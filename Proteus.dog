@@ -73,7 +73,8 @@ model pureInfon{
         }
         return(S)
     }
-    me void: clear() <- {num<-0 str<-'' items.clear() listSpec<-NULL}
+    void: deleteNth(me uint: toDel) <- {items.erase(items.nthItr(toDel))}
+    void: clear() <- {num<-0 str<-'' items.clear() listSpec<-NULL}
 }
 
 #define LISTBODY(LEFT_BRKT, RIGHT_BRKT) <% >{ "LEFT_BRKT" "T"[opt]:timelike  >me listInfo[opt] >our listItem[list]: items >ws "RIGHT_BRKT" } %>
@@ -97,7 +98,13 @@ model infon{
         S<-S+value.dump(indent+"  ")
         return(S)
     }
-    me void: clear() <- {size.clear() value.clear()}
+    void: deleteNth(me uint: toDel) <- {
+        /- Low level delete of an item in list. Does not update size.
+        if(value.fType==LST){
+            value.deleteNth(toDel)
+        }
+    }
+    void: clear() <- {size.clear() value.clear()}
 }
 
 model infItr{
@@ -127,11 +134,10 @@ model infItr{
         return(ret)
     }
 
- /*   me infItr: parentItr() <- {
-        me infItr: ret
-
-        return(ret)
-    } */
+    our infon: getPrevPtr() <- {
+        if(parent==NULL or item==NULL or idx==0) {return(NULL)}
+        return(parent.item.value.items[idx-1])
+    }
 
 
     our infItr:subItemNextItr() <- {
@@ -142,6 +148,10 @@ model infItr{
         }
         if(nxt.item == NULL){ nxt<-NULL }
         return(nxt)
+    }
+
+    void: deleteCrnt() <- {
+        parent.item.deleteNth(idx)
     }
 
     /-me none: infItr(our infon: Item, our infon: Parent, me uint: Idx)<- {item<-item; parent.allocate(Parent); idx<-Idx;}
@@ -216,14 +226,16 @@ struct infon::mem auto
 
 struct infDeepItr{
     our infItr: crntCursor
-    mode[sInvalid, sInited, sFirstVisit, sSecondVisit, sEOL, sError]: state
     me int: nestLvl
+    mode[sInvalid, sInited, sFirstVisit, sSecondVisit, sEOL, sError]: state
+    flag: alreadyIncremented   /- When an item is deleted, the cursor idx is already incremented.
 
     me bool: isASeq(our infon: i) <- {
         return ((i.value.format==fLiteral and i.value.fType==LST) or i.value.format==fConcat)
     }
 
     void: init(our infon: inf) <- {
+        alreadyIncremented<-false
         if(inf==NULL) {state <- sError return()}
         state <- sInited
         our infItr:: newParent()
@@ -247,11 +259,13 @@ struct infDeepItr{
                 }
             }
             case sSecondVisit:{
+                me uint: nextCursor <- crntCursor.idx
+                if(!alreadyIncremented){nextCursor<-nextCursor+1} else {alreadyIncremented<-false}
                 if(nestLvl==0){
                     crntCursor.item <- NULL;
                     state <- sEOL
-                } else if(crntCursor.idx+1 < crntCursor.parent.item.value.items.size()){
-                    crntCursor.idx <- crntCursor.idx+1
+                } else if(nextCursor < crntCursor.parent.item.value.items.size()){
+                    crntCursor.idx <- nextCursor
                     crntCursor.item <- crntCursor.parent.item.value.items[crntCursor.idx];   /- NextSibling()
                     state <- sFirstVisit
                 }else{
@@ -269,6 +283,13 @@ struct infDeepItr{
         return(crntCursor.item)
     }
 
+    void: deleteCrnt() <- {
+        if(state == sSecondVisit){
+            crntCursor.deleteCrnt()
+            alreadyIncremented <- true
+        } else {state<-sError}
+    }
+
 }
 
 
@@ -276,6 +297,22 @@ struct agent{
     our infon: world
     their infon: context
     /- me Locale locale
+
+    me bool: joinOnRight(our infon: LHS, our infon: RHS) <- { /- Join RHS into LHS. Return true on success (so need no subscription).
+        if(LHS.value.format==fLiteral and RHS.value.format==fLiteral){
+            me int: LHSType <- LHS.value.fType
+            if(LHSType == RHS.value.fType){
+                switch(LHSType){
+                    case NUM: {LHS.size.num<-LHS.size.num * RHS.size.num; LHS.value.num<-(LHS.value.num * RHS.size.num) + RHS.value.num;}
+                    case STR: {LHS.value.str.append(RHS.value.str);  LHS.size.num<-LHS.value.str.size()}
+                    case LST: {}
+                    default: {return(false)}
+                }
+            } else {} /- TODO: handle type conversions
+            return(true)
+        }
+        return(false)
+    }
 
     our infItr: makeInfItr(our infon: i, our infItr: parent, me uint: idx) <- {
         our infItr:: ret(i, parent, idx)
@@ -308,6 +345,8 @@ struct agent{
     }
 
     void: prepWorkList(our infon: CI) <- {
+        if(CI.value.cursor == cGetLast){
+        }
     }
 
 
@@ -424,7 +463,6 @@ struct agent{
         ii.init(i)
         our infItr[our list]: IdentsForCIsFollower<-NULL
         withEach count in WHILE(ii.getNext()):{
-            CI <- ii.crntCursor.item
             if(ii.state==sFirstVisit){
                 if(IdentsForCIsFollower){
                     withEach ident in IdentsForCIsFollower:{
@@ -433,7 +471,23 @@ struct agent{
                 }
                 IdentsForCIsFollower <- fetchNodesNormalForm(ii)
             } else if(ii.state==sSecondVisit){
-                ii.crntCursor.item.isNormed <- true
+                CI <- ii.crntCursor.item
+                CI.isNormed <- true
+
+                /- Process CIs in a concat.
+                if(ii.crntCursor.parent!=NULL and ii.crntCursor.parent.item!=NULL and (ii.crntCursor.parent.item.value.format==fConcat)){
+                    if(ii.crntCursor.idx==0){ /- Set parent's type
+                    } else {
+                        our infon: prev <- ii.crntCursor.getPrevPtr()
+                        if(joinOnRight(prev, CI)){
+                            ii.deleteCrnt()
+                        } else {}  /- Subscribe
+                    }
+
+                }
+                if(ii.crntCursor.item.value.format==fConcat and ii.crntCursor.item.value.items.size()==1){
+                    ii.crntCursor.parent.item.value.items[ii.crntCursor.idx] <- ii.crntCursor.item.value.items[0]
+                }
             } /-else {logFatal("Unexpected iterator state in normalizer."))}
 
           /-  withEach L in RANGE(0..ii.nestLvl):{print("|    ")} print(printInfon(CI), "\n")
