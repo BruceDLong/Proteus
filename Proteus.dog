@@ -40,7 +40,7 @@ model pureInfon{
     me mode[fUNKNOWN, fConcat, fLiteral]: format
     me mode[fDefault, fFloat, fFraction, fSingleQuote, fHereDoc, fSizedBin]: literalFormat
     me mode[bDec, bBin, bHex]:numBase
-    me mode[cDefault, cGetLast, cGetFirst, cGetMiddle]: cursor
+    me mode[cDefault, cGetLast, cGetFirst, cGetMarked]: cursor
     me flag: inverted
     me flag: timelike
     flag: sizeGiven
@@ -90,13 +90,43 @@ model infon{
     me string: tag
     flag: isNormed
     flag: hasSelector
-    our infon: sel1
-    our infon: sel2
+    our infon: aux1
+    our infon: aux2
     our infItr[list]: wrkList
     me string: dump(me string: indent)<-{
         me string: S <- ""
         S<-S+value.dump(indent+"  ")
         return(S)
+    }
+    our infon: getLastItem() <- {
+        /- ASSERT(Should be already normed and a non-concat list)
+        our infon: lastItem
+        if(value.items.size()>0) {
+            lastItem <- value.items[value.items.size()-1]
+        }  else {return(NULL)}
+        switch(lastItem.itmMode){
+            case mItem:{
+                return(lastItem)
+            }
+            case mSubItems:{return(lastItem.getLastItem())}
+            case mDots:{exit(3)}
+            case mTagDefn:{exit(4)}
+        }
+    }
+    our infon: getFirstItem() <- {
+        /- ASSERT(Should be already normed and a non-concat list)
+        our infon: firstItem
+        if(value.items.size()>0) {
+            firstItem <- value.items[0]
+        }  else {return(NULL)}
+        switch(firstItem.itmMode){
+            case mItem:{
+                return(firstItem)
+            }
+            case mSubItems:{return(firstItem.getFirstItem())}
+            case mDots:{exit(3)}
+            case mTagDefn:{exit(4)}
+        }
     }
     void: deleteNth(me uint: toDel) <- {
         /- Low level delete of an item in list. Does not update size.
@@ -211,7 +241,7 @@ string infon::str{
         | ("<!" <=> isFunc=true; invertFunc=true;)
         | ("!>" <=> isFuncArg=true; invertFunc=true;)
         ]
-        >ws >our infon:sel1
+        >ws >our infon:aux1
     }[opt]
 }
 
@@ -344,8 +374,39 @@ struct agent{
         }
     }
 
-    void: prepWorkList(our infon: CI) <- {
-        if(CI.value.cursor == cGetLast){
+    void: prepWorkList(our infItr: ciItr) <- {
+        our infon: CI <- ciItr.item
+        me int: cursor <- CI.value.cursor
+        withEach count in WHILE(true):{
+            our infon: newTop
+            if(isFunc==true or isFuncArg==true){
+                if(isFuncArg==true){
+                    me infon: swapTmp <- CI
+                    CI <deep- CI.aux1
+                    CI.aux1 <deep- swapTmp
+                }
+                our infon: tmp
+                if(invertFunc){tmp <- CI.getLastItem()}
+                else {tmp <- CI.getFirstItem()}
+                tmp.wrkList.pushLast(makeInfItr(CI.aux1, NULL, 0))
+                CI.aux1 <- NULL
+            }
+            if(cursor != cDefault){
+                CI.value.cursor <- cDefault
+                our infon: aux Allocate(aux)
+                aux <deep- CI
+                normalize(aux)
+                our infon: newTop
+                switch(cursor){  /- TODO: ensure that, when possible, these return subscriptions if needed. e.g., for when last is tentative or a tag or concat.
+                    case cGetLast   : {newTop <- aux.getLastItem()}
+                    case cGetFirst  : {newTop <- aux.getFirstItem()}
+         /-           case cGetMarked : {newTop <- aux.getMarked()}
+                }
+                if(newTop!=NULL) {
+                    CI <deep- newTop
+                    cursor <- CI.value.cursor
+                }
+            } else {break()}
         }
     }
 
@@ -452,7 +513,7 @@ struct agent{
     }
 
     our infItr[our list]: fetchNodesNormalForm(their infDeepItr: cii) <- {
-        prepWorkList(cii.crntCursor.item)
+        prepWorkList(cii.crntCursor)
         our infItr[our list]: IdentsForCIsFollower <- doWorkList(cii.crntCursor)
         return(IdentsForCIsFollower)
     }
@@ -593,11 +654,11 @@ struct agent{
             }
 
             if (i.isFunc){
-                if(i.invertFunc){S <- S+"<!" + printInfon(i.sel1)}
-                else{S <- S+"<:" + printInfon(i.sel1)}
+                if(i.invertFunc){S <- S+"<!" + printInfon(i.aux1)}
+                else{S <- S+"<:" + printInfon(i.aux1)}
             } else if(i.isFuncArg){
-                if(i.invertFunc){S <- S+"!>" + printInfon(i.sel1)}
-                else{S <- S+":>" + printInfon(i.sel1)}
+                if(i.invertFunc){S <- S+"!>" + printInfon(i.aux1)}
+                else{S <- S+":>" + printInfon(i.aux1)}
             }
         }
         return(S)
