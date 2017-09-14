@@ -443,6 +443,7 @@ struct agent{
             }
         } else {  /- TODO: Do Convert + verify
         }
+        return(true)
     }
 
     void: CO_SUBSCRIBE_VALUES(their infon: from, their infon: to) <- {}
@@ -454,30 +455,34 @@ struct agent{
         our infItr: remainder <- NULL
         if(PropogateIndirectItem(ciItr, workItem) > 0){return(NULL)}
 
-        me bool: shouldFirstCopyItemsTypeToCI <- false
-        if(CI.value.fType==tUNKNOWN and item.value.fType!=tUNKNOWN) {shouldFirstCopyItemsTypeToCI <- true}
-
-        me uint: LHS_RHS_SIZE_Status  <- (CI.size.format*2)  + item.size.format
-        me uint: LHS_RHS_VALUE_Status <- (CI.value.format*2) + item.value.format
+        me bool: copyItemsTypeToCI <- (CI.value.fType==tUNKNOWN and item.value.fType!=tUNKNOWN)
+        if(copyItemsTypeToCI){CI.value.fType <- item.value.fType}
 
         /-----------------------
         me bool: LooseType<-false   /- Strict or loose typing?
         me bool: reject <- false    /- ReturnStatus
         if(! LooseType){
+            me uint: LHS_RHS_SIZE_Status  <- (CI.size.format*2)  + item.size.format
             switch(LHS_RHS_SIZE_Status){
-                case 0: {reject <- DO_VERIFY(CI.size, item.size) } /- Both sizes are known
-                case 1: {DO_COPY(CI.size, item.size)   }           /- Only CI's size is known
-                case 2: {DO_COPY(item.size, CI.size)   }           /- Only item's size is known
-                case 3: {CO_SUBSCRIBE_SIZES(CI, item)  }           /- Neither are known
+                case 0: {reject <- !DO_VERIFY(CI.size, item.size)}    /- Both sizes are known
+                case 1: {DO_COPY(CI.size, item.size)   }              /- Only CI's size is known
+                case 2: {DO_COPY(item.size, CI.size)   }              /- Only item's size is known
+                case 3: {CO_SUBSCRIBE_SIZES(CI, item)  }              /- Neither are known
             }
         }
-        if(true or !reject){
+        if(!reject){
+            me uint: LHS_RHS_VALUE_Status <- (CI.value.format*2) + item.value.format
             switch(LHS_RHS_VALUE_Status){
-                case 0: {reject <- DO_VERIFY(CI.value, item.value)}       /- Both values are known
-                case 1: {DO_COPY(CI.value, item.value) }                  /- Only CI's value is known
-                case 2: {DO_COPY(item.value, CI.value) }                  /- Only item's value is known
-                case 3: {CO_SUBSCRIBE_VALUES(CI, item) }                  /- Neither are known
+                case 0: {reject <- !DO_VERIFY(CI.value, item.value)}   /- Both values are known
+                case 1: {DO_COPY(CI.value, item.value) }               /- Only CI's value is known
+                case 2: {DO_COPY(item.value, CI.value) }               /- Only item's value is known
+                case 3: {CO_SUBSCRIBE_VALUES(CI, item) }               /- Neither are known
             }
+        }
+
+        if(reject){ /- This failed to match so undo any changes and return(NULL)
+            if(copyItemsTypeToCI){CI.value.fType <- tUNKNOWN}
+            return(NULL)
         }
 
         /- Next list op: process remainder/next | descend
@@ -540,7 +545,7 @@ struct agent{
                 if(ii.crntCursor.item.value.format==fConcat and ii.crntCursor.item.value.items.size()==1){
                     ii.crntCursor.parent.item.value.items[ii.crntCursor.idx] <- ii.crntCursor.item.value.items[0]
                 }
-            } /-else {logFatal("Unexpected iterator state in normalizer."))}
+            } /- else {logFatal("Unexpected iterator state in normalizer.")}
 
           /-  withEach L in RANGE(0..ii.nestLvl):{print("|    ")} print(printInfon(CI), "\n")
 
