@@ -78,7 +78,7 @@ model infon{
     our infon: aux1
     our infon: aux2
     our infItr[list]: wrkList
-    flag: wrkListIsAlts
+    /-flag: wrkListIsAlts
     me string: dump(me string: indent)<-{
         me string: S <- ""
         S<-S+value.dump(indent+"  ")
@@ -176,6 +176,22 @@ model infItr{
         parent.item.value.items.insert(parent.item.value.items.nthItr(idx), i)
     }
 
+    me void: getNextDeDotted() <- {
+	me agent: a
+	me string: S <- a.printInfon(item)
+	nextItr()
+        if(item==NULL){return()}
+        if(item.itmMode == mDots){
+	    /- insert a new item of correct type
+	    our infon: tentativeInf
+	    Allocate(tentativeInf)
+	    tentativeInf<-parent.item.value.listSpec /- should be a lazy cow copy
+	    insertAtIDX(tentativeInf)
+	    S <- S + " ## next ## " + a.printInfon(item)
+	    print("		RHS GNDD: ", S, "\n")
+	}
+    }
+    
     /-me none: infItr(our infon: Item, our infon: Parent, me uint: Idx)<- {item<-item; parent.allocate(Parent); idx<-Idx;}
 }
 
@@ -314,28 +330,18 @@ struct infDeepItr{
 
     our infon: getNextDeDotted() <- {
         getNext()
+	if(state == sSecondVisit and crntCursor.item.value.fType != LST){
+	    getNext()
+	}
         if(crntCursor.item==NULL){return(NULL)}
         if(crntCursor.item.itmMode == mDots){
-            /- insert a new item of correct type, set crntCursor to it
-           our infon: tentativeInf Allocate(crntCursor.parent.item.value.listSpec) /- should be a lazy cow copy
-           crntCursor.insertAtIDX(tentativeInf)
-        /*   me int: possibilityMode = getPossibilityMode()
-           switch(possibilityMode){
-               case: pMustBe:{
-                   /- insert a new item of correct type, set crntCursor to it
-                   our infon: tentativeInf(crntCursor.parent.item.value.listSpec) /- should be a lazy cow copy
-                   crntCursor.insertAtIDX(tentativeInf)
-               }
-               case: pMayBe:{
-                   /- Get parent.next
-                   /- if it's not already an ALT, make an alt and add parent.next
-                   /- add to alt a new item of correct type
-                   /- crntCursor = this new ALT?
-               }
-               case: pCannotBe:{
-                   /- crntCursor <- parent's next
-               }
-           }   */
+	    /- insert a new item of correct type, set crntCursor to it
+	    our infon: tentativeInf
+	    Allocate(tentativeInf)
+	    tentativeInf <- crntCursor.parent.item.value.listSpec /- should be a lazy cow copy
+	    crntCursor.insertAtIDX(tentativeInf)
+	    crntCursor.item <- crntCursor.parent.item.value.items[crntCursor.idx]
+
         }
         return(crntCursor.item)
     }
@@ -487,6 +493,57 @@ struct agent{
     void: CO_SUBSCRIBE_VALUES(their infon: from, their infon: to) <- {}
     void: CO_SUBSCRIBE_SIZES(their infon: from, their infon: to) <- {}
 
+    our infItr: tryMERGE(our aItem: agendaItem) <- {
+	our infon: LHS <- agendaItem.LHS.crntCursor.item
+        our infon: RHS <- agendaItem.RHS.item
+        our infItr: remainder <- NULL
+
+	if(PropogateIndirectItem(agendaItem.LHS.crntCursor, agendaItem.RHS) > 0){return(NULL)}
+
+	me int: copyItemsTypeToCI <- 0
+	if(LHS.value.fType==tUNKNOWN and RHS.value.fType!=tUNKNOWN){
+	    copyItemsTypeToCI <- 1
+	}
+
+        me bool: LooseType<-false   /- Strict or loose typing?
+        me bool: reject <- false    /- ReturnStatus
+	me int: actionCopySize  <- 0
+	me int: actionCopyValue <- 0
+	const int: copyLHStoRHS <- 1
+	const int: copyRHStoLHS <- 2
+	
+	if(! LooseType){
+            me int: LHS_RHS_SIZE_Status  <- (LHS.size.format*2)  + RHS.size.format
+            switch(LHS_RHS_SIZE_Status){
+                case 0: {reject <- !DO_VERIFY(LHS.size, RHS.size)}    /- Both sizes are known
+                case 1: {actionCopySize <- copyLHStoRHS }             /- Only LHS's size is known
+                case 2: {actionCopySize <- copyRHStoLHS }             /- Only RHS's size is known
+                case 3: {CO_SUBSCRIBE_SIZES(LHS, RHS)  }              /- Neither are known
+            }
+        }
+        if(!reject){
+            me int: LHS_RHS_VALUE_Status <- (LHS.value.format*2) + RHS.value.format
+            switch(LHS_RHS_VALUE_Status){
+                case 0: {reject <- !DO_VERIFY(LHS.value, RHS.value)}   /- Both values are known
+                case 1: {actionCopyValue <- copyLHStoRHS }             /- Only LHS's value is known
+                case 2: {actionCopyValue <- copyRHStoLHS }             /- Only RHS's value is known
+                case 3: {CO_SUBSCRIBE_VALUES(LHS, RHS) }               /- Neither are known
+            }
+        }
+
+	if(reject){ /- This failed to match so undo any changes and return(NULL)
+            return(NULL)
+        }
+
+	/- Next list op: process remainder/next | descend
+        if(LHS.value.fType!=LST or RHS.value.fType!=LST ){ /- Descend into lists
+            /- TODO: if LooseType, calculate partial remainders
+            remainder <- agendaItem.RHS.subItemNextItr()   /- Get next but ascend through #{...}s
+        }
+	
+        return(remainder)
+    }
+
     our infItr: doMERGE(our infItr: ciItr, our infItr: workItem) <- {
         our infon: CI <- ciItr.item
         our infon: item <- workItem.item
@@ -552,18 +609,23 @@ struct agent{
         return(IdentsForCIsFollower)
     }
 
+    void: addWorkItemsToAgenda(me int: priority, our infDeepItr: itrToProcess)<-{
+	our infon: i <- itrToProcess.crntCursor.item
+	withEach workItem in i.wrkList:{
+	    our aItem: newItem
+	    Allocate(newItem)
+	    newItem.init(0,itrToProcess,workItem)
+	    agenda.addItem(newItem)
+	}
+    }
 
     void: normalize(our infon: i) <- {
 	our infDeepItr: ii
 	Allocate(ii)
         ii.initialize(i)
+	ii.getNext()
 	agenda.parentAgent <- self
-	withEach workItem in i.wrkList:{
-	    our aItem: newItem
-	    Allocate(newItem)
-	    newItem.init(0,ii,workItem)
-	    agenda.addItem(newItem)
-	}
+	addWorkItemsToAgenda(0, ii)
 	agenda.processAgenda()
     }
 /*
@@ -726,4 +788,4 @@ struct agent{
 
 }
 /-///////////////////////////////////////
-/-do codeDataDisplay(infon, TAG_infonDumpMode)
+do codeDataDisplay(infon, TAG_infonDumpMode)
