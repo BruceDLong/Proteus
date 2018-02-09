@@ -225,24 +225,13 @@ struct infon {}
 /-////////////////////////
 /- Infon Interface Routines
 
-struct itrChain{
-    our infDeepItr: theItr
-    our itrChain: next
-
-    me string: toString() <- {
-        me string: S <- ""
-        me agent: a
-        if(theItr){S <- S + a.printInfon(theItr.crntCursor.item)}
-        if(next){S <- S+ " | "+ next.toString() +"\n"}
-        return(S)
-    }
-}
-
 struct infDeepItr{
     our infItr: crntCursor
     me int: nestLvl
+    our infDeepItr: next
     mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError]: state
     flag: alreadyIncremented   /- When an item is deleted, the cursor idx is already incremented.
+    flag: fromDotted
 
     me bool: isASeq(our infon: i) <- {
         return ((i.value.format==fLiteral and i.value.fType==LST) or i.value.format==fConcat)
@@ -267,7 +256,16 @@ struct infDeepItr{
         nestLvl <- 0
     }
 
-    void: goNext(me string: indent) <- {
+    me string: toString() <- {
+        me string: S <- ""
+        me agent: a
+        if(this==NULL){S<-S+"NULL"}
+        else {S <- S + a.printInfon(crntCursor.item)}
+        if(next){S <- S+ " | "+ next.toString()}
+        return(S)
+    }
+
+    void: goNext() <- {
         switch(state) {
             case sNotASeq:{
                 /- if current item not last item
@@ -322,14 +320,20 @@ struct infDeepItr{
         }
     }
 
-    our infDeepItr: getNext(me string: indent) <- {
+    void: copyThisTo(our infDeepItr: to) <- {
+        to.crntCursor          <- crntCursor
+        to.nestLvl             <- nestLvl
+        to.next                <- next
+        to.state               <- state
+        to.alreadyIncremented  <- alreadyIncremented
+        to.fromDotted          <- fromDotted
+    }
+
+    our infDeepItr: getNext() <- {
         our infDeepItr: retVal
         Allocate(retVal)
-        retVal.crntCursor <- crntCursor
-        retVal.nestLvl <- nestLvl
-        retVal.state <- state
-        retVal.alreadyIncremented <- alreadyIncremented
-        retVal.goNext(indent)
+        copyThisTo(retVal)
+        retVal.goNext()
         return(retVal)
     }
 
@@ -340,46 +344,52 @@ struct infDeepItr{
         } else {state<-sError}
     }
 
-    our itrChain: getNextDeDotted(me string: indent) <- {
-        me agent: a
-        our infDeepItr: nextItr <- getNext(indent)
-        if(nextItr.state == sEOL){
-            print(indent, "   getNextDeDotted returns NULL\n")
-            return(NULL)
+    our infDeepItr: fillDotChild(their infDeepItr: parent) <- {
+        our infon: child
+        our infon: infonType <- parent.crntCursor.parent.item.value.listSpec
+        if(infonType != NULL){
+            child <- infonType /- should be a lazy cow copy
+        } else {
+            Allocate(child)
+            child.value.str     <- "TEST"
+            child.value.fType   <- STR
+            child.infMode       <- isLiteral
+            child.itmMode       <- mItem
+            child.value.format  <- fLiteral
+           /- me agent: a; print(indent, "else ",a.printInfon(child),"\n")
         }
-        our itrChain: retVal
-        Allocate(retVal)
-        if(nextItr.crntCursor.item.itmMode != mDots){
-            retVal.theItr <- nextItr
-            retVal.next <- NULL
-        }else {
-            /- insert a new item of correct type, set crntCursor to it
-            our infon: tentativeInf
-            Allocate(tentativeInf)
-            our infon: infonType <- nextItr.crntCursor.parent.item.value.listSpec
-            if(infonType != NULL){
-                tentativeInf <- infonType /- should be a lazy cow copy
-                print("if ",a.printInfon(tentativeInf),"\n")
-            } else {
-                tentativeInf.value.str <- "TEST"
-                tentativeInf.value.fType <- STR
-                tentativeInf.infMode <- isLiteral
-                tentativeInf.itmMode <- mItem
-                tentativeInf.value.format <- fLiteral
-                print(indent, "else ",a.printInfon(tentativeInf),"\n")
-            }
-            our infDeepItr: tentativeItr
-            Allocate(tentativeItr)
-            Allocate(tentativeItr.crntCursor)
-            tentativeItr.crntCursor <- nextItr.crntCursor
-            tentativeItr.crntCursor.parent <- nextItr.crntCursor.parent
-            tentativeItr.crntCursor.item <- tentativeInf
-            tentativeItr.nestLvl <- nextItr.nestLvl
-            tentativeItr.state <- sNotASeq
-            retVal.theItr <- tentativeItr
+        our infDeepItr: tentativeItr
+        Allocate(tentativeItr)
+        Allocate(tentativeItr.crntCursor)
+        tentativeItr.crntCursor.idx <- parent.crntCursor.idx
+        tentativeItr.crntCursor.parent <- parent.crntCursor.parent
+        tentativeItr.crntCursor.item <- child
+        tentativeItr.nestLvl <- parent.nestLvl
+        tentativeItr.next <- parent.next
+        tentativeItr.state <- sNotASeq
+        tentativeItr.fromDotted <- true
 
-            retVal.next <- nextItr.getNextDeDotted(indent + "|m   ")
-            print("retVal.theItr ",a.printInfon(retVal.theItr.crntCursor.item),"\n")
+        return(tentativeItr)
+    }
+
+    our infDeepItr: getNextDeDotted() <- {
+        our infDeepItr: nextItr
+        our infDeepItr: retVal
+        if(!fromDotted){
+            nextItr <- getNext()
+            if(nextItr.state == sEOL or nextItr.state == sError){ return(NULL) }
+        } else {
+            Allocate(nextItr)
+            copyThisTo(nextItr)
+        }
+
+        if(fromDotted or nextItr.crntCursor.item.itmMode == mDots){ /- Make a new DOTTED item
+            retVal <- fillDotChild(nextItr)
+            if(!fromDotted){retVal.next <- nextItr.getNextDeDotted()}
+            else{retVal.next <- nextItr.next}
+        }else{
+            retVal <- nextItr
+            retVal.next <- NULL
         }
         return(retVal)
     }
@@ -397,20 +407,19 @@ struct agent{
     our infon: world
     their infon: context
     me retriever: agenda
-    
+
     void: testIterator(our infon: i)<-{
         our infDeepItr: testItr
-        our itrChain: results
+        our infDeepItr: results
         Allocate(testItr)
         testItr.initialize(i)
-        results <- testItr.getNextDeDotted("")
+        results <- testItr.getNextDeDotted()
         withEach count in WHILE(results):{
-            our infDeepItr: first <- results.theItr
-            withEach nl in RANGE(0..(first.nestLvl*5)):{print(" ")}
-            /-print("|: ", printInfon(first.crntCursor.item), "\n")
+            our infDeepItr: first <- results
+            withEach nl in RANGE(0..(results.nestLvl*5)):{print(" ")}
             print("|: ", results.toString(), "\n")
-            testItr <- results.theItr
-            results <- testItr.getNextDeDotted("")
+            testItr <- results
+            results <- testItr.getNextDeDotted()
         }
     }
 
@@ -660,8 +669,8 @@ struct agent{
 
 
     void: normalize(our infon: i) <- {
-        testIterator(i)
-        exit(2)
+      /-  testIterator(i)
+      /-  exit(2)
         our infDeepItr: ii
         Allocate(ii)
         ii.initialize(i)
