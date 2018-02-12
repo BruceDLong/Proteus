@@ -62,11 +62,11 @@ model infon{
     me mode[mItem, mSubItems, mDots, mTagDefn]: itmMode
     me pureInfon: size
     me pureInfon: value
-    me string: tag
     flag: isNormed
     flag: hasSelector
     our infon: aux1
     our infon: aux2
+    me string: tag
     our infItr[list]: wrkList
     /-flag: wrkListIsAlts
 
@@ -112,8 +112,8 @@ model infon{
     me none: infon(me string: S) <- {
         infMode <- isLiteral
         itmMode <- mItem
-  /-      size <- pureInfon(S.size())
-   /-     value <- pureInfon(S)
+        size <- pureInfon(S.size())
+        value <- pureInfon(S)
     }
 }
 
@@ -148,6 +148,12 @@ model infItr{
         }
         if(nxt.item == NULL){ nxt<-NULL }
         return(nxt)
+    }
+
+    void: copyThisTo(our infItr: to) <- {
+        to.item <- item
+        to.parent <- parent
+        to.idx <- idx
     }
 
     void: deleteCrnt() <- {
@@ -240,9 +246,10 @@ struct infDeepItr{
     void: initialize(our infon: inf) <- {
         alreadyIncremented<-false
         if(inf==NULL) {state <- sError; return()}
-        state <- sInited
         our infItr:: newParent()
         crntCursor.allocate(inf, newParent, 0, 0)
+        if(isASeq(crntCursor.item)){state <- sFirstVisit}
+        else{state <- sNotASeq}
         nestLvl <- 0
         me agent: a
 
@@ -321,7 +328,8 @@ struct infDeepItr{
     }
 
     void: copyThisTo(our infDeepItr: to) <- {
-        to.crntCursor          <- crntCursor
+        Allocate(to.crntCursor)
+        crntCursor.copyThisTo(to.crntCursor)
         to.nestLvl             <- nestLvl
         to.next                <- next
         to.state               <- state
@@ -364,7 +372,7 @@ struct infDeepItr{
         tentativeItr.crntCursor.parent <- parent.crntCursor.parent
         tentativeItr.crntCursor.item <- child
         tentativeItr.nestLvl <- parent.nestLvl
-        tentativeItr.next <- parent.next
+        tentativeItr.next <- NULL
         tentativeItr.state <- sNotASeq
         tentativeItr.fromDotted <- true
 
@@ -417,7 +425,7 @@ struct agent{
             if(results == NULL){break()}
             withEach nl in RANGE(0..(results.nestLvl*5)):{print(" ")}
             print("|: ", results.toString(), "\n")
-            testItr <- results      
+            testItr <- results
         }
     }
 
@@ -541,6 +549,11 @@ struct agent{
         }
     }
 
+    const int: matchFailed  <- 1
+    const int: wasVerified  <- 2
+    const int: copyLHStoRHS <- 3
+    const int: copyRHStoLHS <- 4
+
     me int: matchLength(me string: A, me string: B)<-{
         me int: lastChar
         me int: retVal <-0
@@ -570,9 +583,8 @@ struct agent{
                     me int: LSize <- LHS.str.size()
                     me int: RSize <- RHS.str.size()
                     me int: matchLen <- matchLength(LHS.str, RHS.str)
-                    if(matchLen < LSize and matchLen < RSize){retVal.cmd <- 0}
-                    else{retVal.sizeDiff <- RSize - LSize}
-                    print("            matchLen: ", matchLen, "\n")
+                    if(matchLen==-1 or (matchLen < LSize and matchLen < RSize)){retVal.cmd <- matchFailed}
+                    else{retVal.sizeDiff <- RSize - LSize; retVal.cmd <- wasVerified}
                 }
                 case LST: {
                     /- TODO: Is it sometimes OK to skip this or check each member at once?
@@ -586,11 +598,6 @@ struct agent{
 
     void: CO_SUBSCRIBE_VALUES(their infon: from, their infon: to) <- {}
     void: CO_SUBSCRIBE_SIZES(their infon: from, their infon: to) <- {}
-
-    const int: matchFailed  <- 0
-    const int: wasVerified  <- 1
-    const int: copyLHStoRHS <- 2
-    const int: copyRHStoLHS <- 3
 
     our infDeepItr: tryMERGE(our aItem: agendaItem) <- {
         print("    tryMERGE: \n")
@@ -638,13 +645,17 @@ struct agent{
             me int: rSize <- RHS.value.str.size()
             if(sizeDiff > 0 ){
                 me string: remainderStr <- RHS.value.str.subStr(rSize -sizeDiff, sizeDiff)
-                our infon: remainderInfon(remainderStr)
-                remainder.initialize(remainderInfon)
+                our infon: remainderInfon; Allocate(remainderInfon,remainderStr)
+                Allocate(remainder)
+                agendaItem.RHS.copyThisTo(remainder)
+                Allocate(remainder.crntCursor)
+                remainder.crntCursor.item <- remainderInfon
+                print("####### REMAINDER:", remainderStr,"\n")
 
             }/- TODO: finish case where remainder is on the left
 
         }
-
+        if(valueStatus.cmd==matchFailed){agendaItem.actionCommand<-matchFailed; reject<-true}
         if(reject){return(NULL)}
 
         /- Next list op: process remainder/next | descend
@@ -763,7 +774,7 @@ struct agent{
                 S <- S+printInfon(item)
             }
             S <- S+endBrkt
-        } else {print("Error In printPureInfon()\n") exit(2)}
+        } else {print("\nError: Unknown fType in printPureInfon(): ", pure.fType,"\n") exit(2)}
         return(S)
     }
 
