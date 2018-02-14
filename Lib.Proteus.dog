@@ -268,8 +268,12 @@ struct infDeepItr{
         me string: S <- ""
         me agent: a
         if(this==NULL){S<-S+"NULL"}
-        else {S <- S + a.printInfon(crntCursor.item)}
-        if(next){S <- S+ " | "+ next.toString()}
+        else if(state == sEOL){S<-S+" sEOL"}
+        else if(state == sError){S<-S+" sError"}
+        else {
+            S <- S + a.printInfon(crntCursor.item)
+            if(next){S <- S+ " | "+ next.toString()}
+        }
         return(S)
     }
 
@@ -331,7 +335,8 @@ struct infDeepItr{
 
     void: copyThisTo(our infDeepItr: to) <- {
         Allocate(to.crntCursor)
-        crntCursor.copyThisTo(to.crntCursor)
+        if(crntCursor==NULL){to.crntCursor <- NULL}
+        else{crntCursor.copyThisTo(to.crntCursor)}
         to.nestLvl             <- nestLvl
         to.next                <- next
         to.state               <- state
@@ -365,7 +370,6 @@ struct infDeepItr{
             child.infMode       <- isUnknown
             child.itmMode       <- mItem
             child.value.format  <- fUNKNOWN
-           /- me agent: a; print(indent, "else ",a.printInfon(child),"\n")
         }
         our infDeepItr: tentativeItr
         Allocate(tentativeItr)
@@ -384,24 +388,24 @@ struct infDeepItr{
     our infDeepItr: getNextDeDotted() <- {
         our infDeepItr: nextItr
         our infDeepItr: retVal
-        print("in getNextDeDotted(): ")
+
         if(!fromDotted){
-            print("At-A  ")
             nextItr <- getNext()
-            if(nextItr.state == sEOL or nextItr.state == sError){ return(NULL) }
+            if(nextItr.state == sError){return(NULL) }
         } else {
-            print("At-B  ")
             Allocate(nextItr)
             copyThisTo(nextItr)
         }
 
-        if(fromDotted or nextItr.crntCursor.item.itmMode == mDots){ /- Make a new DOTTED item
-            print("At-C  ")
+        if(nextItr.state == sEOL){
+          Allocate(retVal)
+          retVal.state <- sEOL
+          retVal.next <- NULL
+        } else if(fromDotted or nextItr.crntCursor.item.itmMode == mDots){ /- Make a new DOTTED item
             retVal <- fillDotChild(nextItr)
-            if(!fromDotted){print("At-C2  "); retVal.next <- nextItr.getNextDeDotted()}
+            if(!fromDotted){retVal.next <- nextItr.getNextDeDotted()}
             else{retVal.next <- nextItr.next}
-        }else{
-            print("At-D  ")
+        } else {
             retVal <- nextItr
             retVal.next <- NULL
         }
@@ -471,7 +475,7 @@ struct agent{
      /-   if(LHS.item.?==asLast){RHS.target<-asLast}
 
         me bool: isDuplicate<-false
-  /*       withEach wrkItm in LHS.item.wrkList:{
+         /*withEach wrkItm in LHS.item.wrkList:{
             if (wrkItm.productionID==RHS.productionID and wrkItm.originPos==RHS.originPos){
                 if(wrkItm.SeqPosition==RHS.SeqPos or (ProdType==parseREP and wrkItm.SeqPosition+1 == SeqPos)){
                     isDuplicate<-true
@@ -535,8 +539,8 @@ struct agent{
             if(RHS.target == asFirst)       {addIdent(makeInfItr(LHS_tmp.items[0], LHS, 0), RHS);  ret<-1;}
             /- if(RHS.target == asLast or LHS.target==asLastParent)   {addIdent(makeInfItr(LHS_tmp.items[LHS.item.value.items.size()-1], LHS, LHS_tmp.items.size()-1), RHS);  ret<-1;}
         }
-        their pureInfon: RHS_tmp <- RHS.item.value
-        if(RHS_tmp.fType==LST and RHS_tmp.items.size()>0){
+        /-their pureInfon: RHS_tmp <- RHS.item.value
+        if(RHS.item.value.fType==LST and RHS.item.value.items.size()>0){
             if(RHS.target == asFirstParent) {addIdent(LHS, makeInfItr(RHS.item.value.items[0], RHS, 0));  ret<-1;}
         }
         return(ret)
@@ -576,15 +580,14 @@ struct agent{
 
     me mergeCmd: DO_VERIFY(their pureInfon: LHS, their pureInfon: RHS) <- {
         me int: RHSType <- RHS.fType
-        /-print("            DO_VERIY LHS.fType: ", LHS.fType," RHS.fType: ", RHS.fType,"\n")
         me mergeCmd: retVal
         if(RHSType==LHS.fType){
             switch(RHSType){
                 case NUM: {
                     if(LHS.num == RHS.num){
-                        retVal.cmd <-1
+                        retVal.cmd <- wasVerified
                         retVal.sizeDiff <- 0
-                    }
+                    } else {retVal.cmd <- matchFailed}
                 }
                 case STR: {
                     me int: LSize <- LHS.str.size()
@@ -600,23 +603,64 @@ struct agent{
             }
         } else {  /- TODO: Do Convert + verify
         }
+        /-print("DO_VERIFY retVal.sizeDiff: ", retVal.sizeDiff, "\n")
         return(retVal)
     }
 
     void: CO_SUBSCRIBE_VALUES(their infon: from, their infon: to) <- {}
     void: CO_SUBSCRIBE_SIZES(their infon: from, their infon: to) <- {}
 
+    our aItem: stitch(our aItem: crntItem, me string: indent)<-{
+        print(indent, "crntItem: ", crntItem.printAgendaItem())
+        our aItem: retVal <- NULL
+        me bool: copyRHSTypeToLHS <- crntItem.copyRHSTypeToLHS
+        me int: sizeAction <- crntItem.sizeAction
+        me int: valueAction <- crntItem.valueAction
+        our infDeepItr: LHS <- crntItem.LHS
+        our infDeepItr: RHS <- crntItem.RHS
+        switch(LHS.state) {
+            case sNotASeq:{
+                print(", sNotASeq\n")
+                if(copyRHSTypeToLHS){ LHS.crntCursor.item.value.fType <- RHS.crntCursor.item.value.fType}
+
+                if(sizeAction == copyRHStoLHS){DO_COPY(RHS.crntCursor.item.size, LHS.crntCursor.item.size)}
+                else if(sizeAction == copyLHStoRHS){DO_COPY(LHS.crntCursor.item.size, RHS.crntCursor.item.size)}
+
+                if(valueAction == copyRHStoLHS){DO_COPY(RHS.crntCursor.item.value, LHS.crntCursor.item.value)}
+                else if(valueAction == copyLHStoRHS){DO_COPY(LHS.crntCursor.item.value, RHS.crntCursor.item.value)}
+
+                retVal <- crntItem.successor
+            }
+            case sFirstVisit:{
+                print(", sFirstVisit\n")
+                our aItem: nextItem <- crntItem.successor
+                withEach count in WHILE(nextItem.LHS.state != sSecondVisit and !(nextItem.LHS.crntCursor.item === crntItem.LHS.crntCursor.item)):{
+                    nextItem <- stitch(nextItem, indent + "     ")
+                    if(nextItem.LHS.fromDotted){
+                        print(indent, "     INSERT THIS\n")
+                    }
+                }
+                print(indent, "nextItem: ", nextItem.printAgendaItem(), "\n")
+                retVal <- nextItem.successor
+            }
+            case sSecondVisit:{
+                print(", sSecondVisit\n")
+            }
+            default: {print("Error in stitch(): invalid state\n")}
+        }
+        return(retVal)
+
+    }
+
     our infDeepItr: tryMERGE(our aItem: agendaItem) <- {
-        print("    tryMERGE: \n")
         our infon: LHS <- agendaItem.LHS.crntCursor.item
         our infon: RHS <- agendaItem.RHS.crntCursor.item
         our infDeepItr: remainder <- NULL
         if(PropogateIndirectItem(agendaItem.LHS.crntCursor, agendaItem.RHS.crntCursor) > 0){return(NULL)}
 
-        me int: copyItemsTypeToCI <- 0
         if(LHS.value.fType==tUNKNOWN and RHS.value.fType!=tUNKNOWN){
-            copyItemsTypeToCI <- 1
-        }
+            agendaItem.copyRHSTypeToLHS <- 1
+        } else {agendaItem.copyRHSTypeToLHS <- 0}
 
         me bool: LooseType<-false   /- Strict or loose typing?
         me bool: reject <- false    /- ReturnStatus
@@ -627,17 +671,15 @@ struct agent{
         if(! LooseType){
             me int: LHSFormat <- LHS.size.format
             me int: RHSFormat <- RHS.size.format
-            print("        ! LooseType: ", LHSFormat, " || ", RHSFormat,"\n")
             if(LHSFormat != fUNKNOWN and RHSFormat != fUNKNOWN){sizeStatus <- DO_VERIFY(LHS.value, RHS.value)}
-            else if(LHSFormat != fUNKNOWN and RHSFormat == fUNKNOWN){actionCopyValue <- copyLHStoRHS }
-            else if(LHSFormat == fUNKNOWN and RHSFormat != fUNKNOWN){actionCopyValue <- copyRHStoLHS }
+            else if(LHSFormat != fUNKNOWN and RHSFormat == fUNKNOWN){actionCopySize <- copyLHStoRHS }
+            else if(LHSFormat == fUNKNOWN and RHSFormat != fUNKNOWN){actionCopySize <- copyRHStoLHS }
             else if(LHSFormat == fUNKNOWN and RHSFormat == fUNKNOWN){CO_SUBSCRIBE_VALUES(LHS, RHS)}
         }
         me mergeCmd: valueStatus
         if(!reject){
             me int: LHSFormat <- LHS.value.format
             me int: RHSFormat <- RHS.value.format
-            print("        ! reject: ", LHSFormat, " || ", RHSFormat,"\n")
             if(LHSFormat != fUNKNOWN and RHSFormat != fUNKNOWN){
                 valueStatus <- DO_VERIFY(LHS.value, RHS.value)
             }
@@ -647,7 +689,6 @@ struct agent{
         }
 
         if (valueStatus.cmd == wasVerified and RHS.value.fType == STR){
-            print("        wasVerified: ", RHS.value.str, "\n")
             me int: sizeDiff <- valueStatus.sizeDiff
             me int: rSize <- RHS.value.str.size()
             if(sizeDiff > 0 ){
@@ -657,21 +698,23 @@ struct agent{
                 agendaItem.RHS.copyThisTo(remainder)
                 Allocate(remainder.crntCursor)
                 remainder.crntCursor.item <- remainderInfon
-                print("####### REMAINDER:", remainderStr,"\n")
 
             }/- TODO: finish case where remainder is on the left
 
         }
-        if(valueStatus.cmd==matchFailed){agendaItem.actionCommand<-matchFailed; reject<-true}
-        if(reject){return(NULL)}
 
-        /- Next list op: process remainder/next | descend
-  /*       if(LooseType and LHS.value.fType==STR and RHS.value.fType==STR ){
-            /- If LooseType, calculate partial remainders
+        if(valueStatus.cmd==matchFailed){agendaItem.valueAction<-valueFailed; reject<-true;}
+        else if (valueStatus.cmd== wasVerified){agendaItem.valueAction<-valueVerified}
+        else if (valueStatus.cmd== copyLHStoRHS){agendaItem.valueAction<-copyValueLHStoRHS}
+        else if (valueStatus.cmd== copyRHStoLHS){agendaItem.valueAction<-copyValueRHStoLHS}
 
-            Allocate(remainder)
-            remainder.initialize(tmpRemainder)
-        }  */
+        if (sizeStatus.cmd==matchFailed){agendaItem.sizeAction<-valueFailed; reject<-true;}
+        else if (sizeStatus.cmd== wasVerified){agendaItem.sizeAction<-sizeVerified}
+        else if (sizeStatus.cmd== copyLHStoRHS){agendaItem.sizeAction<-copySizeLHStoRHS}
+        else if (sizeStatus.cmd== copyRHStoLHS){agendaItem.sizeAction<-copySizeRHStoLHS}
+
+        if(reject){agendaItem.rejected <- true; remainder <- NULL}
+
         return(remainder)
     }
 
@@ -684,7 +727,7 @@ struct agent{
             our aItem: newItem
             Allocate(newItem)
             newItem.init(0,itrToProcess,newIDP)
-            newItem.predecessors.pushLast(pred)
+            if(pred != NULL){newItem.predecessors.pushLast(pred)}
             agenda.addItem(newItem)
         }
     }
@@ -699,7 +742,6 @@ struct agent{
         agenda.parentAgent <- self
         addWorkItemsToAgenda(0, NULL, ii)
         agenda.processAgenda()
-        /-print("____________________________________________________\nEND NORMALIZE\n")
     }
 
 /* TODO: Check these for changes
