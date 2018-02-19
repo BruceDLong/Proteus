@@ -587,18 +587,15 @@ struct agent{
             to.format<-from.format
             to.sizeGiven <- from.sizeGiven
             switch(fromsType){
-                case NUM: {print("COPY:", from.num, " -> ", to.num, "\n"); to.num <- from.num}
-                case STR: {print("COPY:", from.str, " -> ", to.str, "\n"); to.str <- from.str}
+                case NUM: {to.num <- from.num}
+                case STR: {to.str <- from.str}
                 case LST: {}
             }
         } else {  /- TODO: Do Convert + copy
         }
     }
 
-    const int: matchFailed  <- 1
-    const int: wasVerified  <- 2
-    const int: copyLHStoRHS <- 3
-    const int: copyRHStoLHS <- 4
+
 
     me int: matchLength(me string: A, me string: B)<-{
         me int: lastChar
@@ -612,6 +609,9 @@ struct agent{
         }
         return(lastChar)
     }
+
+    const int: matchFailed  <- 1
+    const int: wasVerified  <- 2
 
     me mergeCmd: DO_VERIFY(their pureInfon: LHS, their pureInfon: RHS) <- {
         me int: RHSType <- RHS.fType
@@ -695,20 +695,21 @@ struct agent{
         me bool: LooseType<-false   /- Strict or loose typing?
         me bool: reject <- false    /- ReturnStatus
 
-
         if(LHS.value.fType==tUNKNOWN and RHS.value.fType!=tUNKNOWN){
             agendaItem.copyRHSTypeToLHS <- 1
         } else {agendaItem.copyRHSTypeToLHS <- 0}
 
-        me int: actionCopySize  <- 0
-        me int: actionCopyValue <- 0
         me mergeCmd: sizeStatus; sizeStatus.cmd <- 0
         if(! LooseType){
             me int: LHSFormat <- LHS.size.format
             me int: RHSFormat <- RHS.size.format
-            if(LHSFormat != fUNKNOWN and RHSFormat != fUNKNOWN){sizeStatus <- DO_VERIFY(LHS.size, RHS.size)}
-            else if(LHSFormat != fUNKNOWN and RHSFormat == fUNKNOWN){actionCopySize <- copyLHStoRHS }
-            else if(LHSFormat == fUNKNOWN and RHSFormat != fUNKNOWN){actionCopySize <- copyRHStoLHS }
+            if(LHSFormat != fUNKNOWN and RHSFormat != fUNKNOWN){
+                sizeStatus <- DO_VERIFY(LHS.size, RHS.size)
+                if (sizeStatus.cmd==matchFailed){agendaItem.sizeAction<-sizeFailed; reject<-true;}
+                else if (sizeStatus.cmd== wasVerified){agendaItem.sizeAction<-sizeVerified}
+            }
+            else if(LHSFormat != fUNKNOWN and RHSFormat == fUNKNOWN){agendaItem.sizeAction<-copySizeLHStoRHS}
+            else if(LHSFormat == fUNKNOWN and RHSFormat != fUNKNOWN){agendaItem.sizeAction<-copySizeRHStoLHS}
             else if(LHSFormat == fUNKNOWN and RHSFormat == fUNKNOWN){CO_SUBSCRIBE_SIZES(LHS, RHS)}
         }
         me mergeCmd: valueStatus; valueStatus.cmd<-0
@@ -718,9 +719,11 @@ struct agent{
 
             if(LHSFormat != fUNKNOWN and RHSFormat != fUNKNOWN){
                 valueStatus <- DO_VERIFY(LHS.value, RHS.value)
+                if(valueStatus.cmd==matchFailed){agendaItem.valueAction<-valueFailed; reject<-true;}
+                else if (valueStatus.cmd== wasVerified){agendaItem.valueAction<-valueVerified}
             }
-            else if(LHSFormat != fUNKNOWN and RHSFormat == fUNKNOWN){actionCopyValue <- copyLHStoRHS }
-            else if(LHSFormat == fUNKNOWN and RHSFormat != fUNKNOWN){actionCopyValue <- copyRHStoLHS }
+            else if(LHSFormat != fUNKNOWN and RHSFormat == fUNKNOWN){agendaItem.valueAction<-copyValueLHStoRHS}
+            else if(LHSFormat == fUNKNOWN and RHSFormat != fUNKNOWN){agendaItem.valueAction<-copyValueRHStoLHS}
             else if(LHSFormat == fUNKNOWN and RHSFormat == fUNKNOWN){CO_SUBSCRIBE_VALUES(LHS, RHS)}
         }
 
@@ -738,17 +741,6 @@ struct agent{
             }/- TODO: finish case where remainder is on the left
 
         }
-
-
-        if (sizeStatus.cmd==matchFailed){agendaItem.sizeAction<-sizeFailed; reject<-true;}
-        else if (sizeStatus.cmd== wasVerified){agendaItem.sizeAction<-sizeVerified}
-        else if (actionCopySize== copyLHStoRHS){agendaItem.sizeAction<-copySizeLHStoRHS}
-        else if (actionCopySize== copyRHStoLHS){agendaItem.sizeAction<-copySizeRHStoLHS}
-
-        if(valueStatus.cmd==matchFailed){agendaItem.valueAction<-valueFailed; reject<-true;}
-        else if (valueStatus.cmd== wasVerified){agendaItem.valueAction<-valueVerified}
-        else if (actionCopyValue== copyLHStoRHS){agendaItem.valueAction<-copyValueLHStoRHS}
-        else if (actionCopyValue== copyRHStoLHS){agendaItem.valueAction<-copyValueRHStoLHS}
 
         if(reject){agendaItem.rejected <- true; remainder <- NULL}
 
