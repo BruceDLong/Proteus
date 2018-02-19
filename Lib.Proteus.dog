@@ -68,6 +68,8 @@ model infon{
     our infon: aux2
     me string: tag
     our infItr[list]: wrkList
+    flag: workListPrepped
+    flag: workItemsAdded
     /-flag: wrkListIsAlts
 
     our infon: getLastItem() <- {
@@ -246,9 +248,30 @@ struct infDeepItr{
     mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError]: state
     flag: alreadyIncremented   /- When an item is deleted, the cursor idx is already incremented.
     flag: fromDotted
+    flag: isAList
+
+    me string: stateToString() <-{
+        me string: stateStr
+        switch(state) {
+            case sNotASeq:      {stateStr <-  "sNotASeq"}
+            case sFirstVisit:   {stateStr <-  "sFirstVisit"}
+            case sSecondVisit:  {stateStr <-  "sSecondVisit"}
+            case sInited:       {stateStr <-  "sInited"}
+            case sEOL:          {stateStr <-  "sEOL"}
+            case sInvalid:      {stateStr <-  "sInvalid"}
+            case sError:        {stateStr <-  "sError"}
+            default:            {stateStr <-  "Error: invalid iterator state"}
+        }
+        return (stateStr)
+    }
 
     me bool: isASeq(our infon: i) <- {
         return ((i.value.format==fLiteral and i.value.fType==LST) or i.value.format==fConcat)
+    }
+
+    void: setListSeqFlags() <- {
+        if(isASeq(crntCursor.item)){state <- sFirstVisit; isAList <- true}
+        else{state <- sNotASeq; isAList <- false}
     }
 
     void: initialize(our infon: inf) <- {
@@ -256,8 +279,7 @@ struct infDeepItr{
         if(inf==NULL) {state <- sError; return()}
         our infItr:: newParent()
         crntCursor.allocate(inf, newParent, 0, 0)
-        if(isASeq(crntCursor.item)){state <- sFirstVisit}
-        else{state <- sNotASeq}
+        setListSeqFlags()
         nestLvl <- 0
         me agent: a
 
@@ -267,8 +289,7 @@ struct infDeepItr{
         alreadyIncremented<-false
         if(InfItr==NULL or InfItr.item==NULL){state <- sError; return()}
         crntCursor <- InfItr
-        if(isASeq(crntCursor.item)){state <- sFirstVisit}
-        else{state <- sNotASeq}
+        setListSeqFlags()
         nestLvl <- 0
     }
 
@@ -297,25 +318,25 @@ struct infDeepItr{
                 } else if(nextCursor < crntCursor.parent.item.value.items.size()){
                     crntCursor.idx <- nextCursor
                     crntCursor.item <- crntCursor.parent.item.value.items[crntCursor.idx];   /- NextSibling()
-                    if(isASeq(crntCursor.item)){state <- sFirstVisit}
-                    else{state <- sNotASeq}
+                    setListSeqFlags()
                 }else{
                     crntCursor <- crntCursor.parent
                     state <- sSecondVisit
+                    isAList <- true
                     nestLvl <- nestLvl-1
                 }
             }
             case sFirstVisit:{
                 if(crntCursor.item.value.items.size()==0){
                     state <- sSecondVisit
+                    isAList <- true
                 } else {
                     /-Prepare to iterate children
                     our infItr: tmp
                     Allocate(tmp); tmp.idx<-crntCursor.idx; tmp.parent<-crntCursor.parent; tmp.item <- crntCursor.item; crntCursor.parent  <- tmp;   /- After ptr bug is fixed, Allocate(crntCursor.parent, crntCursor)
                     crntCursor.idx <- 0
                     crntCursor.item <- crntCursor.item.value.items[0];
-                    if(isASeq(crntCursor.item)){state <- sFirstVisit}
-                    else{state <- sNotASeq}
+                    setListSeqFlags()
                     nestLvl <- nestLvl+1
                 }
             }
@@ -328,11 +349,11 @@ struct infDeepItr{
                 } else if(nextCursor < crntCursor.parent.item.value.items.size()){
                     crntCursor.idx <- nextCursor
                     crntCursor.item <- crntCursor.parent.item.value.items[crntCursor.idx];   /- NextSibling()
-                    if(isASeq(crntCursor.item)){state <- sFirstVisit}
-                    else{state <- sNotASeq}
+                    setListSeqFlags()
                 }else{
                     crntCursor <- crntCursor.parent
                     state <- sSecondVisit
+                    isAList <- true
                     nestLvl <- nestLvl-1
                 }
             }
@@ -353,6 +374,7 @@ struct infDeepItr{
         to.state               <- state
         to.alreadyIncremented  <- alreadyIncremented
         to.fromDotted          <- fromDotted
+        to.isAList             <- isAList
     }
 
     our infDeepItr: getNext() <- {
@@ -411,6 +433,7 @@ struct infDeepItr{
         if(nextItr.state == sEOL){
           Allocate(retVal)
           retVal.state <- sEOL
+          retVal.isAList <- nextItr.isAList
           retVal.next <- NULL
         } else if(fromDotted or nextItr.crntCursor.item.itmMode == mDots){ /- Make a new DOTTED item
             retVal <- fillDotChild(nextItr)
@@ -501,10 +524,11 @@ struct agent{
 
     void: prepWorkList(our infItr: ciItr) <- {
         our infon: CI <- ciItr.item
+        if (CI.workListPrepped){return()}else{CI.workListPrepped <- 1}
         me int: cursor <- CI.value.cursor
         withEach count in WHILE(true):{
             if(CI.isFunc!=0 or CI.isFuncArg!=0){
-                if(CI.isFuncArg!=0){  /- Swap func bady with args
+                if(CI.isFuncArg!=0){  /- Swap func body with args
                     me infon: CITmp <- CI
                     CI <deep- CI.aux1
                     CI.isFunc <- true
@@ -646,7 +670,7 @@ struct agent{
                 our infon: crntInfon <- crntItem.LHS.crntCursor.item
                 withEach count in WHILE(nextItem.LHS.state != sSecondVisit and !(nextItem.LHS.crntCursor.item === crntInfon)):{
                     if(nextItem.LHS.fromDotted){
-                        if(crntInfon.value.items[crntIDX].itmMode==mDots and count==0){
+                        if(count==0 and crntInfon.value.items[crntIDX].itmMode==mDots ){
                             crntInfon.deleteNth(crntIDX)
                         }
                         nextItem.LHS.crntCursor.insertAtIdx(crntIDX, nextItem.LHS.crntCursor.item)
@@ -733,6 +757,7 @@ struct agent{
 
     void: addWorkItemsToAgenda(me int: priority, our aItem: pred, our infDeepItr: itrToProcess)<-{
         our infon: i <- itrToProcess.crntCursor.item
+        if (i.workItemsAdded){return()}else{i.workItemsAdded <- 1}
         withEach workItem in i.wrkList:{
             our infDeepItr: newIDP
             Allocate(newIDP)
