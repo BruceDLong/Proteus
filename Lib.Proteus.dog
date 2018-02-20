@@ -141,17 +141,6 @@ model infItr{
         return(parent.item.value.items[idx-1])
     }
 
-
-    our infItr:subItemNextItr() <- {
-        our infItr: nxt <- nextItr()
-        withEach r in WHILE(nxt!= NULL and nxt.item == NULL and nxt.idx>1 and nxt.parent!=NULL and nxt.parent.item.itmMode==mSubItems):{
-            nxt <- nxt.parent
-            nxt <- nxt.nextItr()
-        }
-        if(nxt.item == NULL){ nxt<-NULL }
-        return(nxt)
-    }
-
     void: copyThisTo(our infItr: to) <- {
         to.item <- item
         to.parent <- parent
@@ -266,6 +255,7 @@ struct infDeepItr{
     }
 
     me bool: isASeq(our infon: i) <- {
+        /-if(i.value.format==fConcat){print("ENTERING CONCAT\n")}
         return ((i.value.format==fLiteral and i.value.fType==LST) or i.value.format==fConcat)
     }
 
@@ -311,7 +301,8 @@ struct infDeepItr{
             case sNotASeq:{
                 if(crntCursor.parent==NULL){state <- sEOL; return()}
                 /- if current item not last item
-                me int: nextCursor <- crntCursor.idx +1
+                me int: nextCursor <- crntCursor.idx
+                if(alreadyIncremented==0){nextCursor<-nextCursor+1} else {alreadyIncremented<-false}
                 if(nestLvl==0){
                     crntCursor.item <- NULL;
                     state <- sEOL
@@ -386,10 +377,8 @@ struct infDeepItr{
     }
 
     void: deleteCrnt() <- {
-        if(state == sSecondVisit){
-            crntCursor.deleteCrnt()
-            alreadyIncremented <- true
-        } else {state<-sError}
+        crntCursor.deleteCrnt()
+        alreadyIncremented <- true
     }
 
     our infDeepItr: fillDotChild(their infDeepItr: parent) <- {
@@ -527,7 +516,8 @@ struct agent{
         if (CI.workListPrepped){return()}else{CI.workListPrepped <- 1}
         me int: cursor <- CI.value.cursor
         withEach count in WHILE(true):{
-            if(CI.isFunc!=0 or CI.isFuncArg!=0){
+            if(CI.isFunc or CI.isFuncArg){
+                print("HANDLING FUNCTION ARGS")
                 if(CI.isFuncArg!=0){  /- Swap func body with args
                     me infon: CITmp <- CI
                     CI <deep- CI.aux1
@@ -547,6 +537,7 @@ struct agent{
                 CI.aux1 <- NULL
             }
             if(cursor != cDefault){
+                print("HANDLING FUNCTION USAGE")
                 CI.value.cursor <- cDefault
                 our infon: aux Allocate(aux)
                 aux <deep- CI
@@ -749,16 +740,27 @@ struct agent{
 
     void: addWorkItemsToAgenda(me int: priority, our aItem: pred, our infDeepItr: itrToProcess)<-{
         our infon: i <- itrToProcess.crntCursor.item
-        if (i.workItemsAdded){return()}else{i.workItemsAdded <- 1}
-        withEach workItem in i.wrkList:{
+        if(i.workItemsAdded){return()}else{i.workItemsAdded <- 1}
+        if(false and i.wrkList.size()==0){
             our infDeepItr: newIDP
             Allocate(newIDP)
-            newIDP.initialize(workItem)
+            newIDP.crntCursor <- NULL
             our aItem: newItem
             Allocate(newItem)
             newItem.init(0,itrToProcess,newIDP)
             if(pred != NULL){newItem.predecessors.pushLast(pred)}
             agenda.addItem(newItem)
+        } else {
+            withEach workItem in i.wrkList:{
+                our infDeepItr: newIDP
+                Allocate(newIDP)
+                newIDP.initialize(workItem)
+                our aItem: newItem
+                Allocate(newItem)
+                newItem.init(0,itrToProcess,newIDP)
+                if(pred != NULL){newItem.predecessors.pushLast(pred)}
+                agenda.addItem(newItem)
+            }
         }
     }
 
@@ -766,6 +768,7 @@ struct agent{
     void: normalize(our infon: i) <- {
       /-  testIterator(i)
       /-  exit(2)
+        print("NORMALIZING: ", printInfon(i) ,"\n")
         our infDeepItr: ii
         Allocate(ii)
         ii.initialize(i)
@@ -774,12 +777,6 @@ struct agent{
         agenda.processAgenda()
         i.isNormed <- true
     }
-
-/* TODO: Check these for changes
-    our infItr[our list]: doWorkList(our infItr: ciItr) <- {}
-    our infItr[our list]: fetchNodesNormalForm(their infDeepItr: cii) <- {}
-    void: normalize(our infon: i) <- {}
-*/
 
     me string: fetchAsStr(their infon: i) <- {return(i.value.str)}
     me uint64: fetchAsNum(their infon: i) <- {return(i.value.num)}
