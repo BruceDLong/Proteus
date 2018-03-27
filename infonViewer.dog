@@ -14,7 +14,7 @@ Authors = "Bruce Long"
 Description = "DataDog gives you the numbers of your life."
 ProgramOrLibrary = "program"
 
-featuresNeeded = [GUI_ToolKit, Dashboard, Proteus]
+featuresNeeded = [GUI_ToolKit, Dashboard, Proteus, ReadMultiLine, Terminal, Unicode, Threads]
 
 LicenseText = `This file is part of the "Proteus suite" All Rights Reserved.`
 
@@ -98,8 +98,9 @@ struct dataMan{
      /-   me int: timerID
 
        if(InfSrcTypeIDTag=="dispInfon"){
-            our display_infon: dBoard Allocate(dBoard)
-            dBoard.update("TopInfon", ">", Parse_infon("*4+{3 _ $ *3+{...}} = *4+{3 4 'hi' {5 6 7}}"))  /-("{ {'A'|...}  'AARON'} = 'AAAARON'"))
+            /-our display_infon: dBoard
+            Allocate(dBoard)
+            dBoard.update("TopInfon", ">", Parse_infon("_=123"))  /-"*4+{3 _ $ *3+{...}} = *4+{3 4 'hi' {5 6 7}}"))  /-("{ {'A'|...}  'AARON'} = 'AAAARON'"))
             dBoard.setPos(15,15,15+20)
             dashBoard.children.pushLast(dBoard)
            /- callPeriodically(dispInfon, dispInfonSrc, 100)
@@ -159,7 +160,83 @@ struct GLOBAL{
         dashBoard.draw(cr)
         return(false)
     }
+}
 
+struct infonUpdateData {
+    me string: txt1
+    me string: txt2
+    our infon: i
+}
+
+struct GLOBAL{
+    their clip: theClip
+    our display_infon: dBoard
+    void: CallInfonUpdateInternal(their infonUpdateData: data) <- {
+        their infonUpdateData:  IUD <- data
+        dBoard.update(IUD.txt1, IUD.txt2, IUD.i)
+        markDirtyArea(drawing_area, 0,0,1000,1000)
+    }
+}
+
+struct clip: inherits = "Thread"{
+
+    their readMultiLine: RML
+    me bool: stepMode <- true
+
+    void: CallInfonUpdateExternal(me string: txt1, me string: txt2, our infon: i) <- {
+        their infonUpdateData: IUD; Allocate(IUD)
+        IUD.txt1 <- txt1
+        IUD.txt2 <- txt2
+        IUD.i <- i
+        their GMainContext: GUIContext <- g_main_context_get_thread_default()
+        g_main_context_invoke(GUIContext, GSourceFunc(CallInfonUpdateInternal), IUD);
+    }
+
+    void: dispAndWait(our infon: i, me string: mesg) <- {
+        if(RML!=NULL and stepMode){
+            RML.message <- mesg
+            RML.refreshDisplay(0)
+            CallInfonUpdateExternal("TopInfon", ">", i)
+            waitForSpacePressed(RML.readMultiLineGUIMode)
+            RML.message <- ""
+        }
+    }
+
+    void: run()<-{
+        me string: PromptChars <- " >~$Ss=?#:"
+        Allocate(RML,1,PromptChars)
+        RML.initNCurses()
+        me bool: done <- false
+        me EParser: parser
+        parser.populateGrammar()
+        our infon: world
+        Allocate(world)
+        me agent: A
+        our infon: crntInfon
+        RML.addUserMesg("The Proteus CLI. Type some infons, 'quit' or 'help':", 5+shiftLeft(8, 4))  /- ColrMesg + tagMesg
+        withEach count in WHILE(!done):{
+            me string: inputStr <- RML.readLines()
+            if(inputStr=="quit" or  RML.cmd==4){break()}  /-rml.cmd==CTRLD
+            else if (inputStr=="help"){}
+            else if (inputStr=="dict"){}
+            else if (inputStr==""){continue()}
+            else{
+                parser.initPosStateSets(parser.infon_str, inputStr)
+                parser.doParse()
+                if(parser.doesParseHaveError()){
+                    RML.message <- "Error:" + parser.errorMesg
+                } else {
+                    our stateRec: topItem <- parser.resolve(parser.lastTopLevelItem, "")
+                    Allocate(crntInfon)
+                    parser.Extract_infon_to_infon(topItem, crntInfon)
+                    dispAndWait(crntInfon, "Next: normalize()")
+                    A.normalize(crntInfon)
+                    me string:result <- A.printInfon(crntInfon)
+                    RML.addUserMesg(result, 3+shiftLeft(6, 4))  /- ColrResultOK + tagResult
+                }
+            }
+        }
+    }
 }
 
 
@@ -199,5 +276,8 @@ struct APP{
         gui.setWidgetSize(drawing_area, widgetWidth(thisApp.scrollerRef), widgetHeight(thisApp.scrollerRef))
         EventDispatcher.registerWidgetForEventDispatcher(drawing_area, dashBoard)
         gui.addToContainerAndExpand(frame, scrollerFrame)
+
+        Allocate(theClip)
+        theClip.start()
     }
 }
