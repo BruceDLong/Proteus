@@ -21,8 +21,8 @@ do ManageCmdLine(cmd)
 
 
 model pureInfon{
-    me mode[tUNKNOWN, NUM, STR, LST]: fType
-    me mode[fUNKNOWN, fConcat, fLiteral]: format
+    me mode[tUnknown, NUM, STR, LST]: fType
+    me mode[fUnknown, fConcat, fLiteral]: format
     me mode[fDefault, fFloat, fFraction, fSingleQuote, fHereDoc, fSizedBin]: literalFormat
     me mode[bDec, bBin, bHex]:numBase
     me mode[cDefault, cGetLast, cGetFirst, cGetMarked]: cursor
@@ -68,8 +68,8 @@ model infon{
     our infon: aux2
     me string: tag
     our infItr[list]: wrkList
-    flag: workListPrepped
-    flag: workItemsAdded
+    flag: wrkLstPreped
+    flag: wrkItmsAdded
     /-flag: wrkListIsAlts
 
     our infon: getLastItem() <- {
@@ -124,6 +124,7 @@ model infItr{
     our infItr: parent
     me  int: idx
     mode [asID, asFirst, asLast, asMarked, asFirstParent, asLastParent, asMarkedParent]: target
+    flag: wasProcessed
 
     our infItr: nextItr() <- {
         our infItr:: ret();
@@ -178,7 +179,7 @@ string listItem{
     me mode[mItem, mSubItems, mDots, mTagDefn]: itmMode
      >[ (>{"class" >ws > CID:tag > ws > our infon:inf} <=> itmMode=mTagDefn;)
       | (>our infon:inf <=> itmMode=mItem;)
-      | ("..." <=> itmMode=mDots; value.format=fUNKNOWN;)
+      | ("..." <=> itmMode=mDots; value.format=fUnknown;)
       | (>{"#" >ws >our infon:inf} <=> itmMode=mSubItems;)
       ]
 }
@@ -186,8 +187,8 @@ string listItem{
 
 string pureInfon{
     >ws
-    >[ ( >[ (>uint64: num <=> format = fLiteral;) | ("_" <=> format = fUNKNOWN; num=0; )]   <=>  fType = NUM;)
-     | ( >[ (>string: str <=> format = fLiteral;) | ("$" <=> format = fUNKNOWN; str="";)]   <=>  fType = STR;)
+    >[ ( >[ (>uint64: num <=> format = fLiteral;) | ("_" <=> format = fUnknown; num=0; )]   <=>  fType = NUM;)
+     | ( >[ (>string: str <=> format = fLiteral;) | ("$" <=> format = fUnknown; str="";)]   <=>  fType = STR;)
      | ( >[ (LISTBODY({,}) <=> format=fLiteral; cursor=cDefault;)
           | (LISTBODY([,]) <=> format=fLiteral; cursor=cGetLast;)
           | (LISTBODY((,)) <=> format=fConcat;  cursor=cDefault;)
@@ -204,7 +205,7 @@ string infon: StartSymbol="true" {
     | ( >[ (>{ >[("*" <=>  size.inverted = false; ) | ("/" <=>  size.inverted = true; ) ] > me pureInfon: size
                >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ] > me pureInfon: value
             } <=> size.fType=NUM; value.sizeGiven=true;)
-         | (>{ >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ][opt] > me pureInfon: value}  <=> size.num=0; size.fType=NUM; size.format=fUNKNOWN; value.sizeGiven=false;)
+         | (>{ >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ][opt] > me pureInfon: value}  <=> size.num=0; size.fType=NUM; size.format=fUnknown; value.sizeGiven=false;)
          ]   <=>   infMode=isLiteral;
       )
 
@@ -388,10 +389,10 @@ struct infDeepItr{
             child <- infonType /- should be a lazy cow copy
         } else {
             Allocate(child)
-            child.value.fType   <- tUNKNOWN
+            child.value.fType   <- tUnknown
             child.infMode       <- isUnknown
             child.itmMode       <- mItem
-            child.value.format  <- fUNKNOWN
+            child.value.format  <- fUnknown
         }
         our infDeepItr: tentativeItr
         Allocate(tentativeItr)
@@ -511,23 +512,23 @@ struct agent{
         }
     }
 
-    void: prepWorkList(our infItr: ciItr) <- {
-        our infon: CI <- ciItr.item
-        if (CI.workListPrepped){return()}else{CI.workListPrepped <- 1}
+    void: prepWorkList(our infDeepItr: ciItr) <- {
+        our infon: CI <- ciItr.crntCursor.item
+        if (CI.wrkLstPreped){return()}else{CI.wrkLstPreped <- 1}
         me int: cursor <- CI.value.cursor
         withEach count in WHILE(true):{
             if(CI.isFunc or CI.isFuncArg){
-                print("HANDLING FUNCTION ARGS")
+               /- print("HANDLING FUNCTION ARGS\n")
                 if(CI.isFuncArg!=0){  /- Swap func body with args
                     me infon: CITmp <- CI
                     CI <deep- CI.aux1
-                    CI.isFunc <- true
+                    CI.isFunc <- false
                     CI.isFuncArg <- false
                     CI.invertFunc <- CITmp.invertFunc
 
                     Allocate( CI.aux1, CITmp)
                     CI.aux1.aux1 <- NULL
-                    CI.aux1.isFunc <- true
+                    CI.aux1.isFunc <- false
                     CI.aux1.isFuncArg <- false
                 }
                 our infon: tmp
@@ -535,9 +536,11 @@ struct agent{
                 else {tmp <- CI.getFirstItem()}
                 tmp.wrkList.pushLast(makeInfItr(CI.aux1, NULL, 0))
                 CI.aux1 <- NULL
+                if(CI.value.fType==LST){ciItr.state <- sFirstVisit}
+                else if(CI.value.fType!=LST){ciItr.state <- sNotASeq}
             }
             if(cursor != cDefault){
-                print("HANDLING FUNCTION USAGE")
+              /- print("HANDLING FUNCTION USAGE\n")
                 CI.value.cursor <- cDefault
                 our infon: aux Allocate(aux)
                 aux <deep- CI
@@ -636,23 +639,25 @@ struct agent{
     void: CO_SUBSCRIBE_SIZES(their infon: from, their infon: to) <- {}
 
     our aItem: stitch(our aItem: crntItem, me string: indent)<-{
+        /-print(indent + "STITCH: ", crntItem.printAgendaItem() ,"  ")
         our aItem: retVal <- NULL
         me bool: copyRHSTypeToLHS <- crntItem.copyRHSTypeToLHS
         me int: sizeAction <- crntItem.sizeAction
-        me int: valueAction <- crntItem.valueAction
+        me int: valueAction <- crntItem.valueAction             crntItem.valueAction <- false
         our infDeepItr: LHS <- crntItem.LHS
         our infDeepItr: RHS <- crntItem.RHS
         switch(LHS.state) {
             case sNotASeq:{
-                if(true or copyRHSTypeToLHS){ LHS.crntCursor.item.value.fType <- RHS.crntCursor.item.value.fType}
-                LHS.crntCursor.item.infMode <- RHS.crntCursor.item.infMode
+                if(RHS.crntCursor!=NULL){
+                    if(true or copyRHSTypeToLHS){ LHS.crntCursor.item.value.fType <- RHS.crntCursor.item.value.fType}
+                    LHS.crntCursor.item.infMode <- RHS.crntCursor.item.infMode
 
-                if(sizeAction == copySizeRHStoLHS)     {DO_COPY(RHS.crntCursor.item.size, LHS.crntCursor.item.size)}
-                else if(sizeAction == copySizeLHStoRHS){DO_COPY(LHS.crntCursor.item.size, RHS.crntCursor.item.size)}
+                    if(sizeAction == copySizeRHStoLHS)     {DO_COPY(RHS.crntCursor.item.size, LHS.crntCursor.item.size)}
+                    else if(sizeAction == copySizeLHStoRHS){DO_COPY(LHS.crntCursor.item.size, RHS.crntCursor.item.size)}
 
-                if(valueAction == copyValueRHStoLHS)     {DO_COPY(RHS.crntCursor.item.value, LHS.crntCursor.item.value)}
-                else if(valueAction == copyValueLHStoRHS){DO_COPY(LHS.crntCursor.item.value, RHS.crntCursor.item.value)}
-
+                    if(valueAction == copyValueRHStoLHS)     {DO_COPY(RHS.crntCursor.item.value, LHS.crntCursor.item.value)}
+                    else if(valueAction == copyValueLHStoRHS){DO_COPY(LHS.crntCursor.item.value, RHS.crntCursor.item.value)}
+                }
                 retVal <- crntItem.successor
             }
             case sFirstVisit:{
@@ -660,10 +665,12 @@ struct agent{
                 me int: crntIDX <- 0
                 our infon: crntInfon <- crntItem.LHS.crntCursor.item
                 withEach count in WHILE(nextItem.LHS.state != sSecondVisit and !(nextItem.LHS.crntCursor.item === crntInfon)):{
+                    /- TODO: in '...' cases this goes over things that have already been stitched. Try to optimize.
                     if(nextItem.LHS.fromDotted){
                         if(count==0 and crntInfon.value.items[crntIDX].itmMode==mDots ){
                             crntInfon.deleteNth(crntIDX)
                         }
+                        nextItem.LHS.fromDotted <- false
                         nextItem.LHS.crntCursor.insertAtIdx(crntIDX, nextItem.LHS.crntCursor.item)
                     }
                     nextItem <- stitch(nextItem, indent + "     ")
@@ -686,7 +693,7 @@ struct agent{
         me bool: LooseType<-false   /- Strict or loose typing?
         me bool: reject <- false    /- ReturnStatus
 
-        if(LHS.value.fType==tUNKNOWN and RHS.value.fType!=tUNKNOWN){
+        if(LHS.value.fType==tUnknown and RHS.value.fType!=tUnknown){
             agendaItem.copyRHSTypeToLHS <- 1
         } else {agendaItem.copyRHSTypeToLHS <- 0}
 
@@ -694,28 +701,28 @@ struct agent{
         if(! LooseType){
             me int: LHSFormat <- LHS.size.format
             me int: RHSFormat <- RHS.size.format
-            if(LHSFormat != fUNKNOWN and RHSFormat != fUNKNOWN){
+            if(LHSFormat != fUnknown and RHSFormat != fUnknown){
                 sizeStatus <- DO_VERIFY(LHS.size, RHS.size)
                 if (sizeStatus.cmd==matchFailed){agendaItem.sizeAction<-sizeFailed; reject<-true;}
                 else if (sizeStatus.cmd== wasVerified){agendaItem.sizeAction<-sizeVerified}
             }
-            else if(LHSFormat != fUNKNOWN and RHSFormat == fUNKNOWN){agendaItem.sizeAction<-copySizeLHStoRHS}
-            else if(LHSFormat == fUNKNOWN and RHSFormat != fUNKNOWN){agendaItem.sizeAction<-copySizeRHStoLHS}
-            else if(LHSFormat == fUNKNOWN and RHSFormat == fUNKNOWN){CO_SUBSCRIBE_SIZES(LHS, RHS)}
+            else if(LHSFormat == fUnknown and RHSFormat != fUnknown){agendaItem.sizeAction<-copySizeRHStoLHS}
+            else if(LHSFormat != fUnknown and RHSFormat == fUnknown){agendaItem.sizeAction<-copySizeLHStoRHS}
+            else if(LHSFormat == fUnknown and RHSFormat == fUnknown){CO_SUBSCRIBE_SIZES(LHS, RHS)}
         }
         me mergeCmd: valueStatus; valueStatus.cmd<-0
         if(!reject){
             me int: LHSFormat <- LHS.value.format
             me int: RHSFormat <- RHS.value.format
 
-            if(LHSFormat != fUNKNOWN and RHSFormat != fUNKNOWN){
+            if(LHSFormat != fUnknown and RHSFormat != fUnknown){
                 valueStatus <- DO_VERIFY(LHS.value, RHS.value)
                 if(valueStatus.cmd==matchFailed){agendaItem.valueAction<-valueFailed; reject<-true;}
                 else if (valueStatus.cmd== wasVerified){agendaItem.valueAction<-valueVerified}
             }
-            else if(LHSFormat != fUNKNOWN and RHSFormat == fUNKNOWN){agendaItem.valueAction<-copyValueLHStoRHS}
-            else if(LHSFormat == fUNKNOWN and RHSFormat != fUNKNOWN){agendaItem.valueAction<-copyValueRHStoLHS}
-            else if(LHSFormat == fUNKNOWN and RHSFormat == fUNKNOWN){CO_SUBSCRIBE_VALUES(LHS, RHS)}
+            else if(LHSFormat == fUnknown and RHSFormat != fUnknown){agendaItem.valueAction<-copyValueRHStoLHS}
+            else if(LHSFormat != fUnknown and RHSFormat == fUnknown){agendaItem.valueAction<-copyValueLHStoRHS}
+            else if(LHSFormat == fUnknown and RHSFormat == fUnknown){CO_SUBSCRIBE_VALUES(LHS, RHS)}
         }
 
         if (valueStatus.cmd == wasVerified and RHS.value.fType == STR){
@@ -741,18 +748,20 @@ struct agent{
     me int: addWorkItemsToAgenda(me int: priority, our aItem: pred, our infDeepItr: itrToProcess)<-{
         me int: numItemsAdded <- 0
         our infon: i <- itrToProcess.crntCursor.item
-        if(i.workItemsAdded){return(0)}else{i.workItemsAdded <- true}
+        if(i.wrkItmsAdded){return(0)}else{i.wrkItmsAdded <- true}
        /- theClip.dispAndWait(i, "addWorkItemsToAgenda - A")
-        if(pred == NULL and i.wrkList.size()==0){
-            our infDeepItr: newIDP
-            Allocate(newIDP)
-            newIDP.crntCursor <- NULL
-            print("MAKING NULL RHS\n")
-            our aItem: newItem
-            Allocate(newItem)
-            newItem.init(0,itrToProcess,newIDP)
-            if(pred != NULL){newItem.predecessors.pushLast(pred)}
-            agenda.addItem(newItem)
+        if(i.wrkList.size()==0){
+            if(pred == NULL){
+                /-print("MAKING NULL RHS: \t")
+                our infDeepItr: newIDP
+                Allocate(newIDP)
+                newIDP.crntCursor <- NULL
+                our aItem: newItem
+                Allocate(newItem)
+                newItem.init(0,itrToProcess,newIDP)
+                if(pred != NULL){newItem.predecessors.pushLast(pred)}
+                agenda.addItem(newItem)
+            }
         } else {
             withEach workItem in i.wrkList:{
                 our infDeepItr: newIDP
@@ -763,6 +772,7 @@ struct agent{
                 newItem.init(0,itrToProcess,newIDP)
                 if(pred != NULL){newItem.predecessors.pushLast(pred)}
                 agenda.addItem(newItem)
+                workItem.wasProcessed <- true
                 numItemsAdded <- numItemsAdded+1
             }
         }
@@ -771,13 +781,13 @@ struct agent{
 
 
     void: normalize(our infon: i) <- {
-      /-  testIterator(i)
-      /-  exit(2)
+      /-  testIterator(i);  exit(2)
        /- print("NORMALIZING: ", printInfon(i) ,"\n")
         our infDeepItr: ii
         Allocate(ii)
         ii.initialize(i)
         agenda.parentAgent <- self
+        prepWorkList(ii)
         addWorkItemsToAgenda(0, NULL, ii)
         agenda.processAgenda()
         i.isNormed <- true
@@ -826,13 +836,13 @@ struct agent{
                 else if(size==NULL and pure.isLstSize==0){S <- S+"*"}
         }
         if(pure.fType == NUM){
-            if(pure.format == fUNKNOWN){S<-S+"_"}
+            if(pure.format == fUnknown){S<-S+"_"}
             else{
                 me uint64:N <- pure.num
                 S <- S+ toString(N)
             }
         } else if(pure.fType == STR){
-            if(pure.format == fUNKNOWN){S<-S+"$"}
+            if(pure.format == fUnknown){S<-S+"$"}
             else{
                 me string: str <- pure.str
                 S <- S+"'"+ str + "'"
@@ -865,7 +875,7 @@ struct agent{
         me string: S <- ""
         if(i ==  NULL){return("NULL")}
         if(i.itmMode==mSubItems){S<-S+"#"}
-        else if(i.itmMode==mDots){S<-S+"..." return(S)}
+        else if(i.itmMode==mDots){S<-S+"..."; return(S)}
         else if(i.itmMode==mTagDefn){S<-S+"class "+i.tag+" "}
 
         if(i.asNot){S <- S+"!"}
@@ -878,7 +888,9 @@ struct agent{
 
         if(i.isNormed ==0){
             withEach WorkItm in i.wrkList:{
-                S <- S+" = "+printInfon(WorkItm.item)
+                if(!WorkItm.wasProcessed){
+                    S <- S+" = "+printInfon(WorkItm.item)
+                }
             }
 
             if (i.isFunc){
