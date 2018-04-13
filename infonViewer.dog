@@ -21,6 +21,7 @@ LicenseText = `This file is part of the "Proteus suite" All Rights Reserved.`
 runCode=`
     thisApp.loadAndParseSettingsAndData()
     isFirstRun<-true
+    Allocate(CORE); CORE.init("./assets")
     dataManager.initialize()
     dashBoard.initialize(0,0,100,100,1,256)
 `
@@ -62,7 +63,40 @@ struct infonTypeSpec{       /- Represents an infon source / views
 }
 
 /-//////////   D a t a M a n   a n d   i t s   s u p p o r t i n g   s t r u c t s
+struct infViewerStyle: inherits = 'styleProvider'{
+    const int: changedColor    <- 4
+    const int: LHS_infonColor  <- 5
+    const int: RHS_infonColor  <- 6
 
+    me Color: forground   <- GUI.black
+    me Color: background  <- GUI.white
+    me Color: highlight   <- GUI.blue
+    me Color: changedItem <- GUI.red
+    me Color: LHS_color   <- GUI.blue
+    me Color: RHS_color   <- GUI.green
+
+    their void: crntRHS
+    their void: crntLHS
+
+    their Color: getColor(their void: ID, me int: attributeCode)  <- {
+        switch(attributeCode){
+            case forgroundColor:  {
+                if(ID!=NULL){
+                    if(ID===crntLHS){return(LHS_color)}
+                    if(ID===crntRHS){return(RHS_color)}
+                }
+                return(forground)
+            }
+            case backgroundColor: {return(background)}
+            case highlightColor:  {return(highlight)}
+            case changedColor:    {return(changedItem)}
+            case LHS_infonColor:  {return(LHS_color)}
+            case RHS_infonColor:  {return(RHS_color)}
+            default: {}
+        }
+        return(NULL)
+    }
+}
 struct trackerConfigParams{
     me string: name
     me string: dateType
@@ -92,26 +126,31 @@ struct dispInfon{
 
 struct dataMan{
     our dataSourceDetails[list]: currentTrackers
-
     me int: addTracker(our dataSourceDetails: sourceDetails) <- {
         me string: InfSrcTypeIDTag <- sourceDetails.infonArchetype.IdTag
-     /-   me int: timerID
 
        if(InfSrcTypeIDTag=="dispInfon"){
-            /-our display_infon: dBoard
-            Allocate(dBoard)
-            World <- Parse_infon("{...}")
-            dBoard.update("World", ">", World)
-            dBoard.setPos(15,15,15+20)
-            dashBoard.children.pushLast(dBoard)
-           /- callPeriodically(dispInfon, dispInfonSrc, 100)
+            /-our display_infon: TopInfonDash
+            Allocate(TopInfonDash)
+            TopInfonDash.update("World", ">", CORE.WORLD)
+            /-TopInfonDash.setPos(15,15,15+20)
+            dashBoard.children.pushLast(TopInfonDash)
+        }
+        else if(InfSrcTypeIDTag=="dispAgendaItem"){
+            Allocate(topAItem)
+            /-our display_infon: TopAItemDash
+            Allocate(TopAItemDash)
+            TopAItemDash.update("aITEM", ">", topAItem)
+            /-TopAItemDash.setPos(15, TopInfonDash.extY+30,15+20)
+            dashBoard.children.pushLast(TopAItemDash)
         }
 
-    me int: trackerID <-0
+        me int: trackerID <- 0
         return(trackerID)
     }
 
     our infonTypeSpec[list]: TypesOfInfoSources_Views
+    our infViewerStyle: styler
     void: initTypesOfInfoSources_Views() <-{
         our infonTypeSpec: infSpec
 
@@ -121,11 +160,20 @@ struct dataMan{
         infSpec.shortTitle <- "infon"
         infSpec.isDefault <- true
         TypesOfInfoSources_Views.pushLast(infSpec)
+
+
+        Allocate(infSpec)
+        infSpec.IdTag <- "dispAgendaItem"
+        infSpec.longTitle <- "Agenda Item"
+        infSpec.shortTitle <- "aItem"
+        infSpec.isDefault <- true
+        TypesOfInfoSources_Views.pushLast(infSpec)
     }
 
     void: initialize() <- {
-        Allocate(World)
         Allocate(dashBoard)
+        Allocate(styler)
+        dashBoard.styler <- styler
         currentTrackers.clear()
         initTypesOfInfoSources_Views()     /- Load the supported types of infon tracking from literals
         if(isFirstRun){
@@ -156,24 +204,25 @@ struct infonUpdateData {
     me string: txt2
     our infon: i
 }
-
+struct aItemUpdateData {
+    me string: txt1
+    me string: txt2
+    our aItem: i
+}
 struct GLOBAL{
-
     me bool: isFirstRun
+    their clip: theClip
+    our ProteusCore: CORE
     me dataMan: dataManager
     our dashboard: dashBoard
     me GUI_canvas: drawing_area
 
-    their clip: theClip
-    our infon: World
-    our display_infon: dBoard
+    our display_infon: TopInfonDash
+    our display_aItem: TopAItemDash
 
-    our infon: crntLHS
-    our infon: crntRHS
-    our infon: auxColor1
-    our infon: auxColor2
+    our aItem: topAItem
 
-    me bool: drawAppArea_cb (me GUI_item: Widget, me GUI_ctxt: cr)  <- { /-, me gpointer: data)  <- {
+    me bool: drawAppArea_cb (me GUI_item: Widget, me GUI_ctxt: cr)  <- { /-, me gpointer: data)
         /-    gui.fetchAreaToBeDrawn(areaToBeDrawn)
         thisApp.gui.setWidgetSize(drawing_area, dashBoard.width, dashBoard.height)
         dashBoard.draw(cr)
@@ -182,9 +231,18 @@ struct GLOBAL{
 
     void: CallInfonUpdateInternal(their infonUpdateData: data) <- {
         their infonUpdateData:  IUD <- data
-        dBoard.update(IUD.txt1, IUD.txt2, IUD.i)
-        dBoard.setPos(15,15,15+20)
-        markDirtyArea(drawing_area, 0,0,1000,1000)
+        TopInfonDash.update(IUD.txt1, IUD.txt2, IUD.i)
+      /-  dashBoard.setPos(15,15,15+20)
+        markDirtyArea(drawing_area, 0,0,TopInfonDash.extX, TopInfonDash.extY)
+    }
+
+
+    void: CallAItemUpdateInternal(their aItemUpdateData: data) <- {
+        their aItemUpdateData:  IUD <- data
+        TopAItemDash.update(IUD.txt1, IUD.txt2, IUD.i)
+      /-  dashBoard.setPos(15,15,15+20)
+      dashBoard.setPos(15,15,15+20)
+        markDirtyArea(drawing_area, 0,0,TopAItemDash.extX, TopAItemDash.extY)
     }
 }
 
@@ -201,28 +259,32 @@ struct clip: inherits = "Thread"{
         their GMainContext: GUIContext <- g_main_context_get_thread_default()
         g_main_context_invoke(GUIContext, GSourceFunc(CallInfonUpdateInternal), IUD);
     }
+    void: CallAItemUpdateExternal(me string: txt1, me string: txt2, our aItem: i) <- {
+        their aItemUpdateData: IUD; Allocate(IUD)
+        IUD.txt1 <- txt1
+        IUD.txt2 <- txt2
+        IUD.i <- i
+        their GMainContext: GUIContext <- g_main_context_get_thread_default()
+        g_main_context_invoke(GUIContext, GSourceFunc(CallAItemUpdateInternal), IUD);
+    }
 
-    void: dispAndWait(our infon: i, me string: mesg) <- {
+    void: dispAndWait(me string: mesg) <- {
         if(RML!=NULL and stepMode){
             RML.message <- mesg
             RML.refreshDisplay(0)
-            CallInfonUpdateExternal("TopInfon", ">", i)
+            CallInfonUpdateExternal("Top infon", ">", CORE.WORLD)
+            if(topAItem!=NULL) {CallAItemUpdateExternal("Agenda Items", ">", topAItem)}
             waitForSpacePressed(RML.readMultiLineGUIMode)
             RML.message <- ""
         }
     }
 
     void: run()<-{
-        me string: PromptChars <- " >~$Ss=?#:"
-        Allocate(RML,1,PromptChars)
+        Allocate(RML,1," >~$Ss=?#:")
         RML.initNCurses()
-        me bool: done <- false
-        me EParser: parser
-        parser.populateGrammar()
-
-
-        me agent:a; a.init(World)
         RML.addUserMesg("The Proteus CLI. Type some infons, 'quit' or 'help':", 5+shiftLeft(8, 4))  /- ColrMesg + tagMesg
+
+        me bool: done <- false
         withEach count in WHILE(!done):{
             me string: inputStr <- RML.readLines()
             if(inputStr=="quit" or  RML.cmd==4){break()}  /-rml.cmd==CTRLD
@@ -230,21 +292,16 @@ struct clip: inherits = "Thread"{
             else if (inputStr=="dict"){}
             else if (inputStr==""){continue()}
             else{
-                parser.initPosStateSets(parser.infon_str, inputStr)
-                parser.doParse()
-                if(parser.doesParseHaveError()){
-                    RML.message <- "Error:" + parser.errorMesg
-                } else {
-                    our stateRec: topItem <- parser.resolve(parser.lastTopLevelItem, "")
-                    our infon: crntInfon
-                    Allocate(crntInfon)
-                    parser.Extract_infon_to_infon(topItem, crntInfon)
-                    a.appendToWorld(crntInfon)
-                    dispAndWait(World, "Next: normalize()")
-                    a.normalize(crntInfon)
-                    dispAndWait(World, "NOMALIZED")
-                    me string:result <- a.printInfon(crntInfon)
+                our infon: crntInfon <- CORE.parseAndExtract(inputStr)
+                if(crntInfon!=NULL){
+                    CORE.a.appendToWorld(crntInfon)
+                    dispAndWait("Next: normalize()")
+                    CORE.a.normalize(crntInfon)
+                    dispAndWait("NOMALIZED")
+                    me string:result <- CORE.a.printInfon(crntInfon)
                     RML.addUserMesg(result, 3+shiftLeft(6, 4))  /- ColrResultOK + tagResult
+                } else {
+                    RML.message <- "Parse Error:" + CORE.parser.errorMesg + " at line " + toString(CORE.parser.errLineNum) + ":" + toString(CORE.parser.errCharPos)
                 }
             }
         }
