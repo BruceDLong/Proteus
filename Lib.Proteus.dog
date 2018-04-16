@@ -55,8 +55,9 @@ model infon{
     flag: isFunc
     flag: isFuncArg
     flag: invertFunc
+    mode[mItem, mSubItems, mDots, mTagDefn]:      itmMode
     mode[isUnknown, newCursor, isTag, isLiteral]: infMode
-    me mode[mItem, mSubItems, mDots, mTagDefn]: itmMode
+    mode[cNone, cThis, cWorld, cContext, cPrev, cNext]:  cursorMode
     me pureInfon: size
     me pureInfon: value
     flag: isNormed
@@ -133,6 +134,16 @@ model infItr{
         return(ret)
     }
 
+    me bool: goNext() <- {
+        if(parent==NULL or item==NULL or idx+1 >= parent.item.value.items.size()){
+            item <- NULL  /- Signify EOL
+            return(false)
+        }
+        idx  <- idx+1
+        item <- parent.item.value.items[idx]
+        return(true)
+    }
+
     our infon: getPrevPtr() <- {
         if(parent==NULL or item==NULL or idx==0) {return(NULL)}
         return(parent.item.value.items[idx-1])
@@ -146,18 +157,22 @@ model infItr{
 
     void: deleteCrnt() <- {
         parent.item.deleteNth(idx)
+        idx <- idx-1
     }
 
-    void: deleteNth(me int: idx) <- {
-        parent.item.deleteNth(idx)
+    void: deleteNth(me int: N) <- {
+        parent.item.deleteNth(N)
+        if(idx >= N){N <- N-1}
     }
 
-    void: insertAtIDX(our infon: i) <- {
+    void: insertAtCursor(our infon: i) <- {
         parent.item.value.items.insert(parent.item.value.items.nthItr(idx), i)
+        idx <- idx+1
     }
 
-    void: insertAtIdx(me int: IDX, our infon: i) <- {
+    void: insertBeforeNth(me int: IDX, our infon: i) <- {
         parent.item.value.items.insert(parent.item.value.items.nthItr(IDX), i)
+        if(idx>IDX){ idx <- idx+1}
     }
 
 }
@@ -193,7 +208,7 @@ string infon: StartSymbol="true" {
     "!"[opt]:asNot
    >[ ( "?" <=> infMode=isUnknown;)
 
-    | ( >{ "%" >[ ("this" <=> tag="this";) | ("W" <=> tag="W";) | ("prev" <=> tag="prev";) | ("next" <=> tag="next";) ]} <=> infMode=newCursor;)
+    | ( >{ "%" >[ ("this" <=> cursorMode=cThis;) | ("W" <=> cursorMode=cWorld;) | ("prev" <=> cursorMode=cPrev;) | ("next" <=> cursorMode=cNext;) ]} <=> infMode=newCursor;)
 
     | ( >[ (>{ >[("*" <=>  size.inverted = false; ) | ("/" <=>  size.inverted = true; ) ] > me pureInfon: size
                >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ] > me pureInfon: value
@@ -277,17 +292,9 @@ model infDeepItr{
 
     void: goNext() <- {
         switch(state) {
-            case sNotASeq:{
-                if(crntCursor.parent==NULL){state <- sEOL; return()}
-                /- if current item not last item
-                me int: nextCursor <- crntCursor.idx
-                if(alreadyIncremented==0){nextCursor<-nextCursor+1} else {alreadyIncremented<-false}
-                if(nestLvl==0){
-                    crntCursor.item <- NULL;
-                    state <- sEOL
-                } else if(nextCursor < crntCursor.parent.item.value.items.size()){
-                    crntCursor.idx <- nextCursor
-                    crntCursor.item <- crntCursor.parent.item.value.items[crntCursor.idx];   /- NextSibling()
+            case sNotASeq: sSecondVisit:{  /- Get the next item or set EOL
+                if(crntCursor.parent==NULL or nestLvl==0){state <- sEOL; return()}
+                if(crntCursor.goNext()){
                     setListSeqFlags()
                 }else{
                     crntCursor <- crntCursor.parent
@@ -303,35 +310,18 @@ model infDeepItr{
                 } else {
                     /-Prepare to iterate children
                     our infItr: tmp
-                    Allocate(tmp); tmp.idx<-crntCursor.idx; tmp.parent<-crntCursor.parent; tmp.item <- crntCursor.item; crntCursor.parent  <- tmp;   /- After ptr bug is fixed, Allocate(crntCursor.parent, crntCursor)
+                    Allocate(tmp); tmp.idx<-crntCursor.idx; tmp.parent<-crntCursor.parent; tmp.item <- crntCursor.item; crntCursor.parent  <- tmp;   /- TODO: After ptr bug is fixed, Allocate(crntCursor.parent, crntCursor)
                     crntCursor.idx <- 0
                     crntCursor.item <- crntCursor.item.value.items[0];
                     setListSeqFlags()
                     nestLvl <- nestLvl+1
                 }
             }
-            case sSecondVisit:{
-                me int: nextCursor <- crntCursor.idx
-                if(alreadyIncremented==0){nextCursor<-nextCursor+1} else {alreadyIncremented<-false}
-                if(nestLvl==0){
-                    crntCursor.item <- NULL;
-                    state <- sEOL
-                } else if(nextCursor < crntCursor.parent.item.value.items.size()){
-                    crntCursor.idx <- nextCursor
-                    crntCursor.item <- crntCursor.parent.item.value.items[crntCursor.idx];   /- NextSibling()
-                    setListSeqFlags()
-                }else{
-                    crntCursor <- crntCursor.parent
-                    state <- sSecondVisit
-                    isAList <- true
-                    nestLvl <- nestLvl-1
-                }
-            }
             case sInited: {state <- sFirstVisit}
             case sEOL:    {crntCursor.item<-NULL}
             case sInvalid:{crntCursor.item<-NULL;   state <- sError}
             case sError:  {crntCursor.item<-NULL}
-            default: {print("Error: invalid iterator state\n")}
+            default: {print("Error: invalid iterator state:", state, "\n")}
         }
     }
 
@@ -481,8 +471,8 @@ struct agent{
     void: prepWorkList(our infDeepItr: ciItr) <- {
         our infon: CI <- ciItr.crntCursor.item
         if (CI.wrkLstPreped){return()}else{CI.wrkLstPreped <- 1}
-        me int: cursor <- CI.value.cursor
         withEach count in WHILE(true):{
+            our infon: newTop<-NULL
             if(CI.isFunc or CI.isFuncArg){
                /- print("HANDLING FUNCTION ARGS\n")
                 if(CI.isFuncArg!=0){  /- Swap func body with args
@@ -505,23 +495,31 @@ struct agent{
                 if(CI.value.fType==LST){ciItr.state <- sFirstVisit}
                 else if(CI.value.fType!=LST){ciItr.state <- sNotASeq}
             }
+            me int: cursor <- CI.value.cursor
             if(cursor != cDefault){
               /- print("HANDLING FUNCTION USAGE\n")
                 CI.value.cursor <- cDefault
                 our infon: aux Allocate(aux)
                 aux <deep- CI
                 normalize(aux)
-                our infon: newTop
                 switch(cursor){  /- TODO: ensure that, when possible, these return subscriptions if needed. e.g., for when last is tentative or a tag or concat.
                     case cGetLast   : {newTop <- aux.getLastItem()}
                     case cGetFirst  : {newTop <- aux.getFirstItem()}
          /-           case cGetMarked : {newTop <- aux.getMarked()}
                 }
-                if(newTop!=NULL) {
-                    CI <deep- newTop
-                    cursor <- CI.value.cursor
+            } else if(CI.infMode==newCursor) {
+                switch(CI.cursorMode){
+                    case cThis:   {} /-{newTop <- thisItem}
+                    case cWorld:  {newTop <- world}
+                    case cContext:{newTop <- context}
+                    case cPrev:   {} /-{newTop <- previous}
+                    case cNext:   {} /-{newTop <- next}
                 }
             } else {break()}
+
+            if(newTop!=NULL) {
+                CI <deep- newTop
+            }
         }
     }
 
@@ -633,7 +631,7 @@ struct agent{
                             crntInfon.deleteNth(crntIDX)
                         }
                         nextItem.LHS.fromDotted <- false
-                        nextItem.LHS.crntCursor.insertAtIdx(crntIDX, nextItem.LHS.crntCursor.item)
+                        nextItem.LHS.crntCursor.insertBeforeNth(crntIDX, nextItem.LHS.crntCursor.item)
                     }
                     nextItem <- stitch(nextItem, indent + "     ")
                     crntIDX <- crntIDX+1
@@ -722,7 +720,7 @@ struct agent{
                 newItem.init(0,itrToProcess,newIDP)
                 if(pred != NULL){newItem.predecessors.pushLast(pred)}
                 agenda.addItem(newItem)
-            if(pred==NULL){topAItem <- newItem}
+/- VIEWER     if(pred==NULL){topAItem <- newItem}
             }
         } else {
             withEach workItem in i.wrkList:{
@@ -734,7 +732,7 @@ struct agent{
                 newItem.init(0,itrToProcess,newIDP)
                 if(pred != NULL){newItem.predecessors.pushLast(pred)}
                 agenda.addItem(newItem)
-            if(pred==NULL){topAItem <- newItem}
+/- VIEWER   if(pred==NULL){topAItem <- newItem}
                 workItem.wasProcessed <- true
                 numItemsAdded <- numItemsAdded+1
             }
@@ -848,7 +846,16 @@ struct agent{
 
         if(i.asNot){S <- S+"!"}
         if(i.infMode==isUnknown){S <- S+"?"}
-        else if(i.infMode==newCursor){S <- S+"%"+i.tag}
+        else if(i.infMode==newCursor){
+            S <- S+"%"
+            switch(i.cursorMode){
+                case cThis:   {S <- S+"this"}
+                case cWorld:  {S <- S+"W"}
+                case cContext:{S <- S+"C"}
+                case cPrev:   {S <- S+"prev"}
+                case cNext:   {S <- S+"next"}
+            }
+        }
         else if(i.infMode==isTag){S <- S+i.tag}
         else if(i.infMode==isLiteral){
              S <- S+printPureInfon(i.value, i.size)
