@@ -12,7 +12,7 @@ Description = "Proteus Engine"
 ProgramOrLibrary = "program"
 TestSpec = "ProteusTests.dog"
 
-featuresNeeded = [ ]
+featuresNeeded = [Logger]
 
 LicenseText = `This file is part of the "Proteus Language suite" All Rights Reserved.`
 infonDumpMode='text'
@@ -26,6 +26,8 @@ struct GLOBAL{
         classDefs.insert(classInfon.tag, classInfon)
     }
 }
+
+#include infonList.dog
 
 model pureInfon{
     me mode[tUnknown, NUM, STR, LST]: fType
@@ -127,6 +129,7 @@ model infon{
 model infItr{
     our infon: item
     our infItr: parent
+ /-   me int: itmItr
     me  int: idx
     mode [asID, asFirst, asLast, asMarked, asFirstParent, asLastParent, asMarkedParent]: target
     flag: wasProcessed
@@ -283,7 +286,7 @@ model infDeepItr{
     me string: ToString() <- {
         me string: S <- ""
         me agent: a
-        if(this==NULL){S<-S+"NULL"}
+        if(self==NULL){S<-S+"NULL"}
         else if(state == sEOL){S<-S+" sEOL"}
         else if(state == sError){S<-S+" sError"}
         else {
@@ -430,7 +433,7 @@ struct agent{
         while(true){
             results <- testItr.getNextDeDotted()
             if(results == NULL){break()}
-            withEach nl in RANGE(0..(results.nestLvl*5)):{print(" ")}
+            withEach nl in RANGE(0..(results.nestLvl*5)){print(" ")}
             print("|: ", results.ToString(), "\n")
             testItr <- results
         }
@@ -560,7 +563,7 @@ struct agent{
         me int: retVal <-0
         lastChar <- min(A.size(), B.size())
         if (lastChar==0){return(0)}
-        withEach pos in RANGE(0..lastChar):{
+        withEach pos in RANGE(0..lastChar){
             if(A[pos]!= B[pos]){
                 return(pos-1)
             }
@@ -603,32 +606,53 @@ struct agent{
     void: CO_SUBSCRIBE_SIZES(their infon: from, their infon: to) <- {}
 
     our aItem: stitch(our aItem: crntItem, me string: indent)<-{
-        /-print(indent + "STITCH: ", crntItem.printAgendaItem(),"\n")
+        log(indent + "STITCH crntaItem: " + crntItem.mySymbol(crntItem) + " is:"+crntItem.printAgendaItem(),"\n")
+ /- Viewer       theClip.dispAndWait("STITCH: " + crntItem.mySymbol(crntItem) + crntItem.printAgendaItem())
         our aItem: retVal <- NULL
         me bool: copyRHSTypeToLHS <- crntItem.copyRHSTypeToLHS
         me int: sizeAction <- crntItem.sizeAction
-        me int: valueAction <- crntItem.valueAction             crntItem.valueAction <- false
+        me int: valueAction <- crntItem.valueAction
+        crntItem.valueAction <- false
         our infDeepItr: LHS <- crntItem.LHS
         our infDeepItr: RHS <- crntItem.RHS
+        our infItr: LHSCursor <- LHS.crntCursor
+        log(indent+"LHSCursor:"+LHSCursor.item.mySymbol(LHSCursor.item))
         switch(LHS.state) {
             case sNotASeq:{
+                log(indent + "In NotASEQ")
                 if(RHS.crntCursor!=NULL and RHS.state!=sSecondVisit){
-                    if(true or copyRHSTypeToLHS){ LHS.crntCursor.item.value.fType <- RHS.crntCursor.item.value.fType}
-                    LHS.crntCursor.item.infMode <- RHS.crntCursor.item.infMode
+                    if(true or copyRHSTypeToLHS){ LHSCursor.item.value.fType <- RHS.crntCursor.item.value.fType}
+                    LHSCursor.item.infMode <- RHS.crntCursor.item.infMode
 
-                    if(sizeAction == copySizeRHStoLHS)     {DO_COPY(RHS.crntCursor.item.size, LHS.crntCursor.item.size)}
-                    else if(sizeAction == copySizeLHStoRHS){DO_COPY(LHS.crntCursor.item.size, RHS.crntCursor.item.size)}
+                    if(sizeAction == copySizeRHStoLHS)     {DO_COPY(RHS.crntCursor.item.size, LHSCursor.item.size)}
+                    else if(sizeAction == copySizeLHStoRHS){DO_COPY(LHSCursor.item.size, RHS.crntCursor.item.size)}
 
-                    if(valueAction == copyValueRHStoLHS)     {DO_COPY(RHS.crntCursor.item.value, LHS.crntCursor.item.value)}
-                    else if(valueAction == copyValueLHStoRHS){DO_COPY(LHS.crntCursor.item.value, RHS.crntCursor.item.value)}
+                    if(valueAction == copyValueRHStoLHS)     {DO_COPY(RHS.crntCursor.item.value, LHSCursor.item.value)}
+                    else if(valueAction == copyValueLHStoRHS){DO_COPY(LHSCursor.item.value, RHS.crntCursor.item.value)}
+                }
+
+                /- Handle when parent is a CONCAT
+                if(LHSCursor.parent!=NULL and LHSCursor.parent.item!=NULL and (LHSCursor.parent.item.value.format==fConcat)){
+                    if(LHSCursor.idx==0){ /- Set parent's type
+                    } else {
+                        our infon: prev <- LHSCursor.getPrevPtr()
+                        log(indent+"Joining "+prev.mySymbol(prev)+" and "+LHSCursor.item.mySymbol(LHSCursor.item))
+                        if(joinOnRight(prev, LHSCursor.item)){
+                            log(indent+"Joined.")
+                            LHS.deleteCrnt()
+                        } else {}  /- Subscribe
+                    }
                 }
                 retVal <- crntItem.successor
             }
             case sFirstVisit:{
+            log(indent + "In sFirstVisit")
                 our aItem: nextItem <- crntItem.successor
+                log(indent+"  nextItem:"+nextItem.mySymbol(nextItem))
                 me int: crntIDX <- 0
-                our infon: crntInfon <- crntItem.LHS.crntCursor.item
-                withEach count in WHILE(nextItem.LHS.state != sSecondVisit and !(nextItem.LHS.crntCursor.item === crntInfon)):{
+                our infon: crntInfon <- LHSCursor.item
+                me int: count <- 0
+                while(nextItem.LHS.state != sSecondVisit and !(nextItem.LHS.crntCursor.item === crntInfon)){
                     if(nextItem.LHS.fromDotted){
                         if(count==0 and crntInfon.value.items[crntIDX].itmMode==mDots ){
                             crntInfon.deleteNth(crntIDX)
@@ -636,13 +660,20 @@ struct agent{
                         nextItem.LHS.fromDotted <- false
                         nextItem.LHS.crntCursor.insertBeforeNth(crntIDX, nextItem.LHS.crntCursor.item)
                     }
+                    log(indent+"STITCH FROM RECURSE:"+toString(count)+" nextItem:" +nextItem.mySymbol(nextItem))
                     nextItem <- stitch(nextItem, indent + "     ")
                     crntIDX <- crntIDX+1
+                    count <- count + 1
+                }
+                /- If this was a CONCAT with only one item:
+                if(LHSCursor.item.value.format==fConcat and LHSCursor.item.value.items.size()==1){
+                    LHSCursor.item <deep- LHSCursor.item.value.items[0]
                 }
                 retVal <- nextItem.successor
             }
             default: {print("Error in stitch(): invalid state\n")}
         }
+
         return(retVal)
 
     }
@@ -726,7 +757,7 @@ struct agent{
 /- VIEWER     if(pred==NULL){topAItem <- newItem}
             }
         } else {
-            withEach workItem in i.wrkList:{
+            withEach workItem in i.wrkList{
                 our infDeepItr: newIDP
                 Allocate(newIDP)
                 newIDP.initialize(workItem)
@@ -795,7 +826,7 @@ struct agent{
 
     me string: printPureInfon(their pureInfon: pure, their pureInfon: size) <- {
         me string: S <- ""
-        me bool: showSize <- (size!=NULL and (pure.sizeGiven !=0) and (pure.fType!=LST or pure.format!=fLiteral))
+        me bool: showSize <- size!=NULL and (pure.sizeGiven !=0) and (pure.fType!=LST or pure.format!=fLiteral)
         if(showSize){S <- S+printPureInfon(size, NULL)}
         if(pure.inverted){
             if(size!=NULL){S <- S+"-"}
@@ -831,7 +862,7 @@ struct agent{
                 showBar<-true
             }
             if(showBar){S <- S+"| "}
-            withEach item in pure.items:{
+            withEach item in pure.items{
                 if(item_key>0){S <- S+" "}
                 S <- S+printInfon(item)
             }
@@ -865,7 +896,7 @@ struct agent{
         } else {print("Error In PrintInfon()\n") exit(2)}
 
         if(i.isNormed ==0){
-            withEach WorkItm in i.wrkList:{
+            withEach WorkItm in i.wrkList{
                 if(!WorkItm.wasProcessed){
                     S <- S+" = "+printInfon(WorkItm.item)
                 }
@@ -918,7 +949,7 @@ struct ProteusCore{
         WORLD <- parseAndExtract(worldStr)
         Allocate(a, WORLD)
     }
-    me bool: init(me string: resourceDir) <- {
+    me void: init(me string: resourceDir) <- {
         resourceDirectory <- resourceDir
         parser.populateGrammar()
         loadWorld(worldFileName)

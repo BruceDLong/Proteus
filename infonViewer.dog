@@ -13,17 +13,18 @@ Authors = "Bruce Long"
 Description = "Infon Viewer is a tool for debugging Proteus core."
 ProgramOrLibrary = "program"
 
-featuresNeeded = [GUI_ToolKit, Dashboard, Proteus, ReadMultiLine, Terminal, Unicode, Threads, Logger]
+featuresNeeded = [GUI_ToolKit, Dashboard, DataManager, Proteus, ReadMultiLine, Terminal, Unicode, Threads, Logger]
 
 LicenseText = `This file is part of the "Proteus suite" All Rights Reserved.`
 
 runCode=`
     logMgr.init(OFile)
+    log("InfonViewer started")
     thisApp.loadAndParseSettingsAndData()
     isFirstRun<-true
     Allocate(CORE); CORE.init("./assets")
-    dataManager.initialize()
-    dashBoard.initialize(0,0,100,100,1,256)
+        Allocate(styler)
+    log("Runcode completed")
 `
 UserActionSets = [
     {module = 'mainProgram' menuItems = [
@@ -122,13 +123,17 @@ struct AgendaItemGrid_dash: inherits = 'dash'{
 
     void: update() <- {
         isNullLike<-false
+        withEach aItm in agendaItemsByPriority{
+            /-log("  UPDATING:"+aItm.data.mySymbol(aItm.data))
+            aItm.update(aItm.data.mySymbol(aItm.data), ">", aItm.data)
+        }
     }
 
     void: updatePush(our aItem: aItm) <- {
         me string: mySymbol <- aItm.mySymbol(aItm)
         our display_aItem: disp_aItm
         Allocate(disp_aItm)
-        dashBoard.addDependent(mySymbol, disp_aItm)
+        addDependent(mySymbol, disp_aItm)
         disp_aItm.update(mySymbol, ">", aItm)
         agendaItemsByPriority.insert(aItm.priority, disp_aItm)
     }
@@ -144,7 +149,7 @@ struct AgendaItemGrid_dash: inherits = 'dash'{
         me int: crntY <- topY
         me int: crntX <- posX
         me int: crntPriority <- -1
-        withEach aItm in agendaItemsByPriority:{
+        withEach aItm in agendaItemsByPriority{
             me int: itmsPriority <- aItm.data.priority
             if(crntPriority < itmsPriority){
                 crntPriority <- itmsPriority
@@ -169,7 +174,7 @@ struct AgendaItemGrid_dash: inherits = 'dash'{
 
     void: draw(me GUI_ctxt: cr) <- {
      /-   if (isHidden){return()}
-        withEach aItm in agendaItemsByPriority:{
+        withEach aItm in agendaItemsByPriority{
             aItm.draw(cr)
         }
     /-    renderText(cr, "HELLO!", "Ariel",  fontSize, posX, posY+15)
@@ -177,23 +182,28 @@ struct AgendaItemGrid_dash: inherits = 'dash'{
     }
 }
 
-struct dataMan{
+struct ViewController{
     our dataSourceDetails[list]: currentTrackers
+    our DataManager: dataManager
+    our Dashboard: VCDashboard
+
     me int: addTracker(our dataSourceDetails: sourceDetails) <- {
         me string: InfSrcTypeIDTag <- sourceDetails.infonArchetype.IdTag
 
        if(InfSrcTypeIDTag=="dispInfon"){
+            log("Adding dispInfon tracker")
             /-our display_infon: TopInfonDash
             Allocate(TopInfonDash)
+            VCDashboard.addChild(TopInfonDash)
             TopInfonDash.update("World", ">", CORE.WORLD)
             TopInfonDash.setPos(15,15,15+20)
-            dashBoard.children.pushLast(TopInfonDash)
         }
         else if(InfSrcTypeIDTag=="dispAgendaItem"){
+            log("Adding TopAItemDash tracker")
             Allocate(TopAItemDash)
+            VCDashboard.addChild(TopAItemDash)
             TopAItemDash.update()
             TopAItemDash.setPos(15, TopInfonDash.extY+30,15+20)
-            dashBoard.children.pushLast(TopAItemDash)
         }
 
         me int: trackerID <- 0
@@ -201,7 +211,6 @@ struct dataMan{
     }
 
     our infonTypeSpec[list]: TypesOfInfoSources_Views
-    our infViewerStyle: styler
     void: initTypesOfInfoSources_Views() <-{
         our infonTypeSpec: infSpec
 
@@ -221,14 +230,13 @@ struct dataMan{
         TypesOfInfoSources_Views.pushLast(infSpec)
     }
 
-    void: initialize() <- {
-        Allocate(dashBoard)
-        Allocate(styler)
-        dashBoard.styler <- styler
+    void: initialize(our DataManager: theDataMan, our Dashboard: dboard) <- {
+        dataManager <- theDataMan
+        VCDashboard <- dboard
         currentTrackers.clear()
-        initTypesOfInfoSources_Views()     /- Load the supported types of infon tracking from literals
+        initTypesOfInfoSources_Views()
         if(isFirstRun){
-            withEach srcInf in TypesOfInfoSources_Views:{
+            withEach srcInf in TypesOfInfoSources_Views{
                 if(srcInf.isDefault){
                     our dataSourceDetails: newTracker
                     Allocate(newTracker)
@@ -264,33 +272,25 @@ struct GLOBAL{
     me bool: isFirstRun
     their clip: theClip
     our ProteusCore: CORE
-    me dataMan: dataManager
-    our dashboard: dashBoard
-    me GUI_canvas: drawing_area
+    our DataManager: dataManager
+    our ViewController: viewController
+    our DashboardWidget: theDashboard
 
     our display_infon: TopInfonDash
     our AgendaItemGrid_dash: TopAItemDash
 
-    our aItem: topAItem
-
-    me bool: drawAppArea_cb (me GUI_item: Widget, me GUI_ctxt: cr)  <- { /-, me gpointer: data)
-        /-    gui.fetchAreaToBeDrawn(areaToBeDrawn)
-        thisApp.gui.setWidgetSize(drawing_area, dashBoard.width, dashBoard.height)
-        dashBoard.draw(cr)
-        return(false)
-    }
 
     void: CallInfonUpdateInternal(their infonUpdateData: data) <- {
         their infonUpdateData:  IUD <- data
         TopInfonDash.update(IUD.txt1, IUD.txt2, IUD.i)
-        markDirtyArea(drawing_area, 0,0,TopInfonDash.extX, TopInfonDash.extY)
+        TopInfonDash.requestRedraw()
     }
 
 
     void: CallAItemUpdateInternal(their aItemUpdateData: data) <- {
         their aItemUpdateData:  IUD <- data
         TopAItemDash.update()
-        markDirtyArea(drawing_area, 0,0,TopAItemDash.extX, TopAItemDash.extY)
+        TopAItemDash.requestRedraw()
     }
 }
 
@@ -321,7 +321,7 @@ struct clip: inherits = "Thread"{
             RML.message <- mesg
             RML.refreshDisplay(0)
             CallInfonUpdateExternal("Top infon", ">", CORE.WORLD)
-            if(topAItem!=NULL) {CallAItemUpdateExternal("Agenda Items", ">", topAItem)}
+            if(TopAItemDash!=NULL) {CallAItemUpdateExternal("Agenda Items", ">", NULL)}
             waitForSpacePressed(RML.readMultiLineGUIMode)
             RML.message <- ""
         }
@@ -367,35 +367,20 @@ struct APP{
     }
 
     me void: createAppMenu(me GUI_Frame: frame) <- {
- /*       me GUI_menuBar: menubar
-        me GUI_menu: MenuLvl1
-        /-me GUI_menu: MenuLvl2
-        MenuLvl1 <- gui.create_TopSubMenu(menubar, "File")
-            gui.create_MenuItem(MenuLvl1, "Configure Trackers")    /- About this data, ( )Track, ( )Show, [Color |v], [Units |v]
-            gui.create_MenuItem(MenuLvl1, "View / Print Reports")
-            gui.create_MenuItem(MenuLvl1, "Goals")
-            gui.create_MenuItem(MenuLvl1, "Close")
-        MenuLvl1 <- gui.create_TopSubMenu(menubar, "Edit")
-            gui.create_MenuItem(MenuLvl1, "Undo")
-            gui.create_MenuItem(MenuLvl1, "Redo")
-            gui.create_MenuItem(MenuLvl1, "Cut")
-            gui.create_MenuItem(MenuLvl1, "Copy")
-            gui.create_MenuItem(MenuLvl1, "Paste")
-
-        gui.addMenuBar(frame, menubar)  */
     }
 
     me void: createAppArea(me GUI_Frame: frame) <- {
-        drawing_area  <- gui.newCanvas()
-        me GUI_ScrollingWindow:: scrollerFrame(gui.newScrollingWindow(NULL, NULL))
-        scrollerRef <- scrollerFrame
-        gui.addToContainer(scrollerFrame, drawing_area)
-        gui.setWidgetSize(drawing_area, widgetWidth(thisApp.scrollerRef), widgetHeight(thisApp.scrollerRef))
-        EventDispatcher.registerWidgetForEventDispatcher(drawing_area, dashBoard)
-        gui.addToContainerAndExpand(frame, scrollerFrame)
+        Allocate(dataManager)
+        dataManager.initialize()
+        Allocate(theDashboard)
+        theDashboard.init()
+        theDashboard.dashboardDBW.setPos(15,15,0)
+        Allocate(viewController)
+        viewController.initialize(dataManager, theDashboard.dashboardDBW)
+        gui.addToContainerAndExpand(frame, theDashboard.managedWidget)
 
         Allocate(theClip)
-        log("start Clip")
+        log("Starting Clip...")
         theClip.start()
     }
 }
