@@ -41,9 +41,8 @@ model pureInfon{
     flag: isLstSize
     me uint64: num
     me string: str
-    our infon[list]: items
+    me DblLinkedList: items            /-  our list<our infon, [fast_prepend, fast_delete]>: newItems
     our infon: listSpec
-
     our pureInfon: size
 
     me none: pureInfon(me int: N) <- {
@@ -57,8 +56,9 @@ model pureInfon{
         str <- S
 
     }
-    void: deleteNth(me int: toDel) <- {items.erase(items.nthItr(toDel))}
-    void: clear() <- {num<-0 str<-'' items.clear() listSpec<-NULL}
+    our DblLinkedListNode: deleteListNode(our DblLinkedListNode: toDel) <- {return(items.erase(toDel))}
+    void: clear() <- {num<-0 str<-""; items.clear(); listSpec<-NULL}
+  /-  void: init() <- {Allocate(items)}
 }
 model infon{
     flag: asNot
@@ -83,8 +83,8 @@ model infon{
     our infon: getLastItem() <- {
         /- ASSERT(Should be already normed and a non-concat list)
         our infon: lastItem
-        if(value.items.size()>0) {
-            lastItem <- value.items[value.items.size()-1]
+        if(!value.items.isEmpty()) {
+            lastItem <- value.items.last()
         }  else {return(NULL)}
         switch(lastItem.itmMode){
             case mItem:{
@@ -99,8 +99,8 @@ model infon{
     our infon: getFirstItem() <- {
         /- ASSERT(Should be already normed and a non-concat list)
         our infon: firstItem
-        if(value.items.size()>0) {
-            firstItem <- value.items[0]
+        if(!value.items.isEmpty()) {
+            firstItem <- value.items.first()
         }  else {return(NULL)}
         switch(firstItem.itmMode){
             case mItem:{
@@ -112,11 +112,12 @@ model infon{
         }
         return(firstItem)
     }
-    void: deleteNth(me int: toDel) <- {
+    our DblLinkedListNode: deleteListNode(our DblLinkedListNode: toDel) <- {
         /- Low level delete of an item in list. Does not update size.
         if(value.fType==LST){
-            value.deleteNth(toDel)
+            return (value.deleteListNode(toDel))
         }
+        return(NULL)
     }
     void: clear() <- {size.clear() value.clear()}
     me none: infon(me string: S) <- {
@@ -129,19 +130,18 @@ model infon{
 model infItr{
     our infon: item
     our infItr: parent
- /-   me int: itmItr
-    me  int: idx
+    our DblLinkedListNode: itmItr
     mode [asID, asFirst, asLast, asMarked, asFirstParent, asLastParent, asMarkedParent]: target
     flag: wasProcessed
 
     me bool: goNext() <- {
         while(true){
-            if(parent==NULL or item==NULL or idx+1 >= parent.item.value.items.size()){
+            if(parent==NULL or item==NULL or itmItr.next==NULL){
                 item <- NULL  /- Signify EOL
                 return(false)
             }
-            idx  <- idx+1
-            item <- parent.item.value.items[idx]
+            itmItr  <- itmItr.next
+            item <- itmItr.item
             if(item.itmMode == mTagDefn){
                 registerClass(item)
             }else {
@@ -151,35 +151,30 @@ model infItr{
     }
 
     our infon: getPrevPtr() <- {
-        if(parent==NULL or item==NULL or idx==0) {return(NULL)}
-        return(parent.item.value.items[idx-1])
+        if(parent==NULL or item==NULL or itmItr.prev==NULL) {return(NULL)}
+        return(itmItr.prev.item)
     }
 
     void: copyThisTo(our infItr: to) <- {
         to.item <- item
         to.parent <- parent
-        to.idx <- idx
+        to.itmItr <- itmItr
     }
 
     void: deleteCrnt() <- {
-        parent.item.deleteNth(idx)
-        idx <- idx-1
+        itmItr <- parent.item.deleteListNode(itmItr)
     }
 
-    void: deleteNth(me int: N) <- {
-        parent.item.deleteNth(N)
-        if(idx >= N){N <- N-1}
+
+    void: insertBefore(our DblLinkedListNode: itm, our infon: i) <- {
+        if(itm){
+            parent.item.value.items.insertBefore(itm, i)
+        } else {
+            parent.item.value.items.pushLast(i)
+        }
     }
 
-    void: insertAtCursor(our infon: i) <- {
-        parent.item.value.items.insert(parent.item.value.items.nthItr(idx), i)
-        idx <- idx+1
-    }
-
-    void: insertBeforeNth(me int: IDX, our infon: i) <- {
-        parent.item.value.items.insert(parent.item.value.items.nthItr(IDX), i)
-        if(idx>IDX){ idx <- idx+1}
-    }
+    void: init() <- {Allocate(itmItr)}
 
 }
 
@@ -267,8 +262,8 @@ model infDeepItr{
     void: initialize(our infon: inf) <- {
         alreadyIncremented<-false
         if(inf==NULL) {state <- sError; return()}
-        our infItr:: newParent()
-        crntCursor.allocate(inf, newParent, 0, 0)
+        our infItr:: newParent
+        crntCursor.allocate(inf, newParent, NULL, 0)
         setListSeqFlags()
         nestLvl <- 0
         me agent: a
@@ -310,15 +305,15 @@ model infDeepItr{
                 }
             }
             case sFirstVisit:{
-                if(crntCursor.item.value.items.size()==0){
+                if(crntCursor.item.value.items.isEmpty()){
                     state <- sSecondVisit
                     isAList <- true
                 } else {
                     /-Prepare to iterate children
                     our infItr: tmp
-                    Allocate(tmp); tmp.idx<-crntCursor.idx; tmp.parent<-crntCursor.parent; tmp.item <- crntCursor.item; crntCursor.parent  <- tmp;   /- TODO: After ptr bug is fixed, Allocate(crntCursor.parent, crntCursor)
-                    crntCursor.idx <- 0
-                    crntCursor.item <- crntCursor.item.value.items[0];
+                    Allocate(tmp); tmp.itmItr<-crntCursor.itmItr; tmp.parent<-crntCursor.parent; tmp.item <- crntCursor.item; crntCursor.parent  <- tmp;   /- TODO: After ptr bug is fixed, Allocate(crntCursor.parent, crntCursor)
+                    crntCursor.itmItr <- crntCursor.item.value.items.begin()
+                    crntCursor.item <- crntCursor.itmItr.item
                     setListSeqFlags()
                     nestLvl <- nestLvl+1
                 }
@@ -371,7 +366,7 @@ model infDeepItr{
         our infDeepItr: tentativeItr
         Allocate(tentativeItr)
         Allocate(tentativeItr.crntCursor)
-        tentativeItr.crntCursor.idx <- parent.crntCursor.idx
+        tentativeItr.crntCursor.itmItr <- parent.crntCursor.itmItr
         tentativeItr.crntCursor.parent <- parent.crntCursor.parent
         tentativeItr.crntCursor.item <- child
         tentativeItr.nestLvl <- parent.nestLvl
@@ -455,8 +450,8 @@ struct agent{
         return(false)
     }
 
-    our infItr: makeInfItr(our infon: i, our infItr: parent, me int: idx) <- {
-        our infItr:: ret(i, parent, idx, 0)
+    our infItr: makeInfItr(our infon: i, our infItr: parent, our DblLinkedListNode: idx) <- {
+        our infItr:: ret <- (i, parent, idx, 0)
         return(ret)
     }
 
@@ -533,13 +528,13 @@ struct agent{
     /- HANDLE #{}, [....] and other cases of identities of child nodes:
         me int: ret <- 0
         their pureInfon: LHS_tmp <- LHS.item.value
-        if(LHS_tmp.fType==LST and LHS_tmp.items.size()>0){
-            if(RHS.target == asFirst)       {addIdent(makeInfItr(LHS_tmp.items[0], LHS, 0), RHS);  ret<-1;}
-            /- if(RHS.target == asLast or LHS.target==asLastParent)   {addIdent(makeInfItr(LHS_tmp.items[LHS.item.value.items.size()-1], LHS, LHS_tmp.items.size()-1), RHS);  ret<-1;}
+        if(LHS_tmp.fType==LST and !LHS_tmp.items.isEmpty()){
+            if(RHS.target == asFirst)       {addIdent(makeInfItr(LHS_tmp.items.first(), LHS, 0), RHS);  ret<-1;}
+            /- if(RHS.target == asLast or LHS.target==asLastParent)   {addIdent(makeInfItr(LHS_tmp.items.back(), LHS, LHS_tmp.items.size()-1), RHS);  ret<-1;}
         }
         /-their pureInfon: RHS_tmp <- RHS.item.value
-        if(RHS.item.value.fType==LST and RHS.item.value.items.size()>0){
-            if(RHS.target == asFirstParent) {addIdent(LHS, makeInfItr(RHS.item.value.items[0], RHS, 0));  ret<-1;}
+        if(RHS.item.value.fType==LST and !RHS.item.value.items.isEmpty()){
+            if(RHS.target == asFirstParent) {addIdent(LHS, makeInfItr(RHS.item.value.items.first(), RHS, 0));  ret<-1;}
         }
         return(ret)
     }
@@ -633,7 +628,7 @@ struct agent{
 
                 /- Handle when parent is a CONCAT
                 if(LHSCursor.parent!=NULL and LHSCursor.parent.item!=NULL and (LHSCursor.parent.item.value.format==fConcat)){
-                    if(LHSCursor.idx==0){ /- Set parent's type
+                    if(LHSCursor.itmItr.isFirst()){ /- Set parent's type
                     } else {
                         our infon: prev <- LHSCursor.getPrevPtr()
                         log(indent+"Joining "+prev.mySymbol(prev)+" and "+LHSCursor.item.mySymbol(LHSCursor.item))
@@ -649,25 +644,29 @@ struct agent{
             log(indent + "In sFirstVisit")
                 our aItem: nextItem <- crntItem.successor
                 log(indent+"  nextItem:"+nextItem.mySymbol(nextItem))
-                me int: crntIDX <- 0
                 our infon: crntInfon <- LHSCursor.item
+                our DblLinkedListNode: crntFrom <- crntInfon.value.items.begin()
+                our DblLinkedListNode: crntTo  <- nextItem.LHS.crntCursor.item.value.items.begin()
+                our DblLinkedListNode: dottedToDelete <- NULL
                 me int: count <- 0
                 while(nextItem.LHS.state != sSecondVisit and !(nextItem.LHS.crntCursor.item === crntInfon)){
                     if(nextItem.LHS.fromDotted){
-                        if(count==0 and crntInfon.value.items[crntIDX].itmMode==mDots ){
-                            crntInfon.deleteNth(crntIDX)
+                        if(count==0 and crntTo.item.itmMode==mDots ){
+                            dottedToDelete <- crntTo
+                            crntInfon.deleteListNode(crntFrom)
                         }
                         nextItem.LHS.fromDotted <- false
-                        nextItem.LHS.crntCursor.insertBeforeNth(crntIDX, nextItem.LHS.crntCursor.item)
+                        nextItem.LHS.crntCursor.insertBefore(crntFrom, nextItem.LHS.crntCursor.item)
                     }
                     log(indent+"STITCH FROM RECURSE:"+toString(count)+" nextItem:" +nextItem.mySymbol(nextItem))
                     nextItem <- stitch(nextItem, indent + "     ")
-                    crntIDX <- crntIDX+1
+                    crntFrom <- crntFrom.next
                     count <- count + 1
                 }
+                if(dottedToDelete!=NULL){nextItem.LHS.crntCursor.item.deleteListNode(dottedToDelete)}
                 /- If this was a CONCAT with only one item:
-                if(LHSCursor.item.value.format==fConcat and LHSCursor.item.value.items.size()==1){
-                    LHSCursor.item <deep- LHSCursor.item.value.items[0]
+                if(LHSCursor.item.value.format==fConcat and !LHSCursor.item.value.items.isEmpty() and LHSCursor.item.value.items.head.isLast()){
+                    LHSCursor.item <deep- LHSCursor.item.value.items.first()
                 }
                 retVal <- nextItem.successor
             }
@@ -749,24 +748,24 @@ struct agent{
                 our infDeepItr: newIDP
                 Allocate(newIDP)
                 newIDP.crntCursor <- NULL
-                our aItem: newItem
-                Allocate(newItem)
-                newItem.init(0,itrToProcess,newIDP)
-                if(pred != NULL){newItem.predecessors.pushLast(pred)}
-                agenda.addItem(newItem)
-/- VIEWER     if(pred==NULL){topAItem <- newItem}
+                our aItem: new_item
+                Allocate(new_item)
+                new_item.init(0,itrToProcess,newIDP)
+                if(pred != NULL){new_item.predecessors.pushLast(pred)}
+                agenda.addItem(new_item)
+/- VIEWER     if(pred==NULL){topAItem <- new_item}
             }
         } else {
             withEach workItem in i.wrkList{
                 our infDeepItr: newIDP
                 Allocate(newIDP)
                 newIDP.initialize(workItem)
-                our aItem: newItem
-                Allocate(newItem)
-                newItem.init(0,itrToProcess,newIDP)
-                if(pred != NULL){newItem.predecessors.pushLast(pred)}
-                agenda.addItem(newItem)
-/- VIEWER   if(pred==NULL){topAItem <- newItem}
+                our aItem: new_item
+                Allocate(new_item)
+                new_item.init(0,itrToProcess,newIDP)
+                if(pred != NULL){new_item.predecessors.pushLast(pred)}
+                agenda.addItem(new_item)
+/- VIEWER   if(pred==NULL){topAItem <- new_item}
                 workItem.wasProcessed <- true
                 numItemsAdded <- numItemsAdded+1
             }
@@ -789,7 +788,7 @@ struct agent{
 
     me string: fetchAsStr(their infon: i) <- {return(i.value.str)}
     me uint64: fetchAsNum(their infon: i) <- {return(i.value.num)}
-    our infon: fetchAsList(their infon: i, me int: idx) <- {return(i.value.items[idx])}
+ /-   our infon: fetchAsList(their infon: i, me int: idx) <- {return(i.value.items[idx])}
 
     void: appendToWorld(our infon: newInfon) <- {
         our infon: dotsAtTheEnd <- world.value.items.last()
@@ -862,9 +861,12 @@ struct agent{
                 showBar<-true
             }
             if(showBar){S <- S+"| "}
-            withEach item in pure.items{
-                if(item_key>0){S <- S+" "}
-                S <- S+printInfon(item)
+            our DblLinkedListNode: itemItr <- pure.items.begin()
+            me bool: firstTime <- true
+            while(itemItr){
+                if(!firstTime){S <- S+" "} else {firstTime <- false}
+                S <- S+printInfon(itemItr.item)
+                itemItr <- itemItr.next
             }
             S <- S+endBrkt
         } else {print("\nError: Unknown fType in printPureInfon(): ", pure.fType,"\n") exit(2)}
@@ -916,8 +918,9 @@ struct agent{
     void: init(our infon: World) <- {
         world <- NULL
         context <- NULL
-        if(World.value.fType!=LST or World.value.items.size()==0){ print("World is not valid for agant.\n"); return()}  /- TODO: Log error messages
-        if(World.value.items.last().itmMode != mDots){ print("World must end with '...' for agant.\n"); return()}
+        if(World.value.fType!=LST or World.value.items.isEmpty()){ print("World is not valid for agent.\n"); return()}  /- TODO: Log error messages
+        our infon: lastInfon <- World.value.items.last()
+        if(lastInfon.itmMode != mDots){ print("World must end with '...' for agent.\n"); return()}
         world <- World
         Allocate(context)
     }
