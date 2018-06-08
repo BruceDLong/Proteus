@@ -68,7 +68,7 @@ model infon{
     mode[mItem, mSubItems, mDots, mTagDefn]:      itmMode
     mode[isUnknown, newCursor, isTag, isLiteral]: infMode
     mode[cNone, cThis, cWorld, cContext, cPrev, cNext]:  cursorMode
-    me pureInfon: size
+    me pureInfon: endMarker
     me pureInfon: value
     flag: isNormed
     flag: hasSelector
@@ -79,6 +79,30 @@ model infon{
     flag: wrkLstPreped
     flag: wrkItmsAdded
     /-flag: wrkListIsAlts
+
+    their pureInfon: size() <- {
+        if(endMarker.format==fUnknown){
+            if(value.fType==STR and value.format==fLiteral){
+                endMarker.fType  <- NUM
+                endMarker.format <- fLiteral
+                endMarker.num    <- value.str.size()
+            } else if(value.fType==LST and value.format==fLiteral){
+                me uint64: acc <- 0
+                withEach item in value.items{
+                    if(item.itmMode == mItem) {
+                        acc <- acc + 1
+                    } else if(item.itmMode == mSubItems) {
+                        their pureInfon: tmp <- item.size()
+                        if(tmp.format==fUnknown){return(endMarker)}
+                         acc <- acc + tmp.num
+                    } else if(item.itmMode == mDots) {return(endMarker)}
+                }
+                endMarker.format <- fLiteral
+                endMarker.num    <- acc
+            }
+        }
+        return(endMarker)
+    }
 
     our infon: getLastItem() <- {
         /- ASSERT(Should be already normed and a non-concat list)
@@ -119,11 +143,11 @@ model infon{
         }
         return(NULL)
     }
-    void: clear() <- {size.clear() value.clear()}
+    void: clear() <- {endMarker.clear() value.clear()}
     me none: infon(me string: S) <- {
         infMode <- isLiteral
         itmMode <- mItem
-        size <- pureInfon(S.size())
+        endMarker <- pureInfon(S.size())
         value <- pureInfon(S)
     }
 }
@@ -211,10 +235,10 @@ string infon: StartSymbol="true" {
 
     | ( >{ "%" >[ ("this" <=> cursorMode=cThis;) | ("W" <=> cursorMode=cWorld;) | ("prev" <=> cursorMode=cPrev;) | ("next" <=> cursorMode=cNext;) ]} <=> infMode=newCursor;)
 
-    | ( >[ (>{ >[("*" <=>  size.inverted = false; ) | ("/" <=>  size.inverted = true; ) ] > me pureInfon: size
+    | ( >[ (>{ >[("*" <=>  endMarker.inverted = false; ) | ("/" <=>  endMarker.inverted = true; ) ] > me pureInfon: endMarker
                >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ] > me pureInfon: value
-            } <=> size.fType=NUM; value.sizeGiven=true;)
-         | (>{ >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ][opt] > me pureInfon: value}  <=> size.num=0; size.fType=NUM; size.format=fUnknown; value.sizeGiven=false;)
+            } <=> endMarker.fType=NUM; value.sizeGiven=true;)
+         | (>{ >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ][opt] > me pureInfon: value}  <=> endMarker.num=0; endMarker.fType=NUM; endMarker.format=fUnknown; value.sizeGiven=false;)
          ]   <=>   infMode=isLiteral;
       )
 
@@ -439,8 +463,8 @@ struct agent{
             me int: LHSType <- LHS.value.fType
             if(LHSType == RHS.value.fType){
                 switch(LHSType){
-                    case NUM: {LHS.size.num<-LHS.size.num * RHS.size.num; LHS.value.num<-(LHS.value.num * RHS.size.num) + RHS.value.num;}
-                    case STR: {LHS.value.str.append(RHS.value.str);  LHS.size.num<-LHS.value.str.size()}
+                    case NUM: {LHS.endMarker.num<-LHS.size().num * RHS.size().num; LHS.value.num<-(LHS.value.num * RHS.size().num) + RHS.value.num;}
+                    case STR: {LHS.value.str.append(RHS.value.str);  LHS.endMarker.num<-LHS.value.str.size()}
                     case LST: {
                         withEach element in RHS.value.items {
                             LHS.value.items.pushLast(element)
@@ -638,8 +662,8 @@ struct agent{
                     if(true or copyRHSTypeToLHS){ LHSCursor.item.value.fType <- RHS.crntCursor.item.value.fType}
                     LHSCursor.item.infMode <- RHS.crntCursor.item.infMode
 
-                    if(sizeAction == copySizeRHStoLHS)     {DO_COPY(RHS.crntCursor.item.size, LHSCursor.item.size)}
-                    else if(sizeAction == copySizeLHStoRHS){DO_COPY(LHSCursor.item.size, RHS.crntCursor.item.size)}
+                    if(sizeAction == copySizeRHStoLHS)     {DO_COPY(RHS.crntCursor.item.endMarker, LHSCursor.item.endMarker)}
+                    else if(sizeAction == copySizeLHStoRHS){DO_COPY(LHSCursor.item.endMarker, RHS.crntCursor.item.endMarker)}
 
                     if(valueAction == copyValueRHStoLHS)     {DO_COPY(RHS.crntCursor.item.value, LHSCursor.item.value)}
                     else if(valueAction == copyValueLHStoRHS){DO_COPY(LHSCursor.item.value, RHS.crntCursor.item.value)}
@@ -699,10 +723,10 @@ struct agent{
 
         me mergeCmd: sizeStatus; sizeStatus.cmd <- 0
         if(! LooseType){
-            me int: LHSFormat <- LHS.size.format
-            me int: RHSFormat <- RHS.size.format
+            me int: LHSFormat <- LHS.endMarker.format
+            me int: RHSFormat <- RHS.endMarker.format
             if(LHSFormat != fUnknown and RHSFormat != fUnknown){
-                sizeStatus <- DO_VERIFY(LHS.size, RHS.size)
+                sizeStatus <- DO_VERIFY(LHS.size(), RHS.size())
                 if (sizeStatus.cmd==matchFailed){agendaItem.sizeAction<-sizeFailed; reject<-true;}
                 else if (sizeStatus.cmd== wasVerified){agendaItem.sizeAction<-sizeVerified}
             }
@@ -901,7 +925,7 @@ struct agent{
         }
         else if(i.infMode==isTag){S <- S+i.tag}
         else if(i.infMode==isLiteral){
-             S <- S+printPureInfon(i.value, i.size)
+             S <- S+printPureInfon(i.value, i.size())
         } else {print("Error In PrintInfon()\n") exit(2)}
 
         if(i.isNormed ==0){
