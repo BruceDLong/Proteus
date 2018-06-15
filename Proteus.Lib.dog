@@ -156,6 +156,7 @@ model infItr{
     our infItr: parent
     our DblLinkedListNode: itmItr
     mode [asID, asFirst, asLast, asMarked, asFirstParent, asLastParent, asMarkedParent]: target
+    mode [pmStrict, pmLoose]: parseMode
     flag: wasProcessed
 
     me bool: goNext() <- {
@@ -204,15 +205,15 @@ model infItr{
 
 #define LISTBODY(LEFT_BRKT, RIGHT_BRKT) <% >{ "LEFT_BRKT" "T"[opt]:timelike  >me listInfo[opt] >our listItem[list]: items >ws "RIGHT_BRKT" } %>
 string infItr{
-    "=" > ws > our infon:item
+    >[ ("=" <=> parseMode=pmStrict;) | ("==" <=> parseMode=pmLoose;) ] > ws > our infon:item
 }
 string listInfo[
         >{ >{"~" >ws >our pureInfon: size}[opt]:Size >ws "C" >ws >our infon:listSpec "|"[opt]}
      |  >{ >{"~" >ws >our pureInfon: size}[opt]:Size         >ws >our infon:listSpec "|"}
-     |  >{ "~" >ws >our pureInfon: size >ws }
+     |  >{ "~" >ws >our pureInfon: size >ws "|"[opt]}
 ]
 string listItem{
-    me mode[mItem, mSubItems, mDots, mTagDefn]: itmMode
+    >ws
      >[ (>{"class" >ws > CID:tag > ws ":" > ws > our infon:inf} <=> itmMode=mTagDefn;)
       | (>our infon:inf <=> itmMode=mItem;)
       | ("..." <=> itmMode=mDots; value.format=fUnknown;)
@@ -262,12 +263,29 @@ struct infItr {}
 struct infon {}
 
 /-////////////////////////
+/- Definition storage
+
+struct ModelManager {
+    our infon[map string]: classToModel
+    void: indexDefinition(me string: classID, our infon: infModel) <- {
+        classToModel[classID] <- infModel;
+    }
+    our infon: fetchModel(me string: classID) <- {
+        return(classToModel[classID])
+    }
+}
+
+struct GLOBAL{ me ModelManager: modelMngr}
+
+
+/-////////////////////////
 /- Infon Interface Routines
 
 model infDeepItr{
     our infItr: crntCursor
     me int: nestLvl
     our infDeepItr: next
+    our DblLinkedListNode: myDots
     mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError]: state
     flag: alreadyIncremented   /- When an item is deleted, the cursor idx is already incremented.
     flag: fromDotted
@@ -360,6 +378,7 @@ model infDeepItr{
         to.alreadyIncremented  <- alreadyIncremented
         to.fromDotted          <- fromDotted
         to.isAList             <- isAList
+        to.myDots              <- myDots
     }
 
     our infDeepItr: getNext() <- {
@@ -397,6 +416,7 @@ model infDeepItr{
         tentativeItr.next <- NULL
         tentativeItr.setListSeqFlags() /- Set state, etc.
         tentativeItr.fromDotted <- true
+        tentativeItr.myDots     <- NULL
 
         return(tentativeItr)
     }
@@ -420,8 +440,14 @@ model infDeepItr{
           retVal.next <- NULL
         } else if(fromDotted or nextItr.crntCursor.item.itmMode == mDots){  /- The new item is nullable so also return the follower.
             retVal <- fillDotChild(nextItr)
-            if(!fromDotted){retVal.next <- nextItr.getNextDeDotted()} /- Caused by "..."
-            else{retVal.next <- nextItr.next}                         /- Caused by a result of "..."
+            if(!fromDotted){ /- Caused by "..."
+                retVal.myDots <- nextItr.crntCursor.itmItr
+                retVal.next <- nextItr.getNextDeDotted()
+            }
+            else{      /- Caused by a result of "..."
+                retVal.myDots <- myDots
+                retVal.next <- nextItr.next
+            }
         } else {
             retVal <- nextItr
             retVal.next <- NULL
@@ -500,9 +526,18 @@ struct agent{
     void: prepWorkList(our infDeepItr: ciItr) <- {
         our infon: CI <- ciItr.crntCursor.item
         if (CI.wrkLstPreped){return()}else{CI.wrkLstPreped <- 1}
-        while(true){
+        me bool: done <- false
+        while(!done){
             our infon: newTop<-NULL
-            if(CI.isFunc or CI.isFuncArg){
+            if(CI.itmMode == mTagDefn){
+                modelMngr.indexDefinition(CI.tag, CI)
+                break()
+            } else if(CI.infMode == isTag){
+                our infon: infModel <- modelMngr.fetchModel(CI.tag)
+                Allocate(newTop)
+                newTop <deep- infModel
+                newTop.itmMode <- mItem
+            } else if(CI.isFunc or CI.isFuncArg){
                /- print("HANDLING FUNCTION ARGS\n")
                 if(CI.isFuncArg!=0){  /- Swap func body with args
                     me infon: CITmp <- CI
@@ -544,7 +579,7 @@ struct agent{
                     case cPrev:   {} /-{newTop <- previous}
                     case cNext:   {} /-{newTop <- next}
                 }
-            } else {break()}
+            } else {done<-true}
 
             if(newTop!=NULL) {
                 CI <deep- newTop
@@ -579,6 +614,68 @@ struct agent{
             }
         } else {  /- TODO: Do Convert + copy
         }
+    }
+
+    our aItem: stitch(our aItem: crntItem, me string: indent)<-{
+        log(indent + "STITCH crntaItem: " + crntItem.mySymbol(crntItem) + " is:"+crntItem.printAgendaItem(),"\n")
+  /-      theClip.dispAndWait("STITCH: " + crntItem.mySymbol(crntItem) + crntItem.printAgendaItem())
+        our aItem: retVal <- NULL
+        me bool: copyRHSTypeToLHS <- crntItem.copyRHSTypeToLHS
+        me int: sizeAction <- crntItem.sizeAction
+        me int: valueAction <- crntItem.valueAction
+        crntItem.valueAction <- false
+        our infDeepItr: LHS <- crntItem.LHS
+        our infDeepItr: RHS <- crntItem.RHS
+        our infItr: LHSCursor <- LHS.crntCursor
+        log(indent+"LHSCursor:"+LHSCursor.item.mySymbol(LHSCursor.item))
+        switch(LHS.state) {
+            case sNotASeq:{
+                log(indent + "In NotASEQ")
+                if(RHS.crntCursor!=NULL and RHS.state!=sSecondVisit){
+                    if(true or copyRHSTypeToLHS){ LHSCursor.item.value.fType <- RHS.crntCursor.item.value.fType}
+                    LHSCursor.item.infMode <- RHS.crntCursor.item.infMode
+
+                    if(sizeAction == copySizeRHStoLHS)     {DO_COPY(RHS.crntCursor.item.endMarker, LHSCursor.item.endMarker)}
+                    else if(sizeAction == copySizeLHStoRHS){DO_COPY(LHSCursor.item.endMarker, RHS.crntCursor.item.endMarker)}
+
+                    if(valueAction == copyValueRHStoLHS)     {DO_COPY(RHS.crntCursor.item.value, LHSCursor.item.value)}
+                    else if(valueAction == copyValueLHStoRHS){DO_COPY(LHSCursor.item.value, RHS.crntCursor.item.value)}
+                }
+
+                /- Handle when parent is a CONCAT
+                JoinIfConcat(LHS)
+                retVal <- crntItem.successor
+            }
+            case sFirstVisit:{
+            log(indent + "In sFirstVisit")
+                our aItem: nextItem <- crntItem.successor
+                log(indent+"  nextItem:"+nextItem.mySymbol(nextItem))
+                our infon: crntInfon <- LHSCursor.item
+                our DblLinkedListNode: dottedToDelete <- NULL
+                me int: count <- 0
+                while(nextItem.LHS.state != sSecondVisit and !(nextItem.LHS.crntCursor.item === crntInfon)){
+                    if(nextItem.LHS.myDots!=NULL){
+                            dottedToDelete <- nextItem.LHS.myDots
+                        nextItem.LHS.fromDotted <- false
+                        crntInfon.value.items.insertBefore(nextItem.LHS.myDots, nextItem.LHS.crntCursor.item)
+                    }
+                    log(indent+"STITCH FROM RECURSE:"+toString(count)+" nextItem:" +nextItem.mySymbol(nextItem))
+                    nextItem <- stitch(nextItem, indent + "     ")
+                    count <- count + 1
+                }
+                if(dottedToDelete!=NULL){crntInfon.deleteListNode(dottedToDelete)}
+                /- If this was a CONCAT with only one item:
+                if(LHSCursor.item.value.format==fConcat and !LHSCursor.item.value.items.isEmpty() and LHSCursor.item.value.items.head.isLast()){
+                    LHSCursor.item <deep- LHSCursor.item.value.items.first()
+                }
+                JoinIfConcat(LHS)
+                retVal <- nextItem.successor
+            }
+            default: {print("Error in stitch(): invalid state\n")}
+        }
+
+        return(retVal)
+
     }
 
     me int: matchLength(me string: A, me string: B)<-{
@@ -643,78 +740,13 @@ struct agent{
         }
     }
 
-    our aItem: stitch(our aItem: crntItem, me string: indent)<-{
-        log(indent + "STITCH crntaItem: " + crntItem.mySymbol(crntItem) + " is:"+crntItem.printAgendaItem(),"\n")
- /- Viewer       theClip.dispAndWait("STITCH: " + crntItem.mySymbol(crntItem) + crntItem.printAgendaItem())
-        our aItem: retVal <- NULL
-        me bool: copyRHSTypeToLHS <- crntItem.copyRHSTypeToLHS
-        me int: sizeAction <- crntItem.sizeAction
-        me int: valueAction <- crntItem.valueAction
-        crntItem.valueAction <- false
-        our infDeepItr: LHS <- crntItem.LHS
-        our infDeepItr: RHS <- crntItem.RHS
-        our infItr: LHSCursor <- LHS.crntCursor
-        log(indent+"LHSCursor:"+LHSCursor.item.mySymbol(LHSCursor.item))
-        switch(LHS.state) {
-            case sNotASeq:{
-                log(indent + "In NotASEQ")
-                if(RHS.crntCursor!=NULL and RHS.state!=sSecondVisit){
-                    if(true or copyRHSTypeToLHS){ LHSCursor.item.value.fType <- RHS.crntCursor.item.value.fType}
-                    LHSCursor.item.infMode <- RHS.crntCursor.item.infMode
-
-                    if(sizeAction == copySizeRHStoLHS)     {DO_COPY(RHS.crntCursor.item.endMarker, LHSCursor.item.endMarker)}
-                    else if(sizeAction == copySizeLHStoRHS){DO_COPY(LHSCursor.item.endMarker, RHS.crntCursor.item.endMarker)}
-
-                    if(valueAction == copyValueRHStoLHS)     {DO_COPY(RHS.crntCursor.item.value, LHSCursor.item.value)}
-                    else if(valueAction == copyValueLHStoRHS){DO_COPY(LHSCursor.item.value, RHS.crntCursor.item.value)}
-                }
-
-                /- Handle when parent is a CONCAT
-                JoinIfConcat(LHS)
-                retVal <- crntItem.successor
-            }
-            case sFirstVisit:{
-            log(indent + "In sFirstVisit")
-                our aItem: nextItem <- crntItem.successor
-                log(indent+"  nextItem:"+nextItem.mySymbol(nextItem))
-                our infon: crntInfon <- LHSCursor.item
-                our DblLinkedListNode: crntTo <- crntInfon.value.items.begin()
-                our DblLinkedListNode: dottedToDelete <- NULL
-                me int: count <- 0
-                while(nextItem.LHS.state != sSecondVisit and !(nextItem.LHS.crntCursor.item === crntInfon)){
-                    if(nextItem.LHS.fromDotted){
-                        if(count==0 and crntTo.item.itmMode==mDots ){
-                            dottedToDelete <- crntTo
-                        }
-                        nextItem.LHS.fromDotted <- false
-                        crntInfon.value.items.insertBefore(crntTo, nextItem.LHS.crntCursor.item)
-                    }
-                    log(indent+"STITCH FROM RECURSE:"+toString(count)+" nextItem:" +nextItem.mySymbol(nextItem))
-                    nextItem <- stitch(nextItem, indent + "     ")
-                    count <- count + 1
-                }
-                if(dottedToDelete!=NULL){crntInfon.deleteListNode(dottedToDelete)}
-                /- If this was a CONCAT with only one item:
-                if(LHSCursor.item.value.format==fConcat and !LHSCursor.item.value.items.isEmpty() and LHSCursor.item.value.items.head.isLast()){
-                    LHSCursor.item <deep- LHSCursor.item.value.items.first()
-                }
-                JoinIfConcat(LHS)
-                retVal <- nextItem.successor
-            }
-            default: {print("Error in stitch(): invalid state\n")}
-        }
-
-        return(retVal)
-
-    }
-
     our infDeepItr: tryMERGE(our aItem: agendaItem) <- {
         our infon: LHS <- agendaItem.LHS.crntCursor.item
         our infon: RHS <- agendaItem.RHS.crntCursor.item
         our infDeepItr: remainder <- NULL
         if(PropogateIndirectItem(agendaItem.LHS.crntCursor, agendaItem.RHS.crntCursor) > 0){return(NULL)}
 
-        me bool: LooseType<-false   /- Strict or loose typing?
+        me bool: LooseType <- agendaItem.looseMode   /- Strict or loose typing?
         me bool: reject <- false    /- ReturnStatus
 
         if(LHS.value.fType==tUnknown and RHS.value.fType!=tUnknown){
@@ -794,6 +826,7 @@ struct agent{
                 our aItem: new_item
                 Allocate(new_item)
                 new_item.init(0,itrToProcess,newIDP)
+                new_item.looseMode <- workItem.parseMode == pmLoose
                 if(pred != NULL){new_item.predecessors.pushLast(pred)}
                 agenda.addItem(new_item)
 /- VIEWER   if(pred==NULL){topAItem <- new_item}
@@ -931,7 +964,9 @@ struct agent{
         if(i.isNormed ==0){
             withEach WorkItm in i.wrkList{
                 if(!WorkItm.wasProcessed){
-                    S <- S+" = "+printInfon(WorkItm.item)
+                    if(WorkItm.parseMode == pmStrict){ S <- S+" = "}
+                    else { S <- S+" == "}
+                    S <- S + printInfon(WorkItm.item)
                 }
             }
 
