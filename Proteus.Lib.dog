@@ -97,6 +97,7 @@ model infon{
                          acc <- acc + tmp.num
                     } else if(item.itmMode == mDots) {return(endMarker)}
                 }
+                endMarker.fType  <- NUM
                 endMarker.format <- fLiteral
                 endMarker.num    <- acc
             }
@@ -156,7 +157,7 @@ model infItr{
     our infItr: parent
     our DblLinkedListNode: itmItr
     mode [asID, asFirst, asLast, asMarked, asFirstParent, asLastParent, asMarkedParent]: target
-    mode [pmStrict, pmLoose]: parseMode
+    flag: looseMode
     flag: wasProcessed
 
     me bool: goNext() <- {
@@ -205,7 +206,7 @@ model infItr{
 
 #define LISTBODY(LEFT_BRKT, RIGHT_BRKT) <% >{ "LEFT_BRKT" "T"[opt]:timelike  >me listInfo[opt] >our listItem[list]: items >ws "RIGHT_BRKT" } %>
 string infItr{
-    >[ ("=" <=> parseMode=pmStrict;) | ("==" <=> parseMode=pmLoose;) ] > ws > our infon:item
+    >[ ("=" <=> looseMode=false;) | ("==" <=> looseMode=true;) ] > ws > our infon:item
 }
 string listInfo[
         >{ >{"~" >ws >our pureInfon: size}[opt]:Size >ws "C" >ws >our infon:listSpec "|"[opt]}
@@ -602,14 +603,17 @@ struct agent{
         return(ret)
     }
 
-    void: DO_COPY(their pureInfon: from, their pureInfon: to) <- {
+    void: DO_COPY(their pureInfon: from, their pureInfon: to, me int: sizeToCopy) <- {
         me int: fromsType <- from.fType
         if(fromsType==to.fType){
             to.format<-from.format
             to.sizeGiven <- from.sizeGiven
             switch(fromsType){
                 case NUM: {to.num <- from.num}
-                case STR: {to.str <- from.str}
+                case STR: {
+                    if(sizeToCopy==0){to.str <- from.str}
+                    else {to.str <- from.str.subStr(0,sizeToCopy)}
+                }
                 case LST: {}
             }
         } else {  /- TODO: Do Convert + copy
@@ -635,11 +639,11 @@ struct agent{
                     if(true or copyRHSTypeToLHS){ LHSCursor.item.value.fType <- RHS.crntCursor.item.value.fType}
                     LHSCursor.item.infMode <- RHS.crntCursor.item.infMode
 
-                    if(sizeAction == copySizeRHStoLHS)     {DO_COPY(RHS.crntCursor.item.endMarker, LHSCursor.item.endMarker)}
-                    else if(sizeAction == copySizeLHStoRHS){DO_COPY(LHSCursor.item.endMarker, RHS.crntCursor.item.endMarker)}
+                    if(sizeAction == copySizeRHStoLHS)     {DO_COPY(RHS.crntCursor.item.endMarker, LHSCursor.item.endMarker, 0)}
+                    else if(sizeAction == copySizeLHStoRHS){DO_COPY(LHSCursor.item.endMarker, RHS.crntCursor.item.endMarker, 0)}
 
-                    if(valueAction == copyValueRHStoLHS)     {DO_COPY(RHS.crntCursor.item.value, LHSCursor.item.value)}
-                    else if(valueAction == copyValueLHStoRHS){DO_COPY(LHSCursor.item.value, RHS.crntCursor.item.value)}
+                    if(valueAction == copyValueRHStoLHS)     {DO_COPY(RHS.crntCursor.item.value, LHSCursor.item.value, crntItem.sizeToCopy)}
+                    else if(valueAction == copyValueLHStoRHS){DO_COPY(LHSCursor.item.value, RHS.crntCursor.item.value, crntItem.sizeToCopy)}
                 }
 
                 /- Handle when parent is a CONCAT
@@ -746,7 +750,7 @@ struct agent{
         our infDeepItr: remainder <- NULL
         if(PropogateIndirectItem(agendaItem.LHS.crntCursor, agendaItem.RHS.crntCursor) > 0){return(NULL)}
 
-        me bool: LooseType <- agendaItem.looseMode   /- Strict or loose typing?
+        me bool: looseMode <- agendaItem.looseMode   /- Strict or loose typing?
         me bool: reject <- false    /- ReturnStatus
 
         if(LHS.value.fType==tUnknown and RHS.value.fType!=tUnknown){
@@ -754,9 +758,10 @@ struct agent{
         } else {agendaItem.copyRHSTypeToLHS <- 0}
 
         me mergeCmd: sizeStatus; sizeStatus.cmd <- 0
-        if(! LooseType){
-            me int: LHSFormat <- LHS.endMarker.format
-            me int: RHSFormat <- RHS.endMarker.format
+        if(! looseMode){
+            log("AGENDA ITEM: " + agendaItem.printAgendaItem())
+            me int: LHSFormat <- LHS.size().format
+            me int: RHSFormat <- RHS.size().format
             if(LHSFormat != fUnknown and RHSFormat != fUnknown){
                 sizeStatus <- DO_VERIFY(LHS.size(), RHS.size())
                 if (sizeStatus.cmd==matchFailed){agendaItem.sizeAction<-sizeFailed; reject<-true;}
@@ -765,7 +770,7 @@ struct agent{
             else if(LHSFormat == fUnknown and RHSFormat != fUnknown){agendaItem.sizeAction<-copySizeRHStoLHS}
             else if(LHSFormat != fUnknown and RHSFormat == fUnknown){agendaItem.sizeAction<-copySizeLHStoRHS}
             else if(LHSFormat == fUnknown and RHSFormat == fUnknown){CO_SUBSCRIBE_SIZES(LHS, RHS)}
-        }
+        } else {log("LOOSE MODE")}
         me mergeCmd: valueStatus; valueStatus.cmd<-0
         if(!reject){
             me int: LHSFormat <- LHS.value.format
@@ -776,7 +781,11 @@ struct agent{
                 if(valueStatus.cmd==matchFailed){agendaItem.valueAction<-valueFailed; reject<-true;}
                 else if (valueStatus.cmd== wasVerified){agendaItem.valueAction<-valueVerified}
             }
-            else if(LHSFormat == fUnknown and RHSFormat != fUnknown){agendaItem.valueAction<-copyValueRHStoLHS}
+            else if(LHSFormat == fUnknown and RHSFormat != fUnknown){
+                agendaItem.valueAction<-copyValueRHStoLHS
+                valueStatus.cmd <- wasVerified
+                valueStatus.sizeDiff <- RHS.size().num - LHS.size().num
+            }
             else if(LHSFormat != fUnknown and RHSFormat == fUnknown){agendaItem.valueAction<-copyValueLHStoRHS}
             else if(LHSFormat == fUnknown and RHSFormat == fUnknown){CO_SUBSCRIBE_VALUES(LHS, RHS)}
         }
@@ -791,10 +800,13 @@ struct agent{
                 agendaItem.RHS.copyThisTo(remainder)
                 Allocate(remainder.crntCursor)
                 remainder.crntCursor.item <- remainderInfon
+                agendaItem.sizeToCopy <- rSize - sizeDiff
 
+            } else if(sizeDiff==0){
+                agendaItem.sizeToCopy <-rSize
             }/- TODO: finish case where remainder is on the left
 
-        }
+        } else {agendaItem.sizeToCopy <- RHS.size().num}
 
         if(reject){agendaItem.rejected <- true; remainder <- NULL}
 
@@ -826,7 +838,7 @@ struct agent{
                 our aItem: new_item
                 Allocate(new_item)
                 new_item.init(0,itrToProcess,newIDP)
-                new_item.looseMode <- workItem.parseMode == pmLoose
+                new_item.looseMode <- workItem.looseMode
                 if(pred != NULL){new_item.predecessors.pushLast(pred)}
                 agenda.addItem(new_item)
 /- VIEWER   if(pred==NULL){topAItem <- new_item}
@@ -964,7 +976,7 @@ struct agent{
         if(i.isNormed ==0){
             withEach WorkItm in i.wrkList{
                 if(!WorkItm.wasProcessed){
-                    if(WorkItm.parseMode == pmStrict){ S <- S+" = "}
+                    if(!WorkItm.looseMode){ S <- S+" = "}
                     else { S <- S+" == "}
                     S <- S + printInfon(WorkItm.item)
                 }
