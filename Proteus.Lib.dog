@@ -71,9 +71,10 @@ model infon{
     me pureInfon: endMarker
     me pureInfon: value
     flag: isNormed
-    flag: hasSelector
+    flag: hasCursorHead
+    flag: doCursorLookup
+    our infon: cursorHead
     our infon: aux1
-    our infon: aux2
     me string: tag
     our infItr[list]: wrkList
     flag: wrkLstPreped
@@ -145,6 +146,7 @@ model infon{
         return(NULL)
     }
     void: clear() <- {endMarker.clear() value.clear()}
+    void: INIT() <- {endMarker <- pureInfon(0)}
     me none: infon(me string: S) <- {
         infMode <- isLiteral
         itmMode <- mItem
@@ -231,6 +233,7 @@ string pureInfon{
           ]  <=>  fType = LST;)
      ]
 }
+
 string infon: StartSymbol="true" {
     "!"[opt]:asNot
    >[ ( "?" <=> infMode=isUnknown;)
@@ -254,6 +257,7 @@ string infon: StartSymbol="true" {
         | (":>" <=> isFunc=false; isFuncArg=true; invertFunc=false;)
         | ("<!" <=> isFunc=true; isFuncArg=false; invertFunc=true;)
         | ("!>" <=> isFunc=false; isFuncArg=true; invertFunc=true;)
+        | ("."  <=> hasCursorHead=true;)
         ]
         >ws >our infon:aux1
     }[opt]
@@ -261,7 +265,9 @@ string infon: StartSymbol="true" {
 
 struct pureInfon {}
 struct infItr {}
-struct infon {}
+struct infon {
+    our infon[multimap string]: index
+}
 
 /-////////////////////////
 /- Definition storage
@@ -533,11 +539,15 @@ struct agent{
             if(CI.itmMode == mTagDefn){
                 modelMngr.indexDefinition(CI.tag, CI)
                 break()
+            } else if(CI.doCursorLookup){
+                print("Cursor LOOPUP!\n")
             } else if(CI.infMode == isTag){
                 our infon: infModel <- modelMngr.fetchModel(CI.tag)
                 Allocate(newTop)
                 newTop <deep- infModel
                 newTop.itmMode <- mItem
+
+                ciItr.crntCursor.parent.item.index.insert(CI.tag, CI)
             } else if(CI.isFunc or CI.isFuncArg){
                /- print("HANDLING FUNCTION ARGS\n")
                 if(CI.isFuncArg!=0){  /- Swap func body with args
@@ -559,6 +569,16 @@ struct agent{
                 CI.aux1 <- NULL
                 if(CI.value.fType==LST){ciItr.state <- sFirstVisit}
                 else if(CI.value.fType!=LST){ciItr.state <- sNotASeq}
+            } else if(CI.hasCursorHead){
+                our infon:: CITmp
+                CITmp <deep- CI
+                theClip.dispAndWait("Swapping cursorHead.tag")
+                CI <deep- CI.aux1
+                CI.doCursorLookup <- true
+                CI.hasCursorHead <- false
+                CI.cursorHead <- CITmp
+
+                /-  Somewhere in normalize, if aux1 is a tag, if cursorHead.index[tag] exists, copy it to CI
             }
             me int: cursor <- CI.value.cursor
             if(cursor != cDefault){
@@ -971,7 +991,11 @@ struct agent{
         else if(i.infMode==isTag){S <- S+i.tag}
         else if(i.infMode==isLiteral){
              S <- S+printPureInfon(i.value, i.size())
-        } else {print("Error In PrintInfon()\n") exit(2)}
+        }
+        else if(i.hasCursorHead){
+            S <- S + printInfon(i.cursorHead)+"."+i.tag
+        }
+        else {print("Error In PrintInfon()\n") exit(2)}
 
         if(i.isNormed ==0){
             withEach WorkItm in i.wrkList{
