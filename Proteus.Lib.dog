@@ -22,12 +22,13 @@ do ManageCmdLine(cmd)
 struct GLOBAL{
     our infon[multimap string]: classDefs
     void: registerClass(our infon: classInfon) <- {
-        print("REGISTER:", classInfon.tag, "\n")
-        classDefs.insert(classInfon.tag, classInfon)
+        print("REGISTER:", classInfon.type.asGiven, "\n")
+        classDefs.insert(classInfon.type.asGiven, classInfon)
     }
 }
 
 #include infonList.dog
+#include wordSystemMgr.dog
 
 model pureInfon{
     me mode[tUnknown, NUM, STR, LST]: fType
@@ -57,6 +58,23 @@ model pureInfon{
 
     }
     our DblLinkedListNode: deleteListNode(our DblLinkedListNode: toDel) <- {return(items.erase(toDel))}
+
+    void: copyAsTypeTo(their pureInfon: to) <- {
+        to <deep- self
+        to.items.clear()
+        to.index.clear()
+        withEach node in items {
+            our infon: newNode
+            Allocate(newNode)
+            node.copyAsTypeTo(newNode)
+            to.items.pushLast(newNode)
+            if(node.type!=NULL and node.type.asGiven!=""){
+                to.index.insert(node.type.asGiven, newNode)
+            }
+        }
+
+    }
+
     void: clear() <- {num<-0 str<-""; items.clear(); listSpec<-NULL}
   /-  void: init() <- {Allocate(items)}
 }
@@ -75,7 +93,7 @@ model infon{
     flag: doCursorLookup
     our infon: cursorHead
     our infon: aux1
-    me string: tag
+    our WordSystem: type
     our infItr[list]: wrkList
     flag: wrkLstPreped
     flag: wrkItmsAdded
@@ -145,6 +163,23 @@ model infon{
         }
         return(NULL)
     }
+    void: copyAsTypeTo(our infon: to) <- {
+        to.flags <- flags
+        to.type <- type
+        endMarker.copyAsTypeTo(to.endMarker)
+        value.copyAsTypeTo(to.value)
+        if(cursorHead){cursorHead.copyAsTypeTo(to.cursorHead)}
+        if(aux1){aux1.copyAsTypeTo(to.aux1)}
+        withEach wrkListItem in wrkList {
+            our infItr: ii
+            Allocate(ii)
+            ii <deep- wrkListItem
+            Allocate(ii.item)
+            wrkListItem.item.copyAsTypeTo(ii.item)
+            to.wrkList.pushLast(ii)
+        }
+    }
+
     void: clear() <- {endMarker.clear() value.clear()}
     void: INIT() <- {endMarker <- pureInfon(0)}
     me none: infon(me string: S) <- {
@@ -207,6 +242,10 @@ model infItr{
 }
 
 #define LISTBODY(LEFT_BRKT, RIGHT_BRKT) <% >{ "LEFT_BRKT" "T"[opt]:timelike  >me listInfo[opt] >our listItem[list]: items >ws "RIGHT_BRKT" } %>
+
+string WordSystem{
+    >CID:asGiven
+}
 string infItr{
     >[ ("=" <=> looseMode=false;) | ("==" <=> looseMode=true;) ] > ws > our infon:item
 }
@@ -217,7 +256,7 @@ string listInfo[
 ]
 string listItem{
     >ws
-     >[ (>{"class" >ws > CID:tag > ws ":" > ws > our infon:inf} <=> itmMode=mTagDefn;)
+     >[ (>{"class" >ws > WordSystem:type > ws ":" > ws > our infon:inf} <=> itmMode=mTagDefn;)
       | (>our infon:inf <=> itmMode=mItem;)
       | ("..." <=> itmMode=mDots; value.format=fUnknown;)
       | (>{"#" >ws >our infon:inf} <=> itmMode=mSubItems;)
@@ -233,7 +272,6 @@ string pureInfon{
           ]  <=>  fType = LST;)
      ]
 }
-
 string infon: StartSymbol="true" {
     "!"[opt]:asNot
    >[ ( "?" <=> infMode=isUnknown;)
@@ -247,7 +285,7 @@ string infon: StartSymbol="true" {
          ]   <=>   infMode=isLiteral;
       )
 
-    | ( >CID:tag <=> infMode=isTag;)
+    | ( >WordSystem:type <=> infMode=isTag;)
     ]
     >ws
 
@@ -263,22 +301,23 @@ string infon: StartSymbol="true" {
     }[opt]
 }
 
-struct pureInfon {}
-struct infItr {}
-struct infon {
+struct pureInfon {
     our infon[multimap string]: index
+    our infon[multimap int64]: T_index
 }
+struct infItr {}
+struct infon {}
 
 /-////////////////////////
 /- Definition storage
 
 struct ModelManager {
     our infon[map string]: classToModel
-    void: indexDefinition(me string: classID, our infon: infModel) <- {
-        classToModel[classID] <- infModel;
+    void: indexDefinition(our WordSystem: classID, our infon: infModel) <- {
+        classToModel[classID.asGiven] <- infModel;
     }
-    our infon: fetchModel(me string: classID) <- {
-        return(classToModel[classID])
+    our infon: fetchModel(our WordSystem: classID) <- {
+        return(classToModel[classID.asGiven])
     }
 }
 
@@ -491,6 +530,10 @@ struct agent{
         }
     }
 
+    void: setErrorState(our infItr: infonWithError, me string: errorMesg) <- {
+        log("INFON ERROR: " + errorMesg)
+    }
+
     me bool: joinOnRight(our infon: LHS, our infon: RHS) <- { /- Join RHS into LHS. Return true on success (so need no subscription).
         if(LHS.value.format==fLiteral and RHS.value.format==fLiteral){
             me int: LHSType <- LHS.value.fType
@@ -530,56 +573,68 @@ struct agent{
         LHS.item.wrkList.pushLast(RHS)
     }
 
+    me string: ptrToStr(our infon: I) <- <%{
+        string S = printInfon(I)+" ("+to_string(uint64_t(I.get()))+")";
+        return (S);
+    }%>
+
     void: prepWorkList(our infDeepItr: ciItr) <- {
         our infon: CI <- ciItr.crntCursor.item
         if (CI.wrkLstPreped){return()}else{CI.wrkLstPreped <- 1}
         me bool: done <- false
-        log("> PrepWorkList")
+        log(" > PrepWorkList")
         while(!done){
             log("    > LOOP of PrepWorkList")
             me bool: loopAgain <- false
             our infon: newTop<-NULL
             if(CI.itmMode == mTagDefn){
-                log("        Define tag:"+CI.tag)
-                modelMngr.indexDefinition(CI.tag, CI)
+                log("        Define class:"+CI.type.asGiven+" "+ptrToStr(CI))
+                modelMngr.indexDefinition(CI.type, CI)
                 break()
             } else if(CI.doCursorLookup){
-                log("        Cursor LOOPUP!")
+                /-log("        Cursor '.type' lookup")
                 normalize(CI.cursorHead)
-                our infon[itr multimap string]: idxItem <- CI.cursorHead.index.find(CI.tag)
-                if(idxItem != CI.cursorHead.index.end()){
+                our infon[itr multimap string]: idxItem <- CI.cursorHead.value.index.find(CI.type.asGiven)
+                if(idxItem != CI.cursorHead.value.index.end()){
                     our infon: aux1Tmp <- CI.aux1
-                    CI <- idxItem.val
+                    ciItr.crntCursor.item <- idxItem.val
+                    CI <- ciItr.crntCursor.item  /- CI <deep- idxItem.val
                     if(aux1Tmp){
                         CI.aux1 <- aux1Tmp
                         CI.hasCursorHead <- true
                         loopAgain <- true
+                        log("        Cursor '.type' lookup "+CI.type.asGiven+" "+ptrToStr(CI))
                     }
-                } else {log("        Could not find tag:"+CI.tag)}
+                } else {
+                    setErrorState(ciItr.crntCursor, "Could not find type:"+CI.type.asGiven)
+                }
             } else if(CI.hasCursorHead){
+                /- We want to search CI for CI->aux1, which is probably a wordSystem.
+                /- Here we prepare by moving data into better positions
+                /- We set the flag CI.doCursorLookup so that the lookup can be done on the next loop.
                 our infon:: CITmp
                 CITmp <deep- CI
                 CITmp.wrkLstPreped <- false
                 CITmp.hasCursorHead <- false
-                log("        Swapping cursorHead.tag")
+                log("        Swapping cursorHead.type")
                 CI <deep- CI.aux1
                 CI.doCursorLookup <- true
                 CI.hasCursorHead <- false
                 CI.cursorHead <- CITmp
                 loopAgain <- true
-                /-  Somewhere in normalize, if aux1 is a tag, if cursorHead.index[tag] exists, copy it to CI
             } else if(CI.infMode == isTag){
-                log("        Access tag:"+CI.tag)
-                our infon: infModel <- modelMngr.fetchModel(CI.tag)
+                log("        Access type:"+CI.type.asGiven)
+
+                our infon: infModel <- modelMngr.fetchModel(CI.type)
                 if(infModel){
                     Allocate(newTop)
-                    newTop <deep- infModel
+                    infModel.copyAsTypeTo(newTop)
                     newTop.itmMode <- mItem
-                }
+                } else {setErrorState(ciItr.crntCursor, CI.type.asGiven+" is not defined")}
                 if(ciItr.crntCursor.parent.item){
-                    ciItr.crntCursor.parent.item.index.insert(CI.tag, CI)
-                } else { /- This section is to get items into World. In a fully streaming more this isn't needed.
-                    world.index.insert(CI.tag, CI)
+                    ciItr.crntCursor.parent.item.value.index.insert(CI.type.asGiven, CI)
+                } else { /- This section is to get items into World. In a fully streaming mode this isn't needed.
+                    world.value.index.insert(CI.type.asGiven, CI)
                 }
             } else if(CI.isFunc or CI.isFuncArg){
                /- print("HANDLING FUNCTION ARGS\n")
@@ -798,23 +853,32 @@ struct agent{
         me bool: looseMode <- agendaItem.looseMode   /- Strict or loose typing?
         me bool: reject <- false    /- ReturnStatus
 
-        if(LHS.value.fType==tUnknown and RHS.value.fType!=tUnknown){
+        if((LHS.infMode==isUnknown and RHS.infMode!=isUnknown) or (LHS.value.fType==tUnknown and RHS.value.fType!=tUnknown)){
             agendaItem.copyRHSTypeToLHS <- 1
         } else {agendaItem.copyRHSTypeToLHS <- 0}
 
         me mergeCmd: sizeStatus; sizeStatus.cmd <- 0
-        if(! looseMode){
+        if(!looseMode){ /- Make sure typeSpec are compatible
+            if(!LHS.type.isCompatibleWith(RHS.type)){reject<-true;}
+        }
+        if(!looseMode){
             log("AGENDA ITEM: " + agendaItem.printAgendaItem())
             me int: LHSFormat <- LHS.size().format
             me int: RHSFormat <- RHS.size().format
-            if(LHSFormat != fUnknown and RHSFormat != fUnknown){
-                sizeStatus <- DO_VERIFY(LHS.size(), RHS.size())
-                if (sizeStatus.cmd==matchFailed){agendaItem.sizeAction<-sizeFailed; reject<-true;}
-                else if (sizeStatus.cmd== wasVerified){agendaItem.sizeAction<-sizeVerified}
+            me int: LHSInfMode <- LHS.infMode
+            if(LHSInfMode==isUnknown){
+                agendaItem.sizeAction<-copySizeRHStoLHS
+                agendaItem.valueAction<-copyValueLHStoRHS
+            } else {
+                if(LHSFormat != fUnknown and RHSFormat != fUnknown){
+                    sizeStatus <- DO_VERIFY(LHS.size(), RHS.size())
+                    if (sizeStatus.cmd==matchFailed){agendaItem.sizeAction<-sizeFailed; reject<-true;}
+                    else if (sizeStatus.cmd== wasVerified){agendaItem.sizeAction<-sizeVerified}
+                }
+                else if(LHSFormat == fUnknown and RHSFormat != fUnknown){agendaItem.sizeAction<-copySizeRHStoLHS}
+                else if(LHSFormat != fUnknown and RHSFormat == fUnknown){agendaItem.sizeAction<-copySizeLHStoRHS}
+                else if(LHSFormat == fUnknown and RHSFormat == fUnknown){CO_SUBSCRIBE_SIZES(LHS, RHS)}
             }
-            else if(LHSFormat == fUnknown and RHSFormat != fUnknown){agendaItem.sizeAction<-copySizeRHStoLHS}
-            else if(LHSFormat != fUnknown and RHSFormat == fUnknown){agendaItem.sizeAction<-copySizeLHStoRHS}
-            else if(LHSFormat == fUnknown and RHSFormat == fUnknown){CO_SUBSCRIBE_SIZES(LHS, RHS)}
         } else {log("LOOSE MODE")}
         me mergeCmd: valueStatus; valueStatus.cmd<-0
         if(!reject){
@@ -852,7 +916,7 @@ struct agent{
             }/- TODO: finish case where remainder is on the left
 
         } else {agendaItem.sizeToCopy <- RHS.size().num}
-
+        if(LHS.asNot){reject <- !reject}
         if(reject){agendaItem.rejected <- true; remainder <- NULL}
 
         return(remainder)
@@ -861,8 +925,10 @@ struct agent{
     me int: addWorkItemsToAgenda(me int: priority, our aItem: pred, our infDeepItr: itrToProcess)<-{
         me int: numItemsAdded <- 0
         our infon: i <- itrToProcess.crntCursor.item
+        log("Adding WorkItem:" + printInfon(i))
         if(i.wrkItmsAdded){return(0)}else{i.wrkItmsAdded <- true}
        /- theClip.dispAndWait(i, "addWorkItemsToAgenda - A")
+       log("Adding WorkItem-B:" + printInfon(i))
         if(i.wrkList.size()==0){
             if(pred == NULL){   /- There is no RHS so make RHS NULL
                 our infDeepItr: newIDP
@@ -896,7 +962,7 @@ struct agent{
 
     void: normalize(our infon: i) <- {
       /-  testIterator(i);  exit(2)
-       /- print("NORMALIZING: ", printInfon(i) ,"\n")
+        log("NORMALIZING: " + printInfon(i))
         our infDeepItr: ii
         Allocate(ii)
         ii.initialize(i)
@@ -999,7 +1065,7 @@ struct agent{
         if(i ==  NULL){return("NULL")}
         if(i.itmMode==mSubItems){S<-S+"#"}
         else if(i.itmMode==mDots){S<-S+"..."; return(S)}
-        else if(i.itmMode==mTagDefn){S<-S+"class "+i.tag+": "}
+        else if(i.itmMode==mTagDefn){S<-S+"class "+i.type.asGiven+": "}
 
         if(i.asNot){S <- S+"!"}
         if(i.infMode==isUnknown){S <- S+"?"}
@@ -1013,12 +1079,12 @@ struct agent{
                 case cNext:   {S <- S+"next"}
             }
         }
-        else if(i.infMode==isTag){S <- S+i.tag}
+        else if(i.infMode==isTag){S <- S+i.type.asGiven}
         else if(i.infMode==isLiteral){
              S <- S+printPureInfon(i.value, i.size())
         }
         else if(i.hasCursorHead){
-            S <- S + printInfon(i.cursorHead)+"."+i.tag
+            S <- S + printInfon(i.cursorHead)+"."+i.type.asGiven
         }
         else {print("Error In PrintInfon()\n") exit(2)}
 

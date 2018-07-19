@@ -1,0 +1,121 @@
+/- Work around for V1 of ProteusDB
+
+    me string: stripString(me string: s) <- {
+        if(s=="") {return("")}
+        while(s[s.size()-1]==" "){s <- s.subStr(0, s.size()-1)}
+        while(s[0]==" "){s <- s.subStr(1, s.size()-1)}
+        return(s)
+    }
+
+    void: split(me string: s, me string: divider, me string[their list]: strList) <- {
+        me int: strLen <- s.size()
+        me int: divLen <- divider.size()
+        me string: segment
+        withEach pos in RANGE(0..strLen){
+            if(s.subStr(pos, divLen)==divider){
+                strList.pushLast(segment)
+                segment <- ""
+                pos <- pos + (divLen-1)
+            } else {segment <- segment + s[pos]}
+        }
+        segment <- stripString(segment)
+        if(segment != ""){strList.pushLast(segment)}
+    }
+
+    me bool: isNumberSegment(me string: seg, their int64: result) <- {
+        if(seg[0]=="T" and seg.size()>2 and seg[1]=="_"){
+            me int: strSize <- seg.size()
+            me int64: acc <- 0
+            withEach pos in RANGE(2..strSize){
+                me char: ch <- seg[pos]
+                if(isdigit(ch)){
+                    acc <- (acc*10)+(ch-48)
+                } else {return(false)}
+            }
+            result <deep- acc
+            log("For "+seg+" returning:"+toString(acc))
+            return(true)
+        }
+        return(false)
+    }
+
+    me string: ProteusHandleString(me string: protText) <- {
+        me string: result
+        if (protText==""){return("")}
+        else if (protText[0]=="%"){
+            me string[list]: withEquals
+            me string[list]: nameSegs
+            split(protText, "=", withEquals)
+            split(withEquals[0], ".", nameSegs)
+            our infon: infLevel
+            me bool: itemWasFound <- false
+            withEach seg in nameSegs{
+                if(seg=="%W"){infLevel <- CORE.WORLD}
+                else{
+                    if(infLevel!=NULL){
+                        if(infLevel.value.fType==LST){
+                            me bool: segFound <- false
+                            me int64: segSlotPos
+                            if(isNumberSegment(seg, segSlotPos)){
+                                our infon[itr multimap int64]: T_item <- infLevel.value.T_index.find(segSlotPos)
+                                if(T_item != infLevel.value.T_index.end()){
+                                    infLevel <- T_item.val
+                                    segFound <- true
+                                } else { /- if it wasn't found but there is a '=', add it.
+                                    if(withEquals.size()>1 and seg_key == (nameSegs.size()-1)){
+                                        our infon: newItem <- CORE.parseAndExtract(withEquals[1])
+                                        infLevel.value.T_index.insert(segSlotPos, newItem)
+                                        infLevel <- newItem
+                                        segFound <- true
+                                        withEquals.clear()
+                                    }
+                                }
+                            } else {
+                                withEach infItem in infLevel.value.items{
+                                    if(infItem.type!=NULL and infItem.type.asGiven==seg){
+                                        infLevel <- infItem
+                                        segFound <- true
+                                        break()
+                                    }
+                                }
+                            }
+                            if(segFound){itemWasFound <- true; log("INFON FOUND:"+CORE.a.printInfon(infLevel))}
+                            else{
+                                itemWasFound <- false
+                                log("Segment not found:"+seg)
+                                break();
+                            }
+                        }
+                    }
+                }
+            }
+            if(itemWasFound and withEquals.size()>1){
+                our infon: newRHS <- CORE.parseAndExtract(withEquals[1])
+                if(newRHS!=NULL){
+                    our infItr:: ii
+                    ii.item <- newRHS
+                    infLevel.wrkList.pushLast(ii)
+                    infLevel.isNormed <- false
+                    infLevel.wrkItmsAdded <- false
+                    log("Normalizing:"+CORE.a.printInfon(infLevel))
+                    CORE.a.normalize(infLevel)
+                    log("Normalized:"+CORE.a.printInfon(infLevel))
+                    result <- CORE.a.printInfon(infLevel) + "   SIZE:" + CORE.a.printPureInfon(infLevel.size(), NULL)
+                } else {
+                    result <- "Parse Error:" + CORE.parser.errorMesg + " at line " + toString(CORE.parser.errLineNum) + ":" + toString(CORE.parser.errCharPos)
+                }
+            } else {
+                result <- CORE.a.printInfon(infLevel) + "   SIZE:" + CORE.a.printPureInfon(infLevel.size(), NULL)
+            }
+        } else {
+            our infon: crntInfon <- CORE.parseAndExtract(protText)
+            if(crntInfon!=NULL){
+                CORE.a.appendToWorld(crntInfon)
+                CORE.a.normalize(crntInfon)
+                result <- CORE.a.printInfon(crntInfon) /- + "   SIZE:" + CORE.a.printPureInfon(crntInfon.size(), NULL)
+            } else {
+                result <- "Parse Error:" + CORE.parser.errorMesg + " at line " + toString(CORE.parser.errLineNum) + ":" + toString(CORE.parser.errCharPos)
+            }
+        }
+        return(result)
+    }
