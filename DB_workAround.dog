@@ -205,10 +205,11 @@ struct dataCache{
 struct Vessel{
     me string: name
     me double: length
-    me double: circmEntry
-    me double: circmExit
+    me double: entryArea
+    me double: exitArea
     me int64:  buffer
     me int64:  glucoseLevel
+    me int64:  outputArea
     me string[list]: inputs
     me string[list]: outputs
 }
@@ -228,11 +229,11 @@ struct bodySim{
     our bodyEvent[map timeValue]: bodyEvents
 
     void: constructBodySystem() <- {
-        our WordSystem: word
+        me agent: a
+	our WordSystem: word
         Allocate(word, "Circulatory_system")
         our infon: infModel <- modelMngr.fetchModel(word)
         withEach item in infModel.value.items {
-            me agent: a
             our Vessel:: V
             me int: cursor <- 0
             V.name <- item.value.items.at(cursor).item.value.str
@@ -241,21 +242,31 @@ struct bodySim{
             me int: nextNum <- item.value.items.at(cursor).item.value.getValAsInt()
             if(nextNum >= 0){
                 V.length     <- nextNum
-                V.circmEntry <- item.value.items.at(cursor+1).item.value.getValAsInt()
-                V.circmExit  <- item.value.items.at(cursor+2).item.value.getValAsInt()
+                V.entryArea <- item.value.items.at(cursor+1).item.value.getValAsInt()
+                V.exitArea  <- item.value.items.at(cursor+2).item.value.getValAsInt()
                 cursor <- cursor+3
             } else {cursor <- cursor+1}        /- nextNum is negative
             our infon: vesselInfon <- item.value.items.at(cursor).item
             withEach inputItem in vesselInfon.value.items.at(0).item.value.items {
-                print("    IN>", a.printInfon(inputItem), "\n")
+                /-print("    IN>", a.printInfon(inputItem), "\n")
                 V.inputs.pushLast(inputItem.value.str)
             }
             withEach outputItem in vesselInfon.value.items.at(1).item.value.items {
-                print("    OUT>", a.printInfon(outputItem), "\n")
+                /-print("    OUT>", a.printInfon(outputItem), "\n")
                 V.outputs.pushLast(outputItem.value.str)
             }
             bloodVessels[V.name] <- V
         }
+	withEach vessel in bloodVessels{
+	    me int64: outputAreaAccum <- 0
+	    withEach outVesselName in vessel.outputs{
+		our Vessel[itr map string]: V <- bloodVessels.find(outVesselName)
+		if(V == bloodVessels.end()){ print("        Error: outVesselName ", outVesselName, " not found.\n"); exit(1) }
+		else{ outputAreaAccum <- outputAreaAccum + V.val.entryArea }
+	    }
+	    vessel.outputArea <- outputAreaAccum
+	    print("Ratio: ", vessel.exitArea/vessel.outputArea, "     name: ", vessel.name, "      outputArea: ", vessel.outputArea, "      exitArea: ", vessel.exitArea, "\n")
+	}
     }
 
     void: fetchInitialData() <- {
@@ -270,19 +281,33 @@ struct bodySim{
         }
     }
 
+me timeValue: simStart
+    me timeValue: simEnd
+    me timeValue: simStep
+    me timeValue: crntSimTime
+
     void: init() <- {
         constructBodySystem()
         fetchInitialData()
     }
 
-    void: runSim(me timeValue: start, me timeValue: end) <- {
+    void: initSimulation(me timeValue: start, me timeValue: end, me timeValue: step) <- {
+        simStart <- start
+        simEnd   <- end
+        simStep  <- step
+        crntSimTime <- simStart
+    }
+    me bool: EOS() <- {
+	return(crntSimTime > simEnd)
+    }
+    void: runStep() <- {
         withEach vessel in bloodVessels{
             vessel.buffer <- 0
         }
         me int64: output <- 0
         withEach vessel in bloodVessels{
             withEach outVessel in vessel.outputs{
-                me int64: outToVessel <- 100
+                me int64: outToVessel <- vessel.glucoseLevel * (vessel.entryArea/vessel.outputArea)
                 our Vessel[itr map string]: V <- bloodVessels.find(outVessel)
                 if(V == bloodVessels.end()){ print("        Error: outVessel ", outVessel, " not found.\n"); exit(1) }
                 else{ V.val.buffer <- V.val.buffer + outToVessel }
