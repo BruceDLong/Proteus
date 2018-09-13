@@ -69,7 +69,6 @@ struct GLOBAL{
         our infon: result
         if (protText==""){return(NULL)}
         else if (protText[0]=="%"){
-            print("    QUERY:", protText, "\n")
             me string[list]: withEquals
             me string[list]: nameSegs
             split(protText, "=", withEquals)
@@ -80,34 +79,26 @@ struct GLOBAL{
                 me bool: segFound <- false
                 if(seg=="%W"){infLevel <- CORE.WORLD}
                 else{
-                    print("       Seg: ",seg, "-\n")
                     if(infLevel!=NULL){
                         if(infLevel.value.fType==LST){
-                            print("           LST\n")
                             withEach infItem in infLevel.value.items{
                                 if(infItem.type!=NULL and infItem.type.asGiven==seg){
-                                print("           <", infItem.type.asGiven, ">  ", seg, "\n")
                                     infLevel <- infItem
                                     segFound <- true
                                     break()
                                 }
                             }
                         }else{
-                            print("           not LST\n")
                             me int64: segSlotPos
                             me int64: earliest
                             me int64: latest
                             if(isNumberSegment(seg, segSlotPos)){
-                                print("           isNumberSegment\n")
                                 our infon[itr multimap int64]: T_item <- infLevel.value.T_index.find(segSlotPos)
                                 if(T_item != infLevel.value.T_index.end()){
-                                    print("               T_item\n")
                                     infLevel <- T_item.val
                                     segFound <- true
                                 } else { /- if it wasn't found but there is a '=', add it.
-                                    print("               else\n")
                                     if(withEquals.size()>1 and seg_key == (nameSegs.size()-1)){
-                                        print("                  if\n")
                                         CORE.addStatementToSession(protText)
                                         our infon: newItem <- CORE.parseAndExtract(withEquals[1])
                                         infLevel.value.T_index.insert(segSlotPos, newItem)
@@ -117,17 +108,14 @@ struct GLOBAL{
                                     }
                                 }
                             } else if(isNumberRange(seg, earliest, latest)){
-                                print("           isNumberRange")
                                 /-log("For "+seg+" returning:"+toString(earliest) + " - " + toString(latest))
                             }
                         }
                         if(segFound){
-                            print("        segFound: ", seg, "\n")
                             itemWasFound <- true;
                         }
                         else{
                             itemWasFound <- false
-                            print("        Segment not found: ", seg, "\n")
                             break();
                         }
                     }
@@ -135,7 +123,6 @@ struct GLOBAL{
             }
             if(itemWasFound and withEquals.size()>1){
                 me string: infonText <- withEquals[1]
-                print("itemWasFound: ", infonText)
                 our infon: newRHS <- CORE.parseAndExtract(infonText)
                 if(newRHS!=NULL){
                     our infItr:: ii
@@ -143,10 +130,8 @@ struct GLOBAL{
                     infLevel.wrkList.pushLast(ii)
                     infLevel.isNormed <- false
                     infLevel.wrkItmsAdded <- false
-                    print("Normalizing:"+CORE.a.printInfon(infLevel))
                     CORE.a.normalize(infLevel)
                     CORE.addStatementToSession(protText)
-                    print("Normalized:"+CORE.a.printInfon(infLevel))
                     result <- infLevel
                 } else {
                     result <- NULL
@@ -199,14 +184,12 @@ struct dataCache{
 
     me timeIntervalSpec[map int64]: cacheContents
     void: condenseContentsList() <- {}
-
 }
 
 struct Fluid{
     me double: volume
     me double: glucoseFactor
     me double: insulinFactor
-
 }
 
 struct Vessel{
@@ -223,7 +206,41 @@ struct Vessel{
     me string[list]: inputs
     me string[list]: outputs
 
-    void: mergePush(me timeIntervalSpec: interval, me Fluid: fluid) <- {
+    void: mergePush(their bodySim: sim, me timeIntervalSpec: interval, our Fluid: fluidIn) <- {
+        fluidQueue.pushFirst(fluidIn)   /- TODO: Merge instead of push
+        me double: inVolume        <- fluidIn.volume
+        me double: volumeRemaining <- inVolume
+        me int: count
+        while(volumeRemaining > 0){
+            our Fluid: fluidOut   <- fluidQueue.last()
+            me double: outVolume  <- fluidOut.volume
+            me double: stepVolume <- 0
+            if(volumeRemaining > outVolume){stepVolume <- volumeRemaining}
+            else if(volumeRemaining < outVolume){stepVolume <- outVolume}
+            else{stepVolume <- volumeRemaining}
+            volumeRemaining <- volumeRemaining - stepVolume
+            withEach vesselName in outputs{
+                if(vesselName=="arteryHeart"){continue()}
+                our Vessel[itr map string]: outVesselItr <- sim.bloodVessels.find(vesselName)
+                if(outVesselItr != sim.bloodVessels.end()){
+                    our Vessel: outVessel  <- outVesselItr.val
+                    me double: outToVessel <- stepVolume * (outVessel.entryArea/outputArea)
+                    our Fluid:: eventFluid
+                        eventFluid.volume        <- outToVessel
+                        eventFluid.glucoseFactor <- fluidIn.glucoseFactor
+                        eventFluid.insulinFactor <- fluidIn.insulinFactor
+                    me fluidEvent: event
+                        event.fluid    <- eventFluid
+                        event.vessel   <- outVessel
+                        event.interval <- interval  /- TODO: interval should be a fraction if they are multiple steps
+                    if(outVessel.eventsRemaining>=1){
+                        if(count==0){outVessel.eventsRemaining <- outVessel.eventsRemaining -1}
+                        sim.vesselQueue.pushFirst(event)
+                    }
+                }
+            }
+            count <- count +1
+        }
     }
 }
 struct fluidEvent{
@@ -246,6 +263,7 @@ struct bodySim{
     our Vessel:   mainVessel
     our Vessel[map string]:       bloodVessels
     our bodyEvent[map timeValue]: bodyEvents
+    me fluidEvent[list]: vesselQueue
 
     void: constructBodySystem() <- {
         me agent: a
@@ -256,7 +274,6 @@ struct bodySim{
             our Vessel:: V
             me int: cursor <- 0
             V.name <- item.value.items.at(cursor).item.value.str
-            print("# ", V.name, "\n")
             cursor <- cursor+1
             me int: nextNum <- item.value.items.at(cursor).item.value.getValAsInt()
             if(nextNum >= 0){
@@ -278,17 +295,16 @@ struct bodySim{
             bloodVessels[V.name] <- V
         }
         withEach vessel in bloodVessels{
+            if(vessel.name=="arteryHeart"){mainVessel <- vessel}
             me int64: outputAreaAccum <- 0
             withEach outVesselName in vessel.outputs{
-/*                our Vessel[itr map string]: V <- bloodVessels.find(outVesselName)
-                if(V == bloodVessels.end()){ print("        Error: outVesselName ", outVesselName, " not found.\n"); exit(1) }
-                else{ 
-                    outputAreaAccum <- outputAreaAccum + V.val.entryArea 
-                    if(outVesselName=="arteryHeart"){mainVessel <- v.val}
-                } */
+                our Vessel[itr map string]: V <- bloodVessels.find(outVesselName)
+                if(V == bloodVessels.end()){print("        Error: outVesselName ", outVesselName, " not found.\n"); exit(1) }
+                else{
+                    outputAreaAccum <- outputAreaAccum + V.val.entryArea
+                }
             }
             vessel.outputArea <- outputAreaAccum
-            print("Ratio: ", vessel.exitArea/vessel.outputArea, "     name: ", vessel.name, "      outputArea: ", vessel.outputArea, "      exitArea: ", vessel.exitArea, "\n")
         }
     }
 
@@ -338,19 +354,16 @@ struct bodySim{
         return(crntSimTime > simEnd)
     }
 
-
-    void: moveFluid(our Vessel: from, our Vessel: to, me timeIntervalSpec: interval, me Fluid: fluid) <- {
+    void: moveFluid(our Vessel: from, our Vessel: to, me timeIntervalSpec: interval, our Fluid: fluid) <- {
     }
 
     void: runStep() <- {
-        print("\nCRNT-TIME:", crntSimTime, ", \t")
         withEach vessel in bloodVessels{
             vessel.eventsRemaining <- vessel.numInputs
         }
 
         /- Setup and then process queue
         me int64:            output          <- 0
-        me fluidEvent[list]: vesselQueue
         me fluidEvent:       firstEvent
         firstEvent.fluid          <- mainVessel.fluidQueue.last()
         firstEvent.vessel         <- mainVessel
@@ -358,26 +371,14 @@ struct bodySim{
         firstEvent.interval.end   <- firstEvent.interval.start + 100
         vesselQueue.pushFirst(firstEvent)
         while (! vesselQueue.isEmpty()){
-            
+            me fluidEvent: evt <- vesselQueue.last()
+            me int: size <- vesselQueue.size()
+            vesselQueue.popLast()
+            evt.vessel.mergePush(self,evt.interval,evt.fluid)
         }
         withEach vessel in bloodVessels{
-            withEach outVessel in vessel.outputs{
-                our Vessel[itr map string]: V <- bloodVessels.find(outVessel)
-                if(V == bloodVessels.end()){ print("        Error: outVessel ", outVessel, " not found.\n"); exit(1) }
-                else{
-                    me int64: outToVessel <- vessel.glucoseLevel * (vessel.entryArea/vessel.outputArea)
-     /- V.val.mergePush(interval, partialFluid)          /-      V.val.buffer <- V.val.buffer + outToVessel
-                    output <- output+outToVessel
-                }
-            }
-            vessel.glucoseLevel <- vessel.glucoseLevel - output
-        }
-        withEach vessel in bloodVessels{
-/-            vessel.glucoseLevel <- vessel.glucoseLevel + vessel.buffer
-            /-print ("    ", vessel.name, ":", vessel.glucoseLevel, "\n")
+            /-vessel.glucoseLevel <- vessel.glucoseLevel + vessel.buffer
         }
         crntSimTime <- crntSimTime + simStep
     }
 }
-
-
