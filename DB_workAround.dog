@@ -200,8 +200,8 @@ struct Vessel{
     me double: volume
     me int:  eventsRemaining
     me int:  numInputs
-    me int:  glucoseLevel
-    me int:  outputArea
+    me double:  glucoseLevel
+    me double:  outputArea
     our Fluid[list]: fluidQueue
     me string[list]: inputs
     me string[list]: outputs
@@ -214,17 +214,23 @@ struct Vessel{
         while(volumeRemaining > 0){
             our Fluid: fluidOut   <- fluidQueue.last()
             me double: outVolume  <- fluidOut.volume
+
             me double: stepVolume <- 0
-            if(volumeRemaining > outVolume){stepVolume <- volumeRemaining}
-            else if(volumeRemaining < outVolume){stepVolume <- outVolume}
-            else{stepVolume <- volumeRemaining}
+            if(volumeRemaining >= outVolume){  /- Use this fluid up then get more on next loop itr
+                stepVolume <- volumeRemaining
+                fluidQueue.popLast()
+            } else if(volumeRemaining < outVolume){  /- There is left over fluid, update fluid queue
+                stepVolume <- outVolume
+                fluidOut.volume <- outVolume - volumeRemaining
+            }
+
             volumeRemaining <- volumeRemaining - stepVolume
             withEach vesselName in outputs{
-                if(vesselName=="arteryHeart"){continue()}
                 our Vessel[itr map string]: outVesselItr <- sim.bloodVessels.find(vesselName)
                 if(outVesselItr != sim.bloodVessels.end()){
                     our Vessel: outVessel  <- outVesselItr.val
                     me double: outToVessel <- stepVolume * (outVessel.entryArea/outputArea)
+                    print("    outToVessel:", outToVessel, " = ", stepVolume, "* (", outVessel.entryArea, " / ",  outputArea, ")\n")
                     our Fluid:: eventFluid
                         eventFluid.volume        <- outToVessel
                         eventFluid.glucoseFactor <- fluidIn.glucoseFactor
@@ -232,7 +238,7 @@ struct Vessel{
                     me fluidEvent: event
                         event.fluid    <- eventFluid
                         event.vessel   <- outVessel
-                        event.interval <- interval  /- TODO: interval should be a fraction if they are multiple steps
+                        event.interval <- interval  /- TODO: interval should be sub-divided if there are multiple steps
                     if(outVessel.eventsRemaining>=1){
                         if(count==0){outVessel.eventsRemaining <- outVessel.eventsRemaining -1}
                         sim.vesselQueue.pushFirst(event)
@@ -241,6 +247,14 @@ struct Vessel{
             }
             count <- count +1
         }
+    }
+
+    me double: totalFluid() <- {
+        me double: acc <- 0
+        withEach fluid in fluidQueue{
+            acc <- acc + fluid.volume
+        }
+        return(acc)
     }
 }
 struct fluidEvent{
@@ -280,6 +294,8 @@ struct bodySim{
                 V.length     <- nextNum
                 V.entryArea <- item.value.items.at(cursor+1).item.value.getValAsInt()
                 V.exitArea  <- item.value.items.at(cursor+2).item.value.getValAsInt()
+                V.entryArea <- V.entryArea/1000
+                V.exitArea  <- V.exitArea/1000
                 V.volume <- pi / 3 * V.length * (V.entryArea*V.entryArea  + V.entryArea*V.exitArea + V.exitArea*V.exitArea)
                 cursor <- cursor+3
             } else {cursor <- cursor+1}        /- nextNum is negative
@@ -296,7 +312,7 @@ struct bodySim{
         }
         withEach vessel in bloodVessels{
             if(vessel.name=="arteryHeart"){mainVessel <- vessel}
-            me int64: outputAreaAccum <- 0
+            me double: outputAreaAccum <- 0
             withEach outVesselName in vessel.outputs{
                 our Vessel[itr map string]: V <- bloodVessels.find(outVesselName)
                 if(V == bloodVessels.end()){print("        Error: outVesselName ", outVesselName, " not found.\n"); exit(1) }
@@ -304,6 +320,7 @@ struct bodySim{
                     outputAreaAccum <- outputAreaAccum + V.val.entryArea
                 }
             }
+        if(outputAreaAccum==0){print("OUTPUT_AREA_ACCUM = 0 for "+vessel.name+ "\n")}
             vessel.outputArea <- outputAreaAccum
         }
     }
@@ -338,6 +355,7 @@ struct bodySim{
         withEach vessel in bloodVessels{
             our Fluid:: fld
             fld.volume <- vessel.volume
+            print ("VESSEL VOLUME:", vessel.volume, "\n")
             fld.glucoseFactor <- 1000
             fld.insulinFactor <- 0
             vessel.fluidQueue.clear()
@@ -358,9 +376,15 @@ struct bodySim{
     }
 
     void: runStep() <- {
+        me double: totalBlood <- 0
         withEach vessel in bloodVessels{
             vessel.eventsRemaining <- vessel.numInputs
+
+            me double: vesselFluid <- vessel.totalFluid()
+            totalBlood <- totalBlood + vesselFluid
+            print("    ", vessel.name, " \t  Fluid:", vesselFluid, "\n")
         }
+        print("Total Blood Volume:", totalBlood, "\n")
 
         /- Setup and then process queue
         me int64:            output          <- 0
@@ -376,8 +400,9 @@ struct bodySim{
             vesselQueue.popLast()
             evt.vessel.mergePush(self,evt.interval,evt.fluid)
         }
+        print("\n\nFLUID LEVELS:\n")
         withEach vessel in bloodVessels{
-            /-vessel.glucoseLevel <- vessel.glucoseLevel + vessel.buffer
+         /-   print("    ", vessel.name, " -  Fluid:", vessel.totalFluid(), "\n")
         }
         crntSimTime <- crntSimTime + simStep
     }
