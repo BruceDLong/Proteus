@@ -217,7 +217,7 @@ struct Fluid{
 
 struct substanceAdjustment{
     me string: substanceName
-    me double: amount
+    me double: amount           /- Milligrams
     me timeIntervalSpec: dispersalInterval
 }
 
@@ -226,7 +226,7 @@ struct Vessel{
     me double: length
     me double: entryArea
     me double: exitArea
-    me double: volume
+    me double: volume           /- Milliliters
     me int:  eventsRemaining
     me int:  numInputs
     me double:  glucoseLevel
@@ -237,20 +237,40 @@ struct Vessel{
 
     our substanceAdjustment[list]: substanceAdjustments
     void: applySubstanceAdjustments() <- {
-        /- Find the start and end items, if they exist.
-        withEach fluid in fluidQueue{
-            if(fluid.pushedInterval.start){}
+        withEach adjustment in substanceAdjustments {
+            me string: substanceName <- adjustment.substanceName
+            me double: amount        <- adjustment.amount
+            me timeValue: startTime  <- adjustment.dispersalInterval.start
+            me timeValue: endTime    <- adjustment.dispersalInterval.end
+            me double: totalTimeAmount <- endTime - startTime
+
+  /-          print("        Adding ", amount, " of ", substanceName, " to ", name, " over interval ", startTime, " to ", endTime,  "\n")
+            withEach fluid in fluidQueue{
+                me timeValue: fluidStart <- fluid.pushedInterval.start
+                me timeValue: fluidEnd   <- fluid.pushedInterval.end
+                if(fluidStart <= startTime and startTime < fluidEnd){   /- startTime in in the interval fluidStart .. fluidEnd
+                    me timeValue: segmentEnd <- min(endTime, fluidEnd)
+                    me double: segmentTimeAmount <- segmentEnd - startTime
+                    me double: divFactor <- segmentTimeAmount / totalTimeAmount
+                    me double: segmentAmount <- amount*divFactor
+                    me double: percentageToIncrease <- segmentAmount / fluid.volume
+                    me double: newFactor <- fluid.substanceFactors[substanceName] + percentageToIncrease
+                    fluid.substanceFactors[substanceName] <- newFactor
+   /-                 print("         Added:", percentageToIncrease, " from ", fluidStart, " to ", fluidEnd, "\n")
+                }
+   /-             else {print("        invalid interval:", fluidStart, " to ", fluidEnd, "\n")}
+            }
+            /- If this event or part of it was in the unreachable past, log an error
+
+            /- Are start and end partially included?
+
+            /- Are start and end the same segment?
+
+            /- From start to given end: update segment
+
+            /- If more to come as fluid flows, update the substanceAdjustment
+            /- else remove it from the list.
         }
-        /- If this event or part of it was in the unreachable past, log an error
-
-        /- Are start and end partially included?
-
-        /- Are start and end the same segment?
-
-        /- From start to given end: update segment
-
-        /- If more to come as fluid flows, update the substanceAdjustment
-        /- else remove it from the list.
     }
 
     /- TODO: This function doesn't push enough so vessels run out of fluid
@@ -379,8 +399,9 @@ struct bodySim{
         our Vessel[itr map string]: V <- bloodVessels.find(vessel)
         if(V == bloodVessels.end()){print("        Error adding substance: ", vessel, " not found.\n"); exit(1) }
         else{
+            print ("ADDING ", substance, " to ", vessel, "\n")
             our substanceAdjustment:: adjustment
-            adjustment.substanceName       <- vessel
+            adjustment.substanceName       <- substance
             adjustment.amount              <- amount
             adjustment.dispersalInterval   <- timeInterval
             V.val.substanceAdjustments.pushLast(adjustment)
@@ -463,8 +484,9 @@ struct bodySim{
     me timeValue: simEnd
     me timeValue: simStep
     me timeValue: crntSimTime
-
+    me bool: firstRun <- true
     void: init() <- {
+        firstRun <- true
         constructBodySystem()
         fetchInitialData()
     }
@@ -474,21 +496,26 @@ struct bodySim{
         simEnd   <- end
         simStep  <- stepSize
         crntSimTime <- simStart
-        withEach vessel in bloodVessels{
-            our Fluid:: fld
-            fld.volume <- vessel.volume
-            fld.pushedInterval.start <- start
-            fld.pushedInterval.end   <- start+stepSize
-            fld.substanceFactors['glucose'] <- 250.0
-            fld.substanceFactors['insulin'] <- 0.0
 
-            vessel.fluidQueue.clear()
-            vessel.fluidQueue.pushFirst(fld)
 
-            withEach outVessel in vessel.outputs{
-                our Vessel[itr map string]: V <- bloodVessels.find(outVessel)
-                if(V != bloodVessels.end()){V.val.numInputs <- V.val.numInputs + 1}
+        if(firstRun){
+            withEach vessel in bloodVessels{
+                our Fluid:: fld
+                fld.volume <- vessel.volume
+                fld.pushedInterval.start <- start
+                fld.pushedInterval.end   <- start+stepSize
+                fld.substanceFactors['glucose'] <- 250.0
+                fld.substanceFactors['insulin'] <- 0.0
+
+                vessel.fluidQueue.clear()
+                vessel.fluidQueue.pushFirst(fld)
+
+                withEach outVessel in vessel.outputs{
+                    our Vessel[itr map string]: V <- bloodVessels.find(outVessel)
+                    if(V != bloodVessels.end()){V.val.numInputs <- V.val.numInputs + 1}
+                }
             }
+            firstRun <- false
         }
     }
 
@@ -505,7 +532,7 @@ struct bodySim{
             totalBlood <- totalBlood + vesselFluid
     /-        print("    ", vessel.name, " \t  Fluid:", vesselFluid, "\n")
         }
-        print("Total Blood Volume:", totalBlood, "\n")
+    /-    print("Total Blood Volume:", totalBlood, "\n")
 
         /- Setup and then process queue
         me int64:            output          <- 0
@@ -524,9 +551,9 @@ struct bodySim{
             evt.vessel.pushFluid(self, nextInterval, evt.fluid)
         }
     /-  print("\n\nFLUID LEVELS:\n")
-    /*  withEach vessel in bloodVessels{
-            print("    ", vessel.name, " -  Fluid:", vessel.totalFluid(), "\n")
-        } */
+      withEach vessel in bloodVessels{
+     /-       print("    ", vessel.name, " -  Fluid:", vessel.totalFluid(), "\n")
+        }
         crntSimTime <- crntSimTime + simStep
     }
 }
