@@ -236,8 +236,12 @@ struct Vessel{
     me string[list]: outputs
 
     void: pushAndMergeSmallAmounts(our Fluid: inFluid) <- {
-        if(inFluid.volume >= (volume/10) or fluidQueue.isEmpty()){fluidQueue.pushFirst(inFluid) }
+        if(inFluid.volume >= (volume/10) or fluidQueue.isEmpty()){
+	    /-print("Fluid volume greater than or equal to 10% or fluid queue is empty\n")
+	    fluidQueue.pushFirst(inFluid)
+	}
         else{  /- merge with firstItem
+	    /-print("Fluid volume is less than 10% and greater than 0.\n")
             our Fluid: crntFirstItem <- fluidQueue.first()
             crntFirstItem.volume <- crntFirstItem.volume + inFluid.volume
             withEach substance in inFluid.substanceFactors{
@@ -289,7 +293,7 @@ struct Vessel{
 
     /- TODO: This function doesn't push enough so vessels run out of fluid
     void: mergeFluidsOntoQueue(our Fluid: inFluid) <- {
-        our Fluid: topFluid    <- fluidQueue.last()
+        our Fluid: topFluid    <- fluidQueue.first()
         me timeValue: topStart <- topFluid.pushedInterval.start
         me timeValue: topEnd   <- topFluid.pushedInterval.end
         me timeValue: inStart  <- inFluid.pushedInterval.start
@@ -299,8 +303,9 @@ struct Vessel{
             if(inStart > topEnd) {print("There was a time gap between last and this fluid push\n")}
             pushAndMergeSmallAmounts(inFluid)
         } else if(inStart < topEnd){  /- Times overlap, mixing required
-            if(inStart > topStart){           /- Partial overlap: push [top-head, mix, in-tail]
-
+            fluidQueue.popFirst()
+	    if(inStart > topStart){           /- Partial overlap: push [top-head, mix, in-tail]
+		/-print("inStart < topEnd AND inStart > topStart\n")
                 me double: beginSegRatio; beginSegRatio <- (inStart - topStart) / (topEnd - topStart)
                 our Fluid:: middleSeg; middleSeg.copyFromRatio(topFluid, topStart, inStart, beginSegRatio); pushAndMergeSmallAmounts(middleSeg)
 
@@ -309,17 +314,21 @@ struct Vessel{
                 our Fluid:: topHead; topHead.fromMixingTwoFluids(topFluid, midSegRatioEarly, inFluid, midSegRatioLater); pushAndMergeSmallAmounts(topHead)
 
             } else if(inStart < topStart){    /- Total overlap:   push [in-head, mix, in-tail]
-
+		/-print("inStart < topEnd AND inStart < topStart\n")
                 me double: beginSegRatio; beginSegRatio <- (topStart - inStart) / (inEnd - inStart)
-                our Fluid:: middleSeg; middleSeg.copyFromRatio(topFluid, inStart, topStart, beginSegRatio); pushAndMergeSmallAmounts(middleSeg)
+                our Fluid:: middleSeg; middleSeg.copyFromRatio(inFluid, inStart, topStart, beginSegRatio); pushAndMergeSmallAmounts(middleSeg)
 
-                me double: midSegRatio <- 1
-                our Fluid:: topHead; topHead.copyFromRatio(topFluid, topStart, topEnd, midSegRatio); pushAndMergeSmallAmounts(topHead)
+                me double: midSegRatioEarly <- 1
+		me double: midSegRatioLater; midSegRatioLater <- (topEnd - topStart) / (inEnd - inStart)
+                our Fluid:: topHead; topHead.fromMixingTwoFluids(topFluid, midSegRatioEarly, inFluid, midSegRatioLater); pushAndMergeSmallAmounts(topHead)
 
             } else {  /- inStart == topStart: Overlap but start at the same time:  push [mix, in-tail]
-
-                me double: midSegRatio <- 1
-                our Fluid:: topHead; topHead.copyFromRatio(topFluid, topStart, topEnd, midSegRatio); pushAndMergeSmallAmounts(topHead)
+		/-print("inStart < topEnd AND inStart == topStart\n")
+                /*me double: midSegRatio <- 1
+                our Fluid:: topHead; topHead.copyFromRatio(topFluid, topStart, topEnd, midSegRatio); pushAndMergeSmallAmounts(topHead)*/
+		me double: midSegRatioEarly; midSegRatioEarly <- 1
+		me double: midSegRatioLater; midSegRatioLater <- (topEnd - topStart) / (inEnd - inStart)
+		our Fluid:: topHead; topHead.fromMixingTwoFluids(topFluid, midSegRatioEarly, inFluid, midSegRatioLater); pushAndMergeSmallAmounts(topHead)
             }
             me double: endSegRatio; endSegRatio <- (inEnd - topEnd) / (inEnd - inStart)
             our Fluid:: inTail; inTail.copyFromRatio(inFluid, topEnd, inEnd, endSegRatio); pushAndMergeSmallAmounts(inTail)
@@ -328,13 +337,14 @@ struct Vessel{
 
     void: pushFluid(their bodySim: sim, me timeIntervalSpec: nextInterval, our Fluid: inFluid) <- {
       /-  print("    Vessel ", name, "\n")
-        pushAndMergeSmallAmounts(inFluid)   /- TODO: use this instead: mergeFluidsOntoQueue(inFluid)
+        /-pushAndMergeSmallAmounts(inFluid)   /- TODO: use this instead: 
+	mergeFluidsOntoQueue(inFluid)
         applySubstanceAdjustments()
         me double: inVolume        <- inFluid.volume
         me double: volumeRemaining <- inVolume
         me int: count
         while(volumeRemaining > 0){
-            if(fluidQueue.size()==0){print("ERROR: No fluid in vessel. ", volumeRemaining, "\n"); exit(1);}
+            if(fluidQueue.size()==0){print("ERROR: No fluid in vessel queue. ", name, ": ", volumeRemaining, "\n"); exit(1);}
             our Fluid: fluidOut   <- fluidQueue.last()
             me double: outVolume  <- fluidOut.volume
 
@@ -548,7 +558,7 @@ struct bodySim{
         me double: totalBlood <- 0
         withEach vessel in bloodVessels{
             vessel.eventsRemaining <- vessel.numInputs
-print("    ", vessel.name, " \t  Fluid: ")
+	    print("    ", vessel.name, " \t  Fluid: ")
             me double: vesselFluid <- vessel.totalFluid()
             totalBlood <- totalBlood + vesselFluid
            print(" \t  TOTAL:", vesselFluid, "\n")
