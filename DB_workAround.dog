@@ -177,13 +177,53 @@ struct dataPoint: {
 }
 
 struct dataCache{
-    me bool: request(me timeValue: start, me timeValue: end) <- {
-    }
-    me bool: endOfData() <- {}
-    me dataPoint: getNext() <- {}
+    our timeIntervalSpec[map int64]: cacheMap
+    our timeIntervalSpec: prev
+    their bodySim: sim
 
-    me timeIntervalSpec[map int64]: cacheContents
-    void: condenseContentsList() <- {}
+    me void: addToCache(me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
+        our timeIntervalSpec:: newInterval
+        newInterval.start <- start
+        newInterval.end   <- end
+        cacheMap[start]   <- newInterval
+    }
+    me void: processGap(me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
+        sim.initSimulation(start, end, stepSize)
+        while (!sim.EOS()){
+            sim.runStep()
+        }
+        addToCache(start, end, stepSize)
+    }
+    me void: request(me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
+        if (cacheMap.isEmpty()){
+            processGap(start, end, stepSize)
+            prev <- NULL
+        } else {
+            prev <- NULL
+            withEach interval in cacheMap{
+                if (prev == NULL){
+                    if(interval.start >= end){
+                        processGap(start, end, stepSize)
+                    } else if(interval.start > start){
+                        processGap(start, interval.start, stepSize)
+                    }
+                }
+                else{   /- prev != NULL
+                    if(prev.end >= start){
+                        if(prev.end >= end){break()}
+                    else if (interval.start<=end){
+                        processGap(prev.end, interval.start, stepSize)
+                    } else {
+                         processGap(prev.end, end, stepSize)
+                        break()
+                    }
+                }
+
+            }
+             prev <- interval
+           }
+        }
+    }
 }
 
 struct Fluid{
@@ -216,7 +256,7 @@ struct Fluid{
 }
 
 struct substanceAdjustment{
-    me string: VesselName
+    me string: vesselName
     me string: substanceName
     me double: amount           /- Milligrams
     me timeIntervalSpec: dispersalInterval
@@ -237,8 +277,12 @@ struct Vessel{
     me string[list]: outputs
 
     void: pushAndMergeSmallAmounts(our Fluid: inFluid) <- {
-        if(inFluid.volume >= (volume/10) or fluidQueue.isEmpty()){fluidQueue.pushFirst(inFluid) }
+        if(inFluid.volume >= (volume/10) or fluidQueue.isEmpty()){
+            /-print("Fluid volume greater than or equal to 10% or fluid queue is empty\n")
+            fluidQueue.pushFirst(inFluid)
+        }
         else{  /- merge with firstItem
+            /-print("Fluid volume is less than 10% and greater than 0.\n")
             our Fluid: crntFirstItem <- fluidQueue.first()
             crntFirstItem.volume <- crntFirstItem.volume + inFluid.volume
             withEach substance in inFluid.substanceFactors{
@@ -250,9 +294,9 @@ struct Vessel{
         }
     }
 
-    our substanceAdjustment[list]: VesselSubstanceAdjustments
+    our substanceAdjustment[list]: substanceAdjustments
     void: applySubstanceAdjustments() <- {
-        withEach adjustment in VesselSubstanceAdjustments {
+        withEach adjustment in substanceAdjustments {
             me string: substanceName <- adjustment.substanceName
             me double: amount        <- adjustment.amount
             me timeValue: startTime  <- adjustment.dispersalInterval.start
@@ -263,7 +307,7 @@ struct Vessel{
             withEach fluid in fluidQueue{
                 me timeValue: fluidStart <- fluid.pushedInterval.start
                 me timeValue: fluidEnd   <- fluid.pushedInterval.end
-                if(fluidStart <= startTime and startTime < fluidEnd){   /- startTime in the interval fluidStart .. fluidEnd
+                if(fluidStart <= startTime and startTime < fluidEnd){   /- startTime in in the interval fluidStart .. fluidEnd
                     me timeValue: segmentEnd <- min(endTime, fluidEnd)
                     me double: segmentTimeAmount <- segmentEnd - startTime
                     me double: divFactor <- segmentTimeAmount / totalTimeAmount
@@ -288,9 +332,8 @@ struct Vessel{
         }
     }
 
-    /- TODO: This function doesn not push enough so vessels run out of fluid
     void: mergeFluidsOntoQueue(our Fluid: inFluid) <- {
-        our Fluid: topFluid    <- fluidQueue.last()
+        our Fluid: topFluid    <- fluidQueue.first()
         me timeValue: topStart <- topFluid.pushedInterval.start
         me timeValue: topEnd   <- topFluid.pushedInterval.end
         me timeValue: inStart  <- inFluid.pushedInterval.start
@@ -300,8 +343,9 @@ struct Vessel{
             if(inStart > topEnd) {print("There was a time gap between last and this fluid push\n")}
             pushAndMergeSmallAmounts(inFluid)
         } else if(inStart < topEnd){  /- Times overlap, mixing required
+            fluidQueue.popFirst()
             if(inStart > topStart){           /- Partial overlap: push [top-head, mix, in-tail]
-
+                /-print("inStart < topEnd AND inStart > topStart\n")
                 me double: beginSegRatio; beginSegRatio <- (inStart - topStart) / (topEnd - topStart)
                 our Fluid:: middleSeg; middleSeg.copyFromRatio(topFluid, topStart, inStart, beginSegRatio); pushAndMergeSmallAmounts(middleSeg)
 
@@ -310,17 +354,21 @@ struct Vessel{
                 our Fluid:: topHead; topHead.fromMixingTwoFluids(topFluid, midSegRatioEarly, inFluid, midSegRatioLater); pushAndMergeSmallAmounts(topHead)
 
             } else if(inStart < topStart){    /- Total overlap:   push [in-head, mix, in-tail]
-
+                /-print("inStart < topEnd AND inStart < topStart\n")
                 me double: beginSegRatio; beginSegRatio <- (topStart - inStart) / (inEnd - inStart)
-                our Fluid:: middleSeg; middleSeg.copyFromRatio(topFluid, inStart, topStart, beginSegRatio); pushAndMergeSmallAmounts(middleSeg)
+                our Fluid:: middleSeg; middleSeg.copyFromRatio(inFluid, inStart, topStart, beginSegRatio); pushAndMergeSmallAmounts(middleSeg)
 
-                me double: midSegRatio <- 1
-                our Fluid:: topHead; topHead.copyFromRatio(topFluid, topStart, topEnd, midSegRatio); pushAndMergeSmallAmounts(topHead)
+                me double: midSegRatioEarly <- 1
+                me double: midSegRatioLater; midSegRatioLater <- (topEnd - topStart) / (inEnd - inStart)
+                our Fluid:: topHead; topHead.fromMixingTwoFluids(topFluid, midSegRatioEarly, inFluid, midSegRatioLater); pushAndMergeSmallAmounts(topHead)
 
             } else {  /- inStart == topStart: Overlap but start at the same time:  push [mix, in-tail]
-
-                me double: midSegRatio <- 1
-                our Fluid:: topHead; topHead.copyFromRatio(topFluid, topStart, topEnd, midSegRatio); pushAndMergeSmallAmounts(topHead)
+                /-print("inStart < topEnd AND inStart == topStart\n")
+                /*me double: midSegRatio <- 1
+                our Fluid:: topHead; topHead.copyFromRatio(topFluid, topStart, topEnd, midSegRatio); pushAndMergeSmallAmounts(topHead)*/
+                me double: midSegRatioEarly; midSegRatioEarly <- 1
+                me double: midSegRatioLater; midSegRatioLater <- (topEnd - topStart) / (inEnd - inStart)
+                our Fluid:: topHead; topHead.fromMixingTwoFluids(topFluid, midSegRatioEarly, inFluid, midSegRatioLater); pushAndMergeSmallAmounts(topHead)
             }
             me double: endSegRatio; endSegRatio <- (inEnd - topEnd) / (inEnd - inStart)
             our Fluid:: inTail; inTail.copyFromRatio(inFluid, topEnd, inEnd, endSegRatio); pushAndMergeSmallAmounts(inTail)
@@ -328,16 +376,14 @@ struct Vessel{
     }
 
     void: pushFluid(their bodySim: sim, me timeIntervalSpec: nextInterval, our Fluid: inFluid) <- {
-        print("    Vessel ", name, "\n")
-        /-pushAndMergeSmallAmounts(inFluid)   /- TODO: use this instead: mergeFluidsOntoQueue(inFluid)
+      /-  print("    Vessel ", name, "\n")
         mergeFluidsOntoQueue(inFluid)
-
         applySubstanceAdjustments()
         me double: inVolume        <- inFluid.volume
         me double: volumeRemaining <- inVolume
         me int: count
         while(volumeRemaining > 0){
-            if(fluidQueue.size()==0){print("ERROR: No fluid in vessel. ", volumeRemaining, "\n"); exit(1);}
+            if(fluidQueue.size()==0){print("ERROR: No fluid in vessel queue. ", name, ": ", volumeRemaining, "\n"); exit(1);}
             our Fluid: fluidOut   <- fluidQueue.last()
             me double: outVolume  <- fluidOut.volume
 
@@ -379,13 +425,10 @@ struct Vessel{
         print("(")
         me int: count<-0
         withEach fluid in fluidQueue{
-            me double: datum <- fluid.volume
-           /- me double: datum <- fluid.substanceFactors['glucose']
-            acc <- acc + datum
+            acc <- acc + fluid.volume
             if(count>0){print(" + ")}
             count <- count +1
-            /-print(fluid.volume)
-            print(datum)
+            print(fluid.volume)
         }
         print(")=", acc)
         return(acc)
@@ -419,8 +462,8 @@ struct bodySim{
     our Vessel:   mainVessel
     our Vessel[map string]:       bloodVessels
     our bodyEvent[map timeValue]: bodyEvents
-    our substanceAdjustment[list]: SubstanceAdjustments
     me fluidEvent[list]: vesselQueue
+    me dataCache: cache
 
     void: addSubstance(me string: vessel, me string: substance, me double: amount, me timeIntervalSpec: timeInterval) <- {
         our Vessel[itr map string]: V <- bloodVessels.find(vessel)
@@ -431,7 +474,7 @@ struct bodySim{
             adjustment.substanceName       <- substance
             adjustment.amount              <- amount
             adjustment.dispersalInterval   <- timeInterval
-            V.val.VesselSubstanceAdjustments.pushLast(adjustment)
+            V.val.substanceAdjustments.pushLast(adjustment)
             V.val.applySubstanceAdjustments()
         }
     }
@@ -490,8 +533,8 @@ struct bodySim{
                     outputAreaAccum <- outputAreaAccum + V.val.entryArea
                 }
             }
-            if(outputAreaAccum==0){print("OUTPUT_AREA_ACCUM = 0 for "+vessel.name+ "\n")}
-                vessel.outputArea <- outputAreaAccum
+        if(outputAreaAccum==0){print("OUTPUT_AREA_ACCUM = 0 for "+vessel.name+ "\n")}
+            vessel.outputArea <- outputAreaAccum
         }
     }
 
@@ -516,6 +559,7 @@ struct bodySim{
         firstRun <- true
         constructBodySystem()
         fetchInitialData()
+        cache.sim <- self
     }
 
     void: initSimulation(me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
