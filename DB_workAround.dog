@@ -177,6 +177,7 @@ struct dataPoint: {
 }
 
 struct dataCache{
+    our GraphDataStreamSources: dataStreamSrcs
     our timeIntervalSpec[map int64]: cacheMap
     our timeIntervalSpec: prev
     their bodySim: sim
@@ -188,10 +189,12 @@ struct dataCache{
         cacheMap[start]   <- newInterval
     }
     me void: processGap(me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
-        sim.simulateInterval(start, end, stepSize)
+        print("        > DataCache::processGap\n")
+        sim.simulateInterval(dataStreamSrcs, start, end, stepSize)
         addToCache(start, end, stepSize)
     }
-    me void: request(me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
+    me void: requestDataRangeViaCache(me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
+        print("        > DataCache::requestDataRangeViaCache\n")
         if (cacheMap.isEmpty()){
             processGap(start, end, stepSize)
             prev <- NULL
@@ -467,7 +470,7 @@ struct bodyEvent{
     me int:       glucoseTestResult
 }
 
-struct bodySim: COMMAND_addCallProxy="bundledArgs:requestDataRangeWorker"{
+struct bodySim:{
     me string:    name
     me timeValue: birthday
     me int:       height
@@ -478,7 +481,6 @@ struct bodySim: COMMAND_addCallProxy="bundledArgs:requestDataRangeWorker"{
     our Vessel[map string]:       bloodVessels
     our bodyEvent[map timeValue]: bodyEvents
     me fluidEvent[list]: vesselQueue
-    me dataCache: cache
 
     void: addSubstance(me string: vessel, me string: substance, me double: amount, me timeIntervalSpec: timeInterval) <- {
         our Vessel[itr map string]: V <- bloodVessels.find(vessel)
@@ -574,7 +576,6 @@ struct bodySim: COMMAND_addCallProxy="bundledArgs:requestDataRangeWorker"{
         firstRun <- true
         constructBodySystem()
         fetchInitialData()
-        cache.sim <- self
     }
 
     void: initSimulation(me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
@@ -583,8 +584,8 @@ struct bodySim: COMMAND_addCallProxy="bundledArgs:requestDataRangeWorker"{
         simStep  <- stepSize
         crntSimTime <- simStart
 
-/-        print("\nInitializeSimulation(", start-prgStartTime, ",  ", end-prgStartTime, ",  ", stepSize, ")\n")
-        if(firstRun){
+        print("\nInitializeSimulation(", start-prgStartTime, ",  ", end-prgStartTime, ",  ", stepSize, ")\n")
+        if(true or firstRun){
             withEach vessel in bloodVessels{
                 print("#")
                 our Fluid:: fld
@@ -637,30 +638,16 @@ struct bodySim: COMMAND_addCallProxy="bundledArgs:requestDataRangeWorker"{
             vesselQueue.popLast()
             evt.vessel.pushFluid(self, nextInterval, evt.fluid)
         }
-    /-  print("\n\nFLUID LEVELS:\n")
-      withEach vessel in bloodVessels{
-     /-       print("    ", vessel.name, " -  Fluid:", vessel.totalFluid(), "\n")
-        }
         crntSimTime <- crntSimTime + simStep
     }
 
-    void: simulateInterval(me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
-        sim.initSimulation(start, end, convertToTimeVal(stepSize))
+    void: simulateInterval(our GraphDataStreamSources: dataStreamSrcs, me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
+        print("simulateInterval(", start-prgStartTime, ",  ", end-prgStartTime, ",  ", stepSize, ")\n")
+        initSimulation(start, end, convertToTimeVal(stepSize))
         while (!EOS()){
             runStep()
+     /-       dataStreamSrcs.dataStreams[0].dataMap[crntSimTime] <- 200 /- bloodVessels["lowerRightArmCapillaries"].glucoseLevel
         }
     }
 
-    void: requestDataRangeWorker(their timeStepInterval: interval) <- {
-        cache.request(interval.start, interval.end, interval.stepSize)
-    }
-
-    void: requestDataRangeGUI(me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
-        their timeStepInterval: reqInterval
-        Allocate(reqInterval)
-        reqInterval.start    <- start
-        reqInterval.end      <- end
-        reqInterval.stepSize <- stepSize
-    invokeFunctionInThread(workerThreadMessagePasser, self, bodySim, requestDataRangeWorker, reqInterval)
-    }
 }
