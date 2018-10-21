@@ -169,13 +169,37 @@ struct GLOBAL{
 struct timeIntervalSpec{
     me timeValue: start
     me timeValue: end
+    our SnapShot: finalState
 }
 
 struct dataPoint: {
     me double: medianValue
     me double: precision
 }
+struct SnapShot {
+    our Vessel[map string]:       bloodVessels
+    me timeValue:		  timeStamp
+    
+    me void: initFromData(me double: glucoseAverage, me timeValue: start, me timeValue: simStep) <- {
+	withEach vessel in bloodVessels{
+	    /-print("#")
+	    our Fluid:: fld
+	    fld.volume <- vessel.volume
+	    fld.pushedInterval.start <- start
+	    fld.pushedInterval.end   <- start+simStep
+	    fld.substanceFactors['glucose'] <- glucoseAverage
+	    fld.substanceFactors['insulin'] <- 0.0
 
+	    vessel.fluidQueue.clear()
+	    vessel.fluidQueue.pushFirst(fld)
+	    withEach outVessel in vessel.outputs{
+		our Vessel[itr map string]: V <- bloodVessels.find(outVessel)
+		if(V != bloodVessels.end()){V.val.numInputs <- V.val.numInputs + 1}
+	    }
+	}
+	/-print("\n")
+    }
+}
 struct GapCache{
     me int64: previous
     me int64: current
@@ -212,9 +236,10 @@ struct GapCache{
 	currentGapEnd   <- gapList[current].start
 	return (current < gapList.size() )
     }
-    me void: narrowCurrentGap(me int64: start, me int64:end) <- {
+    me void: narrowCurrentGap(me int64: start, me int64:end, our SnapShot: snapShot) <- {
 	if (start <= gapList[previous].end and end > gapList[previous].end){
-	    gapList[previous].end <- end
+	    gapList[previous].end        <- end
+	    gapList[previous].finalState <- snapShot
 	}
 	if (end >= gapList[current].start and start < gapList[current].start){
 	    gapList[current].start <- start
@@ -223,10 +248,12 @@ struct GapCache{
 	    me timeIntervalSpec: newSpec
 	    newSpec.start <- start
 	    newSpec.end   <- end
+	    newSpec.finalState <- snapShot
 	    gapList.insert(gapList.nthItr((previous+1)), newSpec)
 	}
 	if (gapList[previous].end >= gapList[current].start){
 	    gapList[previous].end  <- gapList[current].end
+	    gapList[previous].finalState <- gapList[current].finalState
 	    gapList.deleteNth(current)
 	}
     }
@@ -239,20 +266,27 @@ struct dataCache{
     me void: init() <- {
 	gapCache.init()
     }
-    me void: processGap(me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
+    me void: processGap(me timeValue: start, me timeValue: end, me timeValue: stepSize, our SnapShot: startState) <- {
         /-print("        processGap:: ", start-prgStartTime, "::", end-prgStartTime, "\n")
-        sim.simulateInterval(dataStreamSrcs, start, end, stepSize)
+        sim.simulateInterval(dataStreamSrcs, start, end, stepSize, startState)
     }
     me void: requestDataRangeViaCache(me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
         /-end <- end + 2000
 	/-print( "reqDataRangCache:: ", start-prgStartTime, "::", end-prgStartTime, "\n")
 	gapCache.startIterating()
 	while(gapCache.getNextGap()){
+	    our SnapShot: startState
 	    me int64: thisGapStart <- max(gapCache.currentGapStart, start)
 	    me int64: thisGapEnd   <- min(gapCache.currentGapEnd, end)
-	    gapCache.narrowCurrentGap(thisGapStart, thisGapEnd)
+	    if (gapCache.currentGapStart > start){
+		startState <- gapCache.gapList[gapCache.previous].finalState
+	    } else {
+		Allocate(startState)
+		startState.initFromData(250,thisGapStart,stepSize/100)
+	    }
 	    if(thisGapStart < thisGapEnd){
-		processGap(thisGapStart, thisGapEnd, stepSize)
+		processGap(thisGapStart, thisGapEnd, stepSize, startState)
+		gapCache.narrowCurrentGap(thisGapStart, thisGapEnd, sim.snapShot)
 	    }
 	    if(end <= thisGapEnd){break()}
 	}
@@ -339,9 +373,7 @@ struct Vessel{
             me timeValue: startTime  <- adjustment.dispersalInterval.start
             me timeValue: endTime    <- adjustment.dispersalInterval.end
             me double: totalTimeAmount <- endTime - startTime
-
             /- print("        Adding ", amount, " of ", substanceName, " to ", name, " over interval ", startTime-prgStartTime, " to ", endTime-prgStartTime,  "\n");
-
             withEach fluid in fluidQueue{
                 me timeValue: fluidStart <- fluid.pushedInterval.start
                 me timeValue: fluidEnd   <- fluid.pushedInterval.end
@@ -351,11 +383,21 @@ struct Vessel{
                     me double: divFactor <- segmentTimeAmount / totalTimeAmount
                     me double: segmentAmount <- amount*divFactor
                     me double: percentageToIncrease <- segmentAmount / fluid.volume
-                    me double: newFactor <- fluid.substanceFactors[substanceName] + 100 /-percentageToIncrease
+                    me double: newFactor <- fluid.substanceFactors[substanceName] + percentageToIncrease
                     fluid.substanceFactors[substanceName] <- newFactor
-           /-         print("         Added:", percentageToIncrease, " from ", fluidStart-prgStartTime, " to ", fluidEnd-prgStartTime, "\n")
-                }
-   /-             else {print("        invalid interval:", fluidStart, " to ", fluidEnd, "\n")}
+                    print("         Added ", substanceName, " : ", percentageToIncrease, " from ", fluidStart-prgStartTime, " to ", fluidEnd-prgStartTime, "\n")
+                }else if(startTime <= fluidStart and fluidStart < endTime){
+		    /- TODO: verify this logic
+                    me timeValue: segmentEnd <- min(endTime, fluidEnd)
+                    me double: segmentTimeAmount <- segmentEnd - fluidStart
+                    me double: divFactor <- segmentTimeAmount / totalTimeAmount
+                    me double: segmentAmount <- amount*divFactor
+                    me double: percentageToIncrease <- segmentAmount / fluid.volume
+                    me double: newFactor <- fluid.substanceFactors[substanceName] + percentageToIncrease
+                    fluid.substanceFactors[substanceName] <- newFactor
+                    print("         Added ", substanceName, " : ", percentageToIncrease, " from ", fluidStart-prgStartTime, " to ", fluidEnd-prgStartTime, "\n")
+		}
+            /-    else {print("        invalid interval:", fluidStart-prgStartTime, " to ", fluidEnd-prgStartTime, "\n")}
             }
             /- If this event or part of it was in the unreachable past, log an error
 
@@ -409,7 +451,6 @@ struct Vessel{
             }
             if(topEnd < inEnd){
                 me double: endSegRatio; endSegRatio <- (inEnd - topEnd) / (inEnd - inStart)
-                print("     endSegRatio:", endSegRatio, "\n")
                 our Fluid:: inTail; inTail.copyFromRatio(convertToTimeVal(topEnd), convertToTimeVal(inEnd), inFluid, endSegRatio); pushAndMergeSmallAmounts(inTail)
             }
         }
@@ -440,8 +481,8 @@ struct Vessel{
 
             volumeRemaining <- volumeRemaining - stepVolume
             withEach vesselName in outputs{
-                our Vessel[itr map string]: outVesselItr <- sim.bloodVessels.find(vesselName)
-                if(outVesselItr != sim.bloodVessels.end()){
+                our Vessel[itr map string]: outVesselItr <- sim.snapShot.bloodVessels.find(vesselName)
+                if(outVesselItr != sim.snapShot.bloodVessels.end()){
                     our Vessel: outVessel  <- outVesselItr.val
                     me double: outToVessel <- stepVolume * (outVessel.entryArea/outputArea)
                     totalVolumeOut <- totalVolumeOut + outToVessel
@@ -511,15 +552,14 @@ struct bodySim:{
     me int:       BMI
     me int:       percentFat
     our Vessel:   mainVessel
-    our Vessel[map string]:       bloodVessels
+    our SnapShot: snapShot
     our bodyEvent[map timeValue]: bodyEvents
     me fluidEvent[list]: vesselQueue
 
     void: addSubstance(me string: vessel, me string: substance, me double: amount, me timeIntervalSpec: timeInterval) <- {
-        our Vessel[itr map string]: V <- bloodVessels.find(vessel)
-        if(V == bloodVessels.end()){print("        Error adding substance: ", vessel, " not found.\n"); exit(1) }
+        our Vessel[itr map string]: V <- snapShot.bloodVessels.find(vessel)
+        if(V == snapShot.bloodVessels.end()){print("        Error adding substance: ", vessel, " not found.\n"); exit(1) }
         else{
-            print ("ADDING ", substance, " to ", vessel, "\n")
             our substanceAdjustment:: adjustment
             adjustment.substanceName       <- substance
             adjustment.amount              <- amount
@@ -529,14 +569,14 @@ struct bodySim:{
         }
     }
     void: removeSubstance(me string: vessel, me string: substance, me double: amount, me int: timeInterval) <- {
-        our Vessel[itr map string]: V <- bloodVessels.find(vessel)
-        if(V == bloodVessels.end()){print("        Error removing substance: ", vessel, " not found.\n"); exit(1) }
+        our Vessel[itr map string]: V <- snapShot.bloodVessels.find(vessel)
+        if(V == snapShot.bloodVessels.end()){print("        Error removing substance: ", vessel, " not found.\n"); exit(1) }
         else{
         }
     }
     void: transmuteSubstance(me string: vessel, me string: substance, me int:finalSubstance, me double: amount, me int: timeInterval) <- {
-        our Vessel[itr map string]: V <- bloodVessels.find(vessel)
-        if(V == bloodVessels.end()){print("        Error transmuting substance: ", vessel, " not found.\n"); exit(1) }
+        our Vessel[itr map string]: V <- snapShot.bloodVessels.find(vessel)
+        if(V == snapShot.bloodVessels.end()){print("        Error transmuting substance: ", vessel, " not found.\n"); exit(1) }
         else{
 
         }
@@ -571,14 +611,14 @@ struct bodySim:{
                 /-print("    OUT>", a.printInfon(outputItem), "\n")
                 V.outputs.pushLast(outputItem.value.str)
             }
-            bloodVessels[V.name] <- V
+            snapShot.bloodVessels[V.name] <- V
         }
-        withEach vessel in bloodVessels{
+        withEach vessel in snapShot.bloodVessels{
             if(vessel.name=="arteryHeart"){mainVessel <- vessel}
             me double: outputAreaAccum <- 0
             withEach outVesselName in vessel.outputs{
-                our Vessel[itr map string]: V <- bloodVessels.find(outVesselName)
-                if(V == bloodVessels.end()){print("        Error: outVesselName ", outVesselName, " not found.\n"); exit(1) }
+                our Vessel[itr map string]: V <- snapShot.bloodVessels.find(outVesselName)
+                if(V == snapShot.bloodVessels.end()){print("        Error: outVesselName ", outVesselName, " not found.\n"); exit(1) }
                 else{
                     outputAreaAccum <- outputAreaAccum + V.val.entryArea
                 }
@@ -607,6 +647,7 @@ struct bodySim:{
     me bool: firstRun <- true
     void: init() <- {
         firstRun <- true
+	Allocate(snapShot)
         constructBodySystem()
         fetchInitialData()
     }
@@ -617,25 +658,9 @@ struct bodySim:{
         simStep  <- stepSize/100        /- TODO: update this to screenwidth
         crntSimTime <- simStart
 
-        print("\nInitializeSimulation(", start-prgStartTime, ",  ", end-prgStartTime, ",  ", stepSize, ")\n")
-        if(true or firstRun){
-            withEach vessel in bloodVessels{
-                print("#")
-                our Fluid:: fld
-                fld.volume <- vessel.volume
-                fld.pushedInterval.start <- start
-                fld.pushedInterval.end   <- start+simStep
-                fld.substanceFactors['glucose'] <- 250.0
-                fld.substanceFactors['insulin'] <- 0.0
-
-                vessel.fluidQueue.clear()
-                vessel.fluidQueue.pushFirst(fld)
-
-                withEach outVessel in vessel.outputs{
-                    our Vessel[itr map string]: V <- bloodVessels.find(outVessel)
-                    if(V != bloodVessels.end()){V.val.numInputs <- V.val.numInputs + 1}
-                }
-            }
+        /-print("InitializeSimulation(", start-prgStartTime, ",  ", end-prgStartTime, ",  ", stepSize, ")\n")
+        if(firstRun){
+            snapShot.initFromData(150, start, simStep)
             firstRun <- false
         }
     }
@@ -646,7 +671,7 @@ struct bodySim:{
 
     void: runStep() <- {
         me double: totalValue <- 0
-        withEach vessel in bloodVessels{
+        withEach vessel in snapShot.bloodVessels{
             vessel.eventsRemaining <- vessel.numInputs
    /-         print("    ", vessel.name, " \t  Fluid: ")
    /-         me double: vesselFluid <- vessel.totalFluid()  /-Glucose()
@@ -674,12 +699,18 @@ struct bodySim:{
         crntSimTime <- crntSimTime + simStep
     }
 
-    void: simulateInterval(our GraphDataStreamSources: dataStreamSrcs, me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
-        print("simulateInterval(", start-prgStartTime, ",  ", end-prgStartTime, ",  ", stepSize, ")\n")
+    void: simulateInterval(our GraphDataStreamSources: dataStreamSrcs, me timeValue: start, me timeValue: end, me timeValue: stepSize, our SnapShot: startState) <- {
+        /-print("simulateInterval(", start-prgStartTime, ",  ", end-prgStartTime, ",  ", stepSize, ")\n")
         initSimulation(start, end, convertToTimeVal(stepSize))
+	simStart <- start
+        simEnd   <- end
+        simStep  <- convertToTimeVal(stepSize)/100        /- TODO: update this to screenwidth
+        crntSimTime <- simStart
+	startState.initFromData(150, start, simStep)
+	
         while (!EOS()){
             runStep()
-            dataStreamSrcs.dataStreams[0].dataMap[crntSimTime] <- 200 /- bloodVessels["lowerRightArmCapillaries"].glucoseLevel
+            dataStreamSrcs.dataStreams[0].dataMap[crntSimTime] <-  snapShot.bloodVessels["lowerRightArmCapillaries"].totalGlucose()
         }
     }
 
