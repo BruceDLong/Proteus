@@ -176,53 +176,86 @@ struct dataPoint: {
     me double: precision
 }
 
+struct GapCache{
+    me int64: previous
+    me int64: current
+    me int64: currentGapStart
+    me int64: currentGapEnd
+    me timeIntervalSpec[our list]:: gapList
+     
+    me void: init() <- {
+	previous        <- 0
+	current         <- 0
+	currentGapStart <- 0
+	currentGapEnd   <- 0
+	gapList.clear()
+	me timeIntervalSpec: firstItem
+	firstItem.start <- -2000000000000
+	firstItem.end   <- firstItem.start
+	gapList.pushLast(firstItem)
+	me timeIntervalSpec: lastItem
+	lastItem.start  <- 2000000000000
+	lastItem.end    <- lastItem.start
+	gapList.pushLast(lastItem)
+	me int: initSize <- gapList.size()
+    }
+    me void: startIterating() <- {
+	previous        <- 0
+	current         <- 0
+	currentGapStart <- 0
+	currentGapEnd   <- 0
+    }
+    me bool: getNextGap() <- {
+	previous        <- current
+	current         <- current + 1
+	currentGapStart <- gapList[previous].end
+	currentGapEnd   <- gapList[current].start
+	return (current < gapList.size() )
+    }
+    me void: narrowCurrentGap(me int64: start, me int64:end) <- {
+	if (start <= gapList[previous].end and end > gapList[previous].end){
+	    gapList[previous].end <- end
+	}
+	if (end >= gapList[current].start and start < gapList[current].start){
+	    gapList[current].start <- start
+	}
+	if(start > gapList[previous].end and end < gapList[current].start){
+	    me timeIntervalSpec: newSpec
+	    newSpec.start <- start
+	    newSpec.end   <- end
+	    gapList.insert(gapList.nthItr((previous+1)), newSpec)
+	}
+	if (gapList[previous].end >= gapList[current].start){
+	    gapList[previous].end  <- gapList[current].end
+	    gapList.deleteNth(current)
+	}
+    }
+}
 struct dataCache{
     our GraphDataStreamSources: dataStreamSrcs
-    our timeIntervalSpec[map int64]: cacheMap
-    our timeIntervalSpec: prev
-    their bodySim: sim
-
-    me void: addToCache(me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
-        our timeIntervalSpec:: newInterval
-        newInterval.start <- start
-        newInterval.end   <- end
-        cacheMap[start]   <- newInterval
+    me GapCache: gapCache
+    their bodySim:  sim
+    
+    me void: init() <- {
+	gapCache.init()
     }
     me void: processGap(me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
-        print("        > DataCache::processGap\n")
+        /-print("        processGap:: ", start-prgStartTime, "::", end-prgStartTime, "\n")
         sim.simulateInterval(dataStreamSrcs, start, end, stepSize)
-        addToCache(start, end, stepSize)
     }
     me void: requestDataRangeViaCache(me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
-        print("        > DataCache::requestDataRangeViaCache\n")
-        if (cacheMap.isEmpty()){
-            processGap(start, end, stepSize)
-            prev <- NULL
-        } else {
-            prev <- NULL
-            withEach interval in cacheMap{
-                if (prev == NULL){
-                    if(interval.start >= end){
-                        processGap(start, end, stepSize)
-                    } else if(interval.start > start){
-                        processGap(start, interval.start, stepSize)
-                    }
-                }
-                else{   /- prev != NULL
-                    if(prev.end >= start){
-                        if(prev.end >= end){break()}
-                    else if (interval.start<=end){
-                        processGap(prev.end, interval.start, stepSize)
-                    } else {
-                         processGap(prev.end, end, stepSize)
-                        break()
-                    }
-                }
-
-            }
-             prev <- interval
-           }
-        }
+        /-end <- end + 2000
+	/-print( "reqDataRangCache:: ", start-prgStartTime, "::", end-prgStartTime, "\n")
+	gapCache.startIterating()
+	while(gapCache.getNextGap()){
+	    me int64: thisGapStart <- max(gapCache.currentGapStart, start)
+	    me int64: thisGapEnd   <- min(gapCache.currentGapEnd, end)
+	    gapCache.narrowCurrentGap(thisGapStart, thisGapEnd)
+	    if(thisGapStart < thisGapEnd){
+		processGap(thisGapStart, thisGapEnd, stepSize)
+	    }
+	    if(end <= thisGapEnd){break()}
+	}
     }
 }
 
@@ -338,7 +371,7 @@ struct Vessel{
     }
 
     void: mergeFluidsOntoQueue(our Fluid: inFluid) <- {
-me double: mergedFluid <- 0
+        me double: mergedFluid <- 0
         our Fluid: topFluid <- fluidQueue.first()
         me double: topStart <- topFluid.pushedInterval.start
         me double: topEnd   <- topFluid.pushedInterval.end
@@ -581,7 +614,7 @@ struct bodySim:{
     void: initSimulation(me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
         simStart <- start
         simEnd   <- end
-        simStep  <- stepSize
+        simStep  <- stepSize/100        /- TODO: update this to screenwidth
         crntSimTime <- simStart
 
         print("\nInitializeSimulation(", start-prgStartTime, ",  ", end-prgStartTime, ",  ", stepSize, ")\n")
@@ -591,7 +624,7 @@ struct bodySim:{
                 our Fluid:: fld
                 fld.volume <- vessel.volume
                 fld.pushedInterval.start <- start
-                fld.pushedInterval.end   <- start+stepSize
+                fld.pushedInterval.end   <- start+simStep
                 fld.substanceFactors['glucose'] <- 250.0
                 fld.substanceFactors['insulin'] <- 0.0
 
@@ -646,7 +679,7 @@ struct bodySim:{
         initSimulation(start, end, convertToTimeVal(stepSize))
         while (!EOS()){
             runStep()
-     /-       dataStreamSrcs.dataStreams[0].dataMap[crntSimTime] <- 200 /- bloodVessels["lowerRightArmCapillaries"].glucoseLevel
+            dataStreamSrcs.dataStreams[0].dataMap[crntSimTime] <- 200 /- bloodVessels["lowerRightArmCapillaries"].glucoseLevel
         }
     }
 
