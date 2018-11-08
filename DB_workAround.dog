@@ -245,10 +245,6 @@ struct timeIntervalSpec{
     our SnapShot: finalState
 }
 
-struct dataPoint: {
-    me double: medianValue
-    me double: precision
-}
 struct SnapShot {
     our Vessel[map string]:       bloodVessels
     me timeValue:                 timeStamp
@@ -393,6 +389,7 @@ struct Fluid{
 }
 
 struct substanceAdjustment{
+    mode[saMeasurment, saAdd, saRemove, saMorph]: adjustmentType
     me string: vesselName
     me string: substanceName
     me double: amount           /- Milligrams
@@ -446,42 +443,27 @@ struct Vessel{
             me timeValue: startTime  <- adjustment.dispersalInterval.start
             me timeValue: endTime    <- adjustment.dispersalInterval.end
             me double: totalTimeAmount <- endTime - startTime
+
+            if(adjustmentType == saMeasurement){
+            } else {
             /- print("        Adding ", amount, " of ", substanceName, " to ", name, " over interval ", startTime-prgStartTime, " to ", endTime-prgStartTime,  "\n");
-            withEach fluid in fluidQueue{
-                me timeValue: fluidStart <- fluid.pushedInterval.start
-                me timeValue: fluidEnd   <- fluid.pushedInterval.end
-                if(fluidStart <= startTime and startTime < fluidEnd){   /- startTime in in the interval fluidStart .. fluidEnd
-                    me timeValue: segmentEnd <- min(endTime, fluidEnd)
-                    me double: segmentTimeAmount <- segmentEnd - startTime
-                    me double: divFactor <- segmentTimeAmount / totalTimeAmount
-                    me double: segmentAmount <- amount*divFactor
-                    me double: percentageToIncrease <- segmentAmount / fluid.volume
-                    me double: newFactor <- fluid.substanceFactors[substanceName] + percentageToIncrease
-                    fluid.substanceFactors[substanceName] <- newFactor
-                    print("         Added ", substanceName, " : ", percentageToIncrease, " from ", fluidStart-prgStartTime, " to ", fluidEnd-prgStartTime, "\n")
-                }else if(startTime <= fluidStart and fluidStart < endTime){
-                    /- TODO: verify this logic
-                    me timeValue: segmentEnd <- min(endTime, fluidEnd)
-                    me double: segmentTimeAmount <- segmentEnd - fluidStart
-                    me double: divFactor <- segmentTimeAmount / totalTimeAmount
-                    me double: segmentAmount <- amount*divFactor
-                    me double: percentageToIncrease <- segmentAmount / fluid.volume
-                    me double: newFactor <- fluid.substanceFactors[substanceName] + percentageToIncrease
-                    fluid.substanceFactors[substanceName] <- newFactor
-                    print("         Added ", substanceName, " : ", percentageToIncrease, " from ", fluidStart-prgStartTime, " to ", fluidEnd-prgStartTime, "\n")
+                withEach fluid in fluidQueue{
+                    me timeValue: fluidStart <- fluid.pushedInterval.start
+                    me timeValue: fluidEnd   <- fluid.pushedInterval.end
+                    if(fluidStart < endTime and startTime < fluidEnd){   /- some fluid should be injected
+                        me timeValue: segmentStart <- max(startTime, fluidStart)
+                        me timeValue: segmentEnd   <- min(endTime, fluidEnd)
+                        me double: segmentTimeAmount <- segmentEnd - segmentStart
+                        me double: divFactor <- segmentTimeAmount / totalTimeAmount
+                        me double: segmentAmount <- amount*divFactor
+                        me double: percentageToIncrease <- segmentAmount / fluid.volume
+                        me double: newFactor <- fluid.substanceFactors[substanceName] + percentageToIncrease
+                        fluid.substanceFactors[substanceName] <- newFactor
+                        print("         Added ", substanceName, " : ", percentageToIncrease, " from ", fluidStart-prgStartTime, " to ", fluidEnd-prgStartTime, "\n")
+                    }
+                    /- else {print("        inapplicable interval:", fluidStart-prgStartTime, " to ", fluidEnd-prgStartTime, "\n")}
                 }
-            /-    else {print("        invalid interval:", fluidStart-prgStartTime, " to ", fluidEnd-prgStartTime, "\n")}
             }
-            /- If this event or part of it was in the unreachable past, log an error
-
-            /- Are start and end partially included?
-
-            /- Are start and end the same segment?
-
-            /- From start to given end: update segment
-
-            /- If more to come as fluid flows, update the substanceAdjustment
-            /- else remove it from the list.
         }
     }
 
@@ -591,21 +573,24 @@ struct Vessel{
         return(acc)
     }
 
-    me double: totalSubstance(me string: substance) <- {
-        me double: acc <- 0
+    me datum: totalSubstance(me string: substance) <- {
+        me double: subsAcc <- 0
         me double: totalFluid <- 0
+        me double: confidenceAcc <- 0
      /-   print("(")
         me int: count<-0
         withEach fluid in fluidQueue{
      /-       if(count>0){print(" + ")}
             count <- count +1
-            acc <- acc + (fluid.substanceFactors[substance] * fluid.volume)
+            subsAcc <- subsAcc + (fluid.substanceFactors[substance] * fluid.volume)
             totalFluid <- totalFluid + fluid.volume
      /-       print(fluid.substanceFactors[substance] )
         }
-        glucoseLevel <- acc/totalFluid
-     /-   print(")=", glucoseLevel)
-        return(glucoseLevel)
+        me datum: substanceLevel
+        substanceLevel.value <- subsAcc/totalFluid
+        substanceLevel.confidenceLvl <- confidenceAcc/fluidQueue.size()
+     /-   print(")=", substanceLevel.value)
+        return(substanceLevel)
     }
 }
 struct fluidEvent{
@@ -623,10 +608,10 @@ struct bodyEvent{
 struct bodySim:{
     me string:    name
     me timeValue: birthday
-    me int:       height
+ /*   me int:       height
     me int:       weight
     me int:       BMI
-    me int:       percentFat
+    me int:       percentFat*/
     our Vessel:   mainVessel
     our SnapShot: snapShot
     our bodyEvent[map timeValue]: bodyEvents
@@ -641,7 +626,7 @@ struct bodySim:{
             adjustment.amount              <- amount
             adjustment.dispersalInterval   <- timeInterval
             V.val.substanceAdjustments.pushLast(adjustment)
-            V.val.applySubstanceAdjustments()
+           /- V.val.applySubstanceAdjustments()
         }
     }
     void: removeSubstance(me string: vessel, me string: substance, me double: amount, me int: timeInterval) <- {
@@ -722,13 +707,16 @@ struct bodySim:{
     void: initSimulation(me timeValue: start, me timeValue: end, me timeValue: stepSize) <- {
         simStart <- start
         simEnd   <- end
-        simStep  <- stepSize/100        /- TODO: update this to screenwidth
+        simStep  <- convertToTimeVal(stepSize)/100        /- TODO: update this to screenwidth
         crntSimTime <- simStart
 
         /-print("InitializeSimulation(", start-prgStartTime, ",  ", end-prgStartTime, ",  ", stepSize, ")\n")
         if(firstRun){
             snapShot.initFromData(150, start, simStep)
             firstRun <- false
+        }
+        withEach vessel in snapShot.bloodVessels{
+            vessel.substanceAdjustments.clear()
         }
     }
 
@@ -778,8 +766,8 @@ struct bodySim:{
         }
     }
 
-    void: applyBodyEvent(our infon: bEvent) <- {
-        /- bEvent represents an EntryPad entry; extract data and construct bodyEvents
+    void: enqueueSubstanceAdjustmentsFromBodyEvent(our infon: bEvent) <- {
+        /- bEvent represents an EntryPad entry; extract data and add adjustments to blood vessel's adjustment queue.
         print("applyBodyEvent\n")
         me agent: a; print("bodyEvent: ",a.printInfon( bEvent))
         me timeValue: timeStamp  <- fetchInfonByNameSeg(bEvent, "timeForEntry").value.num
@@ -799,17 +787,12 @@ struct bodySim:{
     void: simulateInterval(our GraphDataStreamSources: dataStreamSrcs, me timeValue: start, me timeValue: end, me timeValue: stepSize, our SnapShot: startState) <- {
         /-print("simulateInterval(", start-prgStartTime, ",  ", end-prgStartTime, ",  ", stepSize, ")\n")
         initSimulation(start, end, convertToTimeVal(stepSize))
-        simStart <- start
-        simEnd   <- end
-        simStep  <- convertToTimeVal(stepSize)/100        /- TODO: update this to screenwidth
-        crntSimTime <- simStart
 
         me string: rangeQuery <- "%W.user.entryData.R_"+toString(simStart)+"_"+toString(simEnd)
         our infon: result <- ProteusQuery(CORE, rangeQuery, true)
         withEach event in result.value.T_index {
-            applyBodyEvent(event)
+            enqueueSubstanceAdjustmentsFromBodyEvent(event)
         }
-        startState.initFromData(150, start, simStep)
         while (!EOS()){
             runStep()
             dataStreamSrcs.dataStreams[0].dataMap[crntSimTime] <-  snapShot.bloodVessels["lowerRightArmCapillaries"].totalSubstance("glucose")
