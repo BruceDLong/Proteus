@@ -258,7 +258,7 @@ struct SnapShot {
             fld.pushedInterval.end   <- start+simStep
             our datum:: newSubstance
             newSubstance.value <- glucoseAverage
-        newSubstance.confidenceLvl <- 150.0 /- TODO: find correct confidenceLvl replace 10
+        newSubstance.confidenceInterval <- 150.0 /- TODO: find correct confidenceInterval replace 10
             fld.substanceFactors['glucose'] <- newSubstance
             /- TODO: add Insulin
 
@@ -379,7 +379,7 @@ struct Fluid{
             our datum:: newSubstance
             me double: newValue <- factor.value * ratio * fromFluid.volume / volume
             newSubstance.value <- newValue
-            newSubstance.confidenceLvl <- factor.confidenceLvl
+            newSubstance.confidenceInterval <- factor.confidenceInterval
             substanceFactors[factor_key] <- newSubstance
         }
         pushedInterval.start <- start
@@ -394,7 +394,7 @@ struct Fluid{
             me double: newValue
             newValue <- ((fluidA.substanceFactors[factor_key].value * ARatio * fluidA.volume) + (fluidB.substanceFactors[factor_key].value * BRatio * fluidB.volume)) / volume
             newSubstance.value <- newValue
-            newSubstance.confidenceLvl  <- factor.confidenceLvl
+            newSubstance.confidenceInterval  <- factor.confidenceInterval
             substanceFactors[factor_key] <- newSubstance
         }
 
@@ -446,7 +446,7 @@ struct Vessel{
         me double: newValue
         newValue <- (topPrevAmount + newAmount) / newVolume
         newSubstance.value <- newValue
-        newSubstance.confidenceLvl <- crntFirstItem.substanceFactors[substanceKey].confidenceLvl
+        newSubstance.confidenceInterval <- crntFirstItem.substanceFactors[substanceKey].confidenceInterval
         crntFirstItem.substanceFactors[substanceKey] <- newSubstance
             }
             crntFirstItem.volume <- newVolume
@@ -459,7 +459,7 @@ struct Vessel{
     void: applySubstanceAdjustments(their bodySim: sim) <- {
         withEach adjustment in substanceAdjustments {
             me string: substanceName <- adjustment.substanceName
-            me datum: amount        <- adjustment.amount
+            me datum: amount         <- adjustment.amount
             me timeValue: startTime  <- adjustment.dispersalInterval.start
             me timeValue: endTime    <- adjustment.dispersalInterval.end
             me timeValue: totalTimeAmount <- endTime - startTime
@@ -478,7 +478,7 @@ struct Vessel{
             our datum:: newSubstance
                     me double: newFactor <- fluid.substanceFactors[substanceName].value + percentageToIncrease
             newSubstance.value <- newFactor
-            newSubstance.confidenceLvl <- fluid.substanceFactors[substanceName].confidenceLvl
+            newSubstance.confidenceInterval <- fluid.substanceFactors[substanceName].confidenceInterval
                     fluid.substanceFactors[substanceName] <- newSubstance
                     print("         Added ", substanceName, " : ", percentageToIncrease, " from ", fluidStart-prgStartTime, " to ", fluidEnd-prgStartTime, "\n")
                 }
@@ -601,12 +601,12 @@ struct Vessel{
         withEach fluid in fluidQueue{
             count <- count +1
             subsAcc <- subsAcc + fluid.substanceFactors[substance].value * fluid.volume
-            confidenceAcc <- confidenceAcc + fluid.substanceFactors[substance].confidenceLvl
+            confidenceAcc <- confidenceAcc + fluid.substanceFactors[substance].confidenceInterval
             totalFluid <- totalFluid + fluid.volume
         }
         me datum: substanceLevel
         substanceLevel.value <- convertToGUIScalar(subsAcc/totalFluid)
-        substanceLevel.confidenceLvl <- confidenceAcc/fluidQueue.size()
+        substanceLevel.confidenceInterval <- confidenceAcc/fluidQueue.size()
         return(substanceLevel)
     }
 }
@@ -635,13 +635,14 @@ struct bodySim:{
     our substanceAdjustment[map timeValue]: globalEvents
     me fluidEvent[list]: vesselQueue
 
-    void: addSubstance(me string: vessel, me string: substance, me datum: amount, me timeIntervalSpec: timeInterval) <- {
+    void: addSubstance(me string: vessel, me string: substance, me double: amount, me double: confidenceInterval, me timeIntervalSpec: timeInterval) <- {
         our Vessel[itr map string]: V <- snapShot.bloodVessels.find(vessel)
         if(V == snapShot.bloodVessels.end()){print("        Error adding substance: ", vessel, " not found.\n"); exit(1) }
         else{
             our substanceAdjustment:: adjustment
             adjustment.substanceName       <- substance
-            adjustment.amount              <- amount
+            adjustment.amount.value              <- amount
+            adjustment.amount.confidenceInterval  <- confidenceInterval
             adjustment.dispersalInterval   <- timeInterval
             V.val.substanceAdjustments.pushLast(adjustment)
            /- V.val.applySubstanceAdjustments()
@@ -659,6 +660,22 @@ struct bodySim:{
         else{
 
         }
+    }
+
+    me MedicationInformation: medInfo
+    void: loadMedicationData() <- {
+        medInfo.medChoices.clear()
+        medInfo.addEntry("Glucotrol", 5, "mg")
+        medInfo.addEntry("Glucotrol", 10, "mg")
+        medInfo.addEntry("Januvia",   25, "mg")
+        medInfo.addEntry("Januvia",   50, "mg")
+        medInfo.addEntry("Januvia",   100, "mg")
+        medInfo.addEntry("Metformin", 500, "mg")
+        medInfo.addEntry("Metformin", 850, "mg")
+        medInfo.addEntry("Metformin", 1000, "mg")
+        medInfo.addEntry("Humulin R", -1, "U")
+        medInfo.addEntry("Humulin N", -1, "U")
+        medInfo.addEntry("Levemir",   -1, "U")
     }
 
     void: constructBodySystem() <- {
@@ -776,7 +793,6 @@ struct bodySim:{
     }
 
     void: modifyConfidenceLevel(me string: substanceName, me timeValue: time, me datum: substanceDatum) <- {
-              print("@@modifyConfidenceLevel\n")
         our substanceAdjustment:: adjustment
         adjustment.adjustmentType          <- saMeasurement
         adjustment.substanceName           <- substanceName
@@ -788,19 +804,38 @@ struct bodySim:{
 
     void: enqueueSubstanceAdjustmentsFromBodyEvent(our infon: bEvent) <- {
         /- bEvent represents an EntryPad entry; extract data and add adjustments to blood vessel's adjustment queue.
-        print("applyBodyEvent\n")
+        print("enqueueSubstanceAdjustmentsFromBodyEvent\n")
         me agent: a; print("bodyEvent: ",a.printInfon( bEvent),"\n")
         me timeValue: timeStamp  <- fetchInfonByNameSeg(bEvent, "timeForEntry").value.num
+
+        /----------------------  PROCESS GLUCOSE MEASUMEMENT
         me int:       glucoseLvl <- convertToIntVal(fetchInfonByNameSeg(bEvent, "bloodGlucose").value.num)
-        me datum: glucoseDatum; glucoseDatum.value <- glucoseLvl; glucoseDatum.confidenceLvl <- 40
+        me datum: glucoseDatum; glucoseDatum.value <- glucoseLvl; glucoseDatum.confidenceInterval <- 40
               if(glucoseLvl > 20){modifyConfidenceLevel("glucose", timeStamp, glucoseDatum)}
 
-        our infon: mealsInf <- fetchInfonByNameSeg(bEvent, "mealInfo")
-
-        our infon: medsInf <- fetchInfonByNameSeg(bEvent, "medsInfo")
-
+        /----------------------  RECORD ACTIVITY LEVEL
         our infon: activityInf <- fetchInfonByNameSeg(bEvent, "activityInfo")
         me int: activityLevel <- convertToIntVal(fetchInfonByNameSeg(activityInf, "activityLevel").value.num)
+
+        /----------------------  PROCESS MEALS
+        our infon: mealsInf <- fetchInfonByNameSeg(bEvent, "mealInfo")
+
+        me timeIntervalSpec: AI; AI.start <- timeStamp;  AI.end <- timeStamp+30000
+        me int: confidenceInterval <- 0
+        sim.addSubstance("jejunumCapillaries", "carbs",   1000, confidenceInterval, AI)
+        sim.addSubstance("jejunumCapillaries", "protein", 1000, confidenceInterval, AI)
+        sim.addSubstance("jejunumCapillaries", "fats",    1000, confidenceInterval, AI)
+
+        /----------------------  PROCESS MEDS
+        our infon: medsInf <- fetchInfonByNameSeg(bEvent, "medInfo")
+        me int: med_count <- 0
+        withEach med in medsInf.value.items{
+            me string: medName <- fetchInfonByNameSeg(med, "name").value.str
+            print("    medicine["+toString(med_count)+"]: ",medName,"\n")
+    /-        sim.addSubstance("stomachCapillaries", medName,   quantity, confidenceInterval, AI)
+            med_count <- med_count + 1
+        }
+
 
     }
 
