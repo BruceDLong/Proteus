@@ -58,6 +58,25 @@ model pureInfon{
         str <- S
 
     }
+    me bool: isDuplicateOf(their pureInfon: dup) <- {
+        if(fType != dup.fType){return(false)}
+        if(format != dup.format){return(false)}
+        if(cursor != dup.cursor){return(false)}
+        if(inverted != dup.inverted){return(false)}
+        if(timelike != dup.timelike){return(false)}
+        me int: formatType <- fType
+        if(formatType==NUM){return(num==dup.num)}
+        else if(formatType==STR){return(str==dup.str)}
+        else if(formatType==LST){
+            if(items.size() != dup.items.size()){return(false)}
+            me int: lstSize <- items.size()
+            withEach idx in RANGE(0..lstSize){
+                our infon: left <- items.at(idx).item
+                if(! left.isDuplicateOf(dup.items.at(idx).item)){return(false)}
+            }
+        } else {return(false)}
+        return(true)
+    }
     our DblLinkedListNode: deleteListNode(our DblLinkedListNode: toDel) <- {return(items.erase(toDel))}
     me uint64: getValAsInt() <-{
     if(inverted){return(-num)}
@@ -126,6 +145,15 @@ model infon{
             }
         }
         return(endMarker)
+    }
+
+    me bool: isDuplicateOf(our infon: dup) <- {   /- TODO: much more could go here
+        if(!value.isDuplicateOf(dup.value)){return(false)}
+        if(!endMarker.isDuplicateOf(dup.endMarker)){return(false)}
+        if(itmMode != dup.itmMode){return(false)}
+        if(infMode != dup.infMode){return(false)}
+        if(cursorMode != dup.cursorMode){return(false)}
+        return(true)
     }
 
     our infon: getLastItem() <- {
@@ -382,6 +410,11 @@ model infDeepItr{
             if(next){S <- S+ " | "+ next.ToString()}
         }
         return(S)
+    }
+
+    me bool: isDuplicateOf(our infDeepItr: dup) <- {
+        if(crntCursor==NULL or dup.crntCursor==NULL){return(false)}
+        return(crntCursor.item.isDuplicateOf(dup.crntCursor.item))
     }
 
     void: goNext() <- {
@@ -731,7 +764,7 @@ struct agent{
     }
 
     our aItem: stitch(our aItem: crntItem, me string: indent)<-{
-        log(indent + "STITCH crntaItem: " + crntItem.mySymbol(crntItem) + " is:"+crntItem.printAgendaItem(),"\n")
+        log(indent + "STITCH TOP: " + crntItem.mySymbol(crntItem) + " is:"+crntItem.printAgendaItem(),"\n")
   /-      theClip.dispAndWait("STITCH: " + crntItem.mySymbol(crntItem) + crntItem.printAgendaItem())
         our aItem: retVal <- NULL
         me bool: copyRHSTypeToLHS <- crntItem.copyRHSTypeToLHS
@@ -767,20 +800,23 @@ struct agent{
                 our infon: crntInfon <- LHSCursor.item
                 our DblLinkedListNode: dottedToDelete <- NULL
                 me int: count <- 0
+            me bool: NoKeepIt <- false
                 while(nextItem.LHS.state != sSecondVisit and !(nextItem.LHS.crntCursor.item === crntInfon)){
-                    log(indent + "STITCH crntaItem: " + crntItem.mySymbol(crntItem) + " is:"+crntItem.printAgendaItem(),"\n")
-                    if(nextItem.LHS.myDots!=NULL){
-                        if(!crntItem.LHS.preserveDots){
+                        log(indent + "STITCH crntaItem: " + crntItem.mySymbol(crntItem) + " is:"+crntItem.printAgendaItem(),"\n")
+                            if(nextItem.LHS.fromDotted and nextItem.RHS.fromDotted){log("DELETE, DELETE, DELETE..."); NoKeepIt <- true;}
+                    if(!nextItem.stitched and NoKeepIt==false){
+                        if(nextItem.LHS.myDots!=NULL){
                             dottedToDelete <- nextItem.LHS.myDots
+                            nextItem.LHS.fromDotted <- false
+                            crntInfon.value.items.insertBefore(nextItem.LHS.myDots, nextItem.LHS.crntCursor.item)
                         }
-                        nextItem.LHS.fromDotted <- false
-                        crntInfon.value.items.insertBefore(nextItem.LHS.myDots, nextItem.LHS.crntCursor.item)
-                    }
-                    log(indent+"*** NextItem:"+toString(count)+nextItem.mySymbol(nextItem)+ " is "+nextItem.printAgendaItem())
-                    nextItem <- stitch(nextItem, indent + "     ")
+                        nextItem.stitched <- true
+                        log(indent+"*** NextItem:"+toString(count)+nextItem.mySymbol(nextItem)+ " is "+nextItem.printAgendaItem())
+                        nextItem <- stitch(nextItem, indent + "     ")
+                    } else {nextItem <- nextItem.successor}
                     count <- count + 1
                 }
-                if(dottedToDelete!=NULL){
+                if(dottedToDelete!=NULL and !NoKeepIt){
                         log(indent+"  Deleting '...':"); crntInfon.deleteListNode(dottedToDelete)}
                 /- If this was a CONCAT with only one item:
                 if(LHSCursor.item.value.format==fConcat and !LHSCursor.item.value.items.isEmpty() and LHSCursor.item.value.items.head.isLast()){
@@ -1163,14 +1199,14 @@ struct ProteusCore{
     me bool: loadWorld(me string: filename) <- {
         me string: worldFilePath <- filename
         me string: worldStr <- readAssetAsString(worldFilePath)
-    if(worldStr==""){
-        errorMesg <- "Model file "+worldFilePath+" not found";
-        return(false)
-    }
+        if(worldStr==""){
+            errorMesg <- "Model file "+worldFilePath+" not found";
+            return(false)
+        }
         WORLD <- parseAndExtract(worldStr)
         if(WORLD == NULL){
-        return(false)
-    }
+            return(false)
+        }
         Allocate(a)
         a.world <- WORLD
         return(true)
