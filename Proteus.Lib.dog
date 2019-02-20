@@ -366,6 +366,7 @@ model infDeepItr{
     our infDeepItr: nextOr
     our DblLinkedListNode: myDots
     mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError]: state
+    flag: looseMode
     flag: alreadyIncremented   /- When an item is deleted, the cursor idx is already incremented.
     flag: fromDotted
     flag: preserveDots
@@ -397,6 +398,7 @@ model infDeepItr{
         if(InfItr==NULL or InfItr.item==NULL){state <- sError; return()}
         crntCursor <- InfItr
         setListSeqFlags()
+        looseMode <- InfItr.looseMode
         nestLvl <- 0
     }
 
@@ -414,7 +416,7 @@ model infDeepItr{
     }
 
     me bool: isDuplicateOf(our infDeepItr: dup) <- {
-        if(crntCursor==NULL or dup.crntCursor==NULL){return(false)}
+        if(crntCursor==NULL or dup==NULL or dup.crntCursor==NULL){return(false)}
         return(crntCursor.item.isDuplicateOf(dup.crntCursor.item))
     }
 
@@ -454,9 +456,11 @@ model infDeepItr{
     }
 
     void: copyThisTo(our infDeepItr: to) <- {
-        Allocate(to.crntCursor)
         if(crntCursor==NULL){to.crntCursor <- NULL}
-        else{crntCursor.copyThisTo(to.crntCursor)}
+        else{
+            Allocate(to.crntCursor)
+            crntCursor.copyThisTo(to.crntCursor)
+        }
         to.nestLvl             <- nestLvl
         to.nextOr              <- nextOr
         to.state               <- state
@@ -779,7 +783,7 @@ struct agent{
         switch(LHS.state) {
             case sNotASeq:{
    /-             log(indent + "In NotASEQ")
-                if(RHS.crntCursor!=NULL and RHS.state!=sSecondVisit){
+                if(RHS!=NULL and RHS.crntCursor!=NULL and RHS.state!=sSecondVisit){
                     if(true or copyRHSTypeToLHS){ LHSCursor.item.value.fType <- RHS.crntCursor.item.value.fType}
                     LHSCursor.item.infMode <- RHS.crntCursor.item.infMode
 
@@ -981,36 +985,27 @@ struct agent{
         our infon: i <- itrToProcess.crntCursor.item
 /-        log("Adding WorkItem:" + printInfon(i))
         if(i.wrkItmsAdded){return(0)}else{i.wrkItmsAdded <- true}
-       /- theClip.dispAndWait(i, "addWorkItemsToAgenda - A")
+if(i.wrkList.size()==0 and pred!=NULL){return(0)}  /- If there is no predecessor this will not be automatically enqeued by a predecessor.
+        our aItem:: new_item
+        new_item.init(0, itrToProcess, NULL)
+        if(pred!=NULL){new_item.predecessors.pushLast(pred)}
 
-        if(i.wrkList.size()==0){
-            if(pred == NULL){   /- There is no RHS so make RHS NULL
-                our infDeepItr: newIDP
-                Allocate(newIDP)
-                newIDP.crntCursor <- NULL
-                our aItem: new_item
-                Allocate(new_item)
-                new_item.init(0,itrToProcess,newIDP)
-                if(pred != NULL){new_item.predecessors.pushLast(pred)}
+if(i.wrkList.size()==0){   /- There is no ident so make RHS NULL
+        our infDeepItr:: newIDP
+        newIDP.crntCursor <- NULL
+        new_item.RHS <- newIDP
+        agenda.addItem(new_item)
+} else {
+        withEach workItem in i.wrkList{
+            our infDeepItr:: newIDP
+            newIDP.initialize(workItem)
+                 new_item.looseMode <- workItem.looseMode   // looseMode is not in each IDP.
+                new_item.addRHS(newIDP)
                 agenda.addItem(new_item)
-/- VIEWER     if(pred==NULL){topAItem <- new_item}
-            }
-        } else {
-            withEach workItem in i.wrkList{
-                our infDeepItr: newIDP
-                Allocate(newIDP)
-                newIDP.initialize(workItem)
-                our aItem: new_item
-                Allocate(new_item)
-                new_item.init(0,itrToProcess,newIDP)
-                new_item.looseMode <- workItem.looseMode
-                if(pred != NULL){new_item.predecessors.pushLast(pred)}
-                agenda.addItem(new_item)
-/- VIEWER   if(pred==NULL){topAItem <- new_item}
-                workItem.wasProcessed <- true
-                numItemsAdded <- numItemsAdded+1
-            }
+            workItem.wasProcessed <- true
+            numItemsAdded <- numItemsAdded+1
         }
+}
         return(numItemsAdded)
     }
 
