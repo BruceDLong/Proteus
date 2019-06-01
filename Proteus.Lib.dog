@@ -226,6 +226,9 @@ model infItr{
     our infItr: parent
     our DblLinkedListNode: itmItr
     mode [asID, asFirst, asLast, asMarked, asFirstParent, asLastParent, asMarkedParent]: target
+    mode[sizeFailed, sizeVerified, copySizeLHStoRHS, copySizeRHStoLHS]:     sizeAction
+    mode[valueFailed, valueVerified, copyValueLHStoRHS, copyValueRHStoLHS]: valueAction
+    flag: copyRHSTypeToLHS
     flag: looseMode
     flag: wasProcessed
 
@@ -251,9 +254,10 @@ model infItr{
     }
 
     void: copyThisTo(our infItr: to) <- {
-        to.item <- item
-        to.parent <- parent
-        to.itmItr <- itmItr
+        to.item      <- item
+        to.parent    <- parent
+        to.itmItr    <- itmItr
+        to.looseMode <- looseMode
     }
 
     void: deleteCrnt() <- {
@@ -364,9 +368,9 @@ model infDeepItr{
     me int: nestLvl
     our infDeepItr: nextAnd
     our infDeepItr: nextOr
+    our infDeepItr: nextRemainder
     our DblLinkedListNode: myDots
     mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError]: state
-    flag: looseMode
     flag: alreadyIncremented   /- When an item is deleted, the cursor idx is already incremented.
     flag: fromDotted
     flag: preserveDots
@@ -398,7 +402,6 @@ model infDeepItr{
         if(InfItr==NULL or InfItr.item==NULL){state <- sError; return()}
         crntCursor <- InfItr
         setListSeqFlags()
-        looseMode <- InfItr.looseMode
         nestLvl <- 0
     }
 
@@ -411,6 +414,7 @@ model infDeepItr{
         else {
             S <- S + a.printInfon(crntCursor.item)
             if(nextOr){S <- S+ " | "+ nextOr.ToString()}
+            if(nextAnd){S <- S+ " & "+ nextAnd.ToString()}
         }
         return(S)
     }
@@ -440,9 +444,14 @@ model infDeepItr{
                 } else {
                     /-Prepare to iterate children
                     our infItr: tmp
-                    Allocate(tmp); tmp.itmItr<-crntCursor.itmItr; tmp.parent<-crntCursor.parent; tmp.item <- crntCursor.item; crntCursor.parent  <- tmp;   /- TODO: After ptr bug is fixed, Allocate(crntCursor.parent, crntCursor)
+                    Allocate(tmp)
+			tmp.itmItr    <-crntCursor.itmItr
+			tmp.parent    <-crntCursor.parent
+			tmp.item      <- crntCursor.item
+			tmp.looseMode <- crntCursor.looseMode
+		    crntCursor.parent <- tmp   /- TODO: After ptr bug is fixed, Allocate(crntCursor.parent, crntCursor)
                     crntCursor.itmItr <- crntCursor.item.value.items.begin()
-                    crntCursor.item <- crntCursor.itmItr.item
+                    crntCursor.item   <- crntCursor.itmItr.item
                     setListSeqFlags()
                     nestLvl <- nestLvl+1
                 }
@@ -462,6 +471,7 @@ model infDeepItr{
             crntCursor.copyThisTo(to.crntCursor)
         }
         to.nestLvl             <- nestLvl
+        to.nextAnd             <- nextAnd
         to.nextOr              <- nextOr
         to.state               <- state
         to.alreadyIncremented  <- alreadyIncremented
@@ -499,9 +509,10 @@ model infDeepItr{
         our infDeepItr: tentativeItr
         Allocate(tentativeItr)
         Allocate(tentativeItr.crntCursor)
-        tentativeItr.crntCursor.itmItr <- parent.crntCursor.itmItr
-        tentativeItr.crntCursor.parent <- parent.crntCursor.parent
-        tentativeItr.crntCursor.item <- child
+        tentativeItr.crntCursor.itmItr    <- parent.crntCursor.itmItr
+        tentativeItr.crntCursor.parent    <- parent.crntCursor.parent
+        tentativeItr.crntCursor.looseMode <- parent.crntCursor.looseMode
+        tentativeItr.crntCursor.item      <- child
         tentativeItr.nestLvl <- parent.nestLvl
         tentativeItr.nextOr <- NULL
         tentativeItr.setListSeqFlags() /- Set state, etc.
@@ -521,6 +532,7 @@ model infDeepItr{
         } else {
             Allocate(nextItr)
             copyThisTo(nextItr)
+	    nextItr.crntCursor.looseMode <- crntCursor.looseMode
         }
 
         if(nextItr.state == sEOL){
@@ -542,6 +554,7 @@ model infDeepItr{
             retVal <- nextItr
             retVal.nextOr <- NULL
         }
+        if(retVal.nextAnd != NULL){retVal.nextAnd <- retVal.nextAnd.getNextDeDotted()}
         return(retVal)
     }
 
@@ -769,29 +782,31 @@ struct agent{
     }
 
     our aItem: stitch(our aItem: crntItem, me string: indent)<-{
-        log(indent + "STITCH TOP: " + crntItem.mySymbol(crntItem) + " is:"+crntItem.printAgendaItem(),"\n")
+        /-log(indent + "STITCH TOP: " + crntItem.mySymbol(crntItem) + " is:"+crntItem.printAgendaItem(),"\n")
   /-      theClip.dispAndWait("STITCH: " + crntItem.mySymbol(crntItem) + crntItem.printAgendaItem())
-        our aItem: retVal <- NULL
-        me bool: copyRHSTypeToLHS <- crntItem.copyRHSTypeToLHS
-        me int: sizeAction <- crntItem.sizeAction
-        me int: valueAction <- crntItem.valueAction
-        crntItem.valueAction <- false
-        our infDeepItr: LHS <- crntItem.LHS
-        our infDeepItr: RHS <- crntItem.RHS
+        our aItem: retVal     <- NULL
+        our infDeepItr: LHS   <- crntItem.LHS
+        our infDeepItr: RHS   <- crntItem.RHS
         our infItr: LHSCursor <- LHS.crntCursor
-        log(indent+"LHSCursor:"+LHSCursor.item.mySymbol(LHSCursor.item))
         switch(LHS.state) {
             case sNotASeq:{
-   /-             log(indent + "In NotASEQ")
-                if(RHS!=NULL and RHS.crntCursor!=NULL and RHS.state!=sSecondVisit){
-                    if(true or copyRHSTypeToLHS){ LHSCursor.item.value.fType <- RHS.crntCursor.item.value.fType}
-                    LHSCursor.item.infMode <- RHS.crntCursor.item.infMode
+                /-log(indent + "In NotASEQ")
+                our infDeepItr: RHSItr <- RHS
+                while(RHSItr!=NULL){
+                    if (RHSItr.state!=sSecondVisit){
+                        me bool: copyRHSTypeToLHS <- RHSItr.crntCursor.copyRHSTypeToLHS
+                        if(copyRHSTypeToLHS){ LHSCursor.item.value.fType <- RHSItr.crntCursor.item.value.fType}
+                        LHSCursor.item.infMode <- RHSItr.crntCursor.item.infMode
 
-                    if(sizeAction == copySizeRHStoLHS)     {DO_COPY(RHS.crntCursor.item.endMarker, LHSCursor.item.endMarker, 0)}
-                    else if(sizeAction == copySizeLHStoRHS){DO_COPY(LHSCursor.item.endMarker, RHS.crntCursor.item.endMarker, 0)}
+                        me int: sizeAction    <- RHSItr.crntCursor.sizeAction
+                        if(sizeAction == copySizeRHStoLHS)     {DO_COPY(RHSItr.crntCursor.item.endMarker, LHSCursor.item.endMarker, 0)}
+                        else if(sizeAction == copySizeLHStoRHS){DO_COPY(LHSCursor.item.endMarker, RHSItr.crntCursor.item.endMarker, 0)}
 
-                    if(valueAction == copyValueRHStoLHS)     {DO_COPY(RHS.crntCursor.item.value, LHSCursor.item.value, crntItem.sizeToCopy)}
-                    else if(valueAction == copyValueLHStoRHS){DO_COPY(LHSCursor.item.value, RHS.crntCursor.item.value, crntItem.sizeToCopy)}
+                        me int: valueAction   <- RHSItr.crntCursor.valueAction
+                        if(valueAction == copyValueRHStoLHS)     {DO_COPY(RHSItr.crntCursor.item.value, LHSCursor.item.value, crntItem.sizeToCopy)}
+                        else if(valueAction == copyValueLHStoRHS){DO_COPY(LHSCursor.item.value, RHSItr.crntCursor.item.value, crntItem.sizeToCopy)}
+                    }
+                    RHSItr <- RHSItr.nextAnd
                 }
 
                 /- Handle when parent is a CONCAT
@@ -808,7 +823,7 @@ struct agent{
             me bool: NoKeepIt <- false
                 while(nextItem.LHS.state != sSecondVisit and !(nextItem.LHS.crntCursor.item === crntInfon)){
                         log(indent + "STITCH crntaItem: " + crntItem.mySymbol(crntItem) + " is:"+crntItem.printAgendaItem(),"\n")
-                            if(nextItem.LHS.fromDotted and nextItem.RHS.fromDotted){log("DELETE, DELETE, DELETE..."); NoKeepIt <- true;}
+                            if(nextItem.LHS.fromDotted and nextItem.RHS != NULL and nextItem.RHS.fromDotted){log("DELETE, DELETE, DELETE..."); NoKeepIt <- true;}
                     if(!nextItem.stitched and NoKeepIt==false){
                         if(nextItem.LHS.myDots!=NULL){
                             dottedToDelete <- nextItem.LHS.myDots
@@ -899,18 +914,18 @@ struct agent{
         }
     }
 
-    our infDeepItr: tryMERGE(our aItem: agendaItem) <- {
+    our infDeepItr: tryMERGE(our aItem: agendaItem, our infDeepItr: RHSItr) <- {
         our infon: LHS <- agendaItem.LHS.crntCursor.item
-        our infon: RHS <- agendaItem.RHS.crntCursor.item
+        our infon: RHS <- RHSItr.crntCursor.item
         our infDeepItr: remainder <- NULL
-        if(PropogateIndirectItem(agendaItem.LHS.crntCursor, agendaItem.RHS.crntCursor) > 0){return(NULL)}
+        if(PropogateIndirectItem(agendaItem.LHS.crntCursor, RHSItr.crntCursor) > 0){return(NULL)}
 
-        me bool: looseMode <- agendaItem.looseMode   /- Strict or loose typing?
+        me bool: looseMode <- RHSItr.crntCursor.looseMode   /- Strict or loose typing?
         me bool: reject <- false    /- ReturnStatus
 
         if((LHS.infMode==isUnknown and RHS.infMode!=isUnknown) or (LHS.value.fType==tUnknown and RHS.value.fType!=tUnknown)){
-            agendaItem.copyRHSTypeToLHS <- 1
-        } else {agendaItem.copyRHSTypeToLHS <- 0}
+            RHSItr.crntCursor.copyRHSTypeToLHS <- 1
+        } else {RHSItr.crntCursor.copyRHSTypeToLHS <- 0}
 
         me mergeCmd: sizeStatus; sizeStatus.cmd <- 0
         if(!looseMode){ /- Make sure typeSpec are compatible
@@ -922,16 +937,16 @@ struct agent{
             me int: RHSFormat <- RHS.size().format
             me int: LHSInfMode <- LHS.infMode
             if(LHSInfMode==isUnknown){
-                agendaItem.sizeAction<-copySizeRHStoLHS
-                agendaItem.valueAction<-copyValueLHStoRHS
+                RHSItr.crntCursor.sizeAction  <-copySizeRHStoLHS
+                RHSItr.crntCursor.valueAction <-copyValueRHStoLHS
             } else {
                 if(LHSFormat != fUnknown and RHSFormat != fUnknown){
                     sizeStatus <- DO_VERIFY(LHS.size(), RHS.size())
-                    if (sizeStatus.cmd==matchFailed){agendaItem.sizeAction<-sizeFailed; reject<-true;}
-                    else if (sizeStatus.cmd== wasVerified){agendaItem.sizeAction<-sizeVerified}
+                    if (sizeStatus.cmd==matchFailed){RHSItr.crntCursor.sizeAction<-sizeFailed; reject<-true;}
+                    else if (sizeStatus.cmd== wasVerified){RHSItr.crntCursor.sizeAction<-sizeVerified}
                 }
-                else if(LHSFormat == fUnknown and RHSFormat != fUnknown){agendaItem.sizeAction<-copySizeRHStoLHS}
-                else if(LHSFormat != fUnknown and RHSFormat == fUnknown){agendaItem.sizeAction<-copySizeLHStoRHS}
+                else if(LHSFormat == fUnknown and RHSFormat != fUnknown){RHSItr.crntCursor.sizeAction<-copySizeRHStoLHS}
+                else if(LHSFormat != fUnknown and RHSFormat == fUnknown){RHSItr.crntCursor.sizeAction<-copySizeLHStoRHS}
                 else if(LHSFormat == fUnknown and RHSFormat == fUnknown){CO_SUBSCRIBE_SIZES(LHS, RHS)}
             }
         } else {log("tryMERGE:LOOSE MODE")}
@@ -942,17 +957,17 @@ struct agent{
 
             if(LHSFormat != fUnknown and RHSFormat != fUnknown){
                 valueStatus <- DO_VERIFY(LHS.value, RHS.value)
-                if(valueStatus.cmd==matchFailed){agendaItem.valueAction<-valueFailed; reject<-true;}
-                else if (valueStatus.cmd== wasVerified){agendaItem.valueAction<-valueVerified}
+                if(valueStatus.cmd==matchFailed){RHSItr.crntCursor.valueAction<-valueFailed; reject<-true;}
+                else if (valueStatus.cmd== wasVerified){RHSItr.crntCursor.valueAction<-valueVerified}
             }
             else if(LHSFormat == fUnknown and RHSFormat != fUnknown){
-                agendaItem.valueAction<-copyValueRHStoLHS
+                RHSItr.crntCursor.valueAction<-copyValueRHStoLHS
                 valueStatus.cmd <- wasVerified
                 if(RHS.endMarker.format!=fUnknown and LHS.endMarker.format!=fUnknown){
                     valueStatus.sizeDiff <- RHS.size().num - LHS.size().num
                 }
             }
-            else if(LHSFormat != fUnknown and RHSFormat == fUnknown){agendaItem.valueAction<-copyValueLHStoRHS}
+            else if(LHSFormat != fUnknown and RHSFormat == fUnknown){RHSItr.crntCursor.valueAction<-copyValueLHStoRHS}
             else if(LHSFormat == fUnknown and RHSFormat == fUnknown){CO_SUBSCRIBE_VALUES(LHS, RHS)}
         }
 
@@ -964,9 +979,10 @@ struct agent{
                 me string: remainderStr <- RHS.value.str.subStr(convertToIntVal(rSize -sizeDiff), convertToIntVal(sizeDiff))
                 our infon: remainderInfon; Allocate(remainderInfon,remainderStr)
                 Allocate(remainder)
-                agendaItem.RHS.copyThisTo(remainder)
+                RHSItr.copyThisTo(remainder)
                 Allocate(remainder.crntCursor)
                 remainder.crntCursor.item <- remainderInfon
+                remainder.crntCursor.looseMode <- RHSItr.crntCursor.looseMode
                 agendaItem.sizeToCopy <- rSize - sizeDiff
 
             } else if(sizeDiff==0){
@@ -980,30 +996,38 @@ struct agent{
         return(remainder)
     }
 
+    our infDeepItr: validateAndAnnotate(our aItem: agendaItem) <- {
+        our infDeepItr: rmdrHead <- NULL
+        our infDeepItr: RHSItr <- agendaItem.RHS
+        our infDeepItr: rmdrCrnt <- NULL
+        our infDeepItr: rmdrTail <- NULL
+        while(RHSItr != NULL){
+            rmdrCrnt <- tryMERGE(agendaItem, RHSItr)
+            /-log("validateAndAnnotate:"+ printInfon(RHSItr.crntCursor.item) + ":rmdrCrnt:" + rmdrCrnt.ToString())
+            if(rmdrHead == NULL){rmdrHead <- rmdrCrnt}
+            else{rmdrTail.nextAnd <- rmdrCrnt}
+            rmdrTail <- rmdrCrnt
+            RHSItr <- RHSItr.nextAnd
+        }
+        return(rmdrHead)
+    }
+
     me int: addWorkItemsToAgenda(me int: priority, our aItem: pred, our infDeepItr: itrToProcess)<-{
         me int: numItemsAdded <- 0
         our infon: i <- itrToProcess.crntCursor.item
-/-        log("Adding WorkItem:" + printInfon(i))
+        log("Adding WorkItem:" + printInfon(i))
         if(i.wrkItmsAdded){return(0)}else{i.wrkItmsAdded <- true}
-if(i.wrkList.size()==0 and pred!=NULL){return(0)}  /- If there is no predecessor this will not be automatically enqeued by a predecessor.
+        if(i.wrkList.size()==0 and pred!=NULL){return(0)}  /- If there is no predecessor this will not be automatically enqeued by a predecessor.
         our aItem:: new_item
         new_item.init(0, itrToProcess, NULL)
         if(pred!=NULL){new_item.predecessors.pushLast(pred)}
-/*
-if(i.wrkList.size()==0){   /- There is no ident so make RHS NULL
-        our infDeepItr:: newIDP
-                newIDP.crntCursor <- NULL
-        new_item.RHS <- newIDP
-} else { */
-            withEach workItem in i.wrkList{
+        withEach workItem in i.wrkList{
             our infDeepItr:: newIDP
-                newIDP.initialize(workItem)
-                 new_item.looseMode <- workItem.looseMode   // looseMode is not in each IDP.
-                new_item.addRHS(newIDP)
-                workItem.wasProcessed <- true
-                numItemsAdded <- numItemsAdded+1
-            }
-/-}
+            newIDP.initialize(workItem)
+            new_item.addRHS(newIDP)
+            workItem.wasProcessed <- true
+            numItemsAdded <- numItemsAdded+1
+        }
         agenda.addItem(new_item)
         return(numItemsAdded)
     }

@@ -6,12 +6,8 @@ model aItem{
     our infDeepItr:   RHS
     our aItem[list]:  predecessors
     our aItem:        successor
-    me flag:          copyRHSTypeToLHS
     me flag:          rejected
-    me flag:          looseMode
     me flag:          stitched
-    me mode[valueFailed, valueVerified, copyValueLHStoRHS, copyValueRHStoLHS]:        valueAction
-    me mode[sizeFailed, sizeVerified, copySizeLHStoRHS, copySizeRHStoLHS]:        sizeAction
     me uint64: sizeToCopy
 
     me mode[getAllPlusSize, startPos, endPos, query, size, length, first, last, Nth, tagged, typed]:opTypes
@@ -53,14 +49,15 @@ model aItem{
             itemStr <- itemStr + innrStr;
         }
         else{itemStr <- itemStr +" ITEM-NULL"}
-        if(looseMode!=0){itemStr <- itemStr + " |==| "}
-        else{itemStr <- itemStr + " |=| "}
-        if (RHS!=NULL and RHS.crntCursor!=NULL){
-            innrStr <- a.printInfon(RHS.crntCursor.item)
-            if(RHS.state==sSecondVisit) {innrStr <- "<"+innrStr + ">"}
+        our infDeepItr: RHSItr <- RHS
+        while(RHSItr!=NULL){
+            if(RHSItr.crntCursor.looseMode){itemStr <- itemStr + " |==| "}
+            else{itemStr <- itemStr + " |=| "}
+            innrStr <- a.printInfon(RHSItr.crntCursor.item)
+            if(RHSItr.state==sSecondVisit) {innrStr <- "<"+innrStr + ">"}
             itemStr <- itemStr + innrStr;
-        }else{itemStr <- itemStr +"ITEM-NULL"}
-
+            RHSItr <- RHSItr.nextAnd
+        }
         me string: predStr <- " | "
         withEach pred in predecessors{
             predStr <- predStr + pred.mySymbol(pred) + " "
@@ -114,25 +111,11 @@ struct retriever{
     void: addItem(our aItem: agendaItem)<-{
         if(!agenda.isDuplicate(agendaItem)){
             log("ADDING WORK-ITEM:" + agendaItem.mySymbol(agendaItem) + ": \t" + agendaItem.printAgendaItem() + "##########################")
-    if(agendaItem.LHS.fromDotted and agendaItem.RHS.fromDotted){
-        log("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@" +  agendaItem.printAgendaItem() )
-    /*    our infon: LHS <- agendaItem.LHS.crntCursor.item
-        LHS.infMode <- isLiteral
-        LHS.value.fType <- LST
-        LHS.itmMode <- mDots
-        LHS.value.format <- fUnknown
-        LHS.value.cursor <- cDefault
-
-        our infon: RHS <- agendaItem.RHS.crntCursor.item
-        RHS.infMode <- isLiteral
-        RHS.value.fType <- LST
-        RHS.itmMode <- mDots
-        RHS.value.format <- fUnknown
-        RHS.value.cursor <- cDefault*/
-        agendaItem.LHS.preserveDots <- true
-    }
-            agenda.push(agendaItem)
-      /-      TopAItemDash.updatePush(agendaItem)
+	if(agendaItem.LHS.fromDotted and agendaItem.RHS != NULL and agendaItem.RHS.fromDotted){
+	    agendaItem.LHS.preserveDots <- true
+	}
+	agenda.push(agendaItem)
+      /-viewer      TopAItemDash.updatePush(agendaItem) 
         }
     else {log("DUPLICATE WORK-ITEM:" + agendaItem.printAgendaItem() + "##########################")}
     }
@@ -166,26 +149,23 @@ struct retriever{
         }
     }
 
-    void: addItemsToAgenda(our aItem: pred, me bool: looseMode, our infDeepItr: LHSChain, our infDeepItr: RHSChain, me bool: breakDotCycle)<-{
+    void: addItemsToAgenda(our aItem: pred, our infDeepItr: LHSChain, our infDeepItr: RHSChain, me bool: breakDotCycle)<-{
         me int: priority <- pred.priority
-        if(pred.LHS.crntCursor.item.value.fType!=LST and (pred.RHS==NULL or pred.RHS.crntCursor==NULL or pred.RHS.crntCursor.item.value.fType!=LST)){priority <- priority+1}
+        if(pred.LHS.crntCursor.item.value.fType!=LST and (pred.RHS==NULL or pred.RHS.crntCursor.item.value.fType!=LST)){priority <- priority+1}
         our infDeepItr: currentLHS <- LHSChain
         while(currentLHS != NULL){
             if(currentLHS.state != sEOL){
                 parentAgent.prepWorkList(currentLHS)
                 me int: numItemsAdded <- parentAgent.addWorkItemsToAgenda(priority, pred, currentLHS)
                 our infDeepItr: currentRHS <- RHSChain
-                while(currentRHS != NULL) {
-                    if(numItemsAdded==0 or currentRHS.crntCursor!=NULL){
-                        our aItem: nextItem
-                        Allocate(nextItem)
-                        nextItem.init(priority, currentLHS, currentRHS)
-                        nextItem.looseMode <- looseMode
-                        if(pred!=NULL){nextItem.predecessors.pushLast(pred)}
-                        if(!breakDotCycle or (!nextItem.LHS.fromDotted and !nextItem.RHS.fromDotted))
-                            {addItem(nextItem)}
-                    }
-                    currentRHS <- currentRHS.nextOr
+                while(currentRHS != NULL or numItemsAdded==0) {
+                    our aItem: nextItem
+                    Allocate(nextItem)
+                    nextItem.init(priority, currentLHS, currentRHS)
+                    if(pred!=NULL){nextItem.predecessors.pushLast(pred)}
+                    if(!breakDotCycle or (!nextItem.LHS.fromDotted and (nextItem.RHS == NULL or !nextItem.RHS.fromDotted))){addItem(nextItem)}
+                    if(currentRHS != NULL){currentRHS <- currentRHS.nextOr}
+                    if(numItemsAdded==0){numItemsAdded <- 1}
                 }
             }
             currentLHS <- currentLHS.nextOr
@@ -200,8 +180,8 @@ struct retriever{
         our infDeepItr: RHS <- agendaItem.RHS
        /- print("    CONDITIONS: ", " |RHS.nestLvl: ", RHS.nestLvl, " |RHS.state: ", RHS.state, " |LHS.nestLvl: ", LHS.nestLvl, "\n")
 
-        if(LHS.nestLvl == 0 and RHS.nestLvl == 0 and LHS.state == sSecondVisit){retVal <- true}
-        else if(LHS.nestLvl == 0 and RHS.nestLvl == 0 and RHS.state == sEOL and !RHS.isAList){retVal <- true}
+        if(LHS.nestLvl == 0 and (RHS == NULL or RHS.nestLvl == 0) and LHS.state == sSecondVisit){retVal <- true}
+        else if(LHS.nestLvl == 0 and (RHS == NULL or RHS.nestLvl == 0) and RHS.state == sEOL and !RHS.isAList){retVal <- true}
 
         if (retVal and !agenda.isEmpty()){retVal <- false}
 
@@ -210,52 +190,56 @@ struct retriever{
 
     void: processAgendaItem(our aItem: agendaItem)<-{
         log("processAgendaItem: " + agendaItem.printAgendaItem())
+	me string: logStr <- "PAI:" +agendaItem.mySymbol(agendaItem)+ agendaItem.printAgendaItem()+" "
         me bool: breakDotCycle <- false
         our infDeepItr: LHS <- agendaItem.LHS
         our infItr: crntCursor <- LHS.crntCursor
         me int: agendaLHS_state <- agendaItem.LHS.state
-        me bool: RHS_Empty <- agendaItem.RHS==NULL or agendaItem.RHS.crntCursor==NULL
+        me bool: RHS_Empty <- agendaItem.RHS==NULL
         me int: numItemsAdded <- 0
         our infDeepItr: remainder <- NULL
-        me bool: looseMode <- agendaItem.looseMode
         if(agendaLHS_state == sNotASeq or agendaLHS_state == sFirstVisit){
             if(!RHS_Empty){
                 if(agendaItem.RHS.state != sSecondVisit){
-                    log("processAgendaItem - ! RHS.sSecondVisit")
-                    remainder <- parentAgent.tryMERGE(agendaItem)
-                    if(agendaItem.rejected){log("processAgendaItem - REJECT"); return();}
+                    logStr <- logStr + ":A1"
+                    remainder <- parentAgent.validateAndAnnotate(agendaItem)
+                    if(agendaItem.rejected){logStr <- logStr +  ":A1-REJECT"; log(logStr); return();}
                 } else {
-                    log("processAgendaItem - RHS.SecondVisit!")
+                    logStr <- logStr + ":A2"
                     if(agendaItem.RHS.crntCursor.item.itmMode!=mSubItems){ /- TODO: Or if parent is in concat
+			logStr <- logStr +  ":A2-RETURN"
+			log(logStr)
                         return()
                     }
                 }
             }
             if(LHS.nestLvl == 0 and agendaLHS_state == sNotASeq){   /- Stitching
+		logStr <- logStr + ":A3-STITCH"
                 parentAgent.stitch(agendaItem, "")
             }
         } else if(agendaLHS_state == sSecondVisit){
-            log("processAgendaItem - LHS.SecondVisit")
+            logStr <- logStr + ":B"
             if(readyToResolve(agendaItem)){
+		logStr <- logStr + ":B-STITCH"
                 our aItem: topItem <- resolve(agendaItem, "    resolve: ")
                 parentAgent.stitch(topItem, "")
             }
         } else {print("IMPOSSIBLE LHS-STATE:", agendaLHS_state); exit(2)}
 
-        if(agendaItem.LHS.fromDotted and agendaItem.RHS.fromDotted){breakDotCycle<-true}
+        if(agendaItem.LHS.fromDotted and agendaItem.RHS != NULL  and agendaItem.RHS.fromDotted){breakDotCycle<-true}
         our infDeepItr: LHSChain <- NULL
         our infDeepItr: RHSChain <- NULL
 
         if(RHS_Empty){
             LHSChain <- agendaItem.LHS.getNextDeDotted()
-            Allocate(RHSChain);  RHSChain.crntCursor <- NULL
         } else {
             me bool: remainderSideRHS <- true  /- Later this may be false if the LHS has a remainder
             if(remainder != NULL){
-                    log("processAgendaItem - RHS-1")
                 if(remainderSideRHS){
+		    logStr <- logStr + ":C1"
                     RHSChain <-remainder
                 } else {
+		    logStr <- logStr + ":C2"
                     LHSChain <-remainder
                 }
             }
@@ -270,16 +254,18 @@ struct retriever{
                 }
             }
             if (RHSChain == NULL){
-                log("processAgendaItem - RHS-2a")
                 if (LHSfType == LST and RHSfType != LST){
                     RHSChain <- agendaItem.RHS
+                    logStr <- logStr + ":D1"
                 }else{
                     RHSChain <- agendaItem.RHS.getNextDeDotted()
-                  /-  if(RHSChain.state==sEOL){print("<EOL> "); return()} /- Return here makes testItem/test1 fail
+		    if(RHSChain.state == sEOL){RHSChain <- NULL}
+                    logStr <- logStr + ":D2"
                 }
             }
         }
-        addItemsToAgenda(agendaItem, looseMode, LHSChain, RHSChain, breakDotCycle)
+	log(logStr)
+        addItemsToAgenda(agendaItem, LHSChain, RHSChain, breakDotCycle)
 
 /- VIEWER    dataManager.styler.crntLHS <- NULL;  dataManager.styler.crntRHS <- NULL; /- Reset colors for dashboard
     }
