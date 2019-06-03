@@ -1,11 +1,17 @@
 /- retriever.dog
 
+model normNode{
+    our aItem[list]: finalists
+}
+struct normNode{}
+
 model aItem{
     me int:           priority
     our infDeepItr:   LHS
     our infDeepItr:   RHS
     our aItem[list]:  predecessors
     our aItem:        successor
+    our normNode:     myNormNode
     me flag:          rejected
     me flag:          stitched
     me uint64: sizeToCopy
@@ -162,7 +168,10 @@ struct retriever{
                     our aItem: nextItem
                     Allocate(nextItem)
                     nextItem.init(priority, currentLHS, currentRHS)
-                    if(pred!=NULL){nextItem.predecessors.pushLast(pred)}
+                    if(pred!=NULL){
+                        nextItem.predecessors.pushLast(pred)
+                        nextItem.myNormNode <- pred.myNormNode
+                    }
                     if(!breakDotCycle or (!nextItem.LHS.fromDotted and (nextItem.RHS == NULL or !nextItem.RHS.fromDotted))){addItem(nextItem)}
                     if(currentRHS != NULL){currentRHS <- currentRHS.nextOr}
                     if(numItemsAdded==0){numItemsAdded <- 1}
@@ -186,6 +195,23 @@ struct retriever{
         if (retVal and !agenda.isEmpty()){retVal <- false}
 
         return(retVal)
+    }
+
+    void: handleStitchDecisions(our aItem: agendaItem)<-{
+        /- TODO: streaming switch will be supported by setting doStreamingStitch=true in the correct cases
+        me bool: doStreamingStitch <- false
+        if(doStreamingStitch){
+            our aItem: toStitch <- resolve(agendaItem, "    resolve: ")
+            parentAgent.stitch(toStitch, "")
+        } else { /- Check if this could be a valid parse
+            our infDeepItr: LHS <- agendaItem.LHS
+            our infDeepItr: RHS <- agendaItem.RHS
+            if(LHS.nestLvl == 0 and LHS.state == sSecondVisit){
+                if(RHS == NULL or RHS.nestLvl == 0){
+                    agendaItem.myNormNode.finalists.pushLast(agendaItem)
+                }
+            }
+        }
     }
 
     void: processAgendaItem(our aItem: agendaItem)<-{
@@ -219,6 +245,7 @@ struct retriever{
             }
         } else if(agendaLHS_state == sSecondVisit){
             logStr <- logStr + ":B"
+            handleStitchDecisions(agendaItem)
             if(readyToResolve(agendaItem)){
                 logStr <- logStr + ":B-STITCH"
                 our aItem: toStitch <- resolve(agendaItem, "    resolve: ")
