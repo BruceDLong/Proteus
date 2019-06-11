@@ -369,10 +369,11 @@ model infDeepItr{
     our infDeepItr: nextAnd
     our infDeepItr: nextOr
     our infDeepItr: nextRemainder
-    our DblLinkedListNode: myDots
+    our infItr: myDots
     mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError]: state
     flag: alreadyIncremented   /- When an item is deleted, the cursor idx is already incremented.
     flag: fromDotted
+    mode[cmdNoOp, cmdDeleteDots, cmdKeepDots, cmdInsertBeforeDots, cmdInsertAfterDots]: stitchCmd
     flag: preserveDots
     flag: isAList
 
@@ -479,6 +480,7 @@ model infDeepItr{
         to.preserveDots        <- preserveDots
         to.isAList             <- isAList
         to.myDots              <- myDots
+        to.stitchCmd           <- stitchCmd
     }
 
     our infDeepItr: getNext() <- {
@@ -544,12 +546,14 @@ model infDeepItr{
         } else if(fromDotted or nextItr.crntCursor.item.itmMode == mDots){  /- The new item is nullable so also return the follower.
             retVal <- fillDotChild(nextItr)
             if(!fromDotted){ /- Caused by "..."
-                retVal.myDots <- nextItr.crntCursor.itmItr
+                retVal.stitchCmd <- cmdInsertBeforeDots
+                retVal.myDots <- nextItr.crntCursor
                 retVal.nextOr <- nextItr.getNextDeDotted()
             }
             else{      /- Caused by a result of "..."
-                retVal.myDots <- myDots
-                retVal.nextOr <- nextItr.nextOr
+                retVal.stitchCmd <- stitchCmd
+                retVal.myDots    <- myDots
+                retVal.nextOr    <- nextItr.nextOr
             }
         } else {
             retVal <- nextItr
@@ -665,7 +669,6 @@ struct agent{
                         log("        Cursor '.type' lookup "+CI.type.asGiven+" "+ptrToStr(CI))
                     }
                 } else {
-
                     setErrorState(ciItr.crntCursor, "Could not find type:"+CI.type.asGiven)
                 }
             } else if(CI.hasCursorHead){
@@ -783,13 +786,88 @@ struct agent{
         }
     }
 
-    our aItem: stitch(our aItem: crntItem, me string: indent)<-{
+    void: stitch(our aItem: crntItem)<-{
+    our infItr: tmpDots2Del
+        me int[map our infItr]: dotsToDelete
+        while(crntItem!=NULL){
+            log("STITCH: " + crntItem.mySymbol(crntItem) + " is:"+crntItem.printAgendaItem(),"\n")
+            our infDeepItr: LHS  <- crntItem.LHS
+            our infDeepItr: RHS  <- crntItem.RHS
+            our infon: LHS_infon <- LHS.crntCursor.item
+
+            switch(LHS.stitchCmd){
+                case cmdInsertBeforeDots:{
+                        LHS.myDots.parent.item.value.items.insertBefore(LHS.myDots.itmItr, LHS.crntCursor.item)
+                        log("       INS-before")
+                    if(LHS.fromDotted){
+                        dotsToDelete[LHS.myDots] <- 1
+                        tmpDots2Del <- LHS.myDots
+                        log("       delDots2")
+                    }
+                }
+                case cmdInsertAfterDots:{
+                    LHS.myDots.parent.item.value.items.insertAfter(LHS.myDots.itmItr, LHS.crntCursor.item)
+                    log("       INS-after")
+                }
+                case cmdKeepDots:{
+                    dotsToDelete.erase(LHS.myDots)
+                    tmpDots2Del <- NULL
+                    log("       keepDots")
+                }
+                case cmdDeleteDots:{
+                    dotsToDelete[LHS.myDots] <- 1
+                    tmpDots2Del <- LHS.myDots
+                    log("       delDots")
+                }
+                case cmdNoOp:{log("       No Oper")}
+            }
+
+            our infDeepItr: RHSItr <- RHS
+            while(RHSItr!=NULL){
+                if (RHSItr.state!=sSecondVisit){
+                    me bool: copyRHSTypeToLHS <- RHSItr.crntCursor.copyRHSTypeToLHS
+                    if(copyRHSTypeToLHS){ LHS_infon.value.fType <- RHSItr.crntCursor.item.value.fType}
+                    LHS_infon.infMode <- RHSItr.crntCursor.item.infMode
+
+                    me int: sizeAction    <- RHSItr.crntCursor.sizeAction
+                    if(sizeAction == copySizeRHStoLHS)     {DO_COPY(RHSItr.crntCursor.item.endMarker, LHS_infon.endMarker, 0)}
+                    else if(sizeAction == copySizeLHStoRHS){DO_COPY(LHS_infon.endMarker, RHSItr.crntCursor.item.endMarker, 0)}
+
+                    me int: valueAction   <- RHSItr.crntCursor.valueAction
+                    if(valueAction == copyValueRHStoLHS)     {DO_COPY(RHSItr.crntCursor.item.value, LHS_infon.value, crntItem.sizeToCopy)}
+                    else if(valueAction == copyValueLHStoRHS){DO_COPY(LHS_infon.value, RHSItr.crntCursor.item.value, crntItem.sizeToCopy)}
+                }
+                RHSItr <- RHSItr.nextAnd
+            }
+
+            /- If this was a CONCAT with only one item:
+            if (LHS.state==sSecondVisit){
+                if(LHS_infon.value.format==fConcat and !LHS_infon.value.items.isEmpty() and LHS_infon.value.items.head.isLast()){
+                    LHS_infon <deep- LHS_infon.value.items.first()
+                }
+            }
+
+            /- Handle when parent is a CONCAT
+            JoinIfConcat(LHS)
+            crntItem <- crntItem.successor
+        }
+
+        /- Now delete dots as needed
+        if(tmpDots2Del!=NULL){
+            tmpDots2Del.parent.item.deleteListNode(tmpDots2Del.itmItr)
+        }
+ /-       withEach dotItem in dotsToDelete{
+ /-           dotItem_key.parent.item.value.items.deleteListNode(dotItem_key.itmItr)
+ /-       }
+    }
+/*
+    our aItem: stitchOld(our aItem: crntItem, me string: indent)<-{
         log(indent + "STITCH TOP: " + crntItem.mySymbol(crntItem) + " is:"+crntItem.printAgendaItem(),"\n")
   /-      theClip.dispAndWait("STITCH: " + crntItem.mySymbol(crntItem) + crntItem.printAgendaItem())
         our aItem: retVal     <- NULL
-        our infDeepItr: LHS   <- crntItem.LHS
-        our infDeepItr: RHS   <- crntItem.RHS
-        our infItr: LHSCursor <- LHS.crntCursor
+            our infDeepItr: LHS   <- crntItem.LHS
+            our infDeepItr: RHS   <- crntItem.RHS
+            our infItr: LHSCursor <- LHS.crntCursor
         switch(LHS.state) {
             case sNotASeq:{
                 our infDeepItr: RHSItr <- RHS
@@ -821,26 +899,34 @@ struct agent{
                 our DblLinkedListNode: dottedToDelete <- NULL
                 me int: count <- 0
                 me bool: NoKeepIt <- false
-                while(nextItem.LHS.state != sSecondVisit and !(nextItem.LHS.crntCursor.item === crntInfon)){
+                while(nextItem.LHS.state != sSecondVisit){
                     log(indent + "  Stitching nextItem: " + nextItem.mySymbol(nextItem) + " is:"+nextItem.printAgendaItem(),"\n")
                     if(nextItem.LHS.fromDotted and nextItem.RHS != NULL and nextItem.RHS.fromDotted){
                         log("NoKeepIt == true...");
                         NoKeepIt <- true;
                     }
-                    if(!nextItem.stitched and NoKeepIt==false){
-                        if(nextItem.LHS.myDots!=NULL){
-                            dottedToDelete <- nextItem.LHS.myDots
-                            nextItem.LHS.fromDotted <- false
-                            crntInfon.value.items.insertBefore(nextItem.LHS.myDots, nextItem.LHS.crntCursor.item)
+        log("  W")
+                    if(true or !nextItem.stitched){
+                        if(NoKeepIt==false){
+        log("    A")
+                            if(nextItem.LHS.myDots!=NULL){
+        log("    a")
+                                dottedToDelete <- nextItem.LHS.myDots
+                                nextItem.LHS.fromDotted <- false
+                                crntInfon.value.items.insertBefore(nextItem.LHS.myDots, nextItem.LHS.crntCursor.item)
+                            }
                         }
                         nextItem.stitched <- true
-                        nextItem <- stitch(nextItem, indent + "     ")
-                    } else {nextItem <- nextItem.successor}
+                    /-    nextItem <- stitchOld(nextItem)
+
+                    } else {log("    B");nextItem <- nextItem.successor}
                     count <- count + 1
                 }
-                if(dottedToDelete!=NULL and !NoKeepIt){
-                    log(indent+"  Deleting '...':");
-                    crntInfon.deleteListNode(dottedToDelete)
+                if(dottedToDelete!=NULL){
+                    if(!NoKeepIt){
+                        log(indent+"  Deleting '...':");
+                        crntInfon.deleteListNode(dottedToDelete)
+                    }
                 }
                 /- If this was a CONCAT with only one item:
                 if(LHSCursor.item.value.format==fConcat and !LHSCursor.item.value.items.isEmpty() and LHSCursor.item.value.items.head.isLast()){
@@ -855,7 +941,7 @@ struct agent{
         return(retVal)
 
     }
-
+*/
     me int: matchLength(me string: A, me string: B)<-{
         me int: lastChar
         me int: retVal <-0
@@ -1055,7 +1141,7 @@ struct agent{
         me int: numSolutions <- myNormNode.finalists.size()
         if(numSolutions>0){
             our aItem: toStitch <- agenda.resolve(myNormNode.finalists.last(), "    resolve: ") /- TODO: .last() is arbitrary
-            stitch(toStitch, "")
+            stitch(toStitch)
         }
         i.isNormed <- true
     }
