@@ -162,11 +162,19 @@ model infon{
         our infon: lastItem
         if(!value.items.isEmpty()) {
             lastItem <- value.items.last()
-        }  else {return(NULL)}
+        }  else {lastItem <- NULL}
         switch(lastItem.itmMode){
-            case mItem:{return(lastItem)}
-            case mSubItems:{return(lastItem.getLastItem())}
-            case mDots:{exit(3)}
+            case mItem:{}
+            case mSubItems:{lastItem <- lastItem.getLastItem()}
+            case mDots:{
+                /- Make a virtual last item to be joined later.
+                our infItr:: ii
+                ii.target <- asLast
+                Allocate(ii.item)
+
+                wrkList.pushLast(ii)
+                lastItem <- ii.item
+            }
             case mTagDefn:{log("TODO: handle when a tag is the last item in a list"); exit(4)}
         }
         return(lastItem)
@@ -176,12 +184,10 @@ model infon{
         our infon: firstItem
         if(!value.items.isEmpty()) {
             firstItem <- value.items.first()
-        }  else {return(NULL)}
+        }  else {firstItem <- NULL}
         switch(firstItem.itmMode){
-            case mItem:{
-                return(firstItem)
-            }
-            case mSubItems:{return(firstItem.getFirstItem())}
+            case mItem:{}
+            case mSubItems:{firstItem <- firstItem.getFirstItem()}
             case mDots:{exit(3)}
             case mTagDefn:{log("TODO: handle when a tag is the first item in a list"); exit(4)}
         }
@@ -741,16 +747,21 @@ struct agent{
 
             me int: cursor <- CI.value.cursor
             if(cursor != cDefault){
-                log("        @ HANDLING FUNCTION CALL")
+                log("        @ HANDLING FUNCTION CALL:"+printInfon(CI))
                 CI.value.cursor <- cDefault
                 our infon: aux Allocate(aux)
                 aux <deep- CI
-                normalize(aux)
-                switch(cursor){  /- TODO: ensure that, when possible, these return subscriptions if needed. e.g., for when last is tentative or a tag or concat.
-                    case cGetLast   : {log("         @> GET_LAST_ITEM"); newTop <- aux.getLastItem()}
+                switch(cursor){
+                    case cGetLast   : {newTop <- aux.getLastItem(); log("         @> GET_LAST_ITEM:"+printInfon(newTop)); }
                     case cGetFirst  : {newTop <- aux.getFirstItem()}
          /-           case cGetMarked : {newTop <- aux.getMarked()}
                 }
+                withEach workItem in CI.wrkList{
+                    newTop.wrkList.pushLast(workItem)
+                    log("            PUSH:"+printInfon(workItem.item))
+                }
+                aux.wrkList.clear()
+                normalize(aux)
             } else if(CI.infMode==newCursor) {
                 log("        @ NEW CURSOR")
                 switch(CI.cursorMode){
@@ -785,6 +796,7 @@ struct agent{
     }
 
     void: DO_COPY(their pureInfon: from, their pureInfon: to, me uint64: sizeToCopy) <- {
+
         me int: fromsType <- from.fType
         if(fromsType==to.fType){
             to.format<-from.format
@@ -795,7 +807,7 @@ struct agent{
                     if(sizeToCopy==0){to.str <- from.str}
                     else {to.str <- from.str.subStr(0,convertToIntVal(sizeToCopy))}
                 }
-                case LST: {}
+                case LST: {to.items <- from.items}
             }
         } else {  /- TODO: Do Convert + copy
         }
@@ -943,10 +955,11 @@ struct agent{
     }
 
     our infDeepItr: tryMERGE(our aItem: agendaItem, our infDeepItr: RHSItr) <- {
+            log("    tryMERGE(" + agendaItem.printAgendaItem()+")")
         our infon: LHS <- agendaItem.LHS.crntCursor.item
         our infon: RHS <- RHSItr.crntCursor.item
         our infDeepItr: remainder <- NULL
-        if(PropogateIndirectItem(agendaItem.LHS.crntCursor, RHSItr.crntCursor) > 0){return(NULL)}
+        if(PropogateIndirectItem(agendaItem.LHS.crntCursor, RHSItr.crntCursor) > 0){log("AT TM:OUT-1") return(NULL)}
 
         me bool: looseMode <- RHSItr.crntCursor.looseMode   /- Strict or loose typing?
         me bool: reject <- false    /- ReturnStatus
@@ -960,17 +973,20 @@ struct agent{
             if(!LHS.type.isCompatibleWith(RHS.type)){reject<-true;}
         }
         if(!looseMode){
-            /-log("    tryMERGE(" + agendaItem.printAgendaItem()+")")
+            log("AT TM:A")
             if(RHS.infMode!=isUnknown){
                 me int: LHSFormat <- LHS.size().format
                 me int: RHSFormat <- RHS.size().format
                 me int: LHSInfMode <- LHS.infMode
                 if(LHSInfMode==isUnknown){
+                    log("   AT TM:A1")
                     if(RHS.infMode!=isUnknown){
+                        RHSItr.crntCursor.copyRHSTypeToLHS <- 1
                         RHSItr.crntCursor.sizeAction  <-copySizeRHStoLHS
                         RHSItr.crntCursor.valueAction <-copyValueRHStoLHS
                     }
                 } else {
+                    log("   AT TM:A2")
                     if(LHSFormat != fUnknown and RHSFormat != fUnknown){
                         sizeStatus <- DO_VERIFY(LHS.size(), RHS.size())
                         if (sizeStatus.cmd==matchFailed){RHSItr.crntCursor.sizeAction<-sizeFailed; reject<-true;}
@@ -982,20 +998,23 @@ struct agent{
                 }
             }
         } else {
-            /-log("tryMERGE:LOOSE MODE")
+            log("tryMERGE:LOOSE MODE")
         }
         me mergeCmd: valueStatus; valueStatus.cmd<-0
         if(!reject){
             if(RHS.infMode!=isUnknown){
+                log("AT TM:B")
                 me int: LHSFormat <- LHS.value.format
                 me int: RHSFormat <- RHS.value.format
 
                 if(LHSFormat != fUnknown and RHSFormat != fUnknown){
+                    log("   AT TM:B1")
                     valueStatus <- DO_VERIFY(LHS.value, RHS.value)
                     if(valueStatus.cmd==matchFailed){RHSItr.crntCursor.valueAction<-valueFailed; reject<-true;}
                     else if (valueStatus.cmd== wasVerified){RHSItr.crntCursor.valueAction<-valueVerified}
                 }
-                else if(LHSFormat == fUnknown and RHSFormat != fUnknown){
+                else if((LHSFormat == fUnknown or LHS.infMode==isUnknown) and RHSFormat != fUnknown){
+                    log("   AT TM:B2")
                     RHSItr.crntCursor.valueAction<-copyValueRHStoLHS
                     valueStatus.cmd <- wasVerified
                     if(RHS.endMarker.format!=fUnknown and LHS.endMarker.format!=fUnknown){
