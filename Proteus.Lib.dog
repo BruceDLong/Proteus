@@ -261,6 +261,7 @@ model infItr{
     mode[valueFailed, valueVerified, copyValueLHStoRHS, copyValueRHStoLHS]: valueAction
     flag: copyRHSTypeToLHS
     flag: looseMode
+    flag: looseSize
     flag: wasProcessed
 
     me bool: goNext() <- {
@@ -308,7 +309,7 @@ model infItr{
     me string: stringify() <- {
         me string: S <- ""
         me agent: a
-        S <- S + a.printInfon(item) + " target:" + targetStrings[target]  + " copyRHSTypeToLHS:" + dispBool(copyRHSTypeToLHS)+ " sizeAction:" + sizeActionStrings[sizeAction]+ " valueAction:" + valueActionStrings[valueAction]+ " looseMode:" + dispBool(looseMode)
+        S <- S + a.printInfon(item) + " target:" + targetStrings[target]  + " copyRHSTypeToLHS:" + dispBool(copyRHSTypeToLHS)+ " sizeAction:" + sizeActionStrings[sizeAction]+ " valueAction:" + valueActionStrings[valueAction]+ " looseMode:" + dispBool(looseMode)+ " looseSize:" + dispBool(looseSize)
         return (S)
     }
     void: INIT() <- {Allocate(itmItr)}
@@ -492,6 +493,7 @@ model infDeepItr{
                         tmp.parent    <-crntCursor.parent
                         tmp.item      <- crntCursor.item
                         tmp.looseMode <- crntCursor.looseMode
+                        tmp.looseSize <- crntCursor.looseSize
                     crntCursor.parent <- tmp   /- TODO: After ptr bug is fixed, Allocate(crntCursor.parent, crntCursor)
                     crntCursor.itmItr <- crntCursor.item.value.items.begin()
                     crntCursor.item   <- crntCursor.itmItr.item
@@ -557,6 +559,7 @@ model infDeepItr{
         tentativeItr.crntCursor.itmItr    <- parent.crntCursor.itmItr
         tentativeItr.crntCursor.parent    <- parent.crntCursor.parent
         tentativeItr.crntCursor.looseMode <- parent.crntCursor.looseMode
+        tentativeItr.crntCursor.looseSize <- parent.crntCursor.looseSize
         tentativeItr.crntCursor.item      <- child
         tentativeItr.nestLvl <- parent.nestLvl
         tentativeItr.nextOr <- NULL
@@ -578,6 +581,7 @@ model infDeepItr{
             Allocate(nextItr)
             copyThisTo(nextItr)
             nextItr.crntCursor.looseMode <- crntCursor.looseMode
+            nextItr.crntCursor.looseSize <- crntCursor.looseSize
         }
 
         if(nextItr.state == sEOL){
@@ -1018,13 +1022,18 @@ struct agent{
     }
 
     our infDeepItr: tryMERGE(our aItem: agendaItem, our infDeepItr: RHSItr) <- {
-        log("    tryMERGE(" + agendaItem.stringify()+")")
+        me string: logStr <- "    tryMERGE(" + agendaItem.stringify()+")"
         our infon: LHS <- agendaItem.LHS.crntCursor.item
         our infon: RHS <- RHSItr.crntCursor.item
         our infDeepItr: remainder <- NULL
-        if(PropogateIndirectItem(agendaItem.LHS.crntCursor, RHSItr.crntCursor) > 0){log("AT TM:OUT-1") return(NULL)}
+        if(PropogateIndirectItem(agendaItem.LHS.crntCursor, RHSItr.crntCursor) > 0){
+            logStr <- logStr + ":OUT-1"
+            log(logStr)
+            return(NULL)
+        }
 
         me bool: looseMode <- RHSItr.crntCursor.looseMode   /- Strict or loose typing?
+        me bool: looseSize <- RHSItr.crntCursor.looseSize   /- Strict or loose typing?
         me bool: reject <- false    /- ReturnStatus
 
         if((LHS.infMode==isUnknown and RHS.infMode!=isUnknown) or (LHS.value.fType==tUnknown and RHS.value.fType!=tUnknown)){
@@ -1035,21 +1044,21 @@ struct agent{
         if(!looseMode){ /- Make sure typeSpec are compatible
             if(!LHS.type.isCompatibleWith(RHS.type)){reject<-true;}
         }
-        if(!looseMode){
-            log("AT TM:A")
+        if(!looseSize){
+            logStr <- logStr + ":A"
             if(RHS.infMode!=isUnknown){
                 me int: LHSFormat <- LHS.calcSize().format
                 me int: RHSFormat <- RHS.calcSize().format
                 me int: LHSInfMode <- LHS.infMode
                 if(LHSInfMode==isUnknown){
-                    log("   AT TM:A1")
+                    logStr <- logStr + ":A1"
                     if(RHS.infMode!=isUnknown){
                         RHSItr.crntCursor.copyRHSTypeToLHS <- 1
                         RHSItr.crntCursor.sizeAction  <-copySizeRHStoLHS
                         RHSItr.crntCursor.valueAction <-copyValueRHStoLHS
                     }
                 } else {
-                    log("   AT TM:A2")
+                    logStr <- logStr + ":A2"
                     if(LHSFormat != fUnknown and RHSFormat != fUnknown){
                         sizeStatus <- DO_VERIFY(LHS.calcSize(), RHS.calcSize())
                         if (sizeStatus.cmd==matchFailed){
@@ -1064,17 +1073,17 @@ struct agent{
                 }
             }
         } else {
-            log("tryMERGE:LOOSE MODE")
+            logStr <- logStr + ":LOOSE MODE"
         }
         me mergeCmd: valueStatus; valueStatus.cmd<-0
         if(!reject){
             if(RHS.infMode!=isUnknown){
-                log("AT TM:B")
+                logStr <- logStr + ":B"
                 me int: LHSFormat <- LHS.value.format
                 me int: RHSFormat <- RHS.value.format
 
                 if(LHSFormat != fUnknown and RHSFormat != fUnknown){
-                    log("   AT TM:B1")
+                    logStr <- logStr + ":B1"
                     valueStatus <- DO_VERIFY(LHS.value, RHS.value)
                     if(valueStatus.cmd==matchFailed){
                         RHSItr.crntCursor.valueAction<-valueFailed
@@ -1083,11 +1092,11 @@ struct agent{
                     else if (valueStatus.cmd== wasVerified){RHSItr.crntCursor.valueAction<-valueVerified}
                 }
                 else if((LHSFormat == fUnknown or LHS.infMode==isUnknown) and RHSFormat != fUnknown){
-                    log("   AT TM:B2")
+                    logStr <- logStr + ":B2"
                     RHSItr.crntCursor.valueAction<-copyValueRHStoLHS
                     valueStatus.cmd <- wasVerified
                     if(RHS.endMarker.format!=fUnknown and LHS.endMarker.format!=fUnknown){
-                        log("      AT TM:B2:X:" + formatStrings[LHS.endMarker.format])
+                        logStr <- logStr + ":B2:X:" + formatStrings[LHS.endMarker.format]
                         valueStatus.sizeDiff <- RHS.calcSize().num - LHS.calcSize().num
                     }
                 }
@@ -1108,6 +1117,7 @@ struct agent{
                 Allocate(remainder.crntCursor)
                 remainder.crntCursor.item <- remainderInfon
                 remainder.crntCursor.looseMode <- RHSItr.crntCursor.looseMode
+                remainder.crntCursor.looseSize <- RHSItr.crntCursor.looseSize
                 agendaItem.sizeToCopy <- rSize - sizeDiff
 
             } else if(sizeDiff==0){
@@ -1119,6 +1129,7 @@ struct agent{
         }
         if(LHS.asNot){reject <- !reject}
         if(reject){agendaItem.rejected <- true; remainder <- NULL}
+        log(logStr)
 
         return(remainder)
     }
