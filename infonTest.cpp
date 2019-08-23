@@ -77,7 +77,7 @@ struct inf{
 
         for(int v=0; v < size; ++v){
             if(pos!=SingletsPos(ZERO, singlets[v])) {printf("Malformed inf at %i:",value); dump(); printf("\n"); exit(2);}
-            //-----
+            //////
             pos+=value; pos %= size;
             if(pos==coset) {
                 coset++; pos=coset;
