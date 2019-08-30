@@ -643,7 +643,7 @@ model infDeepItr{
 
 }
 struct infDeepItr {}
-struct mergeCmd{
+struct MergeCmd{
     me int: cmd
     me uint64: sizeDiff
 }
@@ -899,7 +899,12 @@ struct agent{
         } else {  // TODO: Do Convert + copy
         }
     }
-
+    void: COPY_SIZE(our infon: from, our infon: to) <- {
+        DO_COPY(from.endMarker, to.endMarker, 0)
+    }
+    void: COPY_VALUE(our infon: from, our infon: to) <- {
+        DO_COPY(from.value, to.value, 0)
+    }
     void: stitch(our aItem: crntItem)<-{
         //log(">>STITCH")
         our infItr:                 tmpDots2Del
@@ -1026,9 +1031,9 @@ struct agent{
     const int: matchFailed  <- 1
     const int: wasVerified  <- 2
 
-    me mergeCmd: DO_VERIFY(their pureInfon: LHS, their pureInfon: RHS) <- {
+    me MergeCmd: DO_VERIFY(their pureInfon: LHS, their pureInfon: RHS) <- {
         me int: RHSType <- RHS.fType
-        me mergeCmd: retVal
+        me MergeCmd: retVal
         if(RHSType==LHS.fType){
             switch(RHSType){
                 case NUM: {
@@ -1072,10 +1077,11 @@ struct agent{
 
     our infDeepItr: tryMERGE(our aItem: agendaItem, our infDeepItr: RHSItr) <- {
         me string: logStr <- "    TM(" + agendaItem.stringify()+")"
-        our infon: LHS <- agendaItem.LHS.crntCursor.item
+        our infItr: LHSCrntCursor <- agendaItem.LHS.crntCursor
+        our infon: LHS <- LHSCrntCursor.item
         our infon: RHS <- RHSItr.crntCursor.item
         our infDeepItr: remainder <- NULL
-        if(PropogateIndirectItem(agendaItem.LHS.crntCursor, RHSItr.crntCursor) > 0){
+        if(PropogateIndirectItem(LHSCrntCursor, RHSItr.crntCursor) > 0){
             logStr <- logStr + ":OUT-1"
             //log(logStr)
             return(NULL)
@@ -1089,7 +1095,7 @@ struct agent{
             RHSItr.crntCursor.copyRHSTypeToLHS <- 1
         } else {RHSItr.crntCursor.copyRHSTypeToLHS <- 0}
 
-        me mergeCmd: sizeStatus; sizeStatus.cmd <- 0
+        me MergeCmd: sizeStatus; sizeStatus.cmd <- 0
         if(!looseMode){ // Make sure typeSpec are compatible
             if(!LHS.type.isCompatibleWith(RHS.type)){
                 logStr <- logStr + ":REJECT"
@@ -1131,7 +1137,7 @@ struct agent{
             RHSItr.crntCursor.sizeAction <- hardenLHS
             logStr <- logStr + ":LOOSE"
         }
-        me mergeCmd: valueStatus; valueStatus.cmd<-0
+        me MergeCmd: valueStatus; valueStatus.cmd<-0
         if(!reject){
             if(RHS.infMode!=isUnknown){
                 logStr <- logStr + ":B"
@@ -1190,7 +1196,45 @@ struct agent{
 
         return(remainder)
     }
-
+    void: tryMerge2(our infon: LHS, our infItr: RHSItr) <- {
+        our infon: RHS <- RHSItr.item
+        if(RHS.infMode == isUnknown){
+            // if RHS is ? DoNothing
+            log("TM:A")
+            LHS.isNormed <- true
+        }
+        else if(LHS.infMode == isUnknown){
+            // ? = $, ? = _, ?=(...), ?=5, ?='Hi'
+            log("TM:B")
+            LHS <deep- RHS
+        }
+        else if(LHS.value.format == fUnknown and RHS.value.format == fUnknown){
+            // $=$, _=_, *_+$=*_+$, *5+$=*3+$, *(*5+1 *6+2)+$=*(*5+1=*6+2)+$
+            log("TM:D")
+        }
+        else if(LHS.value.format == fUnknown and RHS.value.format == fConcat){log("TM:E")}
+        else if(LHS.value.format == fUnknown and RHS.value.format == fLiteral){
+            // _ = 123, $ = 'hi'
+            log("TM:F")
+            me MergeCmd: mergeCmd <- DO_VERIFY(LHS.value, RHS.value)
+            DO_COPY(RHS.value, LHS.value, mergeCmd.sizeDiff)
+            LHS.isNormed <- true
+        }
+        else if(LHS.value.format == fConcat  and RHS.value.format == fUnknown){log("TM:G")}
+        else if(LHS.value.format == fConcat  and RHS.value.format == fConcat){log("TM:H")}
+        else if(LHS.value.format == fConcat  and RHS.value.format == fLiteral){log("TM:I")}
+        else if(LHS.value.format == fLiteral and RHS.value.format == fUnknown){
+            //
+            log("TM:J")
+        }
+        else if(LHS.value.format == fLiteral and RHS.value.format == fConcat){log("TM:K")}
+        else if(LHS.value.format == fLiteral and RHS.value.format == fLiteral){
+            //
+            log("TM:L")
+        }
+        else{log("tryMerge2 CATCH --  TODO: handle case")}
+        RHSItr.wasProcessed <- true
+    }
     our infDeepItr: validateAndAnnotate(our aItem: agendaItem) <- {
         our infDeepItr: rmdrHead <- NULL
         our infDeepItr: RHSItr <- agendaItem.RHS
@@ -1259,6 +1303,7 @@ struct agent{
     }
 
     void: processAgendaItem2(our infDeepItr: LHS, me int: altNestLvl)<-{
+        //log("PIA")
         our infItr: crntCursor    <- LHS.crntCursor
         our infon: CI             <- crntCursor.item
         me int: LHS_state         <- LHS.state
@@ -1270,6 +1315,7 @@ struct agent{
             //else{rmdrTail.nextAnd <- remainder}
             //rmdrTail <- remainder
             //RHSItr <- RHSItr.nextAnd
+            tryMerge2(CI, RHSItr)
         }
     }
 
