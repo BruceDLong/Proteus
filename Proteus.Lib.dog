@@ -288,7 +288,7 @@ model infItr{
     our infItr: parent
     our DblLinkedListNode: itmItr
     mode [asID, asFirst, asLast, asMarked, asFirstParent, asLastParent, asMarkedParent]: target
-    mode[sizeFailed, sizeVerified, copySizeLHStoRHS, copySizeRHStoLHS, hardenLHS]:       sizeAction
+    mode[sizeFailed, sizeVerified, copySizeLHStoRHS, copySizeRHStoLHS, hardenLHS]: sizeAction
     mode[valueFailed, valueVerified, copyValueLHStoRHS, copyValueRHStoLHS]: valueAction
     flag: copyRHSTypeToLHS
     flag: looseMode
@@ -327,7 +327,6 @@ model infItr{
     void: deleteCrnt() <- {
         itmItr <- parent.item.deleteListNode(itmItr)
     }
-
 
     void: insertBefore(our DblLinkedListNode: itm, our infon: i) <- {
         if(itm){
@@ -407,6 +406,16 @@ string infon: StartSymbol="true" {
     }[opt]
 }
 
+struct transformAction{
+    flag: reject
+    mode[sizeFailed, sizeVerified, copySizeLHStoRHS, copySizeRHStoLHS]: sizeAction
+    mode[valueFailed, valueVerified, copyValueLHStoRHS, copyValueRHStoLHS]: valueAction
+    flag: copyRHSTypeToLHS
+    flag: moveRHSToFirstChild
+    flag: moveRHSFirstToFirstChild
+    flag: addRemainderToSuccessor
+    uint64: sizeToCopy
+}
 struct pureInfon {
     our infon[multimap string]: index
     our infon[multimap int64]: T_index
@@ -1074,7 +1083,27 @@ struct agent{
             }
         }
     }
-
+    void: doAction(me transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
+        if(action.reject){return()}
+        if(action.copyRHSTypeToLHS){
+            LHS.value.fType <- RHSItr.item.value.fType
+            LHS.infMode <- RHSItr.item.infMode
+        }
+        me int: sizeAction    <- action.sizeAction
+        if(sizeAction == copySizeRHStoLHS){
+            DO_COPY(RHSItr.item.endMarker, LHS.endMarker, 0)
+        }
+        else if(sizeAction == copySizeLHStoRHS){
+            DO_COPY(LHS.endMarker, RHSItr.item.endMarker, 0)
+        }
+        me int: valueAction   <- action.valueAction
+        if(valueAction == copyValueRHStoLHS){
+            DO_COPY(RHSItr.item.value, LHS.value, action.sizeToCopy)
+        }
+        else if(valueAction == copyValueLHStoRHS){
+            DO_COPY(LHS.value, RHSItr.item.value, action.sizeToCopy)
+        }
+    }
     our infDeepItr: tryMERGE(our aItem: agendaItem, our infDeepItr: RHSItr) <- {
         me string: logStr <- "    TM(" + agendaItem.stringify()+")"
         our infItr: LHSCrntCursor <- agendaItem.LHS.crntCursor
@@ -1196,7 +1225,8 @@ struct agent{
 
         return(remainder)
     }
-    void: tryMerge2(our infon: LHS, our infItr: RHSItr) <- {
+    me transformAction: tryMerge2(our infon: LHS, our infItr: RHSItr) <- {
+        me transformAction: action
         our infon: RHS <- RHSItr.item
         if(RHS.infMode == isUnknown){
             // if RHS is ? DoNothing
@@ -1206,7 +1236,9 @@ struct agent{
         else if(LHS.infMode == isUnknown){
             // ? = $, ? = _, ?=(...), ?=5, ?='Hi'
             log("TM:B")
-            LHS <deep- RHS
+            action.copyRHSTypeToLHS <- true
+            action.sizeAction       <- copySizeRHStoLHS
+            action.valueAction      <- copyValueRHStoLHS
         }
         else if(LHS.value.format == fUnknown and RHS.value.format == fUnknown){
             // $=$, _=_, *_+$=*_+$, *5+$=*3+$, *(*5+1 *6+2)+$=*(*5+1=*6+2)+$
@@ -1234,6 +1266,7 @@ struct agent{
         }
         else{log("tryMerge2 CATCH --  TODO: handle case")}
         RHSItr.wasProcessed <- true
+        return(action)
     }
     our infDeepItr: validateAndAnnotate(our aItem: agendaItem) <- {
         our infDeepItr: rmdrHead <- NULL
@@ -1315,7 +1348,8 @@ struct agent{
             //else{rmdrTail.nextAnd <- remainder}
             //rmdrTail <- remainder
             //RHSItr <- RHSItr.nextAnd
-            tryMerge2(CI, RHSItr)
+            me transformAction: action <- tryMerge2(CI, RHSItr)
+            doAction(action, CI, RHSItr)
         }
     }
 
