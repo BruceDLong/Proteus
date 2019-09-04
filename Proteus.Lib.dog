@@ -411,9 +411,9 @@ string infon: StartSymbol="true" {
 
 struct transformAction{
     flag: reject
-    mode[sizeFailed, sizeVerified, copySizeLHStoRHS, copySizeRHStoLHS]: sizeAction
-    mode[valueFailed, valueVerified, copyValueLHStoRHS, copyValueRHStoLHS]: valueAction
-    mode[moveRHSFirstToFirstChild, moveRHSToFirstChild, moveRHSFirstToLHS]: listCommand
+    mode[sizeNotChecked, sizeFailed, sizeVerified, copySizeLHStoRHS, copySizeRHStoLHS]: sizeAction
+    mode[valueNotChecked, valueFailed, valueVerified, copyValueLHStoRHS, copyValueRHStoLHS]: valueAction
+    mode[noOperation, moveRHSFirstToFirstChild, moveRHSToFirstChild, moveRHSFirstToLHS]: listCommand
     flag: copyRHSTypeToLHS
     flag: addRemainderToSuccessor
     uint64: sizeToCopy
@@ -1262,22 +1262,29 @@ struct agent{
 
         return(remainder)
     }*/
-    our transformAction: tryMerge2(our infon: LHS, our infItr: RHSItr) <- {
-        our transformAction:: action
+    void: tryMergeSize(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
         our infon: RHS <- RHSItr.item
-        if(RHS.infMode == isUnknown){
-            // if RHS is ? DoNothing
-            log("TM:RHS Unknown")
-            LHS.isNormed <- true
+        me bool: looseMode <- RHSItr.looseMode
+        me bool: looseSize <- RHSItr.looseSize
+        action.reject <- false
+        action.sizeAction <- sizeNotChecked
+        if(!looseSize){
+            me int: LHSFormat <- LHS.calcSize().format
+            me int: RHSFormat <- RHS.calcSize().format
+            me int: LHSInfMode <- LHS.infMode
+            if(LHSFormat != fUnknown and RHSFormat != fUnknown){
+                if(!looseMode){
+                    DO_VERIFY2(action, LHS.calcSize(), RHS.calcSize())
+                }
+            }
+            else if(LHSFormat == fUnknown and RHSFormat != fUnknown){action.sizeAction<-copySizeRHStoLHS}
+            else if(LHSFormat != fUnknown and RHSFormat == fUnknown){action.sizeAction<-copySizeLHStoRHS}
+            else if(LHSFormat == fUnknown and RHSFormat == fUnknown){CO_SUBSCRIBE_SIZES(LHS, RHS)}
         }
-        else if(LHS.infMode == isUnknown){
-            // ? = $, ? = _, ?=(...), ?=5, ?='Hi'
-            log("TM:LHS Unknown")
-            action.copyRHSTypeToLHS <- true
-            action.sizeAction       <- copySizeRHStoLHS
-            action.valueAction      <- copyValueRHStoLHS
-        }
-        else if(LHS.value.fType != LST and RHS.value.fType != LST){
+    }
+    void: tryMergeValue(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
+        our infon: RHS <- RHSItr.item
+        if(LHS.value.fType != LST and RHS.value.fType != LST){
             if(LHS.value.format == fConcat or RHS.value.format == fConcat){
                 log("WARNING: tryMerge, item is concat but not list")
                 exit(1)
@@ -1316,8 +1323,31 @@ struct agent{
             }
             else{log("tryMerge2 lists CATCH --  TODO: handle case")}
         }
-
+    }
+    our transformAction: tryMerge2(our infon: LHS, our infItr: RHSItr) <- {
+        our transformAction:: action
+        our infon: RHS <- RHSItr.item
+        //if(PropogateIndirectItem(LHSCrntCursor, RHSItr) > 0){return(NULL)}
+        if(RHS.infMode == isUnknown){
+            // if RHS is ? DoNothing
+            log("TM:RHS Unknown")
+            LHS.isNormed <- true
+        }
+        else if(LHS.infMode == isUnknown){
+            // ? = $, ? = _, ?=(...), ?=5, ?='Hi'
+            log("TM:LHS Unknown")
+            action.copyRHSTypeToLHS <- true
+            action.sizeAction       <- copySizeRHStoLHS
+            action.valueAction      <- copyValueRHStoLHS
+        }
+        else {
+            if(!RHSItr.looseMode and !LHS.type.isCompatibleWith(RHS.type)){action.reject <- true}// TYPE ACTION
+            if(!action.reject){tryMergeSize(action, LHS, RHSItr)} // SIZE ACTION
+            if(!action.reject){tryMergeValue(action, LHS, RHSItr)}// VALUE ACTION
+            // HANDLE REMAINDERS
+        }
         RHSItr.wasProcessed <- true
+        // CHECK FOR INVERTED REJECT
         return(action)
     }
     /*our infDeepItr: validateAndAnnotate(our aItem: agendaItem) <- {
