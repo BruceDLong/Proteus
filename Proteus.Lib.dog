@@ -416,6 +416,8 @@ struct transformAction{
     mode[noOperation, moveRHSFirstToFirstChild, moveRHSToFirstChild, moveRHSFirstToLHS]: listCommand
     flag: copyRHSTypeToLHS
     flag: addRemainderToSuccessor
+    flag: propogateLHSToLHSFirst
+    flag: propogateRHSToRHSFirst
     uint64: sizeToCopy
 }
 struct pureInfon {
@@ -711,18 +713,18 @@ struct agent{
         return(ret)
     }
 
-    void: addIdent(our infItr: LHS, our infItr: RHS) <- {
+    void: addIdent(our infItr: LHSItr, our infItr: RHSItr) <- {
     // LHS gets RHS as a new ident in its wrkList
-        if(RHS.item === LHS.item) {return()}
+        if(RHSItr.item === LHSItr.item) {return()}
 
         // Set propogation flag for #{} on LHS or RHS
-        RHS.target <- asID
-        if(RHS.item.itmMode==mSubItems){RHS.target<-asFirstParent}
-        if(LHS.item.itmMode==mSubItems){RHS.target<-asFirst}            // TODO: If bug, check this: What if it is both?
-     //   if(RHS.item.?==asLast){RHS.target<-asLastParent}
-     //   if(LHS.item.?==asLast){RHS.target<-asLast}
+        RHSItr.target <- asID
+        if(RHSItr.item.itmMode==mSubItems){RHSItr.target<-asFirstParent}
+        if(LHSItr.item.itmMode==mSubItems){RHSItr.target<-asFirst}            // TODO: If bug, check this: What if it is both?
+     //   if(RHSItr.item.?==asLast){RHSItr.target<-asLastParent}
+     //   if(LHSItr.item.?==asLast){RHSItr.target<-asLast}
 
-        LHS.item.wrkList.pushLast(RHS)
+        LHSItr.item.wrkList.pushLast(RHSItr)
     }
 
     me string: ptrToStr(our infon: I) <- {
@@ -866,22 +868,21 @@ struct agent{
         }
     }
 
-    me int: PropogateIndirectItem(our infItr: LHS, our infItr: RHS) <- {
+    me bool: PropagateIndirectItem(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
     // HANDLE #{}, [....] and other cases of identities of child nodes:
-        me int: ret <- 0
-        their pureInfon: LHS_tmp <- LHS.item.value
-        if(LHS_tmp.fType==LST and !LHS_tmp.items.isEmpty()){
-            if(RHS.target == asFirst){
-                addIdent(makeInfItr(LHS_tmp.items.first(), LHS, NULL), RHS)
-                 ret<-1
+        me bool: ret <- false
+        their pureInfon: LHS_Value <- LHS.value
+        if(LHS_Value.fType==LST and !LHS_Value.items.isEmpty()){
+            if(RHSItr.target == asFirst){
+                action.propogateLHSToLHSFirst <- true
+                ret<-true
             }
-            // if(RHS.target == asLast or LHS.target==asLastParent)   {addIdent(makeInfItr(LHS_tmp.items.back(), LHS, LHS_tmp.items.size()-1), RHS);  ret<-1;}
+            // if(RHSItr.target == asLast or LHS.target==asLastParent)   {addIdent(makeInfItr(LHS_Value.items.back(), LHS, LHS_Value.items.size()-1), RHS);  ret<-1;}
         }
-        //their pureInfon: RHS_tmp <- RHS.item.value
-        if(RHS.item.value.fType==LST and !RHS.item.value.items.isEmpty()){
-            if(RHS.target == asFirstParent) {
-                addIdent(LHS, makeInfItr(RHS.item.value.items.first(), RHS, NULL))
-                ret<-1
+        if(RHSItr.item.value.fType==LST and !RHSItr.item.value.items.isEmpty()){
+            if(RHSItr.target == asFirstParent) {
+                action.propogateRHSToRHSFirst <- true
+                ret<-true
             }
         }
         return(ret)
@@ -1073,8 +1074,7 @@ struct agent{
         }
     }
     void: doAction(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
-        if(action.reject){log("doAction reject! "); return()}
-        log("doAction: ")
+        if(action.reject){return()}
         if(action.copyRHSTypeToLHS){
             LHS.value.fType <- RHSItr.item.value.fType
             LHS.infMode <- RHSItr.item.infMode
@@ -1101,6 +1101,12 @@ struct agent{
             }
             case moveRHSFirstToLHS:{
             }
+        }
+        if(action.propogateLHSToLHSFirst){
+            //addIdent(makeInfItr(LHS.value.items.first(), LHS, NULL), RHSItr)
+        }
+        if(action.propogateRHSToRHSFirst){
+            //addIdent(LHS, makeInfItr(RHSItr.item.value.items.first(), RHSItr, NULL))
         }
     }
     void: tryMergeSize(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
@@ -1191,7 +1197,7 @@ struct agent{
     our transformAction: tryMerge2(our infon: LHS, our infItr: RHSItr) <- {
         our transformAction:: action
         our infon: RHS <- RHSItr.item
-        //if(PropogateIndirectItem(LHSCrntCursor, RHSItr) > 0){return(NULL)}
+        if(PropagateIndirectItem(action, LHS, RHSItr) > 0){return(action)}
         if(RHS.infMode == isUnknown){ // any = ?
             LHS.isNormed <- true
         }
