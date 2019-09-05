@@ -297,7 +297,18 @@ model infItr{
     flag: looseMode
     flag: looseSize
     flag: wasProcessed
+    me int: nestLvl
+    mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError]: state
+    flag: isAList
 
+    me bool: isASeq(our infon: i) <- {
+        return ((i.value.format==fLiteral and i.value.fType==LST) or i.value.format==fConcat)
+    }
+
+    void: setListSeqFlags() <- {
+        if(isASeq(item)){state <- sFirstVisit; isAList <- true}
+        else{state <- sNotASeq; isAList <- false}
+    }
     me bool: goNext() <- {
         while(true){
             if(parent==NULL or item==NULL or itmItr.next==NULL){
@@ -313,7 +324,57 @@ model infItr{
             }
         }
     }
-
+    void: goNextDeep() <- {
+        me int: tmpState <- state
+        if(state == sNotASeq and item.infMode == isUnknown and ! item.value.items.isEmpty()){
+            tmpState <- sFirstVisit
+        }
+        switch(tmpState) {
+            case sNotASeq: sSecondVisit:{  // Get the next item or set EOL
+                if(parent==NULL or nestLvl==0){state <- sEOL; return()}
+                if(goNext()){
+                    setListSeqFlags()
+                }else{
+                    self <deep- parent
+                    state <- sSecondVisit
+                    isAList <- true
+                    nestLvl <- nestLvl-1
+                }
+            }
+            case sFirstVisit:{
+                if(item.value.items.isEmpty()){
+                    state <- sSecondVisit
+                    isAList <- true
+                } else {
+                    //Prepare to iterate children
+                    our infItr: tmp
+                    Allocate(tmp)
+                        tmp.itmItr    <-itmItr
+                        tmp.parent    <-parent
+                        tmp.item      <- item
+                        tmp.looseMode <- looseMode
+                        tmp.looseSize <- looseSize
+                    parent <- tmp   // TODO: After ptr bug is fixed, Allocate(parent, self)
+                    itmItr <- item.value.items.begin()
+                    item   <- itmItr.item
+                    setListSeqFlags()
+                    nestLvl <- nestLvl+1
+                }
+            }
+            case sInited: {state <- sFirstVisit}
+            case sEOL:    {item<-NULL}
+            case sInvalid:{item<-NULL;   state <- sError}
+            case sError:  {item<-NULL}
+            default: {print("Error: invalid iterator state:", state, "\n")}
+        }
+    }
+    our infItr: getNextDeep() <- {
+        our infItr: retVal
+        Allocate(retVal)
+        copyThisTo(retVal)
+        retVal.goNextDeep()
+        return(retVal)
+    }
     our infon: getPrevPtr() <- {
         if(parent==NULL or item==NULL or itmItr.prev==NULL) {return(NULL)}
         return(itmItr.prev.item)
