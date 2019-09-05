@@ -1033,7 +1033,7 @@ struct agent{
         return(lastChar)
     }
 
-    void: DO_VERIFY2(our transformAction: action, their pureInfon: LHS, their pureInfon: RHS) <- {
+    void: DO_VERIFY(our transformAction: action, their pureInfon: LHS, their pureInfon: RHS) <- {
         me int: RHSType <- RHS.fType
         if(RHSType==LHS.fType){
             switch(RHSType){
@@ -1050,7 +1050,9 @@ struct agent{
                     me int: RSize <- RHS.str.size()
                     me int: matchLen <- matchLength(LHS.str, RHS.str)
                     if(matchLen==-1 or (matchLen < LSize and matchLen < RSize)){log("DV:B");action.reject <- true}
-                    else{action.sizeToCopy <- RSize - LSize; action.reject <- false}
+                    else{
+                        action.sizeToCopy <- RSize - LSize; action.reject <- false
+                    }
                 }
                 case LST: {}// TODO: Is it sometimes OK to skip this or check each member at once?
                 default:{print("unknown fType in DO_VERIFY\n")}
@@ -1115,18 +1117,27 @@ struct agent{
         me bool: looseSize <- RHSItr.looseSize
         action.reject <- false
         action.sizeAction <- sizeNotChecked
+        me int: LHSFormat <- LHS.calcSize().format
+        me int: RHSFormat <- RHS.calcSize().format
         if(!looseSize){
-            me int: LHSFormat <- LHS.calcSize().format
-            me int: RHSFormat <- RHS.calcSize().format
             me int: LHSInfMode <- LHS.infMode
             if(LHSFormat != fUnknown and RHSFormat != fUnknown){
                 if(!looseMode){
-                    DO_VERIFY2(action, LHS.calcSize(), RHS.calcSize())
+                    DO_VERIFY(action, LHS.calcSize(), RHS.calcSize())
                 }
             }
-            else if(LHSFormat == fUnknown and RHSFormat != fUnknown){action.sizeAction<-copySizeRHStoLHS}
-            else if(LHSFormat != fUnknown and RHSFormat == fUnknown){action.sizeAction<-copySizeLHStoRHS}
-            else if(LHSFormat == fUnknown and RHSFormat == fUnknown){CO_SUBSCRIBE_SIZES(LHS, RHS)}
+            else if(LHSFormat == fUnknown and RHSFormat != fUnknown){
+                action.sizeAction<-copySizeRHStoLHS
+            }
+            else if(LHSFormat != fUnknown and RHSFormat == fUnknown){
+                action.sizeAction<-copySizeLHStoRHS
+            }
+            else if(LHSFormat == fUnknown and RHSFormat == fUnknown){
+                CO_SUBSCRIBE_SIZES(LHS, RHS)
+            }
+        }else{
+            //TODO: set action.sizeToCopy
+            if(LHSFormat == fLiteral and RHSFormat == fLiteral){}
         }
     }
     void: tryMergeValue(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
@@ -1138,37 +1149,29 @@ struct agent{
             }
             if(LHS.value.format == fUnknown and RHS.value.format == fUnknown){
                 // $=$, _=_, *_+$=*_+$, *5+$=*3+$, *(*5+1 *6+2)+$=*(*5+1=*6+2)+$
-                log("TM:LHS unknown RHS unknown: do Nothing")
             }
             else if(LHS.value.format == fUnknown and RHS.value.format == fLiteral){
                 // _ = 123, $ = 'hi'
-                log("TM:LHS unknown RHS literal")
                 action.valueAction <- copyValueRHStoLHS
             }
             else if(LHS.value.format == fLiteral and RHS.value.format == fUnknown){
-                //
-                log("TM:LHS literal RHS unknown: do nothing")
             }
             else if(LHS.value.format == fLiteral and RHS.value.format == fLiteral){
                 // 5=5, 5=6, 'hi'='hi', 'hi'='low'
-                DO_VERIFY2(action, LHS.value, RHS.value)
-                log("TM:LHS literal RHS literal")
+                DO_VERIFY(action, LHS.value, RHS.value)
             }
-            else{log("tryMerge2 CATCH --  TODO: handle case")}
+            else{log("tryMerge CATCH --  TODO: handle case")}
         }else{
             if(LHS.value.fType == LST and RHS.value.fType == LST){
-                log("TM:RHS & LHS LISTS")
                 action.listCommand <- moveRHSFirstToFirstChild
             }
             else if(LHS.value.fType == LST){
-                log("TM:LHS LIST")
                 action.listCommand <- moveRHSToFirstChild
             }
             else if(RHS.value.fType == LST){
-                log("TM:RHS LIST")
                 action.listCommand <- moveRHSFirstToLHS
             }
-            else{log("tryMerge2 lists CATCH --  TODO: handle case")}
+            else{log("tryMerge lists CATCH --  TODO: handle case")}
         }
     }
     void: trimMergeRemainder(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
@@ -1176,8 +1179,8 @@ struct agent{
         if(RHS.value.fType == STR){
             me uint64: sizeDiff <- action.sizeToCopy
             me uint64: rSize <- RHS.value.str.size()
-/*            if(sizeDiff > 0 ){
-                me string: remainderStr <- RHS.value.str.subStr(convertToIntVal(rSize -sizeDiff), convertToIntVal(sizeDiff))
+            if(sizeDiff > 0 ){
+                /*me string: remainderStr <- RHS.value.str.subStr(convertToIntVal(rSize -sizeDiff), convertToIntVal(sizeDiff))
                 our infon: remainderInfon; Allocate(remainderInfon,remainderStr)
                 our infDeepItr: remainder <- NULL
                 Allocate(remainder)
@@ -1185,19 +1188,20 @@ struct agent{
                 remainder.crntCursor.item <- remainderInfon
                 remainder.crntCursor.looseMode <- RHSItr.looseMode
                 remainder.crntCursor.looseSize <- RHSItr.looseSize
-                action.sizeToCopy <- rSize - sizeDiff
+                action.sizeToCopy <- rSize - sizeDiff*/
             } else if(sizeDiff==0){
                 action.sizeToCopy <-rSize
             }// TODO: finish case where remainder is on the left
-*/
         } else {
             action.sizeToCopy <- RHS.calcSize().num
         }
     }
-    our transformAction: tryMerge2(our infon: LHS, our infItr: RHSItr) <- {
+    our transformAction: tryMerge(our infon: LHS, our infItr: RHSItr) <- {
         our transformAction:: action
         our infon: RHS <- RHSItr.item
-        if(PropagateIndirectItem(action, LHS, RHSItr) > 0){return(action)}
+        if(PropagateIndirectItem(action, LHS, RHSItr) > 0){
+            return(action)
+        }
         if(RHS.infMode == isUnknown){ // any = ?
             LHS.isNormed <- true
         }
@@ -1223,7 +1227,6 @@ struct agent{
         our infDeepItr: rmdrTail <- NULL
         while(RHSItr != NULL){
             rmdrCrnt <- tryMERGE(agendaItem, RHSItr)
-            //log("validateAndAnnotate:"+ printInfon(RHSItr.crntCursor.item) + ":rmdrCrnt:" + rmdrCrnt.stringify())
             if(rmdrHead == NULL){rmdrHead <- rmdrCrnt}
             else{rmdrTail.nextAnd <- rmdrCrnt}
             rmdrTail <- rmdrCrnt
@@ -1239,7 +1242,6 @@ struct agent{
     /*me int: addWorkItemsToAgenda(me int: priority, our aItem: pred, our infDeepItr: itrToProcess, our NormNode: myNormNode)<-{
         me int: numItemsAdded <- 0
         our infon: i <- itrToProcess.crntCursor.item
-        //log("Adding WorkItem:" + printInfon(i))
         if(i.wrkItmsAdded){return(0)}else{i.wrkItmsAdded <- true}
         if(i.wrkList.size()==0 and pred!=NULL){return(0)}  // If there is no predecessor this will not be automatically enqeued by a predecessor.
         our aItem:: newItem
@@ -1259,9 +1261,9 @@ struct agent{
         return(numItemsAdded)
     }*/
 
-    me int: addItemToAgenda(our infDeepItr: addItm) <- {
+    /*me int: addItemToAgenda(our infDeepItr: addItm) <- {
         agenda2.pushLast(addItm)
-    }
+    }*/
 
     /*void: normalizeOld(our infon: i) <- {
       //  testIterator(i);  exit(2)
@@ -1283,7 +1285,7 @@ struct agent{
         //log("NORMALIZED:  " + printInfon(i))
     }*/
 
-    void: processAgendaItem2(our infDeepItr: LHS, me int: altNestLvl)<-{
+    void: processAgendaItem(our infDeepItr: LHS, me int: altNestLvl)<-{
         //log("PIA")
         our infItr: crntCursor    <- LHS.crntCursor
         our infon: CI             <- crntCursor.item
@@ -1297,17 +1299,17 @@ struct agent{
             //rmdrTail <- remainder
             //RHSItr <- RHSItr.nextAnd
             our transformAction:: action
-            action <- tryMerge2(CI, RHSItr)
+            action <- tryMerge(CI, RHSItr)
             doAction(action, CI, RHSItr)
         }
     }
 
-    void: processAgenda2()<-{
+    void: processAgenda()<-{
         withEach count in WHILE(!agenda2.isEmpty()) {
             if (count > 100){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
             our infDeepItr: CI <- agenda2.last()
             agenda2.popLast()
-            processAgendaItem2(CI, 0)
+            processAgendaItem(CI, 0)
         }
     }
 
@@ -1316,7 +1318,7 @@ struct agent{
         ii.initialize(inf)
         prepWorkList(ii)
         addInfonToAgenda(ii)
-        processAgenda2()
+        processAgenda()
     }
     me string: fetchAsStr(their infon: i) <- {return(i.value.str)}
     me uint64: fetchAsNum(their infon: i) <- {return(i.value.num)}
