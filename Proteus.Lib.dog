@@ -291,15 +291,15 @@ model infItr{
     our infItr: parent
     our DblLinkedListNode: itmItr
     mode [asID, asFirst, asLast, asMarked, asFirstParent, asLastParent, asMarkedParent]: target
-    //mode[sizeFailed, sizeVerified, copySizeLHStoRHS, copySizeRHStoLHS, hardenLHS]: sizeAction
-    //mode[valueFailed, valueVerified, copyValueLHStoRHS, copyValueRHStoLHS]: valueAction
-    //flag: copyRHSTypeToLHS
     flag: looseMode
     flag: looseSize
     flag: wasProcessed
     me int: nestLvl
     mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError]: state
     flag: isAList
+    mode[cmdNoOp, cmdDeleteDots, cmdKeepDots, cmdInsertBeforeDots, cmdInsertAfterDots]: stitchCmd
+    flag: fromDotted
+    our infItr: myDots
 
     me bool: isASeq(our infon: i) <- {
         return ((i.value.format==fLiteral and i.value.fType==LST) or i.value.format==fConcat)
@@ -325,23 +325,34 @@ model infItr{
         }
     }
     void: goNextDeep() <- {
+        me string:  logStr <- "            goNextDeep:" + stringify() + " >>"
         me int: tmpState <- state
         if(state == sNotASeq and item.infMode == isUnknown and ! item.value.items.isEmpty()){
             tmpState <- sFirstVisit
+            logStr <- logStr + ":isUnknown"
         }
         switch(tmpState) {
             case sNotASeq: sSecondVisit:{  // Get the next item or set EOL
-                if(parent==NULL or nestLvl==0){state <- sEOL; return()}
+                logStr <- logStr + " case(sNotASeq&sSecondV):" + stringify() + " >>"
+                if(parent==NULL or nestLvl==0){
+                    logStr <- logStr + ":set sEOL: nestLvl=" + toString(nestLvl)
+                    if(parent==NULL){logStr <- logStr + ":NULL parent" }
+                    state <- sEOL
+                    //log(logStr)
+                    return()
+                }
                 if(goNext()){
                     setListSeqFlags()
+                    logStr <- logStr + " setListSeqFlags:" + stringify() + " >>"
                 }else{
                     self <deep- parent
+                    logStr <- logStr + ":copyDeep(parent)" + toString(nestLvl)
                     state <- sSecondVisit
                     isAList <- true
-                    nestLvl <- nestLvl-1
                 }
             }
             case sFirstVisit:{
+                logStr <- logStr + ":sFirstV"
                 if(item.value.items.isEmpty()){
                     state <- sSecondVisit
                     isAList <- true
@@ -359,14 +370,16 @@ model infItr{
                     item   <- itmItr.item
                     setListSeqFlags()
                     nestLvl <- nestLvl+1
+                    logStr <- logStr + ":nestLvl+1=" + toString(nestLvl)
                 }
             }
-            case sInited: {state <- sFirstVisit}
-            case sEOL:    {item<-NULL}
-            case sInvalid:{item<-NULL;   state <- sError}
-            case sError:  {item<-NULL}
+            case sInited: {logStr <- logStr + ":sInited" state <- sFirstVisit}
+            case sEOL:    {logStr <- logStr + ":sEOL" item<-NULL}
+            case sInvalid:{logStr <- logStr + ":sInvalid" item<-NULL;   state <- sError}
+            case sError:  {logStr <- logStr + ":sError" item<-NULL}
             default: {print("Error: invalid iterator state:", state, "\n")}
         }
+        //log(logStr)
     }
     our infItr: getNextDeep() <- {
         our infItr: retVal
@@ -379,13 +392,96 @@ model infItr{
         if(parent==NULL or item==NULL or itmItr.prev==NULL) {return(NULL)}
         return(itmItr.prev.item)
     }
+    our infItr: fillDotChild(their infItr: parent) <- {
+        our infon: child
+        our infon: infonType <- parent.parent.item.value.listSpec
+        if(infonType != NULL){
+            Allocate(child)
+            child <deep- infonType // should be a lazy cow copy
+        } else {
+            Allocate(child)
+            child.value.fType   <- tUnknown
+            child.infMode       <- isUnknown
+            child.itmMode       <- mItem
+            child.value.format  <- fUnknown
+        }
+        our infItr: tentativeItr
+        Allocate(tentativeItr)
+        tentativeItr.itmItr    <- parent.itmItr
+        tentativeItr.parent    <- parent.parent
+        tentativeItr.looseMode <- parent.looseMode
+        tentativeItr.looseSize <- parent.looseSize
+        tentativeItr.item      <- child
+        tentativeItr.nestLvl <- parent.nestLvl
+        //tentativeItr.nextOr <- NULL
+        tentativeItr.setListSeqFlags() // Set state, etc.
+        tentativeItr.fromDotted <- true
+        tentativeItr.myDots     <- NULL
 
+        return(tentativeItr)
+    }
+    our infItr: getNextDeDotted() <- {
+        our infItr: nextItr
+        our infItr: retVal
+        me string:  logStr <- "            GNDD: nestLvl=" + toString(nestLvl)
+        if(!fromDotted){
+            nextItr <- getNextDeep()
+            logStr <- logStr + ":A1:nextItr.nestLvl=" + toString(nextItr.nestLvl)
+            if(nextItr.state == sError){return(NULL)}
+            //log(logStr)
+        } else {
+            logStr <- logStr + ":A2"
+            Allocate(nextItr)
+            copyThisTo(nextItr)
+            nextItr.looseMode <- looseMode
+            nextItr.looseSize <- looseSize
+        }
+        if(nextItr.state == sEOL){
+            logStr <- logStr + ":B1(state=sEOL)"
+            Allocate(retVal)
+            retVal.state <- sEOL
+            retVal.isAList <- nextItr.isAList
+            //retVal.nextOr <- NULL
+        } else if(fromDotted or nextItr.item.itmMode == mDots){  // The new item is nullable so also return the follower.
+            logStr <- logStr + ":B2"
+            retVal <- fillDotChild(nextItr)
+            if(!fromDotted){ // Caused by "..."
+                retVal.stitchCmd <- cmdInsertBeforeDots
+                retVal.myDots <- nextItr
+                //retVal.nextOr <- getNextDeDotted()
+            }
+            else{      // Caused by a result of "..."
+                retVal.stitchCmd <- stitchCmd
+                retVal.myDots    <- myDots
+                //retVal.nextOr    <- nextOr
+            }
+        } else {
+            logStr <- logStr + ":B3"
+            retVal <- nextItr
+            //retVal.nextOr <- NULL
+        }
+        //if(retVal.nextAnd != NULL){retVal.nextAnd <- retVal.nextAnd.getNextDeDotted()}
+        if(retVal.item!=NULL and retVal.item.itmMode == mSubItems){
+            logStr <- logStr + ":D"
+            retVal <- retVal.getNextDeDotted()
+        }
+        //log(logStr)
+        return(retVal)
+    }
     void: copyThisTo(our infItr: to) <- {
-        to.item      <- item
-        to.parent    <- parent
-        to.itmItr    <- itmItr
-        to.looseMode <- looseMode
-        to.looseSize <- looseSize
+        to.item         <- item
+        to.parent       <- parent
+        to.itmItr       <- itmItr
+        to.target       <- target
+        to.looseMode    <- looseMode
+        to.looseSize    <- looseSize
+        to.wasProcessed <- wasProcessed
+        to.nestLvl      <- nestLvl
+        to.state        <- state
+        to.isAList      <- isAList
+        to.stitchCmd    <- stitchCmd
+        to.fromDotted   <- fromDotted
+        to.myDots       <- myDots
     }
 
     void: deleteCrnt() <- {
@@ -403,7 +499,10 @@ model infItr{
     me string: stringify() <- {
         me string: S <- ""
         me agent: a
-        S <- S + a.printInfon(item) + " target:" + targetStrings[target]  + " copyRHSTypeToLHS:" + dispBool(copyRHSTypeToLHS)+ " looseMode:" + dispBool(looseMode)+ " looseSize:" + dispBool(looseSize)
+        S <- S + a.printInfon(item)
+        S <- S + "|nestLvl=" + toString(nestLvl)
+        S <- S + "|state=" + toString(state)
+        if(state==sSecondVisit){S <- "<" + S + ">"}
         return (S)
     }
     void: INIT() <- {Allocate(itmItr)}
@@ -479,6 +578,7 @@ string infon: StartSymbol="true" {
 
 struct transformAction{
     flag: reject
+    our infItr: remainder
     mode[sizeNotChecked, sizeFailed, sizeVerified, copySizeLHStoRHS, copySizeRHStoLHS]: sizeAction
     mode[valueNotChecked, valueFailed, valueVerified, copyValueLHStoRHS, copyValueRHStoLHS]: valueAction
     mode[noOperation, moveRHSFirstToFirstChild, moveRHSToFirstChild, moveRHSFirstToLHS]: listCommand
@@ -513,218 +613,6 @@ struct GLOBAL{ me ModelManager: modelMngr}
 
 //////////////////////////
 // Infon Interface Routines
-
-/*model infDeepItr{
-    our infItr: crntCursor
-    me int: nestLvl
-    our infDeepItr: nextAnd
-    our infDeepItr: nextOr
-    our infDeepItr: nextRemainder
-    our infItr: myDots
-    mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError]: state
-    flag: alreadyIncremented   // When an item is deleted, the cursor idx is already incremented.
-    flag: fromDotted
-    mode[cmdNoOp, cmdDeleteDots, cmdKeepDots, cmdInsertBeforeDots, cmdInsertAfterDots]: stitchCmd
-    flag: preserveDots
-    flag: isAList
-
-    me bool: isASeq(our infon: i) <- {
-        //if(i.value.format==fConcat){print("ENTERING CONCAT\n")}
-        return ((i.value.format==fLiteral and i.value.fType==LST) or i.value.format==fConcat)
-    }
-
-    void: setListSeqFlags() <- {
-        if(isASeq(crntCursor.item)){state <- sFirstVisit; isAList <- true}
-        else{state <- sNotASeq; isAList <- false}
-    }
-
-    void: initialize(our infon: inf) <- {
-        alreadyIncremented<-false
-        if(inf==NULL) {state <- sError; return()}
-        our infItr:: newParent
-        crntCursor.allocate(inf, newParent, NULL, 0)
-        setListSeqFlags()
-        nestLvl <- 0
-        me agent: a
-
-    }
-
-    void: initialize(our infItr: InfItr) <- {
-        alreadyIncremented<-false
-        if(InfItr==NULL or InfItr.item==NULL){state <- sError; return()}
-        crntCursor <- InfItr
-        setListSeqFlags()
-        nestLvl <- 0
-    }
-
-    me string: stringify() <- {
-        me string: S <- ""
-        me agent: a
-        if(self==NULL){S<-S+"NULL"}
-        else if(state == sEOL){S<-S+" sEOL"}
-        else if(state == sError){S<-S+" sError"}
-        else {
-            S <- S + a.printInfon(crntCursor.item)
-            if(nextOr){S <- S+ " | "+ nextOr.stringify()}
-            if(nextAnd){S <- S+ " & "+ nextAnd.stringify()}
-        }
-        return(S)
-    }
-
-    me bool: isDuplicateOf(our infDeepItr: dup) <- {
-        if(crntCursor==NULL or dup==NULL or dup.crntCursor==NULL){return(false)}
-        return(crntCursor.item.isDuplicateOf(dup.crntCursor.item))
-    }
-
-    void: goNext() <- {
-        me int: tmpState <- state
-        if(state == sNotASeq and crntCursor.item.infMode == isUnknown and ! crntCursor.item.value.items.isEmpty()){
-            tmpState <- sFirstVisit
-        }
-        switch(tmpState) {
-            case sNotASeq: sSecondVisit:{  // Get the next item or set EOL
-                if(crntCursor.parent==NULL or nestLvl==0){state <- sEOL; return()}
-                if(crntCursor.goNext()){
-                    setListSeqFlags()
-                }else{
-                    crntCursor <- crntCursor.parent
-                    state <- sSecondVisit
-                    isAList <- true
-                    nestLvl <- nestLvl-1
-                }
-            }
-            case sFirstVisit:{
-                if(crntCursor.item.value.items.isEmpty()){
-                    state <- sSecondVisit
-                    isAList <- true
-                } else {
-                    //Prepare to iterate children
-                    our infItr: tmp
-                    Allocate(tmp)
-                        tmp.itmItr    <-crntCursor.itmItr
-                        tmp.parent    <-crntCursor.parent
-                        tmp.item      <- crntCursor.item
-                        tmp.looseMode <- crntCursor.looseMode
-                        tmp.looseSize <- crntCursor.looseSize
-                    crntCursor.parent <- tmp   // TODO: After ptr bug is fixed, Allocate(crntCursor.parent, crntCursor)
-                    crntCursor.itmItr <- crntCursor.item.value.items.begin()
-                    crntCursor.item   <- crntCursor.itmItr.item
-                    setListSeqFlags()
-                    nestLvl <- nestLvl+1
-                }
-            }
-            case sInited: {state <- sFirstVisit}
-            case sEOL:    {crntCursor.item<-NULL}
-            case sInvalid:{crntCursor.item<-NULL;   state <- sError}
-            case sError:  {crntCursor.item<-NULL}
-            default: {print("Error: invalid iterator state:", state, "\n")}
-        }
-    }
-
-    void: copyThisTo(our infDeepItr: to) <- {
-        if(crntCursor==NULL){to.crntCursor <- NULL}
-        else{
-        Allocate(to.crntCursor)
-            crntCursor.copyThisTo(to.crntCursor)
-        }
-        to.nestLvl             <- nestLvl
-        to.nextAnd             <- nextAnd
-        to.nextOr              <- nextOr
-        to.state               <- state
-        to.alreadyIncremented  <- alreadyIncremented
-        to.fromDotted          <- fromDotted
-        to.preserveDots        <- preserveDots
-        to.isAList             <- isAList
-        to.myDots              <- myDots
-        to.stitchCmd           <- stitchCmd
-    }
-
-    our infDeepItr: getNext() <- {
-        our infDeepItr: retVal
-        Allocate(retVal)
-        copyThisTo(retVal)
-        retVal.goNext()
-        return(retVal)
-    }
-
-    void: deleteCrnt() <- {
-        crntCursor.deleteCrnt()
-        alreadyIncremented <- true
-    }
-
-    our infDeepItr: fillDotChild(their infDeepItr: parent) <- {
-        our infon: child
-        our infon: infonType <- parent.crntCursor.parent.item.value.listSpec
-        if(infonType != NULL){
-            Allocate(child)
-            child <deep- infonType // should be a lazy cow copy
-        } else {
-            Allocate(child)
-            child.value.fType   <- tUnknown
-            child.infMode       <- isUnknown
-            child.itmMode       <- mItem
-            child.value.format  <- fUnknown
-        }
-        our infDeepItr: tentativeItr
-        Allocate(tentativeItr)
-        Allocate(tentativeItr.crntCursor)
-        tentativeItr.crntCursor.itmItr    <- parent.crntCursor.itmItr
-        tentativeItr.crntCursor.parent    <- parent.crntCursor.parent
-        tentativeItr.crntCursor.looseMode <- parent.crntCursor.looseMode
-        tentativeItr.crntCursor.looseSize <- parent.crntCursor.looseSize
-        tentativeItr.crntCursor.item      <- child
-        tentativeItr.nestLvl <- parent.nestLvl
-        tentativeItr.nextOr <- NULL
-        tentativeItr.setListSeqFlags() // Set state, etc.
-        tentativeItr.fromDotted <- true
-        tentativeItr.myDots     <- NULL
-
-        return(tentativeItr)
-    }
-
-    our infDeepItr: getNextDeDotted() <- {
-        our infDeepItr: nextItr
-        our infDeepItr: retVal
-
-        if(!fromDotted){
-            nextItr <- getNext()
-            if(nextItr.state == sError){return(NULL) }
-        } else {
-            Allocate(nextItr)
-            copyThisTo(nextItr)
-            nextItr.crntCursor.looseMode <- crntCursor.looseMode
-            nextItr.crntCursor.looseSize <- crntCursor.looseSize
-        }
-
-        if(nextItr.state == sEOL){
-            Allocate(retVal)
-            retVal.state <- sEOL
-            retVal.isAList <- nextItr.isAList
-            retVal.nextOr <- NULL
-        } else if(fromDotted or nextItr.crntCursor.item.itmMode == mDots){  // The new item is nullable so also return the follower.
-            retVal <- fillDotChild(nextItr)
-            if(!fromDotted){ // Caused by "..."
-                retVal.stitchCmd <- cmdInsertBeforeDots
-                retVal.myDots <- nextItr.crntCursor
-                retVal.nextOr <- nextItr.getNextDeDotted()
-            }
-            else{      // Caused by a result of "..."
-                retVal.stitchCmd <- stitchCmd
-                retVal.myDots    <- myDots
-                retVal.nextOr    <- nextItr.nextOr
-            }
-        } else {
-            retVal <- nextItr
-            retVal.nextOr <- NULL
-        }
-        if(retVal.nextAnd != NULL){retVal.nextAnd <- retVal.nextAnd.getNextDeDotted()}
-        if(retVal.crntCursor!=NULL and retVal.crntCursor.item.itmMode == mSubItems){retVal <- retVal.getNextDeDotted()}
-        return(retVal)
-    }
-
-}*/
-//struct infDeepItr {}
-
 struct agent{
     our infon: world
     our infon: context
@@ -1117,7 +1005,7 @@ struct agent{
                     me int: LSize <- LHS.str.size()
                     me int: RSize <- RHS.str.size()
                     me int: matchLen <- matchLength(LHS.str, RHS.str)
-                    if(matchLen==-1 or (matchLen < LSize and matchLen < RSize)){log("DV:B");action.reject <- true}
+                    if(matchLen==-1 or (matchLen < LSize and matchLen < RSize)){action.reject <- true}
                     else{
                         action.sizeToCopy <- RSize - LSize; action.reject <- false
                     }
@@ -1234,17 +1122,6 @@ struct agent{
                 DO_VERIFY(action, LHS.value, RHS.value)
             }
             else{log("tryMerge CATCH --  TODO: handle case")}
-        }else{
-            if(LHS.value.fType == LST and RHS.value.fType == LST){
-                action.listCommand <- moveRHSFirstToFirstChild
-            }
-            else if(LHS.value.fType == LST){
-                action.listCommand <- moveRHSToFirstChild
-            }
-            else if(RHS.value.fType == LST){
-                action.listCommand <- moveRHSFirstToLHS
-            }
-            else{log("tryMerge lists CATCH --  TODO: handle case")}
         }
     }
     void: trimMergeRemainder(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
@@ -1270,6 +1147,7 @@ struct agent{
         }
     }
     our transformAction: tryMerge(our infon: LHS, our infItr: RHSItr) <- {
+        //log(">>TM")
         our transformAction:: action
         our infon: RHS <- RHSItr.item
         if(PropagateIndirectItem(action, LHS, RHSItr) > 0){
@@ -1291,88 +1169,71 @@ struct agent{
         }
         if(LHS.asNot){action.reject <- !action.reject}
         RHSItr.wasProcessed <- true
+        log("<<TM RHSItr.wasProcessed <- true")
         return(action)
     }
-    /*our infDeepItr: validateAndAnnotate(our aItem: agendaItem) <- {
-        our infDeepItr: rmdrHead <- NULL
-        our infDeepItr: RHSItr <- agendaItem.RHS
-        our infDeepItr: rmdrCrnt <- NULL
-        our infDeepItr: rmdrTail <- NULL
-        while(RHSItr != NULL){
-            rmdrCrnt <- tryMERGE(agendaItem, RHSItr)
-            if(rmdrHead == NULL){rmdrHead <- rmdrCrnt}
-            else{rmdrTail.nextAnd <- rmdrCrnt}
-            rmdrTail <- rmdrCrnt
-            RHSItr <- RHSItr.nextAnd
-        }
-        return(rmdrHead)
-    }*/
 
-    void: addInfonToAgenda(our infItr: inf) <- {
-        agenda2.pushFirst(inf)
+    void: addInfItrToAgenda(our infItr: ii) <- {
+        agenda2.pushFirst(ii)
     }
 
-    /*me int: addWorkItemsToAgenda(me int: priority, our aItem: pred, our infDeepItr: itrToProcess, our NormNode: myNormNode)<-{
-        me int: numItemsAdded <- 0
-        our infon: i <- itrToProcess.crntCursor.item
-        if(i.wrkItmsAdded){return(0)}else{i.wrkItmsAdded <- true}
-        if(i.wrkList.size()==0 and pred!=NULL){return(0)}  // If there is no predecessor this will not be automatically enqeued by a predecessor.
-        our aItem:: newItem
-        newItem.init(0, itrToProcess, NULL)
-        newItem.myNormNode <- myNormNode
-        if(pred!=NULL){newItem.predecessors.pushLast(pred)}
-        withEach workItem in i.wrkList{
-            if(workItem.target==asID){
-            our infDeepItr:: newIDP
-            newIDP.initialize(workItem)
-            newItem.addRHS(newIDP)
-            workItem.wasProcessed <- true
-            numItemsAdded <- numItemsAdded+1
-            }
-        }
-        agenda.addItem(newItem)
-        return(numItemsAdded)
-    }*/
-
-    /*me int: addItemToAgenda(our infDeepItr: addItm) <- {
-        agenda2.pushLast(addItm)
-    }*/
-
-    /*void: normalizeOld(our infon: i) <- {
-      //  testIterator(i);  exit(2)
-        //log("NORMALIZING: " + printInfon(i))
-        our infDeepItr: ii
-        Allocate(ii)
-        ii.initialize(i)
-        agenda.parentAgent <- self
-        prepWorkList(ii)
-        our NormNode:: myNormNode
-        addWorkItemsToAgenda(0, NULL, ii, myNormNode)
-        agenda.processAgenda()
-        me int: numSolutions <- myNormNode.finalists.size()
-        if(numSolutions>0){
-            our aItem: toStitch <- agenda.resolve(myNormNode.finalists.last(), "    resolve: ") // TODO: .last() is arbitrary
-            stitch(toStitch)
-        }
-        i.isNormed <- true
-        //log("NORMALIZED:  " + printInfon(i))
-    }*/
-
     void: processAgendaItem(our infItr: LHSItr, me int: altNestLvl)<-{
-        //log("PIA")
+        log("PIA")
+        prepWorkList(LHSItr)
         our infon: CI             <- LHSItr.item
         me int: LHS_state         <- LHSItr.state
-        our infItr: remainder <- NULL
-        withEach RHSItr in CI.wrkList{
-            // TODO: get remainders working
-            //remainder <- tryMERGE(agendaItem, RHSItr)
-            //if(rmdrHead == NULL){rmdrHead <- remainder}
-            //else{rmdrTail.nextAnd <- remainder}
-            //rmdrTail <- remainder
-            //RHSItr <- RHSItr.nextAnd
-            our transformAction:: action
-            action <- tryMerge(CI, RHSItr)
-            doAction(action, LHSItr, RHSItr)
+        // handleFieldsInWrkList()
+        me bool: doNextList       <- false
+        me bool: doNextNotList    <- false
+        me bool: RHS_Empty        <- CI.wrkList.isEmpty()
+        our infItr: LHSItrNext <- NULL
+        our infItr: RHSItrNext <- NULL
+        if(RHS_Empty){
+            LHSItrNext <- LHSItr.getNextDeDotted()
+            log("    LHSItrNext from GNDD()="+LHSItrNext.stringify())
+        }else{
+            withEach RHSItr in CI.wrkList{
+                log("    PIA loop:" + LHSItr.stringify() + " = " + RHSItr.stringify()+ ":LHSItr.nestLvl="+ toString(LHSItr.nestLvl)+ ":RHSItr.nestLvl="+ toString(RHSItr.nestLvl))
+                RHSItr.setListSeqFlags()
+                our transformAction:: action
+                action <- tryMerge(CI, RHSItr)
+                if(action.remainder != NULL){RHSItrNext <- action.remainder}
+                me bool: unknownAsList <- false
+                me int: LHSfType <- LHSItr.item.value.fType
+                me int: RHSfType <- 0; if(!RHS_Empty){RHSfType <- RHSItr.item.value.fType}
+                // HANDLE LHS
+                if ((LHSfType != LST and !unknownAsList) and RHSfType == LST){LHSItrNext <- LHSItr}
+                else {
+                    LHSItrNext <- LHSItr.getNextDeDotted()
+                    log("        Loop:LHSItrNext from GNDD()="+LHSItrNext.stringify())
+                    if(LHSItrNext != NULL and LHSItrNext.state != sEOL and LHSItrNext.state != sSecondVisit){
+                        log("LHSItrNext.state="+ toString(LHSItrNext.state))
+                        addInfItrToAgenda(LHSItrNext)
+                    }
+                }
+                // HANDLE RHS
+                if(RHSItrNext == NULL){
+                    if(LHSfType == LST and RHSfType != LST){
+                        log("        RHSfType:A")
+                        RHSItrNext <- RHSItr
+                        if(RHSItrNext.looseMode){RHSItrNext.looseSize <- true}
+                    }else{
+                        RHSItrNext <- RHSItr.getNextDeDotted()
+                        log("        Loop:RHSItrNext from GNDD()="+RHSItrNext.stringify() + ":RHSItr.nestLvl="+ toString(RHSItr.nestLvl) + ":RHSItrNext.nestLvl="+ toString(RHSItrNext.nestLvl))
+                        if(RHSItrNext.state == sEOL){
+                            log("        RHSfType:sEOL:B1")
+                            RHSItrNext <- NULL
+                        }
+                        else if(RHSItrNext.looseMode){
+                            log("        RHSfType:B2")
+                            RHSItrNext.looseSize <- true
+                        }
+                    }
+                }
+                log("        call addItemToWrkList from PIA loop")
+                addItemToWrkList(LHSItrNext, RHSItrNext)
+                doAction(action, LHSItr, RHSItr)
+            }
         }
     }
 
@@ -1384,12 +1245,15 @@ struct agent{
             processAgendaItem(CI, 0)
         }
     }
-
+    void: addItemToWrkList(our infItr: LHSItr, our infItr: RHSItr)<-{
+        if(RHSItr != NULL and RHSItr.state != sSecondVisit and LHSItr.item != NULL){ // TODO: this is wrong
+            LHSItr.item.addItemToWrkList(RHSItr)
+        }
+    }
     me void: normalize(our infon: inf) <- {
         our infItr:: ii
         ii.initialize(inf)
-        prepWorkList(ii)
-        addInfonToAgenda(ii)
+        addInfItrToAgenda(ii)
         processAgenda()
     }
     me string: fetchAsStr(their infon: i) <- {return(i.value.str)}
@@ -1521,7 +1385,7 @@ struct agent{
 
         if(i.isNormed ==0){
             withEach WorkItm in i.wrkList{
-                if(!WorkItm.wasProcessed){
+                if(WorkItm.wasProcessed == false){
                     if(!WorkItm.looseMode){ S <- S+" ="}
                     else { S <- S+" =="}
                     if(WorkItm.looseSize){ S <- S + ":"}
