@@ -501,7 +501,7 @@ model infItr{
         me agent: a
         S <- S + a.printInfon(item)
         S <- S + "|nestLvl=" + toString(nestLvl)
-        S <- S + "|state=" + toString(state)
+        S <- S + "|state=" + stateStrings[state]
         if(state==sSecondVisit){S <- "<" + S + ">"}
         return (S)
     }
@@ -989,12 +989,14 @@ struct agent{
         return(lastChar)
     }
 
-    void: DO_VERIFY(our transformAction: action, their pureInfon: LHS, their pureInfon: RHS) <- {
-        me int: RHSType <- RHS.fType
-        if(RHSType==LHS.fType){
+    void: DO_VERIFY(our transformAction: action, our infon: LHS, our infon: RHS) <- {
+        their pureInfon: LHSValue <- LHS.value
+        their pureInfon: RHSValue <- RHS.value
+        me int: RHSType <- RHSValue.fType
+        if(RHSType==LHSValue.fType){
             switch(RHSType){
                 case NUM: {
-                    if(LHS.num == RHS.num){
+                    if(LHSValue.num == RHSValue.num){
                         action.reject <- false
                         action.sizeToCopy <- 0
                     } else {
@@ -1002,12 +1004,14 @@ struct agent{
                     }
                 }
                 case STR: {
-                    me int: LSize <- LHS.str.size()
-                    me int: RSize <- RHS.str.size()
-                    me int: matchLen <- matchLength(LHS.str, RHS.str)
-                    if(matchLen==-1 or (matchLen < LSize and matchLen < RSize)){action.reject <- true}
-                    else{
-                        action.sizeToCopy <- RSize - LSize; action.reject <- false
+                    me int: LSize <- LHS.calcSize().num
+                    me int: RSize <- RHS.calcSize().num
+                    me int: matchLen <- matchLength(LHSValue.str, RHSValue.str)
+                    if(matchLen==-1 or (matchLen < LSize and matchLen < RSize)){
+                        action.reject <- true
+                    }else{
+                        action.sizeToCopy <- RSize - LSize
+                        action.reject <- false
                     }
                 }
                 case LST: {}// TODO: Is it sometimes OK to skip this or check each member at once?
@@ -1083,9 +1087,7 @@ struct agent{
         if(!looseSize){
             me int: LHSInfMode <- LHS.infMode
             if(LHSFormat != fUnknown and RHSFormat != fUnknown){
-                if(!looseMode){
-                    DO_VERIFY(action, LHS.calcSize(), RHS.calcSize())
-                }
+                if(LHS.calcSize().num != RHS.calcSize().num){action.reject <- true}
             }
             else if(LHSFormat == fUnknown and RHSFormat != fUnknown){
                 action.sizeAction<-copySizeRHStoLHS
@@ -1113,35 +1115,34 @@ struct agent{
             }
             else if(LHS.value.format == fUnknown and RHS.value.format == fLiteral){
                 // _ = 123, $ = 'hi'
+                DO_VERIFY(action, LHS, RHS)
                 action.valueAction <- copyValueRHStoLHS
             }
             else if(LHS.value.format == fLiteral and RHS.value.format == fUnknown){
             }
             else if(LHS.value.format == fLiteral and RHS.value.format == fLiteral){
                 // 5=5, 5=6, 'hi'='hi', 'hi'='low'
-                DO_VERIFY(action, LHS.value, RHS.value)
+                DO_VERIFY(action, LHS, RHS)
             }
             else{log("tryMerge CATCH --  TODO: handle case")}
         }
     }
     void: trimMergeRemainder(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
         our infon: RHS <- RHSItr.item
-        if(RHS.value.fType == STR){
+        if(LHS.value.fType == STR and RHS.value.fType == STR){
             me uint64: sizeDiff <- action.sizeToCopy
             me uint64: rSize <- RHS.value.str.size()
             if(sizeDiff > 0 ){
-                /*me string: remainderStr <- RHS.value.str.subStr(convertToIntVal(rSize -sizeDiff), convertToIntVal(sizeDiff))
+                me string: remainderStr <- RHS.value.str.subStr(convertToIntVal(rSize -sizeDiff), convertToIntVal(sizeDiff))
                 our infon: remainderInfon; Allocate(remainderInfon,remainderStr)
-                our infDeepItr: remainder <- NULL
-                Allocate(remainder)
-                RHSItr.copyThisTo(remainder)
-                remainder.crntCursor.item <- remainderInfon
-                remainder.crntCursor.looseMode <- RHSItr.looseMode
-                remainder.crntCursor.looseSize <- RHSItr.looseSize
-                action.sizeToCopy <- rSize - sizeDiff*/
+                Allocate(action.remainder)
+                RHSItr.copyThisTo(action.remainder)
+                action.remainder.item <- remainderInfon
+                action.sizeToCopy <- rSize - sizeDiff
+                log("    TRIM:remainder:"+printInfon(remainderInfon))
             } else if(sizeDiff==0){
                 action.sizeToCopy <-rSize
-            }// TODO: finish case where remainder is on the left
+            }// MUST: finish case where remainder is on the left
         } else {
             action.sizeToCopy <- RHS.calcSize().num
         }
@@ -1155,13 +1156,11 @@ struct agent{
         }
         if(RHS.infMode == isUnknown){ // any = ?
             LHS.isNormed <- true
-        }
-        else if(LHS.infMode == isUnknown){ // ? = any
+        }else if(LHS.infMode == isUnknown){ // ? = any
             action.copyRHSTypeToLHS <- true
             action.sizeAction       <- copySizeRHStoLHS
             action.valueAction      <- copyValueRHStoLHS
-        }
-        else {
+        }else{
             if(!RHSItr.looseMode and !LHS.type.isCompatibleWith(RHS.type)){action.reject <- true}// TYPE ACTION
             if(!action.reject){tryMergeSize(action, LHS, RHSItr)} // SIZE ACTION
             if(!action.reject){tryMergeValue(action, LHS, RHSItr)}// VALUE ACTION
@@ -1232,7 +1231,7 @@ struct agent{
                 }
                 log("        call addItemToWrkList from PIA loop")
                 addItemToWrkList(LHSItrNext, RHSItrNext)
-                doAction(action, LHSItr, RHSItr)
+                if(!action.reject){doAction(action, LHSItr, RHSItr)}
             }
         }
     }
