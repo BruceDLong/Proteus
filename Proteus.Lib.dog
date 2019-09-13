@@ -292,7 +292,8 @@ model infItr{
     our DblLinkedListNode: itmItr
     mode [asID, asFirst, asLast, asMarked, asFirstParent, asLastParent, asMarkedParent]: target
     flag: looseMode
-    flag: looseSize
+    flag: looseTop
+    flag: looseInhtd
     flag: wasProcessed
     me int: nestLvl
     mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError]: state
@@ -327,6 +328,7 @@ model infItr{
     void: goNextDeep() <- {
         me string:  logStr <- "            goNextDeep:" + stringify() + " >>"
         me int: tmpState <- state
+        me bool: loose_Size <- looseTop!=false or looseInhtd!=false
         if(state == sNotASeq and item.infMode == isUnknown and ! item.value.items.isEmpty()){
             tmpState <- sFirstVisit
             logStr <- logStr + ":isUnknown"
@@ -343,6 +345,7 @@ model infItr{
                 }
                 if(goNext()){
                     setListSeqFlags()
+                    looseInhtd <- loose_Size
                     logStr <- logStr + " setListSeqFlags:" + stringify() + " >>"
                 }else{
                     self <deep- parent
@@ -360,16 +363,18 @@ model infItr{
                     //Prepare to iterate children
                     our infItr: tmp
                     Allocate(tmp)
-                        tmp.itmItr    <-itmItr
-                        tmp.parent    <-parent
-                        tmp.item      <- item
-                        tmp.looseMode <- looseMode
-                        tmp.looseSize <- looseSize
-                    parent <- tmp   // TODO: After ptr bug is fixed, Allocate(parent, self)
-                    itmItr <- item.value.items.begin()
-                    item   <- itmItr.item
+                        tmp.itmItr     <-itmItr
+                        tmp.parent     <-parent
+                        tmp.item       <- item
+                        tmp.looseMode  <- looseMode
+                        tmp.looseTop   <- looseTop
+                        tmp.looseInhtd <- looseInhtd
+                    parent     <- tmp   // TODO: After ptr bug is fixed, Allocate(parent, self)
+                    itmItr     <- item.value.items.begin()
+                    looseInhtd <- parent.looseMode or parent.looseInhtd
+                    item       <- itmItr.item
                     setListSeqFlags()
-                    nestLvl <- nestLvl+1
+                    nestLvl    <- nestLvl+1
                     logStr <- logStr + ":nestLvl+1=" + toString(nestLvl)
                 }
             }
@@ -407,13 +412,13 @@ model infItr{
         }
         our infItr: tentativeItr
         Allocate(tentativeItr)
-        tentativeItr.itmItr    <- parent.itmItr
-        tentativeItr.parent    <- parent.parent
-        tentativeItr.looseMode <- parent.looseMode
-        tentativeItr.looseSize <- parent.looseSize
-        tentativeItr.item      <- child
-        tentativeItr.nestLvl <- parent.nestLvl
-        //tentativeItr.nextOr <- NULL
+        tentativeItr.itmItr     <- parent.itmItr
+        tentativeItr.parent     <- parent.parent
+        tentativeItr.looseMode  <- parent.looseMode
+        tentativeItr.looseTop   <- parent.looseTop
+        tentativeItr.looseInhtd <- parent.looseInhtd
+        tentativeItr.item       <- child
+        tentativeItr.nestLvl    <- parent.nestLvl
         tentativeItr.setListSeqFlags() // Set state, etc.
         tentativeItr.fromDotted <- true
         tentativeItr.myDots     <- NULL
@@ -433,8 +438,9 @@ model infItr{
             logStr <- logStr + ":A2"
             Allocate(nextItr)
             copyThisTo(nextItr)
-            nextItr.looseMode <- looseMode
-            nextItr.looseSize <- looseSize
+            nextItr.looseMode  <- looseMode
+            nextItr.looseTop   <- looseTop
+            nextItr.looseInhtd <- looseInhtd
         }
         if(nextItr.state == sEOL){
             logStr <- logStr + ":B1(state=sEOL)"
@@ -474,7 +480,8 @@ model infItr{
         to.itmItr       <- itmItr
         to.target       <- target
         to.looseMode    <- looseMode
-        to.looseSize    <- looseSize
+        to.looseTop     <- looseTop
+        to.looseInhtd   <- looseInhtd
         to.wasProcessed <- wasProcessed
         to.nestLvl      <- nestLvl
         to.state        <- state
@@ -522,7 +529,7 @@ string WordSystem{
     >CID:asGiven
 }
 string infItr{
-    >[ ("=" <=> looseMode=false;) | ("==" <=> looseMode=true;) ] ":"[opt]:looseSize > ws > our infon:item
+    >[ ("=" <=> looseMode=false;) | ("==" <=> looseMode=true;) ] ":"[opt]:looseTop > ws > our infon:item
 }
 string listInfo[
         >{ >{"~" >ws >our pureInfon: size}[opt]:Size >ws "C" >ws >our infon:listSpec "|"[opt]}
@@ -586,6 +593,7 @@ struct transformAction{
     flag: addRemainderToSuccessor
     flag: propogateLHSToLHSFirst
     flag: propogateRHSToRHSFirst
+    flag: hardenSize
     uint64: sizeToCopy
 }
 struct pureInfon {
@@ -860,121 +868,6 @@ struct agent{
         } else {  // TODO: Do Convert + copy
         }
     }
-    void: COPY_SIZE(our infon: from, our infon: to) <- {
-        DO_COPY(from.endMarker, to.endMarker, 0)
-    }
-    void: COPY_VALUE(our infon: from, our infon: to) <- {
-        DO_COPY(from.value, to.value, 0)
-    }
-    /*void: stitch(our aItem: crntItem)<-{
-        //log(">>STITCH")
-        our infItr:                 tmpDots2Del
-        me int[map our infItr]:     dotsToDelete
-        our DblLinkedListNode[map our infItr]: recordOfDots
-        me string: logStr
-        while(crntItem!=NULL){
-            logStr <- "    STITCH-Loop: " + crntItem.mySymbol(crntItem) + " is:"+crntItem.stringify() + ":"
-            our infDeepItr: LHS  <- crntItem.LHS
-            our infDeepItr: RHS  <- crntItem.RHS
-            our infon: LHS_infon <- LHS.crntCursor.item
-            if(LHS.state != sSecondVisit){
-                logStr <- logStr + ":NOT2ndVisit"
-                switch(LHS.stitchCmd){
-                    case cmdInsertBeforeDots:{
-                        logStr <- logStr + ":IBDots"
-                        LHS.myDots.parent.item.value.items.insertBefore(LHS.myDots.itmItr, LHS.crntCursor.item)
-                        if(LHS.fromDotted){
-                            dotsToDelete[LHS.myDots] <- 1
-                            tmpDots2Del <- LHS.myDots
-                        }
-                    }
-                    case cmdInsertAfterDots:{
-                        logStr <- logStr + ":IADots"
-                        our DblLinkedListNode: insertedListNode
-                        if(recordOfDots.containsKey(LHS.myDots)){
-                            insertedListNode <- LHS.myDots.parent.item.value.items.insertAfter(recordOfDots[LHS.myDots], LHS.crntCursor.item)
-                        }else{
-                            insertedListNode <- LHS.myDots.parent.item.value.items.insertAfter(LHS.myDots.itmItr, LHS.crntCursor.item)
-                        }
-                        recordOfDots[LHS.myDots] <- insertedListNode
-                    }
-                    case cmdKeepDots:{
-                        logStr <- logStr + ":KDots"
-                        dotsToDelete.erase(LHS.myDots)
-                        tmpDots2Del <- NULL
-                    }
-                    case cmdDeleteDots:{
-                        logStr <- logStr + ":DDots"
-                        dotsToDelete[LHS.myDots] <- 1
-                        tmpDots2Del <- LHS.myDots
-                    }
-                    //case cmdNoOp:{}
-                }
-                our infDeepItr: RHSItr <- RHS
-                while(RHSItr!=NULL){
-                    if (RHSItr.state!=sSecondVisit){
-                        me bool: copyRHSTypeToLHS <- RHSItr.crntCursor.copyRHSTypeToLHS
-                        if(copyRHSTypeToLHS){
-                            LHS_infon.value.fType <- RHSItr.crntCursor.item.value.fType
-                            LHS_infon.infMode <- RHSItr.crntCursor.item.infMode
-                        }
-                        me int: sizeAction    <- RHSItr.crntCursor.sizeAction
-                        if(sizeAction == copySizeRHStoLHS){
-                            logStr <- logStr + ":SizeRHStoLHS"
-                            DO_COPY(RHSItr.crntCursor.item.endMarker, LHS_infon.endMarker, 0)
-                        }
-                        else if(sizeAction == copySizeLHStoRHS){
-                            logStr <- logStr + ":SizeLHStoRHS"
-                            DO_COPY(LHS_infon.endMarker, RHSItr.crntCursor.item.endMarker, 0)
-                        }
-                        else if(sizeAction == hardenLHS){
-                            logStr <- logStr + ":hardenLHS:sizeHardTrue"
-                            LHS.crntCursor.item.sizeHardened <- true
-                        }
-                        else{
-                            logStr <- logStr + ":noSizeAction"
-                        }
-
-                        me int: valueAction   <- RHSItr.crntCursor.valueAction
-                        if(valueAction == copyValueRHStoLHS){
-                            DO_COPY(RHSItr.crntCursor.item.value, LHS_infon.value, crntItem.sizeToCopy)
-                        }
-                        else if(valueAction == copyValueLHStoRHS){
-                            DO_COPY(LHS_infon.value, RHSItr.crntCursor.item.value, crntItem.sizeToCopy)
-                        }
-                    }
-                    RHSItr <- RHSItr.nextAnd
-                }
-                if(LHS.state == sNotASeq){
-                    JoinIfConcat(LHS)
-                }
-            }else{
-                logStr <- logStr + ":2ndVisit"
-                // Now delete dots as needed
-                if(tmpDots2Del!=NULL){
-                    logStr <- logStr + ":tmpDots2Del"
-                    tmpDots2Del.parent.item.deleteListNode(tmpDots2Del.itmItr)
-                }
-                // If this was a CONCAT with only one item:
-                if(LHS_infon.value.format==fConcat and !LHS_infon.value.items.isEmpty() and LHS_infon.value.items.head.isLast()){
-                    logStr <- logStr + ":RemoveParens"
-                    LHS_infon <deep- LHS_infon.value.items.first()
-                }else{
-                    logStr <- logStr + ":KeepParens"
-                }
-                // Handle when parent is a CONCAT
-                JoinIfConcat(LHS)
-            }
-            crntItem <- crntItem.successor
-            //log(logStr)
-        }
-
-
- //       withEach dotItem in dotsToDelete{
- //           dotItem_key.parent.item.value.items.deleteListNode(dotItem_key.itmItr)
- //       }
-
-    }*/
 
     me int: matchLength(me string: A, me string: B)<-{
         me int: lastChar
@@ -1075,16 +968,16 @@ struct agent{
         if(action.propogateRHSToRHSFirst){
             //addIdent(LHS, makeInfItr(RHSItr.item.value.items.first(), RHSItr, NULL))
         }
+        if(action.hardenSize){LHS.sizeHardened <- true}
     }
     void: tryMergeSize(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
         our infon: RHS <- RHSItr.item
-        me bool: looseMode <- RHSItr.looseMode
-        me bool: looseSize <- RHSItr.looseSize
+        me bool: loose_Size <- RHSItr.looseTop!=false or RHSItr.looseInhtd!=false
         action.reject <- false
         action.sizeAction <- sizeNotChecked
         me int: LHSFormat <- LHS.calcSize().format
         me int: RHSFormat <- RHS.calcSize().format
-        if(!looseSize){
+        if(!loose_Size){
             me int: LHSInfMode <- LHS.infMode
             if(LHSFormat != fUnknown and RHSFormat != fUnknown){
                 if(LHS.calcSize().num != RHS.calcSize().num){action.reject <- true}
@@ -1105,6 +998,8 @@ struct agent{
     }
     void: tryMergeValue(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
         our infon: RHS <- RHSItr.item
+        me bool: loose_Size <- RHSItr.looseTop!=false or RHSItr.looseInhtd!=false
+        log("TMV:  looseTop="+dispBool(RHSItr.looseTop)+"    looseInhtd="+dispBool(RHSItr.looseInhtd)+"    loose_Size="+dispBool(loose_Size))
         if(LHS.value.fType != LST and RHS.value.fType != LST){
             if(LHS.value.format == fConcat or RHS.value.format == fConcat){
                 log("WARNING: tryMerge, item is concat but not list")
@@ -1115,31 +1010,107 @@ struct agent{
             }
             else if(LHS.value.format == fUnknown and RHS.value.format == fLiteral){
                 // _ = 123, $ = 'hi'
-                DO_VERIFY(action, LHS, RHS)
-                action.valueAction <- copyValueRHStoLHS
+                their pureInfon: LHSValue <- LHS.value
+                their pureInfon: RHSValue <- RHS.value
+                me int: RHSType <- RHSValue.fType
+                if(RHSType==LHSValue.fType){
+                    me int: LSize <- LHS.calcSize().num
+                    me int: RSize <- RHS.calcSize().num
+                    switch(RHSType){
+                        case NUM:{
+                            if(loose_Size){
+                                switch(LHS.endMarker.format){
+                                    case fUnknown:{log("fUnknown1")}
+                                    case fLiteral:{log("fLiteral1")}
+                                    case fConcat:{log("SizeConcat1")}
+                                }
+                            }else{
+                                log("!LooseSize1")
+                                action.valueAction <- copyValueRHStoLHS
+                                action.sizeToCopy  <- LSize
+                            }
+                        }
+                        case STR:{
+                            if(loose_Size){
+                                //"{*3+$ *4+$} == 'CatDogs'",  "$ =: 'Hello'",  "{*3+$|...}=='CatHatBatDog'"
+                                switch(LHS.endMarker.format){
+                                    case fUnknown:{// do nothing or set maxSize?
+                                        log("SizeUnknown2")
+                                        action.valueAction <- copyValueRHStoLHS
+                                        action.hardenSize  <- true
+                                    }
+                                    case fLiteral:{
+                                        log("SizeLiteral2")
+                                        action.valueAction <- copyValueRHStoLHS
+                                        action.sizeToCopy  <- LSize
+                                        //MUST: handle remainder here
+                                    }
+                                    case fConcat:{log("SizeConcat2")}
+                                }
+                            }else{
+                                log("!LooseSize2")
+                                action.valueAction <- copyValueRHStoLHS
+                                action.sizeToCopy  <- LSize
+                            }
+                        }
+                        default:{print("unknown fType in tryMergeValue_unknown_literal\n")}
+                    }
+                } else {}  // TODO: Do Convert + verify
             }
             else if(LHS.value.format == fLiteral and RHS.value.format == fUnknown){
             }
             else if(LHS.value.format == fLiteral and RHS.value.format == fLiteral){
                 // 5=5, 5=6, 'hi'='hi', 'hi'='low'
-                DO_VERIFY(action, LHS, RHS)
+                their pureInfon: LHSValue <- LHS.value
+                their pureInfon: RHSValue <- RHS.value
+                me int: RHSType <- RHSValue.fType
+                if(RHSType==LHSValue.fType){
+                    me int: LSize <- LHS.calcSize().num
+                    me int: RSize <- RHS.calcSize().num
+                    switch(RHSType){
+                        case NUM:{
+                            if(loose_Size){
+                                switch(LHS.endMarker.format){
+                                    case fUnknown:{log("fUnknown3")}
+                                    case fLiteral:{log("fLiteral3")}
+                                    case fConcat:{log("SizeConcat3")}
+                                }
+                            }else{
+                                log("!LooseSize3")
+                                if(LHSValue.num != RHSValue.num){action.reject <- true}
+                            }
+                        }
+                        case STR:{
+                            if(loose_Size){
+                                switch(LHS.endMarker.format){
+                                    case fUnknown:{log("fUnknown4")}
+                                    case fLiteral:{log("fLiteral4")}
+                                    case fConcat:{log("SizeConcat4")}
+                                }
+                            }else{
+                                log("!LooseSize4")
+                                if(LHS.value.str != RHS.value.str){action.reject <- true}
+                            }
+                        }
+                        default:{print("unknown fType in tryMergeValue_literal_literal\n")}
+                    }
+                } else {}  // TODO: Do Convert + verify
             }
-            else{log("tryMerge CATCH --  TODO: handle case")}
+            else{log("tryMergeValue LHS.value.format/RHS.value.format CATCH --  TODO: handle case")}
         }
     }
     void: trimMergeRemainder(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
         our infon: RHS <- RHSItr.item
         if(LHS.value.fType == STR and RHS.value.fType == STR){
-            me uint64: sizeDiff <- action.sizeToCopy
             me uint64: rSize <- RHS.value.str.size()
+            me uint64: sizeToCopy <- action.sizeToCopy
+            me uint64: sizeDiff <- rSize - sizeToCopy
             if(sizeDiff > 0 ){
-                me string: remainderStr <- RHS.value.str.subStr(convertToIntVal(rSize -sizeDiff), convertToIntVal(sizeDiff))
+                me string: remainderStr <- RHS.value.str.subStr(convertToIntVal(sizeToCopy), convertToIntVal(sizeDiff))
                 our infon: remainderInfon; Allocate(remainderInfon,remainderStr)
                 Allocate(action.remainder)
                 RHSItr.copyThisTo(action.remainder)
                 action.remainder.item <- remainderInfon
-                action.sizeToCopy <- rSize - sizeDiff
-                log("    TRIM:remainder:"+printInfon(remainderInfon))
             } else if(sizeDiff==0){
                 action.sizeToCopy <-rSize
             }// MUST: finish case where remainder is on the left
@@ -1168,7 +1139,7 @@ struct agent{
         }
         if(LHS.asNot){action.reject <- !action.reject}
         RHSItr.wasProcessed <- true
-        log("<<TM RHSItr.wasProcessed <- true")
+        //log("<<TM RHSItr.wasProcessed <- true")
         return(action)
     }
 
@@ -1177,7 +1148,7 @@ struct agent{
     }
 
     void: processAgendaItem(our infItr: LHSItr, me int: altNestLvl)<-{
-        log("PIA")
+        //log("PIA")
         prepWorkList(LHSItr)
         our infon: CI             <- LHSItr.item
         me int: LHS_state         <- LHSItr.state
@@ -1192,7 +1163,7 @@ struct agent{
             log("    LHSItrNext from GNDD()="+LHSItrNext.stringify())
         }else{
             withEach RHSItr in CI.wrkList{
-                log("    PIA loop:" + LHSItr.stringify() + " = " + RHSItr.stringify()+ ":LHSItr.nestLvl="+ toString(LHSItr.nestLvl)+ ":RHSItr.nestLvl="+ toString(RHSItr.nestLvl))
+                //log("    PIA loop:" + LHSItr.stringify() + " = " + RHSItr.stringify()+ ":LHSItr.nestLvl="+ toString(LHSItr.nestLvl)+ ":RHSItr.nestLvl="+ toString(RHSItr.nestLvl))
                 RHSItr.setListSeqFlags()
                 our transformAction:: action
                 action <- tryMerge(CI, RHSItr)
@@ -1204,7 +1175,7 @@ struct agent{
                 if ((LHSfType != LST and !unknownAsList) and RHSfType == LST){LHSItrNext <- LHSItr}
                 else {
                     LHSItrNext <- LHSItr.getNextDeDotted()
-                    log("        Loop:LHSItrNext from GNDD()="+LHSItrNext.stringify())
+                    //log("        Loop:LHSItrNext from GNDD()="+LHSItrNext.stringify())
                     if(LHSItrNext != NULL and LHSItrNext.state != sEOL and LHSItrNext.state != sSecondVisit){
                         log("LHSItrNext.state="+ toString(LHSItrNext.state))
                         addInfItrToAgenda(LHSItrNext)
@@ -1215,21 +1186,20 @@ struct agent{
                     if(LHSfType == LST and RHSfType != LST){
                         log("        RHSfType:A")
                         RHSItrNext <- RHSItr
-                        if(RHSItrNext.looseMode){RHSItrNext.looseSize <- true}
                     }else{
                         RHSItrNext <- RHSItr.getNextDeDotted()
-                        log("        Loop:RHSItrNext from GNDD()="+RHSItrNext.stringify() + ":RHSItr.nestLvl="+ toString(RHSItr.nestLvl) + ":RHSItrNext.nestLvl="+ toString(RHSItrNext.nestLvl))
+                        //log("        Loop:RHSItrNext from GNDD()="+RHSItrNext.stringify() + ":RHSItr.nestLvl="+ toString(RHSItr.nestLvl) + ":RHSItrNext.nestLvl="+ toString(RHSItrNext.nestLvl))
                         if(RHSItrNext.state == sEOL){
-                            log("        RHSfType:sEOL:B1")
+                            //log("        RHSfType:sEOL:B1")
                             RHSItrNext <- NULL
                         }
                         else if(RHSItrNext.looseMode){
                             log("        RHSfType:B2")
-                            RHSItrNext.looseSize <- true
+                            //RHSItrNext.looseSize <- true
                         }
                     }
                 }
-                log("        call addItemToWrkList from PIA loop")
+                //log("        call addItemToWrkList from PIA loop")
                 addItemToWrkList(LHSItrNext, RHSItrNext)
                 if(!action.reject){doAction(action, LHSItr, RHSItr)}
             }
@@ -1387,7 +1357,7 @@ struct agent{
                 if(WorkItm.wasProcessed == false){
                     if(!WorkItm.looseMode){ S <- S+" ="}
                     else { S <- S+" =="}
-                    if(WorkItm.looseSize){ S <- S + ":"}
+                    if(WorkItm.looseTop){ S <- S + ":"}
                     S <- S + " "
                     S <- S + printInfon(WorkItm.item)
                 }
