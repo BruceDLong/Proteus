@@ -122,7 +122,7 @@ model infon{
     our infon: aux1
     our WordSystem: type
     our infItr[list]: wrkList
-    our infon: subscribers
+    our infon[list]: subscribers
     flag: wrkLstPreped
     flag: wrkItmsAdded
 
@@ -310,6 +310,10 @@ model infItr{
     flag: fromDotted
     our infItr: myDots
 
+    me bool: looseSize() <- {
+        return(looseInhtd!=false or looseTop!=false)
+    }
+
     me bool: isASeq(our infon: i) <- {
         return ((i.value.format==fLiteral and i.value.fType==LST) or i.value.format==fConcat)
     }
@@ -336,7 +340,6 @@ model infItr{
     void: goNextDeep() <- {
         me string:  logStr <- "            goNextDeep:" + stringify() + " >>"
         me int: tmpState <- state
-        me bool: loose_Size <- looseTop!=false or looseInhtd!=false
         if(state == sNotASeq and item.infMode == isUnknown and ! item.value.items.isEmpty()){
             tmpState <- sFirstVisit
             logStr <- logStr + ":isUnknown"
@@ -353,7 +356,7 @@ model infItr{
                 }
                 if(goNext()){
                     setListSeqFlags()
-                    looseInhtd <- loose_Size
+                    looseInhtd <- looseSize()
                     logStr <- logStr + " setListSeqFlags:" + stringify() + " >>"
                 }else{
                     self <deep- parent
@@ -379,7 +382,9 @@ model infItr{
                         tmp.looseInhtd <- looseInhtd
                     parent     <- tmp   // TODO: After ptr bug is fixed, Allocate(parent, self)
                     itmItr     <- item.value.items.begin()
-                    looseInhtd <- parent.looseMode or parent.looseInhtd
+                    looseInhtd <- parent.looseMode!=false or parent.looseSize()
+                    looseMode  <- false
+                    looseTop   <- false
                     item       <- itmItr.item
                     setListSeqFlags()
                     nestLvl    <- nestLvl+1
@@ -980,12 +985,16 @@ struct agent{
     }
     void: tryMergeSize(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
         our infon: RHS <- RHSItr.item
-        me bool: loose_Size <- RHSItr.looseTop!=false or RHSItr.looseInhtd!=false
         action.reject <- false
         action.sizeAction <- sizeNotChecked
         me int: LHSFormat <- LHS.calcSize().format
         me int: RHSFormat <- RHS.calcSize().format
-        if(!loose_Size){
+        if(!RHSItr.looseSize()){
+            me int: RHSType <- RHS.value.fType
+            if(RHSType!=LHS.value.fType){
+                log("MUST: Ensure mixed-format infon Ends match")
+                return()
+            }
             me int: LHSInfMode <- LHS.infMode
             if(LHSFormat != fUnknown and RHSFormat != fUnknown){
                 if(LHS.calcSize().num != RHS.calcSize().num){action.reject <- true}
@@ -1006,8 +1015,6 @@ struct agent{
     }
     void: tryMergeValue(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
         our infon: RHS <- RHSItr.item
-        me bool: loose_Size <- RHSItr.looseTop!=false or RHSItr.looseInhtd!=false
-        log("TMV:  looseTop="+dispBool(RHSItr.looseTop)+"    looseInhtd="+dispBool(RHSItr.looseInhtd)+"    loose_Size="+dispBool(loose_Size))
         if(LHS.value.fType != LST and RHS.value.fType != LST){
             if(LHS.value.format == fConcat or RHS.value.format == fConcat){
                 log("WARNING: tryMerge, item is concat but not list")
@@ -1026,7 +1033,7 @@ struct agent{
                     me int: RSize <- RHS.calcSize().num
                     switch(RHSType){
                         case NUM:{
-                            if(loose_Size){
+                            if(RHSItr.looseSize()){
                                 switch(LHS.endMarker.format){
                                     case fUnknown:{
                                         log("fUnknown1")
@@ -1055,7 +1062,7 @@ struct agent{
                             }
                         }
                         case STR:{
-                            if(loose_Size){
+                            if(RHSItr.looseSize()){
                                 //"{*3+$ *4+$} == 'CatDogs'",  "$ =: 'Hello'",  "{*3+$|...}=='CatHatBatDog'"
                                 switch(LHS.endMarker.format){
                                     case fUnknown:{// MUST: set range of sizes
@@ -1101,7 +1108,7 @@ struct agent{
                     me int: RSize <- RHS.calcSize().num
                     switch(RHSType){
                         case NUM:{
-                            if(loose_Size){
+                            if(RHSItr.looseSize()){
                                 switch(LHS.endMarker.format){
                                     case fUnknown:{log("fUnknown3")}
                                     case fLiteral:{log("fLiteral3")}
@@ -1121,7 +1128,7 @@ struct agent{
                             }
                         }
                         case STR:{
-                            if(loose_Size){
+                            if(RHSItr.looseSize()){
                                 switch(LHS.endMarker.format){
                                     case fUnknown:{log("looseSizefUnknown3")}
                                     case fLiteral:{log("looseSizefLiteral3")}
@@ -1220,8 +1227,9 @@ struct agent{
                 me int: LHSfType <- LHSItr.item.value.fType
                 me int: RHSfType <- 0; if(!RHS_Empty){RHSfType <- RHSItr.item.value.fType}
                 // HANDLE LHS
-                if ((LHSfType != LST and !unknownAsList) and RHSfType == LST){LHSItrNext <- LHSItr}
-                else {
+                if ((LHSfType != LST and !unknownAsList) and RHSfType == LST){
+                    LHSItrNext <- LHSItr
+                }else{
                     LHSItrNext <- LHSItr.getNextDeDotted()
                     //log("        Loop:LHSItrNext from GNDD()="+LHSItrNext.stringify())
                     if(LHSItrNext != NULL and LHSItrNext.state != sEOL and LHSItrNext.state != sSecondVisit){
@@ -1233,7 +1241,8 @@ struct agent{
                 if(RHSItrNext == NULL){
                     if(LHSfType == LST and RHSfType != LST){
                         log("        RHSfType:A")
-                        RHSItrNext <- RHSItr
+                        RHSItrNext <- RHSItr //.getSelfCopy()
+                        RHSItrNext.looseInhtd <- true
                     }else{
                         RHSItrNext <- RHSItr.getNextDeDotted()
                         //log("        Loop:RHSItrNext from GNDD()="+RHSItrNext.stringify() + ":RHSItr.nestLvl="+ toString(RHSItr.nestLvl) + ":RHSItrNext.nestLvl="+ toString(RHSItrNext.nestLvl))
