@@ -119,7 +119,8 @@ model infon{
     flag: hasCursorHead
     flag: doCursorLookup
     our infon: cursorHead
-    our infon: aux1
+    our infon: funcArgs
+    our infon: dotPath
     our WordSystem: type
     our infItr[list]: wrkList
     our infon[list]: subscribers
@@ -226,7 +227,8 @@ model infon{
         endMarker.copyAsTypeTo(to.endMarker)
         value.copyAsTypeTo(to.value)
         if(cursorHead){cursorHead.copyAsTypeTo(to.cursorHead)}
-        if(aux1){aux1.copyAsTypeTo(to.aux1)}
+        if(funcArgs){funcArgs.copyAsTypeTo(to.funcArgs)}
+        if(dotPath){dotPath.copyAsTypeTo(to.dotPath)}
         withEach wrkListItem in wrkList {
             our infItr: ii
             Allocate(ii)
@@ -250,7 +252,8 @@ model infon{
 
         cursorMode              <- cNone
         cursorHead              <- NULL
-        aux1                    <- NULL
+        funcArgs                <- NULL
+        dotPath                 <- NULL
         type                    <- NULL
 
         our infon:: mDotsItem
@@ -309,6 +312,8 @@ model infItr{
     mode[cmdNoOp, cmdDeleteDots, cmdKeepDots, cmdInsertBeforeDots, cmdInsertAfterDots]: stitchCmd
     flag: fromDotted
     our infItr: myDots
+    our infon: LHS
+    flag: hasLHS
 
     me bool: looseSize() <- {
         return(looseInhtd!=false or looseTop!=false)
@@ -546,6 +551,7 @@ string WordSystem{
     >CID:asGiven
 }
 string infItr{
+//    >{ "." >ws > our infon:LHS}[opt]: hasLHS
     >[ ("=" <=> looseMode=false;) | ("==" <=> looseMode=true;) ] ":"[opt]:looseTop > ws > our infon:item
 }
 string listInfo[
@@ -594,10 +600,11 @@ string infon: StartSymbol="true" {
         | (":>" <=> isFunc=false; isFuncArg=true; invertFunc=false;)
         | ("<!" <=> isFunc=true; isFuncArg=false; invertFunc=true;)
         | ("!>" <=> isFunc=false; isFuncArg=true; invertFunc=true;)
-        | ("."  <=> hasCursorHead=true;)
         ]
-        >ws >our infon:aux1
+        >ws >our infon:funcArgs
     }[opt]
+
+    >{ "." >ws > our infon:dotPath}[opt]: hasCursorHead
 }
 
 struct transformAction{
@@ -744,11 +751,11 @@ struct agent{
                     normalize(CI.cursorHead)
                     our infon[itr multimap string]: idxItem <- CI.cursorHead.value.index.find(CI.type.asGiven)
                     if(idxItem != CI.cursorHead.value.index.end()){
-                        our infon: aux1Tmp <- CI.aux1
+                        our infon: dotPathTmp <- CI.dotPath
                         ciItr.item <- idxItem.val
                         CI <- ciItr.item  // CI <deep- idxItem.val
-                        if(aux1Tmp){
-                            CI.aux1 <- aux1Tmp
+                        if(dotPathTmp){
+                            CI.dotPath <- dotPathTmp
                             CI.hasCursorHead <- true
                             loopAgain <- true
                             //log("        # Cursor '.type' lookup "+CI.type.asGiven+" "+ptrToStr(CI))
@@ -759,7 +766,7 @@ struct agent{
                 }
                 CI.doCursorLookup <- false
             } else if(CI.hasCursorHead){
-                // We want to search CI for CI->aux1, which is probably a wordSystem.
+                // We want to search CI for CI->dotPath, which is probably a wordSystem.
                 // Here we prepare by moving data into better positions
                 // We set the flag CI.doCursorLookup so that the lookup can be done on the next loop.
                 our infon:: CITmp
@@ -767,7 +774,7 @@ struct agent{
                 CITmp.wrkLstPreped <- false
                 CITmp.hasCursorHead <- false
                 //log("        # Swapping cursorHead.type")
-                CI <deep- CI.aux1
+                CI <deep- CI.dotPath
                 CI.doCursorLookup <- true
                 CI.hasCursorHead <- false
                 CI.cursorHead <- CITmp
@@ -790,21 +797,21 @@ struct agent{
                //log("        # HANDLING FUNCTION ARGS")
                 if(CI.isFuncArg!=0){  // Swap func body with args
                     me infon: CITmp <- CI
-                    CI <deep- CI.aux1
+                    CI <deep- CI.funcArgs
                     CI.isFunc <- false
                     CI.isFuncArg <- false
                     CI.invertFunc <- CITmp.invertFunc
 
-                    Allocate( CI.aux1, CITmp)
-                    CI.aux1.aux1 <- NULL
-                    CI.aux1.isFunc <- false
-                    CI.aux1.isFuncArg <- false
+                    Allocate( CI.funcArgs, CITmp)
+                    CI.funcArgs.funcArgs <- NULL
+                    CI.funcArgs.isFunc <- false
+                    CI.funcArgs.isFuncArg <- false
                 }
                 our infon: tmp
                 if(CI.invertFunc!=0){tmp <- CI.getLastItem()}
                 else {tmp <- CI.getFirstItem()}
-                tmp.wrkList.pushLast(makeInfItr(CI.aux1, NULL, NULL))
-                CI.aux1 <- NULL
+                tmp.wrkList.pushLast(makeInfItr(CI.funcArgs, NULL, NULL))
+                CI.funcArgs <- NULL
                 if(CI.value.fType==LST){ciItr.state <- sFirstVisit}
                 else if(CI.value.fType!=LST){ciItr.state <- sNotASeq}
             } else {
@@ -999,7 +1006,7 @@ struct agent{
         if(!RHSItr.looseSize()){
             me int: RHSType <- RHS.value.fType
             if(RHSType!=LHS.value.fType){
-                log("MUST: Ensure mixed-format infon Ends match")
+                log("MUST: Ensure mixed-format infon Ends match: LHSType=" + fTypeStrings[LHS.value.fType] + "    RHSType="+ fTypeStrings[RHSType])
                 return()
             }
             me int: LHSInfMode <- LHS.infMode
@@ -1219,7 +1226,10 @@ struct agent{
         if(RHS_Empty){
             LHSItrNext <- LHSItr.getNextDeDotted()
             log("    LHSItrNext from GNDD()="+LHSItrNext.stringify())
-            //addInfItrToAgenda(LHSItrNext)
+            if(LHSItrNext != NULL and LHSItrNext.state != sEOL and LHSItrNext.state != sSecondVisit){
+                log("    LHSItrNext.state=" + stateStrings[LHSItrNext.state])
+                addInfItrToAgenda(LHSItrNext)
+            }
         }else{
             withEach RHSItr in CI.wrkList{
                 //log("    PIA loop:" + LHSItr.stringify() + " = " + RHSItr.stringify()+ ":LHSItr.nestLvl="+ toString(LHSItr.nestLvl)+ ":RHSItr.nestLvl="+ toString(RHSItr.nestLvl))
@@ -1237,7 +1247,7 @@ struct agent{
                     LHSItrNext <- LHSItr.getNextDeDotted()
                     //log("        Loop:LHSItrNext from GNDD()="+LHSItrNext.stringify())
                     if(LHSItrNext != NULL and LHSItrNext.state != sEOL and LHSItrNext.state != sSecondVisit){
-                        log("LHSItrNext.state="+ toString(LHSItrNext.state))
+                        log("B LHSItrNext.state="+ stateStrings[LHSItrNext.state])
                         addInfItrToAgenda(LHSItrNext)
                     }
                 }
@@ -1381,7 +1391,7 @@ struct agent{
                 itemItr <- itemItr.next
             }
             S <- S+endBrkt
-        } else {print("\nError: Unknown fType in printPureInfon(): ", pure.fType,"\n") exit(2)}
+        } else {log("\nError: Unknown fType in printPureInfon(): ", pure.fType,"\n") exit(2)}
         return(S)
     }
 
@@ -1425,11 +1435,11 @@ struct agent{
             }
 
             if (i.isFunc){
-                if(i.invertFunc){S <- S+"<!" + printInfon(i.aux1)}
-                else{S <- S+"<:" + printInfon(i.aux1)}
+                if(i.invertFunc){S <- S+"<!" + printInfon(i.funcArgs)}
+                else{S <- S+"<:" + printInfon(i.funcArgs)}
             } else if(i.isFuncArg !=0){
-                if(i.invertFunc){S <- S+"!>" + printInfon(i.aux1)}
-                else{S <- S+":>" + printInfon(i.aux1)}
+                if(i.invertFunc){S <- S+"!>" + printInfon(i.funcArgs)}
+                else{S <- S+":>" + printInfon(i.funcArgs)}
             }
         }
         return(S)
