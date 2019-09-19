@@ -275,7 +275,12 @@ model infon{
             }
         }
     }
-
+    void: takeWrkListFrom(our infon:from) <- {
+        withEach wrkItm in from.wrkList{
+            addItemToWrkList(wrkItm)
+        }
+        from.wrkList.clear()
+    }
     me string: stringifyWorklist() <- {
         me string: S <- ""
         withEach workItm in wrkList{
@@ -474,7 +479,7 @@ model infItr{
                 retVal.myDots    <- nextItr
                 //retVal.nextOr <- getNextDeDotted()
                 //retVal.item.makeOrInfon()
-                //log("    GNDD:retVal.item:After1:"+ a.printInfon(retVal.item))
+
             }
             else{      // Caused by a result of "..."
                 retVal.stitchCmd <- stitchCmd
@@ -546,6 +551,7 @@ model infItr{
 model PartPath{
     our infon: path
     mode[dotField, colonField]: pathMode
+    flag: wasTransfered
 }
 
 #define LISTBODY(LEFT_BRKT, RIGHT_BRKT) <% >{ "LEFT_BRKT" "T"[opt]:timelike  >me listInfo[opt] >our listItem[list]: items >ws "RIGHT_BRKT" } %>
@@ -554,7 +560,7 @@ string WordSystem{
     >CID:asGiven
 }
 string PartPath{
-    >{>[ ("." <=> pathMode = dotField;) | (":" <=> pathMode = colonField;) ] > ws > our infon:path}
+    >{>[ ("." <=> pathMode = dotField;) | (":" <=> pathMode = colonField;) ] > ws > our infon:path > ws ";"}
 }
 string infItr{
     >[ ("=" <=> looseMode=false;) | ("==" <=> looseMode=true;) ] ":"[opt]:looseTop > ws > our infon:item
@@ -609,7 +615,7 @@ string infon: StartSymbol="true" {
         >ws >our infon:funcArgs
     }[opt]
 
-    >our PartPath[list]: parts ";"[opt]
+    >our PartPath[list]: parts
     //>{ "." >ws > our infon:dotPath}[opt]: hasCursorHead
 }
 
@@ -785,6 +791,29 @@ struct agent{
                 CI.hasCursorHead <- false
                 CI.cursorHead <- CITmp
                 loopAgain <- true
+            } else if(!CI.parts.isEmpty()){
+                withEach part in CI.parts{
+                    if(part.path.infMode == isTag){
+                        me string: partTag <- part.path.type.asGiven
+                        if(partTag == "size"){
+                            log("IsTag:  " + partTag)
+                        }
+                        else if(partTag == "first"){
+                            log("PWL:Tag First")
+                            our infon: firstItm <- CI.getFirstItem()
+                            firstItm.takeWrkListFrom(part.path)
+                            part.wasTransfered <- true
+                        }
+                        else if(partTag == "last"){
+                            our infon: lastItm <- CI.getLastItem()
+                            lastItm.takeWrkListFrom(part.path)
+                            part.wasTransfered <- true
+                        }
+                        else if(partTag == "pred"){
+                            log("IsTag:  " + partTag)
+                        }
+                    }
+                }
             } else if(CI.infMode == isTag){
                 //log("        # Access type:"+CI.type.asGiven)
 
@@ -1056,7 +1085,7 @@ struct agent{
                             if(RHSItr.looseSize()){
                                 switch(LHS.endMarker.format){
                                     case fUnknown:{
-                                        log("LooseSize1:fUnknown")
+                                        //log("LooseSize1:fUnknown")
                                         action.valueAction <- copyValueRHStoLHS
                                         action.hardenSize  <- true
                                     }
@@ -1202,6 +1231,8 @@ struct agent{
             action.copyRHSTypeToLHS <- true
             action.sizeAction       <- copySizeRHStoLHS
             action.valueAction      <- copyValueRHStoLHS
+            //LHS.value.fType         <- RHSItr.item.value.fType
+            //LHS.infMode             <- RHSItr.item.infMode
         }else{
             if(!RHSItr.looseMode and !LHS.type.isCompatibleWith(RHS.type)){action.reject <- true}// TYPE ACTION
             if(!action.reject){tryMergeSize(action, LHS, RHSItr)} // SIZE ACTION
@@ -1219,7 +1250,7 @@ struct agent{
     }
 
     void: processAgendaItem(our infItr: LHSItr, me int: altNestLvl)<-{
-        //log("PIA")
+        me string: logStr <- "PIA:"+ printInfon(LHSItr.item) + " nstLvl="+toString(LHSItr.nestLvl)
         prepWorkList(LHSItr)
         our infon: CI             <- LHSItr.item
         me int: LHS_state         <- LHSItr.state
@@ -1230,15 +1261,16 @@ struct agent{
         our infItr: LHSItrNext <- NULL
         our infItr: RHSItrNext <- NULL
         if(RHS_Empty){
+            logStr <- logStr + ":RHS_Empty"
             LHSItrNext <- LHSItr.getNextDeDotted()
-            log("    LHSItrNext from GNDD()="+LHSItrNext.stringify())
             if(LHSItrNext != NULL and LHSItrNext.state != sEOL and LHSItrNext.state != sSecondVisit){
-                log("    LHSItrNext.state=" + stateStrings[LHSItrNext.state])
                 addInfItrToAgenda(LHSItrNext)
+                logStr <- logStr + ":addToAgenda("+printInfon(LHSItrNext.item)+")"
             }
         }else{
+            logStr <- logStr + ":!RHS_Empty"
             withEach RHSItr in CI.wrkList{
-                //log("    PIA loop:" + LHSItr.stringify() + " = " + RHSItr.stringify()+ ":LHSItr.nestLvl="+ toString(LHSItr.nestLvl)+ ":RHSItr.nestLvl="+ toString(RHSItr.nestLvl))
+                logStr <- logStr + ":LOOP"
                 RHSItr.setListSeqFlags()
                 our transformAction:: action
                 action <- tryMerge(CI, RHSItr)
@@ -1247,40 +1279,39 @@ struct agent{
                 me int: LHSfType <- LHSItr.item.value.fType
                 me int: RHSfType <- 0; if(!RHS_Empty){RHSfType <- RHSItr.item.value.fType}
                 // HANDLE LHS
+                logStr <- logStr + ":LHS"
                 if ((LHSfType != LST and !unknownAsList) and RHSfType == LST){
+                    logStr <- logStr + "(LHS is !LST & RHS is LST)"
                     LHSItrNext <- LHSItr
                 }else{
                     LHSItrNext <- LHSItr.getNextDeDotted()
-                    //log("        Loop:LHSItrNext from GNDD()="+LHSItrNext.stringify())
                     if(LHSItrNext != NULL and LHSItrNext.state != sEOL and LHSItrNext.state != sSecondVisit){
-                        log("B LHSItrNext.state="+ stateStrings[LHSItrNext.state])
                         addInfItrToAgenda(LHSItrNext)
+                        logStr <- logStr + ":addToAgenda("+printInfon(LHSItrNext.item)+")"
                     }
                 }
                 // HANDLE RHS
+                logStr <- logStr + ":RHS"
                 if(RHSItrNext == NULL){
                     if(LHSfType == LST and RHSfType != LST){
-                        log("        RHSfType:A")
+                        logStr <- logStr + ":LHS is LST & RHS is !LST"
                         RHSItrNext <- RHSItr //.getSelfCopy()
                         RHSItrNext.looseInhtd <- true
                     }else{
                         RHSItrNext <- RHSItr.getNextDeDotted()
-                        //log("        Loop:RHSItrNext from GNDD()="+RHSItrNext.stringify() + ":RHSItr.nestLvl="+ toString(RHSItr.nestLvl) + ":RHSItrNext.nestLvl="+ toString(RHSItrNext.nestLvl))
                         if(RHSItrNext.state == sEOL){
-                            //log("        RHSfType:sEOL:B1")
                             RHSItrNext <- NULL
                         }
                         else if(RHSItrNext.looseMode){
-                            log("        RHSfType:B2")
-                            //RHSItrNext.looseSize <- true
                         }
                     }
                 }
-                //log("        call addItemToWrkList from PIA loop")
+                if(RHSItrNext!= NULL){logStr <- logStr + ":addItemToWrkList("+printInfon(RHSItrNext.item)+")"}
                 addItemToWrkList(LHSItrNext, RHSItrNext)
                 if(!action.reject){doAction(action, LHSItr, RHSItr)}
             }
         }
+        //log("<<" + logStr)
     }
 
     void: processAgenda()<-{
@@ -1450,11 +1481,13 @@ struct agent{
         }
 
         withEach part in i.parts{
-            if(part.pathMode == dotField){S <- S+"."}
-            else if(part.pathMode == colonField){S <- S+":"}
-            S <- S + printInfon(part.path)
+            if(! part.wasTransfered){
+                if(part.pathMode == dotField){S <- S+"."}
+                else if(part.pathMode == colonField){S <- S+":"}
+                S <- S + printInfon(part.path)
+                S <- S + "; "
+            }
         }
-
         return(S)
     }
 
