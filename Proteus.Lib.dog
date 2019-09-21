@@ -25,8 +25,17 @@ struct GLOBAL{
         print("REGISTER:", classInfon.type.asGiven, "\n")
         classDefs.insert(classInfon.type.asGiven, classInfon)
     }
+    our infItr: makeInfItr(our infon: i, our infItr: parent, our DblLinkedListNode: idx) <- {
+        our infItr:: ret
+        ret.item   <- i
+        ret.parent <- parent
+        ret.itmItr <- idx
+        return(ret)
+    }
+
 }
 
+#include infonPrinter.dog
 #include DB_workAround.dog
 #include infonList.dog
 #include Functions.dog
@@ -262,7 +271,7 @@ model infon{
         value.items.pushLast(mDotsItem)
     }
     void: addToOrInfon(our infon: alt) <- {
-        value.items.pushLast(alt)
+        value.items.pushFirst(alt)
     }
     void: addItemToWrkList(our infItr: newWorkItem) <- {
         wrkList.pushLast(newWorkItem)
@@ -280,6 +289,15 @@ model infon{
             addItemToWrkList(wrkItm)
         }
         from.wrkList.clear()
+    }
+    void: insertNewDotPart(me string: fieldName, our infon: newPart) <- {
+        newPart.infMode <- isTag
+        Allocate(newPart.type)
+        newPart.type.asGiven <- fieldName
+        our PartPath:: newPath
+        newPath.pathMode <- dotField
+        newPath.path <- newPart
+        parts.pushLast(newPath)
     }
     me string: stringifyWorklist() <- {
         me string: S <- ""
@@ -318,6 +336,8 @@ model infItr{
     mode[cmdNoOp, cmdDeleteDots, cmdKeepDots, cmdInsertBeforeDots, cmdInsertAfterDots]: stitchCmd
     flag: fromDotted
     our infItr: myDots
+    our infItr: nextOr
+    our infItr: fieldAcc
 
     me bool: looseSize() <- {
         return(looseInhtd!=false or looseTop!=false)
@@ -347,7 +367,7 @@ model infItr{
         }
     }
     void: goNextDeep() <- {
-        me string:  logStr <- "            goNextDeep:" + stringify() + " >>"
+        me string:  logStr <- "            goNextDeep:" //+ stringify() + " >>"
         me int: tmpState <- state
         if(state == sNotASeq and item.infMode == isUnknown and ! item.value.items.isEmpty()){
             tmpState <- sFirstVisit
@@ -469,28 +489,36 @@ model infItr{
             Allocate(retVal)
             retVal.state <- sEOL
             retVal.isAList <- nextItr.isAList
-            //retVal.nextOr <- NULL
+            retVal.nextOr <- NULL
         }else if(fromDotted or nextItr.item.itmMode == mDots){  // The new item is nullable so also return the follower.
             logStr <- logStr + ":B2"
             retVal <- fillDotChild(nextItr)
-            //me agent: a
             if(!fromDotted){ // Caused by "..."
                 retVal.stitchCmd <- cmdInsertBeforeDots
                 retVal.myDots    <- nextItr
-                //retVal.nextOr <- getNextDeDotted()
-                //retVal.item.makeOrInfon()
-
+                retVal.fromDotted<- true
+                our infItr: afterDots <- nextItr.getNextDeDotted()
+                our infItr:: predAcc
+                    Allocate(predAcc.item)
+                    predAcc.item.makeOrInfon()
+                    predAcc.item.addToOrInfon(item)
+                retVal.myDots.fieldAcc <- predAcc
+                our infon:: afterDotsPred
+                    afterDots.item.insertNewDotPart("pred", afterDotsPred)
+                    afterDotsPred.addItemToWrkList(predAcc)
             }
             else{      // Caused by a result of "..."
                 retVal.stitchCmd <- stitchCmd
                 retVal.myDots    <- myDots
+                our infItr: predAcc   <- myDots.fieldAcc
+                    predAcc.item.addToOrInfon(item)
+                retVal.myDots.fieldAcc <- predAcc
                 //retVal.item.makeOrInfon()
-                //log("    GNDD:retVal.item:After2:"+ a.printInfon(retVal.item))
             }
         }else{
             logStr <- logStr + ":B3"
             retVal <- nextItr
-            //retVal.nextOr <- NULL
+            retVal.nextOr <- NULL
         }
         //if(retVal.nextAnd != NULL){retVal.nextAnd <- retVal.nextAnd.getNextDeDotted()}
         if(retVal.item!=NULL and retVal.item.itmMode == mSubItems){
@@ -531,8 +559,7 @@ model infItr{
 
     me string: stringify() <- {
         me string: S <- ""
-        me agent: a
-        S <- S + a.printInfon(item)
+        S <- S + stringifyInfon(item)
         S <- S + "|nestLvl=" + toString(nestLvl)
         S <- S + "|state=" + stateStrings[state]
         if(state==sSecondVisit){S <- "<" + S + ">"}
@@ -708,11 +735,6 @@ struct agent{
         return(false)
     }
 
-    our infItr: makeInfItr(our infon: i, our infItr: parent, our DblLinkedListNode: idx) <- {
-        our infItr:: ret <- (i, parent, idx, 0)
-        return(ret)
-    }
-
     void: addIdent(our infItr: LHSItr, our infItr: RHSItr) <- {
     // LHS gets RHS as a new ident in its wrkList
         if(RHSItr.item === LHSItr.item) {return()}
@@ -728,7 +750,7 @@ struct agent{
     }
 
     me string: ptrToStr(our infon: I) <- {
-        me string: S <- printInfon(I)
+        me string: S <- stringifyInfon(I)
         return(S)
     }
 
@@ -739,7 +761,7 @@ struct agent{
         me bool: done <- false
         //log(" > PrepWorkList")
         while(!done){
-            //log("    > LOOP of PrepWorkList: " + printInfon(CI))
+            //log("    > LOOP of PrepWorkList: " + stringifyInfon(CI))
             me bool: loopAgain <- false
             our infon: newTop<-NULL
             if(CI.itmMode == mTagDefn){
@@ -855,21 +877,21 @@ struct agent{
 
             me int: cursor <- CI.value.cursor
             if(cursor != cDefault){
-                //log("        @ HANDLING FUNCTION CALL:"+printInfon(CI))
+                //log("        @ HANDLING FUNCTION CALL:"+stringifyInfon(CI))
                 CI.value.cursor <- cDefault
                 our infon: aux Allocate(aux)
                 aux <deep- CI
                 switch(cursor){
                     case cGetLast   : {
                         newTop <- aux.getLastItem()
-                        //log("         @> GET_LAST_ITEM:"+printInfon(newTop))
+                        //log("         @> GET_LAST_ITEM:"+stringifyInfon(newTop))
                     }
                     case cGetFirst  : {newTop <- aux.getFirstItem()}
          //           case cGetMarked : {newTop <- aux.getMarked()}
                 }
                 withEach workItem in CI.wrkList{
                     newTop.wrkList.pushLast(workItem)
-                    //log("            PUSH:"+printInfon(workItem.item))
+                    //log("            PUSH:"+stringifyInfon(workItem.item))
                 }
                 aux.wrkList.clear()
                 normalize(aux)
@@ -1088,6 +1110,7 @@ struct agent{
                                         //log("LooseSize1:fUnknown")
                                         action.valueAction <- copyValueRHStoLHS
                                         action.hardenSize  <- true
+                                        //MUST: use range for size
                                     }
                                     case fLiteral:{log("LooseSize1:fLiteral")
                                         action.valueAction <- copyValueRHStoLHS
@@ -1144,6 +1167,7 @@ struct agent{
                 } else {}  // TODO: Do Convert + verify
             }
             else if(LHS.value.format == fLiteral and RHS.value.format == fUnknown){
+                //MUST: copy LHS to RHS
             }
             else if(LHS.value.format == fLiteral and RHS.value.format == fLiteral){
                 // 5=5, 5=6, 'hi'='hi', 'hi'='low'
@@ -1250,7 +1274,7 @@ struct agent{
     }
 
     void: processAgendaItem(our infItr: LHSItr, me int: altNestLvl)<-{
-        me string: logStr <- "PIA:"+ printInfon(LHSItr.item) + " nstLvl="+toString(LHSItr.nestLvl)
+        me string: logStr <- "PIA:"+ stringifyInfon(LHSItr.item) + " nstLvl="+toString(LHSItr.nestLvl)
         prepWorkList(LHSItr)
         our infon: CI             <- LHSItr.item
         me int: LHS_state         <- LHSItr.state
@@ -1265,7 +1289,7 @@ struct agent{
             LHSItrNext <- LHSItr.getNextDeDotted()
             if(LHSItrNext != NULL and LHSItrNext.state != sEOL and LHSItrNext.state != sSecondVisit){
                 addInfItrToAgenda(LHSItrNext)
-                logStr <- logStr + ":addToAgenda("+printInfon(LHSItrNext.item)+")"
+                logStr <- logStr + ":addToAgenda("+stringifyInfon(LHSItrNext.item)+")"
             }
         }else{
             logStr <- logStr + ":!RHS_Empty"
@@ -1287,7 +1311,7 @@ struct agent{
                     LHSItrNext <- LHSItr.getNextDeDotted()
                     if(LHSItrNext != NULL and LHSItrNext.state != sEOL and LHSItrNext.state != sSecondVisit){
                         addInfItrToAgenda(LHSItrNext)
-                        logStr <- logStr + ":addToAgenda("+printInfon(LHSItrNext.item)+")"
+                        logStr <- logStr + ":addToAgenda("+stringifyInfon(LHSItrNext.item)+")"
                     }
                 }
                 // HANDLE RHS
@@ -1306,7 +1330,7 @@ struct agent{
                         }
                     }
                 }
-                if(RHSItrNext!= NULL){logStr <- logStr + ":addItemToWrkList("+printInfon(RHSItrNext.item)+")"}
+                if(RHSItrNext!= NULL){logStr <- logStr + ":addItemToWrkList("+stringifyInfon(RHSItrNext.item)+")"}
                 addItemToWrkList(LHSItrNext, RHSItrNext)
                 if(!action.reject){doAction(action, LHSItr, RHSItr)}
             }
@@ -1369,128 +1393,6 @@ struct agent{
         return(true)
     }
 
-    me bool: isListWithDots(their pureInfon: pure) <- {
-        if(pure.fType!=LST){ return(false)}
-        if(pure.format==fLiteral){
-            withEach item in pure.items {
-                if(item.itmMode==mDots){return(true)}
-            }
-        }
-        return(false)
-    }
-    me string: printPureInfon(their pureInfon: pure, their pureInfon: size) <- {
-        me string: S <- ""
-        me bool: showSize <- size!=NULL and (
-            (((pure.sizeGiven !=0) and (pure.fType!=LST or pure.format!=fLiteral))
-            or (pure.fType!=NUM and size.format==fUnknown and pure.format!=fUnknown))
-            and !isListWithDots(pure)
-        )
-        if(showSize){S <- S+printPureInfon(size, NULL)}
-        if(pure.inverted){
-            if(size!=NULL){S <- S+"-"}
-            else if(pure.isLstSize==0){S <- S+"/"}
-        } else{
-                if(showSize){S <- S+"+"}
-                else if(size==NULL and pure.isLstSize==0){S <- S+"*"}
-        }
-        if(pure.fType == NUM){
-            if(pure.format == fUnknown){S<-S+"_"}
-            else{
-                me uint64:N <- pure.num
-                S <- S+ toString(N)
-            }
-        } else if(pure.fType == STR){
-            if(pure.format == fUnknown){S<-S+"$"}
-            else{
-                me string: str <- pure.str
-                S <- S+"'"+ str + "'"
-            }
-        } else if(pure.fType == LST){
-            me bool: showBar<-false
-            me string: endBrkt<-"}"
-            if(pure.cursor == cGetLast)     {S<-S+"["  endBrkt<-"]"}
-            else if(pure.format == fConcat) {S<-S+"("  endBrkt<-")"}
-            else {S <- S+("{")}
-            if(pure.timelike){S <- S+"T "}
-            if(pure.size!=NULL) {pure.size.isLstSize <- true}
-            if(pure.size!=NULL and pure.format==fLiteral){S <- S+"~"+printPureInfon(pure.size, NULL) showBar<-true}
-            if(pure.listSpec){
-                if(showBar){S <- S+" "}
-                S <- S + printInfon(pure.listSpec)
-                showBar<-true
-            }
-            if(showBar){S <- S+"| "}
-            our DblLinkedListNode: itemItr <- pure.items.begin()
-            me bool: firstTime <- true
-            while(itemItr){
-                if(!firstTime){S <- S+" "} else {firstTime <- false}
-                S <- S+printInfon(itemItr.item)
-                itemItr <- itemItr.next
-            }
-            S <- S+endBrkt
-        } else {log("\nError: Unknown fType in printPureInfon(): ", pure.fType,"\n") exit(2)}
-        return(S)
-    }
-
-    me string: printInfon(our infon: i) <- {
-        me string: S <- ""
-        if(i ==  NULL){return("NULL")}
-        if(i.itmMode==mSubItems){S<-S+"#"}
-        else if(i.itmMode==mDots){S<-S+"..."; return(S)}
-        else if(i.itmMode==mTagDefn){S<-S+"class "+i.type.asGiven+": "}
-
-        if(i.asNot){S <- S+"!"}
-        if(i.infMode==isUnknown){S <- S+"?"}
-        else if(i.infMode==newCursor){
-            S <- S+"%"
-            switch(i.cursorMode){
-                case cThis:   {S <- S+"this"}
-                case cWorld:  {S <- S+"W"}
-                case cContext:{S <- S+"C"}
-                case cPrev:   {S <- S+"prev"}
-                case cNext:   {S <- S+"next"}
-            }
-        }
-        else if(i.infMode==isTag){S <- S+i.type.asGiven}
-        else if(i.infMode==isLiteral){
-             S <- S+printPureInfon(i.value, i.calcSize())
-        }
-        else if(i.hasCursorHead){
-            S <- S + printInfon(i.cursorHead)+"."+i.type.asGiven
-        }
-        else {print("Error In PrintInfon()\n") exit(2)}
-
-        if(i.isNormed ==0){
-            withEach WorkItm in i.wrkList{
-                if(WorkItm.wasProcessed == false){
-                    if(!WorkItm.looseMode){ S <- S+" ="}
-                    else { S <- S+" =="}
-                    if(WorkItm.looseTop){ S <- S + ":"}
-                    S <- S + " "
-                    S <- S + printInfon(WorkItm.item)
-                }
-            }
-
-            if (i.isFunc){
-                if(i.invertFunc){S <- S+"<!" + printInfon(i.funcArgs)}
-                else{S <- S+"<:" + printInfon(i.funcArgs)}
-            } else if(i.isFuncArg !=0){
-                if(i.invertFunc){S <- S+"!>" + printInfon(i.funcArgs)}
-                else{S <- S+":>" + printInfon(i.funcArgs)}
-            }
-        }
-
-        withEach part in i.parts{
-            if(! part.wasTransfered){
-                if(part.pathMode == dotField){S <- S+"."}
-                else if(part.pathMode == colonField){S <- S+":"}
-                S <- S + printInfon(part.path)
-                S <- S + "; "
-            }
-        }
-        return(S)
-    }
-
     void: init(our infon: World) <- {
         world <- NULL
         context <- NULL
@@ -1551,7 +1453,7 @@ struct ProteusCore{
     me string: resultString(our infon: inf) <- {
         me string: result <- ""
         if(inf!=NULL){
-            result <- a.printInfon(inf)
+            result <- stringifyInfon(inf)
         } else {
             result <- errorMesg
         }
