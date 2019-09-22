@@ -338,6 +338,7 @@ model infItr{
     our infItr: myDots
     our infItr: nextOr
     our infItr: fieldAcc
+    flag: isOnAgenda    // True if item is currently on agenda
 
     me bool: looseSize() <- {
         return(looseInhtd!=false or looseTop!=false)
@@ -470,14 +471,10 @@ model infItr{
     our infItr: getNextDeDotted() <- {
         our infItr: nextItr
         our infItr: retVal
-        me string:  logStr <- "            GNDD: nestLvl=" + toString(nestLvl)
         if(!fromDotted){
             nextItr <- getNextDeep()
-            logStr <- logStr + ":A1:nextItr.nestLvl=" + toString(nextItr.nestLvl)
             if(nextItr.state == sError){return(NULL)}
-            //log(logStr)
         }else{
-            logStr <- logStr + ":A2"
             Allocate(nextItr)
             copyThisTo(nextItr)
             nextItr.looseMode  <- looseMode
@@ -485,13 +482,11 @@ model infItr{
             nextItr.looseInhtd <- looseInhtd
         }
         if(nextItr.state == sEOL){
-            logStr <- logStr + ":B1(state=sEOL)"
             Allocate(retVal)
             retVal.state <- sEOL
             retVal.isAList <- nextItr.isAList
             retVal.nextOr <- NULL
         }else if(fromDotted or nextItr.item.itmMode == mDots){  // The new item is nullable so also return the follower.
-            logStr <- logStr + ":B2"
             retVal <- fillDotChild(nextItr)
             if(!fromDotted){ // Caused by "..."
                 retVal.stitchCmd <- cmdInsertBeforeDots
@@ -506,6 +501,7 @@ model infItr{
                 our infon:: afterDotsPred
                     afterDots.item.insertNewDotPart("pred", afterDotsPred)
                     afterDotsPred.addItemToWrkList(predAcc)
+                log("GNDD...1:predAcc:"+predAcc.stringify())
             }
             else{      // Caused by a result of "..."
                 retVal.stitchCmd <- stitchCmd
@@ -513,18 +509,16 @@ model infItr{
                 our infItr: predAcc   <- myDots.fieldAcc
                     predAcc.item.addToOrInfon(item)
                 retVal.myDots.fieldAcc <- predAcc
+                log("GNDD...2:predAcc:"+predAcc.stringify())
             }
         }else{
-            logStr <- logStr + ":B3"
             retVal <- nextItr
             retVal.nextOr <- NULL
         }
         //if(retVal.nextAnd != NULL){retVal.nextAnd <- retVal.nextAnd.getNextDeDotted()}
         if(retVal.item!=NULL and retVal.item.itmMode == mSubItems){
-            logStr <- logStr + ":D"
             retVal <- retVal.getNextDeDotted()
         }
-        //log(logStr)
         return(retVal)
     }
     void: copyThisTo(our infItr: to) <- {
@@ -686,7 +680,7 @@ struct GLOBAL{ me ModelManager: modelMngr}
 struct agent{
     our infon: world
     our infon: context
-    our infItr[list]: agenda2
+    our infItr[list]: agenda
     // me Locale locale
 
     void: setErrorState(our infItr: infonWithError, me string: errorMesg) <- {
@@ -1274,7 +1268,16 @@ struct agent{
     }
 
     void: addInfItrToAgenda(our infItr: ii) <- {
-        agenda2.pushFirst(ii)
+        if(!ii.isOnAgenda){
+            ii.isOnAgenda <- true
+            agenda.pushFirst(ii)
+        }
+    }
+    our infItr: popInfItrFromAgenda() <- {
+        our infItr: retVal <- agenda.last()
+        agenda.popLast()
+        retVal.isOnAgenda <- false
+        return(retVal)
     }
 
     void: processAgendaItem(our infItr: LHSItr, me int: altNestLvl)<-{
@@ -1291,6 +1294,7 @@ struct agent{
         if(RHS_Empty){
             logStr <- logStr + ":RHS_Empty"
             LHSItrNext <- LHSItr.getNextDeDotted()
+            log("from GNDD1:"+ LHSItrNext.stringify())
             if(LHSItrNext != NULL and LHSItrNext.state != sEOL and LHSItrNext.state != sSecondVisit){
                 addInfItrToAgenda(LHSItrNext)
                 logStr <- logStr + ":addToAgenda1("+stringifyInfon(LHSItrNext.item)+")"
@@ -1314,6 +1318,7 @@ struct agent{
                     LHSItrNext <- LHSItr
                 }else{
                     LHSItrNext <- LHSItr.getNextDeDotted()
+                    log("----from GNDD2:"+ LHSItrNext.stringify())
                     if(LHSItrNext != NULL and LHSItrNext.state != sEOL and LHSItrNext.state != sSecondVisit){
                         addInfItrToAgenda(LHSItrNext)
                         logStr <- logStr + ":addToAgenda2("+stringifyInfon(LHSItrNext.item)+")"
@@ -1328,6 +1333,7 @@ struct agent{
                         RHSItrNext.looseInhtd <- true
                     }else{
                         RHSItrNext <- RHSItr.getNextDeDotted()
+                        log("from GNDD3:"+ RHSItrNext.stringify())
                         if(RHSItrNext.state == sEOL){
                             RHSItrNext <- NULL
                         }
@@ -1345,10 +1351,9 @@ struct agent{
     }
 
     void: processAgenda()<-{
-        withEach count in WHILE(!agenda2.isEmpty()) {
+        withEach count in WHILE(!agenda.isEmpty()) {
             if (count > 100){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
-            our infItr: CI <- agenda2.last()
-            agenda2.popLast()
+            our infItr: CI <- popInfItrFromAgenda()
             processAgendaItem(CI, 0)
         }
     }
