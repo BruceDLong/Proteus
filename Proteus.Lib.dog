@@ -387,6 +387,7 @@ model infItr{
                 if(goNext()){
                     setListSeqFlags()
                     looseInhtd <- looseSize()
+                    wasProcessed <- false  // TODO: verify this is correct
                     logStr <- logStr + " setListSeqFlags:" + stringify() + " >>"
                 }else{
                     self <deep- parent
@@ -415,6 +416,7 @@ model infItr{
                     looseInhtd <- parent.looseMode!=false or parent.looseSize()
                     looseMode  <- false
                     looseTop   <- false
+                    wasProcessed <- false // TODO: verify this is correct
                     item       <- itmItr.item
                     setListSeqFlags()
                     nestLvl    <- nestLvl+1
@@ -561,7 +563,7 @@ model infItr{
     me string: stringify() <- {
         me string: S <- ""
         S <- S + stringifyInfon(item)
-        S <- S + "|nestLvl=" + toString(nestLvl)
+        S <- S + "|wasProcessed=" + dispBool(wasProcessed)
         S <- S + "|state=" + stateStrings[state]
         if(state==sSecondVisit){S <- "<" + S + ">"}
         return (S)
@@ -1298,34 +1300,51 @@ struct agent{
     void: processAgendaItem(our infItr: LHSItr, me int: altNestLvl)<-{
         me string: logStr <- "PIA:"+ stringifyInfon(LHSItr.item) + " nstLvl="+toString(LHSItr.nestLvl)
         prepWorkList(LHSItr)
-        our infon: CI             <- LHSItr.item
-        me int: LHS_state         <- LHSItr.state
         handleFieldsInWrkList(LHSItr)
-        me bool: doNextList       <- false
-        me bool: doNextNotList    <- false
-        me bool: RHS_Empty        <- CI.wrkList.isEmpty()
+        our infon: CI          <- LHSItr.item
+        me bool: RHS_Empty     <- CI.wrkList.isEmpty()
         our infItr: LHSItrNext <- NULL
         our infItr: RHSItrNext <- NULL
         if(RHS_Empty){
             logStr <- logStr + ":RHS_Empty"
-            LHSItrNext <- LHSItr.getNextDeDotted()
-            log("from GNDD1:"+ LHSItrNext.stringify())
-            if(LHSItrNext != NULL and LHSItrNext.state != sEOL and LHSItrNext.state != sSecondVisit){
-                addInfItrToAgenda(LHSItrNext)
-                logStr <- logStr + ":addToAgenda1("+stringifyInfon(LHSItrNext.item)+")"
+            if(LHSItr.fromDotted == false){
+                LHSItrNext <- LHSItr.getNextDeDotted()
+                log("from GNDD1:"+ LHSItrNext.stringify())
+                if(LHSItrNext != NULL and LHSItrNext.state != sEOL and LHSItrNext.state != sSecondVisit){
+                    addInfItrToAgenda(LHSItrNext)
+                    logStr <- logStr + ":addToAgenda1("+stringifyInfon(LHSItrNext.item)+")"
+                }
             }
         }else{
             logStr <- logStr + ":!RHS_Empty"
             withEach RHSItr in CI.wrkList{
-                logStr <- logStr + ":LOOP"
+                logStr <- logStr+ "\n    RHSState="+stateStrings[RHSItr.state]
+                me bool: breakDotCycle <- false
                 RHSItr.setListSeqFlags()
                 our transformAction:: action
                 action <- tryMerge(CI, RHSItr)
                 if(action.reject){continue()}
+                if(LHSItr.fromDotted and RHSItr.fromDotted){
+                    breakDotCycle <- true
+                    LHSItr.stitchCmd <- cmdKeepDots
+                }
                 if(action.remainder != NULL){RHSItrNext <- action.remainder}
                 me bool: unknownAsList <- false
                 me int: LHSfType <- LHSItr.item.value.fType
                 me int: RHSfType <- 0; if(!RHS_Empty){RHSfType <- RHSItr.item.value.fType}
+                // DECIDE IF DOT CYCLE CONTINUES
+                if(LHSItr.fromDotted){
+                    if(RHSItr == NULL){
+                        logStr <- logStr + ":LHS-fromDotted & RHS NULL- return"
+                        log(logStr)
+                        return()
+                    }
+                    else if(RHSItr.fromDotted){
+                        breakDotCycle   <- true
+                        LHSItr.stitchCmd <- cmdKeepDots
+                        logStr <- logStr + ":breakDots"
+                    }
+                }
                 // HANDLE LHS
                 logStr <- logStr + ":LHS"
                 if ((LHSfType != LST and !unknownAsList) and RHSfType == LST){
@@ -1333,10 +1352,9 @@ struct agent{
                     LHSItrNext <- LHSItr
                 }else{
                     LHSItrNext <- LHSItr.getNextDeDotted()
-                    log("----from GNDD2:"+ LHSItrNext.stringify())
                     if(LHSItrNext != NULL and LHSItrNext.state != sEOL and LHSItrNext.state != sSecondVisit){
                         addInfItrToAgenda(LHSItrNext)
-                        logStr <- logStr + ":addToAgenda2("+stringifyInfon(LHSItrNext.item)+")"
+                        logStr <- logStr + ":addToAgenda2("+LHSItrNext.stringify()+")"
                     }
                 }
                 // HANDLE RHS
@@ -1356,8 +1374,8 @@ struct agent{
                         }
                     }
                 }
-                if(RHSItrNext!= NULL){logStr <- logStr + ":addItem2WrkList("+stringifyInfon(RHSItrNext.item)+")"}
-                addItemToWrkList(LHSItrNext, RHSItrNext, false)
+                if(RHSItrNext!= NULL){logStr <- logStr + "\n    addItem2WL("+RHSItrNext.stringify()+")"}
+                addItemToWrkList(LHSItrNext, RHSItrNext, breakDotCycle)
                 if(!action.reject){doAction(action, LHSItr, RHSItr)}
                 else{logStr <- logStr + ":REJECT"}
             }
@@ -1373,7 +1391,10 @@ struct agent{
         }
     }
     void: addItemToWrkList(our infItr: LHSItr, our infItr: RHSItr, me bool: breakDotCycle)<-{
-        if(LHSItr.nextOr != NULL){log("LHSItr.nextOR isn't handled!"); exit(2)}
+        if(LHSItr.nextOr != NULL){
+            log("LHSItr.nextOR isn't handled!")
+            //exit(2)
+        }
         if(LHSItr.state != sEOL){
             our infItr: crntRHS <- RHSItr
             while(crntRHS != NULL){
@@ -1383,18 +1404,19 @@ struct agent{
 //~                     nextItem.myNormNode <- pred.myNormNode
 //~                 }
 
-//~                 if(breakDotCycle){  // This sets the stitchCmd
-//~                     if(!LHSItr.fromDotted){LHSItr.stitchCmd <- cmdDeleteDots}
-//~                     else {
-//~                         if(!crntRHS.fromDotted){
-//~                         me int: dotCmd <- LHSItr.stitchCmd
-//~                             if(dotCmd==cmdInsertBeforeDots){LHSItr.stitchCmd <- cmdInsertAfterDots
-//~                                 }
-//~                             else{LHSItr.stitchCmd <- cmdInsertAfterDots}
-//~                         } else {LHSItr.stitchCmd <- cmdKeepDots} // "?=?"
-//~                     }
-//~                 }
-                if(!breakDotCycle or (!LHSItr.fromDotted or !crntRHS.fromDotted)){
+                if(breakDotCycle){  // This sets the stitchCmd
+                    if(!LHSItr.fromDotted){LHSItr.stitchCmd <- cmdDeleteDots}
+                    else{
+                        if(!crntRHS.fromDotted){
+                        me int: dotCmd <- LHSItr.stitchCmd
+                            if(dotCmd==cmdInsertBeforeDots){
+                                LHSItr.stitchCmd <- cmdInsertAfterDots
+                            }
+                            else{LHSItr.stitchCmd <- cmdInsertAfterDots}
+                        }else{LHSItr.stitchCmd <- cmdKeepDots} // "?=?"
+                    }
+                }
+                if(!breakDotCycle or !(LHSItr.fromDotted and crntRHS.fromDotted)){
                     if(RHSItr.state != sSecondVisit){
                         LHSItr.item.addInfItrToWrkList(RHSItr)
                     }
