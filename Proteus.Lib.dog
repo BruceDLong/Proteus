@@ -136,6 +136,9 @@ model infon{
     our infon[list]: subscribers
     flag: wrkLstPreped
     flag: wrkItmsAdded
+    flag: endAdded
+    flag: hasAlts
+    flag: altForDots    // if true this infon is a list of alts for mDots
 
     their pureInfon: calcSize() <- {
         if(! sizeHardened and endMarker.format==fUnknown){
@@ -277,10 +280,21 @@ model infon{
         wrkList.pushLast(newWorkItem)
     }
     void: deleteDotsInAlt() <- {
-        if(value.items.size() > 0){
-            our infon: lastInf <- value.items.last()
-            if (lastInf.itmMode == mDots){
-                value.items.popLast()
+        our infon: altAccInfon
+        if(hasAlts){
+            withEach wrkItm in wrkList{
+                if(wrkItm.item.altForDots){
+                    altAccInfon <- wrkItm.item
+                    break()
+                }
+            }
+            if(altAccInfon != NULL){
+                if(altAccInfon.value.items.size() > 0){
+                    our infon: lastInf <- altAccInfon.value.items.last()
+                    if (lastInf.itmMode == mDots){
+                        altAccInfon.value.items.popLast()
+                    }
+                }
             }
         }
     }
@@ -298,6 +312,42 @@ model infon{
         newPath.pathMode <- dotField
         newPath.path <- newPart
         parts.pushLast(newPath)
+    }
+    void: insertNewAltDotPart(our infon: newPart) <- {
+        our infon: altAccInfon
+        if(hasAlts){
+            withEach wrkItm in wrkList{
+                if(wrkItm.item.altForDots){
+                    altAccInfon <- wrkItm.item
+                    break()
+                }
+            }
+            if(altAccInfon == NULL){log("ERROR in insertNewAltDotPart(), no altForDots found.") exit(1)}
+        }else{
+            Allocate(altAccInfon)
+            altAccInfon.altForDots <- true
+            altAccInfon.makeOrInfon()
+            our infItr: altAccItr <- makeInfItr(altAccInfon, NULL, 0)
+            addInfItrToWrkList(altAccItr)
+            hasAlts <- true
+        }
+        altAccInfon.addToOrInfon(newPart)
+    }
+    our infon: findPartPathByTag(me string: fieldName) <- {
+        withEach part in parts{
+            if(part.path.type != NULL and part.path.type.asGiven == fieldName){
+                return(part.path)
+            }
+        }
+        return(NULL)
+    }
+    our infon: findOrAddPartPathByTag(me string: fieldName) <- {
+        our infon: retVal <- findPartPathByTag(fieldName)
+        if(retVal == NULL){
+            Allocate(retVal)
+            insertNewDotPart(fieldName, retVal)
+        }
+        return(retVal)
     }
     me string: stringifyWorklist() <- {
         me string: S <- ""
@@ -557,9 +607,15 @@ model infItr{
             parent.item.value.items.pushLast(i)
         }
     }
-
+    me bool: hasUnresolvedWrkItems() <- {
+        withEach wrkItem in item.wrkList{
+            if(!wrkItem.wasProcessed){return(true)}
+        }
+        return(false)
+    }
     me string: stringify() <- {
         me string: S <- ""
+        S <- S + item.mySymbol(item) + "  "
         S <- S + stringifyInfon(item)
         S <- S + "|nestLvl=" + toString(nestLvl)
         S <- S + "|state=" + stateStrings[state]
@@ -618,33 +674,51 @@ string pureInfon{
 }
 string infon: StartSymbol="true" {
     "!"[opt]:asNot
-   >[ ( "?" <=> infMode=isUnknown;  value.format=fUnknown;  endMarker.format=fUnknown;)
+    >[>{>WordSystem:type >ws}
+    |(>{>WordSystem:type >ws ":" >ws
+    >{>[ ( "?" <=> infMode=isUnknown;  value.format=fUnknown;  endMarker.format=fUnknown;)
+        | ( >{ "%" >[ ("this" <=> cursorMode=cThis;) | ("W" <=> cursorMode=cWorld;) | ("prev" <=> cursorMode=cPrev;) | ("next" <=> cursorMode=cNext;) ]} <=> infMode=newCursor;)
+        | ( >[ (>{ >[("*" <=>  endMarker.inverted = false; ) | ("/" <=>  endMarker.inverted = true; ) ] > me pureInfon: endMarker
+                   >ws >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ] > me pureInfon: value
+                } <=> endMarker.fType=NUM; value.sizeGiven=true;)
+             | (>{ >ws >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ][opt] > me pureInfon: value}  <=> endMarker.num=0; endMarker.fType=NUM; endMarker.format=fUnknown; value.sizeGiven=false;)
+             ]   <=>   infMode=isLiteral;
+          )
+        |
+        ] >ws
+        >our infItr[list]:wrkList
+        >{ >[ ("<:" <=> isFunc=true; isFuncArg=false; invertFunc=false;)
+            | (":>" <=> isFunc=false; isFuncArg=true; invertFunc=false;)
+            | ("<!" <=> isFunc=true; isFuncArg=false; invertFunc=true;)
+            | ("!>" <=> isFunc=false; isFuncArg=true; invertFunc=true;)
+            ]
+            >ws >our infon:funcArgs
+        }[opt]
+        >our PartPath[list]: parts
+    }
 
-    | ( >{ "%" >[ ("this" <=> cursorMode=cThis;) | ("W" <=> cursorMode=cWorld;) | ("prev" <=> cursorMode=cPrev;) | ("next" <=> cursorMode=cNext;) ]} <=> infMode=newCursor;)
 
-    | ( >[ (>{ >[("*" <=>  endMarker.inverted = false; ) | ("/" <=>  endMarker.inverted = true; ) ] > me pureInfon: endMarker
-               >ws >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ] > me pureInfon: value
-            } <=> endMarker.fType=NUM; value.sizeGiven=true;)
-         | (>{ >ws >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ][opt] > me pureInfon: value}  <=> endMarker.num=0; endMarker.fType=NUM; endMarker.format=fUnknown; value.sizeGiven=false;)
-         ]   <=>   infMode=isLiteral;
-      )
-
-    | ( >WordSystem:type <=> infMode=isTag;)
-    ]
-    >ws
-
-    >our infItr[list]:wrkList
-
-    >{ >[ ("<:" <=> isFunc=true; isFuncArg=false; invertFunc=false;)
-        | (":>" <=> isFunc=false; isFuncArg=true; invertFunc=false;)
-        | ("<!" <=> isFunc=true; isFuncArg=false; invertFunc=true;)
-        | ("!>" <=> isFunc=false; isFuncArg=true; invertFunc=true;)
-        ]
-        >ws >our infon:funcArgs
-    }[opt]
-
-    >our PartPath[list]: parts
-    //>{ "." >ws > our infon:dotPath}[opt]: hasCursorHead
+    }<=> infMode=isTag;)
+    |>{>[ ( "?" <=> infMode=isUnknown;  value.format=fUnknown;  endMarker.format=fUnknown;)
+        | ( >{ "%" >[ ("this" <=> cursorMode=cThis;) | ("W" <=> cursorMode=cWorld;) | ("prev" <=> cursorMode=cPrev;) | ("next" <=> cursorMode=cNext;) ]} <=> infMode=newCursor;)
+        | ( >[ (>{ >[("*" <=>  endMarker.inverted = false; ) | ("/" <=>  endMarker.inverted = true; ) ] > me pureInfon: endMarker
+                   >ws >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ] > me pureInfon: value
+                } <=> endMarker.fType=NUM; value.sizeGiven=true;)
+             | (>{ >ws >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ][opt] > me pureInfon: value}  <=> endMarker.num=0; endMarker.fType=NUM; endMarker.format=fUnknown; value.sizeGiven=false;)
+             ]   <=>   infMode=isLiteral;
+          )
+        |
+        ] >ws
+        >our infItr[list]:wrkList
+        >{ >[ ("<:" <=> isFunc=true; isFuncArg=false; invertFunc=false;)
+            | (":>" <=> isFunc=false; isFuncArg=true; invertFunc=false;)
+            | ("<!" <=> isFunc=true; isFuncArg=false; invertFunc=true;)
+            | ("!>" <=> isFunc=false; isFuncArg=true; invertFunc=true;)
+            ]
+            >ws >our infon:funcArgs
+        }[opt]
+        >our PartPath[list]: parts
+    }]
 }
 
 struct transformAction{
@@ -1288,6 +1362,7 @@ struct agent{
     }
 
     void: processAgendaItem(our infItr: LHSItr, me int: altNestLvl)<-{
+        log("_________________________")
         if(LHSItr.state==sSecondVisit){
           /*  if(altNestLvl==0 and noUnresolvedWrkItems()){
                 // remove the ... from predAlts
@@ -1359,7 +1434,7 @@ struct agent{
                         }
                     }
                 }
-                addItemToWrkList(LHSItrNext, RHSItrNext, breakDotCycle)
+                addItemToWrkList(LHSItr, LHSItrNext, RHSItrNext, breakDotCycle)
                 if(!action.reject){doAction(action, LHSItr, RHSItr)}
             }
         }
@@ -1373,41 +1448,63 @@ struct agent{
             processAgendaItem(CI, 0)
         }
     }
-    void: addItemToWrkList(our infItr: LHSItr, our infItr: RHSItr, me bool: breakDotCycle)<-{
-        if(LHSItr.nextOr != NULL){log("LHSItr.nextOR isn't handled!");}// exit(2)}
-        if(LHSItr.state != sEOL){
-            our infItr: crntRHS <- RHSItr
-            while(crntRHS != NULL){
 
-//~                 if(pred!=NULL){
-//~                     nextItem.predecessors.pushLast(pred)
-//~                     nextItem.myNormNode <- pred.myNormNode
-//~                 }
-
-//~                 if(breakDotCycle){  // This sets the stitchCmd
-//~                     if(!LHSItr.fromDotted){LHSItr.stitchCmd <- cmdDeleteDots}
-//~                     else {
-//~                         if(!crntRHS.fromDotted){
-//~                         me int: dotCmd <- LHSItr.stitchCmd
-//~                             if(dotCmd==cmdInsertBeforeDots){LHSItr.stitchCmd <- cmdInsertAfterDots
-//~                                 }
-//~                             else{LHSItr.stitchCmd <- cmdInsertAfterDots}
-//~                         } else {LHSItr.stitchCmd <- cmdKeepDots} // "?=?"
-//~                     }
-//~                 }
-                if(!breakDotCycle or !(LHSItr.fromDotted and crntRHS.fromDotted)){
-                    if(RHSItr.state != sSecondVisit){
-                        LHSItr.item.addInfItrToWrkList(RHSItr)
+    void: addItemToWrkList(our infItr: pred, our infItr: LHSItr, our infItr: RHSItr, me bool: breakDotCycle)<-{
+        log("    PRED:"+pred.stringify())
+        our infItr: crntLHS <- LHSItr
+        me int: LHSCount <- 0
+        while(crntLHS != NULL){
+            if(crntLHS.state != sEOL){
+                prepWorkList(crntLHS)
+                our infItr: crntRHS <- RHSItr
+                while(crntRHS != NULL){
+                    if(pred!=NULL){
+                        // nextItem.predecessors.pushLast(pred)
+                        our infon: afterDots
+                        if(crntLHS.state == sSecondVisit){
+                            our infon:: afterDotsEnd
+                            // tmp crntLHS.item.insertNewDotPart("end", afterDotsEnd)
+                            afterDots <- afterDotsEnd
+                            crntLHS.item.endAdded <- true
+                        }else{
+                            afterDots <- crntLHS.item
+                        }
+                        if(LHSCount == 0){
+                            // tmp crntLHS.item.insertNewDotPart("pred", pred.item)
+                        }
+                        else if(LHSCount > 0){
+                            // tmp our infon: predItem <- crntLHS.item.findOrAddPartPathByTag("pred")
+                            // tmp predItem.insertNewAltDotPart(pred.item)
+                        }
                     }
+                    if(breakDotCycle){  // This sets the stitchCmd
+                        // MUST: store stitchCmd in RHSItr instead of LHSItr
+                        if(!LHSItr.fromDotted){LHSItr.stitchCmd <- cmdDeleteDots}
+                        else {
+                            if(!crntRHS.fromDotted){
+                            me int: dotCmd <- LHSItr.stitchCmd
+                                if(dotCmd==cmdInsertBeforeDots){
+                                    LHSItr.stitchCmd <- cmdInsertAfterDots
+                                }
+                                else{LHSItr.stitchCmd <- cmdInsertAfterDots}
+                            } else {LHSItr.stitchCmd <- cmdKeepDots} // "?=?"
+                        }
+                    }
+                    if(!breakDotCycle or !(LHSItr.fromDotted and crntRHS.fromDotted)){
+                        if(RHSItr.state != sSecondVisit){
+                            LHSItr.item.addInfItrToWrkList(RHSItr)
+                        }else{
+                            me bool: evaluationFinished <- !RHSItr.hasUnresolvedWrkItems()
+                            if(evaluationFinished){
+                                crntLHS.item.deleteDotsInAlt()
+                            }
+                        }
+                    }
+                    crntRHS <- crntRHS.nextOr
                 }
-
-// Below is old; delete it
-//~                 if(RHSItr != NULL and RHSItr.state != sSecondVisit and LHSItr.item != NULL){ // TODO: this is wrong
-//~                     LHSItr.item.addInfItrToWrkList(RHSItr)
-//~                 }
-
-                crntRHS <- crntRHS.nextOr
             }
+            crntLHS <- crntLHS.nextOr
+            LHSCount <- LHSCount + 1
         }
     }
     me void: normalize(our infon: inf) <- {
