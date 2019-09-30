@@ -121,7 +121,7 @@ model infon{
     flag: sizeHardened
     mode[mItem, mSubItems, mDots, mTagDefn]:      itmMode
     mode[isUnknown, newCursor, isTag, isLiteral]: infMode
-    mode[cNone, cThis, cWorld, cContext, cPrev, cNext]:  cursorMode
+    mode[cNone, cThis, cWorld, cContext, cPrev, cNext, cPred, cSucc, cEndPred]:  cursorMode
     me pureInfon: endMarker
     me pureInfon: value
     flag: isNormed
@@ -390,6 +390,7 @@ model infItr{
     our infItr: nextOr
     our infItr: fieldAcc
     flag: isOnAgenda    // True if item is currently on agenda
+    our infItr[map string]: pctTags
 
     me bool: looseSize() <- {
         return(looseInhtd!=false or looseTop!=false)
@@ -419,18 +420,19 @@ model infItr{
         }
     }
     void: goNextDeep() <- {
-        me string:  logStr <- "            goNextDeep:" //+ stringify() + " >>"
+        me string:  logStr <- "----goNextDeep nestLvl="  + toString(nestLvl)
         me int: tmpState <- state
         if(state == sNotASeq and item.infMode == isUnknown and ! item.value.items.isEmpty()){
             tmpState <- sFirstVisit
             logStr <- logStr + ":isUnknown"
         }
+        logStr <- logStr + " case("+stateStrings[tmpState]+ "):"
         switch(tmpState) {
             case sNotASeq: sSecondVisit:{  // Get the next item or set EOL
-                logStr <- logStr + " case(sNotASeq&sSecondV):" + stringify() + " >>"
                 if(parent==NULL or nestLvl==0){
                     logStr <- logStr + ":set sEOL: nestLvl=" + toString(nestLvl)
                     if(parent==NULL){logStr <- logStr + ":NULL parent" }
+                    else{logStr <- logStr + ": parent=" + parent.stringify()}
                     state <- sEOL
                     //log(logStr)
                     return()
@@ -440,14 +442,15 @@ model infItr{
                     looseInhtd <- looseSize()
                     logStr <- logStr + " setListSeqFlags:" + stringify() + " >>"
                 }else{
+                    me int: tmpNestLvl <- nestLvl
                     self <deep- parent
-                    logStr <- logStr + ":copyDeep(parent)" + toString(nestLvl)
+                    nestLvl <- tmpNestLvl - 1
                     state <- sSecondVisit
                     isAList <- true
+                    logStr <- logStr + ":copyDeep(parent) nestLvl-1=" + toString(nestLvl)
                 }
             }
             case sFirstVisit:{
-                logStr <- logStr + ":sFirstV"
                 if(item.value.items.isEmpty()){
                     state <- sSecondVisit
                     isAList <- true
@@ -455,12 +458,7 @@ model infItr{
                     //Prepare to iterate children
                     our infItr: tmp
                     Allocate(tmp)
-                        tmp.itmItr     <-itmItr
-                        tmp.parent     <-parent
-                        tmp.item       <- item
-                        tmp.looseMode  <- looseMode
-                        tmp.looseTop   <- looseTop
-                        tmp.looseInhtd <- looseInhtd
+                        copyThisTo(tmp)
                     parent     <- tmp   // TODO: After ptr bug is fixed, Allocate(parent, self)
                     itmItr     <- item.value.items.begin()
                     looseInhtd <- parent.looseMode!=false or parent.looseSize()
@@ -472,10 +470,10 @@ model infItr{
                     logStr <- logStr + ":nestLvl+1=" + toString(nestLvl)
                 }
             }
-            case sInited: {logStr <- logStr + ":sInited" state <- sFirstVisit}
-            case sEOL:    {logStr <- logStr + ":sEOL" item<-NULL}
-            case sInvalid:{logStr <- logStr + ":sInvalid" item<-NULL;   state <- sError}
-            case sError:  {logStr <- logStr + ":sError" item<-NULL}
+            case sInited: {state <- sFirstVisit}
+            case sEOL:    {item<-NULL}
+            case sInvalid:{item<-NULL;   state <- sError}
+            case sError:  {item<-NULL}
             default: {print("Error: invalid iterator state:", state, "\n")}
         }
         //log(logStr)
@@ -589,7 +587,28 @@ model infItr{
     void: deleteCrnt() <- {
         itmItr <- parent.item.deleteListNode(itmItr)
     }
-
+    void: insertNewPctTag(me string: tag, our infon: newPart) <- {
+        our infItr[itr map string]: tagItr <- pctTags.find(tag)
+        if(tagItr == pctTags.end()){
+            our infItr:: newItr
+            newItr.item <- newPart
+            pctTags.insert(tag, newItr)
+        }else{
+            tagItr.val.item.addInfItrToWrkList(makeInfItr(newPart, NULL, 0))
+        }
+    }
+    our infItr: findOrAddPctTag(me string: tag) <- {
+        our infItr: retVal
+        our infItr[itr map string]: tagItr <- pctTags.find(tag)
+        if(tagItr == pctTags.end()){
+            Allocate(retVal)
+            Allocate(retVal.item)
+            pctTags.insert(tag, retVal)
+        }else{
+            retVal <- tagItr.val
+        }
+        return(retVal)
+    }
     void: insertBefore(our DblLinkedListNode: itm, our infon: i) <- {
         if(itm){
             parent.item.value.items.insertBefore(itm, i)
@@ -668,7 +687,7 @@ string infon: StartSymbol="true" {
     >[>{>WordSystem:type >ws}
     |>{>WordSystem:type >ws ":" >ws
     >{>[ ( "?" <=> infMode=isUnknown;  value.format=fUnknown;  endMarker.format=fUnknown;)
-        | ( >{ "%" >[ ("this" <=> cursorMode=cThis;) | ("W" <=> cursorMode=cWorld;) | ("prev" <=> cursorMode=cPrev;) | ("next" <=> cursorMode=cNext;) ]} <=> infMode=newCursor;)
+        | ( >{ "%" >[ ("this" <=> cursorMode=cThis;) | ("W" <=> cursorMode=cWorld;) | ("prev" <=> cursorMode=cPrev;) | ("next" <=> cursorMode=cNext;) | ("pred" <=> cursorMode=cPred;)  | ("succ" <=> cursorMode=cSucc;) | ("endPred" <=> cursorMode=cEndPred;)]} <=> infMode=newCursor;)
         | ( >[ (>{ >[("*" <=>  endMarker.inverted = false; ) | ("/" <=>  endMarker.inverted = true; ) ] > me pureInfon: endMarker
                    >ws >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ] > me pureInfon: value
                 } <=> endMarker.fType=NUM; value.sizeGiven=true;)
@@ -691,7 +710,7 @@ string infon: StartSymbol="true" {
 
     }
     |>{>[ ( "?" <=> infMode=isUnknown;  value.format=fUnknown;  endMarker.format=fUnknown;)
-        | ( >{ "%" >[ ("this" <=> cursorMode=cThis;) | ("W" <=> cursorMode=cWorld;) | ("prev" <=> cursorMode=cPrev;) | ("next" <=> cursorMode=cNext;) ]} <=> infMode=newCursor;)
+        | ( >{ "%" >[ ("this" <=> cursorMode=cThis;) | ("W" <=> cursorMode=cWorld;) | ("prev" <=> cursorMode=cPrev;) | ("next" <=> cursorMode=cNext;) | ("pred" <=> cursorMode=cPred;) | ("succ" <=> cursorMode=cSucc;) | ("endPred" <=> cursorMode=cEndPred;) ]} <=> infMode=newCursor;)
         | ( >[ (>{ >[("*" <=>  endMarker.inverted = false; ) | ("/" <=>  endMarker.inverted = true; ) ] > me pureInfon: endMarker
                    >ws >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ] > me pureInfon: value
                 } <=> endMarker.fType=NUM; value.sizeGiven=true;)
@@ -955,6 +974,9 @@ struct agent{
                     case cContext:{newTop <- context}
                     case cPrev:   {} //{newTop <- previous}
                     case cNext:   {} //{newTop <- next}
+                    case cPred:   {newTop <- ciItr.findOrAddPctTag("pred").item}
+                    case cSucc:   {newTop <- ciItr.findOrAddPctTag("succ").item}
+                    case cEndPred:{newTop <- ciItr.findOrAddPctTag("endPred").item}
                 }
             } else {done <- !loopAgain}
 
@@ -1455,21 +1477,21 @@ struct agent{
                         // nextItem.predecessors.pushLast(pred)
                         if(LHSCount == 0){
                             log("        Before crntLHS:"+crntLHS.stringify())
-                            crntLHS.insertNewDotPart("pred", pred.item)
-                            log("        After  crntLHS:"+crntLHS.stringify())
+                            crntLHS.insertNewPctTag("pred", pred.item)
+                            log("        After  LHS.pred:"+crntLHS.pctTags["pred"].stringify())
                         }
                         else if(LHSCount > 0){
-                            our infon: altList <- crntLHS.item.findOrAddPartPathByTag("pred")
-                            log("PREPPING ALT_LIST" + stringifyInfon(altList))
+                            our infItr: altList <- crntLHS.findOrAddPctTag("pred")
+                            log("PREPPING ALT_LIST" + stringifyInfon(altList.item))
                             log("        Before-B crntLHS:"+crntLHS.stringify())
                             // HERE, the first time, the altList should be blank and it should be a .pred of crntLHS.
                             // The 2nd+ times, the same one should appear to be appended to.
                             // If crntLHS is on secondVisit, there should be .end.pred.
-                            altList.insertNewAltDotPart(pred.item)
-                            log("INSERTED ALT INTO ALT_LIST" + stringifyInfon(altList))
+                            altList.item.insertNewAltDotPart(pred.item)
+                            log("INSERTED ALT INTO ALT_LIST" + stringifyInfon(altList.item))
                             // Here, the first time, altList should become a [predItem ...]
                             // Thw 2nd+ times things should be prepended.
-                            log("        After-B  crntLHS:"+crntLHS.stringify())
+                            log("        After-B  LHS.pred:"+crntLHS.pctTags["pred"].stringify())
                         }
                     }
                     if(breakDotCycle){  // This sets the stitchCmd
