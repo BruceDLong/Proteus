@@ -277,6 +277,7 @@ model infon{
         value.items.pushFirst(alt)
     }
     void: addInfItrToWrkList(our infItr: newWorkItem) <- {
+        log("            add2WL:"+newWorkItem.stringify())
         wrkList.pushLast(newWorkItem)
     }
     void: deleteDotsInAlt() <- {
@@ -656,7 +657,7 @@ model infItr{
             //if(item.hasAlts){S <- S + "|hasAltsTrue" }
             //S <- S + "(parent:" + parent.mySymbol(parent) + ")"
             //if(nextAnd){S <- S+ " & "+ nextAnd.stringify()}
-            if(state==sSecondVisit){S <- S + ">"}
+            if(state==sSecondVisit){S <- S + ">SV"}
             if(nextOr){S <- S+ "] NEXT_OR ["+ nextOr.stringify()}
         }
         S <- S+"]"
@@ -1391,8 +1392,8 @@ struct agent{
     }
 
     void: addInfItrToAgenda(our infItr: ii) <- {
-        me string: logStr <- "ADD TO AGENDA:" + ii.stringify()
-        if(ii != NULL and ii.state != sEOL and ii.state != sSecondVisit){
+        me string: logStr <- "        ADD_TO_AGENDA:" + ii.stringify()
+        if(ii != NULL and ii.state != sEOL){
             if(!ii.isOnAgenda){
                 agenda.pushFirst(ii)
                 ii.isOnAgenda <- true
@@ -1408,6 +1409,7 @@ struct agent{
 
     void: processAgendaItem(our infItr: LHSItr, me int: altNestLvl)<-{
         log("_________________________")
+        log("PAI: LHS: "+LHSItr.stringify())
         prepWorkList(LHSItr)
         handleFieldsInWrkList(LHSItr)
         our infon: CI             <- LHSItr.item
@@ -1417,7 +1419,7 @@ struct agent{
         our infItr: RHSItrNext <- NULL
         if(RHS_Empty){
             if(LHSItr.fromDotted==false){
-                log("PAI: LHS: "+LHSItr.stringify()+", RHS: NULL")
+                log("    PAI: RHS: NULL")
                 LHSItrNext <- LHSItr.getNextDeDotted()
                 addInfItrToAgenda(LHSItrNext)
             }
@@ -1427,40 +1429,45 @@ struct agent{
                 if(tmpItrCount>20){log("DEBUG: Too many loops..."); exit(2)} else {tmpItrCount<-tmpItrCount+1}
                 log("PAI: LHS: "+stringifyInfon(LHSItr.item)+" ("+LHSItr.mySymbol(LHSItr)+")"+", RHS#"+toString(tmpItrCount)+": "+stringifyInfon(RHSItr.item)+" ("+RHSItr.mySymbol(RHSItr)+")")
                 if(RHSItr.wasProcessed!=false){log("WasProcessed"); continue()} else {RHSItr.wasProcessed <- true}
-                RHSItr.setListSeqFlags()
-                if(RHSItr.state == sSecondVisit){
-                    if(RHSItr.item.itmMode != mSubItems){continue()}
-                }
                 our transformAction:: action
-                action <- tryMerge(CI, RHSItr)
-                if(action.reject){log("          REJECT"); continue()}
-                if(LHSItr.fromDotted and RHSItr.fromDotted){
-                    breakDotCycle<-true
-                    LHSItr.stitchCmd <- cmdKeepDots
-                }
-
-                if(action.remainder != NULL){RHSItrNext <- action.remainder}
-
-                // Do init for ?={...}
                 me bool: unknownAsList <- false
-                if(LHSItr.item.infMode == isUnknown and RHSItr.item.value.fType == LST){
-                    our infon:: newNode
-                    newNode.itmMode <- mDots
-                    LHSItr.item.value.items.pushFirst(newNode)
-                    unknownAsList <- true
-                }
+                if(LHSItr.state != sSecondVisit){
+                    RHSItr.setListSeqFlags()
+                    if(RHSItr.state == sSecondVisit){
+                        if(RHSItr.item.itmMode != mSubItems){continue()}
+                    }
+                    action <- tryMerge(CI, RHSItr)
+                    if(action.reject){log("          REJECT"); continue()}
+                    if(LHSItr.fromDotted and RHSItr.fromDotted){
+                        breakDotCycle<-true
+                        LHSItr.stitchCmd <- cmdKeepDots
+                    }
 
+                    if(action.remainder != NULL){RHSItrNext <- action.remainder}
+
+                    // Do init for ?={...}
+                    if(LHSItr.item.infMode == isUnknown and RHSItr.item.value.fType == LST){
+                        our infon:: newNode
+                        newNode.itmMode <- mDots
+                        LHSItr.item.value.items.pushFirst(newNode)
+                        unknownAsList <- true
+                    }
+                }else{log("SECOND-VISIT")}
                 me int: LHSfType <- LHSItr.item.value.fType
                 me int: RHSfType <- 0; if(!RHS_Empty){RHSfType <- RHSItr.item.value.fType}
                 // HANDLE LHS
                 if ((LHSfType != LST and !unknownAsList) and RHSfType == LST){
-                    LHSItrNext <- LHSItr
+                    //LHSItrNext <- LHSItr
+                    Allocate(LHSItrNext)
+                    LHSItr.copyThisTo(LHSItrNext)
+                    log("from copyThisTo:LHSItrNext:"+LHSItrNext.stringify())
                 }else{
                     LHSItrNext <- LHSItr.getNextDeDotted()
                 }
                 // HANDLE RHS
                 if(RHSItrNext == NULL){
                     if(LHSfType == LST and RHSfType != LST){
+                        Allocate(RHSItrNext)
                         RHSItr.copyThisTo(RHSItrNext) // <- RHSItr //.getSelfCopy()
                         RHSItrNext.looseInhtd <- true
                     }else{
@@ -1474,7 +1481,7 @@ struct agent{
                 }
 
                 addItemToWrkList(LHSItr, LHSItrNext, RHSItrNext, breakDotCycle)
-                doAction(action, LHSItr, RHSItr)
+                if(LHSItr.state != sSecondVisit){doAction(action, LHSItr, RHSItr)}
             }
         }
     }
@@ -1489,28 +1496,31 @@ struct agent{
     }
 
     void: addItemToWrkList(our infItr: pred, our infItr: LHSItr, our infItr: RHSItr, me bool: breakDotCycle)<-{
+        log("----pred:"+pred.stringify())
         our infItr: crntLHS <- LHSItr
         me int: LHSCount <- 0
         while(crntLHS != NULL){
             if(crntLHS.state != sEOL){
+                log("    ----crntLHS:"+crntLHS.stringify())
                 our infItr: crntRHS <- RHSItr
                 while(crntRHS != NULL){
+                    log("        ----crntRHS:"+crntRHS.stringify())
                     if(pred!=NULL){
                         // nextItem.predecessors.pushLast(pred)
                         if(LHSCount == 0){
                             crntLHS.insertNewPctTag("pred", pred)
-                            log("        A insertNewPctTag crntLHS: "+crntLHS.stringify())
+                            //log("        A insertNewPctTag crntLHS: "+crntLHS.stringify())
                         }
                         else if(LHSCount > 0){
               //              our infItr: altList <- crntLHS.findOrAddPctTag("pred")
-//our infon: altList <- crntLHS.item.findOrAddAltWrkItm()
+our infon: altList <- crntLHS.item.findOrAddAltWrkItm()
  //                           log("        PREPPING ALT_LIST: " + stringifyInfon(altList))
                             //log("        Before-B crntLHS: "+crntLHS.stringify())
                             // HERE, the first time, the altList should be blank and it should be a .pred of crntLHS.
                             // The 2nd+ times, the same one should appear to be appended to.
                             // If crntLHS is on secondVisit, there should be .end.pred.
               //              altList.item.insertNewAltDotPart(pred.item)
-//altList.addToOrInfon(crntRHS.item)
+altList.addToOrInfon(crntRHS.item)
                             //log("        INSERTED ALT INTO ALT_LIST: " + altList.stringify())
                             // Here, the first time, altList should become a [predItem ...]
                             // Thw 2nd+ times things should be prepended.
@@ -1518,7 +1528,7 @@ struct agent{
                         }
                     }
                     if(breakDotCycle){  // This sets the stitchCmd
-                        // MUST: store stitchCmd in RHSItr instead of crntLHS
+                        // MUST: store stitchCmd in crntRHS instead of crntLHS
                         if(!crntLHS.fromDotted){crntLHS.stitchCmd <- cmdDeleteDots}
                         else {
                             if(!crntRHS.fromDotted){
@@ -1531,16 +1541,25 @@ struct agent{
                         }
                     }
                     if(!breakDotCycle or !(crntLHS.fromDotted and crntRHS.fromDotted)){
-                        if(RHSItr.state != sSecondVisit){
-                            crntLHS.item.addInfItrToWrkList(RHSItr)
+        // MUST: This is almost certainly wrong. What about RHS=secondState and LHS!=secondstate. Also, look at the older code base.
+                        if(crntRHS.state != sSecondVisit){
+                            our infItr: RHS2Add
+                            if(LHSCount == 0){RHS2Add <- crntRHS}
+                            else{
+                                Allocate(RHS2Add)
+                                crntRHS.copyThisTo(RHS2Add)
+                            }
+                            crntLHS.item.addInfItrToWrkList(RHS2Add)
                         }else{
-                            me bool: evaluationFinished <- !RHSItr.hasUnresolvedWrkItems()
-                            log("    evaluationFinished="+dispBool(evaluationFinished))
+                            me bool: evaluationFinished <- !crntRHS.hasUnresolvedWrkItems()
+                            //log("        evaluationFinished="+dispBool(evaluationFinished))
                             if(evaluationFinished){
                                 if(crntLHS.pctTags.containsKey("pred")){
                                     crntLHS.pctTags["pred"].item.deleteDotsInAlt()
+                                    log("        LHS PRED after deleteDots:"+crntLHS.pctTags["pred"].stringify())
                                 }
                              //   log("    LHS PRED after deleteDots:"+crntLHS.pctTags["pred"].stringify())
+                                if(crntLHS.state == sSecondVisit){crntLHS.item.addInfItrToWrkList(crntRHS)}
                             }
                         }
                     }
