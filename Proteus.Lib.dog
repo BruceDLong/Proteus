@@ -29,9 +29,9 @@ struct GLOBAL{
     }
     our infItr: makeInfItr(our infon: i, our infItr: parent, our DblLinkedListNode: idx) <- {
         our infItr:: ret
-        ret.item   <- i
-        ret.parent <- parent
-        ret.itmItr <- idx
+        ret.item    <- i
+        ret.parent  <- parent
+        ret.infNode <- idx
         return(ret)
     }
 
@@ -53,6 +53,7 @@ model pureInfon{
     me flag: timelike
     flag: sizeGiven
     flag: isLstSize
+    me flag: tailUnfinished
     me uint64: num
     me string: str
     me DblLinkedList: items            //  our list<our infon, [fast_prepend, fast_delete]>: newItems
@@ -143,6 +144,23 @@ model infon{
     flag: altForDots    // if true this infon is a list of alts for mDots
     flag: isOnAgenda    // True if item is currently on agenda
 
+    me int64: sizeIfKnown() <- {
+        if(endMarker.format == fLiteral){return(endMarker.num)}
+        return(-1)
+    }
+    me int64: countGivenItems() <- {
+        me int64: acc <- 0
+        withEach item in value.items{
+            if(item.itmMode == mItem) {
+                acc <- acc + 1
+            } else if(item.itmMode == mSubItems){
+                me int64: childCount <- item.sizeIfKnown()
+                if(childCount==-1){return(-1)}
+                acc <- acc + childCount
+            } else if(item.itmMode == mDots){log("count:@mDots:"+toString(acc)) exit(2) return(acc)}
+        }
+        return(acc)
+    }
     their pureInfon: calcSize() <- {
         if(!sizeHardened and !value.sizeGiven and endMarker.format==fUnknown){
             if(value.fType==STR and value.format==fLiteral){
@@ -192,10 +210,11 @@ model infon{
 
     our infon: getLastItem() <- {
         // ASSERT(Should be already normed and a non-concat list)
+        //TODO: handle [...]
         our infon: lastItem
         if(!value.items.isEmpty()) {
             lastItem <- value.items.last()
-        }  else {lastItem <- NULL}
+        }else{log("WARNING: TODO: handle [...] tailUnfinished: "+ dispBool(value.tailUnfinished)); exit(2); return(NULL)}
         switch(lastItem.itmMode){
             case mItem:{}
             case mSubItems:{lastItem <- lastItem.getLastItem()}
@@ -380,6 +399,17 @@ model infon{
         }
         return(retVal)
     }
+    me string: lengthStatus(our infItr: parent) <- {
+        //MUST: complete after range functionality works
+        if(parent.item.endMarker.format==fLiteral){
+            me uint64: maxSize <- parent.item.endMarker.num
+            me int64: itmCount <- parent.item.countGivenItems()
+            if(itmCount == -1){return("?")}
+            if(itmCount < maxSize){return("L")}
+            else if(itmCount == maxSize){return("E")}
+            else{return("G")}
+        }else{return("?")}
+    }
     me string: stringifyWorklist() <- {
         me string: S <- ""
         withEach workItm in wrkList{
@@ -405,7 +435,7 @@ model infon{
 model infItr{
     our infon: item
     our infItr: parent
-    our DblLinkedListNode: itmItr
+    our DblLinkedListNode: infNode
     mode [asID, asFirst, asLast, asMarked, asFirstParent, asLastParent, asMarkedParent]: target
     flag: looseMode
     flag: looseTop
@@ -417,6 +447,7 @@ model infItr{
     flag: isAList
     mode[cmdNoOp, delDots, keepDots, insB4Dots, insAftDots]: stitchCmd
     flag: fromDotted
+    flag: isTentative
     our infItr: myDots
     our infItr: nextOr
     our infItr: fieldAcc
@@ -434,11 +465,11 @@ model infItr{
         if(!item.value.items.isEmpty()){
             Allocate(retVal)
             retVal.parent     <- selfPtr
-            retVal.itmItr     <- item.value.items.begin()
+            retVal.infNode    <- item.value.items.begin()
             retVal.looseInhtd <- looseMode!=false or looseSize()
             retVal.looseMode  <- false
             retVal.looseTop   <- false
-            retVal.item       <- retVal.itmItr.item
+            retVal.item       <- retVal.infNode.item
             retVal.setListSeqFlags()
             retVal.nestLvl    <- nestLvl+1
         }
@@ -449,18 +480,37 @@ model infItr{
         else{state <- sNotASeq; isAList <- false}
     }
     me bool: goNext() <- {
+        me string: lenStatus
         while(true){
-            if(parent==NULL or item==NULL or itmItr.next==NULL){
-                item <- NULL  // Signify EOL
-                return(false)
+            if(parent==NULL or item==NULL or infNode.next==NULL){
+                lenStatus <- item.lengthStatus(parent)
+                if(lenStatus == "L" or lenStatus == "?"){
+                    our infon:: newInf
+                    our infon: infonType <- parent.item.value.listSpec
+                    if(infonType != NULL){
+                        newInf <deep- infonType // MUST: be a lazy cow copy
+                    }else{
+                        newInf.value.fType   <- tUnknown
+                        newInf.infMode       <- isUnknown
+                        newInf.itmMode       <- mItem
+                        newInf.value.format  <- fUnknown
+                        newInf.sizeHardened  <- true
+                    }
+                    if(lenStatus == "?"){newInf.value.tailUnfinished <- true}
+                    parent.item.value.items.pushLast(newInf)
+                    infNode <- infNode.next
+                    item    <- newInf
+                    return(true)
+                }else{
+                    item <- NULL  // Signify EOL
+                    return(false)
+                }
             }
-            itmItr  <- itmItr.next
-            item <- itmItr.item
+            infNode <- infNode.next
+            item    <- infNode.item
             if(item.itmMode == mTagDefn){
                 registerClass(item)
-            }else {
-                return(true)
-            }
+            }else{return(true)}
         }
     }
     void: goNextDeep() <- {
@@ -504,11 +554,11 @@ model infItr{
                     Allocate(tmp)
                         copyThisTo(tmp)
                     parent     <- tmp   // TODO: After ptr bug is fixed, Allocate(parent, self)
-                    itmItr     <- item.value.items.begin()
+                    infNode    <- item.value.items.begin()
                     looseInhtd <- parent.looseMode!=false or parent.looseSize()
                     looseMode  <- false
                     looseTop   <- false
-                    item       <- itmItr.item
+                    item       <- infNode.item
                     setListSeqFlags()
                     nestLvl    <- nestLvl+1
                     logStr <- logStr + ":nestLvl+1=" + toString(nestLvl)
@@ -537,12 +587,12 @@ model infItr{
         return(retVal)
     }
     our infon: getPrevPtr() <- {
-        if(parent==NULL or item==NULL or itmItr.prev==NULL) {return(NULL)}
-        return(itmItr.prev.item)
+        if(parent==NULL or item==NULL or infNode.prev==NULL) {return(NULL)}
+        return(infNode.prev.item)
     }
-    our infItr: fillDotChild(their infItr: parent) <- {
+    our infItr: fillDotChild(their infItr: ii) <- {
         our infon: child
-        our infon: infonType <- parent.parent.item.value.listSpec
+        our infon: infonType <- ii.item.value.listSpec
         if(infonType != NULL){
             Allocate(child)
             child <deep- infonType // should be a lazy cow copy
@@ -555,13 +605,13 @@ model infItr{
         }
         our infItr: tentativeItr
         Allocate(tentativeItr)
-        tentativeItr.itmItr     <- parent.itmItr
-        tentativeItr.parent     <- parent.parent
-        tentativeItr.looseMode  <- parent.looseMode
-        tentativeItr.looseTop   <- parent.looseTop
-        tentativeItr.looseInhtd <- parent.looseInhtd
+        tentativeItr.infNode    <- ii.infNode
+        tentativeItr.parent     <- ii.parent
+        tentativeItr.looseMode  <- ii.looseMode
+        tentativeItr.looseTop   <- ii.looseTop
+        tentativeItr.looseInhtd <- ii.looseInhtd
         tentativeItr.item       <- child
-        tentativeItr.nestLvl    <- parent.nestLvl
+        tentativeItr.nestLvl    <- ii.nestLvl
         tentativeItr.setListSeqFlags() // Set state, etc.
         tentativeItr.fromDotted <- true
         tentativeItr.myDots     <- NULL
@@ -613,7 +663,7 @@ model infItr{
     void: copyThisTo(our infItr: to) <- {
         to.item         <- item
         to.parent       <- parent
-        to.itmItr       <- itmItr
+        to.infNode      <- infNode
         to.target       <- target
         to.looseMode    <- looseMode
         to.looseTop     <- looseTop
@@ -636,7 +686,7 @@ model infItr{
         }
     }
     void: deleteCrnt() <- {
-        itmItr <- parent.item.deleteListNode(itmItr)
+        infNode <- parent.item.deleteListNode(infNode)
     }
     void: insertNewPctTag(me string: tag, our infItr: newItr) <- {
         our infItr[itr map string]: tagItr <- pctTags.find(tag)
@@ -694,7 +744,7 @@ model infItr{
         S <- S+"]"
         return (S)
     }
-    void: INIT() <- {Allocate(itmItr)}
+    void: INIT() <- {Allocate(infNode)}
     void: initialize(our infon: inf) <- {
         if(inf==NULL) {state <- sError; return()}
         item <- inf
@@ -812,7 +862,26 @@ struct pureInfon {
 }
 struct infItr {}
 struct infon {
-    void: postParseProcessing() <- {}
+    void: postParseProcessing() <- {
+        me int: numItems <- value.items.size()
+        if(numItems > 0){
+            our infon: lastItem <- value.items.last()
+            if(lastItem.value.tailUnfinished and lastItem.itmMode == mSubItems and lastItem.endMarker.format == fUnknown){
+                value.tailUnfinished <- true
+                value.items.popLast()
+            }
+        }
+        if(itmMode == mDots){
+            itmMode              <- mSubItems
+            endMarker.format     <- fUnknown
+            value.fType          <- LST
+            infMode              <- isLiteral
+            value.tailUnfinished <- true
+        }
+        if(value.tailUnfinished == false){
+            calcSize()
+        }else{sizeHardened <- true}
+    }
 }
 struct PartPath{}
 //////////////////////////
@@ -828,7 +897,7 @@ struct ModelManager {
     }
 }
 
-struct GLOBAL{ me ModelManager: modelMngr}
+struct GLOBAL{me ModelManager: modelMngr}
 
 
 //////////////////////////
@@ -1023,6 +1092,7 @@ struct agent{
                     }
                     case cGetFirst  : {newTop <- aux.getFirstItem()}
          //           case cGetMarked : {newTop <- aux.getMarked()}
+                    default:{log("PrepWL: cursor:"+cursorStrings[cursor])}
                 }
                 withEach workItem in CI.wrkList{
                     newTop.wrkList.pushLast(workItem)
@@ -1106,7 +1176,7 @@ struct agent{
 
     void: JoinIfConcat(our infItr: node) <- {
         if(node.parent!=NULL and node.parent.item!=NULL and (node.parent.item.value.format==fConcat)){
-            if(node.itmItr.isFirst()){ // Set parent's type
+            if(node.infNode.isFirst()){ // Set parent's type
             } else {
                 our infon: prev <- node.getPrevPtr()
                 if(joinOnRight(prev, node.item)){
@@ -1439,6 +1509,39 @@ struct agent{
         agenda.popLast()
         return(retVal)
     }
+    bool: handleRHSAlts(our infItr: LHSItr, our infItr: RHSItr) <- {
+        // MUST: this is hard coded, must integrate
+        //log("    HRAlts-LHSItr:"+LHSItr.item.mySymbol(LHSItr.item)+"    "+LHSItr.stringify())
+        //log(".......HRA:RHSItr:"+RHSItr.item.mySymbol(RHSItr.item)+"    "+RHSItr.stringify())
+        //log(".......HRA:cursor:"+cursorStrings[RHSItr.item.value.cursor])
+        if(RHSItr.item.value.cursor == cGetLast){
+            //log(".......HRA:RHSformat:"+formatStrings[RHSItr.item.endMarker.format])
+            if(RHSItr.item.endMarker.format == fUnknown){
+                //log(".......HRA:LHSformat:"+formatStrings[LHSItr.item.value.format])
+                if(LHSItr.item.value.format == fLiteral){
+                    our infon: lastInf <- RHSItr.item.value.items.last()
+                    //log(".......HRA:lastInf.itmMode:"+itmModeStrings[lastInf.itmMode])
+                    if(lastInf.itmMode != mDots){
+                        our infItr: RHSItmItr <- RHSItr.getFirstItr(RHSItr)
+                        me int: acceptCount <- 0
+                        our infItr: lastNotRejectedItr
+                        log(".......HRA:RHSItmItr:"+RHSItmItr.stringify())
+                        while(RHSItmItr != NULL and RHSItmItr.item != NULL and RHSItmItr.nestLvl != 0 and RHSItmItr.state != sSecondVisit){
+                            log("HandleAltsLoop:"+RHSItmItr.stringify())
+                            our transformAction:: action
+                            action <- tryMerge(LHSItr.item, RHSItmItr)
+                            if(action.reject){RHSItmItr.wasRejected <- true}
+                            else{acceptCount <- acceptCount +1 lastNotRejectedItr <- RHSItmItr}
+                            RHSItmItr <- RHSItmItr.getNext()
+                        }
+                        if(acceptCount == 1){LHSItr.item.addInfItrToWrkList(lastNotRejectedItr, false) log("ALT:"+lastNotRejectedItr.stringify())}
+                        return(true)
+                    }
+                }
+            }
+        }
+        return(false)
+    }
 
     void: processAgendaItem(our infItr: LHSItr, me int: altNestLvl)<-{
         log("_________________________")
@@ -1467,6 +1570,7 @@ struct agent{
                 crntRHSMySymbol <- RHS.mySymbol(RHS)
                 //theClip.dispAndWait("start PAI LHS:"+LHS.mySymbol(LHS)+"   RHS:"+RHS.mySymbol(RHS))
                 our transformAction:: action
+                if(handleRHSAlts(LHSItr, RHSItr)){continue()}
                 me bool: unknownAsList <- false
                 if(LHSItr.state != sSecondVisit){
                     RHSItr.setListSeqFlags()
@@ -1591,9 +1695,11 @@ struct agent{
                             me bool: evaluationFinished <- !crntRHS.hasUnresolvedWrkItems()
                             //log("        evaluationFinished="+dispBool(evaluationFinished))
                             if(evaluationFinished){
-                                if(crntLHS.pctTags.containsKey("pred")){
-                                    crntLHS.pctTags["pred"].item.deleteDotsInAlt()
-                                    log("        LHS PRED after deleteDots:"+crntLHS.pctTags["pred"].stringify())
+                                if(crntLHS.item.hasAlts){
+                                    me bool: dotsDeleted <- crntLHS.item.deleteDotsInAlt()
+                                    if(dotsDeleted){
+                                        log("        after deleteDots:"+crntLHS.stringify())
+                                    }
                                 }
                                 if(crntLHS.state == sSecondVisit){crntLHS.item.addInfItrToWrkList(crntRHS, false)}
                             }
@@ -1618,9 +1724,7 @@ struct agent{
 
     void: appendToWorld(our infon: newInfon) <- {
         our infon: dotsAtTheEnd <- world.value.items.last()
-        world.value.items.popLast()
         world.value.items.pushLast(newInfon)
-        world.value.items.pushLast(dotsAtTheEnd)
     }
 
     me bool: loadAndParseData() <- {
