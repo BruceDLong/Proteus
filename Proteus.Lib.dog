@@ -501,10 +501,11 @@ model infItr{
                     infNode <- infNode.next
                     item    <- newInf
                     return(true)
-                }else{
+                }else if(lenStatus == "E"){
                     item <- NULL  // Signify EOL
+                    parent.item.value.tailUnfinished <- false
                     return(false)
-                }
+                }else if(lenStatus == "G"){log("INFON TOO BIG")}
             }
             infNode <- infNode.next
             item    <- infNode.item
@@ -512,6 +513,18 @@ model infItr{
                 registerClass(item)
             }else{return(true)}
         }
+    }
+    void: beginIterating(our DblLinkedListNode: newNode) <- {
+        our infItr:: tmp
+        copyThisTo(tmp)
+        parent     <- tmp   // TODO: After ptr bug is fixed, Allocate(parent, self)
+        infNode    <- newNode
+        looseInhtd <- parent.looseMode!=false or parent.looseSize()
+        looseMode  <- false
+        looseTop   <- false
+        item       <- infNode.item
+        setListSeqFlags()
+        nestLvl    <- nestLvl+1
     }
     void: goNextDeep() <- {
         me string:  logStr <- "----goNextDeep nestLvl="  + toString(nestLvl)
@@ -546,21 +559,28 @@ model infItr{
             }
             case sFirstVisit:{
                 if(item.value.items.isEmpty()){
-                    state <- sSecondVisit
-                    isAList <- true
-                } else {
-                    //Prepare to iterate children
-                    our infItr: tmp
-                    Allocate(tmp)
-                        copyThisTo(tmp)
-                    parent     <- tmp   // TODO: After ptr bug is fixed, Allocate(parent, self)
-                    infNode    <- item.value.items.begin()
-                    looseInhtd <- parent.looseMode!=false or parent.looseSize()
-                    looseMode  <- false
-                    looseTop   <- false
-                    item       <- infNode.item
-                    setListSeqFlags()
-                    nestLvl    <- nestLvl+1
+                    if(item.value.tailUnfinished == false){
+                        state <- sSecondVisit
+                        isAList <- true
+                    }else{
+                        if(!item.endMarker.format==fLiteral or item.endMarker.num != 0){
+                            our infon:: newInf
+                            our infon: infonType <- item.value.listSpec
+                            if(infonType != NULL){
+                                newInf <deep- infonType // MUST: be a lazy cow copy
+                            }else{
+                                newInf.value.fType   <- tUnknown
+                                newInf.infMode       <- isUnknown
+                                newInf.itmMode       <- mItem
+                                newInf.value.format  <- fUnknown
+                                newInf.sizeHardened  <- true
+                            }
+                            item.value.items.pushLast(newInf)
+                            beginIterating(item.value.items.begin())
+                        }
+                    }
+                }else{
+                    beginIterating(item.value.items.begin())
                     logStr <- logStr + ":nestLvl+1=" + toString(nestLvl)
                 }
             }
@@ -621,35 +641,35 @@ model infItr{
     our infItr: getNextDeDotted() <- {
         our infItr: nextItr
         our infItr: retVal
-        if(!fromDotted){
+        //if(!fromDotted){
             nextItr <- getNextDeep()
             if(nextItr.state == sError){return(NULL)}
-        }else{
-            Allocate(nextItr)
-            copyThisTo(nextItr)
-            nextItr.looseMode  <- looseMode
-            nextItr.looseTop   <- looseTop
-            nextItr.looseInhtd <- looseInhtd
-        }
+        //}else{
+            //Allocate(nextItr)
+            //copyThisTo(nextItr)
+            //nextItr.looseMode  <- looseMode
+            //nextItr.looseTop   <- looseTop
+            //nextItr.looseInhtd <- looseInhtd
+        //}
         if(nextItr.state == sEOL){
             Allocate(retVal)
             retVal.state <- sEOL
             retVal.isAList <- nextItr.isAList
             retVal.nextOr <- NULL
         }else if(fromDotted or nextItr.item.itmMode == mDots){  // The new item is nullable so also return the follower.
-            retVal <- fillDotChild(nextItr)
+            log("ERROR: in GNDD:fromDotted:"+dispBool(fromDotted)+"  itmMode:"+itmModeStrings[nextItr.item.itmMode])
+            exit(2)
+            /*retVal <- fillDotChild(nextItr)
             if(!fromDotted){ // Caused by "..."
                 retVal.stitchCmd <- insB4Dots
                 retVal.myDots    <- nextItr
                 retVal.nextOr    <- nextItr.getNextDeDotted()
-                //log("---------GNDD1...retVal:"+retVal.nextOr.stringify())
             }
             else{      // Caused by a result of "..."
                 retVal.stitchCmd <- stitchCmd
                 retVal.myDots    <- myDots
                 retVal.nextOr    <- nextOr
-                //log("--------GNDD2...retVal:"+retVal.nextOr.stringify())
-            }
+            }*/
         }else{
             retVal <- nextItr
             retVal.nextOr <- NULL
