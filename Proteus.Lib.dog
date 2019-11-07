@@ -143,6 +143,7 @@ model infon{
     flag: hasAlts
     flag: altForDots    // if true this infon is a list of alts for mDots
     flag: isOnAgenda    // True if item is currently on agenda
+    flag: isTentative
 
     me int64: sizeIfKnown() <- {
         if(endMarker.format == fLiteral){return(endMarker.num)}
@@ -210,8 +211,28 @@ model infon{
 
     our infon: getLastItem() <- {
         // ASSERT(Should be already normed and a non-concat list)
-        //TODO: handle [...]
         our infon: lastItem
+        if(value.tailUnfinished){
+            me string: lenStatus <- lengthStatus()
+            if(lenStatus == "L" or lenStatus == "?"){
+                our infItr: virtualLastItem <- searchWorkListForRelation(asLast)
+                if(virtualLastItem==NULL){
+                // Make a virtual last item to be joined later.
+                    Allocate(virtualLastItem)
+                    virtualLastItem.target <- asLast
+                    Allocate(virtualLastItem.item)
+                    virtualLastItem.item.endMarker.format <- fUnknown
+                    wrkList.pushLast(virtualLastItem)
+                }
+                lastItem <- virtualLastItem.item
+                return(lastItem)
+            }
+            else if(lenStatus == "E"){
+                value.tailUnfinished <- false
+            }
+            else if(lenStatus == "G"){
+            }
+        }
         if(!value.items.isEmpty()) {
             lastItem <- value.items.last()
         }else{log("WARNING: TODO: handle [...] tailUnfinished: "+ dispBool(value.tailUnfinished)); exit(2); return(NULL)}
@@ -293,6 +314,8 @@ model infon{
 
         our infon:: mDotsItem
         mDotsItem.itmMode       <- mDots
+        log("ERROR set mDots-2")
+        exit(2)
         value.items.pushLast(mDotsItem)
     }
     void: addToOrInfon(our infon: alt) <- {
@@ -399,11 +422,11 @@ model infon{
         }
         return(retVal)
     }
-    me string: lengthStatus(our infItr: parent) <- {
+    me string: lengthStatus() <- {
         //MUST: complete after range functionality works
-        if(parent.item.endMarker.format==fLiteral){
-            me uint64: maxSize <- parent.item.endMarker.num
-            me int64: itmCount <- parent.item.countGivenItems()
+        if(endMarker.format==fLiteral){
+            me uint64: maxSize <- endMarker.num
+            me int64: itmCount <- countGivenItems()
             if(itmCount == -1){return("?")}
             if(itmCount < maxSize){return("L")}
             else if(itmCount == maxSize){return("E")}
@@ -447,7 +470,6 @@ model infItr{
     flag: isAList
     mode[cmdNoOp, delDots, keepDots, insB4Dots, insAftDots]: stitchCmd
     flag: fromDotted
-    flag: isTentative
     our infItr: myDots
     our infItr: nextOr
     our infItr: fieldAcc
@@ -480,10 +502,9 @@ model infItr{
         else{state <- sNotASeq; isAList <- false}
     }
     me bool: goNext() <- {
-        me string: lenStatus
         while(true){
             if(parent==NULL or item==NULL or infNode.next==NULL){
-                lenStatus <- item.lengthStatus(parent)
+                me string: lenStatus <- parent.item.lengthStatus()
                 if(lenStatus == "L" or lenStatus == "?"){
                     our infon:: newInf
                     our infon: infonType <- parent.item.value.listSpec
@@ -496,7 +517,7 @@ model infItr{
                         newInf.value.format  <- fUnknown
                         newInf.sizeHardened  <- true
                     }
-                    if(lenStatus == "?"){newInf.value.tailUnfinished <- true}
+                    if(lenStatus == "?"){newInf.isTentative <- true}
                     parent.item.value.items.pushLast(newInf)
                     infNode <- infNode.next
                     item    <- newInf
@@ -1608,9 +1629,6 @@ struct agent{
 
                     // Do init for ?={...}
                     if(LHSItr.item.infMode == isUnknown and RHSItr.item.value.fType == LST){
-                        our infon:: newNode
-                        newNode.itmMode <- mDots
-                        LHSItr.item.value.items.pushFirst(newNode)
                         unknownAsList <- true
                     }
                 }else{log("SECOND-VISIT")}
