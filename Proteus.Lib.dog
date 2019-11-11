@@ -298,24 +298,17 @@ model infon{
         tmp <deep- self
         clear()
         infMode                 <- isLiteral
-        infSize.format        <- fUnknown
+        infSize.format          <- fUnknown
         value.fType             <- LST
         value.format            <- fLiteral
         value.cursor            <- cGetLast
         value.sizeGiven         <- false
         value.listSpec          <- tmp
-
         cursorMode              <- cNone
         cursorHead              <- NULL
         funcArgs                <- NULL
         dotPath                 <- NULL
         type                    <- NULL
-
-        our infon:: mDotsItem
-        mDotsItem.itmMode       <- mDots
-        log("ERROR set mDots-2")
-        exit(2)
-        value.items.pushLast(mDotsItem)
     }
     void: addToOrInfon(our infon: alt) <- {
         value.items.pushFirst(alt)
@@ -502,29 +495,34 @@ model infItr{
     }
     me bool: goNext() <- {
         while(true){
-            if(parent==NULL or item==NULL or infNode.next==NULL){
-                me string: lenStatus <- parent.item.lengthStatus()
-                if(lenStatus == "L" or lenStatus == "?"){
-                    our infon:: newInf
-                    our infon: infonType <- parent.item.value.listSpec
-                    if(infonType != NULL){
-                        newInf <deep- infonType // MUST: be a lazy cow copy
-                    }else{
-                        newInf.value.fType   <- tUnknown
-                        newInf.infMode       <- isUnknown
-                        newInf.itmMode       <- mItem
-                        newInf.value.format  <- fUnknown
-                    }
-                    if(lenStatus == "?"){newInf.isTentative <- true}
-                    parent.item.value.items.pushLast(newInf)
-                    infNode <- infNode.next
-                    item    <- newInf
-                    return(true)
-                }else if(lenStatus == "E"){
-                    item <- NULL  // Signify EOL
-                    parent.item.value.tailUnfinished <- false
-                    return(false)
-                }else if(lenStatus == "G"){log("INFON TOO BIG")}
+            if(item==NULL){return(false)}
+            if(infNode==NULL){log("ERROR: GN:infNode==NULL") exit(2)}
+            if(parent==NULL){log("ERROR: GN:parent==NULL") exit(2)}
+            if(infNode.next==NULL){
+                if(parent.item.value.tailUnfinished){
+                    me string: lenStatus <- parent.item.lengthStatus()
+                    log("GN:lenStatus:"+lenStatus)
+                    if(lenStatus == "L" or lenStatus == "?"){
+                        our infon:: newInfon
+                        our infon: infonType <- parent.item.value.listSpec
+                        if(infonType != NULL){
+                            newInfon <deep- infonType // MUST: be a lazy cow copy
+                        }else{
+                            newInfon.value.fType   <- tUnknown
+                            newInfon.infMode       <- isUnknown
+                            newInfon.itmMode       <- mItem
+                            newInfon.value.format  <- fUnknown
+                        }
+                        if(lenStatus == "?"){newInfon.isTentative <- true}
+                        infNode <- item.value.items.pushLast(newInfon)
+                        item    <- newInfon
+                        return(true)
+                    }else if(lenStatus == "E"){
+                        item <- NULL  // Signify EOL
+                        parent.item.value.tailUnfinished <- false
+                        return(false)
+                    }else if(lenStatus == "G"){log("INFON TOO BIG")}
+                }else{return(false)}
             }
             infNode <- infNode.next
             item    <- infNode.item
@@ -546,7 +544,7 @@ model infItr{
         nestLvl    <- nestLvl+1
     }
     void: goNextDeep() <- {
-        me string:  logStr <- "----goNextDeep nestLvl="  + toString(nestLvl)
+        me string:  logStr <- "----goNextDeep:"+stringify()
         me int: tmpState <- state
         if(state == sNotASeq and item.infMode == isUnknown and ! item.value.items.isEmpty()){
             tmpState <- sFirstVisit
@@ -566,7 +564,7 @@ model infItr{
                 if(goNext()){
                     setListSeqFlags()
                     looseInhtd <- looseSize()
-                    logStr <- logStr + " setListSeqFlags:" + stringify() + " >>"
+                    logStr <- logStr + " GNthenSetFlags:" + stringify() + " >>"
                 }else{
                     me int: tmpNestLvl <- nestLvl
                     self <deep- parent
@@ -660,8 +658,8 @@ model infItr{
         our infItr: nextItr
         our infItr: retVal
         //if(!fromDotted){
-            nextItr <- getNextDeep()
-            if(nextItr.state == sError){return(NULL)}
+        nextItr <- getNextDeep()
+        if(nextItr.state == sError){return(NULL)}
         //}else{
             //Allocate(nextItr)
             //copyThisTo(nextItr)
@@ -694,7 +692,7 @@ model infItr{
         }
         //if(retVal.nextAnd != NULL){retVal.nextAnd <- retVal.nextAnd.getNextExtended()}
         if(retVal.item!=NULL and retVal.item.itmMode == mSubItems){
-            retVal <- retVal.getNextExtended()
+            retVal.nextOr <- retVal.getNextExtended()
         }
         return(retVal)
     }
@@ -1044,6 +1042,7 @@ struct agent{
                 // We want to search CI for CI->dotPath, which is probably a wordSystem.
                 // Here we prepare by moving data into better positions
                 // We set the flag CI.doCursorLookup so that the lookup can be done on the next loop.
+                // MUST: move some functionality to postParseProcessing()
                 our infon:: CITmp
                 CITmp <deep- CI
                 CITmp.wrkLstPreped <- false
@@ -1094,6 +1093,7 @@ struct agent{
             } else if(CI.isFunc or CI.isFuncArg){
                //log("        # HANDLING FUNCTION ARGS")
                 if(CI.isFuncArg!=0){  // Swap func body with args
+                    // MUST: move this functionality to postParseProcessing
                     me infon: CITmp <- CI
                     CI <deep- CI.funcArgs
                     CI.isFunc <- false
@@ -1604,7 +1604,7 @@ struct agent{
                 crntRHSMySymbol <- RHS.mySymbol(RHS)
                 //theClip.dispAndWait("start PAI LHS:"+LHS.mySymbol(LHS)+"   RHS:"+RHS.mySymbol(RHS))
                 our transformAction:: action
-                if(handleRHSAlts(LHSItr, RHSItr)){continue()}
+                //if(handleRHSAlts(LHSItr, RHSItr)){continue()}
                 me bool: unknownAsList <- false
                 if(LHSItr.state != sSecondVisit){
                     RHSItr.setListSeqFlags()
