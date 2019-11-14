@@ -1,6 +1,19 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/goNext/simple
+    unit/goNext/empty
+    unit/goNext/subItems
+    unit/goNext/endDots
+    unit/goNext/dots
+    unit/goNext/dots2
+    unit/goNext/dots0
+
+    unit/GNDP/simple
+    unit/GNDP/empty
+    unit/GNDP/subItems0
+    unit/GNDP/subItems
+
     parser/misc/tUnknown
     parser/misc/isTag
     parser/misc/isNot
@@ -157,11 +170,26 @@ runCode=`
 `
 FileName = "TestProteus"
 
-#define MULTITEST(NAME, MSG, SPEC) <% TEST_CASE(NAME, MSG){agent *a=0; multiNorm(&a, SPEC);} %>
+#define MULTITEST(NAME, MSG, SPEC) <%TEST_CASE(NAME, MSG){agent *a=0; multiNorm(&a, SPEC);}%>
 #define PARSETEST(NAME, MSG, IN, OUT) <%void: DESLASH(NAME)()<-{ParseData(IN, OUT, false)}%>
 #define NORMTEST (NAME, MSG, IN, OUT) <%void: DESLASH(NAME)()<-{ParseData(IN, OUT, true)}%>
+#define GONEXT   (NAME, MSG, IN, OUT) <%void: DESLASH(NAME)()<-{unitTestGoNext(IN, OUT)}%>
+#define GONXTDEEP(NAME, MSG, IN, OUT) <%void: DESLASH(NAME)()<-{unitTestGoNextDeep(IN, OUT)}%>
 
 struct GLOBAL {
+    GONEXT(unit/goNext/simple,      "basic list",         "{1 2 3}", "{1 2 3 }")
+    GONEXT(unit/goNext/empty,       "empty list",         "{}", "{}")
+    GONEXT(unit/goNext/subItems,    "list with subItems", "{1 #{} 2}", "{1 #{} 2 }")
+    GONEXT(unit/goNext/endDots,     "tailUnfinished1",    "{1 ... }", "{1 ? ? ? ? ? ? ? ? ? ? ?  Infinite Loop}")
+    GONEXT(unit/goNext/dots,        "tailUnfinished2",    "{ ... }", "{? ? ? ? ? ? ? ? ? ? ? ?  Infinite Loop}")
+    GONEXT(unit/goNext/dots2,       "tailUnfinished3",    "*3 +{ ... }", "{? ? ? }")
+    GONEXT(unit/goNext/dots0,       "tailUnfinished0",    "*0+{ ... }", "{}")
+
+    GONXTDEEP(unit/GNDP/simple,     "basic list",         "{1 2 3}", "{1 2 3 }")
+    GONXTDEEP(unit/GNDP/empty,      "empty list",         "{}", "{}")
+    GONXTDEEP(unit/GNDP/subItems0,  "list with subItems0","{1 #{} 2}", "{1 {}2 }")
+    GONXTDEEP(unit/GNDP/subItems,   "list with subItems", "{1 #{2 3 4} 5}", "{1 {2 3 4 }5 }")
+
     PARSETEST(parser/misc/tUnknown, "type unknown",     "?", "?")
     PARSETEST(parser/misc/isTag,    "parse a tag",      "ImATag", "ImATag")
     PARSETEST(parser/misc/isNot,    "Not tag",          "!ImATag", "!ImATag")
@@ -326,29 +354,67 @@ struct GLOBAL {
 
 
 //////////////////////////////////////////////////////////////
-    me void: ParseData(me string: in, me string: expected, me bool: doNorm) <- {
-        me string: data <- in
-
+    our infon: parseTheTest(me string: data) <- {
         me EParser: parser
         parser.populateGrammar()
         parser.initPosStateSets(parser.infon_str, data)
-
         parser.doParse()
-        if(parser.doesParseHaveError()){
-            FAIL("Parse Error:" + parser.errorMesg)
-           // print("\nParse Error:", parser.errorMesg, " at line ", parser.errLineNum,":", parser.errCharPos, "\n")
-        } //else {print("\nParse Succeeded\n")}
-
+        if(parser.doesParseHaveError()){return(NULL)}
         our stateRec: topItem <- parser.resolve(parser.lastTopLevelItem, "")
       //  parser.displayParse(topItem, "")
-        our infon: world
-        Allocate(world)
-        parser.Extract_infon_to_infon(topItem, world)
+        our infon: parsedInfon
+        Allocate(parsedInfon)
+        parser.Extract_infon_to_infon(topItem, parsedInfon)
+        return(parsedInfon)
+    }
+    me void: ParseData(me string: in, me string: expected, me bool: doNorm) <- {
+        our infon: world <- parseTheTest(in)
+        if(world == NULL){FAIL("Syntax Error in input: " + in)}
         me agent: A
         if (doNorm){A.normalize(world)}
         me string:result <- stringifyInfon(world)
         REQUIRE(result==expected)
         return()
     }
-
+    me void: unitTestGoNext(me string: in, me string: expected) <- {
+        me string: result
+        our infon: testVector <- parseTheTest(in)
+        if(testVector == NULL){FAIL("Syntax Error in input: " + in)}
+        our infItr:: infItrUnderTest
+        infItrUnderTest.initialize(testVector)
+        infItrUnderTest.beginIterating()
+        me int: count
+        me bool: FUT_result <- infItrUnderTest.item != NULL
+        result <-  result + "{"
+        while(FUT_result == true){
+            result <- result + stringifyInfon(infItrUnderTest.item)+ " "
+            if(count > 10){result <- result + " Infinite Loop"; break()}
+            FUT_result <- infItrUnderTest.goNext()
+            count <- count + 1
+        }
+        result <-  result + "}"
+        REQUIRE(result==expected)
+        return()
+    }
+    me void: unitTestGoNextDeep(me string: in, me string: expected) <- {
+        me string: result
+        our infon: testVector <- parseTheTest(in)
+        if(testVector == NULL){FAIL("Syntax Error in input: " + in)}
+        our infItr: infItrUnderTest <- NULL
+        Allocate(infItrUnderTest)
+        infItrUnderTest.initialize(testVector)
+        me int: count
+        our infItr: nextItr <- infItrUnderTest
+        while(nextItr.state != sEOL){
+            if(nextItr.state == sFirstVisit){result <- result + "{"}
+            else if(nextItr.state == sSecondVisit){result <- result + "}"}
+            else if(nextItr.state == sNotASeq){result <- result + stringifyInfon(nextItr.item) + " "}
+            else{result <- result + stateStrings[nextItr.state]}
+            if(count > 10){result <- result + " Infinite Loop"; break()}
+            nextItr <- nextItr.getNextDeep()
+            count <- count + 1
+        }
+        REQUIRE(result==expected)
+        return()
+    }
 }

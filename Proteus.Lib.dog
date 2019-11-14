@@ -493,35 +493,40 @@ model infItr{
         if(isASeq(item)){state <- sFirstVisit; isAList <- true}
         else{state <- sNotASeq; isAList <- false}
     }
+    our DblLinkedListNode: tryAddingTentativeChild() <- {
+        me string: lenStatus <- item.lengthStatus()
+        if(lenStatus == "L" or lenStatus == "?"){
+            our infon:: newInfon
+            our infon: infonType <- item.value.listSpec
+            if(infonType != NULL){
+                newInfon <deep- infonType // MUST: be a lazy cow copy
+            }else{
+                newInfon.value.fType   <- tUnknown
+                newInfon.infMode       <- isUnknown
+                newInfon.itmMode       <- mItem
+                newInfon.value.format  <- fUnknown
+            }
+            if(lenStatus == "?"){newInfon.isTentative <- true}
+            infNode <- item.value.items.pushLast(newInfon)
+            return(infNode)
+        }else if(lenStatus == "E"){
+            item.value.tailUnfinished <- false
+            return(NULL)
+        }else if(lenStatus == "G"){log("INFON TOO BIG")}
+        return(NULL)
+    }
     me bool: goNext() <- {
         while(true){
             if(item==NULL){return(false)}
-            if(infNode==NULL){log("ERROR: GN:infNode==NULL") exit(2)}
-            if(parent==NULL){log("ERROR: GN:parent==NULL") exit(2)}
+            if(infNode==NULL){log("ERROR: GN:infNode==NULL"); exit(2)}
+            if(parent==NULL){log("ERROR: GN:parent==NULL"); exit(2)}
             if(infNode.next==NULL){
                 if(parent.item.value.tailUnfinished){
-                    me string: lenStatus <- parent.item.lengthStatus()
-                    log("GN:lenStatus:"+lenStatus)
-                    if(lenStatus == "L" or lenStatus == "?"){
-                        our infon:: newInfon
-                        our infon: infonType <- parent.item.value.listSpec
-                        if(infonType != NULL){
-                            newInfon <deep- infonType // MUST: be a lazy cow copy
-                        }else{
-                            newInfon.value.fType   <- tUnknown
-                            newInfon.infMode       <- isUnknown
-                            newInfon.itmMode       <- mItem
-                            newInfon.value.format  <- fUnknown
-                        }
-                        if(lenStatus == "?"){newInfon.isTentative <- true}
-                        infNode <- item.value.items.pushLast(newInfon)
-                        item    <- newInfon
-                        return(true)
-                    }else if(lenStatus == "E"){
-                        item <- NULL  // Signify EOL
-                        parent.item.value.tailUnfinished <- false
-                        return(false)
-                    }else if(lenStatus == "G"){log("INFON TOO BIG")}
+                    our DblLinkedListNode: newChild <- parent.tryAddingTentativeChild()
+                    if(newChild == NULL){return(false)}
+                    infNode <- newChild
+                    item    <- infNode.item
+                    return(true)
                 }else{return(false)}
             }
             infNode <- infNode.next
@@ -531,11 +536,22 @@ model infItr{
             }else{return(true)}
         }
     }
-    void: beginIterating(our DblLinkedListNode: newNode) <- {
+    void: beginIterating() <- {
+        our DblLinkedListNode: firstNode
+        if(item.value.items.size() == 0){
+            if(item.value.tailUnfinished){
+                firstNode <- tryAddingTentativeChild()
+                if(firstNode == NULL){item <- NULL; return()}
+            }
+            else{item <- NULL; return()}
+        }
+        else{
+            firstNode <- item.value.items.begin()
+        }
         our infItr:: tmp
         copyThisTo(tmp)
         parent     <- tmp   // TODO: After ptr bug is fixed, Allocate(parent, self)
-        infNode    <- newNode
+        infNode    <- firstNode
         looseInhtd <- parent.looseMode!=false or parent.looseSize()
         looseMode  <- false
         looseTop   <- false
@@ -544,61 +560,36 @@ model infItr{
         nestLvl    <- nestLvl+1
     }
     void: goNextDeep() <- {
-        me string:  logStr <- "----goNextDeep:"+stringify()
         me int: tmpState <- state
         if(state == sNotASeq and item.infMode == isUnknown and ! item.value.items.isEmpty()){
             tmpState <- sFirstVisit
-            logStr <- logStr + ":isUnknown"
         }
-        logStr <- logStr + " case("+stateStrings[tmpState]+ "):"
         switch(tmpState) {
             case sNotASeq: sSecondVisit:{  // Get the next item or set EOL
                 if(parent==NULL or nestLvl==0){
-                    logStr <- logStr + ":set sEOL: nestLvl=" + toString(nestLvl)
-                    if(parent==NULL){logStr <- logStr + ":NULL parent" }
-                    else{logStr <- logStr + ": parent=" + parent.stringify()}
                     state <- sEOL
-                    //log(logStr)
                     return()
                 }
                 if(goNext()){
                     setListSeqFlags()
                     looseInhtd <- looseSize()
-                    logStr <- logStr + " GNthenSetFlags:" + stringify() + " >>"
                 }else{
                     me int: tmpNestLvl <- nestLvl
                     self <deep- parent
                     nestLvl <- tmpNestLvl - 1
-                    state <- sSecondVisit
+                    state   <- sSecondVisit
                     isAList <- true
-                    logStr <- logStr + ":copyDeep(parent) nestLvl-1=" + toString(nestLvl)
                 }
             }
             case sFirstVisit:{
                 if(item.value.items.isEmpty()){
                     if(item.value.tailUnfinished == false){
-                        state <- sSecondVisit
+                        state   <- sSecondVisit
                         isAList <- true
                     }else{
-                        if(!item.infSize.format==fLiteral or item.infSize.num != 0){
-                            our infon:: newInf
-                            our infon: infonType <- item.value.listSpec
-                            if(infonType != NULL){
-                                newInf <deep- infonType // MUST: be a lazy cow copy
-                            }else{
-                                newInf.value.fType   <- tUnknown
-                                newInf.infMode       <- isUnknown
-                                newInf.itmMode       <- mItem
-                                newInf.value.format  <- fUnknown
-                            }
-                            item.value.items.pushLast(newInf)
-                            beginIterating(item.value.items.begin())
-                        }
+                        if(tryAddingTentativeChild()!=NULL){beginIterating()}
                     }
-                }else{
-                    beginIterating(item.value.items.begin())
-                    logStr <- logStr + ":nestLvl+1=" + toString(nestLvl)
-                }
+                }else{beginIterating()}
             }
             case sInited: {state <- sFirstVisit}
             case sEOL:    {item<-NULL}
@@ -606,7 +597,6 @@ model infItr{
             case sError:  {item<-NULL}
             default: {print("Error: invalid iterator state:", state, "\n")}
         }
-        //log(logStr)
     }
     our infItr: getNextDeep() <- {
         our infItr: retVal
@@ -908,7 +898,7 @@ struct infon {
         }
         if(itmMode == mDots){
             itmMode              <- mSubItems
-            infSize.format     <- fUnknown
+            infSize.format       <- fUnknown
             value.fType          <- LST
             infMode              <- isLiteral
             value.tailUnfinished <- true
