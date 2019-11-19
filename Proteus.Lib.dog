@@ -460,7 +460,6 @@ model infItr{
     flag: wasRejected
     me int: nestLvl
     mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError]: state
-    flag: isAList
     mode[cmdNoOp, delDots, keepDots, insB4Dots, insAftDots]: stitchCmd
     flag: fromDotted
     our infItr: myDots
@@ -491,8 +490,8 @@ model infItr{
         return(retVal)
     }
     void: setListSeqFlags() <- {
-        if(isASeq(item)){state <- sFirstVisit; isAList <- true}
-        else{state <- sNotASeq; isAList <- false}
+        if(isASeq(item)){state <- sFirstVisit; }
+        else{state <- sNotASeq;}
     }
     our DblLinkedListNode: tryAddingTentativeChild() <- {
         me string: lenStatus <- item.lengthStatus()
@@ -522,13 +521,13 @@ model infItr{
             if(infNode==NULL){log("ERROR: GN:infNode==NULL"); exit(2)}
             if(parent==NULL){log("ERROR: GN:parent==NULL"); exit(2)}
             if(infNode.next==NULL){
-                if(parent.item.value.tailUnfinished){
+                if(parent.item != NULL and parent.item.value.tailUnfinished){
                     our DblLinkedListNode: newChild <- parent.tryAddingTentativeChild()
                     if(newChild == NULL){return(false)}
                     infNode <- newChild
                     item    <- infNode.item
                     return(true)
-                }else{return(false)}
+                }else{item <- NULL; return(false)}
             }
             infNode <- infNode.next
             item    <- infNode.item
@@ -537,14 +536,14 @@ model infItr{
             }else{return(true)}
         }
     }
-    void: beginIterating() <- {
+    bool: beginIterating() <- {
         our DblLinkedListNode: firstNode
         if(item.value.items.isEmpty()){
             if(item.value.tailUnfinished){
                 firstNode <- tryAddingTentativeChild()
-                if(firstNode == NULL){item <- NULL; return()}
+                if(firstNode == NULL){item <- NULL; return(false)}
             }
-            else{item <- NULL; return()}
+            else{item <- NULL; return(false)}
         }
         else{
             firstNode <- item.value.items.begin()
@@ -559,6 +558,7 @@ model infItr{
         item       <- infNode.item
         setListSeqFlags()
         nestLvl    <- nestLvl+1
+        return(true)
     }
     void: goNextDeep() <- {
         me int: tmpState <- state
@@ -580,16 +580,16 @@ model infItr{
                     self <deep- parent
                     nestLvl <- tmpNestLvl - 1
                     state   <- sSecondVisit
-                    isAList <- true
                 }
             }
             case sFirstVisit:{
                 if(item.value.items.isEmpty()){
                     if(item.value.tailUnfinished){
-                        beginIterating()
+                        if(!beginIterating()){
+                            state <- sSecondVisit
+                        }
                     }else{
-                        state   <- sSecondVisit
-                        isAList <- true
+                        state <- sSecondVisit
                     }
                 }else{beginIterating()}
             }
@@ -649,8 +649,13 @@ model infItr{
         our infItr: nextItr <- getNextDeep()
         if(nextItr.state == sError){return(NULL)}
         //if(nextItr.nextAnd != NULL){nextItr.nextAnd <- nextItr.nextAnd.getNextExtended()}
-        if(nextItr.item.itmMode == mSubItems){nextItr <- nextItr.getNextExtended()}
-        //if(nextItr.item.isTentative){nextItr.nextOr   <- parent.getNextExtended()}
+        while(nextItr.item.itmMode == mSubItems){
+            nextItr <- nextItr.getNextDeep()
+        }
+        if(nextItr.item.isTentative){
+            //MUST: handle recursive tentatives
+            nextItr.nextOr <- nextItr.parent.getNext()
+        }
         return(nextItr)
     }
     void: copyThisTo(our infItr: to) <- {
@@ -663,7 +668,6 @@ model infItr{
         to.looseInhtd   <- looseInhtd
         to.nestLvl      <- nestLvl
         to.state        <- state
-        to.isAList      <- isAList
         to.stitchCmd    <- stitchCmd
         to.fromDotted   <- fromDotted
         to.myDots       <- myDots
