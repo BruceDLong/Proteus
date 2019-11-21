@@ -517,18 +517,20 @@ model infItr{
         }else if(lenStatus == "G"){log("INFON TOO BIG")}
         return(NULL)
     }
-    me bool: goNext() <- {
+    me bool: goNext(me bool: skipDots) <- {
         while(true){
             if(item==NULL){return(false)}
             if(infNode==NULL){log("ERROR: GN:infNode==NULL "+stringify()); exit(2)}
             if(parent==NULL){log("ERROR: GN:parent==NULL "+stringify()); exit(2)}
             if(infNode.next==NULL){
-                if(parent.item != NULL and parent.item.value.tailUnfinished){
-                    our DblLinkedListNode: newChild <- parent.tryAddingTentativeChild()
-                    if(newChild == NULL){return(false)}
-                    infNode <- newChild
-                    item    <- infNode.item
-                    return(true)
+                if(!skipDots){
+                    if(parent.item != NULL and parent.item.value.tailUnfinished){
+                        our DblLinkedListNode: newChild <- parent.tryAddingTentativeChild()
+                        if(newChild == NULL){return(false)}
+                        infNode <- newChild
+                        item    <- infNode.item
+                        return(true)
+                    }else{item <- NULL; return(false)}
                 }else{item <- NULL; return(false)}
             }
             infNode <- infNode.next
@@ -538,14 +540,17 @@ model infItr{
             }else{return(true)}
         }
     }
-    bool: beginIterating() <- {
+    bool: beginIterating(me bool: skipDots) <- {
         our DblLinkedListNode: firstNode
         if(item.value.items.isEmpty()){
-            if(item.value.tailUnfinished){
+            if(!skipDots and item.value.tailUnfinished){
                 firstNode <- tryAddingTentativeChild()
                 if(firstNode == NULL){item <- NULL; return(false)}
             }
-            else{item <- NULL; return(false)}
+            else{
+                if(!skipDots){item <- NULL}
+                return(false)
+            }
         }
         else{
             firstNode <- item.value.items.begin()
@@ -562,7 +567,7 @@ model infItr{
         nestLvl    <- nestLvl+1
         return(true)
     }
-    void: goNextDeep() <- {
+    void: goNextDeep(me bool: skipDots) <- {
         me int: tmpState <- state
         if(state == sNotASeq and item.infMode == isUnknown and ! item.value.items.isEmpty()){
             tmpState <- sFirstVisit
@@ -574,7 +579,7 @@ model infItr{
                     state <- sEOL
                     return()
                 }
-                if(goNext()){
+                if(goNext(skipDots)){
                     setListSeqFlags()
                     looseInhtd <- looseSize()
                 }else{
@@ -587,13 +592,13 @@ model infItr{
             case sFirstVisit:{
                 if(item.value.items.isEmpty()){
                     if(item.value.tailUnfinished){
-                        if(!beginIterating()){
+                        if(!beginIterating(skipDots)){
                             state <- sSecondVisit
                         }
                     }else{
                         state <- sSecondVisit
                     }
-                }else{beginIterating()}
+                }else{beginIterating(skipDots)}
             }
             case sInited: {state <- sFirstVisit}
             case sEOL:    {item<-NULL}
@@ -602,18 +607,18 @@ model infItr{
             default: {print("Error: invalid iterator state:", state, "\n")}
         }
     }
-    our infItr: getNextDeep() <- {
+    our infItr: getNextDeep(me bool: skipDots) <- {
         our infItr: retVal
         Allocate(retVal)
         copyThisTo(retVal)
-        retVal.goNextDeep()
+        retVal.goNextDeep(skipDots)
         return(retVal)
     }
-    our infItr: getNext() <- {
+    our infItr: getNext(me bool: skipDots) <- {
         our infItr: retVal
         Allocate(retVal)
         copyThisTo(retVal)
-        if(retVal.goNext()){return(retVal)}
+        if(retVal.goNext(skipDots)){return(retVal)}
         return(NULL)
     }
     our infon: getPrevPtr() <- {
@@ -647,16 +652,16 @@ model infItr{
         tentativeItr.myDots     <- NULL
         return(tentativeItr)
     }
-    our infItr: getNextExtended() <- {
-        our infItr: nextItr <- getNextDeep()
+    our infItr: getNextExtended(me bool: skipDots) <- {
+        our infItr: nextItr <- getNextDeep(skipDots)
         if(nextItr.state == sError){return(NULL)}
-        //if(nextItr.nextAnd != NULL){nextItr.nextAnd <- nextItr.nextAnd.getNextExtended()}
+        //if(nextItr.nextAnd != NULL){nextItr.nextAnd <- nextItr.nextAnd.getNextExtended(false)}
         while(nextItr.item.itmMode == mSubItems){
-            nextItr <- nextItr.getNextDeep()
+            nextItr <- nextItr.getNextDeep(skipDots)
         }
         if(nextItr.item.isTentative){
             //MUST: handle recursive tentatives
-            nextItr.nextOr <- nextItr.parent.getNext()
+            nextItr.nextOr <- nextItr.parent.getNext(true)
         }
         return(nextItr)
     }
@@ -1529,7 +1534,7 @@ struct agent{
                             action <- tryMerge(LHSItr.item, RHSItmItr)
                             if(action.reject){RHSItmItr.wasRejected <- true}
                             else{acceptCount <- acceptCount +1 lastNotRejectedItr <- RHSItmItr}
-                            RHSItmItr <- RHSItmItr.getNext()
+                            RHSItmItr <- RHSItmItr.getNext(false)
                         }
                         if(acceptCount == 1){LHSItr.item.addInfItrToWrkList(lastNotRejectedItr, false) log("ALT:"+lastNotRejectedItr.stringify())}
                         return(true)
@@ -1553,11 +1558,16 @@ struct agent{
         our infItr: LHSItrNext <- NULL
         our infItr: RHSItrNext <- NULL
         if(RHS_Empty){
-            if(LHSItr.item.isTentative==false){
-                log("    PAI: RHS: NULL")
-                LHSItrNext <- LHSItr.getNextExtended()
-                addInfItrToAgenda(LHSItrNext)
+            if(LHSItr.infNode.next == NULL and (LHSItr.parent != NULL and LHSItr.parent.item != NULL and LHSItr.parent.item.value.tailUnfinished)){
+                LHSItrNext <- LHSItr.getNextExtended(true)
+                LHSItrNext.item.isOnAgenda <- false
+            }else if(LHSItr.item.value.tailUnfinished and LHSItr.item.value.items.isEmpty()){
+                LHSItrNext <- LHSItr.getNextExtended(true)
+                LHSItrNext.item.isOnAgenda <- false
+            }else{
+                LHSItrNext <- LHSItr.getNextExtended(false)
             }
+            addInfItrToAgenda(LHSItrNext)
         }else{
             me int: tmpItrCount <- 0
             withEach RHSItr in CI.wrkList{
@@ -1597,7 +1607,7 @@ struct agent{
                     LHSItr.copyThisTo(LHSItrNext)
                     log("from copyThisTo:LHSItrNext:"+LHSItrNext.stringify())
                 }else{
-                    LHSItrNext <- LHSItr.getNextExtended()
+                    LHSItrNext <- LHSItr.getNextExtended(false)
                 }
                 // HANDLE RHS
                 if(RHSItrNext == NULL){
@@ -1606,7 +1616,7 @@ struct agent{
                         RHSItr.copyThisTo(RHSItrNext) // <- RHSItr //.getSelfCopy()
                         RHSItrNext.looseInhtd <- true
                     }else{
-                        RHSItrNext <- RHSItr.getNextExtended()
+                        RHSItrNext <- RHSItr.getNextExtended(false)
                         if(RHSItrNext.state == sEOL){
                             RHSItrNext <- NULL
                         }
@@ -1615,7 +1625,7 @@ struct agent{
                     }
                 }
 
-                addItemToWrkList(LHSItr, LHSItrNext, RHSItrNext, breakDotCycle)
+                enqueueForProcessing(LHSItr, LHSItrNext, RHSItrNext, breakDotCycle)
                 if(LHSItr.state != sSecondVisit){doAction(action, LHSItr, RHSItr)}
                 //theClip.dispAndWait("end PAI LHS:"+LHS.mySymbol(LHS)+"   RHS:"+RHS.mySymbol(RHS))
             }
@@ -1631,7 +1641,7 @@ struct agent{
         }
     }
 
-    void: addItemToWrkList(our infItr: pred, our infItr: LHSItr, our infItr: RHSItr, me bool: breakDotCycle)<-{
+    void: enqueueForProcessing(our infItr: pred, our infItr: LHSItr, our infItr: RHSItr, me bool: breakDotCycle)<-{
         log("----pred:"+pred.stringify())
         our infItr: crntLHS <- LHSItr
         me int: LHSCount <- 0
@@ -1651,7 +1661,6 @@ struct agent{
                         else if(LHSCount > 0){
                             our infItr: altList <- crntLHS.findOrAddPctTag("pred")
  //                           log("        PREPPING ALT_LIST: " + stringifyInfon(altList))
-                            //log("        Before-B crntLHS: "+crntLHS.stringify())
                             // HERE, the first time, the altList should be blank and it should be a .pred of crntLHS.
                             // The 2nd+ times, the same one should appear to be appended to.
                             // If crntLHS is on secondVisit, there should be .end.pred.
@@ -1659,7 +1668,6 @@ struct agent{
                             log("            PRED ALT_LIST: " + altList.stringify())
                             // Here, the first time, altList should become a [predItem ...]
                             // Thw 2nd+ times things should be prepended.
-                            //log("        After-B  LHS.pred: "+crntLHS.pctTags["pred"].stringify())
                         }
                     }
                     if(breakDotCycle){  // This sets the stitchCmd
