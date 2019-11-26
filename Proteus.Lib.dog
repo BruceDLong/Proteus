@@ -32,6 +32,7 @@ struct GLOBAL{
         ret.item    <- i
         ret.parent  <- parent
         ret.infNode <- idx
+        ret.setListSeqFlags()
         return(ret)
     }
 
@@ -661,7 +662,7 @@ model infItr{
         }
         if(nextItr.item.isTentative){
             //MUST: handle recursive tentatives
-            nextItr.nextOr <- nextItr.parent.getNext(true)
+            nextItr.nextOr <- nextItr.getNextExtended(true)
         }
         return(nextItr)
     }
@@ -673,12 +674,14 @@ model infItr{
         to.looseMode    <- looseMode
         to.looseTop     <- looseTop
         to.looseInhtd   <- looseInhtd
+        to.wasProcessed <- false
         to.nestLvl      <- nestLvl
         to.state        <- state
         to.stitchCmd    <- stitchCmd
         to.fromDotted   <- fromDotted
         to.myDots       <- myDots
-        to.wasProcessed <- false
+        to.nextOr       <- nextOr
+        to.pctTags       <- pctTags
     }
     void: insertNewDotPart(me string: fieldName, our infon: newPart) <- {
         if(state == sSecondVisit and fieldName == "pred"){
@@ -858,12 +861,16 @@ struct transformAction{
     flag: propogateRHSToRHSFirst
     uint64: sizeToCopy
 }
-struct pureInfon {
+struct pureInfon{
     our infon[multimap string]: index
     our infon[multimap int64]: T_index
 }
-struct infItr {}
-struct infon {
+struct infItr{
+    void: postParseProcessing() <- {
+        setListSeqFlags()
+    }
+}
+struct infon{
     void: postParseProcessing() <- {
         me int: numItems <- value.items.size()
         if(numItems > 0){
@@ -909,6 +916,7 @@ struct agent{
     our infon: world
     our infon: context
     our infItr[list]: agenda
+    me string: logStrA
     // me Locale locale
 
     void: setErrorState(our infItr: infonWithError, me string: errorMesg) <- {
@@ -1359,8 +1367,7 @@ struct agent{
                 } else {}  // TODO: Do Convert + verify
             }
             else if(LHS.value.format == fLiteral and RHS.value.format == fUnknown){
-                //MUST: copy LHS to RHS
-                log("MUST: copy LHS to RHS")
+                action.valueAction <- copyValueLHStoRHS
             }
             else if(LHS.value.format == fLiteral and RHS.value.format == fLiteral){
                 // 5=5, 5=6, 'hi'='hi', 'hi'='low'
@@ -1504,7 +1511,7 @@ struct agent{
                 ii.item.isOnAgenda <- true
             } else {logStr <- logStr + " Already on agenda!"}
         }else{logStr <- logStr + " DIDN'T ADD!"}
-        log(logStr)
+        //log(logStr)
     }
     our infItr: popInfItrFromAgenda() <- {
         our infItr: retVal <- agenda.last()
@@ -1544,20 +1551,37 @@ struct agent{
         }
         return(false)
     }
-
+    me int: PAI_StateSig(our infItr: LHSItr, our infItr: RHSItr, me bool: looseMode) <- {
+        me int: LHS_Sig <- LHSItr.state
+        me int: RHS_Sig <- RHSItr.state
+        me int: retVal  <- 2*((RHS_Sig-2)*3 + (LHS_Sig-2))
+        if(RHSItr.looseMode){retVal <- retVal + 1}
+        return(retVal)
+    }
+    me string: infItrStateSig(our infItr: ii) <- {
+        me string: retVal
+        me int: state <- ii.state
+        //sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError
+        if(state == sInvalid){return("X")}
+        else if(state == sNotASeq){return("#")}
+        else if(state == sFirstVisit){return("{")}
+        else if(state == sSecondVisit){return("}")}
+        else{log("invalid State in infItrStateSig:"+ stateStrings[state]); exit(2)}
+    }
     void: processAgendaItem(our infItr: LHSItr, me int: altNestLvl)<-{
-        log("_________________________")
-        log("PAI: LHS: "+LHSItr.stringify())
+        //log("_________________________")
+        //log("PAI: LHS: "+LHSItr.stringify())
         our infon: LHS  <- LHSItr.item
         crntLHSMySymbol <- LHS.mySymbol(LHS)
         prepWorkList(LHSItr)
         handleFieldsInWrkList(LHSItr)
-        our infon: CI             <- LHSItr.item
-        me bool: RHS_Empty        <- CI.wrkList.isEmpty()
+        our infon: CI          <- LHSItr.item
+        me bool: RHS_Empty     <- CI.wrkList.isEmpty()
         me bool: breakDotCycle <- false
         our infItr: LHSItrNext <- NULL
         our infItr: RHSItrNext <- NULL
         if(RHS_Empty){
+            log("PAI no RHS")
             if(LHSItr.infNode.next == NULL and (LHSItr.parent != NULL and LHSItr.parent.item != NULL and LHSItr.parent.item.value.tailUnfinished)){
                 LHSItrNext <- LHSItr.getNextExtended(true)
                 LHSItrNext.item.isOnAgenda <- false
@@ -1573,6 +1597,13 @@ struct agent{
             withEach RHSItr in CI.wrkList{
                 if(tmpItrCount>20){log("DEBUG: Too many loops..."); exit(2)} else {tmpItrCount<-tmpItrCount+1}
                 if(RHSItr.wasProcessed!=false){continue()}else{RHSItr.wasProcessed <- true}
+me int: stateSig <- PAI_StateSig(LHSItr, RHSItr, false)
+if(stateSig < 10 and stateSig >= 0){logStrA <- "0" +toString(stateSig)+" |"}
+else{logStrA <- toString(stateSig)+" |"}
+logStrA <- logStrA + infItrStateSig(LHSItr)
+if(RHSItr.looseMode){logStrA <- logStrA + " == "}
+else{logStrA <- logStrA + "  = "}
+logStrA <- logStrA + infItrStateSig(RHSItr) +"| "
                 our infon: RHS  <- RHSItr.item
                 crntRHSMySymbol <- RHS.mySymbol(RHS)
                 //theClip.dispAndWait("start PAI LHS:"+LHS.mySymbol(LHS)+"   RHS:"+RHS.mySymbol(RHS))
@@ -1582,22 +1613,31 @@ struct agent{
                 if(LHSItr.state != sSecondVisit){
                     RHSItr.setListSeqFlags()
                     if(RHSItr.state == sSecondVisit){
+logStrA <- logStrA + " mSubItems"
                         if(RHSItr.item.itmMode != mSubItems){continue()}
                     }
+logStrA <- logStrA + " TM"
                     action <- tryMerge(CI, RHSItr)
-                    if(action.reject){log("          REJECT"); continue()}
+if(action.valueAction == copyValueLHStoRHS){logStrA <- logStrA + " copyV_L2R"}
+else if(action.valueAction == copyValueRHStoLHS){logStrA <- logStrA + " copyV_R2L"}
+if(action.sizeAction == copySizeLHStoRHS){logStrA <- logStrA + " copyS_L2R"}
+else if(action.sizeAction == copySizeRHStoLHS){logStrA <- logStrA + " copyS_R2L"}
+if(action.sizeToCopy > 0){logStrA <- logStrA + " copySz"}
+if(action.reject){logStrA <- logStrA + " REJECT"; continue()}
                     if(LHSItr.item.isTentative and RHSItr.item.isTentative){
                         breakDotCycle<-true
+logStrA <- logStrA + " breakDot"
                         LHSItr.stitchCmd <- keepDots
                     }
 
-                    if(action.remainder != NULL){RHSItrNext <- action.remainder}
+if(action.remainder != NULL){logStrA <- logStrA + " remainder"; RHSItrNext <- action.remainder}
 
                     // Do init for ?={...}
                     if(LHSItr.item.infMode == isUnknown and RHSItr.item.value.fType == LST){
                         unknownAsList <- true
+logStrA <- logStrA + " unknownAsList"
                     }
-                }else{log("SECOND-VISIT")}
+                }
                 me int: LHSfType <- LHSItr.item.value.fType
                 me int: RHSfType <- 0; if(!RHS_Empty){RHSfType <- RHSItr.item.value.fType}
                 // HANDLE LHS
@@ -1605,7 +1645,6 @@ struct agent{
                     //LHSItrNext <- LHSItr
                     Allocate(LHSItrNext)
                     LHSItr.copyThisTo(LHSItrNext)
-                    log("from copyThisTo:LHSItrNext:"+LHSItrNext.stringify())
                 }else{
                     LHSItrNext <- LHSItr.getNextExtended(false)
                 }
@@ -1628,6 +1667,7 @@ struct agent{
                 enqueueForProcessing(LHSItr, LHSItrNext, RHSItrNext, breakDotCycle)
                 if(LHSItr.state != sSecondVisit){doAction(action, LHSItr, RHSItr)}
                 //theClip.dispAndWait("end PAI LHS:"+LHS.mySymbol(LHS)+"   RHS:"+RHS.mySymbol(RHS))
+log(logStrA)
             }
         }
     }
@@ -1642,20 +1682,20 @@ struct agent{
     }
 
     void: enqueueForProcessing(our infItr: pred, our infItr: LHSItr, our infItr: RHSItr, me bool: breakDotCycle)<-{
-        log("----pred:"+pred.stringify())
+        //log("----pred:"+pred.stringify())
         our infItr: crntLHS <- LHSItr
         me int: LHSCount <- 0
         while(crntLHS != NULL){
             if(crntLHS.state != sEOL){
-                log("    ----crntLHS:"+crntLHS.stringify())
+                //log("    ----crntLHS:"+crntLHS.stringify())
                 our infItr: crntRHS <- RHSItr
                 while(crntRHS != NULL){
-                    log("        ----crntRHS:"+crntRHS.stringify())
+                    //log("        ----crntRHS:"+crntRHS.stringify())
                     if(pred!=NULL){
                         // nextItem.predecessors.pushLast(pred)
                         if(LHSCount == 0){
                             crntLHS.insertNewPctTag("pred", pred)
-                            log("            insert pred("+pred.mySymbol(pred)+") as pctTag into LHS("+crntLHS.mySymbol(crntLHS)+")")
+                            //log("            insert pred("+pred.mySymbol(pred)+") as pctTag into LHS("+crntLHS.mySymbol(crntLHS)+")")
                             //addDisplayInfItr("LHS(pred):", crntLHS)
                         }
                         else if(LHSCount > 0){
@@ -1665,7 +1705,7 @@ struct agent{
                             // The 2nd+ times, the same one should appear to be appended to.
                             // If crntLHS is on secondVisit, there should be .end.pred.
                             altList.item.insertNewAltDotPart(pred.item)
-                            log("            PRED ALT_LIST: " + altList.stringify())
+                            //log("            PRED ALT_LIST: " + altList.stringify())
                             // Here, the first time, altList should become a [predItem ...]
                             // Thw 2nd+ times things should be prepended.
                         }
