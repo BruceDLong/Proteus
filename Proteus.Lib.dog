@@ -312,14 +312,14 @@ model infon{
         dotPath                 <- NULL
         type                    <- NULL
     }
-    void: addToOrInfon(our infon: alt) <- {
-        value.items.pushFirst(alt)
+    void: addToOrInfon(our infItr: altItr) <- {
+        value.items.pushAsAlt(altItr)
     }
     void: addInfItrToWrkList(our infItr: RHSItr, me bool: asAlt) <- {
         if(!asAlt){wrkList.pushLast(RHSItr)}
         else{
             our infon: altList <- findOrAddAltWrkItm()
-            altList.addToOrInfon(RHSItr.item)
+            altList.addToOrInfon(RHSItr)
             //log("***:altList:"+altList.mySymbol(altList)+"    "+stringifyInfon(altList) + "    ADD Ident:" + RHSItr.stringify())
         }
     }
@@ -359,7 +359,7 @@ model infon{
         log("ADDING NEW DOT_PART:'" + fieldName + "'" + stringifyInfon(newPart))
         parts.pushLast(newPath)
     }
-    void: insertNewAltDotPart(our infon: newPart) <- {
+    void: insertNewAltDotPart(our infItr: newItr) <- {
         our infon: altAccInfon
         if(hasAlts){
             withEach wrkItm in wrkList{
@@ -377,7 +377,7 @@ model infon{
             addInfItrToWrkList(altAccItr, false)
             hasAlts <- true
         }
-        altAccInfon.addToOrInfon(newPart)
+        altAccInfon.addToOrInfon(newItr)
     }
     our infon: findPartPathByTag(me string: tagName) <- {
         withEach part in parts{
@@ -860,6 +860,8 @@ struct transformAction{
     flag: propogateLHSToLHSFirst
     flag: propogateRHSToRHSFirst
     uint64: sizeToCopy
+    flag: breakDotCycle
+    flag: unknownAsList
 }
 struct pureInfon{
     our infon[multimap string]: index
@@ -1478,12 +1480,11 @@ struct agent{
             action.sizeToCopy <- RHS.infSize.num
         }
     }
-    our transformAction: tryMerge(our infon: LHS, our infItr: RHSItr) <- {
+    void: tryMerge(our infon: LHS, our infItr: RHSItr, our transformAction: action) <- {
         //log(">>TM")
-        our transformAction:: action
         our infon: RHS <- RHSItr.item
         if(PropagateIndirectItem(action, LHS, RHSItr) > 0){
-            return(action)
+            return()
         }
         if(RHS.infMode == isUnknown){ // any = ?
             LHS.isNormed <- true
@@ -1500,7 +1501,7 @@ struct agent{
             if(!action.reject){trimMergeRemainder(action, LHS, RHSItr)}// HANDLE REMAINDERS
         }
         if(LHS.asNot){action.reject <- !action.reject}
-        return(action)
+        return()
     }
 
     void: addInfItrToAgenda(our infItr: ii) <- {
@@ -1538,7 +1539,7 @@ struct agent{
                         while(RHSItmItr != NULL and RHSItmItr.item != NULL and RHSItmItr.nestLvl != 0 and RHSItmItr.state != sSecondVisit){
                             log("HandleAltsLoop:"+RHSItmItr.stringify())
                             our transformAction:: action
-                            action <- tryMerge(LHSItr.item, RHSItmItr)
+                            tryMerge(LHSItr.item, RHSItmItr, action)
                             if(action.reject){RHSItmItr.wasRejected <- true}
                             else{acceptCount <- acceptCount +1 lastNotRejectedItr <- RHSItmItr}
                             RHSItmItr <- RHSItmItr.getNext(false)
@@ -1568,6 +1569,53 @@ struct agent{
         else if(state == sSecondVisit){return("}")}
         else{log("invalid State in infItrStateSig:"+ stateStrings[state]); exit(2)}
     }
+    me bool: testCompatibility(our infon: CI, our infItr: LHSItr, our infItr: RHSItr, our transformAction: action) <- {
+        RHSItr.setListSeqFlags()
+        if(RHSItr.state == sSecondVisit){if(RHSItr.item.itmMode != mSubItems){return(true)}}
+        tryMerge(CI, RHSItr, action)
+logStrA <- logStrA + " TM"
+if(action.valueAction == copyValueLHStoRHS){logStrA <- logStrA + " copyV_L2R"}
+else if(action.valueAction == copyValueRHStoLHS){logStrA <- logStrA + " copyV_R2L"}
+if(action.sizeAction == copySizeLHStoRHS){logStrA <- logStrA + " copyS_L2R"}
+else if(action.sizeAction == copySizeRHStoLHS){logStrA <- logStrA + " copyS_R2L"}
+if(action.sizeToCopy > 0){logStrA <- logStrA + " copySz"}
+        if(action.reject){logStrA <- logStrA + " REJECT"; return(true)}
+        if(LHSItr.item.isTentative and RHSItr.item.isTentative){
+            action.breakDotCycle<-true
+            LHSItr.stitchCmd <- keepDots
+logStrA <- logStrA + " breakDot"
+        }
+        // Do init for ?={...}
+        if(LHSItr.item.infMode == isUnknown and RHSItr.item.value.fType == LST){
+            action.unknownAsList <- true
+logStrA <- logStrA + " unknownAsList"
+        }
+        return(false)
+    }
+    our infItr: findNextLHS(our infItr: LHSItr, me int: LHSfType, me int: RHSfType, me bool: unknownAsList) <- {
+        our infItr: LHSItrNext
+        if((LHSfType != LST and !unknownAsList) and RHSfType == LST){
+            Allocate(LHSItrNext)
+            LHSItr.copyThisTo(LHSItrNext)
+        }else{LHSItrNext <- LHSItr.getNextExtended(false)}
+        return(LHSItrNext)
+    }
+    our infItr: findNextRHS(our infItr: RHSItr, me int: LHSfType, me int: RHSfType) <- {
+        our infItr: RHSItrNext
+        if(LHSfType == LST and RHSfType != LST){
+            Allocate(RHSItrNext)
+            RHSItr.copyThisTo(RHSItrNext) // <- RHSItr //.getSelfCopy()
+            RHSItrNext.looseInhtd <- true
+        }else{
+            RHSItrNext <- RHSItr.getNextExtended(false)
+            if(RHSItrNext.state == sEOL){
+                RHSItrNext <- NULL
+            }
+            else if(RHSItrNext.looseMode){
+            }
+        }
+        return(RHSItrNext)
+    }
     void: processAgendaItem(our infItr: LHSItr, me int: altNestLvl)<-{
         //log("_________________________")
         //log("PAI: LHS: "+LHSItr.stringify())
@@ -1577,7 +1625,6 @@ struct agent{
         handleFieldsInWrkList(LHSItr)
         our infon: CI          <- LHSItr.item
         me bool: RHS_Empty     <- CI.wrkList.isEmpty()
-        me bool: breakDotCycle <- false
         our infItr: LHSItrNext <- NULL
         our infItr: RHSItrNext <- NULL
         if(RHS_Empty){
@@ -1597,6 +1644,7 @@ struct agent{
             withEach RHSItr in CI.wrkList{
                 if(tmpItrCount>20){log("DEBUG: Too many loops..."); exit(2)} else {tmpItrCount<-tmpItrCount+1}
                 if(RHSItr.wasProcessed!=false){continue()}else{RHSItr.wasProcessed <- true}
+// LOG STATE
 me int: stateSig <- PAI_StateSig(LHSItr, RHSItr, false)
 if(stateSig < 10 and stateSig >= 0){logStrA <- "0" +toString(stateSig)+" |"}
 else{logStrA <- toString(stateSig)+" |"}
@@ -1604,69 +1652,21 @@ logStrA <- logStrA + infItrStateSig(LHSItr)
 if(RHSItr.looseMode){logStrA <- logStrA + " == "}
 else{logStrA <- logStrA + "  = "}
 logStrA <- logStrA + infItrStateSig(RHSItr) +"| "
-                our infon: RHS  <- RHSItr.item
-                crntRHSMySymbol <- RHS.mySymbol(RHS)
-                //theClip.dispAndWait("start PAI LHS:"+LHS.mySymbol(LHS)+"   RHS:"+RHS.mySymbol(RHS))
+////////////
+                crntRHSMySymbol <- RHSItr.item.mySymbol(RHSItr.item)
                 our transformAction:: action
                 //if(handleRHSAlts(LHSItr, RHSItr)){continue()}
-                me bool: unknownAsList <- false
                 if(LHSItr.state != sSecondVisit){
-                    RHSItr.setListSeqFlags()
-                    if(RHSItr.state == sSecondVisit){
-logStrA <- logStrA + " mSubItems"
-                        if(RHSItr.item.itmMode != mSubItems){continue()}
-                    }
-logStrA <- logStrA + " TM"
-                    action <- tryMerge(CI, RHSItr)
-if(action.valueAction == copyValueLHStoRHS){logStrA <- logStrA + " copyV_L2R"}
-else if(action.valueAction == copyValueRHStoLHS){logStrA <- logStrA + " copyV_R2L"}
-if(action.sizeAction == copySizeLHStoRHS){logStrA <- logStrA + " copyS_L2R"}
-else if(action.sizeAction == copySizeRHStoLHS){logStrA <- logStrA + " copyS_R2L"}
-if(action.sizeToCopy > 0){logStrA <- logStrA + " copySz"}
-if(action.reject){logStrA <- logStrA + " REJECT"; continue()}
-                    if(LHSItr.item.isTentative and RHSItr.item.isTentative){
-                        breakDotCycle<-true
-logStrA <- logStrA + " breakDot"
-                        LHSItr.stitchCmd <- keepDots
-                    }
-
-if(action.remainder != NULL){logStrA <- logStrA + " remainder"; RHSItrNext <- action.remainder}
-
-                    // Do init for ?={...}
-                    if(LHSItr.item.infMode == isUnknown and RHSItr.item.value.fType == LST){
-                        unknownAsList <- true
-logStrA <- logStrA + " unknownAsList"
-                    }
+                    me bool: doContinue <- testCompatibility(CI, LHSItr, RHSItr, action)
+                    if(doContinue){continue()}
+                    if(action.remainder != NULL){RHSItrNext <- action.remainder}
                 }
                 me int: LHSfType <- LHSItr.item.value.fType
                 me int: RHSfType <- 0; if(!RHS_Empty){RHSfType <- RHSItr.item.value.fType}
-                // HANDLE LHS
-                if ((LHSfType != LST and !unknownAsList) and RHSfType == LST){
-                    //LHSItrNext <- LHSItr
-                    Allocate(LHSItrNext)
-                    LHSItr.copyThisTo(LHSItrNext)
-                }else{
-                    LHSItrNext <- LHSItr.getNextExtended(false)
-                }
-                // HANDLE RHS
-                if(RHSItrNext == NULL){
-                    if(LHSfType == LST and RHSfType != LST){
-                        Allocate(RHSItrNext)
-                        RHSItr.copyThisTo(RHSItrNext) // <- RHSItr //.getSelfCopy()
-                        RHSItrNext.looseInhtd <- true
-                    }else{
-                        RHSItrNext <- RHSItr.getNextExtended(false)
-                        if(RHSItrNext.state == sEOL){
-                            RHSItrNext <- NULL
-                        }
-                        else if(RHSItrNext.looseMode){
-                        }
-                    }
-                }
-
-                enqueueForProcessing(LHSItr, LHSItrNext, RHSItrNext, breakDotCycle)
+                LHSItrNext <- findNextLHS(LHSItr, LHSfType, RHSfType, action.unknownAsList)
+                if(RHSItrNext == NULL){RHSItrNext <- findNextRHS(RHSItr, LHSfType, RHSfType)}
+                enqueueForProcessing(LHSItr, LHSItrNext, RHSItrNext, action.breakDotCycle)
                 if(LHSItr.state != sSecondVisit){doAction(action, LHSItr, RHSItr)}
-                //theClip.dispAndWait("end PAI LHS:"+LHS.mySymbol(LHS)+"   RHS:"+RHS.mySymbol(RHS))
 log(logStrA)
             }
         }
@@ -1692,22 +1692,13 @@ log(logStrA)
                 while(crntRHS != NULL){
                     //log("        ----crntRHS:"+crntRHS.stringify())
                     if(pred!=NULL){
-                        // nextItem.predecessors.pushLast(pred)
+                        //crntLHS.predecessors.pushLast(pred)
                         if(LHSCount == 0){
                             crntLHS.insertNewPctTag("pred", pred)
-                            //log("            insert pred("+pred.mySymbol(pred)+") as pctTag into LHS("+crntLHS.mySymbol(crntLHS)+")")
-                            //addDisplayInfItr("LHS(pred):", crntLHS)
                         }
                         else if(LHSCount > 0){
                             our infItr: altList <- crntLHS.findOrAddPctTag("pred")
- //                           log("        PREPPING ALT_LIST: " + stringifyInfon(altList))
-                            // HERE, the first time, the altList should be blank and it should be a .pred of crntLHS.
-                            // The 2nd+ times, the same one should appear to be appended to.
-                            // If crntLHS is on secondVisit, there should be .end.pred.
-                            altList.item.insertNewAltDotPart(pred.item)
-                            //log("            PRED ALT_LIST: " + altList.stringify())
-                            // Here, the first time, altList should become a [predItem ...]
-                            // Thw 2nd+ times things should be prepended.
+                            altList.item.insertNewAltDotPart(pred)
                         }
                     }
                     if(breakDotCycle){  // This sets the stitchCmd
