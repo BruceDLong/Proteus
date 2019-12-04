@@ -209,6 +209,7 @@ model infon{
     }
 
     void: addSubscriber(our infon: subscriber) <- {subscribers.pushLast(subscriber)}
+    me bool: isOrLike() <- {return(value.cursor == cGetLast and infSize.format == fUnknown and value.format == fLiteral)}
 
     our infon: getLastItem() <- {
         // ASSERT(Should be already normed and a non-concat list)
@@ -313,7 +314,7 @@ model infon{
         type                    <- NULL
     }
     void: addToOrInfon(our infItr: altItr) <- {
-        value.items.pushAsAlt(altItr)
+        value.items.pushAsAlt(altItr, altItr.item)
     }
     void: addInfItrToWrkList(our infItr: RHSItr, me bool: asAlt) <- {
         if(!asAlt){wrkList.pushLast(RHSItr)}
@@ -471,7 +472,25 @@ model infItr{
     me bool: looseSize() <- {
         return(looseInhtd!=false or looseTop!=false)
     }
-
+    void: makeOrItr(our infItr: nextItr) <- {
+        our infon:: tmp
+        tmp <deep- item
+        item.clear()
+        item.infMode                 <- isLiteral
+        item.infSize.format          <- fUnknown
+        item.value.fType             <- LST
+        item.value.format            <- fLiteral
+        item.value.cursor            <- cGetLast
+        item.value.sizeGiven         <- false
+        item.value.listSpec          <- NULL
+        item.cursorMode              <- cNone
+        item.cursorHead              <- NULL
+        item.funcArgs                <- NULL
+        item.dotPath                 <- NULL
+        item.type                    <- NULL
+        item.value.tailUnfinished    <- true
+        item.value.items.pushAsAlt(nextItr, tmp)
+    }
     me bool: isASeq(our infon: i) <- {
         return ((i.value.format==fLiteral and i.value.fType==LST) or i.value.format==fConcat)
     }
@@ -661,8 +680,11 @@ model infItr{
             nextItr <- nextItr.getNextDeep(skipDots)
         }
         if(nextItr.item.isTentative){
-            //MUST: handle recursive tentatives
-            nextItr.nextOr <- nextItr.getNextExtended(true)
+            our infItr: nxtOR <- nextItr.getNextExtended(true)
+            if(nxtOR != NULL){
+                if(!nextItr.item.isOrLike()){nextItr.makeOrItr(nextItr)}
+                nextItr.item.addToOrInfon(nxtOR)
+            }
         }
         return(nextItr)
     }
@@ -745,7 +767,6 @@ model infItr{
             //S <- S + "(parent:" + parent.mySymbol(parent) + ")"
             //if(nextAnd){S <- S+ " & "+ nextAnd.stringify()}
             if(state==sSecondVisit){S <- S + ">SV"}
-            if(nextOr){S <- S+ "] NEXT_OR ["+ nextOr.stringify()}
         }
         S <- S+"]"
         return (S)
@@ -973,25 +994,25 @@ struct agent{
 
     void: prepWorkList(our infItr: ciItr) <- {
         our infon: CI <- ciItr.item
-
         if (CI.wrkLstPreped){return()}else{CI.wrkLstPreped <- 1}
         me bool: done <- false
         //log(" > PrepWorkList")
         while(!done){
-            //log("    > LOOP of PrepWorkList: " + stringifyInfon(CI))
+            me string: loopStr <- "PrepWL-LOOP   " + stringifyInfon(CI)+"   "
             me bool: loopAgain <- false
             our infon: newTop<-NULL
             if(CI.itmMode == mTagDefn){
-                //log("        # Define class:"+CI.type.asGiven+" "+ptrToStr(CI), "\n")
+                loopStr <- loopStr + ":A:mTagDefn:"
                 modelMngr.indexDefinition(CI.type, CI)
+                log(loopStr)
                 break()
             } else if(CI.doCursorLookup){
-                //log("        # Cursor '.type' lookup: "+CI.type.asGiven)
+                loopStr <- loopStr + ":A:doCursorLookup"
                 me int: hardFunc <- isHardFunction(CI.type.asGiven)
                 if(hardFunc != 0){
                     switch(hardFunc){
                         case 1: {// "innr"
-                            //log("          INNR!!!!!")
+                            loopStr <- loopStr + ":INNR"
                             newTop <- CI.cursorHead
                             newTop.value.cursor <- cDefault
                         }
@@ -1009,10 +1030,10 @@ struct agent{
                             CI.dotPath <- dotPathTmp
                             CI.hasCursorHead <- true
                             loopAgain <- true
-                            //log("        # Cursor '.type' lookup "+CI.type.asGiven+" "+ptrToStr(CI))
+                            loopStr <- loopStr + ":A:dotPathTmp"
                         }
                     } else {
-                        setErrorState(ciItr, "        # Could not find type:"+CI.type.asGiven)
+                        setErrorState(ciItr, " # Could not find type:"+CI.type.asGiven)
                     }
                 }
                 CI.doCursorLookup <- false
@@ -1025,21 +1046,19 @@ struct agent{
                 CITmp <deep- CI
                 CITmp.wrkLstPreped <- false
                 CITmp.hasCursorHead <- false
-                //log("        # Swapping cursorHead.type")
+                loopStr <- loopStr + ":A:cursorHead_swap"
                 CI <deep- CI.dotPath
                 CI.doCursorLookup <- true
                 CI.hasCursorHead <- false
                 CI.cursorHead <- CITmp
                 loopAgain <- true
             } else if(!CI.parts.isEmpty()){
+                loopStr <- loopStr + ":A:part_Tag"
                 withEach part in CI.parts{
                     if(part.path.infMode == isTag){
                         me string: partTag <- part.path.type.asGiven
-                        if(partTag == "size"){
-                            log("IsTag:  " + partTag)
-                        }
+                        if(partTag == "size"){}
                         else if(partTag == "first"){
-                            log("PWL:Tag First")
                             our infon: firstItm <- CI.getFirstItem()
                             firstItm.takeWrkListFrom(part.path)
                             part.wasTransfered <- true
@@ -1050,13 +1069,11 @@ struct agent{
                             part.wasTransfered <- true
                         }
                         else if(partTag == "pred"){
-                            log("IsTag:  " + partTag)
-                        }else{log("Handle tag in prepWorkList():"+partTag)}
+                        }else{log("TODO: Handle tag in prepWorkList():"+partTag)}
                     }
                 }
             } else if(CI.infMode == isTag){
-                //log("        # Access type:"+CI.type.asGiven)
-
+                loopStr <- loopStr + ":A:Access_type:"+CI.type.asGiven
                 our infon: infModel <- modelMngr.fetchModel(CI.type)
                 if(infModel){
                     Allocate(newTop)
@@ -1069,7 +1086,7 @@ struct agent{
                     world.value.index.insert(CI.type.asGiven, CI)
                 }
             } else if(CI.isFunc or CI.isFuncArg){
-               //log("        # HANDLING FUNCTION ARGS")
+               loopStr <- loopStr + ":A:FUNC_ARGS"
                 if(CI.isFuncArg!=0){  // Swap func body with args
                     // MUST: move this functionality to postParseProcessing
                     me infon: CITmp <- CI
@@ -1091,32 +1108,32 @@ struct agent{
                 if(CI.value.fType==LST){ciItr.state <- sFirstVisit}
                 else if(CI.value.fType!=LST){ciItr.state <- sNotASeq}
             } else {
- //               log("        Null-action")
+                loopStr <- loopStr + ":A:No-action"
             }
 
             me int: cursor <- CI.value.cursor
             if(cursor != cDefault){
-                //log("        @ HANDLING FUNCTION CALL:"+stringifyInfon(CI))
                 CI.value.cursor <- cDefault
                 our infon: aux Allocate(aux)
                 aux <deep- CI
+                loopStr <- loopStr + ":B1:HANDLING_FUNC_CALL:"+cursorStrings[cursor]
                 switch(cursor){
                     case cGetLast   : {
                         newTop <- aux.getLastItem()
-                        //log("         @> GET_LAST_ITEM:"+stringifyInfon(newTop))
+                        loopStr <- loopStr +stringifyInfon(newTop)
                     }
                     case cGetFirst  : {newTop <- aux.getFirstItem()}
          //           case cGetMarked : {newTop <- aux.getMarked()}
-                    default:{log("PrepWL: cursor:"+cursorStrings[cursor])}
+                    default:{}
                 }
                 withEach workItem in CI.wrkList{
                     newTop.wrkList.pushLast(workItem)
-                    //log("            PUSH:"+stringifyInfon(workItem.item))
+                    loopStr <- loopStr + ":B:PUSH( "+stringifyInfon(workItem.item)+" )"
                 }
                 aux.wrkList.clear()
                 normalize(aux)
             } else if(CI.infMode==newCursor) {
-                //log("        @ NEW CURSOR")
+                loopStr <- loopStr + ":B2:newCursor"
                 switch(CI.cursorMode){
                     case cThis:   {} //{newTop <- thisItem}
                     case cWorld:  {newTop <- world}
@@ -1128,11 +1145,11 @@ struct agent{
                     case cEndPred:{newTop <- ciItr.findOrAddPctTag("endPred").item}
                 }
             } else {done <- !loopAgain}
-
             if(newTop!=NULL) {
                 CI <deep- newTop
-                //log("        ### APPLY NEWTOP")
+                loopStr <- loopStr + ":B3:APPLY_NEWTOP"
             }
+            //log(loopStr)
         }
     }
 
@@ -1241,9 +1258,6 @@ struct agent{
         if(action.propogateRHSToRHSFirst){
             //addIdent(LHS, makeInfItr(RHSItr.item.value.items.first(), RHSItr, NULL))
         }
-    }
-    void: handleFieldsInWrkList(our infItr: LHSItr) <- {
-        //
     }
     void: tryMergeSize(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
         our infon: RHS <- RHSItr.item
@@ -1622,7 +1636,7 @@ logStrA <- logStrA + " unknownAsList"
         our infon: LHS  <- LHSItr.item
         crntLHSMySymbol <- LHS.mySymbol(LHS)
         prepWorkList(LHSItr)
-        handleFieldsInWrkList(LHSItr)
+        if(LHSItr.item.isOrLike()){log("IS_OR_LIKE:"+LHSItr.stringify())}
         our infon: CI          <- LHSItr.item
         me bool: RHS_Empty     <- CI.wrkList.isEmpty()
         our infItr: LHSItrNext <- NULL
