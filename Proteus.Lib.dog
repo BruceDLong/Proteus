@@ -210,7 +210,7 @@ model infon{
     }
 
     void: addSubscriber(our infon: subscriber) <- {subscribers.pushLast(subscriber)}
-    me bool: isOrLike() <- {return(value.cursor == cGetLast and infSize.format == fUnknown and value.format == fLiteral)}
+    me bool: isOrLike() <- {return(value.cursor == cGetLast and source != NULL and source.infSize.format == fUnknown and source.value.format == fLiteral)}
 
     our infon: getLastItem() <- {
         // ASSERT(Should be already normed and a non-concat list)
@@ -317,7 +317,7 @@ model infon{
         type                    <- NULL
     }
     void: addToOrInfon(our infItr: altItr) <- {
-        value.items.pushAsAlt(altItr, altItr.item)
+        source.value.items.pushAsAlt(altItr, altItr.item)
     }
     void: addInfItrToWrkList(our infItr: RHSItr, me bool: asAlt) <- {
         if(!asAlt){wrkList.pushLast(RHSItr)}
@@ -468,7 +468,6 @@ model infItr{
     mode[cmdNoOp, delDots, keepDots, insB4Dots, insAftDots]: stitchCmd
     flag: fromDotted
     our infItr: myDots
-    our infItr: nextOr
     our infItr: fieldAcc
     our infItr[map string]: pctTags
 
@@ -481,20 +480,19 @@ model infItr{
         item.clear()
         item.infMode                 <- isLiteral
         item.infSize.format          <- fUnknown
-        item.value.fType             <- LST
         item.value.format            <- fLiteral
         item.value.cursor            <- cGetLast
         item.value.sizeGiven         <- false
         item.value.listSpec          <- NULL
         item.cursorMode              <- cNone
         item.cursorHead              <- NULL
-        item.source                  <- NULL
         item.funcArgs                <- NULL
         item.dotPath                 <- NULL
         item.type                    <- NULL
         item.value.tailUnfinished    <- true
         item.value.items.pushAsAlt(nextItr, tmp)
-        //log("mkOR:"+stringifyInfon(item)+"  source:"+stringifyInfon(item.source))
+        item.moveInnerToSource()
+        //log("mkOR:"+item.mySymbol(item)+stringifyInfon(item))
     }
     me bool: isASeq(our infon: i) <- {
         return ((i.value.format==fLiteral and i.value.fType==LST) or i.value.format==fConcat)
@@ -597,7 +595,6 @@ model infItr{
         if(state == sNotASeq and item.infMode == isUnknown and ! item.value.items.isEmpty()){
             tmpState <- sFirstVisit
         }
-        nextOr <- NULL
         switch(tmpState) {
             case sNotASeq: sSecondVisit:{  // Get the next item or set EOL
                 if(parent==NULL or nestLvl==0){
@@ -687,9 +684,10 @@ model infItr{
         if(nextItr.item.isTentative){
             our infItr: nxtOR <- nextItr.getNextExtended(true)
             if(nxtOR != NULL){
-                //log("GNE:nxtOR:"+stringifyInfon(nxtOR.item)+"  source:"+stringifyInfon(nxtOR.item.source))
                 if(!nextItr.item.isOrLike()){nextItr.makeOrItr(nextItr)}
                 nextItr.item.addToOrInfon(nxtOR)
+                nextItr.item.source.value.tailUnfinished <- false
+                log("    GNE:nextItr:"+nextItr.stringify())
             }
         }
         return(nextItr)
@@ -708,8 +706,7 @@ model infItr{
         to.stitchCmd    <- stitchCmd
         to.fromDotted   <- fromDotted
         to.myDots       <- myDots
-        to.nextOr       <- nextOr
-        to.pctTags       <- pctTags
+        to.pctTags      <- pctTags
     }
     void: insertNewDotPart(me string: fieldName, our infon: newPart) <- {
         if(state == sSecondVisit and fieldName == "pred"){
@@ -773,6 +770,7 @@ model infItr{
             //S <- S + "(parent:" + parent.mySymbol(parent) + ")"
             //if(nextAnd){S <- S+ " & "+ nextAnd.stringify()}
             if(state==sSecondVisit){S <- S + ">SV"}
+            if(item.source){S <- S+ " source:"+item.source.mySymbol(item.source)+" "+ stringifyInfon(item.source)}
         }
         S <- S+"]"
         return (S)
@@ -900,6 +898,21 @@ struct infItr{
     }
 }
 struct infon{
+    void: moveInnerToSource() <- {
+        Allocate(source)
+        source.itmMode      <- itmMode
+        source.infMode      <- infMode
+        source.cursorMode   <- cursorMode
+        source.infSize      <- infSize
+        source.value        <- value
+        source.value.cursor <- cDefault
+        source.value.fType  <- LST
+        value.clear()
+        infSize.clear()
+        itmMode             <- mItem
+        infMode             <- isUnknown
+        cursorMode          <- cNone
+    }
     void: postParseProcessing() <- {
         me int: numItems <- value.items.size()
         if(numItems > 0){
@@ -921,9 +934,7 @@ struct infon{
             countSize()
         }
         if(value.cursor == cGetLast or value.cursor == cGetFirst or value.cursor == cGetMarked){
-            Allocate(source)
-            source <deep- self
-            source.value.cursor <- cDefault
+            moveInnerToSource()
         }
     }
 }
@@ -1007,7 +1018,6 @@ struct agent{
         our infon: CI <- ciItr.item
         if (CI.wrkLstPreped){return()}else{CI.wrkLstPreped <- 1}
         me bool: done <- false
-        //log(" > PrepWorkList")
         while(!done){
             me string: loopStr <- "PrepWL-LOOP   " + stringifyInfon(CI)+"   "
             me bool: loopAgain <- false
@@ -1124,9 +1134,6 @@ struct agent{
 
             me int: cursor <- CI.value.cursor
             if(cursor != cDefault){
-                CI.value.cursor <- cDefault
-                Allocate(CI.source)
-                CI.source <deep- CI
                 loopStr <- loopStr + ":B1:HANDLING_FUNC_CALL:"+cursorStrings[cursor]
                 switch(cursor){
                     case cGetLast   : {
@@ -1648,7 +1655,8 @@ logStrA <- logStrA + " unknownAsList"
         our infon: LHS  <- LHSItr.item
         crntLHSMySymbol <- LHS.mySymbol(LHS)
         prepWorkList(LHSItr)
-        if(LHSItr.item.isOrLike()){log("IS_OR_LIKE:"+LHSItr.stringify())}
+        if(LHSItr.item.isOrLike()){log("IS_OR_LIKE:")}
+        //value.cursor == cGetLast and source != NULL and source.infSize.format == fUnknown and source.value.format == fLiteral
         our infon: CI          <- LHSItr.item
         me bool: RHS_Empty     <- CI.wrkList.isEmpty()
         our infItr: LHSItrNext <- NULL
@@ -1711,11 +1719,11 @@ logStrA <- logStrA + infItrStateSig(RHSItr) +"| "
         //log("----pred:"+pred.stringify())
         our infItr: crntLHS <- LHSItr
         me int: LHSCount <- 0
-        while(crntLHS != NULL){
+        if(crntLHS != NULL){
             if(crntLHS.state != sEOL){
                 //log("    ----crntLHS:"+crntLHS.stringify())
                 our infItr: crntRHS <- RHSItr
-                while(crntRHS != NULL){
+                if(crntRHS != NULL){
                     //log("        ----crntRHS:"+crntRHS.stringify())
                     if(pred!=NULL){
                         //crntLHS.predecessors.pushLast(pred)
@@ -1764,12 +1772,9 @@ logStrA <- logStrA + infItrStateSig(RHSItr) +"| "
                             }
                         }
                     }
-                    crntRHS <- crntRHS.nextOr
                 }
                 addInfItrToAgenda(crntLHS)
             }
-            crntLHS <- crntLHS.nextOr
-            LHSCount <- LHSCount + 1
         }
     }
     me void: normalize(our infon: inf) <- {
