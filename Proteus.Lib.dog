@@ -140,9 +140,6 @@ model infon{
     our infon[list]: subscribers
     flag: wrkLstPreped
     flag: wrkItmsAdded
-    flag: endAdded
-    flag: hasAlts
-    flag: altForDots    // if true this infon is a list of alts for mDots
     flag: isOnAgenda    // True if item is currently on agenda
     flag: isTentative
 
@@ -298,59 +295,15 @@ model infon{
             to.wrkList.pushLast(ii)
         }
     }
-    void: makeOrInfon() <- {
-        our infon:: tmp
-        tmp <deep- self
-        clear()
-        infMode                 <- isLiteral
-        infSize.format          <- fUnknown
-        value.fType             <- LST
-        value.format            <- fLiteral
-        value.cursor            <- cGetLast
-        value.sizeGiven         <- false
-        value.listSpec          <- tmp
-        cursorMode              <- cNone
-        cursorHead              <- NULL
-        source                  <- NULL
-        funcArgs                <- NULL
-        dotPath                 <- NULL
-        type                    <- NULL
-    }
     void: addToOrInfon(our infItr: altItr) <- {
         source.value.items.pushAsAlt(altItr, altItr.item)
     }
-    void: addInfItrToWrkList(our infItr: RHSItr, me bool: asAlt) <- {
-        if(!asAlt){wrkList.pushLast(RHSItr)}
-        else{
-            our infon: altList <- findOrAddAltWrkItm()
-            altList.addToOrInfon(RHSItr)
-            //log("***:altList:"+altList.mySymbol(altList)+"    "+stringifyInfon(altList) + "    ADD Ident:" + RHSItr.stringify())
-        }
-    }
-    bool: deleteDotsInAlt() <- {
-        our infon: altAccInfon
-        if(hasAlts){
-            withEach wrkItm in wrkList{
-                if(wrkItm.item.altForDots){
-                    altAccInfon <- wrkItm.item
-                    break()
-                }
-            }
-            if(altAccInfon != NULL){
-                if(altAccInfon.value.items.size() > 0){
-                    our infon: lastInf <- altAccInfon.value.items.last()
-                    if (lastInf.itmMode == mDots){
-                        altAccInfon.value.items.popLast()
-                        return(true)
-                    }
-                }
-            }
-        }
-        return(false)
+    void: addInfItrToWrkList(our infItr: RHSItr) <- {
+        wrkList.pushLast(RHSItr)
     }
     void: takeWrkListFrom(our infon:from) <- {
         withEach wrkItm in from.wrkList{
-            addInfItrToWrkList(wrkItm, false)
+            addInfItrToWrkList(wrkItm)
         }
         from.wrkList.clear()
     }
@@ -363,26 +316,6 @@ model infon{
         log("ADDING NEW DOT_PART:'" + fieldName + "'" + stringifyInfon(newPart))
         parts.pushLast(newPath)
     }
-    void: insertNewAltDotPart(our infItr: newItr) <- {
-        our infon: altAccInfon
-        if(hasAlts){
-            withEach wrkItm in wrkList{
-                if(wrkItm.item.altForDots){
-                    altAccInfon <- wrkItm.item
-                    break()
-                }
-            }
-            if(altAccInfon == NULL){log("ERROR in insertNewAltDotPart(), no altForDots found.") exit(1)}
-        }else{
-            Allocate(altAccInfon)
-            altAccInfon.makeOrInfon()
-            altAccInfon.altForDots <- true
-            our infItr: altAccItr <- makeInfItr(altAccInfon, NULL, 0)
-            addInfItrToWrkList(altAccItr, false)
-            hasAlts <- true
-        }
-        altAccInfon.addToOrInfon(newItr)
-    }
     our infon: findPartPathByTag(me string: tagName) <- {
         withEach part in parts{
             if(part.path.type != NULL and part.path.type.asGiven == tagName){
@@ -390,35 +323,6 @@ model infon{
             }
         }
         return(NULL)
-    }
-    our infon: findOrAddAltWrkItm() <- {
-        our infon: altAccInfon
-        if(hasAlts){
-            withEach wrkItm in wrkList{
-                if(wrkItm.item.altForDots){
-                    altAccInfon <- wrkItm.item
-                    break()
-                }
-            }
-            if(altAccInfon == NULL){log("ERROR in findOrAddAltWrkItm(), no altForDots found.") exit(1)}
-        }else{
-            Allocate(altAccInfon)
-            altAccInfon.makeOrInfon()
-            altAccInfon.altForDots <- true
-            our infItr: altAccItr <- makeInfItr(altAccInfon, NULL, 0)
-            addInfItrToWrkList(altAccItr, false)
-            hasAlts <- true
-        }
-        return(altAccInfon)
-    }
-    our infon: findOrAddPartPathByTag(me string: tagName) <- {
-        log("FIELD:" + tagName)
-        our infon: retVal <- findPartPathByTag(tagName)
-        if(retVal == NULL){
-            Allocate(retVal)
-            insertNewDotPart(tagName, retVal)
-        }
-        return(retVal)
     }
     me string: lengthStatus() <- {
         //MUST: complete after range functionality works
@@ -466,9 +370,6 @@ model infItr{
     me int: nestLvl
     mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError]: state
     mode[cmdNoOp, delDots, keepDots, insB4Dots, insAftDots]: stitchCmd
-    flag: fromDotted
-    our infItr: myDots
-    our infItr: fieldAcc
     our infItr[map string]: pctTags
 
     me bool: looseSize() <- {
@@ -498,21 +399,6 @@ model infItr{
         return ((i.value.format==fLiteral and i.value.fType==LST) or i.value.format==fConcat)
     }
     void:closeListAtItem(our DblLinkedListNode: lastItem) <- {
-    }
-    our infItr: getFirstItr(our infItr: selfPtr) <- {
-        our infItr: retVal <- NULL
-        if(!item.value.items.isEmpty()){
-            Allocate(retVal)
-            retVal.parent     <- selfPtr
-            retVal.infNode    <- item.value.items.begin()
-            retVal.looseInhtd <- looseMode!=false or looseSize()
-            retVal.looseMode  <- false
-            retVal.looseTop   <- false
-            retVal.item       <- retVal.infNode.item
-            retVal.setListSeqFlags()
-            retVal.nestLvl    <- nestLvl+1
-        }
-        return(retVal)
     }
     void: setListSeqFlags() <- {
         if(isASeq(item)){state <- sFirstVisit; }
@@ -647,33 +533,6 @@ model infItr{
         if(parent==NULL or item==NULL or infNode.prev==NULL) {return(NULL)}
         return(infNode.prev.item)
     }
-    our infItr: fillDotChild(their infItr: ii) <- {
-        our infon: child
-        our infon: infonType <- ii.item.value.listSpec
-        if(infonType != NULL){
-            Allocate(child)
-            child <deep- infonType // should be a lazy cow copy
-        } else {
-            Allocate(child)
-            child.value.fType   <- tUnknown
-            child.infMode       <- isUnknown
-            child.itmMode       <- mItem
-            child.value.format  <- fUnknown
-        }
-        our infItr: tentativeItr
-        Allocate(tentativeItr)
-        tentativeItr.infNode    <- ii.infNode
-        tentativeItr.parent     <- ii.parent
-        tentativeItr.looseMode  <- ii.looseMode
-        tentativeItr.looseTop   <- ii.looseTop
-        tentativeItr.looseInhtd <- ii.looseInhtd
-        tentativeItr.item       <- child
-        tentativeItr.nestLvl    <- ii.nestLvl
-        tentativeItr.setListSeqFlags() // Set state, etc.
-        tentativeItr.fromDotted <- true
-        tentativeItr.myDots     <- NULL
-        return(tentativeItr)
-    }
     our infItr: getNextExtended(me bool: skipDots) <- {
         our infItr: nextItr <- getNextDeep(skipDots)
         if(nextItr.state == sError){return(NULL)}
@@ -705,19 +564,9 @@ model infItr{
         to.nestLvl      <- nestLvl
         to.state        <- state
         to.stitchCmd    <- stitchCmd
-        to.fromDotted   <- fromDotted
-        to.myDots       <- myDots
         to.pctTags      <- pctTags
     }
-    void: insertNewDotPart(me string: fieldName, our infon: newPart) <- {
-        if(state == sSecondVisit and fieldName == "pred"){
-            our infon:: secondVisitEnd
-            item.insertNewDotPart("end", secondVisitEnd)
-            secondVisitEnd.insertNewDotPart("pred", newPart)
-        }else{
-            item.insertNewDotPart(fieldName, newPart)
-        }
-    }
+
     void: deleteCrnt() <- {
         infNode <- parent.item.deleteListNode(infNode)
     }
@@ -726,7 +575,7 @@ model infItr{
         if(tagItr == pctTags.end()){
             pctTags.insert(tag, newItr)
         }else{
-            tagItr.val.item.addInfItrToWrkList(newItr, false)
+            tagItr.val.item.addInfItrToWrkList(newItr)
         }
     }
     our infItr: findOrAddPctTag(me string: tag) <- {
@@ -767,7 +616,6 @@ model infItr{
             //if(wasProcessed){S <- S + "|wasProcessedTrue" }
             //S <- S + "|nestLvl=" + toString(nestLvl)
             //S <- S + "|state=" + stateStrings[state]
-            //if(item.hasAlts){S <- S + "|hasAltsTrue" }
             //S <- S + "(parent:" + parent.mySymbol(parent) + ")"
             //if(nextAnd){S <- S+ " & "+ nextAnd.stringify()}
             if(state==sSecondVisit){S <- S + ">SV"}
@@ -1271,7 +1119,7 @@ struct agent{
                 our infon: LHSFirst     <- LHS.getFirstItem()
                 our infon: RHSFirst     <- RHS.getFirstItem()
                 our infItr: RHSFirstItr <- makeInfItr(RHSFirst, LHSItr, NULL)
-                LHSFirst.addInfItrToWrkList(RHSFirstItr, false)
+                LHSFirst.addInfItrToWrkList(RHSFirstItr)
             }
             case moveRHSToFirstChild:{
             }
@@ -1559,39 +1407,6 @@ struct agent{
         agenda.popLast()
         return(retVal)
     }
-    bool: handleRHSAlts(our infItr: LHSItr, our infItr: RHSItr) <- {
-        // MUST: this is hard coded, must integrate
-        //log("    HRAlts-LHSItr:"+LHSItr.item.mySymbol(LHSItr.item)+"    "+LHSItr.stringify())
-        //log(".......HRA:RHSItr:"+RHSItr.item.mySymbol(RHSItr.item)+"    "+RHSItr.stringify())
-        //log(".......HRA:cursor:"+cursorStrings[RHSItr.item.value.cursor])
-        if(RHSItr.item.value.cursor == cGetLast){
-            //log(".......HRA:RHSformat:"+formatStrings[RHSItr.item.infSize.format])
-            if(RHSItr.item.infSize.format == fUnknown){
-                //log(".......HRA:LHSformat:"+formatStrings[LHSItr.item.value.format])
-                if(LHSItr.item.value.format == fLiteral){
-                    our infon: lastInf <- RHSItr.item.value.items.last()
-                    //log(".......HRA:lastInf.itmMode:"+itmModeStrings[lastInf.itmMode])
-                    if(lastInf.itmMode != mDots){
-                        our infItr: RHSItmItr <- RHSItr.getFirstItr(RHSItr)
-                        me int: acceptCount <- 0
-                        our infItr: lastNotRejectedItr
-                        log(".......HRA:RHSItmItr:"+RHSItmItr.stringify())
-                        while(RHSItmItr != NULL and RHSItmItr.item != NULL and RHSItmItr.nestLvl != 0 and RHSItmItr.state != sSecondVisit){
-                            log("HandleAltsLoop:"+RHSItmItr.stringify())
-                            our transformAction:: action
-                            tryMerge(LHSItr.item, RHSItmItr, action)
-                            if(action.reject){RHSItmItr.wasRejected <- true}
-                            else{acceptCount <- acceptCount +1 lastNotRejectedItr <- RHSItmItr}
-                            RHSItmItr <- RHSItmItr.getNext(false)
-                        }
-                        if(acceptCount == 1){LHSItr.item.addInfItrToWrkList(lastNotRejectedItr, false) log("ALT:"+lastNotRejectedItr.stringify())}
-                        return(true)
-                    }
-                }
-            }
-        }
-        return(false)
-    }
     me int: PAI_StateSig(our infItr: LHSItr, our infItr: RHSItr, me bool: looseMode) <- {
         me int: LHS_Sig <- LHSItr.state
         me int: RHS_Sig <- RHSItr.state
@@ -1696,7 +1511,6 @@ logStrA <- logStrA + infItrStateSig(RHSItr) +"| "
 ////////////
                 crntRHSMySymbol <- RHSItr.item.mySymbol(RHSItr.item)
                 our transformAction:: action
-                //if(handleRHSAlts(LHSItr, RHSItr)){continue()}
                 if(LHSItr.state != sSecondVisit){
                     me bool: doContinue <- testCompatibility(CI, LHSItr, RHSItr, action)
                     if(doContinue){continue()}
@@ -1725,7 +1539,6 @@ logStrA <- logStrA + infItrStateSig(RHSItr) +"| "
     void: enqueueForProcessing(our infItr: pred, our infItr: LHSItr, our infItr: RHSItr, me bool: breakDotCycle)<-{
         //log("----pred:"+pred.stringify())
         our infItr: crntLHS <- LHSItr
-        me int: LHSCount <- 0
         if(crntLHS != NULL){
             if(crntLHS.state != sEOL){
                 //log("    ----crntLHS:"+crntLHS.stringify())
@@ -1734,13 +1547,7 @@ logStrA <- logStrA + infItrStateSig(RHSItr) +"| "
                     //log("        ----crntRHS:"+crntRHS.stringify())
                     if(pred!=NULL){
                         //crntLHS.predecessors.pushLast(pred)
-                        if(LHSCount == 0){
-                            crntLHS.insertNewPctTag("pred", pred)
-                        }
-                        else if(LHSCount > 0){
-                            our infItr: altList <- crntLHS.findOrAddPctTag("pred")
-                            altList.item.insertNewAltDotPart(pred)
-                        }
+			crntLHS.insertNewPctTag("pred", pred)
                     }
                     if(breakDotCycle){  // This sets the stitchCmd
                         // MUST: store stitchCmd in crntRHS instead of crntLHS
@@ -1759,23 +1566,13 @@ logStrA <- logStrA + infItrStateSig(RHSItr) +"| "
         // MUST: This is almost certainly wrong. What about RHS=secondState and LHS!=secondstate. Also, look at the older code base.
                         if(crntRHS.state != sSecondVisit){
                             our infItr: RHS2Add
-                            if(LHSCount == 0){RHS2Add <- crntRHS}
-                            else{
-                                Allocate(RHS2Add)
-                                crntRHS.copyThisTo(RHS2Add)
-                            }
-                            crntLHS.item.addInfItrToWrkList(RHS2Add, LHSCount > 0)
+                            RHS2Add <- crntRHS
+                            crntLHS.item.addInfItrToWrkList(RHS2Add)
                         }else{
                             me bool: evaluationFinished <- !crntRHS.hasUnresolvedWrkItems()
                             //log("        evaluationFinished="+dispBool(evaluationFinished))
                             if(evaluationFinished){
-                                if(crntLHS.item.hasAlts){
-                                    me bool: dotsDeleted <- crntLHS.item.deleteDotsInAlt()
-                                    if(dotsDeleted){
-                                        log("        after deleteDots:"+crntLHS.stringify())
-                                    }
-                                }
-                                if(crntLHS.state == sSecondVisit){crntLHS.item.addInfItrToWrkList(crntRHS, false)}
+                                if(crntLHS.state == sSecondVisit){crntLHS.item.addInfItrToWrkList(crntRHS)}
                             }
                         }
                     }
