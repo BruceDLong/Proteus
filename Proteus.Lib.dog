@@ -35,7 +35,6 @@ struct GLOBAL{
         ret.setListSeqFlags()
         return(ret)
     }
-
 }
 
 #include infonPrinter.dog
@@ -49,7 +48,7 @@ model pureInfon{
     me mode[fUnknown, fConcat, fLiteral]: format
     me mode[fDefault, fFloat, fFraction, fSingleQuote, fHereDoc, fSizedBin]: literalFormat
     me mode[bDec, bBin, bHex]:numBase
-    me mode[cDefault, cGetLast, cGetFirst, cGetMarked]: cursor
+    me mode[ipDefault, ipSquareBrackets]: intersectPosParse
     me flag: inverted
     me flag: timelike
     flag: sizeGiven
@@ -75,7 +74,6 @@ model pureInfon{
     me bool: isDuplicateOf(their pureInfon: dup) <- {
         if(fType != dup.fType){return(false)}
         if(format != dup.format){return(false)}
-        if(cursor != dup.cursor){return(false)}
         if(inverted != dup.inverted){return(false)}
         if(timelike != dup.timelike){return(false)}
         me int: formatType <- fType
@@ -124,6 +122,7 @@ model infon{
     flag: invertFunc
     mode[mItem, mSubItems, mDots, mTagDefn]:      itmMode
     mode[isUnknown, newCursor, isTag, isLiteral]: infMode
+    me mode[ipNoIntersect, ipGetLast, ipGetFirst, ipGetMarked]: intersectPos
     mode[cNone, cThis, cWorld, cContext, cPrev, cNext, cPred, cSucc, cEndPred]:  cursorMode
     me pureInfon: infSize
     me pureInfon: value
@@ -207,7 +206,7 @@ model infon{
     }
 
     void: addSubscriber(our infon: subscriber) <- {subscribers.pushLast(subscriber)}
-    me bool: isOrLike() <- {return(value.cursor == cGetLast and source != NULL and source.infSize.format == fUnknown and source.value.format == fLiteral)}
+    me bool: isOrLike() <- {return(intersectPos == ipGetLast and source != NULL and source.infSize.format == fUnknown and source.value.format == fLiteral)}
 
     our infon: getLastItem() <- {
         // ASSERT(Should be already normed and a non-concat list)
@@ -379,13 +378,13 @@ model infItr{
         item.infMode                 <- isLiteral
         item.infSize.format          <- fUnknown
         item.value.format            <- fLiteral
-        item.value.cursor            <- cGetLast
+        item.intersectPos            <- ipGetLast
         item.value.sizeGiven         <- false
         item.value.listSpec          <- NULL
         item.cursorMode              <- cNone
         item.value.tailUnfinished    <- true
         item.value.items.pushAsAlt(nextItr, tmp)
-        item.moveInerToSource()
+        item.moveInnrToSource()
         //log("mkOR:"+item.mySymbol(item)+stringifyInfon(item))
     }
     me bool: isASeq(our infon: i) <- {
@@ -661,9 +660,9 @@ string pureInfon{
     >ws
     >[ ( >[ (>uint64: num <=> format = fLiteral;) | ("_" <=> format = fUnknown; num=0; )]   <=>  fType = NUM;)
      | ( >[ (>string: str <=> format = fLiteral;) | ("$" <=> format = fUnknown; str="";)]   <=>  fType = STR;)
-     | ( >[ (LISTBODY({,}) <=> format=fLiteral; cursor=cDefault;)
-          | (LISTBODY([,]) <=> format=fLiteral; cursor=cGetLast;)
-          | (LISTBODY((,)) <=> format=fConcat;  cursor=cDefault;)
+     | ( >[ (LISTBODY({,}) <=> format=fLiteral; intersectPosParse=ipDefault;)
+          | (LISTBODY([,]) <=> format=fLiteral; intersectPosParse=ipSquareBrackets;)
+          | (LISTBODY((,)) <=> format=fConcat;  intersectPosParse=ipDefault;)
           ]  <=>  fType = LST;)
      ]
 }
@@ -740,14 +739,14 @@ struct infItr{
     }
 }
 struct infon{
-    void: moveInerToSource() <- {
+    void: moveInnrToSource() <- {
         Allocate(source)
         source.itmMode      <- itmMode
         source.infMode      <- infMode
         source.cursorMode   <- cursorMode
         source.infSize      <- infSize
         source.value        <- value
-        source.value.cursor <- cDefault
+        source.intersectPos <- ipNoIntersect
         source.value.fType  <- LST
         value.clear()
         infSize.clear()
@@ -775,8 +774,10 @@ struct infon{
         if(value.tailUnfinished == false){
             countSize()
         }
-        if(value.cursor == cGetLast or value.cursor == cGetFirst or value.cursor == cGetMarked){
-            moveInerToSource()
+        if(value.intersectPosParse == ipSquareBrackets){
+            moveInnrToSource()
+            intersectPos<-ipGetLast
+            //CRNT: handle function args and getGetFirst if needed.
         }
     }
 }
@@ -877,7 +878,7 @@ struct agent{
                         case 1: {// "innr"
                             loopStr <- loopStr + ":INNR"
                             newTop <- CI.cursorHead
-                            newTop.value.cursor <- cDefault
+                            newTop.intersectPos <- ipNoIntersect
                         }
                         case 2:{}
                     }
@@ -974,20 +975,17 @@ struct agent{
                 loopStr <- loopStr + ":A:No-action"
             }
 
-            me int: cursor <- CI.value.cursor
-            if(cursor != cDefault){
-                loopStr <- loopStr + ":B1:HANDLING_FUNC_CALL:"+cursorStrings[cursor]
+            me int: intersectPos <- CI.intersectPos
+            if(intersectPos != ipNoIntersect){
                 our infon: src <- CI.source
-                switch(cursor){
-                    case cGetLast   : {
+                switch(intersectPos){
+                    case ipGetLast   : {
                         log("******@getLast")
                         newTop              <- src.getLastItem()
                         newTop.source       <- src
-                        loopStr <- loopStr + ":newTop="+ stringifyInfon(newTop)
                     }
-                    case cGetFirst  : {newTop <- src.getFirstItem()}
-                    //case cGetMarked : {newTop <- src.getMarked()}
-                    default:{log("TODO: finish value.cursor @prepWorkList_handle_func_call:"+cursorStrings[cursor])}
+                    case ipGetFirst  : {newTop <- src.getFirstItem()}
+                    //case ipGetMarked : {newTop <- src.getMarked()}
                 }
                 withEach workItem in CI.wrkList{
                     newTop.wrkList.pushLast(workItem)
@@ -1010,9 +1008,6 @@ struct agent{
                 }
             } else {done <- !loopAgain}
             if(newTop!=NULL) {
-                log("******@NEW_TOP source:"+stringifyInfon(newTop.source))
-                log("******CI.value.cursor(cGetLast)       ="+cursorStrings[CI.value.cursor])
-                log("******newTop.value.cursor(cGetLast)   ="+cursorStrings[newTop.value.cursor])
                 CI <deep- newTop
                 loopStr <- loopStr + ":B3:APPLY_NEWTOP"
             }
@@ -1471,7 +1466,6 @@ logStrA <- logStrA + " unknownAsList"
         crntLHSMySymbol <- LHS.mySymbol(LHS)
         prepWorkList(LHSItr)
         if(LHSItr.item.isOrLike()){log("IS_OR_LIKE:")}
-        //value.cursor == cGetLast and source != NULL and source.infSize.format == fUnknown and source.value.format == fLiteral
         our infon: CI          <- LHSItr.item
         me bool: RHS_Empty     <- CI.wrkList.isEmpty()
         our infItr: LHSItrNext <- NULL
