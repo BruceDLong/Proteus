@@ -1,3 +1,173 @@
+// This file implements parsing and printing of infons
+
+struct infItr{
+    void: postParseProcessing() <- {
+        setListSeqFlags()
+    }
+}
+struct infon{
+    flag: isFunc
+    flag: isFuncArg
+    flag: invertFunc
+
+    void: moveInnrToSource() <- {
+        Allocate(source)
+        //source.itmMode      <- itmMode
+        source.infMode      <- infMode
+        source.cursorMode   <- cursorMode
+        source.infSize      <- infSize
+        source.value        <- value
+        source.intersectPos <- ipNoIntersect
+        source.value.fType  <- LST
+        source.argsOnLeft   <- argsOnLeft
+        source.argPos       <- argPos
+        source.funcArgs     <- funcArgs
+        value.clear()
+        infSize.clear()
+        argsOnLeft          <- false
+        argPos              <- argPos
+        itmMode             <- mItem
+        infMode             <- isUnknown
+        cursorMode          <- cNone
+        funcArgs            <- NULL
+    }
+    void: postParseProcessing() <- {
+        me int: numItems <- value.items.size()
+        if(numItems > 0){
+            our infon: lastItem <- value.items.last()
+            if(lastItem.value.tailUnfinished and lastItem.itmMode == mSubItems and lastItem.infSize.format == fUnknown){
+                value.tailUnfinished <- true
+                value.items.popLast()
+            }
+        }
+        if(itmMode == mDots){
+            itmMode              <- mSubItems
+            infSize.format       <- fUnknown
+            value.format         <- fLiteral
+            value.fType          <- LST
+            infMode              <- isLiteral
+            value.tailUnfinished <- true
+        }
+        if(value.tailUnfinished == false){countSize()}
+        if(isFunc or isFuncArg){
+            if(isFuncArg != 0){  // Swap func body with args
+                log("FUNC_ARG:" + stringifyInfon(funcArgs))
+                our infon:: CI_args
+                CI_args <deep- self
+
+                log("FUNC_ARG SELF:" + stringifyInfon(CI_args))
+
+                log("FUNC_ARG CI_args:" + stringifyInfon(CI_args.funcArgs))
+                self <deep- CI_args.funcArgs
+                invertFunc <- CI_args.invertFunc
+        our infon:: tmp; tmp <deep- self
+        log("FUNC_ARG SELF_TMP:" + stringifyInfon(tmp))
+                funcArgs <- CI_args
+                funcArgs.isFunc <- false
+                funcArgs.isFuncArg <- false
+                argsOnLeft <- true
+            } else {argsOnLeft <- false}
+            isFunc <- false
+            isFuncArg <- false
+
+            if(invertFunc){argPos <- apArgIsLastItem}
+            else{log("FIRST_ITEM"); argPos <- apArgIsFirstItem}
+        }else{argPos <- apNoArgs}
+        if(value.intersectPosParse == ipSquareBrackets){
+            moveInnrToSource()
+            if(invertFunc){
+                intersectPos <- ipGetLast
+            } else {
+                intersectPos <- ipGetFirst
+            }
+        }
+    }
+}
+
+#define LISTBODY(LEFT_BRKT, RIGHT_BRKT) <% >{ "LEFT_BRKT" "T"[opt]:timelike  >me listInfo[opt] >our listItem[list]: items >ws "RIGHT_BRKT" } %>
+
+string WordSystem{
+    >CID:asGiven
+}
+string PartPath{
+    >{>[ ("." <=> pathMode = dotField;) | (":" <=> pathMode = colonField;) ] > ws > our infon:path > ws ";"}
+}
+string infItr{
+    >[ ("=" <=> looseMode=false;) | ("==" <=> looseMode=true;) ] ":"[opt]:looseTop > ws > our infon:item
+}
+string listInfo[
+        >{ >{"~" >ws >our pureInfon: size}[opt]:Size >ws "C" >ws >our infon:listSpec "|"[opt]}
+     |  >{ >{"~" >ws >our pureInfon: size}[opt]:Size         >ws >our infon:listSpec "|"}
+     |  >{ "~" >ws >our pureInfon: size >ws "|"[opt]}
+]
+string listItem{
+    >ws
+     >[ (>{"class" >ws > WordSystem:type > ws ":" > ws > our infon:inf} <=> itmMode=mTagDefn;)
+      | (>our infon:inf <=> itmMode=mItem;)
+      | ("..." <=> itmMode=mDots; value.format=fUnknown;)
+      | (>{"#" >ws >our infon:inf} <=> itmMode=mSubItems;)
+      ]
+}
+string pureInfon{
+    >ws
+    >[ ( >[ (>uint64: num <=> format = fLiteral;) | ("_" <=> format = fUnknown; num=0; )]   <=>  fType = NUM;)
+     | ( >[ (>string: str <=> format = fLiteral;) | ("$" <=> format = fUnknown; str="";)]   <=>  fType = STR;)
+     | ( >[ (LISTBODY({,}) <=> format=fLiteral; intersectPosParse=ipDefault;)
+          | (LISTBODY([,]) <=> format=fLiteral; intersectPosParse=ipSquareBrackets;)
+          | (LISTBODY((,)) <=> format=fConcat;  intersectPosParse=ipDefault;)
+          ]  <=>  fType = LST;)
+     ]
+}
+string infon: StartSymbol="true" {
+    "!"[opt]:asNot
+    >[>{>WordSystem:type >ws}
+    |>{>WordSystem:type >ws ":" >ws
+        >{>[ ( "?" <=> infMode=isUnknown;  value.format=fUnknown;  infSize.format=fUnknown;)
+            | ( >{ "%" >[ ("this" <=> cursorMode=cThis;) | ("W" <=> cursorMode=cWorld;) | ("prev" <=> cursorMode=cPrev;) | ("next" <=> cursorMode=cNext;) | ("pred" <=> cursorMode=cPred;)  | ("succ" <=> cursorMode=cSucc;) | ("endPred" <=> cursorMode=cEndPred;)]} <=> infMode=newCursor;)
+            | ( >[ (>{ >[("*" <=>  infSize.inverted = false; ) | ("/" <=>  infSize.inverted = true; ) ] > me pureInfon: infSize
+                       >ws >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ] > me pureInfon: value
+                    } <=> infSize.fType=NUM; value.sizeGiven=true;)
+                 | (>{ >ws >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ][opt] > me pureInfon: value}  <=> infSize.num=0; infSize.fType=NUM; infSize.format=fUnknown; value.sizeGiven=false;)
+                 ]   <=>   infMode=isLiteral;
+              )
+            |
+            ] >ws
+            >our infItr[list]:wrkList
+            >{ >[ ("<:" <=> isFunc=true; isFuncArg=false; invertFunc=false;)
+                | (":>" <=> isFunc=false; isFuncArg=true; invertFunc=false;)
+                | ("<!" <=> isFunc=true; isFuncArg=false; invertFunc=true;)
+                | ("!>" <=> isFunc=false; isFuncArg=true; invertFunc=true;)
+                ]
+                >ws >our infon:funcArgs
+            }[opt]
+            >our PartPath[list]: parts
+        }
+//MUST: This code is doubled. Fix it.
+
+    }
+    |>{>[ ( "?" <=> infMode=isUnknown;  value.format=fUnknown;  infSize.format=fUnknown;)
+        | ( >{ "%" >[ ("this" <=> cursorMode=cThis;) | ("W" <=> cursorMode=cWorld;) | ("prev" <=> cursorMode=cPrev;) | ("next" <=> cursorMode=cNext;) | ("pred" <=> cursorMode=cPred;) | ("succ" <=> cursorMode=cSucc;) | ("endPred" <=> cursorMode=cEndPred;) ]} <=> infMode=newCursor;)
+        | ( >[ (>{ >[("*" <=>  infSize.inverted = false; ) | ("/" <=>  infSize.inverted = true; ) ] > me pureInfon: infSize
+                   >ws >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ] > me pureInfon: value
+                } <=> infSize.fType=NUM; value.sizeGiven=true;)
+             | (>{ >ws >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ][opt] > me pureInfon: value}  <=> infSize.num=0; infSize.fType=NUM; infSize.format=fUnknown; value.sizeGiven=false;)
+             ]   <=>   infMode=isLiteral;
+          )
+        |
+        ] >ws
+        >our infItr[list]:wrkList
+        >{ >[ ("<:" <=> isFunc=true; isFuncArg=false; invertFunc=false;)
+            | (":>" <=> isFunc=false; isFuncArg=true; invertFunc=false;)
+            | ("<!" <=> isFunc=true; isFuncArg=false; invertFunc=true;)
+            | ("!>" <=> isFunc=false; isFuncArg=true; invertFunc=true;)
+            ]
+            >ws >our infon:funcArgs
+        }[opt]
+        >our PartPath[list]: parts
+    }]
+}
+
+
 struct GLOBAL{
     me InfonPrinter: infonPrinter
 
@@ -19,6 +189,15 @@ struct InfonPrinter{
         }
         if(pure.tailUnfinished){return(true)}
         return(false)
+    }
+
+    me string: addFuncArgs(me string: funcStr, me string: argStr, me int: argsOnLeft, me int: argPos, me string: tmpChar) <- {
+        me string: S
+        me string: invertChar <- ":"
+        if(argPos==apArgIsLastItem){invertChar <- "!"}
+        if(argsOnLeft){S <- argStr + invertChar + ">" + funcStr}
+        else{S <- funcStr + "<" + tmpChar+ invertChar + argStr}
+        return(S)
     }
 
     me string: printPureInfon(their pureInfon: pure, their pureInfon: size, me int[our map string]: used) <- {
@@ -115,6 +294,9 @@ struct InfonPrinter{
                     }
                     if(i.source.value.tailUnfinished){S <+- " ... "}
                     S <+- "]"
+                    if (i.source.argPos != apNoArgs){
+                        S <- addFuncArgs(S, printInfonActual(i.source.funcArgs, used), i.source.argsOnLeft, i.source.argPos, "")
+                    }
                 }
             }
             else if(i.infMode==newCursor){
@@ -147,12 +329,8 @@ struct InfonPrinter{
                 }
             }
 
-            if (i.isFunc){
-                if(i.invertFunc){S <+- "<!" + printInfonActual(i.funcArgs, used)}
-                else{S <+- "<:" + printInfonActual(i.funcArgs, used)}
-            } else if(i.isFuncArg !=0){
-                if(i.invertFunc){S <+- "!>" + printInfonActual(i.funcArgs, used)}
-                else{S <+- ":>" + printInfonActual(i.funcArgs, used)}
+            if (i.argPos != apNoArgs){
+                S <- addFuncArgs(S, printInfonActual(i.funcArgs, used), i.argsOnLeft, i.argPos, "")
             }
         }
 
