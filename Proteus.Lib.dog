@@ -37,7 +37,7 @@ struct GLOBAL{
     }
 }
 
-#include infonPrinter.dog
+#include infonIO.dog
 #include DB_workAround.dog
 #include infonList.dog
 #include Functions.dog
@@ -153,7 +153,7 @@ model infon{
                 me int64: childCount <- item.sizeIfKnown()
                 if(childCount==-1){return(-1)}
                 acc <- acc + childCount
-            } else if(item.itmMode == mDots){log("count:@mDots:"+toString(acc)) exit(2) return(acc)}
+            } else if(item.itmMode == mDots){logFatalError("count:@mDots:"+toString(acc)); return(acc)}
         }
         return(acc)
     }
@@ -230,29 +230,23 @@ model infon{
             else if(lenStatus == "G"){
             }
         }
-        if(!value.items.isEmpty()) {
+        if(infSize.format==fUnknown){ //MUST: Handle if size is fConcat
+            return(NULL)
+        } else if(!value.items.isEmpty()) {
             lastItem <- value.items.last()
-        }else{log("WARNING: TODO: handle [...] value.items.isEmpty() "); exit(2); return(NULL) }
-        switch(lastItem.itmMode){
-            case mItem:{}
-            case mSubItems:{lastItem <- lastItem.getLastItem()}
-            case mDots:{} // Should't ever happen
-            case mTagDefn:{log("TODO: handle when a tag is the last item in a list"); exit(4)}
-        }
+            if(value.format==fConcat){lastItem <- lastItem.getLastItem()}
+        }else{logFatalError("WARNING: TODO: handle [...] value.items.isEmpty() "); return(NULL) }
+        if(lastItem!=NULL and lastItem.itmMode==mSubItems){lastItem <- lastItem.getLastItem()}
         return(lastItem)
     }
     our infon: getFirstItem() <- {
-        // ASSERT(Should be already normed and a non-concat list)
+        // ASSERT(Should be already normed)
         our infon: firstItem
         if(!value.items.isEmpty()) {
             firstItem <- value.items.first()
+            if(value.format==fConcat){firstItem <- firstItem.getFirstItem()}
         }  else {firstItem <- NULL}
-        switch(firstItem.itmMode){
-            case mItem:{}
-            case mSubItems:{firstItem <- firstItem.getFirstItem()}
-            case mDots:{exit(3)}
-            case mTagDefn:{log("TODO: handle when a tag is the first item in a list"); exit(4)}
-        }
+        if(firstItem!=NULL and firstItem.itmMode==mSubItems){firstItem <- firstItem.getFirstItem()}
         return(firstItem)
     }
     our DblLinkedListNode: deleteListNode(our DblLinkedListNode: toDel) <- {
@@ -384,6 +378,7 @@ model infItr{
         item.value.tailUnfinished    <- true
         item.value.items.pushAsAlt(nextItr, tmp)
         item.moveInnrToSource()
+        infNode.item <- item
         //log("mkOR:"+item.mySymbol(item)+stringifyInfon(item))
     }
     me bool: isASeq(our infon: i) <- {
@@ -420,8 +415,8 @@ model infItr{
     me bool: goNext(me bool: skipDots) <- {
         while(true){
             if(item==NULL){return(false)}
-            if(infNode==NULL){log("ERROR: GN:infNode==NULL "+stringify()); exit(2)}
-            if(parent==NULL){log("ERROR: GN:parent==NULL "+stringify()); exit(2)}
+            if(infNode==NULL){logFatalError("ERROR: GN:infNode==NULL "+stringify())}
+            if(parent==NULL){logFatalError("ERROR: GN:parent==NULL "+stringify())}
             if(infNode.next==NULL){
                 if(!skipDots){
                     if(parent.item != NULL and parent.item.value.tailUnfinished){
@@ -535,8 +530,11 @@ model infItr{
             nextItr.item.isTentative <- false
             our infItr: nxtOR <- nextItr.getNextExtended(true)
             if(nxtOR != NULL){
+                log("NEXT ITR 1:" + nextItr.stringify())
                 if(!nextItr.item.isOrLike()){nextItr.makeOrItr(nextItr)}
+                log("NEXT ITR 2:" + nextItr.stringify())
                 nextItr.item.addToOrInfon(nxtOR)
+                log("NEXT ITR 3:" + nextItr.stringify())
                 nextItr.item.source.value.tailUnfinished <- false
                 //log("    GNE:nextItr:"+nextItr.stringify())
             }
@@ -793,11 +791,13 @@ struct agent{
                         if(partTag == "size"){}
                         else if(partTag == "first"){
                             our infon: firstItm <- CI.getFirstItem()
+                            if(firstItm==NULL){logFatalError("Handle firstItm is null")}
                             firstItm.takeWrkListFrom(part.path)
                             part.wasTransfered <- true
                         }
                         else if(partTag == "last"){
                             our infon: lastItm <- CI.getLastItem()
+                            if(lastItm==NULL){logFatalError("Handle LastItm is null")}
                             lastItm.takeWrkListFrom(part.path)
                             part.wasTransfered <- true
                         }
@@ -824,9 +824,11 @@ struct agent{
                 our infon: tmp
                 if(CI.argPos == apArgIsFirstItem){tmp <- CI.getFirstItem()}
                 else {tmp <- CI.getLastItem()}
-                tmp.wrkList.pushLast(makeInfItr(CI.funcArgs, NULL, NULL))
-                CI.funcArgs <- NULL
-                CI.argPos <- apNoArgs
+                if(tmp!=NULL){
+                    tmp.wrkList.pushLast(makeInfItr(CI.funcArgs, NULL, NULL))
+                    CI.funcArgs <- NULL
+                    CI.argPos <- apNoArgs
+                }
                 if(CI.value.fType==LST){ciItr.state <- sFirstVisit}
                 else if(CI.value.fType!=LST){ciItr.state <- sNotASeq}
             } else {
@@ -841,13 +843,16 @@ struct agent{
                     case ipGetFirst  : {newTop <- src.getFirstItem()}
                     //case ipGetMarked : {newTop <- src.getMarked()}
                 }
-                withEach workItem in CI.wrkList{
-                    newTop.wrkList.pushLast(workItem)
-                    loopStr <- loopStr + ":B:PUSH( "+stringifyInfon(workItem.item)+" )"
-                }
-                src.wrkList.clear()
-                log("******@NORMALIZE_SRC")
-                normalize(src)
+                if(newTop){
+                    withEach workItem in CI.wrkList{
+                        newTop.wrkList.pushLast(workItem)
+                        loopStr <- loopStr + ":B:PUSH( "+stringifyInfon(workItem.item)+" )"
+                    }
+                    src.wrkList.clear()
+                    log(">******@NORMALIZE_SRC")
+                    normalize(src)
+                    log("<******@NORMALIZE_SRC")
+                } else {done <- true}
             } else if(CI.infMode==newCursor) {
                 loopStr <- loopStr + ":B2:newCursor"
                 switch(CI.cursorMode){
@@ -861,11 +866,8 @@ struct agent{
                     case cEndPred:{newTop <- ciItr.findOrAddPctTag("endPred").item}
                 }
             } else {done <- !loopAgain}
-            if(newTop!=NULL) {
-                CI <deep- newTop
-                loopStr <- loopStr + ":B3:APPLY_NEWTOP"
-            }
-            //log(loopStr)
+            if(newTop!=NULL) {CI <deep- newTop}
+            log(loopStr)
         }
     }
 
@@ -1009,8 +1011,7 @@ struct agent{
         our infon: RHS <- RHSItr.item
         if(LHS.value.fType != LST and RHS.value.fType != LST){
             if(LHS.value.format == fConcat or RHS.value.format == fConcat){
-                log("WARNING: tryMerge, item is concat but not list")
-                exit(1)
+                logFatalError("WARNING: tryMerge, item is concat but not list")
             }
             if(LHS.value.format == fUnknown and RHS.value.format == fUnknown){
                 // $=$, _=_, *_+$=*_+$, *5+$=*3+$, *(*5+1 *6+2)+$=*(*5+1=*6+2)+$
@@ -1264,7 +1265,7 @@ struct agent{
         else if(state == sNotASeq){return("#")}
         else if(state == sFirstVisit){return("{")}
         else if(state == sSecondVisit){return("}")}
-        else{log("invalid State in infItrStateSig:"+ stateStrings[state]); exit(2)}
+        else{logFatalError("invalid State in infItrStateSig:"+ stateStrings[state])}
     }
     me bool: testCompatibility(our infon: CI, our infItr: LHSItr, our infItr: RHSItr, our transformAction: action) <- {
         RHSItr.setListSeqFlags()
@@ -1315,13 +1316,10 @@ logStrA <- logStrA + " unknownAsList"
     }
     void: processAgendaItem(our infItr: LHSItr, me int: altNestLvl)<-{
         //log("_________________________")
-        //log("PAI: LHS: "+LHSItr.stringify())
-        our infon: LHS  <- LHSItr.item
-        crntLHSMySymbol <- LHS.mySymbol(LHS)
+        log("PAI: LHS: "+LHSItr.stringify())
         prepWorkList(LHSItr)
-        if(LHSItr.item.isOrLike()){log("IS_OR_LIKE:")}
-        our infon: CI          <- LHSItr.item
-        me bool: RHS_Empty     <- CI.wrkList.isEmpty()
+        our infon: LHS         <- LHSItr.item
+        me bool: RHS_Empty     <- LHS.wrkList.isEmpty()
         our infItr: LHSItrNext <- NULL
         our infItr: RHSItrNext <- NULL
         if(RHS_Empty){
@@ -1338,8 +1336,20 @@ logStrA <- logStrA + " unknownAsList"
             addInfItrToAgenda(LHSItrNext)
         }else{
             me int: tmpItrCount <- 0
-            withEach RHSItr in CI.wrkList{
-                if(tmpItrCount>20){log("DEBUG: Too many loops..."); exit(2)} else {tmpItrCount<-tmpItrCount+1}
+            withEach RHSItr in LHS.wrkList{
+                if(tmpItrCount>20){logFatalError("DEBUG: Too many loops...")} else {tmpItrCount<-tmpItrCount+1}
+
+
+                if(LHS.isOrLike()){log("IS_OR_LIKE:")
+                    our DblLinkedListNode: possibilityItr <- LHS.source.value.items.begin()
+                    while (possibilityItr!=NULL){
+                        log("   ENQUEUE:"+stringifyInfon(possibilityItr.altItr.item) + " === " + stringifyInfon(RHSItr.item))
+                       // enqueueForProcessing(LHSItr, possibilityItr.altItr, RHSItr, false)
+                        possibilityItr <- possibilityItr.next
+                    }
+                    continue()
+                }
+
                 if(RHSItr.wasProcessed!=false){continue()}else{RHSItr.wasProcessed <- true}
 // LOG STATE
 me int: stateSig <- PAI_StateSig(LHSItr, RHSItr, false)
@@ -1353,7 +1363,7 @@ logStrA <- logStrA + infItrStateSig(RHSItr) +"| "
                 crntRHSMySymbol <- RHSItr.item.mySymbol(RHSItr.item)
                 our transformAction:: action
                 if(LHSItr.state != sSecondVisit){
-                    me bool: doContinue <- testCompatibility(CI, LHSItr, RHSItr, action)
+                    me bool: doContinue <- testCompatibility(LHS, LHSItr, RHSItr, action)
                     if(doContinue){continue()}
                     if(action.remainder != NULL){RHSItrNext <- action.remainder}
                 }
@@ -1439,8 +1449,7 @@ logStrA <- logStrA + infItrStateSig(RHSItr) +"| "
     me bool: loadAndParseData() <- {
         me string: data <- readFileAsString("data.pr")
         if(data==""){
-            print("File Error!\n\n")
-            exit(2)
+            logFatalError("File Error: data.pr")
         }
 
         me EParser: parser
