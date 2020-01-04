@@ -204,7 +204,7 @@ model infon{
     }
 
     void: addSubscriber(our infon: subscriber) <- {subscribers.pushLast(subscriber)}
-    me bool: isOrLike() <- {return(intersectPos == ipGetLast and source != NULL and source.infSize.format == fUnknown and source.value.format == fLiteral)}
+    me bool: isOrLike() <- {return(intersectPos == ipGetLast and infSize.format == fUnknown and source != NULL and source.value.format == fLiteral)}
 
     our infon: getLastItem() <- {
         // ASSERT(Should be already normed and a non-concat list)
@@ -356,31 +356,34 @@ model infItr{
     flag: wasProcessed
     flag: wasRejected
     me int: nestLvl
-    mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError]: state
+    mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError, sNonIterable]: state
     mode[cmdNoOp, delDots, keepDots, insB4Dots, insAftDots]: stitchCmd
     our infItr[map string]: pctTags
 
     me bool: looseSize() <- {
         return(looseInhtd!=false or looseTop!=false)
     }
-    void: makeOrItr(our infItr: nextItr) <- {
-        our infon:: tmp
-        tmp <deep- item
-        item.clear()
-        item.infMode                 <- isLiteral
-        item.infSize.format          <- fUnknown
-        item.value.format            <- fLiteral
-        item.value.fType            <- LST
-        item.intersectPos            <- ipGetLast
-        item.value.sizeGiven         <- false
-        item.value.listSpec          <- NULL
-        item.cursorMode              <- cNone
-        item.value.tailUnfinished    <- true
-        item.value.items.pushAsAlt(nextItr, tmp)
-        item.moveInnrToSource()
-        infNode.item <- item
-        //log("mkOR:"+item.mySymbol(item)+stringifyInfon(item))
-    }
+    our infItr: makeOrItr(our infItr: nextItr) <- {
+	our infon:: newListInfon
+	    newListInfon.itmMode	<- mItem
+	    newListInfon.infMode	<- isLiteral
+	    newListInfon.infSize.fType	<- NUM
+	    newListInfon.infSize.format <- fUnknown
+	    newListInfon.infSize.num  	<- 1
+	    newListInfon.value.fType	<- LST
+	    newListInfon.value.format	<- fLiteral
+	    newListInfon.value.items.pushAsAlt(nextItr, nextItr.item) 
+	our infon:: newAltInfon
+	    newAltInfon.itmMode     	<- mItem
+	    newAltInfon.infMode      	<- isLiteral
+	    newAltInfon.intersectPos 	<- ipGetLast
+	    newAltInfon.infSize.format 	<- fUnknown
+	    newAltInfon.source 		<- newListInfon
+	our infItr:: newAltInfItr
+	    newAltInfItr.item 		<- newAltInfon
+	    newAltInfItr.state 		<- sNonIterable
+	return(newAltInfItr)
+	}
     me bool: isASeq(our infon: i) <- {
         return ((i.value.format==fLiteral and i.value.fType==LST) or i.value.format==fConcat)
     }
@@ -463,6 +466,7 @@ model infItr{
         return(true)
     }
     void: goNextDeep(me bool: skipDots) <- {
+	if(state == sNonIterable){logFatalError("Trying to iterate nonIterable infItr")}
         me int: tmpState <- state
         if(state == sNotASeq and item.infMode == isUnknown and ! item.value.items.isEmpty()){
             tmpState <- sFirstVisit
@@ -530,11 +534,8 @@ model infItr{
             nextItr.item.isTentative <- false
             our infItr: nxtOR <- nextItr.getNextExtended(true)
             if(nxtOR != NULL){
-                log("NEXT ITR 1:" + nextItr.stringify())
-                if(!nextItr.item.isOrLike()){nextItr.makeOrItr(nextItr)}
-                log("NEXT ITR 2:" + nextItr.stringify())
+                if(!nextItr.item.isOrLike()){nextItr <- nextItr.makeOrItr(nextItr)}
                 nextItr.item.addToOrInfon(nxtOR)
-                log("NEXT ITR 3:" + nextItr.stringify())
                 nextItr.item.source.value.tailUnfinished <- false
                 //log("    GNE:nextItr:"+nextItr.stringify())
             }
@@ -1344,7 +1345,7 @@ logStrA <- logStrA + " unknownAsList"
                     our DblLinkedListNode: possibilityItr <- LHS.source.value.items.begin()
                     while (possibilityItr!=NULL){
                         log("   ENQUEUE:"+stringifyInfon(possibilityItr.altItr.item) + " === " + stringifyInfon(RHSItr.item))
-                       // enqueueForProcessing(LHSItr, possibilityItr.altItr, RHSItr, false)
+                        enqueueForProcessing(LHSItr, possibilityItr.altItr, RHSItr, false)
                         possibilityItr <- possibilityItr.next
                     }
                     continue()
@@ -1423,7 +1424,8 @@ logStrA <- logStrA + infItrStateSig(RHSItr) +"| "
                             me bool: evaluationFinished <- !crntRHS.hasUnresolvedWrkItems()
                             //log("        evaluationFinished="+dispBool(evaluationFinished))
                             if(evaluationFinished){
-                                if(crntLHS.state == sSecondVisit){crntLHS.item.addInfItrToWrkList(crntRHS)}
+				if(crntLHS.state == sSecondVisit){crntLHS.item.addInfItrToWrkList(crntRHS)}
+				else{return()}
                             }
                         }
                     }
