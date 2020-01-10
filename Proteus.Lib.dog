@@ -133,6 +133,7 @@ model infon{
     our infon: source
     our WordSystem: type
     our infItr[list]: wrkList
+    our infItr[list]: usedWrkList
     our PartPath[list]: parts
     our infon[list]: subscribers
     flag: wrkLstPreped
@@ -352,7 +353,6 @@ model infItr{
     flag: looseMode
     flag: looseTop
     flag: looseInhtd
-    flag: wasProcessed
     flag: wasRejected
     flag: readyToResolve
     me int: nestLvl
@@ -389,7 +389,19 @@ model infItr{
     me bool: isASeq(our infon: i) <- {
         return ((i.value.format==fLiteral and i.value.fType==LST) or i.value.format==fConcat)
     }
-    void:closeListAtItem(our DblLinkedListNode: lastItem) <- {
+    void:closeListAtItem(our infItr: lastItem) <- {
+        our infItr: infItrToDelete <- lastItem.getNext(false)
+        me bool: itemExists <- infItrToDelete!=NULL
+        while(!(item.value.items.last() === lastItem.item)){
+            item.value.items.popLast()
+        }
+        withEach itm in item.value.items {
+            itm.isTentative <- false
+        }
+        if(stitchCmd != keepDots){
+            item.value.tailUnfinished <- false
+            item.countSize()
+        }
     }
     void: setListSeqFlags() <- {
         if(isASeq(item)){state <- sFirstVisit; }
@@ -527,6 +539,7 @@ model infItr{
     }
     our infItr: getNextExtended(me bool: skipDots) <- {
         our infItr: nextItr <- getNextDeep(skipDots)
+    //    log("    GNE:nextItr:"+nextItr.stringify())
         if(nextItr.state == sError){return(NULL)}
         //if(nextItr.nextAnd != NULL){nextItr.nextAnd <- nextItr.nextAnd.getNextExtended(false)}
         while(nextItr.item.itmMode == mSubItems){
@@ -538,7 +551,6 @@ model infItr{
                 if(!nextItr.item.isOrLike()){nextItr <- nextItr.makeOrItr(nextItr)}
                 nextItr.item.addToOrInfon(nxtOR)
                 nextItr.item.source.value.tailUnfinished <- false
-          //      log("    GNE:nextItr:"+nextItr.stringify())
             }
         }
         return(nextItr)
@@ -551,7 +563,6 @@ model infItr{
         to.looseMode    <- looseMode
         to.looseTop     <- looseTop
         to.looseInhtd   <- looseInhtd
-        to.wasProcessed <- false
         to.nestLvl      <- nestLvl
         to.state        <- state
         to.stitchCmd    <- stitchCmd
@@ -588,10 +599,8 @@ model infItr{
         }
     }
     me bool: hasUnresolvedWrkItems() <- {
-        withEach wrkItem in item.wrkList{
-            if(!wrkItem.wasProcessed){return(true)}
-        }
-        return(false)
+        if(item.wrkList.isEmpty()){return(false)}
+        return(true)
     }
     me string: stringify() <- {
         me string: S <- "["
@@ -629,7 +638,6 @@ model PartPath{
     mode[dotField, colonField]: pathMode
     flag: wasTransfered
 }
-
 struct transformAction{
     flag: reject
     our infItr: remainder
@@ -648,7 +656,6 @@ struct pureInfon{
     our infon[multimap string]: index
     our infon[multimap int64]: T_index
 }
-
 struct PartPath{}
 //////////////////////////
 // Definition storage
@@ -681,11 +688,24 @@ struct agent{
     }
 
     void: resolve(our infItr: ii)<-{
-        log("    RESOLVE:" + stringifyInfon(ii.item))
         if(ii.stitchCmd == delDots){ii.item.value.tailUnfinished <- false}
-        me int: numChoices <- ii.predecessors.size()
-        if(numChoices > 0){
-            resolve(ii.predecessors[0])
+        our infItr: crntItr <- ii
+        me int[map our infItr]: trimmedLists
+        me int: numChoices <- crntItr.predecessors.size()
+            log("    RESOLVE:" + stringifyInfon(crntItr.item) + "  Num Preds:" + toString(numChoices))
+        while(numChoices>0){
+
+            crntItr <- crntItr.predecessors[0]
+            numChoices <- crntItr.predecessors.size()
+            our infItr: parent <- crntItr.parent
+            log("    RESOLVE:" + stringifyInfon(crntItr.item) + "  Num Preds:" + toString(numChoices))
+            if(!trimmedLists.containsKey(parent)){
+                if(parent.item){
+                    parent.closeListAtItem(crntItr)
+                    log("closeListAtItem" + stringifyInfon(parent.item))
+                    trimmedLists.insert(parent, 1)
+                }
+            }
         }
     }
 
@@ -1347,7 +1367,10 @@ logStrA <- logStrA + " unknownAsList"
             addInfItrToAgenda(LHSItrNext)
         }else{
             me int: tmpItrCount <- 0
-            withEach RHSItr in LHS.wrkList{
+            while(!LHS.wrkList.isEmpty()){
+                our infItr: RHSItr <- LHS.wrkList.first()
+                LHS.wrkList.popFirst()
+                LHS.usedWrkList.pushLast(RHSItr)
                 if(tmpItrCount>20){logFatalError("DEBUG: Too many loops...")} else {tmpItrCount<-tmpItrCount+1}
 
 
@@ -1355,7 +1378,7 @@ logStrA <- logStrA + " unknownAsList"
                     our DblLinkedListNode: possibilityItr <- LHS.source.value.items.begin()
                     while (possibilityItr!=NULL){
                      //   log("   LHS_ENQUEUE:"+stringifyInfon(possibilityItr.altItr.item) + " === " + stringifyInfon(RHSItr.item))
-                        enqueueForProcessing(LHSItr, possibilityItr.altItr, RHSItr, false)
+                        enqueueForProcessing(LHSItr.predecessors.last(), possibilityItr.altItr, RHSItr, false)
                         possibilityItr <- possibilityItr.next
                     }
                     continue()
@@ -1364,14 +1387,13 @@ logStrA <- logStrA + " unknownAsList"
                 if(RHSItr.item.isOrLike()){
                     our DblLinkedListNode: possibilityItr <- RHSItr.item.source.value.items.begin()
                     while (possibilityItr!=NULL){
+                        // MUST: Ensure that the predecessor is chosen correctly  in the call to enqueueForProcessing
                      //   log("   RHS_ENQUEUE:"+stringifyInfon(LHSItr.item) + " === " + stringifyInfon(possibilityItr.altItr.item))
                         enqueueForProcessing(LHSItr, LHSItr, possibilityItr.altItr, false)
                         possibilityItr <- possibilityItr.next
                     }
                     continue()
                 }
-
-                if(RHSItr.wasProcessed!=false){continue()}else{RHSItr.wasProcessed <- true}
 
 // LOG STATE
 me int: stateSig <- PAI_StateSig(LHSItr, RHSItr, false)
@@ -1390,12 +1412,12 @@ logStrA <- logStrA + infItrStateSig(RHSItr) +"| "
                     if(action.remainder != NULL){RHSItrNext <- action.remainder}
                 }
 
-               /*  FINISH THIS TO MAKE NORMALIZE STREAM CORRECTLTY.
+               //  FINISH THIS TO MAKE NORMALIZE STREAM CORRECTLTY.
                 if(LHSItr.state == sSecondVisit and RHSItr.state == sSecondVisit){
                     if (!RHSItr.hasUnresolvedWrkItems()){
                         resolve(LHSItr)
                     }
-                }*/
+                }
 
                 me int: LHSfType <- LHSItr.item.value.fType
                 me int: RHSfType <- 0; if(!RHS_Empty){RHSfType <- RHSItr.item.value.fType}
@@ -1421,33 +1443,33 @@ log(logStrA)
         //log("----pred:"+pred.stringify())
         if(LHSItr != NULL){
             if(LHSItr.state != sEOL){
-            //log("    ----LHSItr:"+LHSItr.stringify())
-            if(RHSItr != NULL){
-                //log("        ----RHSItr:"+RHSItr.stringify())
-                if(pred!=NULL){
-                    LHSItr.predecessors.pushLast(pred)
-                 //   LHSItr.insertNewPctTag("pred", pred)
-                }
-                if(breakDotCycle){  // This sets the stitchCmd
-                    // MUST: store stitchCmd in RHSItr instead of LHSItr
-                    if(!LHSItr.item.isTentative){log("DELETE DOTS"); LHSItr.stitchCmd <- delDots}
-                    else {
-                        if(!RHSItr.item.isTentative){
-                            me int: dotCmd <- LHSItr.stitchCmd
-                            if(dotCmd==insB4Dots){
-                                LHSItr.stitchCmd <- insAftDots
-                            }
-                            else{LHSItr.stitchCmd <- insAftDots}
-                        } else {log("KEEPING DOTS"); LHSItr.stitchCmd <- keepDots} // "?=?"
+                //log("    ----LHSItr:"+stringifyInfon(LHSItr.item))
+                if(RHSItr != NULL){
+                    //log("    ----RHSItr:"+stringifyInfon(RHSItr.item))
+                    if(pred!=NULL){
+                        LHSItr.predecessors.pushLast(pred)
+                     //   LHSItr.insertNewPctTag("pred", pred)
                     }
-                }
+                    if(breakDotCycle){  // This sets the stitchCmd
+                        // MUST: store stitchCmd in RHSItr instead of LHSItr
+                        if(!LHSItr.item.isTentative){log("DELETE DOTS"); LHSItr.stitchCmd <- delDots}
+                        else {
+                            if(!RHSItr.item.isTentative){
+                                me int: dotCmd <- LHSItr.stitchCmd
+                                if(dotCmd==insB4Dots){
+                                    LHSItr.stitchCmd <- insAftDots
+                                }
+                                else{LHSItr.stitchCmd <- insAftDots}
+                            } else {log("KEEPING DOTS"); LHSItr.stitchCmd <- keepDots} // "?=?"
+                        }
+                    }
         //        if(!breakDotCycle or !(LHSItr.item.isTentative and RHSItr.item.isTentative)){
                     me bool: doEnqueue <- false
                     if(LHSItr.state != sSecondVisit){
                         if(RHSItr.state != sSecondVisit){
                             if(LHSItr.item.isTentative and RHSItr.item.isTentative){  // ?=?
                                 log("?=? ")
-                                LHSItr.parent.item.value.items.popLast()
+                                LHSItr.parent.stitchCmd <- keepDots
                             } else {
                                 doEnqueue <- true
                             }
@@ -1477,7 +1499,6 @@ log(logStrA)
         addInfItrToAgenda(ii)
         processAgenda()
         ii.item.isNormed <- true
-        resolve(ii)
     }
     me string: fetchAsStr(their infon: i) <- {return(i.value.str)}
     me uint64: fetchAsNum(their infon: i) <- {return(i.value.num)}
