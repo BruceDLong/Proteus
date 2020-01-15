@@ -355,6 +355,7 @@ model infItr{
     flag: looseInhtd
     flag: wasRejected
     flag: readyToResolve
+    flag: addNewSubDots
     me int: nestLvl
     mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError, sNonIterable]: state
     mode[cmdNoOp, delDots, keepDots, insB4Dots, insAftDots]: stitchCmd
@@ -689,7 +690,6 @@ struct agent{
 
     void: resolve(our infItr: ii)<-{
         log("RESOLVING:"+ii.stringify())
-        if(ii.stitchCmd == delDots){ii.item.value.tailUnfinished <- false}
         our infItr: crntItr <- ii
         me int[map our infItr]: trimmedLists
         me int: numChoices <- crntItr.predecessors.size()
@@ -697,9 +697,24 @@ struct agent{
         while(numChoices>0){
             crntItr <- crntItr.predecessors[0]
             numChoices <- crntItr.predecessors.size()
+
             if(crntItr.item===ii.item){break()}
+        if(ii.stitchCmd == delDots){crntItr.item.value.tailUnfinished <- false}
             our infItr: parent <- crntItr.parent
             log("    RESOLVE:" + crntItr.stringify() + "  Num Preds:" + toString(numChoices))
+if(crntItr.addNewSubDots!=0) {
+    log("ADD_NEW_DOTS_HERE")
+    our infon:: newSubDots
+    newSubDots.itmMode <- mSubItems
+    newSubDots.infMode <- isLiteral
+    newSubDots.value.tailUnfinished <- true
+    newSubDots.value.fType <- LST
+    newSubDots.value.format <- fLiteral
+
+    parent.item.value.items.insertBefore(crntItr.infNode, newSubDots)
+
+    parent.item.value.tailUnfinished <- false
+}
             if(!trimmedLists.containsKey(parent)){
                 if(parent.item){
                     log("closeListAtItem" + stringifyInfon(parent.item))
@@ -1252,7 +1267,9 @@ struct agent{
             LHS.isNormed <- true
         }else if(LHS.infMode == isUnknown){ // ? = any
             action.copyRHSTypeToLHS <- true
-            action.sizeAction       <- copySizeRHStoLHS
+            if(!RHSItr.looseSize()){
+                action.sizeAction       <- copySizeRHStoLHS
+            }
             action.valueAction      <- copyValueRHStoLHS
             //LHS.value.fType         <- RHSItr.item.value.fType
             //LHS.infMode             <- RHSItr.item.infMode
@@ -1313,6 +1330,7 @@ if(action.sizeToCopy > 0){logStrA <- logStrA + " copySz"}
         if(LHSItr.item.isTentative and RHSItr.item.isTentative){
             action.breakDotCycle<-true
             LHSItr.stitchCmd <- keepDots
+            log("breakDotCycle = true");
 logStrA <- logStrA + " breakDot"
         }
         // Do init for ?={...}
@@ -1348,14 +1366,14 @@ logStrA <- logStrA + " unknownAsList"
     }
     void: processAgendaItem(our infItr: LHSItr, me int: altNestLvl)<-{
         //log("_________________________")
-        log("PAI: "+stringifyInfon(LHSItr.item))
+        //log("PAI: "+stringifyInfon(LHSItr.item))
         prepWorkList(LHSItr)
         our infon: LHS         <- LHSItr.item
         me bool: RHS_Empty     <- LHS.wrkList.isEmpty()
         our infItr: LHSItrNext <- NULL
         our infItr: RHSItrNext <- NULL
         if(RHS_Empty){
-            //log("PAI no RHS")
+            log("PAI no RHS:"+stringifyInfon(LHSItr.item))
             if(LHSItr.infNode.next == NULL and (LHSItr.parent != NULL and LHSItr.parent.item != NULL and LHSItr.parent.item.value.tailUnfinished)){
                 LHSItrNext <- LHSItr.getNextExtended(true)
                 LHSItrNext.item.isOnAgenda <- false
@@ -1374,11 +1392,16 @@ logStrA <- logStrA + " unknownAsList"
                 LHS.usedWrkList.pushLast(RHSItr)
                 if(tmpItrCount>20){logFatalError("DEBUG: Too many loops...")} else {tmpItrCount<-tmpItrCount+1}
 
-
+                log("PAI: "+stringifyInfon(LHSItr.item) + " === "+stringifyInfon(RHSItr.item))
                 if(LHS.isOrLike()){
+                    if(RHSItr.item.isOrLike()){ // set flag to add new #{...}
+                        log("LHSItr.addNewSubDots <- true in: "+ LHS.source.value.items.head.altItr.stringify())
+                        LHS.source.value.items.head.altItr.addNewSubDots <- true
+                    }
+
                     our DblLinkedListNode: possibilityItr <- LHS.source.value.items.begin()
                     while (possibilityItr!=NULL){
-                     //   log("   LHS_ENQUEUE:"+stringifyInfon(possibilityItr.altItr.item) + " === " + stringifyInfon(RHSItr.item))
+                        //log("   LHS_ENQUEUE:"+stringifyInfon(possibilityItr.altItr.item) + " === " + stringifyInfon(RHSItr.item))
                         enqueueForProcessing(LHSItr.predecessors.last(), possibilityItr.altItr, RHSItr, false)
                         possibilityItr <- possibilityItr.next
                     }
@@ -1389,13 +1412,14 @@ logStrA <- logStrA + " unknownAsList"
                     our DblLinkedListNode: possibilityItr <- RHSItr.item.source.value.items.begin()
                     while (possibilityItr!=NULL){
                         // MUST: Ensure that the predecessor is chosen correctly  in the call to enqueueForProcessing
-                     //   log("   RHS_ENQUEUE:"+stringifyInfon(LHSItr.item) + " === " + stringifyInfon(possibilityItr.altItr.item))
+                       // log("   RHS_ENQUEUE:"+stringifyInfon(LHSItr.item) + " === " + stringifyInfon(possibilityItr.altItr.item))
                         enqueueForProcessing(LHSItr, LHSItr, possibilityItr.altItr, false)
                         possibilityItr <- possibilityItr.next
                     }
                     continue()
                 }
 
+if(LHSItr.state == sNonIterable){logFatalError("Trying to iterate nonIterable infItr!!!!")}
 // LOG STATE
 me int: stateSig <- PAI_StateSig(LHSItr, RHSItr, false)
 if(stateSig < 10 and stateSig >= 0){logStrA <- "0" +toString(stateSig)+" |"}
@@ -1458,10 +1482,10 @@ log(logStrA)
                         else {
                             if(!RHSItr.item.isTentative){
                                 me int: dotCmd <- LHSItr.stitchCmd
-                                if(dotCmd==insB4Dots){
+                                if(dotCmd==insB4Dots){ log("B4 DOTS");
                                     LHSItr.stitchCmd <- insAftDots
                                 }
-                                else{LHSItr.stitchCmd <- insAftDots}
+                                else{log("AFTER DOTS"); LHSItr.stitchCmd <- insAftDots}
                             } else {log("KEEPING DOTS"); LHSItr.stitchCmd <- keepDots} // "?=?"
                         }
                     }
@@ -1470,7 +1494,7 @@ log(logStrA)
                     if(LHSItr.state != sSecondVisit){
                         if(RHSItr.state != sSecondVisit){
                             if(LHSItr.item.isTentative and RHSItr.item.isTentative){  // ?=?
-                                log("?=? ")
+                                log("?=? : parent.KEEPING DOTS")
                                 LHSItr.parent.stitchCmd <- keepDots
                             } else {
                                 doEnqueue <- true
@@ -1482,6 +1506,7 @@ log(logStrA)
                         if(RHSItr.state != sSecondVisit){
                             if(RHSItr.item.isOrLike()){doEnqueue <- true}
                         } else { // RHS is SecondVisit:  }=} in PAI, resolve
+                            log("RHS is SecondVisit:  }=} in PAI, resolve")
                             doEnqueue <- true
                         }
                     }
