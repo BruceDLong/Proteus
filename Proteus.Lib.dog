@@ -357,6 +357,7 @@ model infItr{
     flag: readyToResolve
     flag: addNewSubDots
     me int: nestLvl
+    me int: AlternativesNestLvl
     mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError, sNonIterable]: state
     mode[cmdNoOp, delDots, keepDots, insB4Dots, insAftDots]: stitchCmd
     our infItr[map string]: pctTags
@@ -599,6 +600,17 @@ model infItr{
             parent.item.value.items.pushLast(i)
         }
     }
+
+    void: insertChildDotsBefore(our infItr: position) <- {
+        our infon:: newSubDots
+        newSubDots.itmMode <- mSubItems
+        newSubDots.infMode <- isLiteral
+        newSubDots.value.tailUnfinished <- true
+        newSubDots.value.fType <- LST
+        newSubDots.value.format <- fLiteral
+        item.value.items.insertBefore(position.infNode, newSubDots)
+        item.value.tailUnfinished <- false
+    }
     me bool: hasUnresolvedWrkItems() <- {
         if(item.wrkList.isEmpty()){return(false)}
         return(true)
@@ -691,43 +703,6 @@ struct agent{
        // print("INFON ERROR: " + errorMesg+"\n")
     }
 
-    void: resolve(our infItr: ii)<-{
-        log("RESOLVING:"+ii.stringify())
-        our infItr: crntItr <- ii
-        me int[map our infItr]: trimmedLists
-        me int: numChoices <- crntItr.predecessors.size()
-            log("    RESOLVE:" + stringifyInfon(crntItr.item) + "  Num Preds:" + toString(numChoices))
-        while(numChoices>0){
-            crntItr <- crntItr.predecessors[0].LHSItr
-            numChoices <- crntItr.predecessors.size()
-
-            if(crntItr.item===ii.item){break()}
-        if(ii.stitchCmd == delDots){crntItr.item.value.tailUnfinished <- false}
-            our infItr: parent <- crntItr.parent
-            log("    RESOLVE:" + crntItr.stringify() + "  Num Preds:" + toString(numChoices))
-if(crntItr.addNewSubDots!=0) {
-    log("ADD_NEW_DOTS_HERE")
-    our infon:: newSubDots
-    newSubDots.itmMode <- mSubItems
-    newSubDots.infMode <- isLiteral
-    newSubDots.value.tailUnfinished <- true
-    newSubDots.value.fType <- LST
-    newSubDots.value.format <- fLiteral
-
-    parent.item.value.items.insertBefore(crntItr.infNode, newSubDots)
-
-    parent.item.value.tailUnfinished <- false
-}
-            if(!trimmedLists.containsKey(parent)){
-                if(parent.item){
-                    log("closeListAtItem" + stringifyInfon(parent.item))
-                    parent.closeListAtItem(crntItr)
-                    trimmedLists.insert(parent, 1)
-                }
-            }
-        }
-    }
-
     me bool: joinOnRight(our infon: LHS, our infon: RHS) <- { // Join RHS into LHS. Return true on success (so need no subscription).
         if(LHS.value.format==fLiteral and RHS.value.format==fLiteral){
             me int: LHSType <- LHS.value.fType
@@ -752,6 +727,56 @@ if(crntItr.addNewSubDots!=0) {
             return(true)
         }
         return(false)
+    }
+
+    void: processConcat(our infItr: concatItr) <- {
+        if(concatItr.state != sSecondVisit){
+            if(concatItr.state == sNotASeq){
+                JoinIfConcat(concatItr)
+            }
+        } else {  // SecondVisit
+            our infon: LHS <- concatItr.item
+            if(LHS.value.format==fConcat and !LHS.value.items.isEmpty() and LHS.value.items.head.isLast()){
+                LHS <deep- LHS.value.items.first()
+            }
+            JoinIfConcat(concatItr)
+        }
+    }
+
+    void: resolve(our infItr: ii)<-{
+        log("RESOLVING:"+ii.stringify())
+        our infItr: crntItr <- ii
+        me int[map our infItr]: closedLists
+        me int: numChoices <- crntItr.predecessors.size()
+        our transformAction[list]: actionStack
+        log("    RESOLVE:" + stringifyInfon(crntItr.item) + "  Num Preds:" + toString(numChoices))
+        while(numChoices>0){
+            our transformAction: action <- crntItr.predecessors[0]
+            crntItr <- action.LHSItr
+            if(crntItr == NULL or crntItr.item===ii.item){break()}
+            numChoices <- crntItr.predecessors.size()
+            actionStack.pushFirst(action)
+            our infItr: parent <- crntItr.parent
+            log("    RESOLVE:" + crntItr.stringify() + "  Num Preds:" + toString(numChoices))
+            if(crntItr.addNewSubDots!=0) {
+                parent.insertChildDotsBefore(crntItr)
+            }
+            if(!closedLists.containsKey(parent)){
+                if(parent.item){
+                    log("closeListAtItem" + stringifyInfon(parent.item))
+                    parent.closeListAtItem(crntItr)
+                    closedLists.insert(parent, 1)
+                }
+            }
+        }
+
+        // Now Stitch
+        withEach stitchAction in actionStack{
+            if(stitchAction.LHSItr.state != sSecondVisit){
+                doAction(stitchAction)
+            }
+            processConcat(stitchAction.LHSItr)
+        }
     }
 
     void: addIdent(our infItr: LHSItr, our infItr: RHSItr) <- {
@@ -984,27 +1009,29 @@ if(crntItr.addNewSubDots!=0) {
             }
         }
     }
-    void: doAction(our transformAction: action, our infItr: LHSItr, our infItr: RHSItr) <- {
+    void: doAction(our transformAction: action) <- {
+        our infItr: LHSItr <- action.LHSItr
+        our infItr: RHSItr <- action.RHSItr
         our infon: LHS <- LHSItr.item
         our infon: RHS <- RHSItr.item
         if(action.reject){return()}
         if(action.copyRHSTypeToLHS){
-            LHS.value.fType <- RHSItr.item.value.fType
-            LHS.infMode <- RHSItr.item.infMode
+            LHS.value.fType <- RHS.value.fType
+            LHS.infMode <- RHS.infMode
         }
         me int: sizeAction    <- action.sizeAction
         if(sizeAction == copySizeRHStoLHS){
-            DO_COPY(RHSItr.item.infSize, LHS.infSize, 0)
+            DO_COPY(RHS.infSize, LHS.infSize, 0)
         }
         else if(sizeAction == copySizeLHStoRHS){
-            DO_COPY(LHS.infSize, RHSItr.item.infSize, 0)
+            DO_COPY(LHS.infSize, RHS.infSize, 0)
         }
         me int: valueAction   <- action.valueAction
         if(valueAction == copyValueRHStoLHS){
-            DO_COPY(RHSItr.item.value, LHS.value, action.sizeToCopy)
+            DO_COPY(RHS.value, LHS.value, action.sizeToCopy)
         }
         else if(valueAction == copyValueLHStoRHS){
-            DO_COPY(LHS.value, RHSItr.item.value, action.sizeToCopy)
+            DO_COPY(LHS.value, RHS.value, action.sizeToCopy)
         }
         me int: listCommand <- action.listCommand
         switch(listCommand){
@@ -1023,7 +1050,7 @@ if(crntItr.addNewSubDots!=0) {
             //addIdent(makeInfItr(LHS.value.items.first(), LHS, NULL), RHSItr)
         }
         if(action.propogateRHSToRHSFirst){
-            //addIdent(LHS, makeInfItr(RHSItr.item.value.items.first(), RHSItr, NULL))
+            //addIdent(LHS, makeInfItr(RHS.value.items.first(), RHSItr, NULL))
         }
     }
     void: tryMergeSize(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
@@ -1381,14 +1408,14 @@ logStrA <- logStrA + " unknownAsList"
             log("PAI no RHS:"+stringifyInfon(LHSItr.item))
             if(LHSItr.infNode.next == NULL and (LHSItr.parent != NULL and LHSItr.parent.item != NULL and LHSItr.parent.item.value.tailUnfinished)){
                 LHSItrNext <- LHSItr.getNextExtended(true)
-                LHSItrNext.item.isOnAgenda <- false
             }else if(LHSItr.item.value.tailUnfinished and LHSItr.item.value.items.isEmpty()){
                 LHSItrNext <- LHSItr.getNextExtended(true)
-                LHSItrNext.item.isOnAgenda <- false
             }else{
                 LHSItrNext <- LHSItr.getNextExtended(false)
             }
+            LHSItrNext.item.isOnAgenda <- false
             addInfItrToAgenda(LHSItrNext)
+            processConcat(LHSItr)
         }else{
             me int: tmpItrCount <- 0
             while(!LHS.wrkList.isEmpty()){
@@ -1407,7 +1434,7 @@ logStrA <- logStrA + " unknownAsList"
                     our DblLinkedListNode: possibilityItr <- LHS.source.value.items.begin()
                     while (possibilityItr!=NULL){
                         //log("   LHS_ENQUEUE:"+stringifyInfon(possibilityItr.altItr.item) + " === " + stringifyInfon(RHSItr.item))
-                        enqueueForProcessing(LHSItr.predecessors.last(), possibilityItr.altItr, RHSItr, false)
+                        enqueueForProcessing(LHSItr.predecessors.last(), possibilityItr.altItr, RHSItr, altNestLvl+1, false)
                         possibilityItr <- possibilityItr.next
                     }
                     continue()
@@ -1418,7 +1445,7 @@ logStrA <- logStrA + " unknownAsList"
                     while (possibilityItr!=NULL){
                         // MUST: Ensure that the predecessor is chosen correctly  in the call to enqueueForProcessing
                        // log("   RHS_ENQUEUE:"+stringifyInfon(LHSItr.item) + " === " + stringifyInfon(possibilityItr.altItr.item))
-                        enqueueForProcessing(LHSItr.predecessors.last(), LHSItr, possibilityItr.altItr, false)
+                        enqueueForProcessing(LHSItr.predecessors.last(), LHSItr, possibilityItr.altItr, altNestLvl+1, false)
                         possibilityItr <- possibilityItr.next
                     }
                     continue()
@@ -1453,8 +1480,8 @@ logStrA <- logStrA + infItrStateSig(RHSItr) +"| "
                 me int: RHSfType <- 0; if(!RHS_Empty){RHSfType <- RHSItr.item.value.fType}
                 LHSItrNext <- findNextLHS(LHSItr, LHSfType, RHSfType, action.unknownAsList)
                 if(RHSItrNext == NULL){RHSItrNext <- findNextRHS(RHSItr, LHSfType, RHSfType)}
-                enqueueForProcessing(action, LHSItrNext, RHSItrNext, action.breakDotCycle)
-                if(LHSItr.state != sSecondVisit){doAction(action, LHSItr, RHSItr)}
+                enqueueForProcessing(action, LHSItrNext, RHSItrNext, altNestLvl, action.breakDotCycle)
+                if(altNestLvl==0 and LHSItr.state != sSecondVisit){doAction(action)}
 log(logStrA)
             }
         }
@@ -1464,12 +1491,12 @@ log(logStrA)
         withEach count in WHILE(!agenda.isEmpty()) {
             if (count > 100){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
             our infItr: CI <- popInfItrFromAgenda()
-            processAgendaItem(CI, 0)
+            processAgendaItem(CI, CI.AlternativesNestLvl)
             CI.item.isOnAgenda <- false
         }
     }
 
-    void: enqueueForProcessing(our transformAction: pred, our infItr: LHSItr, our infItr: RHSItr, me bool: breakDotCycle)<-{
+    void: enqueueForProcessing(our transformAction: pred, our infItr: LHSItr, our infItr: RHSItr, me int: altLvl, me bool: breakDotCycle)<-{
         //log("----pred:"+pred.stringify())
         if(LHSItr != NULL){
             if(LHSItr.state != sEOL){
@@ -1477,7 +1504,7 @@ log(logStrA)
                 if(RHSItr != NULL){
                     //log("    ----RHSItr:"+stringifyInfon(RHSItr.item))
                     if(pred!=NULL){
-                        //log("      PRED:"+stringifyInfon(pred.item))
+                        LHSItr.AlternativesNestLvl <- altLvl
                         LHSItr.predecessors.pushLast(pred)
                      //   LHSItr.insertNewPctTag("pred", pred)
                     }
