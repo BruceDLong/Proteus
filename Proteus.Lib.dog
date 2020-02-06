@@ -364,6 +364,9 @@ model infItr{
 
     our transformAction[list]: predecessors
 
+    their infItr: frontierNext
+    their infItr: frontierPrev
+
     me bool: looseSize() <- {
         return(looseInhtd!=false or looseTop!=false)
     }
@@ -501,6 +504,8 @@ model infItr{
                     self <deep- parent
                     nestLvl <- tmpNestLvl - 1
                     state   <- sSecondVisit
+                    if(parent === parent.frontierNext){frontierNext <- self}
+                    if(parent === parent.frontierPrev){frontierPrev <- self}
                 }
             }
             case sFirstVisit:{
@@ -569,6 +574,8 @@ model infItr{
         to.state        <- state
         to.stitchCmd    <- stitchCmd
         to.pctTags      <- pctTags
+        //if(frontierNext === self){to.frontierNext <- to}
+        //if(frontierPrev === self){to.frontierPrev <- to}
     }
     void: deleteCrnt() <- {
         infNode <- parent.item.deleteListNode(infNode)
@@ -615,6 +622,31 @@ model infItr{
         if(item.wrkList.isEmpty()){return(false)}
         return(true)
     }
+    void: frontierJoin(their infItr: toAdd)<-{
+        their infItr: tmpAddPrev        <- toAdd.frontierPrev
+        their infItr: tmpThisNxt        <- frontierNext
+        frontierNext                    <- toAdd
+        toAdd.frontierPrev              <- self
+        tmpThisNxt.frontierPrev         <- tmpAddPrev
+        tmpAddPrev.frontierNext         <- tmpThisNxt
+}
+    void: frontierDetatch()<-{
+        frontierNext.frontierPrev       <- frontierPrev
+        frontierPrev.frontierNext       <- frontierNext
+        frontierNext                    <- self
+        frontierPrev                    <- self
+    }
+    void: logFrontierLoop()<-{
+        log("Frontier_____________")
+        their infItr: crntFrontierItem  <- self
+        their infItr: startItem         <- crntFrontierItem
+        me bool: loopAgain              <- crntFrontierItem != NULL
+        while(loopAgain){
+            log("    "+crntFrontierItem.mySymbol(crntFrontierItem)+" <"+stringifyInfon(crntFrontierItem.item)+ "> ")
+            crntFrontierItem <- crntFrontierItem.frontierNext
+            if(crntFrontierItem === startItem){loopAgain <- false}
+        }
+    }
     me string: stringify() <- {
         me string: S <- "["
         if(self==NULL){S<-S+"NULL"}
@@ -636,13 +668,19 @@ model infItr{
         S <- S+"]"
         return (S)
     }
-    void: INIT() <- {Allocate(infNode)}
+    void: INIT() <- {
+        Allocate(infNode)
+        frontierNext <- self
+        frontierPrev <- self
+    }
     void: initialize(our infon: inf) <- {
         if(inf==NULL) {state <- sError; return()}
         item <- inf
         Allocate(parent)
         setListSeqFlags()
         nestLvl <- 0
+        frontierNext <- self
+        frontierPrev <- self
     }
 
 }
@@ -757,6 +795,7 @@ struct agent{
             numChoices <- crntItr.predecessors.size()
             actionStack.pushFirst(action)
             our infItr: parent <- crntItr.parent
+            if(parent == NULL){continue()}
             log("    RESOLVE:" + crntItr.stringify() + "  Num Preds:" + toString(numChoices))
             if(crntItr.addNewSubDots!=0) {
                 parent.insertChildDotsBefore(crntItr)
@@ -1433,8 +1472,12 @@ logStrA <- logStrA + " unknownAsList"
 
                     our DblLinkedListNode: possibilityItr <- LHS.source.value.items.begin()
                     while (possibilityItr!=NULL){
+                        our transformAction: predAction
+                            Allocate(predAction)
+                            predAction.LHSItr <- LHSItr
+                            predAction.RHSItr <- RHSItr
                         //log("   LHS_ENQUEUE:"+stringifyInfon(possibilityItr.altItr.item) + " === " + stringifyInfon(RHSItr.item))
-                        enqueueForProcessing(LHSItr.predecessors.last(), possibilityItr.altItr, RHSItr, altNestLvl+1, false)
+                        enqueueForProcessing(predAction, possibilityItr.altItr, RHSItr, altNestLvl+1, false)
                         possibilityItr <- possibilityItr.next
                     }
                     continue()
@@ -1463,10 +1506,11 @@ logStrA <- logStrA + infItrStateSig(RHSItr) +"| "
 ////////////
                 crntRHSMySymbol <- RHSItr.item.mySymbol(RHSItr.item)
                 our transformAction:: action
+                action.LHSItr <- LHSItr
                 if(LHSItr.state != sSecondVisit){
                     me bool: rejected <- testCompatibility(LHS, LHSItr, RHSItr, action)
                     if(rejected){continue()}
-                    if(action.remainder != NULL){RHSItrNext <- action.remainder; log("REMAINDER:" + stringifyInfon(action.remainder.item))}
+                    if(action.remainder != NULL){RHSItrNext <- action.remainder}
                 }
 
                //  FINISH THIS TO MAKE NORMALIZE STREAM CORRECTLTY.
@@ -1492,20 +1536,17 @@ log(logStrA)
         withEach count in WHILE(!agenda.isEmpty()) {
             if (count > 100){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
             our infItr: CI <- popInfItrFromAgenda()
-            processAgendaItem(CI, CI.AlternativesNestLvl)
+            processAgendaItem(CI, 0)
             CI.item.isOnAgenda <- false
         }
     }
 
     void: enqueueForProcessing(our transformAction: pred, our infItr: LHSItr, our infItr: RHSItr, me int: altLvl, me bool: breakDotCycle)<-{
-        //log("----pred:"+pred.stringify())
         if(LHSItr != NULL){
             if(LHSItr.state != sEOL){
-                //log("    ----LHSItr:"+stringifyInfon(LHSItr.item))
+                pred.LHSItr.frontierJoin(LHSItr)
                 if(RHSItr != NULL){
-                    //log("    ----RHSItr:"+stringifyInfon(RHSItr.item))
                     if(pred!=NULL){
-                        LHSItr.AlternativesNestLvl <- altLvl
                         LHSItr.predecessors.pushLast(pred)
                      //   LHSItr.insertNewPctTag("pred", pred)
                     }
@@ -1534,6 +1575,9 @@ log(logStrA)
                             }
                         } else { // RHS is SecondVisit
                             if(LHSItr.item.isOrLike()){doEnqueue <- true}
+                            else{
+                                //reduce
+                            }
                         }
                     } else { // LHS is SecondVisit
                         if(RHSItr.state != sSecondVisit){
@@ -1579,8 +1623,7 @@ log(logStrA)
 
         parser.doParse()
         if(parser.doesParseHaveError()){
-            print("\n", parser.errorMesg, "\n")
-            exit(2)
+            logFatalError("\n", parser.errorMesg, "\n")
         } else {print("\nParse Succeeded\n")}
 
         our stateRec: topItem <- parser.resolve(parser.lastTopLevelItem, "")
