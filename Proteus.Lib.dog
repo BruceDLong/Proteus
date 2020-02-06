@@ -35,6 +35,35 @@ struct GLOBAL{
         ret.setListSeqFlags()
         return(ret)
     }
+    void: frontierJoin(our infItr: iiA, our infItr: iiB)<-{
+        our infItr: tmpAddPrev          <- iiB.frontierPrev
+        our infItr: tmpThisNxt          <- iiA.frontierNext
+        iiA.frontierNext                <- iiB
+        iiB.frontierPrev                <- iiA
+        tmpThisNxt.frontierPrev         <- tmpAddPrev
+        tmpAddPrev.frontierNext         <- tmpThisNxt
+    }
+    void: frontierDetach(our infItr: toDetach)<-{
+        toDetach.frontierNext.frontierPrev       <- toDetach.frontierPrev
+        toDetach.frontierPrev.frontierNext       <- toDetach.frontierNext
+        toDetach.frontierNext                    <- toDetach
+        toDetach.frontierPrev                    <- toDetach
+    }
+    void: logFrontierLoop(our infItr: fItr)<-{
+        log("Frontier_____________")
+        our infItr: crntFrontierItem  <- fItr
+        our infItr: startItem         <- crntFrontierItem
+        me bool: loopAgain            <- crntFrontierItem != NULL
+        while(loopAgain){
+            log("    "+crntFrontierItem.mySymbol(crntFrontierItem)+" <"+stringifyInfon(crntFrontierItem.item)+ "> ")
+            crntFrontierItem <- crntFrontierItem.frontierNext
+            if(crntFrontierItem === startItem){loopAgain <- false}
+        }
+    }
+    void: initFrontier(our infItr: ii)<-{
+        if(ii.frontierPrev == NULL){ii.frontierPrev <- ii}
+        if(ii.frontierNext == NULL){ii.frontierNext <- ii}
+    }
 }
 
 #include infonIO.dog
@@ -364,8 +393,8 @@ model infItr{
 
     our transformAction[list]: predecessors
 
-    their infItr: frontierNext
-    their infItr: frontierPrev
+    our infItr: frontierNext
+    our infItr: frontierPrev
 
     me bool: looseSize() <- {
         return(looseInhtd!=false or looseTop!=false)
@@ -389,6 +418,7 @@ model infItr{
         our infItr:: newAltInfItr
             newAltInfItr.item           <- newAltInfon
             newAltInfItr.state          <- sNonIterable
+            initFrontier(newAltInfItr)
         return(newAltInfItr)
         }
     me bool: isASeq(our infon: i) <- {
@@ -504,8 +534,6 @@ model infItr{
                     self <deep- parent
                     nestLvl <- tmpNestLvl - 1
                     state   <- sSecondVisit
-                    if(parent === parent.frontierNext){frontierNext <- self}
-                    if(parent === parent.frontierPrev){frontierPrev <- self}
                 }
             }
             case sFirstVisit:{
@@ -531,6 +559,7 @@ model infItr{
         Allocate(retVal)
         copyThisTo(retVal)
         retVal.goNextDeep(skipDots)
+        initFrontier(retVal)
         return(retVal)
     }
     our infItr: getNext(me bool: skipDots) <- {
@@ -622,31 +651,7 @@ model infItr{
         if(item.wrkList.isEmpty()){return(false)}
         return(true)
     }
-    void: frontierJoin(their infItr: toAdd)<-{
-        their infItr: tmpAddPrev        <- toAdd.frontierPrev
-        their infItr: tmpThisNxt        <- frontierNext
-        frontierNext                    <- toAdd
-        toAdd.frontierPrev              <- self
-        tmpThisNxt.frontierPrev         <- tmpAddPrev
-        tmpAddPrev.frontierNext         <- tmpThisNxt
-}
-    void: frontierDetatch()<-{
-        frontierNext.frontierPrev       <- frontierPrev
-        frontierPrev.frontierNext       <- frontierNext
-        frontierNext                    <- self
-        frontierPrev                    <- self
-    }
-    void: logFrontierLoop()<-{
-        log("Frontier_____________")
-        their infItr: crntFrontierItem  <- self
-        their infItr: startItem         <- crntFrontierItem
-        me bool: loopAgain              <- crntFrontierItem != NULL
-        while(loopAgain){
-            log("    "+crntFrontierItem.mySymbol(crntFrontierItem)+" <"+stringifyInfon(crntFrontierItem.item)+ "> ")
-            crntFrontierItem <- crntFrontierItem.frontierNext
-            if(crntFrontierItem === startItem){loopAgain <- false}
-        }
-    }
+
     me string: stringify() <- {
         me string: S <- "["
         if(self==NULL){S<-S+"NULL"}
@@ -670,8 +675,6 @@ model infItr{
     }
     void: INIT() <- {
         Allocate(infNode)
-        frontierNext <- self
-        frontierPrev <- self
     }
     void: initialize(our infon: inf) <- {
         if(inf==NULL) {state <- sError; return()}
@@ -679,8 +682,6 @@ model infItr{
         Allocate(parent)
         setListSeqFlags()
         nestLvl <- 0
-        frontierNext <- self
-        frontierPrev <- self
     }
 
 }
@@ -1464,6 +1465,9 @@ logStrA <- logStrA + " unknownAsList"
                 if(tmpItrCount>20){logFatalError("DEBUG: Too many loops...")} else {tmpItrCount<-tmpItrCount+1}
 
                 log("PAI: "+stringifyInfon(LHSItr.item) + " === "+stringifyInfon(RHSItr.item))
+                //log("     "+LHSItr.mySymbol(LHSItr) + " === "+RHSItr.mySymbol(RHSItr))
+                //log("     "+LHSItr.item.mySymbol(LHSItr.item) + " === "+RHSItr.item.mySymbol(RHSItr.item))
+                //logFrontierLoop(LHSItr)
                 if(LHS.isOrLike()){
                     if(RHSItr.item.isOrLike()){ // set flag to add new #{...}
                         log("LHSItr.addNewSubDots <- true in: "+ LHS.source.value.items.head.altItr.stringify())
@@ -1527,7 +1531,7 @@ logStrA <- logStrA + infItrStateSig(RHSItr) +"| "
                 if(RHSItrNext == NULL){RHSItrNext <- findNextRHS(RHSItr, LHSfType, RHSfType)}
                 enqueueForProcessing(action, LHSItrNext, RHSItrNext, altNestLvl, action.breakDotCycle)
                 if(altNestLvl==0 and LHSItr.state != sSecondVisit){doAction(action)}
-log(logStrA)
+//log(logStrA)
             }
         }
     }
@@ -1544,7 +1548,7 @@ log(logStrA)
     void: enqueueForProcessing(our transformAction: pred, our infItr: LHSItr, our infItr: RHSItr, me int: altLvl, me bool: breakDotCycle)<-{
         if(LHSItr != NULL){
             if(LHSItr.state != sEOL){
-                pred.LHSItr.frontierJoin(LHSItr)
+                frontierJoin(pred.LHSItr, LHSItr)
                 if(RHSItr != NULL){
                     if(pred!=NULL){
                         LHSItr.predecessors.pushLast(pred)
@@ -1599,6 +1603,7 @@ log(logStrA)
     me void: normalize(our infon: inf) <- {
         our infItr:: ii
         ii.initialize(inf)
+        initFrontier(ii)
         addInfItrToAgenda(ii)
         processAgenda()
         ii.item.isNormed <- true
