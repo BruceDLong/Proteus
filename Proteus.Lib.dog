@@ -64,6 +64,18 @@ struct GLOBAL{
         if(ii.frontierPrev == NULL){ii.frontierPrev <- ii}
         if(ii.frontierNext == NULL){ii.frontierNext <- ii}
     }
+    me int: frontierCount(our infItr: ii)<-{
+        our infItr: crntFrontierItem  <- ii
+        our infItr: startItem         <- crntFrontierItem
+        me bool: loopAgain            <- crntFrontierItem != NULL
+        me int: counter               <- 0
+        while(loopAgain){
+            crntFrontierItem <- crntFrontierItem.frontierNext
+            if(crntFrontierItem === startItem){loopAgain <- false}
+            counter <+- 1
+        }
+        return(counter)
+    }
 }
 
 #include infonIO.dog
@@ -395,6 +407,7 @@ model infItr{
 
     our infItr: frontierNext
     our infItr: frontierPrev
+    flag: detachFromFrontier
 
     me bool: looseSize() <- {
         return(looseInhtd!=false or looseTop!=false)
@@ -1489,10 +1502,14 @@ logStrA <- logStrA + " unknownAsList"
 
                 if(RHSItr.item.isOrLike()){
                     our DblLinkedListNode: possibilityItr <- RHSItr.item.source.value.items.begin()
-                    while (possibilityItr!=NULL){
+                    while (possibilityItr!=NULL and possibilityItr.altItr != NULL ){
+                        our transformAction: predAction
+                            Allocate(predAction)
+                            predAction.LHSItr <- LHSItr
+                            predAction.RHSItr <- RHSItr
                         // MUST: Ensure that the predecessor is chosen correctly  in the call to enqueueForProcessing
                        // log("   RHS_ENQUEUE:"+stringifyInfon(LHSItr.item) + " === " + stringifyInfon(possibilityItr.altItr.item))
-                        enqueueForProcessing(LHSItr.predecessors.last(), LHSItr, possibilityItr.altItr, altNestLvl+1, false)
+                        enqueueForProcessing(predAction, LHSItr, possibilityItr.altItr, altNestLvl+1, false)
                         possibilityItr <- possibilityItr.next
                     }
                     continue()
@@ -1513,15 +1530,19 @@ logStrA <- logStrA + infItrStateSig(RHSItr) +"| "
                 action.LHSItr <- LHSItr
                 if(LHSItr.state != sSecondVisit){
                     me bool: rejected <- testCompatibility(LHS, LHSItr, RHSItr, action)
-                    if(rejected){continue()}
+                    if(rejected){
+                        log("     REJECT")
+                        LHSItr.detachFromFrontier <- true
+                        continue()
+                    }
                     if(action.remainder != NULL){RHSItrNext <- action.remainder}
                 }
 
                //  FINISH THIS TO MAKE NORMALIZE STREAM CORRECTLTY.
                 if(LHSItr.state == sSecondVisit and (RHSItr.state == sSecondVisit or RHSItr.looseSize())){
-                    log("MAYBE RESOLVE")
                     if (!LHSItr.hasUnresolvedWrkItems()){
-                        resolve(LHSItr)
+                        log("MAYBE RESOLVE  fCount:"+toString(frontierCount(LHSItr))+"     predCount:"+toString(LHSItr.predecessors.size()))
+                        if(frontierCount(LHSItr)==LHSItr.predecessors.size()){resolve(LHSItr)}
                     }
                 }
 
@@ -1533,11 +1554,18 @@ logStrA <- logStrA + infItrStateSig(RHSItr) +"| "
                 if(altNestLvl==0 and LHSItr.state != sSecondVisit){doAction(action)}
 //log(logStrA)
             }
+            if(LHSItr.state != sEOL){
+                LHSItr.detachFromFrontier <- true
+            }
+        }
+        if(LHSItr.detachFromFrontier){
+            frontierDetach(LHSItr)
         }
     }
 
     void: processAgenda()<-{
         withEach count in WHILE(!agenda.isEmpty()) {
+            //log("_____"+toString(count+1)+"_____")
             if (count > 100){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
             our infItr: CI <- popInfItrFromAgenda()
             processAgendaItem(CI, 0)
