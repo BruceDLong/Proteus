@@ -1,0 +1,356 @@
+// This file implements parsing and printing of infons
+
+struct infItr{
+    void: postParseProcessing() <- {
+        setListSeqFlags()
+    }
+}
+struct infon{
+    flag: isFunc
+    flag: isFuncArg
+    flag: invertFunc
+
+    void: moveInnrToSource() <- {
+        Allocate(source)
+        source.itmMode      <- mItem
+        source.infMode      <- infMode
+        source.infSize      <- infSize
+        source.value        <- value
+        source.intersectPos <- ipNoIntersect
+        source.argsOnLeft   <- argsOnLeft
+        source.argPos       <- argPos
+        source.funcArgs     <- funcArgs
+        value.clear()
+        infSize.clear()
+        argsOnLeft          <- false
+        argPos              <- apNoArgs
+        infMode             <- isUnknown
+        funcArgs            <- NULL
+    }
+    void: postParseProcessing() <- {
+        me int: numItems <- value.items.size()
+        if(numItems > 0){
+            our infon: lastItem <- value.items.last()
+            if(lastItem.value.tailUnfinished and lastItem.itmMode == mSubItems and lastItem.infSize.format == fUnknown){
+                value.tailUnfinished <- true
+                value.items.popLast()
+            }
+        }
+        if(itmMode == mDots){
+            itmMode              <- mSubItems
+            infSize.format       <- fUnknown
+            value.format         <- fLiteral
+            value.fType          <- LST
+            infMode              <- isLiteral
+            value.tailUnfinished <- true
+        }
+        if(value.tailUnfinished == false){countSize()}
+        if(isFunc or isFuncArg){
+            if(isFuncArg != 0){  // Swap func body with args
+                our infon:: CI_args
+                CI_args <deep- self
+                self <deep- CI_args.funcArgs
+                invertFunc <- CI_args.invertFunc
+                funcArgs <- CI_args
+                funcArgs.funcArgs <- NULL
+                funcArgs.isFunc <- false
+                funcArgs.isFuncArg <- false
+                argsOnLeft <- true
+            } else {argsOnLeft <- false}
+            isFunc <- false
+            isFuncArg <- false
+
+            if(invertFunc){argPos <- apArgIsLastItem}
+            else{argPos <- apArgIsFirstItem}
+        }else{argPos <- apNoArgs}
+        if(value.intersectPosParse == ipSquareBrackets and source==NULL){
+            moveInnrToSource()
+            if(invertFunc){
+                intersectPos <- ipGetFirst
+            } else {
+                intersectPos <- ipGetLast
+            }
+        }
+    }
+}
+
+#define LISTBODY(LEFT_BRKT, RIGHT_BRKT) <% >{ "LEFT_BRKT" "T"[opt]:timelike  >me listInfo[opt] >our listItem[list]: items >ws "RIGHT_BRKT" } %>
+
+string WordSystem{
+    >CID:asGiven
+}
+string PartPath{
+    >{>[ ("." <=> pathMode = dotField;) | (":" <=> pathMode = colonField;) ] > ws > our infon:path > ws ";"}
+}
+string infItr{
+    >[ ("=" <=> looseMode=false;) | ("==" <=> looseMode=true;) ] ":"[opt]:looseTop > ws > our infon:item
+}
+string listInfo[
+        >{ >{"~" >ws >our pureInfon: size}[opt]:Size >ws "C" >ws >our infon:listSpec "|"[opt]}
+     |  >{ >{"~" >ws >our pureInfon: size}[opt]:Size         >ws >our infon:listSpec "|"}
+     |  >{ "~" >ws >our pureInfon: size >ws "|"[opt]}
+]
+string listItem{
+    >ws
+     >[ (>{"class" >ws > WordSystem:type > ws ":" > ws > our infon:inf} <=> itmMode=mTagDefn;)
+      | (>our infon:inf <=> itmMode=mItem;)
+      | ("..." <=> itmMode=mDots; value.format=fUnknown;)
+      | (>{"#" >ws >our infon:inf} <=> itmMode=mSubItems;)
+      ]
+}
+string pureInfon{
+    >ws
+    >[ ( >[ (>uint64: num <=> format = fLiteral;) | ("_" <=> format = fUnknown; num=0; )]   <=>  fType = NUM;)
+     | ( >[ (>string: str <=> format = fLiteral;) | ("$" <=> format = fUnknown; str="";)]   <=>  fType = STR;)
+     | ( >[ (LISTBODY({,}) <=> format=fLiteral; intersectPosParse=ipDefault;)
+          | (LISTBODY([,]) <=> format=fLiteral; intersectPosParse=ipSquareBrackets;)
+          | (LISTBODY((,)) <=> format=fConcat;  intersectPosParse=ipDefault;)
+          ]  <=>  fType = LST;)
+     ]
+}
+string infon: StartSymbol="true" {
+    "!"[opt]:asNot
+    >[>{>WordSystem:type >ws}
+    |>{>WordSystem:type >ws ":" >ws
+        >{>[ ( "?" <=> infMode=isUnknown;  value.format=fUnknown;  infSize.format=fUnknown;)
+            | ( >{ "%" >[ ("this" <=> cursorMode=cThis;) | ("W" <=> cursorMode=cWorld;) | ("prev" <=> cursorMode=cPrev;) | ("next" <=> cursorMode=cNext;) | ("pred" <=> cursorMode=cPred;)  | ("succ" <=> cursorMode=cSucc;) | ("endPred" <=> cursorMode=cEndPred;)]} <=> infMode=newCursor;)
+            | ( >[ (>{ >[("*" <=>  infSize.inverted = false; ) | ("/" <=>  infSize.inverted = true; ) ] > me pureInfon: infSize
+                       >ws >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ] > me pureInfon: value
+                    } <=> infSize.fType=NUM; value.sizeGiven=true;)
+                 | (>{ >ws >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ][opt] > me pureInfon: value}  <=> infSize.num=0; infSize.fType=NUM; infSize.format=fUnknown; value.sizeGiven=false;)
+                 ]   <=>   infMode=isLiteral;
+              )
+            |
+            ] >ws
+            >our infItr[list]:wrkList
+            >{ >[ ("<:" <=> isFunc=true; isFuncArg=false; invertFunc=false;)
+                | (":>" <=> isFunc=false; isFuncArg=true; invertFunc=false;)
+                | ("<!" <=> isFunc=true; isFuncArg=false; invertFunc=true;)
+                | ("!>" <=> isFunc=false; isFuncArg=true; invertFunc=true;)
+                ]
+                >ws >our infon:funcArgs
+            }[opt]
+            >our PartPath[list]: parts
+        }
+//MUST: This code is doubled. Fix it.
+
+    }
+    |>{>[ ( "?" <=> infMode=isUnknown;  value.format=fUnknown;  infSize.format=fUnknown;)
+        | ( >{ "%" >[ ("this" <=> cursorMode=cThis;) | ("W" <=> cursorMode=cWorld;) | ("prev" <=> cursorMode=cPrev;) | ("next" <=> cursorMode=cNext;) | ("pred" <=> cursorMode=cPred;) | ("succ" <=> cursorMode=cSucc;) | ("endPred" <=> cursorMode=cEndPred;) ]} <=> infMode=newCursor;)
+        | ( >[ (>{ >[("*" <=>  infSize.inverted = false; ) | ("/" <=>  infSize.inverted = true; ) ] > me pureInfon: infSize
+                   >ws >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ] > me pureInfon: value
+                } <=> infSize.fType=NUM; value.sizeGiven=true;)
+             | (>{ >ws >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ][opt] > me pureInfon: value}  <=> infSize.num=0; infSize.fType=NUM; infSize.format=fUnknown; value.sizeGiven=false;)
+             ]   <=>   infMode=isLiteral;
+          )
+        |
+        ] >ws
+        >our infItr[list]:wrkList
+        >{ >[ ("<:" <=> isFunc=true; isFuncArg=false; invertFunc=false;)
+            | (":>" <=> isFunc=false; isFuncArg=true; invertFunc=false;)
+            | ("<!" <=> isFunc=true; isFuncArg=false; invertFunc=true;)
+            | ("!>" <=> isFunc=false; isFuncArg=true; invertFunc=true;)
+            ]
+            >ws >our infon:funcArgs
+        }[opt]
+        >our PartPath[list]: parts
+    }]
+}
+
+
+struct GLOBAL{
+    me InfonPrinter: infonPrinter
+
+    me string: stringifyInfon(our infon: i) <- {
+        return(infonPrinter.printInfon(i))
+    }
+    me string: stringifyPureInfon(their pureInfon: pure) <- {
+        me int[our map string]:: used
+        return(infonPrinter.printPureInfon(pure, NULL, used))
+    }
+}
+struct InfonPrinter{
+    me bool: isListWithDots(their pureInfon: pure) <- {
+        if(pure.fType!=LST){ return(false)}
+        if(pure.format==fLiteral){
+            withEach item in pure.items {
+                if(item.value.tailUnfinished){return(true)}
+            }
+        }
+        if(pure.tailUnfinished){return(true)}
+        return(false)
+    }
+
+    me string: addFuncArgs(me string: funcStr, me string: argStr, me int: argsOnLeft, me int: argPos, me string: tmpChar) <- {
+        me string: S
+        me string: invertChar <- ":"
+        if(argPos==apArgIsLastItem){invertChar <- "!"}
+        if(argsOnLeft){S <- argStr + invertChar + ">" + funcStr}
+        else{S <- funcStr + "<" + tmpChar+ invertChar + argStr}
+        return(S)
+    }
+
+    me string: printPureInfon(their pureInfon: pure, their pureInfon: size, me int[our map string]: used) <- {
+        me string: S <- ""
+        me bool: showSize <- size!=NULL and (
+            (((pure.sizeGiven !=0) and (pure.fType!=LST or pure.format!=fLiteral))
+            or (pure.fType!=NUM and size.format==fUnknown and pure.format!=fUnknown))
+            and !isListWithDots(pure)
+        )
+        if(showSize){S <+- printPureInfon(size, NULL, used)}
+        if(pure.inverted){
+            if(size!=NULL){S <+- "-"}
+            else if(pure.isLstSize==0){S <+- "/"}
+        }else{
+                if(showSize){S <+- "+"}
+                else if(size==NULL and pure.isLstSize==0){S <+- "*"}
+        }
+        if(pure.fType == NUM){
+            if(pure.format == fUnknown){S <+- "_"}
+            else{
+                me uint64:N <- pure.num
+                S <+- toString(N)
+            }
+        }else if(pure.fType == STR){
+            if(pure.format == fUnknown){S <+- "$"}
+            else{
+                me string: str <- pure.str
+                S <+- "'"+ str + "'"
+            }
+        }else if(pure.fType == LST){
+            me bool: showBar<-false
+            me string: endBrkt<-"}"
+            if(pure.format == fConcat) {S <+- "("  endBrkt<-")"}
+            else {S <+- ("{")}
+            if(pure.timelike){S <+- "T "}
+            if(pure.size!=NULL) {pure.size.isLstSize <- true}
+            if(pure.size!=NULL and pure.format==fLiteral){S <+- "~"+printPureInfon(pure.size, NULL, used) showBar<-true}
+            if(pure.listSpec){
+                if(showBar){S <+- " "}
+                S <+- printInfonActual(pure.listSpec, used)
+                showBar<-true
+            }
+            if(showBar){S <+- "| "}
+            our DblLinkedListNode: itemItr <- pure.items.begin()
+            me bool: firstTime <- true
+            while(itemItr){
+                if(!firstTime){S <+- " "} else {firstTime <- false}
+                S <+- printInfonActual(itemItr.item, used)
+                itemItr <- itemItr.next
+            }
+            if(pure.tailUnfinished){S <+- " ... "}
+            S <+- endBrkt
+        }else if(pure.fType == tUnknown){
+        }else{logFatalError("Error: Unknown fType in printPureInfon(): "+ toString(pure.fType))}
+        return(S)
+    }
+
+    me string: printInfonActual(our infon: i, me int[our map string]: used) <- {
+        me bool: debugPrint <- true
+        me string: S <- ""
+        if(i ==  NULL){return("NULL")}
+        me string: iSymbol <- i.mySymbol(i)
+        if(used.containsKey2(iSymbol)){return(iSymbol)}
+        else{used[iSymbol]<-1}
+        if(i.asNot){S <+- "!"}
+        if(i.type!=NULL){
+            me string: wordSysString <- i.type.asGiven
+            if(wordSysString==""){wordSysString<-"ERROR: NULL-TAG"}
+            S <+- wordSysString
+            if(i.infMode == isUnknown){
+                return(S)
+            }else{S <+- ": "}
+        }
+        me bool: isMDots
+        if(i.itmMode==mSubItems){
+            if(i.value.tailUnfinished and i.infSize.format == fUnknown and i.value.items.size()==0){
+                S<+-"..."
+                isMDots <- true
+            }
+            else{
+                if(debugPrint){S<+-"#"}
+                else{
+                    if(i.value.format==fLiteral){
+                        our DblLinkedListNode: itemItr <- i.value.items.begin()
+                        me bool: firstTime <- true
+                        while(itemItr){
+                            if(!firstTime){S <+- " "} else {firstTime <- false}
+                            S <+- printInfonActual(itemItr.item, used)
+                            itemItr <- itemItr.next
+                        }
+                        if(i.value.tailUnfinished){S <+- " ... "}
+                        isMDots <- true
+                    }
+                }
+            }
+        }
+        else if(i.itmMode==mTagDefn){S<+-"class "+i.type.asGiven+": "}
+
+        if(!isMDots){
+            if(i.infMode==isUnknown){
+                if(i.intersectPos==ipNoIntersect){S <+-"?"}
+                else{
+                    S <+- "["
+                    our DblLinkedListNode: itemItr <- i.source.value.items.begin()
+                    me bool: firstTime <- true
+                    while(itemItr){
+                        if(!firstTime){S <+- " "} else {firstTime <- false}
+                        S <+- printInfonActual(itemItr.item, used)
+                        itemItr <- itemItr.next
+                    }
+                    if(i.source.value.tailUnfinished){S <+- " ... "}
+                    S <+- "]"
+                    if (i.source.argPos != apNoArgs){
+                        S <- addFuncArgs(S, printInfonActual(i.source.funcArgs, used), i.source.argsOnLeft, i.source.argPos, "")
+                    }
+                }
+            }
+            else if(i.infMode==newCursor){
+                S <+- "%"
+                switch(i.cursorMode){
+                    case cThis:   {S <+- "this"}
+                    case cWorld:  {S <+- "W"}
+                    case cContext:{S <+- "C"}
+                    case cPrev:   {S <+- "prev"}
+                    case cNext:   {S <+- "next"}
+                }
+            }
+            else if(i.infMode==isTag){log('at-isTag')}
+            else if(i.infMode==isLiteral){
+                 S <+- printPureInfon(i.value, i.infSize, used)
+            }
+            else if(i.hasCursorHead){
+                S <+- printInfonActual(i.cursorHead, used)+"."+i.type.asGiven
+            }
+            else {logFatalError("Error In printInfonActual()\n")}
+        }
+        if(i.isNormed ==0){
+            withEach WorkItm in i.wrkList{
+                if(!WorkItm.looseMode){ S <+- " ="}
+                else { S <+- " =="}
+                if(WorkItm.looseTop){ S <+- ":"}
+                S <+- " "
+                S <+- printInfonActual(WorkItm.item, used)
+            }
+
+            if (i.argPos != apNoArgs){
+                S <- addFuncArgs(S, printInfonActual(i.funcArgs, used), i.argsOnLeft, i.argPos, "")
+            }
+        }
+
+        withEach part in i.parts{
+            if(! part.wasTransfered){
+                if(part.pathMode == dotField){S <+- "."}
+                else if(part.pathMode == colonField){S <+- ":"}
+                S <+- printInfonActual(part.path, used)
+                S <+- "; "
+            }
+        }
+        return(S)
+    }
+    me string: printInfon(our infon: i) <- {
+        me int[our map string]:: used
+        return(printInfonActual(i, used))
+    }
+
+}

@@ -20,13 +20,65 @@ infonDumpMode='text'
 do ManageCmdLine(cmd)
 
 struct GLOBAL{
+    me string: crntRHSMySymbol
+    me string: crntLHSMySymbol
     our infon[multimap string]: classDefs
     void: registerClass(our infon: classInfon) <- {
         print("REGISTER:", classInfon.type.asGiven, "\n")
         classDefs.insert(classInfon.type.asGiven, classInfon)
     }
+    our infItr: makeInfItr(our infon: i, our infItr: parent, our DblLinkedListNode: idx) <- {
+        our infItr:: ret
+        ret.item    <- i
+        ret.parent  <- parent
+        ret.infNode <- idx
+        ret.setListSeqFlags()
+        return(ret)
+    }
+    void: frontierJoin(our infItr: iiA, our infItr: iiB)<-{
+        our infItr: tmpAddPrev          <- iiB.frontierPrev
+        our infItr: tmpThisNxt          <- iiA.frontierNext
+        iiA.frontierNext                <- iiB
+        iiB.frontierPrev                <- iiA
+        tmpThisNxt.frontierPrev         <- tmpAddPrev
+        tmpAddPrev.frontierNext         <- tmpThisNxt
+    }
+    void: frontierDetach(our infItr: toDetach)<-{
+        toDetach.frontierNext.frontierPrev       <- toDetach.frontierPrev
+        toDetach.frontierPrev.frontierNext       <- toDetach.frontierNext
+        toDetach.frontierNext                    <- toDetach
+        toDetach.frontierPrev                    <- toDetach
+    }
+    void: logFrontierLoop(our infItr: fItr, me string: ID)<-{
+        log("Frontier_____________"+ID)
+        our infItr: crntFrontierItem  <- fItr
+        our infItr: startItem         <- crntFrontierItem
+        me bool: loopAgain            <- crntFrontierItem != NULL
+        while(loopAgain){
+            log("    "+crntFrontierItem.mySymbol(crntFrontierItem)+" <"+crntFrontierItem.stringify()+ "> ")
+            crntFrontierItem <- crntFrontierItem.frontierNext
+            if(crntFrontierItem === startItem){loopAgain <- false}
+        }
+    }
+    void: initFrontier(our infItr: ii)<-{
+        if(ii.frontierPrev == NULL){ii.frontierPrev <- ii}
+        if(ii.frontierNext == NULL){ii.frontierNext <- ii}
+    }
+    me int: frontierCount(our infItr: ii)<-{
+        our infItr: crntFrontierItem  <- ii
+        our infItr: startItem         <- crntFrontierItem
+        me bool: loopAgain            <- crntFrontierItem != NULL
+        me int: counter               <- 0
+        while(loopAgain){
+            crntFrontierItem <- crntFrontierItem.frontierNext
+            if(crntFrontierItem === startItem){loopAgain <- false}
+            counter <+- 1
+        }
+        return(counter)
+    }
 }
 
+#include infonIO.dog
 #include DB_workAround.dog
 #include infonList.dog
 #include Functions.dog
@@ -37,11 +89,12 @@ model pureInfon{
     me mode[fUnknown, fConcat, fLiteral]: format
     me mode[fDefault, fFloat, fFraction, fSingleQuote, fHereDoc, fSizedBin]: literalFormat
     me mode[bDec, bBin, bHex]:numBase
-    me mode[cDefault, cGetLast, cGetFirst, cGetMarked]: cursor
+    me mode[ipDefault, ipSquareBrackets]: intersectPosParse
     me flag: inverted
     me flag: timelike
     flag: sizeGiven
     flag: isLstSize
+    me flag: tailUnfinished
     me uint64: num
     me string: str
     me DblLinkedList: items            //  our list<our infon, [fast_prepend, fast_delete]>: newItems
@@ -57,12 +110,10 @@ model pureInfon{
         fType <- STR
         format <- fLiteral
         str <- S
-
     }
     me bool: isDuplicateOf(their pureInfon: dup) <- {
         if(fType != dup.fType){return(false)}
         if(format != dup.format){return(false)}
-        if(cursor != dup.cursor){return(false)}
         if(inverted != dup.inverted){return(false)}
         if(timelike != dup.timelike){return(false)}
         me int: formatType <- fType
@@ -82,8 +133,8 @@ model pureInfon{
         return(items.erase(toDel))
     }
     me uint64: getValAsInt() <-{
-    if(inverted){return(-num)}
-    else{return(num)}
+        if(inverted){return(-num)}
+        else{return(num)}
     }
     void: copyAsTypeTo(their pureInfon: to) <- {
         to <deep- self
@@ -106,54 +157,77 @@ model pureInfon{
 }
 model infon{
     flag: asNot
-    flag: isFunc
-    flag: isFuncArg
-    flag: invertFunc
-    flag: sizeHardened
     mode[mItem, mSubItems, mDots, mTagDefn]:      itmMode
     mode[isUnknown, newCursor, isTag, isLiteral]: infMode
-    mode[cNone, cThis, cWorld, cContext, cPrev, cNext]:  cursorMode
-    me pureInfon: endMarker
+    mode[ipNoIntersect, ipGetLast, ipGetFirst, ipGetMarked]: intersectPos
+    mode[apNoArgs, apArgIsFirstItem, apArgIsLastItem]: argPos
+    flag: argsOnLeft
+    mode[cNone, cThis, cWorld, cContext, cPrev, cNext, cPred, cSucc, cEndPred]:  cursorMode
+    me pureInfon: infSize
     me pureInfon: value
     flag: isNormed
     flag: hasCursorHead
     flag: doCursorLookup
     our infon: cursorHead
-    our infon: aux1
+    our infon: funcArgs
+    our infon: dotPath
+    our infon: source
     our WordSystem: type
     our infItr[list]: wrkList
+    our infItr[list]: usedWrkList
+    our PartPath[list]: parts
+    our infon[list]: subscribers
     flag: wrkLstPreped
     flag: wrkItmsAdded
-    //flag: wrkListIsAlts
+    flag: isOnAgenda    // True if item is currently on agenda
+    flag: isTentative
 
-    their pureInfon: calcSize() <- {
-        if(! sizeHardened and endMarker.format==fUnknown){
+    me int64: sizeIfKnown() <- {
+        if(infSize.format == fLiteral){return(infSize.num)}
+        return(-1)
+    }
+    me int64: countGivenItems() <- {
+        me int64: acc <- 0
+        withEach item in value.items{
+            if(item.itmMode == mItem) {
+                acc <- acc + 1
+            } else if(item.itmMode == mSubItems){
+                me int64: childCount <- item.sizeIfKnown()
+                if(childCount==-1){return(-1)}
+                acc <- acc + childCount
+            } else if(item.itmMode == mDots){logFatalError("count:@mDots:"+toString(acc)); return(acc)}
+        }
+        return(acc)
+    }
+    their pureInfon: countSize() <- {
+        if(!value.sizeGiven and infSize.format==fUnknown){
             if(value.fType==STR and value.format==fLiteral){
-                endMarker.fType  <- NUM
-                endMarker.format <- fLiteral
-                endMarker.num    <- value.str.size()
+                infSize.fType  <- NUM
+                infSize.format <- fLiteral
+                infSize.num    <- value.str.size()
             } else if(value.fType==LST and value.format==fLiteral){
                 me uint64: acc <- 0
                 withEach item in value.items{
                     if(item.itmMode == mItem) {
                         acc <- acc + 1
                     } else if(item.itmMode == mSubItems) {
-                        their pureInfon: tmp <- item.calcSize()
-                        if(tmp.format==fUnknown){return(endMarker)}
+                        if(item.value.tailUnfinished){return(infSize)}
+                        their pureInfon: tmp <- item.countSize()
+                        if(tmp.format==fUnknown){return(infSize)}
                          acc <- acc + tmp.num
-                    } else if(item.itmMode == mDots) {return(endMarker)}
+                    } else if(item.itmMode == mDots) {return(infSize)}
                 }
-                endMarker.fType  <- NUM
-                endMarker.format <- fLiteral
-                endMarker.num    <- acc
+                infSize.fType  <- NUM
+                infSize.format <- fLiteral
+                infSize.num    <- acc
             }
         }
-        return(endMarker)
+        return(infSize)
     }
 
     me bool: isDuplicateOf(our infon: dup) <- {   // TODO: much more could go here
         if(!value.isDuplicateOf(dup.value)){return(false)}
-        if(!endMarker.isDuplicateOf(dup.endMarker)){return(false)}
+        if(!infSize.isDuplicateOf(dup.infSize)){return(false)}
         if(itmMode != dup.itmMode){return(false)}
         if(infMode != dup.infMode){return(false)}
         if(cursorMode != dup.cursorMode){return(false)}
@@ -171,44 +245,50 @@ model infon{
         return(retVal)
     }
 
+    void: addSubscriber(our infon: subscriber) <- {subscribers.pushLast(subscriber)}
+    me bool: isOrLike() <- {return(intersectPos == ipGetLast and infSize.format == fUnknown and source != NULL and source.value.format == fLiteral)}
+
     our infon: getLastItem() <- {
         // ASSERT(Should be already normed and a non-concat list)
         our infon: lastItem
-        if(!value.items.isEmpty()) {
-            lastItem <- value.items.last()
-        }  else {lastItem <- NULL}
-        switch(lastItem.itmMode){
-            case mItem:{}
-            case mSubItems:{lastItem <- lastItem.getLastItem()}
-            case mDots:{
+        if(value.tailUnfinished){
+            me string: lenStatus <- lengthStatus()
+            if(lenStatus == "L" or lenStatus == "?"){
                 our infItr: virtualLastItem <- searchWorkListForRelation(asLast)
                 if(virtualLastItem==NULL){
                 // Make a virtual last item to be joined later.
                     Allocate(virtualLastItem)
                     virtualLastItem.target <- asLast
                     Allocate(virtualLastItem.item)
-                    virtualLastItem.item.endMarker.format <- fUnknown
-
+                    virtualLastItem.item.infSize.format <- fUnknown
                     wrkList.pushLast(virtualLastItem)
                 }
                 lastItem <- virtualLastItem.item
+                return(lastItem)
             }
-            case mTagDefn:{log("TODO: handle when a tag is the last item in a list"); exit(4)}
+            else if(lenStatus == "E"){
+                value.tailUnfinished <- false
+            }
+            else if(lenStatus == "G"){
+            }
         }
+        if(infSize.format==fUnknown){ //MUST: Handle if size is fConcat
+            return(NULL)
+        } else if(!value.items.isEmpty()) {
+            lastItem <- value.items.last()
+            if(value.format==fConcat){lastItem <- lastItem.getLastItem()}
+        }else{logFatalError("WARNING: TODO: handle [...] value.items.isEmpty() "); return(NULL) }
+        if(lastItem!=NULL and lastItem.itmMode==mSubItems){lastItem <- lastItem.getLastItem()}
         return(lastItem)
     }
     our infon: getFirstItem() <- {
-        // ASSERT(Should be already normed and a non-concat list)
+        // ASSERT(Should be already normed)
         our infon: firstItem
         if(!value.items.isEmpty()) {
             firstItem <- value.items.first()
+            if(value.format==fConcat){firstItem <- firstItem.getFirstItem()}
         }  else {firstItem <- NULL}
-        switch(firstItem.itmMode){
-            case mItem:{}
-            case mSubItems:{firstItem <- firstItem.getFirstItem()}
-            case mDots:{exit(3)}
-            case mTagDefn:{log("TODO: handle when a tag is the first item in a list"); exit(4)}
-        }
+        if(firstItem!=NULL and firstItem.itmMode==mSubItems){firstItem <- firstItem.getFirstItem()}
         return(firstItem)
     }
     our DblLinkedListNode: deleteListNode(our DblLinkedListNode: toDel) <- {
@@ -220,11 +300,13 @@ model infon{
     }
     void: copyAsTypeTo(our infon: to) <- {
         to.flags <- flags
-        to.type <- type
-        endMarker.copyAsTypeTo(to.endMarker)
+        to.type  <- type
+        infSize.copyAsTypeTo(to.infSize)
         value.copyAsTypeTo(to.value)
         if(cursorHead){cursorHead.copyAsTypeTo(to.cursorHead)}
-        if(aux1){aux1.copyAsTypeTo(to.aux1)}
+        if(funcArgs){funcArgs.copyAsTypeTo(to.funcArgs)}
+        if(dotPath){dotPath.copyAsTypeTo(to.dotPath)}
+        if(source){source.copyAsTypeTo(to.source)}
         withEach wrkListItem in wrkList {
             our infItr: ii
             Allocate(ii)
@@ -234,6 +316,46 @@ model infon{
             to.wrkList.pushLast(ii)
         }
     }
+    void: addToOrInfon(our infItr: altItr) <- {
+        source.value.items.pushAsAlt(altItr, altItr.item)
+    }
+    void: addInfItrToWrkList(our infItr: RHSItr) <- {
+        wrkList.pushLast(RHSItr)
+    }
+    void: takeWrkListFrom(our infon:from) <- {
+        withEach wrkItm in from.wrkList{
+            addInfItrToWrkList(wrkItm)
+        }
+        from.wrkList.clear()
+    }
+    void: insertNewDotPart(me string: fieldName, our infon: newPart) <- {
+        Allocate(newPart.type)
+        newPart.type.asGiven <- fieldName
+        our PartPath:: newPath
+        newPath.pathMode <- dotField
+        newPath.path <- newPart
+        log("ADDING NEW DOT_PART:'" + fieldName + "'" + stringifyInfon(newPart))
+        parts.pushLast(newPath)
+    }
+    our infon: findPartPathByTag(me string: tagName) <- {
+        withEach part in parts{
+            if(part.path.type != NULL and part.path.type.asGiven == tagName){
+                return(part.path)
+            }
+        }
+        return(NULL)
+    }
+    me string: lengthStatus() <- {
+        //MUST: complete after range functionality works
+        if(infSize.format==fLiteral){
+            me uint64: maxSize <- infSize.num
+            me int64: itmCount <- countGivenItems()
+            if(itmCount == -1){return("?")}
+            if(itmCount < maxSize){return("L")}
+            else if(itmCount == maxSize){return("E")}
+            else{return("G")}
+        }else{return("?")}
+    }
     me string: stringifyWorklist() <- {
         me string: S <- ""
         withEach workItm in wrkList{
@@ -241,62 +363,283 @@ model infon{
         }
         return(S)
     }
+    void: onUpdate() <- {
+        withEach subscriber in subscribers{
+        }
+    }
 
-    void: clear() <- {endMarker.clear() value.clear()}
-    void: INIT() <- {endMarker <- pureInfon(0)}
+    void: clear() <- {
+        infSize.clear()
+        value.clear()
+        resetFlagsAndModes()
+        cursorHead <- NULL
+        funcArgs   <- NULL
+        dotPath    <- NULL
+        source     <- NULL
+        type       <- NULL
+    }
+    void: INIT() <- {infSize <- pureInfon(0)}
     me none: infon(me string: S) <- {
         infMode <- isLiteral
         itmMode <- mItem
-        endMarker <- pureInfon(S.size())
+        infSize <- pureInfon(S.size())
         value <- pureInfon(S)
     }
 }
 model infItr{
     our infon: item
     our infItr: parent
-    our DblLinkedListNode: itmItr
+    our DblLinkedListNode: infNode
     mode [asID, asFirst, asLast, asMarked, asFirstParent, asLastParent, asMarkedParent]: target
-    mode[sizeFailed, sizeVerified, copySizeLHStoRHS, copySizeRHStoLHS, hardenLHS]:       sizeAction
-    mode[valueFailed, valueVerified, copyValueLHStoRHS, copyValueRHStoLHS]: valueAction
-    flag: copyRHSTypeToLHS
     flag: looseMode
-    flag: looseSize
-    flag: wasProcessed
+    flag: looseTop
+    flag: looseInhtd
+    flag: wasRejected
+    flag: readyToResolve
+    flag: addNewSubDots
+    me int: nestLvl
+    me int: AlternativesNestLvl
+    mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError, sNonIterable]: state
+    mode[cmdNoOp, delDots, keepDots, insB4Dots, insAftDots]: stitchCmd
+    our infItr[map string]: pctTags
 
-    me bool: goNext() <- {
-        while(true){
-            if(parent==NULL or item==NULL or itmItr.next==NULL){
-                item <- NULL  // Signify EOL
-                return(false)
-            }
-            itmItr  <- itmItr.next
-            item <- itmItr.item
-            if(item.itmMode == mTagDefn){
-                registerClass(item)
-            }else {
-                return(true)
-            }
+    our transformAction[list]: predecessors
+
+    our infItr: frontierNext
+    our infItr: frontierPrev
+    flag: detachFromFrontier
+
+    me bool: looseSize() <- {
+        return(looseInhtd!=false or looseTop!=false)
+    }
+    our infItr: makeOrItr(our infItr: nextItr) <- {
+        our infon:: newListInfon
+            newListInfon.itmMode        <- mItem
+            newListInfon.infMode        <- isLiteral
+            newListInfon.infSize.fType  <- NUM
+            newListInfon.infSize.format <- fUnknown
+            newListInfon.infSize.num    <- 1
+            newListInfon.value.fType    <- LST
+            newListInfon.value.format   <- fLiteral
+            newListInfon.value.items.pushAsAlt(nextItr, nextItr.item)
+        our infon:: newAltInfon
+            newAltInfon.itmMode         <- mItem
+            newAltInfon.infMode         <- isUnknown
+            newAltInfon.intersectPos    <- ipGetLast
+            newAltInfon.infSize.format  <- fUnknown
+            newAltInfon.source          <- newListInfon
+        our infItr:: newAltInfItr
+            newAltInfItr.item           <- newAltInfon
+            newAltInfItr.state          <- sNonIterable
+            initFrontier(newAltInfItr)
+        return(newAltInfItr)
+        }
+    me bool: isASeq(our infon: i) <- {
+        return ((i.value.format==fLiteral and i.value.fType==LST) or i.value.format==fConcat)
+    }
+    void:closeListAtItem(our infItr: lastItem) <- {
+        our infItr: infItrToDelete <- lastItem.getNext(false)
+        me bool: itemExists <- infItrToDelete!=NULL
+        while(!(item.value.items.last() === lastItem.item)){
+            item.value.items.popLast()
+        }
+        withEach itm in item.value.items {
+            itm.isTentative <- false
+        }
+        if(stitchCmd != keepDots){
+            item.value.tailUnfinished <- false
+            item.countSize()
         }
     }
-
+    void: setListSeqFlags() <- {
+        if(isASeq(item)){state <- sFirstVisit; }
+        else{state <- sNotASeq;}
+    }
+    our DblLinkedListNode: tryAddingTentativeChild() <- {
+        me string: lenStatus <- item.lengthStatus()
+        if(lenStatus == "L" or lenStatus == "?"){
+            our infon:: newInfon
+            our infon: infonType <- item.value.listSpec
+            if(infonType != NULL){
+                newInfon <deep- infonType // MUST: be a lazy cow copy
+            }else{
+                newInfon.value.fType   <- tUnknown
+                newInfon.infMode       <- isUnknown
+                newInfon.itmMode       <- mItem
+                newInfon.value.format  <- fUnknown
+            }
+            if(lenStatus == "?"){newInfon.isTentative <- true}
+            our DblLinkedListNode: newInfNode <- item.value.items.pushLast(newInfon)
+            return(newInfNode)
+        }else if(lenStatus == "E"){
+            item.value.tailUnfinished <- false
+            return(NULL)
+        }else if(lenStatus == "G"){log("INFON TOO BIG")}
+        return(NULL)
+    }
+    me bool: goNext(me bool: skipDots) <- {
+        while(true){
+            if(item==NULL){return(false)}
+            if(infNode==NULL){logFatalError("ERROR: GN:infNode==NULL "+stringify())}
+            if(parent==NULL){logFatalError("ERROR: GN:parent==NULL "+stringify())}
+            if(infNode.next==NULL){
+                if(!skipDots){
+                    if(parent.item != NULL and parent.item.value.tailUnfinished){
+                        our DblLinkedListNode: newChild <- parent.tryAddingTentativeChild()
+                        if(newChild == NULL){return(false)}
+                        infNode <- newChild
+                        item    <- infNode.item
+                        return(true)
+                    }else{item <- NULL; return(false)}
+                }else{item <- NULL; return(false)}
+            }
+            infNode <- infNode.next
+            item    <- infNode.item
+            if(item.itmMode == mTagDefn){
+                registerClass(item)
+            }else{return(true)}
+        }
+    }
+    bool: beginIterating(me bool: skipDots) <- {
+        our DblLinkedListNode: firstNode
+        if(item.value.items.isEmpty()){
+            if(!skipDots and item.value.tailUnfinished){
+                firstNode <- tryAddingTentativeChild()
+                if(firstNode == NULL){item <- NULL; return(false)}
+            }
+            else{
+                if(!skipDots){item <- NULL}
+                return(false)
+            }
+        }
+        else{
+            firstNode <- item.value.items.begin()
+        }
+        our infItr:: tmp
+        copyThisTo(tmp)
+        parent     <- tmp   // TODO: After ptr bug is fixed, Allocate(parent, self)
+        infNode    <- firstNode
+        looseInhtd <- parent.looseMode!=false or parent.looseSize()
+        looseMode  <- false
+        looseTop   <- false
+        item       <- infNode.item
+        setListSeqFlags()
+        nestLvl    <- nestLvl+1
+        return(true)
+    }
+    void: goNextDeep(me bool: skipDots) <- {
+        if(state == sNonIterable){logFatalError("Trying to iterate nonIterable infItr")}
+        me int: tmpState <- state
+        if(state == sNotASeq and item.infMode == isUnknown and ! item.value.items.isEmpty()){
+            tmpState <- sFirstVisit
+        }
+        switch(tmpState) {
+            case sNotASeq: sSecondVisit:{  // Get the next item or set EOL
+                if(parent==NULL or nestLvl==0){
+                    state <- sEOL
+                    return()
+                }
+                if(goNext(skipDots)){
+                    setListSeqFlags()
+                    looseInhtd <- looseSize()
+                }else{
+                    me int: tmpNestLvl <- nestLvl
+                    self <deep- parent
+                    nestLvl <- tmpNestLvl - 1
+                    state   <- sSecondVisit
+                }
+            }
+            case sFirstVisit:{
+                if(item.value.items.isEmpty()){
+                    if(item.value.tailUnfinished){
+                        if(!beginIterating(skipDots)){
+                            state <- sSecondVisit
+                        }
+                    }else{
+                        state <- sSecondVisit
+                    }
+                }else{beginIterating(skipDots)}
+            }
+            case sInited: {state <- sFirstVisit}
+            case sEOL:    {item<-NULL}
+            case sInvalid:{item<-NULL;   state <- sError}
+            case sError:  {item<-NULL}
+            default: {print("Error: invalid iterator state:", state, "\n")}
+        }
+    }
+    our infItr: getNextDeep(me bool: skipDots) <- {
+        our infItr: retVal
+        Allocate(retVal)
+        copyThisTo(retVal)
+        retVal.goNextDeep(skipDots)
+        initFrontier(retVal)
+        return(retVal)
+    }
+    our infItr: getNext(me bool: skipDots) <- {
+        our infItr: retVal
+        Allocate(retVal)
+        copyThisTo(retVal)
+        if(retVal.goNext(skipDots)){return(retVal)}
+        return(NULL)
+    }
     our infon: getPrevPtr() <- {
-        if(parent==NULL or item==NULL or itmItr.prev==NULL) {return(NULL)}
-        return(itmItr.prev.item)
+        if(parent==NULL or item==NULL or infNode.prev==NULL) {return(NULL)}
+        return(infNode.prev.item)
     }
-
+    our infItr: getNextExtended(me bool: skipDots) <- {
+        our infItr: nextItr <- getNextDeep(skipDots)
+    //    log("    GNE:nextItr:"+nextItr.stringify())
+        if(nextItr.state == sError){return(NULL)}
+        //if(nextItr.nextAnd != NULL){nextItr.nextAnd <- nextItr.nextAnd.getNextExtended(false)}
+        while(nextItr.item.itmMode == mSubItems){
+            nextItr <- nextItr.getNextDeep(skipDots)
+        }
+        if(nextItr.item.isTentative){
+            our infItr: nxtOR <- nextItr.getNextExtended(true)
+            if(nxtOR != NULL){
+                if(!nextItr.item.isOrLike()){nextItr <- nextItr.makeOrItr(nextItr)}
+                nextItr.item.addToOrInfon(nxtOR)
+                nextItr.item.source.value.tailUnfinished <- false
+            }
+        }
+        return(nextItr)
+    }
     void: copyThisTo(our infItr: to) <- {
-        to.item      <- item
-        to.parent    <- parent
-        to.itmItr    <- itmItr
-        to.looseMode <- looseMode
-        to.looseSize <- looseSize
+        to.item         <- item
+        to.parent       <- parent
+        to.infNode      <- infNode
+        to.target       <- target
+        to.looseMode    <- looseMode
+        to.looseTop     <- looseTop
+        to.looseInhtd   <- looseInhtd
+        to.nestLvl      <- nestLvl
+        to.state        <- state
+        to.stitchCmd    <- stitchCmd
+        to.pctTags      <- pctTags
     }
-
     void: deleteCrnt() <- {
-        itmItr <- parent.item.deleteListNode(itmItr)
+        infNode <- parent.item.deleteListNode(infNode)
     }
-
-
+    void: insertNewPctTag(me string: tag, our infItr: newItr) <- {
+        our infItr[itr map string]: tagItr <- pctTags.find(tag)
+        if(tagItr == pctTags.end()){
+            pctTags.insert(tag, newItr)
+        }else{
+            tagItr.val.item.addInfItrToWrkList(newItr)
+        }
+    }
+    our infItr: findOrAddPctTag(me string: tag) <- {
+        our infItr: retVal
+        our infItr[itr map string]: tagItr <- pctTags.find(tag)
+        if(tagItr == pctTags.end()){
+            Allocate(retVal)
+            Allocate(retVal.item)
+            pctTags.insert(tag, retVal)
+        }else{
+            retVal <- tagItr.val
+        }
+        return(retVal)
+    }
     void: insertBefore(our DblLinkedListNode: itm, our infon: i) <- {
         if(itm){
             parent.item.value.items.insertBefore(itm, i)
@@ -305,83 +648,74 @@ model infItr{
         }
     }
 
+    void: insertChildDotsBefore(our infItr: position) <- {
+        our infon:: newSubDots
+        newSubDots.itmMode <- mSubItems
+        newSubDots.infMode <- isLiteral
+        newSubDots.value.tailUnfinished <- true
+        newSubDots.value.fType <- LST
+        newSubDots.value.format <- fLiteral
+        item.value.items.insertBefore(position.infNode, newSubDots)
+        item.value.tailUnfinished <- false
+    }
     me string: stringify() <- {
-        me string: S <- ""
-        me agent: a
-        S <- S + a.printInfon(item) + " target:" + targetStrings[target]  + " copyRHSTypeToLHS:" + dispBool(copyRHSTypeToLHS)+ " sizeAction:" + sizeActionStrings[sizeAction]+ " valueAction:" + valueActionStrings[valueAction]+ " looseMode:" + dispBool(looseMode)+ " looseSize:" + dispBool(looseSize)
+        me string: S <- "["
+        if(self==NULL){S<-S+"NULL"}
+        else if(state == sEOL){S<-S+" sEOL"}
+        else if(state == sError){S<-S+" sError"}
+        else{
+            S <- S + mySymbol(self) + ":"
+            S <- S + item.mySymbol(item) + ":"
+            if(state==sSecondVisit){S <- "<" + S}
+            S <- S + stringifyInfon(item)
+            //if(wasProcessed){S <- S + "|wasProcessedTrue" }
+            //S <- S + "|nestLvl=" + toString(nestLvl)
+            //S <- S + "|state=" + stateStrings[state]
+            //S <- S + "(parent:" + parent.mySymbol(parent) + ")"
+            //if(nextAnd){S <- S+ " & "+ nextAnd.stringify()}
+            if(state==sSecondVisit){S <- S + ">SV"}
+            if(item.source){S <- S+ " source:"+item.source.mySymbol(item.source)+" "+ stringifyInfon(item.source)}
+        }
+        S <- S+"]"
         return (S)
     }
-    void: INIT() <- {Allocate(itmItr)}
+    void: INIT() <- {Allocate(infNode)}
+    void: initialize(our infon: inf) <- {
+        if(inf==NULL) {state <- sError; return()}
+        item <- inf
+        Allocate(parent)
+        setListSeqFlags()
+        nestLvl <- 0
+    }
 
 }
-
-#define LISTBODY(LEFT_BRKT, RIGHT_BRKT) <% >{ "LEFT_BRKT" "T"[opt]:timelike  >me listInfo[opt] >our listItem[list]: items >ws "RIGHT_BRKT" } %>
-
-string WordSystem{
-    >CID:asGiven
+model PartPath{
+    our infon: path
+    mode[dotField, colonField]: pathMode
+    flag: wasTransfered
 }
-string infItr{
-    >[ ("=" <=> looseMode=false;) | ("==" <=> looseMode=true;) ] ":"[opt]:looseSize > ws > our infon:item
+model transformAction{
+    our infItr: LHSItr
+    our infItr: RHSItr
+    flag: reject
+    our infItr: remainder
+    mode[sizeNotChecked, sizeFailed, sizeVerified, copySizeLHStoRHS, copySizeRHStoLHS]: sizeAction
+    mode[valueNotChecked, valueFailed, valueVerified, copyValueLHStoRHS, copyValueRHStoLHS]: valueAction
+    mode[noOperation, moveRHSFirstToFirstChild, moveRHSToFirstChild, moveRHSFirstToLHS]: listCommand
+    flag: copyRHSTypeToLHS
+    flag: addRemainderToSuccessor
+    flag: propogateLHSToLHSFirst
+    flag: propogateRHSToRHSFirst
+    uint64: sizeToCopy
+    flag: breakDotCycle
+    flag: unknownAsList
 }
-string listInfo[
-        >{ >{"~" >ws >our pureInfon: size}[opt]:Size >ws "C" >ws >our infon:listSpec "|"[opt]}
-     |  >{ >{"~" >ws >our pureInfon: size}[opt]:Size         >ws >our infon:listSpec "|"}
-     |  >{ "~" >ws >our pureInfon: size >ws "|"[opt]}
-]
-string listItem{
-    >ws
-     >[ (>{"class" >ws > WordSystem:type > ws ":" > ws > our infon:inf} <=> itmMode=mTagDefn;)
-      | (>our infon:inf <=> itmMode=mItem;)
-      | ("..." <=> itmMode=mDots; value.format=fUnknown;)
-      | (>{"#" >ws >our infon:inf} <=> itmMode=mSubItems;)
-      ]
-}
-string pureInfon{
-    >ws
-    >[ ( >[ (>uint64: num <=> format = fLiteral;) | ("_" <=> format = fUnknown; num=0; )]   <=>  fType = NUM;)
-     | ( >[ (>string: str <=> format = fLiteral;) | ("$" <=> format = fUnknown; str="";)]   <=>  fType = STR;)
-     | ( >[ (LISTBODY({,}) <=> format=fLiteral; cursor=cDefault;)
-          | (LISTBODY([,]) <=> format=fLiteral; cursor=cGetLast;)
-          | (LISTBODY((,)) <=> format=fConcat;  cursor=cDefault;)
-          ]  <=>  fType = LST;)
-     ]
-}
-string infon: StartSymbol="true" {
-    "!"[opt]:asNot
-   >[ ( "?" <=> infMode=isUnknown;  value.format=fUnknown;  endMarker.format=fUnknown;)
-
-    | ( >{ "%" >[ ("this" <=> cursorMode=cThis;) | ("W" <=> cursorMode=cWorld;) | ("prev" <=> cursorMode=cPrev;) | ("next" <=> cursorMode=cNext;) ]} <=> infMode=newCursor;)
-
-    | ( >[ (>{ >[("*" <=>  endMarker.inverted = false; ) | ("/" <=>  endMarker.inverted = true; ) ] > me pureInfon: endMarker
-               >ws >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ] > me pureInfon: value
-            } <=> endMarker.fType=NUM; value.sizeGiven=true;)
-         | (>{ >ws >[("+" <=> value.inverted = false; ) | ("-" <=> value.inverted = true; ) ][opt] > me pureInfon: value}  <=> endMarker.num=0; endMarker.fType=NUM; endMarker.format=fUnknown; value.sizeGiven=false;)
-         ]   <=>   infMode=isLiteral;
-      )
-
-    | ( >WordSystem:type <=> infMode=isTag;)
-    ]
-    >ws
-
-    >our infItr[list]:wrkList
-
-    >{ >[ ("<:" <=> isFunc=true; isFuncArg=false; invertFunc=false;)
-        | (":>" <=> isFunc=false; isFuncArg=true; invertFunc=false;)
-        | ("<!" <=> isFunc=true; isFuncArg=false; invertFunc=true;)
-        | ("!>" <=> isFunc=false; isFuncArg=true; invertFunc=true;)
-        | ("."  <=> hasCursorHead=true;)
-        ]
-        >ws >our infon:aux1
-    }[opt]
-}
-
-struct pureInfon {
+struct transformAction{}
+struct pureInfon{
     our infon[multimap string]: index
     our infon[multimap int64]: T_index
 }
-struct infItr {}
-struct infon {}
-
+struct PartPath{}
 //////////////////////////
 // Definition storage
 
@@ -395,248 +729,17 @@ struct ModelManager {
     }
 }
 
-struct GLOBAL{ me ModelManager: modelMngr}
+struct GLOBAL{me ModelManager: modelMngr}
 
 
 //////////////////////////
 // Infon Interface Routines
-
-model infDeepItr{
-    our infItr: crntCursor
-    me int: nestLvl
-    our infDeepItr: nextAnd
-    our infDeepItr: nextOr
-    our infDeepItr: nextRemainder
-    our infItr: myDots
-    mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError]: state
-    flag: alreadyIncremented   // When an item is deleted, the cursor idx is already incremented.
-    flag: fromDotted
-    mode[cmdNoOp, cmdDeleteDots, cmdKeepDots, cmdInsertBeforeDots, cmdInsertAfterDots]: stitchCmd
-    flag: preserveDots
-    flag: isAList
-
-    me bool: isASeq(our infon: i) <- {
-        //if(i.value.format==fConcat){print("ENTERING CONCAT\n")}
-        return ((i.value.format==fLiteral and i.value.fType==LST) or i.value.format==fConcat)
-    }
-
-    void: setListSeqFlags() <- {
-        if(isASeq(crntCursor.item)){state <- sFirstVisit; isAList <- true}
-        else{state <- sNotASeq; isAList <- false}
-    }
-
-    void: initialize(our infon: inf) <- {
-        alreadyIncremented<-false
-        if(inf==NULL) {state <- sError; return()}
-        our infItr:: newParent
-        crntCursor.allocate(inf, newParent, NULL, 0)
-        setListSeqFlags()
-        nestLvl <- 0
-        me agent: a
-
-    }
-
-    void: initialize(our infItr: InfItr) <- {
-        alreadyIncremented<-false
-        if(InfItr==NULL or InfItr.item==NULL){state <- sError; return()}
-        crntCursor <- InfItr
-        setListSeqFlags()
-        nestLvl <- 0
-    }
-
-    me string: stringify() <- {
-        me string: S <- ""
-        me agent: a
-        if(self==NULL){S<-S+"NULL"}
-        else if(state == sEOL){S<-S+" sEOL"}
-        else if(state == sError){S<-S+" sError"}
-        else {
-            S <- S + a.printInfon(crntCursor.item)
-            if(nextOr){S <- S+ " | "+ nextOr.stringify()}
-            if(nextAnd){S <- S+ " & "+ nextAnd.stringify()}
-        }
-        return(S)
-    }
-
-    me bool: isDuplicateOf(our infDeepItr: dup) <- {
-        if(crntCursor==NULL or dup==NULL or dup.crntCursor==NULL){return(false)}
-        return(crntCursor.item.isDuplicateOf(dup.crntCursor.item))
-    }
-
-    void: goNext() <- {
-        me int: tmpState <- state
-        if(state == sNotASeq and crntCursor.item.infMode == isUnknown and ! crntCursor.item.value.items.isEmpty()){
-            tmpState <- sFirstVisit
-        }
-        switch(tmpState) {
-            case sNotASeq: sSecondVisit:{  // Get the next item or set EOL
-                if(crntCursor.parent==NULL or nestLvl==0){state <- sEOL; return()}
-                if(crntCursor.goNext()){
-                    setListSeqFlags()
-                }else{
-                    crntCursor <- crntCursor.parent
-                    state <- sSecondVisit
-                    isAList <- true
-                    nestLvl <- nestLvl-1
-                }
-            }
-            case sFirstVisit:{
-                if(crntCursor.item.value.items.isEmpty()){
-                    state <- sSecondVisit
-                    isAList <- true
-                } else {
-                    //Prepare to iterate children
-                    our infItr: tmp
-                    Allocate(tmp)
-                        tmp.itmItr    <-crntCursor.itmItr
-                        tmp.parent    <-crntCursor.parent
-                        tmp.item      <- crntCursor.item
-                        tmp.looseMode <- crntCursor.looseMode
-                        tmp.looseSize <- crntCursor.looseSize
-                    crntCursor.parent <- tmp   // TODO: After ptr bug is fixed, Allocate(crntCursor.parent, crntCursor)
-                    crntCursor.itmItr <- crntCursor.item.value.items.begin()
-                    crntCursor.item   <- crntCursor.itmItr.item
-                    setListSeqFlags()
-                    nestLvl <- nestLvl+1
-                }
-            }
-            case sInited: {state <- sFirstVisit}
-            case sEOL:    {crntCursor.item<-NULL}
-            case sInvalid:{crntCursor.item<-NULL;   state <- sError}
-            case sError:  {crntCursor.item<-NULL}
-            default: {print("Error: invalid iterator state:", state, "\n")}
-        }
-    }
-
-    void: copyThisTo(our infDeepItr: to) <- {
-        if(crntCursor==NULL){to.crntCursor <- NULL}
-        else{
-        Allocate(to.crntCursor)
-            crntCursor.copyThisTo(to.crntCursor)
-        }
-        to.nestLvl             <- nestLvl
-        to.nextAnd             <- nextAnd
-        to.nextOr              <- nextOr
-        to.state               <- state
-        to.alreadyIncremented  <- alreadyIncremented
-        to.fromDotted          <- fromDotted
-        to.preserveDots        <- preserveDots
-        to.isAList             <- isAList
-        to.myDots              <- myDots
-        to.stitchCmd           <- stitchCmd
-    }
-
-    our infDeepItr: getNext() <- {
-        our infDeepItr: retVal
-        Allocate(retVal)
-        copyThisTo(retVal)
-        retVal.goNext()
-        return(retVal)
-    }
-
-    void: deleteCrnt() <- {
-        crntCursor.deleteCrnt()
-        alreadyIncremented <- true
-    }
-
-    our infDeepItr: fillDotChild(their infDeepItr: parent) <- {
-        our infon: child
-        our infon: infonType <- parent.crntCursor.parent.item.value.listSpec
-        if(infonType != NULL){
-            Allocate(child)
-            child <deep- infonType // should be a lazy cow copy
-        } else {
-            Allocate(child)
-            child.value.fType   <- tUnknown
-            child.infMode       <- isUnknown
-            child.itmMode       <- mItem
-            child.value.format  <- fUnknown
-        }
-        our infDeepItr: tentativeItr
-        Allocate(tentativeItr)
-        Allocate(tentativeItr.crntCursor)
-        tentativeItr.crntCursor.itmItr    <- parent.crntCursor.itmItr
-        tentativeItr.crntCursor.parent    <- parent.crntCursor.parent
-        tentativeItr.crntCursor.looseMode <- parent.crntCursor.looseMode
-        tentativeItr.crntCursor.looseSize <- parent.crntCursor.looseSize
-        tentativeItr.crntCursor.item      <- child
-        tentativeItr.nestLvl <- parent.nestLvl
-        tentativeItr.nextOr <- NULL
-        tentativeItr.setListSeqFlags() // Set state, etc.
-        tentativeItr.fromDotted <- true
-        tentativeItr.myDots     <- NULL
-
-        return(tentativeItr)
-    }
-
-    our infDeepItr: getNextDeDotted() <- {
-        our infDeepItr: nextItr
-        our infDeepItr: retVal
-
-        if(!fromDotted){
-            nextItr <- getNext()
-            if(nextItr.state == sError){return(NULL) }
-        } else {
-            Allocate(nextItr)
-            copyThisTo(nextItr)
-            nextItr.crntCursor.looseMode <- crntCursor.looseMode
-            nextItr.crntCursor.looseSize <- crntCursor.looseSize
-        }
-
-        if(nextItr.state == sEOL){
-            Allocate(retVal)
-            retVal.state <- sEOL
-            retVal.isAList <- nextItr.isAList
-            retVal.nextOr <- NULL
-        } else if(fromDotted or nextItr.crntCursor.item.itmMode == mDots){  // The new item is nullable so also return the follower.
-            retVal <- fillDotChild(nextItr)
-            if(!fromDotted){ // Caused by "..."
-                retVal.stitchCmd <- cmdInsertBeforeDots
-                retVal.myDots <- nextItr.crntCursor
-                retVal.nextOr <- nextItr.getNextDeDotted()
-            }
-            else{      // Caused by a result of "..."
-                retVal.stitchCmd <- stitchCmd
-                retVal.myDots    <- myDots
-                retVal.nextOr    <- nextItr.nextOr
-            }
-        } else {
-            retVal <- nextItr
-            retVal.nextOr <- NULL
-        }
-        if(retVal.nextAnd != NULL){retVal.nextAnd <- retVal.nextAnd.getNextDeDotted()}
-        if(retVal.crntCursor!=NULL and retVal.crntCursor.item.itmMode == mSubItems){retVal <- retVal.getNextDeDotted()}
-        return(retVal)
-    }
-
-}
-struct infDeepItr {}
-struct mergeCmd{
-    me int: cmd
-    me uint64: sizeDiff
-}
-
-#include retriever.dog
-
 struct agent{
     our infon: world
     our infon: context
-    me retriever: agenda
+    our infItr[list]: agenda
+    me string: logStrA
     // me Locale locale
-
-    void: testIterator(our infon: i)<-{
-        our infDeepItr: testItr
-        our infDeepItr: results
-        Allocate(testItr)
-        testItr.initialize(i)
-        while(true){
-            results <- testItr.getNextDeDotted()
-            if(results == NULL){break()}
-            withEach nl in RANGE(0..(results.nestLvl*5)){print(" ")}
-            print("|: ", results.stringify(), "\n")
-            testItr <- results
-        }
-    }
 
     void: setErrorState(our infItr: infonWithError, me string: errorMesg) <- {
         log("INFON ERROR: " + errorMesg)
@@ -649,12 +752,12 @@ struct agent{
             if(LHSType == RHS.value.fType){
                 switch(LHSType){
                     case NUM: {
-                        LHS.endMarker.num<-LHS.calcSize().num * RHS.calcSize().num
-                        LHS.value.num<-(LHS.value.num * RHS.calcSize().num) + RHS.value.num
+                        LHS.infSize.num<-LHS.infSize.num * RHS.infSize.num
+                        LHS.value.num<-(LHS.value.num * RHS.infSize.num) + RHS.value.num
                     }
                     case STR: {
                         LHS.value.str.append(RHS.value.str)
-                        LHS.endMarker.num<-LHS.value.str.size()
+                        LHS.infSize.num<-LHS.value.str.size()
                     }
                     case LST: {
                         withEach element in RHS.value.items {
@@ -669,53 +772,98 @@ struct agent{
         return(false)
     }
 
-    our infItr: makeInfItr(our infon: i, our infItr: parent, our DblLinkedListNode: idx) <- {
-        our infItr:: ret <- (i, parent, idx, 0)
-        return(ret)
+    void: processConcat(our infItr: concatItr) <- {
+        if(concatItr.state != sSecondVisit){
+            if(concatItr.state == sNotASeq){
+                JoinIfConcat(concatItr)
+            }
+        } else {  // SecondVisit
+            our infon: LHS <- concatItr.item
+            if(LHS.value.format==fConcat and !LHS.value.items.isEmpty() and LHS.value.items.head.isLast()){
+                LHS <deep- LHS.value.items.first()
+            }
+            JoinIfConcat(concatItr)
+        }
     }
 
-    void: addIdent(our infItr: LHS, our infItr: RHS) <- {
+    void: resolve(our infItr: ii)<-{
+        log("RESOLVING:"+ii.stringify())
+        our infItr: crntItr <- ii
+        me int[map our infItr]: closedLists
+        me int: numChoices <- crntItr.predecessors.size()
+        our transformAction[list]: actionStack
+        log("    RESOLVE:" + stringifyInfon(crntItr.item) + "  Num Preds:" + toString(numChoices))
+        while(numChoices>0){
+            our transformAction: action <- crntItr.predecessors.last()
+            crntItr <- action.LHSItr
+            if(crntItr == NULL or crntItr.item===ii.item){break()}
+            numChoices <- crntItr.predecessors.size()
+            actionStack.pushFirst(action)
+            our infItr: parent <- crntItr.parent
+            if(parent == NULL){continue()}
+            log("    RESOLVE:" + crntItr.stringify() + "  Num preds:" + toString(numChoices))
+            if(crntItr.addNewSubDots!=0) {
+                parent.insertChildDotsBefore(crntItr)
+            }
+            if(!closedLists.containsKey(parent)){
+                if(parent.item){
+                    log("closeListAtItem" + stringifyInfon(parent.item))
+                    parent.closeListAtItem(crntItr)
+                    closedLists.insert(parent, 1)
+                }
+            }
+        }
+
+        // Now Stitch
+        withEach stitchAction in actionStack{
+            if(stitchAction.LHSItr.state != sSecondVisit){
+                doAction(stitchAction)
+            }
+            processConcat(stitchAction.LHSItr)
+        }
+    }
+
+    void: addIdent(our infItr: LHSItr, our infItr: RHSItr) <- {
     // LHS gets RHS as a new ident in its wrkList
-        if(RHS.item === LHS.item) {return()}
+        if(RHSItr.item === LHSItr.item) {return()}
 
         // Set propogation flag for #{} on LHS or RHS
-        RHS.target <- asID
-        if(RHS.item.itmMode==mSubItems){RHS.target<-asFirstParent}
-        if(LHS.item.itmMode==mSubItems){RHS.target<-asFirst}            // TODO: If bug, check this: What if it is both?
-     //   if(RHS.item.?==asLast){RHS.target<-asLastParent}
-     //   if(LHS.item.?==asLast){RHS.target<-asLast}
+        RHSItr.target <- asID
+        if(RHSItr.item.itmMode==mSubItems){RHSItr.target<-asFirstParent}
+        if(LHSItr.item.itmMode==mSubItems){RHSItr.target<-asFirst}            // TODO: If bug, check this: What if it is both?
+     //   if(RHSItr.item.?==asLast){RHSItr.target<-asLastParent}
+     //   if(LHSItr.item.?==asLast){RHSItr.target<-asLast}
 
-        LHS.item.wrkList.pushLast(RHS)
+        LHSItr.item.wrkList.pushLast(RHSItr)
     }
 
     me string: ptrToStr(our infon: I) <- {
-        me string: S <- printInfon(I)
+        me string: S <- stringifyInfon(I)
         return(S)
     }
 
-    void: prepWorkList(our infDeepItr: ciItr) <- {
-        our infon: CI <- ciItr.crntCursor.item
-
+    void: prepWorkList(our infItr: ciItr) <- {
+        our infon: CI <- ciItr.item
         if (CI.wrkLstPreped){return()}else{CI.wrkLstPreped <- 1}
         me bool: done <- false
-        //log(" > PrepWorkList")
         while(!done){
-            //log("    > LOOP of PrepWorkList: " + printInfon(CI))
+            me string: loopStr <- "PrepWL-LOOP   " + stringifyInfon(CI)+"   "
             me bool: loopAgain <- false
             our infon: newTop<-NULL
             if(CI.itmMode == mTagDefn){
-                //log("        # Define class:"+CI.type.asGiven+" "+ptrToStr(CI), "\n")
+                loopStr <- loopStr + ":A:mTagDefn:"
                 modelMngr.indexDefinition(CI.type, CI)
+                log(loopStr)
                 break()
             } else if(CI.doCursorLookup){
-                //log("        # Cursor '.type' lookup: "+CI.type.asGiven)
+                loopStr <- loopStr + ":A:doCursorLookup"
                 me int: hardFunc <- isHardFunction(CI.type.asGiven)
                 if(hardFunc != 0){
                     switch(hardFunc){
                         case 1: {// "innr"
-                            //log("          INNR!!!!!")
+                            loopStr <- loopStr + ":INNR"
                             newTop <- CI.cursorHead
-                            newTop.value.cursor <- cDefault
+                            newTop.intersectPos <- ipNoIntersect
                         }
                         case 2:{}
                     }
@@ -724,127 +872,138 @@ struct agent{
                     normalize(CI.cursorHead)
                     our infon[itr multimap string]: idxItem <- CI.cursorHead.value.index.find(CI.type.asGiven)
                     if(idxItem != CI.cursorHead.value.index.end()){
-                        our infon: aux1Tmp <- CI.aux1
-                        ciItr.crntCursor.item <- idxItem.val
-                        CI <- ciItr.crntCursor.item  // CI <deep- idxItem.val
-                        if(aux1Tmp){
-                            CI.aux1 <- aux1Tmp
+                        our infon: dotPathTmp <- CI.dotPath
+                        ciItr.item <- idxItem.val
+                        CI <- ciItr.item  // CI <deep- idxItem.val
+                        if(dotPathTmp){
+                            CI.dotPath <- dotPathTmp
                             CI.hasCursorHead <- true
                             loopAgain <- true
-                            //log("        # Cursor '.type' lookup "+CI.type.asGiven+" "+ptrToStr(CI))
+                            loopStr <- loopStr + ":A:dotPathTmp"
                         }
                     } else {
-                        setErrorState(ciItr.crntCursor, "        # Could not find type:"+CI.type.asGiven)
+                        setErrorState(ciItr, " # Could not find type:"+CI.type.asGiven)
                     }
                 }
                 CI.doCursorLookup <- false
             } else if(CI.hasCursorHead){
-                // We want to search CI for CI->aux1, which is probably a wordSystem.
+                // We want to search CI for CI->dotPath, which is probably a wordSystem.
                 // Here we prepare by moving data into better positions
                 // We set the flag CI.doCursorLookup so that the lookup can be done on the next loop.
+                // MUST: move some functionality to postParseProcessing()
                 our infon:: CITmp
                 CITmp <deep- CI
                 CITmp.wrkLstPreped <- false
                 CITmp.hasCursorHead <- false
-                //log("        # Swapping cursorHead.type")
-                CI <deep- CI.aux1
+                loopStr <- loopStr + ":A:cursorHead_swap"
+                CI <deep- CI.dotPath
                 CI.doCursorLookup <- true
                 CI.hasCursorHead <- false
                 CI.cursorHead <- CITmp
                 loopAgain <- true
+            } else if(!CI.parts.isEmpty()){
+                loopStr <- loopStr + ":A:part_Tag"
+                withEach part in CI.parts{
+                    if(part.path.infMode == isTag){
+                        me string: partTag <- part.path.type.asGiven
+                        if(partTag == "size"){}
+                        else if(partTag == "first"){
+                            our infon: firstItm <- CI.getFirstItem()
+                            if(firstItm==NULL){logFatalError("Handle firstItm is null")}
+                            firstItm.takeWrkListFrom(part.path)
+                            part.wasTransfered <- true
+                        }
+                        else if(partTag == "last"){
+                            our infon: lastItm <- CI.getLastItem()
+                            if(lastItm==NULL){logFatalError("Handle LastItm is null")}
+                            lastItm.takeWrkListFrom(part.path)
+                            part.wasTransfered <- true
+                        }
+                        else if(partTag == "pred"){
+                        }else{log("TODO: Handle tag in prepWorkList():"+partTag)}
+                    }
+                }
             } else if(CI.infMode == isTag){
-                //log("        # Access type:"+CI.type.asGiven)
-
+                loopStr <- loopStr + ":A:Access_type:"+CI.type.asGiven
                 our infon: infModel <- modelMngr.fetchModel(CI.type)
                 if(infModel){
                     Allocate(newTop)
                     infModel.copyAsTypeTo(newTop)
                     newTop.itmMode <- mItem
-                } else {setErrorState(ciItr.crntCursor, CI.type.asGiven+" is not defined")}
-                if(ciItr.crntCursor.parent.item){
-                    ciItr.crntCursor.parent.item.value.index.insert(CI.type.asGiven, CI)
+                } else {setErrorState(ciItr, CI.type.asGiven+" is not defined")}
+                if(ciItr.parent.item){
+                    ciItr.parent.item.value.index.insert(CI.type.asGiven, CI)
                 } else { // This section is to get items into World. In a fully streaming mode this isn't needed.
                     world.value.index.insert(CI.type.asGiven, CI)
                 }
-            } else if(CI.isFunc or CI.isFuncArg){
-               //log("        # HANDLING FUNCTION ARGS")
-                if(CI.isFuncArg!=0){  // Swap func body with args
-                    me infon: CITmp <- CI
-                    CI <deep- CI.aux1
-                    CI.isFunc <- false
-                    CI.isFuncArg <- false
-                    CI.invertFunc <- CITmp.invertFunc
+            } else if(CI.argPos != apNoArgs){
+               loopStr <- loopStr + ":A:FUNC_ARGS"
 
-                    Allocate( CI.aux1, CITmp)
-                    CI.aux1.aux1 <- NULL
-                    CI.aux1.isFunc <- false
-                    CI.aux1.isFuncArg <- false
-                }
                 our infon: tmp
-                if(CI.invertFunc!=0){tmp <- CI.getLastItem()}
-                else {tmp <- CI.getFirstItem()}
-                tmp.wrkList.pushLast(makeInfItr(CI.aux1, NULL, NULL))
-                CI.aux1 <- NULL
+                if(CI.argPos == apArgIsFirstItem){tmp <- CI.getFirstItem()}
+                else {tmp <- CI.getLastItem()}
+                if(tmp!=NULL){
+                    tmp.wrkList.pushLast(makeInfItr(CI.funcArgs, NULL, NULL))
+                    CI.funcArgs <- NULL
+                    CI.argPos <- apNoArgs
+                }
                 if(CI.value.fType==LST){ciItr.state <- sFirstVisit}
                 else if(CI.value.fType!=LST){ciItr.state <- sNotASeq}
             } else {
- //               log("        Null-action")
+                loopStr <- loopStr + ":A:No-action"
             }
 
-            me int: cursor <- CI.value.cursor
-            if(cursor != cDefault){
-                //log("        @ HANDLING FUNCTION CALL:"+printInfon(CI))
-                CI.value.cursor <- cDefault
-                our infon: aux Allocate(aux)
-                aux <deep- CI
-                switch(cursor){
-                    case cGetLast   : {
-                        newTop <- aux.getLastItem()
-                        //log("         @> GET_LAST_ITEM:"+printInfon(newTop))
+            me int: intersectPos <- CI.intersectPos
+            if(intersectPos != ipNoIntersect){
+                our infon: src <- CI.source
+                switch(intersectPos){
+                    case ipGetLast   : {newTop <- src.getLastItem()}
+                    case ipGetFirst  : {newTop <- src.getFirstItem()}
+                    //case ipGetMarked : {newTop <- src.getMarked()}
+                }
+                if(newTop){
+                    withEach workItem in CI.wrkList{
+                        newTop.wrkList.pushLast(workItem)
+                        loopStr <- loopStr + ":B:PUSH( "+stringifyInfon(workItem.item)+" )"
                     }
-                    case cGetFirst  : {newTop <- aux.getFirstItem()}
-         //           case cGetMarked : {newTop <- aux.getMarked()}
-                }
-                withEach workItem in CI.wrkList{
-                    newTop.wrkList.pushLast(workItem)
-                    //log("            PUSH:"+printInfon(workItem.item))
-                }
-                aux.wrkList.clear()
-                normalize(aux)
+                    src.wrkList.clear()
+                    log(">******@NORMALIZE_SRC")
+                    normalize(src)
+                    log("<******@NORMALIZE_SRC")
+                } else {done <- true}
             } else if(CI.infMode==newCursor) {
-                //log("        @ NEW CURSOR")
+                loopStr <- loopStr + ":B2:newCursor"
                 switch(CI.cursorMode){
                     case cThis:   {} //{newTop <- thisItem}
                     case cWorld:  {newTop <- world}
                     case cContext:{newTop <- context}
                     case cPrev:   {} //{newTop <- previous}
                     case cNext:   {} //{newTop <- next}
+                    case cPred:   {newTop <- ciItr.findOrAddPctTag("pred").item}
+                    case cSucc:   {newTop <- ciItr.findOrAddPctTag("succ").item}
+                    case cEndPred:{newTop <- ciItr.findOrAddPctTag("endPred").item}
                 }
             } else {done <- !loopAgain}
-
-            if(newTop!=NULL) {
-                CI <deep- newTop
-                //log("        ### APPLY NEWTOP")
-            }
+            if(newTop!=NULL) {CI <deep- newTop}
+          //  log(loopStr)
         }
     }
 
-    me int: PropogateIndirectItem(our infItr: LHS, our infItr: RHS) <- {
+    me bool: PropagateIndirectItem(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
     // HANDLE #{}, [....] and other cases of identities of child nodes:
-        me int: ret <- 0
-        their pureInfon: LHS_tmp <- LHS.item.value
-        if(LHS_tmp.fType==LST and !LHS_tmp.items.isEmpty()){
-            if(RHS.target == asFirst){
-                addIdent(makeInfItr(LHS_tmp.items.first(), LHS, NULL), RHS)
-                 ret<-1
+        me bool: ret <- false
+        their pureInfon: LHS_Value <- LHS.value
+        if(LHS_Value.fType==LST and !LHS_Value.items.isEmpty()){
+            if(RHSItr.target == asFirst){
+                action.propogateLHSToLHSFirst <- true
+                ret<-true
             }
-            // if(RHS.target == asLast or LHS.target==asLastParent)   {addIdent(makeInfItr(LHS_tmp.items.back(), LHS, LHS_tmp.items.size()-1), RHS);  ret<-1;}
+            // if(RHSItr.target == asLast or LHS.target==asLastParent)   {addIdent(makeInfItr(LHS_Value.items.back(), LHS, LHS_Value.items.size()-1), RHS);  ret<-1;}
         }
-        //their pureInfon: RHS_tmp <- RHS.item.value
-        if(RHS.item.value.fType==LST and !RHS.item.value.items.isEmpty()){
-            if(RHS.target == asFirstParent) {
-                addIdent(LHS, makeInfItr(RHS.item.value.items.first(), RHS, NULL))
-                ret<-1
+        if(RHSItr.item.value.fType==LST and !RHSItr.item.value.items.isEmpty()){
+            if(RHSItr.target == asFirstParent) {
+                action.propogateRHSToRHSFirst <- true
+                ret<-true
             }
         }
         return(ret)
@@ -867,116 +1026,6 @@ struct agent{
         }
     }
 
-    void: stitch(our aItem: crntItem)<-{
-        //log(">>STITCH")
-        our infItr:                 tmpDots2Del
-        me int[map our infItr]:     dotsToDelete
-        our DblLinkedListNode[map our infItr]: recordOfDots
-        me string: logStr
-        while(crntItem!=NULL){
-            logStr <- "    STITCH-Loop: " + crntItem.mySymbol(crntItem) + " is:"+crntItem.stringify() + ":"
-            our infDeepItr: LHS  <- crntItem.LHS
-            our infDeepItr: RHS  <- crntItem.RHS
-            our infon: LHS_infon <- LHS.crntCursor.item
-            if(LHS.state != sSecondVisit){
-                logStr <- logStr + ":NOT2ndVisit"
-                switch(LHS.stitchCmd){
-                    case cmdInsertBeforeDots:{
-                        logStr <- logStr + ":IBDots"
-                        LHS.myDots.parent.item.value.items.insertBefore(LHS.myDots.itmItr, LHS.crntCursor.item)
-                        if(LHS.fromDotted){
-                            dotsToDelete[LHS.myDots] <- 1
-                            tmpDots2Del <- LHS.myDots
-                        }
-                    }
-                    case cmdInsertAfterDots:{
-                        logStr <- logStr + ":IADots"
-                        our DblLinkedListNode: insertedListNode
-                        if(recordOfDots.containsKey(LHS.myDots)){
-                            insertedListNode <- LHS.myDots.parent.item.value.items.insertAfter(recordOfDots[LHS.myDots], LHS.crntCursor.item)
-                        }else{
-                            insertedListNode <- LHS.myDots.parent.item.value.items.insertAfter(LHS.myDots.itmItr, LHS.crntCursor.item)
-                        }
-                        recordOfDots[LHS.myDots] <- insertedListNode
-                    }
-                    case cmdKeepDots:{
-                        logStr <- logStr + ":KDots"
-                        dotsToDelete.erase(LHS.myDots)
-                        tmpDots2Del <- NULL
-                    }
-                    case cmdDeleteDots:{
-                        logStr <- logStr + ":DDots"
-                        dotsToDelete[LHS.myDots] <- 1
-                        tmpDots2Del <- LHS.myDots
-                    }
-                    //case cmdNoOp:{}
-                }
-                our infDeepItr: RHSItr <- RHS
-                while(RHSItr!=NULL){
-                    if (RHSItr.state!=sSecondVisit){
-                        me bool: copyRHSTypeToLHS <- RHSItr.crntCursor.copyRHSTypeToLHS
-                        if(copyRHSTypeToLHS){
-                            LHS_infon.value.fType <- RHSItr.crntCursor.item.value.fType
-                            LHS_infon.infMode <- RHSItr.crntCursor.item.infMode
-                        }
-                        me int: sizeAction    <- RHSItr.crntCursor.sizeAction
-                        if(sizeAction == copySizeRHStoLHS){
-                            logStr <- logStr + ":SizeRHStoLHS"
-                            DO_COPY(RHSItr.crntCursor.item.endMarker, LHS_infon.endMarker, 0)
-                        }
-                        else if(sizeAction == copySizeLHStoRHS){
-                            logStr <- logStr + ":SizeLHStoRHS"
-                            DO_COPY(LHS_infon.endMarker, RHSItr.crntCursor.item.endMarker, 0)
-                        }
-                        else if(sizeAction == hardenLHS){
-                            logStr <- logStr + ":hardenLHS:sizeHardTrue"
-                            LHS.crntCursor.item.sizeHardened <- true
-                        }
-                        else{
-                            logStr <- logStr + ":noSizeAction"
-                        }
-
-                        me int: valueAction   <- RHSItr.crntCursor.valueAction
-                        if(valueAction == copyValueRHStoLHS){
-                            DO_COPY(RHSItr.crntCursor.item.value, LHS_infon.value, crntItem.sizeToCopy)
-                        }
-                        else if(valueAction == copyValueLHStoRHS){
-                            DO_COPY(LHS_infon.value, RHSItr.crntCursor.item.value, crntItem.sizeToCopy)
-                        }
-                    }
-                    RHSItr <- RHSItr.nextAnd
-                }
-                if(LHS.state == sNotASeq){
-                    JoinIfConcat(LHS)
-                }
-            }else{
-                logStr <- logStr + ":2ndVisit"
-                // Now delete dots as needed
-                if(tmpDots2Del!=NULL){
-                    logStr <- logStr + ":tmpDots2Del"
-                    tmpDots2Del.parent.item.deleteListNode(tmpDots2Del.itmItr)
-                }
-                // If this was a CONCAT with only one item:
-                if(LHS_infon.value.format==fConcat and !LHS_infon.value.items.isEmpty() and LHS_infon.value.items.head.isLast()){
-                    logStr <- logStr + ":RemoveParens"
-                    LHS_infon <deep- LHS_infon.value.items.first()
-                }else{
-                    logStr <- logStr + ":KeepParens"
-                }
-                // Handle when parent is a CONCAT
-                JoinIfConcat(LHS)
-            }
-            crntItem <- crntItem.successor
-            //log(logStr)
-        }
-
-
- //       withEach dotItem in dotsToDelete{
- //           dotItem_key.parent.item.value.items.deleteListNode(dotItem_key.itmItr)
- //       }
-
-    }
-
     me int: matchLength(me string: A, me string: B)<-{
         me int: lastChar
         me int: retVal <-0
@@ -990,249 +1039,627 @@ struct agent{
         return(lastChar)
     }
 
-    const int: matchFailed  <- 1
-    const int: wasVerified  <- 2
-
-    me mergeCmd: DO_VERIFY(their pureInfon: LHS, their pureInfon: RHS) <- {
-        me int: RHSType <- RHS.fType
-        me mergeCmd: retVal
-        if(RHSType==LHS.fType){
-            switch(RHSType){
-                case NUM: {
-                    if(LHS.num == RHS.num){
-                        retVal.cmd <- wasVerified
-                        retVal.sizeDiff <- 0
-                    } else {retVal.cmd <- matchFailed}
-                }
-                case STR: {
-                    me int: LSize <- LHS.str.size()
-                    me int: RSize <- RHS.str.size()
-                    me int: matchLen <- matchLength(LHS.str, RHS.str)
-                    if(matchLen==-1 or (matchLen < LSize and matchLen < RSize)){retVal.cmd <- matchFailed}
-                    else{retVal.sizeDiff <- RSize - LSize; retVal.cmd <- wasVerified}
-                }
-                case LST: {
-                    // TODO: Is it sometimes OK to skip this or check each member at once?
-                }
-                default:{print("unknown fType in DO_VERIFY\n")}
-            }
-        } else {  // TODO: Do Convert + verify
-        }
-        return(retVal)
-    }
-
     void: CO_SUBSCRIBE_VALUES(their infon: from, their infon: to) <- {}
     void: CO_SUBSCRIBE_SIZES(their infon: from, their infon: to) <- {}
 
-    void: JoinIfConcat(our infDeepItr: node) <- {
-        our infItr: nodeCursor <- node.crntCursor
-        if(nodeCursor.parent!=NULL and nodeCursor.parent.item!=NULL and (nodeCursor.parent.item.value.format==fConcat)){
-            if(nodeCursor.itmItr.isFirst()){ // Set parent's type
+    void: JoinIfConcat(our infItr: node) <- {
+        if(node.parent!=NULL and node.parent.item!=NULL and (node.parent.item.value.format==fConcat)){
+            if(node.infNode.isFirst()){ // Set parent's type
             } else {
-                our infon: prev <- nodeCursor.getPrevPtr()
-                if(joinOnRight(prev, nodeCursor.item)){
+                our infon: prev <- node.getPrevPtr()
+                if(joinOnRight(prev, node.item)){
                     node.deleteCrnt()
                 } else {}  // Subscribe
             }
         }
     }
-
-    our infDeepItr: tryMERGE(our aItem: agendaItem, our infDeepItr: RHSItr) <- {
-        me string: logStr <- "    TM(" + agendaItem.stringify()+")"
-        our infon: LHS <- agendaItem.LHS.crntCursor.item
-        our infon: RHS <- RHSItr.crntCursor.item
-        our infDeepItr: remainder <- NULL
-        if(PropogateIndirectItem(agendaItem.LHS.crntCursor, RHSItr.crntCursor) > 0){
-            logStr <- logStr + ":OUT-1"
-            //log(logStr)
-            return(NULL)
+    void: doAction(our transformAction: action) <- {
+        our infItr: LHSItr <- action.LHSItr
+        our infItr: RHSItr <- action.RHSItr
+        our infon: LHS <- LHSItr.item
+        our infon: RHS <- RHSItr.item
+        if(action.reject){return()}
+        if(action.copyRHSTypeToLHS){
+            LHS.value.fType <- RHS.value.fType
+            LHS.infMode <- RHS.infMode
         }
-
-        me bool: looseMode <- RHSItr.crntCursor.looseMode   // Strict or loose typing?
-        me bool: looseSize <- RHSItr.crntCursor.looseSize   // Strict or loose typing?
-        me bool: reject <- false    // ReturnStatus
-
-        if((LHS.infMode==isUnknown and RHS.infMode!=isUnknown) or (LHS.value.fType==tUnknown and RHS.value.fType!=tUnknown)){
-            RHSItr.crntCursor.copyRHSTypeToLHS <- 1
-        } else {RHSItr.crntCursor.copyRHSTypeToLHS <- 0}
-
-        me mergeCmd: sizeStatus; sizeStatus.cmd <- 0
-        if(!looseMode){ // Make sure typeSpec are compatible
-            if(!LHS.type.isCompatibleWith(RHS.type)){
-                logStr <- logStr + ":REJECT"
-                reject <- true
+        me int: sizeAction    <- action.sizeAction
+        if(sizeAction == copySizeRHStoLHS){
+            DO_COPY(RHS.infSize, LHS.infSize, 0)
+        }
+        else if(sizeAction == copySizeLHStoRHS){
+            DO_COPY(LHS.infSize, RHS.infSize, 0)
+        }
+        me int: valueAction   <- action.valueAction
+        if(valueAction == copyValueRHStoLHS){
+            DO_COPY(RHS.value, LHS.value, action.sizeToCopy)
+        }
+        else if(valueAction == copyValueLHStoRHS){
+            DO_COPY(LHS.value, RHS.value, action.sizeToCopy)
+        }
+        me int: listCommand <- action.listCommand
+        switch(listCommand){
+            case moveRHSFirstToFirstChild:{
+                our infon: LHSFirst     <- LHS.getFirstItem()
+                our infon: RHSFirst     <- RHS.getFirstItem()
+                our infItr: RHSFirstItr <- makeInfItr(RHSFirst, LHSItr, NULL)
+                LHSFirst.addInfItrToWrkList(RHSFirstItr)
+            }
+            case moveRHSToFirstChild:{
+            }
+            case moveRHSFirstToLHS:{
             }
         }
-        if(!looseSize){
-            logStr <- logStr + ":TIGHT"
-            if(RHS.infMode!=isUnknown){
-                me int: LHSFormat <- LHS.calcSize().format
-                me int: RHSFormat <- RHS.calcSize().format
-                me int: LHSInfMode <- LHS.infMode
-                if(LHSInfMode==isUnknown){
-                    logStr <- logStr + ":A1"
-                    if(RHS.infMode!=isUnknown){
-                        RHSItr.crntCursor.copyRHSTypeToLHS <- 1
-                        RHSItr.crntCursor.sizeAction  <-copySizeRHStoLHS
-                        RHSItr.crntCursor.valueAction <-copyValueRHStoLHS
-                    }
-                } else {
-                    logStr <- logStr + ":A2"
-                    if(LHSFormat != fUnknown and RHSFormat != fUnknown){
-                        if(!looseMode){
-                            sizeStatus <- DO_VERIFY(LHS.calcSize(), RHS.calcSize())
-                            if (sizeStatus.cmd==matchFailed){
-                                RHSItr.crntCursor.sizeAction<-sizeFailed
-                                logStr <- logStr + ":REJECT"
-                                reject <- true
-                            }
-                            else if (sizeStatus.cmd== wasVerified){RHSItr.crntCursor.sizeAction<-sizeVerified}
-                        }
-                    }
-                    else if(LHSFormat == fUnknown and RHSFormat != fUnknown){RHSItr.crntCursor.sizeAction<-copySizeRHStoLHS}
-                    else if(LHSFormat != fUnknown and RHSFormat == fUnknown){RHSItr.crntCursor.sizeAction<-copySizeLHStoRHS}
-                    else if(LHSFormat == fUnknown and RHSFormat == fUnknown){CO_SUBSCRIBE_SIZES(LHS, RHS)}
-                }
+        if(action.propogateLHSToLHSFirst){
+            //addIdent(makeInfItr(LHS.value.items.first(), LHS, NULL), RHSItr)
+        }
+        if(action.propogateRHSToRHSFirst){
+            //addIdent(LHS, makeInfItr(RHS.value.items.first(), RHSItr, NULL))
+        }
+    }
+    void: tryMergeSize(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
+        our infon: RHS <- RHSItr.item
+        action.reject <- false
+        action.sizeAction <- sizeNotChecked
+        me int: LHSFormat <- LHS.infSize.format
+        me int: RHSFormat <- RHS.infSize.format
+        if(!RHSItr.looseSize()){
+            me int: RHSType <- RHS.value.fType
+            if(RHSType!=LHS.value.fType){
+                log("MUST: Ensure mixed-format infon Ends match: LHSType=" + fTypeStrings[LHS.value.fType] + "    RHSType="+ fTypeStrings[RHSType])
+                return()
+            }
+            me int: LHSInfMode <- LHS.infMode
+            if(LHSFormat != fUnknown and RHSFormat != fUnknown){
+                if(LHS.infSize.num != RHS.infSize.num){action.reject <- true}
+            }
+            else if(LHSFormat == fUnknown and RHSFormat != fUnknown){
+                action.sizeAction<-copySizeRHStoLHS
+                action.sizeToCopy<-RHS.infSize.num
+            }
+            else if(LHSFormat != fUnknown and RHSFormat == fUnknown){
+                action.sizeAction<-copySizeLHStoRHS
+            }
+            else if(LHSFormat == fUnknown and RHSFormat == fUnknown){
+                CO_SUBSCRIBE_SIZES(LHS, RHS)
             }
         }else{
-            RHSItr.crntCursor.sizeAction <- hardenLHS
-            logStr <- logStr + ":LOOSE"
+            //TODO: set action.sizeToCopy
+            if(LHSFormat == fLiteral and RHSFormat == fLiteral){}
         }
-        me mergeCmd: valueStatus; valueStatus.cmd<-0
-        if(!reject){
-            if(RHS.infMode!=isUnknown){
-                logStr <- logStr + ":B"
-                me int: LHSFormat <- LHS.value.format
-                me int: RHSFormat <- RHS.value.format
-
-                if(LHSFormat != fUnknown and RHSFormat != fUnknown){
-                    logStr <- logStr + ":B1"
-                    valueStatus <- DO_VERIFY(LHS.value, RHS.value)
-                    if(valueStatus.cmd==matchFailed){
-                        RHSItr.crntCursor.valueAction<-valueFailed
-                        logStr <- logStr + ":REJECT"
-                        reject <- true
-                    }
-                    else if (valueStatus.cmd== wasVerified){RHSItr.crntCursor.valueAction<-valueVerified}
-                }
-                else if((LHSFormat == fUnknown or LHS.infMode==isUnknown) and RHSFormat != fUnknown){
-                    logStr <- logStr + ":B2"
-                    RHSItr.crntCursor.valueAction<-copyValueRHStoLHS
-                    valueStatus.cmd <- wasVerified
-                    if(RHS.endMarker.format!=fUnknown and LHS.endMarker.format!=fUnknown){
-                        logStr <- logStr + ":X" + formatStrings[LHS.endMarker.format]
-                        valueStatus.sizeDiff <- RHS.calcSize().num - LHS.calcSize().num
-                    }
-                }
-                else if(LHSFormat != fUnknown and RHSFormat == fUnknown){RHSItr.crntCursor.valueAction<-copyValueLHStoRHS}
-                else if(LHSFormat == fUnknown and RHSFormat == fUnknown){CO_SUBSCRIBE_VALUES(LHS, RHS)}
+    }
+    void: tryMergeValue(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
+        our infon: RHS <- RHSItr.item
+        if(LHS.value.fType != LST and RHS.value.fType != LST){
+            if(LHS.value.format == fConcat or RHS.value.format == fConcat){
+                logFatalError("WARNING: tryMerge, item is concat but not list")
             }
+            if(LHS.value.format == fUnknown and RHS.value.format == fUnknown){
+                // $=$, _=_, *_+$=*_+$, *5+$=*3+$, *(*5+1 *6+2)+$=*(*5+1=*6+2)+$
+            }
+            else if(LHS.value.format == fUnknown and RHS.value.format == fLiteral){
+                // _ = 123, $ = 'hi'
+                their pureInfon: LHSValue <- LHS.value
+                their pureInfon: RHSValue <- RHS.value
+                me int: RHSType <- RHSValue.fType
+                if(RHSType==LHSValue.fType){
+                    me int: LSize <- LHS.infSize.num
+                    me int: RSize <- RHS.infSize.num
+                    switch(RHSType){
+                        case NUM:{
+                            if(RHSItr.looseSize()){
+                                switch(LHS.infSize.format){
+                                    case fUnknown:{
+                                        action.valueAction <- copyValueRHStoLHS
+                                        //MUST: use range for size
+                                        log("LooseSize1:fUnknown   MUST: use range for size")
+                                    }
+                                    case fLiteral:{
+                                        action.valueAction <- copyValueRHStoLHS
+                                        action.sizeToCopy  <- LSize
+                                        //MUST: handle remainder here
+                                        log("LooseSize1:fLiteral   MUST: handle remainder here")
+                                    }
+                                    case fConcat:{
+                                        log("LooseSize1:fConcat  MUST: handle concat")
+                                    }
+                                }
+                            }else{
+                                switch(LHS.infSize.format){
+                                    case fUnknown:{
+                                        //log("!LooseSize1:fUnknown")
+                                        action.valueAction <- copyValueRHStoLHS
+                                    }
+                                    case fLiteral:{
+                                        //log("!LooseSize1:fLiteral")
+                                        action.valueAction <- copyValueRHStoLHS
+                                        action.sizeToCopy  <- LSize
+                                    }
+                                    case fConcat:{
+                                        log("!LooseSize1:fConcat  MUST: handle concat")
+                                    }
+                                }
+                            }
+                        }
+                        case STR:{
+                            if(RHSItr.looseSize()){
+                                //"{*3+$ *4+$} == 'CatDogs'",  "$ =: 'Hello'",  "{*3+$|...}=='CatHatBatDog'"
+                                switch(LHS.infSize.format){
+                                    case fUnknown:{//MUST: set range of sizes
+                                        log("LooseSize2:fUnknown   MUST: set range of sizes")
+                                        action.valueAction <- copyValueRHStoLHS
+                                    }
+                                    case fLiteral:{
+                                        action.valueAction <- copyValueRHStoLHS
+                                        action.sizeToCopy  <- LSize
+                                        //MUST: handle remainder here
+                                        log("LooseSize2:fLiteral   MUST: handle remainder here")
+                                    }
+                                    case fConcat:{
+                                        log("LooseSize2:fConcat   MUST: handle concat")
+                                    }
+                                }
+                            }else{
+                                switch(LHS.infSize.format){
+                                    case fUnknown:{
+                                        //log("!LooseSize2:fUnknown")
+                                        action.valueAction <- copyValueRHStoLHS
+                                    }
+                                    case fLiteral:{
+                                        //log("!LooseSize2:fLiteral")
+                                        action.valueAction <- copyValueRHStoLHS
+                                        action.sizeToCopy  <- LSize
+                                    }
+                                    case fConcat:{
+                                        log("!LooseSize2:SizeConcat   MUST: handle concat")
+                                    }
+                                }
+                            }
+                        }
+                        default:{print("unknown fType in tryMergeValue_unknown_literal\n")}
+                    }
+                } else {}  // TODO: Do Convert + verify
+            }
+            else if(LHS.value.format == fLiteral and RHS.value.format == fUnknown){
+                action.valueAction <- copyValueLHStoRHS
+            }
+            else if(LHS.value.format == fLiteral and RHS.value.format == fLiteral){
+                // 5=5, 5=6, 'hi'='hi', 'hi'='low'
+                their pureInfon: LHSValue <- LHS.value
+                their pureInfon: RHSValue <- RHS.value
+                me int: RHSType <- RHSValue.fType
+                if(RHSType==LHSValue.fType){
+                    me int: LSize <- LHS.infSize.num
+                    me int: RSize <- RHS.infSize.num
+                    switch(RHSType){
+                        case NUM:{
+                            if(RHSItr.looseSize()){
+                                switch(LHS.infSize.format){
+                                    case fUnknown:{
+                                        log("LooseSize3:fUnknown   MUST:?")
+                                    }
+                                    case fLiteral:{
+                                        log("LooseSize3:fLiteral   MUST: test and check matchLength()")
+                                        if(LHSValue.num == RHSValue.num){
+                                            action.reject <- false
+                                            action.sizeToCopy <- 0
+                                        } else {
+                                            action.reject <- true
+                                        }
+                                        //MUST: test and check matchLength()
+                                    }
+                                    case fConcat:{
+                                        log("LooseSize3:SizeConcat   MUST: handle concat")
+                                    }
+                                }
+                            }else{
+                                switch(LHS.infSize.format){
+                                    case fUnknown:{
+                                        //log("!LooseSize3:fUnknown")
+                                        if(LHSValue.num != RHSValue.num){action.reject <- true}
+                                    }
+                                    case fLiteral:{
+                                        //log("!LooseSize3:fLiteral")
+                                        if(LHSValue.num != RHSValue.num){action.reject <- true}
+                                    }
+                                    case fConcat:{
+                                        log("!LooseSize3:SizeConcat   MUST: handle concat")
+                                    }
+                                }
+                            }
+                        }
+                        case STR:{
+                            if(RHSItr.looseSize()){
+                                switch(LHS.infSize.format){
+                                    case fUnknown:{
+                                        log("looseSize4:fUnknown   MUST:?")
+                                    }
+                                    case fLiteral:{
+                                        //log("looseSize4:fLiteral")
+                                        me int: matchLen <- matchLength(LHSValue.str, RHSValue.str)
+                                        if(matchLen==-1 or (matchLen < LSize and matchLen < RSize)){
+                                            action.reject <- true
+                                        }else{
+                                            action.sizeToCopy <- LSize
+                                            action.reject <- false
+                                        }
+                                    }
+                                    case fConcat:{
+                                        log("looseSize4:Concat   MUST: handle concat")
+                                    }
+                                }
+                            }else{
+                                switch(LHS.infSize.format){
+                                    case fUnknown:{
+                                        //log("!LooseSize4:fUnknown")
+                                        if(LHS.value.str != RHS.value.str){action.reject <- true}
+                                    }
+                                    case fLiteral:{
+                                        //log("!LooseSize4:fLiteral")
+                                        if(LHS.value.str != RHS.value.str){action.reject <- true}
+                                    }
+                                    case fConcat:{
+                                        log("!LooseSize4:fConcat   MUST: handle concat")
+                                    }
+                                }
+                            }
+                        }
+                        default:{print("unknown fType in tryMergeValue_literal_literal\n")}
+                    }
+                } else {}  // TODO: Do Convert + verify
+            }
+            else{log("tryMergeValue LHS.value.format/RHS.value.format CATCH --  TODO: handle case")}
         }
-
-        if (valueStatus.cmd == wasVerified and RHS.value.fType == STR){
-            me uint64: sizeDiff <- valueStatus.sizeDiff
+    }
+    void: trimMergeRemainder(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
+        our infon: RHS <- RHSItr.item
+        if(LHS.value.fType == STR and RHS.value.fType == STR){
             me uint64: rSize <- RHS.value.str.size()
-            if(sizeDiff > 0 ){
-                //log("CALC REMAINDER:" + toString(sizeDiff))
-                me string: remainderStr <- RHS.value.str.subStr(convertToIntVal(rSize -sizeDiff), convertToIntVal(sizeDiff))
+            me uint64: sizeToCopy <- action.sizeToCopy
+            me uint64: sizeDiff <- rSize - sizeToCopy
+            if(sizeDiff > 0){
+                me string: remainderStr <- RHS.value.str.subStr(convertToIntVal(sizeToCopy), convertToIntVal(sizeDiff))
                 our infon: remainderInfon; Allocate(remainderInfon,remainderStr)
-                Allocate(remainder)
-                RHSItr.copyThisTo(remainder)
-                Allocate(remainder.crntCursor)
-                remainder.crntCursor.item <- remainderInfon
-                remainder.crntCursor.looseMode <- RHSItr.crntCursor.looseMode
-                remainder.crntCursor.looseSize <- RHSItr.crntCursor.looseSize
-                agendaItem.sizeToCopy <- rSize - sizeDiff
-
-            } else if(sizeDiff==0){
-                agendaItem.sizeToCopy <-rSize
-            }// TODO: finish case where remainder is on the left
-
+                Allocate(action.remainder)
+                RHSItr.copyThisTo(action.remainder)
+                action.remainder.item <- remainderInfon
+            }else if(sizeDiff==0){
+                action.sizeToCopy <-rSize
+            }else{//MUST: finish case where remainder is on the left
+                log("MUST: finish case where remainder is on the left")
+            }
         } else {
-            agendaItem.sizeToCopy <- RHS.calcSize().num
+            action.sizeToCopy <- RHS.infSize.num
         }
-        if(LHS.asNot){reject <- !reject}
-        if(reject){agendaItem.rejected <- true; remainder <- NULL}
+    }
+    void: tryMerge(our infon: LHS, our infItr: RHSItr, our transformAction: action) <- {
+        //log(">>TM")
+        our infon: RHS <- RHSItr.item
+        if(PropagateIndirectItem(action, LHS, RHSItr) > 0){
+            return()
+        }
+        if(RHS.infMode == isUnknown){ // any = ?
+            LHS.isNormed <- true
+        }else if(LHS.infMode == isUnknown){ // ? = any
+            action.copyRHSTypeToLHS <- true
+            if(!RHSItr.looseSize()){
+                action.sizeAction       <- copySizeRHStoLHS
+            }
+            action.valueAction      <- copyValueRHStoLHS
+            //LHS.value.fType         <- RHSItr.item.value.fType
+            //LHS.infMode             <- RHSItr.item.infMode
+        }else{
+            if(!RHSItr.looseMode and !LHS.type.isCompatibleWith(RHS.type)){action.reject <- true}// TYPE ACTION
+            if(!action.reject){tryMergeSize(action, LHS, RHSItr)} // SIZE ACTION
+            if(!action.reject){tryMergeValue(action, LHS, RHSItr)}// VALUE ACTION
+            if(!action.reject){trimMergeRemainder(action, LHS, RHSItr)}// HANDLE REMAINDERS
+        }
+        if(LHS.asNot){action.reject <- !action.reject}
+        return()
+    }
+
+    me bool: addInfItrToAgenda(our infItr: ii) <- {
+        me bool: iiAdded <- true
+        me string: logStr <- "        ADD_TO_AGENDA:" + ii.stringify()
+        if(ii != NULL and ii.state != sEOL){
+            if(!ii.item.isOnAgenda){
+                agenda.pushFirst(ii)
+                ii.item.isOnAgenda <- true
+            } else {logStr <- logStr + " Already on agenda!"; iiAdded <- false}
+        }else{logStr <- logStr + " DIDN'T ADD!"; iiAdded <- false}
         //log(logStr)
-
-        return(remainder)
+        return(iiAdded)
     }
-
-    our infDeepItr: validateAndAnnotate(our aItem: agendaItem) <- {
-        our infDeepItr: rmdrHead <- NULL
-        our infDeepItr: RHSItr <- agendaItem.RHS
-        our infDeepItr: rmdrCrnt <- NULL
-        our infDeepItr: rmdrTail <- NULL
-        while(RHSItr != NULL){
-            rmdrCrnt <- tryMERGE(agendaItem, RHSItr)
-            //log("validateAndAnnotate:"+ printInfon(RHSItr.crntCursor.item) + ":rmdrCrnt:" + rmdrCrnt.stringify())
-            if(rmdrHead == NULL){rmdrHead <- rmdrCrnt}
-            else{rmdrTail.nextAnd <- rmdrCrnt}
-            rmdrTail <- rmdrCrnt
-            RHSItr <- RHSItr.nextAnd
+    our infItr: popInfItrFromAgenda() <- {
+        our infItr: retVal <- agenda.last()
+        agenda.popLast()
+        return(retVal)
+    }
+    me int: PAI_StateSig(our infItr: LHSItr, our infItr: RHSItr, me bool: looseMode) <- {
+        me int: LHS_Sig <- LHSItr.state
+        me int: RHS_Sig <- RHSItr.state
+        me int: retVal  <- 2*((RHS_Sig-2)*3 + (LHS_Sig-2))
+        if(RHSItr.looseMode){retVal <- retVal + 1}
+        return(retVal)
+    }
+    me string: infItrStateSig(our infItr: ii) <- {
+        me string: retVal
+        me int: state <- ii.state
+        //sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError
+        if(state == sInvalid){return("X")}
+        else if(state == sNotASeq){return("#")}
+        else if(state == sFirstVisit){return("{")}
+        else if(state == sSecondVisit){return("}")}
+        else if(state == sNonIterable){return("N")}
+        else{logFatalError("invalid State in infItrStateSig:"+ stateStrings[state])}
+    }
+    me bool: testCompatibility(our infon: CI, our infItr: LHSItr, our infItr: RHSItr, our transformAction: action) <- {
+        if(RHSItr.state == sSecondVisit){if(RHSItr.item.itmMode != mSubItems){return(true)}}
+        RHSItr.setListSeqFlags()
+        tryMerge(CI, RHSItr, action)
+logStrA <- logStrA + " TM"
+if(action.valueAction == copyValueLHStoRHS){logStrA <- logStrA + " copyV_L2R"}
+else if(action.valueAction == copyValueRHStoLHS){logStrA <- logStrA + " copyV_R2L"}
+if(action.sizeAction == copySizeLHStoRHS){logStrA <- logStrA + " copyS_L2R"}
+else if(action.sizeAction == copySizeRHStoLHS){logStrA <- logStrA + " copyS_R2L"}
+if(action.sizeToCopy > 0){logStrA <- logStrA + " copySz"}
+        if(action.reject){logStrA <- logStrA + " REJECT"; return(true)}
+        if(LHSItr.item.isTentative and RHSItr.item.isTentative){
+            action.breakDotCycle<-true
+            LHSItr.stitchCmd <- keepDots
+            log("breakDotCycle = true");
+logStrA <- logStrA + " breakDot"
         }
-        return(rmdrHead)
+        // Do init for ?={...}
+        if(LHSItr.item.infMode == isUnknown and RHSItr.item.value.fType == LST){
+            action.unknownAsList <- true
+logStrA <- logStrA + " unknownAsList"
+        }
+        action.LHSItr <- LHSItr
+        action.RHSItr <- RHSItr
+        return(false)
     }
+    our infItr: findNextLHS(our infItr: LHSItr, me int: LHSfType, me int: RHSfType, me bool: unknownAsList) <- {
+        our infItr: LHSItrNext
+        if((LHSfType != LST and !unknownAsList) and RHSfType == LST){
+            Allocate(LHSItrNext)
+            LHSItr.copyThisTo(LHSItrNext)
+        }else{LHSItrNext <- LHSItr.getNextExtended(false)}
+        return(LHSItrNext)
+    }
+    our infItr: findNextRHS(our infItr: RHSItr, me int: LHSfType, me int: RHSfType) <- {
+        our infItr: RHSItrNext
+        if(LHSfType == LST and RHSfType != LST){
+            Allocate(RHSItrNext)
+            RHSItr.copyThisTo(RHSItrNext) // <- RHSItr //.getSelfCopy()
+            RHSItrNext.looseInhtd <- true
+        }else{
+            RHSItrNext <- RHSItr.getNextExtended(false)
+            if(RHSItrNext.state == sEOL){
+                RHSItrNext <- NULL
+            } else if(RHSItrNext.looseMode){
+            } else {}
+        }
+        return(RHSItrNext)
+    }
+    void: processAgendaItem(our infItr: LHSItr, me int: AlternativesNestLvl)<-{
+        //log("_________________________")
+        //log("PAI: "+stringifyInfon(LHSItr.item))
+        prepWorkList(LHSItr)
+        our infon: LHS         <- LHSItr.item
+        me bool: RHS_Empty     <- LHS.wrkList.isEmpty()
+        our infItr: LHSItrNext <- NULL
+        our infItr: RHSItrNext <- NULL
+        me bool: doResolve     <- false
+        me int: internalFrontierCount <- frontierCount(LHSItr)
+        log("\n\n\n")
+        if(RHS_Empty){
+    //    logFrontierLoop(LHSItr, "    BEFORE PAi")
+            log("PAI no RHS:"+stringifyInfon(LHSItr.item))
+            if(LHSItr.infNode.next == NULL and (LHSItr.parent != NULL and LHSItr.parent.item != NULL and LHSItr.parent.item.value.tailUnfinished)){
+                LHSItrNext <- LHSItr.getNextExtended(true)
+            }else if(LHSItr.item.value.tailUnfinished and LHSItr.item.value.items.isEmpty()){
+                LHSItrNext <- LHSItr.getNextExtended(true)
+            }else{
+                LHSItrNext <- LHSItr.getNextExtended(false)
+            }
+            LHSItrNext.item.isOnAgenda <- false
+            addInfItrToAgenda(LHSItrNext)
+            processConcat(LHSItr)
+        }else{
+   //     logFrontierLoop(LHSItr, "    BEFORE PAI")
+            me int: tmpErrCount <- 0
+            while(!LHS.wrkList.isEmpty()){
+                RHSItrNext <- NULL
+                our infItr: RHSItr <- LHS.wrkList.first()
+                LHS.wrkList.popFirst()
+                LHS.usedWrkList.pushLast(RHSItr)
+                if(tmpErrCount>20){logFatalError("DEBUG: Too many loops...")} else {tmpErrCount <+- 1}
 
-    me int: addWorkItemsToAgenda(me int: priority, our aItem: pred, our infDeepItr: itrToProcess, our NormNode: myNormNode)<-{
-        me int: numItemsAdded <- 0
-        our infon: i <- itrToProcess.crntCursor.item
-        //log("Adding WorkItem:" + printInfon(i))
-        if(i.wrkItmsAdded){return(0)}else{i.wrkItmsAdded <- true}
-        if(i.wrkList.size()==0 and pred!=NULL){return(0)}  // If there is no predecessor this will not be automatically enqeued by a predecessor.
-        our aItem:: newItem
-        newItem.init(0, itrToProcess, NULL)
-        newItem.myNormNode <- myNormNode
-        if(pred!=NULL){newItem.predecessors.pushLast(pred)}
-        withEach workItem in i.wrkList{
-            if(workItem.target==asID){
-            our infDeepItr:: newIDP
-            newIDP.initialize(workItem)
-            newItem.addRHS(newIDP)
-            workItem.wasProcessed <- true
-            numItemsAdded <- numItemsAdded+1
+                log("PAI: "+stringifyInfon(LHSItr.item) + " === "+stringifyInfon(RHSItr.item))
+                //~ log("    ITRS:"+LHSItr.stringify() + " === "+RHSItr.stringify())
+                //~ log("     "+LHSItr.mySymbol(LHSItr) + " === "+RHSItr.mySymbol(RHSItr))
+                //~ log("     "+LHSItr.item.mySymbol(LHSItr.item) + " === "+RHSItr.item.mySymbol(RHSItr.item))
+                //~ log("PREDS:"); withEach P in LHSItr.predecessors{log("    PRED:"+P.mySymbol(P)+" <"+P.LHSItr.mySymbol(P.LHSItr)+":  " + P.LHSItr.stringify()+"> === <"+P.RHSItr.mySymbol(P.RHSItr)+":  " + P.RHSItr.stringify()+">")}
+    //            logFrontierLoop(LHSItr, "BEFORE ENQUEUE")
+                if(LHS.isOrLike()){
+                    if(RHSItr.item.isOrLike()){ // set flag to add new #{...}
+                        log("LHSItr.addNewSubDots <- true in: "+ LHS.source.value.items.head.altItr.stringify())
+                        LHS.source.value.items.head.altItr.addNewSubDots <- true
+                    }
+
+                    our DblLinkedListNode: possibilityItr <- LHS.source.value.items.begin()
+                    while (possibilityItr!=NULL){
+                        our transformAction:: action
+                            action.LHSItr <- LHSItr
+                            action.RHSItr <- RHSItr
+                        //log("   LHS_ENQUEUE:"+stringifyInfon(possibilityItr.altItr.item) + " === " + stringifyInfon(RHSItr.item))
+                        log("    Action in LHS_IS_OR_LIKE:"+ action.mySymbol(action) + " <"+action.LHSItr.mySymbol(action.LHSItr)+":  " + action.LHSItr.stringify()+"> === <"+action.RHSItr.mySymbol(action.RHSItr)+":  " + action.RHSItr.stringify()+">"  )
+                        enqueueForProcessing(action, possibilityItr.altItr, RHSItr, AlternativesNestLvl+1, false)
+    //                    logFrontierLoop(LHSItr, "AFTER LHS")
+                        possibilityItr <- possibilityItr.next
+                    }
+                    continue()
+                }
+
+                if(RHSItr.item.isOrLike()){
+                    our DblLinkedListNode: possibilityItr <- RHSItr.item.source.value.items.begin()
+                    while (possibilityItr!=NULL and possibilityItr.altItr != NULL){
+                        //log("   RHS_ENQUEUE:"+stringifyInfon(LHSItr.item) + " === " + possibilityItr.altItr.stringify())
+                        enqueueForProcessing(NULL, LHSItr, possibilityItr.altItr, AlternativesNestLvl+1, false)
+    //                    logFrontierLoop(LHSItr, "AFTER RHS")
+                        possibilityItr <- possibilityItr.next
+                    }
+                    continue()
+                }
+if(LHSItr.state == sNonIterable){logFatalError("Trying to iterate nonIterable infItr!!!!")}
+// LOG STATE
+me int: stateSig <- PAI_StateSig(LHSItr, RHSItr, false)
+if(stateSig < 10 and stateSig >= 0){logStrA <- "0" +toString(stateSig)+" |"}
+else{logStrA <- toString(stateSig)+" |"}
+logStrA <- logStrA + infItrStateSig(LHSItr)
+if(RHSItr.looseMode){logStrA <- logStrA + " == "}
+else{logStrA <- logStrA + "  = "}
+logStrA <- logStrA + infItrStateSig(RHSItr) +"| "
+////////////
+                crntRHSMySymbol <- RHSItr.item.mySymbol(RHSItr.item)
+                our transformAction:: action
+                    action.LHSItr <- LHSItr
+                    action.RHSItr <- RHSItr
+                if(LHSItr.state != sSecondVisit){
+                    me bool: rejected <- testCompatibility(LHS, LHSItr, RHSItr, action)
+                    if(rejected){
+                        log("     REJECT")
+                     //   LHSItr.detachFromFrontier <- true
+                     //   internalFrontierCount <-- 1
+                        continue()
+                    }
+                    if(AlternativesNestLvl==0){doAction(action)}
+                    if(action.remainder != NULL){RHSItrNext <- action.remainder
+                        log("REMAINDER:"+ RHSItrNext.stringify())}
+                }
+
+                if(LHSItr.state == sSecondVisit and (RHSItr.state == sSecondVisit or RHSItr.looseSize())){
+                    log("MAYBE RESOLVE  fCount:"+toString(internalFrontierCount)+"     predCount:"+toString(LHSItr.predecessors.size()))
+                    withEach P in LHSItr.predecessors{log("    PRED LHS:"+ P.mySymbol(P) + "    PRED RHS:"+ P.RHSItr.mySymbol(P.RHSItr) )}
+                    if(internalFrontierCount==LHSItr.predecessors.size()){
+                        doResolve <- true
+                    }
+                }
+
+                me int: LHSfType <- LHSItr.item.value.fType
+                me int: RHSfType <- 0; if(!RHS_Empty){RHSfType <- RHSItr.item.value.fType}
+                LHSItrNext <- findNextLHS(LHSItr, LHSfType, RHSfType, action.unknownAsList)
+                if(RHSItrNext == NULL){RHSItrNext <- findNextRHS(RHSItr, LHSfType, RHSfType)}
+                //log("RHSItrNext:"+RHSItrNext.stringify())
+                enqueueForProcessing(action, LHSItrNext, RHSItrNext, AlternativesNestLvl, action.breakDotCycle)
+    //            logFrontierLoop(LHSItr, "AFTER ENQUEUE")
+//log(logStrA)
+            }
+            if(LHSItr.state != sEOL){
+                LHSItr.detachFromFrontier <- true
             }
         }
-        agenda.addItem(newItem)
-        return(numItemsAdded)
-    }
-
-    void: normalize(our infon: i) <- {
-      //  testIterator(i);  exit(2)
-        //log("NORMALIZING: " + printInfon(i))
-        our infDeepItr: ii
-        Allocate(ii)
-        ii.initialize(i)
-        agenda.parentAgent <- self
-        prepWorkList(ii)
-        our NormNode:: myNormNode
-        addWorkItemsToAgenda(0, NULL, ii, myNormNode)
-        agenda.processAgenda()
-        me int: numSolutions <- myNormNode.finalists.size()
-        if(numSolutions>0){
-            our aItem: toStitch <- agenda.resolve(myNormNode.finalists.last(), "    resolve: ") // TODO: .last() is arbitrary
-            stitch(toStitch)
+        if(LHSItr.detachFromFrontier){
+  //          log("DETACHING: " + LHSItr.stringify())
+            frontierDetach(LHSItr)
+        } else {log("Not detatching: " + LHSItr.stringify())}
+  //      logFrontierLoop(LHSItr, "    AFTER PAI")
+        if(doResolve){
+            resolve(LHSItr)
         }
-        i.isNormed <- true
-        //log("NORMALIZED:  " + printInfon(i))
     }
 
+    void: processAgenda()<-{
+        withEach count in WHILE(!agenda.isEmpty()) {
+            //log("_____"+toString(count+1)+"_____")
+            if (count > 100){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
+            our infItr: CI <- popInfItrFromAgenda()
+            processAgendaItem(CI, CI.AlternativesNestLvl)
+            CI.item.isOnAgenda <- false
+        }
+    }
+
+    void: enqueueForProcessing(our transformAction: pred, our infItr: LHSItr, our infItr: RHSItr, me int: altLvl, me bool: breakDotCycle)<-{
+        //log("----pred:"+pred.stringify())
+                    me bool: doEnqueue <- false
+        if(LHSItr != NULL){
+            if(LHSItr.state != sEOL){
+             //   log("    ----LHSItr:"+stringifyInfon(LHSItr.item))
+                if(RHSItr != NULL){
+             //       log("    ----RHSItr:"+stringifyInfon(RHSItr.item))
+                    if(breakDotCycle){  // This sets the stitchCmd
+                        // MUST: store stitchCmd in RHSItr instead of LHSItr
+                        if(!LHSItr.item.isTentative){log("DELETE DOTS"); LHSItr.stitchCmd <- delDots}
+                        else {
+                            if(!RHSItr.item.isTentative){
+                                me int: dotCmd <- LHSItr.stitchCmd
+                                if(dotCmd==insB4Dots){ log("B4 DOTS");
+                                    LHSItr.stitchCmd <- insAftDots
+                                }
+                                else{log("AFTER DOTS"); LHSItr.stitchCmd <- insAftDots}
+                            } else {log("KEEPING DOTS"); LHSItr.stitchCmd <- keepDots} // "?=?"
+                        }
+                    }
+        //        if(!breakDotCycle or !(LHSItr.item.isTentative and RHSItr.item.isTentative)){
+                    if(LHSItr.state != sSecondVisit){
+                        if(RHSItr.state != sSecondVisit){
+                            if(LHSItr.item.isTentative and RHSItr.item.isTentative){  // ?=?
+                                log("?=? : parent.KEEPING DOTS")
+                                LHSItr.parent.stitchCmd <- keepDots
+                            } else {
+                                doEnqueue <- true
+                            }
+                        } else { // RHS is SecondVisit
+                            if(LHSItr.item.isOrLike()){doEnqueue <- true}
+                        }
+                    } else { // LHS is SecondVisit
+                        if(RHSItr.state != sSecondVisit){
+                            if(RHSItr.item.isOrLike() or RHSItr.looseSize()){doEnqueue <- true}
+                doEnqueue <- true
+                        } else { // RHS is SecondVisit:  }=}
+                            doEnqueue <- true
+                        }
+                    }
+                    if(doEnqueue){
+                    //    log("     ENQUEUE:" + stringifyInfon(LHSItr.item) + " === " + RHSItr.stringify())
+                        log("     ENQUEUE:" + LHSItr.stringify() + " === " + RHSItr.stringify())
+                        LHSItr.AlternativesNestLvl <- altLvl
+                        LHSItr.item.addInfItrToWrkList(RHSItr)
+                        me bool: itrAdded <- addInfItrToAgenda(LHSItr)
+                        if(itrAdded and pred!=NULL){
+                         //   LHSItr.insertNewPctTag("pred", pred)
+                         //   log("    PRED_IN_ENQUEUE:"+ pred.mySymbol(pred) + " <"+pred.LHSItr.mySymbol(pred.LHSItr)+":  " + pred.LHSItr.stringify()+"> === <"+pred.RHSItr.mySymbol(pred.RHSItr)+":  " + pred.RHSItr.stringify()+">"  )
+                            LHSItr.predecessors.pushLast(pred)
+                           // log("        JOINING:" + LHSItr.stringify())
+                            frontierJoin(pred.LHSItr, LHSItr)
+                        }
+                    }
+        //      }
+            }
+        }
+        }else{logFatalError("crntLHS was NULL")}
+    }
+    me void: normalize(our infon: inf) <- {
+        our infItr:: ii
+        ii.initialize(inf)
+        initFrontier(ii)
+        addInfItrToAgenda(ii)
+        processAgenda()
+        ii.item.isNormed <- true
+    }
     me string: fetchAsStr(their infon: i) <- {return(i.value.str)}
     me uint64: fetchAsNum(their infon: i) <- {return(i.value.num)}
- //   our infon: fetchAsList(their infon: i, me int: idx) <- {return(i.value.items[idx])}
 
     void: appendToWorld(our infon: newInfon) <- {
         our infon: dotsAtTheEnd <- world.value.items.last()
-        world.value.items.popLast()
         world.value.items.pushLast(newInfon)
-        world.value.items.pushLast(dotsAtTheEnd)
     }
 
     me bool: loadAndParseData() <- {
         me string: data <- readFileAsString("data.pr")
         if(data==""){
-            print("File Error!\n\n")
-            exit(2)
+            logFatalError("File Error: data.pr")
         }
 
         me EParser: parser
@@ -1241,8 +1668,7 @@ struct agent{
 
         parser.doParse()
         if(parser.doesParseHaveError()){
-            print("\n", parser.errorMesg, "\n")
-            exit(2)
+            logFatalError("\n", parser.errorMesg, "\n")
         } else {print("\nParse Succeeded\n")}
 
         our stateRec: topItem <- parser.resolve(parser.lastTopLevelItem, "")
@@ -1252,119 +1678,6 @@ struct agent{
         //    trackerMgr.allData.topInfon <- settingsAndData
 
         return(true)
-    }
-
-    me bool: isListWithDots(their pureInfon: pure) <- {
-        if(pure.fType!=LST){ return(false)}
-        if(pure.format==fLiteral){
-            withEach item in pure.items {
-                if(item.itmMode==mDots){return(true)}
-            }
-        }
-        return(false)
-    }
-    me string: printPureInfon(their pureInfon: pure, their pureInfon: size) <- {
-        me string: S <- ""
-        me bool: showSize <- size!=NULL and (
-            (((pure.sizeGiven !=0) and (pure.fType!=LST or pure.format!=fLiteral))
-            or (pure.fType!=NUM and size.format==fUnknown and pure.format!=fUnknown))
-            and !isListWithDots(pure)
-        )
-        if(showSize){S <- S+printPureInfon(size, NULL)}
-        if(pure.inverted){
-            if(size!=NULL){S <- S+"-"}
-            else if(pure.isLstSize==0){S <- S+"/"}
-        } else{
-                if(showSize){S <- S+"+"}
-                else if(size==NULL and pure.isLstSize==0){S <- S+"*"}
-        }
-        if(pure.fType == NUM){
-            if(pure.format == fUnknown){S<-S+"_"}
-            else{
-                me uint64:N <- pure.num
-                S <- S+ toString(N)
-            }
-        } else if(pure.fType == STR){
-            if(pure.format == fUnknown){S<-S+"$"}
-            else{
-                me string: str <- pure.str
-                S <- S+"'"+ str + "'"
-            }
-        } else if(pure.fType == LST){
-            me bool: showBar<-false
-            me string: endBrkt<-"}"
-            if(pure.cursor == cGetLast)     {S<-S+"["  endBrkt<-"]"}
-            else if(pure.format == fConcat) {S<-S+"("  endBrkt<-")"}
-            else {S <- S+("{")}
-            if(pure.timelike){S <- S+"T "}
-            if(pure.size!=NULL) {pure.size.isLstSize <- true}
-            if(pure.size!=NULL and pure.format==fLiteral){S <- S+"~"+printPureInfon(pure.size, NULL) showBar<-true}
-            if(pure.listSpec){
-                if(showBar){S <- S+" "}
-                S <- S + printInfon(pure.listSpec)
-                showBar<-true
-            }
-            if(showBar){S <- S+"| "}
-            our DblLinkedListNode: itemItr <- pure.items.begin()
-            me bool: firstTime <- true
-            while(itemItr){
-                if(!firstTime){S <- S+" "} else {firstTime <- false}
-                S <- S+printInfon(itemItr.item)
-                itemItr <- itemItr.next
-            }
-            S <- S+endBrkt
-        } else {print("\nError: Unknown fType in printPureInfon(): ", pure.fType,"\n") exit(2)}
-        return(S)
-    }
-
-    me string: printInfon(our infon: i) <- {
-        me string: S <- ""
-        if(i ==  NULL){return("NULL")}
-        if(i.itmMode==mSubItems){S<-S+"#"}
-        else if(i.itmMode==mDots){S<-S+"..."; return(S)}
-        else if(i.itmMode==mTagDefn){S<-S+"class "+i.type.asGiven+": "}
-
-        if(i.asNot){S <- S+"!"}
-        if(i.infMode==isUnknown){S <- S+"?"}
-        else if(i.infMode==newCursor){
-            S <- S+"%"
-            switch(i.cursorMode){
-                case cThis:   {S <- S+"this"}
-                case cWorld:  {S <- S+"W"}
-                case cContext:{S <- S+"C"}
-                case cPrev:   {S <- S+"prev"}
-                case cNext:   {S <- S+"next"}
-            }
-        }
-        else if(i.infMode==isTag){S <- S+i.type.asGiven}
-        else if(i.infMode==isLiteral){
-             S <- S+printPureInfon(i.value, i.calcSize())
-        }
-        else if(i.hasCursorHead){
-            S <- S + printInfon(i.cursorHead)+"."+i.type.asGiven
-        }
-        else {print("Error In PrintInfon()\n") exit(2)}
-
-        if(i.isNormed ==0){
-            withEach WorkItm in i.wrkList{
-                if(!WorkItm.wasProcessed){
-                    if(!WorkItm.looseMode){ S <- S+" ="}
-                    else { S <- S+" =="}
-                    if(WorkItm.looseSize){ S <- S + ":"}
-                    S <- S + " "
-                    S <- S + printInfon(WorkItm.item)
-                }
-            }
-
-            if (i.isFunc){
-                if(i.invertFunc){S <- S+"<!" + printInfon(i.aux1)}
-                else{S <- S+"<:" + printInfon(i.aux1)}
-            } else if(i.isFuncArg !=0){
-                if(i.invertFunc){S <- S+"!>" + printInfon(i.aux1)}
-                else{S <- S+":>" + printInfon(i.aux1)}
-            }
-        }
-        return(S)
     }
 
     void: init(our infon: World) <- {
@@ -1427,7 +1740,7 @@ struct ProteusCore{
     me string: resultString(our infon: inf) <- {
         me string: result <- ""
         if(inf!=NULL){
-            result <- a.printInfon(inf)
+            result <- stringifyInfon(inf)
         } else {
             result <- errorMesg
         }
