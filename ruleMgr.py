@@ -52,47 +52,60 @@ def enumerateAllCombos(caseSpec):
         retList = []
         for left in firstList:
             for right in secondList:
-                retList.append(left+'.'+right)
+                retList.append(left+'|'+right)
         return(retList)
     else: return firstList
 
-def doesCaseMatchPattern(pattern, case):
-    patternSegs = pattern.split('.')
-    caseSegs = case.split('.')
-    numPSegs = len(patternSegs)
+def doesCaseMatchPattern(toMatch, case):
+    caseSegs = case.split('|')
+    numPSegs = len(toMatch)
     numCSegs = len(caseSegs)
-    toMatch = []
-    for pseg in patternSegs:
-        toMatch.append(pseg.split(','))
     if numPSegs != numCSegs:
         print("numPSegs:", numPSegs)
         print("numCSegs:", numCSegs)
-        print("ERROR: pattern and case lengths do not match:", patternSegs, "\n\n", caseSegs)
+        print("ERROR: pattern and case lengths do not match:", toMatch, "\n\n", caseSegs)
         exit(1)
     for i in range(0, numCSegs):
         if not(caseSegs[i] in toMatch[i]):
             return(False)
     return(True)
 
+def markHandledCases(patterns, cases, points):
+    for pattern in patterns:
+        patternSegs = pattern.split('|')
+        toMatch = []
+        idx = 0
+        for pseg in patternSegs:
+            if pseg =="":
+                toMatch.append(points[idx])
+            else:
+                toMatch.append(pseg.split(','))
+            idx += 1
+        count = 0
+        matchCount = 0
+        for case in cases:
+            if case[0:2] == "##": print("rules overlap:",case); exit(2)
+            if case[0] == "#": caseToPass = case[1:]
+            else: caseToPass = case
+            if doesCaseMatchPattern(toMatch, caseToPass):
+                #if cases[count] != caseToPass: print("cases != case:",case)
+                cases[count] = "#"+case
+                if case[0]=="#": print("rules overlap:",case); exit(2)
+                matchCount += 1
+            count +=1
+        print("matchCount:",matchCount)
+
+rules = [
+    "merge||||=,==|?||",
+    "merge|?|||=,==|NUM,STR,LST-u,LST-U||"
+]
 
 print("COMBOS:", countCombinations(infonPoints))
 print("COMBOS:", countCombinations(mergePoints))
 cases = enumerateAllCombos(mergePoints)
+#for case in cases: print(case)
 
-rules = [
-    "merge.?,NUM,STR,LST-u,LST-U.fUnknown,fConcat,fLiteral,intersect.Size-0-,Size-0-n,Size-n-m,Size-n,Size-n-,Size-Other.=,==.?.fUnknown,fConcat,fLiteral,intersect.Size-0-,Size-0-n,Size-n-m,Size-n,Size-n-,Size-Other",
-    "merge.?.fUnknown,fConcat,fLiteral,intersect.Size-0-,Size-0-n,Size-n-m,Size-n,Size-n-,Size-Other.=,==.NUM,STR,LST-u,LST-U.fUnknown,fConcat,fLiteral,intersect.Size-0-,Size-0-n,Size-n-m,Size-n,Size-n-,Size-Other"
-]
-
-def markHandledCases(patterns, cases):
-    for pattern in patterns:
-        count = 0
-        for case in cases:
-            if doesCaseMatchPattern(pattern, case):
-                count +=1
-                case = "#"+case
-                print(count, case)
-
-markHandledCases(rules, cases)
+markHandledCases(rules, cases, mergePoints)
+#for case in cases: print(case)
 
 print("Number of Cases:", len(cases))
