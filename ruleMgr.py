@@ -71,8 +71,9 @@ def doesCaseMatchPattern(toMatch, case):
     return(True)
 
 def markHandledCases(patterns, cases, points):
+    handledCount = 0
     for pattern in patterns:
-        patternSegs = pattern.split('|')
+        patternSegs = pattern[0].split('|')
         toMatch = []
         idx = 0
         for pseg in patternSegs:
@@ -94,10 +95,150 @@ def markHandledCases(patterns, cases, points):
                 matchCount += 1
             count +=1
         print("matchCount:",matchCount)
+        handledCount += matchCount
+    print("Handled cases:", handledCount)
+    print("Remaining:", len(cases), "-", handledCount, "=", len(cases) - handledCount)
+    return(handledCount)
 
 rules = [
-    "merge||||=,==|?||",
-    "merge|?|||=,==|NUM,STR,LST-u,LST-U||"
+    ["merge||||=,==|?||",                           "ACTION"],
+    ["merge|?|||=,==|NUM,STR,LST-U,LST-U||",        "ACTION"],
+
+    ["merge|NUM|||=|STR,LST-U,LST-U||",             "REJECT"],   #Reject
+    ["merge|STR|||=|NUM,LST-U,LST-U||",             "REJECT"],
+    ["merge|LST-U,LST-U|||=|NUM,STR||",             "REJECT"],
+
+
+    ["merge|NUM|fUnknown||=|NUM|fUnknown|",         "ACTION"],
+    ["merge|NUM|fUnknown||=|NUM|fConcat|",          "ACTION"],
+    ["merge|NUM|fUnknown||=|NUM|fLiteral|",         "ACTION"],
+    ["merge|NUM|fUnknown||=|NUM|intersect|",        "ACTION"],
+
+    ["merge|NUM|fConcat||=|NUM|fUnknown|",          "ACTION"],
+    ["merge|NUM|fConcat||=|NUM|fConcat|",           "ACTION"],
+    ["merge|NUM|fConcat||=|NUM|fLiteral|",          "ACTION"],
+    ["merge|NUM|fConcat||=|NUM|intersect|",         "ACTION"],
+
+    ["merge|NUM|fLiteral||=|NUM|fUnknown|",         "ACTION"],
+    ["merge|NUM|fLiteral||=|NUM|fConcat|",          "ACTION"],
+    ["merge|NUM|fLiteral||=|NUM|fLiteral|",         "ACTION"],
+    ["merge|NUM|fLiteral||=|NUM|intersect|",        "ACTION"],
+
+    ["merge|NUM|intersect||=|NUM|fUnknown|",        "ACTION"],
+    ["merge|NUM|intersect||=|NUM|fConcat|",         "ACTION"],
+    ["merge|NUM|intersect||=|NUM|fLiteral|",        "ACTION"],
+    ["merge|NUM|intersect||=|NUM|intersect|",       "ACTION"],
+
+
+    ["merge|STR|fUnknown||=|STR|fUnknown|",         "ACTION"],
+    ["merge|STR|fUnknown||=|STR|fConcat|",          "ACTION"],
+    ["merge|STR|fUnknown||=|STR|fLiteral|",         "ACTION"],
+    ["merge|STR|fUnknown||=|STR|intersect|",        "ACTION"],
+
+    ["merge|STR|fConcat||=|STR|fUnknown|",          "ACTION"],
+    ["merge|STR|fConcat||=|STR|fConcat|",           "ACTION"],
+    ["merge|STR|fConcat||=|STR|fLiteral|",          "ACTION"],
+    ["merge|STR|fConcat||=|STR|intersect|",         "ACTION"],
+
+    ["merge|STR|fLiteral||=|STR|fUnknown|",         "ACTION"],
+    ["merge|STR|fLiteral||=|STR|fConcat|",          "ACTION"],
+    ["merge|STR|fLiteral||=|STR|fLiteral|",         "ACTION"],
+    ["merge|STR|fLiteral||=|STR|intersect|",        "ACTION"],
+
+    ["merge|STR|intersect||=|STR|fUnknown|",        "ACTION"],
+    ["merge|STR|intersect||=|STR|fConcat|",         "ACTION"],
+    ["merge|STR|intersect||=|STR|fLiteral|",        "ACTION"],
+    ["merge|STR|intersect||=|STR|intersect|",       "ACTION"],
+
+
+    ["merge|LST-U,LST-u|fUnknown||=|LST-U,LST-u|fUnknown|",        "ACTION"],
+    ["merge|LST-U,LST-u|fUnknown||=|LST-U,LST-u|fConcat|",         "ACTION"],
+    ["merge|LST-U,LST-u|fUnknown||=|LST-U,LST-u|fLiteral|",        "ACTION"],
+    ["merge|LST-U,LST-u|fUnknown||=|LST-U,LST-u|intersect|",       "ACTION"],
+
+    ["merge|LST-U,LST-u|fConcat||=|LST-U,LST-u|fUnknown|",         "ACTION"],
+    ["merge|LST-U,LST-u|fConcat||=|LST-U,LST-u|fConcat|",          "ACTION"],
+    ["merge|LST-U,LST-u|fConcat||=|LST-U,LST-u|fLiteral|",         "ACTION"],
+    ["merge|LST-U,LST-u|fConcat||=|LST-U,LST-u|intersect|",        "ACTION"],
+
+    ["merge|LST-U,LST-u|fLiteral||=|LST-U,LST-u|fUnknown|",        "ACTION"],
+    ["merge|LST-U,LST-u|fLiteral||=|LST-U,LST-u|fConcat|",         "ACTION"],
+    ["merge|LST-U,LST-u|fLiteral||=|LST-U,LST-u|fLiteral|",        "ACTION"],
+    ["merge|LST-U,LST-u|fLiteral||=|LST-U,LST-u|intersect|",       "ACTION"],
+
+    ["merge|LST-U,LST-u|intersect||=|LST-U,LST-u|fUnknown|",       "ACTION"],
+    ["merge|LST-U,LST-u|intersect||=|LST-U,LST-u|fConcat|",        "ACTION"],
+    ["merge|LST-U,LST-u|intersect||=|LST-U,LST-u|fLiteral|",       "ACTION"],
+    ["merge|LST-U,LST-u|intersect||=|LST-U,LST-u|intersect|",      "ACTION"],
+
+
+    ["merge|NUM|||==|STR,LST-U,LST-U||",             "ACTION"],   #Reject
+    ["merge|STR|||==|NUM,LST-U,LST-U||",             "ACTION"],
+    ["merge|LST-U,LST-U|||==|NUM,STR||",             "ACTION"],
+
+
+    ["merge|NUM|fUnknown||==|NUM|fUnknown|",         "ACTION"],
+    ["merge|NUM|fUnknown||==|NUM|fConcat|",          "ACTION"],
+    ["merge|NUM|fUnknown||==|NUM|fLiteral|",         "ACTION"],
+    ["merge|NUM|fUnknown||==|NUM|intersect|",        "ACTION"],
+
+    ["merge|NUM|fConcat||==|NUM|fUnknown|",          "ACTION"],
+    ["merge|NUM|fConcat||==|NUM|fConcat|",           "ACTION"],
+    ["merge|NUM|fConcat||==|NUM|fLiteral|",          "ACTION"],
+    ["merge|NUM|fConcat||==|NUM|intersect|",         "ACTION"],
+
+    ["merge|NUM|fLiteral||==|NUM|fUnknown|",         "ACTION"],
+    ["merge|NUM|fLiteral||==|NUM|fConcat|",          "ACTION"],
+    ["merge|NUM|fLiteral||==|NUM|fLiteral|",         "ACTION"],
+    ["merge|NUM|fLiteral||==|NUM|intersect|",        "ACTION"],
+
+    ["merge|NUM|intersect||==|NUM|fUnknown|",        "ACTION"],
+    ["merge|NUM|intersect||==|NUM|fConcat|",         "ACTION"],
+    ["merge|NUM|intersect||==|NUM|fLiteral|",        "ACTION"],
+    ["merge|NUM|intersect||==|NUM|intersect|",       "ACTION"],
+
+
+    ["merge|STR|fUnknown||==|STR|fUnknown|",         "ACTION"],
+    ["merge|STR|fUnknown||==|STR|fConcat|",          "ACTION"],
+    ["merge|STR|fUnknown||==|STR|fLiteral|",         "ACTION"],
+    ["merge|STR|fUnknown||==|STR|intersect|",        "ACTION"],
+
+    ["merge|STR|fConcat||==|STR|fUnknown|",          "ACTION"],
+    ["merge|STR|fConcat||==|STR|fConcat|",           "ACTION"],
+    ["merge|STR|fConcat||==|STR|fLiteral|",          "ACTION"],
+    ["merge|STR|fConcat||==|STR|intersect|",         "ACTION"],
+
+    ["merge|STR|fLiteral||==|STR|fUnknown|",         "ACTION"],
+    ["merge|STR|fLiteral||==|STR|fConcat|",          "ACTION"],
+    ["merge|STR|fLiteral||==|STR|fLiteral|",         "ACTION"],
+    ["merge|STR|fLiteral||==|STR|intersect|",        "ACTION"],
+
+    ["merge|STR|intersect||==|STR|fUnknown|",        "ACTION"],
+    ["merge|STR|intersect||==|STR|fConcat|",         "ACTION"],
+    ["merge|STR|intersect||==|STR|fLiteral|",        "ACTION"],
+    ["merge|STR|intersect||==|STR|intersect|",       "ACTION"],
+
+
+    ["merge|LST-U,LST-u|fUnknown||==|LST-U,LST-u|fUnknown|",        "ACTION"],
+    ["merge|LST-U,LST-u|fUnknown||==|LST-U,LST-u|fConcat|",         "ACTION"],
+    ["merge|LST-U,LST-u|fUnknown||==|LST-U,LST-u|fLiteral|",        "ACTION"],
+    ["merge|LST-U,LST-u|fUnknown||==|LST-U,LST-u|intersect|",       "ACTION"],
+
+    ["merge|LST-U,LST-u|fConcat||==|LST-U,LST-u|fUnknown|",         "ACTION"],
+    ["merge|LST-U,LST-u|fConcat||==|LST-U,LST-u|fConcat|",          "ACTION"],
+    ["merge|LST-U,LST-u|fConcat||==|LST-U,LST-u|fLiteral|",         "ACTION"],
+    ["merge|LST-U,LST-u|fConcat||==|LST-U,LST-u|intersect|",        "ACTION"],
+
+    ["merge|LST-U,LST-u|fLiteral||==|LST-U,LST-u|fUnknown|",        "ACTION"],
+    ["merge|LST-U,LST-u|fLiteral||==|LST-U,LST-u|fConcat|",         "ACTION"],
+    ["merge|LST-U,LST-u|fLiteral||==|LST-U,LST-u|fLiteral|",        "ACTION"],
+    ["merge|LST-U,LST-u|fLiteral||==|LST-U,LST-u|intersect|",       "ACTION"],
+
+    ["merge|LST-U,LST-u|intersect||==|LST-U,LST-u|fUnknown|",       "ACTION"],
+    ["merge|LST-U,LST-u|intersect||==|LST-U,LST-u|fConcat|",        "ACTION"],
+    ["merge|LST-U,LST-u|intersect||==|LST-U,LST-u|fLiteral|",       "ACTION"],
+    ["merge|LST-U,LST-u|intersect||==|LST-U,LST-u|intersect|",      "ACTION"],
+
 ]
 
 print("COMBOS:", countCombinations(infonPoints))
@@ -107,5 +248,5 @@ cases = enumerateAllCombos(mergePoints)
 
 markHandledCases(rules, cases, mergePoints)
 #for case in cases: print(case)
-
-print("Number of Cases:", len(cases))
+print("Number of rules:", len(rules))
+#print("Number of Cases:", len(cases))
