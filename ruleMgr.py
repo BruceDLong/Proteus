@@ -20,6 +20,7 @@ sizePoints = [
     'fLiteral',
     'intersect'
     ]
+    # TODO: ['Size-*', 'Size-/']
 ]
 
 infonPoints = [
@@ -32,24 +33,25 @@ infonPoints = [
     ],
 
     [
+    'intersect',
     'fUnknown',
     'fConcat',   # TODO: Concats with ... not counted.
-    'fLiteral',
-    'intersect'
-    ],
-
-    [
-    'Size-0-',
-    'Size-0-n',
-    'Size-n-m',
-    'Size-n',
-    'Size-n-',
-    'Size-Other'
+    'fLiteral'
     ]
-        # TODO: ['Size-*', 'Size-/']
 ]
 
+infonCodePoints = {
+    '?':            'infMode == isUnknown',
+    'NUM':          'value.fType == NUM',
+    'STR':          'value.fType == STR',
+    'LST-u':        'value.fType == LST and value.tailUnfinished = false',
+    'LST-U':        'value.fType == LST and value.tailUnfinished = true',
 
+    'intersect':    'value.intersectPosParse == ipSquareBrackets',
+    'fUnknown':     'value.fromat == fUnknown',
+    'fConcat':      'value.fromat == fConcat',
+    'fLiteral':     'value.fromat == fLiteral',
+}
 # Any infon: ?,NUM,STR,LST-u,LST-U.fUnknown,fConcat,fLiteral,intersect.Size-0-,Size-0-n,Size-n-m,Size-n,Size-n-,Size-Other
 mergePoints =  [['merge']] + infonPoints + [['=', '==']] + infonPoints
 
@@ -120,147 +122,159 @@ def markHandledCases(rules, cases, points):
     print("Number of rules:", len(rules))
     return(handledCount)
 
+def generateCode(rules):
+    for rule in rules:
+        trigger    = rule[0]
+        action     = rule[1]
+        conditions = trigger.split('|')
+        for condition in conditions:
+            if condition == 'merge': continue
+            if condition == "": continue
+            if condition == "?":
+                code = infonCodePoints[condition]
+                print('code:', code)
+
 sizeRules = [
 ]
 
 infRules = [
-    ["merge||||=,==|?||",                           "ACTION"],
-    ["merge|?|||=,==|NUM,STR,LST-U,LST-u||",        "ACTION"],
+    ["merge|||=,==|?|",                           "ACTION"],
+    ["merge|?||=,==|NUM,STR,LST-U,LST-u|",        "ACTION"],
 
-    ["merge|NUM|||=|STR,LST-U,LST-u||",             "REJECT"],   #Reject
-    ["merge|STR|||=|NUM,LST-U,LST-u||",             "REJECT"],
-    ["merge|LST-U,LST-u|||=|NUM,STR||",             "REJECT"],
-
-
-    ["merge|NUM|fUnknown||=|NUM|fUnknown|",         "ACTION"],
-    ["merge|NUM|fUnknown||=|NUM|fConcat|",          "ACTION"],
-    ["merge|NUM|fUnknown||=|NUM|fLiteral|",         "ACTION"],
-    ["merge|NUM|fUnknown||=|NUM|intersect|",        "ACTION"],
-
-    ["merge|NUM|fConcat||=|NUM|fUnknown|",          "ACTION"],
-    ["merge|NUM|fConcat||=|NUM|fConcat|",           "ACTION"],
-    ["merge|NUM|fConcat||=|NUM|fLiteral|",          "ACTION"],
-    ["merge|NUM|fConcat||=|NUM|intersect|",         "ACTION"],
-
-    ["merge|NUM|fLiteral||=|NUM|fUnknown|",         "ACTION"],
-    ["merge|NUM|fLiteral||=|NUM|fConcat|",          "ACTION"],
-    ["merge|NUM|fLiteral||=|NUM|fLiteral|",         "ACTION"],
-    ["merge|NUM|fLiteral||=|NUM|intersect|",        "ACTION"],
-
-    ["merge|NUM|intersect||=|NUM|fUnknown|",        "ACTION"],
-    ["merge|NUM|intersect||=|NUM|fConcat|",         "ACTION"],
-    ["merge|NUM|intersect||=|NUM|fLiteral|",        "ACTION"],
-    ["merge|NUM|intersect||=|NUM|intersect|",       "ACTION"],
+    ["merge|NUM||=|STR,LST-U,LST-u|",             "REJECT"],   #Reject
+    ["merge|STR||=|NUM,LST-U,LST-u|",             "REJECT"],
+    ["merge|LST-U,LST-u||=|NUM,STR|",             "REJECT"],
 
 
-    ["merge|STR|fUnknown||=|STR|fUnknown|",         "ACTION"],
-    ["merge|STR|fUnknown||=|STR|fConcat|",          "ACTION"],
-    ["merge|STR|fUnknown||=|STR|fLiteral|",         "ACTION"],
-    ["merge|STR|fUnknown||=|STR|intersect|",        "ACTION"],
+    ["merge|NUM|fUnknown|=|NUM|fUnknown",         "ACTION"],
+    ["merge|NUM|fUnknown|=|NUM|fConcat",          "ACTION"],
+    ["merge|NUM|fUnknown|=|NUM|fLiteral",         "ACTION"],
+    ["merge|NUM|fUnknown|=|NUM|intersect",        "ACTION"],
 
-    ["merge|STR|fConcat||=|STR|fUnknown|",          "ACTION"],
-    ["merge|STR|fConcat||=|STR|fConcat|",           "ACTION"],
-    ["merge|STR|fConcat||=|STR|fLiteral|",          "ACTION"],
-    ["merge|STR|fConcat||=|STR|intersect|",         "ACTION"],
+    ["merge|NUM|fConcat|=|NUM|fUnknown",          "ACTION"],
+    ["merge|NUM|fConcat|=|NUM|fConcat",           "ACTION"],
+    ["merge|NUM|fConcat|=|NUM|fLiteral",          "ACTION"],
+    ["merge|NUM|fConcat|=|NUM|intersect",         "ACTION"],
 
-    ["merge|STR|fLiteral||=|STR|fUnknown|",         "ACTION"],
-    ["merge|STR|fLiteral||=|STR|fConcat|",          "ACTION"],
-    ["merge|STR|fLiteral||=|STR|fLiteral|",         "ACTION"],
-    ["merge|STR|fLiteral||=|STR|intersect|",        "ACTION"],
+    ["merge|NUM|fLiteral|=|NUM|fUnknown",         "ACTION"],
+    ["merge|NUM|fLiteral|=|NUM|fConcat",          "ACTION"],
+    ["merge|NUM|fLiteral|=|NUM|fLiteral",         "ACTION"],
+    ["merge|NUM|fLiteral|=|NUM|intersect",        "ACTION"],
 
-    ["merge|STR|intersect||=|STR|fUnknown|",        "ACTION"],
-    ["merge|STR|intersect||=|STR|fConcat|",         "ACTION"],
-    ["merge|STR|intersect||=|STR|fLiteral|",        "ACTION"],
-    ["merge|STR|intersect||=|STR|intersect|",       "ACTION"],
-
-
-    ["merge|LST-U,LST-u|fUnknown||=|LST-U,LST-u|fUnknown|",        "ACTION"],
-    ["merge|LST-U,LST-u|fUnknown||=|LST-U,LST-u|fConcat|",         "ACTION"],
-    ["merge|LST-U,LST-u|fUnknown||=|LST-U,LST-u|fLiteral|",        "ACTION"],
-    ["merge|LST-U,LST-u|fUnknown||=|LST-U,LST-u|intersect|",       "ACTION"],
-
-    ["merge|LST-U,LST-u|fConcat||=|LST-U,LST-u|fUnknown|",         "ACTION"],
-    ["merge|LST-U,LST-u|fConcat||=|LST-U,LST-u|fConcat|",          "ACTION"],
-    ["merge|LST-U,LST-u|fConcat||=|LST-U,LST-u|fLiteral|",         "ACTION"],
-    ["merge|LST-U,LST-u|fConcat||=|LST-U,LST-u|intersect|",        "ACTION"],
-
-    ["merge|LST-U,LST-u|fLiteral||=|LST-U,LST-u|fUnknown|",        "ACTION"],
-    ["merge|LST-U,LST-u|fLiteral||=|LST-U,LST-u|fConcat|",         "ACTION"],
-    ["merge|LST-U,LST-u|fLiteral||=|LST-U,LST-u|fLiteral|",        "ACTION"],
-    ["merge|LST-U,LST-u|fLiteral||=|LST-U,LST-u|intersect|",       "ACTION"],
-
-    ["merge|LST-U,LST-u|intersect||=|LST-U,LST-u|fUnknown|",       "ACTION"],
-    ["merge|LST-U,LST-u|intersect||=|LST-U,LST-u|fConcat|",        "ACTION"],
-    ["merge|LST-U,LST-u|intersect||=|LST-U,LST-u|fLiteral|",       "ACTION"],
-    ["merge|LST-U,LST-u|intersect||=|LST-U,LST-u|intersect|",      "ACTION"],
+    ["merge|NUM|intersect|=|NUM|fUnknown",        "ACTION"],
+    ["merge|NUM|intersect|=|NUM|fConcat",         "ACTION"],
+    ["merge|NUM|intersect|=|NUM|fLiteral",        "ACTION"],
+    ["merge|NUM|intersect|=|NUM|intersect",       "ACTION"],
 
 
-    ["merge|NUM|||==|STR,LST-U,LST-u||",             "ACTION"],   #Reject
-    ["merge|STR|||==|NUM,LST-U,LST-u||",             "ACTION"],
-    ["merge|LST-U,LST-u|||==|NUM,STR||",             "ACTION"],
+    ["merge|STR|fUnknown|=|STR|fUnknown",         "ACTION"],
+    ["merge|STR|fUnknown|=|STR|fConcat",          "ACTION"],
+    ["merge|STR|fUnknown|=|STR|fLiteral",         "ACTION"],
+    ["merge|STR|fUnknown|=|STR|intersect",        "ACTION"],
+
+    ["merge|STR|fConcat|=|STR|fUnknown",          "ACTION"],
+    ["merge|STR|fConcat|=|STR|fConcat",           "ACTION"],
+    ["merge|STR|fConcat|=|STR|fLiteral",          "ACTION"],
+    ["merge|STR|fConcat|=|STR|intersect",         "ACTION"],
+
+    ["merge|STR|fLiteral|=|STR|fUnknown",         "ACTION"],
+    ["merge|STR|fLiteral|=|STR|fConcat",          "ACTION"],
+    ["merge|STR|fLiteral|=|STR|fLiteral",         "ACTION"],
+    ["merge|STR|fLiteral|=|STR|intersect",        "ACTION"],
+
+    ["merge|STR|intersect|=|STR|fUnknown",        "ACTION"],
+    ["merge|STR|intersect|=|STR|fConcat",         "ACTION"],
+    ["merge|STR|intersect|=|STR|fLiteral",        "ACTION"],
+    ["merge|STR|intersect|=|STR|intersect",       "ACTION"],
 
 
-    ["merge|NUM|fUnknown||==|NUM|fUnknown|",         "ACTION"],
-    ["merge|NUM|fUnknown||==|NUM|fConcat|",          "ACTION"],
-    ["merge|NUM|fUnknown||==|NUM|fLiteral|",         "ACTION"],
-    ["merge|NUM|fUnknown||==|NUM|intersect|",        "ACTION"],
+    ["merge|LST-U,LST-u|fUnknown|=|LST-U,LST-u|fUnknown",        "ACTION"],
+    ["merge|LST-U,LST-u|fUnknown|=|LST-U,LST-u|fConcat",         "ACTION"],
+    ["merge|LST-U,LST-u|fUnknown|=|LST-U,LST-u|fLiteral",        "ACTION"],
+    ["merge|LST-U,LST-u|fUnknown|=|LST-U,LST-u|intersect",       "ACTION"],
 
-    ["merge|NUM|fConcat||==|NUM|fUnknown|",          "ACTION"],
-    ["merge|NUM|fConcat||==|NUM|fConcat|",           "ACTION"],
-    ["merge|NUM|fConcat||==|NUM|fLiteral|",          "ACTION"],
-    ["merge|NUM|fConcat||==|NUM|intersect|",         "ACTION"],
+    ["merge|LST-U,LST-u|fConcat|=|LST-U,LST-u|fUnknown",         "ACTION"],
+    ["merge|LST-U,LST-u|fConcat|=|LST-U,LST-u|fConcat",          "ACTION"],
+    ["merge|LST-U,LST-u|fConcat|=|LST-U,LST-u|fLiteral",         "ACTION"],
+    ["merge|LST-U,LST-u|fConcat|=|LST-U,LST-u|intersect",        "ACTION"],
 
-    ["merge|NUM|fLiteral||==|NUM|fUnknown|",         "ACTION"],
-    ["merge|NUM|fLiteral||==|NUM|fConcat|",          "ACTION"],
-    ["merge|NUM|fLiteral||==|NUM|fLiteral|",         "ACTION"],
-    ["merge|NUM|fLiteral||==|NUM|intersect|",        "ACTION"],
+    ["merge|LST-U,LST-u|fLiteral|=|LST-U,LST-u|fUnknown",        "ACTION"],
+    ["merge|LST-U,LST-u|fLiteral|=|LST-U,LST-u|fConcat",         "ACTION"],
+    ["merge|LST-U,LST-u|fLiteral|=|LST-U,LST-u|fLiteral",        "ACTION"],
+    ["merge|LST-U,LST-u|fLiteral|=|LST-U,LST-u|intersect",       "ACTION"],
 
-    ["merge|NUM|intersect||==|NUM|fUnknown|",        "ACTION"],
-    ["merge|NUM|intersect||==|NUM|fConcat|",         "ACTION"],
-    ["merge|NUM|intersect||==|NUM|fLiteral|",        "ACTION"],
-    ["merge|NUM|intersect||==|NUM|intersect|",       "ACTION"],
-
-
-    ["merge|STR|fUnknown||==|STR|fUnknown|",         "ACTION"],
-    ["merge|STR|fUnknown||==|STR|fConcat|",          "ACTION"],
-    ["merge|STR|fUnknown||==|STR|fLiteral|",         "ACTION"],
-    ["merge|STR|fUnknown||==|STR|intersect|",        "ACTION"],
-
-    ["merge|STR|fConcat||==|STR|fUnknown|",          "ACTION"],
-    ["merge|STR|fConcat||==|STR|fConcat|",           "ACTION"],
-    ["merge|STR|fConcat||==|STR|fLiteral|",          "ACTION"],
-    ["merge|STR|fConcat||==|STR|intersect|",         "ACTION"],
-
-    ["merge|STR|fLiteral||==|STR|fUnknown|",         "ACTION"],
-    ["merge|STR|fLiteral||==|STR|fConcat|",          "ACTION"],
-    ["merge|STR|fLiteral||==|STR|fLiteral|",         "ACTION"],
-    ["merge|STR|fLiteral||==|STR|intersect|",        "ACTION"],
-
-    ["merge|STR|intersect||==|STR|fUnknown|",        "ACTION"],
-    ["merge|STR|intersect||==|STR|fConcat|",         "ACTION"],
-    ["merge|STR|intersect||==|STR|fLiteral|",        "ACTION"],
-    ["merge|STR|intersect||==|STR|intersect|",       "ACTION"],
+    ["merge|LST-U,LST-u|intersect|=|LST-U,LST-u|fUnknown",       "ACTION"],
+    ["merge|LST-U,LST-u|intersect|=|LST-U,LST-u|fConcat",        "ACTION"],
+    ["merge|LST-U,LST-u|intersect|=|LST-U,LST-u|fLiteral",       "ACTION"],
+    ["merge|LST-U,LST-u|intersect|=|LST-U,LST-u|intersect",      "ACTION"],
 
 
-    ["merge|LST-U,LST-u|fUnknown||==|LST-U,LST-u|fUnknown|",        "ACTION"],
-    ["merge|LST-U,LST-u|fUnknown||==|LST-U,LST-u|fConcat|",         "ACTION"],
-    ["merge|LST-U,LST-u|fUnknown||==|LST-U,LST-u|fLiteral|",        "ACTION"],
-    ["merge|LST-U,LST-u|fUnknown||==|LST-U,LST-u|intersect|",       "ACTION"],
+    ["merge|NUM||==|STR,LST-U,LST-u|",             "ACTION"],   #Reject
+    ["merge|STR||==|NUM,LST-U,LST-u|",             "ACTION"],
+    ["merge|LST-U,LST-u||==|NUM,STR|",             "ACTION"],
 
-    ["merge|LST-U,LST-u|fConcat||==|LST-U,LST-u|fUnknown|",         "ACTION"],
-    ["merge|LST-U,LST-u|fConcat||==|LST-U,LST-u|fConcat|",          "ACTION"],
-    ["merge|LST-U,LST-u|fConcat||==|LST-U,LST-u|fLiteral|",         "ACTION"],
-    ["merge|LST-U,LST-u|fConcat||==|LST-U,LST-u|intersect|",        "ACTION"],
 
-    ["merge|LST-U,LST-u|fLiteral||==|LST-U,LST-u|fUnknown|",        "ACTION"],
-    ["merge|LST-U,LST-u|fLiteral||==|LST-U,LST-u|fConcat|",         "ACTION"],
-    ["merge|LST-U,LST-u|fLiteral||==|LST-U,LST-u|fLiteral|",        "ACTION"],
-    ["merge|LST-U,LST-u|fLiteral||==|LST-U,LST-u|intersect|",       "ACTION"],
+    ["merge|NUM|fUnknown|==|NUM|fUnknown",         "ACTION"],
+    ["merge|NUM|fUnknown|==|NUM|fConcat",          "ACTION"],
+    ["merge|NUM|fUnknown|==|NUM|fLiteral",         "ACTION"],
+    ["merge|NUM|fUnknown|==|NUM|intersect",        "ACTION"],
 
-    ["merge|LST-U,LST-u|intersect||==|LST-U,LST-u|fUnknown|",       "ACTION"],
-    ["merge|LST-U,LST-u|intersect||==|LST-U,LST-u|fConcat|",        "ACTION"],
-    ["merge|LST-U,LST-u|intersect||==|LST-U,LST-u|fLiteral|",       "ACTION"],
-    ["merge|LST-U,LST-u|intersect||==|LST-U,LST-u|intersect|",      "ACTION"],
+    ["merge|NUM|fConcat|==|NUM|fUnknown",          "ACTION"],
+    ["merge|NUM|fConcat|==|NUM|fConcat",           "ACTION"],
+    ["merge|NUM|fConcat|==|NUM|fLiteral",          "ACTION"],
+    ["merge|NUM|fConcat|==|NUM|intersect",         "ACTION"],
+
+    ["merge|NUM|fLiteral|==|NUM|fUnknown",         "ACTION"],
+    ["merge|NUM|fLiteral|==|NUM|fConcat",          "ACTION"],
+    ["merge|NUM|fLiteral|==|NUM|fLiteral",         "ACTION"],
+    ["merge|NUM|fLiteral|==|NUM|intersect",        "ACTION"],
+
+    ["merge|NUM|intersect|==|NUM|fUnknown",        "ACTION"],
+    ["merge|NUM|intersect|==|NUM|fConcat",         "ACTION"],
+    ["merge|NUM|intersect|==|NUM|fLiteral",        "ACTION"],
+    ["merge|NUM|intersect|==|NUM|intersect",       "ACTION"],
+
+
+    ["merge|STR|fUnknown|==|STR|fUnknown",         "ACTION"],
+    ["merge|STR|fUnknown|==|STR|fConcat",          "ACTION"],
+    ["merge|STR|fUnknown|==|STR|fLiteral",         "ACTION"],
+    ["merge|STR|fUnknown|==|STR|intersect",        "ACTION"],
+
+    ["merge|STR|fConcat|==|STR|fUnknown",          "ACTION"],
+    ["merge|STR|fConcat|==|STR|fConcat",           "ACTION"],
+    ["merge|STR|fConcat|==|STR|fLiteral",          "ACTION"],
+    ["merge|STR|fConcat|==|STR|intersect",         "ACTION"],
+
+    ["merge|STR|fLiteral|==|STR|fUnknown",         "ACTION"],
+    ["merge|STR|fLiteral|==|STR|fConcat",          "ACTION"],
+    ["merge|STR|fLiteral|==|STR|fLiteral",         "ACTION"],
+    ["merge|STR|fLiteral|==|STR|intersect",        "ACTION"],
+
+    ["merge|STR|intersect|==|STR|fUnknown",        "ACTION"],
+    ["merge|STR|intersect|==|STR|fConcat",         "ACTION"],
+    ["merge|STR|intersect|==|STR|fLiteral",        "ACTION"],
+    ["merge|STR|intersect|==|STR|intersect",       "ACTION"],
+
+
+    ["merge|LST-U,LST-u|fUnknown|==|LST-U,LST-u|fUnknown",        "ACTION"],
+    ["merge|LST-U,LST-u|fUnknown|==|LST-U,LST-u|fConcat",         "ACTION"],
+    ["merge|LST-U,LST-u|fUnknown|==|LST-U,LST-u|fLiteral",        "ACTION"],
+    ["merge|LST-U,LST-u|fUnknown|==|LST-U,LST-u|intersect",       "ACTION"],
+
+    ["merge|LST-U,LST-u|fConcat|==|LST-U,LST-u|fUnknown",         "ACTION"],
+    ["merge|LST-U,LST-u|fConcat|==|LST-U,LST-u|fConcat",          "ACTION"],
+    ["merge|LST-U,LST-u|fConcat|==|LST-U,LST-u|fLiteral",         "ACTION"],
+    ["merge|LST-U,LST-u|fConcat|==|LST-U,LST-u|intersect",        "ACTION"],
+
+    ["merge|LST-U,LST-u|fLiteral|==|LST-U,LST-u|fUnknown",        "ACTION"],
+    ["merge|LST-U,LST-u|fLiteral|==|LST-U,LST-u|fConcat",         "ACTION"],
+    ["merge|LST-U,LST-u|fLiteral|==|LST-U,LST-u|fLiteral",        "ACTION"],
+    ["merge|LST-U,LST-u|fLiteral|==|LST-U,LST-u|intersect",       "ACTION"],
+
+    ["merge|LST-U,LST-u|intersect|==|LST-U,LST-u|fUnknown",       "ACTION"],
+    ["merge|LST-U,LST-u|intersect|==|LST-U,LST-u|fConcat",        "ACTION"],
+    ["merge|LST-U,LST-u|intersect|==|LST-U,LST-u|fLiteral",       "ACTION"],
+    ["merge|LST-U,LST-u|intersect|==|LST-U,LST-u|intersect",      "ACTION"],
 
 ]
 
@@ -274,4 +288,4 @@ infCases = enumerateAllCombos(mergePoints)
 markHandledCases(infRules, infCases, mergePoints)
 #markHandledCases(sizeRules, sizeCases, sizePoints)
 
-
+#generateCode(infRules)
