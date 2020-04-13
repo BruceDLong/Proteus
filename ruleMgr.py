@@ -3,6 +3,25 @@
 
 ruleSetIDs = ['merge']
 
+sizePoints = [
+    [
+    "measurable",
+    "!measurable"
+    ],
+
+    [
+    "sGivn",
+    "s!Gvn"
+    ],
+
+    [
+    'fUnknown',
+    'fConcat',   # TODO: Concats with ... not counted.
+    'fLiteral',
+    'intersect'
+    ]
+]
+
 infonPoints = [
     [
     '?',
@@ -70,10 +89,10 @@ def doesCaseMatchPattern(toMatch, case):
             return(False)
     return(True)
 
-def markHandledCases(patterns, cases, points):
+def markHandledCases(rules, cases, points):
     handledCount = 0
-    for pattern in patterns:
-        patternSegs = pattern[0].split('|')
+    for rule in rules:
+        patternSegs = rule[0].split('|')
         toMatch = []
         idx = 0
         for pseg in patternSegs:
@@ -98,15 +117,19 @@ def markHandledCases(patterns, cases, points):
         handledCount += matchCount
     print("Handled cases:", handledCount)
     print("Remaining:", len(cases), "-", handledCount, "=", len(cases) - handledCount)
+    print("Number of rules:", len(rules))
     return(handledCount)
 
-rules = [
-    ["merge||||=,==|?||",                           "ACTION"],
-    ["merge|?|||=,==|NUM,STR,LST-U,LST-U||",        "ACTION"],
+sizeRules = [
+]
 
-    ["merge|NUM|||=|STR,LST-U,LST-U||",             "REJECT"],   #Reject
-    ["merge|STR|||=|NUM,LST-U,LST-U||",             "REJECT"],
-    ["merge|LST-U,LST-U|||=|NUM,STR||",             "REJECT"],
+infRules = [
+    ["merge||||=,==|?||",                           "ACTION"],
+    ["merge|?|||=,==|NUM,STR,LST-U,LST-u||",        "ACTION"],
+
+    ["merge|NUM|||=|STR,LST-U,LST-u||",             "REJECT"],   #Reject
+    ["merge|STR|||=|NUM,LST-U,LST-u||",             "REJECT"],
+    ["merge|LST-U,LST-u|||=|NUM,STR||",             "REJECT"],
 
 
     ["merge|NUM|fUnknown||=|NUM|fUnknown|",         "ACTION"],
@@ -172,9 +195,9 @@ rules = [
     ["merge|LST-U,LST-u|intersect||=|LST-U,LST-u|intersect|",      "ACTION"],
 
 
-    ["merge|NUM|||==|STR,LST-U,LST-U||",             "ACTION"],   #Reject
-    ["merge|STR|||==|NUM,LST-U,LST-U||",             "ACTION"],
-    ["merge|LST-U,LST-U|||==|NUM,STR||",             "ACTION"],
+    ["merge|NUM|||==|STR,LST-U,LST-u||",             "ACTION"],   #Reject
+    ["merge|STR|||==|NUM,LST-U,LST-u||",             "ACTION"],
+    ["merge|LST-U,LST-u|||==|NUM,STR||",             "ACTION"],
 
 
     ["merge|NUM|fUnknown||==|NUM|fUnknown|",         "ACTION"],
@@ -241,12 +264,14 @@ rules = [
 
 ]
 
+print("COMBOS:", countCombinations(sizePoints))
 print("COMBOS:", countCombinations(infonPoints))
 print("COMBOS:", countCombinations(mergePoints))
-cases = enumerateAllCombos(mergePoints)
-#for case in cases: print(case)
+sizeCases = enumerateAllCombos(sizePoints)
+infCases = enumerateAllCombos(mergePoints)
+#for case in sizeCases: print(case)
 
-markHandledCases(rules, cases, mergePoints)
-#for case in cases: print(case)
-print("Number of rules:", len(rules))
-#print("Number of Cases:", len(cases))
+markHandledCases(infRules, infCases, mergePoints)
+#markHandledCases(sizeRules, sizeCases, sizePoints)
+
+
