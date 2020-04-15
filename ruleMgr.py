@@ -2,8 +2,6 @@
 # Proteus Rule case manager
 from pprint import pprint
 
-ruleSetIDs = ['merge']
-
 sizePoints = [
     [
     "measurable",
@@ -23,6 +21,8 @@ sizePoints = [
     ]
     # TODO: ['Size-*', 'Size-/']
 ]
+sizeRules = []
+sizeCodeSnips = []
 
 infonPoints = [
     [
@@ -41,191 +41,9 @@ infonPoints = [
     ]
 ]
 
-infonCodePoints = {
-    '?':            'aItem.item.infMode == isUnknown',
-    'NUM':          'aItem.item.value.fType == NUM',
-    'STR':          'aItem.item.value.fType == STR',
-    'LST-u':        '(aItem.item.value.fType == LST and aItem.item.value.tailUnfinished == false)',
-    'LST-U':        '(aItem.item.value.fType == LST and aItem.item.value.tailUnfinished == true)',
-
-    'intersect':    'aItem.item.value.intersectPosParse == ipSquareBrackets',
-    'fUnknown':     'aItem.item.value.format == fUnknown',
-    'fConcat':      'aItem.item.value.format == fConcat',
-    'fLiteral':     'aItem.item.value.format == fLiteral',
-
-    '==':           'looseSize()',
-    '=':            '!looseSize()',
-}
 # Any infon: ?,NUM,STR,LST-u,LST-U.fUnknown,fConcat,fLiteral,intersect.Size-0-,Size-0-n,Size-n-m,Size-n,Size-n-,Size-Other
 mergePoints =  infonPoints + [['=', '==']] + infonPoints
-
-
-def countCombinations(caseSpec):
-    combos = 0;
-    for toks in caseSpec:
-        if isinstance(toks, str):
-            combos += 1
-        elif isinstance(toks, list):
-            if combos==0: combos=1
-            combos *= countCombinations(toks)
-    return combos
-
-def enumerateAllCombos(caseSpec):
-    firstList = caseSpec[0]
-    if len(caseSpec) > 1:
-        secondList = enumerateAllCombos(caseSpec[1:])
-        retList = []
-        for left in firstList:
-            for right in secondList:
-                retList.append(left+'|'+right)
-        return(retList)
-    else: return firstList
-
-def doesCaseMatchPattern(toMatch, case):
-    caseSegs = case.split('|')
-    numPSegs = len(toMatch)
-    numCSegs = len(caseSegs)
-    if numPSegs != numCSegs:
-        print("numPSegs:", numPSegs)
-        print("numCSegs:", numCSegs)
-        print("ERROR: pattern and case lengths do not match:", toMatch, "\n\n", caseSegs)
-        exit(1)
-    for i in range(0, numCSegs):
-        if not(caseSegs[i] in toMatch[i]):
-            return(False)
-    return(True)
-
-def stripTags(rules):
-    for rule in rules:
-        ruleStr = rule[0]
-        ruleStr = ruleStr[ruleStr.find(":")+1:]
-        rule[0] = ruleStr
-    return(rules)
-
-def markHandledCases(rules, cases, points):
-    handledCount = 0
-    for rule in rules:
-        patternSegs = rule[0].split('|')
-        toMatch = []
-        idx = 0
-        for pseg in patternSegs:
-            if pseg =="":
-                toMatch.append(points[idx])
-            else:
-                toMatch.append(pseg.split(','))
-            idx += 1
-        count = 0
-        matchCount = 0
-        for case in cases:
-            if case[0:2] == "##": print("rules overlap:",case); exit(2)
-            if case[0] == "#": caseToPass = case[1:]
-            else: caseToPass = case
-            if doesCaseMatchPattern(toMatch, caseToPass):
-                #if cases[count] != caseToPass: print("cases != case:",case)
-                cases[count] = "#"+case
-                if case[0]=="#": print("rules overlap:",case); exit(2)
-                matchCount += 1
-            count +=1
-        #print("matchCount:",matchCount)
-        handledCount += matchCount
-    print("Handled cases:", handledCount)
-    print("Remaining:", len(cases), "-", handledCount, "=", len(cases) - handledCount)
-    print("Number of rules:", len(rules))
-    return(handledCount)
-
-def generateCode(rules):
-    S = ""
-    indent = "        "
-    ruleCount = 0
-    for rule in rules:
-        if ruleCount > 9: break
-        #print('rule:',rule)
-        trigger    = rule[0]
-        action     = rule[1]
-        conditions = trigger.split('|')
-        conditionCode = ""
-        condCount = 0
-        for condition in conditions:
-            subConditions = condition.split(',')
-            subCount = 0
-            subCode = ""
-            for subCondition in subConditions:
-                if subCondition == 'merge': continue
-                if subCondition == '': continue # any condition
-                if subCondition == '=': continue
-                if subCondition == '==': continue
-                else:
-                    if subCount > 0: subCode += " or "
-                    subCode += infonCodePoints[subCondition]
-                    subCount += 1
-            if subCount > 1: subCode="("+subCode+")"
-            if subCode != "":
-                #print(subCode)
-                if condCount > 0: conditionCode += " and "
-                conditionCode += subCode
-                condCount += 1
-        if conditionCode != "":
-            #print(conditionCode)
-            actionCode = action
-            if action =='DO_NOTHING':
-                actionCode = '// do nothing'
-            if ruleCount >0: conditionKW = "else if"
-            else: conditionKW = "if"
-            conditionCode = conditionKW+"("+conditionCode+")"
-            codeBody      = "{\n    "+indent+"//"+actionCode+"\n"+indent+"}\n"
-            S += indent+conditionCode+codeBody
-            #print(conditionCode+codeBody)
-        ruleCount +=1
-    print(S)
-
-def genConditionCode(key):
-    kSegs= key.split(',')
-    S=""
-    count=0
-    for kSeg in kSegs:
-        if not kSeg in infonCodePoints:
-            print("key not found in genIfs:",kSeg)
-            exit(2)
-        if count > 0: S+=" or "
-        S += infonCodePoints[kSeg]
-        count += 1
-    if count > 1: S = "("+S+")"
-    return S
-
-def genIfs(ifsTree, indent = "        "):
-    count =0
-    S = ""
-    if "__code" in ifsTree: return(indent+"// "+ifsTree["__code"]+"\n")
-    for key,value in ifsTree.items():
-        S += indent
-        if count >0: S += "else "
-        S += "if("
-        S += genConditionCode(key)
-        S += "){\n"
-        S += genIfs(value, indent + "    ")
-        S += indent+"}\n"
-        count += 1
-        #print("KS:",key,S)
-    return(S)
-
-def generateCode2(rules):
-    topIfs = {}
-    for rule in rules:
-        crntIfs = topIfs
-        for rSeg in rule[0].split("|"):
-            if rSeg == "": continue
-            if not rSeg in crntIfs:
-                crntIfs[rSeg] = {}
-            crntIfs = crntIfs[rSeg]
-        crntIfs["__code"]=rule[1]
-    #pprint(topIfs)
-    S = genIfs(topIfs)
-    print(S)
-
-sizeRules = [
-]
-
-infRules = [
+mergeRules = [
     ["merge:|||?|",                           "DO_NOTHING"],
     ["merge:?||=|NUM,STR,LST-U,LST-u|",           "copyRHSTypeToLHS,copyValueRHStoLHS,copySizeRHStoLHS"],
     ["merge:?||==|NUM,STR,LST-U,LST-u|",          "copyRHSTypeToLHS,copyValueRHStoLHS"],
@@ -364,17 +182,156 @@ infRules = [
     ["merge:LST-U,LST-u|intersect|==|LST-U,LST-u|fConcat",        "ACTION"],
     ["merge:LST-U,LST-u|intersect|==|LST-U,LST-u|fLiteral",       "ACTION"],
     ["merge:LST-U,LST-u|intersect|==|LST-U,LST-u|intersect",      "ACTION"],
+]
+mergeCodeSnips = {
+    '?':            'aItem.item.infMode == isUnknown',
+    'NUM':          'aItem.item.value.fType == NUM',
+    'STR':          'aItem.item.value.fType == STR',
+    'LST-u':        '(aItem.item.value.fType == LST and aItem.item.value.tailUnfinished == false)',
+    'LST-U':        '(aItem.item.value.fType == LST and aItem.item.value.tailUnfinished == true)',
 
+    'intersect':    'aItem.item.value.intersectPosParse == ipSquareBrackets',
+    'fUnknown':     'aItem.item.value.format == fUnknown',
+    'fConcat':      'aItem.item.value.format == fConcat',
+    'fLiteral':     'aItem.item.value.format == fLiteral',
+
+    '==':           'looseSize()',
+    '=':            '!looseSize()',
+}
+
+ruleSets = [
+    [sizePoints, sizeRules, sizeCodeSnips],
+    [mergePoints, mergeRules, mergeCodeSnips]
 ]
 
-print("COMBOS:", countCombinations(sizePoints))
-print("COMBOS:", countCombinations(infonPoints))
-print("COMBOS:", countCombinations(mergePoints))
-sizeCases = enumerateAllCombos(sizePoints)
-infCases = enumerateAllCombos(mergePoints)
-#for case in sizeCases: print(case)
-untagRules = stripTags(infRules)
-markHandledCases(untagRules, infCases, mergePoints)
-#markHandledCases(sizeRules, sizeCases, sizePoints)
+def countCombinations(caseSpec):
+    combos = 0;
+    for toks in caseSpec:
+        if isinstance(toks, str):
+            combos += 1
+        elif isinstance(toks, list):
+            if combos==0: combos=1
+            combos *= countCombinations(toks)
+    return combos
 
-generateCode2(untagRules)
+def enumerateAllCombos(caseSpec):
+    firstList = caseSpec[0]
+    if len(caseSpec) > 1:
+        secondList = enumerateAllCombos(caseSpec[1:])
+        retList = []
+        for left in firstList:
+            for right in secondList:
+                retList.append(left+'|'+right)
+        return(retList)
+    else: return firstList
+
+def doesCaseMatchPattern(toMatch, case):
+    caseSegs = case.split('|')
+    numPSegs = len(toMatch)
+    numCSegs = len(caseSegs)
+    if numPSegs != numCSegs:
+        print("numPSegs:", numPSegs)
+        print("numCSegs:", numCSegs)
+        print("ERROR: pattern and case lengths do not match:", toMatch, "\n\n", caseSegs)
+        exit(1)
+    for i in range(0, numCSegs):
+        if not(caseSegs[i] in toMatch[i]):
+            return(False)
+    return(True)
+
+def stripTags(rules):
+    for rule in rules:
+        ruleStr = rule[0]
+        ruleStr = ruleStr[ruleStr.find(":")+1:]
+        rule[0] = ruleStr
+    return(rules)
+
+def markHandledCases(rules, cases, points):
+    handledCount = 0
+    for rule in rules:
+        patternSegs = rule[0].split('|')
+        toMatch = []
+        idx = 0
+        for pseg in patternSegs:
+            if pseg =="":
+                toMatch.append(points[idx])
+            else:
+                toMatch.append(pseg.split(','))
+            idx += 1
+        count = 0
+        matchCount = 0
+        for case in cases:
+            if case[0:2] == "##": print("rules overlap:",case); exit(2)
+            if case[0] == "#": caseToPass = case[1:]
+            else: caseToPass = case
+            if doesCaseMatchPattern(toMatch, caseToPass):
+                #if cases[count] != caseToPass: print("cases != case:",case)
+                cases[count] = "#"+case
+                if case[0]=="#": print("rules overlap:",case); exit(2)
+                matchCount += 1
+            count +=1
+        #print("matchCount:",matchCount)
+        handledCount += matchCount
+    print("Handled cases:", handledCount)
+    print("Remaining:", len(cases), "-", handledCount, "=", len(cases) - handledCount)
+    print("Number of rules:", len(rules))
+    return(handledCount)
+
+def genConditionCode(key, codeSnips):
+    kSegs= key.split(',')
+    S=""
+    count=0
+    for kSeg in kSegs:
+        if not kSeg in codeSnips:
+            print("key not found in genIfs:",kSeg)
+            exit(2)
+        if count > 0: S+=" or "
+        S += codeSnips[kSeg]
+        count += 1
+    if count > 1: S = "("+S+")"
+    return S
+
+def genIfs(ifsTree, codeSnips, indent = "        "):
+    count =0
+    S = ""
+    if "__code" in ifsTree: return(indent+"// "+ifsTree["__code"]+"\n")
+    for key,value in ifsTree.items():
+        S += indent
+        if count >0: S += "else "
+        S += "if("
+        S += genConditionCode(key, codeSnips)
+        S += "){\n"
+        S += genIfs(value, codeSnips, indent + "    ")
+        S += indent+"}\n"
+        count += 1
+        #print("KS:",key,S)
+    return(S)
+
+def generateCode(rules, codeSnips):
+    topIfs = {}
+    for rule in rules:
+        crntIfs = topIfs
+        for rSeg in rule[0].split("|"):
+            if rSeg == "": continue
+            if not rSeg in crntIfs:
+                crntIfs[rSeg] = {}
+            crntIfs = crntIfs[rSeg]
+        crntIfs["__code"]=rule[1]
+    #pprint(topIfs)
+    S = genIfs(topIfs, codeSnips)
+    return(S)
+
+def generateMemberFunc(points, rules, codeSnips):
+    cases = enumerateAllCombos(points)
+    #for case in cases: print(case)
+    untagedRules = stripTags(rules)
+    markHandledCases(untagedRules, cases, points)
+    ifsCode = generateCode(untagedRules, codeSnips)
+    #print(ifsCode)
+
+def generateXformMgr(ruleSets):
+    for ruleSet in ruleSets:
+        generateMemberFunc(ruleSet[0], ruleSet[1], ruleSet[2])
+
+
+generateXformMgr(ruleSets)
