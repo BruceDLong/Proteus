@@ -194,17 +194,17 @@ mergeRules = {
 }
 wrkLstRules = {
     'ID': 'wrkLst',
-    'points': [["wrkLstIsEmpty", "wrkLstNotEmpty"]],
+    'points': [["wrkLstEmpty", "!wrkLstEmpty"]],
     'ifSnips': {
-        'wrkLstNotEmpty':   '!aItem.item.wrkList.isEmpty()',
-        'wrkLstIsEmpty':    'true'
+        '!wrkLstEmpty':   '!aItem.item.wrkList.isEmpty()',
+        'wrkLstEmpty':    'true'
     },
     'codeSnips': {
         'enqueueForMerge':  'enqueueForMerge(aItem)'
     },
     'rules': [
-        ["wrkLst:wrkLstNotEmpty",     "enqueueForMerge"],
-        ["wrkLst:wrkLstIsEmpty",      "NULL"]
+        ["wrkLst:!wrkLstEmpty",     "enqueueForMerge"],
+        ["wrkLst:wrkLstEmpty",      "NULL"]
     ]
 }
 startPropRules = { # Start iterating fLiteral LST = fLiteral LST
@@ -452,23 +452,37 @@ def genActionCode(codeKeyWords, codeSnips, indent):
         S+= indent + codeSnips[KW]+"\n"
     return(S)
 
-def genIfs(ifsTree, ifSnips, codeSnips, indent = "        "):
+def genIfs(ifsTree, binaryPts, ifSnips, codeSnips, indent = "        "):
     count =0
     S = ""
     if "__code" in ifsTree: return(genActionCode(ifsTree["__code"], codeSnips, indent))
     for key,value in ifsTree.items():
+        if key in binaryPts:
+            isBinary = True
+
+        else: isBinary = False
         S += indent
-        if count >0: S += "else "
-        S += "if("
-        S += genConditionCode(key, ifSnips)
-        S += "){\n"
-        S += genIfs(value, ifSnips, codeSnips, indent + "    ")
+        if isBinary:
+            if count >0:
+                S += "else"
+            else:
+                S += "if("
+                S += genConditionCode(key, ifSnips)
+                S += ")"
+        else:
+            if count >0:
+                S += "else "
+            S += "if("
+            S += genConditionCode(key, ifSnips)
+            S += ")"
+        S += "{\n"
+        S += genIfs(value, binaryPts, ifSnips, codeSnips, indent + "    ")
         S += indent+"}\n"
         count += 1
         #print("KS:",key,S)
     return(S)
 
-def generateCode(rules, ifSnips, codeSnips):
+def generateCode(rules, binaryPts, ifSnips, codeSnips):
     topIfs = {}
     for rule in rules:
         crntIfs = topIfs
@@ -479,15 +493,28 @@ def generateCode(rules, ifSnips, codeSnips):
             crntIfs = crntIfs[rSeg]
         crntIfs["__code"]=rule[1]
     #pprint(topIfs)
-    S = genIfs(topIfs, ifSnips, codeSnips)
+    S = genIfs(topIfs, binaryPts, ifSnips, codeSnips)
     return(S)
+
+def pointIsBinary(pointSet):
+    if len(pointSet)==2:
+        if pointSet[0][:1] == "!" and pointSet[0][1:] == pointSet[1]:
+            return(True)
+        if pointSet[1][:1] == "!" and pointSet[1][1:] == pointSet[0]:
+            return(True)
+    return(False)
 
 def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
     cases = enumerateAllCombos(points)
     #for case in cases: print(case)
     untagedRules = stripTags(rules)
+    binaryPts = []
+    for pointSet in points:
+         if pointIsBinary(pointSet):
+             for point in pointSet:
+                binaryPts.append(point)
     markHandledCases(ruleSetID, untagedRules, cases, points)
-    ifsCode = generateCode(untagedRules, ifSnips, codeSnips)
+    ifsCode = generateCode(untagedRules, binaryPts, ifSnips, codeSnips)
     funcCode = "    void: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"    }\n"
     return(funcCode)
 
