@@ -3,44 +3,31 @@
 from pprint import pprint
 
 sizePoints = [
-    [
-    "measurable",
-    "!measurable"
-    ],
-
-    [
-    "sGivn",
-    "s!Gvn"
-    ],
-
-    [
-    'fUnknown',
-    'fConcat',   # TODO: Concats with ... not counted.
-    'fLiteral',
-    'intersect'
-    ]
+    ["measurable", "!measurable"],
+    ["sGivn", "s!Gvn"],
+    ['fUnknown', 'fConcat', 'fLiteral', 'intersect']
     # TODO: ['Size-*', 'Size-/']
 ]
 sizeRules = []
-sizeIfSnips = []
+sizeIfSnips = {}
 sizeCodeSnips = {}
 
-# Any infon: ?,NUM,STR,LST-u,LST-U.fUnknown,fConcat,fLiteral,intersect.Size-0-,Size-0-n,Size-n-m,Size-n,Size-n-,Size-Other
+# Any infon: ?,NUM,STR,LST,LST.fUnknown,fConcat,fLiteral,intersect.Size-0-,Size-0-n,Size-n-m,Size-n,Size-n-,Size-Other
 mergePoints = [
-    ['l?', 'lNUM', 'lSTR', 'lLST-u', 'lLST-U'],
+    ['l?', 'lNUM', 'lSTR', 'lLST', 'lLST'],
     ['lintersect', 'lfUnknown', 'lfConcat', 'lfLiteral'],
     ['=', '=='],
-    ['r?', 'rNUM', 'rSTR', 'rLST-u', 'rLST-U'],
+    ['r?', 'rNUM', 'rSTR', 'rLST', 'rLST'],
     ['rintersect', 'rfUnknown', 'rfConcat', 'rfLiteral']
 ]
 mergeRules = [
     ["merge:|||r?|",                           "NULL"],
-    ["merge:l?||=|rNUM,rSTR,rLST-U,rLST-u|",           "copyRHSTypeToLHS,copyValueRHStoLHS,copySizeRHStoLHS"],
-    ["merge:l?||==|rNUM,rSTR,rLST-U,rLST-u|",          "copyRHSTypeToLHS,copyValueRHStoLHS"],
+    ["merge:l?||=|rNUM,rSTR,rLST|",           "copyRHSTypeToLHS,copyValueRHStoLHS,copySizeRHStoLHS"],
+    ["merge:l?||==|rNUM,rSTR,rLST|",          "copyRHSTypeToLHS,copyValueRHStoLHS"],
 
-    ["merge:lNUM||=|rSTR,rLST-U,rLST-u|",             "REJECT"],   #Reject
-    ["merge:lSTR||=|rNUM,rLST-U,rLST-u|",             "REJECT"],
-    ["merge:lLST-U,lLST-u||=|rNUM,rSTR|",             "REJECT"],
+    ["merge:lNUM||=|rSTR,rLST|",             "REJECT"],   #Reject
+    ["merge:lSTR||=|rNUM,rLST|",             "REJECT"],
+    ["merge:lLST||=|rNUM,rSTR|",             "REJECT"],
 
 
     ["merge:lNUM|lfUnknown|=|rNUM|rfUnknown",         "NULL"],
@@ -55,7 +42,7 @@ mergeRules = [
 
     ["merge:lNUM|lfLiteral|=|rNUM|rfUnknown",         "copyValueLHStoRHS"],
     ["merge:lNUM|lfLiteral|=|rNUM|rfConcat",          "ACTION"],
-    ["merge:lNUM|lfLiteral|=|rNUM|rfLiteral",         "rejectIfValuesNotEqual"],
+    ["merge:lNUM|lfLiteral|=|rNUM|rfLiteral",         "rejectIfValueNumNotEqual"],
     ["merge:lNUM|lfLiteral|=|rNUM|rintersect",        "ACTION"],
 
     ["merge:lNUM|lintersect|=|rNUM|rfUnknown",        "ACTION"],
@@ -75,7 +62,7 @@ mergeRules = [
 
     ["merge:lSTR|lfLiteral|=|rSTR|rfUnknown",         "copyValueLHStoRHS"],
     ["merge:lSTR|lfLiteral|=|rSTR|rfConcat",          "ACTION"],
-    ["merge:lSTR|lfLiteral|=|rSTR|rfLiteral",         "rejectIfValuesNotEqual"],
+    ["merge:lSTR|lfLiteral|=|rSTR|rfLiteral",         "rejectIfValueStrNotEqual"],
     ["merge:lSTR|lfLiteral|=|rSTR|rintersect",        "ACTION"],
 
     ["merge:lSTR|lintersect|=|rSTR|rfUnknown",        "ACTION"],
@@ -84,30 +71,30 @@ mergeRules = [
     ["merge:lSTR|lintersect|=|rSTR|rintersect",       "ACTION"],
 
 
-    ["merge:lLST-U,lLST-u|lfUnknown|=|rLST-U,rLST-u|rfUnknown",        "ACTION"],
-    ["merge:lLST-U,lLST-u|lfUnknown|=|rLST-U,rLST-u|rfConcat",         "ACTION"],
-    ["merge:lLST-U,lLST-u|lfUnknown|=|rLST-U,rLST-u|rfLiteral",        "ACTION"],
-    ["merge:lLST-U,lLST-u|lfUnknown|=|rLST-U,rLST-u|rintersect",       "ACTION"],
+    ["merge:lLST|lfUnknown|=|rLST|rfUnknown",        "ACTION"],
+    ["merge:lLST|lfUnknown|=|rLST|rfConcat",         "ACTION"],
+    ["merge:lLST|lfUnknown|=|rLST|rfLiteral",        "ACTION"],
+    ["merge:lLST|lfUnknown|=|rLST|rintersect",       "ACTION"],
 
-    ["merge:lLST-U,lLST-u|lfConcat|=|rLST-U,rLST-u|rfUnknown",         "ACTION"],
-    ["merge:lLST-U,lLST-u|lfConcat|=|rLST-U,rLST-u|rfConcat",          "ACTION"],
-    ["merge:lLST-U,lLST-u|lfConcat|=|rLST-U,rLST-u|rfLiteral",         "ACTION"],
-    ["merge:lLST-U,lLST-u|lfConcat|=|rLST-U,rLST-u|rintersect",        "ACTION"],
+    ["merge:lLST|lfConcat|=|rLST|rfUnknown",         "ACTION"],
+    ["merge:lLST|lfConcat|=|rLST|rfConcat",          "ACTION"],
+    ["merge:lLST|lfConcat|=|rLST|rfLiteral",         "ACTION"],
+    ["merge:lLST|lfConcat|=|rLST|rintersect",        "ACTION"],
 
-    ["merge:lLST-U,lLST-u|lfLiteral|=|rLST-U,rLST-u|rfUnknown",        "ACTION"],
-    ["merge:lLST-U,lLST-u|lfLiteral|=|rLST-U,rLST-u|rfConcat",         "ACTION"],
-    ["merge:lLST-U,lLST-u|lfLiteral|=|rLST-U,rLST-u|rfLiteral",        "ACTION"],
-    ["merge:lLST-U,lLST-u|lfLiteral|=|rLST-U,rLST-u|rintersect",       "ACTION"],
+    ["merge:lLST|lfLiteral|=|rLST|rfUnknown",        "ACTION"],
+    ["merge:lLST|lfLiteral|=|rLST|rfConcat",         "ACTION"],
+    ["merge:lLST|lfLiteral|=|rLST|rfLiteral",        "ACTION"],
+    ["merge:lLST|lfLiteral|=|rLST|rintersect",       "ACTION"],
 
-    ["merge:lLST-U,lLST-u|lintersect|=|rLST-U,rLST-u|rfUnknown",       "ACTION"],
-    ["merge:lLST-U,lLST-u|lintersect|=|rLST-U,rLST-u|rfConcat",        "ACTION"],
-    ["merge:lLST-U,lLST-u|lintersect|=|rLST-U,rLST-u|rfLiteral",       "ACTION"],
-    ["merge:lLST-U,lLST-u|lintersect|=|rLST-U,rLST-u|rintersect",      "ACTION"],
+    ["merge:lLST|lintersect|=|rLST|rfUnknown",       "ACTION"],
+    ["merge:lLST|lintersect|=|rLST|rfConcat",        "ACTION"],
+    ["merge:lLST|lintersect|=|rLST|rfLiteral",       "ACTION"],
+    ["merge:lLST|lintersect|=|rLST|rintersect",      "ACTION"],
 
 
-    ["merge:lNUM||==|rSTR,rLST-U,rLST-u|",             "ACTION"],
-    ["merge:lSTR||==|rNUM,rLST-U,rLST-u|",             "ACTION"],
-    ["merge:lLST-U,lLST-u||==|rNUM,rSTR|",             "ACTION"],
+    ["merge:lNUM||==|rSTR,rLST|",             "ACTION"],
+    ["merge:lSTR||==|rNUM,rLST|",             "ACTION"],
+    ["merge:lLST||==|rNUM,rSTR|",             "ACTION"],
 
 
     ["merge:lNUM|lfUnknown|==|rNUM|rfUnknown",         "NULL"],
@@ -152,32 +139,31 @@ mergeRules = [
     ["merge:lSTR|lintersect|==|rSTR|rintersect",       "ACTION"],
 
 
-    ["merge:lLST-U,lLST-u|lfUnknown|==|rLST-U,rLST-u|rfUnknown",        "ACTION"],
-    ["merge:lLST-U,lLST-u|lfUnknown|==|rLST-U,rLST-u|rfConcat",         "ACTION"],
-    ["merge:lLST-U,lLST-u|lfUnknown|==|rLST-U,rLST-u|rfLiteral",        "ACTION"],
-    ["merge:lLST-U,lLST-u|lfUnknown|==|rLST-U,rLST-u|rintersect",       "ACTION"],
+    ["merge:lLST|lfUnknown|==|rLST|rfUnknown",        "ACTION"],
+    ["merge:lLST|lfUnknown|==|rLST|rfConcat",         "ACTION"],
+    ["merge:lLST|lfUnknown|==|rLST|rfLiteral",        "ACTION"],
+    ["merge:lLST|lfUnknown|==|rLST|rintersect",       "ACTION"],
 
-    ["merge:lLST-U,lLST-u|lfConcat|==|rLST-U,rLST-u|rfUnknown",         "ACTION"],
-    ["merge:lLST-U,lLST-u|lfConcat|==|rLST-U,rLST-u|rfConcat",          "ACTION"],
-    ["merge:lLST-U,lLST-u|lfConcat|==|rLST-U,rLST-u|rfLiteral",         "ACTION"],
-    ["merge:lLST-U,lLST-u|lfConcat|==|rLST-U,rLST-u|rintersect",        "ACTION"],
+    ["merge:lLST|lfConcat|==|rLST|rfUnknown",         "ACTION"],
+    ["merge:lLST|lfConcat|==|rLST|rfConcat",          "ACTION"],
+    ["merge:lLST|lfConcat|==|rLST|rfLiteral",         "ACTION"],
+    ["merge:lLST|lfConcat|==|rLST|rintersect",        "ACTION"],
 
-    ["merge:lLST-U,lLST-u|lfLiteral|==|rLST-U,rLST-u|rfUnknown",        "ACTION"],
-    ["merge:lLST-U,lLST-u|lfLiteral|==|rLST-U,rLST-u|rfConcat",         "ACTION"],
-    ["merge:lLST-U,lLST-u|lfLiteral|==|rLST-U,rLST-u|rfLiteral",        "ACTION"],
-    ["merge:lLST-U,lLST-u|lfLiteral|==|rLST-U,rLST-u|rintersect",       "ACTION"],
+    ["merge:lLST|lfLiteral|==|rLST|rfUnknown",        "ACTION"],
+    ["merge:lLST|lfLiteral|==|rLST|rfConcat",         "ACTION"],
+    ["merge:lLST|lfLiteral|==|rLST|rfLiteral",        "ACTION"],
+    ["merge:lLST|lfLiteral|==|rLST|rintersect",       "ACTION"],
 
-    ["merge:lLST-U,lLST-u|lintersect|==|rLST-U,rLST-u|rfUnknown",       "ACTION"],
-    ["merge:lLST-U,lLST-u|lintersect|==|rLST-U,rLST-u|rfConcat",        "ACTION"],
-    ["merge:lLST-U,lLST-u|lintersect|==|rLST-U,rLST-u|rfLiteral",       "ACTION"],
-    ["merge:lLST-U,lLST-u|lintersect|==|rLST-U,rLST-u|rintersect",      "ACTION"],
+    ["merge:lLST|lintersect|==|rLST|rfUnknown",       "ACTION"],
+    ["merge:lLST|lintersect|==|rLST|rfConcat",        "ACTION"],
+    ["merge:lLST|lintersect|==|rLST|rfLiteral",       "ACTION"],
+    ["merge:lLST|lintersect|==|rLST|rintersect",      "ACTION"],
 ]
 mergeIfSnips = {
     'l?':            'aItem.LHS.infMode == isUnknown',
     'lNUM':          'aItem.LHS.value.fType == NUM',
     'lSTR':          'aItem.LHS.value.fType == STR',
-    'lLST-u':        '(aItem.LHS.value.fType == LST and aItem.LHS.value.tailUnfinished == false)',
-    'lLST-U':        '(aItem.LHS.value.fType == LST and aItem.LHS.value.tailUnfinished == true)',
+    'lLST':          'aItem.LHS.value.fType == LST',
 
     'lintersect':    'aItem.LHS.value.intersectPosParse == ipSquareBrackets',
     'lfUnknown':     'aItem.LHS.value.format == fUnknown',
@@ -187,8 +173,7 @@ mergeIfSnips = {
     'r?':            'aItem.RHS.infMode == isUnknown',
     'rNUM':          'aItem.RHS.value.fType == NUM',
     'rSTR':          'aItem.RHS.value.fType == STR',
-    'rLST-u':        '(aItem.RHS.value.fType == LST and aItem.RHS.value.tailUnfinished == false)',
-    'rLST-U':        '(aItem.RHS.value.fType == LST and aItem.RHS.value.tailUnfinished == true)',
+    'rLST':          'aItem.RHS.value.fType == LST',
 
     'rintersect':    'aItem.RHS.value.intersectPosParse == ipSquareBrackets',
     'rfUnknown':     'aItem.RHS.value.format == fUnknown',
@@ -199,17 +184,127 @@ mergeIfSnips = {
     '=':            '!aItem.looseSize',
 }
 mergeCodeSnips = {
-    'REJECT':                   'aItem.reject = true',
-    'copyValueRHStoLHS':        '',
-    'copyValueLHStoRHS':        '',
-    'copyRHSTypeToLHS':         '',
-    'copySizeRHStoLHS':         '',
-    'rejectIfValuesNotEqual':   '',
+    'REJECT':                   'aItem.reject <- true',
+    'copyValueRHStoLHS':        'DO_COPY(aItem.RHS.value, aItem.LHS.value, aItem.sizeToCopy)',
+    'copyValueLHStoRHS':        'DO_COPY(aItem.LHS.value, aItem.RHS.value, aItem.sizeToCopy)',
+    'copyRHSTypeToLHS':         'aItem.LHS.value.fType <- aItem.RHS.value.fType; aItem.LHS.infMode <- aItem.RHS.infMode',
+    'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.infSize, aItem.LHS.infSize, 0)',
+    'rejectIfValueStrNotEqual': 'if(aItem.LHS.value.str != aItem.RHS.value.str){aItem.reject <- true}',
+    'rejectIfValueNumNotEqual': 'if(aItem.LHS.value.num != aItem.RHS.value.num){aItem.reject <- true}',
+}
+
+wrkLstPoints = [["wrkLstIsEmpty", "wrkLstNotEmpty"]]
+wrkLstRules = [
+    ["wrkLst:wrkLstNotEmpty",     "enqueueForMerge"],
+    ["wrkLst:wrkLstIsEmpty",      "NULL"]
+]
+wrkLstIfSnips = {
+    'wrkLstNotEmpty':   '!aItem.item.wrkList.isEmpty()',
+    'wrkLstIsEmpty':    'true'
+}
+wrkLstCodeSnips = {
+    'enqueueForMerge':  'enqueueForMerge(aItem)'
+}
+
+propagationPoints = [["infonMode", "mergeMode"],["skipDots1", "skipDots2", "notSkipDots"]]
+propagationRules = [
+    ["propagation:infonMode|skipDots1", "getNextExtSkip"],
+    ["propagation:infonMode|skipDots2", "getNextExtSkip"],
+    ["propagation:infonMode|notSkipDots", "getNextExt"],
+
+    ["propagation:mergeMode|skipDots1", "ACTION"],
+    ["propagation:mergeMode|skipDots2", "ACTION"],
+    ["propagation:mergeMode|notSkipDots", "ACTION"],
+]
+propagationIfSnips = {
+    'infonMode':    'aItem.ruleSet == rsInfon',
+    'mergeMode':    'aItem.ruleSet == rsMerge',
+    'skipDots1':    'aItem.item.',
+    'skipDots2':    'aItem.',
+    'notSkipDots':  ''
+}
+propagationCodeSnips = {
+    'getNextExtSkip':   '',
+    'getNextExt':       '',
+    '':    '',
+    '':    ''
+}
+
+resolvePoints = [["", ""]]
+resolveRules = [
+    ["wrkLst:",     "ACTION"],
+    ["wrkLst:",     "ACTION"]
+]
+resolveIfSnips = {
+    '':   '',
+    '':   ''
+}
+resolveCodeSnips = {
+    '':  ''
+}
+
+symbolPoints = [["", ""]]
+symbolRules = [
+    ["wrkLst:",     "ACTION"],
+    ["wrkLst:",     "ACTION"]
+]
+symbolIfSnips = {
+    '':   '',
+    '':   ''
+}
+symbolCodeSnips = {
+    '':  ''
+}
+
+rangePoints = [["", ""]]
+rangeRules = [
+    ["wrkLst:",     "ACTION"],
+    ["wrkLst:",     "ACTION"]
+]
+rangeIfSnips = {
+    '':   '',
+    '':   ''
+}
+rangeCodeSnips = {
+    '':  ''
+}
+
+timePoints = [["", ""]]
+timeRules = [
+    ["wrkLst:",     "ACTION"],
+    ["wrkLst:",     "ACTION"]
+]
+timeIfSnips = {
+    '':   '',
+    '':   ''
+}
+timeCodeSnips = {
+    '':  ''
+}
+
+wordPoints = [["", ""]]
+wordRules = [
+    ["wrkLst:",     "ACTION"],
+    ["wrkLst:",     "ACTION"]
+]
+wordIfSnips = {
+    '':   '',
+    '':   ''
+}
+wordCodeSnips = {
+    '':  ''
 }
 
 ruleSets = [
     ["size", sizePoints, sizeRules, sizeIfSnips, sizeCodeSnips],
-    ["merge", mergePoints, mergeRules, mergeIfSnips, mergeCodeSnips]
+    ["merge", mergePoints, mergeRules, mergeIfSnips, mergeCodeSnips],
+    ["wrkLst", wrkLstPoints, wrkLstRules, wrkLstIfSnips, wrkLstCodeSnips],
+    #["propagation", propagationPoints, propagationRules, propagationIfSnips, propagationCodeSnips],
+    #["resolve", resolvePoints, resolveRules, resolveIfSnips, resolveCodeSnips],
+    #["symbol", symbolPoints, symbolRules, symbolIfSnips, symbolCodeSnips],
+    #["range", rangePoints, rangeRules, rangeIfSnips, rangeCodeSnips],
+    #["time", timePoints, timeRules, timeIfSnips, timeCodeSnips],
+    #["word", wordPoints, wordRules, wordIfSnips, wordCodeSnips]
 ]
 
 def countCombinations(caseSpec):
@@ -262,7 +357,6 @@ def markHandledCases(ruleSetID, rules, cases, points):
         idx = 0
         for pseg in patternSegs:
             if pseg =="":
-
                 toMatch.append(points[idx])
             else:
                 toMatch.append(pseg.split(','))
@@ -347,7 +441,7 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
     return(funcCode)
 
 def generateXformMgr(ruleSets):
-    structCode = "struct xformMgr{\n"
+    structCode = "struct XformMgr{\n"
     for ruleSet in ruleSets:
         funcCode = generateMemberFunc(ruleSet[0], ruleSet[1], ruleSet[2], ruleSet[3], ruleSet[4])
         structCode+=funcCode
