@@ -65,145 +65,131 @@ mergeRules = {
         'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.infSize, aItem.LHS.infSize, 0)',
         'rejectIfValueStrNotEqual': 'if(aItem.LHS.value.str != aItem.RHS.value.str){aItem.reject <- true}',
         'rejectIfValueNumNotEqual': 'if(aItem.LHS.value.num != aItem.RHS.value.num){aItem.reject <- true}',
+        'StartMergePropogation':    'StartMergePropogation()'
     },
     'rules': [
         ["merge:|||r?|",                           "NULL"],
         ["merge:l?||=|rNUM,rSTR,rLST|",           "copyRHSTypeToLHS,copyValueRHStoLHS,copySizeRHStoLHS"],
         ["merge:l?||==|rNUM,rSTR,rLST|",          "copyRHSTypeToLHS,copyValueRHStoLHS"],
 
-        ["merge:lNUM||=|rSTR,rLST|",             "REJECT"],   #Reject
+        ["merge:lNUM||=|rSTR,rLST|",             "REJECT"],
         ["merge:lSTR||=|rNUM,rLST|",             "REJECT"],
         ["merge:lLST||=|rNUM,rSTR|",             "REJECT"],
 
-
         ["merge:lNUM|lfUnknown|=|rNUM|rfUnknown",         "NULL"],
-        ["merge:lNUM|lfUnknown|=|rNUM|rfConcat",          "ACTION"],
         ["merge:lNUM|lfUnknown|=|rNUM|rfLiteral",         "copyValueRHStoLHS"],
-        ["merge:lNUM|lfUnknown|=|rNUM|rintersect",        "ACTION"],
+        ["merge:lNUM|lfLiteral|=|rNUM|rfUnknown",         "copyValueLHStoRHS"],
+        ["merge:lNUM|lfLiteral|=|rNUM|rfLiteral",         "rejectIfValueNumNotEqual"],
 
+        ["merge:lSTR|lfUnknown|=|rSTR|rfUnknown",         "NULL"],
+        ["merge:lSTR|lfUnknown|=|rSTR|rfLiteral",         "copyValueRHStoLHS"],
+        ["merge:lSTR|lfLiteral|=|rSTR|rfUnknown",         "copyValueLHStoRHS"],
+        ["merge:lSTR|lfLiteral|=|rSTR|rfLiteral",         "rejectIfValueStrNotEqual"],
+
+        ["merge:lLST|lfUnknown|=|rLST|rfUnknown",        "ACTION"],
+        ["merge:lLST|lfUnknown|=|rLST|rfLiteral",        "ACTION"],
+        ["merge:lLST|lfLiteral|=|rLST|rfUnknown",        "ACTION"],
+        ["merge:lLST|lfLiteral|=|rLST|rfLiteral",        "StartMergePropogation"],
+
+        # LooseSize
+        ["merge:lNUM||==|rSTR,rLST|",             "ACTION"],
+        ["merge:lSTR||==|rNUM,rLST|",             "ACTION"],
+        ["merge:lLST||==|rNUM,rSTR|",             "ACTION"],
+
+        ["merge:lNUM|lfUnknown|==|rNUM|rfUnknown",         "NULL"],
+        ["merge:lNUM|lfUnknown|==|rNUM|rfLiteral",         "copyValueRHStoLHS"], # remember size to copy
+        ["merge:lNUM|lfLiteral|==|rNUM|rfUnknown",         "copyValueLHStoRHS"],
+        ["merge:lNUM|lfLiteral|==|rNUM|rfLiteral",         "ACTION"], #break into 2 cases: LHS.infSize.format = rfUnknown, rfLiteral.  see tryMergeValue()
+
+        ["merge:lSTR|lfUnknown|==|rSTR|rfUnknown",         "NULL"],
+        ["merge:lSTR|lfUnknown|==|rSTR|rfLiteral",         "copyValueRHStoLHS"], # sizeToCopy, handleRemainder
+        ["merge:lSTR|lfLiteral|==|rSTR|rfUnknown",         "copyValueLHStoRHS"],
+        ["merge:lSTR|lfLiteral|==|rSTR|rfLiteral",         "ACTION"],   #break into 2 cases: LHS.infSize.format = rfUnknown, rfLiteral.  see tryMergeValue()
+
+        ["merge:lLST|lfUnknown|==|rLST|rfUnknown",        "ACTION"],
+        ["merge:lLST|lfUnknown|==|rLST|rfLiteral",        "ACTION"],
+        ["merge:lLST|lfLiteral|==|rLST|rfUnknown",        "ACTION"],
+        ["merge:lLST|lfLiteral|==|rLST|rfLiteral",        "ACTION"],
+
+        ##### CONCAT and INTERSECT
+        ["merge:lNUM|lfUnknown|=|rNUM|rfConcat",          "ACTION"],
+        ["merge:lNUM|lfUnknown|=|rNUM|rintersect",        "ACTION"],
         ["merge:lNUM|lfConcat|=|rNUM|rfUnknown",          "ACTION"],
         ["merge:lNUM|lfConcat|=|rNUM|rfConcat",           "ACTION"],
         ["merge:lNUM|lfConcat|=|rNUM|rfLiteral",          "ACTION"],
         ["merge:lNUM|lfConcat|=|rNUM|rintersect",         "ACTION"],
-
-        ["merge:lNUM|lfLiteral|=|rNUM|rfUnknown",         "copyValueLHStoRHS"],
         ["merge:lNUM|lfLiteral|=|rNUM|rfConcat",          "ACTION"],
-        ["merge:lNUM|lfLiteral|=|rNUM|rfLiteral",         "rejectIfValueNumNotEqual"],
         ["merge:lNUM|lfLiteral|=|rNUM|rintersect",        "ACTION"],
-
         ["merge:lNUM|lintersect|=|rNUM|rfUnknown",        "ACTION"],
         ["merge:lNUM|lintersect|=|rNUM|rfConcat",         "ACTION"],
         ["merge:lNUM|lintersect|=|rNUM|rfLiteral",        "ACTION"],
         ["merge:lNUM|lintersect|=|rNUM|rintersect",       "ACTION"],
 
-        ["merge:lSTR|lfUnknown|=|rSTR|rfUnknown",         "NULL"],
         ["merge:lSTR|lfUnknown|=|rSTR|rfConcat",          "ACTION"],
-        ["merge:lSTR|lfUnknown|=|rSTR|rfLiteral",         "copyValueRHStoLHS"],
         ["merge:lSTR|lfUnknown|=|rSTR|rintersect",        "ACTION"],
-
         ["merge:lSTR|lfConcat|=|rSTR|rfUnknown",          "ACTION"],
         ["merge:lSTR|lfConcat|=|rSTR|rfConcat",           "ACTION"],
         ["merge:lSTR|lfConcat|=|rSTR|rfLiteral",          "ACTION"],
         ["merge:lSTR|lfConcat|=|rSTR|rintersect",         "ACTION"],
-
-        ["merge:lSTR|lfLiteral|=|rSTR|rfUnknown",         "copyValueLHStoRHS"],
         ["merge:lSTR|lfLiteral|=|rSTR|rfConcat",          "ACTION"],
-        ["merge:lSTR|lfLiteral|=|rSTR|rfLiteral",         "rejectIfValueStrNotEqual"],
         ["merge:lSTR|lfLiteral|=|rSTR|rintersect",        "ACTION"],
-
         ["merge:lSTR|lintersect|=|rSTR|rfUnknown",        "ACTION"],
         ["merge:lSTR|lintersect|=|rSTR|rfConcat",         "ACTION"],
         ["merge:lSTR|lintersect|=|rSTR|rfLiteral",        "ACTION"],
         ["merge:lSTR|lintersect|=|rSTR|rintersect",       "ACTION"],
 
-
-        ["merge:lLST|lfUnknown|=|rLST|rfUnknown",        "ACTION"],
         ["merge:lLST|lfUnknown|=|rLST|rfConcat",         "ACTION"],
-        ["merge:lLST|lfUnknown|=|rLST|rfLiteral",        "ACTION"],
         ["merge:lLST|lfUnknown|=|rLST|rintersect",       "ACTION"],
-
         ["merge:lLST|lfConcat|=|rLST|rfUnknown",         "ACTION"],
         ["merge:lLST|lfConcat|=|rLST|rfConcat",          "ACTION"],
         ["merge:lLST|lfConcat|=|rLST|rfLiteral",         "ACTION"],
         ["merge:lLST|lfConcat|=|rLST|rintersect",        "ACTION"],
-
-        ["merge:lLST|lfLiteral|=|rLST|rfUnknown",        "ACTION"],
         ["merge:lLST|lfLiteral|=|rLST|rfConcat",         "ACTION"],
-        ["merge:lLST|lfLiteral|=|rLST|rfLiteral",        "ACTION"],
         ["merge:lLST|lfLiteral|=|rLST|rintersect",       "ACTION"],
-
         ["merge:lLST|lintersect|=|rLST|rfUnknown",       "ACTION"],
         ["merge:lLST|lintersect|=|rLST|rfConcat",        "ACTION"],
         ["merge:lLST|lintersect|=|rLST|rfLiteral",       "ACTION"],
         ["merge:lLST|lintersect|=|rLST|rintersect",      "ACTION"],
 
-
-        ["merge:lNUM||==|rSTR,rLST|",             "ACTION"],
-        ["merge:lSTR||==|rNUM,rLST|",             "ACTION"],
-        ["merge:lLST||==|rNUM,rSTR|",             "ACTION"],
-
-
-        ["merge:lNUM|lfUnknown|==|rNUM|rfUnknown",         "NULL"],
+        # LooseSize
         ["merge:lNUM|lfUnknown|==|rNUM|rfConcat",          "ACTION"],
-        ["merge:lNUM|lfUnknown|==|rNUM|rfLiteral",         "copyValueRHStoLHS"], # remember size to copy
         ["merge:lNUM|lfUnknown|==|rNUM|rintersect",        "ACTION"],
-
         ["merge:lNUM|lfConcat|==|rNUM|rfUnknown",          "ACTION"],
         ["merge:lNUM|lfConcat|==|rNUM|rfConcat",           "ACTION"],
         ["merge:lNUM|lfConcat|==|rNUM|rfLiteral",          "ACTION"],
         ["merge:lNUM|lfConcat|==|rNUM|rintersect",         "ACTION"],
-
-        ["merge:lNUM|lfLiteral|==|rNUM|rfUnknown",         "copyValueLHStoRHS"],
         ["merge:lNUM|lfLiteral|==|rNUM|rfConcat",          "ACTION"],
-        ["merge:lNUM|lfLiteral|==|rNUM|rfLiteral",         "ACTION"], #break into 2 cases: LHS.infSize.format = rfUnknown, rfLiteral.  see tryMergeValue()
         ["merge:lNUM|lfLiteral|==|rNUM|rintersect",        "ACTION"],
-
         ["merge:lNUM|lintersect|==|rNUM|rfUnknown",        "ACTION"],
         ["merge:lNUM|lintersect|==|rNUM|rfConcat",         "ACTION"],
         ["merge:lNUM|lintersect|==|rNUM|rfLiteral",        "ACTION"],
         ["merge:lNUM|lintersect|==|rNUM|rintersect",       "ACTION"],
 
-
-        ["merge:lSTR|lfUnknown|==|rSTR|rfUnknown",         "NULL"],
         ["merge:lSTR|lfUnknown|==|rSTR|rfConcat",          "ACTION"],
-        ["merge:lSTR|lfUnknown|==|rSTR|rfLiteral",         "copyValueRHStoLHS"], # sizeToCopy, handleRemainder
         ["merge:lSTR|lfUnknown|==|rSTR|rintersect",        "ACTION"],
-
         ["merge:lSTR|lfConcat|==|rSTR|rfUnknown",          "ACTION"],
         ["merge:lSTR|lfConcat|==|rSTR|rfConcat",           "ACTION"],
         ["merge:lSTR|lfConcat|==|rSTR|rfLiteral",          "ACTION"],
         ["merge:lSTR|lfConcat|==|rSTR|rintersect",         "ACTION"],
-
-        ["merge:lSTR|lfLiteral|==|rSTR|rfUnknown",         "copyValueLHStoRHS"],
         ["merge:lSTR|lfLiteral|==|rSTR|rfConcat",          "ACTION"],
-        ["merge:lSTR|lfLiteral|==|rSTR|rfLiteral",         "ACTION"],   #break into 2 cases: LHS.infSize.format = rfUnknown, rfLiteral.  see tryMergeValue()
         ["merge:lSTR|lfLiteral|==|rSTR|rintersect",        "ACTION"],
-
         ["merge:lSTR|lintersect|==|rSTR|rfUnknown",        "ACTION"],
         ["merge:lSTR|lintersect|==|rSTR|rfConcat",         "ACTION"],
         ["merge:lSTR|lintersect|==|rSTR|rfLiteral",        "ACTION"],
         ["merge:lSTR|lintersect|==|rSTR|rintersect",       "ACTION"],
 
-
-        ["merge:lLST|lfUnknown|==|rLST|rfUnknown",        "ACTION"],
         ["merge:lLST|lfUnknown|==|rLST|rfConcat",         "ACTION"],
-        ["merge:lLST|lfUnknown|==|rLST|rfLiteral",        "ACTION"],
         ["merge:lLST|lfUnknown|==|rLST|rintersect",       "ACTION"],
-
         ["merge:lLST|lfConcat|==|rLST|rfUnknown",         "ACTION"],
         ["merge:lLST|lfConcat|==|rLST|rfConcat",          "ACTION"],
         ["merge:lLST|lfConcat|==|rLST|rfLiteral",         "ACTION"],
         ["merge:lLST|lfConcat|==|rLST|rintersect",        "ACTION"],
-
-        ["merge:lLST|lfLiteral|==|rLST|rfUnknown",        "ACTION"],
         ["merge:lLST|lfLiteral|==|rLST|rfConcat",         "ACTION"],
-        ["merge:lLST|lfLiteral|==|rLST|rfLiteral",        "ACTION"],
         ["merge:lLST|lfLiteral|==|rLST|rintersect",       "ACTION"],
-
         ["merge:lLST|lintersect|==|rLST|rfUnknown",       "ACTION"],
         ["merge:lLST|lintersect|==|rLST|rfConcat",        "ACTION"],
         ["merge:lLST|lintersect|==|rLST|rfLiteral",       "ACTION"],
-        ["merge:lLST|lintersect|==|rLST|rintersect",      "ACTION"],
+        ["merge:lLST|lintersect|==|rLST|rintersect",      "ACTION"]
     ]
 }
 wrkLstRules = {
@@ -221,25 +207,39 @@ wrkLstRules = {
         ["wrkLst:wrkLstIsEmpty",      "NULL"]
     ]
 }
-startPropRules = {
+startPropRules = { # Start iterating fLiteral LST = fLiteral LST
     'ID': 'startProp',
     'points': [
         ["looseSize", "!looseSize"],
         ["sizesCompat", "!sizesCompat"],
         ["LHSEmpty", "LHSisDots", "LHShasFirst"],
-        ["RHSisPureDots", "!RHSisPureDots"],
-        ["merging", "!merging"]
+        ["RHSisPureDots", "!RHSisPureDots"]
+       # ["merging", "!merging"]
     ],
     'ifSnips': {
-        '':   '',
-        '':   ''
+        '!looseSize':   '',
+        'looseSize':   '',
+        'sizesCompat':   '',
+        '!sizesCompat':   '',
+        'RHSisPureDots':   '',
+        '!RHSisPureDots':   '',
+        'LHSEmpty':   '',
+        'LHSisDots':   '',
+        'LHShasFirst':   ''
     },
     'codeSnips': {
+        'REJECT':   '',
+        'SKIP':   '',
+        'EnqueueFirstsToMerge':   '',
         '':  ''
     },
     'rules': [
-        ["startProp:",     "ACTION"],
-        ["startProp:",     "ACTION"]
+        ["startProp:!looseSize|!sizesCompat||",                               "REJECT"],
+        ["startProp:!looseSize|sizesCompat|LHSEmpty|!RHSisPureDots",          "SKIP"],
+        ["startProp:!looseSize|sizesCompat||RHSisPureDots",                   "SKIP"],
+        ["startProp:!looseSize|sizesCompat|LHSisDots|!RHSisPureDots",         "EnqueueFirstsToMerge"], # Get first; account for #{}, ..., .first
+        ["startProp:!looseSize|sizesCompat|LHShasFirst|!RHSisPureDots",       "EnqueueFirstsToMerge"],
+        ["startProp:looseSize|||",     "ACTION"]
     ]
 }
 propagationRules = {
@@ -349,7 +349,7 @@ ruleSets = [
     #sizeRules,
     mergeRules,
     wrkLstRules,
-    #startPropRules,
+    startPropRules,
     #propagationRules,
     #resolveRules,
     #symbolRules,
