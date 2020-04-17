@@ -487,6 +487,70 @@ def genIfs(ruleSetID, ifsTree, binaryPts, ifSnips, codeSnips, indent = "        
         #print("KS:",key,S)
     return(S)
 
+def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
+    S = ""
+    indent = "        "
+    ruleCount = 0
+    #print(rules)
+    #print(len(rules))
+    for rule in rules:
+        #print("ruleCount:", ruleCount)
+        triggers    = rule[0]
+        codeKeyWords     = rule[1]
+        #print('triggers:',triggers)
+        #print('codeKeyWords:',codeKeyWords)
+        #if ruleCount > 9: break
+        triggerList = triggers.split('|')
+        conditionCode = ""
+        condCount = 0
+        for triggerList in triggerList:
+            conditions = triggerList.split(',')
+            count = 0
+            subCount = 0
+            subCode = ""
+            for condition in conditions:
+                if condition == 'merge':continue
+                if condition == '': continue # any condition
+                if condition == '=':continue
+                if condition == '==':continue
+                else:
+                    #print (condition)
+                    if subCount >0:
+                        subCode += " or "
+                    subCode += ifSnips[condition]
+                    subCount += 1
+            if subCount > 1: subCode="("+subCode+")"
+            if subCode != "":
+                #print(subCode)
+                if condCount > 0: conditionCode += " and "
+                conditionCode += subCode
+                condCount += 1
+        if conditionCode != "":
+            #print(conditionCode)
+            actionCode = ""
+            if codeKeyWords =='ACTION':
+                if debugMode:
+                    actionCode = indent + '    log("TODO: unfinished")\n'
+                else:
+                    actionCode = indent + "    //TODO: unfinished\n"
+            elif codeKeyWords == "NULL":
+                actionCode = indent + "    //Do Nothing\n"
+            else:
+                #print(codeKeyWords)
+                codeKeyWordList = codeKeyWords.split(",")
+                for KW in codeKeyWordList:
+                    actionCode+= indent +"    " + codeSnips[KW]+"\n"
+                if debugMode:
+                    actionCode = indent+'    log("'+ruleSetID+'  '+triggers+'\t'+KW+'")\n' + actionCode
+            if ruleCount >0: conditionKW = "else if"
+            else: conditionKW = "if"
+            conditionCode = conditionKW+"("+conditionCode+")"
+            codeBody      = "{\n"+actionCode+indent+"}\n"
+            S += indent+conditionCode+codeBody
+            #print(conditionCode+codeBody)
+        ruleCount +=1
+    return(S)
+
 def generateCode(ruleSetID, rules, binaryPts, ifSnips, codeSnips):
     topIfs = {}
     for rule in rules:
@@ -520,7 +584,7 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
              for point in pointSet:
                 binaryPts.append(point)
     markHandledCases(ruleSetID, untagedRules, cases, points)
-    ifsCode = generateCode(ruleSetID, untagedRules, binaryPts, ifSnips, codeSnips)
+    ifsCode = genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
     funcCode = "    void: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"    }\n"
     return(funcCode)
 
