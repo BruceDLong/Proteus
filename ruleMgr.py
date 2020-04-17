@@ -2,6 +2,8 @@
 # Proteus Rule case manager
 from pprint import pprint
 
+debugMode = True
+
 sizeRules = {
     'ID': 'size',
     'points': [
@@ -65,7 +67,7 @@ mergeRules = {
         'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.infSize, aItem.LHS.infSize, 0)',
         'rejectIfValueStrNotEqual': 'if(aItem.LHS.value.str != aItem.RHS.value.str){aItem.reject <- true}',
         'rejectIfValueNumNotEqual': 'if(aItem.LHS.value.num != aItem.RHS.value.num){aItem.reject <- true}',
-        'StartMergePropogation':    'StartMergePropogation()'
+        'StartMergePropogation':    'startPropRules(aItem)'
     },
     'rules': [
         ["merge:|||r?|",                           "NULL"],
@@ -212,33 +214,30 @@ startPropRules = { # Start iterating fLiteral LST = fLiteral LST
     'points': [
         ["looseSize", "!looseSize"],
         ["sizesCompat", "!sizesCompat"],
-        ["LHSEmpty", "LHSisDots", "LHShasFirst"],
+        ["LHSEmpty", "!LHSEmpty"],
         ["RHSisPureDots", "!RHSisPureDots"]
        # ["merging", "!merging"]
     ],
     'ifSnips': {
-        '!looseSize':   '',
-        'looseSize':   '',
-        'sizesCompat':   '',
-        '!sizesCompat':   '',
-        'RHSisPureDots':   '',
-        '!RHSisPureDots':   '',
-        'LHSEmpty':   '',
-        'LHSisDots':   '',
-        'LHShasFirst':   ''
+        '!looseSize':       '!aItem.looseSize',
+        'looseSize':        'aItem.looseSize',
+        'sizesCompat':      'sizesAreCompatable(aItem.LHS, aItem.RHS)',
+        '!sizesCompat':     '!sizesAreCompatable(aItem.LHS, aItem.RHS)',
+        'RHSisPureDots':    '(aItem.RHS.value.tailUnfinished and aItem.RHS.value.items.size()==0)',
+        '!RHSisPureDots':   '!(aItem.RHS.value.tailUnfinished and aItem.RHS.value.items.size()==0)',
+        'LHSEmpty':         '(!aItem.LHS.value.tailUnfinished and aItem.LHS.infSize.num == 0)',
+        '!LHSEmpty':        '(!aItem.LHS.value.tailUnfinished and aItem.LHS.infSize.num > 0)'
     },
     'codeSnips': {
-        'REJECT':   '',
-        'SKIP':   '',
-        'EnqueueFirstsToMerge':   '',
-        '':  ''
+        'REJECT':   'aItem.reject <- true',
+        'SKIP':     '//Skip',
+        'EnqueueFirstsToMerge':   'enqueFirstsToMerge(aItem)',
     },
     'rules': [
         ["startProp:!looseSize|!sizesCompat||",                               "REJECT"],
         ["startProp:!looseSize|sizesCompat|LHSEmpty|!RHSisPureDots",          "SKIP"],
         ["startProp:!looseSize|sizesCompat||RHSisPureDots",                   "SKIP"],
-        ["startProp:!looseSize|sizesCompat|LHSisDots|!RHSisPureDots",         "EnqueueFirstsToMerge"], # Get first; account for #{}, ..., .first
-        ["startProp:!looseSize|sizesCompat|LHShasFirst|!RHSisPureDots",       "EnqueueFirstsToMerge"],
+        ["startProp:!looseSize|sizesCompat|!LHSEmpty|!RHSisPureDots",         "EnqueueFirstsToMerge"], # Get first; account for #{}, ..., .first     "EnqueueFirstsToMerge"],
         ["startProp:looseSize|||",     "ACTION"]
     ]
 }
@@ -443,23 +442,29 @@ def genConditionCode(key, ifSnips):
     if count > 1: S = "("+S+")"
     return S
 
-def genActionCode(codeKeyWords, codeSnips, indent):
-    if codeKeyWords == "ACTION": return(indent + "//TODO: unfinished\n")
-    if codeKeyWords == "NULL": return(indent + "//Do Nothing\n")
-    codeKeyWordList = codeKeyWords.split(",")
+def genActionCode(ruleSetID, codeKeyWords, rule, codeSnips, indent):
     S = ""
+    if codeKeyWords == "ACTION":
+        if debugMode:
+            S= indent + 'log("TODO: unfinished")\n'
+        else:
+            S= indent + "//TODO: unfinished\n"
+        return(S)
+    if codeKeyWords == "NULL":
+        return(indent + "//Do Nothing\n")
+    codeKeyWordList = codeKeyWords.split(",")
     for KW in codeKeyWordList:
         S+= indent + codeSnips[KW]+"\n"
+    if debugMode: S = indent+'log("'+ruleSetID+'  '+rule+'\t'+KW+'")\n' +S
     return(S)
 
-def genIfs(ifsTree, binaryPts, ifSnips, codeSnips, indent = "        "):
+def genIfs(ruleSetID, ifsTree, binaryPts, ifSnips, codeSnips, indent = "        "):
     count =0
     S = ""
-    if "__code" in ifsTree: return(genActionCode(ifsTree["__code"], codeSnips, indent))
+    if "__code" in ifsTree: return(genActionCode(ruleSetID, ifsTree["__code"], ifsTree["__rule"], codeSnips, indent))
     for key,value in ifsTree.items():
-        if key in binaryPts:
+        if key in binaryPts and len(ifsTree) == 2:
             isBinary = True
-
         else: isBinary = False
         S += indent
         if isBinary:
@@ -476,13 +481,13 @@ def genIfs(ifsTree, binaryPts, ifSnips, codeSnips, indent = "        "):
             S += genConditionCode(key, ifSnips)
             S += ")"
         S += "{\n"
-        S += genIfs(value, binaryPts, ifSnips, codeSnips, indent + "    ")
+        S += genIfs(ruleSetID, value, binaryPts, ifSnips, codeSnips, indent + "    ")
         S += indent+"}\n"
         count += 1
         #print("KS:",key,S)
     return(S)
 
-def generateCode(rules, binaryPts, ifSnips, codeSnips):
+def generateCode(ruleSetID, rules, binaryPts, ifSnips, codeSnips):
     topIfs = {}
     for rule in rules:
         crntIfs = topIfs
@@ -492,8 +497,9 @@ def generateCode(rules, binaryPts, ifSnips, codeSnips):
                 crntIfs[rSeg] = {}
             crntIfs = crntIfs[rSeg]
         crntIfs["__code"]=rule[1]
+        crntIfs["__rule"]=rule[0]
     #pprint(topIfs)
-    S = genIfs(topIfs, binaryPts, ifSnips, codeSnips)
+    S = genIfs(ruleSetID, topIfs, binaryPts, ifSnips, codeSnips)
     return(S)
 
 def pointIsBinary(pointSet):
@@ -514,7 +520,7 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
              for point in pointSet:
                 binaryPts.append(point)
     markHandledCases(ruleSetID, untagedRules, cases, points)
-    ifsCode = generateCode(untagedRules, binaryPts, ifSnips, codeSnips)
+    ifsCode = generateCode(ruleSetID, untagedRules, binaryPts, ifSnips, codeSnips)
     funcCode = "    void: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"    }\n"
     return(funcCode)
 
