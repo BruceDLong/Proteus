@@ -246,8 +246,8 @@ startPropRules = { # Start iterating fLiteral LST = fLiteral LST
         '!sizesCompat':     '!sizesAreCompatable(aItem.LHS, aItem.RHS)',
         'RHSisPureDots':    '(aItem.RHS.value.tailUnfinished and aItem.RHS.value.items.size()==0)',
         '!RHSisPureDots':   '!(aItem.RHS.value.tailUnfinished and aItem.RHS.value.items.size()==0)',
-        'LHSEmpty':         '(!aItem.LHS.value.tailUnfinished and aItem.LHS.infSize.num == 0)',
-        '!LHSEmpty':        '(!aItem.LHS.value.tailUnfinished and aItem.LHS.infSize.num > 0)'
+        'LHSEmpty':         '(!aItem.LHS.value.tailUnfinished and aItem.LHS.value.items.size() == 0)',
+        '!LHSEmpty':        '(aItem.LHS.value.tailUnfinished or aItem.LHS.value.items.size() > 0)'
     },
     'codeSnips': {
         'REJECT':   'aItem.reject <- true',

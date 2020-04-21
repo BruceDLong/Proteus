@@ -235,7 +235,7 @@ model infon{
         }
     }
     void: addToOrInfon(our infItr: altItr) <- {
-        source.value.items.pushAsAlt(altItr, altItr.item)
+        source.value.items.pushAsAlt(altItr.infNode, altItr.item)
     }
     void: addPOVToWrkList(our POV: pov) <- {
         wrkList.pushLast(pov)
@@ -307,9 +307,7 @@ model infItr{
     our infItr: parent
     our POV: infNode
     me int: nestLvl
-    me int: AlternativesNestLvl
     mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError, sNonIterable]: state
-    mode[cmdNoOp, delDots, keepDots, insB4Dots, insAftDots]: stitchCmd
 
     our infItr: makeOrItr(our infItr: nextItr) <- {
         our infon:: newListInfon
@@ -320,7 +318,7 @@ model infItr{
             newListInfon.infSize.num    <- 1
             newListInfon.value.fType    <- LST
             newListInfon.value.format   <- fLiteral
-            newListInfon.value.items.pushAsAlt(nextItr, nextItr.item)
+            newListInfon.value.items.pushAsAlt(nextItr.infNode, nextItr.item)
         our infon:: newAltInfon
             newAltInfon.itmMode         <- mItem
             newAltInfon.infMode         <- isUnknown
@@ -344,7 +342,7 @@ model infItr{
         withEach itm in item.value.items {
             itm.isTentative <- false
         }
-        if(stitchCmd != keepDots){
+        if(infNode.stitchCmd != keepDots){
             item.value.tailUnfinished <- false
             item.countSize()
         }
@@ -508,7 +506,6 @@ model infItr{
         to.infNode      <- infNode
         to.nestLvl      <- nestLvl
         to.state        <- state
-        to.stitchCmd    <- stitchCmd
     }
     void: deleteCrnt() <- {
         infNode <- parent.item.deleteListNode(infNode)
@@ -562,7 +559,7 @@ model infItr{
     }
 
 }
-struct AItem{
+model AItem{
     mode[rsInfon, rsMerge, rsPure]: ruleSet
     our infon: item
     our infon: LHS
@@ -594,6 +591,7 @@ struct AItem{
         step <- 0
     }
 }
+struct AItem{}
 model PartPath{
     our infon: path
     mode[dotField, colonField]: pathMode
@@ -635,7 +633,7 @@ struct ModelManager {
 struct GLOBAL{me ModelManager: modelMngr}
 
 struct XformMgr{
-    their agent: a
+    their Agent: agent
     our AItem[list]: agenda
     void: prepWorkList(our infon: CI) <- { // ciItr) <- {
     //    our infon: CI <- ciItr.item
@@ -683,7 +681,7 @@ struct XformMgr{
                 if(ciItr.parent.item){
                     ciItr.parent.item.value.index.insert(CI.type.asGiven, CI)
                 } else { // This section is to get items into World. In a fully streaming mode this isn't needed.
-                    a.world.value.index.insert(CI.type.asGiven, CI)
+                    agent.world.value.index.insert(CI.type.asGiven, CI)
                 }*/
             } else if(CI.argPos != apNoArgs){
                loopStr <- loopStr + ":A:FUNC_ARGS"
@@ -717,15 +715,15 @@ struct XformMgr{
                     }
                     src.wrkList.clear()
                     log(">******@NORMALIZE_SRC")
-        //            a.normalize(src)
+        //            agent.normalize(src)
                     log("<******@NORMALIZE_SRC")
                 } else {done <- true}
             } else if(CI.infMode==newCursor) {
                 loopStr <- loopStr + ":B2:newCursor"
                 switch(CI.cursorMode){
                     case cThis:   {} //{newTop <- thisItem}
-                    case cWorld:  {newTop <- a.world}
-                    case cContext:{newTop <- a.context}
+                    case cWorld:  {newTop <- agent.world}
+                    case cContext:{newTop <- agent.context}
                     case cPrev:   {} //{newTop <- previous}
                     case cNext:   {} //{newTop <- next}
   /*                  case cPred:   {newTop <- ciItr.infNode.findOrAddPctTag("pred").item}
@@ -750,7 +748,7 @@ struct XformMgr{
         //log(logStr)
         return(itmAdded)
     }
-    void: processAgendaItem(our AItem: aItem)<-{
+    void: processAgendaItem(our AItem: aItem, me int: AlternativesNestLvl)<-{
         log("PAI:"+aItem.stringify())
         me bool: changeMade <- true
         me int: count <- 0
@@ -774,26 +772,47 @@ struct XformMgr{
                             mergeRules(aItem)
                         }
                         default:{
-                                log("    MERGE-step1+: ApplyMergeRules to:"+aItem.stringify())
-                        if(aItem.LHSItr.state==sSecondVisit or aItem.LHSItr.state==sEOL){changeMade <- false; break()}
+			    log("    MERGE-step1+: ApplyMergeRules to:"+aItem.stringify())
+			    if(aItem.LHSItr.state==sSecondVisit or aItem.LHSItr.state==sEOL){changeMade <- false; break()}
                             aItem.LHSItr <- aItem.LHSItr.getNextExtended(true, false)
                             aItem.RHSItr <- aItem.RHSItr.getNextExtended(aItem.looseSize, false)
-                if(aItem.LHSItr.item.isOrLike() or aItem.RHSItr.item.isOrLike()){changeMade <- false; break()}
+			    if(aItem.LHSItr.item.isOrLike()){
+				log("LHS.isOrLike")
+				changeMade <- false
+				if(aItem.RHSItr.item.isOrLike()){ // set flag to add new #{...}
+				    aItem.LHSItr.item.source.value.items.head.altPOV.addNewSubDots <- true
+				}
+				our POV: altLHS <- aItem.LHSItr.item.source.value.items.begin()
+				while (altLHS!=NULL){
+				    // 1. check for ?==?
+				    if(altLHS.altPOV.item.isTentative and aItem.RHSItr.item.isTentative){  // ?=?
+					log("?=? : parent.KEEPING DOTS")
+					//LHSItr.parent.stitchCmd <- keepDots
+				    }else{
+					log("! ?==? : "+aItem.stringify())
+					altLHS.altPOV.AlternativesNestLvl <+- 1
+					// 2. add crnt Item to pred of lhs pushing
+					altLHS.altPOV.predecessors.pushLast(aItem)
+					// 3. add RHSItr to LHS.worklist
+					altLHS.altPOV.item.addPOVToWrkList(aItem.RHSItr.infNode)
+				    }
+				    altLHS <- altLHS.next
+				}
+				continue()
+			    }
                             if(aItem.LHSItr.state!=sSecondVisit and aItem.LHSItr.state!=sEOL and
                                 aItem.RHSItr.state!=sSecondVisit and aItem.RHSItr.state!=sEOL){
-                                if(aItem.LHSItr.item.isOrLike() or aItem.RHSItr.item.isOrLike()){
-                                } else{
-                                    our AItem:: newAItem
-                                        newAItem.ruleSet   <- rsMerge
-                                        newAItem.LHS       <- aItem.LHSItr.item
-                                        newAItem.RHS       <- aItem.RHSItr.item
-                                        newAItem.propagate <- true
-                                        newAItem.step    <- 0
-                                        newAItem.subscribers.pushFirst(aItem)
-                                    addAItemToAgenda(newAItem)
-                                    changeMade <- false; break()
-                                    //mergeRules(aItem)
-                                }
+				log("! SV & ! SEOL")
+				our AItem:: newAItem
+				    newAItem.ruleSet   <- rsMerge
+				    newAItem.LHS       <- aItem.LHSItr.item
+				    newAItem.RHS       <- aItem.RHSItr.item
+				    newAItem.propagate <- true
+				    newAItem.step    <- 0
+				    newAItem.subscribers.pushFirst(aItem)
+				addAItemToAgenda(newAItem)
+				changeMade <- false; break()
+				//mergeRules(aItem)
                             }
                         }
                     }
@@ -820,7 +839,7 @@ struct XformMgr{
             //log("_____"+toString(count)+"_____")
             if (count > 100){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
             our AItem: aItem <- agenda.last(); agenda.popLast()
-            processAgendaItem(aItem)
+            processAgendaItem(aItem, 0)
             //aItem.item.isOnAgenda <- false
         }
     }
@@ -873,7 +892,7 @@ struct XformMgr{
 
 //////////////////////////
 // Infon Interface Routines
-struct agent{
+struct Agent{
     our infon: world
     our infon: context
     me XformMgr: xformMgr
@@ -1421,7 +1440,7 @@ struct agent{
         else if(state == sNonIterable){return("N")}
         else{logFatalError("invalid State in infItrStateSig:"+ stateStrings[state])}
     }
-    me bool: testCompatibility(our infon: CI, our infItr: LHSItr, our infItr: RHSItr, our transformAction: action) <- {
+    /*me bool: testCompatibility(our infon: CI, our infItr: LHSItr, our infItr: RHSItr, our transformAction: action) <- {
         if(RHSItr.state == sSecondVisit){if(RHSItr.item.itmMode != mSubItems){return(true)}}
         RHSItr.setListSeqFlags()
         tryMerge(CI, RHSItr, action)
@@ -1439,7 +1458,7 @@ struct agent{
         action.LHSItr <- LHSItr
         action.RHSItr <- RHSItr
         return(false)
-    }
+    }*/
     our infItr: findNextLHS(our infItr: LHSItr, me int: LHSfType, me int: RHSfType, me bool: unknownAsList) <- {
         our infItr: LHSItrNext
         if((LHSfType != LST and !unknownAsList) and RHSfType == LST){
@@ -1679,13 +1698,13 @@ if(LHSItr.state == sNonIterable){logFatalError("Trying to iterate nonIterable in
         }
         world <- World
         Allocate(context)
-        xformMgr.a <- this
+        xformMgr.agent <- this
     }
 }
 struct ProteusCore{
     me sessionFile: DB_session
     our infon: WORLD
-    our agent: a
+    our Agent: agent
     me EParser: parser
     me string: errorMesg
 
@@ -1718,7 +1737,7 @@ struct ProteusCore{
         if(WORLD == NULL){
             return(false)
         }
-        a.world <- WORLD
+        agent.world <- WORLD
         return(true)
     }
 
@@ -1753,7 +1772,7 @@ struct ProteusCore{
     me bool: init(me string: worldFileName) <- {
         errorMesg <- ""
         parser.populateGrammar()
-        Allocate(a)
+        Allocate(agent)
         if(!loadWorld(worldFileName)) {return(false)}
         me string: fileDir <- getFilesDirAsString()+"/sessionDB.pr"
         annexSessions(fileDir)
