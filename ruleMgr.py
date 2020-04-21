@@ -4,28 +4,49 @@ from pprint import pprint
 
 debugMode = True
 
-sizeRules = {
-    'ID': 'size',
+mergeSizeRules = {
+    'ID': 'mergeSize',
     'points': [
-        ["measurable", "!measurable"],
-        ["sGivn", "s!Gvn"],
-        ['fUnknown', 'fConcat', 'fLiteral', 'intersect']
-        # TODO: ['Size-*', 'Size-/']
+        # TODO: ['Size-*', 'Size-/'], ["measurable", "!measurable"],l ["sGivn", !sGivn"],
+        ['looseSize', '!looseSize'],
+        ['lfUnknown', 'lfConcat', 'lfLiteral', 'lintersect'],
+        ['rfUnknown', 'rfConcat', 'rsfLiteral', 'rintersect'],
+
     ],
     'ifSnips': {
-        '':   '',
-        '':   ''
+        'l?':            'aItem.LHS.infMode == isUnknown',
+        'lNUM':          'aItem.LHS.value.fType == NUM',
+        'lSTR':          'aItem.LHS.value.fType == STR',
+        'lLST':          'aItem.LHS.value.fType == LST',
+
+        'lintersect':    'aItem.LHS.infSize.intersectPosParse == ipSquareBrackets',
+        'lfUnknown':     'aItem.LHS.infSize.format == fUnknown',
+        'lfConcat':      'aItem.LHS.infSize.format == fConcat',
+        'lfLiteral':     'aItem.LHS.infSize.format == fLiteral',
+
+        'r?':            'aItem.RHS.infMode == isUnknown',
+        'rNUM':          'aItem.RHS.value.fType == NUM',
+        'rSTR':          'aItem.RHS.value.fType == STR',
+        'rLST':          'aItem.RHS.value.fType == LST',
+
+        'rintersect':    'aItem.RHS.infSize.intersectPosParse == ipSquareBrackets',
+        'rfUnknown':     'aItem.RHS.infSize.format == fUnknown',
+        'rfConcat':      'aItem.RHS.infSize.format == fConcat',
+        'rsfLiteral':     'aItem.RHS.infSize.format == fLiteral',
+
+        'looseSize':     'aItem.looseSize',
+        '!looseSize':    '!aItem.looseSize'
     },
     'codeSnips': {
-        '':  ''
+        'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.infSize, aItem.LHS.infSize, 0)',
     },
     'rules': [
-        ["size:",     "ACTION"],
-        ["size:",     "ACTION"]
+        ["mergeSize:!looseSize|lfUnknown|rsfLiteral",     "copySizeRHStoLHS"],
+
     ]
 }
 
-# Any infon: ?,NUM,STR,LST,LST.fUnknown,fConcat,fLiteral,intersect.Size-0-,Size-0-n,Size-n-m,Size-n,Size-n-,Size-Other
+
 mergeRules = {
     'ID': 'merge',
     'points': [
@@ -345,7 +366,7 @@ wordRules = {
     ]
 }
 ruleSets = [
-    #sizeRules,
+    mergeSizeRules,
     mergeRules,
     wrkLstRules,
     startPropRules,
@@ -446,7 +467,7 @@ def genActionCode(ruleSetID, codeKeyWords, rule, codeSnips, indent):
     S = ""
     if codeKeyWords == "ACTION":
         if debugMode:
-            S= indent + 'log("TODO: unfinished")\n'
+            S= indent + 'log("        TODO: unfinished")\n'
         else:
             S= indent + "//TODO: unfinished\n"
         return(S)
@@ -455,7 +476,7 @@ def genActionCode(ruleSetID, codeKeyWords, rule, codeSnips, indent):
     codeKeyWordList = codeKeyWords.split(",")
     for KW in codeKeyWordList:
         S+= indent + codeSnips[KW]+"\n"
-    if debugMode: S = indent+'log("'+ruleSetID+'  '+rule+'\t'+KW+'")\n' +S
+    if debugMode: S = indent+'log("        '+ruleSetID+'  '+rule+'\t'+KW+'")\n' +S
     return(S)
 
 def genIfs(ruleSetID, ifsTree, binaryPts, ifSnips, codeSnips, indent = "        "):
@@ -530,7 +551,7 @@ def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
             actionCode = ""
             if codeKeyWords =='ACTION':
                 if debugMode:
-                    actionCode = indent + '    log("TODO: unfinished")\n'
+                    actionCode = indent + '    log("        TODO: unfinished")\n'
                 else:
                     actionCode = indent + "    //TODO: unfinished\n"
             elif codeKeyWords == "NULL":
@@ -541,7 +562,7 @@ def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
                 for KW in codeKeyWordList:
                     actionCode+= indent +"    " + codeSnips[KW]+"\n"
                 if debugMode:
-                    actionCode = indent+'    log("'+ruleSetID+'  '+triggers+'\t'+KW+'")\n' + actionCode
+                    actionCode = indent+'    log("        '+ruleSetID+'  '+triggers+'\t'+KW+'")\n' + actionCode
             if ruleCount >0: conditionKW = "else if"
             else: conditionKW = "if"
             conditionCode = conditionKW+"("+conditionCode+")"

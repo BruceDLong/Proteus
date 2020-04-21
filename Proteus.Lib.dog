@@ -27,12 +27,12 @@ struct GLOBAL{
         print("REGISTER:", classInfon.type.asGiven, "\n")
         classDefs.insert(classInfon.type.asGiven, classInfon)
     }
-    our infItr: makeInfItr(our infon: i, our infItr: parent, our POV: idx) <- {
-        our infItr:: ret
+    our POV: makePOV(our infon: i, our infItr: parent, our POV: idx) <- {
+        our POV:: ret
         ret.item    <- i
-        ret.parent  <- parent
-        ret.infNode <- idx
-        ret.setListSeqFlags()
+     //   ret.parent  <- parent
+     //   ret.infNode <- idx
+     //   ret.setListSeqFlags()
         return(ret)
     }
 }
@@ -415,22 +415,23 @@ model infItr{
         }
         our infItr:: tmp
         copyThisTo(tmp)
-        parent     <- tmp   // TODO: After ptr bug is fixed, Allocate(parent, self)
+        parent     <- tmp
         infNode    <- firstNode
-        looseInhtd <- parent.looseMode!=false or parent.looseSize()
-        looseMode  <- false
-        looseTop   <- false
+        infNode.looseInhtd <- parent.infNode.looseMode!=false or parent.infNode.looseSize()
+        infNode.looseMode  <- false
+        infNode.looseTop   <- false
         item       <- infNode.item
         setListSeqFlags()
-        nestLvl    <- nestLvl+1
+        nestLvl <+- 1
         return(true)
     }
-    void: goNextDeep(me bool: skipDots) <- {
-        if(state == sNonIterable){logFatalError("Trying to iterate nonIterable infItr")}
+    void: goNextDeep(me bool: shallowMode, me bool: skipDots) <- {
+        if(state == sNonIterable){state <- sEOL; return(); logFatalError("Trying to iterate nonIterable infItr")}
         me int: tmpState <- state
-        if(state == sNotASeq and item.infMode == isUnknown and ! item.value.items.isEmpty()){
+        if(state==sNotASeq and item.infMode==isUnknown and !item.value.items.isEmpty()){
             tmpState <- sFirstVisit
         }
+        if(shallowMode and tmpState==sFirstVisit and item.itmMode != mSubItems){tmpState <- sNotASeq}
         switch(tmpState) {
             case sNotASeq: sSecondVisit:{  // Get the next item or set EOL
                 if(parent==NULL or nestLvl==0){
@@ -465,11 +466,11 @@ model infItr{
             default: {print("Error: invalid iterator state:", state, "\n")}
         }
     }
-    our infItr: getNextDeep(me bool: skipDots) <- {
+    our infItr: getNextDeep(me bool: shallowMode, me bool: skipDots) <- {
         our infItr: retVal
         Allocate(retVal)
         copyThisTo(retVal)
-        retVal.goNextDeep(skipDots)
+        retVal.goNextDeep(shallowMode, skipDots)
         return(retVal)
     }
     our infItr: getNext(me bool: skipDots) <- {
@@ -483,16 +484,16 @@ model infItr{
         if(parent==NULL or item==NULL or infNode.prev==NULL) {return(NULL)}
         return(infNode.prev.item)
     }
-    our infItr: getNextExtended(me bool: skipDots) <- {
-        our infItr: nextItr <- getNextDeep(skipDots)
+    our infItr: getNextExtended(me bool: shallowMode, me bool: skipDots) <- {
+        our infItr: nextItr <- getNextDeep(shallowMode, skipDots)
         //log("    GNE:nextItr:"+nextItr.stringify())
         if(nextItr.state == sError){return(NULL)}
-        //if(nextItr.nextAnd != NULL){nextItr.nextAnd <- nextItr.nextAnd.getNextExtended(false)}
+        //if(nextItr.nextAnd != NULL){nextItr.nextAnd <- nextItr.nextAnd.getNextExtended(shallowMode, false)}
         while(nextItr.item.itmMode == mSubItems){
-            nextItr <- nextItr.getNextDeep(skipDots)
+            nextItr <- nextItr.getNextDeep(shallowMode, skipDots)
         }
         if(nextItr.item.isTentative){
-            our infItr: nxtOR <- nextItr.getNextExtended(true)
+            our infItr: nxtOR <- nextItr.getNextExtended(shallowMode, true)
             if(nxtOR != NULL){
                 if(!nextItr.item.isOrLike()){nextItr <- nextItr.makeOrItr(nextItr)}
                 nextItr.item.addToOrInfon(nxtOR)
@@ -562,7 +563,7 @@ model infItr{
 
 }
 struct AItem{
-    mode[rsMerge, rsInfon, rsPure]: ruleSet
+    mode[rsInfon, rsMerge, rsPure]: ruleSet
     our infon: item
     our infon: LHS
     our infon: RHS
@@ -576,29 +577,21 @@ struct AItem{
     our AItem[list]: subscribers
 
     me string: stringify() <- {
-	me string: S <- ""
-	if(self==NULL){S<-S+"NULL"}
-	else{
-	    S <+- ruleSetStrings[ruleSet] +":"
-	    if(item!=NULL){
-		S <+- ":item:"+item.mySymbol(item) + ":"
-		S <+- stringifyInfon(item)
-	    }else{S <+- ":item:NULL:"}
-	    if(LHS!=NULL){
-		S <+- ":LHS:"+LHS.mySymbol(LHS) + ":"
-		S <+- stringifyInfon(LHS)
-	    }else{S <+- ":LHS:NULL:"}
-	    if(RHS!=NULL){
-		S <+- ":RHS:"+RHS.mySymbol(LHS) + ":"
-		S <+- stringifyInfon(RHS)
-	    }else{S <+- ":RHS:NULL:"}
+        me string: S <- ""
+        if(self==NULL){S<-S+"NULL"}
+        else{
+            S <+- ruleSetStrings[ruleSet] +": "
+            switch(ruleSet){
+                case rsInfon:{S <+- stringifyInfon(item)}
+                case rsMerge:{S <+- stringifyInfon(LHS) + " = " + stringifyInfon(RHS) + "  (step:"+toString(step)+")"}
+            }
         }
-	return (S)
+        return (S)
     }
     void: initialize(our infon: inf) <- {
-	item <- inf
-	ruleSet <- rsInfon
-	step <- 0
+        item <- inf
+        ruleSet <- rsInfon
+        step <- 0
     }
 }
 model PartPath{
@@ -642,55 +635,185 @@ struct ModelManager {
 struct GLOBAL{me ModelManager: modelMngr}
 
 struct XformMgr{
+    their agent: a
     our AItem[list]: agenda
+    void: prepWorkList(our infon: CI) <- { // ciItr) <- {
+    //    our infon: CI <- ciItr.item
+        if (CI.wrkLstPreped){return()}else{CI.wrkLstPreped <- 1}
+        me bool: done <- false
+        while(!done){
+            me string: loopStr <- "PrepWL-LOOP   " + stringifyInfon(CI)+"   "
+            me bool: loopAgain <- false
+            our infon: newTop<-NULL
+            if(CI.itmMode == mTagDefn){
+                loopStr <- loopStr + ":A:mTagDefn:"
+                modelMngr.indexDefinition(CI.type, CI)
+                log(loopStr)
+                break()
+            } else if(!CI.parts.isEmpty()){
+                loopStr <- loopStr + ":A:part_Tag"
+                withEach part in CI.parts{
+                    if(part.path.infMode == isTag){
+                        me string: partTag <- part.path.type.asGiven
+                        if(partTag == "size"){}
+                        else if(partTag == "first"){
+                            our infon: firstItm <- CI.getFirstItem()
+                            if(firstItm==NULL){logFatalError("Handle firstItm is null")}
+                            firstItm.takeWrkListFrom(part.path)
+                            part.wasTransfered <- true
+                        }
+                        else if(partTag == "last"){
+                            our infon: lastItm <- CI.getLastItem()
+                            if(lastItm==NULL){logFatalError("Handle LastItm is null")}
+                            lastItm.takeWrkListFrom(part.path)
+                            part.wasTransfered <- true
+                        }
+                        else if(partTag == "pred"){
+                        }else{log("TODO: Handle tag in prepWorkList():"+partTag)}
+                    }
+                }
+            } else if(CI.infMode == isTag){
+                loopStr <- loopStr + ":A:Access_type:"+CI.type.asGiven
+ /*               our infon: infModel <- modelMngr.fetchModel(CI.type)
+                if(infModel){
+                    Allocate(newTop)
+                    infModel.copyAsTypeTo(newTop)
+                    newTop.itmMode <- mItem
+                } else {a.setErrorState(ciItr, CI.type.asGiven+" is not defined")}
+                if(ciItr.parent.item){
+                    ciItr.parent.item.value.index.insert(CI.type.asGiven, CI)
+                } else { // This section is to get items into World. In a fully streaming mode this isn't needed.
+                    a.world.value.index.insert(CI.type.asGiven, CI)
+                }*/
+            } else if(CI.argPos != apNoArgs){
+               loopStr <- loopStr + ":A:FUNC_ARGS"
 
+                our infon: tmp
+                if(CI.argPos == apArgIsFirstItem){tmp <- CI.getFirstItem()}
+                else {tmp <- CI.getLastItem()}
+                if(tmp!=NULL){
+                    tmp.wrkList.pushLast(makePOV(CI.funcArgs, NULL, NULL))
+                    CI.funcArgs <- NULL
+                    CI.argPos <- apNoArgs
+                }
+ //               if(CI.value.fType==LST){ciItr.state <- sFirstVisit}
+//                else if(CI.value.fType!=LST){ciItr.state <- sNotASeq}
+            } else {
+                loopStr <- loopStr + ":A:No-action"
+            }
+
+            me int: intersectPos <- CI.intersectPos
+            if(intersectPos != ipNoIntersect){
+                our infon: src <- CI.source
+                switch(intersectPos){
+                    case ipGetLast   : {newTop <- src.getLastItem()}
+                    case ipGetFirst  : {newTop <- src.getFirstItem()}
+                    //case ipGetMarked : {newTop <- src.getMarked()}
+                }
+                if(newTop){
+                    withEach workItem in CI.wrkList{
+                        newTop.wrkList.pushLast(workItem)
+                        loopStr <- loopStr + ":B:PUSH( "+stringifyInfon(workItem.item)+" )"
+                    }
+                    src.wrkList.clear()
+                    log(">******@NORMALIZE_SRC")
+        //            a.normalize(src)
+                    log("<******@NORMALIZE_SRC")
+                } else {done <- true}
+            } else if(CI.infMode==newCursor) {
+                loopStr <- loopStr + ":B2:newCursor"
+                switch(CI.cursorMode){
+                    case cThis:   {} //{newTop <- thisItem}
+                    case cWorld:  {newTop <- a.world}
+                    case cContext:{newTop <- a.context}
+                    case cPrev:   {} //{newTop <- previous}
+                    case cNext:   {} //{newTop <- next}
+  /*                  case cPred:   {newTop <- ciItr.infNode.findOrAddPctTag("pred").item}
+                    case cSucc:   {newTop <- ciItr.infNode.findOrAddPctTag("succ").item}
+                    case cEndPred:{newTop <- ciItr.infNode.findOrAddPctTag("endPred").item}
+  */              }
+            } else {done <- !loopAgain}
+            if(newTop!=NULL) {CI <deep- newTop}
+            log(loopStr)
+        }
+
+    }
     me bool: addAItemToAgenda(our AItem: aItem) <- {
         me bool: itmAdded <- true
         me string: logStr <- "        ADD_TO_AGENDA:" + aItem.stringify()
-	if(aItem.ruleSet == rsInfon){
-	    if(!aItem.item.isOnAgenda){
-		agenda.pushFirst(aItem)
-		aItem.item.isOnAgenda <- true
-	    } else {logStr <- logStr + " Already on agenda!"; itmAdded <- false}
-	}else{agenda.pushFirst(aItem)}
-        log(logStr)
+        if(aItem.ruleSet == rsInfon){
+            if(!aItem.item.isOnAgenda){
+                agenda.pushFirst(aItem)
+                aItem.item.isOnAgenda <- true
+            } else {logStr <- logStr + " Already on agenda!"; itmAdded <- false}
+        }else{agenda.pushFirst(aItem)}
+        //log(logStr)
         return(itmAdded)
     }
     void: processAgendaItem(our AItem: aItem)<-{
-	log("PAI:"+aItem.stringify())
-	me bool: changeMade <- true
-	me int: count <- 0
-	while(changeMade){
-	    log("    loop:"+aItem.stringify())
-	    switch(aItem.ruleSet){
-		case rsMerge:{
-		    switch(aItem.step){
-			case 0:{
-			    our AItem:: newAItem
-				newAItem.ruleSet <- rsInfon
-				newAItem.item    <- aItem.RHS
-				newAItem.step    <- 0
-				newAItem.subscribers.pushFirst(aItem)
-			    addAItemToAgenda(newAItem)
-			}
-			case 1:{mergeRules(aItem)}
-		    }
-		    changeMade <- false
-		}
-		case rsInfon:{
-		    if(aItem.item.isNormed){return()}
-		    wrkLstRules(aItem)
-		    changeMade <- false
-		}
-		case rsPure:{
-		}
-	    }
-	    count <+- 1
-	}
-	withEach sub in aItem.subscribers{
-	    sub.step <+- 1
-	    addAItemToAgenda(sub)
-	}
+        log("PAI:"+aItem.stringify())
+        me bool: changeMade <- true
+        me int: count <- 0
+        while(changeMade){
+            switch(aItem.ruleSet){
+                case rsMerge:{
+                    switch(aItem.step){
+                        case 0:{
+                            our AItem:: newAItem
+                                newAItem.ruleSet <- rsInfon
+                                newAItem.item    <- aItem.RHS
+                                newAItem.step    <- 0
+                                newAItem.subscribers.pushFirst(aItem)
+                            log("    MERGE-step0: addAItemToAgenda("+newAItem.stringify()+")")
+                            addAItemToAgenda(newAItem)
+                        }
+                        case 1:{
+                            log("    MERGE-step1: ApplyMergeRules to:"+aItem.stringify())
+                            prepWorkList(aItem.LHS)
+                            mergeSizeRules(aItem)
+                            mergeRules(aItem)
+                        }
+                        default:{
+                                log("    MERGE-step1+: ApplyMergeRules to:"+aItem.stringify())
+                        if(aItem.LHSItr.state==sSecondVisit or aItem.LHSItr.state==sEOL){changeMade <- false; break()}
+                            aItem.LHSItr <- aItem.LHSItr.getNextExtended(true, false)
+                            aItem.RHSItr <- aItem.RHSItr.getNextExtended(aItem.looseSize, false)
+                if(aItem.LHSItr.item.isOrLike() or aItem.RHSItr.item.isOrLike()){changeMade <- false; break()}
+                            if(aItem.LHSItr.state!=sSecondVisit and aItem.LHSItr.state!=sEOL and
+                                aItem.RHSItr.state!=sSecondVisit and aItem.RHSItr.state!=sEOL){
+                                if(aItem.LHSItr.item.isOrLike() or aItem.RHSItr.item.isOrLike()){
+                                } else{
+                                    our AItem:: newAItem
+                                        newAItem.ruleSet   <- rsMerge
+                                        newAItem.LHS       <- aItem.LHSItr.item
+                                        newAItem.RHS       <- aItem.RHSItr.item
+                                        newAItem.propagate <- true
+                                        newAItem.step    <- 0
+                                        newAItem.subscribers.pushFirst(aItem)
+                                    addAItemToAgenda(newAItem)
+                                    changeMade <- false; break()
+                                    //mergeRules(aItem)
+                                }
+                            }
+                        }
+                    }
+                    changeMade <- false
+                }
+                case rsInfon:{
+                    if(aItem.item.isNormed){return()}
+   prepWorkList(aItem.item)
+                    wrkLstRules(aItem)
+                    changeMade <- false
+                }
+                case rsPure:{
+                }
+            }
+            count <+- 1
+        }
+        withEach sub in aItem.subscribers{
+            sub.step <+- 1
+            addAItemToAgenda(sub)
+        }
     }
     void: processAgenda()<-{
         withEach count in WHILE(!agenda.isEmpty()) {
@@ -718,33 +841,33 @@ struct XformMgr{
         }
     }
     void: enqueueForMerge(our AItem: aItem) <- {
-	log("EN:")
-	our POV: RHSPov <- aItem.item.wrkList.first()
-	aItem.item.wrkList.popFirst()
-	aItem.item.usedWrkList.pushLast(RHSPov)
-	our AItem:: newAItem
-	    newAItem.ruleSet <- rsMerge
-	    newAItem.LHS     <- aItem.item
-	    newAItem.RHS     <- RHSPov.item
-	    newAItem.looseSize <- RHSPov.looseSize()
-	    newAItem.step    <- 0
-	addAItemToAgenda(newAItem)
+        log("EN:")
+        our POV: RHSPov <- aItem.item.wrkList.first()
+        aItem.item.wrkList.popFirst()
+        aItem.item.usedWrkList.pushLast(RHSPov)
+        our AItem:: newAItem
+            newAItem.ruleSet <- rsMerge
+            newAItem.LHS     <- aItem.item
+            newAItem.RHS     <- RHSPov.item
+            newAItem.looseSize <- RHSPov.looseSize()
+            newAItem.step    <- 0
+        addAItemToAgenda(newAItem)
     }
     me bool: sizesAreCompatable(our infon: LHS, our infon: RHS)<-{return(true)}
     me void: enqueFirstsToMerge(our AItem: aItem) <- {
-	log("enqueFirstsToMerge:"+ aItem.stringify())
-	Allocate(aItem.LHSItr); aItem.LHSItr.initialize(aItem.LHS)
-	aItem.LHSItr.beginIterating(false)
-	Allocate(aItem.RHSItr); aItem.RHSItr.initialize(aItem.RHS)
-	aItem.RHSItr.beginIterating(false)
+        log("enqueFirstsToMerge:"+ aItem.stringify())
+        Allocate(aItem.LHSItr); aItem.LHSItr.initialize(aItem.LHS)
+        aItem.LHSItr.beginIterating(false)
+        Allocate(aItem.RHSItr); aItem.RHSItr.initialize(aItem.RHS)
+        aItem.RHSItr.beginIterating(false)
 
-	our AItem:: newAItem
-	newAItem.ruleSet   <- rsMerge
-	newAItem.LHS	   <- aItem.LHSItr.item
-	newAItem.RHS	   <- aItem.RHSItr.item
-	newAItem.propagate <- true
-	newAItem.subscribers.pushFirst(aItem)
-	addAItemToAgenda(newAItem)
+        our AItem:: newAItem
+        newAItem.ruleSet   <- rsMerge
+        newAItem.LHS       <- aItem.LHSItr.item
+        newAItem.RHS       <- aItem.RHSItr.item
+        newAItem.propagate <- true
+        newAItem.subscribers.pushFirst(aItem)
+        addAItemToAgenda(newAItem)
     }
 }
 
@@ -991,7 +1114,7 @@ struct agent{
         }
     }
     void: doAction(our transformAction: action) <- {
-        /*our infItr: LHSItr <- action.LHSItr
+        our infItr: LHSItr <- action.LHSItr
         our infItr: RHSItr <- action.RHSItr
         our infon: LHS <- LHSItr.item
         our infon: RHS <- RHSItr.item
@@ -1014,7 +1137,7 @@ struct agent{
         else if(valueAction == copyValueLHStoRHS){
             DO_COPY(LHS.value, RHS.value, action.sizeToCopy)
         }
-        me int: listCommand <- action.listCommand
+     /*   me int: listCommand <- action.listCommand
         switch(listCommand){
             case moveRHSFirstToFirstChild:{
                 our infon: LHSFirst     <- LHS.getFirstItem()
@@ -1026,16 +1149,16 @@ struct agent{
             }
             case moveRHSFirstToLHS:{
             }
-        }
-    */
+        }*/
+
     }
     void: tryMergeSize(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
-        /*our infon: RHS <- RHSItr.item
+        our infon: RHS <- RHSItr.item
         action.reject <- false
         action.sizeAction <- sizeNotChecked
         me int: LHSFormat <- LHS.infSize.format
         me int: RHSFormat <- RHS.infSize.format
-        if(!RHSItr.looseSize()){
+        if(!RHSItr.infNode.looseSize()){
             me int: RHSType <- RHS.value.fType
             if(RHSType!=LHS.value.fType){
                 log("MUST: Ensure mixed-format infon Ends match: LHSType=" + fTypeStrings[LHS.value.fType] + "    RHSType="+ fTypeStrings[RHSType])
@@ -1058,7 +1181,7 @@ struct agent{
         }else{
             //TODO: set action.sizeToCopy
             if(LHSFormat == fLiteral and RHSFormat == fLiteral){}
-        }*/
+        }
     }
     void: tryMergeValue(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
         /*our infon: RHS <- RHSItr.item
@@ -1322,7 +1445,7 @@ struct agent{
         if((LHSfType != LST and !unknownAsList) and RHSfType == LST){
             Allocate(LHSItrNext)
             LHSItr.copyThisTo(LHSItrNext)
-        }else{LHSItrNext <- LHSItr.getNextExtended(false)}
+        }else{LHSItrNext <- LHSItr.getNextExtended(false, false)}
         return(LHSItrNext)
     }
     our infItr: findNextRHS(our infItr: RHSItr, me int: LHSfType, me int: RHSfType) <- {
@@ -1332,7 +1455,7 @@ struct agent{
             RHSItr.copyThisTo(RHSItrNext) // <- RHSItr //.getSelfCopy()
             RHSItrNext.infNode.looseInhtd <- true
         }else{
-            RHSItrNext <- RHSItr.getNextExtended(false)
+            RHSItrNext <- RHSItr.getNextExtended(false, false)
             if(RHSItrNext.state == sEOL){
                 RHSItrNext <- NULL
             } else if(RHSItrNext.infNode.looseMode){
@@ -1500,7 +1623,7 @@ if(LHSItr.state == sNonIterable){logFatalError("Trying to iterate nonIterable in
             }
         }
         }else{logFatalError("crntLHS was NULL")}
-	*/
+        */
     }
     me void: normalize(our infon: inf) <- {
         our AItem:: aItem
@@ -1556,6 +1679,7 @@ if(LHSItr.state == sNonIterable){logFatalError("Trying to iterate nonIterable in
         }
         world <- World
         Allocate(context)
+        xformMgr.a <- this
     }
 }
 struct ProteusCore{
