@@ -238,6 +238,7 @@ model infon{
         source.value.items.pushAsAlt(altItr.infNode, altItr.item)
     }
     void: addPOVToWrkList(our POV: pov) <- {
+	log("addPOVToWrkList:"+stringifyInfon(pov.item))
         wrkList.pushLast(pov)
     }
     void: takeWrkListFrom(our infon:from) <- {
@@ -305,6 +306,7 @@ model infon{
 model infItr{
     our infon: item
     our infItr: parent
+    our infItr: nextOr
     our POV: infNode
     me int: nestLvl
     mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError, sNonIterable]: state
@@ -424,7 +426,8 @@ model infItr{
         return(true)
     }
     void: goNextDeep(me bool: shallowMode, me bool: skipDots) <- {
-        if(state == sNonIterable){state <- sEOL; return(); logFatalError("Trying to iterate nonIterable infItr")}
+	//log("            >>GND:tmpState:"+stateStrings[state])
+        if(state == sNonIterable){logFatalError("Trying to iterate nonIterable infItr")}
         me int: tmpState <- state
         if(state==sNotASeq and item.infMode==isUnknown and !item.value.items.isEmpty()){
             tmpState <- sFirstVisit
@@ -437,6 +440,7 @@ model infItr{
                     return()
                 }
                 if(goNext(skipDots)){
+
                     setListSeqFlags()
                     infNode.looseInhtd <- infNode.looseSize()
                 }else{
@@ -491,15 +495,9 @@ model infItr{
             nextItr <- nextItr.getNextDeep(shallowMode, skipDots)
         }
         if(nextItr.item.isTentative){
-            our infItr: nxtOR <- nextItr.getNextExtended(shallowMode, true)
-            if(nxtOR != NULL){
-                if(!nextItr.item.isOrLike()){nextItr <- nextItr.infNode.makeOrItr(nextItr)}
-                nextItr.item.addToOrInfon(nxtOR)
-                nextItr.item.source.value.tailUnfinished <- false
-            }
-	    //log("            or:"+nextItr.stringify())
+            nextItr.nextOr <- nextItr.getNextExtended(shallowMode, true)
         }
-	log("        <<GNE:nextItr:"+nextItr.stringify())
+	//log("        <<GNE:nextItr:"+nextItr.stringify())
         return(nextItr)
     }
     void: copyThisTo(our infItr: to) <- {
@@ -542,7 +540,7 @@ model infItr{
             S <- S + stringifyInfon(item)
             //if(wasProcessed){S <- S + "|wasProcessedTrue" }
             //S <- S + "|nestLvl=" + toString(nestLvl)
-            //S <- S + "|state=" + stateStrings[state]
+            S <- S + "|state=" + stateStrings[state]
             //S <- S + "(parent:" + parent.mySymbol(parent) + ")"
             //if(nextAnd){S <- S+ " & "+ nextAnd.stringify()}
             if(state==sSecondVisit){S <- S + ">SV"}
@@ -755,6 +753,7 @@ struct XformMgr{
 	addAItemToAgenda(newAItem)
     }
     me bool: processMergeViaAgenda(our infon: LHS, our infon: RHS, me bool: looseSize, our AItem: subscriber)<-{
+	log("processMergeViaAgenda:")
 	our AItem:: newAItem
         newAItem.ruleSet   <- rsMerge
         newAItem.LHS       <- LHS
@@ -770,6 +769,14 @@ struct XformMgr{
 	inf.value.items.pushLast(inf)
 	addAItemToAgenda(aItem)
     }
+    our infItr: packageOrItr(our infItr: ii) <- {
+	if(ii.nextOr != NULL){
+	    if(!ii.item.isOrLike()){ii <- ii.infNode.makeOrItr(ii)}
+	    ii.item.addToOrInfon(ii.nextOr)
+	    ii.item.source.value.tailUnfinished <- false
+	}
+	return(ii)
+    }
     void: processAgendaItem(our AItem: aItem, me int: AlternativesNestLvl)<-{
         log("PAI:"+aItem.stringify()+"______________________________________________")
         me bool: changeMade <- true
@@ -777,16 +784,17 @@ struct XformMgr{
         while(changeMade){
             switch(aItem.ruleSet){
 		case rsInfon:{
-		    //print(bigStringify(aItem.item, "    "))
+		    log("    rsINFON:"+aItem.stringify())
                     if(aItem.item.isNormed){return()}
     prepWorkList(aItem.item)
                     wrkLstRules(aItem)
                     changeMade <- false
                 }
                 case rsMerge:{
-		    //print(bigStringify(aItem.LHS, "    "))
+		    log("    rsMERGE:"+aItem.stringify())
                     switch(aItem.step){
                         case 0:{
+			    log("    MERGE-step0: ApplyMergeRules to:"+aItem.stringify())
 			    processInfonViaAgenda(aItem.RHS, aItem)
                         }
                         case 1:{
@@ -798,37 +806,41 @@ struct XformMgr{
                         default:{
 			    log("    MERGE-step1+: ApplyMergeRules to:"+aItem.stringify())
 			    if(aItem.LHSItr.state==sSecondVisit or aItem.LHSItr.state==sEOL){changeMade <- false; break()}
+			    if(aItem.RHSItr.state==sSecondVisit or aItem.RHSItr.state==sEOL){changeMade <- false; break()}
                             aItem.LHSItr <- aItem.LHSItr.getNextExtended(true, false)
 			    log("        aItem.LHSItr-"+aItem.LHSItr.stringify())
+			    log("        >>aItem.RHSItr-"+aItem.RHSItr.stringify())
                             aItem.RHSItr <- aItem.RHSItr.getNextExtended(aItem.looseSize, false)
+			    //packageOrItr(aItem.RHSItr)
 			    log("        aItem.RHSItr-"+aItem.RHSItr.stringify())
-			    if(aItem.LHSItr.item.isOrLike()){
-				//log("        LHSItr.isOrLike")
-				changeMade <- false
-				if(aItem.RHSItr.item.isOrLike()){ // set flag to add new #{...}
-				    //log("        RHSItr.isOrLike")
-				    aItem.LHSItr.item.source.value.items.head.altPOV.addNewSubDots <- true
-				}
-				our POV: altLHS <- aItem.LHSItr.item.source.value.items.begin()
-				while (altLHS!=NULL){
-				    //log("            altLHS-"+stringifyInfon(altLHS.item))
-				    if(altLHS.altPOV.item != NULL){
-					if(altLHS.altPOV.item.isTentative and aItem.RHSItr.item.isTentative){  // ?=?
-					    //log("            ?=? : parent.KEEPING DOTS")
-					    //LHSItr.parent.stitchCmd <- keepDots
-					}else{
-					    altLHS.altPOV.AlternativesNestLvl <+- 1
-					    altLHS.altPOV.predecessors.pushLast(aItem)
-					    altLHS.altPOV.item.addPOVToWrkList(aItem.RHSItr.infNode)
-					}
-				    }
-				    altLHS <- altLHS.next
-				}
-				continue()
-			    }
-                            if(aItem.LHSItr.state!=sSecondVisit and aItem.LHSItr.state!=sEOL and
+			    if(aItem.LHSItr.state!=sSecondVisit and aItem.LHSItr.state!=sEOL and
                                 aItem.RHSItr.state!=sSecondVisit and aItem.RHSItr.state!=sEOL){
 				log("! SV & ! SEOL")
+				if(aItem.LHSItr.nextOr != NULL){
+				    //log("        LHSItr.nextOr")
+				    changeMade <- false
+				    if(aItem.RHSItr.item.isOrLike()){ // set flag to add new #{...}
+					//log("        RHSItr.isOrLike")
+					aItem.LHSItr.item.source.value.items.head.altPOV.addNewSubDots <- true
+				    }
+				    our infItr: altLHS <- aItem.LHSItr
+				    while (altLHS!=NULL){
+					log("            altLHS:"+stringifyInfon(altLHS.item))
+					if(altLHS.item != NULL){
+					    if(altLHS.item.isTentative and aItem.RHSItr.item.isTentative){  // ?=?
+						log("            ?=? : parent.KEEPING DOTS")
+						//LHSItr.parent.stitchCmd <- keepDots
+					    }else{
+						altLHS.infNode.AlternativesNestLvl <+- 1
+						altLHS.infNode.predecessors.pushLast(aItem)
+						altLHS.infNode.item.addPOVToWrkList(aItem.RHSItr.infNode)
+					    }
+					}
+					altLHS <- altLHS.nextOr
+				    }
+				    //continue()
+				}
+
 				processMergeViaAgenda(aItem.LHSItr.item, aItem.RHSItr.item, aItem.looseSize, aItem)
 				changeMade <- false; break()
 				//mergeRules(aItem)
@@ -1645,12 +1657,12 @@ if(LHSItr.state == sNonIterable){logFatalError("Trying to iterate nonIterable in
         */
     }
     me void: normalize(our infon: inf) <- {
-	print("_______________________\n")
+	//print("_______________________\n")
 	xformMgr.processInfonViaAgenda(inf, NULL)
         xformMgr.processAgenda()
-	print("_______________________\n")
-	print(bigStringify(inf, "    "))
-	print("_______________________\n")
+	//print("_______________________\n")
+	//print(bigStringify(inf, "    "))
+	//print("_______________________\n")
         //aItem.item.isNormed <- true
     }
     me string: fetchAsStr(their infon: i) <- {return(i.value.str)}
