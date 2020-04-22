@@ -484,7 +484,7 @@ model infItr{
     }
     our infItr: getNextExtended(me bool: shallowMode, me bool: skipDots) <- {
         our infItr: nextItr <- getNextDeep(shallowMode, skipDots)
-        //log("    GNE:nextItr:"+nextItr.stringify())
+        log("        >>GNE:nextItr:"+nextItr.stringify())
         if(nextItr.state == sError){return(NULL)}
         //if(nextItr.nextAnd != NULL){nextItr.nextAnd <- nextItr.nextAnd.getNextExtended(shallowMode, false)}
         while(nextItr.item.itmMode == mSubItems){
@@ -493,11 +493,13 @@ model infItr{
         if(nextItr.item.isTentative){
             our infItr: nxtOR <- nextItr.getNextExtended(shallowMode, true)
             if(nxtOR != NULL){
-                if(!nextItr.item.isOrLike()){nextItr <- nextItr.makeOrItr(nextItr)}
+                if(!nextItr.item.isOrLike()){nextItr <- nextItr.infNode.makeOrItr(nextItr)}
                 nextItr.item.addToOrInfon(nxtOR)
                 nextItr.item.source.value.tailUnfinished <- false
             }
+	    //log("            or:"+nextItr.stringify())
         }
+	log("        <<GNE:nextItr:"+nextItr.stringify())
         return(nextItr)
     }
     void: copyThisTo(our infItr: to) <- {
@@ -585,11 +587,7 @@ model AItem{
         }
         return (S)
     }
-    void: initialize(our infon: inf) <- {
-        item <- inf
-        ruleSet <- rsInfon
-        step <- 0
-    }
+
 }
 struct AItem{}
 model PartPath{
@@ -748,22 +746,48 @@ struct XformMgr{
         //log(logStr)
         return(itmAdded)
     }
+    me bool: processInfonViaAgenda(our infon: item, our AItem: subscriber)<-{
+	our AItem:: newAItem
+	newAItem.ruleSet <- rsInfon
+	newAItem.item    <- item
+	newAItem.step    <- 0
+	if(subscriber != NULL){newAItem.subscribers.pushFirst(subscriber)}
+	addAItemToAgenda(newAItem)
+    }
+    me bool: processMergeViaAgenda(our infon: LHS, our infon: RHS, me bool: looseSize, our AItem: subscriber)<-{
+	our AItem:: newAItem
+        newAItem.ruleSet   <- rsMerge
+        newAItem.LHS       <- LHS
+        newAItem.RHS       <- RHS
+	newAItem.looseSize <- looseSize
+        newAItem.propagate <- true
+	newAItem.step      <- 0
+        if(subscriber != NULL){newAItem.subscribers.pushFirst(subscriber)}
+        addAItemToAgenda(newAItem)
+    }
+    void: appendToUnfinishedList(our AItem: aItem, our infon: inf) <- {
+	if(!inf.value.tailUnfinished){logFatalError("ERROR: tailUnfinished FALSE:"+ stringifyInfon(inf))}
+	inf.value.items.pushLast(inf)
+	addAItemToAgenda(aItem)
+    }
     void: processAgendaItem(our AItem: aItem, me int: AlternativesNestLvl)<-{
-        log("PAI:"+aItem.stringify())
+        log("PAI:"+aItem.stringify()+"______________________________________________")
         me bool: changeMade <- true
         me int: count <- 0
         while(changeMade){
             switch(aItem.ruleSet){
+		case rsInfon:{
+		    //print(bigStringify(aItem.item, "    "))
+                    if(aItem.item.isNormed){return()}
+    prepWorkList(aItem.item)
+                    wrkLstRules(aItem)
+                    changeMade <- false
+                }
                 case rsMerge:{
+		    //print(bigStringify(aItem.LHS, "    "))
                     switch(aItem.step){
                         case 0:{
-                            our AItem:: newAItem
-                                newAItem.ruleSet <- rsInfon
-                                newAItem.item    <- aItem.RHS
-                                newAItem.step    <- 0
-                                newAItem.subscribers.pushFirst(aItem)
-                            log("    MERGE-step0: addAItemToAgenda("+newAItem.stringify()+")")
-                            addAItemToAgenda(newAItem)
+			    processInfonViaAgenda(aItem.RHS, aItem)
                         }
                         case 1:{
                             log("    MERGE-step1: ApplyMergeRules to:"+aItem.stringify())
@@ -775,26 +799,28 @@ struct XformMgr{
 			    log("    MERGE-step1+: ApplyMergeRules to:"+aItem.stringify())
 			    if(aItem.LHSItr.state==sSecondVisit or aItem.LHSItr.state==sEOL){changeMade <- false; break()}
                             aItem.LHSItr <- aItem.LHSItr.getNextExtended(true, false)
+			    log("        aItem.LHSItr-"+aItem.LHSItr.stringify())
                             aItem.RHSItr <- aItem.RHSItr.getNextExtended(aItem.looseSize, false)
+			    log("        aItem.RHSItr-"+aItem.RHSItr.stringify())
 			    if(aItem.LHSItr.item.isOrLike()){
-				log("LHS.isOrLike")
+				//log("        LHSItr.isOrLike")
 				changeMade <- false
 				if(aItem.RHSItr.item.isOrLike()){ // set flag to add new #{...}
+				    //log("        RHSItr.isOrLike")
 				    aItem.LHSItr.item.source.value.items.head.altPOV.addNewSubDots <- true
 				}
 				our POV: altLHS <- aItem.LHSItr.item.source.value.items.begin()
 				while (altLHS!=NULL){
-				    // 1. check for ?==?
-				    if(altLHS.altPOV.item.isTentative and aItem.RHSItr.item.isTentative){  // ?=?
-					log("?=? : parent.KEEPING DOTS")
-					//LHSItr.parent.stitchCmd <- keepDots
-				    }else{
-					log("! ?==? : "+aItem.stringify())
-					altLHS.altPOV.AlternativesNestLvl <+- 1
-					// 2. add crnt Item to pred of lhs pushing
-					altLHS.altPOV.predecessors.pushLast(aItem)
-					// 3. add RHSItr to LHS.worklist
-					altLHS.altPOV.item.addPOVToWrkList(aItem.RHSItr.infNode)
+				    //log("            altLHS-"+stringifyInfon(altLHS.item))
+				    if(altLHS.altPOV.item != NULL){
+					if(altLHS.altPOV.item.isTentative and aItem.RHSItr.item.isTentative){  // ?=?
+					    //log("            ?=? : parent.KEEPING DOTS")
+					    //LHSItr.parent.stitchCmd <- keepDots
+					}else{
+					    altLHS.altPOV.AlternativesNestLvl <+- 1
+					    altLHS.altPOV.predecessors.pushLast(aItem)
+					    altLHS.altPOV.item.addPOVToWrkList(aItem.RHSItr.infNode)
+					}
 				    }
 				    altLHS <- altLHS.next
 				}
@@ -803,25 +829,12 @@ struct XformMgr{
                             if(aItem.LHSItr.state!=sSecondVisit and aItem.LHSItr.state!=sEOL and
                                 aItem.RHSItr.state!=sSecondVisit and aItem.RHSItr.state!=sEOL){
 				log("! SV & ! SEOL")
-				our AItem:: newAItem
-				    newAItem.ruleSet   <- rsMerge
-				    newAItem.LHS       <- aItem.LHSItr.item
-				    newAItem.RHS       <- aItem.RHSItr.item
-				    newAItem.propagate <- true
-				    newAItem.step    <- 0
-				    newAItem.subscribers.pushFirst(aItem)
-				addAItemToAgenda(newAItem)
+				processMergeViaAgenda(aItem.LHSItr.item, aItem.RHSItr.item, aItem.looseSize, aItem)
 				changeMade <- false; break()
 				//mergeRules(aItem)
                             }
                         }
                     }
-                    changeMade <- false
-                }
-                case rsInfon:{
-                    if(aItem.item.isNormed){return()}
-   prepWorkList(aItem.item)
-                    wrkLstRules(aItem)
                     changeMade <- false
                 }
                 case rsPure:{
@@ -864,13 +877,7 @@ struct XformMgr{
         our POV: RHSPov <- aItem.item.wrkList.first()
         aItem.item.wrkList.popFirst()
         aItem.item.usedWrkList.pushLast(RHSPov)
-        our AItem:: newAItem
-            newAItem.ruleSet <- rsMerge
-            newAItem.LHS     <- aItem.item
-            newAItem.RHS     <- RHSPov.item
-            newAItem.looseSize <- RHSPov.looseSize()
-            newAItem.step    <- 0
-        addAItemToAgenda(newAItem)
+	processMergeViaAgenda(aItem.item, RHSPov.item, RHSPov.looseSize(), NULL)
     }
     me bool: sizesAreCompatable(our infon: LHS, our infon: RHS)<-{return(true)}
     me void: enqueFirstsToMerge(our AItem: aItem) <- {
@@ -879,14 +886,7 @@ struct XformMgr{
         aItem.LHSItr.beginIterating(false)
         Allocate(aItem.RHSItr); aItem.RHSItr.initialize(aItem.RHS)
         aItem.RHSItr.beginIterating(false)
-
-        our AItem:: newAItem
-        newAItem.ruleSet   <- rsMerge
-        newAItem.LHS       <- aItem.LHSItr.item
-        newAItem.RHS       <- aItem.RHSItr.item
-        newAItem.propagate <- true
-        newAItem.subscribers.pushFirst(aItem)
-        addAItemToAgenda(newAItem)
+	processMergeViaAgenda(aItem.LHSItr.item, aItem.RHSItr.item, aItem.looseSize, aItem)
     }
 }
 
@@ -1645,11 +1645,13 @@ if(LHSItr.state == sNonIterable){logFatalError("Trying to iterate nonIterable in
         */
     }
     me void: normalize(our infon: inf) <- {
-        our AItem:: aItem
-        aItem.initialize(inf)
-        xformMgr.addAItemToAgenda(aItem)
+	print("_______________________\n")
+	xformMgr.processInfonViaAgenda(inf, NULL)
         xformMgr.processAgenda()
-        aItem.item.isNormed <- true
+	print("_______________________\n")
+	print(bigStringify(inf, "    "))
+	print("_______________________\n")
+        //aItem.item.isNormed <- true
     }
     me string: fetchAsStr(their infon: i) <- {return(i.value.str)}
     me BigInt: fetchAsNum(their infon: i) <- {return(i.value.num)}
@@ -1788,3 +1790,4 @@ struct ProteusCore{
 
 /////////////////////////////////////////
 do codeDataDisplay(infon, TAG_infonDumpMode)
+do GeneratePtrSymbols(POV)
