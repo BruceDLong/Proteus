@@ -555,8 +555,7 @@ model infItr{
 }
 model AItem{
     mode[rsInfon, rsMerge, rsPure]: ruleSet
-    our infon: item
-    our infon: LHS
+    our infon: LHS_item
     our infon: RHS
     our infItr: LHSItr
     our infItr: RHSItr
@@ -572,18 +571,16 @@ model AItem{
         if(self==NULL){S<-S+"NULL"}
         else{
             S <+- ruleSetStrings[ruleSet] +": "
+	    S <+- LHS_item.mySymbol(LHS_item)+":"
             switch(ruleSet){
                 case rsInfon:{
-		    S <+- item.mySymbol(item)+":"
-		    S <+- stringifyInfon(item)
-		    //S <+- ":NORM:"+ dispBool(item.isNormed)
+		    S <+- stringifyInfon(LHS_item)
 		}
                 case rsMerge:{
-		    S <+- LHS.mySymbol(LHS)+":"
-		    S <+- stringifyInfon(LHS) + " = " + stringifyInfon(RHS) + "  (step:"+toString(step)+")"
-		    //S <+- ":NORM:"+ dispBool(LHS.isNormed)
+		    S <+- stringifyInfon(LHS_item) + " = " + stringifyInfon(RHS) + "  (step:"+toString(step)+")"
 		}
             }
+	    //S <+- ":NORM:"+ dispBool(LHS.isNormed)
 	    if(subscribers.size()>0){
 		S <+- ":subs:"+toString(subscribers.size())
 		withEach sub in subscribers{
@@ -744,9 +741,9 @@ struct XformMgr{
         me bool: itmAdded <- true
         me string: logStr <- "        ADD_TO_AGENDA:"+aItem.mySymbol(aItem)+":" + aItem.stringify()
         if(aItem.ruleSet == rsInfon){
-            if(!aItem.item.isOnAgenda){
+            if(!aItem.LHS_item.isOnAgenda){
                 agenda.pushFirst(aItem)
-                aItem.item.isOnAgenda <- true
+                aItem.LHS_item.isOnAgenda <- true
             } else {logStr <- logStr + " Already on agenda!"; itmAdded <- false}
         }else{agenda.pushFirst(aItem)}
         //log(logStr)
@@ -754,9 +751,9 @@ struct XformMgr{
     }
     our AItem: processInfonViaAgenda(our infon: item, our AItem: subscriber)<-{
 	our AItem:: newAItem
-	newAItem.ruleSet <- rsInfon
-	newAItem.item    <- item
-	newAItem.step    <- 0
+	newAItem.ruleSet  <- rsInfon
+	newAItem.LHS_item <- item
+	newAItem.step     <- 0
 	if(subscriber != NULL){newAItem.subscribers.pushFirst(subscriber)}
 	addAItemToAgenda(newAItem)
 	return(newAItem)
@@ -765,7 +762,7 @@ struct XformMgr{
 	log("processMergeViaAgenda:")
 	our AItem:: newAItem
         newAItem.ruleSet   <- rsMerge
-        newAItem.LHS       <- LHS
+        newAItem.LHS_item  <- LHS
         newAItem.RHS       <- RHS
 	newAItem.looseSize <- looseSize
         newAItem.propagate <- true
@@ -796,21 +793,19 @@ struct XformMgr{
     void: processAgendaItem(our AItem: aItem, me int: AlternativesNestLvl)<-{
         log("______________________________________________")
         me bool: changeMade <- true
-	    our infon: primaryInfon
+
         me int: count <- 0
         while(changeMade){
             switch(aItem.ruleSet){
 		case rsInfon:{
 		    log("    rsINFON:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
-		    primaryInfon <- aItem.item
-                    if(aItem.item.isNormed){return()}
-    prepWorkList(aItem.item)
+                    if(aItem.LHS_item.isNormed){return()}
+	prepWorkList(aItem.LHS_item)
                     wrkLstRules(aItem)
                     changeMade <- false
 		    fulfillSubscriptions(aItem)
                 }
                 case rsMerge:{
-		    primaryInfon <- aItem.LHS
                     switch(aItem.step){
                         case 0:{
 			    log("    MERGE-step0: ApplyMergeRules to:"+aItem.stringify())
@@ -819,7 +814,7 @@ struct XformMgr{
                         }
                         case 1:{
                             log("    MERGE-step1: ApplyMergeRules to:"+aItem.stringify())
-                            prepWorkList(aItem.LHS)
+                            prepWorkList(aItem.LHS_item)
                             mergeSizeRules(aItem)
                             mergeRules(aItem)
 			    fulfillSubscriptions(aItem)
@@ -875,7 +870,7 @@ struct XformMgr{
             }
             count <+- 1
         }
-	primaryInfon.isNormed <- true
+	aItem.LHS_item.isNormed <- true
     }
     void: processAgenda()<-{
         withEach count in WHILE(!agenda.isEmpty()) {
@@ -883,7 +878,7 @@ struct XformMgr{
             if (count > 100){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
             our AItem: aItem <- agenda.last(); agenda.popLast()
             processAgendaItem(aItem, 0)
-            //aItem.item.isOnAgenda <- false
+            //aItem.LHS_item.isOnAgenda <- false
         }
     }
     void: DO_COPY(their pureInfon: from, their pureInfon: to, me BigInt: sizeToCopy) <- {
@@ -904,15 +899,15 @@ struct XformMgr{
     }
     void: enqueueForMerge(our AItem: aItem) <- {
         log("EN:")
-        our POV: RHSPov <- aItem.item.wrkList.first()
-        aItem.item.wrkList.popFirst()
-        aItem.item.usedWrkList.pushLast(RHSPov)
-	processMergeViaAgenda(aItem.item, RHSPov.item, RHSPov.looseSize(), aItem)
+        our POV: RHSPov <- aItem.LHS_item.wrkList.first()
+        aItem.LHS_item.wrkList.popFirst()
+        aItem.LHS_item.usedWrkList.pushLast(RHSPov)
+	processMergeViaAgenda(aItem.LHS_item, RHSPov.item, RHSPov.looseSize(), aItem)
     }
     me bool: sizesAreCompatable(our infon: LHS, our infon: RHS)<-{return(true)}
     me void: enqueFirstsToMerge(our AItem: aItem) <- {
         log("enqueFirstsToMerge:"+ aItem.stringify())
-        Allocate(aItem.LHSItr); aItem.LHSItr.initialize(aItem.LHS)
+        Allocate(aItem.LHSItr); aItem.LHSItr.initialize(aItem.LHS_item)
         aItem.LHSItr.beginIterating(false)
         Allocate(aItem.RHSItr); aItem.RHSItr.initialize(aItem.RHS)
         aItem.RHSItr.beginIterating(false)
@@ -1681,7 +1676,7 @@ if(LHSItr.state == sNonIterable){logFatalError("Trying to iterate nonIterable in
 	//print("_______________________\n")
 	//print(bigStringify(inf, "    "))
 	//print("_______________________\n")
-        //aItem.item.isNormed <- true
+        //aItem.LHS_item.isNormed <- true
     }
     me string: fetchAsStr(their infon: i) <- {return(i.value.str)}
     me BigInt: fetchAsNum(their infon: i) <- {return(i.value.num)}

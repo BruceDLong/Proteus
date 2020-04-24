@@ -14,15 +14,15 @@ mergeSizeRules = {
 
     ],
     'ifSnips': {
-        'l?':            'aItem.LHS.infMode == isUnknown',
-        'lNUM':          'aItem.LHS.value.fType == NUM',
-        'lSTR':          'aItem.LHS.value.fType == STR',
-        'lLST':          'aItem.LHS.value.fType == LST',
+        'l?':            'aItem.LHS_item.infMode == isUnknown',
+        'lNUM':          'aItem.LHS_item.value.fType == NUM',
+        'lSTR':          'aItem.LHS_item.value.fType == STR',
+        'lLST':          'aItem.LHS_item.value.fType == LST',
 
-        'lintersect':    'aItem.LHS.infSize.intersectPosParse == ipSquareBrackets',
-        'lfUnknown':     'aItem.LHS.infSize.format == fUnknown',
-        'lfConcat':      'aItem.LHS.infSize.format == fConcat',
-        'lfLiteral':     'aItem.LHS.infSize.format == fLiteral',
+        'lintersect':    'aItem.LHS_item.infSize.intersectPosParse == ipSquareBrackets',
+        'lfUnknown':     'aItem.LHS_item.infSize.format == fUnknown',
+        'lfConcat':      'aItem.LHS_item.infSize.format == fConcat',
+        'lfLiteral':     'aItem.LHS_item.infSize.format == fLiteral',
 
         'r?':            'aItem.RHS.infMode == isUnknown',
         'rNUM':          'aItem.RHS.value.fType == NUM',
@@ -38,7 +38,7 @@ mergeSizeRules = {
         '!looseSize':    '!aItem.looseSize'
     },
     'codeSnips': {
-        'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.infSize, aItem.LHS.infSize, 0)',
+        'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.infSize, aItem.LHS_item.infSize, 0)',
     },
     'rules': [
         ["mergeSize:!looseSize|lfUnknown|rsfLiteral",     "copySizeRHStoLHS"],
@@ -57,15 +57,15 @@ mergeRules = {
         ['rintersect', 'rfUnknown', 'rfConcat', 'rfLiteral']
     ],
     'ifSnips': {
-        'l?':            'aItem.LHS.infMode == isUnknown',
-        'lNUM':          'aItem.LHS.value.fType == NUM',
-        'lSTR':          'aItem.LHS.value.fType == STR',
-        'lLST':          'aItem.LHS.value.fType == LST',
+        'l?':            'aItem.LHS_item.infMode == isUnknown',
+        'lNUM':          'aItem.LHS_item.value.fType == NUM',
+        'lSTR':          'aItem.LHS_item.value.fType == STR',
+        'lLST':          'aItem.LHS_item.value.fType == LST',
 
-        'lintersect':    'aItem.LHS.value.intersectPosParse == ipSquareBrackets',
-        'lfUnknown':     'aItem.LHS.value.format == fUnknown',
-        'lfConcat':      'aItem.LHS.value.format == fConcat',
-        'lfLiteral':     'aItem.LHS.value.format == fLiteral',
+        'lintersect':    'aItem.LHS_item.value.intersectPosParse == ipSquareBrackets',
+        'lfUnknown':     'aItem.LHS_item.value.format == fUnknown',
+        'lfConcat':      'aItem.LHS_item.value.format == fConcat',
+        'lfLiteral':     'aItem.LHS_item.value.format == fLiteral',
 
         'r?':            'aItem.RHS.infMode == isUnknown',
         'rNUM':          'aItem.RHS.value.fType == NUM',
@@ -82,12 +82,12 @@ mergeRules = {
     },
     'codeSnips': {
         'REJECT':                   'aItem.reject <- true',
-        'copyValueRHStoLHS':        'DO_COPY(aItem.RHS.value, aItem.LHS.value, aItem.sizeToCopy)',
-        'copyValueLHStoRHS':        'DO_COPY(aItem.LHS.value, aItem.RHS.value, aItem.sizeToCopy)',
-        'copyRHSTypeToLHS':         'aItem.LHS.value.fType <- aItem.RHS.value.fType; aItem.LHS.infMode <- aItem.RHS.infMode',
-        'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.infSize, aItem.LHS.infSize, 0)',
-        'rejectIfValueStrNotEqual': 'if(aItem.LHS.value.str != aItem.RHS.value.str){aItem.reject <- true}',
-        'rejectIfValueNumNotEqual': 'if(aItem.LHS.value.num != aItem.RHS.value.num){aItem.reject <- true}',
+        'copyValueRHStoLHS':        'DO_COPY(aItem.RHS.value, aItem.LHS_item.value, aItem.sizeToCopy)',
+        'copyValueLHStoRHS':        'DO_COPY(aItem.LHS_item.value, aItem.RHS.value, aItem.sizeToCopy)',
+        'copyRHSTypeToLHS':         'aItem.LHS_item.value.fType <- aItem.RHS.value.fType; aItem.LHS_item.infMode <- aItem.RHS.infMode',
+        'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.infSize, aItem.LHS_item.infSize, 0)',
+        'rejectIfValueStrNotEqual': 'if(aItem.LHS_item.value.str != aItem.RHS.value.str){aItem.reject <- true}',
+        'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.value.num != aItem.RHS.value.num){aItem.reject <- true}',
         'StartMergePropogation':    'startPropRules(aItem)'
     },
     'rules': [
@@ -219,7 +219,7 @@ wrkLstRules = {
     'ID': 'wrkLst',
     'points': [["wrkLstEmpty", "!wrkLstEmpty"]],
     'ifSnips': {
-        '!wrkLstEmpty':   '!aItem.item.wrkList.isEmpty()',
+        '!wrkLstEmpty':   '!aItem.LHS_item.wrkList.isEmpty()',
         'wrkLstEmpty':    'true'
     },
     'codeSnips': {
@@ -242,12 +242,12 @@ startPropRules = { # Start iterating fLiteral LST = fLiteral LST
     'ifSnips': {
         '!looseSize':       '!aItem.looseSize',
         'looseSize':        'aItem.looseSize',
-        'sizesCompat':      'sizesAreCompatable(aItem.LHS, aItem.RHS)',
-        '!sizesCompat':     '!sizesAreCompatable(aItem.LHS, aItem.RHS)',
+        'sizesCompat':      'sizesAreCompatable(aItem.LHS_item, aItem.RHS)',
+        '!sizesCompat':     '!sizesAreCompatable(aItem.LHS_item, aItem.RHS)',
         'RHSisPureDots':    '(aItem.RHS.value.tailUnfinished and aItem.RHS.value.items.size()==0)',
         '!RHSisPureDots':   '!(aItem.RHS.value.tailUnfinished and aItem.RHS.value.items.size()==0)',
-        'LHSEmpty':         '(!aItem.LHS.value.tailUnfinished and aItem.LHS.value.items.size() == 0)',
-        '!LHSEmpty':        '(aItem.LHS.value.tailUnfinished or aItem.LHS.value.items.size() > 0)'
+        'LHSEmpty':         '(!aItem.LHS_item.value.tailUnfinished and aItem.LHS_item.value.items.size() == 0)',
+        '!LHSEmpty':        '(aItem.LHS_item.value.tailUnfinished or aItem.LHS_item.value.items.size() > 0)'
     },
     'codeSnips': {
         'REJECT':   'aItem.reject <- true',
@@ -268,7 +268,7 @@ propagationRules = {
     'ifSnips': {
         'infonMode':    'aItem.ruleSet == rsInfon',
         'mergeMode':    'aItem.ruleSet == rsMerge',
-        'skipDots1':    'aItem.item.',
+        'skipDots1':    'aItem.LHS_item.',
         'skipDots2':    'aItem.',
         'notSkipDots':  ''
 
