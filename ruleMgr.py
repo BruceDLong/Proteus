@@ -50,10 +50,10 @@ mergeSizeRules = {
 mergeRules = {
     'ID': 'merge',
     'points': [
-        ['l?', 'lNUM', 'lSTR', 'lLST', 'lLST'],
+        ['l?', 'lNUM', 'lSTR', 'lLST'],
         ['lintersect', 'lfUnknown', 'lfConcat', 'lfLiteral'],
         ['=', '=='],
-        ['r?', 'rNUM', 'rSTR', 'rLST', 'rLST'],
+        ['r?', 'rNUM', 'rSTR', 'rLST'],
         ['rintersect', 'rfUnknown', 'rfConcat', 'rfLiteral']
     ],
     'ifSnips': {
