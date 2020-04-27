@@ -50,10 +50,10 @@ mergeSizeRules = {
 mergeRules = {
     'ID': 'merge',
     'points': [
-        ['l?', 'lNUM', 'lSTR', 'lLST'],
+        ['l?', 'lNUM', 'lSTR', 'lLST', 'ltUnknown'],
         ['lintersect', 'lfUnknown', 'lfConcat', 'lfLiteral'],
         ['=', '=='],
-        ['r?', 'rNUM', 'rSTR', 'rLST'],
+        ['r?', 'rNUM', 'rSTR', 'rLST', 'rtUnknown'],
         ['rintersect', 'rfUnknown', 'rfConcat', 'rfLiteral']
     ],
     'ifSnips': {
@@ -71,8 +71,9 @@ mergeRules = {
         'rNUM':          'aItem.RHS.value.fType == NUM',
         'rSTR':          'aItem.RHS.value.fType == STR',
         'rLST':          'aItem.RHS.value.fType == LST',
+        'rtUnknown':     'aItem.RHS.value.fType == tUnknown',
 
-        'rintersect':    'aItem.RHS.value.intersectPosParse == ipSquareBrackets',
+        'rintersect':    'aItem.RHS.intersectPos != ipNoIntersect',
         'rfUnknown':     'aItem.RHS.value.format == fUnknown',
         'rfConcat':      'aItem.RHS.value.format == fConcat',
         'rfLiteral':     'aItem.RHS.value.format == fLiteral',
@@ -88,10 +89,11 @@ mergeRules = {
         'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.infSize, aItem.LHS_item.infSize, 0)',
         'rejectIfValueStrNotEqual': 'if(aItem.LHS_item.value.str != aItem.RHS.value.str){aItem.reject <- true}',
         'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.value.num != aItem.RHS.value.num){aItem.reject <- true}',
-        'StartMergePropogation':    'startPropRules(aItem)'
+        'StartMergePropogation':    'startPropRules(aItem)',
+        'mergeRHSIntersect':        'mergeRHSIntersect(aItem.LHS_item, aItem.RHS)'
     },
     'rules': [
-        ["merge:|||r?|",                           "NULL"],
+        ["merge:|||r?|",                           "NONE"],
         ["merge:l?||=|rNUM,rSTR,rLST|",           "copyRHSTypeToLHS,copyValueRHStoLHS,copySizeRHStoLHS"],
         ["merge:l?||==|rNUM,rSTR,rLST|",          "copyRHSTypeToLHS,copyValueRHStoLHS"],
 
@@ -99,12 +101,12 @@ mergeRules = {
         ["merge:lSTR||=|rNUM,rLST|",             "REJECT"],
         ["merge:lLST||=|rNUM,rSTR|",             "REJECT"],
 
-        ["merge:lNUM|lfUnknown|=|rNUM|rfUnknown",         "NULL"],
+        ["merge:lNUM|lfUnknown|=|rNUM|rfUnknown",         "NONE"],
         ["merge:lNUM|lfUnknown|=|rNUM|rfLiteral",         "copyValueRHStoLHS"],
         ["merge:lNUM|lfLiteral|=|rNUM|rfUnknown",         "copyValueLHStoRHS"],
         ["merge:lNUM|lfLiteral|=|rNUM|rfLiteral",         "rejectIfValueNumNotEqual"],
 
-        ["merge:lSTR|lfUnknown|=|rSTR|rfUnknown",         "NULL"],
+        ["merge:lSTR|lfUnknown|=|rSTR|rfUnknown",         "NONE"],
         ["merge:lSTR|lfUnknown|=|rSTR|rfLiteral",         "copyValueRHStoLHS"],
         ["merge:lSTR|lfLiteral|=|rSTR|rfUnknown",         "copyValueLHStoRHS"],
         ["merge:lSTR|lfLiteral|=|rSTR|rfLiteral",         "rejectIfValueStrNotEqual"],
@@ -119,12 +121,12 @@ mergeRules = {
         ["merge:lSTR||==|rNUM,rLST|",             "ACTION"],
         ["merge:lLST||==|rNUM,rSTR|",             "ACTION"],
 
-        ["merge:lNUM|lfUnknown|==|rNUM|rfUnknown",         "NULL"],
+        ["merge:lNUM|lfUnknown|==|rNUM|rfUnknown",         "NONE"],
         ["merge:lNUM|lfUnknown|==|rNUM|rfLiteral",         "copyValueRHStoLHS"], # remember size to copy
         ["merge:lNUM|lfLiteral|==|rNUM|rfUnknown",         "copyValueLHStoRHS"],
         ["merge:lNUM|lfLiteral|==|rNUM|rfLiteral",         "ACTION"], #break into 2 cases: LHS.infSize.format = rfUnknown, rfLiteral.  see tryMergeValue()
 
-        ["merge:lSTR|lfUnknown|==|rSTR|rfUnknown",         "NULL"],
+        ["merge:lSTR|lfUnknown|==|rSTR|rfUnknown",         "NONE"],
         ["merge:lSTR|lfUnknown|==|rSTR|rfLiteral",         "copyValueRHStoLHS"], # sizeToCopy, handleRemainder
         ["merge:lSTR|lfLiteral|==|rSTR|rfUnknown",         "copyValueLHStoRHS"],
         ["merge:lSTR|lfLiteral|==|rSTR|rfLiteral",         "ACTION"],   #break into 2 cases: LHS.infSize.format = rfUnknown, rfLiteral.  see tryMergeValue()
@@ -136,7 +138,7 @@ mergeRules = {
 
         ##### CONCAT and INTERSECT
         ["merge:lNUM|lfUnknown|=|rNUM|rfConcat",          "ACTION"],
-        ["merge:lNUM|lfUnknown|=|rNUM|rintersect",        "ACTION"],
+        ["merge:lNUM|lfUnknown|=|rtUnknown|rintersect",        "mergeRHSIntersect"],
         ["merge:lNUM|lfConcat|=|rNUM|rfUnknown",          "ACTION"],
         ["merge:lNUM|lfConcat|=|rNUM|rfConcat",           "ACTION"],
         ["merge:lNUM|lfConcat|=|rNUM|rfLiteral",          "ACTION"],
@@ -227,7 +229,7 @@ wrkLstRules = {
     },
     'rules': [
         ["wrkLst:!wrkLstEmpty",     "enqueueForMerge"],
-        ["wrkLst:wrkLstEmpty",      "NULL"]
+        ["wrkLst:wrkLstEmpty",      "NONE"]
     ]
 }
 startPropRules = { # Start iterating fLiteral LST = fLiteral LST
@@ -471,8 +473,12 @@ def genActionCode(ruleSetID, codeKeyWords, rule, codeSnips, indent):
         else:
             S= indent + "//TODO: unfinished\n"
         return(S)
-    if codeKeyWords == "NULL":
-        return(indent + "//Do Nothing\n")
+    if codeKeyWords == "NONE":
+        if debugMode:
+            S= indent + 'log("        '+ruleSetID+':'+triggers+':Do Nothing")\n'
+        else:
+            S= indent + "//Do Nothing\n"
+        return(S)
     codeKeyWordList = codeKeyWords.split(",")
     for KW in codeKeyWordList:
         S+= indent + codeSnips[KW]+"\n"
@@ -538,6 +544,7 @@ def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
                     #print (condition)
                     if subCount >0:
                         subCode += " or "
+                    if condition not in ifSnips: print("ERROR: condition '"+condition+"' not in ifSnips for ruleSet '"+ruleSetID+"'\n"); exit(1)
                     subCode += ifSnips[condition]
                     subCount += 1
             if subCount > 1: subCode="("+subCode+")"
@@ -554,8 +561,11 @@ def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
                     actionCode = indent + '    log("        TODO: unfinished")\n'
                 else:
                     actionCode = indent + "    //TODO: unfinished\n"
-            elif codeKeyWords == "NULL":
-                actionCode = indent + "    //Do Nothing\n"
+            elif codeKeyWords == "NONE":
+                if debugMode:
+                    actionCode = indent + '    log("        '+ruleSetID+':'+triggers+':Do Nothing")\n'
+                else:
+                    actionCode = indent + "    //Do Nothing\n"
             else:
                 #print(codeKeyWords)
                 codeKeyWordList = codeKeyWords.split(",")
