@@ -138,7 +138,7 @@ mergeRules = {
 
         ##### CONCAT and INTERSECT
         ["merge:lNUM|lfUnknown|=|rNUM|rfConcat",          "ACTION"],
-        ["merge:lNUM|lfUnknown|=|rtUnknown|rintersect",        "mergeRHSIntersect"],
+        ["merge:lNUM|lfUnknown|=|rtUnknown,rNUM|rintersect",        "mergeRHSIntersect"],
         ["merge:lNUM|lfConcat|=|rNUM|rfUnknown",          "ACTION"],
         ["merge:lNUM|lfConcat|=|rNUM|rfConcat",           "ACTION"],
         ["merge:lNUM|lfConcat|=|rNUM|rfLiteral",          "ACTION"],
@@ -151,7 +151,7 @@ mergeRules = {
         ["merge:lNUM|lintersect|=|rNUM|rintersect",       "ACTION"],
 
         ["merge:lSTR|lfUnknown|=|rSTR|rfConcat",          "ACTION"],
-        ["merge:lSTR|lfUnknown|=|rSTR|rintersect",        "ACTION"],
+        ["merge:lSTR|lfUnknown|=|rtUnknown,rSTR|rintersect",        "mergeRHSIntersect"],
         ["merge:lSTR|lfConcat|=|rSTR|rfUnknown",          "ACTION"],
         ["merge:lSTR|lfConcat|=|rSTR|rfConcat",           "ACTION"],
         ["merge:lSTR|lfConcat|=|rSTR|rfLiteral",          "ACTION"],
