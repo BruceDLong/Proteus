@@ -580,6 +580,8 @@ model AItem{
     flag: looseSize
     flag: reject
     flag: propagate
+    flag: taskEnqueued
+    flag: altRulesApplied
     me int:  step
     BigInt: sizeToCopy
     our AItem[list]: subscribers
@@ -679,6 +681,7 @@ struct XformMgr{
         newAItem.step     <- 0
               newAItem.indentLvl <- 0
         if(subscriber != NULL){
+            subscriber.taskEnqueued <- true
             newAItem.subscribers.pushFirst(subscriber)
             newAItem.indentLvl <- subscriber.indentLvl+1
         }
@@ -686,7 +689,7 @@ struct XformMgr{
         return(newAItem)
     }
     our AItem: processMergeViaAgenda(our infon: LHS, our infon: RHS, me bool: looseSize, our AItem: subscriber)<-{
-        log("    processMergeViaAgenda:")
+        //log("    processMergeViaAgenda:")
         our AItem:: newAItem
         newAItem.ruleSet   <- rsMerge
         newAItem.LHS_item  <- LHS
@@ -696,22 +699,25 @@ struct XformMgr{
         newAItem.step      <- 0
         newAItem.indentLvl <- 0
         if(subscriber != NULL){
+            subscriber.taskEnqueued <- true
             newAItem.subscribers.pushFirst(subscriber)
             newAItem.indentLvl <- subscriber.indentLvl+1
         }
         addAItemToAgenda(newAItem)
         return(newAItem)
     }
-    our AItem: processInntersectViaAgenda(our infon: item, our AItem: subscriber)<-{
+    our AItem: processIntersectViaAgenda(our infon: item, our AItem: subscriber)<-{
             our AItem:: newAItem
-            newAItem.ruleSet  <- rsIntersect
-            newAItem.LHS_item <- item
-            newAItem.step     <- 0
+            newAItem.ruleSet   <- rsIntersect
+            newAItem.LHS_item  <- item
+            newAItem.step      <- 0
             newAItem.indentLvl <- 0
             if(subscriber != NULL){
+                subscriber.taskEnqueued <- true
                 newAItem.subscribers.pushFirst(subscriber)
                 newAItem.indentLvl <- subscriber.indentLvl+1
         }
+            //log("        processIntersectViaAgenda:"+newAItem.mySymbol(newAItem)+" "+newAItem.stringify())
             addAItemToAgenda(newAItem)
             return(newAItem)
     }
@@ -730,21 +736,31 @@ struct XformMgr{
         return(ii)
     }
     void: fulfillSubscriptions(our AItem: aItem) <- {
-        withEach sub in aItem.subscribers{
-            sub.step <+- 1
+        log(indentStr(aItem.indentLvl)+"     fulfillSubs")
+        while(!aItem.subscribers.isEmpty()){
+            our AItem: sub <- aItem.subscribers.first()
+            aItem.subscribers.popFirst()
             sub.LHS_item.isNormed <- false
             addAItemToAgenda(sub)
         }
     }
+    // PAI
     void: processAgendaItem(our AItem: aItem, me int: AlternativesNestLvl)<-{
-        me bool: changeMade <- true
+        me bool: changeMade    <- true
+        aItem.taskEnqueued     <- false
+        me string: idnt <- indentStr(aItem.indentLvl)
+        log(idnt+">>"+stringifyAItem(aItem))
         me int: count <- 0
         while(changeMade){
             changeMade <- false
             switch(aItem.ruleSet){
                 case rsInfon:{
-                    log("    INFON:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
-                    if(aItem.LHS_item.isNormed){return()}
+                    log(idnt+"    INFON:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
+                    if(aItem.LHS_item.isNormed){
+                        fulfillSubscriptions(aItem)
+                        log(idnt+"<<:1:"+stringifyAItem(aItem))
+                        return()
+                    }
                     // prepWorkList
                     if(tagDefRules(aItem)){changeMade <- true}
                     if(partsRules(aItem)){changeMade <- true}
@@ -757,16 +773,21 @@ struct XformMgr{
                 case rsMerge:{
                     switch(aItem.step){
                         case 0:{
-                            log("    MERGE-step0: ApplyMergeRules to:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
+                            log(idnt+"    MERGE-step0: ApplyMergeRules to:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
                             processInfonViaAgenda(aItem.RHS, aItem)
+                            aItem.step <- 1
                         }
                         case 1:{
-                            log("    MERGE-step1: ApplyMergeRules to:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
+                            log(idnt+"    MERGE-step1: ApplyMergeRules to:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
                             mergeSizeRules(aItem)
                             mergeRules(aItem)
+                            if(aItem.taskEnqueued){
+                                //log("@@@")
+                                aItem.step <- 2
+                            }
                         }
                         default:{
-                            log("    MERGE-step1+: ApplyMergeRules to:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
+                            log(idnt+"    MERGE-step1+: ApplyMergeRules to:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
                             if(aItem.LHSItr.state==sSecondVisit or aItem.LHSItr.state==sEOL){break()}
                             if(aItem.RHSItr.state==sSecondVisit or aItem.RHSItr.state==sEOL){break()}
                             aItem.LHSItr <- aItem.LHSItr.getNextExtended(true, false)
@@ -774,8 +795,8 @@ struct XformMgr{
                             //packageOrItr(aItem.RHSItr)
                             if(aItem.LHSItr.state!=sSecondVisit and aItem.LHSItr.state!=sEOL and
                                 aItem.RHSItr.state!=sSecondVisit and aItem.RHSItr.state!=sEOL){
-                                log("    ! SV & ! SEOL")
-                                if(aItem.LHSItr.nextOr != NULL){
+                              //  log("    ! SV & ! SEOL")
+                                //if(aItem.LHSItr.nextOr != NULL){
                                     //log("        LHSItr.nextOr")
                                     if(aItem.RHSItr.item.isOrLike()){ // set flag to add new #{...}
                                         //log("        RHSItr.isOrLike")
@@ -789,6 +810,7 @@ struct XformMgr{
                                                 log("            ?=? : parent.KEEPING DOTS")
                                                 //LHSItr.parent.stitchCmd <- keepDots
                                             }else{
+                                                log("            process altLHS:")
                                                 altLHS.infNode.AlternativesNestLvl <+- 1
                                                 altLHS.infNode.predecessors.pushLast(aItem)
                                                 altLHS.infNode.item.addPOVToWrkList(aItem.RHSItr.infNode)
@@ -797,13 +819,15 @@ struct XformMgr{
                                         }
                                         altLHS <- altLHS.nextOr
                                     }
+                                    log("    %%")
                                     //continue()
-                                }
+                                //}
 
-                                processMergeViaAgenda(aItem.LHSItr.item, aItem.RHSItr.item, aItem.looseSize, aItem)
-                                break()
+                                //processMergeViaAgenda(aItem.LHSItr.item, aItem.RHSItr.item, aItem.looseSize, aItem)
+                                log(indentStr(aItem.indentLvl)+"<<:2:"+stringifyAItem(aItem))
+                                return()
                             }else{
-                                log("    MERGE:SV or SEOL:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
+                                log(idnt+"    MERGE:SV or SEOL:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
                             }
                         }
                     }
@@ -812,15 +836,25 @@ struct XformMgr{
                     our infon: CI <- aItem.LHS_item
                     switch(aItem.step){
                         case 0:{
-                            log("        CI.source: "+stringifyInfon(CI.source))
+                            log(idnt+"    CI.source case_0: "+stringifyInfon(CI.source))
                             // proccess .innr parts
                             processInfonViaAgenda(CI.source, aItem)
+                            aItem.step <- 1
                         }
                         case 1:{
-                            log("        CI.source: "+stringifyInfon(CI.source))
+                            log(idnt+"    CI.source case_1: "+stringifyInfon(CI.source))
                             our infon: newTop    <- NULL
                             if(CI.isOrLike()){
-                                log("        TODO: CI isOrLike")
+                                log(idnt+"    TODO: CI isOrLike")
+                                our POV: pov <- CI.source.value.items.head
+                                while(pov != NULL){
+                                    // TODO: if(sizesNotCompatable()){markAsReject or notLast}
+                                    if(!pov.wasRejected and !pov.altWasTried){
+                                        log(idnt+"            pov:"+ stringifyInfon(pov.item))
+                                    }
+                                    pov <- pov.next
+                                }
+//                                processInfonViaAgenda(CI, NULL)
                             }
                             else{
                                 our infon: src <- CI.source
@@ -834,6 +868,7 @@ struct XformMgr{
                             else{
                                 // return Subscriptions
                             }
+                            aItem.step <- 2
                         }
                     }
                 }
@@ -841,15 +876,19 @@ struct XformMgr{
                 }
             }
             count <+- 1
+            if(aItem.taskEnqueued){
+                log(idnt+"<<:3:"+stringifyAItem(aItem))
+                return()
+            }
         }
         fulfillSubscriptions(aItem)
-        aItem.LHS_item.isNormed <- true
-        log("<<"+stringifyAItem(aItem))
+        //aItem.LHS_item.isNormed <- true
+        log(idnt+"<<"+stringifyAItem(aItem))
     }
     void: processAgenda()<-{
         withEach count in WHILE(!agenda.isEmpty()) {
             //log("_____"+toString(count)+"_____")
-            if (count > 100){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
+            if (count > 30){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
             our AItem: aItem <- agenda.last(); agenda.popLast()
             processAgendaItem(aItem, 0)
             //aItem.LHS_item.isOnAgenda <- false
@@ -904,7 +943,7 @@ struct XformMgr{
                 pov <- pov.next
             }
             LHS.convertThisToIntersection(newListInfon)
-            processInfonViaAgenda(LHS, NULL)
+           // processInfonViaAgenda(LHS, NULL)
         }else{
             // TODO: subscribe to RHS updates then retry
         }
@@ -1013,13 +1052,14 @@ struct XformMgr{
         return(changeMade)
     }
     me bool: function_altRules(our AItem: aItem) <- {
-        //log("    function_altRules:")
+        if(aItem.altRulesApplied){return(false)}
+        else{aItem.altRulesApplied <- true}
         our infon: CI        <- aItem.LHS_item
         me int: intersectPos <- CI.intersectPos
         our infon: newTop    <- NULL
         me bool: changeMade  <- false
         if(intersectPos != ipNoIntersect){
-            processInntersectViaAgenda(CI, aItem)
+            processIntersectViaAgenda(CI, aItem)
         }
         return(changeMade)
     }
