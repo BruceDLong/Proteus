@@ -90,7 +90,7 @@ mergeRules = {
         'rejectIfValueStrNotEqual': 'if(aItem.LHS_item.value.str != aItem.RHS.value.str){aItem.reject <- true}',
         'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.value.num != aItem.RHS.value.num){aItem.reject <- true}',
         'StartMergePropogation':    'startPropRules(aItem)',
-        'mergeRHSIntersect':        'mergeRHSIntersect(aItem.LHS_item, aItem.RHS)'
+        'mergeRHSIntersect':        'mergeRHSIntersect(aItem)'
     },
     'rules': [
         ["merge:|||r?|",                           "NONE"],
