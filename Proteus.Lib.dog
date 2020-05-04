@@ -573,11 +573,12 @@ model infItr{
 
 }
 model AItem{
-    mode[rsInfon, rsMerge, rsIntersect, rsPropSequence, rsPure]: ruleSet
+    mode[rsInfon, rsMerge, rsIntersect, rsPropagate, rsPure]: ruleSet
     our infon: LHS_item
     our infon: RHS
     our infItr: LHSItr
     our infItr: RHSItr
+    our infItr[list]: RHSItrs
     flag: looseSize
     flag: reject
     flag: propagate
@@ -722,7 +723,7 @@ struct XformMgr{
     }
     our AItem: processSequenceViaAgenda(our infon: item, our AItem: subscriber)<-{
             our AItem:: newAItem
-            newAItem.ruleSet   <- rsPropSequence
+            newAItem.ruleSet   <- rsPropagate
             newAItem.LHS_item  <- item
             newAItem.step      <- 0
             newAItem.indentLvl <- 0
@@ -868,6 +869,48 @@ struct XformMgr{
                                 // return Subscriptions
                             }
                             aItem.step <- 2
+                        }
+                    }
+                }
+                case rsPropagate:{
+                    our infon: CI <- aItem.LHS_item
+                    switch(aItem.step){
+                        case 0:{  // Start the Seq
+                            if(CI.value.items.isEmpty()){
+                                if(!aItem.RHSItrs.isEmpty() and CI.value.tailUnfinished){
+                                    // if any RHSs are not empty
+                                        // Init LHSItr, begin LHS
+                                        // Init all RHSItrs
+                                    // toProcess <- first Infon
+                                }
+                            } else {  // List is not empty
+                                Allocate(aItem.LHSItr); aItem.LHSItr.initialize(CI)
+                                aItem.LHSItr.beginIterating(false)
+                                if(aItem.LHSItr.nextOr){logFatalError("TODO: Handle alts as first item in a seq.")}
+                                withEach RHSItr in aItem.RHSItrs{
+                                    Allocate(aItem.RHSItr); aItem.RHSItr.initialize(aItem.RHS)
+                                    aItem.RHSItr.beginIterating(false)
+                                    if(RHSItr.state==sSecondVisit or RHSItr.state==sEOL){continue()}
+                                    aItem.LHSItr.infNode.predecessors.pushLast(aItem)
+                                    aItem.LHSItr.infNode.item.addPOVToWrkList(RHSItr.infNode)
+                                }
+                            }
+                            processInfonViaAgenda(aItem.LHSItr.item, aItem)
+                        }
+                        case 1:{
+                            aItem.LHSItr <- aItem.LHSItr.getNextExtended(true, false)
+                            our infItr: altLHS <- aItem.LHSItr
+                            while(altLHS!=NULL){
+                                if(aItem.LHSItr.state==sSecondVisit or aItem.LHSItr.state==sEOL){break()}
+                                withEach RHSItr in aItem.RHSItrs{
+                                    RHSItr <- aItem.RHSItr.getNextExtended(aItem.looseSize, false)
+                                    // packageRHSsAsAlts()
+                                    if(RHSItr.state==sSecondVisit or RHSItr.state==sEOL){break()}
+                                    altLHS.infNode.predecessors.pushLast(aItem)
+                                    altLHS.infNode.item.addPOVToWrkList(RHSItr.infNode)
+                                }
+                            }
+                            processInfonViaAgenda(aItem.LHSItr.item, aItem)
                         }
                     }
                 }
