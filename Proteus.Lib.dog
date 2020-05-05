@@ -578,7 +578,7 @@ model AItem{
     our infon: RHS
     our infItr: LHSItr
     our infItr: RHSItr
-    our infItr[list]: RHSItrs
+    our infItr[our list]: RHSItrs
     flag: looseSize
     flag: reject
     flag: propagate
@@ -586,6 +586,7 @@ model AItem{
     me int:  step
     BigInt: sizeToCopy
     our AItem[list]: subscribers
+    our AItem: parent
     me int: indentLvl
     flag: hasPropagated
     flag: initRulesApplied
@@ -606,7 +607,7 @@ model AItem{
                 case rsIntersect:{
                     S <+- "INTERSECT:"+LHS_item.mySymbol(LHS_item)+":"+ stringifyInfon(LHS_item)+ "  (STEP:"+toString(step)+")"
                 }
-		case rsPropagate:{
+                case rsPropagate:{
                     S <+- "PROPAGATE:"+LHS_item.mySymbol(LHS_item)+":"+ stringifyInfon(LHS_item)+ "  (STEP:"+toString(step)+")"
                 }
             }
@@ -706,6 +707,7 @@ struct XformMgr{
             subscriber.taskEnqueued <- true
             newAItem.subscribers.pushFirst(subscriber)
             newAItem.indentLvl <- subscriber.indentLvl+1
+            newAItem.parent    <- subscriber
         }
         addAItemToAgenda(newAItem)
         return(newAItem)
@@ -734,6 +736,8 @@ struct XformMgr{
                 subscriber.taskEnqueued <- true
                 newAItem.subscribers.pushFirst(subscriber)
                 newAItem.indentLvl <- subscriber.indentLvl+1
+        if(subscriber.RHSItrs==NULL){log("subscriber.RHSItrs was NULL")}
+                newAItem.RHSItrs <- subscriber.RHSItrs
             }
             addAItemToAgenda(newAItem)
             return(newAItem)
@@ -752,7 +756,6 @@ struct XformMgr{
         return(ii)
     }
     void: fulfillSubscriptions(our AItem: aItem) <- {
-        log(indentStr(aItem.indentLvl)+"     fulfillSubs")
         while(!aItem.subscribers.isEmpty()){
             our AItem: sub <- aItem.subscribers.first()
             aItem.subscribers.popFirst()
@@ -771,21 +774,21 @@ struct XformMgr{
             changeMade <- false
             switch(aItem.ruleSet){
                 case rsInfon:{
-                    log(idnt+"    INFON:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
+                    //log(idnt+"    INFON:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
                     if(aItem.LHS_item.isNormed){
                         fulfillSubscriptions(aItem)
-                        log(idnt+"<<:1:"+stringifyAItem(aItem))
+                        log(idnt+"<<:NRMD:"+stringifyAItem(aItem))
                         return()
                     }
                     initRules(aItem)
                     if(tagDefRules(aItem)){changeMade <- true}
-                    if(partsRules(aItem)){changeMade <- true}
-                    if(derefTagRules(aItem)){changeMade <- true}
-                    if(funcArgRules(aItem)){changeMade <- true}
-                    if(function_altRules(aItem)){changeMade <- true}
-                    if(lookUpCursorRules(aItem)){changeMade <- true}
-                    if(wrkLstRules(aItem)){changeMade <- true}
-                    if(propagate(aItem)){changeMade <- true}
+                    else if(partsRules(aItem)){changeMade <- true}
+                    else if(derefTagRules(aItem)){changeMade <- true}
+                    else if(funcArgRules(aItem)){changeMade <- true}
+                    else if(function_altRules(aItem)){changeMade <- true}
+                    else if(lookUpCursorRules(aItem)){changeMade <- true}
+                    else if(wrkLstRules(aItem)){changeMade <- true}
+                    else if(propagate(aItem)){changeMade <- true}
                 }
                 case rsMerge:{
                     switch(aItem.step){
@@ -802,7 +805,7 @@ struct XformMgr{
                         }
                         default:{
                             log(idnt+"    MERGE-step1+: ApplyMergeRules to:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
-                            if(aItem.LHSItr.state==sSecondVisit or aItem.LHSItr.state==sEOL){break()}
+                        /*    if(aItem.LHSItr.state==sSecondVisit or aItem.LHSItr.state==sEOL){break()}
                             if(aItem.RHSItr.state==sSecondVisit or aItem.RHSItr.state==sEOL){break()}
                             aItem.LHSItr <- aItem.LHSItr.getNextExtended(true, false)
                             aItem.RHSItr <- aItem.RHSItr.getNextExtended(aItem.looseSize, false)
@@ -832,7 +835,7 @@ struct XformMgr{
                                 return()
                             }else{
                                 log(idnt+"    MERGE:SV or SEOL:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
-                            }
+                            } */
                         }
                     }
                 }
@@ -880,53 +883,59 @@ struct XformMgr{
                     switch(aItem.step){
                         case 0:{  // Start the Seq
                             if(CI.value.items.isEmpty()){
-				log(idnt+"    PROPAGATE-step0:List Empty")
-                                if(!aItem.RHSItrs.isEmpty() and CI.value.tailUnfinished){
+                                log(idnt+"    PROPAGATE-step0:List Empty:")
+                                if((!(aItem.RHSItrs===NULL) and !aItem.RHSItrs.isEmpty()) and CI.value.tailUnfinished){
                                     // if any RHSs are not empty
                                         // Init LHSItr, begin LHS
                                         // Init all RHSItrs
                                     // toProcess <- first Infon
-				    processInfonViaAgenda(aItem.LHSItr.item, aItem)
+                                    processInfonViaAgenda(aItem.LHSItr.item, aItem)
                                 }
                             } else {  // List is not empty
-				log(idnt+"    PROPAGATE-step0:!List Empty!")
+                                log(idnt+"    PROPAGATE-step0:!List Empty!")
                                 Allocate(aItem.LHSItr); aItem.LHSItr.initialize(CI)
-                                aItem.LHSItr.beginIterating(false)
+                                if(!aItem.LHSItr.beginIterating(false)){log("HANDLE EMPTY LHS")}
                                 if(aItem.LHSItr.nextOr){logFatalError("TODO: Handle alts as first item in a seq.")}
-                                withEach RHSItr in aItem.RHSItrs{
-                                    Allocate(aItem.RHSItr); aItem.RHSItr.initialize(aItem.RHS)
-                                    aItem.RHSItr.beginIterating(false)
-                                    if(RHSItr.state==sSecondVisit or RHSItr.state==sEOL){continue()}
-                                    aItem.LHSItr.infNode.predecessors.pushLast(aItem)
-                                    aItem.LHSItr.infNode.item.addPOVToWrkList(RHSItr.infNode)
-                                }
-				processInfonViaAgenda(aItem.LHSItr.item, aItem)
+                                if(aItem.RHSItrs){
+                                    withEach RHSItr in aItem.RHSItrs{
+                                        log("@@@@@@@@2"+RHSItr.stringify())
+                                        //Allocate(aItem.RHSItr); aItem.RHSItr.initialize(aItem.RHS)
+                                        if(!RHSItr.beginIterating(false)){log("HANDLE EMPTY RHS")}
+                                        if(RHSItr.state==sSecondVisit or RHSItr.state==sEOL){continue()}
+                                        aItem.LHSItr.infNode.predecessors.pushLast(aItem)
+                                        aItem.LHSItr.infNode.item.addPOVToWrkList(RHSItr.infNode)
+                                    }
+                                } else {log("RHSItr was NULL")}
+                                processInfonViaAgenda(aItem.LHSItr.item, aItem)
                             }
-			    aItem.step <- 1
+                            aItem.step <- 1
                         }
                         case 1:{
-			    log(idnt+"    PROPAGATE-step1:")
+                            log(idnt+"    PROPAGATE-step1:")
                             aItem.LHSItr <- aItem.LHSItr.getNextExtended(true, false)
                             our infItr: altLHS <- aItem.LHSItr
                             while(altLHS!=NULL){
                                 if(aItem.LHSItr.state==sSecondVisit or aItem.LHSItr.state==sEOL){
-				    aItem.step <- 2;
-				    break()
-				}
-                                withEach RHSItr in aItem.RHSItrs{
-                                    RHSItr <- aItem.RHSItr.getNextExtended(aItem.looseSize, false)
-                                    // packageRHSsAsAlts()
-                                    if(RHSItr.state==sSecondVisit or RHSItr.state==sEOL){break()}
-                                    altLHS.infNode.predecessors.pushLast(aItem)
-                                    altLHS.infNode.item.addPOVToWrkList(RHSItr.infNode)
+                                    aItem.step <- 2;
+                                    break()
                                 }
-				altLHS <- altLHS.nextOr
+                                if(aItem.RHSItrs){
+                                    withEach RHSItr in aItem.RHSItrs{
+                                        log("@@@@@@@1"+RHSItr.stringify())
+                                        RHSItr <- RHSItr.getNextExtended(aItem.looseSize, false)
+                                        if(RHSItr.state==sSecondVisit or RHSItr.state==sEOL){aItem.step <- 2; break()}
+                                        // packageRHSsAsAlts()
+                                        altLHS.infNode.predecessors.pushLast(aItem)
+                                        altLHS.infNode.item.addPOVToWrkList(RHSItr.infNode)
+                                    }
+                                }
+                                altLHS <- altLHS.nextOr
                             }
                             if(aItem.step == 1){processInfonViaAgenda(aItem.LHSItr.item, aItem)}
                         }
-			case 2:{
-			    log(idnt+"    PROPAGATE-step2:")
-			}
+                        case 2:{
+                            log(idnt+"    PROPAGATE-step2:")
+                        }
                     }
                 }
                 case rsPure:{
@@ -945,7 +954,7 @@ struct XformMgr{
     void: processAgenda()<-{
         withEach count in WHILE(!agenda.isEmpty()) {
             //log("_____"+toString(count)+"_____")
-            if (count > 100){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
+            if (count > 50){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
             our AItem: aItem <- agenda.last(); agenda.popLast()
             processAgendaItem(aItem, 0)
             //aItem.LHS_item.isOnAgenda <- false
@@ -976,14 +985,11 @@ struct XformMgr{
         processMergeViaAgenda(aItem.LHS_item, RHSPov.item, RHSPov.looseSize(), aItem)
     }
     me bool: sizesAreCompatable(our infon: LHS, our infon: RHS)<-{return(true)}
-    me void: enqueFirstsToMerge(our AItem: aItem) <- {
-        //log("    enqueFirstsToMerge:"+ aItem.stringify())
-        Allocate(aItem.LHSItr); aItem.LHSItr.initialize(aItem.LHS_item)
-        aItem.LHSItr.beginIterating(false)
-        //if(aItem.LHSItr.parent.infNode.item == NULL){logFatalError("TODO: handle aItem.LHSItr.parent.infNode.item == NULL segFault")}
+    me void: registerRHS(our AItem: aItem) <- {
+        log("    regRHS:"+aItem.mySymbol(aItem)+":"+ aItem.stringify()+":parent:"+aItem.parent.mySymbol(aItem.parent))
         Allocate(aItem.RHSItr); aItem.RHSItr.initialize(aItem.RHS)
-        aItem.RHSItr.beginIterating(false)
-        processMergeViaAgenda(aItem.LHSItr.item, aItem.RHSItr.item, aItem.looseSize, aItem)
+        if(aItem.parent.RHSItrs == NULL){Allocate(aItem.parent.RHSItrs)}
+        aItem.parent.RHSItrs.pushLast(aItem.RHSItr)
     }
     me void: mergeRHSIntersect(our AItem: aItem) <- {
         log(indentStr(aItem.indentLvl)+"    mergeRHSIntersect:")
@@ -1129,8 +1135,8 @@ struct XformMgr{
         return(changeMade)
     }
     me bool: propagate(our AItem: aItem) <- {
-	if(aItem.hasPropagated){return(false)}
-	else{aItem.hasPropagated <- true}
+        if(aItem.hasPropagated){return(false)}
+        else{aItem.hasPropagated <- true}
         if(aItem.LHS_item.value.fType == LST){
             processSequenceViaAgenda(aItem.LHS_item, aItem)
         }

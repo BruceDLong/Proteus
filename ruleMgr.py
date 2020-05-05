@@ -254,13 +254,13 @@ startPropRules = { # Start iterating fLiteral LST = fLiteral LST
     'codeSnips': {
         'REJECT':   'aItem.reject <- true',
         'SKIP':     '//Skip',
-        'EnqueueFirstsToMerge':   'enqueFirstsToMerge(aItem)',
+        'registerRHS':   'registerRHS(aItem)',
     },
     'rules': [
         ["startProp:!looseSize|!sizesCompat||",                               "REJECT"],
         ["startProp:!looseSize|sizesCompat|LHSEmpty|!RHSisPureDots",          "SKIP"],
         ["startProp:!looseSize|sizesCompat||RHSisPureDots",                   "SKIP"],
-        ["startProp:!looseSize|sizesCompat|!LHSEmpty|!RHSisPureDots",         "EnqueueFirstsToMerge"], # Get first; account for #{}, ..., .first     "EnqueueFirstsToMerge"],
+        ["startProp:!looseSize|sizesCompat|!LHSEmpty|!RHSisPureDots",         "registerRHS"], # Get first; account for #{}, ..., .first     "registerRHS"],
         ["startProp:looseSize|||",     "ACTION"]
     ]
 }
