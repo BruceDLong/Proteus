@@ -60,6 +60,7 @@ struct GLOBAL{
         }
         return (S)
     }
+    me int: lastLineAltID <- 0
 }
 
 #include infonIO.dog
@@ -270,6 +271,33 @@ model infon{
     void: addToOrInfon(our infItr: altItr) <- {
         source.value.items.pushAsAlt(altItr.infNode, altItr.item)
     }
+    void: pushAltIntoLineAlt(our AItem: pred, me int: lineID, our infItr: RHSItr) <- {
+        // Search wrkList for lineID
+        our POV: povToPushTo <- NULL
+        withEach wrkItm in wrkList{
+            if(wrkItm.linearAltID==lineID){povToPushTo<-wrkItm}
+        }
+        if(povToPushTo == NULL){
+            withEach wrkItm in usedWrkList{
+                if(wrkItm.linearAltID==lineID){
+                    povToPushTo<-wrkItm
+                    // POP from used, push to wrkList
+                    // DON'T REDO already done alts.
+                }
+            }
+        }
+        if(povToPushTo == NULL){ // Make an alt item to add.
+            Allocate(povToPushTo)
+            povToPushTo.item        <- // NEW LIST ITEM
+            povToPushTo.linearAltID <- lineID
+
+            if(!povToPushTo.item.isOrLike()){povToPushTo <- povToPushTo.makeOrItr(povToPushTo)}
+            povToPushTo.item.source.value.tailUnfinished <- false
+
+            addPOVToWrkList(povToPushTo)
+        }
+        povToPushTo.item.addToOrInfon(RHSItr, RHSItr.item)
+    }
     void: addPOVToWrkList(our POV: pov) <- {
         //log("addPOVToWrkList:"+stringifyInfon(pov.item))
         isNormed <- false
@@ -345,6 +373,7 @@ model infItr{
     our infItr: nextOr
     our POV: infNode
     me int: nestLvl
+    me int: lineAltID
     mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError, sNonIterable]: state
 
     me bool: isASeq(our infon: i) <- {
@@ -519,6 +548,7 @@ model infItr{
         to.infNode      <- infNode
         to.nestLvl      <- nestLvl
         to.state        <- state
+        to.lineAltID    <- lineAltID
     }
     void: deleteCrnt() <- {
         infNode <- parent.item.deleteListNode(infNode)
@@ -572,6 +602,7 @@ model infItr{
     }
 
 }
+
 model AItem{
     mode[rsInfon, rsMerge, rsIntersect, rsPropagate, rsPure]: ruleSet
     our infon: LHS_item
@@ -602,13 +633,13 @@ model AItem{
                 case rsMerge:{
                     me string: equalStr <- " '=' "
                     if (looseSize){equalStr <- " '==' "}
-                    S <+- "MERGE:"+LHS_item.mySymbol(LHS_item)+":"+ stringifyInfon(LHS_item) +equalStr+ stringifyInfon(RHS) + "  (STEP_"+toString(step)+")"
+                    S <+- "MERGE:"+LHS_item.mySymbol(LHS_item)+":"+ stringifyInfon(LHS_item) +equalStr+ stringifyInfon(RHS) + "  (STEP_M"+toString(step)+")"
                 }
                 case rsIntersect:{
-                    S <+- "INTERSECT:"+LHS_item.mySymbol(LHS_item)+":"+ stringifyInfon(LHS_item)+ "  (STEP:"+toString(step)+")"
+                    S <+- "INTERSECT:"+LHS_item.mySymbol(LHS_item)+":"+ stringifyInfon(LHS_item)+ "  (STEP_I"+toString(step)+")"
                 }
                 case rsPropagate:{
-                    S <+- "PROPAGATE:"+LHS_item.mySymbol(LHS_item)+":"+ stringifyInfon(LHS_item)+ "  (STEP:"+toString(step)+")"
+                    S <+- "PROPAGATE:"+LHS_item.mySymbol(LHS_item)+":"+ stringifyInfon(LHS_item)+ "  (STEP_P"+toString(step)+")"
                 }
             }
             //S <+- ":NORM:"+ dispBool(LHS.isNormed)
@@ -746,14 +777,6 @@ struct XformMgr{
         if(!inf.value.tailUnfinished){logFatalError("ERROR: tailUnfinished FALSE:"+ stringifyInfon(inf))}
         inf.value.items.pushLast(inf)
         addAItemToAgenda(aItem)
-    }
-    our infItr: packageOrItr(our infItr: ii) <- {
-        if(ii.nextOr != NULL){
-            if(!ii.item.isOrLike()){ii <- ii.infNode.makeOrItr(ii)}
-            ii.item.addToOrInfon(ii.nextOr)
-            ii.item.source.value.tailUnfinished <- false
-        }
-        return(ii)
     }
     void: fulfillSubscriptions(our AItem: aItem) <- {
         while(!aItem.subscribers.isEmpty()){
@@ -915,6 +938,7 @@ struct XformMgr{
                             aItem.LHSItr <- aItem.LHSItr.getNextExtended(true, false)
                             if(aItem.LHSItr.state==sSecondVisit or aItem.LHSItr.state==sEOL){aItem.step <- 2;break()}
                             our infItr: altLHS <- aItem.LHSItr
+                            me bool: LHS_IsOrLIKE <- (altLHS.nextOr != NULL)
                             me int: count <- 1
                             while(altLHS!=NULL){
                                 if(aItem.RHSItrs){
@@ -923,10 +947,14 @@ struct XformMgr{
                                             RHSItr <- RHSItr.getNextExtended(aItem.looseSize, false)
                                             if(RHSItr.state==sSecondVisit or RHSItr.state==sEOL){aItem.step <- 2; break()}
                                         }
-                                        // packageRHSsAsAlts()
-                                        log("@@@@@@@@"+toString(count)+altLHS.stringify()+" === "+RHSItr.stringify())
-                                        altLHS.infNode.predecessors.pushLast(aItem)
-                                        altLHS.infNode.item.addPOVToWrkList(RHSItr.infNode)
+                                        me bool: RHS_IsOrLIKE <- (RHSItr.nextOr != NULL)
+                                        if(LHS_IsOrLIKE or RHS_IsOrLIKE){ // Applyto linearAltList as alt
+                                            altLHS.item.pushAltIntoLineAlt(aItem, RHSItr.lineAltID, RHSItr)
+                                        } else {
+                                            log("@@@@@@@@"+toString(count)+altLHS.stringify()+" === "+RHSItr.stringify())
+                                            altLHS.infNode.predecessors.pushLast(aItem)
+                                            altLHS.infNode.item.addPOVToWrkList(RHSItr.infNode)
+                                        }
                                     }
                                 }
                                 altLHS <- altLHS.nextOr
@@ -989,6 +1017,7 @@ struct XformMgr{
     me void: registerRHS(our AItem: aItem) <- {
         log("    regRHS:"+aItem.mySymbol(aItem)+":"+ aItem.stringify()+":parent:"+aItem.parent.mySymbol(aItem.parent))
         Allocate(aItem.RHSItr); aItem.RHSItr.initialize(aItem.RHS)
+        lastLineAltID <+- 1; aItem.RHSItr.lineAltID <- lastLineAltID
         if(aItem.parent.RHSItrs == NULL){Allocate(aItem.parent.RHSItrs)}
         aItem.parent.RHSItrs.pushLast(aItem.RHSItr)
     }
@@ -1876,4 +1905,3 @@ struct ProteusCore{
 
 /////////////////////////////////////////
 do codeDataDisplay(infon, TAG_infonDumpMode)
-do GeneratePtrSymbols(POV)
