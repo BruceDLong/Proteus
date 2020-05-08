@@ -46,6 +46,15 @@ struct GLOBAL{
         newListInfon.value.format   <- fLiteral
         return(newListInfon)
     }
+    our POV: makeOrPov(our POV: nextPov) <- {
+        our infon: newListInfon <- makeSrcInfon()
+            newListInfon.value.items.pushAsAlt(nextPov, nextPov.item)
+        our infon:: newAltInfon
+            newAltInfon.convertThisToIntersection(newListInfon)
+        our POV:: newAltInfPov
+            newAltInfPov.item           <- newAltInfon
+        return(newAltInfPov)
+    }
     me string: stringifyAItem(our AItem: aItem) <- {
         me string: S <- aItem.mySymbol(aItem)+":"+aItem.stringify()
         if(aItem.subscribers.size()>0){
@@ -275,9 +284,11 @@ model infon{
         // Search wrkList for lineID
         our POV: povToPushTo <- NULL
         withEach wrkItm in wrkList{
+            log("pushAltIntoLineAlt:WRKLST:"+stringifyInfon(RHSItr.item))
             if(wrkItm.linearAltID==lineID){povToPushTo<-wrkItm}
         }
         if(povToPushTo == NULL){
+            log("pushAltIntoLineAlt:USED:"+stringifyInfon(RHSItr.item))
             withEach wrkItm in usedWrkList{
                 if(wrkItm.linearAltID==lineID){
                     povToPushTo<-wrkItm
@@ -287,16 +298,14 @@ model infon{
             }
         }
         if(povToPushTo == NULL){ // Make an alt item to add.
-            Allocate(povToPushTo)
-            povToPushTo.item        <- // NEW LIST ITEM
+            log("pushAltIntoLineAlt:MAKE:"+stringifyInfon(RHSItr.item))
+            povToPushTo <- makeOrPov(RHSItr.infNode)
+            povToPushTo.item.source.value.tailUnfinished <- true
             povToPushTo.linearAltID <- lineID
-
-            if(!povToPushTo.item.isOrLike()){povToPushTo <- povToPushTo.makeOrItr(povToPushTo)}
-            povToPushTo.item.source.value.tailUnfinished <- false
-
             addPOVToWrkList(povToPushTo)
+
         }
-        povToPushTo.item.addToOrInfon(RHSItr, RHSItr.item)
+        povToPushTo.item.addToOrInfon(RHSItr)
     }
     void: addPOVToWrkList(our POV: pov) <- {
         //log("addPOVToWrkList:"+stringifyInfon(pov.item))
@@ -863,11 +872,12 @@ struct XformMgr{
                     }
                 }
                 case rsIntersect:{
+   // if(aItem.LHS_item.source.value.tailUnfinished){break()}
                     our infon: CI <- aItem.LHS_item
                     switch(aItem.step){
                         case 0:{
                             log(idnt+"    CI.source case_0: "+stringifyInfon(CI.source))
-                            // proccess .innr parts
+                            // TODO: proccess .innr parts
                             processInfonViaAgenda(CI.source, aItem)
                             aItem.step <- 1
                         }
@@ -895,7 +905,7 @@ struct XformMgr{
                             }
                             if(newTop){CI <deep- newTop}
                             else{
-                                // return Subscriptions
+                                // TODO: return Subscriptions
                             }
                             aItem.step <- 2
                         }
@@ -935,21 +945,30 @@ struct XformMgr{
                         }
                         case 1:{
                             log(idnt+"    PROPAGATE-step1:")
-                            aItem.LHSItr <- aItem.LHSItr.getNextExtended(true, false)
-                            if(aItem.LHSItr.state==sSecondVisit or aItem.LHSItr.state==sEOL){aItem.step <- 2;break()}
+                            aItem.LHSItr <- aItem.LHSItr.getNextExtended(true, aItem.RHSItrs==NULL)
                             our infItr: altLHS <- aItem.LHSItr
                             me bool: LHS_IsOrLIKE <- (altLHS.nextOr != NULL)
                             me int: count <- 1
                             while(altLHS!=NULL){
+                                if(aItem.LHSItr.state==sSecondVisit or aItem.LHSItr.state==sEOL){
+                                    aItem.step <- 2;
+                                    altLHS <- altLHS.nextOr
+                                    count <+- 1
+                                    continue()
+                                }
+                                log("LHS_GIVEN:"+stringifyInfon(altLHS.item))
                                 if(aItem.RHSItrs){
                                     withEach RHSItr in aItem.RHSItrs{
                                         if(count==1){
-                                            RHSItr <- RHSItr.getNextExtended(aItem.looseSize, false)
+                                            RHSItr <- RHSItr.getNextExtended(!aItem.looseSize, false)
                                             if(RHSItr.state==sSecondVisit or RHSItr.state==sEOL){aItem.step <- 2; break()}
                                         }
+                                        log("LHS/RHS:"+stringifyInfon(altLHS.item)+" === "+stringifyInfon(RHSItr.item))
                                         me bool: RHS_IsOrLIKE <- (RHSItr.nextOr != NULL)
                                         if(LHS_IsOrLIKE or RHS_IsOrLIKE){ // Applyto linearAltList as alt
+                                            log("LHS_IS_ORLIKE:"+stringifyInfon(altLHS.item)+" === "+stringifyInfon(RHSItr.item))
                                             altLHS.item.pushAltIntoLineAlt(aItem, RHSItr.lineAltID, RHSItr)
+                                                log("povToPushTo:"+stringifyInfon(altLHS.item))
                                         } else {
                                             log("@@@@@@@@"+toString(count)+altLHS.stringify()+" === "+RHSItr.stringify())
                                             altLHS.infNode.predecessors.pushLast(aItem)
@@ -983,7 +1002,7 @@ struct XformMgr{
     void: processAgenda()<-{
         withEach count in WHILE(!agenda.isEmpty()) {
             //log("_____"+toString(count)+"_____")
-            if (count > 50){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
+            if (count > 100){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
             our AItem: aItem <- agenda.last(); agenda.popLast()
             processAgendaItem(aItem, 0)
             //aItem.LHS_item.isOnAgenda <- false
