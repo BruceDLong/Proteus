@@ -304,8 +304,7 @@ model infon{
             povToPushTo.linearAltID <- lineID
             addPOVToWrkList(povToPushTo)
 
-        }
-        povToPushTo.item.addToOrInfon(RHSItr)
+        }else{povToPushTo.item.addToOrInfon(RHSItr)}
     }
     void: addPOVToWrkList(our POV: pov) <- {
         //log("addPOVToWrkList:"+stringifyInfon(pov.item))
@@ -384,6 +383,7 @@ model infItr{
     me int: nestLvl
     me int: lineAltID
     mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError, sNonIterable]: state
+    flag: disabled      // In an AItem, this no longer has next items.
 
     me bool: isASeq(our infon: i) <- {
         return ((i.value.format==fLiteral and i.value.fType==LST) or i.value.format==fConcat)
@@ -492,7 +492,6 @@ model infItr{
                     return()
                 }
                 if(goNext(skipDots)){
-
                     setListSeqFlags()
                     infNode.looseInhtd <- infNode.looseSize()
                 }else{
@@ -596,7 +595,7 @@ model infItr{
             //S <- S + "(parent:" + parent.mySymbol(parent) + ")"
             //if(nextAnd){S <- S+ " & "+ nextAnd.stringify()}
             if(state==sSecondVisit){S <- S + ">SV"}
-            if(item.source){S <- S+ " source:"+item.source.mySymbol(item.source)+" "+ stringifyInfon(item.source)}
+            if(item!=NULL and item.source!=NULL){S <- S+ " source:"+item.source.mySymbol(item.source)+" "+ stringifyInfon(item.source)}
         }
         S <- S+"]"
         return (S)
@@ -823,20 +822,18 @@ struct XformMgr{
                     else if(propagate(aItem)){changeMade <- true}
                 }
                 case rsMerge:{
+                    log(idnt+"    MERGE-step"+toString(aItem.step)+": ApplyMergeRules to:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
                     switch(aItem.step){
                         case 0:{
-                            log(idnt+"    MERGE-step0: ApplyMergeRules to:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
                             processInfonViaAgenda(aItem.RHS, aItem)
                             aItem.step <- 1
                         }
                         case 1:{
-                            log(idnt+"    MERGE-step1: ApplyMergeRules to:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
                             mergeSizeRules(aItem)
                             mergeRules(aItem)
                             if(aItem.taskEnqueued){aItem.step <- 2}
                         }
                         default:{
-                            log(idnt+"    MERGE-step1+: ApplyMergeRules to:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
                         /*    if(aItem.LHSItr.state==sSecondVisit or aItem.LHSItr.state==sEOL){break()}
                             if(aItem.RHSItr.state==sSecondVisit or aItem.RHSItr.state==sEOL){break()}
                             aItem.LHSItr <- aItem.LHSItr.getNextExtended(true, false)
@@ -912,79 +909,54 @@ struct XformMgr{
                     }
                 }
                 case rsPropagate:{
-                    our infon: CI <- aItem.LHS_item
-                    switch(aItem.step){
-                        case 0:{  // Start the Seq
-                            if(CI.value.items.isEmpty()){
-                                log(idnt+"    PROPAGATE-step0:List Empty:")
-                                if((!(aItem.RHSItrs===NULL) and !aItem.RHSItrs.isEmpty()) and CI.value.tailUnfinished){
-                                    // if any RHSs are not empty
-                                        // Init LHSItr, begin LHS
-                                        // Init all RHSItrs
-                                    // toProcess <- first Infon
-                                    processInfonViaAgenda(aItem.LHSItr.item, aItem)
-                                }
-                            } else {  // List is not empty
-                                log(idnt+"    PROPAGATE-step0:!List Empty!")
-                                Allocate(aItem.LHSItr); aItem.LHSItr.initialize(CI)
-                                our infItr: LHSItr <- aItem.LHSItr
-                                if(!aItem.LHSItr.beginIterating(false)){log("HANDLE EMPTY LHS")}
-                                if(aItem.LHSItr.nextOr){logFatalError("TODO: Handle alts as first item in a seq.")}
-                                if(aItem.RHSItrs){
-                                    withEach RHSItr in aItem.RHSItrs{
-                                        if(!RHSItr.beginIterating(false)){log("HANDLE EMPTY RHS")}
-                                        if(RHSItr.state==sSecondVisit or RHSItr.state==sEOL){continue()}
-                                        log("@@@@@@@@0"+LHSItr.stringify()+" === "+RHSItr.stringify())
-                                        aItem.LHSItr.infNode.predecessors.pushLast(aItem)
-                                        aItem.LHSItr.infNode.item.addPOVToWrkList(RHSItr.infNode)
+                    me bool: RHS_Empty <- aItem.RHSItrs==NULL
+    if(!RHS_Empty){  // TODO: Ugly. Optimize without linear search.
+         withEach RHSItr in aItem.RHSItrs{
+             RHS_Empty <- false
+             if(RHSItr.disabled){RHS_Empty<-true; break()}
+         }
+    }
+                    me bool: enqueueLHS <- true
+                    if(aItem.LHSItr==NULL){
+                        Allocate(aItem.LHSItr); aItem.LHSItr.initialize(aItem.LHS_item)
+                        if(!aItem.LHSItr.beginIterating(false)){aItem.LHSItr.state <- sSecondVisit}
+                    } else {
+                        aItem.LHSItr <- aItem.LHSItr.getNextExtended(true, RHS_Empty)}
+                    our infItr: altLHS <- aItem.LHSItr
+                    if(altLHS.state==sSecondVisit or altLHS.state==sEOL){break()}
+                    me bool: LHS_IsOrLIKE <- (altLHS.nextOr != NULL)
+                    me int: lCount <- 1
+                    while(altLHS!=NULL){
+                        log("LHS_GIVEN:"+stringifyInfon(altLHS.item))
+                        if(!RHS_Empty){
+                            withEach RHSItr in aItem.RHSItrs{
+                                if(RHSItr.disabled){continue()}
+                                if(lCount==1){
+                                    //log("GET_RHS:"+stringifyInfon(altLHS.item)+" === "+RHSItr.stringify())
+                                    if(RHSItr.state!=sEOL){
+                                        RHSItr <- RHSItr.getNextExtended(false, false) //TODO: !RHS.looseSize, false)
                                     }
-                                } else {log("RHSItr was NULL")}
-                                processInfonViaAgenda(aItem.LHSItr.item, aItem)
-                            }
-                            aItem.step <- 1
-                        }
-                        case 1:{
-                            log(idnt+"    PROPAGATE-step1:")
-                            aItem.LHSItr <- aItem.LHSItr.getNextExtended(true, aItem.RHSItrs==NULL)
-                            our infItr: altLHS <- aItem.LHSItr
-                            me bool: LHS_IsOrLIKE <- (altLHS.nextOr != NULL)
-                            me int: count <- 1
-                            while(altLHS!=NULL){
-                                if(aItem.LHSItr.state==sSecondVisit or aItem.LHSItr.state==sEOL){
-                                    aItem.step <- 2;
-                                    altLHS <- altLHS.nextOr
-                                    count <+- 1
+                                }
+                                if(RHSItr.state==sSecondVisit or RHSItr.state==sEOL){
+                                    if(RHSItr.state==sEOL){RHSItr.disabled <- true}
+                                    // Check/reject or set LHS's end/size
+                                    //enqueueLHS<-false;
                                     continue()
                                 }
-                                log("LHS_GIVEN:"+stringifyInfon(altLHS.item))
-                                if(aItem.RHSItrs){
-                                    withEach RHSItr in aItem.RHSItrs{
-                                        if(count==1){
-                                            RHSItr <- RHSItr.getNextExtended(!aItem.looseSize, false)
-                                            if(RHSItr.state==sSecondVisit or RHSItr.state==sEOL){aItem.step <- 2; break()}
-                                        }
-                                        log("LHS/RHS:"+stringifyInfon(altLHS.item)+" === "+stringifyInfon(RHSItr.item))
-                                        me bool: RHS_IsOrLIKE <- (RHSItr.nextOr != NULL)
-                                        if(LHS_IsOrLIKE or RHS_IsOrLIKE){ // Applyto linearAltList as alt
-                                            log("LHS_IS_ORLIKE:"+stringifyInfon(altLHS.item)+" === "+stringifyInfon(RHSItr.item))
-                                            altLHS.item.pushAltIntoLineAlt(aItem, RHSItr.lineAltID, RHSItr)
-                                                log("povToPushTo:"+stringifyInfon(altLHS.item))
-                                        } else {
-                                            log("@@@@@@@@"+toString(count)+altLHS.stringify()+" === "+RHSItr.stringify())
-                                            altLHS.infNode.predecessors.pushLast(aItem)
-                                            altLHS.infNode.item.addPOVToWrkList(RHSItr.infNode)
-                                        }
-                                    }
+                                log("LHS/RHS:"+stringifyInfon(altLHS.item)+" === "+stringifyInfon(RHSItr.item))
+                                me bool: RHS_IsOrLIKE <- (RHSItr.nextOr != NULL)
+                                if((lCount>1 and LHS_IsOrLIKE) or RHS_IsOrLIKE){ // Applyto linearAltList as alt
+                                    altLHS.item.pushAltIntoLineAlt(aItem, RHSItr.lineAltID, RHSItr)
+                                } else {
+                                    altLHS.infNode.predecessors.pushLast(aItem)
+                                    altLHS.infNode.item.addPOVToWrkList(RHSItr.infNode)
                                 }
-                                altLHS <- altLHS.nextOr
-                                count <+- 1
                             }
-                            if(aItem.step == 1){processInfonViaAgenda(aItem.LHSItr.item, aItem)}
                         }
-                        case 2:{
-                            log(idnt+"    PROPAGATE-step2:")
-                        }
+                        altLHS <- altLHS.nextOr
+                        lCount <+- 1
                     }
+                    if(enqueueLHS){processInfonViaAgenda(aItem.LHSItr.item, aItem)}
                 }
                 case rsPure:{
                 }
