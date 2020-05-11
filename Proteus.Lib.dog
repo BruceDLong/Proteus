@@ -154,7 +154,8 @@ model infon{
     flag: wrkLstPreped
     flag: wrkItmsAdded
     flag: isOnAgenda    // True if item is currently on agenda
-    flag: isTentative
+    flag: isTentative   // Does this items validity depend on it having no errors?
+    flag: error         // At least one item on the worklist was rejected.
     flag: altRulesApplied
 
     me BigInt: sizeIfKnown() <- {
@@ -281,6 +282,7 @@ model infon{
         source.value.items.pushAsAlt(altItr.infNode, altItr.item)
     }
     void: pushAltIntoLineAlt(our AItem: pred, me int: lineID, our infItr: RHSItr) <- {
+        RHSItr.infNode.predecessors.pushLast(pred)
         // Search wrkList for lineID
         our POV: povToPushTo <- NULL
         withEach wrkItm in wrkList{
@@ -294,6 +296,7 @@ model infon{
                     povToPushTo<-wrkItm
                     // POP from used, push to wrkList
                     // DON'T REDO already done alts.
+                    logFatalError("TODO: POP, PUSH, Don't REDO") // TODO: POP, PUSH, Don't REDO
                 }
             }
         }
@@ -833,7 +836,7 @@ struct XformMgr{
                             mergeRules(aItem)
                             if(aItem.taskEnqueued){aItem.step <- 2}
                         }
-                        default:{
+                        case 2:{
                         /*    if(aItem.LHSItr.state==sSecondVisit or aItem.LHSItr.state==sEOL){break()}
                             if(aItem.RHSItr.state==sSecondVisit or aItem.RHSItr.state==sEOL){break()}
                             aItem.LHSItr <- aItem.LHSItr.getNextExtended(true, false)
@@ -869,7 +872,6 @@ struct XformMgr{
                     }
                 }
                 case rsIntersect:{
-   // if(aItem.LHS_item.source.value.tailUnfinished){break()}
                     our infon: CI <- aItem.LHS_item
                     switch(aItem.step){
                         case 0:{
@@ -883,13 +885,24 @@ struct XformMgr{
                             our infon: newTop    <- NULL
                             if(CI.isOrLike()){
                                 log(idnt+"    TODO: CI isOrLike")
+                                our POV: lastOK   <- NULL
+                                me int: numOK <- 0
                                 our POV: pov <- CI.source.value.items.head
                                 while(pov != NULL){
                                     // TODO: if(sizesNotCompatable()){markAsReject or notLast}
-                                    if(!pov.wasRejected and !pov.altWasTried){
+                                    if(!pov.item.error){
                                         log(idnt+"            pov:"+ stringifyInfon(pov.item))
+                                        numOK <+- 1
+                                        lastOK <- pov
                                     }
                                     pov <- pov.next
+                                }
+                                if(numOK == 1){
+                                    newTop <- lastOK.item
+                                    log("SELECTING:"+stringifyInfon(lastOK.item))
+                                    withEach pred in lastOK.predecessors{
+                                        log("    PRED:"+pred.stringify())
+                                    }
                                 }
                             }
                             else{
@@ -911,12 +924,8 @@ struct XformMgr{
                 case rsPropagate:{
                     me bool: RHS_Empty <- aItem.RHSItrs==NULL
     if(!RHS_Empty){  // TODO: Ugly. Optimize without linear search.
-         withEach RHSItr in aItem.RHSItrs{
-             RHS_Empty <- false
-             if(RHSItr.disabled){RHS_Empty<-true; break()}
-         }
+         withEach RHSItr in aItem.RHSItrs{if(RHSItr.disabled){RHS_Empty<-true; break()}}
     }
-                    me bool: enqueueLHS <- true
                     if(aItem.LHSItr==NULL){
                         Allocate(aItem.LHSItr); aItem.LHSItr.initialize(aItem.LHS_item)
                         if(!aItem.LHSItr.beginIterating(false)){aItem.LHSItr.state <- sSecondVisit}
@@ -940,12 +949,11 @@ struct XformMgr{
                                 if(RHSItr.state==sSecondVisit or RHSItr.state==sEOL){
                                     if(RHSItr.state==sEOL){RHSItr.disabled <- true}
                                     // Check/reject or set LHS's end/size
-                                    //enqueueLHS<-false;
                                     continue()
                                 }
                                 log("LHS/RHS:"+stringifyInfon(altLHS.item)+" === "+stringifyInfon(RHSItr.item))
                                 me bool: RHS_IsOrLIKE <- (RHSItr.nextOr != NULL)
-                                if((lCount>1 and LHS_IsOrLIKE) or RHS_IsOrLIKE){ // Applyto linearAltList as alt
+                                if((lCount>1 and LHS_IsOrLIKE) or RHS_IsOrLIKE){
                                     altLHS.item.pushAltIntoLineAlt(aItem, RHSItr.lineAltID, RHSItr)
                                 } else {
                                     altLHS.infNode.predecessors.pushLast(aItem)
@@ -956,7 +964,7 @@ struct XformMgr{
                         altLHS <- altLHS.nextOr
                         lCount <+- 1
                     }
-                    if(enqueueLHS){processInfonViaAgenda(aItem.LHSItr.item, aItem)}
+                    processInfonViaAgenda(aItem.LHSItr.item, aItem)
                 }
                 case rsPure:{
                 }
@@ -1018,17 +1026,24 @@ struct XformMgr{
         our infon: LHS <- aItem.LHS_item
         our infon: RHS <- aItem.RHS
         if(RHS.isOrLike()){
+            /*if(RHS.infNode.linearAltID>0)*/ {RHS.source.value.tailUnfinished<-false}
             our infon: newListInfon <- makeSrcInfon()
             our POV: pov <- RHS.source.value.items.head
             while(pov != NULL){
+log("POV-PREDS:")
+withEach pred in pov.predecessors{
+    log("    Pred:"+pred.stringify())
+}
                 // TODO: if(sizesNotCompatable()){markAsReject or notLast}
                 our infon:: altItem
                 LHS.copyAsTypeTo(altItem,false)
+                altItem.isTentative <- true
                 altItem.addInfonToWrkList(pov.item)
                 newListInfon.value.items.pushLast(altItem)
                 pov <- pov.next
             }
             LHS.convertThisToIntersection(newListInfon)
+            LHS.source.value.tailUnfinished <- RHS.source.value.tailUnfinished
             LHS.altRulesApplied <- false
         }else{
             // TODO: subscribe to RHS updates then retry
