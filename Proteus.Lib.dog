@@ -281,8 +281,9 @@ model infon{
     void: addToOrInfon(our infItr: altItr) <- {
         source.value.items.pushAsAlt(altItr.infNode, altItr.item)
     }
-    void: pushAltIntoLineAlt(our AItem: pred, me int: lineID, our infItr: RHSItr) <- {
-        RHSItr.infNode.predecessors.pushLast(pred)
+    void: pushAltIntoLineAlt(our POV: pred, me int: lineID, our infItr: RHSItr) <- {
+        if(pred != NULL){RHSItr.infNode.predecessors.pushLast(pred)}
+        log("@@@PushPred:"+RHSItr.infNode.mySymbol(RHSItr.infNode)+":"+RHSItr.infNode.stringify())
         // Search wrkList for lineID
         our POV: povToPushTo <- NULL
         withEach wrkItm in wrkList{
@@ -544,11 +545,11 @@ model infItr{
     }
     our infItr: getNextExtended(me bool: shallowMode, me bool: skipDots) <- {
         our infItr: nextItr <- getNextDeep(shallowMode, skipDots)
-        //log("        >>GNE:nextItr:"+nextItr.stringify())
+        //log("        GNE:nextItr:"+nextItr.stringify())
         if(nextItr.state == sError){return(NULL)}
         //if(nextItr.nextAnd != NULL){nextItr.nextAnd <- nextItr.nextAnd.getNextExtended(shallowMode, false)}
         while(nextItr.item.itmMode == mSubItems){
-            nextItr <- nextItr.getNextDeep(shallowMode, skipDots)
+            nextItr <- nextItr.getNextDeep(false, skipDots)
         }
         if(nextItr.item.isTentative){
             nextItr.nextOr <- nextItr.getNextExtended(shallowMode, true)
@@ -660,6 +661,14 @@ model AItem{
                 //S <+- ":subs:"+toString(subscribers.size())
                 withEach sub in subscribers{
                     //S <+- ":"+ sub.mySymbol(sub)
+                }
+            }
+            if(LHS_item.source != NULL and LHS_item.source.value.items.size()>0){
+                S <+- ":SOURCE:"
+                our POV: pov <- LHS_item.source.value.items.head
+                while(pov != NULL){
+                    S <+- ":"+ pov.mySymbol(pov)+":"+pov.stringify()
+                    pov <- pov.next
                 }
             }
         }
@@ -885,7 +894,7 @@ struct XformMgr{
                         case 1:{
                             log(idnt+"    CI.source case_1: "+stringifyInfon(CI.source))
                             our infon: newTop    <- NULL
-                            if(CI.isOrLike() and !CI.source.value.tailUnfinished){
+                            if(CI.isOrLike()){ // and !CI.source.value.tailUnfinished){
                                 log(idnt+"    TODO: CI isOrLike")
                                 our POV: lastOK   <- NULL
                                 me int: numOK <- 0
@@ -901,9 +910,11 @@ struct XformMgr{
                                 }
                                 if(numOK == 1){
                                     newTop <- lastOK.item
-                                    log("SELECTING:"+stringifyInfon(lastOK.item))
-                                    withEach pred in lastOK.predecessors{
-                                        log("    PRED:"+pred.stringify())
+                                    if(newTop.isTentative){
+                                        if(!lastOK.predecessors.isEmpty()){
+                                        log("TENTATIVE, CLOSING")
+                                            //closeItemsAtPOV(lastOK.predecessors[0])
+                                        }
                                     }
                                 }
                             }
@@ -931,11 +942,14 @@ struct XformMgr{
     if(!RHS_Empty){  // TODO: Ugly. Optimize without linear search.
          withEach RHSItr in aItem.RHSItrs{if(RHSItr.disabled){RHS_Empty<-true; break()}}
     }
+                    our POV: predPOV
                     if(aItem.LHSItr==NULL){
                         Allocate(aItem.LHSItr); aItem.LHSItr.initialize(aItem.LHS_item)
                         if(!aItem.LHSItr.beginIterating(false)){aItem.LHSItr.state <- sSecondVisit}
                     } else {
-                        aItem.LHSItr <- aItem.LHSItr.getNextExtended(true, RHS_Empty)}
+                        predPOV <- aItem.LHSItr.infNode
+                        aItem.LHSItr <- aItem.LHSItr.getNextExtended(true, RHS_Empty)
+                    }
                     our infItr: altLHS <- aItem.LHSItr
                     if(altLHS.state==sSecondVisit or altLHS.state==sEOL){break()}
                     me bool: LHS_IsOrLIKE <- (altLHS.nextOr != NULL)
@@ -959,9 +973,9 @@ struct XformMgr{
                                 log("LHS/RHS:"+stringifyInfon(altLHS.item)+" === "+stringifyInfon(RHSItr.item))
                                 me bool: RHS_IsOrLIKE <- (RHSItr.nextOr != NULL)
                                 if((lCount>1 and LHS_IsOrLIKE) or RHS_IsOrLIKE){
-                                    altLHS.item.pushAltIntoLineAlt(aItem, RHSItr.lineAltID, RHSItr)
+                                    altLHS.item.pushAltIntoLineAlt(predPOV, RHSItr.lineAltID, RHSItr)
                                 } else {
-                                    altLHS.infNode.predecessors.pushLast(aItem)
+                                    if(predPOV != NULL){altLHS.infNode.predecessors.pushLast(predPOV)}
                                     altLHS.infNode.item.addPOVToWrkList(RHSItr.infNode)
                                 }
                             }
@@ -1035,7 +1049,7 @@ struct XformMgr{
             our infon: newListInfon <- makeSrcInfon()
             our POV: pov <- RHS.source.value.items.head
             while(pov != NULL){
-log("POV-PREDS:")
+log("POV_PREDS:"+stringifyInfon(pov.item) + "  (" + pov.mySymbol(pov)+")")
 withEach pred in pov.predecessors{
     log("    Pred:"+pred.stringify())
 }
@@ -1043,8 +1057,10 @@ withEach pred in pov.predecessors{
                 our infon:: altItem
                 LHS.copyAsTypeTo(altItem,false)
                 altItem.isTentative <- true
-                altItem.addInfonToWrkList(pov.item)
-                newListInfon.value.items.pushLast(altItem)
+                our POV:: RHSPov; RHSPov <deep- pov
+                altItem.addPOVToWrkList(RHSPov)
+                our POV: LHSPOV <- newListInfon.value.items.pushLast(altItem)
+                LHSPOV.predecessors <- pov.predecessors
                 pov <- pov.next
             }
             LHS.convertThisToIntersection(newListInfon)
@@ -1916,3 +1932,5 @@ struct ProteusCore{
 
 /////////////////////////////////////////
 do codeDataDisplay(infon, TAG_infonDumpMode)
+do GeneratePtrSymbols(AItem)
+do GeneratePtrSymbols(infItr)
