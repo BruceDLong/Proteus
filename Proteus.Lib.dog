@@ -201,7 +201,7 @@ model infon{
         return(infSize)
     }
 
-    me bool: isOrLike() <- {return(intersectPos == ipGetLast and infSize.format == fUnknown and source != NULL and source.value.format == fLiteral)}
+    me bool: isOrLike() <- {return(intersectPos == ipGetLast and infSize.format == fUnknown and source!=NULL and source.value.sizeGiven and source.value.format == fLiteral)}
 
     our infon: getLastItem() <- {
         // ASSERT(Should be already normed and a non-concat list)
@@ -305,6 +305,7 @@ model infon{
             log("pushAltIntoLineAlt:MAKE:"+stringifyInfon(RHSItr.item))
             povToPushTo <- makeOrPov(RHSItr.infNode)
             povToPushTo.item.source.value.tailUnfinished <- true
+            povToPushTo.item.source.value.sizeGiven      <- true
             povToPushTo.linearAltID <- lineID
             addPOVToWrkList(povToPushTo)
 
@@ -554,6 +555,7 @@ model infItr{
         if(nextItr.item.isTentative){
             nextItr.nextOr <- nextItr.getNextExtended(shallowMode, true)
         }
+        nextItr.infNode.parent <- nextItr.parent.infNode
         return(nextItr)
     }
     void: copyThisTo(our infItr: to) <- {
@@ -892,42 +894,46 @@ struct XformMgr{
                             aItem.step <- 1
                         }
                         case 1:{
-                            log(idnt+"    CI.source case_1: "+stringifyInfon(CI.source))
+                            our infon: src <- CI.source
+                            log(idnt+"    CI.source case_1: "+stringifyInfon(src))
                             our infon: newTop    <- NULL
-                            if(CI.isOrLike()){ // and !CI.source.value.tailUnfinished){
-                                log(idnt+"    TODO: CI isOrLike")
-                                our POV: lastOK   <- NULL
-                                me int: numOK <- 0
-                                our POV: pov <- CI.source.value.items.head
-                                while(pov != NULL){
-                                    // TODO: if(sizesNotCompatable()){markAsReject or notLast}
-                                    if(!pov.item.error){
-                                        log(idnt+"            pov:"+ stringifyInfon(pov.item))
-                                        numOK <+- 1
-                                        lastOK <- pov
+                            if(CI.isOrLike()){
+                                log("IS_OR_LIKE")
+                                if(!src.value.tailUnfinished){
+                                    log(idnt+"    TODO: CI isOrLike")
+                                    our POV: lastOK   <- NULL
+                                    me int: numOK <- 0
+                                    our POV: pov <- src.value.items.head
+                                    while(pov != NULL){
+                                        // TODO: if(sizesNotCompatable()){markAsReject or notLast}
+                                        if(!pov.item.error){
+                                            log(idnt+"            pov:"+ stringifyInfon(pov.item))
+                                            numOK <+- 1
+                                            lastOK <- pov
+                                        }
+                                        pov <- pov.next
                                     }
-                                    pov <- pov.next
-                                }
-                                if(numOK == 1){
-                                    newTop <- lastOK.item
-                                    if(newTop.isTentative){
-                                        if(!lastOK.predecessors.isEmpty()){
-                                        log("TENTATIVE, CLOSING")
-                                            //closeItemsAtPOV(lastOK.predecessors[0])
+                                    if(numOK == 1){
+                                        newTop <- lastOK.item
+                                        if(newTop.isTentative){
+                                            if(!lastOK.predecessors.isEmpty()){
+                                                log("TENTATIVE, CLOSING")
+                                                our POV: pred <- lastOK.predecessors[0]
+                                                pred.parent.closeItemsAtPOV(pred)
+                                            }
                                         }
                                     }
-                                }
-                            }
-                            else{
-                                our infon: src <- CI.source
+                                } else {log("TODO: IS_OR_LIKE: tailUnfinished")}
+                            } else {
                                 switch(CI.intersectPos){
                                     case ipGetLast   : {newTop <- src.getLastItem()}
                                     case ipGetFirst  : {newTop <- src.getFirstItem()}
                                     //case ipGetMarked : {newTop <- src.getMarked()}
                                 }
-                                if(newTop==NULL){logFatalError("Handle LastItm is null")}
-                                newTop.takeWrkListFrom(CI)
-                                log("GETTING_LSAT:"+stringifyInfon(newTop))
+                                if(!(newTop==NULL)){
+                                    newTop.takeWrkListFrom(CI)
+                                    log("GETTING_LSAT:"+stringifyInfon(newTop))
+                                }else{log("Handle LastItm is null")}
                             }
                             if(newTop){CI <deep- newTop}
                             else{
@@ -945,7 +951,7 @@ struct XformMgr{
                     our POV: predPOV
                     if(aItem.LHSItr==NULL){
                         Allocate(aItem.LHSItr); aItem.LHSItr.initialize(aItem.LHS_item)
-                        if(!aItem.LHSItr.beginIterating(false)){aItem.LHSItr.state <- sSecondVisit}
+                        if(!aItem.LHSItr.beginIterating(RHS_Empty)){aItem.LHSItr.state <- sSecondVisit}
                     } else {
                         predPOV <- aItem.LHSItr.infNode
                         aItem.LHSItr <- aItem.LHSItr.getNextExtended(true, RHS_Empty)
@@ -1001,7 +1007,7 @@ struct XformMgr{
     void: processAgenda()<-{
         withEach count in WHILE(!agenda.isEmpty()) {
             //log("_____"+toString(count)+"_____")
-            if (count > 100){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
+            if (count > 200){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
             our AItem: aItem <- agenda.last(); agenda.popLast()
             processAgendaItem(aItem, 0)
             //aItem.LHS_item.isOnAgenda <- false
@@ -1044,8 +1050,8 @@ struct XformMgr{
         // TODO: make this work with inverted and marked intersections
         our infon: LHS <- aItem.LHS_item
         our infon: RHS <- aItem.RHS
+        /*if(RHS.infNode.linearAltID>0)*/ {RHS.source.value.tailUnfinished<-false}
         if(RHS.isOrLike()){
-            /*if(RHS.infNode.linearAltID>0)*/ {RHS.source.value.tailUnfinished<-false}
             our infon: newListInfon <- makeSrcInfon()
             our POV: pov <- RHS.source.value.items.head
             while(pov != NULL){
@@ -1065,6 +1071,7 @@ withEach pred in pov.predecessors{
             }
             LHS.convertThisToIntersection(newListInfon)
             LHS.source.value.tailUnfinished <- RHS.source.value.tailUnfinished
+            LHS.source.value.sizeGiven <- true
             LHS.altRulesApplied <- false
         }else{
             // TODO: subscribe to RHS updates then retry
@@ -1180,7 +1187,7 @@ withEach pred in pov.predecessors{
         return(changeMade)
     }
     me bool: function_altRules(our AItem: aItem) <- {
-        our infon: CI        <- aItem.LHS_item
+        our infon: CI <- aItem.LHS_item
         if(CI.altRulesApplied){return(false)}
         else{CI.altRulesApplied <- true}
         me bool: changeMade  <- false
