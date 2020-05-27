@@ -14,31 +14,31 @@ mergeSizeRules = {
 
     ],
     'ifSnips': {
-        'l?':            'aItem.LHS_item.infMode == isUnknown',
-        'lNUM':          'aItem.LHS_item.value.fType == NUM',
-        'lSTR':          'aItem.LHS_item.value.fType == STR',
-        'lLST':          'aItem.LHS_item.value.fType == LST',
+        'l?':            'aItem.LHS_item.item.infMode == isUnknown',
+        'lNUM':          'aItem.LHS_item.item.value.fType == NUM',
+        'lSTR':          'aItem.LHS_item.item.value.fType == STR',
+        'lLST':          'aItem.LHS_item.item.value.fType == LST',
 
-        'lintersect':    'aItem.LHS_item.infSize.intersectPosParse == ipSquareBrackets',
-        'lfUnknown':     'aItem.LHS_item.infSize.format == fUnknown',
-        'lfConcat':      'aItem.LHS_item.infSize.format == fConcat',
-        'lfLiteral':     'aItem.LHS_item.infSize.format == fLiteral',
+        'lintersect':    'aItem.LHS_item.item.infSize.intersectPosParse == ipSquareBrackets',
+        'lfUnknown':     'aItem.LHS_item.item.infSize.format == fUnknown',
+        'lfConcat':      'aItem.LHS_item.item.infSize.format == fConcat',
+        'lfLiteral':     'aItem.LHS_item.item.infSize.format == fLiteral',
 
-        'r?':            'aItem.RHS.infMode == isUnknown',
-        'rNUM':          'aItem.RHS.value.fType == NUM',
-        'rSTR':          'aItem.RHS.value.fType == STR',
-        'rLST':          'aItem.RHS.value.fType == LST',
+        'r?':            'aItem.RHS.item.infMode == isUnknown',
+        'rNUM':          'aItem.RHS.item.value.fType == NUM',
+        'rSTR':          'aItem.RHS.item.value.fType == STR',
+        'rLST':          'aItem.RHS.item.value.fType == LST',
 
-        'rintersect':    'aItem.RHS.infSize.intersectPosParse == ipSquareBrackets',
-        'rfUnknown':     'aItem.RHS.infSize.format == fUnknown',
-        'rfConcat':      'aItem.RHS.infSize.format == fConcat',
-        'rsfLiteral':     'aItem.RHS.infSize.format == fLiteral',
+        'rintersect':    'aItem.RHS.item.infSize.intersectPosParse == ipSquareBrackets',
+        'rfUnknown':     'aItem.RHS.item.infSize.format == fUnknown',
+        'rfConcat':      'aItem.RHS.item.infSize.format == fConcat',
+        'rsfLiteral':     'aItem.RHS.item.infSize.format == fLiteral',
 
         'looseSize':     'aItem.looseSize',
         '!looseSize':    '!aItem.looseSize'
     },
     'codeSnips': {
-        'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.infSize, aItem.LHS_item.infSize, 0)',
+        'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.item.infSize, aItem.LHS_item.item.infSize, 0)',
     },
     'rules': [
         ["mergeSize:!looseSize|lfUnknown|rsfLiteral",     "copySizeRHStoLHS"],
@@ -57,38 +57,38 @@ mergeRules = {
         ['rintersect', 'rfUnknown', 'rfConcat', 'rfLiteral']
     ],
     'ifSnips': {
-        'l?':            'aItem.LHS_item.infMode == isUnknown',
-        'lNUM':          'aItem.LHS_item.value.fType == NUM',
-        'lSTR':          'aItem.LHS_item.value.fType == STR',
-        'lLST':          'aItem.LHS_item.value.fType == LST',
+        'l?':            'aItem.LHS_item.item.infMode == isUnknown',
+        'lNUM':          'aItem.LHS_item.item.value.fType == NUM',
+        'lSTR':          'aItem.LHS_item.item.value.fType == STR',
+        'lLST':          'aItem.LHS_item.item.value.fType == LST',
 
-        'lintersect':    'aItem.LHS_item.value.intersectPosParse == ipSquareBrackets',
-        'lfUnknown':     'aItem.LHS_item.value.format == fUnknown',
-        'lfConcat':      'aItem.LHS_item.value.format == fConcat',
-        'lfLiteral':     'aItem.LHS_item.value.format == fLiteral',
+        'lintersect':    'aItem.LHS_item.item.value.intersectPosParse == ipSquareBrackets',
+        'lfUnknown':     'aItem.LHS_item.item.value.format == fUnknown',
+        'lfConcat':      'aItem.LHS_item.item.value.format == fConcat',
+        'lfLiteral':     'aItem.LHS_item.item.value.format == fLiteral',
 
-        'r?':            'aItem.RHS.infMode == isUnknown',
-        'rNUM':          'aItem.RHS.value.fType == NUM',
-        'rSTR':          'aItem.RHS.value.fType == STR',
-        'rLST':          'aItem.RHS.value.fType == LST',
-        'rtUnknown':     'aItem.RHS.value.fType == tUnknown',
+        'r?':            'aItem.RHS.item.infMode == isUnknown',
+        'rNUM':          'aItem.RHS.item.value.fType == NUM',
+        'rSTR':          'aItem.RHS.item.value.fType == STR',
+        'rLST':          'aItem.RHS.item.value.fType == LST',
+        'rtUnknown':     'aItem.RHS.item.value.fType == tUnknown',
 
-        'rintersect':    'aItem.RHS.intersectPos != ipNoIntersect',
-        'rfUnknown':     'aItem.RHS.value.format == fUnknown',
-        'rfConcat':      'aItem.RHS.value.format == fConcat',
-        'rfLiteral':     'aItem.RHS.value.format == fLiteral',
+        'rintersect':    'aItem.RHS.item.intersectPos != ipNoIntersect',
+        'rfUnknown':     'aItem.RHS.item.value.format == fUnknown',
+        'rfConcat':      'aItem.RHS.item.value.format == fConcat',
+        'rfLiteral':     'aItem.RHS.item.value.format == fLiteral',
 
         '==':           'aItem.looseSize',
         '=':            '!aItem.looseSize',
     },
     'codeSnips': {
         'REJECT':                   'aItem.reject <- true',
-        'copyValueRHStoLHS':        'DO_COPY(aItem.RHS.value, aItem.LHS_item.value, aItem.sizeToCopy)',
-        'copyValueLHStoRHS':        'DO_COPY(aItem.LHS_item.value, aItem.RHS.value, aItem.sizeToCopy)',
-        'copyRHSTypeToLHS':         'aItem.LHS_item.value.fType <- aItem.RHS.value.fType; aItem.LHS_item.infMode <- aItem.RHS.infMode',
-        'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.infSize, aItem.LHS_item.infSize, 0)',
-        'rejectIfValueStrNotEqual': 'if(aItem.LHS_item.value.str != aItem.RHS.value.str){aItem.reject <- true; aItem.LHS_item.error<-true}',
-        'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.value.num != aItem.RHS.value.num){aItem.reject <- true; aItem.LHS_item.error<-true}',
+        'copyValueRHStoLHS':        'DO_COPY(aItem.RHS.item.value, aItem.LHS_item.item.value, aItem.sizeToCopy)',
+        'copyValueLHStoRHS':        'DO_COPY(aItem.LHS_item.item.value, aItem.RHS.item.value, aItem.sizeToCopy)',
+        'copyRHSTypeToLHS':         'aItem.LHS_item.item.value.fType <- aItem.RHS.item.value.fType; aItem.LHS_item.item.infMode <- aItem.RHS.item.infMode',
+        'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.item.infSize, aItem.LHS_item.item.infSize, 0)',
+        'rejectIfValueStrNotEqual': 'if(aItem.LHS_item.item.value.str != aItem.RHS.item.value.str){aItem.reject <- true; aItem.LHS_item.item.error<-true}',
+        'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.item.value.num != aItem.RHS.item.value.num){aItem.reject <- true; aItem.LHS_item.item.error<-true}',
         'StartMergePropogation':    'startPropRules(aItem)',
         'mergeRHSIntersect':        'mergeRHSIntersect(aItem)'
     },
@@ -221,7 +221,7 @@ wrkLstRules = {
     'ID': 'wrkLst',
     'points': [["wrkLstEmpty", "!wrkLstEmpty"]],
     'ifSnips': {
-        '!wrkLstEmpty':   '!aItem.LHS_item.wrkList.isEmpty()',
+        '!wrkLstEmpty':   '!aItem.LHS_item.item.wrkList.isEmpty()',
         'wrkLstEmpty':    'true'
     },
     'codeSnips': {
@@ -244,12 +244,12 @@ startPropRules = { # Start iterating fLiteral LST = fLiteral LST
     'ifSnips': {
         '!looseSize':       '!aItem.looseSize',
         'looseSize':        'aItem.looseSize',
-        'sizesCompat':      'sizesAreCompatable(aItem.LHS_item, aItem.RHS)',
-        '!sizesCompat':     '!sizesAreCompatable(aItem.LHS_item, aItem.RHS)',
-        'RHSisPureDots':    '(aItem.RHS.value.tailUnfinished and aItem.RHS.value.items.size()==0)',
-        '!RHSisPureDots':   '!(aItem.RHS.value.tailUnfinished and aItem.RHS.value.items.size()==0)',
-        'LHSEmpty':         '(!aItem.LHS_item.value.tailUnfinished and aItem.LHS_item.value.items.size() == 0)',
-        '!LHSEmpty':        '(aItem.LHS_item.value.tailUnfinished or aItem.LHS_item.value.items.size() > 0)'
+        'sizesCompat':      'sizesAreCompatable(aItem.LHS_item.item, aItem.RHS.item)',
+        '!sizesCompat':     '!sizesAreCompatable(aItem.LHS_item.item, aItem.RHS.item)',
+        'RHSisPureDots':    '(aItem.RHS.item.value.tailUnfinished and aItem.RHS.item.value.items.size()==0)',
+        '!RHSisPureDots':   '!(aItem.RHS.item.value.tailUnfinished and aItem.RHS.item.value.items.size()==0)',
+        'LHSEmpty':         '(!aItem.LHS_item.item.value.tailUnfinished and aItem.LHS_item.item.value.items.size() == 0)',
+        '!LHSEmpty':        '(aItem.LHS_item.item.value.tailUnfinished or aItem.LHS_item.item.value.items.size() > 0)'
     },
     'codeSnips': {
         'REJECT':   'aItem.reject <- true',
@@ -270,7 +270,7 @@ propagationRules = {
     'ifSnips': {
         'infonMode':    'aItem.ruleSet == rsInfon',
         'mergeMode':    'aItem.ruleSet == rsMerge',
-        'skipDots1':    'aItem.LHS_item.',
+        'skipDots1':    'aItem.LHS_item.item.',
         'skipDots2':    'aItem.',
         'notSkipDots':  ''
 
