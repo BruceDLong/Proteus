@@ -222,14 +222,14 @@ wrkLstRules = {
     'points': [["wrkLstEmpty", "!wrkLstEmpty"]],
     'ifSnips': {
         '!wrkLstEmpty':   '!aItem.LHS_item.item.wrkList.isEmpty()',
-        'wrkLstEmpty':    'true'
+        'wrkLstEmpty':    '!aItem.hasPropagated'
     },
     'codeSnips': {
-        'enqueueForMerge':  'enqueueForMerge(aItem)'
+        'enqueueForMerge':  'enqueueForMerge(aItem); aItem.hasPropagated <- true'
     },
     'rules': [
         ["wrkLst:!wrkLstEmpty",     "enqueueForMerge"],
-        ["wrkLst:wrkLstEmpty",      "NONE"]
+        ["wrkLst:wrkLstEmpty",      "enqueueForMerge"]
     ]
 }
 startPropRules = { # Start iterating fLiteral LST = fLiteral LST

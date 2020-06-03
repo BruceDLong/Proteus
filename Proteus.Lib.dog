@@ -61,6 +61,7 @@ struct GLOBAL{
         }
         return (S)
     }
+    me int: lastLineAltID <- 0
 }
 
 #include infonIO.dog
@@ -274,7 +275,7 @@ model infon{
     }
     void: pushAltIntoLineAlt(our POV: pred, me int: lineID, our infon: rItem, our POV: rNode) <- {
         if(pred != NULL){rNode.predecessors.pushLast(pred)}
-        log("@@@PushPred:")
+        log("@@@PushPred: LINE_ID:"+toString(lineID))
         // Search wrkList for lineID
         our POV: povToPushTo <- NULL
         withEach wrkItm in wrkList{
@@ -285,6 +286,7 @@ model infon{
             log("pushAltIntoLineAlt:USED:"+stringifyInfon(rItem))
             withEach wrkItm in usedWrkList{
                 if(wrkItm.linearAltID==lineID){
+                    log("LINE_ID:"+toString(lineID))
                     povToPushTo<-wrkItm
                     // POP from used, push to wrkList
                     // DON'T REDO already done alts.
@@ -556,7 +558,6 @@ model infItr{
         to.infNode      <- infNode
         to.nestLvl      <- nestLvl
         to.state        <- state
-        to.lineAltID    <- lineAltID
     }
     void: deleteCrnt() <- {
         infNode <- iParent.item.deleteListNode(infNode)
@@ -642,7 +643,9 @@ model AItem{
                 case rsMerge:{
                     me string: equalStr <- " '=' "
                     if (looseSize){equalStr <- " '==' "}
-                    S <+- "MERGE:"+LHS_item.mySymbol(LHS_item)+":"+ stringifyInfon(LHS_item.item) +equalStr+ stringifyInfon(RHS.item) + "  (STEP_M"+toString(step)+")"
+                    S <+- "MERGE:"+LHS_item.mySymbol(LHS_item)+":"+ stringifyInfon(LHS_item.item)
+                    if(RHS!=NULL) {S <+- equalStr+ stringifyInfon(RHS.item)}
+                    S <+- "  (STEP_M"+toString(step)+")"
                 }
                 case rsIntersect:{
                     S <+- "INTERSECT:"+LHS_item.mySymbol(LHS_item)+":"+ stringifyInfon(LHS_item.item)+ "  (STEP_I"+toString(step)+")"
@@ -656,7 +659,7 @@ model AItem{
                 S <+- ":SOURCE:"
                 our POV: pov <- LHS_item.item.source.value.items.head
                 while(pov != NULL){
-                    S <+- ":"+ pov.mySymbol(pov)+":"+pov.stringify()
+                    S <+- pov.stringify()+"("+ pov.mySymbol(pov)+")"+";"
                     pov <- pov.next
                 }
             }
@@ -712,9 +715,9 @@ struct XformMgr{
         newAItem.ruleSet  <- rsInfon
         newAItem.LHS_item <- item
         newAItem.step     <- 0
-              newAItem.indentLvl <- 0
+        newAItem.indentLvl <- 0
+        if(aParent != NULL){aParent.taskEnqueued <- true}
         if(subscriber != NULL){
-            subscriber.taskEnqueued <- true
             newAItem.subscribers.pushFirst(subscriber)
             newAItem.indentLvl <- subscriber.indentLvl+1
         }
@@ -733,8 +736,8 @@ struct XformMgr{
         newAItem.propagate <- true
         newAItem.step      <- 0
         newAItem.indentLvl <- 0
+        aParent.taskEnqueued <- true
         if(subscriber != NULL){
-            subscriber.taskEnqueued <- true
             newAItem.subscribers.pushFirst(subscriber)
             newAItem.indentLvl <- subscriber.indentLvl+1
         }
@@ -798,34 +801,39 @@ struct XformMgr{
         }
         return(RHSItrNext)
     }
-    void: propagateWithRHS(our AItem: aItem, our POV: LHSPov, our POV: RHSPov, me bool: looseSize) <- {
-        log("PROPAGATE:"+stringifyInfon(LHSPov.item) + " ==== " +stringifyInfon(RHSPov.item))
+    void: propagate(our AItem: aItem, our POV: LHSPov, our POV: RHSPov, me bool: looseSize) <- {
+        me string: logStr <- "PROPAGATE:"+stringifyInfon(LHSPov.item) + " ==== "; if(RHSPov){logStr <+- stringifyInfon(RHSPov.item)} else {logStr <+- "NULL"}
+        log(logStr)
+        aItem.hasPropagated <- true
         if(aItem.LHSItr == NULL and aItem.parent.LHSItr == NULL){return()}
-        me int: LHSfType <- LHSPov.item.value.fType
-        me int: RHSfType <- RHSPov.item.value.fType
+        //me int: LHSfType <- LHSPov.item.value.fType
+        //me int: RHSfType <- RHSPov.item.value.fType
         our POV: LHSPovNext
         our POV: RHSPovNext
         our AItem: aParent <- aItem
         if(aItem.LHSItr != NULL and LHSPov === aItem.LHSItr.topPOV){
             log("DO GETFIRST:"+stringifyAItem(aItem))
             LHSPovNext <- LHSPov.getFirstTight(aItem.LHSItr, false)
-            RHSPovNext <- RHSPov.getFirstTight(aItem.RHSItr, false)
+                log("    ----LHSPovNext:"+LHSPovNext.stringify())
+            if(RHSPov){RHSPovNext <- RHSPov.getFirstTight(aItem.RHSItr, false)}
+                log("    ----RHSPovNext:"+RHSPovNext.stringify())
         } else {
             aParent <- aItem.parent
             log("DO GETNEXT:"+stringifyAItem(aItem))
             LHSPovNext <- LHSPov.getNextTight(aParent.LHSItr, false) //findNextLHS(LHSPov, LHSfType, RHSfType, action.unknownAsList)
-	        //log("    ----LHSPovNext:"+LHSPovNext.stringify())
-            RHSPovNext <- RHSPov.getNextTight(aParent.RHSItr, false) //findNextRHS(RHSPov, LHSfType, RHSfType)
-	        //log("    ----RHSPovNext:"+RHSPovNext.stringify())
+                log("    ----LHSPovNext:"+LHSPovNext.stringify())
+            if(RHSPov){RHSPovNext <- RHSPov.getNextTight(aParent.RHSItr, false)} //findNextRHS(RHSPov, LHSfType, RHSfType)
+                log("    ----RHSPovNext:"+RHSPovNext.stringify())
         }
         if(LHSPovNext == NULL){return()}
-        LHSPovNext.linearAltID <- LHSPov.linearAltID
         //enqueueForProcessing(action, LHSPovNext, RHSPovNext, AlternativesNestLvl, action.breakDotCycle)
+        me bool: breakLoop <- RHSPov!= NULL and RHSPovNext==NULL
         me bool: foundTentEqTent <- false
         me bool: LHS_IsOrLIKE <- (LHSPovNext.altPOV != NULL)
         me int: lCount <- 1
         our POV: LHSAlt <- LHSPovNext
         while(LHSAlt){
+            log("LHS_ALT:" + LHSAlt.stringify())
             our POV: RHSAlt <- RHSPovNext
             while(RHSAlt){
                 me bool: RHS_IsOrLIKE <- (RHSPovNext.altPOV != NULL)
@@ -835,7 +843,7 @@ struct XformMgr{
                   //  LHSItr.parent.stitchCmd <- keepDots
                 } else {
                     if((lCount>1 and LHS_IsOrLIKE) or RHS_IsOrLIKE){
-                        LHSAlt.item.pushAltIntoLineAlt(LHSPov, RHSAlt.linearAltID, RHSAlt.item, RHSAlt)
+                        LHSAlt.item.pushAltIntoLineAlt(LHSPov, aParent.LHSItr.lineAltID, RHSAlt.item, RHSAlt)
                     } else {
                         LHSAlt.predecessors.pushLast(LHSPov)
                         LHSAlt.item.addPOVToWrkList(RHSAlt)
@@ -847,7 +855,10 @@ struct XformMgr{
             lCount <+- 1
             LHSAlt <- LHSAlt.altPOV
         }
-        processInfonViaAgenda(LHSPovNext, aItem, aParent)
+        if(breakLoop and LHS_IsOrLIKE){log("BREAKLOOP##################"); processInfonViaAgenda(LHSPovNext.altPOV, NULL, aParent)}
+        else{processInfonViaAgenda(LHSPovNext, NULL, aParent)}
+        LHSPovNext.altPOV <- NULL
+        if(RHSPovNext!=NULL){RHSPovNext.altPOV <- NULL}
     }
     void: appendToUnfinishedList(our AItem: aItem, our infon: inf) <- {
         if(!inf.value.tailUnfinished){logFatalError("ERROR: tailUnfinished FALSE:"+ stringifyInfon(inf))}
@@ -864,7 +875,6 @@ struct XformMgr{
     }
     // PAI
     void: processAgendaItem(our AItem: aItem, me int: AlternativesNestLvl)<-{
-        our AItem: aParent     <- aItem
         me bool: changeMade    <- true
         aItem.taskEnqueued     <- false
         me string: idnt <- indentStr(aItem.indentLvl)
@@ -888,27 +898,40 @@ struct XformMgr{
                     else if(function_altRules(aItem)){changeMade <- true}
                     else if(lookUpCursorRules(aItem)){changeMade <- true}
                     else if(wrkLstRules(aItem)){changeMade <- true}
- //                   else if(propagate(aItem)){changeMade <- true}
+                  //  else if(propagateNoRHS(aItem)){changeMade <- true}
                 }
                 case rsMerge:{
                     log(idnt+"    MERGE-step"+toString(aItem.step)+": ApplyMergeRules to:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
-                    switch(aItem.step){
-                        case 0:{
-                            processInfonViaAgenda(aItem.RHS, aItem, aParent)
-                            aItem.step <- 1
+                    if(aItem.RHS==NULL){
+                        if(aItem.LHS_item.item.value.fType == LST){
+                            log("propagateNoRHS-LST:" + aItem.stringify())
+                            //enqueueForMerge(aItem)
+                            propagate(aItem, aItem.LHS_item, NULL, false)
+                        } else {
+                            log("propagateNoRHS-NSEQ:" + aItem.stringify())
+                            propagate(aItem, aItem.LHS_item, NULL, false)
                         }
-                        case 1:{
-                            mergeSizeRules(aItem)
-                            mergeRules(aItem)
-                            if(aItem.taskEnqueued){aItem.step <- 2}
-                            else{
-                                log("rsMERGE:PROPAGATE-C1:"+aItem.stringify())
-                                propagateWithRHS(aItem, aItem.LHS_item, aItem.RHS, false)
+                            aItem.taskEnqueued <- true
+                    } else {
+                        switch(aItem.step){
+                            case 0:{
+                                log("rsMERGE:PROPAGATE-RHS:"+aItem.stringify())
+                                processInfonViaAgenda(aItem.RHS, aItem, aItem)
+                                aItem.step <- 1
                             }
-                        }
-                        case 2:{
-                            log("rsMERGE:PROPAGATE-C2:"+aItem.stringify())
-                            propagateWithRHS(aItem, aItem.LHS_item, aItem.RHS, false)
+                            case 1:{
+                                mergeSizeRules(aItem)
+                                mergeRules(aItem)
+                                if(aItem.taskEnqueued){aItem.step <- 2}
+                                else{
+                                    log("rsMERGE:PROPAGATE-C1:"+aItem.stringify())
+                                    propagate(aItem, aItem.LHS_item, aItem.RHS, false)
+                                }
+                            }
+                            case 2:{
+                                log("rsMERGE:PROPAGATE-C2:"+aItem.stringify())
+                                propagate(aItem, aItem.LHS_item, aItem.RHS, false)
+                            }
                         }
                     }
                 }
@@ -919,7 +942,7 @@ struct XformMgr{
                             log(idnt+"    CI.source case_0: "+stringifyInfon(CI.source))
                             // TODO: proccess .innr parts
                             our POV:: srcPOV; srcPOV.item <- CI.source
-                            processInfonViaAgenda(srcPOV, aItem, aParent)
+                            processInfonViaAgenda(srcPOV, aItem, aItem)
                             aItem.step <- 1
                         }
                         case 1:{
@@ -1061,22 +1084,23 @@ struct XformMgr{
     }
     void: enqueueForMerge(our AItem: aItem) <- {
         //log("    enqueueForMerge:")
-        our POV: RHSPov <- aItem.LHS_item.item.wrkList.first()
-        aItem.LHS_item.item.wrkList.popFirst()
-        aItem.LHS_item.item.usedWrkList.pushLast(RHSPov)
+        our POV: RHSPov    <- NULL
+        me bool: looseSize <- false
+        if(!aItem.LHS_item.item.wrkList.isEmpty()){
+            RHSPov <- aItem.LHS_item.item.wrkList.first()
+            aItem.LHS_item.item.wrkList.popFirst()
+            aItem.LHS_item.item.usedWrkList.pushLast(RHSPov)
+            looseSize <- RHSPov.looseSize()
+        }
         our AItem: aParent <- aItem
         if(aItem.parent != NULL){aParent <- aItem.parent}
-        processMergeViaAgenda(aItem.LHS_item, RHSPov, RHSPov.looseSize(), aItem, aParent)
+        processMergeViaAgenda(aItem.LHS_item, RHSPov, looseSize, aItem, aParent)
     }
     me bool: sizesAreCompatable(our infon: LHS, our infon: RHS)<-{return(true)}
     me void: enqueFirstsToMerge(our AItem: aItem) <- {
-        log("    EN1st:"+ aItem.stringify())
         Allocate(aItem.LHSItr); aItem.LHSItr.initialize(aItem.LHS_item)
-        //aItem.LHSItr.beginIterating(false)
-        //if(aItem.LHSItr.parent.infNode.item == NULL){logFatalError("TODO: handle aItem.LHSItr.parent.infNode.item == NULL segFault")}
-        Allocate(aItem.RHSItr); aItem.RHSItr.initialize(aItem.RHS)
-        //aItem.RHSItr.beginIterating(false)
-        //processMergeViaAgenda(aItem.LHSItr.topPOV, aItem.RHSItr.topPOV, aItem.looseSize, aItem, parent)
+        if(aItem.RHS){Allocate(aItem.RHSItr); aItem.RHSItr.initialize(aItem.RHS)}
+        lastLineAltID <+- 1; aItem.LHSItr.lineAltID <- lastLineAltID
     }
     me void: mergeRHSIntersect(our AItem: aItem) <- {
         log(indentStr(aItem.indentLvl)+"    mergeRHSIntersect:")
@@ -1233,12 +1257,14 @@ withEach pred in pov.predecessors{
         }
         return(changeMade)
     }
-    me bool: propagate(our AItem: aItem) <- {
+    me bool: propagateNoRHS(our AItem: aItem) <- {
         if(aItem.hasPropagated){return(false)}
-        else{aItem.hasPropagated <- true}
         if(aItem.LHS_item.item.value.fType == LST){
-            processSequenceViaAgenda(aItem.LHS_item, aItem)
+            log("propagateNoRHS-2:" + aItem.stringify())
+            enqueueForMerge(aItem)
+            return(false)  // Should be true if this weren't the last action in PAI
         }
+        return(false)
     }
 }
 
