@@ -49,8 +49,8 @@ struct GLOBAL{
     }
     me string: stringifyAItem(our AItem: aItem) <- {
         me string: S <- aItem.mySymbol(aItem)+":"+aItem.stringify()
-        if(aItem.parent != NULL){
-            S <- aItem.parent.mySymbol(aItem.parent)+"->"+ S
+        if(! aItem.subscribers.isEmpty()){
+            S <- aItem.subscribers[0].mySymbol(aItem.subscribers[0])+"->"+ S
         }
         return(S)
     }
@@ -305,12 +305,10 @@ model infon{
         }else{povToPushTo.item.addToOrInfon(rItem, rNode)}
     }
     void: addPOVToWrkList(our POV: pov) <- {
-        //log("addPOVToWrkList:"+stringifyInfon(pov.item))
         isNormed <- false
         wrkList.pushLast(pov)
     }
     void: addInfonToWrkList(our infon: i) <- {
-        //log("addInfonToWrkList:"+stringifyInfon(i))
         our POV:: pov
         pov.item <- i
         addPOVToWrkList(pov)
@@ -540,7 +538,6 @@ model infItr{
     }
     our infItr: getNextExtended(me bool: shallowMode, me bool: skipDots) <- {
         our infItr: nextItr <- getNextDeep(shallowMode, skipDots)
-        //log("        GNE:nextItr:"+nextItr.stringify())
         if(nextItr.state == sError){return(NULL)}
         //if(nextItr.nextAnd != NULL){nextItr.nextAnd <- nextItr.nextAnd.getNextExtended(shallowMode, false)}
         while(nextItr.item.itmMode == mSubItems){
@@ -638,20 +635,19 @@ model AItem{
         else{
             switch(ruleSet){
                 case rsInfon:{
-                    S <+- "INFON:"+LHS_item.mySymbol(LHS_item)+":"+ stringifyInfon(LHS_item.item)
+                    S <+- "INF:"+ stringifyInfon(LHS_item.item)
                 }
                 case rsMerge:{
                     me string: equalStr <- " '=' "
                     if (looseSize){equalStr <- " '==' "}
-                    S <+- "MERGE:"+LHS_item.mySymbol(LHS_item)+":"+ stringifyInfon(LHS_item.item)
+                    S <+- "MRG:"+ stringifyInfon(LHS_item.item)
                     if(RHS!=NULL) {S <+- equalStr+ stringifyInfon(RHS.item)}
-                    S <+- "  (STEP_M"+toString(step)+")"
                 }
                 case rsIntersect:{
-                    S <+- "INTERSECT:"+LHS_item.mySymbol(LHS_item)+":"+ stringifyInfon(LHS_item.item)+ "  (STEP_I"+toString(step)+")"
+                    S <+- "INST:"+LHS_item.mySymbol(LHS_item)+":"+ stringifyInfon(LHS_item.item)+ "  (STEP_I"+toString(step)+")"
                 }
                 case rsPropagate:{
-                    S <+- "PROPAGATE:"+LHS_item.mySymbol(LHS_item)+":"+ stringifyInfon(LHS_item.item)+ "  (STEP_P"+toString(step)+")"
+                    S <+- "PROP:"+LHS_item.mySymbol(LHS_item)+":"+ stringifyInfon(LHS_item.item)+ "  (STEP_P"+toString(step)+")"
                 }
             }
             //S <+- ":NORM:"+ dispBool(LHS.isNormed)
@@ -659,7 +655,7 @@ model AItem{
                 S <+- ":SOURCE:"
                 our POV: pov <- LHS_item.item.source.value.items.head
                 while(pov != NULL){
-                    S <+- pov.stringify()+"("+ pov.mySymbol(pov)+")"+";"
+                    //S <+- pov.stringify()+"("+ pov.mySymbol(pov)+")"+";"
                     pov <- pov.next
                 }
             }
@@ -772,7 +768,6 @@ struct XformMgr{
                 newAItem.subscribers.pushFirst(subscriber)
                 newAItem.indentLvl <- subscriber.indentLvl+1
 //// Handle RHSItr here?
-        //if(subscriber.RHSItrs==NULL){log("subscriber.RHSItrs was NULL")}
                 //newAItem.RHSItrs <- subscriber.RHSItrs
             }
             addAItemToAgenda(newAItem)
@@ -803,7 +798,7 @@ struct XformMgr{
     }
     void: propagate(our AItem: aItem, our POV: LHSPov, our POV: RHSPov, me bool: looseSize) <- {
         me string: logStr <- "PROPAGATE:"+stringifyInfon(LHSPov.item) + " ==== "; if(RHSPov){logStr <+- stringifyInfon(RHSPov.item)} else {logStr <+- "NULL"}
-        log(logStr)
+        logSeg("-PROP")
         aItem.hasPropagated <- true
         if(aItem.LHSItr == NULL and aItem.parent.LHSItr == NULL){return()}
         me bool: RHSEmpty <- RHSPov == NULL
@@ -813,18 +808,23 @@ struct XformMgr{
         our POV: RHSPovNext
         our AItem: aParent <- aItem
         if(aItem.LHSItr != NULL and LHSPov === aItem.LHSItr.topPOV){
-            log("DO GETFIRST:"+stringifyAItem(aItem))
-            LHSPovNext <- LHSPov.getFirstTight(aItem.LHSItr, RHSEmpty)
-                log("    ----LHSPovNext:"+LHSPovNext.stringify())
+            logSeg("-GET1ST")
+            if(RHSEmpty and LHSPov.item.value.tailUnfinished and LHSPov.item.value.items.isEmpty()){
+		// TODO: this is hack, handing off code
+		LHSPovNext <- LHSPov.getFirstTight(aItem.LHSItr, false)
+		LHSPov.item.value.items.popLast()
+		our AItem: PIVA <- processInfonViaAgenda(LHSPovNext, NULL, aParent)
+		logSeg("-PIVA->  "+PIVA.mySymbol(PIVA))
+		return()
+	    }else{
+		LHSPovNext <- LHSPov.getFirstTight(aItem.LHSItr, RHSEmpty)
+	    }
             if(!RHSEmpty){RHSPovNext <- RHSPov.getFirstTight(aItem.RHSItr, false)}
-                log("    ----RHSPovNext:"+RHSPovNext.stringify())
         } else {
             aParent <- aItem.parent
-            log("DO GETNEXT:"+stringifyAItem(aItem))
+            logSeg("-GETNXT")
             LHSPovNext <- LHSPov.getNextTight(aParent.LHSItr, RHSEmpty) //findNextLHS(LHSPov, LHSfType, RHSfType, action.unknownAsList)
-            log("    ----LHSPovNext:"+LHSPovNext.stringify())
             if(!RHSEmpty and aParent.RHSItr != NULL){RHSPovNext <- RHSPov.getNextTight(aParent.RHSItr, false)} //findNextRHS(RHSPov, LHSfType, RHSfType)
-            log("    ----RHSPovNext:"+RHSPovNext.stringify())
         }
         if(LHSPovNext == NULL){return()}
         //enqueueForProcessing(action, LHSPovNext, RHSPovNext, AlternativesNestLvl, action.breakDotCycle)
@@ -834,13 +834,12 @@ struct XformMgr{
         me int: lCount <- 1
         our POV: LHSAlt <- LHSPovNext
         while(LHSAlt){
-            log("LHS_ALT:" + LHSAlt.stringify())
             our POV: RHSAlt <- RHSPovNext
             while(RHSAlt){
                 me bool: RHS_IsOrLIKE <- (RHSPovNext.altPOV != NULL)
                 if(LHSAlt.item.isTentative and RHSAlt.item.isTentative){  // ?=?
                     foundTentEqTent <- true
-                    log("            ?=? : parent.KEEPING DOTS")
+                    logSeg(":?=? : parent.KEEPING DOTS")
                   //  LHSItr.parent.stitchCmd <- keepDots
                 } else {
                     if((lCount>1 and LHS_IsOrLIKE) or RHS_IsOrLIKE){
@@ -856,8 +855,14 @@ struct XformMgr{
             lCount <+- 1
             LHSAlt <- LHSAlt.altPOV
         }
-        if(breakLoop and LHS_IsOrLIKE){log("BREAKLOOP##################"); processInfonViaAgenda(LHSPovNext.altPOV, NULL, aParent)}
-        else{processInfonViaAgenda(LHSPovNext, NULL, aParent)}
+        if(breakLoop and LHS_IsOrLIKE){
+	        our AItem: PIVA <- processInfonViaAgenda(LHSPovNext.altPOV, NULL, aParent)
+	        logSeg("BREAKLOOP-PIVA->  "+PIVA.mySymbol(PIVA))
+	}
+        else{
+	        our AItem: PIVA <- processInfonViaAgenda(LHSPovNext, NULL, aParent)
+	        logSeg("-PIVA->  "+PIVA.mySymbol(PIVA))
+	}
         LHSPovNext.altPOV <- NULL
         if(RHSPovNext!=NULL){RHSPovNext.altPOV <- NULL}
     }
@@ -867,28 +872,31 @@ struct XformMgr{
         addAItemToAgenda(aItem)
     }
     void: fulfillSubscriptions(our AItem: aItem) <- {
+        me string: S
         while(!aItem.subscribers.isEmpty()){
             our AItem: sub <- aItem.subscribers.first()
             aItem.subscribers.popFirst()
             sub.LHS_item.item.isNormed <- false
-            addAItemToAgenda(sub)
+            me bool: itmAdded <- addAItemToAgenda(sub)
+            if(itmAdded){S<+-":"+sub.mySymbol(sub)}
         }
+        if(S != ""){logSeg(":FFSubs"+S)}
     }
     // PAI
     void: processAgendaItem(our AItem: aItem, me int: AlternativesNestLvl)<-{
         me bool: changeMade    <- true
         aItem.taskEnqueued     <- false
         me string: idnt <- indentStr(aItem.indentLvl)
-        log(idnt+">>"+stringifyAItem(aItem))
+        logSeg(indentedStr(">>"+stringifyAItem(aItem), aItem.indentLvl, 50))
         me int: count <- 0
         while(changeMade){
             changeMade <- false
             switch(aItem.ruleSet){
                 case rsInfon:{
-                    //log(idnt+"    INFON:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
                     if(aItem.LHS_item.item.isNormed){
                         fulfillSubscriptions(aItem)
-                        log(idnt+"<<:NRMD:"+stringifyAItem(aItem))
+                        logSeg("<<:NRMD")
+                        logFlush()
                         return()
                     }
                     initRules(aItem)
@@ -902,22 +910,20 @@ struct XformMgr{
                   //  else if(propagateNoRHS(aItem)){changeMade <- true}
                 }
                 case rsMerge:{
-                    log(idnt+"    MERGE-step"+toString(aItem.step)+": ApplyMergeRules to:"+aItem.mySymbol(aItem)+":"+aItem.stringify())
                     if(aItem.RHS==NULL){
                         if(aItem.LHS_item.item.value.fType == LST){
-                            log("propagateNoRHS-LST:" + aItem.stringify())
-                            log("    aItem.LHSItr:" + aItem.LHSItr.stringify())
+                            logSeg("-NoRHSLST")
                             enqueFirstsToMerge(aItem)
                             propagate(aItem, aItem.LHS_item, NULL, false)
                         } else {
-                            log("propagateNoRHS-NSEQ:" + aItem.stringify())
+                            logSeg("-NoRHSNSEQ")
                             propagate(aItem, aItem.LHS_item, NULL, false)
                         }
                     } else {
                         switch(aItem.step){
                             case 0:{
-                                log("rsMERGE:PROPAGATE-RHS:"+aItem.stringify())
-                                processInfonViaAgenda(aItem.RHS, aItem, aItem)
+                                our AItem: PIVA <- processInfonViaAgenda(aItem.RHS, aItem, aItem)
+                                logSeg("-C0-PIVA->  "+PIVA.mySymbol(PIVA))
                                 aItem.step <- 1
                             }
                             case 1:{
@@ -925,12 +931,12 @@ struct XformMgr{
                                 mergeRules(aItem)
                                 if(aItem.taskEnqueued){aItem.step <- 2}
                                 else{
-                                    log("rsMERGE:PROPAGATE-C1:"+aItem.stringify())
+                                    logSeg("-C1")
                                     propagate(aItem, aItem.LHS_item, aItem.RHS, false)
                                 }
                             }
                             case 2:{
-                                log("rsMERGE:PROPAGATE-C2:"+aItem.stringify())
+                                logSeg("-C2")
                                 propagate(aItem, aItem.LHS_item, aItem.RHS, false)
                             }
                         }
@@ -940,18 +946,17 @@ struct XformMgr{
                     our infon: CI <- aItem.LHS_item.item
                     switch(aItem.step){
                         case 0:{
-                            log(idnt+"    CI.source case_0: "+stringifyInfon(CI.source))
                             // TODO: proccess .innr parts
                             our POV:: srcPOV; srcPOV.item <- CI.source
-                            processInfonViaAgenda(srcPOV, aItem, aItem)
+                            our AItem: PIVA <- processInfonViaAgenda(srcPOV, aItem, aItem)
+                            logSeg("-PIVA->  "+PIVA.mySymbol(PIVA))
                             aItem.step <- 1
                         }
                         case 1:{
                             our infon: src <- CI.source
-                            log(idnt+"    CI.source case_1: "+stringifyInfon(src))
                             our infon: newTop    <- NULL
                             if(CI.isOrLike()){
-                                log("IS_OR_LIKE")
+                                logSeg("-IS_OR_LIKE")
                                 if(!src.value.tailUnfinished){
                                     log(idnt+"    TODO: CI isOrLike")
                                     our POV: lastOK   <- NULL
@@ -970,7 +975,7 @@ struct XformMgr{
                                         newTop <- lastOK.item
                                         if(newTop.isTentative){
                                             if(!lastOK.predecessors.isEmpty()){
-                                                log("TENTATIVE, CLOSING")
+                                                logSeg("-TENT_CLOSING")
                                                 our POV: pred <- lastOK.predecessors[0]
                                                 pred.pParent.closeItemsAtPOV(pred)
                                             }
@@ -985,7 +990,7 @@ struct XformMgr{
                                 }
                                 if(!(newTop==NULL)){
                                     newTop.takeWrkListFrom(CI)
-                                    log("GETTING_LSAT:"+stringifyInfon(newTop))
+                                    logSeg("-GET_LSAT")
                                 }else{log("Handle LastItm is null")}
                             }
                             if(newTop){CI <deep- newTop}
@@ -1019,7 +1024,6 @@ struct XformMgr{
                             withEach RHSItr in aItem.RHSItrs{
                                 if(RHSItr.disabled){continue()}
                                 if(lCount==1){
-                                    //log("GET_RHS:"+stringifyInfon(altLHS.item)+" === "+RHSItr.stringify())
                                     if(RHSItr.state!=sEOL){
                                         RHSItr <- RHSItr.getNextExtended(false, false) //TODO: !RHS.looseSize, false)
                                     }
@@ -1049,13 +1053,15 @@ struct XformMgr{
             }
             count <+- 1
             if(aItem.taskEnqueued){
-                log(idnt+"<<:3:"+stringifyAItem(aItem))
+                logSeg("<<:ENQ")
+                logFlush()
                 return()
             }
         }
         fulfillSubscriptions(aItem)
         //aItem.LHS_item.item.isNormed <- true
-        log(idnt+"<<"+stringifyAItem(aItem))
+        logSeg("<<:DONE")
+        logFlush()
     }
     void: processAgenda()<-{
         withEach count in WHILE(!agenda.isEmpty()) {
@@ -1084,7 +1090,6 @@ struct XformMgr{
         }
     }
     void: enqueueForMerge(our AItem: aItem) <- {
-        //log("    enqueueForMerge:")
         our POV: RHSPov    <- NULL
         me bool: looseSize <- false
         if(!aItem.LHS_item.item.wrkList.isEmpty()){
@@ -1095,7 +1100,8 @@ struct XformMgr{
         }
         our AItem: aParent <- aItem
         if(aItem.parent != NULL){aParent <- aItem.parent}
-        processMergeViaAgenda(aItem.LHS_item, RHSPov, looseSize, aItem, aParent)
+        our AItem: newAItem <- processMergeViaAgenda(aItem.LHS_item, RHSPov, looseSize, aItem, aParent)
+	    logSeg("-EN4MRG->  "+newAItem.mySymbol(newAItem))
     }
     me bool: sizesAreCompatable(our infon: LHS, our infon: RHS)<-{return(true)}
     me void: enqueFirstsToMerge(our AItem: aItem) <- {
