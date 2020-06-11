@@ -617,6 +617,7 @@ model AItem{
     flag: propagate
     flag: taskEnqueued
     me int:  step
+    me int: pendingTasks
     BigInt: sizeToCopy
     our AItem[list]: subscribers
     our AItem: parent
@@ -709,11 +710,15 @@ struct XformMgr{
         newAItem.indentLvl <- 0
         if(subscriber != NULL){
             newAItem.subscribers.pushFirst(subscriber)
+            subscriber.pendingTasks <+- 1
+            logSeg("\t++"+subscriber.mySymbol(subscriber)+".PT="+toString(subscriber.pendingTasks))
             newAItem.indentLvl <- subscriber.indentLvl+1
         }
         if(aParent != NULL){
-	    aParent.taskEnqueued <- true
+            aParent.taskEnqueued <- true
             newAItem.parent <- aParent
+            newAItem.parent.pendingTasks <+- 1
+            logSeg("\t++"+newAItem.parent.mySymbol(newAItem.parent)+".PT="+toString(newAItem.parent.pendingTasks))
         }
         addAItemToAgenda(newAItem)
         return(newAItem)
@@ -730,6 +735,8 @@ struct XformMgr{
         aParent.taskEnqueued <- true
         if(subscriber != NULL){
             newAItem.subscribers.pushFirst(subscriber)
+            subscriber.pendingTasks <+- 1
+            logSeg("\t++"+subscriber.mySymbol(subscriber)+".PT="+toString(subscriber.pendingTasks))
             newAItem.indentLvl <- subscriber.indentLvl+1
         }
         if(aParent != NULL){
@@ -747,23 +754,9 @@ struct XformMgr{
             if(subscriber != NULL){
                 subscriber.taskEnqueued <- true
                 newAItem.subscribers.pushFirst(subscriber)
+                subscriber.pendingTasks <+- 1
+                logSeg("\t++"+subscriber.mySymbol(subscriber)+".PT="+toString(subscriber.pendingTasks))
                 newAItem.indentLvl <- subscriber.indentLvl+1
-            }
-            addAItemToAgenda(newAItem)
-            return(newAItem)
-    }
-    our AItem: processSequenceViaAgenda(our POV: item, our AItem: subscriber)<-{
-            our AItem:: newAItem
-            newAItem.ruleSet   <- rsPropagate
-            newAItem.LHS_item  <- item
-            newAItem.step      <- 0
-            newAItem.indentLvl <- 0
-            if(subscriber != NULL){
-                subscriber.taskEnqueued <- true
-                newAItem.subscribers.pushFirst(subscriber)
-                newAItem.indentLvl <- subscriber.indentLvl+1
-//// Handle RHSItr here?
-                //newAItem.RHSItrs <- subscriber.RHSItrs
             }
             addAItemToAgenda(newAItem)
             return(newAItem)
@@ -812,7 +805,7 @@ struct XformMgr{
             if(!RHSEmpty){RHSPovNext <- RHSPov.getFirstTight(aItem.RHSItr, false)}
         } else {
             aParent <- aItem.parent.parent
-            if(aParent == NULL){logSeg("-RET()\t"); return(true)}
+            if(aParent == NULL){logSeg("-RET()\t"); return(false)}
             logSeg("-GETNXT")
             LHSPovNext <- LHSPov.getNextTight(aParent.LHSItr, RHSEmpty) //findNextLHS(LHSPov, LHSfType, RHSfType, action.unknownAsList)
             if(!RHSEmpty and aParent.RHSItr != NULL){RHSPovNext <- RHSPov.getNextTight(aParent.RHSItr, false)} //findNextRHS(RHSPov, LHSfType, RHSfType)
@@ -849,6 +842,7 @@ struct XformMgr{
         if(breakLoop and LHS_IsOrLIKE){
                 our AItem: PIVA <- processInfonViaAgenda(LHSPovNext.altPOV, NULL, aParent)
                 logSeg("-BRKLOOP-PIVA->\t"+PIVA.mySymbol(PIVA))
+                return(true)
         }
         else{
                 our AItem: PIVA <- processInfonViaAgenda(LHSPovNext, NULL, aParent)
@@ -856,7 +850,7 @@ struct XformMgr{
         }
         LHSPovNext.altPOV <- NULL
         if(RHSPovNext!=NULL){RHSPovNext.altPOV <- NULL}
-	return(false)
+        return(false)
     }
     void: appendToUnfinishedList(our AItem: aItem, our infon: inf) <- {
         if(!inf.value.tailUnfinished){logFatalError("ERROR: tailUnfinished FALSE:"+ stringifyInfon(inf))}
@@ -869,17 +863,18 @@ struct XformMgr{
             our AItem: sub <- aItem.subscribers.first()
             aItem.subscribers.popFirst()
             sub.LHS_item.item.isNormed <- false
+            sub.pendingTasks <-- 1
+            logSeg("\t--"+sub.mySymbol(sub)+".PT="+toString(sub.pendingTasks))
             me bool: itmAdded <- addAItemToAgenda(sub)
             if(itmAdded){S<+-":"+sub.mySymbol(sub)}
         }
-        if(S != ""){logSeg("\tFFSubs:"+S)}
-	else{logSeg("\tFFSubs:noSubs")}
+        if(S != ""){logSeg("\tFFSubs:"+S)}else{logSeg("\tFFSubs:noSubs")}
     }
     // PAI
     void: processAgendaItem(our AItem: aItem, me int: AlternativesNestLvl)<-{
-	//log("________________________________________")
+        //log("________________________________________")
         me bool: changeMade    <- true
-	me bool: doFulfillSubs <- false
+        me bool: doFulfillSubs <- false
         aItem.taskEnqueued     <- false
         me string: idnt <- indentStr(aItem.indentLvl)
         logSeg(indentedStr(">>"+stringifyAItem(aItem), aItem.indentLvl, 60))
@@ -902,48 +897,63 @@ struct XformMgr{
                     else if(function_altRules(aItem)){changeMade <- true}
                     else if(lookUpCursorRules(aItem)){changeMade <- true}
                     else if(wrkLstRules(aItem)){changeMade <- true}
-                  //  else if(propagateNoRHS(aItem)){changeMade <- true}
-		    //if(changeMade){logSeg("-changeMade")}
-		    else{
-			logSeg("@@")
-			//if(aItem.LHS_item.item.value.fType != LST){}
-			doFulfillSubs <- true
-		    }
+                    else{
+                        //logSeg("@@PT-"+toString(aItem.pendingTasks))
+                        if(aItem.pendingTasks==0){
+                            if(aItem.parent != NULL){
+                                aItem.parent.pendingTasks <-- 1
+                                logSeg("\t--"+aItem.parent.mySymbol(aItem.parent)+".PT="+toString(aItem.parent.pendingTasks))
+                                if(aItem.parent.pendingTasks == 0){
+                                    logSeg("-AddParent-"+aItem.parent.mySymbol(aItem.parent))
+                            //        addAItemToAgenda(aItem.parent)
+                                }
+                            }
+                            doFulfillSubs <- true
+                        }
+                    }
                 }
                 case rsMerge:{
-		    me bool: propagateFinished
+                    me bool: propagateFinished
                     if(aItem.RHS==NULL){
                         if(aItem.LHS_item.item.value.fType == LST){
                             logSeg("-NoRHSLST")
                             enqueFirstsToMerge(aItem)
                             propagateFinished <- propagate(aItem, aItem.LHS_item, NULL, false)
-			    if(propagateFinished){doFulfillSubs <- true}
+                            //if(propagateFinished)
+                            {doFulfillSubs <- true}
                         } else {
                             logSeg("-NoRHSNSEQ")
                             propagateFinished <- propagate(aItem, aItem.LHS_item, NULL, false)
-			    if(propagateFinished){doFulfillSubs <- true}
+                    //if(propagateFinished)
+                    {doFulfillSubs <- true}
                         }
                     } else {
                         switch(aItem.step){
                             case 0:{
                                 our AItem: PIVA <- processInfonViaAgenda(aItem.RHS, aItem, NULL)
-                                logSeg("-MC0-PIVA->\t\t\t\t\t\t"+PIVA.mySymbol(PIVA))
+                                logSeg("-MC0-PIVA->\t\t\t\t\t\t")//+PIVA.mySymbol(PIVA))
                                 aItem.step <- 1
                             }
                             case 1:{
                                 mergeSizeRules(aItem)
                                 mergeRules(aItem)
+                                aItem.parent.pendingTasks <-- 1
                                 if(aItem.taskEnqueued){aItem.step <- 2}
                                 else{
                                     logSeg("-MC1")
                                     propagateFinished <- propagate(aItem, aItem.LHS_item, aItem.RHS, false)
-				    if(propagateFinished){doFulfillSubs <- true}
+                                    if(aItem.pendingTasks==0){doFulfillSubs <- true}
+                                    aItem.step <- 3
                                 }
                             }
                             case 2:{
                                 logSeg("-MC2")
                                 propagateFinished <- propagate(aItem, aItem.LHS_item, aItem.RHS, false)
-				if(propagateFinished){doFulfillSubs <- true}
+                                if(propagateFinished){doFulfillSubs <- true}
+                            }
+                            case 3:{
+                                logSeg("-MC3")
+                              //  doFulfillSubs <- true
                             }
                         }
                     }
@@ -955,11 +965,11 @@ struct XformMgr{
                             // TODO: proccess .innr parts
                             our POV:: srcPOV; srcPOV.item <- CI.source
                             our AItem: PIVA <- processInfonViaAgenda(srcPOV, aItem, NULL)
-			    logSeg("-IC0-PIVA->\t\t\t\t\t"+PIVA.mySymbol(PIVA))
+                            logSeg("-IC0-PIVA->\t\t\t\t\t"+PIVA.mySymbol(PIVA))
                             aItem.step <- 1
                         }
                         case 1:{
-			    logSeg("-IC1")
+                            logSeg("-IC1")
                             our infon: src <- CI.source
                             our infon: newTop    <- NULL
                             if(CI.isOrLike()){
@@ -989,9 +999,9 @@ struct XformMgr{
                                         }
                                     }
                                 } else {
-				    log("TODO: IS_OR_LIKE: tailUnfinished")
-				    doFulfillSubs <- true
-				}
+                                    log("TODO: IS_OR_LIKE: tailUnfinished")
+                                    doFulfillSubs <- true
+                                }
                             } else {
                                 switch(CI.intersectPos){
                                     case ipGetLast   : {newTop <- src.getLastItem()}
@@ -1002,7 +1012,7 @@ struct XformMgr{
                                     newTop.takeWrkListFrom(CI)
                                     logSeg("-GET_LSAT")
                                 }else{log("Handle LastItm is null")}
-				doFulfillSubs <- true
+                                doFulfillSubs <- true
                             }
                             if(newTop){CI <deep- newTop}
                             else{
@@ -1106,7 +1116,7 @@ struct XformMgr{
             looseSize <- RHSPov.looseSize()
         }
         our AItem: newAItem <- processMergeViaAgenda(aItem.LHS_item, RHSPov, looseSize, aItem, aItem)
-	logSeg("-EN4MRG->\t\t\t\t\t\t\t"+newAItem.mySymbol(newAItem))
+        logSeg("-EN4MRG->\t\t\t\t\t\t\t"+newAItem.mySymbol(newAItem))
     }
     me bool: sizesAreCompatable(our infon: LHS, our infon: RHS)<-{return(true)}
     me void: enqueFirstsToMerge(our AItem: aItem) <- {
@@ -1263,15 +1273,6 @@ struct XformMgr{
             changeMade  <- true
         }
         return(changeMade)
-    }
-    me bool: propagateNoRHS(our AItem: aItem) <- {
-        if(aItem.hasPropagated){return(false)}
-        if(aItem.LHS_item.item.value.fType == LST){
-            log("propagateNoRHS-2:" + aItem.stringify())
-            enqueueForMerge(aItem)
-            return(false)  // Should be true if this weren't the last action in PAI
-        }
-        return(false)
     }
 }
 
