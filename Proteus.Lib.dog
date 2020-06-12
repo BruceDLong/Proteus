@@ -616,6 +616,7 @@ model AItem{
     flag: reject
     flag: propagate
     flag: taskEnqueued
+    flag: concatProcessed
     flag: mergeFinished
     me int:  step
     me int: pendingTasks
@@ -692,6 +693,7 @@ struct XformMgr{
     our AItem[list]: agenda
     // Concat Functions
     me bool: joinOnRight(our infon: LHS, our infon: RHS) <- { // Join RHS into LHS. Return true on success (so need no subscription).
+        logSeg("-JOR:")
         if(LHS.value.format==fLiteral and RHS.value.format==fLiteral){
             me int: LHSType <- LHS.value.fType
             if(LHSType == RHS.value.fType){
@@ -699,15 +701,18 @@ struct XformMgr{
                     case NUM: {
                         LHS.infSize.num<-LHS.infSize.num * RHS.infSize.num
                         LHS.value.num<-(LHS.value.num * RHS.infSize.num) + RHS.value.num
+                        logSeg("-CCatNUM")
                     }
                     case STR: {
                         LHS.value.str.append(RHS.value.str)
                         LHS.infSize.num<-LHS.value.str.size()
+                        logSeg("-CCatSTR:"+LHS.value.str)
                     }
                     case LST: {
                         withEach element in RHS.value.items {
                             LHS.value.items.pushLast(element)
                         }
+                        logSeg("-CCatLST")
                     }
                     default: {return(false)}
                 }
@@ -716,7 +721,8 @@ struct XformMgr{
         }
         return(false)
     }
-    void: JoinIfConcat(our POV: pov) <- {
+    me bool: JoinIfConcat(our POV: pov) <- {
+        me bool: changeMade  <- false
         if(pov.pParent!=NULL and (pov.pParent.item.value.format==fConcat)){
             if(pov.isFirst()){ // Set Parent's type
             } else {
@@ -724,20 +730,19 @@ struct XformMgr{
                 if(prev != NULL){
                     if(joinOnRight(prev.item, pov.item)){
                         pov.pParent.item.value.items.erase(pov)
+                        logSeg("-erase:")
                     }else{}  // Subscribe
                 }
             }
         }
+        return(changeMade)
     }
     me bool: processConcat(our AItem: aItem) <- {
         me bool: changeMade  <- false
+        if(aItem.concatProcessed){return(changeMade)}else{aItem.concatProcessed<-true}
         our infon: CI <- aItem.LHS_item.item
         //if(CI.state == sNotASeq){}
-        if(CI.value.format == fConcat and !CI.value.items.isEmpty() and CI.value.items.head.isLast()){
-            CI <deep- CI.value.items.first()
-            changeMade <- true
-        }
-        JoinIfConcat(aItem.LHS_item)
+        if(JoinIfConcat(aItem.LHS_item)){changeMade <- true}
         return(changeMade)
     }
     // Agenda processing functions
@@ -762,14 +767,14 @@ struct XformMgr{
         if(subscriber != NULL){
             newAItem.subscribers.pushFirst(subscriber)
             subscriber.pendingTasks <+- 1
-            logSeg(" ++"+subscriber.mySymbol(subscriber)+".i1PT="+toString(subscriber.pendingTasks))
+            //logSeg(" ++"+subscriber.mySymbol(subscriber)+".i1PT="+toString(subscriber.pendingTasks))
             newAItem.indentLvl <- subscriber.indentLvl+1
         }
         if(aParent != NULL){
             aParent.taskEnqueued <- true
             newAItem.parent <- aParent
             if(!(subscriber===aParent)) {aParent.pendingTasks <+- 1}
-            logSeg(" ++"+newAItem.parent.mySymbol(newAItem.parent)+".i2PT="+toString(newAItem.parent.pendingTasks))
+            //logSeg(" ++"+newAItem.parent.mySymbol(newAItem.parent)+".i2PT="+toString(newAItem.parent.pendingTasks))
         }
       //  addAItemToAgenda(newAItem)
         return(newAItem)
@@ -787,7 +792,7 @@ struct XformMgr{
         if(subscriber != NULL){
             newAItem.subscribers.pushFirst(subscriber)
             subscriber.pendingTasks <+- 1
-            logSeg(" ++"+subscriber.mySymbol(subscriber)+".mPT="+toString(subscriber.pendingTasks))
+            //logSeg(" ++"+subscriber.mySymbol(subscriber)+".mPT="+toString(subscriber.pendingTasks))
             newAItem.indentLvl <- subscriber.indentLvl+1
         }
         if(aParent != NULL){
@@ -807,7 +812,7 @@ struct XformMgr{
                 subscriber.taskEnqueued <- true
                 newAItem.subscribers.pushFirst(subscriber)
                 subscriber.pendingTasks <+- 1
-                logSeg(" ++"+subscriber.mySymbol(subscriber)+".sPT="+toString(subscriber.pendingTasks))
+                //logSeg(" ++"+subscriber.mySymbol(subscriber)+".sPT="+toString(subscriber.pendingTasks))
                 newAItem.indentLvl <- subscriber.indentLvl+1
             }
             addAItemToAgenda(newAItem)
@@ -919,11 +924,11 @@ struct XformMgr{
             aItem.subscribers.popFirst()
             sub.LHS_item.item.isNormed <- false
             sub.pendingTasks <-- 1
-            logSegStartCol(" --"+sub.mySymbol(sub)+".fPT="+toString(sub.pendingTasks),127)
+            //logSegStartCol(" --"+sub.mySymbol(sub)+".fPT="+toString(sub.pendingTasks),127)
             me bool: itmAdded <- addAItemToAgenda(sub)
             if(itmAdded){S<+-":"+sub.mySymbol(sub)}
         }
-        if(S != ""){logSegStartCol("FFSubs:"+S,160)}else{logSegStartCol("FFSubs:noSubs",160)}
+        if(S != ""){logSegStartCol("FFS"+S,125)}
     }
     // PAI
     void: processAgendaItem(our AItem: aItem, me int: AlternativesNestLvl)<-{
@@ -940,7 +945,7 @@ struct XformMgr{
                 case rsInfon:{
                     if(aItem.LHS_item.item.isNormed){
                         fulfillSubscriptions(aItem)
-                        logSegStartCol("<<:NRMD",175)
+                        logSegStartCol("<<:NRMD",141)
                         logFlush()
                         return()
                     }
@@ -961,9 +966,9 @@ struct XformMgr{
                             our AItem: aParent <- aItem.parent
                             if(aParent != NULL){
                                 aParent.pendingTasks <-- 1
-                                logSegStartCol(" --"+aParent.mySymbol(aParent)+".iPT="+toString(aParent.pendingTasks),127)
+                                //logSegStartCol(" --"+aParent.mySymbol(aParent)+".iPT="+toString(aParent.pendingTasks),127)
                                 if(aParent.pendingTasks == 0){
-                                    logSeg("-AddParent-"+aParent.mySymbol(aParent))
+                                    logSeg("-AddParent->"+aParent.mySymbol(aParent))
                                     addAItemToAgenda(aParent)
                                 }
                             }
@@ -975,7 +980,7 @@ struct XformMgr{
                     if(aItem.mergeFinished){
                         logSeg("-MFin")
                         fulfillSubscriptions(aItem)
-                        logSegStartCol("<<:MFIN", 175)
+                        logSegStartCol("<<:MFIN", 141)
                         logFlush()
                         return()
                     }
@@ -998,8 +1003,8 @@ struct XformMgr{
                         switch(aItem.step){
                             case 0:{
                                 our AItem: PIVA <- processInfonViaAgenda(aItem.RHS, aItem, NULL)
-                            addAItemToAgenda(PIVA)
-                                logSeg("-MC0-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),120)
+                                addAItemToAgenda(PIVA)
+                                logSeg("-MC0-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),104)
                                 aItem.step <- 1
                             }
                             case 1:{
@@ -1030,8 +1035,8 @@ struct XformMgr{
                             // TODO: proccess .innr parts
                             our POV:: srcPOV; srcPOV.item <- CI.source
                             our AItem: PIVA <- processInfonViaAgenda(srcPOV, aItem, NULL)
-                        addAItemToAgenda(PIVA)
-                            logSeg("-IC0-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),120)
+                            addAItemToAgenda(PIVA)
+                            logSeg("-IC0-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),104)
                             aItem.step <- 1
                         }
                         case 1:{
@@ -1142,9 +1147,8 @@ struct XformMgr{
             count <+- 1
         }
         if(doFulfillSubs){fulfillSubscriptions(aItem)}
-        else{logSegStartCol("FFSubs:noCall", 160)}
         //aItem.LHS_item.item.isNormed <- true
-        logSegStartCol("<<:DONE", 175)
+        logSegStartCol("<<:DONE", 141)
         logFlush()
     }
     void: processAgenda()<-{
@@ -1183,7 +1187,7 @@ struct XformMgr{
             looseSize <- RHSPov.looseSize()
         }
         our AItem: newAItem <- processMergeViaAgenda(aItem.LHS_item, RHSPov, looseSize, aItem, aItem)
-        logSeg("-EN4MRG->"); logSegStartCol(newAItem.mySymbol(newAItem),120)
+        logSeg("-EN4MRG->"); logSegStartCol(newAItem.mySymbol(newAItem),104)
     }
     me bool: sizesAreCompatable(our infon: LHS, our infon: RHS)<-{return(true)}
     me void: enqueFirstsToMerge(our AItem: aItem) <- {
@@ -1344,10 +1348,16 @@ struct XformMgr{
 
     void: cleanUpInfon(our AItem: aItem) <- {
         our infon: CI <- aItem.LHS_item.item
-        logSeg("CLEANING")
+        logSeg("-CLEAN")
         if(CI.value.tailUnfinished and !CI.value.items.isEmpty() and CI.value.items.last().isTentative){
             CI.value.items.popLast()
+	    logSeg(":LST")
         }
+	if(CI.value.format == fConcat and !CI.value.items.isEmpty() and CI.value.items.head.isLast()){
+	    CI <deep- CI.value.items.first()
+	    logSeg(":CC("+stringifyInfon(CI)+")"+formatStrings[CI.value.format]+"  "+toString(CI.value.items.size()))
+	    JoinIfConcat(aItem.LHS_item)
+	}
     }
 }
 
