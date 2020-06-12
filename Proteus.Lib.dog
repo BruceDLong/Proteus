@@ -616,6 +616,7 @@ model AItem{
     flag: reject
     flag: propagate
     flag: taskEnqueued
+    flag: mergeFinished
     me int:  step
     me int: pendingTasks
     BigInt: sizeToCopy
@@ -711,14 +712,14 @@ struct XformMgr{
         if(subscriber != NULL){
             newAItem.subscribers.pushFirst(subscriber)
             subscriber.pendingTasks <+- 1
-            logSeg("\t++"+subscriber.mySymbol(subscriber)+".PT="+toString(subscriber.pendingTasks))
+            logSeg("\t++"+subscriber.mySymbol(subscriber)+".i1PT="+toString(subscriber.pendingTasks)+"\t\t\t\t")
             newAItem.indentLvl <- subscriber.indentLvl+1
         }
         if(aParent != NULL){
             aParent.taskEnqueued <- true
             newAItem.parent <- aParent
-            newAItem.parent.pendingTasks <+- 1
-            logSeg("\t++"+newAItem.parent.mySymbol(newAItem.parent)+".PT="+toString(newAItem.parent.pendingTasks))
+            if(!(subscriber===aParent)) {aParent.pendingTasks <+- 1}
+            logSeg("\t++"+newAItem.parent.mySymbol(newAItem.parent)+".i2PT="+toString(newAItem.parent.pendingTasks))
         }
         addAItemToAgenda(newAItem)
         return(newAItem)
@@ -736,11 +737,12 @@ struct XformMgr{
         if(subscriber != NULL){
             newAItem.subscribers.pushFirst(subscriber)
             subscriber.pendingTasks <+- 1
-            logSeg("\t++"+subscriber.mySymbol(subscriber)+".PT="+toString(subscriber.pendingTasks))
+            logSeg("\t++"+subscriber.mySymbol(subscriber)+".mPT="+toString(subscriber.pendingTasks))
             newAItem.indentLvl <- subscriber.indentLvl+1
         }
         if(aParent != NULL){
             newAItem.parent <- aParent
+            if(!(subscriber===aParent)) {newAItem.parent.pendingTasks <+- 1}
         }
         addAItemToAgenda(newAItem)
         return(newAItem)
@@ -755,7 +757,7 @@ struct XformMgr{
                 subscriber.taskEnqueued <- true
                 newAItem.subscribers.pushFirst(subscriber)
                 subscriber.pendingTasks <+- 1
-                logSeg("\t++"+subscriber.mySymbol(subscriber)+".PT="+toString(subscriber.pendingTasks))
+                logSeg("\t++"+subscriber.mySymbol(subscriber)+".sPT="+toString(subscriber.pendingTasks)+"\t\t\t\t\t")
                 newAItem.indentLvl <- subscriber.indentLvl+1
             }
             addAItemToAgenda(newAItem)
@@ -812,7 +814,7 @@ struct XformMgr{
         }
         if(LHSPovNext == NULL){logSeg("\t\t"); return(true)}
         //enqueueForProcessing(action, LHSPovNext, RHSPovNext, AlternativesNestLvl, action.breakDotCycle)
-        me bool: breakLoop <- !RHSEmpty and RHSPovNext==NULL
+        me bool: breakLoop <- !RHSEmpty and RHSPovNext==NULL and aParent.RHSItr != NULL
         me bool: foundTentEqTent <- false
         me bool: LHS_IsOrLIKE <- (LHSPovNext.altPOV != NULL)
         me int: lCount <- 1
@@ -841,12 +843,12 @@ struct XformMgr{
         }
         if(breakLoop and LHS_IsOrLIKE){
                 our AItem: PIVA <- processInfonViaAgenda(LHSPovNext.altPOV, NULL, aParent)
-                logSeg("-BRKLOOP-PIVA->\t"+PIVA.mySymbol(PIVA))
+                logSeg("-BRKLOOP-PIVA->\t"+PIVA.mySymbol(PIVA)+"\t\t")
                 return(true)
         }
         else{
                 our AItem: PIVA <- processInfonViaAgenda(LHSPovNext, NULL, aParent)
-                logSeg("-PIVA->\t\t"+PIVA.mySymbol(PIVA))
+                logSeg("-PIVA->\t\t\t\t"+PIVA.mySymbol(PIVA))
         }
         LHSPovNext.altPOV <- NULL
         if(RHSPovNext!=NULL){RHSPovNext.altPOV <- NULL}
@@ -864,7 +866,7 @@ struct XformMgr{
             aItem.subscribers.popFirst()
             sub.LHS_item.item.isNormed <- false
             sub.pendingTasks <-- 1
-            logSeg("\t--"+sub.mySymbol(sub)+".PT="+toString(sub.pendingTasks))
+            logSeg("\t--"+sub.mySymbol(sub)+".fPT="+toString(sub.pendingTasks))
             me bool: itmAdded <- addAItemToAgenda(sub)
             if(itmAdded){S<+-":"+sub.mySymbol(sub)}
         }
@@ -898,36 +900,42 @@ struct XformMgr{
                     else if(lookUpCursorRules(aItem)){changeMade <- true}
                     else if(wrkLstRules(aItem)){changeMade <- true}
                     else{
-                        //logSeg("@@PT-"+toString(aItem.pendingTasks))
+                        logSeg("\t"+aItem.parent.mySymbol(aItem)+".@@PT="+toString(aItem.pendingTasks))
                         if(aItem.pendingTasks==0){
+                            doFulfillSubs <- true
                             if(aItem.parent != NULL){
                                 aItem.parent.pendingTasks <-- 1
-                                logSeg("\t--"+aItem.parent.mySymbol(aItem.parent)+".PT="+toString(aItem.parent.pendingTasks))
+                                logSeg("\t--"+aItem.parent.mySymbol(aItem.parent)+".iPT="+toString(aItem.parent.pendingTasks))
                                 if(aItem.parent.pendingTasks == 0){
                                     logSeg("-AddParent-"+aItem.parent.mySymbol(aItem.parent))
-                            //        addAItemToAgenda(aItem.parent)
+                                    addAItemToAgenda(aItem.parent)
                                 }
                             }
-                            doFulfillSubs <- true
                         }
                     }
                 }
                 case rsMerge:{
                     me bool: propagateFinished
+                    if(aItem.mergeFinished){
+                        fulfillSubscriptions(aItem)
+                        logSeg("\t<<:MFIN")
+                        logFlush()
+                        return()
+                    }
                     if(aItem.RHS==NULL){
                         if(aItem.LHS_item.item.value.fType == LST){
                             logSeg("-NoRHSLST")
                             enqueFirstsToMerge(aItem)
                             propagateFinished <- propagate(aItem, aItem.LHS_item, NULL, false)
-                            //if(propagateFinished)
-                            {doFulfillSubs <- true}
+                            if(aItem.pendingTasks==0){doFulfillSubs <- true}
                         } else {
                             logSeg("-NoRHSNSEQ")
                             propagateFinished <- propagate(aItem, aItem.LHS_item, NULL, false)
-                    //if(propagateFinished)
-                    {doFulfillSubs <- true}
-                        }
+                            if(aItem.pendingTasks==0){doFulfillSubs <- true}
+                            }
+                        aItem.mergeFinished <- true
                     } else {
+    //    if(aItem.step ==0){aItem.step <- 1}
                         switch(aItem.step){
                             case 0:{
                                 our AItem: PIVA <- processInfonViaAgenda(aItem.RHS, aItem, NULL)
@@ -937,23 +945,22 @@ struct XformMgr{
                             case 1:{
                                 mergeSizeRules(aItem)
                                 mergeRules(aItem)
-                                aItem.parent.pendingTasks <-- 1
                                 if(aItem.taskEnqueued){aItem.step <- 2}
                                 else{
                                     logSeg("-MC1")
                                     propagateFinished <- propagate(aItem, aItem.LHS_item, aItem.RHS, false)
                                     if(aItem.pendingTasks==0){doFulfillSubs <- true}
-                                    aItem.step <- 3
+                                    else{
+                                        aItem.parent.pendingTasks <-- 1
+                                        logSeg("\t--"+aItem.parent.mySymbol(aItem.parent)+".mcPT2="+toString(aItem.parent.pendingTasks))
+                                    }
+                                    aItem.mergeFinished <- true
                                 }
                             }
                             case 2:{
                                 logSeg("-MC2")
                                 propagateFinished <- propagate(aItem, aItem.LHS_item, aItem.RHS, false)
                                 if(propagateFinished){doFulfillSubs <- true}
-                            }
-                            case 3:{
-                                logSeg("-MC3")
-                              //  doFulfillSubs <- true
                             }
                         }
                     }
@@ -1019,6 +1026,7 @@ struct XformMgr{
                                 // TODO: return Subscriptions
                             }
                             aItem.step <- 2
+                            doFulfillSubs <- true
                         }
                     }
                 }
@@ -1075,7 +1083,7 @@ struct XformMgr{
             count <+- 1
         }
         if(doFulfillSubs){fulfillSubscriptions(aItem)}
-        else{logSeg("\tFFSubs:noCall")}
+        else{logSeg("\t\t\t\t\tFFSubs:noCall")}
         //aItem.LHS_item.item.isNormed <- true
         logSeg("\t<<:DONE")
         logFlush()
@@ -1083,7 +1091,7 @@ struct XformMgr{
     void: processAgenda()<-{
         withEach count in WHILE(!agenda.isEmpty()) {
             //log("_____"+toString(count)+"_____")
-            if (count > 200){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
+            if (count > 400){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
             our AItem: aItem <- agenda.last(); agenda.popLast()
             processAgendaItem(aItem, 0)
             //aItem.LHS_item.item.isOnAgenda <- false
