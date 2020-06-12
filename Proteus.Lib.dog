@@ -690,7 +690,57 @@ struct GLOBAL{me ModelManager: modelMngr}
 struct XformMgr{
     their Agent: agent
     our AItem[list]: agenda
-
+    // Concat Functions
+    me bool: joinOnRight(our infon: LHS, our infon: RHS) <- { // Join RHS into LHS. Return true on success (so need no subscription).
+        if(LHS.value.format==fLiteral and RHS.value.format==fLiteral){
+            me int: LHSType <- LHS.value.fType
+            if(LHSType == RHS.value.fType){
+                switch(LHSType){
+                    case NUM: {
+                        LHS.infSize.num<-LHS.infSize.num * RHS.infSize.num
+                        LHS.value.num<-(LHS.value.num * RHS.infSize.num) + RHS.value.num
+                    }
+                    case STR: {
+                        LHS.value.str.append(RHS.value.str)
+                        LHS.infSize.num<-LHS.value.str.size()
+                    }
+                    case LST: {
+                        withEach element in RHS.value.items {
+                            LHS.value.items.pushLast(element)
+                        }
+                    }
+                    default: {return(false)}
+                }
+            } else {} // TODO: handle type conversions
+            return(true)
+        }
+        return(false)
+    }
+    void: JoinIfConcat(our POV: pov) <- {
+        if(pov.pParent!=NULL and (pov.pParent.item.value.format==fConcat)){
+            if(pov.isFirst()){ // Set Parent's type
+            } else {
+                our POV: prev <- pov.prev
+		if(prev != NULL){
+		    if(joinOnRight(prev.item, pov.item)){
+			pov.pParent.item.value.items.erase(pov)
+		    }else{}  // Subscribe
+		}
+            }
+        }
+    }
+    me bool: processConcat(our AItem: aItem) <- {
+	me bool: changeMade  <- false
+	our infon: CI <- aItem.LHS_item.item
+	//if(CI.state == sNotASeq){}
+	if(CI.value.format == fConcat and !CI.value.items.isEmpty() and CI.value.items.head.isLast()){
+	    CI <deep- CI.value.items.first()
+	    changeMade <- true
+	}
+	JoinIfConcat(aItem.LHS_item)
+	return(changeMade)
+    }
+    // Agenda processing functions
     me bool: addAItemToAgenda(our AItem: aItem) <- {
         me bool: itmAdded <- true
         me string: logStr <- "        ADD_TO_AGENDA:"+stringifyAItem(aItem)
@@ -899,6 +949,7 @@ struct XformMgr{
                     else if(function_altRules(aItem)){changeMade <- true}
                     else if(lookUpCursorRules(aItem)){changeMade <- true}
                     else if(wrkLstRules(aItem)){changeMade <- true}
+                    else if(processConcat(aItem)){changeMade <- true}
                     else{
                         if(aItem.pendingTasks < 0){log("@@@@@@@@"+aItem.parent.mySymbol(aItem)+".PT="+toString(aItem.pendingTasks))}
                         if(aItem.pendingTasks==0){
@@ -1305,46 +1356,6 @@ struct Agent{
        // print("INFON ERROR: " + errorMesg+"\n")
     }
 
-    me bool: joinOnRight(our infon: LHS, our infon: RHS) <- { // Join RHS into LHS. Return true on success (so need no subscription).
-        if(LHS.value.format==fLiteral and RHS.value.format==fLiteral){
-            me int: LHSType <- LHS.value.fType
-            if(LHSType == RHS.value.fType){
-                switch(LHSType){
-                    case NUM: {
-                        LHS.infSize.num<-LHS.infSize.num * RHS.infSize.num
-                        LHS.value.num<-(LHS.value.num * RHS.infSize.num) + RHS.value.num
-                    }
-                    case STR: {
-                        LHS.value.str.append(RHS.value.str)
-                        LHS.infSize.num<-LHS.value.str.size()
-                    }
-                    case LST: {
-                        withEach element in RHS.value.items {
-                            LHS.value.items.pushLast(element)
-                        }
-                    }
-                    default: {return(false)}
-                }
-            } else {} // TODO: handle type conversions
-            return(true)
-        }
-        return(false)
-    }
-
-    void: processConcat(our infItr: concatItr) <- {
-        if(concatItr.state != sSecondVisit){
-            if(concatItr.state == sNotASeq){
-                JoinIfConcat(concatItr)
-            }
-        } else {  // SecondVisit
-            our infon: LHS <- concatItr.item
-            if(LHS.value.format==fConcat and !LHS.value.items.isEmpty() and LHS.value.items.head.isLast()){
-                LHS <deep- LHS.value.items.first()
-            }
-            JoinIfConcat(concatItr)
-        }
-    }
-
     me string: ptrToStr(our infon: I) <- {
         me string: S <- stringifyInfon(I)
         return(S)
@@ -1382,18 +1393,6 @@ struct Agent{
 
     void: CO_SUBSCRIBE_VALUES(their infon: from, their infon: to) <- {}
     void: CO_SUBSCRIBE_SIZES(their infon: from, their infon: to) <- {}
-
-    void: JoinIfConcat(our infItr: node) <- {
-        if(node.iParent!=NULL and node.iParent.item!=NULL and (node.iParent.item.value.format==fConcat)){
-            if(node.infNode.isFirst()){ // Set Parent's type
-            } else {
-                our infon: prev <- node.getPrevPtr()
-                if(joinOnRight(prev, node.item)){
-                    node.deleteCrnt()
-                } else {}  // Subscribe
-            }
-        }
-    }
 
     me void: normalize(our infon: inf) <- {
         our POV:: normPov; normPov.item <- inf
