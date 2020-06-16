@@ -2,7 +2,7 @@
 # Proteus Rule case manager
 from pprint import pprint
 
-debugMode = True
+debugMode = False
 
 mergeSizeRules = {
     'ID': 'mergeSize',
@@ -87,8 +87,8 @@ mergeRules = {
         'copyValueLHStoRHS':        'DO_COPY(aItem.LHS_item.item.value, aItem.RHS.item.value, aItem.sizeToCopy)',
         'copyRHSTypeToLHS':         'aItem.LHS_item.item.value.fType <- aItem.RHS.item.value.fType; aItem.LHS_item.item.infMode <- aItem.RHS.item.infMode',
         'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.item.infSize, aItem.LHS_item.item.infSize, 0)',
-        'rejectIfValueStrNotEqual': 'if(aItem.LHS_item.item.value.str != aItem.RHS.item.value.str){aItem.reject <- true; aItem.LHS_item.item.error<-true}',
-        'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.item.value.num != aItem.RHS.item.value.num){aItem.reject <- true; aItem.LHS_item.item.error<-true}',
+        'rejectIfValueStrNotEqual': 'if(aItem.LHS_item.item.value.str != aItem.RHS.item.value.str){aItem.reject <- true; aItem.LHS_item.error<-true}',
+        'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.item.value.num != aItem.RHS.item.value.num){aItem.reject <- true; aItem.LHS_item.error<-true; log("REJECT")}',
         'StartMergePropogation':    'startPropRules(aItem)',
         'mergeRHSIntersect':        'mergeRHSIntersect(aItem)'
     },
@@ -96,6 +96,8 @@ mergeRules = {
         ["merge:|||r?|",                           "NONE"],
         ["merge:l?||=|rNUM,rSTR,rLST|",           "copyRHSTypeToLHS,copyValueRHStoLHS,copySizeRHStoLHS"],
         ["merge:l?||==|rNUM,rSTR,rLST|",          "copyRHSTypeToLHS,copyValueRHStoLHS"],
+        ["merge:l?||=|rtUnknown|rintersect",      "mergeRHSIntersect"],
+        ["merge:l?||==|rtUnknown|rintersect",     "mergeRHSIntersect"],
 
         ["merge:lNUM||=|rSTR,rLST|",             "REJECT"],
         ["merge:lSTR||=|rNUM,rLST|",             "REJECT"],
