@@ -192,7 +192,7 @@ model infon{
         return(infSize)
     }
 
-    me bool: isOrLike() <- {return(intersectPos == ipGetLast and infSize.format == fUnknown and source!=NULL and source.value.sizeGiven and source.value.format == fLiteral)}
+    me bool: isOrLike() <- {return(intersectPos == ipGetLast and source!=NULL and source.infSize.format == fUnknown and source.value.sizeGiven and source.value.format == fLiteral)}
 
     our infon: getLastItem() <- {
         // ASSERT(Should be already normed and a non-concat list)
@@ -268,6 +268,7 @@ model infon{
         intersectPos    <- ipGetLast
         infSize.format  <- fUnknown
         source          <- newSource
+        source.value.sizeGiven <- true
     }
     void: addToOrInfon(our infon: rItem, our POV: rNode) <- {
         source.value.items.pushAsAlt(rNode, rItem)
@@ -842,7 +843,7 @@ struct XformMgr{
             if(!RHSEmpty){RHSPovNext <- RHSPov.getFirstTight(aItem.RHSItr, false)}
         } else {
             aParent <- aItem.parent.parent
-            if(aParent == NULL){logSeg("-RET()"); return(NULL)}
+            if(aParent == NULL or aParent.LHSItr == NULL){logSeg("-RET()"); return(NULL)}
             logSeg("-gNXT")
             LHSPovNext <- LHSPov.getNextTight(aParent.LHSItr, RHSEmpty) //findNextLHS(LHSPov, LHSfType, RHSfType, action.unknownAsList)
             if(!RHSEmpty and aParent.RHSItr != NULL){RHSPovNext <- RHSPov.getNextTight(aParent.RHSItr, false)} //findNextRHS(RHSPov, LHSfType, RHSfType)
@@ -984,7 +985,7 @@ struct XformMgr{
                             }
                         aItem.mergeFinished <- true
                     } else {
-    //    if(aItem.step ==0){aItem.step <- 1}
+        if(aItem.step ==0){aItem.step <- 1}
                         switch(aItem.step){
                             case 0:{
                                 our AItem: PIVA <- processInfonViaAgenda(aItem.RHS, aItem, NULL)
@@ -995,14 +996,16 @@ struct XformMgr{
                             case 1:{
                                 mergeSizeRules(aItem)
                                 mergeRules(aItem)
-                                if(aItem.taskEnqueued){aItem.step <- 2}
-                                else{
-                                    logSeg("-MC1")
-                                    nextAItem <- propagate(aItem, aItem.LHS_item, aItem.RHS, false)
-                                    if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
-                                    aItem.mergeFinished <- true
-                                    if(nextAItem){addAItemToAgenda(nextAItem)}
-                                }
+                                if(!aItem.reject){
+                                    if(aItem.taskEnqueued){aItem.step <- 2}
+                                    else{
+                                        logSeg("-MC1")
+                                        nextAItem <- propagate(aItem, aItem.LHS_item, aItem.RHS, false)
+                                        if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
+                                        aItem.mergeFinished <- true
+                                        if(nextAItem){addAItemToAgenda(nextAItem)}
+                                    }
+                                } else {doFulfillSubs <- true}
                             }
                             case 2:{
                                 logSeg("-MC2")
@@ -1015,37 +1018,48 @@ struct XformMgr{
                 }
                 case rsIntersect:{
                     our infon: CI <- aItem.LHS_item.item
+                    our infon: innr <- CI.source
                     our AItem: nextAItem
                     switch(aItem.step){
                         case 0:{
                             // TODO: proccess .innr parts
-                            our POV:: srcPOV; srcPOV.item <- CI.source
-                            our AItem: PIVA <- processInfonViaAgenda(srcPOV, aItem, NULL)
-                            addAItemToAgenda(PIVA)
-                            logSeg("-IC0-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
+                            if(CI.isOrLike()){
+                                if(!innr.value.tailUnfinished){
+                                    our POV: innrPov <- innr.value.items.head
+                                    while(innrPov != NULL){
+                                        our AItem: PIVA <- processInfonViaAgenda(innrPov, NULL, aItem)
+                                        addAItemToAgenda(PIVA)
+                                        innrPov <- innrPov.next
+                                    log("-IC0-OR_LIKE_PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
+                                    }
+                                }
+                            } else {  // CI is FunctionLike
+                                our POV:: srcPOV; srcPOV.item <- innr
+                                our AItem: PIVA <- processInfonViaAgenda(srcPOV, aItem, NULL)
+                                addAItemToAgenda(PIVA)
+                                logSeg("-IC0-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
+                            }
                             aItem.step <- 1
                         }
                         case 1:{
                             logSeg("-IC1")
-                            our infon: src <- CI.source
                             our infon: newTop    <- NULL
                             if(CI.isOrLike()){
                                 logSeg("-IS_OR_LIKE")
-                                if(!src.value.tailUnfinished){
+                                if(!innr.value.tailUnfinished){
                                     log(idnt+"    TODO: CI isOrLike")
                                     our POV: lastOK   <- NULL
                                     me int: numOK <- 0
-                                    our POV: pov <- src.value.items.head
+                                    our POV: pov <- innr.value.items.head
                                     while(pov != NULL){
                                         // TODO: if(sizesNotCompatable()){markAsReject or notLast}
                                         if(!pov.error){
-                                            log(idnt+"            pov:"+ pov.stringify() + "  Pred:"+ pov.predecessors[0].stringify())
+                                            if(!pov.predecessors.isEmpty()){log(idnt+"            pov:"+ pov.stringify() + "  Pred:"+ pov.predecessors[0].stringify())}
                                             numOK <+- 1
                                             lastOK <- pov
-                                        } else {log(idnt+"          x pov:"+ pov.stringify() + "  Pred:"+ pov.predecessors[0].stringify())}
+                                        } else if(!pov.predecessors.isEmpty()){log(idnt+"          x pov:"+ pov.stringify() + "  Pred:"+ pov.predecessors[0].stringify())}
                                         pov <- pov.next
                                     }
-                if(lastOK){numOK <- 1}  //delete this!
                                     if(numOK == 1){
                                         newTop <- lastOK.item
                                         if(newTop.isTentative){
@@ -1061,11 +1075,11 @@ struct XformMgr{
                                     log("TODO: IS_OR_LIKE: tailUnfinished")
                                     doFulfillSubs <- true
                                 }
-                            } else {
+                            } else {  // CI is FunctionLike
                                 switch(CI.intersectPos){
-                                    case ipGetLast   : {newTop <- src.getLastItem()}
-                                    case ipGetFirst  : {newTop <- src.getFirstItem()}
-                                    //case ipGetMarked : {newTop <- src.getMarked()}
+                                    case ipGetLast   : {newTop <- innr.getLastItem()}
+                                    case ipGetFirst  : {newTop <- innr.getFirstItem()}
+                                    //case ipGetMarked : {newTop <- innr.getMarked()}
                                 }
                                 if(!(newTop==NULL)){
                                     newTop.takeWrkListFrom(CI)
@@ -1074,9 +1088,7 @@ struct XformMgr{
                                 doFulfillSubs <- true
                             }
                             if(newTop){CI <deep- newTop}
-                            else{
-                                // TODO: return Subscriptions
-                            }
+                            else{} // TODO: return Subscriptions
                             aItem.step <- 2
                         }
                     }
@@ -1189,24 +1201,23 @@ struct XformMgr{
         our infon: RHS <- aItem.RHS.item
         if(RHS.isOrLike()){
     if(aItem.RHS.linearAltID>0) {RHS.source.value.tailUnfinished<-false}  // TODO: Mark this elsewhere
-
-		our infon: newListInfon <- makeSrcInfon()
-		our POV: pov <- RHS.source.value.items.head
-		while(pov != NULL){
-		    // TODO: if(sizesNotCompatable()){markAsReject or notLast}
-		    our infon:: altItem
-		    LHS.copyAsTypeTo(altItem,false)
-		    altItem.isTentative <- true
-		    our POV:: RHSPov; RHSPov <deep- pov
-		    altItem.addPOVToWrkList(RHSPov)
-		    our POV: LHSPOV <- newListInfon.value.items.pushLast(altItem)
-		    LHSPOV.predecessors <- pov.predecessors
-		    pov <- pov.next
-		}
-		LHS.convertThisToIntersection(newListInfon)
-		LHS.source.value.tailUnfinished <- RHS.source.value.tailUnfinished
-		LHS.source.value.sizeGiven <- true
-		LHS.altRulesApplied <- false
+                our infon: newListInfon <- makeSrcInfon()
+                our POV: pov <- RHS.source.value.items.head
+                while(pov != NULL){
+                    // TODO: if(sizesNotCompatable()){markAsReject or notLast}
+                    our infon:: altItem
+                    LHS.copyAsTypeTo(altItem,false)
+                    altItem.isTentative <- true
+                    our POV:: RHSPov; RHSPov <deep- pov
+                    altItem.addPOVToWrkList(RHSPov)
+                    our POV: LHSPOV <- newListInfon.value.items.pushLast(altItem)
+                    LHSPOV.predecessors <- pov.predecessors
+                    pov <- pov.next
+                }
+                LHS.convertThisToIntersection(newListInfon)
+                LHS.source.value.tailUnfinished <- RHS.source.value.tailUnfinished
+                LHS.source.value.sizeGiven <- true
+                LHS.altRulesApplied <- false
         }else{
             // TODO: subscribe to RHS updates then retry
         }
