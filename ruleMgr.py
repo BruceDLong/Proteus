@@ -372,7 +372,7 @@ wordRules = {
 ruleSets = [
     mergeSizeRules,
     mergeRules,
-    wrkLstRules,
+    #wrkLstRules,
     startPropRules,
     #propagationRules,
     #resolveRules,
