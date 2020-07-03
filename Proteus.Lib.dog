@@ -275,7 +275,6 @@ model infon{
     }
     void: pushAltIntoLineAlt(our POV: pred, me int: lineID, our infon: rItem, our POV: rNode) <- {
         //logSeg("-pAlt")
-        if(pred != NULL){rNode.predecessors.pushLast(pred)}
         // Search wrkList for lineID
         our POV: povToPushTo <- NULL
         withEach wrkItm in wrkList{
@@ -287,7 +286,9 @@ model infon{
                     povToPushTo<-wrkItm
                     // POP from used, push to wrkList
                     // DON'T REDO already done alts.
-                    logFatalError("TODO: POP, PUSH, Don't REDO") // TODO: POP, PUSH, Don't REDO
+                //    usedWrkList.erase(wrkItm)
+                    wrkList.pushLast(povToPushTo)
+                    log("TODO: POP, PUSH, Don't REDO") // TODO: POP, PUSH, Don't REDO
                 }
             }
         }
@@ -870,7 +871,7 @@ struct XformMgr{
             if(!RHSEmpty){RHSPovNext <- adjRhsPOV.getFirstTight(aItem.RHSItr, false)}
         } else {
             aParent <- aItem.parent.parent
-            if(aParent == NULL or aParent.LHSItr == NULL){LHSPovNext <- NULL}
+            if(aParent == NULL or aParent.LHSItr == NULL){LHSPovNext <- NULL}  // At very top infon or propagating a lone RHS or interset.
             else{LHSPovNext <- adjLhsPOV.getNextTight(aParent.LHSItr, RHSEmpty)} //findNextLHS(adjLhsPOV, LHSfType, RHSfType, action.unknownAsList)
             if(!RHSEmpty and aParent != NULL and aParent.RHSItr != NULL){RHSPovNext <- adjRhsPOV.getNextTight(aParent.RHSItr, false)} //findNextRHS(adjRhsPOV, LHSfType, RHSfType)
         }
@@ -885,13 +886,20 @@ struct XformMgr{
         me bool: breakLoop <- !RHSEmpty and RHSPovNext==NULL and aParent.RHSItr != NULL
         me bool: foundTentEqTent <- false
         me bool: LHS_IsOrLIKE <- (LHSPovNext.altPOV != NULL)
+        me bool: RHS_IsOrLIKE <- (RHSPovNext != NULL and RHSPovNext.altPOV != NULL)
+        me int: RHSsAvailable <- 0
+        our POV: RHSAlt <- RHSPovNext
+        while(RHSAlt){RHSsAvailable <+- 1; RHSAlt <- RHSAlt.altPOV}
+        if(LHSIsFromALT){RHSsAvailable <+- 1}
         me int: lCount <- 0
         our POV: LHSAlt <- LHSPovNext
         while(LHSAlt){
-            our POV: RHSAlt <- RHSPovNext
+            me int: numRHSs <- RHSsAvailable
+            if(RHS_IsOrLIKE and LHSAlt.item.isTentative){numRHSs <-- 1}
+            log("NUMRHSs:" + toString( numRHSs))
+            RHSAlt <- RHSPovNext
             me bool: predPushed
             while(RHSAlt){
-                me bool: RHS_IsOrLIKE <- (RHSPovNext.altPOV != NULL)
                 if(LHSAlt.item.isTentative and RHSAlt.item.isTentative){  // ?=?
                     foundTentEqTent <- true
                     logSeg("-?=?")
@@ -900,6 +908,8 @@ struct XformMgr{
                     log(idnt+"    ENQUEq:"+  LHSAlt.stringify() + " === " + RHSAlt.stringify())
                 } else {
                     if((lCount>0 and (LHS_IsOrLIKE or RHS_IsOrLIKE)) or LHSIsFromALT){
+                    //if(numRHSs>1 or lCount>0){
+                        RHSAlt.predecessors.pushLast(adjLhsPOV)
                         LHSAlt.item.pushAltIntoLineAlt(adjLhsPOV, aParent.LHSItr.lineAltID, RHSAlt.item, RHSAlt)
                         log(idnt+"    ENQUEx:" + LHSAlt.stringify() + " === " + RHSAlt.stringify())
                     } else {
@@ -919,13 +929,10 @@ struct XformMgr{
         }
         if(breakLoop and LHS_IsOrLIKE){
                 PIVA <- processInfonViaAgenda(LHSPovNext.altPOV, NULL, aParent)
-            //addAItemToAgenda((PIVA)
                 logSeg("-BRKLOOP-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
-              //  return(PIVA)
         }
         else{
                 PIVA <- processInfonViaAgenda(LHSPovNext, NULL, aParent)
-           // addAItemToAgenda((PIVA)
                 logSeg("-PROP-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
         }
         LHSPovNext.altPOV <- NULL
@@ -1088,7 +1095,7 @@ struct XformMgr{
                                     our POV: pov <- innr.value.items.head
                                     while(pov != NULL){
                                         // TODO: if(sizesNotCompatable()){markAsReject or notLast}
-                                        if(!pov.error){
+                                        if(!pov.rejected){
                                             if(!pov.predecessors.isEmpty()){log(idnt+"            pov:"+ pov.stringify() + "  Pred:"+ pov.predecessors[0].stringify())}
                                             numOK <+- 1
                                             lastOK <- pov
@@ -1235,7 +1242,7 @@ struct XformMgr{
         our infon: LHS <- aItem.LHS_item.item
         our infon: RHS <- aItem.RHS.item
         if(RHS.isOrLike()){
-    if(aItem.RHS.linearAltID>0) {RHS.source.value.tailUnfinished<-false}  // TODO: Mark this elsewhere
+    if(aItem.RHS.linearAltID>0) {RHS.source.value.tailUnfinished<-false}  // TODO-WORKING: Mark this elsewhere
                 our infon: newListInfon <- makeSrcInfon()
                 our POV: pov <- RHS.source.value.items.head
                 while(pov != NULL){

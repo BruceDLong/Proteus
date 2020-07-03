@@ -87,8 +87,8 @@ mergeRules = {
         'copyValueLHStoRHS':        'DO_COPY(aItem.LHS_item.item.value, aItem.RHS.item.value, aItem.sizeToCopy)',
         'copyRHSTypeToLHS':         'aItem.LHS_item.item.value.fType <- aItem.RHS.item.value.fType; aItem.LHS_item.item.infMode <- aItem.RHS.item.infMode',
         'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.item.infSize, aItem.LHS_item.item.infSize, 0)',
-        'rejectIfValueStrNotEqual': 'if(aItem.LHS_item.item.value.str != aItem.RHS.item.value.str){aItem.reject <- true; aItem.LHS_item.error<-true}',
-        'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.item.value.num != aItem.RHS.item.value.num){aItem.reject <- true; aItem.LHS_item.error<-true; log("REJECT")}',
+        'rejectIfValueStrNotEqual': 'if(aItem.LHS_item.item.value.str != aItem.RHS.item.value.str){aItem.reject <- true; aItem.LHS_item.rejected<-true}',
+        'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.item.value.num != aItem.RHS.item.value.num){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
         'StartMergePropogation':    'startPropRules(aItem)',
         'mergeRHSIntersect':        'mergeRHSIntersect(aItem)'
     },
