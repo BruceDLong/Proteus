@@ -256,13 +256,13 @@ startPropRules = { # Start iterating fLiteral LST = fLiteral LST
     'codeSnips': {
         'REJECT':   'aItem.reject <- true',
         'SKIP':     '//Skip',
-        'enqueFirstsToMerge':   'enqueFirstsToMerge(aItem)',
+        'initListIterators':   'initListIterators(aItem)',
     },
     'rules': [
         ["startProp:!looseSize|!sizesCompat||",                               "REJECT"],
         ["startProp:!looseSize|sizesCompat|LHSEmpty|!RHSisPureDots",          "SKIP"],
         ["startProp:!looseSize|sizesCompat||RHSisPureDots",                   "SKIP"],
-        ["startProp:!looseSize|sizesCompat|!LHSEmpty|!RHSisPureDots",         "enqueFirstsToMerge"], # Get first; account for #{}, ..., .first     "enqueFirstsToMerge"],
+        ["startProp:!looseSize|sizesCompat|!LHSEmpty|!RHSisPureDots",         "initListIterators"], # Get first; account for #{}, ..., .first     "initListIterators"],
         ["startProp:looseSize|||",     "ACTION"]
     ]
 }

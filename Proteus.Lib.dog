@@ -40,11 +40,12 @@ struct GLOBAL{
     }
     our POV: makeOrPov(our POV: nextPov) <- {
         our infon: newListInfon <- makeSrcInfon()
-            newListInfon.value.items.pushAsAlt(nextPov, nextPov.item)
+            our POV: newAlt <- newListInfon.value.items.pushAsAlt(nextPov, nextPov.item)
         our infon:: newAltInfon
             newAltInfon.convertThisToIntersection(newListInfon)
         our POV:: newAltInfPov
-            newAltInfPov.item           <- newAltInfon
+            newAltInfPov.item  <- newAltInfon
+            newAlt.pParent     <- newAltInfPov
         return(newAltInfPov)
     }
     me string: stringifyAItem(our AItem: aItem) <- {
@@ -270,8 +271,9 @@ model infon{
         source          <- newSource
         source.value.sizeGiven <- true
     }
-    void: addToOrInfon(our infon: rItem, our POV: rNode) <- {
-        source.value.items.pushAsAlt(rNode, rItem)
+    our POV: addToOrInfon(our infon: rItem, our POV: rNode) <- {
+        our POV: newAlt <- source.value.items.pushAsAlt(rNode, rItem)
+        return(newAlt)
     }
     void: pushAltIntoLineAlt(our POV: pred, me int: lineID, our infon: rItem, our POV: rNode) <- {
         //logSeg("-pAlt")
@@ -299,7 +301,10 @@ model infon{
             povToPushTo.linearAltID <- lineID
             addPOVToWrkList(povToPushTo)
 
-        }else{povToPushTo.item.addToOrInfon(rItem, rNode)}
+        }else{
+            our POV: newAlt <- povToPushTo.item.addToOrInfon(rItem, rNode)
+            newAlt.pParent  <- povToPushTo
+        }
     }
     void: addPOVToWrkList(our POV: pov) <- {
         isNormed <- false
@@ -404,7 +409,7 @@ model infItr{
         }else if(lenStatus == "G"){log("INFON TOO BIG")}
         return(NULL)
     }
-    me bool: goNext(me bool: skipDots) <- {
+/*    me bool: goNext(me bool: skipDots) <- {
         while(true){
             if(item==NULL){return(false)}
             if(infNode==NULL){logFatalError("ERROR: GN:infNode==NULL "+stringify())}
@@ -525,7 +530,7 @@ model infItr{
         }
         nextItr.infNode.pParent <- nextItr.iParent.infNode
         return(nextItr)
-    }
+    }*/
     void: copyThisTo(our infItr: to) <- {
         to.item         <- item
         to.iParent      <- iParent
@@ -614,7 +619,7 @@ model AItem{
                     if(RHS!=NULL) {S <+- equalStr+ stringifyInfon(RHS.item)}
                 }
                 case rsIntersect:{
-                    S <+- "INST:"+ stringifyInfon(LHS_item.item)
+                    S <+- "INSCT:"+ stringifyInfon(LHS_item.item)
                 }
                 case rsPropagate:{
                     S <+- "PROP:"+LHS_item.mySymbol(LHS_item)+":"+ stringifyInfon(LHS_item.item)+ "  (STEP_P"+toString(step)+")"
@@ -723,22 +728,24 @@ struct XformMgr{
     }
     // Agenda processing functions
     void: closeIntersectAt(our POV: pov) <- {
-        pov.pParent.item <deep- pov.item
+        pov.outerPOV.item <deep- pov.item
     }
     void: validateItem(our POV: pov) <- {
+        me string: logStr <- "VALIDATE:" + pov.stringify() + "    PARENT:<"+pov.pParent.stringify()+">"
         pov.item.isTentative <- false
         their POV: parent <- pov.pParent
-        if(parent!=NULL and parent.pParent!=NULL and parent.pParent.item.isOrLike()){ // First check whether pov is in [...]
-            log("VALIDATE-[]:"+pov.stringify())
+        if(pov.outerPOV!=NULL and pov.outerPOV.item.isOrLike()){ // First check whether pov is in [...]
+            logStr <+- "[]"
             closeIntersectAt(pov)
         } else if(parent!=NULL and parent.item.value.tailUnfinished){ // Close a list that has 1 lastItem
-                log("VALIDATE-lastItem:"+pov.stringify())
+                logStr <+- ":LAST_ITEM"
                 parent.closeItemsAtPOV(pov)
         }
-        if(pov.predecessors.size()==1){
-            log("  VALIDATE-PRED:"+pov.stringify())
+        if(pov.predecessors.size()>=1){
+            logStr <+- ":TO_PRED:"
             validateItem(pov.predecessors.last())
-        }else{log("  VALIDATE-NONE:"+pov.stringify())}
+        }else{logStr <+- ":SKIP_PRED:"}
+        log(logStr)
     }
 
     me bool: addAItemToAgenda(our AItem: aItem) <- {
@@ -815,11 +822,12 @@ struct XformMgr{
                 newAItem.LHSItr <- subscriber.parent.LHSItr
                 newAItem.RHSItr <- subscriber.parent.RHSItr
             }
+            newAItem.parent <- subscriber
         }
         addAItemToAgenda(newAItem)
         return(newAItem)
     }
-    our infItr: findNextLHS(our infItr: LHSItr, me int: LHSfType, me int: RHSfType, me bool: unknownAsList) <- {
+/*  our infItr: findNextLHS(our infItr: LHSItr, me int: LHSfType, me int: RHSfType, me bool: unknownAsList) <- {
         our infItr: LHSItrNext
         if((LHSfType != LST and !unknownAsList) and RHSfType == LST){
             Allocate(LHSItrNext)
@@ -841,7 +849,7 @@ struct XformMgr{
             } else {}
         }
         return(RHSItrNext)
-    }
+    }*/
     // PROPAGATE
     our AItem: propagate(our AItem: aItem, our POV: LHSPov, our POV: RHSPov, me bool: looseSize) <- {
         me string: idnt <- indentStr(aItem.indentLvl)
@@ -861,33 +869,35 @@ struct XformMgr{
         our POV: LHSPovNext
         our POV: RHSPovNext
         our AItem: aParent <- aItem
-        me bool: was2ndVisitLEFT
-        me bool: was2ndVisitRIGHT
+        me bool: leftWas2ndVisit
+        me bool: rightWas2ndVisit
         if(aItem.LHSItr != NULL and adjLhsPOV === aItem.LHSItr.topPOV){
             logSeg("-g1ST")
-            if(RHSEmpty and adjLhsPOV.item.value.tailUnfinished and adjLhsPOV.item.value.items.isEmpty()){
-                LHSPovNext <- adjLhsPOV.getNextTight(aItem.LHSItr, false, was2ndVisitLEFT, false)
+            if(RHSEmpty and adjLhsPOV.item.value.items.isEmpty()){
+        aParent <- aItem.parent.parent
+                LHSPovNext <- adjLhsPOV.getNextTight(aItem.LHSItr, false, leftWas2ndVisit, false)
             }else{
-                LHSPovNext <- adjLhsPOV.getFirstTight(aItem.LHSItr, RHSEmpty, was2ndVisitLEFT)
+                LHSPovNext <- adjLhsPOV.getFirstTight(aItem.LHSItr, RHSEmpty, leftWas2ndVisit)
             }
-            if(!RHSEmpty){RHSPovNext <- adjRhsPOV.getFirstTight(aItem.RHSItr, false, was2ndVisitRIGHT)}
+            if(!RHSEmpty){RHSPovNext <- adjRhsPOV.getFirstTight(aItem.RHSItr, false, rightWas2ndVisit)}
         } else {
             logSeg("-gNxt")
             aParent <- aItem.parent.parent
             if(aParent == NULL or aParent.LHSItr == NULL){LHSPovNext <- NULL}  // At very top infon or propagating a lone RHS or interset.
-            else{LHSPovNext <- adjLhsPOV.getNextTight(aParent.LHSItr, RHSEmpty, was2ndVisitLEFT, false)} //findNextLHS(adjLhsPOV, LHSfType, RHSfType, action.unknownAsList)
-            if(!RHSEmpty and aParent != NULL and aParent.RHSItr != NULL){RHSPovNext <- adjRhsPOV.getNextTight(aParent.RHSItr, false, was2ndVisitRIGHT, false)} //findNextRHS(adjRhsPOV, LHSfType, RHSfType)
+            else{LHSPovNext <- adjLhsPOV.getNextTight(aParent.LHSItr, RHSEmpty, leftWas2ndVisit, false)} //findNextLHS(adjLhsPOV, LHSfType, RHSfType, action.unknownAsList)
+            if(!RHSEmpty and aParent != NULL and aParent.RHSItr != NULL){RHSPovNext <- adjRhsPOV.getNextTight(aParent.RHSItr, false, rightWas2ndVisit, false)} //findNextRHS(adjRhsPOV, LHSfType, RHSfType)
         }
-        if(!RHSEmpty and LHSPovNext == NULL and RHSPovNext == NULL and adjLhsPOV.pParent!=NULL){ //Both sides have ended.
-            log(idnt+"    candidatesForLastItem:" + adjLhsPOV.pParent.stringify() + "   EndsOn:"+LHSPov.stringify())
+        if(!RHSEmpty and (LHSPovNext == NULL or leftWas2ndVisit) and (RHSPovNext == NULL or rightWas2ndVisit) and adjLhsPOV.pParent!=NULL){ //Both sides have ended.
             if(LHSPov.item.intersectPos == ipNoIntersect){
+            log(idnt+"    candidatesForLastItem:" + adjLhsPOV.pParent.stringify() + "   EndsOn:"+LHSPov.stringify())
                 adjLhsPOV.pParent.candidatesForLastItem.pushLast(LHSPov)
             }
         }
-        if(LHSPovNext == NULL){return(NULL)}
+        if(LHSPovNext == NULL){log("Propagate return NULL")return(NULL)}
         //enqueueForProcessing(action, LHSPovNext, RHSPovNext, AlternativesNestLvl, action.breakDotCycle)
         me bool: breakLoop <- !RHSEmpty and RHSPovNext==NULL and aParent.RHSItr != NULL
         me bool: foundTentEqTent <- false
+//if(leftWas2ndVisit){aParent <- aParent.parent.parent}
         me bool: LHS_IsOrLIKE <- (LHSPovNext.altPOV != NULL)
         me bool: RHS_IsOrLIKE <- (RHSPovNext != NULL and RHSPovNext.altPOV != NULL)
         me int: RHSsAvailable <- 0
@@ -906,18 +916,18 @@ struct XformMgr{
                 if(LHSAlt.item.isTentative and RHSAlt.item.isTentative){  // ?=?
                     foundTentEqTent <- true
                     logSeg("-?=?")
-                    LHSAlt.pParent.keepDots <- true
                     LHSAlt.addNewSubDots <- true
+                    LHSAlt.pParent.keepDots <- true
                     log(idnt+"    ENQUEq:"+  LHSAlt.stringify() + " === " + RHSAlt.stringify())
                 } else {
                     if((lCount>0 and (LHS_IsOrLIKE or RHS_IsOrLIKE)) or LHSIsFromALT){
                     //if(numRHSs>1 or lCount>0){
-                        RHSAlt.predecessors.pushLast(adjLhsPOV)
+                        RHSAlt.predecessors.pushLast(LHSPov)
                         LHSAlt.item.pushAltIntoLineAlt(adjLhsPOV, aParent.LHSItr.lineAltID, RHSAlt.item, RHSAlt)
-                        log(idnt+"    ENQUEx:" + LHSAlt.stringify() + " === " + RHSAlt.stringify())
+                        log(idnt+"    ENQUEx:" + LHSAlt.stringify() + " === " + RHSAlt.stringify()+"  PREDx:"+adjLhsPOV.stringify())
                     } else {
                         if(!predPushed){
-                            LHSAlt.predecessors.pushLast(adjLhsPOV)
+                            LHSAlt.predecessors.pushLast(LHSPov)
                             predPushed <- true
                         }
                         LHSAlt.item.addPOVToWrkList(RHSAlt)
@@ -930,13 +940,16 @@ struct XformMgr{
             lCount <+- 1
             LHSAlt <- LHSAlt.altPOV
         }
+
+        if((leftWas2ndVisit or aParent.LHS_item.item.intersectPos != ipNoIntersect) and aParent.parent!=NULL){aParent <- aParent.parent.parent}
         if(breakLoop and LHS_IsOrLIKE){
-                PIVA <- processInfonViaAgenda(LHSPovNext.altPOV, NULL, aParent)
-                logSeg("-BRKLOOP-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
+            PIVA <- processInfonViaAgenda(LHSPovNext.altPOV, NULL, aParent)
+            logSeg("-BRKLOOP-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
         }
         else{
-                PIVA <- processInfonViaAgenda(LHSPovNext, NULL, aParent)
-                logSeg("-PROP-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
+            PIVA <- processInfonViaAgenda(LHSPovNext, NULL, aParent)
+            log("ADDED:"+PIVA.mySymbol(PIVA)+" with_parent:"+aParent.mySymbol(aParent))
+            logSeg("-PROP-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
         }
         LHSPovNext.altPOV <- NULL
         if(RHSPovNext!=NULL){RHSPovNext.altPOV <- NULL}
@@ -1019,7 +1032,7 @@ struct XformMgr{
                     if(aItem.RHS==NULL){
                         if(aItem.LHS_item.item.value.fType == LST){
                             logSeg("-NoRHSLST")
-                            enqueFirstsToMerge(aItem)
+                            initListIterators(aItem)
                             nextAItem <- propagate(aItem, aItem.LHS_item, NULL, false)
                             if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
                             if(nextAItem){addAItemToAgenda(nextAItem)}
@@ -1090,7 +1103,7 @@ struct XformMgr{
                         case 1:{
                             logSeg("-IC1")
                             our infon: newTop    <- NULL
-                            if(CI.isOrLike()){
+                            if(CI.isOrLike()){  // Eliminate if only 1 non - reject.
                                 logSeg("-IS_OR_LIKE")
                                 if(!innr.value.tailUnfinished){
                                     our POV: lastOK   <- NULL
@@ -1108,10 +1121,10 @@ struct XformMgr{
                                     if(numOK == 1){
                                         newTop <- lastOK.item
                                         if(newTop.isTentative){
-                                            if(!lastOK.predecessors.isEmpty()){
-                                                logSeg("-TENT_CLOSING behind " + lastOK.stringify())
+                                            if(lastOK.predecessors.size()==1){
                                                 our POV: pred <- lastOK.predecessors[0]
-                                                pred.pParent.closeItemsAtPOV(pred)
+                                                log("-TENT_CLOSING behind " + lastOK.stringify() + "  PREDc:"+pred.stringify())
+                    //                            validateItem(pred)      // TODO: Why doesn't this work?
                                             }
                                         }
                                     }
@@ -1232,9 +1245,11 @@ struct XformMgr{
         logSeg("-EN4MRG->"); logSegStartCol(newAItem.mySymbol(newAItem),col2)
     }
     me bool: sizesAreCompatable(our infon: LHS, our infon: RHS)<-{return(true)}
-    me void: enqueFirstsToMerge(our AItem: aItem) <- {
+    me void: initListIterators(our AItem: aItem) <- {
         if(aItem.LHSItr==NULL){
+            log("initListIterators:"+aItem.stringify())
             Allocate(aItem.LHSItr); aItem.LHSItr.initialize(aItem.LHS_item)
+    if(aItem.parent.parent){aItem.LHSItr.iParent <- aItem.parent.parent.LHSItr}
             if(aItem.RHS){Allocate(aItem.RHSItr); aItem.RHSItr.initialize(aItem.RHS)}
             lastLineAltID <+- 1; aItem.LHSItr.lineAltID <- lastLineAltID
         }
@@ -1256,6 +1271,7 @@ struct XformMgr{
                     our POV:: RHSPov; RHSPov <deep- pov
                     altItem.addPOVToWrkList(RHSPov)
                     our POV: LHSPOV <- newListInfon.value.items.pushLast(altItem)
+                    //LHSPOV.pParent  <- aItem.LHS_item
                     LHSPOV.outerPOV <- aItem.LHS_item
                     LHSPOV.predecessors <- pov.predecessors
                     pov <- pov.next
@@ -1405,25 +1421,27 @@ struct XformMgr{
 
     void: cleanUpInfon(our AItem: aItem) <- {
         our infon: CI <- aItem.LHS_item.item
+        // {? ...}  --> {...}
         if(CI.value.tailUnfinished and !CI.value.items.isEmpty() and CI.value.items.last().isTentative){
             CI.value.items.popLast()
         }
+        // (234) --> 234
         if(CI.value.format == fConcat and !CI.value.items.isEmpty() and CI.value.items.head.isLast()){
             CI <deep- CI.value.items.first()
             //logSeg("CLEAN_CC("+stringifyInfon(CI)+")")
             if(aItem.parent != NULL){aItem.parent.mergeFinished <- false}
             JoinIfConcat(aItem.LHS_item)
         }
-        if(CI.value.fType==LST and aItem.LHS_item.candidatesForLastItem.size()==1){
+        if(CI.value.fType==LST and aItem.LHS_item.candidatesForLastItem.size()>=1){ // TODO: ==1
             our POV: lastItem <- aItem.LHS_item.candidatesForLastItem.last()
-//log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))
+log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))
             aItem.LHS_item.candidatesForLastItem.popLast()
             logSeg("CLEAN_LAST:" + lastItem.stringify())
             if(lastItem.outerPOV){
                 lastItem.outerPOV.item <- lastItem.item
                 lastItem.outerPOV.predecessors <- lastItem.predecessors
             }
-            aItem.LHS_item.closeItemsAtPOV(lastItem)
+         //   aItem.LHS_item.closeItemsAtPOV(lastItem)
             validateItem(lastItem)
         }
     }
