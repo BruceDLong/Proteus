@@ -2,7 +2,7 @@
 # Proteus Rule case manager
 from pprint import pprint
 
-debugMode = False
+debugMode = True
 
 mergeSizeRules = {
     'ID': 'mergeSize',
@@ -540,8 +540,8 @@ def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
             for condition in conditions:
                 if condition == 'merge':continue
                 if condition == '': continue # any condition
-                if condition == '=':continue
-                if condition == '==':continue
+            #    if condition == '=':continue
+            #    if condition == '==':continue
                 else:
                     #print (condition)
                     if subCount >0:
