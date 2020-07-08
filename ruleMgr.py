@@ -573,7 +573,7 @@ def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
                 codeKeyWordList = codeKeyWords.split(",")
                 for KW in codeKeyWordList:
                     actionCode+= indent +"    " + codeSnips[KW]+"\n"
-                actionCode+= indent +"    changeMade <- true\n"
+                if ruleSetID !="merge": actionCode+= indent +"    changeMade <- true\n"
                 if debugMode:
                     actionCode = indent+'    log(indentStr(aItem.indentLvl)+"        '+ruleSetID+'  '+triggers+'\t'+KW+'")\n' + actionCode
             if ruleCount >0: conditionKW = "else if"
@@ -618,10 +618,17 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
              for point in pointSet:
                 binaryPts.append(point)
     markHandledCases(ruleSetID, untagedRules, cases, points)
-    ifsCode =  "        me bool: changeMade <- false\n"
-    ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
-    ifsCode += "        return(changeMade)"
-    funcCode = "    me bool: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
+    if ruleSetID =="merge":
+        print("ruleSetID:"+ruleSetID)
+        ifsCode =  "        our POV: remainder <- NULL\n"
+        ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
+        ifsCode += "        return(remainder)"
+        funcCode = "    our POV: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
+    else:
+        ifsCode =  "        me bool: changeMade <- false\n"
+        ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
+        ifsCode += "        return(changeMade)"
+        funcCode = "    me bool: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
     return(funcCode)
 
 def generateXformMgr(ruleSets):
