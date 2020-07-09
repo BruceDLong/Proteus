@@ -560,7 +560,7 @@ def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
             actionCode = ""
             if codeKeyWords =='ACTION':
                 if debugMode:
-                    actionCode = indent + '    log(indentStr(aItem.indentLvl)+"        TODO: unfinished")\n'
+                    actionCode = indent + '    log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':TODO: unfinished")\n'
                 else:
                     actionCode = indent + "    //TODO: unfinished\n"
             elif codeKeyWords == "NONE":
