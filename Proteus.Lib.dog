@@ -721,6 +721,58 @@ struct XformMgr{
         if(JoinIfConcat(aItem.LHS_item)){changeMade <- true}
         return(changeMade)
     }
+    // mergeRules Utility Functions
+    me int: matchLength(me string: A, me string: B)<-{
+	log("matchLength: '"+A +"'     '" +B+"'")
+	me int: lastChar
+	me int: retVal <-0
+	    lastChar <- min(A.size(), B.size())
+	if (lastChar==0){return(0)}
+	withEach pos in RANGE(0..lastChar){
+	    if(A[pos]!= B[pos]){
+		return(pos-1)
+	    }
+	}
+	return(lastChar)
+    }
+    our POV: mergeLooseStrings(our AItem: aItem) <- {
+	log("mergeLooseStrings:"+aItem.stringify())
+	our infon: LHS <- aItem.LHS_item.item
+	our infon: RHS <- aItem.RHS.item
+	me int: LSize <- LHS.value.str.size()
+	me int: RSize <- RHS.value.str.size()
+	me int: matchLen <- matchLength(LHS.value.str, RHS.value.str)
+	me uint64: sizeDiff
+	me bool: matchFailed
+	if(matchLen==-1 or (matchLen < LSize and matchLen < RSize)){
+	    //valueStatus.cmd <- matchFailed
+	    matchFailed <- true
+	    aItem.reject <- true
+	}
+	else{
+	    sizeDiff <- RSize - LSize
+	    //valueStatus.cmd <- wasVerified
+	    matchFailed <- false
+	}
+	me uint64: rSize <- RHS.value.str.size()
+	if(sizeDiff > 0 ){
+	    me string: remainderStr <- RHS.value.str.subStr(convertToIntVal(rSize -sizeDiff), convertToIntVal(sizeDiff))
+	    our infon: remainderInfon; Allocate(remainderInfon,remainderStr)
+	    our POV:: remainder
+	    remainder       <deep- aItem.RHS
+	    remainder.item      <- remainderInfon
+	    remainder.pParent   <- aItem.RHS.pParent
+	    remainder.looseMode <- aItem.RHS.looseMode
+	    aItem.sizeToCopy    <- rSize - sizeDiff
+	    return(remainder)
+	} else if(sizeDiff==0){
+	    aItem.sizeToCopy <-rSize
+	}
+	return(NULL)
+    }
+
+    our POV: mergeLooseNums(our AItem: aItem) <- {
+    }
     // Agenda processing functions
     void: closeIntersectAt(our POV: pov) <- {
         pov.outerPOV.item <deep- pov.item
@@ -822,29 +874,31 @@ struct XformMgr{
         addAItemToAgenda(newAItem)
         return(newAItem)
     }
-/*  our infItr: findNextLHS(our infItr: LHSItr, me int: LHSfType, me int: RHSfType, me bool: unknownAsList) <- {
-        our infItr: LHSItrNext
+    our POV: findNextLHS(our POV: LHSItr, our infItr: ii, me bool: RHSEmpty, their bool: leftWas2ndVisit, me bool: itrBeginning, me int: LHSfType, me int: RHSfType, me bool: unknownAsList) <- {
+        logSeg("-nxtLHS")
+        our POV: LHSItrNext
         if((LHSfType != LST and !unknownAsList) and RHSfType == LST){
             Allocate(LHSItrNext)
-            LHSItr.copyThisTo(LHSItrNext)
-        }else{LHSItrNext <- LHSItr.getNextExtended(false, false)}
+            LHSItrNext <deep- LHSItr
+        }else{
+	    LHSItrNext <- LHSItr.getNextTight(ii, RHSEmpty, leftWas2ndVisit, false, itrBeginning)
+	}
         return(LHSItrNext)
     }
-    our infItr: findNextRHS(our infItr: RHSItr, me int: LHSfType, me int: RHSfType) <- {
-        our infItr: RHSItrNext
+    our POV: findNextRHS(our POV: RHSItr, our infItr: ii, me bool: RHSEmpty, their bool: rightWas2ndVisit, me bool: itrBeginning, me int: LHSfType, me int: RHSfType) <- {
+        logSeg("-nxtRHS");
+        our POV: RHSItrNext
+        me bool: was2ndVisit
         if(LHSfType == LST and RHSfType != LST){
             Allocate(RHSItrNext)
-            RHSItr.copyThisTo(RHSItrNext) // <- RHSItr //.getSelfCopy()
-            RHSItrNext.infNode.looseInhtd <- true
+            RHSItrNext <deep- RHSItr
+            RHSItrNext.looseInhtd <- true
         }else{
-            RHSItrNext <- RHSItr.getNextExtended(false, false)
-            if(RHSItrNext.state == sEOL){
-                RHSItrNext <- NULL
-            } else if(RHSItrNext.infNode.looseMode){
-            } else {}
+            RHSItrNext <- RHSItr.getNextTight(ii, RHSEmpty, was2ndVisit, false, itrBeginning)
+            //if(RHSItrNext!=NULL and RHSItrNext.looseMode){} else {}
         }
         return(RHSItrNext)
-    }*/
+    }
     // PROPAGATE
     our AItem: propagate(our AItem: aItem, our POV: LHSPov, our POV: RHSPov, me bool: looseSize) <- {
         me string: idnt <- indentStr(aItem.indentLvl)
@@ -854,8 +908,9 @@ struct XformMgr{
         logSeg("-PROP")
         aItem.hasPropagated <- true
         me bool: RHSEmpty <- RHSPov == NULL
-        //me int: LHSfType <- LHSPov.item.value.fType
-        //me int: RHSfType <- RHSPov.item.value.fType
+        me int: LHSfType <- LHSPov.item.value.fType
+        me int: RHSfType <- 0
+        if(!RHSEmpty){RHSfType <- RHSPov.item.value.fType}
         me bool: LHSIsFromALT
         our POV: adjLhsPOV  <- LHSPov
         our POV: adjRhsPOV  <- RHSPov
@@ -866,21 +921,21 @@ struct XformMgr{
         our AItem: aParent <- aItem
         me bool: leftWas2ndVisit
         me bool: rightWas2ndVisit
-        if(aItem.LHSItr != NULL and adjLhsPOV === aItem.LHSItr.topPOV){
+        me bool: itrBeginning <- aItem.LHSItr!=NULL and adjLhsPOV===aItem.LHSItr.topPOV
+        if(itrBeginning){
             logSeg("-g1ST")
             if(RHSEmpty and adjLhsPOV.item.value.items.isEmpty()){
-        aParent <- aItem.parent.parent
-                LHSPovNext <- adjLhsPOV.getNextTight(aItem.LHSItr, false, leftWas2ndVisit, false)
+                aParent <- aItem.parent.parent
+                LHSPovNext <- adjLhsPOV.getNextTight(aItem.LHSItr, false, leftWas2ndVisit, false, false)
             }else{
-                LHSPovNext <- adjLhsPOV.getFirstTight(aItem.LHSItr, RHSEmpty, leftWas2ndVisit)
+                LHSPovNext <- adjLhsPOV.getNextTight(aItem.LHSItr, RHSEmpty, leftWas2ndVisit, false, itrBeginning)
             }
-            if(!RHSEmpty){RHSPovNext <- adjRhsPOV.getFirstTight(aItem.RHSItr, false, rightWas2ndVisit)}
+            if(!RHSEmpty){RHSPovNext <- adjRhsPOV.getNextTight(aItem.RHSItr, false, rightWas2ndVisit, true, itrBeginning)}
         } else {
-            logSeg("-gNxt")
             aParent <- aItem.parent.parent
-            if(aParent == NULL or aParent.LHSItr == NULL){LHSPovNext <- NULL}  // At very top infon or propagating a lone RHS or interset.
-            else{LHSPovNext <- adjLhsPOV.getNextTight(aParent.LHSItr, RHSEmpty, leftWas2ndVisit, false)} //findNextLHS(adjLhsPOV, LHSfType, RHSfType, action.unknownAsList)
-            if(!RHSEmpty and aParent != NULL and aParent.RHSItr != NULL){RHSPovNext <- adjRhsPOV.getNextTight(aParent.RHSItr, false, rightWas2ndVisit, false)} //findNextRHS(adjRhsPOV, LHSfType, RHSfType)
+            if(aParent == NULL ){log("-nxtTop"); LHSPovNext <- NULL}  // At very top infon or propagating a lone RHS or interset.
+            else{LHSPovNext <- findNextLHS(adjLhsPOV, aParent.LHSItr, RHSEmpty, leftWas2ndVisit, itrBeginning, LHSfType, RHSfType, false)}
+            if(!RHSEmpty and aParent != NULL and aParent.RHSItr != NULL){RHSPovNext <- findNextRHS(adjRhsPOV, aParent.RHSItr, RHSEmpty, rightWas2ndVisit, itrBeginning, LHSfType, RHSfType)}
         }
         if(!RHSEmpty and (LHSPovNext == NULL or leftWas2ndVisit) and (RHSPovNext == NULL or rightWas2ndVisit) and adjLhsPOV.pParent!=NULL){ //Both sides have ended.
             if(LHSPov.item.intersectPos == ipNoIntersect){
@@ -888,7 +943,7 @@ struct XformMgr{
                 adjLhsPOV.pParent.candidatesForLastItem.pushLast(LHSPov)
             }
         }
-        if(LHSPovNext == NULL){return(NULL)}
+        if(LHSPovNext == NULL){logSeg("-LNxt_NULL"); return(NULL)}
         //enqueueForProcessing(action, LHSPovNext, RHSPovNext, AlternativesNestLvl, action.breakDotCycle)
         me bool: breakLoop <- !RHSEmpty and RHSPovNext==NULL and aParent.RHSItr != NULL
         me bool: foundTentEqTent <- false
@@ -1017,28 +1072,21 @@ struct XformMgr{
                 }
                 case rsMerge:{
                     our AItem: nextAItem
-                    if(aItem.mergeFinished){                    //CHK: is this needed? Just don't call again.
+                    if(aItem.mergeFinished){
                         fulfillSubscriptions(aItem)
                         logSegStartCol("<<:MFIN", col4)
                         logFlush()
                         return()
                     }
-                    if(aItem.RHS==NULL){    //CHK: Can this section be handled in ruleMgr?
-                        if(aItem.LHS_item.item.value.fType == LST){
-                            logSeg("-NoRHSLST")
-                            initListIterators(aItem)
-                            nextAItem <- propagate(aItem, aItem.LHS_item, NULL, false) //CHK: Consolidate repetitions of these 3 lines
-                            if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
-                            if(nextAItem){addAItemToAgenda(nextAItem)}
-                        } else {
-                            logSeg("-NoRHSNSEQ")
-                            nextAItem <- propagate(aItem, aItem.LHS_item, NULL, false)
-                            if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
-                            if(nextAItem){addAItemToAgenda(nextAItem)}
-                            }
+                    if(aItem.RHS==NULL){
+                        logSeg("-NoRHS")
+                        if(aItem.LHS_item.item.value.fType == LST){initListIterators(aItem)}
+                        nextAItem <- propagate(aItem, aItem.LHS_item, NULL, false)
+                        if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
+                        if(nextAItem){addAItemToAgenda(nextAItem)}
                         aItem.mergeFinished <- true
                     } else {
-        if(aItem.step ==0){aItem.step <- 1}  //CHK: optimize so that this isn't needed.
+        if(aItem.step ==0){aItem.step <- 1}  //TODO: optimize so that this isn't needed.
                         switch(aItem.step){
                             case 0:{
                                 our AItem: PIVA <- processInfonViaAgenda(aItem.RHS, aItem, NULL)
@@ -1048,23 +1096,14 @@ struct XformMgr{
                             }
                             case 1:{
                                 mergeSizeRules(aItem)  //CHK: FInish this: Perhaps move it in rsInfon. Also, do it AFTER merge if needed.
-                                mergeRules(aItem)      //CHK: return a remainder if there is one. Use it in propagate()
+                                our POV: remainder <- mergeRules(aItem)      //CHK: return a remainder if there is one. Use it in propagate()
                                 if(!aItem.reject){
-                                    if(aItem.taskEnqueued){aItem.step <- 2}
-                                    else{
-                                        logSeg("-MC1")
-                                        nextAItem <- propagate(aItem, aItem.LHS_item, aItem.RHS, false)
-                                        if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
-                                        aItem.mergeFinished <- true
-                                        if(nextAItem){addAItemToAgenda(nextAItem)}
-                                    }
+                                    logSeg("-MC1")
+                                    nextAItem <- propagate(aItem, aItem.LHS_item, aItem.RHS, false)
+                                    if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
+                                    aItem.mergeFinished <- true
+                                    if(nextAItem){addAItemToAgenda(nextAItem)}
                                 } else {doFulfillSubs <- true}
-                            }
-                            case 2:{  //CHK: Remove this
-                                logSeg("-MC2")
-                                nextAItem <- propagate(aItem, aItem.LHS_item, aItem.RHS, false)
-                                if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
-                                if(nextAItem){addAItemToAgenda(nextAItem)}
                             }
                         }
                     }

@@ -119,9 +119,9 @@ mergeRules = {
         ["merge:lLST|lfLiteral|=|rLST|rfLiteral",        "StartMergePropogation"],
 
         # LooseSize
-        ["merge:lNUM||==|rSTR,rLST|",             "ACTION"],
-        ["merge:lSTR||==|rNUM,rLST|",             "ACTION"],
-        ["merge:lLST||==|rNUM,rSTR|",             "ACTION"],
+        ["merge:lNUM||==|rSTR,rLST|",                      "ACTION"],
+        ["merge:lSTR||==|rNUM,rLST|",                      "ACTION"],
+        ["merge:lLST||==|rNUM,rSTR|",                      "StartMergePropogation"], # ADD NEW AITEM LHS FIRST FROM LIST & THE WHOLE NUTHER RHS, MAYBE PROPAGATE SHOULD HANDLE
 
         ["merge:lNUM|lfUnknown|==|rNUM|rfUnknown",         "NONE"],
         ["merge:lNUM|lfUnknown|==|rNUM|rfLiteral",         "copyValueRHStoLHS"], # remember size to copy
@@ -263,7 +263,7 @@ startPropRules = { # Start iterating fLiteral LST = fLiteral LST
         ["startProp:!looseSize|sizesCompat|LHSEmpty|!RHSisPureDots",          "SKIP"],
         ["startProp:!looseSize|sizesCompat||RHSisPureDots",                   "SKIP"],
         ["startProp:!looseSize|sizesCompat|!LHSEmpty|!RHSisPureDots",         "initListIterators"], # Get first; account for #{}, ..., .first     "initListIterators"],
-        ["startProp:looseSize|||",     "ACTION"]
+        ["startProp:looseSize|||",                                            "initListIterators"]
     ]
 }
 propagationRules = {
@@ -560,7 +560,7 @@ def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
             actionCode = ""
             if codeKeyWords =='ACTION':
                 if debugMode:
-                    actionCode = indent + '    log(indentStr(aItem.indentLvl)+"        TODO: unfinished")\n'
+                    actionCode = indent + '    log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':TODO: unfinished")\n'
                 else:
                     actionCode = indent + "    //TODO: unfinished\n"
             elif codeKeyWords == "NONE":
@@ -573,7 +573,7 @@ def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
                 codeKeyWordList = codeKeyWords.split(",")
                 for KW in codeKeyWordList:
                     actionCode+= indent +"    " + codeSnips[KW]+"\n"
-                actionCode+= indent +"    changeMade <- true\n"
+                if ruleSetID !="merge": actionCode+= indent +"    changeMade <- true\n"
                 if debugMode:
                     actionCode = indent+'    log(indentStr(aItem.indentLvl)+"        '+ruleSetID+'  '+triggers+'\t'+KW+'")\n' + actionCode
             if ruleCount >0: conditionKW = "else if"
@@ -618,10 +618,17 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
              for point in pointSet:
                 binaryPts.append(point)
     markHandledCases(ruleSetID, untagedRules, cases, points)
-    ifsCode =  "        me bool: changeMade <- false\n"
-    ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
-    ifsCode += "        return(changeMade)"
-    funcCode = "    me bool: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
+    if ruleSetID =="merge":
+        print("ruleSetID:"+ruleSetID)
+        ifsCode =  "        our POV: remainder <- NULL\n"
+        ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
+        ifsCode += "        return(remainder)"
+        funcCode = "    our POV: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
+    else:
+        ifsCode =  "        me bool: changeMade <- false\n"
+        ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
+        ifsCode += "        return(changeMade)"
+        funcCode = "    me bool: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
     return(funcCode)
 
 def generateXformMgr(ruleSets):
