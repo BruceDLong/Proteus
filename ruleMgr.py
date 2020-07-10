@@ -119,9 +119,9 @@ mergeRules = {
         ["merge:lLST|lfLiteral|=|rLST|rfLiteral",        "StartMergePropogation"],
 
         # LooseSize
-        ["merge:lNUM||==|rSTR,rLST|",             "ACTION"],
-        ["merge:lSTR||==|rNUM,rLST|",             "ACTION"],
-        ["merge:lLST||==|rNUM,rSTR|",             "ACTION"],
+        ["merge:lNUM||==|rSTR,rLST|",                      "ACTION"],
+        ["merge:lSTR||==|rNUM,rLST|",                      "ACTION"],
+        ["merge:lLST||==|rNUM,rSTR|",                      "StartMergePropogation"], # ADD NEW AITEM LHS FIRST FROM LIST & THE WHOLE NUTHER RHS, MAYBE PROPAGATE SHOULD HANDLE
 
         ["merge:lNUM|lfUnknown|==|rNUM|rfUnknown",         "NONE"],
         ["merge:lNUM|lfUnknown|==|rNUM|rfLiteral",         "copyValueRHStoLHS"], # remember size to copy
@@ -263,7 +263,7 @@ startPropRules = { # Start iterating fLiteral LST = fLiteral LST
         ["startProp:!looseSize|sizesCompat|LHSEmpty|!RHSisPureDots",          "SKIP"],
         ["startProp:!looseSize|sizesCompat||RHSisPureDots",                   "SKIP"],
         ["startProp:!looseSize|sizesCompat|!LHSEmpty|!RHSisPureDots",         "initListIterators"], # Get first; account for #{}, ..., .first     "initListIterators"],
-        ["startProp:looseSize|||",     "ACTION"]
+        ["startProp:looseSize|||",                                            "initListIterators"]
     ]
 }
 propagationRules = {
