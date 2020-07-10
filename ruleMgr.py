@@ -78,8 +78,8 @@ mergeRules = {
         'rfConcat':      'aItem.RHS.item.value.format == fConcat',
         'rfLiteral':     'aItem.RHS.item.value.format == fLiteral',
 
-        '==':           'aItem.looseSize',
-        '=':            '!aItem.looseSize',
+        '==':           '(aItem.RHS.looseMode or aItem.RHS.looseTop)',
+        '=':            '!(aItem.RHS.looseMode or aItem.RHS.looseTop)',
     },
     'codeSnips': {
         'REJECT':                   'aItem.reject <- true',
@@ -90,6 +90,7 @@ mergeRules = {
         'rejectIfValueStrNotEqual': 'if(aItem.LHS_item.item.value.str != aItem.RHS.item.value.str){aItem.reject <- true; aItem.LHS_item.rejected<-true}',
         'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.item.value.num != aItem.RHS.item.value.num){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
         'StartMergePropogation':    'startPropRules(aItem)',
+        'MergeLooseStrings':        'remainder <- mergeLooseStrings(aItem)',
         'mergeRHSIntersect':        'mergeRHSIntersect(aItem)'
     },
     'rules': [
@@ -129,7 +130,7 @@ mergeRules = {
         ["merge:lNUM|lfLiteral|==|rNUM|rfLiteral",         "ACTION"], #break into 2 cases: LHS.infSize.format = rfUnknown, rfLiteral.  see tryMergeValue()
 
         ["merge:lSTR|lfUnknown|==|rSTR|rfUnknown",         "NONE"],
-        ["merge:lSTR|lfUnknown|==|rSTR|rfLiteral",         "copyValueRHStoLHS"], # sizeToCopy, handleRemainder
+        ["merge:lSTR|lfUnknown|==|rSTR|rfLiteral",         "MergeLooseStrings"], # sizeToCopy, handleRemainder
         ["merge:lSTR|lfLiteral|==|rSTR|rfUnknown",         "copyValueLHStoRHS"],
         ["merge:lSTR|lfLiteral|==|rSTR|rfLiteral",         "ACTION"],   #break into 2 cases: LHS.infSize.format = rfUnknown, rfLiteral.  see tryMergeValue()
 
