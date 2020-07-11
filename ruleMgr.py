@@ -38,7 +38,7 @@ mergeSizeRules = {
         '!looseSize':    '!aItem.looseSize'
     },
     'codeSnips': {
-        'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.item.infSize, aItem.LHS_item.item.infSize, 0)',
+        'copySizeRHStoLHS':         'if(aItem.LHS_item.item.infMode!=isLiteral or aItem.RHS.item.value.fType==aItem.LHS_item.item.value.fType){DO_COPY(aItem.RHS.item.infSize, aItem.LHS_item.item.infSize, 0)}',
     },
     'rules': [
         ["mergeSize:!looseSize|lfUnknown|rsfLiteral",     "copySizeRHStoLHS"],
