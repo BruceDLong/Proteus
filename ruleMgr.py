@@ -132,7 +132,7 @@ mergeRules = {
         ["merge:lSTR|lfUnknown|==|rSTR|rfUnknown",         "NONE"],
         ["merge:lSTR|lfUnknown|==|rSTR|rfLiteral",         "MergeLooseStrings"], # sizeToCopy, handleRemainder
         ["merge:lSTR|lfLiteral|==|rSTR|rfUnknown",         "copyValueLHStoRHS"],
-        ["merge:lSTR|lfLiteral|==|rSTR|rfLiteral",         "ACTION"],   #break into 2 cases: LHS.infSize.format = rfUnknown, rfLiteral.  see tryMergeValue()
+        ["merge:lSTR|lfLiteral|==|rSTR|rfLiteral",         "MergeLooseStrings"],   #break into 2 cases: LHS.infSize.format = rfUnknown, rfLiteral.  see tryMergeValue()
 
         ["merge:lLST|lfUnknown|==|rLST|rfUnknown",        "ACTION"],
         ["merge:lLST|lfUnknown|==|rLST|rfLiteral",        "ACTION"],
