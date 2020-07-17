@@ -137,7 +137,7 @@ mergeRules = {
         ["merge:lLST|lfUnknown|==|rLST|rfUnknown",        "ACTION"],
         ["merge:lLST|lfUnknown|==|rLST|rfLiteral",        "ACTION"],
         ["merge:lLST|lfLiteral|==|rLST|rfUnknown",        "ACTION"],
-        ["merge:lLST|lfLiteral|==|rLST|rfLiteral",        "ACTION"],
+        ["merge:lLST|lfLiteral|==|rLST|rfLiteral",        "StartMergePropogation"],
 
         ##### CONCAT and INTERSECT
         ["merge:lNUM|lfUnknown|=|rNUM|rfConcat",          "ACTION"],
