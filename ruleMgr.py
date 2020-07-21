@@ -78,11 +78,11 @@ mergeRules = {
         'rfConcat':      'aItem.RHS.item.value.format == fConcat',
         'rfLiteral':     'aItem.RHS.item.value.format == fLiteral',
 
-        '==':           '(aItem.RHS.looseMode or aItem.RHS.looseTop)',
-        '=':            '!(aItem.RHS.looseMode or aItem.RHS.looseTop)',
+        '==':           '(aItem.RHS.looseType())',
+        '=':            '!(aItem.RHS.looseType())',
     },
     'codeSnips': {
-        'REJECT':                   'aItem.reject <- true',
+        'REJECT':                   'aItem.reject <- true; aItem.LHS_item.rejected<-true;',
         'copyValueRHStoLHS':        'DO_COPY(aItem.RHS.item.value, aItem.LHS_item.item.value, aItem.sizeToCopy)',
         'copyValueLHStoRHS':        'DO_COPY(aItem.LHS_item.item.value, aItem.RHS.item.value, aItem.sizeToCopy)',
         'copyRHSTypeToLHS':         'aItem.LHS_item.item.value.fType <- aItem.RHS.item.value.fType; aItem.LHS_item.item.infMode <- aItem.RHS.item.infMode',
@@ -200,7 +200,7 @@ mergeRules = {
         ["merge:lSTR|lfConcat|==|rSTR|rfLiteral",          "ACTION"],
         ["merge:lSTR|lfConcat|==|rSTR|rintersect",         "ACTION"],
         ["merge:lSTR|lfLiteral|==|rSTR|rfConcat",          "ACTION"],
-        ["merge:lSTR|lfLiteral|==|rSTR|rintersect",        "ACTION"],
+        ["merge:lSTR|lfLiteral|==|rtUnknown,rSTR|rintersect",        "mergeRHSIntersect"],
         ["merge:lSTR|lintersect|==|rSTR|rfUnknown",        "ACTION"],
         ["merge:lSTR|lintersect|==|rSTR|rfConcat",         "ACTION"],
         ["merge:lSTR|lintersect|==|rSTR|rfLiteral",        "ACTION"],
@@ -245,8 +245,8 @@ startPropRules = { # Start iterating fLiteral LST = fLiteral LST
        # ["merging", "!merging"]
     ],
     'ifSnips': {
-        '!looseSize':       '!aItem.looseSize',
-        'looseSize':        'aItem.looseSize',
+        '!looseSize':       '!(aItem.RHS.looseType())',
+        'looseSize':        '(aItem.RHS.looseType())',
         'sizesCompat':      'sizesAreCompatable(aItem.LHS_item.item, aItem.RHS.item)',
         '!sizesCompat':     '!sizesAreCompatable(aItem.LHS_item.item, aItem.RHS.item)',
         'RHSisPureDots':    '(aItem.RHS.item.value.tailUnfinished and aItem.RHS.item.value.items.size()==0)',
