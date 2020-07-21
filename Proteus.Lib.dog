@@ -27,21 +27,53 @@ struct GLOBAL{
         print("REGISTER:", classInfon.type.asGiven, "\n")
         classDefs.insert(classInfon.type.asGiven, classInfon)
     }
-    our infItr: makeInfItr(our infon: i, our infItr: parent, our POV: idx) <- {
-        our infItr:: ret
-        ret.item    <- i
-        ret.parent  <- parent
-        ret.infNode <- idx
-        ret.setListSeqFlags()
-        return(ret)
+    our infon: makeSrcInfon() <- {
+        our infon:: newListInfon
+        newListInfon.itmMode        <- mItem
+        newListInfon.infMode        <- isLiteral
+        newListInfon.infSize.fType  <- NUM
+        newListInfon.infSize.format <- fUnknown
+        newListInfon.infSize.num    <- 1
+        newListInfon.value.fType    <- LST
+        newListInfon.value.format   <- fLiteral
+        return(newListInfon)
     }
+    our POV: makeOrPov(our POV: nextPov, our POV: pred) <- {
+        our infon: newListInfon <- makeSrcInfon()               // Make {...} to be used as innr
+        our POV: newAlt <- newListInfon.value.items.pushAsAlt(nextPov, nextPov.item, pred)  // Make a POV for the item.
+        our infon:: newAltInfon
+            newAltInfon.convertThisToIntersection(newListInfon) // Make [ ] and add innr to it
+        our POV:: newAltInfPov                                  // Make the POV pointing to the [...]
+            newAltInfPov.item  <- newAltInfon
+            newAlt.looseInhtd <- nextPov.looseInhtd
+            newAlt.looseTop   <- nextPov.looseTop
+            newAlt.looseMode  <- nextPov.looseMode
+            newAlt.pParent     <- newAltInfPov
+        return(newAltInfPov)
+    }
+    me string: stringifyAItem(our AItem: aItem) <- {
+        me string: S <- aItem.mySymbol(aItem)+":"+aItem.stringify()
+        if(! aItem.subscribers.isEmpty()){
+            S <- aItem.subscribers[0].mySymbol(aItem.subscribers[0])+"->"+ S
+        }
+        return(S)
+    }
+    me string: indentStr(me int: lvl) <- {
+        me string: S <- ""
+        withEach c in RANGE(0..lvl){
+            S <+- "   |"
+        }
+        return (S)
+    }
+    me int: lastLineAltID <- 0
 }
 
 #include infonIO.dog
-#include DB_workAround.dog
+//include DB_workAround.dog
 #include infonList.dog
 #include Functions.dog
 #include wordSystemMgr.dog
+#include xformMgr.dog
 
 model pureInfon{
     me mode[tUnknown, NUM, STR, LST]: fType
@@ -84,7 +116,7 @@ model pureInfon{
         withEach node in items {
             our infon: newNode
             Allocate(newNode)
-            node.copyAsTypeTo(newNode)
+            node.copyAsTypeTo(newNode, true)
             to.items.pushLast(newNode)
             if(node.type!=NULL and node.type.asGiven!=""){
                 to.index.insert(node.type.asGiven, newNode)
@@ -112,14 +144,14 @@ model infon{
     our infon: dotPath
     our infon: source
     our WordSystem: type
-    our infItr[list]: wrkList
-    our infItr[list]: usedWrkList
+    our POV[list]: wrkList
+    our POV[list]: usedWrkList
     our PartPath[list]: parts
-    our infon[list]: subscribers
     flag: wrkLstPreped
     flag: wrkItmsAdded
     flag: isOnAgenda    // True if item is currently on agenda
-    flag: isTentative
+    flag: isTentative   // Does this items validity depend on it having no errors?
+    flag: altRulesApplied
 
     me BigInt: sizeIfKnown() <- {
         if(infSize.format == fLiteral){return(infSize.num)}
@@ -163,21 +195,8 @@ model infon{
         }
         return(infSize)
     }
-
-
-    our infItr: searchWorkListForRelation(me int: targetRelation) <- {
-        our infItr: retVal <- NULL
-        withEach item in wrkList{
-            if(item.target==targetRelation){
-                retVal <- item
-                break()
-            }
-        }
-        return(retVal)
-    }
-
-    void: addSubscriber(our infon: subscriber) <- {subscribers.pushLast(subscriber)}
-    me bool: isOrLike() <- {return(intersectPos == ipGetLast and infSize.format == fUnknown and source != NULL and source.value.format == fLiteral)}
+    me bool: isASeq() <- {return((value.format==fLiteral and value.fType==LST) or value.format==fConcat)}
+    me bool: isOrLike() <- {return(intersectPos == ipGetLast and source!=NULL and source.infSize.format == fUnknown and source.value.sizeGiven and source.value.format == fLiteral)}
 
     our infon: getLastItem() <- {
         // ASSERT(Should be already normed and a non-concat list)
@@ -185,11 +204,10 @@ model infon{
         if(value.tailUnfinished){
             me string: lenStatus <- lengthStatus()
             if(lenStatus == "L" or lenStatus == "?"){
-                our infItr: virtualLastItem <- searchWorkListForRelation(asLast)
+                our POV: virtualLastItem //<- searchWorkListForRelation(asLast)
                 if(virtualLastItem==NULL){
                 // Make a virtual last item to be joined later.
                     Allocate(virtualLastItem)
-                    virtualLastItem.target <- asLast
                     Allocate(virtualLastItem.item)
                     virtualLastItem.item.infSize.format <- fUnknown
                     wrkList.pushLast(virtualLastItem)
@@ -229,32 +247,84 @@ model infon{
         }
         return(NULL)
     }
-    void: copyAsTypeTo(our infon: to) <- {
+    void: copyAsTypeTo(our infon: to, me bool: copyWrkList) <- {
         to.flags <- flags
         to.type  <- type
         infSize.copyAsTypeTo(to.infSize)
         value.copyAsTypeTo(to.value)
-        if(funcArgs){funcArgs.copyAsTypeTo(to.funcArgs)}
-        if(dotPath){dotPath.copyAsTypeTo(to.dotPath)}
-        if(source){source.copyAsTypeTo(to.source)}
-        withEach wrkListItem in wrkList {
-            our infItr: ii
-            Allocate(ii)
-            ii <deep- wrkListItem
-            Allocate(ii.item)
-            wrkListItem.item.copyAsTypeTo(ii.item)
-            to.wrkList.pushLast(ii)
+        if(funcArgs){funcArgs.copyAsTypeTo(to.funcArgs, true)}
+        if(dotPath){dotPath.copyAsTypeTo(to.dotPath, true)}
+        if(source){Allocate(to.source); source.copyAsTypeTo(to.source, true)}
+        if(copyWrkList){
+            withEach wrkListItem in wrkList {
+                our POV: pov
+                Allocate(pov)
+                pov <deep- wrkListItem
+                Allocate(pov.item)
+                wrkListItem.item.copyAsTypeTo(pov.item, true)
+                to.wrkList.pushLast(pov)
+            }
         }
     }
-    void: addToOrInfon(our infItr: altItr) <- {
-        source.value.items.pushAsAlt(altItr, altItr.item)
+    void: convertThisToIntersection(our infon: newSource) <- {
+        itmMode         <- mItem
+        infMode         <- isLiteral
+        intersectPos    <- ipGetLast
+        infSize.format  <- fUnknown
+        source          <- newSource
+        source.value.sizeGiven <- true
     }
-    void: addInfItrToWrkList(our infItr: RHSItr) <- {
-        wrkList.pushLast(RHSItr)
+    our POV: addToOrInfon(our infon: rItem, our POV: rNode, our POV: pred) <- {
+        our POV: pov <- source.value.items.head
+        while(pov != NULL){  // Don't push if duplicate
+            if(pov.item===rNode.item){return(NULL)}
+            pov <- pov.next
+        }
+        our POV: newAlt <- source.value.items.pushAsAlt(rNode, rItem, pred)
+        return(newAlt)
+    }
+    void: pushAltIntoLineAlt(our POV: pred, me int: lineID, our infon: rItem, our POV: rNode) <- {
+        //logSeg("-pAlt")
+        // Search wrkList for lineID
+        our POV: povToPushTo <- NULL
+        withEach wrkItm in wrkList{
+            if(wrkItm.linearAltID==lineID){povToPushTo<-wrkItm}
+        }
+        if(povToPushTo == NULL){
+            withEach wrkItm in usedWrkList{
+                if(wrkItm.linearAltID==lineID){
+                    povToPushTo<-wrkItm
+                    // POP from used, push to wrkList
+                    // DON'T REDO already done alts.
+                //    usedWrkList.erase(wrkItm)
+                    wrkList.pushLast(povToPushTo)
+                    log("TODO: POP, PUSH, Don't REDO") // TODO: POP, PUSH, Don't REDO
+                }
+            }
+        }
+        if(povToPushTo == NULL){ // Make an alt item to add.
+            povToPushTo <- makeOrPov(rNode, pred)
+            povToPushTo.item.source.value.tailUnfinished <- true
+            povToPushTo.item.source.value.sizeGiven      <- true
+            povToPushTo.linearAltID <- lineID
+            addPOVToWrkList(povToPushTo)
+        }else{
+            our POV: newAlt <- povToPushTo.item.addToOrInfon(rItem, rNode, pred)
+            if(newAlt!=NULL){newAlt.pParent  <- povToPushTo}
+        }
+    }
+    void: addPOVToWrkList(our POV: pov) <- {
+        isNormed <- false
+        wrkList.pushLast(pov)
+    }
+    void: addInfonToWrkList(our infon: i) <- {
+        our POV:: pov
+        pov.item <- i
+        addPOVToWrkList(pov)
     }
     void: takeWrkListFrom(our infon:from) <- {
         withEach wrkItm in from.wrkList{
-            addInfItrToWrkList(wrkItm)
+            addPOVToWrkList(wrkItm)
         }
         from.wrkList.clear()
     }
@@ -264,7 +334,6 @@ model infon{
         our PartPath:: newPath
         newPath.pathMode <- dotField
         newPath.path <- newPart
-        log("ADDING NEW DOT_PART:'" + fieldName + "'" + stringifyInfon(newPart))
         parts.pushLast(newPath)
     }
     our infon: findPartPathByTag(me string: tagName) <- {
@@ -289,15 +358,10 @@ model infon{
     me string: stringifyWorklist() <- {
         me string: S <- ""
         withEach workItm in wrkList{
-            S <- S + "\n    ::" + workItm.stringify()
+            //S <- S + "\n    ::" + workItm.stringify()
         }
         return(S)
     }
-    void: onUpdate() <- {
-        withEach subscriber in subscribers{
-        }
-    }
-
     void: clear() <- {
         infSize.clear()
         value.clear()
@@ -316,373 +380,66 @@ model infon{
     }
 }
 model infItr{
-    our infon: item
-    our infItr: parent
-    our POV: infNode
-    mode [asID, asFirst, asLast, asMarked, asFirstParent, asLastParent, asMarkedParent]: target
-    flag: looseMode
-    flag: looseTop
-    flag: looseInhtd
-    flag: wasRejected
-    flag: readyToResolve
-    flag: addNewSubDots
-    me int: nestLvl
-    me int: AlternativesNestLvl
-    mode[sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError, sNonIterable]: state
-    mode[cmdNoOp, delDots, keepDots, insB4Dots, insAftDots]: stitchCmd
-    our infItr[map string]: pctTags
+    our infItr: iParent
+    their POV: topPOV
+    me int: lineAltID
+    void: initialize(our POV: pov) <- {topPOV <- pov}
+}
 
-    our transformAction[list]: predecessors
+model AItem{
+    mode[rsInfon, rsMerge, rsIntersect, rsPure]: ruleSet
+    our POV: LHS_item
+    our POV: RHS
+    our infItr: LHSItr
+    our infItr: RHSItr
+    flag: looseSize
+    flag: reject
+    flag: taskEnqueued
+    flag: concatProcessed
+    flag: mergeFinished
+    flag: notFirstVisit
+    flag: candidateForLast
+    me int:  step
+    me int: pendingTasks
+    BigInt: sizeToCopy
+    our AItem[list]: subscribers
+    our AItem: parent
+    me int: indentLvl
+    flag: hasPropagated
+    flag: initRulesApplied
 
-    our infItr: frontierNext
-    our infItr: frontierPrev
-    flag: detachFromFrontier
-
-    me bool: looseSize() <- {
-        return(looseInhtd!=false or looseTop!=false)
-    }
-    our infItr: makeOrItr(our infItr: nextItr) <- {
-        our infon:: newListInfon
-            newListInfon.itmMode        <- mItem
-            newListInfon.infMode        <- isLiteral
-            newListInfon.infSize.fType  <- NUM
-            newListInfon.infSize.format <- fUnknown
-            newListInfon.infSize.num    <- 1
-            newListInfon.value.fType    <- LST
-            newListInfon.value.format   <- fLiteral
-            newListInfon.value.items.pushAsAlt(nextItr, nextItr.item)
-        our infon:: newAltInfon
-            newAltInfon.itmMode         <- mItem
-            newAltInfon.infMode         <- isUnknown
-            newAltInfon.intersectPos    <- ipGetLast
-            newAltInfon.infSize.format  <- fUnknown
-            newAltInfon.source          <- newListInfon
-        our infItr:: newAltInfItr
-            newAltInfItr.item           <- newAltInfon
-            newAltInfItr.state          <- sNonIterable
-            initFrontier(newAltInfItr)
-        return(newAltInfItr)
-        }
-    me bool: isASeq(our infon: i) <- {
-        return ((i.value.format==fLiteral and i.value.fType==LST) or i.value.format==fConcat)
-    }
-    void:closeListAtItem(our infItr: lastItem) <- {
-        our infItr: infItrToDelete <- lastItem.getNext(false)
-        me bool: itemExists <- infItrToDelete!=NULL
-        while(!(item.value.items.last() === lastItem.item)){
-            item.value.items.popLast()
-        }
-        withEach itm in item.value.items {
-            itm.isTentative <- false
-        }
-        if(stitchCmd != keepDots){
-            item.value.tailUnfinished <- false
-            item.countSize()
-        }
-    }
-    void: setListSeqFlags() <- {
-        if(isASeq(item)){state <- sFirstVisit; }
-        else{state <- sNotASeq;}
-    }
-    our POV: tryAddingTentativeChild() <- {
-        me string: lenStatus <- item.lengthStatus()
-        if(lenStatus == "L" or lenStatus == "?"){
-            our infon:: newInfon
-            our infon: infonType <- item.value.listSpec
-            if(infonType != NULL){
-                newInfon <deep- infonType // MUST: be a lazy cow copy
-            }else{
-                newInfon.value.fType   <- tUnknown
-                newInfon.infMode       <- isUnknown
-                newInfon.itmMode       <- mItem
-                newInfon.value.format  <- fUnknown
-            }
-            if(lenStatus == "?"){newInfon.isTentative <- true}
-            our POV: newInfNode <- item.value.items.pushLast(newInfon)
-            return(newInfNode)
-        }else if(lenStatus == "E"){
-            item.value.tailUnfinished <- false
-            return(NULL)
-        }else if(lenStatus == "G"){log("INFON TOO BIG")}
-        return(NULL)
-    }
-    me bool: goNext(me bool: skipDots) <- {
-        while(true){
-            if(item==NULL){return(false)}
-            if(infNode==NULL){logFatalError("ERROR: GN:infNode==NULL "+stringify())}
-            if(parent==NULL){logFatalError("ERROR: GN:parent==NULL "+stringify())}
-            if(infNode.next==NULL){
-                if(!skipDots){
-                    if(parent.item != NULL and parent.item.value.tailUnfinished){
-                        our POV: newChild <- parent.tryAddingTentativeChild()
-                        if(newChild == NULL){return(false)}
-                        infNode <- newChild
-                        item    <- infNode.item
-                        return(true)
-                    }else{item <- NULL; return(false)}
-                }else{item <- NULL; return(false)}
-            }
-            infNode <- infNode.next
-            item    <- infNode.item
-            if(item.itmMode == mTagDefn){
-                registerClass(item)
-            }else{return(true)}
-        }
-    }
-    bool: beginIterating(me bool: skipDots) <- {
-        our POV: firstNode
-        if(item.value.items.isEmpty()){
-            if(!skipDots and item.value.tailUnfinished){
-                firstNode <- tryAddingTentativeChild()
-                if(firstNode == NULL){item <- NULL; return(false)}
-            }
-            else{
-                if(!skipDots){item <- NULL}
-                return(false)
-            }
-        }
-        else{
-            firstNode <- item.value.items.begin()
-        }
-        our infItr:: tmp
-        copyThisTo(tmp)
-        parent     <- tmp   // TODO: After ptr bug is fixed, Allocate(parent, self)
-        infNode    <- firstNode
-        looseInhtd <- parent.looseMode!=false or parent.looseSize()
-        looseMode  <- false
-        looseTop   <- false
-        item       <- infNode.item
-        setListSeqFlags()
-        nestLvl    <- nestLvl+1
-        return(true)
-    }
-    void: goNextDeep(me bool: skipDots) <- {
-        if(state == sNonIterable){logFatalError("Trying to iterate nonIterable infItr")}
-        me int: tmpState <- state
-        if(state == sNotASeq and item.infMode == isUnknown and ! item.value.items.isEmpty()){
-            tmpState <- sFirstVisit
-        }
-        switch(tmpState) {
-            case sNotASeq: sSecondVisit:{  // Get the next item or set EOL
-                if(parent==NULL or nestLvl==0){
-                    state <- sEOL
-                    return()
-                }
-                if(goNext(skipDots)){
-                    setListSeqFlags()
-                    looseInhtd <- looseSize()
-                }else{
-                    me int: tmpNestLvl <- nestLvl
-                    self <deep- parent
-                    nestLvl <- tmpNestLvl - 1
-                    state   <- sSecondVisit
-                }
-            }
-            case sFirstVisit:{
-                if(item.value.items.isEmpty()){
-                    if(item.value.tailUnfinished){
-                        if(!beginIterating(skipDots)){
-                            state <- sSecondVisit
-                        }
-                    }else{
-                        state <- sSecondVisit
-                    }
-                }else{beginIterating(skipDots)}
-            }
-            case sInited: {state <- sFirstVisit}
-            case sEOL:    {item<-NULL}
-            case sInvalid:{item<-NULL;   state <- sError}
-            case sError:  {item<-NULL}
-            default: {print("Error: invalid iterator state:", state, "\n")}
-        }
-    }
-    our infItr: getNextDeep(me bool: skipDots) <- {
-        our infItr: retVal
-        Allocate(retVal)
-        copyThisTo(retVal)
-        retVal.goNextDeep(skipDots)
-        initFrontier(retVal)
-        return(retVal)
-    }
-    our infItr: getNext(me bool: skipDots) <- {
-        our infItr: retVal
-        Allocate(retVal)
-        copyThisTo(retVal)
-        if(retVal.goNext(skipDots)){return(retVal)}
-        return(NULL)
-    }
-    our infon: getPrevPtr() <- {
-        if(parent==NULL or item==NULL or infNode.prev==NULL) {return(NULL)}
-        return(infNode.prev.item)
-    }
-    our infItr: getNextExtended(me bool: skipDots) <- {
-        our infItr: nextItr <- getNextDeep(skipDots)
-        //log("    GNE:nextItr:"+nextItr.stringify())
-        if(nextItr.state == sError){return(NULL)}
-        //if(nextItr.nextAnd != NULL){nextItr.nextAnd <- nextItr.nextAnd.getNextExtended(false)}
-        while(nextItr.item.itmMode == mSubItems){
-            nextItr <- nextItr.getNextDeep(skipDots)
-        }
-        if(nextItr.item.isTentative){
-            our infItr: nxtOR <- nextItr.getNextExtended(true)
-            if(nxtOR != NULL){
-                if(!nextItr.item.isOrLike()){nextItr <- nextItr.makeOrItr(nextItr)}
-                nextItr.item.addToOrInfon(nxtOR)
-                nextItr.item.source.value.tailUnfinished <- false
-            }
-        }
-        return(nextItr)
-    }
-    void: copyThisTo(our infItr: to) <- {
-        to.item         <- item
-        to.parent       <- parent
-        to.infNode      <- infNode
-        to.target       <- target
-        to.looseMode    <- looseMode
-        to.looseTop     <- looseTop
-        to.looseInhtd   <- looseInhtd
-        to.nestLvl      <- nestLvl
-        to.state        <- state
-        to.stitchCmd    <- stitchCmd
-        to.pctTags      <- pctTags
-    }
-    void: deleteCrnt() <- {
-        infNode <- parent.item.deleteListNode(infNode)
-    }
-    void: insertNewPctTag(me string: tag, our infItr: newItr) <- {
-        our infItr[itr map string]: tagItr <- pctTags.find(tag)
-        if(tagItr == pctTags.end()){
-            pctTags.insert(tag, newItr)
-        }else{
-            tagItr.val.item.addInfItrToWrkList(newItr)
-        }
-    }
-    our infItr: findOrAddPctTag(me string: tag) <- {
-        our infItr: retVal
-        our infItr[itr map string]: tagItr <- pctTags.find(tag)
-        if(tagItr == pctTags.end()){
-            Allocate(retVal)
-            Allocate(retVal.item)
-            pctTags.insert(tag, retVal)
-        }else{
-            retVal <- tagItr.val
-        }
-        return(retVal)
-    }
-    void: insertBefore(our POV: itm, our infon: i) <- {
-        if(itm){
-            parent.item.value.items.insertBefore(itm, i)
-        } else {
-            parent.item.value.items.pushLast(i)
-        }
-    }
-
-    void: insertChildDotsBefore(our infItr: position) <- {
-        our infon:: newSubDots
-        newSubDots.itmMode <- mSubItems
-        newSubDots.infMode <- isLiteral
-        newSubDots.value.tailUnfinished <- true
-        newSubDots.value.fType <- LST
-        newSubDots.value.format <- fLiteral
-        item.value.items.insertBefore(position.infNode, newSubDots)
-        item.value.tailUnfinished <- false
-    }
     me string: stringify() <- {
-        me string: S <- "["
+        me string: S <- ""
         if(self==NULL){S<-S+"NULL"}
-        else if(state == sEOL){S<-S+" sEOL"}
-        else if(state == sError){S<-S+" sError"}
         else{
-            S <- S + mySymbol(self) + ":"
-            S <- S + item.mySymbol(item) + ":"
-            if(state==sSecondVisit){S <- "<" + S}
-            S <- S + stringifyInfon(item)
-            //if(wasProcessed){S <- S + "|wasProcessedTrue" }
-            //S <- S + "|nestLvl=" + toString(nestLvl)
-            //S <- S + "|state=" + stateStrings[state]
-            //S <- S + "(parent:" + parent.mySymbol(parent) + ")"
-            //if(nextAnd){S <- S+ " & "+ nextAnd.stringify()}
-            if(state==sSecondVisit){S <- S + ">SV"}
-            if(item.source){S <- S+ " source:"+item.source.mySymbol(item.source)+" "+ stringifyInfon(item.source)}
+            switch(ruleSet){
+                case rsInfon:{
+                    S <+- "INF:"+ stringifyInfon(LHS_item.item)
+                }
+                case rsMerge:{
+                    me string: equalStr <- " '=' "
+                    if (looseSize){equalStr <- " '==' "}
+                    S <+- "MRG:"+ stringifyInfon(LHS_item.item)
+                    if(RHS!=NULL) {S <+- equalStr+ stringifyInfon(RHS.item)}
+                }
+                case rsIntersect:{
+                    S <+- "INSCT:"+ stringifyInfon(LHS_item.item)
+                }
+                case rsPure:{
+                    S <+- "PURE:"
+                }
+            }
         }
-        S <- S+"]"
         return (S)
     }
-    void: INIT() <- {Allocate(infNode)}
-    void: initialize(our infon: inf) <- {
-        if(inf==NULL) {state <- sError; return()}
-        item <- inf
-        Allocate(parent)
-        setListSeqFlags()
-        nestLvl <- 0
-    }
-
+    void: INIT() <- {clearSymbol(self)}
 }
-struct GLOBAL{
-    void: frontierJoin(our infItr: iiA, our infItr: iiB)<-{
-        our infItr: tmpAddPrev          <- iiB.frontierPrev
-        our infItr: tmpThisNxt          <- iiA.frontierNext
-        iiA.frontierNext                <- iiB
-        iiB.frontierPrev                <- iiA
-        tmpThisNxt.frontierPrev         <- tmpAddPrev
-        tmpAddPrev.frontierNext         <- tmpThisNxt
-    }
-    void: frontierDetach(our infItr: toDetach)<-{
-        toDetach.frontierNext.frontierPrev       <- toDetach.frontierPrev
-        toDetach.frontierPrev.frontierNext       <- toDetach.frontierNext
-        toDetach.frontierNext                    <- toDetach
-        toDetach.frontierPrev                    <- toDetach
-    }
-    void: logFrontierLoop(our infItr: fItr, me string: ID)<-{
-        log("Frontier_____________"+ID)
-        our infItr: crntFrontierItem  <- fItr
-        our infItr: startItem         <- crntFrontierItem
-        me bool: loopAgain            <- crntFrontierItem != NULL
-        while(loopAgain){
-            log("    "+crntFrontierItem.mySymbol(crntFrontierItem)+" <"+crntFrontierItem.stringify()+ "> ")
-            crntFrontierItem <- crntFrontierItem.frontierNext
-            if(crntFrontierItem === startItem){loopAgain <- false}
-        }
-    }
-    void: initFrontier(our infItr: ii)<-{
-        if(ii.frontierPrev == NULL){ii.frontierPrev <- ii}
-        if(ii.frontierNext == NULL){ii.frontierNext <- ii}
-    }
-    me int: frontierCount(our infItr: ii)<-{
-        our infItr: crntFrontierItem  <- ii
-        our infItr: startItem         <- crntFrontierItem
-        me bool: loopAgain            <- crntFrontierItem != NULL
-        me int: counter               <- 0
-        while(loopAgain){
-            crntFrontierItem <- crntFrontierItem.frontierNext
-            if(crntFrontierItem === startItem){loopAgain <- false}
-            counter <+- 1
-        }
-        return(counter)
-    }
-}
+struct AItem{}
 model PartPath{
     our infon: path
     mode[dotField, colonField]: pathMode
     flag: wasTransfered
 }
-model transformAction{
-    our infItr: LHSItr
-    our infItr: RHSItr
-    flag: reject
-    our infItr: remainder
-    mode[sizeNotChecked, sizeFailed, sizeVerified, copySizeLHStoRHS, copySizeRHStoLHS]: sizeAction
-    mode[valueNotChecked, valueFailed, valueVerified, copyValueLHStoRHS, copyValueRHStoLHS]: valueAction
-    mode[noOperation, moveRHSFirstToFirstChild, moveRHSToFirstChild, moveRHSFirstToLHS]: listCommand
-    flag: copyRHSTypeToLHS
-    flag: addRemainderToSuccessor
-    flag: propogateLHSToLHSFirst
-    flag: propogateRHSToRHSFirst
-    BigInt: sizeToCopy
-    flag: breakDotCycle
-    flag: unknownAsList
-}
-struct transformAction{}
 struct pureInfon{
     our infon[multimap string]: index
     our infon[multimap int64]: T_index
@@ -703,21 +460,16 @@ struct ModelManager {
 
 struct GLOBAL{me ModelManager: modelMngr}
 
-
-//////////////////////////
-// Infon Interface Routines
-struct agent{
-    our infon: world
-    our infon: context
-    our infItr[list]: agenda
-    // me Locale locale
-
-    void: setErrorState(our infItr: infonWithError, me string: errorMesg) <- {
-        log("INFON ERROR: " + errorMesg)
-       // print("INFON ERROR: " + errorMesg+"\n")
-    }
-
+struct XformMgr{
+    their Agent: agent
+    our AItem[list]: agenda
+    const int: col1 <- 60
+    const int: col2 <- 90
+    const int: col3 <- 110
+    const int: col4 <- 122
+    // Concat Functions
     me bool: joinOnRight(our infon: LHS, our infon: RHS) <- { // Join RHS into LHS. Return true on success (so need no subscription).
+        logSeg("-JOR:")
         if(LHS.value.format==fLiteral and RHS.value.format==fLiteral){
             me int: LHSType <- LHS.value.fType
             if(LHSType == RHS.value.fType){
@@ -725,15 +477,18 @@ struct agent{
                     case NUM: {
                         LHS.infSize.num<-LHS.infSize.num * RHS.infSize.num
                         LHS.value.num<-(LHS.value.num * RHS.infSize.num) + RHS.value.num
+                        logSeg("-CCatNUM")
                     }
                     case STR: {
                         LHS.value.str.append(RHS.value.str)
                         LHS.infSize.num<-LHS.value.str.size()
+                        logSeg("-CCatSTR:"+LHS.value.str)
                     }
                     case LST: {
                         withEach element in RHS.value.items {
                             LHS.value.items.pushLast(element)
                         }
+                        logSeg("-CCatLST")
                     }
                     default: {return(false)}
                 }
@@ -742,198 +497,555 @@ struct agent{
         }
         return(false)
     }
-
-    void: processConcat(our infItr: concatItr) <- {
-        if(concatItr.state != sSecondVisit){
-            if(concatItr.state == sNotASeq){
-                JoinIfConcat(concatItr)
-            }
-        } else {  // SecondVisit
-            our infon: LHS <- concatItr.item
-            if(LHS.value.format==fConcat and !LHS.value.items.isEmpty() and LHS.value.items.head.isLast()){
-                LHS <deep- LHS.value.items.first()
-            }
-            JoinIfConcat(concatItr)
-        }
-    }
-
-    void: resolve(our infItr: ii)<-{
-        log("RESOLVING:"+ii.stringify())
-        our infItr: crntItr <- ii
-        me int[map our infItr]: closedLists
-        me int: numChoices <- crntItr.predecessors.size()
-        our transformAction[list]: actionStack
-        log("    RESOLVE1:" + stringifyInfon(crntItr.item) + "  Num Preds:" + toString(numChoices))
-        while(numChoices>0){
-            our transformAction: action <- crntItr.predecessors.last()
-            crntItr <- action.LHSItr
-            if(crntItr == NULL or crntItr.item===ii.item){break()}
-            numChoices <- crntItr.predecessors.size()
-            actionStack.pushFirst(action)
-            our infItr: parent <- crntItr.parent
-            if(parent == NULL){continue()}
-            log("    RESOLVE2:" + crntItr.stringify() + "  Num preds:" + toString(numChoices))
-            if(crntItr.addNewSubDots!=0) {
-                parent.insertChildDotsBefore(crntItr)
-            }
-            if(!closedLists.containsKey(parent)){
-                if(parent.item){
-                    log("closeListAtItem" + stringifyInfon(parent.item))
-                    parent.closeListAtItem(crntItr)
-                    closedLists.insert(parent, 1)
-                }
-            }
-        }
-
-        // Now Stitch
-        withEach stitchAction in actionStack{
-            if(stitchAction.LHSItr.state != sSecondVisit){
-                doAction(stitchAction)
-            }
-            processConcat(stitchAction.LHSItr)
-        }
-    }
-
-    void: addIdent(our infItr: LHSItr, our infItr: RHSItr) <- {
-    // LHS gets RHS as a new ident in its wrkList
-        if(RHSItr.item === LHSItr.item) {return()}
-
-        // Set propogation flag for #{} on LHS or RHS
-        RHSItr.target <- asID
-        if(RHSItr.item.itmMode==mSubItems){RHSItr.target<-asFirstParent}
-        if(LHSItr.item.itmMode==mSubItems){RHSItr.target<-asFirst}            // TODO: If bug, check this: What if it is both?
-     //   if(RHSItr.item.?==asLast){RHSItr.target<-asLastParent}
-     //   if(LHSItr.item.?==asLast){RHSItr.target<-asLast}
-
-        LHSItr.item.wrkList.pushLast(RHSItr)
-    }
-
-    me string: ptrToStr(our infon: I) <- {
-        me string: S <- stringifyInfon(I)
-        return(S)
-    }
-
-    void: prepWorkList(our infItr: ciItr) <- {
-        our infon: CI <- ciItr.item
-        if (CI.wrkLstPreped){return()}else{CI.wrkLstPreped <- 1}
-        me bool: done <- false
-        while(!done){
-            me string: loopStr <- "PrepWL-LOOP   " + stringifyInfon(CI)+"   "
-            me bool: loopAgain <- false
-            our infon: newTop<-NULL
-            if(CI.itmMode == mTagDefn){
-                loopStr <- loopStr + ":A:mTagDefn:"
-                modelMngr.indexDefinition(CI.type, CI)
-                log(loopStr)
-                break()
-            } else if(!CI.parts.isEmpty()){
-                loopStr <- loopStr + ":A:part_Tag"
-                withEach part in CI.parts{
-                    if(part.path.infMode == isTag){
-                        me string: partTag <- part.path.type.asGiven
-                        if(partTag == "size"){}
-                        else if(partTag == "first"){
-                            our infon: firstItm <- CI.getFirstItem()
-                            if(firstItm==NULL){logFatalError("Handle firstItm is null")}
-                            firstItm.takeWrkListFrom(part.path)
-                            part.wasTransfered <- true
-                        }
-                        else if(partTag == "last"){
-                            our infon: lastItm <- CI.getLastItem()
-                            if(lastItm==NULL){logFatalError("Handle LastItm is null")}
-                            lastItm.takeWrkListFrom(part.path)
-                            part.wasTransfered <- true
-                        }
-                        else if(partTag == "pred"){
-                        }else{log("TODO: Handle tag in prepWorkList():"+partTag)}
-                    }
-                }
-            } else if(CI.infMode == isTag){
-                loopStr <- loopStr + ":A:Access_type:"+CI.type.asGiven
-                our infon: infModel <- modelMngr.fetchModel(CI.type)
-                if(infModel){
-                    Allocate(newTop)
-                    infModel.copyAsTypeTo(newTop)
-                    newTop.itmMode <- mItem
-                } else {setErrorState(ciItr, CI.type.asGiven+" is not defined")}
-                if(ciItr.parent.item){
-                    ciItr.parent.item.value.index.insert(CI.type.asGiven, CI)
-                } else { // This section is to get items into World. In a fully streaming mode this isn't needed.
-                    world.value.index.insert(CI.type.asGiven, CI)
-                }
-            } else if(CI.argPos != apNoArgs){
-               loopStr <- loopStr + ":A:FUNC_ARGS"
-
-                our infon: tmp
-                if(CI.argPos == apArgIsFirstItem){tmp <- CI.getFirstItem()}
-                else {tmp <- CI.getLastItem()}
-                if(tmp!=NULL){
-                    tmp.wrkList.pushLast(makeInfItr(CI.funcArgs, NULL, NULL))
-                    CI.funcArgs <- NULL
-                    CI.argPos <- apNoArgs
-                }
-                if(CI.value.fType==LST){ciItr.state <- sFirstVisit}
-                else if(CI.value.fType!=LST){ciItr.state <- sNotASeq}
+    me bool: JoinIfConcat(our POV: pov) <- {
+        me bool: changeMade  <- false
+        if(pov.pParent!=NULL and (pov.pParent.item.value.format==fConcat)){
+            if(pov.isFirst()){ // Set Parent's type
             } else {
-                loopStr <- loopStr + ":A:No-action"
-            }
-
-            me int: intersectPos <- CI.intersectPos
-            if(intersectPos != ipNoIntersect){
-                our infon: src <- CI.source
-                switch(intersectPos){
-                    case ipGetLast   : {newTop <- src.getLastItem()}
-                    case ipGetFirst  : {newTop <- src.getFirstItem()}
-                    //case ipGetMarked : {newTop <- src.getMarked()}
+                our POV: prev <- pov.prev
+                if(prev != NULL){
+                    if(joinOnRight(prev.item, pov.item)){
+                        pov.pParent.item.value.items.erase(pov)
+                        logSeg("-erase:")
+                    }else{}  // Subscribe
                 }
-                if(newTop){
-                    withEach workItem in CI.wrkList{
-                        newTop.wrkList.pushLast(workItem)
-                        loopStr <- loopStr + ":B:PUSH( "+stringifyInfon(workItem.item)+" )"
+            }
+        }
+        return(changeMade)
+    }
+    me bool: processConcat(our AItem: aItem) <- {
+        me bool: changeMade  <- false
+        if(aItem.concatProcessed){return(changeMade)}else{aItem.concatProcessed<-true}
+        our infon: CI <- aItem.LHS_item.item
+        if(JoinIfConcat(aItem.LHS_item)){changeMade <- true}
+        return(changeMade)
+    }
+    // mergeRules Utility Functions
+    me int: matchLength(me string: A, me string: B)<-{
+        //log("matchLength: '"+A +"'     '" +B+"'")
+        me int: lastChar
+        me int: retVal <-0
+            lastChar <- min(A.size(), B.size())
+        if (lastChar==0){return(0)}
+        withEach pos in RANGE(0..lastChar){
+            if(A[pos]!= B[pos]){
+                return(pos-1)
+            }
+        }
+        return(lastChar)
+    }
+    our POV: mergeLooseStrings(our AItem: aItem) <- {
+        //log("mergeLooseStrings:"+aItem.stringify())
+        our infon: LHS <- aItem.LHS_item.item
+        our infon: RHS <- aItem.RHS.item
+        me int64: sizeDiff
+        me int64: RSize <- RHS.value.str.size()
+        me int64: LSize
+        if(LHS.value.format==fUnknown){
+            if(LHS.infSize.format == fUnknown){
+                sizeDiff            <- 0
+                LHS.value.format    <- fLiteral
+                LHS.value.str       <- RHS.value.str
+                LHS.value.sizeGiven <- true
+            }else if(LHS.infSize.format == fLiteral){
+                LSize       <- LHS.infSize.num.convertToIntVal()
+                sizeDiff            <- RSize - LSize
+                LHS.value.format    <- fLiteral
+                LHS.value.str       <- RHS.value.str.subStr(0, LSize)
+                LHS.value.sizeGiven <- false
+            }
+        }
+        else{
+            LSize <- LHS.value.str.size()
+            me int: matchLen <- matchLength(LHS.value.str, RHS.value.str)
+            me bool: matchFailed
+            if(matchLen==-1 or (matchLen < LSize and matchLen < RSize)){
+                matchFailed  <- true
+                aItem.reject <- true
+                aItem.LHS_item.rejected<-true
+                log("REJECTED")
+            }
+            else{
+                sizeDiff    <- RSize - LSize
+                matchFailed <- false
+            }
+        }
+        if(sizeDiff > 0 ){
+            me string: remainderStr <- RHS.value.str.subStr(convertToIntVal(RSize -sizeDiff), convertToIntVal(sizeDiff))
+            our infon: remainderInfon; Allocate(remainderInfon,remainderStr)
+            our POV:: remainder
+            remainder       <deep- aItem.RHS
+            remainder.item      <- remainderInfon
+            aItem.sizeToCopy    <- RSize - sizeDiff
+            return(remainder)
+        } else if(sizeDiff==0){
+            aItem.sizeToCopy    <- RSize
+        }
+        return(NULL)
+    }
+
+    our POV: mergeLooseNums(our AItem: aItem) <- {
+    }
+    // Agenda processing functions
+    void: closeIntersectAt(our POV: pov) <- {
+        log("closeIntersectAt:"+pov.outerPOV.stringify()+" <- " +pov.stringify())
+        pov.item.isTentative <- false
+        pov.outerPOV.item <deep- pov.item
+    }
+    void: validateItem(our POV: pov) <- {
+        me string: logStr <- "VALIDATE:" + pov.stringify() + "    PARENT:<"+pov.pParent.stringify()+">"
+        pov.item.isTentative <- false
+        their POV: parent <- pov.pParent
+        if(pov.outerPOV!=NULL and pov.outerPOV.item.isOrLike()){ // First check whether pov is in [...]
+            logStr <+- "[]"
+            closeIntersectAt(pov)
+        } else if(parent!=NULL and parent.item.value.tailUnfinished){ // Close a list at lastItem
+                logStr <+- ":LAST_ITEM"
+                parent.closeItemsAtPOV(pov)
+        }
+        if(pov.predecessors.size()==1){
+            logStr <+- ":TO_PRED:"
+            validateItem(pov.predecessors.first())
+        }else{logStr <+- ":SKIP_PRED:"}
+        log(logStr)
+    }
+
+    me bool: addAItemToAgenda(our AItem: aItem) <- {
+        me bool: itmAdded <- true
+        me string: logStr <- "        ADD_TO_AGENDA:"+stringifyAItem(aItem)
+        if(aItem.ruleSet == rsInfon){
+            //if(!aItem.LHS_item.item.isOnAgenda){
+                agenda.pushFirst(aItem)
+                aItem.LHS_item.item.isOnAgenda <- true
+            //} else {logStr <- logStr + " Already on agenda!"; itmAdded <- false}
+        }else{agenda.pushFirst(aItem)}
+        //log(logStr)
+        return(itmAdded)
+    }
+    our AItem: processInfonViaAgenda(our POV: item, our AItem: subscriber, our AItem: aParent)<-{
+        our AItem:: newAItem
+        newAItem.ruleSet  <- rsInfon
+        newAItem.LHS_item <- item
+        newAItem.step     <- 0
+        newAItem.indentLvl <- 0
+        if(subscriber != NULL){
+            newAItem.subscribers.pushFirst(subscriber)
+            subscriber.pendingTasks <+- 1
+            //logSeg(" ++"+subscriber.mySymbol(subscriber)+"_PT-a="+toString(subscriber.pendingTasks))
+            newAItem.indentLvl <- subscriber.indentLvl+1
+        }
+        if(aParent != NULL){
+            aParent.taskEnqueued <- true
+            newAItem.parent <- aParent
+            if(!(subscriber===aParent)) {aParent.pendingTasks <+- 1}
+            //logSeg(" ++"+newAItem.parent.mySymbol(newAItem.parent)+"_PT-b="+toString(newAItem.parent.pendingTasks))
+            newAItem.indentLvl <- aParent.indentLvl+1
+        }
+        return(newAItem)
+    }
+    our AItem: processMergeViaAgenda(our POV: LHS, our POV: RHS, me bool: looseSize, our AItem: subscriber, our AItem: aParent)<-{
+        our AItem:: newAItem
+        newAItem.ruleSet   <- rsMerge
+        newAItem.LHS_item  <- LHS
+        newAItem.RHS       <- RHS
+        newAItem.looseSize <- looseSize
+        newAItem.step      <- 0
+        newAItem.indentLvl <- 0
+        aParent.taskEnqueued <- true
+        if(subscriber != NULL){
+            newAItem.subscribers.pushFirst(subscriber)
+            subscriber.pendingTasks <+- 1
+            //logSeg(" ++"+subscriber.mySymbol(subscriber)+"_PT-c="+toString(subscriber.pendingTasks))
+            newAItem.indentLvl <- subscriber.indentLvl+1
+        }
+        if(aParent != NULL){
+            newAItem.parent <- aParent
+            if(!(subscriber===aParent)) {newAItem.parent.pendingTasks <+- 1}
+        }
+        addAItemToAgenda(newAItem)
+        return(newAItem)
+    }
+    our AItem: processIntersectViaAgenda(our POV: pov, our AItem: subscriber)<-{
+        //log("processINTERSECTViaAgenda:"+ pov.stringify())
+        //if(subscriber.parent!=NULL and subscriber.parent.LHSItr!=NULL){log("     LHSItr:"+subscriber.parent.LHSItr.topPOV.stringify())}
+        our AItem:: newAItem
+        newAItem.ruleSet   <- rsIntersect
+        newAItem.LHS_item  <- pov
+        newAItem.step      <- 0
+        newAItem.indentLvl <- 0
+        if(subscriber != NULL){
+            subscriber.taskEnqueued <- true
+            newAItem.subscribers.pushFirst(subscriber)
+            subscriber.pendingTasks <+- 1
+            //logSeg(" ++"+subscriber.mySymbol(subscriber)+"_PT-d="+toString(subscriber.pendingTasks))
+            newAItem.indentLvl <- subscriber.indentLvl+1
+            if(subscriber.parent!=NULL){
+                newAItem.LHSItr <- subscriber.parent.LHSItr
+                newAItem.RHSItr <- subscriber.parent.RHSItr
+            }
+            newAItem.parent <- subscriber
+        }
+        addAItemToAgenda(newAItem)
+        return(newAItem)
+    }
+    our POV: findNextLHS(our POV: LHSPov, our infItr: ii, me bool: skipDots, their bool: leftWas2ndVisit, me bool: itrBeginning, me int: LHSfType, me int: RHSfType, me bool: unknownAsList) <- {
+        logSeg("-nxtLHS")
+        our POV: LHSPovNxt
+        if((LHSfType != LST and !unknownAsList) and RHSfType == LST){
+            Allocate(LHSPovNxt)
+            LHSPovNxt <deep- LHSPov
+        }else{
+            LHSPovNxt <- LHSPov.getNextTight(ii, skipDots, leftWas2ndVisit, false, itrBeginning)
+        }
+        return(LHSPovNxt)
+    }
+    our POV: findNextRHS(our POV: RHSPov, our infItr: ii, me bool: skipDots, their bool: rightWas2ndVisit, me bool: itrBeginning, me int: LHSfType, me int: RHSfType) <- {
+        logSeg("-nxtRHS");
+        our POV: RHSPovNxt
+        if(LHSfType == LST and RHSfType != LST){
+            Allocate(RHSPovNxt)
+            RHSPovNxt <deep- RHSPov
+            RHSPovNxt.looseInhtd <- true
+        }else{
+            RHSPovNxt <- RHSPov.getNextTight(ii, skipDots, rightWas2ndVisit, false, itrBeginning)
+            //if(RHSPovNxt!=NULL and RHSPovNxt.looseMode){} else {}
+        }
+        return(RHSPovNxt)
+    }
+    // PROPAGATE
+    our AItem: propagate(our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque) <- {
+        me string: idnt <- indentStr(aItem.indentLvl)
+        me string: logStr <- idnt+"    PROPAGATE:"+stringifyInfon(LHSPov.item)
+        if(RHSPov){
+            if(RHSPov.looseSize()){logStr <+- " =="}
+            else{logStr <+- " ="}
+            if(RHSPov.looseTop){logStr <+- ":"}
+            logStr <+- " " + stringifyInfon(RHSPov.item)
+        }else{
+            if(remainder!=NULL){logStr <+- " "+stringifyInfon(remainder.item)}
+            else{logStr <+- "NULL"}
+        }
+        log(logStr)
+        logSeg("-PROP")
+        aItem.hasPropagated <- true
+        me bool: RHSExists <- RHSPov != NULL
+        me int: LHSfType <- LHSPov.item.value.fType
+        me int: RHSfType <- 0
+        if(RHSExists){RHSfType <- RHSPov.item.value.fType}
+        me bool: LHSIsFromALT
+        our POV: adjLhsPOV  <- LHSPov
+        our POV: adjRhsPOV  <- RHSPov
+        if(LHSPov.outerPOV != NULL){LHSIsFromALT <- true; adjLhsPOV <- LHSPov.outerPOV}
+        if(RHSExists and RHSPov.outerPOV != NULL){adjRhsPOV <- RHSPov.outerPOV}
+        our POV: LHSPovNext
+        our POV: RHSPovNext
+        me bool: leftWas2ndVisit
+        me bool: rightWas2ndVisit
+        me bool: LHSitrBeginning <- aItem.LHSItr!=NULL and adjLhsPOV===aItem.LHSItr.topPOV
+        me bool: RHSitrBeginning <- aItem.RHSItr!=NULL and adjRhsPOV===aItem.RHSItr.topPOV
+        if(!RHSExists and adjLhsPOV.item.value.items.isEmpty()){LHSitrBeginning <- false}
+        our AItem: aParent <- aItem
+        if(!LHSitrBeginning){aParent <- aItem.parent.parent}
+    if(aParent!=NULL and aParent.ruleSet==rsIntersect){aParent <- aParent.parent.parent}
+    if(RHSExists and aParent!=NULL and !aParent.LHS_item.item.value.sizeGiven and LHSPov.item.isTentative and !RHSPov.item.isTentative){LHSPov.item.isTentative <- false}
+        if(aParent == NULL){LHSPovNext <- NULL}  // At very top infon or propagating a lone RHS or interset.
+        else{LHSPovNext <- findNextLHS(adjLhsPOV, aParent.LHSItr, (!RHSExists or dontEnque), leftWas2ndVisit, LHSitrBeginning, LHSfType, RHSfType, false)}
+        if(remainder!=NULL){RHSPovNext <- remainder}
+        else if(RHSExists and aParent != NULL and aParent.RHSItr != NULL){
+            RHSPovNext <- findNextRHS(adjRhsPOV, aParent.RHSItr, dontEnque, rightWas2ndVisit, RHSitrBeginning, LHSfType, RHSfType)
+        }
+        me bool: LHSHasAlt <- (LHSPovNext != NULL and LHSPovNext.altPOV != NULL)
+        me bool: RHSHasAlt <- (RHSPovNext != NULL and RHSPovNext.altPOV != NULL)
+        me bool: candidateForLast
+        if(!dontEnque){
+            me bool: LHSisFinished <- LHSPovNext == NULL or leftWas2ndVisit or LHSPovNext.tentFromDots
+            me bool: RHSisFinished <- RHSPovNext == NULL or rightWas2ndVisit
+            if(RHSExists and adjLhsPOV.pParent!=NULL and ((LHSisFinished and RHSisFinished) or (aParent.RHS!=NULL and aParent.RHS.looseSize()))){
+                if(LHSPov.item.intersectPos == ipNoIntersect){
+                    if(LHSitrBeginning){
+                        log(idnt+"   candidatesForLastItem:" + adjLhsPOV.stringify() + "   EndsOn:"+LHSPovNext.stringify())
+                        adjLhsPOV.candidatesForLastItem.pushLast(LHSPovNext)
+                        candidateForLast <- true
+                    }else{
+                        log(idnt+"   candidatesForLastItem:" + adjLhsPOV.pParent.stringify() + "   EndsOn:"+LHSPov.stringify())
+                        adjLhsPOV.pParent.candidatesForLastItem.pushLast(LHSPov)
+                        candidateForLast <- true
                     }
-                    src.wrkList.clear()
-                    log(">******@NORMALIZE_SRC")
-                    normalize(src)
-                    log("<******@NORMALIZE_SRC")
-                } else {done <- true}
-            } else if(CI.infMode==newCursor) {
-                loopStr <- loopStr + ":B2:newCursor"
-                switch(CI.cursorMode){
-                    case cThis:   {} //{newTop <- thisItem}
-                    case cWorld:  {newTop <- world}
-                    case cContext:{newTop <- context}
-                    case cPrev:   {} //{newTop <- previous}
-                    case cNext:   {} //{newTop <- next}
-                    case cPred:   {newTop <- ciItr.findOrAddPctTag("pred").item}
-                    case cSucc:   {newTop <- ciItr.findOrAddPctTag("succ").item}
-                    case cEndPred:{newTop <- ciItr.findOrAddPctTag("endPred").item}
                 }
-            } else {done <- !loopAgain}
-            if(newTop!=NULL) {CI <deep- newTop}
-            //log(loopStr)
+            }
+            if(LHSPovNext == NULL){logSeg("-LNxt_NULL"); return(NULL)}
+            //ENQUEUE FOR PROCESSING
+            me int: RHSsAvailable <- 0
+            our POV: RHSAlt <- RHSPovNext
+            while(RHSAlt){RHSsAvailable <+- 1; RHSAlt <- RHSAlt.altPOV}
+            if(LHSIsFromALT){RHSsAvailable <+- 1}
+            me int: lCount <- 0
+            our POV: LHSAlt <- LHSPovNext
+            while(LHSAlt){
+                me int: numRHSs <- RHSsAvailable
+                if(RHSHasAlt and LHSAlt.item.isTentative){numRHSs <-- 1}
+                RHSAlt <- RHSPovNext
+                me bool: predPushed
+                while(RHSAlt){
+                    if(LHSAlt.item.isTentative and RHSAlt.item.isTentative){  // ?=?
+                        logSeg("-?=?")
+                        LHSAlt.addNewSubDots <- true
+                        LHSAlt.pParent.keepDots <- true
+                        //log(idnt+"    ENQUEq:"+  LHSAlt.stringify() + " === " + RHSAlt.stringify())
+                    } else {
+                        if((lCount>0 and (LHSHasAlt or RHSHasAlt)) or LHSIsFromALT){
+                        //if(numRHSs>1 or lCount>0){
+                            if(aParent.RHS){
+                                RHSAlt.looseInhtd <- aParent.RHS.looseInhtd or aParent.RHS.looseMode
+                                RHSAlt.looseTop   <- false
+                            }
+                            LHSAlt.item.pushAltIntoLineAlt(LHSPov, aParent.LHSItr.lineAltID, RHSAlt.item, RHSAlt)
+                            //log(idnt+"    ENQUEx:" + LHSAlt.stringify() + " === " + RHSAlt.stringify()+"  PREDx:"+LHSPov.stringify())
+                        } else {
+                            if(!predPushed){
+                                LHSAlt.predecessors.pushLast(LHSPov)
+                                predPushed <- true
+                            }
+                            RHSAlt.looseInhtd <- aParent.RHS.looseInhtd or aParent.RHS.looseMode
+                            RHSAlt.looseTop   <- false
+                            LHSAlt.item.addPOVToWrkList(RHSAlt)
+                            //log(idnt+"    ENQUEy:" + LHSAlt.stringify() + " === " + RHSAlt.stringify())
+                        }
+                    }
+                    RHSAlt <- RHSAlt.altPOV
+                }
+                lCount <+- 1
+                LHSAlt <- LHSAlt.altPOV
+            }
+        } else {if(LHSPovNext == NULL){return(NULL)}}
+        if((leftWas2ndVisit or aParent.LHS_item.item.intersectPos != ipNoIntersect) and aParent.parent!=NULL){aParent <- aParent.parent.parent}
+        our AItem: PIVA
+        me bool: breakLoop <- RHSExists and RHSPovNext==NULL and aParent!=NULL and aParent.RHSItr != NULL
+        if(breakLoop and LHSHasAlt){
+            PIVA <- processInfonViaAgenda(LHSPovNext.altPOV, NULL, aParent)
+            logSeg("-BRKLOOP-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
+        }
+        else{
+            PIVA <- processInfonViaAgenda(LHSPovNext, NULL, aParent)
+            logSeg("-PROP-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
+        }
+        if(!candidateForLast){LHSPovNext.altPOV <- NULL}
+        if(RHSPovNext!=NULL){RHSPovNext.altPOV <- NULL}
+        if(PIVA){PIVA.candidateForLast <- candidateForLast}
+        return(PIVA)
+    }
+    void: appendToUnfinishedList(our AItem: aItem, our infon: inf) <- {
+        if(!inf.value.tailUnfinished){logFatalError("ERROR: tailUnfinished FALSE:"+ stringifyInfon(inf))}
+        inf.value.items.pushLast(inf)
+        addAItemToAgenda(aItem)
+    }
+    void: fulfillSubscriptions(our AItem: aItem) <- {
+        me string: S
+        while(!aItem.subscribers.isEmpty()){
+            our AItem: sub <- aItem.subscribers.first()
+            aItem.subscribers.popFirst()
+            sub.LHS_item.item.isNormed <- false
+            sub.notFirstVisit <- true
+            me bool: itmAdded <- addAItemToAgenda(sub)
+            if(itmAdded){S<+-":"+sub.mySymbol(sub)}
+        }
+        if(S != ""){logSegStartCol("FFS"+S,col3)}
+    }
+    // PAI
+    void: processAgendaItem(our AItem: aItem, me int: AlternativesNestLvl)<-{
+        //log("________________________________________")
+        me bool: continueLoop    <- true
+        me bool: doFulfillSubs <- false
+        aItem.taskEnqueued     <- false
+        me string: idnt <- indentStr(aItem.indentLvl)
+        logSeg(indentedStr(">>"+stringifyAItem(aItem), aItem.indentLvl, col1))
+        if(aItem.notFirstVisit){
+            aItem.pendingTasks <-- 1
+            //logSeg(" --"+aItem.mySymbol(aItem)+"_PT-e="+toString(aItem.pendingTasks))
+        }
+        me int: count <- 0
+        while(continueLoop){
+            continueLoop <- false
+            switch(aItem.ruleSet){
+                case rsInfon:{
+                    if(aItem.LHS_item.item.isNormed){
+                        fulfillSubscriptions(aItem)
+                        logSegStartCol("<<:NRMD",col4)
+                        logFlush()
+                        return()
+                    }
+                    initRules(aItem)
+                    if(tagDefRules(aItem)){continueLoop <- true}
+                    else if(partsRules(aItem)){continueLoop <- true}
+                    else if(derefTagRules(aItem)){continueLoop <- true}
+                    else if(funcArgRules(aItem)){continueLoop <- true}
+                    else if(function_altRules(aItem)){continueLoop <- false}
+                    else if(lookUpCursorRules(aItem)){continueLoop <- true}
+                    else if(wrkLstRules(aItem)){continueLoop <- false}
+                    else if(processConcat(aItem)){continueLoop <- true}
+                    else{
+                        if(aItem.pendingTasks < 0){log("@@@@@@@@"+aItem.parent.mySymbol(aItem)+".PT="+toString(aItem.pendingTasks))}
+                        if(aItem.pendingTasks==0){
+                            cleanUpInfon(aItem)
+                            doFulfillSubs <- true
+                            our AItem: aParent <- aItem.parent
+                            if(aParent != NULL){
+                                aParent.pendingTasks <-- 1
+                                //logSeg(" --"+aParent.mySymbol(aParent)+"_PT-f="+toString(aParent.pendingTasks))
+                                if(aParent.pendingTasks == 0){
+                                    logSegStartCol("ADP:"+aParent.mySymbol(aParent),col3)
+                                    addAItemToAgenda(aParent)
+                                }
+                            }
+                        }
+                    }
+                }
+                case rsMerge:{
+                    our AItem: nextAItem
+                    if(aItem.mergeFinished){
+                        fulfillSubscriptions(aItem)
+                        logSegStartCol("<<:MFIN", col4)
+                        logFlush()
+                        return()
+                    }
+                    if(aItem.RHS==NULL){
+                        logSeg("-NoRHS")
+                        if(aItem.LHS_item.item.value.fType == LST){initListIterators(aItem)}
+                        nextAItem <- propagate(aItem, aItem.LHS_item, NULL, NULL, false, false)
+                        if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
+                        if(nextAItem){addAItemToAgenda(nextAItem)}
+                        aItem.mergeFinished <- true
+                    } else {
+        if(aItem.step ==0){aItem.step <- 1}  //TODO: optimize so that this isn't needed.
+                        switch(aItem.step){
+                            case 0:{
+                                our AItem: PIVA <- processInfonViaAgenda(aItem.RHS, aItem, NULL)
+                                addAItemToAgenda(PIVA)
+                                logSeg("-MC0-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
+                                aItem.step <- 1
+                            }
+                            case 1:{
+                                mergeSizeRules(aItem)  //CHK: FInish this: Perhaps move it in rsInfon. Also, do it AFTER merge if needed.
+                                our POV: remainder <- mergeRules(aItem)
+                                //log("aItem.pendingTasks:" + toString(aItem.pendingTasks))
+                                logSeg("-MC1")
+                                if(!aItem.reject){
+                                    nextAItem <- propagate(aItem, aItem.LHS_item, aItem.RHS, remainder, aItem.looseSize, (aItem.reject and aItem.parent.candidateForLast))
+                                    if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
+                                    aItem.mergeFinished <- true
+                                    if(nextAItem){addAItemToAgenda(nextAItem)}
+                                } else{
+                                    if(aItem.parent.candidateForLast){
+                                        nextAItem <- propagate(aItem, aItem.LHS_item, aItem.RHS, remainder, aItem.looseSize, (aItem.reject and aItem.parent.candidateForLast))
+                                        if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
+                                        aItem.mergeFinished <- true
+                                        if(nextAItem){addAItemToAgenda(nextAItem)}
+                                    } else {
+                                        if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                case rsIntersect:{
+                    our infon: CI <- aItem.LHS_item.item
+                    our infon: innr <- CI.source
+                    our AItem: nextAItem
+                    switch(aItem.step){
+                        case 0:{
+                            // TODO: proccess .innr parts
+                            if(CI.isOrLike()){
+                                if(!innr.value.tailUnfinished){
+                                    our POV: innrPov <- innr.value.items.head
+                                    while(innrPov != NULL){
+                                        our AItem: PIVA <- processInfonViaAgenda(innrPov, NULL, aItem)
+                                        addAItemToAgenda(PIVA)
+                                        innrPov <- innrPov.next
+                                        logSeg("-IC0-OR-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
+                                    }
+                                }
+                            } else {  // CI is FunctionLike
+                                our POV:: srcPOV; srcPOV.item <- innr
+                                our AItem: PIVA <- processInfonViaAgenda(srcPOV, aItem, NULL)
+                                addAItemToAgenda(PIVA)
+                                logSeg("-IC0-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
+                            }
+                            aItem.step <- 1
+                        }
+                        case 1:{
+                            logSeg("-IC1")
+                            our infon: newTop    <- NULL
+                            if(CI.isOrLike()){  // Eliminate if only 1 non - reject.
+                                logSeg("-IS_OR_LIKE")
+                                if(!innr.value.tailUnfinished){
+                                    our POV: lastOK   <- NULL
+                                    me int: numOK <- 0
+                                    our POV: pov <- innr.value.items.head
+                                    while(pov != NULL){
+                                        // TODO: if(sizesNotCompatable()){markAsReject or notLast}
+                                        if(!pov.rejected){
+                                            if(!pov.predecessors.isEmpty()){log(idnt+"            pov:"+ pov.mySymbol(pov)+":"+ pov.stringify() + "  Pred:"+ pov.predecessors[0].stringify())}
+                                            numOK <+- 1
+                                            lastOK <- pov
+                                        } else if(!pov.predecessors.isEmpty()){log(idnt+"          x pov:"+ pov.stringify() + "  Pred:"+ pov.predecessors[0].stringify())}
+                                        pov <- pov.next
+                                    }
+                                    if(numOK == 1){
+                                        newTop <- lastOK.item
+                                        aItem.LHS_item.predecessors <- lastOK.predecessors
+                                        if(newTop.isTentative){
+                                            newTop.isTentative <- false
+                                            if(lastOK.predecessors.size()==1){
+                                                our POV: pred <- lastOK.predecessors[0]
+                                                log("-TryCloseTentative " + lastOK.stringify() + "  PREDc:"+pred.stringify())
+                    //                            validateItem(pred)      // TODO: Why doesn't this work?
+                                            }
+                                        }
+                                    }
+                                    doFulfillSubs <- true
+                                } else {
+                                    log("TODO: IS_OR_LIKE: tailUnfinished")
+                                    doFulfillSubs <- true
+                                }
+                            } else {  // CI is FunctionLike
+                                switch(CI.intersectPos){
+                                    case ipGetLast   : {newTop <- innr.getLastItem()}
+                                    case ipGetFirst  : {newTop <- innr.getFirstItem()}
+                                    //case ipGetMarked : {newTop <- innr.getMarked()}
+                                }
+                                if(!(newTop==NULL)){
+                                    newTop.takeWrkListFrom(CI)
+                                    logSeg("-GET_LSAT")
+                                }else{log("Handle LastItm is null")}
+                                doFulfillSubs <- true
+                            }
+                            if(newTop){CI <deep- newTop}
+                            else{} // TODO: return Subscriptions
+                            aItem.step <- 2
+                        }
+                    }
+                }
+                case rsPure:{
+                }
+            }
+            count <+- 1
+        }
+        if(doFulfillSubs){fulfillSubscriptions(aItem)}
+        //aItem.LHS_item.item.isNormed <- true
+        logSegStartCol("<<:DONE", col4)
+        logFlush()
+    }
+    void: processAgenda()<-{
+        withEach count in WHILE(!agenda.isEmpty()) {
+            //log("_____"+toString(count)+"_____")
+            if (count > 400){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
+            our AItem: aItem <- agenda.last(); agenda.popLast()
+            processAgendaItem(aItem, 0)
+            //aItem.LHS_item.item.isOnAgenda <- false
         }
     }
-
-    me bool: PropagateIndirectItem(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
-    // HANDLE #{}, [....] and other cases of identities of child nodes:
-        me bool: ret <- false
-        their pureInfon: LHS_Value <- LHS.value
-        if(LHS_Value.fType==LST and !LHS_Value.items.isEmpty()){
-            if(RHSItr.target == asFirst){
-                action.propogateLHSToLHSFirst <- true
-                ret<-true
-            }
-            // if(RHSItr.target == asLast or LHS.target==asLastParent)   {addIdent(makeInfItr(LHS_Value.items.back(), LHS, LHS_Value.items.size()-1), RHS);  ret<-1;}
-        }
-        if(RHSItr.item.value.fType==LST and !RHSItr.item.value.items.isEmpty()){
-            if(RHSItr.target == asFirstParent) {
-                action.propogateRHSToRHSFirst <- true
-                ret<-true
-            }
-        }
-        return(ret)
-    }
-
+    // Xform Utility Functions
     void: DO_COPY(their pureInfon: from, their pureInfon: to, me BigInt: sizeToCopy) <- {
         me int: fromsType <- from.fType
         if(fromsType==to.fType){
@@ -950,603 +1062,245 @@ struct agent{
         } else {  // TODO: Do Convert + copy
         }
     }
-
-    me int: matchLength(me string: A, me string: B)<-{
-        me int: lastChar
-        me int: retVal <-0
-        lastChar <- min(A.size(), B.size())
-        if (lastChar==0){return(0)}
-        withEach pos in RANGE(0..lastChar){
-            if(A[pos]!= B[pos]){
-                return(pos-1)
-            }
+    me bool: sizesAreCompatable(our infon: LHS, our infon: RHS)<-{return(true)}
+    me void: initListIterators(our AItem: aItem) <- {
+        if(aItem.LHSItr==NULL){
+            Allocate(aItem.LHSItr); aItem.LHSItr.initialize(aItem.LHS_item)
+            if(aItem.parent.parent){aItem.LHSItr.iParent <- aItem.parent.parent.LHSItr}
+            lastLineAltID <+- 1; aItem.LHSItr.lineAltID <- lastLineAltID
         }
-        return(lastChar)
+        if(aItem.RHS!=NULL and aItem.RHSItr==NULL){
+            Allocate(aItem.RHSItr)
+            aItem.RHSItr.initialize(aItem.RHS)
+            if(aItem.parent.parent){aItem.RHSItr.iParent <- aItem.parent.parent.RHSItr}
+        }
+    }
+    me void: mergeRHSIntersect(our AItem: aItem) <- {
+        logSeg("-mrgRHSInst")
+        // TODO: make this work with inverted and marked intersections
+        our infon: LHS <- aItem.LHS_item.item
+        our infon: RHS <- aItem.RHS.item
+        if(RHS.isOrLike()){
+    if(aItem.RHS.linearAltID>0) {RHS.source.value.tailUnfinished<-false}  // TODO-WORKING: Mark this elsewhere
+                our infon: newListInfon <- makeSrcInfon()
+                our POV: pov <- RHS.source.value.items.head
+                while(pov != NULL){
+                    // TODO: if(sizesNotCompatable()){markAsReject or notLast}
+                    our infon:: altItem
+                    LHS.copyAsTypeTo(altItem,false)
+                    altItem.isTentative <- true
+                    our POV:: RHSPov; RHSPov <deep- pov
+                    altItem.addPOVToWrkList(RHSPov)
+                    our POV: LHSPOV <- newListInfon.value.items.pushLast(altItem)
+                    //LHSPOV.pParent  <- aItem.LHS_item
+                    LHSPOV.outerPOV <- aItem.LHS_item
+                    LHSPOV.predecessors <- pov.predecessors
+                    pov <- pov.next
+                }
+                LHS.convertThisToIntersection(newListInfon)
+                LHS.source.value.tailUnfinished <- RHS.source.value.tailUnfinished
+                LHS.source.value.sizeGiven <- true
+                LHS.altRulesApplied <- false
+        }else{
+            // TODO: subscribe to RHS updates then retry
+        }
+    }
+    // Prep WorkList Functions
+
+    void: initRules(our AItem: aItem) <- {
+        if(aItem.initRulesApplied){return()} else {aItem.initRulesApplied <- true}
+        aItem.hasPropagated <- false
     }
 
+    me bool: tagDefRules(our AItem: aItem) <- {
+        our infon: CI        <- aItem.LHS_item.item
+        me bool: changeMade  <- false
+        if(CI.itmMode == mTagDefn){
+            modelMngr.indexDefinition(CI.type, CI)
+            changeMade <- true
+        }
+        return(changeMade)
+    }
+    me bool: partsRules(our AItem: aItem) <- {
+        our infon: CI        <- aItem.LHS_item.item
+        me bool: changeMade  <- false
+        if(!CI.parts.isEmpty()){
+            withEach part in CI.parts{
+                if(part.path.infMode == isTag){
+                    me string: partTag <- part.path.type.asGiven
+                    if(partTag == "size"){}
+                    else if(partTag == "first"){
+                        our infon: firstItm <- CI.getFirstItem()
+                        if(firstItm==NULL){logFatalError("Handle firstItm is null")}
+                        firstItm.takeWrkListFrom(part.path)
+                        part.wasTransfered <- true
+                        changeMade <- true
+                    }
+                    else if(partTag == "last"){
+                        our infon: lastItm <- CI.getLastItem()
+                        if(lastItm==NULL){logFatalError("Handle LastItm is null")}
+                        lastItm.takeWrkListFrom(part.path)
+                        part.wasTransfered <- true
+                        changeMade <- true
+                    }
+                    else if(partTag == "pred"){
+                    }else{log("TODO: Handle tag in prepWorkList():"+partTag)}
+                }
+            }
+        }
+        return(changeMade)
+    }
+    me bool: derefTagRules(our AItem: aItem) <- {
+        our infon: CI        <- aItem.LHS_item.item
+        me bool: changeMade  <- false
+        if(CI.infMode == isTag){
+            /*our infon: infModel <- modelMngr.fetchModel(CI.type)
+             changeMade  <- true
+            if(infModel){
+                Allocate(newTop)
+                infModel.copyAsTypeTo(newTop)
+                newTop.itmMode <- mItem
+            }else{
+                changeMade  <- false
+                a.setErrorState(ciItr, CI.type.asGiven+" is not defined")
+            }
+            if(ciItr.Parent.item){
+                ciItr.Parent.item.value.index.insert(CI.type.asGiven, CI)
+            }else{ // This section is to get items into World. In a fully streaming mode this isn't needed.
+                agent.world.value.index.insert(CI.type.asGiven, CI)
+            }*/
+        }
+        return(changeMade)
+    }
+    me bool: funcArgRules(our AItem: aItem) <- {
+        our infon: CI        <- aItem.LHS_item.item
+        me bool: changeMade  <- false
+        if(CI.argPos != apNoArgs){
+            our infon: tmp
+            if(CI.argPos == apArgIsFirstItem){tmp <- CI.getFirstItem()}
+            else {tmp <- CI.getLastItem()}
+            if(tmp!=NULL){
+                our POV:: newPOV
+                newPOV.item    <- CI.funcArgs
+                tmp.wrkList.pushLast(newPOV)
+                CI.funcArgs <- NULL
+                CI.argPos   <- apNoArgs
+                changeMade  <- true
+            }
+            //if(CI.value.fType==LST){ciItr.state <- sFirstVisit}
+            //else if(CI.value.fType!=LST){ciItr.state <- sNotASeq}
+        }
+        return(changeMade)
+    }
+    me bool: lookUpCursorRules(our AItem: aItem) <- {
+        our infon: CI        <- aItem.LHS_item.item
+        our infon: newTop    <- NULL
+        me bool: changeMade  <- false
+        if(CI.infMode==newCursor) {
+            switch(CI.cursorMode){
+                case cThis:   {} //{newTop <- thisItem}
+                case cWorld:  {newTop <- agent.world}
+                case cContext:{newTop <- agent.context}
+                case cPrev:   {} //{newTop <- previous}
+                case cNext:   {} //{newTop <- next}
+                /*case cPred:   {newTop <- ciItr.infNode.findOrAddPctTag("pred").item}
+                case cSucc:   {newTop <- ciItr.infNode.findOrAddPctTag("succ").item}
+                case cEndPred:{newTop <- ciItr.infNode.findOrAddPctTag("endPred").item}
+                */
+                //changeMade  <- true
+            }
+            if(newTop!=NULL) {
+                CI <deep- newTop
+                changeMade <- true
+            }
+        }
+        return(changeMade)
+    }
+    me bool: wrkLstRules(our AItem: aItem) <- {
+        me bool: stopAndWait <- false
+        our POV: RHSPov    <- NULL
+        me bool: looseSize <- false
+        while(!aItem.LHS_item.item.wrkList.isEmpty()){
+            RHSPov <- aItem.LHS_item.item.wrkList.first()
+            aItem.LHS_item.item.wrkList.popFirst()
+            aItem.LHS_item.item.usedWrkList.pushLast(RHSPov)
+            looseSize <- RHSPov.looseSize()
+            processMergeViaAgenda(aItem.LHS_item, RHSPov, looseSize, aItem, aItem)
+            aItem.hasPropagated <- true
+            stopAndWait <- true
+        }
+        if(!aItem.hasPropagated){
+            processMergeViaAgenda(aItem.LHS_item, RHSPov, false, aItem, aItem)
+            aItem.hasPropagated <- true
+            stopAndWait <- true
+        }
+        return(stopAndWait)
+    }
+    me bool: function_altRules(our AItem: aItem) <- {
+        our infon: CI <- aItem.LHS_item.item
+        if(CI.altRulesApplied){return(false)}
+        else{CI.altRulesApplied <- true}
+        me bool: stopAndWait <- false
+        if(CI.intersectPos != ipNoIntersect){
+            processIntersectViaAgenda(aItem.LHS_item, aItem)
+            stopAndWait <- true
+        }
+        return(stopAndWait)
+    }
+
+    void: cleanUpInfon(our AItem: aItem) <- {
+        our infon: CI <- aItem.LHS_item.item
+        // {? ...}  --> {...}
+        if(CI.value.tailUnfinished and !CI.value.items.isEmpty() and CI.value.items.last().isTentative){
+            CI.value.items.popLast()
+        }
+        // (234) --> 234
+        if(CI.value.format == fConcat and !CI.value.items.isEmpty() and CI.value.items.head.isLast()){
+            CI <deep- CI.value.items.first()
+            //logSeg("CLEAN_CC("+stringifyInfon(CI)+")")
+            if(aItem.parent != NULL){aItem.parent.mergeFinished <- false}
+            JoinIfConcat(aItem.LHS_item)
+        }
+if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
+        if(CI.value.fType==LST){
+            log("CLEAN_LIST:"+toString(aItem.LHS_item.candidatesForLastItem.size()))
+            if(aItem.LHS_item.candidatesForLastItem.size()==1){
+                our POV: lastItem <- aItem.LHS_item.candidatesForLastItem.last()
+                aItem.LHS_item.candidatesForLastItem.popLast()
+                logSeg("CLEAN_LAST:" + lastItem.stringify())
+                if(lastItem.outerPOV){
+                    //lastItem.outerPOV.item <- lastItem.item
+                    //lastItem.outerPOV.predecessors <- lastItem.predecessors
+                    validateItem(lastItem)//.outerPOV)  ///FIXING
+                }else {
+                    validateItem(lastItem)
+                }
+            } /*else if(aItem.LHS_item.candidatesForLastItem.size()==0){
+                if(CI.value.items.tail!=NULL and (!CI.value.sizeGiven and CI.infSize.format==fUnknown)){validateItem(CI.value.items.tail)}
+            } */
+        }
+    }
+}
+
+//////////////////////////
+// Infon Interface Routines
+struct Agent{
+    our infon: world
+    our infon: context
+    me XformMgr: xformMgr
+    // me Locale locale
+
+    void: setErrorState(our POV: POVWithError, me string: errorMesg) <- {
+        log("INFON ERROR: " + errorMesg)
+       // print("INFON ERROR: " + errorMesg+"\n")
+    }
     void: CO_SUBSCRIBE_VALUES(their infon: from, their infon: to) <- {}
     void: CO_SUBSCRIBE_SIZES(their infon: from, their infon: to) <- {}
 
-    void: JoinIfConcat(our infItr: node) <- {
-        if(node.parent!=NULL and node.parent.item!=NULL and (node.parent.item.value.format==fConcat)){
-            if(node.infNode.isFirst()){ // Set parent's type
-            } else {
-                our infon: prev <- node.getPrevPtr()
-                if(joinOnRight(prev, node.item)){
-                    node.deleteCrnt()
-                } else {}  // Subscribe
-            }
-        }
-    }
-    void: doAction(our transformAction: action) <- {
-        our infItr: LHSItr <- action.LHSItr
-        our infItr: RHSItr <- action.RHSItr
-        our infon: LHS <- LHSItr.item
-        our infon: RHS <- RHSItr.item
-        if(action.reject){return()}
-        if(action.copyRHSTypeToLHS){
-            LHS.value.fType <- RHS.value.fType
-            LHS.infMode <- RHS.infMode
-        }
-        me int: sizeAction    <- action.sizeAction
-        if(sizeAction == copySizeRHStoLHS){
-            DO_COPY(RHS.infSize, LHS.infSize, 0)
-        }
-        else if(sizeAction == copySizeLHStoRHS){
-            DO_COPY(LHS.infSize, RHS.infSize, 0)
-        }
-        me int: valueAction   <- action.valueAction
-        if(valueAction == copyValueRHStoLHS){
-            DO_COPY(RHS.value, LHS.value, action.sizeToCopy)
-        }
-        else if(valueAction == copyValueLHStoRHS){
-            DO_COPY(LHS.value, RHS.value, action.sizeToCopy)
-        }
-        me int: listCommand <- action.listCommand
-        switch(listCommand){
-            case moveRHSFirstToFirstChild:{
-                our infon: LHSFirst     <- LHS.getFirstItem()
-                our infon: RHSFirst     <- RHS.getFirstItem()
-                our infItr: RHSFirstItr <- makeInfItr(RHSFirst, LHSItr, NULL)
-                LHSFirst.addInfItrToWrkList(RHSFirstItr)
-            }
-            case moveRHSToFirstChild:{
-            }
-            case moveRHSFirstToLHS:{
-            }
-        }
-        if(action.propogateLHSToLHSFirst){
-            //addIdent(makeInfItr(LHS.value.items.first(), LHS, NULL), RHSItr)
-        }
-        if(action.propogateRHSToRHSFirst){
-            //addIdent(LHS, makeInfItr(RHS.value.items.first(), RHSItr, NULL))
-        }
-    }
-    void: tryMergeSize(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
-        our infon: RHS <- RHSItr.item
-        action.reject <- false
-        action.sizeAction <- sizeNotChecked
-        me int: LHSFormat <- LHS.infSize.format
-        me int: RHSFormat <- RHS.infSize.format
-        if(!RHSItr.looseSize()){
-            me int: RHSType <- RHS.value.fType
-            if(RHSType!=LHS.value.fType){
-                log("MUST: Ensure mixed-format infon Ends match: LHSType=" + fTypeStrings[LHS.value.fType] + "    RHSType="+ fTypeStrings[RHSType])
-                return()
-            }
-            me int: LHSInfMode <- LHS.infMode
-            if(LHSFormat != fUnknown and RHSFormat != fUnknown){
-                if(LHS.infSize.num != RHS.infSize.num){action.reject <- true}
-            }
-            else if(LHSFormat == fUnknown and RHSFormat != fUnknown){
-                action.sizeAction<-copySizeRHStoLHS
-                action.sizeToCopy<-RHS.infSize.num
-            }
-            else if(LHSFormat != fUnknown and RHSFormat == fUnknown){
-                action.sizeAction<-copySizeLHStoRHS
-            }
-            else if(LHSFormat == fUnknown and RHSFormat == fUnknown){
-                CO_SUBSCRIBE_SIZES(LHS, RHS)
-            }
-        }else{
-            //TODO: set action.sizeToCopy
-            if(LHSFormat == fLiteral and RHSFormat == fLiteral){}
-        }
-    }
-    void: tryMergeValue(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
-        our infon: RHS <- RHSItr.item
-        if(LHS.value.fType != LST and RHS.value.fType != LST){
-            if(LHS.value.format == fConcat or RHS.value.format == fConcat){
-                logFatalError("WARNING: tryMerge, item is concat but not list")
-            }
-            if(LHS.value.format == fUnknown and RHS.value.format == fUnknown){
-                // $=$, _=_, *_+$=*_+$, *5+$=*3+$, *(*5+1 *6+2)+$=*(*5+1=*6+2)+$
-            }
-            else if(LHS.value.format == fUnknown and RHS.value.format == fLiteral){
-                // _ = 123, $ = 'hi'
-                their pureInfon: LHSValue <- LHS.value
-                their pureInfon: RHSValue <- RHS.value
-                me int: RHSType <- RHSValue.fType
-                if(RHSType==LHSValue.fType){
-                    me BigInt: LSize <- LHS.infSize.num
-                    me BigInt: RSize <- RHS.infSize.num
-                    switch(RHSType){
-                        case NUM:{
-                            if(RHSItr.looseSize()){
-                                switch(LHS.infSize.format){
-                                    case fUnknown:{
-                                        action.valueAction <- copyValueRHStoLHS
-                                        //MUST: use range for size
-                                        log("LooseSize1:fUnknown   MUST: use range for size")
-                                    }
-                                    case fLiteral:{
-                                        action.valueAction <- copyValueRHStoLHS
-                                        action.sizeToCopy  <- LSize
-                                        //MUST: handle remainder here
-                                        log("LooseSize1:fLiteral   MUST: handle remainder here")
-                                    }
-                                    case fConcat:{
-                                        log("LooseSize1:fConcat  MUST: handle concat")
-                                    }
-                                }
-                            }else{
-                                switch(LHS.infSize.format){
-                                    case fUnknown:{
-                                        //log("!LooseSize1:fUnknown")
-                                        action.valueAction <- copyValueRHStoLHS
-                                    }
-                                    case fLiteral:{
-                                        //log("!LooseSize1:fLiteral")
-                                        action.valueAction <- copyValueRHStoLHS
-                                        action.sizeToCopy  <- LSize
-                                    }
-                                    case fConcat:{
-                                        log("!LooseSize1:fConcat  MUST: handle concat")
-                                    }
-                                }
-                            }
-                        }
-                        case STR:{
-                            if(RHSItr.looseSize()){
-                                //"{*3+$ *4+$} == 'CatDogs'",  "$ =: 'Hello'",  "{*3+$|...}=='CatHatBatDog'"
-                                switch(LHS.infSize.format){
-                                    case fUnknown:{//MUST: set range of sizes
-                                        log("LooseSize2:fUnknown   MUST: set range of sizes")
-                                        action.valueAction <- copyValueRHStoLHS
-                                    }
-                                    case fLiteral:{
-                                        action.valueAction <- copyValueRHStoLHS
-                                        action.sizeToCopy  <- LSize
-                                        //MUST: handle remainder here
-                                        log("LooseSize2:fLiteral   MUST: handle remainder here")
-                                    }
-                                    case fConcat:{
-                                        log("LooseSize2:fConcat   MUST: handle concat")
-                                    }
-                                }
-                            }else{
-                                switch(LHS.infSize.format){
-                                    case fUnknown:{
-                                        //log("!LooseSize2:fUnknown")
-                                        action.valueAction <- copyValueRHStoLHS
-                                    }
-                                    case fLiteral:{
-                                        //log("!LooseSize2:fLiteral")
-                                        action.valueAction <- copyValueRHStoLHS
-                                        action.sizeToCopy  <- LSize
-                                    }
-                                    case fConcat:{
-                                        log("!LooseSize2:SizeConcat   MUST: handle concat")
-                                    }
-                                }
-                            }
-                        }
-                        default:{print("unknown fType in tryMergeValue_unknown_literal\n")}
-                    }
-                } else {}  // TODO: Do Convert + verify
-            }
-            else if(LHS.value.format == fLiteral and RHS.value.format == fUnknown){
-                action.valueAction <- copyValueLHStoRHS
-            }
-            else if(LHS.value.format == fLiteral and RHS.value.format == fLiteral){
-                // 5=5, 5=6, 'hi'='hi', 'hi'='low'
-                their pureInfon: LHSValue <- LHS.value
-                their pureInfon: RHSValue <- RHS.value
-                me int: RHSType <- RHSValue.fType
-                if(RHSType==LHSValue.fType){
-                    me BigInt: LSize <- LHS.infSize.num
-                    me BigInt: RSize <- RHS.infSize.num
-                    switch(RHSType){
-                        case NUM:{
-                            if(RHSItr.looseSize()){
-                                switch(LHS.infSize.format){
-                                    case fUnknown:{
-                                        log("LooseSize3:fUnknown   MUST:?")
-                                    }
-                                    case fLiteral:{
-                                        log("LooseSize3:fLiteral   MUST: test and check matchLength()")
-                                        if(LHSValue.num == RHSValue.num){
-                                            action.reject <- false
-                                            action.sizeToCopy <- 0
-                                        } else {
-                                            action.reject <- true
-                                        }
-                                        //MUST: test and check matchLength()
-                                    }
-                                    case fConcat:{
-                                        log("LooseSize3:SizeConcat   MUST: handle concat")
-                                    }
-                                }
-                            }else{
-                                switch(LHS.infSize.format){
-                                    case fUnknown:{
-                                        //log("!LooseSize3:fUnknown")
-                                        if(LHSValue.num != RHSValue.num){action.reject <- true}
-                                    }
-                                    case fLiteral:{
-                                        //log("!LooseSize3:fLiteral")
-                                        if(LHSValue.num != RHSValue.num){action.reject <- true}
-                                    }
-                                    case fConcat:{
-                                        log("!LooseSize3:SizeConcat   MUST: handle concat")
-                                    }
-                                }
-                            }
-                        }
-                        case STR:{
-                            if(RHSItr.looseSize()){
-                                switch(LHS.infSize.format){
-                                    case fUnknown:{
-                                        log("looseSize4:fUnknown   MUST:?")
-                                    }
-                                    case fLiteral:{
-                                        //log("looseSize4:fLiteral")
-                                        me int: matchLen <- matchLength(LHSValue.str, RHSValue.str)
-                                        if(matchLen==-1 or (matchLen < LSize and matchLen < RSize)){
-                                            action.reject <- true
-                                        }else{
-                                            action.sizeToCopy <- LSize
-                                            action.reject <- false
-                                        }
-                                    }
-                                    case fConcat:{
-                                        log("looseSize4:Concat   MUST: handle concat")
-                                    }
-                                }
-                            }else{
-                                switch(LHS.infSize.format){
-                                    case fUnknown:{
-                                        //log("!LooseSize4:fUnknown")
-                                        if(LHS.value.str != RHS.value.str){action.reject <- true}
-                                    }
-                                    case fLiteral:{
-                                        //log("!LooseSize4:fLiteral")
-                                        if(LHS.value.str != RHS.value.str){action.reject <- true}
-                                    }
-                                    case fConcat:{
-                                        log("!LooseSize4:fConcat   MUST: handle concat")
-                                    }
-                                }
-                            }
-                        }
-                        default:{print("unknown fType in tryMergeValue_literal_literal\n")}
-                    }
-                } else {}  // TODO: Do Convert + verify
-            }
-            else{log("tryMergeValue LHS.value.format/RHS.value.format CATCH --  TODO: handle case")}
-        }
-    }
-    void: trimMergeRemainder(our transformAction: action, our infon: LHS, our infItr: RHSItr) <- {
-        our infon: RHS <- RHSItr.item
-        if(LHS.value.fType == STR and RHS.value.fType == STR){
-            me BigInt: rSize <- RHS.value.str.size()
-            me BigInt: sizeToCopy <- action.sizeToCopy
-            me BigInt: sizeDiff <- rSize - sizeToCopy
-            if(sizeDiff > 0){
-                me string: remainderStr <- RHS.value.str.subStr(sizeToCopy.convertToIntVal(), sizeDiff.convertToIntVal())
-                our infon: remainderInfon; Allocate(remainderInfon,remainderStr)
-                Allocate(action.remainder)
-                RHSItr.copyThisTo(action.remainder)
-                action.remainder.item <- remainderInfon
-            }else if(sizeDiff==0){
-                action.sizeToCopy <-rSize
-            }else{//MUST: finish case where remainder is on the left
-                log("MUST: finish case where remainder is on the left")
-            }
-        } else {
-            action.sizeToCopy <- RHS.infSize.num
-        }
-    }
-    void: tryMerge(our infon: LHS, our infItr: RHSItr, our transformAction: action) <- {
-        //log(">>TM")
-        our infon: RHS <- RHSItr.item
-        if(PropagateIndirectItem(action, LHS, RHSItr) > 0){
-            return()
-        }
-        if(RHS.infMode == isUnknown){ // any = ?
-            LHS.isNormed <- true
-        }else if(LHS.infMode == isUnknown){ // ? = any
-            action.copyRHSTypeToLHS <- true
-            if(!RHSItr.looseSize()){
-                action.sizeAction       <- copySizeRHStoLHS
-            }
-            action.valueAction      <- copyValueRHStoLHS
-            //LHS.value.fType         <- RHSItr.item.value.fType
-            //LHS.infMode             <- RHSItr.item.infMode
-        }else{
-            if(!RHSItr.looseMode and !LHS.type.isCompatibleWith(RHS.type)){action.reject <- true}// TYPE ACTION
-            if(!action.reject){tryMergeSize(action, LHS, RHSItr)} // SIZE ACTION
-            if(!action.reject){tryMergeValue(action, LHS, RHSItr)}// VALUE ACTION
-            if(!action.reject){trimMergeRemainder(action, LHS, RHSItr)}// HANDLE REMAINDERS
-        }
-        if(LHS.asNot){action.reject <- !action.reject}
-        return()
-    }
-
-    me bool: addInfItrToAgenda(our infItr: ii) <- {
-        me bool: iiAdded <- true
-        me string: logStr <- "        ADD_TO_AGENDA:" + ii.stringify()
-        if(ii != NULL and ii.state != sEOL){
-            if(!ii.item.isOnAgenda){
-                agenda.pushFirst(ii)
-                ii.item.isOnAgenda <- true
-            } else {logStr <- logStr + " Already on agenda!"; iiAdded <- false}
-        }else{logStr <- logStr + " DIDN'T ADD!"; iiAdded <- false}
-        //log(logStr)
-        return(iiAdded)
-    }
-    our infItr: popInfItrFromAgenda() <- {
-        our infItr: retVal <- agenda.last()
-        agenda.popLast()
-        return(retVal)
-    }
-    me int: PAI_StateSig(our infItr: LHSItr, our infItr: RHSItr, me bool: looseMode) <- {
-        me int: LHS_Sig <- LHSItr.state
-        me int: RHS_Sig <- RHSItr.state
-        me int: retVal  <- 2*((RHS_Sig-2)*3 + (LHS_Sig-2))
-        if(RHSItr.looseMode){retVal <- retVal + 1}
-        return(retVal)
-    }
-    me string: infItrStateSig(our infItr: ii) <- {
-        me string: retVal
-        me int: state <- ii.state
-        //sInvalid, sInited, sNotASeq, sFirstVisit, sSecondVisit, sEOL, sError
-        if(state == sInvalid){return("X")}
-        else if(state == sNotASeq){return("#")}
-        else if(state == sFirstVisit){return("{")}
-        else if(state == sSecondVisit){return("}")}
-        else if(state == sNonIterable){return("N")}
-        else{logFatalError("invalid State in infItrStateSig:"+ stateStrings[state])}
-    }
-    me bool: testCompatibility(our infon: CI, our infItr: LHSItr, our infItr: RHSItr, our transformAction: action) <- {
-        if(RHSItr.state == sSecondVisit){if(RHSItr.item.itmMode != mSubItems){return(true)}}
-        RHSItr.setListSeqFlags()
-        tryMerge(CI, RHSItr, action)
-
-        if(action.reject){return(true)}
-        if(LHSItr.item.isTentative and RHSItr.item.isTentative){
-            action.breakDotCycle<-true
-            LHSItr.stitchCmd <- keepDots
-            log("breakDotCycle = true");
-        }
-        // Do init for ?={...}
-        if(LHSItr.item.infMode == isUnknown and RHSItr.item.value.fType == LST){
-            action.unknownAsList <- true
-        }
-        action.LHSItr <- LHSItr
-        action.RHSItr <- RHSItr
-        return(false)
-    }
-    our infItr: findNextLHS(our infItr: LHSItr, me int: LHSfType, me int: RHSfType, me bool: unknownAsList) <- {
-        our infItr: LHSItrNext
-        if((LHSfType != LST and !unknownAsList) and RHSfType == LST){
-            Allocate(LHSItrNext)
-            LHSItr.copyThisTo(LHSItrNext)
-        }else{LHSItrNext <- LHSItr.getNextExtended(false)}
-        return(LHSItrNext)
-    }
-    our infItr: findNextRHS(our infItr: RHSItr, me int: LHSfType, me int: RHSfType) <- {
-        our infItr: RHSItrNext
-        if(LHSfType == LST and RHSfType != LST){
-            Allocate(RHSItrNext)
-            RHSItr.copyThisTo(RHSItrNext) // <- RHSItr //.getSelfCopy()
-            RHSItrNext.looseInhtd <- true
-        }else{
-            RHSItrNext <- RHSItr.getNextExtended(false)
-            if(RHSItrNext.state == sEOL){
-                RHSItrNext <- NULL
-            } else if(RHSItrNext.looseMode){
-            } else {}
-        }
-        return(RHSItrNext)
-    }
-    void: processAgendaItem(our infItr: LHSItr, me int: AlternativesNestLvl)<-{
-        log("_________________________")
-        prepWorkList(LHSItr)
-        our infon: LHS         <- LHSItr.item
-        me bool: RHS_Empty     <- LHS.wrkList.isEmpty()
-        our infItr: LHSItrNext <- NULL
-        our infItr: RHSItrNext <- NULL
-        me bool: doResolve     <- false
-        me int: internalFrontierCount <- frontierCount(LHSItr)
-        if(RHS_Empty){
-    //    logFrontierLoop(LHSItr, "    BEFORE PAi")
-            log("PAI no RHS:"+stringifyInfon(LHSItr.item))
-            if(LHSItr.infNode.next == NULL and (LHSItr.parent != NULL and LHSItr.parent.item != NULL and LHSItr.parent.item.value.tailUnfinished)){
-                LHSItrNext <- LHSItr.getNextExtended(true)
-            }else if(LHSItr.item.value.tailUnfinished and LHSItr.item.value.items.isEmpty()){
-                LHSItrNext <- LHSItr.getNextExtended(true)
-            }else{
-                LHSItrNext <- LHSItr.getNextExtended(false)
-            }
-            LHSItrNext.item.isOnAgenda <- false
-            addInfItrToAgenda(LHSItrNext)
-            processConcat(LHSItr)
-        }else{
-   //     logFrontierLoop(LHSItr, "    BEFORE PAI")
-            me int: tmpErrCount <- 0
-            while(!LHS.wrkList.isEmpty()){
-                RHSItrNext <- NULL
-                our infItr: RHSItr <- LHS.wrkList.first()
-                LHS.wrkList.popFirst()
-                LHS.usedWrkList.pushLast(RHSItr)
-                if(tmpErrCount>20){logFatalError("DEBUG: Too many loops...")} else {tmpErrCount <+- 1}
-
-                log("PAI: "+stringifyInfon(LHSItr.item) + " === "+stringifyInfon(RHSItr.item))
-                //log("    ITRS:"+LHSItr.stringify() + " === "+RHSItr.stringify())
-                //log("     "+LHSItr.mySymbol(LHSItr) + " === "+RHSItr.mySymbol(RHSItr))
-                //log("     "+LHSItr.item.mySymbol(LHSItr.item) + " === "+RHSItr.item.mySymbol(RHSItr.item))
-                if(LHS.isOrLike()){
-                    if(RHSItr.item.isOrLike()){ // set flag to add new #{...}
-                        log("LHSItr.addNewSubDots <- true in: "+ LHS.source.value.items.head.altItr.stringify())
-                        LHS.source.value.items.head.altItr.addNewSubDots <- true
-                    }
-
-                    our POV: possibilityItr <- LHS.source.value.items.begin()
-                    while (possibilityItr!=NULL){
-                        our transformAction:: action
-                            action.LHSItr <- LHSItr
-                            action.RHSItr <- RHSItr
-                        //log("   LHS_ENQUEUE:"+stringifyInfon(possibilityItr.altItr.item) + " === " + stringifyInfon(RHSItr.item))
-                        log("    Action in LHS_IS_OR_LIKE:"+ action.mySymbol(action) + " <"+action.LHSItr.mySymbol(action.LHSItr)+":  " + action.LHSItr.stringify()+"> === <"+action.RHSItr.mySymbol(action.RHSItr)+":  " + action.RHSItr.stringify()+">"  )
-                        enqueueForProcessing(action, possibilityItr.altItr, RHSItr, AlternativesNestLvl+1, false)
-    //                    logFrontierLoop(LHSItr, "AFTER LHS")
-                        possibilityItr <- possibilityItr.next
-                    }
-                    continue()
-                }
-
-                if(RHSItr.item.isOrLike()){
-                    our POV: possibilityItr <- RHSItr.item.source.value.items.begin()
-                    while (possibilityItr!=NULL and possibilityItr.altItr != NULL){
-                        //log("   RHS_ENQUEUE:"+stringifyInfon(LHSItr.item) + " === " + possibilityItr.altItr.stringify())
-                        enqueueForProcessing(NULL, LHSItr, possibilityItr.altItr, AlternativesNestLvl+1, false)
-    //                    logFrontierLoop(LHSItr, "AFTER RHS")
-                        possibilityItr <- possibilityItr.next
-                    }
-                    continue()
-                }
-if(LHSItr.state == sNonIterable){logFatalError("Trying to iterate nonIterable infItr!!!!")}
-                crntRHSMySymbol <- RHSItr.item.mySymbol(RHSItr.item)
-                our transformAction:: action
-                    action.LHSItr <- LHSItr
-                    action.RHSItr <- RHSItr
-                if(LHSItr.state != sSecondVisit){
-                    me bool: rejected <- testCompatibility(LHS, LHSItr, RHSItr, action)
-                    if(rejected){
-                        log("     REJECT")
-                     //   LHSItr.detachFromFrontier <- true
-                     //   internalFrontierCount <-- 1
-                        continue()
-                    }
-                    if(AlternativesNestLvl==0){doAction(action)}
-                    if(action.remainder != NULL){RHSItrNext <- action.remainder
-                        log("REMAINDER:"+ RHSItrNext.stringify())}
-                }
-
-                if(LHSItr.state == sSecondVisit and (RHSItr.state == sSecondVisit or RHSItr.looseSize())){
-                    //log("MAYBE RESOLVE  fCount:"+toString(internalFrontierCount)+"     predCount:"+toString(LHSItr.predecessors.size()))
-                    //withEach P in LHSItr.infNode.predecessors{log("    PRED LHS:"+ P.mySymbol(P) + "    PRED RHS:"+ P.RHSItr.mySymbol(P.RHSItr) )}
-                    if(internalFrontierCount==LHSItr.predecessors.size()){
-                        doResolve <- true
-                    }
-                }
-
-                me int: LHSfType <- LHSItr.item.value.fType
-                me int: RHSfType <- 0; if(!RHS_Empty){RHSfType <- RHSItr.item.value.fType}
-                LHSItrNext <- findNextLHS(LHSItr, LHSfType, RHSfType, action.unknownAsList)
-                if(RHSItrNext == NULL){RHSItrNext <- findNextRHS(RHSItr, LHSfType, RHSfType)}
-                //log("RHSItrNext:"+RHSItrNext.stringify())
-                enqueueForProcessing(action, LHSItrNext, RHSItrNext, AlternativesNestLvl, action.breakDotCycle)
-    //            logFrontierLoop(LHSItr, "AFTER ENQUEUE")
-            }
-            if(LHSItr.state != sEOL){
-                LHSItr.detachFromFrontier <- true
-            }
-        }
-        if(LHSItr.detachFromFrontier){
-            //log("DETACHING: " + LHSItr.stringify())
-            frontierDetach(LHSItr)
-        } else {log("Not detatching: " + LHSItr.stringify())}
-  //      logFrontierLoop(LHSItr, "    AFTER PAI")
-        if(doResolve){
-            resolve(LHSItr)
-        }
-    }
-
-    void: processAgenda()<-{
-        withEach count in WHILE(!agenda.isEmpty()) {
-            //log("_____"+toString(count+1)+"_____")
-            if (count > 100){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
-            our infItr: CI <- popInfItrFromAgenda()
-            processAgendaItem(CI, CI.AlternativesNestLvl)
-            CI.item.isOnAgenda <- false
-        }
-    }
-
-    void: enqueueForProcessing(our transformAction: pred, our infItr: LHSItr, our infItr: RHSItr, me int: altLvl, me bool: breakDotCycle)<-{
-        me bool: doEnqueue <- false
-        if(LHSItr != NULL){
-            if(LHSItr.state != sEOL){
-                if(RHSItr != NULL){
-                    if(breakDotCycle){  // This sets the stitchCmd
-                        // MUST: store stitchCmd in RHSItr instead of LHSItr
-                        if(!LHSItr.item.isTentative){log("DELETE DOTS"); LHSItr.stitchCmd <- delDots}
-                        else {
-                            if(!RHSItr.item.isTentative){
-                                me int: dotCmd <- LHSItr.stitchCmd
-                                if(dotCmd==insB4Dots){ log("B4 DOTS");
-                                    LHSItr.stitchCmd <- insAftDots
-                                }
-                                else{log("AFTER DOTS"); LHSItr.stitchCmd <- insAftDots}
-                            } else {log("KEEPING DOTS"); LHSItr.stitchCmd <- keepDots} // "?=?"
-                        }
-                    }
-        //        if(!breakDotCycle or !(LHSItr.item.isTentative and RHSItr.item.isTentative)){
-                    if(LHSItr.state != sSecondVisit){
-                        if(RHSItr.state != sSecondVisit){
-                            if(LHSItr.item.isTentative and RHSItr.item.isTentative){  // ?=?
-                                log("?=? : parent.KEEPING DOTS")
-                                LHSItr.parent.stitchCmd <- keepDots
-                            } else {
-                                doEnqueue <- true
-                            }
-                        } else { // RHS is SecondVisit
-                            if(LHSItr.item.isOrLike()){doEnqueue <- true}
-                        }
-                    } else { // LHS is SecondVisit
-                        if(RHSItr.state != sSecondVisit){
-                            if(RHSItr.item.isOrLike() or RHSItr.looseSize()){doEnqueue <- true}
-                doEnqueue <- true
-                        } else { // RHS is SecondVisit:  }=}
-                            doEnqueue <- true
-                        }
-                    }
-                    if(doEnqueue){
-                        log("     ENQUEUE:" + LHSItr.stringify() + " === " + RHSItr.stringify())
-                        LHSItr.AlternativesNestLvl <- altLvl
-                        LHSItr.item.addInfItrToWrkList(RHSItr)
-                        me bool: itrAdded <- addInfItrToAgenda(LHSItr)
-                        if(itrAdded and pred!=NULL){
-                         //   LHSItr.insertNewPctTag("pred", pred)
-                            //log("    PRED_IN_ENQUEUE:"+ pred.mySymbol(pred) + " <"+pred.LHSItr.mySymbol(pred.LHSItr)+":  " + pred.LHSItr.stringify()+"> === <"+pred.RHSItr.mySymbol(pred.RHSItr)+":  " + pred.RHSItr.stringify()+">"  )
-                            LHSItr.predecessors.pushLast(pred)
-                            //log("        JOINING:" + LHSItr.stringify())
-                            frontierJoin(pred.LHSItr, LHSItr)
-                        }
-                    }
-        //      }
-            }
-        }
-        }else{logFatalError("crntLHS was NULL")}
-    }
     me void: normalize(our infon: inf) <- {
-        our infItr:: ii
-        ii.initialize(inf)
-        initFrontier(ii)
-        addInfItrToAgenda(ii)
-        processAgenda()
-        ii.item.isNormed <- true
+        our POV:: normPov; normPov.item <- inf
+        xformMgr.addAItemToAgenda(xformMgr.processInfonViaAgenda(normPov, NULL, NULL))
+        xformMgr.processAgenda()
     }
     me string: fetchAsStr(their infon: i) <- {return(i.value.str)}
     me BigInt: fetchAsNum(their infon: i) <- {return(i.value.num)}
@@ -1558,25 +1312,19 @@ if(LHSItr.state == sNonIterable){logFatalError("Trying to iterate nonIterable in
 
     me bool: loadAndParseData() <- {
         me string: data <- readFileAsString("data.pr")
-        if(data==""){
-            logFatalError("File Error: data.pr")
-        }
-
+        if(data==""){logFatalError("File Error: data.pr")}
         me EParser: parser
         parser.populateGrammar()
         parser.initPosStateSets(parser.infon_str, data)
-
         parser.doParse()
         if(parser.doesParseHaveError()){
             logFatalError("\n", parser.errorMesg, "\n")
         } else {print("\nParse Succeeded\n")}
-
         our stateRec: topItem <- parser.resolve(parser.lastTopLevelItem, "")
         //    parser.displayParse(topItem, "")
         Allocate(world)
         parser.Extract_infon_to_infon(topItem, world)
         //    trackerMgr.allData.topInfon <- settingsAndData
-
         return(true)
     }
 
@@ -1595,12 +1343,13 @@ if(LHSItr.state == sNonIterable){logFatalError("Trying to iterate nonIterable in
         }
         world <- World
         Allocate(context)
+        xformMgr.agent <- this
     }
 }
 struct ProteusCore{
     me sessionFile: DB_session
     our infon: WORLD
-    our agent: a
+    our Agent: agent
     me EParser: parser
     me string: errorMesg
 
@@ -1633,7 +1382,7 @@ struct ProteusCore{
         if(WORLD == NULL){
             return(false)
         }
-        a.world <- WORLD
+        agent.world <- WORLD
         return(true)
     }
 
@@ -1647,8 +1396,18 @@ struct ProteusCore{
         return(result)
     }
 
+    void: loadProteusSessionFile(me string: filename) <- {
+        me sessionFile: session
+        if(session.openToRead(filename)){return()}
+        me string: fLine
+        while(! session.eof()){
+            fLine <- session.readEntry()
+            //ProteusQuery(fLine, false)
+        }
+        session.closeReading()
+    }
     me void: annexSessions(me string: sessionFilename) <- {
-        loadProteusSessionFile(this, sessionFilename)
+        loadProteusSessionFile(sessionFilename)
     }
 
     me void: addStatementToSession(me string: stmt) <- {
@@ -1658,7 +1417,7 @@ struct ProteusCore{
     me bool: init(me string: worldFileName) <- {
         errorMesg <- ""
         parser.populateGrammar()
-        Allocate(a)
+        Allocate(agent)
         if(!loadWorld(worldFileName)) {return(false)}
         me string: fileDir <- getFilesDirAsString()+"/sessionDB.pr"
         annexSessions(fileDir)
@@ -1669,8 +1428,9 @@ struct ProteusCore{
     me void: deInit() <- {
         DB_session.closeSession()
     }
-    // hard-coded function interface
 }
 
 /////////////////////////////////////////
 do codeDataDisplay(infon, TAG_infonDumpMode)
+do GeneratePtrSymbols(AItem)
+do GeneratePtrSymbols(infItr)

@@ -5,9 +5,187 @@ model POV{
     our infon: item
     our POV: next
     our POV: prev
-    our infItr: altItr
+    our POV: altPOV     // NEXT OR
+    our POV: outerPOV  // POV outside of an alt
+    their POV: pParent
+    flag: looseMode
+    flag: looseTop      // Top LHS/RHS pair is looseMode
+    flag: looseInhtd    // Parent was looseMode
+    flag: wasRejected
+    flag: tentFromDots
+    flag: readyToResolve
+    flag: addNewSubDots
+    flag: keepDots
+    me int: AlternativesNestLvl
+    our POV[map string]: pctTags
+    our POV[list]: predecessors
+    our POV[list]: candidatesForLastItem
+    me int: linearAltID
+    flag: rejected         // At least one item on the worklist was rejected.
+
     me bool: isFirst() <- {return(prev==NULL)}
     me bool: isLast()  <- {return(next==NULL)}
+    me bool: looseSize() <- {return(looseInhtd or looseTop)}
+    me bool: looseType() <- {return(looseMode or looseTop)}
+    void: insertNewPctTag(me string: tag, our POV: newPOV) <- {
+        /*our POV[itr map string]: tagPOV <- pctTags.find(tag)
+        if(tagPOV == pctTags.end()){
+            pctTags.insert(tag, newPOV)
+        }else{
+            tagPOV.val.item.addInfItrToWrkList(newPOV)
+        }*/
+    }
+    void: insertChildDotsBefore(our POV: position) <- {
+        our infon:: newSubDots
+        newSubDots.itmMode <- mSubItems
+        newSubDots.infMode <- isLiteral
+        newSubDots.value.tailUnfinished <- true
+        newSubDots.value.fType <- LST
+        newSubDots.value.format <- fLiteral
+        item.value.items.insertBefore(position, newSubDots)
+        item.value.tailUnfinished <- false
+    }
+    void: closeItemsAtPOV(our POV: lastItem) <- {
+        log("closeItemsAtPOV:" + stringify() + "  lastItem:"+lastItem.stringify())
+        while(!item.value.items.isEmpty() and !(item.value.items.last() === lastItem.item)){
+            item.value.items.popLast()
+        }
+        our POV: pov <- item.value.items.head
+        while(pov != NULL){
+            pov.item.isTentative <- false
+            log("reseting_isTentative:"+stringifyInfon(pov.item)+"   addNewSubDots:"+dispBool(pov.addNewSubDots))
+            if(pov.addNewSubDots){
+                pov.pParent.insertChildDotsBefore(pov)
+                pov.pParent.keepDots <- false
+            }
+            pov <- pov.next
+        }
+        if(!keepDots){
+            item.value.tailUnfinished <- false
+            item.countSize()
+        }
+    }
+    our POV: findOrAddPctTag(me string: tag) <- {
+        our POV: retVal
+        our POV[itr map string]: tagPOV <- pctTags.find(tag)
+        if(tagPOV == pctTags.end()){
+            Allocate(retVal)
+            Allocate(retVal.item)
+            pctTags.insert(tag, retVal)
+        }else{
+            retVal <- tagPOV.val
+        }
+        return(retVal)
+    }
+    our POV: tryAddingTentativeChild() <- {
+        me string: lenStatus <- item.lengthStatus()
+        if(lenStatus == "L" or lenStatus == "?"){
+            our infon:: newInfon
+            our infon: infonType <- item.value.listSpec
+            if(infonType != NULL){
+                newInfon <deep- infonType // MUST: be a lazy cow copy
+            }else{
+                newInfon.value.fType   <- tUnknown
+                newInfon.infMode       <- isUnknown
+                newInfon.itmMode       <- mItem
+                newInfon.value.format  <- fUnknown
+            }
+            our POV: newInfNode <- item.value.items.pushLast(newInfon)
+            if(lenStatus == "?"){
+                newInfon.isTentative  <- true
+                newInfNode.tentFromDots <- true
+            }
+            return(newInfNode)
+        }else if(lenStatus == "E"){
+            item.value.tailUnfinished <- false
+            return(NULL)
+        }else if(lenStatus == "G"){log("INFON TOO BIG")}
+        return(NULL)
+    }
+    our POV: getFirst(me bool: skipDots) <- { // WARNING: item must be a literal List.
+        our POV: firstNode
+        if(item.value.items.isEmpty()){
+            if(!skipDots and item.value.tailUnfinished){
+                firstNode <- tryAddingTentativeChild()
+                if(firstNode == NULL){return(NULL)}
+            }
+            else{return(NULL)}
+        }
+        else{
+            firstNode <- item.value.items.begin()
+        }
+        firstNode.pParent <- self
+        return(firstNode)
+    }
+    our POV: getNext(me bool: skipDots) <- {
+        while(true){
+            our POV: nextNode <- next
+            if(nextNode==NULL){
+                if(!skipDots){
+                    if(pParent != NULL and pParent.item != NULL and pParent.item.value.tailUnfinished){
+                        nextNode <- pParent.tryAddingTentativeChild()
+                    }
+                }
+            }
+            if(nextNode != NULL){nextNode.pParent <- pParent}
+            if(nextNode != NULL and nextNode.item.itmMode == mTagDefn){
+                registerClass(nextNode.item)
+            }else{
+                return(nextNode)
+            }
+        }
+    }
+    our POV: getFirstTight(our infItr: ii, me bool: skipDots, their bool: was2ndVisit) <- {
+        me bool: dummyFlag
+        our POV: nextPOV <- getFirst(skipDots)
+        if(nextPOV != NULL and nextPOV.item.itmMode == mSubItems){
+            our POV: firstPOV <- nextPOV.getFirstTight(ii, skipDots, dummyFlag)
+            if(firstPOV == NULL){nextPOV <- nextPOV.getNextTight(ii, skipDots, was2ndVisit, false, false)}
+            else{nextPOV <- firstPOV}
+        }
+        if(nextPOV!=NULL and nextPOV.item.isTentative){nextPOV.altPOV <- nextPOV.getNextTight(ii, true, dummyFlag, false, false)}
+        return(nextPOV)
+    }
+    our POV: getNextTight(our infItr: ii, me bool: skipDots, their bool: was2ndVisit, me bool: getDeep, me bool: itrBeginning) <- {
+        our POV: nextPOV
+        was2ndVisit <- false
+        if(itrBeginning){nextPOV <- getFirstTight(ii, skipDots, was2ndVisit)}
+        else{
+            me bool: dummyFlag
+            nextPOV <- getNext(skipDots)
+            if(nextPOV == NULL){
+            if(pParent == NULL or pParent.item.itmMode != mSubItems){was2ndVisit <- true}
+            if(pParent==NULL){return(NULL)}
+            our infItr: nxtInfItr <- ii
+            if(was2ndVisit and ii.iParent!=NULL){nxtInfItr <- ii.iParent}
+            else{if(pParent === ii.topPOV){return(NULL)}}
+            nextPOV <- pParent.getNextTight(nxtInfItr, skipDots, dummyFlag, getDeep, itrBeginning)
+        }else if(nextPOV.item.itmMode == mSubItems or (nextPOV.item.value.fType==LST and getDeep)){
+            our POV: firstPOV <- nextPOV.getFirstTight(ii, skipDots, dummyFlag)
+            if(firstPOV == NULL){nextPOV <- nextPOV.getNextTight(ii, skipDots, was2ndVisit, getDeep, itrBeginning)}
+            else{nextPOV <- firstPOV}
+            }
+            if(nextPOV!=NULL and nextPOV.item.isTentative){nextPOV.altPOV <- nextPOV.getNextTight(ii, true, dummyFlag, getDeep, itrBeginning)}
+        }
+        return(nextPOV)
+    }
+
+    me string: stringify()<-{
+        me string: S
+        if(self == NULL){S <- "NULL"}
+        else{S <+- item.mySymbol(item)+":"+stringifyInfon(item)
+            if(predecessors.size() >0){
+                //S <+- " PREDS["
+                withEach pred in predecessors{
+                    //S <+- ":"+pred.mySymbol(pred)
+                }
+                //S <+- "] "
+            }
+            if(altPOV!=NULL){S <+- "  ALT_OR:" + altPOV.stringify()}
+            if(outerPOV!=NULL){S <+- "  <outerPOV:" +outerPOV.mySymbol(outerPOV)+" " + outerPOV.stringify()+">"}
+        }
+        return (S)
+    }
 }
 
 model DblLinkedList: implements = list {
@@ -30,10 +208,14 @@ model DblLinkedList: implements = list {
         head <- newNode
         return(newNode)
     }
-    our POV: pushAsAlt(our infItr: ii, our infon: i) <- {
-        our POV: newNode <- pushLast(i)
-        newNode.altItr <- ii
-        return(newNode)
+    our POV: pushAsAlt(our POV: pov, our infon: toPush, our POV: pred) <- {
+        our POV: newAlt <- pushLast(toPush)
+        newAlt.outerPOV <- pov
+            newAlt.looseInhtd <- pov.looseInhtd
+            newAlt.looseTop   <- pov.looseTop
+            newAlt.looseMode  <- pov.looseMode
+        newAlt.predecessors.pushLast(pred)
+        return(newAlt)
     }
     our POV: erase(our POV: toDel) <- {
         our POV: retVal <- toDel.prev
@@ -112,10 +294,10 @@ model DblLinkedList: implements = list {
 
     me int: size() <- {
         me int: count <- 0
-        our POV: i <- head
-        while(i != NULL){
+        our POV: pov <- head
+        while(pov != NULL){
             count <- count+1
-            i <- i.next
+            pov <- pov.next
         }
         return(count)
     }

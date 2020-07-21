@@ -1,10 +1,5 @@
 // This file implements parsing and printing of infons
 
-struct infItr{
-    void: postParseProcessing() <- {
-        setListSeqFlags()
-    }
-}
 struct infon{
     flag: isFunc
     flag: isFuncArg
@@ -24,7 +19,8 @@ struct infon{
         infSize.clear()
         argsOnLeft          <- false
         argPos              <- apNoArgs
-        infMode             <- isUnknown
+        infMode             <- isLiteral
+        value.fType         <- tUnknown
         funcArgs            <- NULL
     }
     void: postParseProcessing() <- {
@@ -74,7 +70,7 @@ string WordSystem{
 string PartPath{
     >{>[ ("." <=> pathMode = dotField;) | (":" <=> pathMode = colonField;) ] > ws > our infon:path > ws ";"}
 }
-string infItr{
+string POV{
     >[ ("=" <=> looseMode=false;) | ("==" <=> looseMode=true;) ] ":"[opt]:looseTop > ws > our infon:item
 }
 string listInfo[
@@ -112,7 +108,7 @@ string pureInfon{
      ]
 }
 string funcParts{
-    >our infItr[list]:wrkList
+    >our POV[list]:wrkList
     >{ >[ ("<:" <=> isFunc=true; isFuncArg=false; invertFunc=false;)
         | (":>" <=> isFunc=false; isFuncArg=true; invertFunc=false;)
         | ("<!" <=> isFunc=true; isFuncArg=false; invertFunc=true;)
@@ -162,12 +158,55 @@ string infon: StartSymbol="true" {
 struct GLOBAL{
     me InfonPrinter: infonPrinter
 
+    me string: stringifyPreds(our POV: pov, me string: indent) <- {
+        me string: S <- indent + pov.mySymbol(pov) +":"+pov.stringify()+"\n"
+        indent <+- "    "
+        withEach pred in pov.predecessors{
+            S <+- indent +"PRED:"+ pred.mySymbol(pred) +":"+pred.stringify()+"\n"
+        }
+        withEach last in pov.candidatesForLastItem{
+            S <+- indent +"LAST:"+ last.mySymbol(last) +":"+last.stringify()+"\n"
+        }
+        if(pov.item.value.fType == LST){
+            our POV: itm <- pov.item.value.items.head
+            while(itm != NULL){
+                S <+- stringifyPreds(itm, indent+">>")
+                itm <- itm.next
+            }
+        }
+        if(pov.item.source != NULL){
+            S <+- indent+"-------\n"
+            our POV: srcItm <- pov.item.source.value.items.head
+            while(srcItm != NULL){
+                S <+- stringifyPreds(srcItm, indent)
+                srcItm <- srcItm.next
+            }
+            S <+- indent+"-------\n"
+        }
+        return(S)
+    }
+    me string: bigStringify(our infon: i, me string: indent) <- {
+        me string: S <- indent + i.mySymbol(i)+ ":" +stringifyInfon(i)+"\n"
+        withEach pov in i.wrkList{
+            S <+- indent + "        =" + pov.mySymbol(pov)+"\n"
+            S <+- bigStringify(pov.item, indent + "            =")
+        }
+        me int: count <- 0
+        our POV: p <- i.value.items.head
+        while(p != NULL){
+            S <+- indent + "    |" + p.mySymbol(p)+"\n"
+            S <+- bigStringify(p.item, indent + "      |")
+            count <- count+1
+            p <- p.next
+        }
+        return(S)
+    }
     me string: stringifyInfon(our infon: i) <- {
         return(infonPrinter.printInfon(i))
     }
     me string: stringifyPureInfon(their pureInfon: pure) <- {
         me int[our map string]:: used
-        return(infonPrinter.printPureInfon(pure, NULL, used))
+        return(infonPrinter.printPureInfon(pure, NULL, false, used))
     }
 }
 struct InfonPrinter{
@@ -191,20 +230,20 @@ struct InfonPrinter{
         return(S)
     }
 
-    me string: printPureInfon(their pureInfon: pure, their pureInfon: size, me int[our map string]: used) <- {
+    me string: printPureInfon(their pureInfon: pure, their pureInfon: size, me bool: asInnr, me int[our map string]: used) <- {
         me string: S <- ""
         me bool: showSize <- size!=NULL and (
             (((pure.sizeGiven !=0) and (pure.fType!=LST or pure.format!=fLiteral))
             or (pure.fType!=NUM and size.format==fUnknown and pure.format!=fUnknown))
             and !isListWithDots(pure)
         )
-        if(showSize){S <+- printPureInfon(size, NULL, used)}
+        if(showSize){S <+- printPureInfon(size, NULL, false, used)}
         if(pure.inverted){
             if(size!=NULL){S <+- "-"}
             else if(pure.isLstSize==0){S <+- "/"}
         }else{
-                if(showSize){S <+- "+"}
-                else if(size==NULL and pure.isLstSize==0){S <+- "*"}
+            if(showSize){S <+- "+"}
+            else if(size==NULL and pure.isLstSize==0){S <+- "*"}
         }
         if(pure.fType == NUM){
             if(pure.format == fUnknown){S <+- "_"}
@@ -220,12 +259,14 @@ struct InfonPrinter{
             }
         }else if(pure.fType == LST){
             me bool: showBar<-false
-            me string: endBrkt<-"}"
-            if(pure.format == fConcat) {S <+- "("  endBrkt<-")"}
-            else {S <+- ("{")}
+            me string: strtBrkt<-"{"
+            me string: endBrkt <-"}"
+            if(asInnr){strtBrkt<-"["; endBrkt<-"]"}
+            else if(pure.format == fConcat) {strtBrkt<-"("; endBrkt<-")"}
+            S <+- strtBrkt
             if(pure.timelike){S <+- "T "}
             if(pure.size!=NULL) {pure.size.isLstSize <- true}
-            if(pure.size!=NULL and pure.format==fLiteral){S <+- "~"+printPureInfon(pure.size, NULL, used) showBar<-true}
+            if(pure.size!=NULL and pure.format==fLiteral){S <+- "~"+printPureInfon(pure.size, NULL, false, used) showBar<-true}
             if(pure.listSpec){
                 if(showBar){S <+- " "}
                 S <+- printInfonActual(pure.listSpec, used)
@@ -250,6 +291,7 @@ struct InfonPrinter{
         me bool: debugPrint <- true
         me string: S <- ""
         if(i ==  NULL){return("NULL")}
+        if(i.isTentative){S <+- "t"}
         me string: iSymbol <- i.mySymbol(i)
         if(used.containsKey2(iSymbol)){return(iSymbol)}
         else{used[iSymbol]<-1}
@@ -288,24 +330,7 @@ struct InfonPrinter{
         else if(i.itmMode==mTagDefn){S<+-"class "+i.type.asGiven+": "}
 
         if(!isMDots){
-            if(i.infMode==isUnknown){
-                if(i.intersectPos==ipNoIntersect){S <+-"?"}
-                else{
-                    S <+- "["
-                    our POV: itemItr <- i.source.value.items.begin()
-                    me bool: firstTime <- true
-                    while(itemItr){
-                        if(!firstTime){S <+- " "} else {firstTime <- false}
-                        S <+- printInfonActual(itemItr.item, used)
-                        itemItr <- itemItr.next
-                    }
-                    if(i.source.value.tailUnfinished){S <+- " ... "}
-                    S <+- "]"
-                    if (i.source.argPos != apNoArgs){
-                        S <- addFuncArgs(S, printInfonActual(i.source.funcArgs, used), i.source.argsOnLeft, i.source.argPos, "")
-                    }
-                }
-            }
+            if(i.infMode==isUnknown){ S <+-"?"}
             else if(i.infMode==newCursor){
                 S <+- "%"
                 switch(i.cursorMode){
@@ -318,7 +343,14 @@ struct InfonPrinter{
             }
             else if(i.infMode==isTag){log('at-isTag')}
             else if(i.infMode==isLiteral){
-                 S <+- printPureInfon(i.value, i.infSize, used)
+                if(i.intersectPos == ipNoIntersect){
+                    S <+- printPureInfon(i.value, i.infSize, false, used)
+                } else {
+                    S <+- printPureInfon(i.source.value, i.source.infSize, true, used)
+                    if (i.source.argPos != apNoArgs){
+                        S <- addFuncArgs(S, printInfonActual(i.source.funcArgs, used), i.source.argsOnLeft, i.source.argPos, "")
+                    }
+                }
             }
             else {logFatalError("Error In printInfonActual()\n")}
         }
