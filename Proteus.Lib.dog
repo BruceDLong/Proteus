@@ -153,6 +153,7 @@ model infon{
     flag: isOnAgenda    // True if item is currently on agenda
     flag: isTentative   // Does this items validity depend on it having no errors?
     flag: altRulesApplied
+    flag: defnRegistered
 
     me BigInt: sizeIfKnown() <- {
         if(infSize.format == fLiteral){return(infSize.num)}
@@ -1148,8 +1149,10 @@ struct XformMgr{
     me bool: wordDefRules(our AItem: aItem) <- {
         our infon: CI        <- aItem.LHS_item.item
         me bool: changeMade  <- false
-        if(CI.itmMode == mWordDefn){
-            modelMngr.indexDefinition(CI.type, CI)
+        if(CI.itmMode==mWordDefn and !CI.defnRegistered){
+            logSeg("-WrdDefn")
+            modelMngr.indexDefinition(CI.type, CI.funcArgs)
+            CI.defnRegistered <- true
             changeMade <- true
         }
         return(changeMade)
@@ -1184,24 +1187,29 @@ struct XformMgr{
         return(changeMade)
     }
     me bool: derefWordRules(our AItem: aItem) <- {
-        our infon: CI        <- aItem.LHS_item.item
+        our POV: CIPov       <- aItem.LHS_item
+        our infon: CI        <- CIPov.item
         me bool: changeMade  <- false
-        if(CI.infMode == isWord){
-            /*our infon: infModel <- modelMngr.fetchModel(CI.type)
-             changeMade  <- true
+        our infon: newTop
+        if(CI.type!=NULL and CI.itmMode!=mWordDefn){
+            logSeg("-isWord")
+            our infon: infModel <- modelMngr.fetchModel(CI.type)
             if(infModel){
                 Allocate(newTop)
-                infModel.copyAsTypeTo(newTop)
+                infModel.copyAsTypeTo(newTop, true)  // TRUE?
                 newTop.itmMode <- mItem
             }else{
-                changeMade  <- false
-                a.setErrorState(ciItr, CI.type.asGiven+" is not defined")
+                agent.setErrorState(CIPov, CI.type.asGiven+" is not defined")
             }
-            if(ciItr.Parent.item){
-                ciItr.Parent.item.value.index.insert(CI.type.asGiven, CI)
+            if(CIPov.pParent!=NULL and CIPov.pParent.item!=NULL){
+                CIPov.pParent.item.value.index.insert(CI.type.asGiven, CI)
             }else{ // This section is to get items into World. In a fully streaming mode this isn't needed.
                 agent.world.value.index.insert(CI.type.asGiven, CI)
-            }*/
+            }
+        }
+        if(newTop!=NULL) {
+            CI <deep- newTop
+            changeMade <- true
         }
         return(changeMade)
     }
@@ -1431,9 +1439,8 @@ struct ProteusCore{
 
     our infon: query(me string: qry, me bool: writeToSession) <- {
         our infon: result <- parseAndExtract(qry)
-        me Agent: A
-        if(result == NULL){logFatalError("Syntax Error in input: " + qry)}
-        A.normalize(result)
+        if(result == NULL){log("Syntax Error in input: " + qry)}
+        agent.normalize(result)
         if(writeToSession){addStatementToSession(remWhiteSpace(qry))}
         return(result)
     }
@@ -1461,6 +1468,7 @@ struct ProteusCore{
         parser.populateGrammar()
         Allocate(agent)
         if(!loadWorld(worldFileName)) {return(false)}
+        agent.init(agent.world) // TODO: diagram Core and Agent init funcs
         me string: fileDir <- getFilesDirAsString()+"/sessionDB.pr"
         annexSessions(fileDir)
         DB_session.openSession(fileDir)
