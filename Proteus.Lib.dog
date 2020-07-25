@@ -44,11 +44,11 @@ struct GLOBAL{
         our infon:: newAltInfon
             newAltInfon.convertThisToIntersection(newListInfon) // Make [ ] and add innr to it
         our POV:: newAltInfPov                                  // Make the POV pointing to the [...]
-            newAltInfPov.item  <- newAltInfon
+            newAltInfPov.item <- newAltInfon
             newAlt.looseInhtd <- nextPov.looseInhtd
             newAlt.looseTop   <- nextPov.looseTop
             newAlt.looseMode  <- nextPov.looseMode
-            newAlt.pParent     <- newAltInfPov
+            newAlt.pParent    <- newAltInfPov
         return(newAltInfPov)
     }
     me string: stringifyAItem(our AItem: aItem) <- {
@@ -113,16 +113,19 @@ model pureInfon{
         to <deep- self
         to.items.clear()
         to.index.clear()
-        withEach node in items {
-            our infon: newNode
-            Allocate(newNode)
-            node.copyAsTypeTo(newNode, true)
-            to.items.pushLast(newNode)
-            if(node.type!=NULL and node.type.asGiven!=""){
-                to.index.insert(node.type.asGiven, newNode)
+        our POV: pov <- items.head
+        while(pov != NULL){
+            our infon: newInfon
+            Allocate(newInfon)
+            pov.item.copyAsTypeTo(newInfon, true)
+            our POV: newPOV <- to.items.pushLast(newInfon)
+            //newPOV.pParent <-  //TODO
+            //log("copyAsTypeTo newPOV:"+newPOV.mySymbol(newPOV)+".pParent:"+newPOV.pParent.mySymbol(newPOV.pParent))
+            if(pov.item.type!=NULL and pov.item.type.asGiven!=""){
+                to.index.insert(pov.item.type.asGiven, newInfon)
             }
+            pov <- pov.next
         }
-
     }
 
     void: clear() <- {num<-0 str<-""; items.clear(); listSpec<-NULL}
@@ -350,11 +353,11 @@ model infon{
         pov.item <- i
         addPOVToWrkList(pov)
     }
-    void: takeWrkListFrom(our infon:from) <- {
+    void: takeWrkListFrom(our infon:from, me bool: doClear) <- {
         withEach wrkItm in from.wrkList{
             addPOVToWrkList(wrkItm)
         }
-        from.wrkList.clear()
+        if(doClear){from.wrkList.clear()}
     }
     void: insertNewDotPart(me string: fieldName, our infon: newPart) <- {
         Allocate(newPart.type)
@@ -752,16 +755,18 @@ struct XformMgr{
             if(RHSPov.looseTop){logStr <+- ":"}
             logStr <+- " " + stringifyInfon(RHSPov.item)
         }else{
-            if(remainder!=NULL){logStr <+- " "+stringifyInfon(remainder.item)}
-            else{logStr <+- " (No RHS)"}
+            if(remainder!=NULL){logStr <+- " REM:"+stringifyInfon(remainder.item)}
+            else{logStr <+- " (No_RHS)"}
         }
         log(logStr)
         logSeg("-PROP")
         aItem.hasPropagated <- true
-        me bool: RHSExists <- RHSPov != NULL
+        me bool: RHSExists  <- RHSPov != NULL
+        me bool: RorRExists <- RHSExists or remainder!=NULL
         me int: LHSfType <- LHSPov.item.value.fType
         me int: RHSfType <- 0
         if(RHSExists){RHSfType <- RHSPov.item.value.fType}
+        else if(RorRExists){RHSfType <- remainder.item.value.fType}
         me bool: LHSIsFromALT
         our POV: adjLhsPOV  <- LHSPov
         our POV: adjRhsPOV  <- RHSPov
@@ -779,7 +784,7 @@ struct XformMgr{
     if(aParent!=NULL and aParent.ruleSet==rsIntersect){aParent <- aParent.parent.parent}
     if(RHSExists and aParent!=NULL and !aParent.LHS_item.item.value.sizeGiven and LHSPov.item.isTentative and !RHSPov.item.isTentative){LHSPov.item.isTentative <- false}
         if(aParent == NULL){LHSPovNext <- NULL}  // At very top infon or propagating a lone RHS or interset.
-        else{LHSPovNext <- findNextLHS(adjLhsPOV, aParent.LHSItr, (!RHSExists or dontEnque), leftWas2ndVisit, LHSitrBeginning, LHSfType, RHSfType, false)}
+        else{LHSPovNext <- findNextLHS(adjLhsPOV, aParent.LHSItr, (!RorRExists or dontEnque), leftWas2ndVisit, LHSitrBeginning, LHSfType, RHSfType, false)}
         if(remainder!=NULL){RHSPovNext <- remainder}
         else if(RHSExists and aParent != NULL and aParent.RHSItr != NULL){
             RHSPovNext <- findNextRHS(adjRhsPOV, aParent.RHSItr, dontEnque, rightWas2ndVisit, RHSitrBeginning, LHSfType, RHSfType)
@@ -790,7 +795,7 @@ struct XformMgr{
         if(!dontEnque){
             me bool: LHSisFinished <- LHSPovNext == NULL or leftWas2ndVisit or LHSPovNext.tentFromDots
             me bool: RHSisFinished <- RHSPovNext == NULL or rightWas2ndVisit
-            if(RHSExists and adjLhsPOV.pParent!=NULL and ((LHSisFinished and RHSisFinished) or (aParent.RHS!=NULL and aParent.RHS.looseSize()))){
+            if(RorRExists and adjLhsPOV.pParent!=NULL and ((LHSisFinished and RHSisFinished) or (aParent.RHS!=NULL and aParent.RHS.looseSize()))){
                 if(LHSPov.item.intersectPos == ipNoIntersect){
                     if(LHSitrBeginning){
                         log(idnt+"   candidatesForLastItem:" + adjLhsPOV.stringify() + "   EndsOn:"+LHSPovNext.stringify())
@@ -960,6 +965,7 @@ struct XformMgr{
                                 //log("aItem.pendingTasks:" + toString(aItem.pendingTasks))
                                 logSeg("-MC1")
                                 if(!aItem.reject){
+                                    log(idnt+"    REMAINDER:"+remainder.stringify())
                                     nextAItem <- propagate(aItem, aItem.LHS_item, aItem.RHS, remainder, aItem.looseSize, (aItem.reject and aItem.parent.candidateForLast))
                                     if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
                                     aItem.mergeFinished <- true
@@ -994,10 +1000,12 @@ struct XformMgr{
                                     our POV: innrPov <- innr.value.items.head
                                     while(innrPov != NULL){
                                         our AItem: PIVA <- processInfonViaAgenda(innrPov, NULL, aItem)
+                                        PIVA.LHS_item.item.takeWrkListFrom(aItem.LHS_item.item, false)
                                         addAItemToAgenda(PIVA)
-                                        innrPov <- innrPov.next
                                         logSeg("-IC0-OR-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
+                                        innrPov <- innrPov.next
                                     }
+                                    aItem.LHS_item.item.wrkList.clear() //TODO: is this necessary
                                 }
                             } else {  // CI is FunctionLike
                                 our POV:: srcPOV; srcPOV.item <- innr
@@ -1049,7 +1057,7 @@ struct XformMgr{
                                     //case ipGetMarked : {newTop <- innr.getMarked()}
                                 }
                                 if(!(newTop==NULL)){
-                                    newTop.takeWrkListFrom(CI)
+                                    newTop.takeWrkListFrom(CI, true)
                                     logSeg("-GET_LAST")
                                 }else{log("Handle LastItm is null")}
                                 doFulfillSubs <- true
@@ -1169,14 +1177,14 @@ struct XformMgr{
                     else if(partTag == "first"){
                         our infon: firstItm <- CI.getFirstItem()
                         if(firstItm==NULL){logFatalError("Handle firstItm is null")}
-                        firstItm.takeWrkListFrom(part.path)
+                        firstItm.takeWrkListFrom(part.path, true)
                         part.wasTransfered <- true
                         changeMade <- true
                     }
                     else if(partTag == "last"){
                         our infon: lastItm <- CI.getLastInfon()
                         if(lastItm==NULL){logFatalError("Handle LastItm is null")}
-                        lastItm.takeWrkListFrom(part.path)
+                        lastItm.takeWrkListFrom(part.path, true)
                         part.wasTransfered <- true
                         changeMade <- true
                     }
@@ -1197,7 +1205,7 @@ struct XformMgr{
             our infon: infModel <- modelMngr.fetchModel(CI.type)
             if(infModel){
                 Allocate(newTop)
-                newTop.takeWrkListFrom(CI)
+                newTop.takeWrkListFrom(CI, true)
                 infModel.copyAsTypeTo(newTop, true)  // TRUE?
                 newTop.itmMode <- mItem
             }else{
