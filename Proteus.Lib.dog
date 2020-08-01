@@ -424,6 +424,7 @@ model AItem{
     our POV: RHS
     our infItr: LHSItr
     our infItr: RHSItr
+    me int64: priority
     flag: looseSize
     flag: reject
     flag: taskEnqueued
@@ -461,6 +462,7 @@ model AItem{
                     S <+- "PURE:"
                 }
             }
+            //S <+- "[P_"+toString(priority)+"]"
         }
         return (S)
     }
@@ -494,7 +496,7 @@ struct GLOBAL{me ModelManager: modelMngr}
 
 struct XformMgr{
     their Agent: agent
-    our AItem[list]: agenda
+    our AItem[multimap int64]: agenda
     const int: col1 <- 60
     const int: col2 <- 90
     const int: col3 <- 110
@@ -646,18 +648,19 @@ struct XformMgr{
         me string: logStr <- "        ADD_TO_AGENDA:"+stringifyAItem(aItem)
         if(aItem.ruleSet == rsInfon){
             //if(!aItem.LHS_item.item.isOnAgenda){
-                agenda.pushFirst(aItem)
+                agenda.insert(aItem.priority, aItem)
                 aItem.LHS_item.item.isOnAgenda <- true
             //} else {logStr <- logStr + " Already on agenda!"; itmAdded <- false}
-        }else{agenda.pushFirst(aItem)}
+        }else{agenda.insert(aItem.priority, aItem)}
         //log(logStr)
         return(itmAdded)
     }
-    our AItem: processInfonViaAgenda(our POV: item, our AItem: subscriber, our AItem: aParent)<-{
+    our AItem: processInfonViaAgenda(our POV: item, our AItem: subscriber, our AItem: aParent, me int64: priority)<-{
         our AItem:: newAItem
-        newAItem.ruleSet  <- rsInfon
-        newAItem.LHS_item <- item
-        newAItem.step     <- 0
+        newAItem.ruleSet   <- rsInfon
+        newAItem.LHS_item  <- item
+        newAItem.priority  <- priority
+        newAItem.step      <- 0
         newAItem.indentLvl <- 0
         if(subscriber != NULL){
             newAItem.subscribers.pushFirst(subscriber)
@@ -676,12 +679,13 @@ struct XformMgr{
         }
         return(newAItem)
     }
-    our AItem: processMergeViaAgenda(our POV: LHS, our POV: RHS, me bool: looseSize, our AItem: subscriber, our AItem: aParent)<-{
+    our AItem: processMergeViaAgenda(our POV: LHS, our POV: RHS, me bool: looseSize, our AItem: subscriber, our AItem: aParent, me int64: priority)<-{
         our AItem:: newAItem
         newAItem.ruleSet   <- rsMerge
         newAItem.LHS_item  <- LHS
         newAItem.RHS       <- RHS
         newAItem.looseSize <- looseSize
+        newAItem.priority  <- priority
         newAItem.step      <- 0
         newAItem.indentLvl <- 0
         aParent.taskEnqueued <- true
@@ -699,12 +703,13 @@ struct XformMgr{
         logSeg("-PMVA->"); logSegStartCol(newAItem.mySymbol(newAItem),col2)
         return(newAItem)
     }
-    our AItem: processIntersectViaAgenda(our POV: pov, our AItem: subscriber)<-{
+    our AItem: processIntersectViaAgenda(our POV: pov, our AItem: subscriber, me int64: priority)<-{
         //log("processINTERSECTViaAgenda:"+ pov.stringify())
         //if(subscriber.parent!=NULL and subscriber.parent.LHSItr!=NULL){log("     LHSItr:"+subscriber.parent.LHSItr.topPOV.stringify())}
         our AItem:: newAItem
         newAItem.ruleSet   <- rsIntersect
         newAItem.LHS_item  <- pov
+        newAItem.priority  <- priority
         newAItem.step      <- 0
         newAItem.indentLvl <- 0
         if(subscriber != NULL){
@@ -862,11 +867,11 @@ struct XformMgr{
         our AItem: PIVA
         me bool: breakLoop <- RHSExists and RHSPovNext==NULL and aParent!=NULL and aParent.RHSItr != NULL
         if(breakLoop and LHSHasAlt){
-            PIVA <- processInfonViaAgenda(LHSPovNext.altPOV, NULL, propagateParent)
+            PIVA <- processInfonViaAgenda(LHSPovNext.altPOV, NULL, aParent, aItem.priority+1)
             logSeg("-BRKLOOP-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
         }
         else{
-            PIVA <- processInfonViaAgenda(LHSPovNext, NULL, propagateParent)
+            PIVA <- processInfonViaAgenda(LHSPovNext, NULL, aParent, aItem.priority+1)
             logSeg("-PROP-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
         }
         if(!candidateForLast){LHSPovNext.altPOV <- NULL}
@@ -959,7 +964,7 @@ struct XformMgr{
         if(aItem.step ==0){aItem.step <- 1}  //TODO: optimize so that this isn't needed.
                         switch(aItem.step){
                             case 0:{
-                                our AItem: PIVA <- processInfonViaAgenda(aItem.RHS, aItem, NULL)
+                                our AItem: PIVA <- processInfonViaAgenda(aItem.RHS, aItem, NULL, aItem.priority)
                                 addAItemToAgenda(PIVA)
                                 logSeg("-MC0-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
                                 aItem.step <- 1
@@ -1007,7 +1012,7 @@ struct XformMgr{
                                     our POV: innrPov <- innr.value.items.head
                                     while(innrPov != NULL){
                                         if(innrPov.outerPOV==NULL){innrPov.outerPOV <- aItem.LHS_item}
-                                        our AItem: PIVA <- processInfonViaAgenda(innrPov, NULL, aItem)
+                                        our AItem: PIVA <- processInfonViaAgenda(innrPov, NULL, aItem, aItem.priority)
                                         PIVA.LHS_item.item.takeWrkListFrom(aItem.LHS_item.item, false)
                                         addAItemToAgenda(PIVA)
                                         logSeg(PIVA.mySymbol(PIVA)+" ")
@@ -1018,7 +1023,7 @@ struct XformMgr{
                                 logSeg("]")
                             } else {  // CI is FunctionLike
                                 our POV:: srcPOV; srcPOV.item <- innr
-                                our AItem: PIVA <- processInfonViaAgenda(srcPOV, aItem, NULL)
+                                our AItem: PIVA <- processInfonViaAgenda(srcPOV, aItem, NULL, aItem.priority)
                                 addAItemToAgenda(PIVA)
                                 logSeg("-IC0-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
                             }
@@ -1094,7 +1099,7 @@ struct XformMgr{
         withEach count in WHILE(!agenda.isEmpty()) {
             //log("_____"+toString(count)+"_____")
             if (count > 400){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
-            our AItem: aItem <- agenda.last(); agenda.popLast()
+            our AItem: aItem <- agenda.first(); agenda.popFirst()
             processAgendaItem(aItem, 0)
             //aItem.LHS_item.item.isOnAgenda <- false
         }
@@ -1289,12 +1294,12 @@ struct XformMgr{
             aItem.LHS_item.item.wrkList.popFirst()
             aItem.LHS_item.item.usedWrkList.pushLast(RHSPov)
             looseSize <- RHSPov.looseSize()
-            processMergeViaAgenda(aItem.LHS_item, RHSPov, looseSize, aItem, aItem)
+            processMergeViaAgenda(aItem.LHS_item, RHSPov, looseSize, aItem, aItem, aItem.priority)
             aItem.hasPropagated <- true
             stopAndWait <- true
         }
         if(!aItem.hasPropagated){
-            processMergeViaAgenda(aItem.LHS_item, RHSPov, false, aItem, aItem)
+            processMergeViaAgenda(aItem.LHS_item, RHSPov, false, aItem, aItem, aItem.priority)
             aItem.hasPropagated <- true
             stopAndWait <- true
         }
@@ -1306,7 +1311,7 @@ struct XformMgr{
         else{CI.altRulesApplied <- true}
         me bool: stopAndWait <- false
         if(CI.intersectPos != ipNoIntersect){
-            processIntersectViaAgenda(aItem.LHS_item, aItem)
+            processIntersectViaAgenda(aItem.LHS_item, aItem, aItem.priority)
             stopAndWait <- true
         }
         return(stopAndWait)
@@ -1363,7 +1368,7 @@ struct Agent{
 
     me void: normalize(our infon: inf) <- {
         our POV:: normPov; normPov.item <- inf
-        xformMgr.addAItemToAgenda(xformMgr.processInfonViaAgenda(normPov, NULL, NULL))
+        xformMgr.addAItemToAgenda(xformMgr.processInfonViaAgenda(normPov, NULL, NULL, 1))
         xformMgr.processAgenda()
     }
     me string: fetchAsStr(their infon: i) <- {return(i.value.str)}
