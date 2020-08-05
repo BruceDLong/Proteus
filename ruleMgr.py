@@ -96,7 +96,7 @@ mergeRules = {
     },
     'rules': [
         ["merge:|||r?|",                           "NONE"],
-        ["merge:l?||=|rNUM,rSTR,rLST|",           "copyRHSTypeToLHS,copyValueRHStoLHS,copySizeRHStoLHS"],
+        ["merge:l?||=|rNUM,rSTR,rLST|",           "copyIdentity"],  #"copyRHSTypeToLHS,copyValueRHStoLHS,copySizeRHStoLHS"
         ["merge:l?||==|rNUM,rSTR,rLST|",          "copyRHSTypeToLHS,copyValueRHStoLHS"],
         ["merge:l?||=|rtUnknown|rintersect",      "mergeRHSIntersect"],
         ["merge:l?||==|rtUnknown|rintersect",     "mergeRHSIntersect"],
