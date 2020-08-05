@@ -91,7 +91,8 @@ mergeRules = {
         'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.item.value.num != aItem.RHS.item.value.num){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
         'StartMergePropogation':    'startPropRules(aItem)',
         'MergeLooseStrings':        'remainder <- mergeLooseStrings(aItem)',
-        'mergeRHSIntersect':        'mergeRHSIntersect(aItem)'
+        'mergeRHSIntersect':        'mergeRHSIntersect(aItem)',
+        'copyIdentity':             'aItem.LHS_item.item <- aItem.RHS.item'
     },
     'rules': [
         ["merge:|||r?|",                           "NONE"],
@@ -109,7 +110,7 @@ mergeRules = {
         ["merge:lNUM|lfLiteral|=|rNUM|rfUnknown",         "copyValueLHStoRHS"],
         ["merge:lNUM|lfLiteral|=|rNUM|rfLiteral",         "rejectIfValueNumNotEqual"],
 
-        ["merge:lSTR|lfUnknown|=|rSTR|rfUnknown",         "NONE"],
+        ["merge:lSTR|lfUnknown|=|rSTR|rfUnknown",         "copyIdentity"],
         ["merge:lSTR|lfUnknown|=|rSTR|rfLiteral",         "copyValueRHStoLHS"],
         ["merge:lSTR|lfLiteral|=|rSTR|rfUnknown",         "copyValueLHStoRHS"],
         ["merge:lSTR|lfLiteral|=|rSTR|rfLiteral",         "rejectIfValueStrNotEqual"],
