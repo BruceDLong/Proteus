@@ -92,7 +92,7 @@ mergeRules = {
         'StartMergePropogation':    'startPropRules(aItem)',
         'MergeLooseStrings':        'remainder <- mergeLooseStrings(aItem)',
         'mergeRHSIntersect':        'mergeRHSIntersect(aItem)',
-        'copyIdentity':             'aItem.LHS_item.item <- aItem.RHS.item'
+        'copyIdentity':             'copyIdentity(aItem)'
     },
     'rules': [
         ["merge:|||r?|",                           "NONE"],
@@ -214,7 +214,7 @@ mergeRules = {
         ["merge:lLST|lfConcat|==|rLST|rfLiteral",         "ACTION"],
         ["merge:lLST|lfConcat|==|rLST|rintersect",        "ACTION"],
         ["merge:lLST|lfLiteral|==|rLST|rfConcat",         "ACTION"],
-        ["merge:lLST|lfLiteral|==|rLST|rintersect",       "ACTION"],
+        ["merge:lLST|lfLiteral|==|rtUnknown,rLST|rintersect",        "mergeRHSIntersect"],
         ["merge:lLST|lintersect|==|rLST|rfUnknown",       "ACTION"],
         ["merge:lLST|lintersect|==|rLST|rfConcat",        "ACTION"],
         ["merge:lLST|lintersect|==|rLST|rfLiteral",       "ACTION"],
