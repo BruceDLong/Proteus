@@ -256,7 +256,7 @@ startPropRules = { # Start iterating fLiteral LST = fLiteral LST
         '!LHSEmpty':        '(aItem.LHS_item.item.value.tailUnfinished or aItem.LHS_item.item.value.items.size() > 0)'
     },
     'codeSnips': {
-        'REJECT':   'aItem.reject <- true',
+        'REJECT':   'aItem.reject<-true; aItem.LHS_item.rejected<-true;',
         'SKIP':     '//Skip',
         'initListIterators':   'initListIterators(aItem)',
     },
