@@ -168,13 +168,13 @@ mergeRules = {
         ["merge:lSTR|lintersect|=|rSTR|rintersect",       "ACTION"],
 
         ["merge:lLST|lfUnknown|=|rLST|rfConcat",         "ACTION"],
-        ["merge:lLST|lfUnknown|=|rLST|rintersect",       "ACTION"],
+        ["merge:lLST|lfUnknown|=|rtUnknown,rLST|rintersect",        "mergeRHSIntersect"],
         ["merge:lLST|lfConcat|=|rLST|rfUnknown",         "ACTION"],
         ["merge:lLST|lfConcat|=|rLST|rfConcat",          "ACTION"],
         ["merge:lLST|lfConcat|=|rLST|rfLiteral",         "ACTION"],
         ["merge:lLST|lfConcat|=|rLST|rintersect",        "ACTION"],
         ["merge:lLST|lfLiteral|=|rLST|rfConcat",         "ACTION"],
-        ["merge:lLST|lfLiteral|=|rLST|rintersect",       "ACTION"],
+        ["merge:lLST|lfLiteral|=|rtUnknown,rLST|rintersect",        "mergeRHSIntersect"],
         ["merge:lLST|lintersect|=|rLST|rfUnknown",       "ACTION"],
         ["merge:lLST|lintersect|=|rLST|rfConcat",        "ACTION"],
         ["merge:lLST|lintersect|=|rLST|rfLiteral",       "ACTION"],
@@ -195,7 +195,7 @@ mergeRules = {
         ["merge:lNUM|lintersect|==|rNUM|rintersect",       "ACTION"],
 
         ["merge:lSTR|lfUnknown|==|rSTR|rfConcat",          "ACTION"],
-        ["merge:lSTR|lfUnknown|==|rSTR|rintersect",        "ACTION"],
+        ["merge:lSTR|lfUnknown|==|rtUnknown,rSTR|rintersect",        "mergeRHSIntersect"],
         ["merge:lSTR|lfConcat|==|rSTR|rfUnknown",          "ACTION"],
         ["merge:lSTR|lfConcat|==|rSTR|rfConcat",           "ACTION"],
         ["merge:lSTR|lfConcat|==|rSTR|rfLiteral",          "ACTION"],
@@ -208,7 +208,7 @@ mergeRules = {
         ["merge:lSTR|lintersect|==|rSTR|rintersect",       "ACTION"],
 
         ["merge:lLST|lfUnknown|==|rLST|rfConcat",         "ACTION"],
-        ["merge:lLST|lfUnknown|==|rLST|rintersect",       "ACTION"],
+        ["merge:lLST|lfUnknown|==|rtUnknown,rLST|rintersect",        "mergeRHSIntersect"],
         ["merge:lLST|lfConcat|==|rLST|rfUnknown",         "ACTION"],
         ["merge:lLST|lfConcat|==|rLST|rfConcat",          "ACTION"],
         ["merge:lLST|lfConcat|==|rLST|rfLiteral",         "ACTION"],
