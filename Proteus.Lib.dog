@@ -95,6 +95,8 @@ model infon{
     flag: isNormed
     flag: doCursorLookup
     flag: hasInnrOutr
+    flag: asWrkLstOutr   // When true in an RHS, the RHS is an outr infon
+    flag: cnvtToFunc     // Convert this to a [ ] before evaluating.
     our infon: funcArgs
     our infon: dotPath
     our infon: innr
@@ -386,6 +388,12 @@ struct GLOBAL{
     void: registerClass(our infon: classInfon) <- {
         //log("REGISTER:", classInfon.type.asGiven, "\n")
         classDefs.insert(classInfon.type.asGiven, classInfon.funcArgs)
+    }
+    void: reFunctionize(our infon: infn) <- {
+        infn.cnvtToFunc <- false
+        our infon:: newInnr
+        newInnr <deep- infn
+        infn.convertThisToIntersection(newInnr)
     }
     our infon: makeInnrInfon() <- {
         our infon:: newListInfon
@@ -814,6 +822,18 @@ struct XformMgr{
         return(changeMade)
     }
     me bool: wrkLstRules(our AItem: aItem) <- {
+        ////////// If "{[....]| ... } <~ outr", prepend outr to wrkList
+        our infon: lSpecItem <- aItem.LHS_item.item
+        our infon: lSpec <- lSpecItem.value.listSpec
+        if(lSpec!=NULL and lSpecItem.hasInnrOutr and lSpecItem.intersectPos==ipNoIntersect and lSpec.intersectPos!=ipNoIntersect){
+            log("OUTR: lSpecItem: "+toString(lSpecItem) + "   lSpec:" +toString(lSpec) + "   outr:" +toString(lSpecItem.funcArgs))
+            our POV:: newPov; newPov.item <- lSpecItem.funcArgs; newPov.looseMode <- true
+            aItem.LHS_item.item.wrkList.pushFirst(newPov)
+            lSpecItem.hasInnrOutr<-false;  lSpecItem.funcArgs <- NULL
+            lSpec.asWrkLstOutr <- true
+        }
+
+        ////////// Handle items on WrkList
         me bool: stopAndWait <- false
         our POV: RHSPov    <- NULL
         me bool: looseSize <- false
@@ -1200,7 +1220,6 @@ if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
                                 predPushed <- true
                             }
                             if(aParent.RHS){
-                                log("aParent.RHS: .looseInhtd:"+toString(aParent.RHS.looseInhtd) + "   .looseMode:"+toString(aParent.RHS.looseMode))
                                 RHSAlt.looseInhtd <- aParent.RHS.looseInhtd or aParent.RHS.looseMode
                                 RHSAlt.looseTop   <- false
                             }
@@ -1266,8 +1285,14 @@ if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
                     else{
                         if(aItem.pendingTasks < 0){log("@@@@@@@@"+aItem.parent.mySymbol(aItem)+".PT="+toString(aItem.pendingTasks))}
                         if(aItem.pendingTasks==0){
-                            cleanUpInfon(aItem)
                             our infon: CI <- aItem.LHS_item.item;
+                            cleanUpInfon(aItem)
+                            if(CI.cnvtToFunc){
+                                reFunctionize(CI)
+                                CI.altRulesApplied <- false
+                                continueLoop <- true
+                                continue()
+                            }
                             if(CI.partRef!=NULL){
                                 log("PARTREF:"+toString(CI.partRef.path))
                                 CI.parts.pushLast(CI.partRef)
