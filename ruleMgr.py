@@ -92,7 +92,8 @@ mergeRules = {
         'StartMergePropogation':    'startPropRules(aItem)',
         'MergeLooseStrings':        'remainder <- mergeLooseStrings(aItem)',
         'mergeRHSIntersect':        'mergeRHSIntersect(aItem)',
-        'copyIdentity':             'copyIdentity(aItem)'
+        'copyIdentity':             'copyIdentity(aItem)',
+        'checkNumRange':            'if(!checkNumRange(aItem.LHS_item.item, aItem.RHS.item)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
     },
     'rules': [
         ["merge:|||r?|",                           "NONE"],
@@ -101,9 +102,9 @@ mergeRules = {
         ["merge:l?||=|rtUnknown|rintersect",      "mergeRHSIntersect"],
         ["merge:l?||==|rtUnknown|rintersect",     "mergeRHSIntersect"],
 
-        ["merge:lNUM||=|rSTR,rLST|",             "REJECT"],
+        ["merge:lNUM||=|rSTR,rLST|rfUnknown,rfLiteral",             "REJECT"],
         ["merge:lSTR||=|rNUM,rLST|",             "REJECT"],
-        ["merge:lLST||=|rNUM,rSTR|",             "REJECT"],
+        ["merge:lLST|lfUnknown,lfLiteral|=|rNUM,rSTR|",             "REJECT"],
 
         ["merge:lNUM|lfUnknown|=|rNUM|rfUnknown",         "NONE"],
         ["merge:lNUM|lfUnknown|=|rNUM|rfLiteral",         "copyValueRHStoLHS"],
@@ -141,13 +142,13 @@ mergeRules = {
         ["merge:lLST|lfLiteral|==|rLST|rfLiteral",        "StartMergePropogation"],
 
         ##### CONCAT and INTERSECT
-        ["merge:lNUM|lfUnknown|=|rNUM|rfConcat",          "ACTION"],
+        ["merge:lNUM|lfUnknown|=|rNUM,rLST|rfConcat",      "ACTION"],
         ["merge:lNUM|lfUnknown|=|rtUnknown,rNUM|rintersect",        "mergeRHSIntersect"],
         ["merge:lNUM|lfConcat|=|rNUM|rfUnknown",          "ACTION"],
         ["merge:lNUM|lfConcat|=|rNUM|rfConcat",           "ACTION"],
-        ["merge:lNUM|lfConcat|=|rNUM|rfLiteral",          "ACTION"],
+        ["merge:lNUM,lLST|lfConcat|=|rNUM|rfLiteral",               "checkNumRange"],
         ["merge:lNUM|lfConcat|=|rNUM|rintersect",         "ACTION"],
-        ["merge:lNUM|lfLiteral|=|rNUM|rfConcat",          "ACTION"],
+        ["merge:lNUM|lfLiteral|=|rNUM,rLST|rfConcat",               "checkNumRange"],
         ["merge:lNUM|lfLiteral|=|rtUnknown,rNUM|rintersect",        "mergeRHSIntersect"],
         ["merge:lNUM|lintersect|=|rNUM|rfUnknown",        "ACTION"],
         ["merge:lNUM|lintersect|=|rNUM|rfConcat",         "ACTION"],
