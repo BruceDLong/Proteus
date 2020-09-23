@@ -27,13 +27,14 @@ do ManageCmdLine(cmd)
 #include xformMgr.dog
 #include ModelManager.dog
 
+struct SizeMode: inherits=<mode[fromCount, fromContext, fromGiven]> {}
+
 model pureInfon{
     me mode[tUnknown, NUM, STR, LST]: fType
     me mode[fUnknown, fConcat, fLiteral]: format
     me mode[fDefault, fFloat, fFraction, fSingleQuote, fHereDoc, fSizedBin]: literalFormat
     me mode[bDec, bBin, bHex]:numBase
     me mode[ipDefault, ipSquareBrackets]: intersectPosParse
-    me mode[fromCount, fromContext, fromGiven]: sizeMode
     me flag: inverted
     me flag: timelike
     flag: isLstSize
@@ -43,6 +44,7 @@ model pureInfon{
     me DblLinkedList: items            //  our list<our infon, [fast_prepend, fast_delete]>: newItems
     our infon: listSpec
     our pureInfon: size
+    me SizeMode: sizeMode <- fromCount
 
     me none: pureInfon(me int: N) <- {
         fType <- NUM
@@ -256,13 +258,13 @@ model infon{
             }
         }
     }
-    void: convertThisToIntersection(our infon: newInnr) <- {
+    void: convertThisToIntersection(our infon: newInnr, me SizeMode: sMode) <- {
         itmMode         <- mItem
         infMode         <- isLiteral
         intersectPos    <- ipGetLast
         infSize.format  <- fUnknown
         innr            <- newInnr
-        innr.value.sizeMode <- fromGiven
+        innr.value.sizeMode <- sMode
     }
     our POV: addToOrInfon(our infon: rItem, our POV: rNode, our POV: pred) <- {
         our POV: pov <- innr.value.items.head
@@ -381,7 +383,7 @@ model TypeSpec{
     mode[tmListSpec, tmWordUse]: typeMode
     flag: wasIntegrated
     // shortcutSpecs
-}
+} struct TypeSpec{}
 struct GLOBAL{
     me string: crntRHSMySymbol
     me string: crntLHSMySymbol
@@ -394,7 +396,7 @@ struct GLOBAL{
         infn.cnvtToFunc <- false
         our infon:: newInnr
         newInnr <deep- infn
-        infn.convertThisToIntersection(newInnr)
+        infn.convertThisToIntersection(newInnr, fromCount)
     }
     our infon: makeInnrInfon() <- {
         our infon:: newListInfon
@@ -411,7 +413,7 @@ struct GLOBAL{
         our infon: newListInfon <- makeInnrInfon()               // Make {...} to be used as innr
         our POV: newAlt <- newListInfon.value.items.pushAsAlt(nextPov, nextPov.item, pred)  // Make a POV for the item.
         our infon:: newAltInfon
-            newAltInfon.convertThisToIntersection(newListInfon) // Make [ ] and add innr to it
+            newAltInfon.convertThisToIntersection(newListInfon, fromGiven) // Make [ ] and add innr to it
         our POV:: newAltInfPov                                  // Make the POV pointing to the [...]
             newAltInfPov.item <- newAltInfon
         newAlt.looseInhtd <- nextPov.looseInhtd
@@ -472,10 +474,12 @@ model AItem{
                     S <+- "INF:"+ toString(LHS_item.item)
                 }
                 case rsMerge:{
-                    me string: equalStr <- " '=' "
-                    if (looseSize){equalStr <- " '==' "}
                     S <+- "MRG:"+ toString(LHS_item.item)
-                    if(RHS!=NULL) {S <+- equalStr+ toString(RHS.item)}
+                    if(RHS!=NULL) {
+                        me string: equalStr <- " '=' "
+                        if (RHS.looseType()){equalStr <- " '==' "}
+                        S <+- equalStr+ toString(RHS.item)
+                    }
                 }
                 case rsIntersect:{
                     S <+- "INSCT:"+ toString(LHS_item.item)
@@ -679,7 +683,7 @@ struct XformMgr{
                                 newInnr.value.items.pushLast(skipPart)
                                 newInnr.value.items.pushLast(part.path)
                             Allocate(path)
-                                path.convertThisToIntersection(newInnr)
+                                path.convertThisToIntersection(newInnr, fromGiven)
                                 newInnr.value.sizeMode        <- fromCount
                                 path.value.sizeMode           <- fromCount
                                 path.infSize.fType            <- NUM
@@ -702,7 +706,7 @@ struct XformMgr{
                             our infon: newInnr <- makeInnrInfon()
                                 newInnr.value.tailUnfinished <- true
                             Allocate(path)
-                                path.convertThisToIntersection(newInnr)
+                                path.convertThisToIntersection(newInnr, fromGiven)
                                 newInnr.infSize              <- part.path.value
                                 newInnr.value.sizeMode       <- fromGiven
                             our POV:: pathPov
@@ -862,13 +866,24 @@ struct XformMgr{
     me bool: checkNumRange(our infon: LHS, our infon: RHS) <- { // NUM=(range)
         me BigInt: lowest
         me BigInt: highest
-        if(evalForRange(RHS, lowest, highest)){
-            me BigInt: LHSVal <- LHS.value.num
-            log("checkNumRange: "+toString(lowest) + " <= " + toString(LHSVal) + " < " + toString(highest))
-            if(LHSVal>=lowest and LHSVal<highest){
-                return(true)
+        if(LHS.value.format==fConcat){
+            if(evalForRange(LHS, lowest, highest)){
+                me BigInt: RHSVal <- RHS.value.num
+                log("checkNumRange-LHS: "+toString(lowest) + " <= " + toString(RHSVal) + " < " + toString(highest))
+                if(RHSVal>=lowest and RHSVal<highest){
+                    return(true)
+                }
             }
-        } else {return(false)}
+        } else if(RHS.value.format==fConcat){
+            if(evalForRange(RHS, lowest, highest)){
+                me BigInt: LHSVal <- LHS.value.num
+                log("checkNumRange-RHS: "+toString(lowest) + " <= " + toString(LHSVal) + " < " + toString(highest))
+                if(LHSVal>=lowest and LHSVal<highest){
+                    return(true)
+                }
+            }
+        }
+        return(false)
     }
     me bool: joinOnRight(our infon: LHS, our infon: RHS) <- { // Join RHS into LHS. Return true on success (so need no subscription).
         logSeg("-JOR:")
@@ -1086,7 +1101,7 @@ if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
         }
     }
     me void: mergeRHSIntersect(our AItem: aItem) <- {
-        logSeg("-mrgRHSInst")
+        logSeg("-mergeRHSIntersect")
         // TODO: make this work with inverted and marked intersections
         our infon: LHS <- aItem.LHS_item.item
         our infon: RHS <- aItem.RHS.item
@@ -1108,7 +1123,7 @@ if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
                     LHSPOV.predecessors <- pov.predecessors
                     pov <- pov.next
                 }
-                LHS.convertThisToIntersection(newListInfon)
+                LHS.convertThisToIntersection(newListInfon, fromGiven)
                 LHS.innr.value.tailUnfinished <- RHS.innr.value.tailUnfinished
                 LHS.innr.value.sizeMode <- fromGiven
                 LHS.altRulesApplied <- false
@@ -1123,10 +1138,10 @@ if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
     }
 
     // PROPAGATE & PROPAGATE UTILITY FUNCTIONS
-    our POV: findNextLHS(our POV: LHSPov, our infItr: ii, me bool: skipDots, their bool: leftWas2ndVisit, me bool: itrBeginning, me int: LHSfType, me int: RHSfType, me bool: unknownAsList) <- {
+    our POV: findNextLHS(our POV: LHSPov, our infItr: ii, me bool: skipDots, their bool: leftWas2ndVisit, me bool: itrBeginning, me bool: LHSIsLST, me bool: RHSIsLST, me bool: unknownAsList) <- {
         logSeg("-nxtL")
         our POV: LHSPovNxt
-        if((LHSfType != LST and !unknownAsList) and RHSfType == LST){
+        if((!LHSIsLST and !unknownAsList) and RHSIsLST){
             Allocate(LHSPovNxt)
             LHSPovNxt <deep- LHSPov
         }else{
@@ -1134,10 +1149,10 @@ if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
         }
         return(LHSPovNxt)
     }
-    our POV: findNextRHS(our POV: RHSPov, our infItr: ii, me bool: skipDots, their bool: rightWas2ndVisit, me bool: itrBeginning, me int: LHSfType, me int: RHSfType) <- {
+    our POV: findNextRHS(our POV: RHSPov, our infItr: ii, me bool: skipDots, their bool: rightWas2ndVisit, me bool: itrBeginning, me bool: LHSIsLST, me bool: RHSIsLST) <- {
         logSeg("-nxtR");
         our POV: RHSPovNxt
-        if(LHSfType == LST and RHSfType != LST){
+        if(LHSIsLST and !RHSIsLST){
             Allocate(RHSPovNxt)
             RHSPovNxt <deep- RHSPov
             RHSPovNxt.looseInhtd <- true
@@ -1164,10 +1179,10 @@ if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
         aItem.hasPropagated <- true
         me bool: RHSExists  <- RHSPov != NULL
         me bool: RorRExists <- RHSExists or remainder!=NULL
-        me int: LHSfType <- LHSPov.item.value.fType
-        me int: RHSfType <- 0
-        if(RHSExists){RHSfType <- RHSPov.item.value.fType}
-        else if(RorRExists){RHSfType <- remainder.item.value.fType}
+        me bool: LHSIsLST   <- (LHSPov.item.value.fType==LST and LHSPov.item.value.format!=fConcat)
+        me bool: RHSIsLST   <- false
+        if(RHSExists){RHSIsLST <- (RHSPov.item.value.fType==LST and RHSPov.item.value.format!=fConcat)}
+        else if(RorRExists){RHSIsLST <- remainder.item.value.fType==LST}
         me bool: LHSitrBeginning <- aItem.LHSItr!=NULL and LHSPov===aItem.LHSItr.topPOV
         me bool: RHSitrBeginning <- aItem.RHSItr!=NULL and RHSPov===aItem.RHSItr.topPOV
         me bool: LHSIsFromALT
@@ -1187,11 +1202,12 @@ if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
         if(aParent!=NULL and aParent.ruleSet==rsIntersect){aParent <- aParent.parent.parent}
         if(RHSExists and aParent!=NULL and aParent.LHS_item.item.value.sizeMode!=fromGiven and LHSPov.item.isTentative and !RHSPov.item.isTentative){LHSPov.item.isTentative <- false}
         if(aParent == NULL){LHSPovNext <- NULL}  // At very top infon or propagating a lone RHS or interset.
-        else{LHSPovNext <- findNextLHS(adjLhsPOV, aParent.LHSItr, skipDots, leftWas2ndVisit, LHSitrBeginning, LHSfType, RHSfType, false)}
+        else{LHSPovNext <- findNextLHS(adjLhsPOV, aParent.LHSItr, skipDots, leftWas2ndVisit, LHSitrBeginning, LHSIsLST, RHSIsLST, false)}
         if(remainder!=NULL){RHSPovNext <- remainder}
         else if(RHSExists and aParent != NULL and aParent.RHSItr != NULL){
-            RHSPovNext <- findNextRHS(adjRhsPOV, aParent.RHSItr, dontEnque, rightWas2ndVisit, RHSitrBeginning, LHSfType, RHSfType)
+            RHSPovNext <- findNextRHS(adjRhsPOV, aParent.RHSItr, dontEnque, rightWas2ndVisit, RHSitrBeginning, LHSIsLST, RHSIsLST)
         }
+        if(RHSPovNext==NULL){logSeg("-RNxt_NULL")}
         me bool: LHSHasAlt <- (LHSPovNext != NULL and LHSPovNext.altPOV != NULL)
         me bool: RHSHasAlt <- (RHSPovNext != NULL and RHSPovNext.altPOV != NULL)
         me bool: candidateForLast
@@ -1271,6 +1287,7 @@ if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
         else{
             PIVA <- processInfonViaAgenda(LHSPovNext, NULL, aParent, aItem.priority+1)
             logSeg("-PROP-PIVA->"); logSegStartCol(PIVA.mySymbol(PIVA),col2)
+            log("PROP_PIVA:"+PIVA.LHS_item.stringify())
         }
         if(!candidateForLast){LHSPovNext.altPOV <- NULL}
         if(RHSPovNext!=NULL){RHSPovNext.altPOV <- NULL}
@@ -1316,13 +1333,14 @@ if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
                             our infon: CI <- aItem.LHS_item.item;
                             cleanUpInfon(aItem)
                             if(CI.cnvtToFunc){
+                                log(",reFunc:"+toString(CI))
                                 reFunctionize(CI)
                                 CI.altRulesApplied <- false
                                 continueLoop <- true
                                 continue()
                             }
                             if(CI.partRef!=NULL){
-                                log("PARTREF:"+toString(CI.partRef.path))
+                                log(",PARTREF:"+toString(CI.partRef.path))
                                 CI.parts.pushLast(CI.partRef)
                                 CI.partRef<-NULL
                                 continueLoop <- true
@@ -1372,7 +1390,7 @@ if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
                                 if(!aItem.reject){mergeSizeRules(aItem)}
                                 if(!aItem.reject){remainder <- mergeRules(aItem)}
                                 our POV: RHSSide; if(remainder==NULL){RHSSide <- aItem.RHS}
-                                if(invertAcceptance){if(aItem.reject){aItem.reject<-false}else{aItem.reject<-true} logSeg(",INVACC:"+toString(aItem.reject))}
+                                if(invertAcceptance){if(aItem.reject){aItem.reject<-false}else{aItem.reject<-true} logSeg(",INVERT:"+toString(aItem.reject))}
                                 if(!aItem.reject){
                                     logSeg("-MC1-ACCEPT")
                                     nextAItem <- propagate(aItem, aItem.LHS_item, RHSSide, remainder, aItem.looseSize, (aItem.reject and aItem.parent.candidateForLast))
@@ -1401,8 +1419,9 @@ if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
                     switch(aItem.step){
                         case 0:{
                             if(CI.hasInnrOutr){
-                                CI.innr.addInfonToWrkList(CI.innr.funcArgs) // TODO: looseTop <- true
-                                CI.hasInnrOutr <- false
+                                our POV: newPOV  <- CI.innr.addInfonToWrkList(CI.innr.funcArgs)
+                                newPOV.looseTop  <- true
+                                CI.hasInnrOutr   <- false
                                 CI.innr.funcArgs <- NULL
                             }
                             if(CI.isOrLike()){
@@ -1692,6 +1711,5 @@ struct ProteusCore{
 }
 
 /////////////////////////////////////////
-do codeDataDisplay(infon, TAG_infonDumpMode)
-do GeneratePtrSymbols(AItem)
-do GeneratePtrSymbols(infItr)
+ //do codeDataDisplay(infon, TAG_infonDumpMode)
+do GeneratePtrSymbols(AItem, POV, infItr, infon, pureInfon)

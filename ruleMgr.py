@@ -94,17 +94,18 @@ mergeRules = {
         'mergeRHSIntersect':        'mergeRHSIntersect(aItem)',
         'copyIdentity':             'copyIdentity(aItem)',
         'checkNumRange':            'if(!checkNumRange(aItem.LHS_item.item, aItem.RHS.item)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
+        'checkNumRangeCpy':         'if(!checkNumRange(aItem.LHS_item.item, aItem.RHS.item)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}else{if(!aItem.LHS_item.item.asNot){aItem.LHS_item.item <deep- aItem.RHS.item; aItem.LHS_item.outerPOV.item.altRulesApplied <- false}}',
     },
     'rules': [
-        ["merge:|||r?|",                           "NONE"],
+        ["merge:|||r?|",                          "NONE"],
         ["merge:l?||=|rNUM,rSTR,rLST|",           "copyIdentity"],  #"copyRHSTypeToLHS,copyValueRHStoLHS,copySizeRHStoLHS"
         ["merge:l?||==|rNUM,rSTR,rLST|",          "copyRHSTypeToLHS,copyValueRHStoLHS"],
         ["merge:l?||=|rtUnknown|rintersect",      "mergeRHSIntersect"],
         ["merge:l?||==|rtUnknown|rintersect",     "mergeRHSIntersect"],
 
-        ["merge:lNUM||=|rSTR,rLST|rfUnknown,rfLiteral",             "REJECT"],
-        ["merge:lSTR||=|rNUM,rLST|",             "REJECT"],
-        ["merge:lLST|lfUnknown,lfLiteral|=|rNUM,rSTR|",             "REJECT"],
+        ["merge:lNUM||=|rSTR,rLST|rfUnknown,rfLiteral",   "REJECT"],
+        ["merge:lSTR||=|rNUM,rLST|",                      "REJECT"],
+        ["merge:lLST|lfUnknown,lfLiteral|=|rNUM,rSTR|",   "REJECT"],
 
         ["merge:lNUM|lfUnknown|=|rNUM|rfUnknown",         "NONE"],
         ["merge:lNUM|lfUnknown|=|rNUM|rfLiteral",         "copyValueRHStoLHS"],
@@ -122,9 +123,9 @@ mergeRules = {
         ["merge:lLST|lfLiteral|=|rLST|rfLiteral",        "StartMergePropogation"],
 
         # LooseSize
-        ["merge:lNUM||==|rSTR,rLST|",                      "ACTION"],
+        ["merge:lNUM||==|rSTR,rLST|rfUnknown,rfLiteral",   "ACTION"],
         ["merge:lSTR||==|rNUM,rLST|",                      "ACTION"],
-        ["merge:lLST||==|rNUM,rSTR|",                      "StartMergePropogation"], # ADD NEW AITEM LHS FIRST FROM LIST & THE WHOLE NUTHER RHS, MAYBE PROPAGATE SHOULD HANDLE
+        ["merge:lLST|lfUnknown,lfLiteral|==|rNUM,rSTR|", "StartMergePropogation"], # ADD NEW AITEM LHS FIRST FROM LIST & THE WHOLE NUTHER RHS, MAYBE PROPAGATE SHOULD HANDLE
 
         ["merge:lNUM|lfUnknown|==|rNUM|rfUnknown",         "NONE"],
         ["merge:lNUM|lfUnknown|==|rNUM|rfLiteral",         "copyValueRHStoLHS"], # remember size to copy
@@ -142,53 +143,58 @@ mergeRules = {
         ["merge:lLST|lfLiteral|==|rLST|rfLiteral",        "StartMergePropogation"],
 
         ##### CONCAT and INTERSECT
-        ["merge:lNUM|lfUnknown|=|rNUM,rLST|rfConcat",      "ACTION"],
+        ["merge:lNUM,lSTR,lLST|lfConcat|=,==|lNUM,lSTR,lLST|rintersect",                 "mergeRHSIntersect"],
+
         ["merge:lNUM|lfUnknown|=|rtUnknown,rNUM|rintersect",        "mergeRHSIntersect"],
+        ["merge:lNUM|lfLiteral|=|rtUnknown,rNUM|rintersect",        "mergeRHSIntersect"],
+        ["merge:lSTR|lfUnknown|=|rtUnknown,rSTR|rintersect",        "mergeRHSIntersect"],
+        ["merge:lSTR|lfLiteral|=|rtUnknown,rSTR|rintersect",        "mergeRHSIntersect"],
+        ["merge:lLST|lfUnknown|=|rtUnknown,rLST|rintersect",        "mergeRHSIntersect"],
+        ["merge:lLST|lfLiteral|=|rtUnknown,rLST|rintersect",        "mergeRHSIntersect"],
+
+        ["merge:lNUM|lfUnknown|=|rNUM,rLST|rfConcat",     "ACTION"],
         ["merge:lNUM|lfConcat|=|rNUM|rfUnknown",          "ACTION"],
         ["merge:lNUM|lfConcat|=|rNUM|rfConcat",           "ACTION"],
-        ["merge:lNUM,lLST|lfConcat|=|rNUM|rfLiteral",               "checkNumRange"],
-        ["merge:lNUM|lfConcat|=|rNUM|rintersect",         "ACTION"],
+        ["merge:lNUM,lLST|lfConcat|=|rNUM|rfLiteral",               "checkNumRangeCpy"],
         ["merge:lNUM|lfLiteral|=|rNUM,rLST|rfConcat",               "checkNumRange"],
-        ["merge:lNUM|lfLiteral|=|rtUnknown,rNUM|rintersect",        "mergeRHSIntersect"],
         ["merge:lNUM|lintersect|=|rNUM|rfUnknown",        "ACTION"],
         ["merge:lNUM|lintersect|=|rNUM|rfConcat",         "ACTION"],
         ["merge:lNUM|lintersect|=|rNUM|rfLiteral",        "ACTION"],
         ["merge:lNUM|lintersect|=|rNUM|rintersect",       "ACTION"],
 
         ["merge:lSTR|lfUnknown|=|rSTR|rfConcat",          "ACTION"],
-        ["merge:lSTR|lfUnknown|=|rtUnknown,rSTR|rintersect",        "mergeRHSIntersect"],
         ["merge:lSTR|lfConcat|=|rSTR|rfUnknown",          "ACTION"],
         ["merge:lSTR|lfConcat|=|rSTR|rfConcat",           "ACTION"],
         ["merge:lSTR|lfConcat|=|rSTR|rfLiteral",          "ACTION"],
-        ["merge:lSTR|lfConcat|=|rSTR|rintersect",         "ACTION"],
         ["merge:lSTR|lfLiteral|=|rSTR|rfConcat",          "ACTION"],
-        ["merge:lSTR|lfLiteral|=|rtUnknown,rSTR|rintersect",        "mergeRHSIntersect"],
         ["merge:lSTR|lintersect|=|rSTR|rfUnknown",        "ACTION"],
         ["merge:lSTR|lintersect|=|rSTR|rfConcat",         "ACTION"],
         ["merge:lSTR|lintersect|=|rSTR|rfLiteral",        "ACTION"],
         ["merge:lSTR|lintersect|=|rSTR|rintersect",       "ACTION"],
 
         ["merge:lLST|lfUnknown|=|rLST|rfConcat",         "ACTION"],
-        ["merge:lLST|lfUnknown|=|rtUnknown,rLST|rintersect",        "mergeRHSIntersect"],
         ["merge:lLST|lfConcat|=|rLST|rfUnknown",         "ACTION"],
         ["merge:lLST|lfConcat|=|rLST|rfConcat",          "ACTION"],
         ["merge:lLST|lfConcat|=|rLST|rfLiteral",         "ACTION"],
-        ["merge:lLST|lfConcat|=|rLST|rintersect",        "ACTION"],
         ["merge:lLST|lfLiteral|=|rLST|rfConcat",         "ACTION"],
-        ["merge:lLST|lfLiteral|=|rtUnknown,rLST|rintersect",        "mergeRHSIntersect"],
         ["merge:lLST|lintersect|=|rLST|rfUnknown",       "ACTION"],
         ["merge:lLST|lintersect|=|rLST|rfConcat",        "ACTION"],
         ["merge:lLST|lintersect|=|rLST|rfLiteral",       "ACTION"],
         ["merge:lLST|lintersect|=|rLST|rintersect",      "ACTION"],
 
         # LooseSize
+        ["merge:lSTR|lfUnknown|==|rtUnknown,rSTR|rintersect",        "mergeRHSIntersect"],
+        ["merge:lSTR|lfLiteral|==|rtUnknown,rSTR|rintersect",        "mergeRHSIntersect"],
+        ["merge:lLST|lfUnknown|==|rtUnknown,rLST|rintersect",        "mergeRHSIntersect"],
+        ["merge:lLST|lfLiteral|==|rtUnknown,rLST|rintersect",        "mergeRHSIntersect"],
+
+
         ["merge:lNUM|lfUnknown|==|rNUM|rfConcat",          "ACTION"],
         ["merge:lNUM|lfUnknown|==|rNUM|rintersect",        "ACTION"],
         ["merge:lNUM|lfConcat|==|rNUM|rfUnknown",          "ACTION"],
         ["merge:lNUM|lfConcat|==|rNUM|rfConcat",           "ACTION"],
-        ["merge:lNUM|lfConcat|==|rNUM|rfLiteral",          "ACTION"],
-        ["merge:lNUM|lfConcat|==|rNUM|rintersect",         "ACTION"],
-        ["merge:lNUM|lfLiteral|==|rNUM|rfConcat",          "ACTION"],
+        ["merge:lNUM,lLST|lfConcat|==|rNUM|rfLiteral",          "checkNumRangeCpy"],
+        ["merge:lNUM|lfLiteral|==|rNUM,rLST|rfConcat",          "checkNumRange"],
         ["merge:lNUM|lfLiteral|==|rNUM|rintersect",        "ACTION"],
         ["merge:lNUM|lintersect|==|rNUM|rfUnknown",        "ACTION"],
         ["merge:lNUM|lintersect|==|rNUM|rfConcat",         "ACTION"],
@@ -196,26 +202,20 @@ mergeRules = {
         ["merge:lNUM|lintersect|==|rNUM|rintersect",       "ACTION"],
 
         ["merge:lSTR|lfUnknown|==|rSTR|rfConcat",          "ACTION"],
-        ["merge:lSTR|lfUnknown|==|rtUnknown,rSTR|rintersect",        "mergeRHSIntersect"],
         ["merge:lSTR|lfConcat|==|rSTR|rfUnknown",          "ACTION"],
         ["merge:lSTR|lfConcat|==|rSTR|rfConcat",           "ACTION"],
         ["merge:lSTR|lfConcat|==|rSTR|rfLiteral",          "ACTION"],
-        ["merge:lSTR|lfConcat|==|rSTR|rintersect",         "ACTION"],
         ["merge:lSTR|lfLiteral|==|rSTR|rfConcat",          "ACTION"],
-        ["merge:lSTR|lfLiteral|==|rtUnknown,rSTR|rintersect",        "mergeRHSIntersect"],
         ["merge:lSTR|lintersect|==|rSTR|rfUnknown",        "ACTION"],
         ["merge:lSTR|lintersect|==|rSTR|rfConcat",         "ACTION"],
         ["merge:lSTR|lintersect|==|rSTR|rfLiteral",        "ACTION"],
         ["merge:lSTR|lintersect|==|rSTR|rintersect",       "ACTION"],
 
         ["merge:lLST|lfUnknown|==|rLST|rfConcat",         "ACTION"],
-        ["merge:lLST|lfUnknown|==|rtUnknown,rLST|rintersect",        "mergeRHSIntersect"],
         ["merge:lLST|lfConcat|==|rLST|rfUnknown",         "ACTION"],
         ["merge:lLST|lfConcat|==|rLST|rfConcat",          "ACTION"],
         ["merge:lLST|lfConcat|==|rLST|rfLiteral",         "ACTION"],
-        ["merge:lLST|lfConcat|==|rLST|rintersect",        "ACTION"],
         ["merge:lLST|lfLiteral|==|rLST|rfConcat",         "ACTION"],
-        ["merge:lLST|lfLiteral|==|rtUnknown,rLST|rintersect",        "mergeRHSIntersect"],
         ["merge:lLST|lintersect|==|rLST|rfUnknown",       "ACTION"],
         ["merge:lLST|lintersect|==|rLST|rfConcat",        "ACTION"],
         ["merge:lLST|lintersect|==|rLST|rfLiteral",       "ACTION"],
@@ -622,14 +622,16 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
                 binaryPts.append(point)
     markHandledCases(ruleSetID, untagedRules, cases, points)
     if ruleSetID =="merge":
-        print("ruleSetID:"+ruleSetID)
+        #print("ruleSetID:"+ruleSetID)
         ifsCode =  "        our POV: remainder <- NULL\n"
         ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
+        ifsCode += '        else {log("MERGE_RULE_MISSING"); exit(2);}\n'
         ifsCode += "        return(remainder)"
         funcCode = "    our POV: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
     else:
         ifsCode =  "        me bool: changeMade <- false\n"
         ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
+        ifsCode += '        else {log("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ '+ruleSetID+' RULE_MISSING");}\n'
         ifsCode += "        return(changeMade)"
         funcCode = "    me bool: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
     return(funcCode)
