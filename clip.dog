@@ -13,7 +13,7 @@ Authors = "Bruce Long"
 Description = "CLIP - The Command Line Interface to Proteus"
 ProgramOrLibrary = "program"
 
-featuresNeeded = [Proteus, ReadMultiLine, Terminal, Unicode, Logger, BigNumbers]
+featuresNeeded = [Proteus, ReadMultiLine, Terminal, Unicode, Logger, BigNumbers, Threads, IOBuffer, EarleyParser]
 
 LicenseText = `This file is part of the "Proteus suite" All Rights Reserved.`
 
@@ -21,7 +21,8 @@ LicenseText = `This file is part of the "Proteus suite" All Rights Reserved.`
 runCode=`
     logMgr.init(OFile)
     log("Clip started")
-    runClip()
+    me Clip: clip
+    clip.runAsComands()
 `
 
 infonDumpMode='text'
@@ -29,7 +30,23 @@ infonDumpMode='text'
 // enum entryColors {ColrDefault=1, ColrParsed, ColrResultOK, ColrResultErr, ColrMesg, ColrCtxtPrmpt, ColrLeftBar};
 // enum entryTags {tagBlank=0, tagEditable=1, tagNotSaved=2, tagRestrictedSave=3, tagPublicSave=4, tagSpecialSave=5, tagResult=6, tagError=7, tagMesg=8, tagCtxt=9};
 
-struct GLOBAL{
+struct UserSource: inherits=Threads{
+    our strBuf: userStream
+    their readMultiLine: RML
+    me bool: done
+    void: init(our strBuf: UserStream, their readMultiLine: lineReader) <- {userStream <- UserStream; RML <- lineReader}
+    void: run() <- {
+        done <- false
+        while(!done){
+            me string: inputStr <- RML.readLines()
+            // TODO: Handle commands: Help, quit, dict, set, show, etc.
+            userStream.putStr(inputStr)
+        }
+        userStream.close()
+    }
+}
+
+struct Clip{
     our infon: topInfon
     me ProteusCore: CORE
 
@@ -65,9 +82,23 @@ struct GLOBAL{
         RML.addUserMesgAndTopBar(msgStr)
     }
 
-    void: runClip()<-{
-        me string: resourceDir <- "world.pr"
-        CORE.init(resourceDir)
+    void: runStreaming()<-{
+        me string: worldFileName <- "world.pr"
+        CORE.init(worldFileName)
+        their readMultiLine: RML
+        Allocate(RML,1," >~$Ss=?#:")
+        RML.initNCurses()
+        RML.addUserMesg("The Proteus CLI. Type some infons, 'quit' or 'help':", 5+shiftLeft(8, 4))  // ColrMesg + tagMesg
+
+        our strBuf:: userBuffer
+        their UserSource:: readLineThread
+        readLineThread.init(userBuffer, RML)
+        readLineThread.start()
+    }
+
+    void: runAsComands()<-{
+        me string: worldFileName <- "world.pr"
+        CORE.init(worldFileName)
         their readMultiLine: RML
         Allocate(RML,1," >~$Ss=?#:")
         RML.initNCurses()
@@ -76,9 +107,9 @@ struct GLOBAL{
         me bool: done <- false
         while(!done){
             me string: inputStr <- RML.readLines()
+            trimWS(inputStr)
             log("___________________")
             log("$: "+inputStr)
-            trimWS(inputStr)
             if(inputStr=="quit" or  RML.cmd==4){break()}  //rml.cmd==CTRLD
             else if (inputStr=="help"){}
             else if (inputStr=="dict"){}
