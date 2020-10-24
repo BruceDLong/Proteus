@@ -8,7 +8,7 @@ LinuxBuild: Platform='Linux' CPU='amd64' Lang='CPP' optimize='speed';
 Title = "Proteus - Clip"
 FileName = "clip"
 Version = "0.8"
-CopyrightMesg = "Copyright (c) 2015-2018 Bruce Long"
+CopyrightMesg = "Copyright (c) 2015-2021 Bruce Long"
 Authors = "Bruce Long"
 Description = "CLIP - The Command Line Interface to Proteus"
 ProgramOrLibrary = "program"
@@ -22,7 +22,7 @@ runCode=`
     logMgr.init(OFile)
     log("Clip started")
     me Clip: clip
-    clip.runAsComands()
+    clip.runStreaming()
 `
 
 infonDumpMode='text'
@@ -30,19 +30,23 @@ infonDumpMode='text'
 // enum entryColors {ColrDefault=1, ColrParsed, ColrResultOK, ColrResultErr, ColrMesg, ColrCtxtPrmpt, ColrLeftBar};
 // enum entryTags {tagBlank=0, tagEditable=1, tagNotSaved=2, tagRestrictedSave=3, tagPublicSave=4, tagSpecialSave=5, tagResult=6, tagError=7, tagMesg=8, tagCtxt=9};
 
-struct UserSource: inherits=Threads{
+struct ParseThread: inherits=Threads{
+    their ProteusCore: CORE
     our strBuf: userStream
-    their readMultiLine: RML
-    me bool: done
-    void: init(our strBuf: UserStream, their readMultiLine: lineReader) <- {userStream <- UserStream; RML <- lineReader}
+    void: init(their ProteusCore: core, our strBuf: UserStream) <- {userStream <- UserStream; CORE <- core;}
     void: run() <- {
-        done <- false
-        while(!done){
-            me string: inputStr <- RML.readLines()
-            // TODO: Handle commands: Help, quit, dict, set, show, etc.
-            userStream.putStr(inputStr)
-        }
-        userStream.close()
+        log("OPENING THREAD")
+        me string: worldFileName <- "world.pr"
+        CORE.init(worldFileName)
+        our infon: result <- CORE.parseAndExtractStream(userStream)
+        if(result == NULL){log("Syntax Error in input: FIX ERROR MSG!!!")}
+        our POV:: normPov; normPov.item <- result
+        CORE.agent.normalize(normPov)
+
+        me string: resultStr  <- toString(normPov.item)
+        log("RESULT:" + resultStr)
+ //       RML.message <- resultStr
+ //       RML.addUserMesg(resultStr, 3+shiftLeft(6, 4))  // ColrResultOK + tagResult
     }
 }
 
@@ -83,17 +87,25 @@ struct Clip{
     }
 
     void: runStreaming()<-{
-        me string: worldFileName <- "world.pr"
-        CORE.init(worldFileName)
+        our strBuf:: userStream
+        their ParseThread:: parseThread
+        parseThread.init(CORE, userStream)
+        parseThread.start()
+
         their readMultiLine: RML
         Allocate(RML,1," >~$Ss=?#:")
         RML.initNCurses()
         RML.addUserMesg("The Proteus CLI. Type some infons, 'quit' or 'help':", 5+shiftLeft(8, 4))  // ColrMesg + tagMesg
-
-        our strBuf:: userBuffer
-        their UserSource:: readLineThread
-        readLineThread.init(userBuffer, RML)
-        readLineThread.start()
+        me bool: done <- false
+        while(!done){
+            me string: inputStr <- RML.readLines()
+            // TODO: Handle commands: Help, quit, dict, set, show, etc.
+            if(inputStr=="quit" or  RML.cmd==4){break()}  //rml.cmd==CTRLD
+            userStream.putStr(inputStr)
+        }
+        userStream.close()
+        log("WaitingForExit")
+        parseThread.waitForExit()
     }
 
     void: runAsComands()<-{
