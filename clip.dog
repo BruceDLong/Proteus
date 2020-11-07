@@ -30,23 +30,107 @@ infonDumpMode='text'
 // enum entryColors {ColrDefault=1, ColrParsed, ColrResultOK, ColrResultErr, ColrMesg, ColrCtxtPrmpt, ColrLeftBar};
 // enum entryTags {tagBlank=0, tagEditable=1, tagNotSaved=2, tagRestrictedSave=3, tagPublicSave=4, tagSpecialSave=5, tagResult=6, tagError=7, tagMesg=8, tagCtxt=9};
 
-struct ParseThread: inherits=Threads{
-    their ProteusCore: CORE
-    our strBuf: userStream
-    void: init(their ProteusCore: core, our strBuf: UserStream) <- {userStream <- UserStream; CORE <- core;}
+struct ExtracterThread: inherits=Threads{
+    their ThreadedInfonParseAndExtractor: ctrls
+    our stateRec: parseTree
+    our infon: topInfon
+    void: init(their ThreadedInfonParseAndExtractor: Ctrls, our stateRec: ParseTree, our infon: TopInfon) <- {
+        topInfon <- TopInfon; parseTree <- ParseTree; ctrls <- Ctrls;
+        ctrls.extractCompleted <- false
+    }
     void: run() <- {
-        log("OPENING THREAD")
-        me string: worldFileName <- "world.pr"
-        CORE.init(worldFileName)
-        our infon: result <- CORE.parseAndExtractStream(userStream)
-        if(result == NULL){log("Syntax Error in input: FIX ERROR MSG!!!")}
+        log("OPENING EXTRACT THREAD")
+        ctrls.parser.Extract_infon_to_infon(parseTree, topInfon)
+        log("CLOSING EXTRACT THREAD")
+      /*  me SyncLock: lock<-{ctrls.chkExtractDone}
+        ctrls.extractCompleted <- true
+        lock.notify_one();*/
+
+ /*       if(result == NULL){log("Syntax Error in input: FIX ERROR MSG!!!")}
         our POV:: normPov; normPov.item <- result
         CORE.agent.normalize(normPov)
-
+log("PrsThrd-C")
         me string: resultStr  <- toString(normPov.item)
         log("RESULT:" + resultStr)
  //       RML.message <- resultStr
  //       RML.addUserMesg(resultStr, 3+shiftLeft(6, 4))  // ColrResultOK + tagResult
+ */
+    }
+}
+
+struct ParseThread: inherits=Threads{
+    their ThreadedInfonParseAndExtractor: ctrls
+    our strBuf: userStream
+    void: init(their ThreadedInfonParseAndExtractor: Ctrls) <- {ctrls <- Ctrls; ctrls.parseCompleted <- false}
+    void: run() <- {
+        log("OPENING_PARSE_THREAD")
+        ctrls.parser.doParse()
+        log("CLOSING_PARSE_THREAD")
+        ctrls.parser.dump()
+        log("\nparser.lastTopLevelItem:"+ctrls.parser.lastTopLevelItem.mySymbol(ctrls.parser.lastTopLevelItem))
+        our stateRec: topItem <- ctrls.parser.resolve(ctrls.parser.lastTopLevelItem, "")
+     //   log("\nptopItem:"+topItem.mySymbol(topItem))
+        our infon:: crntInfon
+        ctrls.parser.Extract_infon_to_infon(ctrls.leftParseNode, crntInfon)
+        log("FinishedInfon:"+toString(crntInfon))
+      /*  me SyncLock: lock<-{ctrls.chkParseDone}
+        ctrls.extractCompleted <- true
+        lock.notify_one();*/
+    }
+}
+// AUTO GENERATE THIS and parseAndExtractStream()
+struct ThreadedInfonParseAndExtractor{
+    their EParser: parser
+    our stateRec: leftParseNode
+    me bool: parseCompleted
+    me bool: extractCompleted
+    me Mutex: chkParseDone
+    me Mutex: chkExtractDone
+    me SyncLock: parseDoneLock
+    me SyncLock: extractDoneLock
+    me ParseThread: parseThread
+    me ExtracterThread: extracterThread
+
+    void: waitForParseCompletion()<-{
+        me MutexMngr: MtxMgr{chkParseDone}
+        while(!parseCompleted){
+            parseDoneLock.wait(MtxMgr)
+        }
+    }
+    void: waitForExtractCompletion()<-{
+        me MutexMngr: MtxMgr{chkExtractDone}
+        while(!extractCompleted){
+            extractDoneLock.wait(MtxMgr)
+        }
+    }
+
+    void: waitForThreadsToExit() <- {
+        parseThread.waitForExit()
+      //  extracterThread.waitForExit()
+    }
+
+    void: start(their EParser: iParser, their strBuf: streamToParse, our infon: topInfon) <- {
+        parser<-iParser
+        me int: startProduction <- parser.infon_str
+        parser.errorMesg <- ""
+        parser.streamingMode <- true
+        leftParseNode <- parser.initParseFromStream(startProduction, streamToParse)
+log("leftParseNode:"+leftParseNode.mySymbol(leftParseNode))
+     //   extracterThread.init(self, leftParseNode, topInfon)
+     //   extracterThread.start()
+        parseThread.init(self)
+        parseThread.start()
+
+
+    /*    if(parser.doesParseHaveError()){
+            parser.errorMesg <- "Proteus syntax error: " + parser.errorMesg + " at line " + toString(parser.errLineNum) + ":" + toString(parser.errCharPos) + "\n"
+            print(parser.errorMesg)
+            topInfon <- NULL
+        } else {
+            parser.resolve(parser.lastTopLevelItem, "")
+            parser.Extract_infon_to_infon(topParseNode, topInfon)
+            return(crntInfon)
+        }*/
     }
 }
 
@@ -87,10 +171,19 @@ struct Clip{
     }
 
     void: runStreaming()<-{
-        our strBuf:: userStream
-        their ParseThread:: parseThread
-        parseThread.init(CORE, userStream)
-        parseThread.start()
+        me string: worldFileName <- "world.pr"
+        CORE.init(worldFileName, false)
+
+        // The main thread supplies the strBuf and topInfon.
+        // After starting parseAndExtractor.start()
+        // Start a normalize thread on TopInfon. Then, the main thread
+        // begins filling the strBuf.
+        me strBuf: userStream; userStream.init()
+        our infon:: topInfon
+        me ThreadedInfonParseAndExtractor: parseAndExtractor
+        parseAndExtractor.start(CORE.parser, userStream, topInfon)
+
+        // We need waitForNormalizeToFinish()
 
         their readMultiLine: RML
         Allocate(RML,1," >~$Ss=?#:")
@@ -101,16 +194,17 @@ struct Clip{
             me string: inputStr <- RML.readLines()
             // TODO: Handle commands: Help, quit, dict, set, show, etc.
             if(inputStr=="quit" or  RML.cmd==4){break()}  //rml.cmd==CTRLD
+            inputStr <+- "\n"
             userStream.putStr(inputStr)
         }
         userStream.close()
-        log("WaitingForExit")
-        parseThread.waitForExit()
+        log("Waiting for threads To End")
+        parseAndExtractor.waitForThreadsToExit()
     }
 
     void: runAsComands()<-{
         me string: worldFileName <- "world.pr"
-        CORE.init(worldFileName)
+        CORE.init(worldFileName, false)
         their readMultiLine: RML
         Allocate(RML,1," >~$Ss=?#:")
         RML.initNCurses()

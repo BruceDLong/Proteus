@@ -637,11 +637,11 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
     return(funcCode)
 
 def generateXformMgr(ruleSets):
-    structCode = "struct XformMgr{\n"
+    structCode = "struct WorldManager{\n"
     for ruleSet in ruleSets:
         funcCode = generateMemberFunc(ruleSet['ID'], ruleSet['points'], ruleSet['rules'], ruleSet['ifSnips'], ruleSet['codeSnips'])
         structCode+=funcCode
     structCode += "}"
-    with open("xformMgr.dog", "w") as text_file: print(structCode, file=text_file)
+    with open("WorldManager.dog", "w") as text_file: print(structCode, file=text_file)
 
 generateXformMgr(ruleSets)
