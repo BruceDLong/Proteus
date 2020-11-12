@@ -22,7 +22,8 @@ runCode=`
     logMgr.init(OFile)
     log("Clip started")
     me Clip: clip
-    clip.runStreaming()
+    //clip.runStreaming()  //TODO: chose runStreaming or runAsCommands via command line.
+    clip.runAsComands()
 `
 
 infonDumpMode='text'
@@ -30,6 +31,7 @@ infonDumpMode='text'
 // enum entryColors {ColrDefault=1, ColrParsed, ColrResultOK, ColrResultErr, ColrMesg, ColrCtxtPrmpt, ColrLeftBar};
 // enum entryTags {tagBlank=0, tagEditable=1, tagNotSaved=2, tagRestrictedSave=3, tagPublicSave=4, tagSpecialSave=5, tagResult=6, tagError=7, tagMesg=8, tagCtxt=9};
 
+/// TODO: After getting them to work, move these thread classes to EarleyParser.Lib.dog
 struct ExtracterThread: inherits=Threads{
     their ThreadedInfonParseAndExtractor: ctrls
     our stateRec: parseTree
@@ -41,6 +43,7 @@ struct ExtracterThread: inherits=Threads{
     void: run() <- {
         log("OPENING EXTRACT THREAD")
         ctrls.parser.Extract_infon_to_infon(parseTree, topInfon)
+        log("FinishedInfon:"+toString(topInfon))
         log("CLOSING EXTRACT THREAD")
       /*  me SyncLock: lock<-{ctrls.chkExtractDone}
         ctrls.extractCompleted <- true
@@ -66,13 +69,21 @@ struct ParseThread: inherits=Threads{
         log("OPENING_PARSE_THREAD")
         ctrls.parser.doParse()
         log("CLOSING_PARSE_THREAD")
-        ctrls.parser.dump()
         log("\nparser.lastTopLevelItem:"+ctrls.parser.lastTopLevelItem.mySymbol(ctrls.parser.lastTopLevelItem))
-        our stateRec: topItem <- ctrls.parser.resolve(ctrls.parser.lastTopLevelItem, "")
-     //   log("\nptopItem:"+topItem.mySymbol(topItem))
-        our infon:: crntInfon
-        ctrls.parser.Extract_infon_to_infon(ctrls.leftParseNode, crntInfon)
-        log("FinishedInfon:"+toString(crntInfon))
+        our infon: crntInfon
+        if(ctrls.parser.doesParseHaveError()){
+            ctrls.parser.errorMesg <- "Proteus syntax error: " + ctrls.parser.errorMesg + " at line " + toString(ctrls.parser.errLineNum) + ":" + toString(ctrls.parser.errCharPos) + "\n"
+            log(ctrls.parser.errorMesg)
+            crntInfon <- NULL
+        } else {
+            our stateRec: topItem <- ctrls.parser.resolve(ctrls.parser.lastTopLevelItem, "")
+        ctrls.parser.dumpGraph("ParseDone", 1)
+    //    log("\nptopItem:"+topItem.mySymbol(topItem))
+            Allocate(crntInfon)
+            ctrls.parser.Extract_infon_to_infon(ctrls.leftParseNode, crntInfon)
+            log("FinishedInfon:"+toString(crntInfon))
+        }
+
       /*  me SyncLock: lock<-{ctrls.chkParseDone}
         ctrls.extractCompleted <- true
         lock.notify_one();*/
@@ -106,31 +117,20 @@ struct ThreadedInfonParseAndExtractor{
 
     void: waitForThreadsToExit() <- {
         parseThread.waitForExit()
-      //  extracterThread.waitForExit()
+   //     extracterThread.waitForExit()
     }
 
     void: start(their EParser: iParser, their strBuf: streamToParse, our infon: topInfon) <- {
         parser<-iParser
         me int: startProduction <- parser.infon_str
         parser.errorMesg <- ""
-        parser.streamingMode <- true
+        parser.setStreamingMode(true)
         leftParseNode <- parser.initParseFromStream(startProduction, streamToParse)
 log("leftParseNode:"+leftParseNode.mySymbol(leftParseNode))
-     //   extracterThread.init(self, leftParseNode, topInfon)
-     //   extracterThread.start()
+  //      extracterThread.init(self, leftParseNode, topInfon)
+  //      extracterThread.start()
         parseThread.init(self)
         parseThread.start()
-
-
-    /*    if(parser.doesParseHaveError()){
-            parser.errorMesg <- "Proteus syntax error: " + parser.errorMesg + " at line " + toString(parser.errLineNum) + ":" + toString(parser.errCharPos) + "\n"
-            print(parser.errorMesg)
-            topInfon <- NULL
-        } else {
-            parser.resolve(parser.lastTopLevelItem, "")
-            parser.Extract_infon_to_infon(topParseNode, topInfon)
-            return(crntInfon)
-        }*/
     }
 }
 
@@ -183,8 +183,6 @@ struct Clip{
         me ThreadedInfonParseAndExtractor: parseAndExtractor
         parseAndExtractor.start(CORE.parser, userStream, topInfon)
 
-        // We need waitForNormalizeToFinish()
-
         their readMultiLine: RML
         Allocate(RML,1," >~$Ss=?#:")
         RML.initNCurses()
@@ -199,6 +197,7 @@ struct Clip{
         }
         userStream.close()
         log("Waiting for threads To End")
+        // We need waitForNormalizeToFinish()
         parseAndExtractor.waitForThreadsToExit()
     }
 
