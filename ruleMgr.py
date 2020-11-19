@@ -94,7 +94,9 @@ mergeRules = {
         'mergeRHSIntersect':        'mergeRHSIntersect(aItem)',
         'copyIdentity':             'copyIdentity(aItem)',
         'checkNumRange':            'if(!checkNumRange(aItem.LHS_item.item, aItem.RHS.item)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
-        'checkNumRangeCpy':         'if(!checkNumRange(aItem.LHS_item.item, aItem.RHS.item)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}else{if(!aItem.LHS_item.item.asNot){aItem.LHS_item.item <deep- aItem.RHS.item; aItem.LHS_item.outerPOV.item.altRulesApplied <- false}}',
+        'checkNumRangeCpy':         """if(!checkNumRange(aItem.LHS_item.item, aItem.RHS.item)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
+            me bool: truReject <- aItem.reject; if(aItem.LHS_item.item.asNot){truReject <- !truReject}
+            if(!truReject){aItem.LHS_item.item <deep- aItem.RHS.item; if(aItem.LHS_item.outerPOV){aItem.LHS_item.outerPOV.item.altRulesApplied <- false}}""",
     },
     'rules': [
         ["merge:|||r?|",                          "NONE"],
