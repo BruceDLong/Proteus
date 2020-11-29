@@ -118,6 +118,7 @@ model infon{
     flag: wordDerefed
     flag: typeSpecsAlreadyCopied
     flag: hasTypeAndValue
+    flag: wasProcessed  // This has been through the cycle
 
     me BigInt: sizeIfKnown() <- {
         if(infSize.format == fLiteral){return(infSize.num)}
@@ -364,7 +365,7 @@ model infon{
         innr       <- NULL
         type       <- NULL
     }
-    void: INIT() <- {infSize <- pureInfon(0)}
+    void: INIT() <- {infSize <- pureInfon(0); clearSymbol(self);}
     me none: infon(me string: S) <- {
         infMode <- isLiteral
         itmMode <- mItem
@@ -377,6 +378,7 @@ model infItr{
     their POV: topPOV
     me int: lineAltID
     void: initialize(our POV: pov) <- {topPOV <- pov}
+    void: INIT() <- {clearSymbol(self);}
 }
 model TypeSpec{
     our infon: constModel
@@ -384,6 +386,7 @@ model TypeSpec{
     flag: wasIntegrated
     // shortcutSpecs
 } struct TypeSpec{}
+
 struct GLOBAL{
     me string: crntRHSMySymbol
     me string: crntLHSMySymbol
@@ -463,6 +466,12 @@ model AItem{
     me int: indentLvl
     flag: hasPropagated
     flag: initRulesApplied
+
+    our AItem: prntOrSub() <- {
+        if(parent!=NULL){return(parent)}
+        if(!subscribers.isEmpty()){return(subscribers[0])}
+        return(NULL)
+    }
 
     me string: stringify() <- {
         me string: S <- ""
@@ -792,7 +801,7 @@ struct WorldManager{
         else{CI.altRulesApplied <- true}
         me bool: stopAndWait <- false
         if(CI.intersectPos != ipNoIntersect){
-        log("function_altRules:"+aItem.stringify())
+            log("function_altRules:"+aItem.stringify())
             processIntersectViaAgenda(aItem.LHS_item, aItem, aItem.priority)
             stopAndWait <- true
         }
@@ -824,7 +833,7 @@ struct WorldManager{
         if(lSpec!=NULL and lSpecItem.hasInnrOutr and lSpecItem.intersectPos==ipNoIntersect and lSpec.intersectPos!=ipNoIntersect){
             log("OUTR: lSpecItem: "+toString(lSpecItem) + "   lSpec:" +toString(lSpec) + "   outr:" +toString(lSpecItem.funcArgs))
             logSeg("-Otr")
-            our POV:: newPov; newPov.item <- lSpecItem.funcArgs; newPov.looseMode <- true
+            our POV:: newPov; newPov.item <- lSpecItem.funcArgs; newPov.looseMode <- true; newPov.isOutrFeed<-true
             aItem.LHS_item.item.wrkList.pushFirst(newPov)
             lSpecItem.hasInnrOutr<-false;  lSpecItem.funcArgs <- NULL
             lSpec.asWrkLstOutr <- true
@@ -952,22 +961,32 @@ struct WorldManager{
         pov.outerPOV.item <deep- pov.item
         pov.outerPOV.item.partRef <- tmpParfDef
     }
-    void: validateItem(our POV: pov) <- {
-        me string: logStr <- "VALIDATE:" + pov.mySymbol() +":" + pov.stringify() + "    PARENT:<"+pov.pParent.stringify()+">"
-        pov.item.isTentative <- false
-        their POV: parent <- pov.pParent
-        if(pov.outerPOV!=NULL and pov.outerPOV.item.isOrLike()){ // First check whether pov is in [...]
-            logStr <+- "[]"
-            closeIntersectAt(pov)
-        } else if(parent!=NULL and parent.item.value.tailUnfinished){ // Close a list at lastItem
-                logStr <+- ":LAST_ITEM"
-                parent.closeItemsAtPOV(pov)
+    void: validateItem(our POV: lastItem) <- {
+        our POV: pov <- lastItem
+        their POV: topParent <- lastItem.pParent
+        if(lastItem.outerPOV!=NULL){topParent <- lastItem.outerPOV.pParent}
+        log("VALIDATING: lastItem:" + pov.mySymbol() +":" + pov.stringify() + "    topParent:"+topParent.stringify())
+        while(pov!=NULL){
+            their POV: parent <- pov.pParent
+            if(pov.outerPOV!=NULL){parent <- pov.outerPOV.pParent}
+            me string: logStr <- "VALIDATE:" + pov.mySymbol() +":" + pov.stringify() + "    PARENT:<"+parent.stringify()+">"
+            pov.item.isTentative <- false
+            if(pov.outerPOV!=NULL and pov.outerPOV.item.isOrLike()){ // First check whether pov is in [...]
+                logStr <+- "[closeIntersectAt]"
+                closeIntersectAt(pov)
+            } else if(parent!=NULL and parent.item.value.tailUnfinished){ // Close a list at lastItem
+                    logStr <+- ":LAST_ITEM"
+                    parent.closeItemsAtPOV(pov)
+            }
+            if(pov.predecessors.size()==1){
+                our POV: pred <- pov.predecessors.first()
+                if(!(topParent===pred) and !(topParent.item===pred.item.innr)){
+                    logStr <+- ":TO_PRED:" + pred.stringify()
+                    pov <- pred
+                }else{pov <- NULL; logStr <+- ":EXIT_TOP"}
+            }else{pov <- NULL; logStr <+- ":EXIT_NO_PRED"}
+            log(logStr)
         }
-        if(pov.predecessors.size()==1){
-            logStr <+- ":TO_PRED:"
-            validateItem(pov.predecessors.first())
-        }else{logStr <+- ":SKIP_PRED:"}
-        log(logStr)
     }
     void: cleanUpInfon(our AItem: aItem) <- {
         our infon: CI <- aItem.LHS_item.item
@@ -987,9 +1006,13 @@ struct WorldManager{
             if(aItem.parent != NULL){aItem.parent.mergeFinished <- false}
             JoinIfConcat(aItem.LHS_item)
         }
+        // If this is [], i.e, null, remove it from parent list.
+        if(CI.intersectPos==ipGetLast and CI.innr!=NULL and CI.innr.infSize.format==fLiteral and CI.innr.value.sizeMode==fromCount and CI.innr.infSize.num==0){
+            aItem.LHS_item.pParent.item.value.items.erase(aItem.LHS_item)
+        }
 if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
         if(CI.value.fType==LST){
-            log("CLEAN_LIST:"+toString(aItem.LHS_item.candidatesForLastItem.size()))
+            log("CLEAN_LIST:"+ aItem.LHS_item.stringify()+"  #candidates:"+toString(aItem.LHS_item.candidatesForLastItem.size()))
             if(aItem.LHS_item.candidatesForLastItem.size()==1){
                 our POV: lastItem <- aItem.LHS_item.candidatesForLastItem.last()
                 aItem.LHS_item.candidatesForLastItem.popLast()
@@ -1092,13 +1115,28 @@ if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
     me void: initListIterators(our AItem: aItem) <- {
         if(aItem.LHSItr==NULL){
             Allocate(aItem.LHSItr); aItem.LHSItr.initialize(aItem.LHS_item)
-            if(aItem.parent.parent){aItem.LHSItr.iParent <- aItem.parent.parent.LHSItr}
             lastLineAltID <+- 1; aItem.LHSItr.lineAltID <- lastLineAltID
+me string: nodeID <- aItem.LHSItr.mySymbol()+"L"
+log("InitInfItr:"+nodeID)
+    grapher.addNode(nodeID, nodeID, "style=filled color=red")
+    grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=purple")
+            our AItem: intPrnt <- aItem.prntOrSub().prntOrSub()
+            if(intPrnt){
+                aItem.LHSItr.iParent <- intPrnt.LHSItr
+                grapher.addArrow(nodeID, aItem.LHSItr.iParent.mySymbol()+"L", "iParent", "color=skyblue")
+            }
         }
         if(aItem.RHS!=NULL and aItem.RHSItr==NULL){
             Allocate(aItem.RHSItr)
             aItem.RHSItr.initialize(aItem.RHS)
-            if(aItem.parent.parent){aItem.RHSItr.iParent <- aItem.parent.parent.RHSItr}
+me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
+    grapher.addNode(nodeID, nodeID, "style=filled color=orange")
+    grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=green")
+            our AItem: intPrnt <- aItem.prntOrSub().prntOrSub()
+            if(intPrnt){
+                aItem.RHSItr.iParent <- intPrnt.RHSItr
+                grapher.addArrow(nodeID, aItem.RHSItr.iParent.mySymbol()+"R", "iParent", "color=blue")
+            }
         }
     }
     me void: mergeRHSIntersect(our AItem: aItem) <- {
@@ -1127,7 +1165,6 @@ if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
                 LHS.convertThisToIntersection(newListInfon, fromGiven)
                 LHS.innr.value.tailUnfinished <- RHS.innr.value.tailUnfinished
                 LHS.innr.value.sizeMode <- fromGiven
-            log("LHS_innr_value_sizeMode <- fromGiven:" + toString(LHS.innr))
                 LHS.altRulesApplied <- false
         }else{
             // TODO: subscribe to RHS updates then retry
@@ -1147,8 +1184,6 @@ if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
             LHSPovNxt <deep- LHSPov
         }else{
             LHSPovNxt <- LHSPov.getNextTight(ii, skipDots, leftWas2ndVisit, false, itrBeginning)
-            grapher.addNode(LHSPov.mySymbol(), LHSPov.mySymbol()+":"+LHSPov.stringify(), "style=filled color=green")
-            grapher.addArrow(LHSPov.mySymbol(), LHSPovNxt.mySymbol(), "LHS_next", "")
         }
         if(LHSPovNxt == NULL){logSeg("-LNxt_NULL")}else{logSeg("-nxtL")}
         return(LHSPovNxt)
@@ -1156,32 +1191,21 @@ if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
     our POV: findNextRHS(our POV: RHSPov, our infItr: ii, me bool: skipDots, their bool: rightWas2ndVisit, me bool: itrBeginning, me bool: LHSIsLST, me bool: RHSIsLST) <- {
         our POV: RHSPovNxt
         if(LHSIsLST and !RHSIsLST and itrBeginning){
-    log("FindNextRHS-A:"+RHSPov.stringify())
             Allocate(RHSPovNxt)
             RHSPovNxt <deep- RHSPov
             RHSPovNxt.looseInhtd <- true
         }else{
-me string: RP <- RHSPov.stringify()
-log("FindNextRHS-B:'"+RP+"'")
-if(RP=="infon12:2"){
-    log("Atinfon12:2")
-   // log("NEXT:"+RHSPov.item.innr.value.items.tail.outerPOV.pParent.stringify())
-  //  RHSPov <- RHSPov.item.innr.value.items.tail.outerPOV
-}
             RHSPovNxt <- RHSPov.getNextTight(ii, skipDots, rightWas2ndVisit, false, itrBeginning)
             //if(RHSPovNxt!=NULL and RHSPovNxt.looseMode){} else {}
-if(RHSPovNxt!=NULL and RP=="infon12:2"){
-    log("FindNextRHS-RHSPovNxt:'"+RHSPovNxt.stringify()+"'")
-    log("NEXT:"+RHSPovNxt.pParent.stringify())
-   // log("NEXT_OUTERPOV:"+RHSPovNxt.outerPOV.pParent.stringify())
-}
         }
         if(RHSPovNxt==NULL){logSeg("-RNxt_NULL")}else{logSeg("-nxtR")}
         return(RHSPovNxt)
     }
+
     our AItem: propagate(our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque) <- {
         me string: idnt <- indentStr(aItem.indentLvl)
         me string: logStr <- idnt+"    PROPAGATE:"+toString(LHSPov.item)
+        me bool: skipPIVA <- false
         if(RHSPov){
             if(RHSPov.looseSize()){logStr <+- " =="}
             else{logStr <+- " ="}
@@ -1205,8 +1229,8 @@ if(RHSPovNxt!=NULL and RP=="infon12:2"){
         me bool: LHSIsFromALT
         our POV: adjLhsPOV  <- LHSPov
         our POV: adjRhsPOV  <- RHSPov
-        if(LHSPov.outerPOV != NULL and !LHSitrBeginning){LHSIsFromALT <- LHSPov.isFromALT; adjLhsPOV <- LHSPov.outerPOV}
-        if(RHSExists and RHSPov.outerPOV != NULL and !RHSitrBeginning){adjRhsPOV <- RHSPov.outerPOV}
+        while(adjLhsPOV.outerPOV != NULL and !LHSitrBeginning){LHSIsFromALT <- adjLhsPOV.isFromALT; adjLhsPOV <- adjLhsPOV.outerPOV}
+        while(RHSExists and adjRhsPOV.outerPOV != NULL and !RHSitrBeginning){adjRhsPOV <- adjRhsPOV.outerPOV}
         our POV: LHSPovNext
         our POV: RHSPovNext
         me bool: leftWas2ndVisit
@@ -1218,33 +1242,49 @@ if(RHSPovNxt!=NULL and RP=="infon12:2"){
         our AItem: propagateParent <- aParent
         if(aParent!=NULL and aParent.ruleSet==rsIntersect){aParent <- aParent.parent.parent}
         if(RHSExists and aParent!=NULL and aParent.LHS_item.item.value.sizeMode!=fromGiven and LHSPov.item.isTentative and !RHSPov.item.isTentative){LHSPov.item.isTentative <- false}
-        if(aParent == NULL){LHSPovNext <- NULL}  // At very top infon or propagating a lone RHS or interset.
-        else{LHSPovNext <- findNextLHS(adjLhsPOV, aParent.LHSItr, skipDots, leftWas2ndVisit, LHSitrBeginning, LHSIsLST, RHSIsLST, false)}
         if(remainder!=NULL){RHSPovNext <- remainder}
         else if(RHSExists and aParent != NULL and aParent.RHSItr != NULL){
             RHSPovNext <- findNextRHS(adjRhsPOV, aParent.RHSItr, dontEnque, rightWas2ndVisit, RHSitrBeginning, LHSIsLST, RHSIsLST)
+            if(RHSPovNext==NULL){
+                if(adjRhsPOV.item.intersectPos != ipNoIntersect and adjRhsPOV.next==NULL){
+                    skipPIVA <- true
+                }
+            }
         }
+        me bool: RHSisFinished <- (RHSPovNext == NULL and !skipPIVA) or rightWas2ndVisit
+        if(RHSisFinished and !skipPIVA){
+            if(adjLhsPOV.pParent!=NULL){
+                their POV: pParent <- adjLhsPOV.pParent.pParent
+                if(pParent != NULL and pParent.item != NULL and pParent.item.value.tailUnfinished){
+                    log("RESET_TAIL:"+pParent.stringify())
+                    pParent.item.value.tailUnfinished<-false
+                    log("RESET_TAIL:"+pParent.stringify())
+                    //log("  SizeMode:"+ toString(pParent.item.value.sizeMode))
+                }
+            }
+        }
+        if(aParent == NULL){LHSPovNext <- NULL}  // At very top infon or propagating a lone RHS or interset.
+        else{LHSPovNext <- findNextLHS(adjLhsPOV, aParent.LHSItr, skipDots, leftWas2ndVisit, LHSitrBeginning, LHSIsLST, RHSIsLST, false)}
         me bool: LHSHasAlt <- (LHSPovNext != NULL and LHSPovNext.altPOV != NULL)
         me bool: RHSHasAlt <- (RHSPovNext != NULL and RHSPovNext.altPOV != NULL)
         me bool: candidateForLast
         if(!dontEnque){
             me bool: LHSisFinished <- LHSPovNext == NULL or leftWas2ndVisit or LHSPovNext.tentFromDots
-            me bool: RHSisFinished <- RHSPovNext == NULL or rightWas2ndVisit
             me bool: prntIsSubItem <- adjLhsPOV.pParent!=NULL and  adjLhsPOV.pParent.item.itmMode==mSubItems
             if(RorRExists and adjLhsPOV.pParent!=NULL and ((LHSisFinished and (RHSisFinished or prntIsSubItem))
                        or (aParent.RHS!=NULL and aParent.RHS.looseSize()
                           and (adjLhsPOV.pParent.item.infSize.format==fUnknown) ))){
-                if(LHSPov.item.intersectPos == ipNoIntersect){
-                    if(LHSitrBeginning){
-                        log(idnt+"   candidatesForLastItem:" + adjLhsPOV.stringify() + "   EndsOnA:"+LHSPovNext.stringify())
-                        adjLhsPOV.candidatesForLastItem.pushLast(LHSPovNext)
-                        candidateForLast <- true
-                    }else{
+                if(LHSitrBeginning){
+                    log(idnt+"   candidatesForLastItem:" + adjLhsPOV.stringify() + "   EndsOnA:"+LHSPovNext.stringify())
+                    adjLhsPOV.candidatesForLastItem.pushLast(LHSPovNext)
+                    candidateForLast <- true
+                }else{
+                    if(LHSPov.item.intersectPos == ipNoIntersect){
                         log(idnt+"   candidatesForLastItem:" + adjLhsPOV.pParent.stringify() + "   EndsOnB:"+LHSPov.stringify())
                         adjLhsPOV.pParent.candidatesForLastItem.pushLast(LHSPov)
                         candidateForLast <- true
-                    }
-                } else {log("NO_candidatesForLastItem due to [...]")}
+                    }else {log("NO_candidatesForLastItem due to [...]")}
+                }
             }
             if(LHSPovNext == NULL){return(NULL)}
             //ENQUEUE FOR PROCESSING
@@ -1293,14 +1333,15 @@ if(RHSPovNxt!=NULL and RP=="infon12:2"){
                 LHSAlt <- LHSAlt.altPOV
             }
         } else {if(LHSPovNext == NULL){return(NULL)}}
-        if((leftWas2ndVisit or aParent.LHS_item.item.intersectPos != ipNoIntersect) and aParent.parent!=NULL){aParent <- aParent.parent.parent}
+        if(leftWas2ndVisit and aParent.parent!=NULL){aParent <- aParent.parent.parent} // If BUG, maybe loop this over levels
+        while(aParent!=NULL and aParent.LHS_item.item.intersectPos != ipNoIntersect and aParent.parent!=NULL){aParent <- aParent.parent.parent}
         our AItem: PIVA
         me bool: breakLoop <- RHSExists and RHSPovNext==NULL and aParent!=NULL and aParent.RHSItr != NULL
         if(breakLoop and LHSHasAlt){
             PIVA <- processInfonViaAgenda(LHSPovNext.altPOV, NULL, aParent, aItem.priority+1)
             logSeg("-BRKLOOP"); logSegStartCol("-PIVA->"+PIVA.mySymbol(),col2)
         }
-        else{
+        else if(!skipPIVA){
             our AItem: subscriber <- NULL
             if(aParent==NULL){subscriber <- propagateParent}
             PIVA <- processInfonViaAgenda(LHSPovNext, subscriber, aParent, aItem.priority+1)
@@ -1351,7 +1392,7 @@ if(RHSPovNxt!=NULL and RP=="infon12:2"){
                             our infon: CI <- aItem.LHS_item.item;
                             cleanUpInfon(aItem)
                             if(CI.cnvtToFunc){
-                                log(",reFunc:"+toString(CI))
+                                log("REFUNC:"+toString(CI))
                                 logSeg("-ReFn")
                                 reFunctionize(CI)
                                 CI.altRulesApplied <- false
@@ -1375,6 +1416,7 @@ if(RHSPovNxt!=NULL and RP=="infon12:2"){
                                     addAItemToAgenda(aParent)
                                 }
                             }
+                            CI.wasProcessed <- true
                         }
                     }
                 }
@@ -1421,8 +1463,9 @@ if(RHSPovNxt!=NULL and RP=="infon12:2"){
                                     if(nextAItem){addAItemToAgenda(nextAItem)}
                                 } else{
                                     logSeg("-MC1-REJCT")
-                                    if(aItem.parent.candidateForLast){
-                                        nextAItem <- propagate(aItem, aItem.LHS_item, RHSSide, remainder, aItem.looseSize, (aItem.reject and aItem.parent.candidateForLast))
+                                    me bool: parentInfonIsNullableList <- (aItem.LHS_item.pParent!=NULL and aItem.LHS_item.pParent.item.value.items.size()==1 and aItem.LHS_item.pParent.item.value.tailUnfinished)
+                                    if(aItem.parent.candidateForLast or parentInfonIsNullableList){
+                                        nextAItem <- propagate(aItem, aItem.LHS_item, RHSSide, remainder, aItem.looseSize, (aItem.reject and (aItem.parent.candidateForLast or parentInfonIsNullableList)))
                                         if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
                                         aItem.mergeFinished <- true
                                         if(nextAItem){addAItemToAgenda(nextAItem)}
@@ -1505,6 +1548,11 @@ if(RHSPovNxt!=NULL and RP=="infon12:2"){
                                                 validateItem(pred)
                                             }
                                         }
+                                    }else if(numOK==0){
+                                        innr.value.items.clear()
+                                        innr.value.sizeMode <- fromCount
+                                        innr.infSize.num <- 0
+                                        innr.infSize.format <- fLiteral
                                     }
                                     doFulfillSubs <- true
                                 } else {
@@ -1546,9 +1594,9 @@ if(RHSPovNxt!=NULL and RP=="infon12:2"){
         if(makeDebugGraph){grapher.clear(); grapher.addItem("rankdir=RL; ordering=out;")}
         me int: count <- 0
         while(!agenda.isEmpty()) {
-            //log("_____"+toString(count)+"_____")
             if (count > 400){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
             our AItem: aItem <- agenda.first(); agenda.popFirst()
+            me bool: graphNodeFirstTime <- false
             if(makeDebugGraph){
                 attrs <- "";
                 if(aItem.ruleSet==rsInfon){attrs <- "style=filled color=skyblue"}
@@ -1557,9 +1605,10 @@ if(RHSPovNxt!=NULL and RP=="infon12:2"){
                 recSym <- aItem.mySymbol()
                 label <- labels[recSym]
                 if(label==""){
-                    label <- aItem.mySymbol() +":" +toString(count) + "\n" +aItem.stringify()
-                    if(aItem.parent!=NULL){grapher.addArrow(aItem.mySymbol(), aItem.parent.mySymbol(), "parent", "color=magenta weight=1000")}
-                    else {grapher.addArrow(aItem.mySymbol(), aItem.subscribers[0].mySymbol(), "parent", "color=brown weight=1000")}
+                    graphNodeFirstTime<-true
+                    label <- recSym +":" +toString(count) + "\n" +aItem.stringify()
+                    if(aItem.parent!=NULL){grapher.addArrow(recSym, aItem.parent.mySymbol(), "parent", "color=magenta weight=1000")}
+                    else {grapher.addArrow(recSym, aItem.subscribers[0].mySymbol(), "subscriber", "color=brown weight=1000")}
                 }
             }
             processAgendaItem(aItem, 0)
@@ -1568,6 +1617,8 @@ if(RHSPovNxt!=NULL and RP=="infon12:2"){
                 if(aItem.reject){label<+-"-R"}
                 labels[recSym] <- label
                 grapher.addNode(recSym, label, attrs)
+                if(graphNodeFirstTime and aItem.RHSItr!=NULL){grapher.addArrow(recSym, aItem.RHSItr.mySymbol()+"R", "RHSItr", "color=orange")}
+                if(graphNodeFirstTime and aItem.LHSItr!=NULL){grapher.addArrow(recSym, aItem.LHSItr.mySymbol()+"L", "LHSItr", "color=gold")}
             }
             //aItem.LHS_item.item.isOnAgenda <- false
             count <+- 1
