@@ -94,9 +94,15 @@ mergeRules = {
         'mergeRHSIntersect':        'mergeRHSIntersect(aItem)',
         'copyIdentity':             'copyIdentity(aItem)',
         'checkNumRange':            'if(!checkNumRange(aItem.LHS_item.item, aItem.RHS.item)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
-        'checkNumRangeCpy':         """if(!checkNumRange(aItem.LHS_item.item, aItem.RHS.item)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
+        'checkNumRangeDeepCpy':     """if(!checkNumRange(aItem.LHS_item.item, aItem.RHS.item)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
             me bool: truReject <- aItem.reject; if(aItem.LHS_item.item.asNot){truReject <- !truReject}
             if(!truReject){aItem.LHS_item.item <deep- aItem.RHS.item; if(aItem.LHS_item.outerPOV){aItem.LHS_item.outerPOV.item.altRulesApplied <- false}}""",
+        'checkNumRangeDoCpy':       """if(!checkNumRange(aItem.LHS_item.item, aItem.RHS.item)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
+            me bool: truReject <- aItem.reject; if(aItem.LHS_item.item.asNot){truReject <- !truReject}
+            if(!truReject){
+                            DO_COPY(aItem.RHS.item.value, aItem.LHS_item.item.value, aItem.sizeToCopy);
+                            if(aItem.LHS_item.outerPOV){aItem.LHS_item.outerPOV.item.altRulesApplied <- false
+            }}""",
     },
     'rules': [
         ["merge:|||r?|",                          "NONE"],
@@ -127,10 +133,10 @@ mergeRules = {
         # LooseSize
         ["merge:lNUM||==|rSTR,rLST|rfUnknown,rfLiteral",   "ACTION"],
         ["merge:lSTR||==|rNUM,rLST|",                      "ACTION"],
-        ["merge:lLST|lfUnknown,lfLiteral|==|rNUM,rSTR|", "StartMergePropogation"], # ADD NEW AITEM LHS FIRST FROM LIST & THE WHOLE NUTHER RHS, MAYBE PROPAGATE SHOULD HANDLE
+        ["merge:lLST|lfUnknown,lfLiteral|==|rNUM,rSTR|",   "StartMergePropogation"], # ADD NEW AITEM LHS FIRST FROM LIST & THE WHOLE NUTHER RHS, MAYBE PROPAGATE SHOULD HANDLE
 
         ["merge:lNUM|lfUnknown|==|rNUM|rfUnknown",         "NONE"],
-        ["merge:lNUM|lfUnknown|==|rNUM|rfLiteral",         "copyValueRHStoLHS"], # remember size to copy
+        ["merge:lNUM|lfUnknown|==|rNUM|rfLiteral",         "checkNumRangeDoCpy"], # remember size to copy
         ["merge:lNUM|lfLiteral|==|rNUM|rfUnknown",         "copyValueLHStoRHS"],
         ["merge:lNUM|lfLiteral|==|rNUM|rfLiteral",         "ACTION"], #break into 2 cases: LHS.infSize.format = rfUnknown, rfLiteral.  see tryMergeValue()
 
@@ -157,8 +163,8 @@ mergeRules = {
         ["merge:lNUM|lfUnknown|=|rNUM,rLST|rfConcat",     "ACTION"],
         ["merge:lNUM|lfConcat|=|rNUM|rfUnknown",          "ACTION"],
         ["merge:lNUM|lfConcat|=|rNUM|rfConcat",           "ACTION"],
-        ["merge:lNUM,lLST|lfConcat|=|rNUM|rfLiteral",               "checkNumRangeCpy"],
-        ["merge:lNUM|lfLiteral|=|rNUM,rLST|rfConcat",               "checkNumRange"],
+        ["merge:lNUM,lLST|lfConcat|=|rNUM|rfLiteral",               "checkNumRangeDeepCpy"],
+        ["merge:lNUM|lfLiteral|=|rNUM,rLST|rfConcat",               "checkNumRangeDeepCpy"],
         ["merge:lNUM|lintersect|=|rNUM|rfUnknown",        "ACTION"],
         ["merge:lNUM|lintersect|=|rNUM|rfConcat",         "ACTION"],
         ["merge:lNUM|lintersect|=|rNUM|rfLiteral",        "ACTION"],
@@ -195,7 +201,7 @@ mergeRules = {
         ["merge:lNUM|lfUnknown|==|rNUM|rintersect",        "ACTION"],
         ["merge:lNUM|lfConcat|==|rNUM|rfUnknown",          "ACTION"],
         ["merge:lNUM|lfConcat|==|rNUM|rfConcat",           "ACTION"],
-        ["merge:lNUM,lLST|lfConcat|==|rNUM|rfLiteral",          "checkNumRangeCpy"],
+        ["merge:lNUM,lLST|lfConcat|==|rNUM|rfLiteral",          "checkNumRangeDeepCpy"],
         ["merge:lNUM|lfLiteral|==|rNUM,rLST|rfConcat",          "checkNumRange"],
         ["merge:lNUM|lfLiteral|==|rNUM|rintersect",        "ACTION"],
         ["merge:lNUM|lintersect|==|rNUM|rfUnknown",        "ACTION"],

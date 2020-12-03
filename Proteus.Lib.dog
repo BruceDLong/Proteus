@@ -28,6 +28,7 @@ do ManageCmdLine(cmd)
 #include ModelManager.dog
 
 struct SizeMode: inherits=<mode[fromCount, fromContext, fromGiven]> {}
+struct evalRangeMode: inherits=<mode[error, unknown, reject, pass]> {}
 
 model pureInfon{
     me mode[tUnknown, NUM, STR, LST]: fType
@@ -861,40 +862,61 @@ struct WorldManager{
         return(stopAndWait)
     }
     // rsINFON UTILITY FUNCTIONS: CONCAT FUNCTIONS
-    me bool: evalForRange(our infon: concat, their BigInt: lowest, their BigInt: highest) <- {
-        if(concat.value.format==fConcat and concat.value.items.size()==2){
-            our infon: first  <- concat.value.items.first()
-            our infon: secnd <- concat.value.items.last()
-            if(first.value.fType==NUM and first.value.format==fUnknown and first.infSize.format==fLiteral and
-               secnd.value.fType==NUM and secnd.value.format==fLiteral and secnd.infSize.format==fUnknown and secnd.value.sizeMode==fromContext){
-                lowest  <deep- secnd.value.num
-                highest <deep- lowest + first.infSize.num
-                return(true)
+    me int: evalForRange(our infon: infn, their BigInt: lowest, their BigInt: highest) <- {
+        if(infn.value.format!=fConcat){
+            if(infn.value.fType==NUM){
+                if(infn.infSize.format==fLiteral){
+                    if(infn.value.format==fLiteral){// eg: *5+3
+                        lowest  <deep- infn.value.num
+                        highest <- lowest
+                    }
+                    else if(infn.value.format==fUnknown){// eg: *5+_
+                        lowest  <- 0
+                        highest <deep- infn.infSize.num
+                    }
+                    else{return(1)}
+                }
+                else if(infn.infSize.format==fUnknown){
+                    if(infn.value.format==fLiteral){// eg: *_+3
+                        lowest  <deep- infn.value.num
+                        highest <deep- infn.value.num
+                    }
+                    else{return(1)}
+                }
+                else{return(1)}
             }
-        }
-        return(false)
+            else{logFatalError("    evalForRange:error")}
+            return(3)
+        }else if(infn.value.format==fConcat){
+            if(infn.value.items.size()==2){
+                our infon: first  <- infn.value.items.first()
+                our infon: secnd <- infn.value.items.last()
+                if(first.value.fType==NUM and first.value.format==fUnknown and first.infSize.format==fLiteral and
+                   secnd.value.fType==NUM and secnd.value.format==fLiteral and secnd.infSize.format==fUnknown and secnd.value.sizeMode==fromContext){
+                    lowest  <deep- secnd.value.num
+                    highest <deep- lowest + first.infSize.num
+                }
+            }
+            else{return(1)}
+            return(3)
+        }else if(infn.value.format==fConcat){}
+        return(1)
     }
     me bool: checkNumRange(our infon: LHS, our infon: RHS) <- { // NUM=(range)
-        me BigInt: lowest
-        me BigInt: highest
-        if(LHS.value.format==fConcat){
-            if(evalForRange(LHS, lowest, highest)){
-                me BigInt: RHSVal <- RHS.value.num
-                log("checkNumRange-LHS: "+toString(lowest) + " <= " + toString(RHSVal) + " < " + toString(highest))
-                if(RHSVal>=lowest and RHSVal<highest){
-                    return(true)
-                }
+        me BigInt: lowestLHS
+        me BigInt: highestLHS
+        me BigInt: lowestRHS
+        me BigInt: highestRHS
+        me int: rangeResultLHS <- evalForRange(LHS, lowestLHS, highestLHS)
+        if(rangeResultLHS!=pass){return(true)}
+        me int: rangeResultRHS <- evalForRange(RHS, lowestRHS, highestRHS)
+        if(rangeResultRHS==pass){
+            if(lowestLHS <= lowestRHS and highestLHS > highestRHS){
+                return(true)
             }
-        } else if(RHS.value.format==fConcat){
-            if(evalForRange(RHS, lowest, highest)){
-                me BigInt: LHSVal <- LHS.value.num
-                log("checkNumRange-RHS: "+toString(lowest) + " <= " + toString(LHSVal) + " < " + toString(highest))
-                if(LHSVal>=lowest and LHSVal<highest){
-                    return(true)
-                }
-            }
+            else{return(false)}
         }
-        return(false)
+        return(true)
     }
     me bool: joinOnRight(our infon: LHS, our infon: RHS) <- { // Join RHS into LHS. Return true on success (so need no subscription).
         logSeg("-JOR:")
@@ -1016,9 +1038,9 @@ struct WorldManager{
         if(CI.intersectPos==ipGetLast and CI.innr!=NULL and CI.innr.infSize.format==fLiteral and CI.innr.value.sizeMode==fromCount and CI.innr.infSize.num==0){
             aItem.LHS_item.pParent.item.value.items.erase(aItem.LHS_item)
         }
-if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
+//if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
         if(CI.value.fType==LST){
-            log("CLEAN_LIST:"+ aItem.LHS_item.stringify()+"  #candidates:"+toString(aItem.LHS_item.candidatesForLastItem.size()))
+            log("CLEAN_LIST:"+aItem.LHS_item.mySymbol()+":"+ aItem.LHS_item.stringify()+"  #candidates:"+toString(aItem.LHS_item.candidatesForLastItem.size()))
             if(aItem.LHS_item.candidatesForLastItem.size()==1){
                 our POV: lastItem <- aItem.LHS_item.candidatesForLastItem.last()
                 aItem.LHS_item.candidatesForLastItem.popLast()
@@ -1572,7 +1594,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                                     case ipGetFirst  : {newTop <- innr.getFirstItem()}
                                     //case ipGetMarked : {newTop <- innr.getMarked()}
                                 }
-                                if(!(newTop==NULL)){
+                                if(newTop!=NULL){
                                     newTop.takeWrkListFrom(CI, true)
                                     logSeg("-GET_LAST")
                                 }else{log("Handle LastItm is null")}
