@@ -38,7 +38,7 @@ mergeSizeRules = {
         '!looseSize':    '!aItem.looseSize'
     },
     'codeSnips': {
-        'copySizeRHStoLHS':         'if(aItem.LHS_item.item.infMode!=isLiteral or aItem.RHS.item.value.fType==aItem.LHS_item.item.value.fType){DO_COPY(aItem.RHS.item.infSize, aItem.LHS_item.item.infSize, 0)}',
+        'copySizeRHStoLHS':         'if((aItem.LHS_item.item.infMode!=isLiteral or aItem.RHS.item.value.fType==aItem.LHS_item.item.value.fType) and (aItem.LHS_item.item.value.listSpec==NULL or !aItem.LHS_item.item.value.listSpec.asWrkLstOutr)){DO_COPY(aItem.RHS.item.infSize, aItem.LHS_item.item.infSize, 0)}',
     },
     'rules': [
         ["mergeSize:!looseSize|lfUnknown|rsfLiteral",     "copySizeRHStoLHS"],
@@ -101,6 +101,7 @@ mergeRules = {
             me bool: truReject <- aItem.reject; if(aItem.LHS_item.item.asNot){truReject <- !truReject}
             if(!truReject){
                             DO_COPY(aItem.RHS.item.value, aItem.LHS_item.item.value, aItem.sizeToCopy);
+                            aItem.LHS_item.item.asNot <- aItem.RHS.item.asNot
                             if(aItem.LHS_item.outerPOV){aItem.LHS_item.outerPOV.item.altRulesApplied <- false
             }}""",
     },
