@@ -200,6 +200,7 @@ mergeRules = {
 
 
         ["merge:lNUM|lfUnknown|==|rNUM|rfConcat",          "ACTION"],
+        ["merge:lNUM|lfUnknown|==|rLST|rfConcat",          "checkNumRangeDeepCpy"],
         ["merge:lNUM|lfUnknown|==|rNUM|rintersect",        "ACTION"],
         ["merge:lNUM|lfConcat|==|rNUM|rfUnknown",          "ACTION"],
         ["merge:lNUM|lfConcat|==|rNUM|rfConcat",           "ACTION"],
@@ -635,7 +636,7 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
         #print("ruleSetID:"+ruleSetID)
         ifsCode =  "        our POV: remainder <- NULL\n"
         ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
-        ifsCode += '        else {log("MERGE_RULE_MISSING"); exit(2);}\n'
+        ifsCode += '        else {log("MERGE_RULE_MISSING: "+ toString(aItem));log("          LHS fType:"+ fTypeStrings[aItem.LHS_item.item.value.fType]);log("          LHS format:"+ formatStrings[aItem.LHS_item.item.value.format]);log("          RHS fType:"+ fTypeStrings[aItem.RHS.item.value.fType]); exit(2);}\n'
         ifsCode += "        return(remainder)"
         funcCode = "    our POV: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
     else:
