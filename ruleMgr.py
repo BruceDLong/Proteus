@@ -92,6 +92,7 @@ mergeRules = {
         'StartMergePropogation':    'startPropRules(aItem)',
         'MergeLooseStrings':        'remainder <- mergeLooseStrings(aItem)',
         'mergeRHSIntersect':        'mergeRHSIntersect(aItem)',
+        'mergeANDRanges':           'mergeANDRanges(aItem)',
         'copyIdentity':             'copyIdentity(aItem)',
         'checkNumRange':            'if(!checkNumRange(aItem.LHS_item.item, aItem.RHS.item)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
         'checkNumRangeDeepCpy':     """if(!checkNumRange(aItem.LHS_item.item, aItem.RHS.item)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
@@ -183,7 +184,7 @@ mergeRules = {
 
         ["merge:lLST|lfUnknown|=|rLST|rfConcat",         "ACTION"],
         ["merge:lLST|lfConcat|=|rLST|rfUnknown",         "ACTION"],
-        ["merge:lLST|lfConcat|=|rLST|rfConcat",          "ACTION"],
+        ["merge:lLST|lfConcat|=|rLST|rfConcat",          "mergeANDRanges"],
         ["merge:lLST|lfConcat|=|rLST|rfLiteral",         "ACTION"],
         ["merge:lLST|lfLiteral|=|rLST|rfConcat",         "ACTION"],
         ["merge:lLST|lintersect|=|rLST|rfUnknown",       "ACTION"],
