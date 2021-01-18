@@ -22,8 +22,20 @@ runCode=`
     logMgr.init(OFile)
     log("Clip started")
     me Clip: clip
-    //clip.runStreaming()  //TODO: chose runStreaming or runAsCommands via command line.
-    clip.runAsComands()
+    CommandLineManager.processCmdLine(joinCmdStrings(argc, argv), false);
+    CommandLineManager.defineOption("Clip", "RunMode", "-m", "--mode", "Specification of which mode to run in.")
+    me string: runMode <- CommandLineManager.getOption("Clip", "RunMode")
+    if(runMode == "stream"){
+	log("Running in streaming mode")
+	clip.runStreaming()
+    } else if(runMode == "command"){
+	log("Running in command mode")
+	clip.runAsComands()
+    } else {
+	log("Default to running in command mode without a command line flag specified")
+	log(runMode)
+	clip.runAsComands()
+    }
 `
 
 infonDumpMode='text'
@@ -35,36 +47,33 @@ infonDumpMode='text'
 struct ExtracterThread: inherits=Threads{
     their ThreadedInfonParseAndExtractor: ctrls
     our stateRec: parseTree
-    our infon: topInfon
-    void: init(their ThreadedInfonParseAndExtractor: Ctrls, our stateRec: ParseTree, our infon: TopInfon) <- {
-        topInfon <- TopInfon; parseTree <- ParseTree; ctrls <- Ctrls;
+    our infon: topItem
+
+    void: init(their ThreadedInfonParseAndExtractor: Ctrls, our stateRec: ParseTree, our infon: TopItem) <- {
+	topItem <- TopItem
+	parseTree <- ParseTree
+	ctrls <- Ctrls
         ctrls.extractCompleted <- false
     }
     void: run() <- {
         log("OPENING EXTRACT THREAD")
-        ctrls.parser.Extract_infon_to_infon(parseTree, topInfon)
-        log("FinishedInfon:"+toString(topInfon))
+        ctrls.parser.Extract_infon_to_infon(parseTree, topItem)
+        log("FinishedInfon:"+toString(topItem))
         log("CLOSING EXTRACT THREAD")
-      /*  me SyncLock: lock<-{ctrls.chkExtractDone}
+	/*me SyncLock: lock<-{ctrls.chkExtractDone}
         ctrls.extractCompleted <- true
         lock.notify_one();*/
-
- /*       if(result == NULL){log("Syntax Error in input: FIX ERROR MSG!!!")}
-        our POV:: normPov; normPov.item <- result
-        CORE.agent.normalize(normPov)
-log("PrsThrd-C")
-        me string: resultStr  <- toString(normPov.item)
-        log("RESULT:" + resultStr)
- //       RML.message <- resultStr
- //       RML.addUserMesg(resultStr, 3+shiftLeft(6, 4))  // ColrResultOK + tagResult
- */
     }
 }
 
 struct ParseThread: inherits=Threads{
     their ThreadedInfonParseAndExtractor: ctrls
     our strBuf: userStream
-    void: init(their ThreadedInfonParseAndExtractor: Ctrls) <- {ctrls <- Ctrls; ctrls.parseCompleted <- false}
+
+    void: init(their ThreadedInfonParseAndExtractor: Ctrls) <- {
+	ctrls <- Ctrls
+	ctrls.parseCompleted <- false
+    }
     void: run() <- {
         log("OPENING_PARSE_THREAD")
         ctrls.parser.doParse()
@@ -76,20 +85,10 @@ struct ParseThread: inherits=Threads{
             ctrls.parser.errorMesg <- "Proteus syntax error: " + ctrls.parser.errorMesg + " at line " + toString(ctrls.parser.errLineNum) + ":" + toString(ctrls.parser.errCharPos) + "\n"
             log(ctrls.parser.errorMesg)
             crntInfon <- NULL
-        } else {
-          //  our stateRec: topItem <- ctrls.parser.topDownResolve(ctrls.parser.lastTopLevelItem, "")
-       // log("\nptopItem:"+topItem.mySymbol())
-        log("\nleftParseNode:"+ctrls.leftParseNode.mySymbol())
-            //~ Allocate(crntInfon)
-            //~ ctrls.parser.Extract_infon_to_infon(ctrls.leftParseNode, crntInfon)
-            //~ log("FinishedInfon:"+toString(crntInfon))
         }
-
-      /*  me SyncLock: lock<-{ctrls.chkParseDone}
-        ctrls.extractCompleted <- true
-        lock.notify_one();*/
     }
 }
+
 // AUTO GENERATE THIS and parseAndExtractStream()
 struct ThreadedInfonParseAndExtractor{
     their EParser: parser
@@ -115,19 +114,16 @@ struct ThreadedInfonParseAndExtractor{
             extractDoneLock.wait(MtxMgr)
         }
     }
-
     void: waitForThreadsToExit() <- {
         parseThread.waitForExit()
         extracterThread.waitForExit()
     }
-
     void: start(their EParser: iParser, their strBuf: streamToParse, our infon: topInfon) <- {
         parser<-iParser
         me int: startProduction <- parser.infon_str
         parser.errorMesg <- ""
         parser.setStreamingMode(true)
         leftParseNode <- parser.initParseFromStream(startProduction, streamToParse)
-log("leftParseNode:"+leftParseNode.mySymbol())
         extracterThread.init(self, leftParseNode, topInfon)
         extracterThread.start()
         parseThread.init(self)
@@ -200,6 +196,7 @@ struct Clip{
         log("Parsed Infon:"+toString(topInfon))
         log("Waiting for threads To End")
         // We need waitForNormalizeToFinish()
+	// could call parseAndExtractor.waitForExtractCompletion
         parseAndExtractor.waitForThreadsToExit()
     }
 
