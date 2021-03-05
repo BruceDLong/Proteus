@@ -31,7 +31,7 @@ struct SizeMode: inherits=<mode[fromCount, fromContext, fromGiven]> {}
 struct evalRangeMode: inherits=<mode[error, unknown, reject, pass]> {}
 
 model pureInfon{
-    me mode[tUnknown, NUM, STR, LST]: fType
+    me mode[tUnset, tUnknown, NUM, STR, LST]: fType
     me mode[fUnknown, fConcat, fLiteral]: format
     me mode[fDefault, fFloat, fFraction, fSingleQuote, fHereDoc, fSizedBin]: literalFormat
     me mode[bDec, bBin, bHex]:numBase
@@ -88,7 +88,7 @@ model pureInfon{
 }
 model infon{
     flag: asNot
-    mode[mItem, mSubItems, mWordDefn]:      itmMode
+    mode[mNone, mItem, mSubItems, mWordDefn]:      itmMode
     mode[isUnknown, newCursor, isLiteral]:  infMode
     mode[ipNoIntersect, ipGetLast, ipGetFirst, ipGetMarked]: intersectPos
     mode[apNoArgs, apArgIsFirstItem, apArgIsLastItem]: argPos
@@ -267,6 +267,7 @@ model infon{
         infSize.format  <- fUnknown
         innr            <- newInnr
         innr.value.sizeMode <- sMode
+
     }
     our POV: addToOrInfon(our infon: rItem, our POV: rNode, our POV: pred) <- {
         our POV: pov <- innr.value.items.head
@@ -366,6 +367,13 @@ model infon{
         innr       <- NULL
         type       <- NULL
     }
+    void: setToList() <- {
+        clear()
+        itmMode         <- mItem
+        infMode         <- isLiteral
+        value.fType <- LST
+        value.tailUnfinished <- true
+    }
     void: INIT() <- {infSize <- pureInfon(0); clearSymbol(self);}
     me none: infon(me string: S) <- {
         infMode <- isLiteral
@@ -389,6 +397,21 @@ model TypeSpec{
 } struct TypeSpec{}
 
 struct GLOBAL{
+    me bool: streamingNormMode
+    me Mutex: streamingNormMutex
+    me SyncLock: streamingNormLock
+
+    me bool: canStreamThoNotDone(our infon: inf) <- {
+        log("   INF:"+toString(inf))
+        if(inf.itmMode!=mItem){ log("@A"); return(false)}
+       // if(inf.infMode!=isLiteral)      {log("@B"); return(false)}
+        log("   fType:"+toString(inf.value.fType))
+        if(inf.value.fType==tUnset)        {log("@C"); return(false)}
+       // if(inf.value.format!=fUnknown)  {log("@DDDDDDDDDDDDDDDDD"); return(false)}
+        log("@True");
+        return(true)
+    }
+
     me string: crntRHSMySymbol
     me string: crntLHSMySymbol
     our infon[multimap string]: classDefs
@@ -416,7 +439,7 @@ struct GLOBAL{
     our POV: makeOrPov(our POV: nextPov, our POV: pred) <- {
         our infon: newListInfon <- makeInnrInfon()               // Make {...} to be used as innr
         our POV: newAlt <- newListInfon.value.items.pushAsAlt(nextPov, nextPov.item, pred)  // Make a POV for the item.
-        our infon:: newAltInfon
+        our infon:: newAltInfon; newAltInfon.value.fType   <- tUnknown
             newAltInfon.convertThisToIntersection(newListInfon, fromGiven) // Make [ ] and add innr to it
         our POV:: newAltInfPov                                  // Make the POV pointing to the [...]
             newAltInfPov.item <- newAltInfon
@@ -1725,17 +1748,28 @@ struct Agent{
     our infon: context
     me WorldManager: worldMgr
     me Locale: locale
-    me string[map string]: preferences
+    our Map<string, string>: settings
+    me int: errorStatus
+    me string: errorMesg
 
     void: setErrorState(our POV: POVWithError, me string: errorMesg) <- {
         log("INFON ERROR: " + errorMesg)
        // print("INFON ERROR: " + errorMesg+"\n")
     }
-    me void: normalize(our POV: normPov) <- {
+    void: normalize(our POV: normPov) <- {
         our AItem: normPIVA <- worldMgr.processInfonViaAgenda(normPov, NULL, NULL, 1)
         worldMgr.addAItemToAgenda(normPIVA)
         log("Norm_PIVA:"+normPIVA.mySymbol()+" " +toString(normPIVA))
         worldMgr.processAgenda()
+    }
+    void: extendAndNorm(our infon: toExtend, our infon: extension) <- {
+        if(toExtend.value.tailUnfinished == false){logFatalError("Extendee must be unfinished with '...'.\n")}
+        if(extension.itmMode==mSubItems or extension.value.fType!=LST){logFatalError("Extension infon must be a list w/o mSubItem.")}
+        extension.itmMode <- mSubItems
+        toExtend.value.items.pushLast(extension)
+        our POV:: extPov; extPov.item <- extension
+        normalize(extPov)
+        me string:result <- toString(extPov.item)
     }
     void: appendToWorld(our infon: newInfon) <- {
         our infon: dotsAtTheEnd <- world.value.items.last()
@@ -1748,8 +1782,8 @@ struct Agent{
     me string: getLocaleBaseName() <- {
         return(unicodeMgr.getLocaleBaseName(locale))
     }
-    me int: setPreferences(me string: key, me string: value) <- {
-        preferences[key] <- value
+    me int: setSetting(me string: key, me string: value) <- {
+        settings[key] <- value
         if(key=='locale'){setLocale(value); return(2)}
         return(1)
     }
@@ -1771,11 +1805,45 @@ struct Agent{
         world <- World
         Allocate(context)
 
-        // Set user data and locale
+        Allocate(settings)
         // AllocSet World to {...}
         // AllocSet Context to {...}
         worldMgr.init(this)
-        // Set ErrorStatus
+        errorStatus <- 0
+        errorMesg <- ""
+    }
+    void: init2(our Map<string, string>: Settings) <- {
+        settings <- Settings
+        Allocate(world);   world.setToList()
+        Allocate(context); context.setToList()
+        worldMgr.init(this)
+        errorStatus <- 0
+        errorMesg <- ""
+    }
+}
+struct ThreadedNormalizer: inherits=Threads {
+    // Also available: start() and waitForExit()
+    our infon: item
+    our POV: pov
+    their Agent: agent
+    void: init(their Agent: _agent, our infon: inf) <- {
+        item <- inf
+        agent <- _agent
+        Allocate(pov)
+        pov.item <- inf
+    }
+    void: run() <- {
+        log("OPENING NORM_THREAD")
+        if(streamingNormMode){
+            me MutexMngr: MtxMgr{streamingNormMutex}
+            while(!item.parseFinished and (item.value.items.isEmpty() or !canStreamThoNotDone(item.value.items.first()))){
+                //log("    parseFinished:" + toString(item.parseFinished) + ";  isEmpty{}:" + toString(item.value.items.isEmpty()) )
+                streamingNormLock.wait(MtxMgr)
+            }
+        }
+        log("OPENED NORM_THREAD")
+        agent.normalize(pov)
+        log("CLOSING NORM_THREAD")
     }
 }
 struct ProteusCore{
