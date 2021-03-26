@@ -20,26 +20,25 @@ infonDumpMode='text'
 do ManageCmdLine(cmd)
 
 #include infonIO.dog
-//include DB_workAround.dog
 #include infonList.dog
 #include Functions.dog
-#include wordSystemMgr.dog
-#include WorldManager.dog
 #include ModelManager.dog
+#include WorldManager.dog
+//include DB_workAround.dog
 
 struct SizeMode: inherits=<mode[fromCount, fromContext, fromGiven]> {}
 struct evalRangeMode: inherits=<mode[error, unknown, reject, pass]> {}
 
 model pureInfon{
-    me mode[tUnset, tUnknown, NUM, STR, LST]: fType
-    me mode[fUnknown, fConcat, fLiteral]: format
-    me mode[fDefault, fFloat, fFraction, fSingleQuote, fHereDoc, fSizedBin]: literalFormat
-    me mode[bDec, bBin, bHex]:numBase
-    me mode[ipDefault, ipSquareBrackets]: intersectPosParse
-    me flag: inverted
-    me flag: timelike
+    mode[tUnset, tUnknown, NUM, STR, LST]: fType
+    mode[fUnknown, fConcat, fLiteral]: format
+    mode[fDefault, fFloat, fFraction, fSingleQuote, fHereDoc, fSizedBin]: literalFormat
+    mode[bDec, bBin, bHex]:numBase
+    mode[ipDefault, ipSquareBrackets]: intersectPosParse
+    flag: inverted
+    flag: timelike
     flag: isLstSize
-    me flag: tailUnfinished
+    flag: tailUnfinished
     me FlexNum: num
     me string: str
     me DblLinkedList: items            //  our list<our infon, [fast_prepend, fast_delete]>: newItems
@@ -104,7 +103,8 @@ model infon{
     our infon: funcArgs
     our infon: dotPath
     our infon: innr
-    our WordDefn: type
+    our WordUse: type
+    our WordDefn: definedWord
     our TypeSpec[list]: typeSpecs
     our POV[list]: wrkList
     our POV[list]: usedWrkList
@@ -414,11 +414,7 @@ struct GLOBAL{
 
     me string: crntRHSMySymbol
     me string: crntLHSMySymbol
-    our infon[multimap string]: classDefs
-    void: registerClass(our infon: classInfon) <- {
-        //log("REGISTER:", classInfon.type.asGiven, "\n")
-        classDefs.insert(classInfon.type.asGiven, classInfon.funcArgs)
-    }
+
     void: reFunctionize(our infon: infn) <- {
         infn.cnvtToFunc <- false
         our infon:: newInnr
@@ -669,8 +665,7 @@ struct WorldManager{
         me bool: changeMade  <- false
         if(CI.itmMode==mWordDefn and !CI.defnRegistered){
             logSeg("-WrdDefn")
-            modelMngr.indexDefinition(agent, CI.type, CI.funcArgs)
-            registerClass(CI)
+            modelMngr.indexDefinition(agent, CI.definedWord, CI.funcArgs)
             CI.defnRegistered <- true
             changeMade <- true
         }
@@ -796,9 +791,9 @@ struct WorldManager{
         me bool: changeMade  <- false
         if(CI.type!=NULL and CI.itmMode!=mWordDefn){
             logSeg("-isWord")
-            our infon: infModel <- modelMngr.fetchModel(agent, CI.type)
+            our infon: infModel <- modelMngr.constructAltModelFromWord(agent, CI.type, NULL, "scope")
             if(infModel){
-                our WordDefn:CIsType <- CI.type
+                our WordUse:CIsType <- CI.type
                 me bool: asNot <- CI.asNot
                 if(CI.hasTypeAndValue){CI.addInfonToWrkList(infModel)}
                 else{infModel.copyAsTypeTo(CI, false)}
@@ -806,7 +801,7 @@ struct WorldManager{
                 CI.asNot <- asNot
                 changeMade <- true
             }else{
-                agent.setErrorState(CIPov, CI.type.asGiven+" is not defined")
+                agent.setErrorState(CIPov, "'"+CI.type.asGiven+"' is not defined")
             }
             if(CIPov.pParent!=NULL and CIPov.pParent.item!=NULL){
                 CIPov.pParent.item.value.index.insert(CI.type.asGiven, CI)
@@ -1268,7 +1263,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
         }
     }
     me void: copyIdentity(our AItem: aItem) <- {
-        our WordDefn:type <- aItem.LHS_item.item.type
+        our WordUse:type <- aItem.LHS_item.item.type
         aItem.LHS_item.item <- aItem.RHS.item
         if(type!=NULL){aItem.LHS_item.item.type <- type}
     }
@@ -1864,8 +1859,8 @@ struct ProteusCore{
         our stateRec: topParseNode <- parser.initParseFromStream(parser.infon_str, streamToParse)
         parser.doParse()
         if(parser.doesParseHaveError()){
-            errorMesg <- "Proteus syntax error: " + parser.errorMesg + " at line " + toString(parser.errLineNum) + ":" + toString(parser.errCharPos) + "\n"
-            print(errorMesg)
+            errorMesg <- parser.errorMesg
+            print(errorMesg+"\n\n")
             return(NULL)
         } else {
             //parser.resolve(parser.lastTopLevelItem, "")
@@ -1876,9 +1871,9 @@ struct ProteusCore{
         }
     }
 
-    our infon: parseAndExtractString(me string: textToParse) <- {
+    our infon: parseAndExtractString(me string: textToParse, me string: streamName) <- {
         their strBuf:: bufToParse
-        bufToParse.init()
+        bufToParse.init(streamName)
         bufToParse.putStr(textToParse)
         bufToParse.close()
         return(parseAndExtractStream(bufToParse))
@@ -1888,14 +1883,17 @@ struct ProteusCore{
         me string: worldFilePath <- filename
         me string: worldStr <- readAssetAsString(worldFilePath)
         if(worldStr==""){
-            errorMesg <- "Model file "+worldFilePath+" not found"
+            errorMesg <- "Proteus file '"+worldFilePath+"' not found"
             return(false)
         }
-        WORLD <- parseAndExtractString(worldStr)
+        WORLD <- parseAndExtractString(worldStr, worldFilePath)
         if(WORLD == NULL){
+            errorMesg <- "Proteus file '"+worldFilePath+"' did not parse correctly"
             return(false)
         }
         agent.world <- WORLD
+        our POV:: normPov; normPov.item <- agent.world
+        agent.normalize(normPov)
         return(true)
     }
 
@@ -1910,7 +1908,7 @@ struct ProteusCore{
     }
 
     our infon: query(me string: qry, me bool: writeToSession) <- {
-        our infon: result <- parseAndExtractString(qry)
+        our infon: result <- parseAndExtractString(qry, "query")
         if(result == NULL){log("Syntax Error in input: " + qry)}
         our POV:: normPov; normPov.item <- result
         agent.normalize(normPov)
@@ -1945,8 +1943,8 @@ struct ProteusCore{
         parser.populateGrammar()
         Allocate(agent)
         if(worldFileName!=""){
-            if(!loadWorld(worldFileName)) {return(false)}
-            agent.init(agent.world) // TODO: diagram Core and Agent init funcs
+            if(!loadWorld(worldFileName)) {logFatalError(errorMesg)}
+            agent.init(agent.world)
         }else{// No World Loaded
             agent.worldMgr.agent <- agent
             our infon:: world
