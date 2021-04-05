@@ -14,31 +14,31 @@ mergeSizeRules = {
 
     ],
     'ifSnips': {
-        'l?':            'aItem.LHS_item.item.infMode == isUnknown',
-        'lNUM':          'aItem.LHS_item.item.value.fType == NUM',
-        'lSTR':          'aItem.LHS_item.item.value.fType == STR',
-        'lLST':          'aItem.LHS_item.item.value.fType == LST',
+        'l?':            'aItem.LHS_item.pItem.infMode == isUnknown',
+        'lNUM':          'aItem.LHS_item.pItem.value.fType == NUM',
+        'lSTR':          'aItem.LHS_item.pItem.value.fType == STR',
+        'lLST':          'aItem.LHS_item.pItem.value.fType == LST',
 
-        'lintersect':    'aItem.LHS_item.item.infSize.intersectPosParse == ipSquareBrackets',
-        'lfUnknown':     'aItem.LHS_item.item.infSize.format == fUnknown',
-        'lfConcat':      'aItem.LHS_item.item.infSize.format == fConcat',
-        'lfLiteral':     'aItem.LHS_item.item.infSize.format == fLiteral',
+        'lintersect':    'aItem.LHS_item.pItem.infSize.intersectPosParse == ipSquareBrackets',
+        'lfUnknown':     'aItem.LHS_item.pItem.infSize.format == fUnknown',
+        'lfConcat':      'aItem.LHS_item.pItem.infSize.format == fConcat',
+        'lfLiteral':     'aItem.LHS_item.pItem.infSize.format == fLiteral',
 
-        'r?':            'aItem.RHS.item.infMode == isUnknown',
-        'rNUM':          'aItem.RHS.item.value.fType == NUM',
-        'rSTR':          'aItem.RHS.item.value.fType == STR',
-        'rLST':          'aItem.RHS.item.value.fType == LST',
+        'r?':            'aItem.RHS.pItem.infMode == isUnknown',
+        'rNUM':          'aItem.RHS.pItem.value.fType == NUM',
+        'rSTR':          'aItem.RHS.pItem.value.fType == STR',
+        'rLST':          'aItem.RHS.pItem.value.fType == LST',
 
-        'rintersect':    'aItem.RHS.item.infSize.intersectPosParse == ipSquareBrackets',
-        'rfUnknown':     'aItem.RHS.item.infSize.format == fUnknown',
-        'rfConcat':      'aItem.RHS.item.infSize.format == fConcat',
-        'rsfLiteral':     'aItem.RHS.item.infSize.format == fLiteral',
+        'rintersect':    'aItem.RHS.pItem.infSize.intersectPosParse == ipSquareBrackets',
+        'rfUnknown':     'aItem.RHS.pItem.infSize.format == fUnknown',
+        'rfConcat':      'aItem.RHS.pItem.infSize.format == fConcat',
+        'rsfLiteral':     'aItem.RHS.pItem.infSize.format == fLiteral',
 
         'looseSize':     'aItem.looseSize',
         '!looseSize':    '!aItem.looseSize'
     },
     'codeSnips': {
-        'copySizeRHStoLHS':         'if((aItem.LHS_item.item.infMode!=isLiteral or aItem.RHS.item.value.fType==aItem.LHS_item.item.value.fType) and (aItem.LHS_item.item.value.listSpec==NULL or !aItem.LHS_item.item.value.listSpec.asWrkLstOutr)){DO_COPY(aItem.RHS.item.infSize, aItem.LHS_item.item.infSize, 0)}',
+        'copySizeRHStoLHS':         'if((aItem.LHS_item.pItem.infMode!=isLiteral or aItem.RHS.pItem.value.fType==aItem.LHS_item.pItem.value.fType) and (aItem.LHS_item.pItem.value.listSpec==NULL or !aItem.LHS_item.pItem.value.listSpec.asWrkLstOutr)){DO_COPY(aItem.RHS.pItem.infSize, aItem.LHS_item.pItem.infSize, 0)}',
     },
     'rules': [
         ["mergeSize:!looseSize|lfUnknown|rsfLiteral",     "copySizeRHStoLHS"],
@@ -57,53 +57,53 @@ mergeRules = {
         ['rintersect', 'rfUnknown', 'rfConcat', 'rfLiteral']
     ],
     'ifSnips': {
-        'l?':            'aItem.LHS_item.item.infMode == isUnknown',
-        'lNUM':          'aItem.LHS_item.item.value.fType == NUM',
-        'lSTR':          'aItem.LHS_item.item.value.fType == STR',
-        'lLST':          'aItem.LHS_item.item.value.fType == LST',
+        'l?':            'aItem.LHS_item.pItem.infMode == isUnknown',
+        'lNUM':          'aItem.LHS_item.pItem.value.fType == NUM',
+        'lSTR':          'aItem.LHS_item.pItem.value.fType == STR',
+        'lLST':          'aItem.LHS_item.pItem.value.fType == LST',
 
-        'lintersect':    'aItem.LHS_item.item.value.intersectPosParse == ipSquareBrackets',
-        'lfUnknown':     'aItem.LHS_item.item.value.format == fUnknown',
-        'lfConcat':      'aItem.LHS_item.item.value.format == fConcat',
-        'lfLiteral':     'aItem.LHS_item.item.value.format == fLiteral',
+        'lintersect':    'aItem.LHS_item.pItem.value.intersectPosParse == ipSquareBrackets',
+        'lfUnknown':     'aItem.LHS_item.pItem.value.format == fUnknown',
+        'lfConcat':      'aItem.LHS_item.pItem.value.format == fConcat',
+        'lfLiteral':     'aItem.LHS_item.pItem.value.format == fLiteral',
 
-        'r?':            'aItem.RHS.item.infMode == isUnknown',
-        'rNUM':          'aItem.RHS.item.value.fType == NUM',
-        'rSTR':          'aItem.RHS.item.value.fType == STR',
-        'rLST':          'aItem.RHS.item.value.fType == LST',
-        'rtUnknown':     'aItem.RHS.item.value.fType == tUnknown',
+        'r?':            'aItem.RHS.pItem.infMode == isUnknown',
+        'rNUM':          'aItem.RHS.pItem.value.fType == NUM',
+        'rSTR':          'aItem.RHS.pItem.value.fType == STR',
+        'rLST':          'aItem.RHS.pItem.value.fType == LST',
+        'rtUnknown':     'aItem.RHS.pItem.value.fType == tUnknown',
 
-        'rintersect':    'aItem.RHS.item.intersectPos != ipNoIntersect',
-        'rfUnknown':     'aItem.RHS.item.value.format == fUnknown',
-        'rfConcat':      'aItem.RHS.item.value.format == fConcat',
-        'rfLiteral':     'aItem.RHS.item.value.format == fLiteral',
+        'rintersect':    'aItem.RHS.pItem.intersectPos != ipNoIntersect',
+        'rfUnknown':     'aItem.RHS.pItem.value.format == fUnknown',
+        'rfConcat':      'aItem.RHS.pItem.value.format == fConcat',
+        'rfLiteral':     'aItem.RHS.pItem.value.format == fLiteral',
 
         '==':           '(aItem.RHS.looseType())',
         '=':            '!(aItem.RHS.looseType())',
     },
     'codeSnips': {
         'REJECT':                   'aItem.reject <- true; aItem.LHS_item.rejected<-true;',
-        'copyValueRHStoLHS':        'DO_COPY(aItem.RHS.item.value, aItem.LHS_item.item.value, aItem.sizeToCopy)',
-        'copyValueLHStoRHS':        'DO_COPY(aItem.LHS_item.item.value, aItem.RHS.item.value, aItem.sizeToCopy)',
-        'copyRHSTypeToLHS':         'aItem.LHS_item.item.value.fType <- aItem.RHS.item.value.fType; aItem.LHS_item.item.infMode <- aItem.RHS.item.infMode',
-        'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.item.infSize, aItem.LHS_item.item.infSize, 0)',
-        'rejectIfValueStrNotEqual': 'if(aItem.LHS_item.item.value.str != aItem.RHS.item.value.str){aItem.reject <- true; aItem.LHS_item.rejected<-true}',
-        'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.item.value.num != aItem.RHS.item.value.num){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
+        'copyValueRHStoLHS':        'DO_COPY(aItem.RHS.pItem.value, aItem.LHS_item.pItem.value, aItem.sizeToCopy)',
+        'copyValueLHStoRHS':        'DO_COPY(aItem.LHS_item.pItem.value, aItem.RHS.pItem.value, aItem.sizeToCopy)',
+        'copyRHSTypeToLHS':         'aItem.LHS_item.pItem.value.fType <- aItem.RHS.pItem.value.fType; aItem.LHS_item.pItem.infMode <- aItem.RHS.pItem.infMode',
+        'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.pItem.infSize, aItem.LHS_item.pItem.infSize, 0)',
+        'rejectIfValueStrNotEqual': 'if(aItem.LHS_item.pItem.value.str != aItem.RHS.pItem.value.str){aItem.reject <- true; aItem.LHS_item.rejected<-true}',
+        'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.pItem.value.num != aItem.RHS.pItem.value.num){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
         'StartMergePropogation':    'startPropRules(aItem)',
         'MergeLooseStrings':        'remainder <- mergeLooseStrings(aItem)',
         'mergeRHSIntersect':        'mergeRHSIntersect(aItem)',
         'mergeANDRanges':           'mergeANDRanges(aItem)',
         'copyIdentity':             'copyIdentity(aItem)',
-        'checkNumRange':            'if(!checkNumRange(aItem.LHS_item.item, aItem.RHS.item)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
-        'checkNumRangeDeepCpy':     """if(!checkNumRange(aItem.LHS_item.item, aItem.RHS.item)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
-            me bool: truReject <- aItem.reject; if(aItem.LHS_item.item.asNot){truReject <- !truReject}
-            if(!truReject){aItem.LHS_item.item <deep- aItem.RHS.item; if(aItem.LHS_item.outerPOV){aItem.LHS_item.outerPOV.item.altRulesApplied <- false}}""",
-        'checkNumRangeDoCpy':       """if(!checkNumRange(aItem.LHS_item.item, aItem.RHS.item)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
-            me bool: truReject <- aItem.reject; if(aItem.LHS_item.item.asNot){truReject <- !truReject}
+        'checkNumRange':            'if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
+        'checkNumRangeDeepCpy':     """if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
+            me bool: truReject <- aItem.reject; if(aItem.LHS_item.pItem.asNot){truReject <- !truReject}
+            if(!truReject){aItem.LHS_item.pItem <deep- aItem.RHS.pItem; if(aItem.LHS_item.outerPOV){aItem.LHS_item.outerPOV.pItem.altRulesApplied <- false}}""",
+        'checkNumRangeDoCpy':       """if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
+            me bool: truReject <- aItem.reject; if(aItem.LHS_item.pItem.asNot){truReject <- !truReject}
             if(!truReject){
-                            DO_COPY(aItem.RHS.item.value, aItem.LHS_item.item.value, aItem.sizeToCopy);
-                            aItem.LHS_item.item.asNot <- aItem.RHS.item.asNot
-                            if(aItem.LHS_item.outerPOV){aItem.LHS_item.outerPOV.item.altRulesApplied <- false
+                            DO_COPY(aItem.RHS.pItem.value, aItem.LHS_item.pItem.value, aItem.sizeToCopy);
+                            aItem.LHS_item.pItem.asNot <- aItem.RHS.pItem.asNot
+                            if(aItem.LHS_item.outerPOV){aItem.LHS_item.outerPOV.pItem.altRulesApplied <- false
             }}""",
     },
     'rules': [
@@ -237,7 +237,7 @@ wrkLstRules = {
     'ID': 'wrkLst',
     'points': [["wrkLstEmpty", "!wrkLstEmpty"]],
     'ifSnips': {
-        '!wrkLstEmpty':   '!aItem.LHS_item.item.wrkList.isEmpty()',
+        '!wrkLstEmpty':   '!aItem.LHS_item.pItem.wrkList.isEmpty()',
         'wrkLstEmpty':    '!aItem.hasPropagated'
     },
     'codeSnips': {
@@ -260,12 +260,12 @@ startPropRules = { # Start iterating fLiteral LST = fLiteral LST
     'ifSnips': {
         '!looseSize':       '!(aItem.RHS.looseType())',
         'looseSize':        '(aItem.RHS.looseType())',
-        'sizesCompat':      'sizesAreCompatable(aItem.LHS_item.item, aItem.RHS.item)',
-        '!sizesCompat':     '!sizesAreCompatable(aItem.LHS_item.item, aItem.RHS.item)',
-        'RHSisPureDots':    '(aItem.RHS.item.value.tailUnfinished and aItem.RHS.item.value.items.size()==0)',
-        '!RHSisPureDots':   '!(aItem.RHS.item.value.tailUnfinished and aItem.RHS.item.value.items.size()==0)',
-        'LHSEmpty':         '(!aItem.LHS_item.item.value.tailUnfinished and aItem.LHS_item.item.value.items.size() == 0)',
-        '!LHSEmpty':        '(aItem.LHS_item.item.value.tailUnfinished or aItem.LHS_item.item.value.items.size() > 0)'
+        'sizesCompat':      'sizesAreCompatable(aItem.LHS_item.pItem, aItem.RHS.pItem)',
+        '!sizesCompat':     '!sizesAreCompatable(aItem.LHS_item.pItem, aItem.RHS.pItem)',
+        'RHSisPureDots':    '(aItem.RHS.pItem.value.tailUnfinished and aItem.RHS.pItem.value.items.size()==0)',
+        '!RHSisPureDots':   '!(aItem.RHS.pItem.value.tailUnfinished and aItem.RHS.pItem.value.items.size()==0)',
+        'LHSEmpty':         '(!aItem.LHS_item.pItem.value.tailUnfinished and aItem.LHS_item.pItem.value.items.size() == 0)',
+        '!LHSEmpty':        '(aItem.LHS_item.pItem.value.tailUnfinished or aItem.LHS_item.pItem.value.items.size() > 0)'
     },
     'codeSnips': {
         'REJECT':   'aItem.reject<-true; aItem.LHS_item.rejected<-true;',
@@ -286,7 +286,7 @@ propagationRules = {
     'ifSnips': {
         'infonMode':    'aItem.ruleSet == rsInfon',
         'mergeMode':    'aItem.ruleSet == rsMerge',
-        'skipDots1':    'aItem.LHS_item.item.',
+        'skipDots1':    'aItem.LHS_item.pItem.',
         'skipDots2':    'aItem.',
         'notSkipDots':  ''
 
@@ -636,7 +636,7 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
         #print("ruleSetID:"+ruleSetID)
         ifsCode =  "        our POV: remainder <- NULL\n"
         ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
-        ifsCode += '        else {log("MERGE_RULE_MISSING: "+ toString(aItem));log("          LHS fType:"+ fTypeStrings[aItem.LHS_item.item.value.fType]);log("          LHS format:"+ formatStrings[aItem.LHS_item.item.value.format]);log("          RHS fType:"+ fTypeStrings[aItem.RHS.item.value.fType]); exit(2);}\n'
+        ifsCode += '        else {log("MERGE_RULE_MISSING: "+ toString(aItem));log("          LHS fType:"+ fTypeStrings[aItem.LHS_item.pItem.value.fType]);log("          LHS format:"+ formatStrings[aItem.LHS_item.pItem.value.format]);log("          RHS fType:"+ fTypeStrings[aItem.RHS.pItem.value.fType]); exit(2);}\n'
         ifsCode += "        return(remainder)"
         funcCode = "    our POV: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
     else:
