@@ -20,26 +20,25 @@ infonDumpMode='text'
 do ManageCmdLine(cmd)
 
 #include infonIO.dog
-//include DB_workAround.dog
 #include infonList.dog
 #include Functions.dog
-#include wordSystemMgr.dog
-#include WorldManager.dog
 #include ModelManager.dog
+#include WorldManager.dog
+//include DB_workAround.dog
 
 struct SizeMode: inherits=<mode[fromCount, fromContext, fromGiven]> {}
 struct evalRangeMode: inherits=<mode[error, unknown, reject, pass]> {}
 
 model pureInfon{
-    me mode[tUnset, tUnknown, NUM, STR, LST]: fType
-    me mode[fUnknown, fConcat, fLiteral]: format
-    me mode[fDefault, fFloat, fFraction, fSingleQuote, fHereDoc, fSizedBin]: literalFormat
-    me mode[bDec, bBin, bHex]:numBase
-    me mode[ipDefault, ipSquareBrackets]: intersectPosParse
-    me flag: inverted
-    me flag: timelike
+    mode[tUnset, tUnknown, NUM, STR, LST]: fType
+    mode[fUnknown, fConcat, fLiteral]: format
+    mode[fDefault, fFloat, fFraction, fSingleQuote, fHereDoc, fSizedBin]: literalFormat
+    mode[bDec, bBin, bHex]:numBase
+    mode[ipDefault, ipSquareBrackets]: intersectPosParse
+    flag: inverted
+    flag: timelike
     flag: isLstSize
-    me flag: tailUnfinished
+    flag: tailUnfinished
     me FlexNum: num
     me string: str
     me DblLinkedList: items            //  our list<our infon, [fast_prepend, fast_delete]>: newItems
@@ -93,7 +92,7 @@ model infon{
     mode[ipNoIntersect, ipGetLast, ipGetFirst, ipGetMarked]: intersectPos
     mode[apNoArgs, apArgIsFirstItem, apArgIsLastItem]: argPos
     flag: argsOnLeft
-    mode[cNone, cThis, cWorld, cContext, cArgs, cVars]:  cursorMode
+    mode[cNone, cThis, cWorld, cContext, cUser, cArgs, cVars]:  cursorMode
     me pureInfon: infSize
     me pureInfon: value
     flag: isNormed
@@ -104,7 +103,8 @@ model infon{
     our infon: funcArgs
     our infon: dotPath
     our infon: innr
-    our WordDefn: type
+    our WordUse: type
+    our WordDefn: definedWord
     our TypeSpec[list]: typeSpecs
     our POV[list]: wrkList
     our POV[list]: usedWrkList
@@ -371,8 +371,13 @@ model infon{
         clear()
         itmMode         <- mItem
         infMode         <- isLiteral
-        value.fType <- LST
+        value.fType  <- LST
+        value.format <- fLiteral
         value.tailUnfinished <- true
+    }
+    void: setSelfAsAPluralOf(our infon: toPluralize) <-{
+        setToList()
+        value.listSpec <- toPluralize
     }
     void: INIT() <- {infSize <- pureInfon(0); clearSymbol(self);}
     me none: infon(me string: S) <- {
@@ -414,11 +419,7 @@ struct GLOBAL{
 
     me string: crntRHSMySymbol
     me string: crntLHSMySymbol
-    our infon[multimap string]: classDefs
-    void: registerClass(our infon: classInfon) <- {
-        //log("REGISTER:", classInfon.type.asGiven, "\n")
-        classDefs.insert(classInfon.type.asGiven, classInfon.funcArgs)
-    }
+
     void: reFunctionize(our infon: infn) <- {
         infn.cnvtToFunc <- false
         our infon:: newInnr
@@ -491,6 +492,16 @@ model AItem{
     flag: hasPropagated
     flag: initRulesApplied
 
+    me int: distanceToTop() <- {
+        me int: retVal <- 0
+        our AItem: crnt <- parent
+        while(crnt!=NULL){
+            retVal <+- 1
+            crnt <- crnt.parent
+        }
+        return(retVal)
+    }
+
     our AItem: prntOrSub() <- {
         if(parent!=NULL){return(parent)}
         if(!subscribers.isEmpty()){return(subscribers[0])}
@@ -534,12 +545,12 @@ model PartPath{
     flag: wasTransfered
     flag: hasSemiColon
 }
+struct PartPath{
+    void: clear()<-{path<-NULL; flags<-0;}
+}
 struct pureInfon{
     our infon[multimap string]: index
     our infon[multimap int64]: T_index
-}
-struct PartPath{
-    void: clear()<-{path<-NULL; flags<-0;}
 }
 //////////////////////////
 // Definition storage
@@ -669,8 +680,7 @@ struct WorldManager{
         me bool: changeMade  <- false
         if(CI.itmMode==mWordDefn and !CI.defnRegistered){
             logSeg("-WrdDefn")
-            modelMngr.indexDefinition(agent, CI.type, CI.funcArgs)
-            registerClass(CI)
+            modelMngr.indexDefinition(agent, CI.definedWord, CI.funcArgs)
             CI.defnRegistered <- true
             changeMade <- true
         }
@@ -796,9 +806,9 @@ struct WorldManager{
         me bool: changeMade  <- false
         if(CI.type!=NULL and CI.itmMode!=mWordDefn){
             logSeg("-isWord")
-            our infon: infModel <- modelMngr.fetchModel(agent, CI.type)
+            our infon: infModel <- modelMngr.constructAltModelFromWord(agent, CI.type, NULL, "scope")
             if(infModel){
-                our WordDefn:CIsType <- CI.type
+                our WordUse:CIsType <- CI.type
                 me bool: asNot <- CI.asNot
                 if(CI.hasTypeAndValue){CI.addInfonToWrkList(infModel)}
                 else{infModel.copyAsTypeTo(CI, false)}
@@ -806,7 +816,7 @@ struct WorldManager{
                 CI.asNot <- asNot
                 changeMade <- true
             }else{
-                agent.setErrorState(CIPov, CI.type.asGiven+" is not defined")
+                agent.setErrorState(CIPov, "'"+CI.type.asGiven+"' is not defined")
             }
             if(CIPov.pParent!=NULL and CIPov.pParent.item!=NULL){
                 CIPov.pParent.item.value.index.insert(CI.type.asGiven, CI)
@@ -856,7 +866,8 @@ struct WorldManager{
         if(CI.infMode==newCursor) {
             switch(CI.cursorMode){
                 case cWorld:  {newTop <- agent.world}
-                case cContext:{newTop <- agent.context}
+                case cContext:{newTop <- agent.context.topicHistory; log("Context: size:"+toString(newTop.value.items.size())+" CTXT:"+toString(newTop))}
+                case cUser:   {newTop <- agent.user}
                 case cThis:   {newTop <- aItem.LHS_item.pParent.item}
                 case cArgs:   {newTop <- aItem.LHS_item.pParent.item.value.items.first()}
                 case cVars:   {} //{newTop <- next}
@@ -1105,7 +1116,9 @@ struct WorldManager{
         }
         // If this is [], i.e, null, remove it from parent list.
         if(CI.intersectPos==ipGetLast and CI.innr!=NULL and CI.innr.infSize.format==fLiteral and CI.innr.value.sizeMode==fromCount and CI.innr.infSize.num==0){
+            if(aItem.LHS_item.pParent != NULL){
  /*Resolve the NULL ambiguity*/           aItem.LHS_item.pParent.item.value.items.erase(aItem.LHS_item)
+            }
         }
 //if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
         if(CI.value.fType==LST){
@@ -1268,7 +1281,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
         }
     }
     me void: copyIdentity(our AItem: aItem) <- {
-        our WordDefn:type <- aItem.LHS_item.item.type
+        our WordUse:type <- aItem.LHS_item.item.type
         aItem.LHS_item.item <- aItem.RHS.item
         if(type!=NULL){aItem.LHS_item.item.type <- type}
     }
@@ -1751,7 +1764,8 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
 // Infon Interface Routines
 struct Agent{
     our infon: world
-    our infon: context
+    our infon: user
+    me AgentContext: context
     me WorldManager: worldMgr
     me Locale: locale
     our Map<string, string>: settings
@@ -1781,6 +1795,7 @@ struct Agent{
         our infon: dotsAtTheEnd <- world.value.items.last()
         world.value.items.pushLast(newInfon)
     }
+    void: initUser() <- {}
     void: setLocale(me string: loc) <- {
         locale <- unicodeMgr.SetLocale(loc)
         //Xlater=fetchXlater(&locale)
@@ -1795,33 +1810,36 @@ struct Agent{
     }
     void: init(our infon: World) <- {
         world <- NULL
-        context <- NULL
-        if(World != NULL){
-            if(World.value.fType!=LST or World.value.items.isEmpty()){
-                 // TODO: Log error messages
-                print("World is not valid for agent.\n")
-                return()
-            }
-            our infon: lastInfon <- World.value.items.last()
-            if(World.value.tailUnfinished == false){
-                log("World must be unfinished with '...' for agent.\n")
-                return()
-            }
+        user  <- NULL
+        if(World==NULL){
+            Allocate(World); World.setToList()
+        }
+        if(World.value.fType!=LST){// or World.value.items.isEmpty()){
+             // TODO: Log error messages
+            print("World is not valid for agent.\n")
+            return()
+        }
+        our infon: lastInfon <- World.value.items.last()
+        if(World.value.tailUnfinished == false){
+            log("World must be unfinished with '...' for agent.\n")
+            return()
         }
         world <- World
-        Allocate(context)
+        Allocate(user)
+        context.init()
 
         Allocate(settings)
         // AllocSet World to {...}
-        // AllocSet Context to {...}
+        // AllocSet user to person:{...}
         worldMgr.init(this)
         errorStatus <- 0
         errorMesg <- ""
     }
     void: init2(our Map<string, string>: Settings) <- {
         settings <- Settings
-        Allocate(world);   world.setToList()
-        Allocate(context); context.setToList()
+        Allocate(world); world.setToList()
+        Allocate(user);  user.setToList()
+        context.init()
         worldMgr.init(this)
         errorStatus <- 0
         errorMesg <- ""
@@ -1864,8 +1882,8 @@ struct ProteusCore{
         our stateRec: topParseNode <- parser.initParseFromStream(parser.infon_str, streamToParse)
         parser.doParse()
         if(parser.doesParseHaveError()){
-            errorMesg <- "Proteus syntax error: " + parser.errorMesg + " at line " + toString(parser.errLineNum) + ":" + toString(parser.errCharPos) + "\n"
-            print(errorMesg)
+            errorMesg <- parser.errorMesg
+            print(errorMesg+"\n\n")
             return(NULL)
         } else {
             //parser.resolve(parser.lastTopLevelItem, "")
@@ -1876,9 +1894,9 @@ struct ProteusCore{
         }
     }
 
-    our infon: parseAndExtractString(me string: textToParse) <- {
+    our infon: parseAndExtractString(me string: textToParse, me string: streamName) <- {
         their strBuf:: bufToParse
-        bufToParse.init()
+        bufToParse.init(streamName)
         bufToParse.putStr(textToParse)
         bufToParse.close()
         return(parseAndExtractStream(bufToParse))
@@ -1888,14 +1906,17 @@ struct ProteusCore{
         me string: worldFilePath <- filename
         me string: worldStr <- readAssetAsString(worldFilePath)
         if(worldStr==""){
-            errorMesg <- "Model file "+worldFilePath+" not found"
+            errorMesg <- "Proteus file '"+worldFilePath+"' not found"
             return(false)
         }
-        WORLD <- parseAndExtractString(worldStr)
+        WORLD <- parseAndExtractString(worldStr, worldFilePath)
         if(WORLD == NULL){
+            errorMesg <- "Proteus file '"+worldFilePath+"' did not parse correctly"
             return(false)
         }
         agent.world <- WORLD
+        our POV:: normPov; normPov.item <- agent.world
+        agent.normalize(normPov)
         return(true)
     }
 
@@ -1910,7 +1931,7 @@ struct ProteusCore{
     }
 
     our infon: query(me string: qry, me bool: writeToSession) <- {
-        our infon: result <- parseAndExtractString(qry)
+        our infon: result <- parseAndExtractString(qry, "query")
         if(result == NULL){log("Syntax Error in input: " + qry)}
         our POV:: normPov; normPov.item <- result
         agent.normalize(normPov)
@@ -1945,12 +1966,10 @@ struct ProteusCore{
         parser.populateGrammar()
         Allocate(agent)
         if(worldFileName!=""){
-            if(!loadWorld(worldFileName)) {return(false)}
-            agent.init(agent.world) // TODO: diagram Core and Agent init funcs
+            if(!loadWorld(worldFileName)) {logFatalError(errorMesg)}
+            agent.init(agent.world)
         }else{// No World Loaded
-            agent.worldMgr.agent <- agent
-            our infon:: world
-            agent.world <- world
+            agent.init(NULL)
         }
         agent.locale <- unicodeMgr.getSystemLocale()
         me string: fileDir <- getFilesDirAsString()+"/sessionDB.pr"

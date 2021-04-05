@@ -1,57 +1,232 @@
-struct ModelManager {
-    our WordDefn[multimap string]: classToModel
-    void: indexDefinition(their Agent: agent, our WordDefn: wordS, our infon: infModel) <- {
-        wordS.meaning <- infModel
-        wordS.asGiven <- unicodeMgr.normalizeStr(wordS.asGiven)
-        me int: underScorePos <- findString(wordS.asGiven, "_")
-        if(underScorePos!=-1){
-            wordS.wordID  <- wordS.asGiven.subStr(underScorePos+1, wordS.asGiven.size())
-            wordS.asGiven <- wordS.asGiven.subStr(0, underScorePos)
+// ModelManager.dog
+
+struct partOfSpeech: inherits=<mode[posUnknown, posNone, posFuncWord, posNoun, posVerb, posAdj, posAdv, posNegotator, posName, posNum]> {}
+
+model WordDefn{
+    me string: defWord
+    me string: modelID
+    me string[list]: UsageTags
+    our infon: meaning
+    me string: langSpecTag      // e.g., 'eng:us:southern::slang'
+    me partOfSpeech: defPOS     // The primary use for this word in speech
+    me bool: tagExists(me string: tag) <- {
+        withEach usageTag in UsageTags{
+            if(usageTag==tag){return(true)}
         }
-        if(!wordS.usageTags.isEmpty()){
-            wordS.localeTag <- unicodeMgr.normalizeStr(wordS.usageTags[0])
-        }else{wordS.localeTag <- unicodeMgr.normalizeStr(agent.getLocaleBaseName())}
-        classToModel.insert(unicodeMgr.normalizeStr(wordS.asGiven), wordS)
+        return(false)
     }
-    our infon: fetchModel(their Agent: agent, our WordDefn: wordS) <- {
-        me string: asGiven      <- unicodeMgr.normalizeStr(wordS.asGiven)
-        me string: wordLocale   <- wordS.localeTag
-        if(wordLocale==""){wordLocale<-unicodeMgr.normalizeStr(agent.getLocaleBaseName())}
-        me string: wordID
-        me int: underScorePos   <- findString(asGiven, "_")
-        if(underScorePos!=-1){
-            wordID  <- asGiven.subStr(underScorePos+1, asGiven.size())
-            asGiven <- asGiven.subStr(0, underScorePos)
+    void: clear() <- {defWord<-""; modelID<-""; UsageTags.clear()}
+}
+struct WordDefn{}
+
+model WordUse{
+    me string: asGiven
+    me string: modelID
+    our WordDefn: baseDefinition
+    our infon: defToUse
+    mode[mpNotDone, normIsBase, N2Plural, N2Genative, N2PluralGenative, V2S_form, V2ed, V2ing,
+         adj2er, adj2est, edv2er, adv2est, adj2adv_ly, wordFromAffixes, compoundWord, mpOther]: mapFromBase
+    me partOfSpeech: usePOS
+
+    mode[wmPreFetch, wmFetchModels, wmTryHarder, wmAssembleAlt, wmDONE]: nextStage
+    mode[vfNone, vfBase, vfPastSimple_ed1, vfPastParticiple_ed2, vfPresentParticiple_ing, vf3rdPersonPresentSimple_s]: verbForm
+    flag: meaningNotFound
+    flag: plural
+    flag: possessive
+    flag: base_ING_AsGerund   // Change a verb to a noun: *Swimming* is fun. *Eating sweets* can harm your teeth
+
+    me bool: isCompatibleWith(our WordUse: wordS) <- {
+        if (self==NULL or wordS==NULL){return(true)}
+        if(asGiven == "" or wordS.asGiven == ""){return(true)}
+        if(asGiven == wordS.asGiven){return(true)}
+        return(false)
+    }
+    void: clear() <- {asGiven<-""}
+}
+struct WordUse{}
+
+struct vocabularySpec{
+    me string: langSpec
+}
+
+struct GLOBAL{
+    me bool: checkEnd(me string: word, me string: sufx, their int: sSze) <- {
+        me int: wSize <- word.size()
+        me int: sSize <- sufx.size()
+        if(wSize <= sSize){return(false)}
+        withEach idx in RANGE(1..sSize+1){
+            if(word[wSize-idx] != sufx[sSize-idx]){
+                return(false)
+            }
         }
-        if(wordID!=""){
-            withEach wordDef in classToModel from asGiven to asGiven{
-                if(wordID==wordDef.wordID){
-                    me string: defLocale   <- wordDef.localeTag
-                    if(wordLocale==defLocale){
-                        return(wordDef.meaning)
-                    }
+        sSze <deep- sSize
+        return(true)
+    }
+}
+
+struct ModelManager {
+    our WordDefn[multimap string]: wordToModel
+
+    void: indexDefinition(their Agent: agent, our WordDefn: wordD, our infon: infModel) <- {
+        // Set Meaning
+        wordD.meaning <- infModel
+        //Normalize and separate the word and modelID
+        wordD.defWord <- unicodeMgr.normalizeStr(wordD.defWord)
+        me int: underScorePos <- findString(wordD.defWord, "_")
+        if(underScorePos!=-1){
+            wordD.modelID <- wordD.defWord.subStr(underScorePos+1, wordD.defWord.size())
+            wordD.defWord <- wordD.defWord.subStr(0, underScorePos)
+        }
+        // Set the locale
+        if(!wordD.UsageTags.isEmpty()){
+            wordD.langSpecTag <- unicodeMgr.normalizeStr(wordD.UsageTags[0])
+        }else{wordD.langSpecTag <- unicodeMgr.normalizeStr(agent.getLocaleBaseName())}
+
+        withEach tag in wordD.UsageTags{
+            if(tag=="det" or tag=="quantfr" or tag=="quantfr" or tag=="ProN" or tag=="verbHlpr" or tag=="prep" or tag=="conj"){wordD.defPOS <- posFuncWord}
+            else if(tag=="noun"){wordD.defPOS <- posNoun}
+            else if(tag=="verb"){wordD.defPOS <- posVerb}
+            else if(tag=="adj") {wordD.defPOS <- posAdj}
+            else if(tag=="adv") {wordD.defPOS <- posAdv}
+            else if(tag=="nego"){wordD.defPOS <- posNegotator}
+            else if(tag=="name"){wordD.defPOS <- posName}
+            else if(tag=="num"){wordD.defPOS  <- posNum}
+            else{wordD.defPOS  <- posNone}
+        }
+        // Store to multimap
+        log("STORE_DEF: '"+wordD.defWord+"'")
+        wordToModel.insert(wordD.defWord, wordD)
+    }
+
+    //me ModelID: findModelIDFromInfon(our infon: inf) <- {}
+    //our infon: findModelFromModelID(me ModelID: modelID) <- {}
+    //our wordList: findWordsForMeaningID(me ModelID: modelID, their vocabularySpec: vSpec) <- {}
+
+    me int: lookupWord(me string: word, their vocabularySpec: vSpec, their List<our WordDefn>:results) <- {
+        me int: count <- 0
+        withEach wordDef in wordToModel from word to word{
+            log("ON:"+word+"  -->  "+wordDef.defWord+"_"+wordDef.modelID)
+            //if(wordDef.langSpecTag == vSpec.langSpec){
+                results.pushLast(wordDef)
+                count <+- 1
+           // }
+        }
+        return(count)
+    }
+
+    me int: FetchBasePlusPOS_forms_stage1(me string: word, their vocabularySpec: vSpec, their List<our WordUse>:results) <- {
+        me int: numDefsBefore <- results.size()
+        me List<our WordDefn>: resultDefns
+        me int: numAdded <- lookupWord(word, vSpec, resultDefns)
+       withEach idx in RANGE(numDefsBefore..numDefsBefore+numAdded){
+            our WordUse:: newWordUse
+            newWordUse.asGiven        <- word
+            newWordUse.modelID        <- resultDefns[idx].modelID
+            newWordUse.baseDefinition <- resultDefns[idx]
+            newWordUse.defToUse       <- resultDefns[idx].meaning
+            newWordUse.mapFromBase    <- normIsBase
+            newWordUse.usePOS         <- resultDefns[idx].defPOS
+            results.append(newWordUse)
+        }
+        if(numAdded==1 and resultDefns[0].defPOS==posFuncWord){
+            return(numAdded)
+        }
+        me string: wrd <- word
+        me int: wLen <- wrd.size()
+        me int: sSze <- 0
+        me string: baseTry
+        numDefsBefore <- resultDefns.size()
+        if(checkEnd(wrd, "s'", sSze)){
+        } else if(checkEnd(wrd, "'s", sSze)){
+        } else if(checkEnd(wrd, "s", sSze)){
+            me string: preSufx <- wrd.subStr(0, wLen-sSze)
+            log("Plural_TRY:"+preSufx + "  size:"+toString(sSze))
+            numAdded <- lookupWord(preSufx, vSpec, resultDefns)
+            withEach idx in RANGE(numDefsBefore..numDefsBefore+numAdded){
+                if(resultDefns[idx].defPOS==posNoun){}
+            }
+
+        } else if(checkEnd(wrd, "ed", sSze) or checkEnd(wrd, "ing", sSze) or checkEnd(wrd, "er", sSze) or checkEnd(wrd, "est", sSze)){
+            me string: preSufx <- wrd.subStr(0, wLen-sSze)
+            me int: preSSze <- preSufx.size()
+            if(preSSze >= 2){
+                me string: preSfx <- preSufx.subStr(preSSze-2, 2)
+                if(preSfx=="ll"){
+                    baseTry <- preSfx.subStr(0, preSSze-1)  // eng:us
+                    baseTry <- preSfx                       // eng:uk
+                } else if(preSfx=="ng" or preSfx=="el" or preSfx=="al" or preSfx=="ol"){
+                    baseTry <- preSfx
+            //    } else if(isConsonant(preSfx[0]) and preSfx[0]==preSfx[1]){
+            //        baseTry <- preSfx.subStr(0, preSSze-1)
+                } else{
+                    baseTry <- preSfx
                 }
             }
-        }else{
-            our infon[list]: infMatchList
-            withEach wordDef in classToModel from asGiven to asGiven{
-                me string: defLocale   <- wordDef.localeTag
-                if(wordLocale==defLocale){
-                    infMatchList.pushLast(wordDef.meaning)
-                }
+        } else if(checkEnd(wrd, "ly", sSze)){
+            baseTry <- wrd.subStr(0, wLen-sSze)
+        }
+        log("BASE_TRY"+baseTry)
+        return(results.size())
+    }
+
+    me int: FetchBasePlusPOS_forms_stage2(me string: word, their vocabularySpec: vSpec, their List<our WordUse>:results) <- {
+        // Try any items missed or not chosen yet. Try making words from context including from prefixes and suffixes.
+        return(0)
+    }
+
+
+    our infon: constructAltModelFromWord(their Agent: agent, our WordUse: wordS, their vocabularySpec: vSpec, me string: scopeID) <- {
+        if(wordS.nextStage==wmPreFetch){
+            // Normalize and separate the word and modelID
+            wordS.asGiven <- unicodeMgr.normalizeStr(wordS.asGiven)
+        log("FIND_DEF:A: '"+wordS.asGiven+"'")
+            me int: underScorePos <- findString(wordS.asGiven, "_")
+            if(underScorePos!=-1){
+                wordS.modelID <- wordS.asGiven.subStr(underScorePos+1, wordS.asGiven.size())
+                wordS.asGiven <- wordS.asGiven.subStr(0, underScorePos)
             }
-            me int: numMatches <- infMatchList.size()
-            if(numMatches==1){return(infMatchList[0])}
-            if(numMatches==0){return(NULL)}
-            // TODO: make altInfon from
+            // TODO: As optimization, if modelID is given, look it up and verify that a word derivable from asGiven matches. Then skip stage 1.
+
+            wordS.nextStage <- wmFetchModels
+        }
+        me List<our WordUse>: results
+        if(wordS.nextStage==wmFetchModels){
+        log("FIND_DEF:B: '"+wordS.asGiven+"'")
+            me int: numAlts <- FetchBasePlusPOS_forms_stage1(wordS.asGiven, vSpec, results)
+            if(numAlts==0){
+                numAlts <- FetchBasePlusPOS_forms_stage2(wordS.asGiven, vSpec, results)
+            }
+            if(numAlts==0){
+                wordS.defToUse <- NULL
+                wordS.meaningNotFound <- true
+                wordS.nextStage <- wmDONE
+            }else if(numAlts==1){
+        //        wordS.baseDefinition <- results[0].defWord
+                wordS.defToUse <- results[0].defToUse
+                wordS.nextStage <- wmDONE
+            }else if(numAlts>1){
+                wordS.nextStage <- wmAssembleAlt
+            }
+        }
+        if(wordS.nextStage==wmAssembleAlt){
+        log("FIND_DEF:C: '"+wordS.asGiven+"'")
+            // sortResultsByScore(results, scopeID)
+            //
             our infon: newInnr <- makeInnrInfon()
-            withEach infMatch in infMatchList{
-                newInnr.value.items.pushLast(infMatch)
+            withEach infMatch in results{
+                newInnr.value.items.pushLast(infMatch.defToUse)
             }
             our infon:: newAltInfon
             newAltInfon.convertThisToIntersection(newInnr, fromGiven) // Make [ ] and add innr to it
-            return(newAltInfon)
+            wordS.defToUse <- newAltInfon
+            wordS.nextStage <- wmDONE
+        }
+        if(wordS.nextStage==wmDONE){
+        log("FIND_DEF:D: '"+wordS.asGiven+"'")
+            return(wordS.defToUse)
         }
         return(NULL)
     }
+
+    void: clear()<-{wordToModel.clear()}
 }
