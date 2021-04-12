@@ -1,6 +1,6 @@
 // ModelManager.dog
 
-struct partOfSpeech: inherits=<mode[posUnknown, posNone, posFuncWord, posNoun, posVerb, posAdj, posAdv, posNegotator, posName, posNum]> {}
+//struct partOfSpeech: inherits=<mode[posUnknown, posNone, posFuncWord, posNoun, posVerb, posAdj, posAdv, posNegotator, posName, posNum]> {}
 
 model WordDefn{
     me string: defWord
@@ -8,7 +8,7 @@ model WordDefn{
     me string[list]: UsageTags
     our infon: meaning
     me string: langSpecTag      // e.g., 'eng:us:southern::slang'
-    me partOfSpeech: defPOS     // The primary use for this word in speech
+    mode[posUnknown, posNone, posFuncWord, posNoun, posVerb, posAdj, posAdv, posNegotator, posName, posNum]: defPOS     // The primary use for this word in speech
     me bool: tagExists(me string: tag) <- {
         withEach usageTag in UsageTags{
             if(usageTag==tag){return(true)}
@@ -26,10 +26,12 @@ model WordUse{
     our infon: defToUse
     mode[mpNotDone, normIsBase, N2Plural, N2Genative, N2PluralGenative, V2S_form, V2ed, V2ing,
          adj2er, adj2est, edv2er, adv2est, adj2adv_ly, wordFromAffixes, compoundWord, mpOther]: mapFromBase
-    me partOfSpeech: usePOS
+    mode[posUnknown, posNone, posFuncWord, posNoun, posVerb, posAdj, posAdv, posNegotator, posName, posNum]: usePOS
 
     mode[wmPreFetch, wmFetchModels, wmTryHarder, wmAssembleAlt, wmDONE]: nextStage
     mode[vfNone, vfBase, vfPastSimple_ed1, vfPastParticiple_ed2, vfPresentParticiple_ing, vf3rdPersonPresentSimple_s]: verbForm
+    mode[fConjunction, fPreposition, fAuxVerb, fPronoun, fDeterminer, fQuantifer]: functionWordType
+    mode[numWord, numOrdinal, numCardinal, numNominal, numInfonal]: numberWordType
     flag: meaningNotFound
     flag: plural
     flag: possessive
@@ -42,6 +44,14 @@ model WordUse{
         return(false)
     }
     void: clear() <- {asGiven<-""}
+    none: WordUse(me string: word, our WordDefn: wordD) <- {
+        asGiven        <- word
+        modelID        <- wordD.modelID
+        baseDefinition <- wordD
+        defToUse       <- wordD.meaning
+        usePOS         <- wordD.defPOS
+    //me int: POS <- usePOS; log("WORD_CONSTRUCT:'"+asGiven+"' POS:"+toString(POS))
+    }
 }
 struct WordUse{}
 
@@ -61,6 +71,43 @@ struct GLOBAL{
         }
         sSze <deep- sSize
         return(true)
+    }
+}
+
+struct AgentContext {
+    our infon: topicHistory
+
+    void: addContextItem(our infon: itemToAdd) <- {
+        if(itemToAdd.asNot){return()}
+        if(topicHistory.value.items.first() === itemToAdd){return()}
+
+        // Remove any already-existing references to itemToAdd
+        our POV: pov <- topicHistory.value.items.head
+        while(pov != NULL){
+            if(pov.dpItem() === itemToAdd){
+                pov <- topicHistory.value.items.erase(pov)
+            } else {pov <- pov.next}
+        }
+
+        topicHistory.value.items.pushFirst(itemToAdd)
+        log("  ADD_TO_CTX: added:"+itemToAdd.mySymbol()+": "+toString(itemToAdd)+"  size:"+toString(topicHistory.value.items.size()))
+        if(itemToAdd.proxy!=NULL){log("       PROXY:"+itemToAdd.proxy.mySymbol())}
+        cull(10)
+    }
+    our infon: searchFor() <- {
+        return(NULL)
+    }
+    void: cull(me int: maxItems) <- {
+        while(topicHistory.value.items.size()>maxItems){
+            topicHistory.value.items.popLast()
+        }
+    }
+
+    void: init() <- {
+        Allocate(topicHistory)
+        topicHistory.setToList()
+        topicHistory.value.tailUnfinished <- false
+        topicHistory.wasProcessed <- true
     }
 }
 
@@ -84,7 +131,7 @@ struct ModelManager {
 
         withEach tag in wordD.UsageTags{
             if(tag=="det" or tag=="quantfr" or tag=="quantfr" or tag=="ProN" or tag=="verbHlpr" or tag=="prep" or tag=="conj"){wordD.defPOS <- posFuncWord}
-            else if(tag=="noun"){wordD.defPOS <- posNoun}
+            else if(tag=="noun"){wordD.defPOS <- posNoun; log("SET_AS_NOUN")}
             else if(tag=="verb"){wordD.defPOS <- posVerb}
             else if(tag=="adj") {wordD.defPOS <- posAdj}
             else if(tag=="adv") {wordD.defPOS <- posAdv}
@@ -115,17 +162,13 @@ struct ModelManager {
     }
 
     me int: FetchBasePlusPOS_forms_stage1(me string: word, their vocabularySpec: vSpec, their List<our WordUse>:results) <- {
+        // TODO: Reversably tablize this
         me int: numDefsBefore <- results.size()
         me List<our WordDefn>: resultDefns
         me int: numAdded <- lookupWord(word, vSpec, resultDefns)
-       withEach idx in RANGE(numDefsBefore..numDefsBefore+numAdded){
-            our WordUse:: newWordUse
-            newWordUse.asGiven        <- word
-            newWordUse.modelID        <- resultDefns[idx].modelID
-            newWordUse.baseDefinition <- resultDefns[idx]
-            newWordUse.defToUse       <- resultDefns[idx].meaning
+        withEach idx in RANGE(numDefsBefore..numDefsBefore+numAdded){
+            our WordUse:: newWordUse{word, resultDefns[idx]}
             newWordUse.mapFromBase    <- normIsBase
-            newWordUse.usePOS         <- resultDefns[idx].defPOS
             results.append(newWordUse)
         }
         if(numAdded==1 and resultDefns[0].defPOS==posFuncWord){
@@ -137,13 +180,48 @@ struct ModelManager {
         me string: baseTry
         numDefsBefore <- resultDefns.size()
         if(checkEnd(wrd, "s'", sSze)){
+            me string: preSufx <- wrd.subStr(0, wLen-sSze)
+            numAdded <- lookupWord(preSufx, vSpec, resultDefns)
+            withEach idx in RANGE(numDefsBefore..numDefsBefore+numAdded){
+                if(resultDefns[idx].defPOS==posNoun){
+                    our WordUse:: newWordUse{word, resultDefns[idx]}
+                    newWordUse.mapFromBase    <- N2PluralGenative
+                    newWordUse.possessive     <- true
+                    newWordUse.plural         <- true
+                        Allocate(newWordUse.defToUse)
+                        newWordUse.defToUse.setSelfAsAPluralOf(resultDefns[idx].meaning)
+                    results.append(newWordUse)
+                }
+            }
         } else if(checkEnd(wrd, "'s", sSze)){
+            me string: preSufx <- wrd.subStr(0, wLen-sSze)
+            numAdded <- lookupWord(preSufx, vSpec, resultDefns)
+            withEach idx in RANGE(numDefsBefore..numDefsBefore+numAdded){
+                if(resultDefns[idx].defPOS==posNoun){
+                    our WordUse:: newWordUse{word, resultDefns[idx]}
+                    newWordUse.mapFromBase    <- N2Genative
+                    newWordUse.possessive     <- true
+                    results.append(newWordUse)
+                }
+            }
         } else if(checkEnd(wrd, "s", sSze)){
             me string: preSufx <- wrd.subStr(0, wLen-sSze)
             log("Plural_TRY:"+preSufx + "  size:"+toString(sSze))
             numAdded <- lookupWord(preSufx, vSpec, resultDefns)
             withEach idx in RANGE(numDefsBefore..numDefsBefore+numAdded){
-                if(resultDefns[idx].defPOS==posNoun){}
+                if(resultDefns[idx].defPOS==posNoun){
+                    our WordUse:: newWordUse{word, resultDefns[idx]}
+                    newWordUse.mapFromBase    <- N2Plural
+                    newWordUse.plural         <- true
+                        Allocate(newWordUse.defToUse)
+                        newWordUse.defToUse.setSelfAsAPluralOf(resultDefns[idx].meaning)
+                    results.append(newWordUse)
+                }else if(resultDefns[idx].defPOS==posVerb){
+                    our WordUse:: newWordUse{word, resultDefns[idx]}
+                    newWordUse.mapFromBase    <- V2S_form
+                    newWordUse.verbForm       <- vf3rdPersonPresentSimple_s
+                    results.append(newWordUse)
+                }
             }
 
         } else if(checkEnd(wrd, "ed", sSze) or checkEnd(wrd, "ing", sSze) or checkEnd(wrd, "er", sSze) or checkEnd(wrd, "est", sSze)){
@@ -163,9 +241,17 @@ struct ModelManager {
                 }
             }
         } else if(checkEnd(wrd, "ly", sSze)){
-            baseTry <- wrd.subStr(0, wLen-sSze)
+            me string: preSufx <- wrd.subStr(0, wLen-sSze)
+            numAdded <- lookupWord(preSufx, vSpec, resultDefns)
+            withEach idx in RANGE(numDefsBefore..numDefsBefore+numAdded){
+                if(resultDefns[idx].defPOS==posAdj){
+                    our WordUse:: newWordUse{word, resultDefns[idx]}
+                    newWordUse.mapFromBase    <- adj2adv_ly
+                    newWordUse.usePOS         <- posAdv
+                    results.append(newWordUse)
+                }
+            }
         }
-        log("BASE_TRY"+baseTry)
         return(results.size())
     }
 
@@ -179,7 +265,6 @@ struct ModelManager {
         if(wordS.nextStage==wmPreFetch){
             // Normalize and separate the word and modelID
             wordS.asGiven <- unicodeMgr.normalizeStr(wordS.asGiven)
-        log("FIND_DEF:A: '"+wordS.asGiven+"'")
             me int: underScorePos <- findString(wordS.asGiven, "_")
             if(underScorePos!=-1){
                 wordS.modelID <- wordS.asGiven.subStr(underScorePos+1, wordS.asGiven.size())
@@ -191,7 +276,6 @@ struct ModelManager {
         }
         me List<our WordUse>: results
         if(wordS.nextStage==wmFetchModels){
-        log("FIND_DEF:B: '"+wordS.asGiven+"'")
             me int: numAlts <- FetchBasePlusPOS_forms_stage1(wordS.asGiven, vSpec, results)
             if(numAlts==0){
                 numAlts <- FetchBasePlusPOS_forms_stage2(wordS.asGiven, vSpec, results)
@@ -201,15 +285,16 @@ struct ModelManager {
                 wordS.meaningNotFound <- true
                 wordS.nextStage <- wmDONE
             }else if(numAlts==1){
-        //        wordS.baseDefinition <- results[0].defWord
+     //   me uint64: POS <- results[0].usePOS; log("WORD_HEACH:'"+wordS.asGiven+"' POS:"+toString(POS))
                 wordS.defToUse <- results[0].defToUse
+                wordS.flags <- results[0].flags
                 wordS.nextStage <- wmDONE
+     //  POS <- wordS.usePOS; log("WORD_HEACH B:'"+wordS.asGiven+"' POS:"+toString(POS))
             }else if(numAlts>1){
                 wordS.nextStage <- wmAssembleAlt
             }
         }
         if(wordS.nextStage==wmAssembleAlt){
-        log("FIND_DEF:C: '"+wordS.asGiven+"'")
             // sortResultsByScore(results, scopeID)
             //
             our infon: newInnr <- makeInnrInfon()
@@ -222,7 +307,6 @@ struct ModelManager {
             wordS.nextStage <- wmDONE
         }
         if(wordS.nextStage==wmDONE){
-        log("FIND_DEF:D: '"+wordS.asGiven+"'")
             return(wordS.defToUse)
         }
         return(NULL)
