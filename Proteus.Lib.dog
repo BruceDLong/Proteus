@@ -93,6 +93,7 @@ model infon{
     mode[apNoArgs, apArgIsFirstItem, apArgIsLastItem]: argPos
     flag: argsOnLeft
     mode[cNone, cThis, cWorld, cContext, cUser, cArgs, cVars]:  cursorMode
+    mode[gUnset, gAbstract, gConcrete]: generality
     me pureInfon: infSize
     me pureInfon: value
     flag: isNormed
@@ -103,7 +104,6 @@ model infon{
     our infon: funcArgs
     our infon: dotPath
     our infon: innr
-    our infon: proxy
     our WordUse: type
     our WordDefn: definedWord
     our TypeSpec[list]: typeSpecs
@@ -111,6 +111,7 @@ model infon{
     our POV[list]: usedWrkList
     our PartPath[list]: parts
     our PartPath: partRef
+    our infon: proxy    // If not NULL, this is a reference infon/
     flag: wrkLstPreped
     flag: wrkItmsAdded
     flag: isOnAgenda    // True if item is currently on agenda
@@ -512,10 +513,10 @@ model AItem{
         me string: S <- ""
         if(self==NULL){S<-S+"NULL"}
         else{
-            //S <+- LHS_item.mySymbol()+":"+LHS_item.pItem.mySymbol()+":"
+            S <+- LHS_item.mySymbol()+":"+LHS_item.pItem.mySymbol()+":"
             switch(ruleSet){
                 case rsInfon:{
-                    S <+- "INF:"+ toString(LHS_item.pItem)
+                    S <+- "INF:<"+ toString(LHS_item.pItem)+">"
                 }
                 case rsMerge:{
                     S <+- "MRG:"+ toString(LHS_item.pItem)
@@ -578,10 +579,10 @@ struct WorldManager{
         //log(logStr)
         return(itmAdded)
     }
-    our AItem: processInfonViaAgenda(our POV: pItem, our AItem: subscriber, our AItem: aParent, me int64: priority)<-{
+    our AItem: processInfonViaAgenda(our POV: pov, our AItem: subscriber, our AItem: aParent, me int64: priority)<-{
         our AItem:: newAItem
         newAItem.ruleSet   <- rsInfon
-        newAItem.LHS_item  <- pItem
+        newAItem.LHS_item  <- pov
         newAItem.priority  <- priority
         newAItem.step      <- 0
         newAItem.indentLvl <- 0
@@ -708,7 +709,6 @@ struct WorldManager{
         our infon: CI        <- aItem.LHS_item.pItem
         me bool: stopAndWait  <- false
         if(!CI.parts.isEmpty()){
-    log("NUM_PARTS:"+toString(CI.parts.size()))
             withEach part in CI.parts{
                 our infon: path
                 me bool: pathFound <- false
@@ -731,6 +731,7 @@ struct WorldManager{
                             our infon:: skipPtn
                                 part.path.copyAsTypeTo(skipPtn, false)
                                 skipPtn.asNot                 <- true
+                        log("TSPEC N:"+toString(skipPtn) +"  "+skipPtn.mySymbol() +" <- " + toString(part.path))
                             our infon:: skipPart
                                 skipPart.value.fType          <- LST
                                 skipPart.value.sizeMode       <- fromCount
@@ -808,12 +809,23 @@ struct WorldManager{
             logSeg("-isWord")
             our infon: infModel <- modelMngr.constructAltModelFromWord(agent, CI.type, NULL, "scope")
             if(infModel){
-                our WordUse:CIsType <- CI.type
-                me bool: asNot <- CI.asNot
-                if(CI.hasTypeAndValue){CI.addInfonToWrkList(infModel)}
-                else{infModel.copyAsTypeTo(CI, false)}
-                CI.type <- CIsType
-                CI.asNot <- asNot
+                infModel.generality <- gAbstract
+                if(CI.hasTypeAndValue){
+                    CI.generality <- gConcrete  // TODO: This may not always be the case.
+                    CI.addInfonToWrkList(infModel)
+                log("TSPEC Def-wrk:"+toString(CI) +"  "+CI.mySymbol() +" <- " + infModel.mySymbol())
+                }else{
+                    our WordUse:CIsType <- CI.type
+                    me bool: asNot <- CI.asNot
+                    our PartPath[list]: parts <- CI.parts
+                    our PartPath: partRef <- CI.partRef
+                    infModel.copyAsTypeTo(CI, false)
+                    CI.type    <- CIsType
+                    CI.asNot   <- asNot
+                    CI.parts   <- parts
+                    CI.partRef <- partRef
+                log("TSPEC Def-cpy:"+toString(CI) +"  "+CI.mySymbol() +" <- " + infModel.mySymbol())
+                }
                 changeMade <- true
             }else{
                 agent.setErrorState(CIPov, "'"+CI.type.asGiven+"' is not defined")
@@ -873,7 +885,12 @@ struct WorldManager{
                 case cVars:   {} //{newTop <- next}
             }
             if(newTop!=NULL) {
+               /* our PartPath: partRef <- CI.partRef
+                // Debugging? more items from CI may need to go here.
                 CI <deep- newTop
+                CI.partRef <- partRef*/
+                newTop.partRef <- CI.partRef
+                aItem.LHS_item.pItem <- newTop
                 changeMade <- true
             }
         }
@@ -1290,8 +1307,8 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
     our POV: findNextLHS(our POV: LHSPov, our infItr: ii, me bool: skipDots, their bool: leftWas2ndVisit, me bool: itrBeginning, me bool: LHSIsLST, me bool: RHSIsLST, me bool: unknownAsList) <- {
         our POV: LHSPovNxt
         if((!LHSIsLST and !unknownAsList) and RHSIsLST){
-            Allocate(LHSPovNxt)
-            LHSPovNxt <deep- LHSPov
+  //        Allocate(LHSPovNxt);  LHSPovNxt <deep- LHSPov
+            LHSPovNxt <- LHSPov
         }else{
             LHSPovNxt <- LHSPov.getNextTight(ii, skipDots, leftWas2ndVisit, false, itrBeginning)
         }
@@ -1399,7 +1416,6 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                 }else{
                     if(LHSPov.pItem.intersectPos == ipNoIntersect and adjLhsPOV.pParent!=NULL){
                         log(idnt+"   candidatesForLastItem:" + adjLhsPOV.pParent.stringify() + "   EndsOnB:"+LHSPov.stringify())
-    log("MYSYMBOL:"+adjLhsPOV.pParent.pItem.mySymbol())
     if(adjLhsPOV.pParent.pItem.cnvtToFunc  and (RorRExists and RHSisFinished)) { //or adjLhsPOV.pParent.pItem.mySymbol()=="infon26"){
         log("INFON61_HACK:"+aParent.LHS_item.stringify())
         log("adjLhsPOV:"+adjLhsPOV.stringify())
@@ -1530,6 +1546,10 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                                 continueLoop <- true
                                 continue()
                             }
+                            if(CI.type!=NULL and CI.type.usePOS==posNoun and CI.intersectPos==ipNoIntersect and aItem.distanceToTop()<=2){ // Add this to context
+                                log("ADD_TO_CONTEXT():"+toString(CI))
+                                agent.context.addContextItem(aItem.LHS_item.dpItem())
+                            }
                             if(CI.partRef!=NULL){
                                 log(",PARTREF:"+toString(CI.partRef.path))
                                 CI.parts.pushLast(CI.partRef)
@@ -1561,6 +1581,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                     }
                     if(aItem.RHS==NULL){
                         logSeg("-NoRHS")
+                log("NO_RHS:"+ toString(aItem.LHS_item.pItem) + ": "+ aItem.LHS_item.pItem.mySymbol())
                         if(aItem.LHS_item.pItem.value.fType == LST){initListIterators(aItem)}
                         nextAItem <- propagate(aItem, aItem.LHS_item, NULL, NULL, false, false)
                         if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
@@ -1588,6 +1609,10 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                                 }
                                 if(!aItem.reject){
                                     logSeg("-MC1-ACEPT")
+                                    if(!aItem.looseSize and aItem.RHS.pItem.generality==gConcrete){
+                                        aItem.LHS_item.pItem.generality <- gConcrete
+                                        aItem.LHS_item.pItem.proxy <- aItem.RHS.pItem
+                                    }
                                     nextAItem <- propagate(aItem, aItem.LHS_item, RHSSide, remainder, aItem.looseSize, (aItem.reject and aItem.parent.candidateForLast))
                                     if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
                                     aItem.mergeFinished <- true
@@ -1667,7 +1692,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                                         newTop <- lastOK.pItem
                                         aItem.parent.dontProcess <- true
                                         aItem.LHS_item.forLastUseOutrPov <- true
-                                        log("NEWTOPING:"+aItem.LHS_item.mySymbol())
+                                        //log("NEWTOPING:"+aItem.LHS_item.mySymbol())
                                         if(!(lastOK.outerPOV != NULL and lastOK.outerPOV===aItem.LHS_item)){
                                             aItem.LHS_item.predecessors <- lastOK.predecessors
                                         }
@@ -1701,6 +1726,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                                 if(newTop!=NULL){
                                     newTop.takeWrkListFrom(CI, true)
                                     logSeg("-GET_LAST")
+                    log("NEW_TOP_FUNC: RHS:"+ toString(aItem.LHS_item.pItem) + "  newTop:" + toString(newTop)+": "+newTop.mySymbol())
                                 }else{log("Handle LastItm is null")}
                                 doFulfillSubs <- true
                             }
