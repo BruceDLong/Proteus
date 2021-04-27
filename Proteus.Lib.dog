@@ -333,6 +333,13 @@ model infon{
         addPOVToWrkList(newPov)
         return(newPov)
     }
+    our POV: addInfonToWorkListWithPriority(our infon: i) <- {
+        our POV:: newPov
+        newPov.pItem <- i
+        isNormed <- false
+        wrkList.pushFirst(newPov)
+        return(newPov)
+    }
     void: takeWrkListFrom(our infon:from, me bool: doClear) <- {
         withEach wrkItm in from.wrkList{
             addPOVToWrkList(wrkItm)
@@ -491,7 +498,8 @@ model AItem{
     our infItr: RHSItr
     me int64: priority
     flag: looseSize
-    flag: reject
+    //flag: reject
+    mode[msUnknown, msAccept, msReject]: mergeStatus  // Did this merge have a contradiction?
     flag: taskEnqueued
     flag: concatProcessed
     flag: mergeFinished
@@ -504,7 +512,6 @@ model AItem{
     our AItem[list]: subscribers
     our AItem: parent
     me int: indentLvl
-    flag: hasPropagated
     flag: initRulesApplied
     me int: distanceToTop() <- {
         me int: retVal <- 0
@@ -593,7 +600,6 @@ struct WorldManager{
         return(itmAdded)
     }
     our AItem: processInfonViaAgenda(our POV: pov, our AItem: subscriber, our AItem: aParent, me int64: priority)<-{
-        if(pov.pItem.dontProcess){return(NULL)}
         our AItem:: newAItem
         newAItem.ruleSet   <- rsInfon
         newAItem.LHS_item  <- pov
@@ -677,7 +683,7 @@ struct WorldManager{
             me bool: itmAdded <- addAItemToAgenda(sub)
             if(itmAdded){S<+-":"+sub.mySymbol()}
         }
-        //if(S != ""){logSegStartCol("-FFS"+S,col3)}
+        if(S != ""){logSegStartCol("-FFS"+S,col3)}
     }
     void: appendToUnfinishedList(our AItem: aItem, our infon: inf) <- {
         if(!inf.value.tailUnfinished){logFatalError("ERROR: tailUnfinished FALSE:"+ toString(inf))}
@@ -688,7 +694,7 @@ struct WorldManager{
     // rsINFON UTILITY FUNCTIONS: PREP WORKLIST FUNCTIONS
     void: initRules(our AItem: aItem) <- {
         if(aItem.initRulesApplied){return()} else {aItem.initRulesApplied <- true}
-        aItem.hasPropagated <- false
+        aItem.LHS_item.hasPropagated <- false
     }
     me bool: wordDefRules(our AItem: aItem) <- {
         our infon: CI        <- aItem.LHS_item.pItem
@@ -736,14 +742,13 @@ struct WorldManager{
                             else if(partTag == "last") {path <- CI.getLastInfon()}
                             //else if(partTag == "size"){path <- gteSizeInfon}
                             else{} //TODO: lookup in index to optimize
-                            if(path){newPov <- path.addInfonToWrkList(CI)}
                         }
                         if(!path){
                             our infon:: skipPtn
                                 part.path.copyAsTypeTo(skipPtn, false)
                                 skipPtn.asNot                 <- true
                                 log("TSPEC N:"+toString(skipPtn) +"  "+skipPtn.mySymbol() +" <- " + toString(part.path))
-                            our infon:: skipPart  //TODO: Fill this with constructors or utility func.
+                            our infon:: skipPart  //TODO: Fill these with constructors or utility func.
                                 skipPart.value.fType          <- LST
                                 skipPart.value.sizeMode       <- fromCount
                                 skipPart.value.format         <- fLiteral
@@ -762,6 +767,7 @@ struct WorldManager{
                                 path.value.sizeMode           <- fromCount
                                 path.infSize.fType            <- NUM
                             newPov <- path.innr.addInfonToWrkList(CI)
+                            newPov.looseMode <- false; newPov.looseTop  <- true
                         }
                     }
                     case upField:{
@@ -776,23 +782,21 @@ struct WorldManager{
                                 newInnr.infSize              <- part.path.value
                                 newInnr.value.sizeMode       <- fromGiven
                             newPov <- path.innr.addInfonToWrkList(CI)
+                            newPov.looseMode <- false; newPov.looseTop  <- true
                         }
                     }
                     case colonField:{}
                 }
                 if(path==NULL){logFatalError("Handle path is null")}
-
-                changeMade <- true
                 path.takeWrkListFrom(part.path, true)
+                if(!part.hasSemiColon){aItem.LHS_item.pItem <- path}
                 our POV:: pathPov
                 pathPov.pItem <- path
+                aItem.notFirstVisit <- false  // This enquing will be a different 'first' due to a part being finished.
                 our AItem: newAItem <-  processInfonViaAgenda(pathPov, NULL, aItem, aItem.priority)
                 logSeg("-PARTS"); logSegStartCol("-PIVA->"+newAItem.mySymbol(),col2)
                 addAItemToAgenda(newAItem)
-                newPov.looseMode <- false; newPov.looseTop  <- true
-                if(!part.hasSemiColon){
-                    aItem.LHS_item.pItem <- path
-                }
+                changeMade <- true
             }
         }
         return(changeMade)
@@ -809,8 +813,7 @@ struct WorldManager{
                 infModel.generality <- gAbstract
                 if(CI.hasTypeAndValue){
                     CI.generality <- gConcrete  // TODO: This may not always be the case.
-                    CI.addInfonToWrkList(infModel)
-                log("TSPEC Def-wrk:"+toString(CI) +"  "+CI.mySymbol() +" <- " +toString(infModel) +": " + infModel.mySymbol())
+                    CI.addInfonToWorkListWithPriority(infModel)
                 }else{
                     our WordUse:CIsType <- CI.type
                     me bool: asNot <- CI.asNot
@@ -824,7 +827,6 @@ struct WorldManager{
                     CI.partRef <- partRef
                     CI.itmMode <- itmMode
                     changeMade <- true
-                log("TSPEC Def-cpy:"+toString(CI) +"  "+CI.mySymbol() +" <- " +toString(infModel) +": " + infModel.mySymbol())
                 }
             }else{
                 agent.setErrorState(CIPov, "'"+CI.type.asGiven+"' is not defined\n\n")
@@ -865,7 +867,7 @@ struct WorldManager{
         else{CI.altRulesApplied <- true}
         me bool: stopAndWait <- false
         if(CI.intersectPos != ipNoIntersect){
-            log("function_altRules:"+aItem.stringify())
+            //log("function_altRules:"+aItem.stringify())
             processIntersectViaAgenda(aItem.LHS_item, aItem, aItem.priority)
             stopAndWait <- true
         }
@@ -878,7 +880,7 @@ struct WorldManager{
         if(CI.infMode==newCursor) {
             switch(CI.cursorMode){
                 case cWorld:  {newTop <- agent.world}
-                case cContext:{newTop <- agent.context.topicHistory; log("Context: size:"+toString(newTop.value.items.size())+" CTXT:"+toString(newTop))}
+                case cContext:{newTop <- agent.context.topicHistory; aItem.dontProcess<-true; log("Context: size:"+toString(newTop.value.items.size())+" CTXT:"+toString(newTop))}
                 case cUser:   {newTop <- agent.user}
                 case cThis:   {newTop <- aItem.LHS_item.pParent.pItem}
                 case cArgs:   {newTop <- aItem.LHS_item.pParent.pItem.value.items.first()}
@@ -913,20 +915,25 @@ struct WorldManager{
         me bool: stopAndWait <- false
         our POV: RHSPov    <- NULL
         me bool: looseSize <- false
-        if(aItem.dontProcess){return(stopAndWait)}
         while(!aItem.LHS_item.pItem.wrkList.isEmpty()){
             RHSPov <- aItem.LHS_item.pItem.wrkList.first()
             aItem.LHS_item.pItem.wrkList.popFirst()
             aItem.LHS_item.pItem.usedWrkList.pushLast(RHSPov)
             looseSize <- RHSPov.looseSize()
-            processMergeViaAgenda(aItem.LHS_item, RHSPov, looseSize, aItem, aItem, aItem.priority)
-            aItem.hasPropagated <- true
-            stopAndWait <- true
+            aItem.LHS_item.hasPropagated <- true
+            if(!aItem.dontProcess){
+                logSeg("-wrkItm")
+                processMergeViaAgenda(aItem.LHS_item, RHSPov, looseSize, aItem, aItem, aItem.priority)
+                stopAndWait <- true
+            }
         }
-        if(!aItem.hasPropagated){
-            processMergeViaAgenda(aItem.LHS_item, RHSPov, false, aItem, aItem, aItem.priority)
-            aItem.hasPropagated <- true
-            stopAndWait <- true
+        if(!aItem.LHS_item.hasPropagated){
+            if(!aItem.dontProcess){
+                logSeg("-wrkLHS")
+                processMergeViaAgenda(aItem.LHS_item, RHSPov, false, aItem, aItem, aItem.priority)
+                stopAndWait <- true
+                aItem.LHS_item.hasPropagated <- true
+            }
         }
         return(stopAndWait)
     }
@@ -1074,7 +1081,7 @@ struct WorldManager{
     }
     // rsINFON UTILITY FUNCTIONS: CLEAN INFON FUNCTIONS
     void: closeIntersectAt(our POV: pov) <- {
-        log("closeIntersectAt:"+pov.outerPOV.stringify()+" <- " +pov.stringify())
+        //log("closeIntersectAt:"+pov.outerPOV.stringify()+" <- " +pov.stringify())
         pov.pItem.isTentative <- false
         our PartPath: tmpParfDef <- pov.outerPOV.pItem.partRef
         pov.outerPOV.pItem <deep- pov.pItem
@@ -1198,7 +1205,7 @@ struct WorldManager{
             me bool: matchFailed
             if(matchLen==-1 or (matchLen < LSize and matchLen < RSize)){
                 matchFailed  <- true
-                aItem.reject <- true
+                aItem.mergeStatus <- msReject
                 aItem.LHS_item.rejected<-true
             }
             else{
@@ -1245,8 +1252,8 @@ struct WorldManager{
             lastLineAltID <+- 1; aItem.LHSItr.lineAltID <- lastLineAltID
 me string: nodeID <- aItem.LHSItr.mySymbol()+"L"
 //log("InitInfItr:"+nodeID)
-    grapher.addNode(nodeID, nodeID, "style=filled color=red")
-    grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=purple")
+grapher.addNode(nodeID, nodeID, "style=filled color=red")
+grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=purple")
             our AItem: intPrnt <- aItem.prntOrSub().prntOrSub()
             if(intPrnt){
                 aItem.LHSItr.iParent <- intPrnt.LHSItr
@@ -1257,8 +1264,8 @@ me string: nodeID <- aItem.LHSItr.mySymbol()+"L"
             Allocate(aItem.RHSItr)
             aItem.RHSItr.initialize(aItem.RHS)
 me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
-    grapher.addNode(nodeID, nodeID, "style=filled color=orange")
-    grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=green")
+grapher.addNode(nodeID, nodeID, "style=filled color=orange")
+grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=green")
             our AItem: intPrnt <- aItem.prntOrSub().prntOrSub()
             if(intPrnt){
                 aItem.RHSItr.iParent <- intPrnt.RHSItr
@@ -1341,11 +1348,10 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
             if(remainder!=NULL){logStr <+- " REM:"+toString(remainder.pItem)}
             else{logStr <+- " (No_RHS)"}
         }
-        //log(logStr)
+        log(logStr)
         logSeg("-PROP")
         // Gather information
         me bool: skipPIVA <- false
-        aItem.hasPropagated <- true
         me bool: RHSExists  <- RHSPov != NULL
         me bool: RorRExists <- RHSExists or remainder!=NULL
         me bool: LHSIsLST   <- (LHSPov.pItem.value.fType==LST and LHSPov.pItem.value.format!=fConcat)
@@ -1380,12 +1386,12 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
             if(adjLhsPOV.pParent!=NULL){
                 their POV: pParent <- adjLhsPOV.pParent.pParent
                 if(pParent != NULL and pParent.pItem != NULL and pParent.pItem.value.tailUnfinished){
-                    log("RESET_TAIL:"+pParent.stringify())
+                   // log("RESET_TAIL:"+pParent.stringify())
    /*remove this when possible*/      //           pParent.pItem.value.tailUnfinished<-false
                 }
             }
         }
-    if(RorRExists and RHSisFinished and !skipPIVA){log("RHS_FINISHED: adjRhsPOV:"+adjRhsPOV.stringify() + "  RHSPovNext:"+RHSPovNext.stringify())}
+  //  if(RorRExists and RHSisFinished and !skipPIVA){log("RHS_FINISHED: adjRhsPOV:"+adjRhsPOV.stringify() + "  RHSPovNext:"+RHSPovNext.stringify())}
 
     me bool: dontNeedLHS <- rightWas2ndVisit and RorRExists and (RHSPovNext == NULL)
     me bool: skipDots <-  dontEnque or ((!RorRExists or dontNeedLHS))//  and !adjLhsPOV.pItem.hasInnrOutr)
@@ -1519,7 +1525,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                 case rsInfon:{
                     if(aItem.LHS_item.pItem.isNormed){
                         fulfillSubscriptions(aItem)
-                        //logSegStartCol("<<:NRMD",col4)
+                        logSegStartCol("<<:NRMD",col4)
                         logFlush()
                         return()
                     }
@@ -1546,10 +1552,6 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                                 continueLoop <- true
                                 continue()
                             }
-                            if(CI.type!=NULL and CI.type.usePOS==posNoun and CI.intersectPos==ipNoIntersect and aItem.distanceToTop()<=2){ // Add this to context
-                                log("ADD_TO_CONTEXT():"+toString(CI))
-                                agent.context.addContextItem(aItem.LHS_item.dpItem())
-                            }
                             if(CI.partRef!=NULL){
                                 log(",PARTREF:"+toString(CI.partRef.path))
                                 CI.parts.pushLast(CI.partRef)
@@ -1557,13 +1559,16 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                                 continueLoop <- true
                                 continue()
                             }
+                            if(CI.type!=NULL and CI.type.usePOS==posNoun and CI.intersectPos==ipNoIntersect and aItem.distanceToTop()<=2){ // Add this to context
+                                agent.context.addContextItem(aItem.LHS_item.dpItem())
+                            }
                             doFulfillSubs <- true
                             our AItem: aParent <- aItem.parent
                             if(aParent != NULL){
                                 aParent.pendingTasks <-- 1
                                 //logSeg(" --"+aParent.mySymbol()+"_PT-f="+toString(aParent.pendingTasks))
                                 if(aParent.pendingTasks == 0){
-                                    //logSegStartCol("-ADP:"+aParent.mySymbol(),col3)
+                                    logSegStartCol("-ADP:"+aParent.mySymbol(),col3)
                                     addAItemToAgenda(aParent)
                                 }
                             }
@@ -1574,15 +1579,16 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                 case rsMerge:{
                     our AItem: nextAItem
                     if(aItem.mergeFinished){
+                        logSeg("-MC2-"+mergeStatusStrings[aItem.mergeStatus])
                         if(aItem.LHS_item.pItem.value.tailUnfinished and aItem.LHS_item.pItem.infSize.format==fLiteral){aItem.LHS_item.pItem.countSize(true)}
                         fulfillSubscriptions(aItem)
-                        //logSegStartCol("<<:MFIN", col4)
+                        logSegStartCol("<<:MFIN", col4)
                         logFlush()
                         return()
                     }
                     if(aItem.RHS==NULL){
                         logSeg("-NoRHS")
-                log("NO_RHS:"+ toString(aItem.LHS_item.pItem) + ": "+ aItem.LHS_item.pItem.mySymbol())
+                //log("NO_RHS:"+ toString(aItem.LHS_item.pItem) + ": "+ aItem.LHS_item.pItem.mySymbol())
                         if(aItem.LHS_item.pItem.value.fType == LST){initListIterators(aItem)}
                         nextAItem <- propagate(aItem, aItem.LHS_item, NULL, NULL, false, false)
                         if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
@@ -1602,16 +1608,18 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                             case 1:{
                                 me bool: invertAcceptance <- aItem.LHS_item.pItem.asNot
                                 our POV: remainder
-                                if(!aItem.looseSize and !aItem.LHS_item.pItem.type.isCompatibleWith(aItem.RHS.pItem.type)){aItem.reject<-true; aItem.LHS_item.rejected<-true}
-                                if(!aItem.reject){mergeSizeRules(aItem)}
-                                if(!aItem.reject){remainder <- mergeRules(aItem)}
+                                aItem.mergeStatus <- msAccept
+                                if(!aItem.looseSize and !aItem.LHS_item.pItem.type.isCompatibleWith(aItem.RHS.pItem.type)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true}
+                                if(aItem.mergeStatus!=msReject){mergeSizeRules(aItem)}
+                                if(aItem.mergeStatus!=msReject){remainder <- mergeRules(aItem)}
                                 our POV: RHSSide; if(remainder==NULL){RHSSide <- aItem.RHS}
                                 if(invertAcceptance){
-                                    if(aItem.reject){aItem.reject<-false}else{aItem.reject<-true}
-                                    logSeg("-INVRT:"+toString(aItem.reject))
+                                    if(aItem.mergeStatus==msAccept){aItem.mergeStatus<-msReject}
+                                    else if(aItem.mergeStatus==msReject){aItem.mergeStatus<-msAccept}
+                                    logSeg("-INVRT")
                                 }
-                                if(!aItem.reject){
-                                    logSeg("-MC1-ACEPT")
+                                if(aItem.mergeStatus!=msReject){
+                                    logSeg("-MC1-"+mergeStatusStrings[aItem.mergeStatus])
                                     if(!aItem.looseSize and aItem.RHS.pItem.generality==gConcrete){
                                         aItem.LHS_item.pItem.generality <- gConcrete
                                         aItem.LHS_item.pItem.proxy <- aItem.RHS.pItem
@@ -1729,7 +1737,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                                 if(newTop!=NULL){
                                     newTop.takeWrkListFrom(CI, true)
                                     logSeg("-GET_LAST")
-                    log("NEW_TOP_FUNC: RHS:"+ toString(aItem.LHS_item.pItem) + "  newTop:" + toString(newTop)+": "+newTop.mySymbol())
+                   // log("NEW_TOP_FUNC: RHS:"+ toString(aItem.LHS_item.pItem) + "  newTop:" + toString(newTop)+": "+newTop.mySymbol())
                                 }else{log("Handle LastItm is null")}
                                 doFulfillSubs <- true
                             }
@@ -1757,7 +1765,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
         if(makeDebugGraph){grapher.clear(); grapher.addItem("rankdir=RL; ordering=out;")}
         me int: count <- 0
         while(!agenda.isEmpty()) {
-            if (count > 400){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
+            if (count > 500){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
             our AItem: aItem <- agenda.first(); agenda.popFirst()
             me bool: graphNodeFirstTime <- false
             if(makeDebugGraph){
@@ -1777,7 +1785,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
             processAgendaItem(aItem, 0)
             if(makeDebugGraph){
                 label <+- "\n"+aItem.stringify()
-                if(aItem.reject){label<+-"-R"}
+                if(aItem.mergeStatus==msReject){label<+-"-R"}
                 labels[recSym] <- label
                 grapher.addNode(recSym, label, attrs)
                 if(graphNodeFirstTime and aItem.RHSItr!=NULL){grapher.addArrow(recSym, aItem.RHSItr.mySymbol()+"R", "RHSItr", "color=orange")}

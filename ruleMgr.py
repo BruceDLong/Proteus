@@ -82,24 +82,24 @@ mergeRules = {
         '=':            '!(aItem.RHS.looseType())',
     },
     'codeSnips': {
-        'REJECT':                   'aItem.reject <- true; aItem.LHS_item.rejected<-true;',
+        'REJECT':                   'aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true;',
         'copyValueRHStoLHS':        'DO_COPY(aItem.RHS.pItem.value, aItem.LHS_item.pItem.value, aItem.sizeToCopy)',
         'copyValueLHStoRHS':        'DO_COPY(aItem.LHS_item.pItem.value, aItem.RHS.pItem.value, aItem.sizeToCopy)',
         'copyRHSTypeToLHS':         'aItem.LHS_item.pItem.value.fType <- aItem.RHS.pItem.value.fType; aItem.LHS_item.pItem.infMode <- aItem.RHS.pItem.infMode',
         'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.pItem.infSize, aItem.LHS_item.pItem.infSize, 0)',
-        'rejectIfValueStrNotEqual': 'if(aItem.LHS_item.pItem.value.str != aItem.RHS.pItem.value.str){aItem.reject <- true; aItem.LHS_item.rejected<-true}',
-        'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.pItem.value.num != aItem.RHS.pItem.value.num){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
+        'rejectIfValueStrNotEqual': 'if(aItem.LHS_item.pItem.value.str != aItem.RHS.pItem.value.str){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true}',
+        'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.pItem.value.num != aItem.RHS.pItem.value.num){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
         'StartMergePropogation':    'startPropRules(aItem)',
         'MergeLooseStrings':        'remainder <- mergeLooseStrings(aItem)',
         'mergeRHSIntersect':        'mergeRHSIntersect(aItem)',
         'mergeANDRanges':           'mergeANDRanges(aItem)',
         'copyIdentity':             'copyIdentity(aItem)',
-        'checkNumRange':            'if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
-        'checkNumRangeDeepCpy':     """if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
-            me bool: truReject <- aItem.reject; if(aItem.LHS_item.pItem.asNot){truReject <- !truReject}
+        'checkNumRange':            'if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
+        'checkNumRangeDeepCpy':     """if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
+            me bool: truReject <- aItem.mergeStatus==msReject; if(aItem.LHS_item.pItem.asNot){truReject <- !truReject}
             if(!truReject){aItem.LHS_item.pItem <deep- aItem.RHS.pItem; if(aItem.LHS_item.outerPOV){aItem.LHS_item.outerPOV.pItem.altRulesApplied <- false}}""",
-        'checkNumRangeDoCpy':       """if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.reject <- true; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
-            me bool: truReject <- aItem.reject; if(aItem.LHS_item.pItem.asNot){truReject <- !truReject}
+        'checkNumRangeDoCpy':       """if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
+            me bool: truReject <- aItem.mergeStatus==msReject; if(aItem.LHS_item.pItem.asNot){truReject <- !truReject}
             if(!truReject){
                             DO_COPY(aItem.RHS.pItem.value, aItem.LHS_item.pItem.value, aItem.sizeToCopy);
                             aItem.LHS_item.pItem.asNot <- aItem.RHS.pItem.asNot
@@ -268,7 +268,7 @@ startPropRules = { # Start iterating fLiteral LST = fLiteral LST
         '!LHSEmpty':        '(aItem.LHS_item.pItem.value.tailUnfinished or aItem.LHS_item.pItem.value.items.size() > 0)'
     },
     'codeSnips': {
-        'REJECT':   'aItem.reject<-true; aItem.LHS_item.rejected<-true;',
+        'REJECT':   'aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true;',
         'SKIP':     '//Skip',
         'initListIterators':   'initListIterators(aItem)',
     },
