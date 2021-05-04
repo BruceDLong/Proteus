@@ -118,6 +118,7 @@ model infon{
     flag: wrkItmsAdded
     flag: isOnAgenda    // True if item is currently on agenda
     flag: isTentative   // Does this items validity depend on it having no errors?
+    flag: asRHSInternalIdent  //LHS's asNot doesn't apply to internal idents.
     flag: altRulesApplied
     flag: defnRegistered
     flag: wordDerefed
@@ -330,15 +331,15 @@ model infon{
     }
     our POV: addInfonToWrkList(our infon: i, me bool: internalIdent) <- {
         our POV:: newPov
+        i.asRHSInternalIdent <- internalIdent
         newPov.pItem <- i
-        newPov.internalIdent <- internalIdent
         addPOVToWrkList(newPov)
         return(newPov)
     }
     our POV: addInfonToWorkListWithPriority(our infon: i, me bool: internalIdent) <- {
         our POV:: newPov
+        i.asRHSInternalIdent <- internalIdent
         newPov.pItem <- i
-        newPov.internalIdent <- internalIdent
         isNormed <- false
         wrkList.pushFirst(newPov)
         return(newPov)
@@ -742,7 +743,6 @@ struct WorldManager{
                     CI.generality <- gConcrete  // TODO: This may not always be the case.
                     CI.addInfonToWorkListWithPriority(infModel, true)
                 }else{logSeg("-isWord-B:'"+CI.type.asGiven+"'")
-                    CIPov.internalIdent <- false
                     our WordUse:CIsType <- CI.type
                     me bool: asNot <- CI.asNot
                     me uint64: itmMode <- CI.itmMode
@@ -780,7 +780,7 @@ struct WorldManager{
             if(tmp!=NULL){
                 our POV:: newPov
                 newPov.pItem    <- CI.funcArgs
-                newPov.internalIdent <- true
+                newPov.pItem.asRHSInternalIdent <- true
                 tmp.addPOVToWrkList(newPov)
                 CI.funcArgs <- NULL
                 CI.argPos   <- apNoArgs
@@ -839,7 +839,7 @@ struct WorldManager{
         if(lSpec!=NULL and lSpecItem.hasInnrOutr and lSpecItem.intersectPos==ipNoIntersect and lSpec.intersectPos!=ipNoIntersect){
             log("OUTR: lSpecItem: "+toString(lSpecItem) + "   lSpec:" +toString(lSpec) + "   outr:" +toString(lSpecItem.funcArgs))
             logSeg("-Otr")
-            our POV:: newPov; newPov.pItem <- lSpecItem.funcArgs; newPov.looseMode <- true; newPov.isOutrFeed<-true; newPov.internalIdent <- true
+            our POV:: newPov; newPov.pItem <- lSpecItem.funcArgs; newPov.looseMode <- true; newPov.isOutrFeed<-true; newPov.pItem.asRHSInternalIdent <- true
             lSpecItem.addPOVToWrkList(newPov)
             lSpecItem.hasInnrOutr<-false;  lSpecItem.funcArgs <- NULL
             lSpec.asWrkLstOutr <- true
@@ -851,7 +851,7 @@ struct WorldManager{
         our POV: RHSPov    <- NULL
         me bool: looseSize <- false
         //if(lSpecItem.wrkList.isEmpty() and LHSPov.hasPropagated){log("WARNING: NotRePropagating "+LHSPov.stringify())}
-        while(!lSpecItem.wrkList.isEmpty()){
+        if(!lSpecItem.wrkList.isEmpty()){
             RHSPov <- lSpecItem.wrkList.first()
             lSpecItem.wrkList.popFirst()
             lSpecItem.usedWrkList.pushLast(RHSPov)
@@ -1016,6 +1016,7 @@ struct WorldManager{
                 } else{ logSeg("-deCCat")
                     CI <deep- CI.value.items.first()
                 }
+                // NEEDED? if(aItem.parent != NULL){aItem.parent.mergeFinished <- false}; JoinIfConcat(aItem.LHS_item)
             }
         }
         return(changeMade)
@@ -1101,12 +1102,13 @@ struct WorldManager{
                 if(path==NULL){logFatalError("Handle path is null")}
                 path.takeWrkListFrom(part.path, true)
                 if(!part.hasSemiColon){aItem.LHS_item.pItem <- path}
-                our POV:: pathPov
-                pathPov.pItem <- path
-            //    aItem.notFirstVisit <- false  // This enquing will be a different 'first' due to a part being finished.
-                our AItem: newAItem <-  processInfonViaAgenda(pathPov, NULL, aItem, aItem.priority)
-                logSegStartCol("-PIVA->"+newAItem.mySymbol(),col2)
-                addAItemToAgenda(newAItem)
+                else{
+                    our POV:: pathPov
+                    pathPov.pItem <- path
+                    our AItem: newAItem <-  processInfonViaAgenda(pathPov, NULL, aItem, aItem.priority)
+                    logSegStartCol("-PIVA->"+newAItem.mySymbol(),col2)
+                    addAItemToAgenda(newAItem)
+                }
                 changeMade <- true
                 logSegOut("")
             }
@@ -1164,18 +1166,7 @@ struct WorldManager{
         if(CI.value.tailUnfinished and !CI.value.items.isEmpty() and CI.value.items.last().isTentative){logSeg("-popT")
             CI.value.items.popLast()
         }
-        // (234) --> 234
- /*       if(CI.value.format == fConcat and !CI.value.items.isEmpty() and CI.value.items.head.isLast()){
-            if(CI.infSize.format!=fUnknown){ // TODO: This likely doesn't handle many cases; instead of deep copy, perhaps merge... and make sizes merge correctly.
-                CI.value <deep- CI.value.items.first().value
-                CI.value.sizeMode<-fromGiven
-            } else{ logSeg("-deCCat")
-                CI <deep- CI.value.items.first()
-            }
-            //logSeg("CLEAN_CC("+toString(CI)+")")
-            if(aItem.parent != NULL){aItem.parent.mergeFinished <- false}
-            JoinIfConcat(aItem.LHS_item)
-        }*/
+
         // If this is [], i.e, null, remove it from parent list.
         if(CI.intersectPos==ipGetLast and CI.innr!=NULL and CI.innr.infSize.format==fLiteral and CI.innr.value.sizeMode==fromCount and CI.innr.infSize.num==0){
             if(aItem.LHS_item.pParent != NULL){ logSeg("-del[]")
@@ -1186,6 +1177,7 @@ struct WorldManager{
         if(CI.value.fType==LST){
             me int: numCandidates <- aItem.LHS_item.candidatesForLastItem.size()
             //log("CLEAN_LIST:"+aItem.LHS_item.mySymbol()+":"+ aItem.LHS_item.stringify()+"  #candidates:"+toString(numCandidates))
+            if(numCandidates==1){
                 our POV: lastItem <- aItem.LHS_item.candidatesForLastItem.last()
                 aItem.LHS_item.candidatesForLastItem.popLast()
                 logSeg("-CLEAN_LAST:" + lastItem.stringify())
@@ -1313,7 +1305,7 @@ grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=green")
         }
     }
     me void: mergeRHSIntersect(our AItem: aItem) <- {
-        //logSeg("-mergeRHSIntersect")
+        logSeg("-mergeRHSIntersect")
         // TODO: make this work with inverted and marked intersections
         our infon: LHS <- aItem.LHS_item.pItem
         our infon: RHS <- aItem.RHS.pItem
@@ -1395,6 +1387,7 @@ grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=green")
         me bool: RorRExists <- RHSExists or remainder!=NULL
         me bool: LHSIsLST   <- (LHSPov.pItem.value.fType==LST and LHSPov.pItem.value.format!=fConcat)
         me bool: RHSIsLST   <- (RHSExists and RHSPov.pItem.value.fType==LST and RHSPov.pItem.value.format!=fConcat)
+        me bool: identIsInternal <- RHSExists and RHSPov.pItem.asRHSInternalIdent
         me bool: LHSitrBeginning <- aItem.LHSItr!=NULL and LHSPov===aItem.LHSItr.topPOV
         me bool: RHSitrBeginning <- aItem.RHSItr!=NULL and RHSPov===aItem.RHSItr.topPOV
         me bool: LHSIsFromALT
@@ -1412,7 +1405,6 @@ grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=green")
         while(aParent!=NULL and aParent.ruleSet==rsIntersect){aParent <- aParent.parent.parent}
 
         // Fetch next RHS: CHECK: aParent
-        if(RHSExists and aParent!=NULL and aParent.LHS_item.pItem.value.sizeMode!=fromGiven and LHSPov.pItem.isTentative and !RHSPov.pItem.isTentative){LHSPov.pItem.isTentative <- false}
         if(remainder!=NULL){RHSPovNext <- remainder}
         else if(RHSExists and aParent != NULL and aParent.RHSItr != NULL){
             RHSPovNext <- findNextRHS(adjRhsPOV, aParent.RHSItr, dontEnque, rightWas2ndVisit, RHSitrBeginning, LHSIsLST, RHSIsLST)
@@ -1420,6 +1412,7 @@ grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=green")
                 skipPIVA <- true // RHS is an unattached intersect
             }
         }
+        if(RHSExists and aParent!=NULL and aParent.LHS_item.pItem.value.sizeMode!=fromGiven and LHSPov.pItem.isTentative and !LHSPov.applyAsNot(RHSPov) and !RHSPov.pItem.isTentative and !skipPIVA and !RHSPov.pItem.asRHSInternalIdent){LHSPov.pItem.isTentative <- false logSeg("-resetTent:D")}
         me bool: RHSisFinished <- (RHSPovNext == NULL and !skipPIVA) or rightWas2ndVisit
         if(RHSisFinished and !skipPIVA){  //Q: When do we need to mark parent-list's tail finished? (recursivly?)
             if(adjLhsPOV.pParent!=NULL){
@@ -1440,7 +1433,7 @@ grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=green")
   //  if(dontNeedLHS){
         if(aParent == NULL){LHSPovNext <- NULL}  // At very top infon or propagating a lone RHS or intersect.
         else{LHSPovNext <- findNextLHS(adjLhsPOV, aParent.LHSItr, skipDots, leftWas2ndVisit, LHSitrBeginning, LHSIsLST, RHSIsLST, false)}
-        if(leftWas2ndVisit and LHSPovNext!=NULL and LHSPovNext.applyAsNot()){ // Eg Coming out of an LHS like: !char:{...}
+        if(leftWas2ndVisit and LHSPovNext!=NULL and LHSPovNext.applyAsNot(RHSPovNext)){ // Eg Coming out of an LHS like: !char:{...}
             if(aParent.mergeStatus==msUnknown){ // If it's msUnknown no 'mismatch' has been found so it's really a reject.
                 aParent.mergeStatus<-msReject
                 LHSPovNext<-NULL
@@ -1457,7 +1450,7 @@ grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=green")
         if(!dontEnque){
             me bool: isLooseSize  <- aParent!=NULL and aParent.RHS!=NULL and aParent.RHS.looseSize()
             me bool: LHSisFinished <- LHSPovNext == NULL or leftWas2ndVisit or LHSPovNext.tentFromDots// or dontNeedLHS
-            if(RorRExists and((LHSisFinished and RHSisFinished)
+            if(RorRExists and (!identIsInternal or remainder!=NULL) and((LHSisFinished and RHSisFinished)
      // or (!aItem.looseSize and RHSisFinished)
                        or (isLooseSize and ( adjLhsPOV.pParent!=NULL and adjLhsPOV.pParent.pItem.infSize.format==fUnknown) ))){
                 if(LHSitrBeginning){
@@ -1501,14 +1494,15 @@ grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=green")
                         LHSAlt.pParent.keepDots <- true
                         //log(idnt+"    ENQUEq:"+  LHSAlt.stringify() + " === " + RHSAlt.stringify())
                     } else {
-                        if((lCount>0 and (LHSHasAlt or RHSHasAlt)) or LHSIsFromALT){
-                        //if(numRHSs>1 or lCount>0){
-                            if(aParent.RHS){
-                                RHSAlt.looseInhtd <- aParent.RHS.looseInhtd or aParent.RHS.looseMode
-                                RHSAlt.looseTop   <- false
+                        if((lCount>0 and (LHSHasAlt or RHSHasAlt)) or LHSIsFromALT){    //if(numRHSs>1 or lCount>0){
+                            if(LHSAlt.pItem.value.fType!=LST or LHSAlt.pItem.value.format==fConcat or leftWas2ndVisit){
+                                if(aParent.RHS){
+                                    RHSAlt.looseInhtd <- aParent.RHS.looseInhtd or aParent.RHS.looseMode
+                                    RHSAlt.looseTop   <- false
+                                }
+                                LHSAlt.pItem.pushAltIntoLineAlt(LHSPov, aParent.LHSItr.lineAltID, RHSAlt.pItem, RHSAlt, LHSIsFromALT)
+                                //log(idnt+"    ENQUEx:" + LHSAlt.stringify() + " === " + RHSAlt.stringify()+"  PREDx:"+LHSPov.stringify())
                             }
-                            LHSAlt.pItem.pushAltIntoLineAlt(LHSPov, aParent.LHSItr.lineAltID, RHSAlt.pItem, RHSAlt, LHSIsFromALT)
-                            //log(idnt+"    ENQUEx:" + LHSAlt.stringify() + " === " + RHSAlt.stringify()+"  PREDx:"+LHSPov.stringify())
                         } else {
                             if(!predPushed){
                                 LHSAlt.predecessors.pushLast(LHSPov)
@@ -1619,6 +1613,10 @@ grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=green")
                 case rsMerge:{
                     our AItem: nextAItem
                     if(aItem.mergeFinished){
+                        if(aItem.mergeStatus==msUnknown){
+                            if(aItem.LHS_item.applyAsNot(aItem.RHS)){aItem.mergeStatus<-msReject}
+                            else{aItem.mergeStatus<-msAccept}
+                        }
                         logSeg("-MC2-"+mergeStatusStrings[aItem.mergeStatus])
                         if(aItem.LHS_item.pItem.value.tailUnfinished and aItem.LHS_item.pItem.infSize.format==fLiteral){aItem.LHS_item.pItem.countSize(true)}
                         fulfillSubscriptions(aItem)
@@ -1646,9 +1644,9 @@ grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=green")
                                 continue()
                             }
                             case 1:{
-                                me bool: invertAcceptance <- aItem.LHS_item.applyAsNot()
+                                me bool: invertAcceptance <- aItem.LHS_item.applyAsNot(aItem.RHS)
                                 our AItem: mrgParent <- aItem.prntOrSub().prntOrSub()
-                                me bool: parentListIsAsNot <- mrgParent!=NULL and mrgParent.LHS_item.applyAsNot()
+                                me bool: parentListIsAsNot <- mrgParent!=NULL and mrgParent.LHS_item.applyAsNot(mrgParent.RHS)
                                 our POV: remainder
                                 aItem.mergeStatus <- msAccept
                                 if(!aItem.looseSize and !aItem.LHS_item.pItem.type.isCompatibleWith(aItem.RHS.pItem.type)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true}
