@@ -155,7 +155,7 @@ model POV{ // Point-Of-View
         }else if(lenStatus == "G"){log("INFON TOO BIG")}
         return(NULL)
     }
-    our POV: getFirst(me bool: skipDots) <- { // WARNING: pItem must be a literal List.
+    our POV: getFirst(me int64: skipDots) <- { // WARNING: pItem must be a literal List.
         if(streamingNormMode){
             me MutexMngr: MtxMgr{streamingNormMutex}
             while(!pItem.parseFinished and (pItem.value.items.isEmpty() or !canStreamThoNotDone(pItem.value.items.first()))){
@@ -164,7 +164,7 @@ model POV{ // Point-Of-View
         }
         our POV: firstNode
         if(pItem.value.items.isEmpty()){
-            if(!skipDots and pItem.value.tailUnfinished){
+            if(skipDots<=0 and pItem.value.tailUnfinished){
                 firstNode <- tryAddingTentativeChild()
                 if(firstNode == NULL){return(NULL)}
             }else{return(NULL)}
@@ -175,7 +175,7 @@ model POV{ // Point-Of-View
         firstNode.pParent <- self
         return(firstNode)
     }
-    our POV: getNext(me bool: skipDots) <- {
+    our POV: getNext(me int64: skipDots) <- {
         if(streamingNormMode){
             me MutexMngr: MtxMgr{streamingNormMutex}
             //log("###GNext")
@@ -189,52 +189,55 @@ model POV{ // Point-Of-View
         }
         our POV: nextNode <- next
         if(nextNode==NULL){
-            if(!skipDots){
+            if(skipDots<=0){ log("DOTS:"+toString(skipDots))
                 if(pParent != NULL and pParent.pItem != NULL and pParent.pItem.value.tailUnfinished){
                     nextNode <- pParent.tryAddingTentativeChild()
                 }
-            }
+            } else{ log("SKIP_DOTS:"+toString(skipDots))}
         }//else{seedTypeSpecs(nextNode.pItem, false)}
         if(nextNode != NULL){nextNode.pParent <- pParent}
         return(nextNode)
     }
-    our POV: getFirstTight(our infItr: ii, me bool: skipDots, their bool: was2ndVisit) <- {
-        me bool: dummyFlag
-        was2ndVisit <- false
+    our POV: getFirstTight(our infItr: ii, me int64: skipDots, their int64: numLvlsUp) <- {
+        //log("[GFT: infItr:"+ii.mySymbol())
+        me int64: dummyFlag
         our POV: nextPOV <- getFirst(skipDots)
         if(nextPOV != NULL and nextPOV.pItem.itmMode == mSubItems){
             our POV: firstPOV <- nextPOV.getFirstTight(ii, skipDots, dummyFlag)
-            if(firstPOV == NULL){nextPOV <- nextPOV.getNextTight(ii, skipDots, was2ndVisit, false, false)}
+            if(firstPOV == NULL){nextPOV <- nextPOV.getNextTight(ii, skipDots, numLvlsUp, false, false)}
             else{nextPOV <- firstPOV}
         }
-        if(nextPOV!=NULL and nextPOV.pItem.isTentative){nextPOV.altPOV <- nextPOV.getNextTight(ii, true, dummyFlag, false, false)}
+       // log("]gft")
         return(nextPOV)
     }
-    our POV: getNextTight(our infItr: ii, me bool: skipDots, their bool: was2ndVisit, me bool: getDeep, me bool: itrBeginning) <- {
+    our POV: getNextTight(our infItr: ii, me int64: skipDots, their int64: numLvlsUp, me bool: getDeep, me bool: itrBeginning) <- {
+        log("[GNT: infItr:"+ii.mySymbol()+"  skipdots:"+toString(skipDots)+"   pItem:"+pItem.mySymbol()+":"+toString(pItem))
         our POV: nextPOV
-        was2ndVisit <- false
-        me bool: dummyFlag
-        if(itrBeginning){nextPOV <- getFirstTight(ii, skipDots, was2ndVisit)}
+       // numLvlsUp <- false
+        me int64: dummyFlag
+        if(itrBeginning){nextPOV <- getFirstTight(ii, skipDots, numLvlsUp)}
         else{
             nextPOV <- getNext(skipDots)
             if(nextPOV == NULL){
-                if(pParent==NULL or pParent.pItem.itmMode != mSubItems){was2ndVisit <- true}
-                if(pParent==NULL){return(NULL)}
                 our infItr: nxtInfItr <- ii
-                if(was2ndVisit and ii.iParent!=NULL){nxtInfItr <- ii.iParent}
-                else{if(pParent === ii.topPOV){return(NULL)}}
-                if(pParent.outerPOV!=NULL){
-                    nextPOV <- pParent.outerPOV.getNextTight(nxtInfItr, skipDots, dummyFlag, getDeep, itrBeginning)
-                } else{
-                    nextPOV <- pParent.getNextTight(nxtInfItr, skipDots, dummyFlag, getDeep, itrBeginning)
+                if(pParent==NULL or pParent.pItem.itmMode != mSubItems){
+                    numLvlsUp <+- 1 me int64: WSV<-numLvlsUp log("WSV++:"+toString(WSV))
+                if(pParent==NULL){log("]gntB: NULL") return(NULL)} else {skipDots <+- 1} // Uncomment this for testsssssssss
+                    if(ii.iParent!=NULL){nxtInfItr <- ii.iParent}
+                }else if(pParent === ii.topPOV){log("]gntC: NULL") return(NULL)}
+                if(pParent.outerPOV!=NULL){ log("UP-outer")
+                    nextPOV <- pParent.outerPOV.getNextTight(nxtInfItr, skipDots-1, numLvlsUp, getDeep, itrBeginning)
+                } else{log("UP")
+                    nextPOV <- pParent.getNextTight(nxtInfItr, skipDots-1, numLvlsUp, getDeep, itrBeginning)
                 }
             }else if(nextPOV.pItem.itmMode == mSubItems or (nextPOV.pItem.value.fType==LST and getDeep)){
                 our POV: firstPOV <- nextPOV.getFirstTight(ii, skipDots, dummyFlag)
-                if(firstPOV == NULL){nextPOV <- nextPOV.getNextTight(ii, skipDots, was2ndVisit, getDeep, itrBeginning)}
+                if(firstPOV == NULL){nextPOV <- nextPOV.getNextTight(ii, skipDots, numLvlsUp, getDeep, itrBeginning)}
                 else{nextPOV <- firstPOV}
             }
         }
-        if(nextPOV!=NULL and nextPOV.pItem.isTentative){nextPOV.altPOV <- nextPOV.getNextTight(ii, true, dummyFlag, getDeep, false)}
+        if(nextPOV!=NULL and nextPOV.altPOV==NULL and nextPOV.pItem.isTentative){nextPOV.altPOV <- nextPOV.getNextTight(ii, 1, dummyFlag, getDeep, false)}
+        if(nextPOV){log("]gntA: returning:"+nextPOV.mySymbol()+"  pItem:"+nextPOV.pItem.mySymbol()+":"+toString(nextPOV.pItem))} else{log("]gntA: NULL")}
         return(nextPOV)
     }
 
