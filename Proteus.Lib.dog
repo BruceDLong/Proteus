@@ -438,7 +438,7 @@ struct GLOBAL{
        // if(inf.infMode!=isLiteral)      {log("@B"); return(false)}
         log("   fType:"+toString(inf.value.fType))
         if(inf.value.fType==tUnset)        {log("@C"); return(false)}
-       // if(inf.value.format!=fUnknown)  {log("@DDDDDDDDDDDDDDDDD"); return(false)}
+       // if(inf.value.format!=fUnknown)  {log("@D"); return(false)}
         log("@True");
         return(true)
     }
@@ -1168,18 +1168,17 @@ struct WorldManager{
             their POV: parent <- pov.pParent
             if(pov.outerPOV!=NULL){parent <- pov.outerPOV.pParent}
             me string: logStr <- "   VALIDATE:" + pov.mySymbol() +":" + pov.stringify() + "    PARENT:<"+parent.stringify()+">"
-  //      if(pov!==topParent){
+        if(pov!==topParent or !pov.pItem.value.tailUnfinished){
             if(pov.pItem.isTentative){logSeg("-resetTent:C")}
             pov.pItem.isTentative <- false
             if(pov.outerPOV!=NULL and pov.outerPOV.pItem.isOrLike()){ // First check whether pov is in [...]
                 logStr <+- "[closeIntersectAt]"
                 closeIntersectAt(pov)
-       //     } else if(parent!=NULL and parent!==topParent and parent.pItem.value.tailUnfinished){ // Close a list at lastItem
-            } else if(parent!=NULL and parent.pItem.value.tailUnfinished){ // Close a list at lastItem
+            } else if(pov!==topParent and parent!=NULL and parent.pItem.value.tailUnfinished){ // Close a list at lastItem
                     logStr <+- ":LAST_ITEM"
                     parent.closeItemsAtPOV(pov)
             }
-  //      }
+        }
             if(oneMore){
                 pov<-NULL
             } else if(pov.predecessors.size()==1){
@@ -1214,7 +1213,7 @@ struct WorldManager{
             }
         }
 //if(CI.value.fType==LST){log("PREDS___\n"+stringifyPreds(aItem.LHS_item, ""))}
-        if(CI.value.fType==LST){
+        if(CI.value.fType==LST and CI.value.format==fLiteral){
             me int: numCandidates <- aItem.LHS_item.candidatesForLastItem.size()
             log("CLEAN_LIST:"+aItem.LHS_item.mySymbol()+":"+ aItem.LHS_item.stringify()+"  #candidates:"+toString(numCandidates))
             if(numCandidates==1){
@@ -1230,7 +1229,9 @@ struct WorldManager{
                 CI.countSize(false)
             } else if(numCandidates==0){
                 logSeg("-Clean0")
-                if(CI.value.items.tail!=NULL and (CI.value.sizeMode!=fromGiven and CI.infSize.format==fUnknown)){validateItem(CI.value.items.tail)}
+                if(aItem.LHS_item.forLastUseLastItem){log("IN_VAL0:"+aItem.LHS_item.stringify()) validateItem(CI.value.items.tail)}
+                else if(CI.value.items.tail!=NULL and (CI.value.sizeMode!=fromGiven and CI.infSize.format==fUnknown)){log("IN_VAL1:"+aItem.LHS_item.stringify()) validateItem(CI.value.items.tail)}
+                //else{log("IN_VAL2:"+aItem.LHS_item.stringify())  aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true}
             } else{logSeg("-LST!") log("candidatesForLastItem:"+toString(numCandidates))}
         }
         logSegOut("")
@@ -1453,13 +1454,16 @@ grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=green")
         // Fetch next RHS: CHECK: aParent
         if(remainder!=NULL){RHSPovNext <- remainder}
         else if(RHSExists and aParent != NULL and aParent.RHSItr != NULL){
-            RHSPovNext <- findNextRHS(adjRhsPOV, aParent.RHSItr, dontEnque, lvlsUpOnRight, RHSitrBeginning, LHSIsLST, RHSIsLST)
+            me int64: skipDots <- 0; if(dontEnque){skipDots<-LLONG_MAX}
+            RHSPovNext <- findNextRHS(adjRhsPOV, aParent.RHSItr, skipDots, lvlsUpOnRight, RHSitrBeginning, LHSIsLST, RHSIsLST)
             if(RHSPovNext==NULL and adjRhsPOV.pItem.intersectPos != ipNoIntersect and adjRhsPOV.next==NULL){
                 skipPIVA <- true // RHS is an unattached intersect
-     //           log("skipPIVA")
+                //log("skipPIVA")
             }
         }
-        if(RHSExists and aParent!=NULL and aParent.LHS_item.pItem.value.sizeMode!=fromGiven and LHSPov.pItem.isTentative and !LHSPov.applyAsNot(RHSPov) and !RHSPov.pItem.isTentative and !skipPIVA and !identIsInternal){LHSPov.pItem.isTentative <- false logSeg("-resetTent:D")}
+        if(RHSExists and aParent!=NULL and aParent.LHS_item.pItem.value.sizeMode!=fromGiven and LHSPov.pItem.isTentative and !LHSPov.applyAsNot(RHSPov) and !RHSPov.pItem.isTentative and !skipPIVA and !identIsInternal){
+            LHSPov.pItem.isTentative <- false; logSeg("-resetTent:D")
+        }
         me bool: RHSisFinished <- (RHSPovNext == NULL and !skipPIVA) or lvlsUpOnRight>0
 
         me int64: skipDots <- 0;
@@ -1495,7 +1499,7 @@ log("LHSPovNext:"+LHSPovNext.mySymbol()+":"+LHSPovNext.stringify())
             their POV: povParent <- adjLhsPOV.pParent
             if(LHSitrBeginning){povParent <- adjLhsPOV}
             if((RorRExists and ((LHSisFinished and RHSisFinished) or (isLooseSize and (povParent!=NULL and povParent.pItem.infSize.format==fUnknown) )))
-            //    or (!LHSitrBeginning and lvlsUpOnLeft>0 and !povParent.pItem.value.tailUnfinished)
+                or (lvlsUpOnLeft>0 and LHSPov.outerPOV==NULL and !povParent.pItem.value.tailUnfinished)
               ){
                 if(LHSitrBeginning){
                     log(idnt+"   candidatesForLastItem:" + adjLhsPOV.stringify() + "   EndsOnA:"+LHSPovNext.stringify())
@@ -1540,7 +1544,6 @@ log(idnt+"candidateForLast:"+toString(candidateForLast) +"  lvlsUpOnLeft:"+toStr
          //               log(idnt+"    ENQUEq:"+  LHSAlt.stringify() + " === " + RHSAlt.stringify())
                     } else {
                         if((lCount>0 and (LHSHasAlt or RHSHasAlt)) or LHSIsFromALT){    //if(numRHSs>1 or lCount>0){
-                     //       if(LHSAlt.pItem.value.fType!=LST or LHSAlt.pItem.value.format==fConcat or lvlsUpOnLeft>0){  // TODO: remove this 'if' when sure about it
                                 if(nxtsParent.RHS){ // TODO: should these really be nxtParent instead or aParent? Check: when LHS is a list | left/right-wasSecondVisit | lCount/rCount >0
                                     RHSAlt.looseInhtd <- nxtsParent.RHS.looseInhtd or nxtsParent.RHS.looseMode
                                     RHSAlt.looseTop   <- false
@@ -1549,7 +1552,6 @@ log(idnt+"candidateForLast:"+toString(candidateForLast) +"  lvlsUpOnLeft:"+toStr
                                 logSeg("-EnqX")
                                 LHSAlt.pItem.pushAltIntoLineAlt(LHSPov, nxtsParent.LHSItr.lineAltID, RHSAlt.pItem, RHSAlt, LHSIsFromALT)
          //                       log(idnt+"    ENQUEx:"+LHSAlt.mySymbol()+":" + LHSAlt.stringify() + " <== " + RHSAlt.stringify()+"  PREDx:"+LHSPov.mySymbol()+":"+LHSPov.stringify())
-                    //        }
                         } else {
                             if(!predPushed){
                                 if(!(LHSAlt===LHSPov)){ // push pred, but not to self
@@ -1701,6 +1703,7 @@ log(idnt+"candidateForLast:"+toString(candidateForLast) +"  lvlsUpOnLeft:"+toStr
                                 if(aItem.mergeStatus!=msReject){mergeSizeRules(aItem)}
                                 if(aItem.mergeStatus!=msReject){remainder <- mergeRules(aItem)}
                                 our POV: RHSSide; if(remainder==NULL){RHSSide <- aItem.RHS}
+                              if(aItem.mergeStatus!=msPending){
                                 if(invertAcceptance){
                                     if(aItem.mergeStatus==msAccept){aItem.mergeStatus<-msReject}
                                     else if(aItem.mergeStatus==msReject){aItem.mergeStatus<-msAccept}
@@ -1731,6 +1734,7 @@ log(idnt+"candidateForLast:"+toString(candidateForLast) +"  lvlsUpOnLeft:"+toStr
                                         if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
                                     }
                                 }
+                              } else {log("mergeStatusPENDING:")}
                             }
                         }
                     }
