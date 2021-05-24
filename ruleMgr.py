@@ -89,6 +89,7 @@ mergeRules = {
         'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.pItem.infSize, aItem.LHS_item.pItem.infSize, 0)',
         'rejectIfValueStrNotEqual': 'if(aItem.LHS_item.pItem.value.str != aItem.RHS.pItem.value.str){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true}',
         'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.pItem.value.num != aItem.RHS.pItem.value.num){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
+        'copyType':                 'if(aItem.RHS.pItem.type!=NULL){aItem.LHS_item.pItem.type <- aItem.RHS.pItem.type}',
         'StartMergePropogation':    'startPropRules(aItem)',
         'MergeLooseStrings':        'remainder <- mergeLooseStrings(aItem)',
         'mergeRHSIntersect':        'mergeRHSIntersect(aItem)',
@@ -96,10 +97,10 @@ mergeRules = {
         'copyIdentity':             'copyIdentity(aItem)',
         'checkNumRange':            'if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
         'checkNumRangeDeepCpy':     """if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
-            me bool: truReject <- aItem.mergeStatus==msReject; if(aItem.LHS_item.pItem.asNot){truReject <- !truReject}
+            me bool: truReject <- aItem.mergeStatus==msReject; if(aItem.LHS_item.applyAsNot(aItem.RHS)){truReject <- !truReject}
             if(!truReject){aItem.LHS_item.pItem <deep- aItem.RHS.pItem; if(aItem.LHS_item.outerPOV){aItem.LHS_item.outerPOV.pItem.altRulesApplied <- false}}""",
         'checkNumRangeDoCpy':       """if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
-            me bool: truReject <- aItem.mergeStatus==msReject; if(aItem.LHS_item.pItem.asNot){truReject <- !truReject}
+            me bool: truReject <- aItem.mergeStatus==msReject; if(aItem.LHS_item.applyAsNot(aItem.RHS)){truReject <- !truReject}
             if(!truReject){
                             DO_COPY(aItem.RHS.pItem.value, aItem.LHS_item.pItem.value, aItem.sizeToCopy);
                             aItem.LHS_item.pItem.asNot <- aItem.RHS.pItem.asNot
@@ -107,7 +108,7 @@ mergeRules = {
             }}""",
     },
     'rules': [
-        ["merge:|||r?|",                          "NONE"],
+        ["merge:|||r?|",                          "copyType"],
         ["merge:l?||=|rNUM,rSTR,rLST|",           "copyIdentity"],  #"copyRHSTypeToLHS,copyValueRHStoLHS,copySizeRHStoLHS"
         ["merge:l?||==|rNUM,rSTR,rLST|",          "copyRHSTypeToLHS,copyValueRHStoLHS"],
         ["merge:l?||=|rtUnknown|rintersect",      "mergeRHSIntersect"],
@@ -124,7 +125,7 @@ mergeRules = {
 
         ["merge:lSTR|lfUnknown|=|rSTR|rfUnknown",         "copyIdentity"],
         ["merge:lSTR|lfUnknown|=|rSTR|rfLiteral",         "copyValueRHStoLHS"],
-        ["merge:lSTR|lfLiteral|=|rSTR|rfUnknown",         "copyValueLHStoRHS"],
+        ["merge:lSTR|lfLiteral|=|rSTR|rfUnknown",         "NONE"],  # Copy LHS to RHS?
         ["merge:lSTR|lfLiteral|=|rSTR|rfLiteral",         "rejectIfValueStrNotEqual"],
 
         ["merge:lLST|lfUnknown|=|rLST|rfUnknown",        "ACTION"],
@@ -270,12 +271,12 @@ startPropRules = { # Start iterating fLiteral LST = fLiteral LST
     'codeSnips': {
         'REJECT':   'aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true;',
         'SKIP':     '//Skip',
-        'initListIterators':   'initListIterators(aItem)',
+        'initListIterators':   'initListIterators(aItem); aItem.mergeStatus<-msUnknown',
     },
     'rules': [
         ["startProp:!looseSize|!sizesCompat||",                               "REJECT"],
         ["startProp:!looseSize|sizesCompat|LHSEmpty|!RHSisPureDots",          "SKIP"],
-        ["startProp:!looseSize|sizesCompat||RHSisPureDots",                   "SKIP"],
+        ["startProp:!looseSize|sizesCompat||RHSisPureDots",                   "initListIterators"],
         ["startProp:!looseSize|sizesCompat|!LHSEmpty|!RHSisPureDots",         "initListIterators"], # Get first; account for #{}, ..., .first     "initListIterators"],
         ["startProp:looseSize|||",                                            "initListIterators"]
     ]
@@ -574,12 +575,12 @@ def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
             actionCode = ""
             if codeKeyWords =='ACTION':
                 if debugMode:
-                    actionCode = indent + '    log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':TODO: unfinished")\n'
+                    actionCode = indent + '    //log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':TODO: unfinished")\n'
                 else:
                     actionCode = indent + "    //TODO: unfinished\n"
             elif codeKeyWords == "NONE":
                 if debugMode:
-                    actionCode = indent + '    log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':Do Nothing")\n'
+                    actionCode = indent + '    //log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':Do Nothing")\n'
                 else:
                     actionCode = indent + "    //Do Nothing\n"
             else:
@@ -589,7 +590,7 @@ def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
                     actionCode+= indent +"    " + codeSnips[KW]+"\n"
                 if ruleSetID !="merge": actionCode+= indent +"    changeMade <- true\n"
                 if debugMode:
-                    actionCode = indent+'    log(indentStr(aItem.indentLvl)+"        '+ruleSetID+'  '+triggers+'\t'+KW+'")\n' + actionCode
+                    actionCode = indent+'    //log(indentStr(aItem.indentLvl)+"        '+ruleSetID+'  '+triggers+'\t'+KW+'")\n' + actionCode
             if ruleCount >0: conditionKW = "else if"
             else: conditionKW = "if"
             conditionCode = conditionKW+"("+conditionCode+")"
@@ -635,6 +636,7 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
     if ruleSetID =="merge":
         #print("ruleSetID:"+ruleSetID)
         ifsCode =  "        our POV: remainder <- NULL\n"
+        ifsCode += '        logSeg("-mRUl")\n'
         ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
         ifsCode += '        else {log("MERGE_RULE_MISSING: "+ toString(aItem));log("          LHS fType:"+ fTypeStrings[aItem.LHS_item.pItem.value.fType]);log("          LHS format:"+ formatStrings[aItem.LHS_item.pItem.value.format]);log("          RHS fType:"+ fTypeStrings[aItem.RHS.pItem.value.fType]); exit(2);}\n'
         ifsCode += "        return(remainder)"
@@ -642,7 +644,7 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
     else:
         ifsCode =  "        me bool: changeMade <- false\n"
         ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
-        ifsCode += '        else {log("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ '+ruleSetID+' RULE_MISSING");}\n'
+        ifsCode += '        //else {log("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ '+ruleSetID+' RULE_MISSING");}\n'
         ifsCode += "        return(changeMade)"
         funcCode = "    me bool: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
     return(funcCode)
