@@ -238,8 +238,8 @@ FileName = "TestProteus"
 
 #define MULTITEST(NAME, MSG, SPEC) <%void: DESLASH(NAME)(me string: tname)<-{multiNorm(tname, SPEC,"")}%>
 #define WORLDTEST(NAME, MSG, WFILE, SPEC) <%void: DESLASH(NAME)(me string: tname)<-{multiNorm(tname, SPEC, WFILE)}%>
-#define PARSETEST(NAME, MSG, IN, OUT) <%void: DESLASH(NAME)(me string: tname)<-{ParseData(tname, IN, OUT, false)}%>
-#define NORMTEST (NAME, MSG, IN, OUT) <%void: DESLASH(NAME)(me string: tname)<-{ParseData(tname, IN, OUT, true)}%>
+#define PARSETEST(NAME, MSG, IN, OUT) <%void: DESLASH(NAME)(me string: tname)<-{initAndTest(tname, IN, OUT, false)}%>
+#define NORMTEST (NAME, MSG, IN, OUT) <%void: DESLASH(NAME)(me string: tname)<-{initAndTest(tname, IN, OUT, true)}%>
 #define GETFIRST (NAME, MSG, IN, OUT, SKIP) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGETFIRST(tname, IN, OUT, SKIP)}%>
 #define GETNEXT (NAME, MSG, IN, OUT, SKIP) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGETNEXT(tname, IN, OUT, SKIP)}%>
 #define GETFIRSTTIGHT (NAME, MSG, IN, OUT, SKIP) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGETFIRSTTIGHT(tname, IN, OUT, SKIP)}%>
@@ -488,23 +488,26 @@ struct GLOBAL {
 
 NORMTEST(temp/t1,     "Merge many idents",   "_=_=321", "321err")
 //////////////////////////////////////////////////////////////
-    our infon: parseTheTest(me string: testName, me string: data) <- {
-        me EParser: parser
+// Test functions need to do one of these 3:
+//    parse&Extract                           |  call parseAndExtract()
+//    InitCORE -> parse&Extract               |  init_manually then call testLine(..., false)  OR  call initAndTest(..., false)
+//    InitCORE -> parse&Extract -> normalize  |  init_manually then call testLine(..., true)   OR  call initAndTest(..., true)
+
+
+    our infon: parseAndExtract(me string: testName, me string: data) <- {
+        // InitParser -> parse -> extract
+        me ProteusParser: parser
         parser.streamingMode <- false
-        parser.populateGrammar()
         our stateRec: topItem <- parser.initParseFromString(testName, parser.infon_str, data)
         parser.doParse()
         if(parser.doesParseHaveError()){return(NULL)}
-//parser.dump()
-
-      //  topItem <- parser.topDownResolve(parser.lastTopLevelItem, "")
-//parser.displayParse(parser.lastTopLevelItem, "")
         our infon:: parsedInfon
         parser.Extract_infon_to_infon(topItem, parsedInfon)
         return(parsedInfon)
     }
-    me void: normalizeLine(me string: testName, our Agent: agent, me string: in, me string: expected, me bool: doNorm) <- {
-        our infon: testInfon <- parseTheTest(testName, in)
+    me void: testLine(me string: testName, our Agent: agent, me string: in, me string: expected, me bool: doNorm) <- {
+        // ParseAndExtract -> maybe normalize() -> check REQUIREMENT
+        our infon: testInfon <- parseAndExtract(testName, in)
         if(testInfon == NULL){FAIL("Syntax Error in input: " + in)}
         our POV:: testPov; testPov.pItem <- testInfon
         if (doNorm){agent.normalize(testPov)}
@@ -512,15 +515,15 @@ NORMTEST(temp/t1,     "Merge many idents",   "_=_=321", "321err")
         if(expected!=""){REQUIRE(result==expected)}
         return()
     }
-    me void: ParseData(me string: testName, me string: in, me string: expected, me bool: doNorm) <- {
+    me void: initAndTest(me string: testName, me string: in, me string: expected, me bool: doNorm) <- {
         me ProteusCore: CORE
         CORE.init("", false)
-        normalizeLine(testName, CORE.agent, in, expected, doNorm)
+        testLine(testName, CORE.agent, in, expected, doNorm)
         return()
     }
     me void: unitTestGETFIRST(me string: testName, me string: in, me string: expected, me int64: skipDots) <- {
         me string: result
-        our infon: testVector <- parseTheTest(testName, in)
+        our infon: testVector <- parseAndExtract(testName, in)
         our POV:: testPOV
         testPOV.pItem <- testVector
         our POV: resultPOV <- testPOV.getFirst(skipDots)
@@ -531,7 +534,7 @@ NORMTEST(temp/t1,     "Merge many idents",   "_=_=321", "321err")
     }
     me void: unitTestGETFIRSTTIGHT(me string: testName, me string: in, me string: expected, me int64: skipDots) <- {
         me string: result
-        our infon: testVector <- parseTheTest(testName, in)
+        our infon: testVector <- parseAndExtract(testName, in)
         our POV:: testPOV
         testPOV.pItem <- testVector
         our infItr:: ii
@@ -545,7 +548,7 @@ NORMTEST(temp/t1,     "Merge many idents",   "_=_=321", "321err")
     }
     me void: unitTestGETNEXT(me string: testName, me string: in, me string: expected, me int64: skipDots) <- {
         me string: result <- "{"
-        our infon: testVector <- parseTheTest(testName, in)
+        our infon: testVector <- parseAndExtract(testName, in)
         our POV:: testPOV
         testPOV.pItem <- testVector
         our POV: CP  <- testPOV.getFirst(skipDots)
@@ -563,7 +566,7 @@ NORMTEST(temp/t1,     "Merge many idents",   "_=_=321", "321err")
     }
     me void: unitTestGETNEXTTIGHT(me string: testName, me string: in, me string: expected, me int64: skipDots) <- {
         me string: result <- "{"
-        our infon: testVector <- parseTheTest(testName, in)
+        our infon: testVector <- parseAndExtract(testName, in)
         our POV:: testPOV
         testPOV.pItem <- testVector
         our infItr:: ii
@@ -594,7 +597,7 @@ NORMTEST(temp/t1,     "Merge many idents",   "_=_=321", "321err")
             expected <- line.subStr(pos+3,line.size())
         }
         log("IN:<"+testInput+">  EXPECTED:<"+expected+">")
-        normalizeLine(testName, agent, testInput, expected, true)
+        testLine(testName, agent, testInput, expected, true)
     }
     me void: multiNorm(me string: testName, me string: in, me string: worldFileName) <- {
         infonPrinter.debugPrint <- true
