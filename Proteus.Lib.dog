@@ -1,7 +1,7 @@
 //////////////////  Structures For Working with Proteus
 // Proteus.dog
 
-LinuxTestBuild: Platform='Linux' CPU='amd64' Lang='CPP' testMode='makeTests';
+LinuxTestBuild: Platform='Linux' CPU='amd64' Lang='CPP' LangVersion='GNU' testMode='makeTests';
 //JavaTestBuild:  Platform='Swing' CPU='amd64' Lang='Java' testMode='makeTests';
 //LinuxBuild:     Platform='Linux' CPU='amd64' Lang='CPP' optimize='speed';
 
@@ -17,8 +17,6 @@ featuresNeeded = [Unicode, BigNumbers, Threads, EarleyParser, GraphLogger]
 
 LicenseText = `This file is part of the "Proteus Language suite" All Rights Reserved.`
 infonDumpMode='text'
-
-do ManageCmdLine(cmd)
 
 #include infonIO.dog
 #include infonList.dog
@@ -113,7 +111,7 @@ model infon{
     me List<our POV>: wrkList
     me List<our POV>: usedWrkList
     me List<our PartPath>: parts
-    me string: includeSpec // identify a stream to #include
+    me string: includeSpec // identify a stream to #insert
     our infon: includeInfn // infon evaluates to a string to parse as Proteus
     our PartPath: partRef
     our infon: proxy    // If not NULL, this is a reference infon/
@@ -463,13 +461,11 @@ struct GLOBAL{
     me SyncLock: streamingNormLock
 
     me bool: canStreamThoNotDone(our infon: inf) <- {
-        log("   INF:"+toString(inf))
-        if(inf.itmMode!=mItem){ log("@A"); return(false)}
+        if(inf.itmMode!=mItem){return(false)}
        // if(inf.infMode!=isLiteral)      {log("@B"); return(false)}
-        log("   fType:"+toString(inf.value.fType))
-        if(inf.value.fType==tUnset)        {log("@C"); return(false)}
+       // log("   fType:"+toString(inf.value.fType))
+        if(inf.value.fType==tUnset)        {return(false)}
        // if(inf.value.format!=fUnknown)  {log("@D"); return(false)}
-        log("@True");
         return(true)
     }
 
@@ -1633,7 +1629,7 @@ grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=green")
         me int: count <- 0
         logSegIn("PAI")
         while(continueLoop){
-            continueLoop <- false // True: keep doing these steps now. False: Stop and wait for other agenda items to complete and filfill your subscription.
+            continueLoop <- false // True: keep doing these steps now. False: Stop and wait for other agenda items to complete and fulfill your subscription.
             switch(aItem.ruleSet){
                 case rsInfon:{
                     if(aItem.LHS_item.pItem.isNormed){
@@ -1645,7 +1641,24 @@ grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=green")
                     }
                     if(!aItem.initRulesApplied){endBracket<-"{"}
                     initRules(aItem)
-                    if(wordDefRules(aItem)){continueLoop <- true}
+
+                    if(aItem.LHS_item.pItem.itmMode==mIncludeStream){ // Normalize the specified SUB-stream
+                        log("SUB_NORMING:"+aItem.LHS_item.pItem.includeSpec)
+                        aItem.LHS_item.pItem.itmMode <- mItem
+                        agent.CORE.normalizeFromStreamSpec(aItem.LHS_item, aItem.LHS_item.pItem.includeSpec)
+
+                        if(!aItem.LHS_item.hasPropagated){
+                            if(!aItem.dontProcess){
+                                logSeg("-MrgLHS")
+                                processMergeViaAgenda(aItem.LHS_item, aItem.RHS, false, aItem, aItem, aItem.priority)
+                                //stopAndWait <- true
+                                aItem.LHS_item.hasPropagated <- true
+                            }
+                        }
+
+                        continueLoop <- false
+                    }
+                    else if(wordDefRules(aItem)){continueLoop <- true}
                     else if(rangeRules(aItem)){continueLoop <- true}
                     else if(derefWordRules(aItem)){continueLoop <- true}
                     else if(funcArgRules(aItem)){continueLoop <- true}
@@ -1932,10 +1945,12 @@ grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=green")
 //////////////////////////
 // Infon Interface Routines
 struct Agent{
-    our infon: world
+    our infon: device
     our infon: user
+    our infon: world
     me AgentContext: context
     me WorldManager: worldMgr
+    their ProteusCore: CORE
     me Locale: locale
     our Map<string, string>: settings
     me int: errorStatus
@@ -1977,34 +1992,12 @@ struct Agent{
         if(key=='locale'){setLocale(value); return(2)}
         return(1)
     }
-    void: init(our infon: World) <- {
-        world <- NULL
-        user  <- NULL
-        if(World==NULL){
-            Allocate(World); World.setToList()
-        }
-        if(World.value.fType!=LST){// or World.value.items.isEmpty()){
-             // TODO: Log error messages
-            print("World is not valid for agent.\n")
-            return()
-        }
-        if(World.value.tailUnfinished == false){
-            log("World must be unfinished with '...' for agent.\n")
-            return()
-        }
-        world <- World
-        Allocate(user)
-        context.init()
-
+    void: init(their ProteusCore: core) <- {
         Allocate(settings)
-        worldMgr.init(this)
-        errorStatus <- 0
-        errorMesg <- ""
-    }
-    void: init2(our Map<string, string>: Settings) <- {
-        settings <- Settings
-        Allocate(world); world.setToList()
-        Allocate(user);  user.setToList()  // Set user to person:{...}
+        CORE <- core
+        Allocate(device); device.setToList()
+        Allocate(user);   user.setToList()
+        Allocate(world);  world.setToList()
         context.init()
         worldMgr.init(this)
         errorStatus <- 0
@@ -2028,7 +2021,9 @@ struct ThreadedNormalizer: inherits=Threads {
             me MutexMngr: MtxMgr{streamingNormMutex}
             while(!item.parseFinished and (item.value.items.isEmpty() or !canStreamThoNotDone(item.value.items.first()))){
               //  log("    parseFinished:" + toString(item.parseFinished) + ";  isEmpty{}:" + toString(item.value.items.isEmpty()) )
+                log("streamingNormLock.wait::ThreadedNormalizer")
                 streamingNormLock.wait(MtxMgr)
+                log("streamingNormLock.DONE::ThreadedNormalizer")
             }
         }
         log("OPENED NORM_THREAD")
@@ -2043,29 +2038,40 @@ struct ProteusCore{
     me ProteusParser: parser
     me string: errorMesg
 
-    our infon: parseAndExtractStream(their strBuf: streamToParse) <- {
+    our stateRec: parse(their ProteusParser: innrParser, their strBuf: streamToParse) <- {
         errorMesg <- ""
-        our stateRec: topParseNode <- parser.initParseFromStream(parser.infon_str, streamToParse)
-        parser.doParse()
-        if(parser.doesParseHaveError()){
-            errorMesg <- parser.errorMesg
+        our stateRec: topParseNode <- innrParser.initParseFromStream(innrParser.infon_str, streamToParse)
+        innrParser.CORE <- self
+        innrParser.doParse()
+        if(innrParser.doesParseHaveError()){
+            errorMesg <- innrParser.errorMesg
             print(errorMesg+"\n\n")
             return(NULL)
-        } else {
-            //parser.resolve(parser.lastTopLevelItem, "")
-            //parser.dumpGraph("parseAndExtract", 1)  // uncomment for debugging
+        } else {return(topParseNode)}
+    }
+
+    our infon: parseAndExtractStream(their strBuf: streamToParse) <- {
+        our stateRec: topParseNode <- parse(parser, streamToParse)
+        if(topParseNode){
             our infon:: crntInfon
             parser.Extract_infon_to_infon(topParseNode, crntInfon)
             return(crntInfon)
-        }
+        } else {return(NULL)}
     }
 
     our infon: parseAndExtractString(me string: textToParse, me string: streamName) <- {
         their strBuf:: bufToParse
-        bufToParse.init(streamName)
-        bufToParse.putStr(textToParse)
-        bufToParse.close()
+        bufToParse.initForString(textToParse, streamName)
         return(parseAndExtractStream(bufToParse))
+    }
+
+    void: initParserParseExtractNormalizeInfon_stream(our POV: toFill, their strBuf: streamToParse) <- {
+        our ProteusParser:: innrParser
+        our stateRec: topParseNode <- parse(innrParser, streamToParse)
+        if(topParseNode){
+            innrParser.Extract_infon_to_infon(topParseNode, toFill.pItem)
+            agent.normalize(toFill)
+        }
     }
 
     me bool: loadWorld(me string: filename) <- {
@@ -2083,6 +2089,26 @@ struct ProteusCore{
         agent.world <- WORLD
         our POV:: normPov; normPov.pItem <- agent.world
         agent.normalize(normPov)
+        return(true)
+    }
+
+    me bool: normalizeFromStreamSpec(our POV: toFill, me string: streamSpec) <- {
+        trimWS(streamSpec)
+        log("ProteusCORE:Normalize:"+streamSpec)
+        me int: colonPos <- streamSpec.find(":")
+        me string: streamSpecType <- streamSpec.subStr(0,colonPos)
+        if(streamSpecType!="file"){
+            logFatalError("Unknown file specification type:"+streamSpecType)
+        }
+        me string: filename <- streamSpec.subStr(colonPos+1)
+        me string: infonStr <- readAssetAsString(filename)
+        if(infonStr==""){
+            errorMesg <- "Proteus file '"+filename+"' not found"
+            return(false)
+        }
+        their strBuf:: bufToParse
+        bufToParse.initForString(infonStr, streamSpec)
+        initParserParseExtractNormalizeInfon_stream(toFill, bufToParse)
         return(true)
     }
 
@@ -2125,18 +2151,17 @@ struct ProteusCore{
 
     void: setStreamingMode(me bool: streamMode) <- {parser.setStreamingMode(streamMode)}
 
-    me bool: init(me string: worldFileName, me bool: streamingMode) <- {
+    me bool: init(me string: worldFileName, me bool: streamingMode<-false) <- {
         errorMesg <- ""
         //log("WORLD:"+worldFileName)
         initHardFuncNames()
         setStreamingMode(streamingMode)
         parser.populateGrammar()
+        parser.CORE <- self
         Allocate(agent)
+        agent.init(this)
         if(worldFileName!=""){
             if(!loadWorld(worldFileName)) {logFatalError(errorMesg)}
-            agent.init(agent.world)
-        }else{// No World Loaded
-            agent.init(NULL)
         }
         agent.locale <- unicodeMgr.getSystemLocale()
         me string: fileDir <- getFilesDirAsString()+"/sessionDB.pr"
