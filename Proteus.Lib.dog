@@ -115,7 +115,8 @@ model infon{
     me string: includeSpec // identify a stream to #insert
     our infon: includeInfn // infon evaluates to a string to parse as Proteus
     our PartPath: partRef
-    our infon: proxy    // If not NULL, this is a reference infon/
+    our infon: proxy       // If not NULL, this is a reference infon/
+    me uint64: sourceID    // Can be used to track the origin of this infon.
     flag: wrkLstPreped
     flag: wrkItmsAdded
     flag: isOnAgenda    // True if item is currently on agenda
@@ -1924,10 +1925,10 @@ grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=green")
                     label <- recSym +":" +toString(count) + "\n" +aItem.stringify()
                     if(aItem.parent!=NULL){grapher.addArrow(recSym, aItem.parent.mySymbol(), "parent", "color=magenta weight=1000")}
                     else {
-			            if(!aItem.subscribers.isEmpty()){
-			                grapher.addArrow(recSym, aItem.subscribers[0].mySymbol(), "subscriber", "color=brown weight=1000")
-			            }
-		            }
+                                    if(!aItem.subscribers.isEmpty()){
+                                        grapher.addArrow(recSym, aItem.subscribers[0].mySymbol(), "subscriber", "color=brown weight=1000")
+                                    }
+                            }
                 }
             }
             processAgendaItem(aItem, 0)
@@ -2040,26 +2041,29 @@ struct ProteusCore{
     me sessionFile: DB_session
     our infon: WORLD
     our Agent: agent
-    me ProteusParser: parser
+    our EGrammar: infonGrammar
+    me bool: streamingMode
     me string: errorMesg
 
-    our stateRec: parse(their ProteusParser: innrParser, their strBuf: streamToParse) <- {
+    our stateRec: parse(their ProteusParser: parser, their strBuf: streamToParse) <- {
         errorMesg <- ""
-        our stateRec: topParseNode <- innrParser.initParseFromStream(innrParser.infon_str, streamToParse)
-        innrParser.CORE <- self
-        innrParser.doParse()
-        if(innrParser.doesParseHaveError()){
-            errorMesg <- innrParser.errorMesg
+        our stateRec: topParseNode <- parser.initParseFromStream(streamToParse)
+        parser.CORE <- self
+        parser.doParse()
+        if(parser.doesParseHaveError()){
+            errorMesg <- parser.errorMesg
             print(errorMesg+"\n\n")
             return(NULL)
         } else {return(topParseNode)}
     }
 
     our infon: parseAndExtractStream(their strBuf: streamToParse) <- {
+        if(infonGrammar==NULL){Allocate(infonGrammar)}
+        me ProteusParser: parser{infonGrammar, self, streamingMode, 0}
         our stateRec: topParseNode <- parse(parser, streamToParse)
         if(topParseNode){
             our infon:: crntInfon
-            parser.Extract_infon_to_infon(topParseNode, crntInfon)
+            parser.syntax.Extract_infon_to_infon(topParseNode, crntInfon, parser)
             return(crntInfon)
         } else {return(NULL)}
     }
@@ -2071,10 +2075,11 @@ struct ProteusCore{
     }
 
     void: initParserParseExtractNormalizeInfon_stream(our POV: toFill, their strBuf: streamToParse) <- {
-        our ProteusParser:: innrParser
-        our stateRec: topParseNode <- parse(innrParser, streamToParse)
+        if(infonGrammar==NULL){Allocate(infonGrammar)}
+        our ProteusParser:: parser{infonGrammar, self, streamingMode, 0}
+        our stateRec: topParseNode <- parse(parser, streamToParse)
         if(topParseNode){
-            innrParser.Extract_infon_to_infon(topParseNode, toFill.pItem)
+            parser.syntax.Extract_infon_to_infon(topParseNode, toFill.pItem, parser)
             agent.normalize(toFill)
         }
     }
@@ -2154,15 +2159,13 @@ struct ProteusCore{
         DB_session.writeEntry(stmt)
     }
 
-    void: setStreamingMode(me bool: streamMode) <- {parser.setStreamingMode(streamMode)}
+    void: setStreamingMode(me bool: streamMode) <- {streamingMode <- streamMode}
 
     me bool: init(me string: worldFileName, me bool: streamingMode<-false) <- {
         errorMesg <- ""
         //log("WORLD:"+worldFileName)
         initHardFuncNames()
         setStreamingMode(streamingMode)
-        parser.populateGrammar()
-        parser.CORE <- self
         Allocate(agent)
         agent.init(this)
         if(worldFileName!=""){
