@@ -153,8 +153,6 @@ model POV{ // Point-Of-View
                 newInfon.isTentative  <- true
                 newInfNode.tentFromDots <- true
             }
-
-            log("tryAddingTentativeChild:"+toString(newInfon))
             return(newInfNode)
         }else if(lenStatus == "E"){
             pItem.value.tailUnfinished <- false
@@ -286,74 +284,129 @@ model POV{ // Point-Of-View
 model PovList: implements = list {
     our POV: head
     our POV: tail
+    me Mutex: mtx
 
-    void: clear() <- {head <- NULL; tail <- NULL;}
+    void: clear() <- {
+        protect(mtx){
+            head <- NULL; tail <- NULL;
+        }
+    }
 
-    our POV: append(our infon: i) <- {
-        our POV:: newNode {i, NULL, tail}
+
+    our POV: appendPov(our POV: newNode) <- {
+        protect(mtx){
+            newNode.prev <- tail
+            newNode.next <- NULL
+            if(tail!=NULL) {tail.next <- newNode}
+            if(head==NULL) {head <- newNode}
+            tail <- newNode
+        }
+        return(newNode)
+    }
+
+    our POV: append_actual_(our infon: i) <- {
+        our POV:: newNode
+        newNode.pItem <- i
+        newNode.next  <- NULL
+        newNode.prev  <- tail
         if(tail!=NULL) {tail.next <- newNode}
         if(head==NULL) {head <- newNode}
         tail <- newNode
         return(newNode)
     }
+
+    our POV: append(our infon: i) <- {
+        our POV: newNode
+        protect(mtx){
+            newNode <- append_actual_(i)
+        }
+        return(newNode)
+    }
     our POV: prepend(our infon: i) <- {
-        our POV:: newNode {i, head, NULL}
-        if(head!=NULL){head.prev <- newNode}
-        if(tail==NULL) {tail <- newNode}
-        head <- newNode
+        our POV:: newNode
+        protect(mtx){
+            newNode.pItem <- i
+            newNode.next  <- head
+            newNode.prev  <- NULL
+            if(head!=NULL){head.prev <- newNode}
+            if(tail==NULL) {tail <- newNode}
+            head <- newNode
+        }
         return(newNode)
     }
     our POV: pushAsAlt(our POV: pov, our infon: toPush, our POV: pred) <- {
-        our POV: newAlt <- append(toPush)
-        newAlt.outerPOV <- pov
-            newAlt.looseInhtd <- pov.looseInhtd
-            newAlt.looseTop   <- pov.looseTop
-            newAlt.looseMode  <- pov.looseMode
-        newAlt.pushPredecessor(pred)
+        our POV: newAlt
+        protect(mtx){
+            newAlt <- append_actual_(toPush)
+            newAlt.outerPOV <- pov
+                newAlt.looseInhtd <- pov.looseInhtd
+                newAlt.looseTop   <- pov.looseTop
+                newAlt.looseMode  <- pov.looseMode
+            newAlt.pushPredecessor(pred)
+        }
         return(newAlt)
     }
     our POV: erase(our POV: toDel) <- {
-        our POV: retVal <- toDel.prev
-        if(toDel===head){head<-head.next}
-        if(toDel===tail){tail<-tail.prev}
-        if(toDel.prev){toDel.prev.next <- toDel.next}
-        if(toDel.next){toDel.next.prev <- toDel.prev}
+        our POV: retVal
+        protect(mtx){
+            retVal <- toDel.prev
+            if(toDel===head){head<-head.next}
+            if(toDel===tail){tail<-tail.prev}
+            if(toDel.prev){toDel.prev.next <- toDel.next}
+            if(toDel.next){toDel.next.prev <- toDel.prev}
+        }
         return(retVal)
     }
 
     our POV: insertBefore(our POV: position, our infon: i) <- {
-        our POV: prevNode <- position.prev
-        our POV:: newNode {i, position, prevNode}
-        if(prevNode!=NULL){prevNode.next <- newNode}
-        position.prev <- newNode
-        if(head === position){head <- newNode}
+        our POV:: newNode
+        protect(mtx){
+            our POV: prevNode <- position.prev
+            newNode.pItem <- i
+            newNode.next  <- position
+            newNode.prev  <- prevNode
+            if(prevNode!=NULL){prevNode.next <- newNode}
+            position.prev <- newNode
+            if(head === position){head <- newNode}
+        }
         return(newNode)
     }
 
     our POV: insertAfter(our POV: position, our infon: i) <- {
-        our POV: nextNode <- position.next
-        our POV:: newNode {i, nextNode, position}
-        if(nextNode!=NULL){nextNode.prev <- newNode}
-        position.next <- newNode
-        if(tail === position){tail <- newNode}
+        our POV:: newNode
+        protect(mtx){
+            our POV: nextNode <- position.next
+            newNode.pItem <- i
+            newNode.next  <- nextNode
+            newNode.prev  <- position
+            if(nextNode!=NULL){nextNode.prev <- newNode}
+            position.next <- newNode
+            if(tail === position){tail <- newNode}
+        }
         return(newNode)
     }
 
     our infon: popFirst() <- {
-        our infon: retVal <- head.pItem
-        if(head!=NULL){
-            head <- head.next
-            if(head==NULL){tail <- NULL}
+        our infon: retVal
+        protect(mtx){
+            retVal <- head.pItem
+            if(head!=NULL){
+                head <- head.next
+                if(head==NULL){tail <- NULL}
+            }
         }
         return(retVal)
     }
 
     our infon: popLast() <- {
-        our infon: retVal <- tail.pItem
-        if(tail!=NULL){
-            tail <- tail.prev
-            if(tail==NULL){head <- NULL}
-            else{tail.next <- NULL}
+        our infon: retVal
+        protect(mtx){
+            retVal <- tail.pItem
+            if(tail!=NULL){
+                tail <- tail.prev
+                if(tail==NULL){head <- NULL}
+                else{tail.next <- NULL}
+            }
         }
         return(retVal)
     }
@@ -363,13 +416,19 @@ model PovList: implements = list {
     }
 
     our infon: first() <- {
-        if(head) {return(head.pItem)}
-        return(NULL)
+        our infon: retVal <- NULL
+        protect(mtx){
+            if(head) {retVal <- head.pItem}
+        }
+        return(retVal)
     }
 
     our infon: last() <- {
-        if(tail) {return(tail.pItem)}
-        return(NULL)
+        our infon: retVal <- NULL
+        protect(mtx){
+            if(tail) {retVal <- tail.pItem}
+        }
+        return(retVal)
     }
 
     our POV: begin()  <- {return(head)} // Remove these 4 when iterators work correctly
@@ -381,24 +440,30 @@ model PovList: implements = list {
     our POV: back()   <- {return(tail)}
 
     our POV: at(me int: N)  <- {
-        if (head == NULL){return(NULL)}
-        our POV: retVal <- begin()
-        withEach x in RANGE(0..N){
-            retVal <- retVal.next
-            if (retVal == NULL){return(NULL)}
+        our POV: retVal
+        protect(mtx){
+            if (head == NULL){return(NULL)}
+            retVal <- begin()
+            withEach x in RANGE(0..N){
+                retVal <- retVal.next
+                if (retVal == NULL){return(NULL)}
+            }
         }
         return(retVal)
     }
 
     me int: size() <- {
         me int: count <- 0
-        our POV: pov <- head
-        while(pov != NULL){
-            count <- count+1
-            pov <- pov.next
+        protect(mtx){
+            our POV: pov <- head
+            while(pov != NULL){
+                count <- count+1
+                pov <- pov.next
+            }
         }
         return(count)
     }
+    void: __opAssign(me PovList: povLst) <- {head<-povLst.head; tail<-povLst.tail;}
 }
 
 struct POV {}
