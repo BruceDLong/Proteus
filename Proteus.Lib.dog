@@ -289,6 +289,7 @@ model infon{
     void: copyAsTypeTo(our infon: to, me bool: copyWrkList) <- {
         to.flags   <- flags
         to.type    <- type
+        to.doReply <- false
         to.itmMode <- itmMode
         to.infMode <- infMode
         to.intersectPos <- intersectPos
@@ -1454,12 +1455,28 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
     }
 
     // PROPAGATE & PROPAGATE UTILITY FUNCTIONS
+void: waitForExtractionThread(our POV: crntPov, me bool: itrBeginning) <- {
+    our infon: CI <- crntPov.pItem
+    me MutexMngr: MtxMgr{streamingNormMutex}
+    while((!itrBeginning and (crntPov.pParent!=NULL and (crntPov.pParent.pItem.stillParsing and (crntPov.next==NULL or !canStreamThoNotDone(crntPov.next.pItem)))))
+       or (itrBeginning  and (CI.stillParsing and (CI.value.items.isEmpty() or !canStreamThoNotDone(CI))))
+       ){
+        if(CI.doReply){
+            CI.doReply <- false
+            agent.CORE.submitProteusResult(CI.originID, CI.infCharPos, toString(CI));
+        }
+        //log("### GN-LOCKING")
+        streamingNormLock.wait(MtxMgr)
+        //log("### GN-UNLOCKED")
+    }
+}
+
     our POV: findNextLHS(our POV: LHSPov, our infItr: ii, me int64: skipDots, their int64: lvlsUpOnLeft, me bool: itrBeginning, me bool: LHSIsLST, me bool: RHSIsLST, me bool: unknownAsList) <- {
         our POV: LHSPovNxt
         if((!LHSIsLST and !unknownAsList) and RHSIsLST){
-  //        Allocate(LHSPovNxt);  LHSPovNxt <deep- LHSPov
             LHSPovNxt <- LHSPov
         }else{
+            if(streamingNormMode){waitForExtractionThread(LHSPov, itrBeginning)}
             LHSPovNxt <- LHSPov.getNextTight(ii, skipDots, lvlsUpOnLeft, false, itrBeginning)
         }
         if(LHSPovNxt == NULL){logSeg("-LNxt_NULL")}else{logSeg("-nxtL")}
@@ -1472,6 +1489,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
             RHSPovNxt <deep- RHSPov
             RHSPovNxt.looseInhtd <- true
         }else{
+            if(streamingNormMode){waitForExtractionThread(RHSPov, itrBeginning)}
             RHSPovNxt <- RHSPov.getNextTight(ii, skipDots, lvlsUpOnRight, false, itrBeginning)
 //  if(RHSPovNxt!=NULL and lvlsUpOnRight==0){RHSPovNxt.pItem.asRHSInternalIdent <- RHSPov.pItem.asRHSInternalIdent}
         }
@@ -2068,8 +2086,8 @@ struct ThreadedNormalizer: inherits=Threads {
         log("OPENING NORM_THREAD: "+infonSourceStr)
         if(streamingNormMode){
             me MutexMngr: MtxMgr{streamingNormMutex}
-            //    log("    parseFinished:" + toString(item.parseFinished) + ";  isEmpty{}:" + toString(item.value.items.isEmpty()) )
-            while(!item.parseFinished and (item.value.items.isEmpty() or !canStreamThoNotDone(item.value.items.first()))){
+            //    log("    stillParsing:" + toString(item.stillParsing) + ";  isEmpty{}:" + toString(item.value.items.isEmpty()) )
+            while(item.stillParsing and (item.value.items.isEmpty() or !canStreamThoNotDone(item.value.items.first()))){
                 //log("streamingNormLock.wait::ThreadedNormalizer: "+infonSourceStr)
                 streamingNormLock.wait(MtxMgr)
                 //log("streamingNormLock.DONE::ThreadedNormalizer: "+infonSourceStr)
