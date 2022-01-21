@@ -292,6 +292,8 @@ model infon{
         to.doReply <- false
         to.itmMode <- itmMode
         to.infMode <- infMode
+    to.originID   <- originID
+    to.infCharPos <- infCharPos
         to.intersectPos <- intersectPos
         infSize.copyAsTypeTo(to.infSize)
         value.copyAsTypeTo(to.value)
@@ -1154,6 +1156,8 @@ struct WorldManager{
                             else{} //TODO: lookup in index to optimize
                         }
                         if(!path){
+                            me bool: doReply <- part.path.doReply
+                            if(doReply){part.path.doReply <- false}
                             our infon:: skipPtn
                                 part.path.copyAsTypeTo(skipPtn, false)
                                 skipPtn.asNot                 <- true
@@ -1172,9 +1176,13 @@ struct WorldManager{
                                 newInnr.value.items.append(part.path)
                             Allocate(path)
                                 path.convertThisToIntersection(newInnr, fromGiven)
+                                path.doReply                  <- doReply
                                 newInnr.value.sizeMode        <- fromCount
                                 path.value.sizeMode           <- fromCount
                                 path.infSize.fType            <- NUM
+                    path.originID             <- CI.originID
+                    path.infCharPos           <- CI.infCharPos
+                    print("path.infCharPos:", path.infCharPos, "\n")
                             newPov <- path.innr.addInfonToWrkList(CI, true)
                             newPov.looseMode <- false; newPov.looseTop  <- true
                         }
@@ -1200,8 +1208,10 @@ struct WorldManager{
                 }
                 if(path==NULL){logFatalError("Handle path is null")}
                 path.takeWrkListFrom(part.path, true)
-                if(!part.hasSemiColon){aItem.LHS_item.pItem <- path}
-                else{
+                if(!part.hasSemiColon){
+                    aItem.LHS_item.pItem <- path
+             //aItem.LHS_item.hasPropagated <- false
+                }else{
                     our POV:: pathPov
                     pathPov.pItem <- path
                     our AItem: newAItem <-  processInfonViaAgenda(pathPov, NULL, aItem, aItem.priority)
@@ -1804,16 +1814,20 @@ void: waitForExtractionThread(our POV: crntPov, me bool: itrBeginning) <- {
                                 me bool: parentListIsAsNot <- mrgParent!=NULL and mrgParent.LHS_item.applyAsNot(mrgParent.RHS)
                                 our POV: remainder
                                 aItem.mergeStatus <- msAccept
-                                if(!aItem.looseSize and !aItem.LHS_item.pItem.type.isCompatibleWith(aItem.RHS.pItem.type)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true}
+                                if(aItem.RHS.pItem.intersectPos == ipNoIntersect){ // Doesn't cover case very well
+                                    if(!aItem.looseSize and !aItem.LHS_item.pItem.type.isCompatibleWith(aItem.RHS.pItem.type)){aItem.mergeStatus<-msReject}
+                                }
                                 if(aItem.mergeStatus!=msReject){mergeSizeRules(aItem)}
                                 if(aItem.mergeStatus!=msReject){remainder <- mergeRules(aItem)}
-                                our POV: RHSSide; if(remainder==NULL){RHSSide <- aItem.RHS}
-                              if(aItem.mergeStatus!=msPending){
                                 if(invertAcceptance){
                                     if(aItem.mergeStatus==msAccept){aItem.mergeStatus<-msReject}
                                     else if(aItem.mergeStatus==msReject){aItem.mergeStatus<-msAccept}
                                     logSeg("-INVRT")
                                 }
+                                if(aItem.mergeStatus == msReject){aItem.LHS_item.rejected <- true}
+                                else{aItem.LHS_item.rejected <- false}
+                                our POV: RHSSide; if(remainder==NULL){RHSSide <- aItem.RHS}
+                              if(aItem.mergeStatus!=msPending){
                                 if(aItem.mergeStatus!=msReject){
                                     logSeg("-MG1-"+mergeStatusStrings[aItem.mergeStatus])
                                     if(!aItem.looseSize and aItem.RHS.pItem.generality==gConcrete){
@@ -1945,7 +1959,9 @@ void: waitForExtractionThread(our POV: crntPov, me bool: itrBeginning) <- {
                                 doFulfillSubs <- true
                             }
                             if(newTop){
-                                newTop.itmMode <- aItem.LHS_item.pItem.itmMode
+                                newTop.itmMode       <- aItem.LHS_item.pItem.itmMode
+                                newTop.doReply       <- aItem.LHS_item.pItem.doReply
+        newTop.originID      <- aItem.LHS_item.pItem.originID // // WRONG! This changes the original, need to track this origin separately in POV or aItem
                                 aItem.LHS_item.pItem <- newTop
                             }else{} // TODO: return Subscriptions
                             aItem.step <- 2
@@ -2031,6 +2047,7 @@ struct Agent{
         worldMgr.addAItemToAgenda(normPIVA)
         //log("Norm_PIVA:"+toString(normPIVA))
         worldMgr.processAgenda()
+        log("NORMED:" + toString(normPov.pItem))
     }
     void: extendAndNorm(our infon: toExtend, our infon: extension) <- {
         if(toExtend.value.tailUnfinished == false){logFatalError("Extendee must be unfinished with '...'.\n")}
@@ -2092,6 +2109,7 @@ struct ThreadedNormalizer: inherits=Threads {
                 streamingNormLock.wait(MtxMgr)
                 //log("streamingNormLock.DONE::ThreadedNormalizer: "+infonSourceStr)
             }
+            print("TOP's FirstItem:",item.value.items.first().mySymbol(),"\n")
         }
         log("OPENED NORM_THREAD: "+infonSourceStr)
         agent.normalize(pov)
