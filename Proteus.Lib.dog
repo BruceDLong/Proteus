@@ -635,6 +635,15 @@ struct pureInfon{
 
 struct GLOBAL{me ModelManager: modelMngr}
 
+struct PropagateRecord{  // Store a call to propagateProxy and propagate it later. Because propagate may block so we need to delay it.
+    our AItem: aItem
+    our POV: LHSPov
+    our POV: RHSPov
+    our POV: remainder
+    me bool: looseSize
+    bool: dontEnque
+}
+
 struct WorldManager{
     their Agent: agent
     me Multimap<me int64, our AItem>: agenda
@@ -652,14 +661,14 @@ struct WorldManager{
     }
     me bool: addAItemToAgenda(our AItem: aItem) <- {
         me bool: itmAdded <- true
-        me string: logStr <- "        ADD_TO_AGENDA:"+toString(aItem)
+        me string: logStr <- "        ADD_TO_AGENDA:"+shortedStr(toString(aItem),120)+"  PRIORITY:"+toString(aItem.priority)
         if(aItem.ruleSet == rsInfon){
             //if(!aItem.LHS_item.pItem.isOnAgenda){
                 agenda.insert(aItem.priority, aItem)
                 aItem.LHS_item.pItem.isOnAgenda <- true
             //} else {logStr <- logStr + " Already on agenda!"; itmAdded <- false}
         }else{agenda.insert(aItem.priority, aItem)}
-        //log(logStr)
+        log(logStr)
         return(itmAdded)
     }
     our AItem: processInfonViaAgenda(our POV: pov, our AItem: subscriber, our AItem: aParent, me int64: priority)<-{
@@ -1181,7 +1190,7 @@ struct WorldManager{
                                 newPath.infSize.fType            <- NUM
                     newPath.originID             <- CI.originID
                     newPath.infCharPos           <- CI.infCharPos
-                    print("newPath.infCharPos:", newPath.infCharPos, "\n")
+                    //print("newPath.infCharPos:", newPath.infCharPos, "\n")
                             newPov <- newPath.innr.addInfonToWrkList(CI, true)
                             newPov.looseMode <- false; newPov.looseTop  <- true
                         }
@@ -1464,28 +1473,11 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
     }
 
     // PROPAGATE & PROPAGATE UTILITY FUNCTIONS
-void: waitForExtractionThread(our POV: crntPov, me bool: itrBeginning) <- {
-    our infon: CI <- crntPov.pItem
-    me MutexMngr: MtxMgr{streamingNormMutex}
-    while((!itrBeginning and (crntPov.pParent!=NULL and (crntPov.pParent.pItem.stillParsing and (crntPov.next==NULL or !canStreamThoNotDone(crntPov.next.pItem)))))
-       or (itrBeginning  and (CI.stillParsing and (CI.value.items.isEmpty() or !canStreamThoNotDone(CI))))
-       ){
-        if(CI.doReply){
-            CI.doReply <- false
-            agent.CORE.submitProteusResult(CI.originID, CI.infCharPos, toString(CI));
-        }
-        //log("### GN-LOCKING")
-        streamingNormLock.wait(MtxMgr)
-        //log("### GN-UNLOCKED")
-    }
-}
-
     our POV: findNextLHS(our POV: LHSPov, our infItr: ii, me int64: skipDots, their int64: lvlsUpOnLeft, me bool: itrBeginning, me bool: LHSIsLST, me bool: RHSIsLST, me bool: unknownAsList) <- {
         our POV: LHSPovNxt
         if((!LHSIsLST and !unknownAsList) and RHSIsLST){
             LHSPovNxt <- LHSPov
         }else{
-            if(streamingNormMode){waitForExtractionThread(LHSPov, itrBeginning)}
             LHSPovNxt <- LHSPov.getNextTight(ii, skipDots, lvlsUpOnLeft, false, itrBeginning)
         }
         if(LHSPovNxt == NULL){logSeg("-LNxt_NULL")}else{logSeg("-nxtL")}
@@ -1498,7 +1490,6 @@ void: waitForExtractionThread(our POV: crntPov, me bool: itrBeginning) <- {
             RHSPovNxt <deep- RHSPov
             RHSPovNxt.looseInhtd <- true
         }else{
-            if(streamingNormMode){waitForExtractionThread(RHSPov, itrBeginning)}
             RHSPovNxt <- RHSPov.getNextTight(ii, skipDots, lvlsUpOnRight, false, itrBeginning)
 //  if(RHSPovNxt!=NULL and lvlsUpOnRight==0){RHSPovNxt.pItem.asRHSInternalIdent <- RHSPov.pItem.asRHSInternalIdent}
         }
@@ -1521,7 +1512,7 @@ void: waitForExtractionThread(our POV: crntPov, me bool: itrBeginning) <- {
         log(logStr)
         logSegIn("PROP")
         // Gather information
-        me bool: skipPIVA <- false
+        me bool: RhsAttached<- true
         me bool: RHSExists  <- RHSPov != NULL
         me bool: RorRExists <- RHSExists or remainder!=NULL
         me bool: LHSIsLST   <- (LHSPov.pItem.value.fType==LST and LHSPov.pItem.value.format!=fConcat)
@@ -1546,26 +1537,21 @@ void: waitForExtractionThread(our POV: crntPov, me bool: itrBeginning) <- {
         // Fetch next RHS: CHECK: aParent
         if(remainder!=NULL){RHSPovNext <- remainder}
         else if(RHSExists and aParent != NULL and aParent.RHSItr != NULL){
-            me int64: skipDots <- 0; if(dontEnque){skipDots<-INT64_MAX}
-            RHSPovNext <- findNextRHS(adjRhsPOV, aParent.RHSItr, skipDots, lvlsUpOnRight, RHSitrBeginning, LHSIsLST, RHSIsLST)
+            me int64: skipDotsR <- 0; if(dontEnque){skipDotsR<-INT64_MAX}
+            RHSPovNext <- findNextRHS(adjRhsPOV, aParent.RHSItr, skipDotsR, lvlsUpOnRight, RHSitrBeginning, LHSIsLST, RHSIsLST)
             if(RHSPovNext==NULL and adjRhsPOV.pItem.intersectPos != ipNoIntersect and adjRhsPOV.next==NULL){
-                skipPIVA <- true // RHS is an unattached intersect
-                //log("skipPIVA")
+                RhsAttached <- false // RHS is an unattached intersect
             }
         }
-        if(RHSExists and aParent!=NULL and aParent.LHS_item.pItem.value.sizeMode!=fromGiven and LHSPov.pItem.isTentative and !LHSPov.applyAsNot(RHSPov) and !RHSPov.pItem.isTentative and !skipPIVA and !identIsInternal){
+        if(RHSExists and aParent!=NULL and aParent.LHS_item.pItem.value.sizeMode!=fromGiven and LHSPov.pItem.isTentative and !LHSPov.applyAsNot(RHSPov) and !RHSPov.pItem.isTentative and !identIsInternal and RhsAttached){
             LHSPov.pItem.isTentative <- false; logSeg("-resetTent:D")
         }
-        me bool: RHSisFinished <- (RHSPovNext == NULL and !skipPIVA) or lvlsUpOnRight>0
-
-        me int64: skipDots <- 0;
-        if(RHSPovNext == NULL){ skipDots <- lvlsUpOnRight}
-        if(skipDots==0 and (dontEnque or !RorRExists)){ skipDots<-INT64_MAX}
 
         // Fetch next LHS
         if(aParent == NULL){LHSPovNext <- NULL}  // At very top infon or propagating a lone RHS or intersect.
         else{
-            LHSPovNext <- findNextLHS(adjLhsPOV, aParent.LHSItr, skipDots, lvlsUpOnLeft, LHSitrBeginning, LHSIsLST, RHSIsLST, false)
+            me int64: skipDotsL <- 0;   if(RHSPovNext == NULL){ skipDotsL <- lvlsUpOnRight}    if(skipDotsL==0 and (dontEnque or !RorRExists)){ skipDotsL<-INT64_MAX}
+            LHSPovNext <- findNextLHS(adjLhsPOV, aParent.LHSItr, skipDotsL, lvlsUpOnLeft, LHSitrBeginning, LHSIsLST, RHSIsLST, false)
             if(lvlsUpOnLeft>0 and LHSPovNext!=NULL and LHSPovNext.applyAsNot(RHSPovNext)){ // Eg Coming out of an LHS like: !char:{...}
                 if(aParent.mergeStatus==msUnknown){ // If it's msUnknown no 'mismatch' has been found so it's really a reject.
                     aParent.mergeStatus<-msReject
@@ -1582,51 +1568,39 @@ void: waitForExtractionThread(our POV: crntPov, me bool: itrBeginning) <- {
         if(lvlsUpOnLeft>0 and nxtsParent.parent!=NULL){nxtsParent <- nxtsParent.parent.parent} // If BUG, maybe loop this over levels
         while(nxtsParent!=NULL and nxtsParent.LHS_item.pItem.intersectPos != ipNoIntersect and nxtsParent.parent!=NULL){nxtsParent <- nxtsParent.parent.parent}
 
-        me bool: LHSHasAlt <- (LHSPovNext != NULL and LHSPovNext.altPOV != NULL)
-        me bool: RHSHasAlt <- (RHSPovNext != NULL and RHSPovNext.altPOV != NULL)
         me bool: candidateForLast <- false
         if(!dontEnque){
-            me bool: isLooseSize  <- aParent!=NULL and aParent.RHS!=NULL and aParent.RHS.looseSize()
-            me bool: LHSisFinished <- LHSPovNext == NULL or lvlsUpOnLeft>0 or LHSPovNext.tentFromDots
-            their POV: povParent <- adjLhsPOV.pParent
-            if(LHSitrBeginning){povParent <- adjLhsPOV}
-            if((RorRExists and ((LHSisFinished and RHSisFinished) or (isLooseSize and (povParent!=NULL and povParent.pItem.infSize.format==fUnknown) )))
-                or (lvlsUpOnLeft>0 and LHSPov.outerPOV==NULL and !povParent.pItem.value.tailUnfinished)
-              ){
-                if(LHSitrBeginning){
-                    //log(idnt+"   candidatesForLastItem:" + adjLhsPOV.stringify() + "   EndsOnA:"+LHSPovNext.stringify())
-                    povParent.addCandidateForLastItem(LHSPovNext)
-                    candidateForLast <- true
-                }else{
-                    if(LHSPov.pItem.intersectPos == ipNoIntersect and povParent!=NULL){
-    //~ if(adjLhsPOV.pParent.pItem.cnvtToFunc  and (RorRExists and RHSisFinished)) { //or adjLhsPOV.pParent.pItem.mySymbol()=="infon26"){
-        //~ log("INFON61_HACK:"+aParent.LHS_item.stringify())
-        //~ log("adjLhsPOV:"+adjLhsPOV.stringify())
-        //~ //log(idnt+"   candidatesForLastItem-T:" +  adjLhsPOV.pParent.outerPOV.pParent.stringify() + "   EndsOnC:"+aParent.LHS_item.outerPOV.stringify())
-       //~ // adjLhsPOV.pParent.outerPOV.pParent.addCandidateForLastItem(aParent.LHS_item.outerPOV)
-//~ //aParent.LHS_item.outerPOV.next.pItem.value.items.tail.pItem.isTentative <- true
-      //~ //  log("FIndingNext:"+aParent.LHS_item.outerPOV.next.stringify())
-    //~ }
-                        //log(idnt+"   candidatesForLastItem:" + povParent.stringify() + "   EndsOnB:"+LHSPov.stringify())
-                        povParent.addCandidateForLastItem(LHSPov)
+            // Set povParent's CandidateForLastItem / flag and povParent.keepDots.
+            {  // REfs after wait(): LHSPovNext==NULL, LHSPovNext.tentFromDots, lvlsUpOnLeft, RHSPovNext==NULL, RhsAttached, lvlsUpOnRight; SETs: candidateForLast, povParent.keepDots
+                me bool: isLooseSize  <- aParent!=NULL and aParent.RHS!=NULL and aParent.RHS.looseSize()
+                me bool: LHSisFinished <- LHSPovNext == NULL or lvlsUpOnLeft>0 or LHSPovNext.tentFromDots
+                me bool: RHSisFinished <- (RHSPovNext == NULL and RhsAttached) or lvlsUpOnRight>0
+                their POV: povParent; if(LHSitrBeginning){povParent <- adjLhsPOV} else {povParent <- adjLhsPOV.pParent}
+                if((RorRExists and ((LHSisFinished and RHSisFinished) or (isLooseSize and (povParent!=NULL and povParent.pItem.infSize.format==fUnknown) )))
+                    or (lvlsUpOnLeft>0 and LHSPov.outerPOV==NULL and !povParent.pItem.value.tailUnfinished)
+                  ){
+                    if(LHSitrBeginning){ //log(idnt+"   candidatesForLastItem:" + adjLhsPOV.stringify() + "   EndsOnA:"+LHSPovNext.stringify())
+                        povParent.addCandidateForLastItem(LHSPovNext)
                         candidateForLast <- true
-                    }//else {log("NO_candidatesForLastItem due to [...] or atTop")}
+                    }else{
+                        if(LHSPov.pItem.intersectPos == ipNoIntersect and povParent!=NULL){
+                            povParent.addCandidateForLastItem(LHSPov)
+                            candidateForLast <- true
+                        }//else {log("NO_candidatesForLastItem due to [...] or atTop")}
+                    }
                 }
+                if(!RorRExists and povParent!=NULL){povParent.keepDots <- true}
             }
-//log(idnt+"candidateForLast:"+toString(candidateForLast) +"  lvlsUpOnLeft:"+toString(lvlsUpOnLeft)+" <= lvlsUpOnRight:"+toString(lvlsUpOnRight))
-            if(!RorRExists and povParent!=NULL){povParent.keepDots <- true}
             if(LHSPovNext == NULL){logSegOut("NO_NXTa"); return(NULL)}
             //ENQUEUE FOR PROCESSING
-            me int: RHSsAvailable <- 0
-            our POV: RHSAlt <- RHSPovNext
-            while(RHSAlt){RHSsAvailable <+- 1; RHSAlt <- RHSAlt.altPOV}
-            if(LHSIsFromALT){RHSsAvailable <+- 1}
+            ///me int: RHSsAvailable <- 0; our POV: RHSAltCnt <- RHSPovNext; while(RHSAltCnt){RHSsAvailable <+- 1; RHSAltCnt <- RHSAltCnt.altPOV}; if(LHSIsFromALT){RHSsAvailable <+- 1} // This may be needed later
+            me bool: LHSHasAlt <- (LHSPovNext != NULL and LHSPovNext.altPOV != NULL)
+            me bool: RHSHasAlt <- (RHSPovNext != NULL and RHSPovNext.altPOV != NULL)
             me int: lCount <- 0
             our POV: LHSAlt <- LHSPovNext
             while(LHSAlt){
-                me int: numRHSs <- RHSsAvailable
-                if(RHSHasAlt and LHSAlt.pItem.isTentative){numRHSs <-- 1}
-                RHSAlt <- RHSPovNext
+                /// me int: numRHSs <- RHSsAvailable; if(RHSHasAlt and LHSAlt.pItem.isTentative){numRHSs <-- 1} // numRHSs can be used as an alternate way to do this, and may be needed later.
+                our POV: RHSAlt <- RHSPovNext
                 me bool: predPushed
                 while(RHSAlt){
                     if(LHSAlt.pItem.isTentative and RHSAlt.pItem.isTentative){  // ?=?
@@ -1635,7 +1609,7 @@ void: waitForExtractionThread(our POV: crntPov, me bool: itrBeginning) <- {
                         LHSAlt.pParent.keepDots <- true
          //               log(idnt+"    ENQUEq:"+  LHSAlt.stringify() + " === " + RHSAlt.stringify())
                     } else {
-                        if((lCount>0 and (LHSHasAlt or RHSHasAlt)) or LHSIsFromALT){    //if(numRHSs>1 or lCount>0){
+                        if((lCount>0 and (LHSHasAlt or RHSHasAlt)) or LHSIsFromALT){    /// if(numRHSs>1 or lCount>0){
                                 if(nxtsParent.RHS){ // TODO: should these really be nxtParent instead or aParent? Check: when LHS is a list | left/right-wasSecondVisit | lCount/rCount >0
                                     RHSAlt.looseInhtd <- nxtsParent.RHS.looseInhtd or nxtsParent.RHS.looseMode
                                     RHSAlt.looseTop   <- false
@@ -1669,7 +1643,7 @@ void: waitForExtractionThread(our POV: crntPov, me bool: itrBeginning) <- {
 
         // Schedule Process Infon Via Agenda
         our AItem: PIVA
-        if(!skipPIVA){
+        if(RhsAttached){
             PIVA <- processInfonViaAgenda(LHSPovNext, NULL, nxtsParent, aItem.priority+1)
             if(PIVA){PIVA.candidateForLast <- candidateForLast}
             logSegStartCol("-PropPIVA->"+PIVA.mySymbol(),col2)
@@ -1679,6 +1653,33 @@ void: waitForExtractionThread(our POV: crntPov, me bool: itrBeginning) <- {
         if(RHSPovNext!=NULL){RHSPovNext.altPOV <- NULL}
         logSegOut("");
         return(PIVA)
+    }
+    void: callPropagate(our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque) <- {
+        our AItem: nextAItem <- propagate(aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque)
+        if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
+        if(nextAItem){addAItemToAgenda(nextAItem)}
+    }
+    me List<our PropagateRecord>: propagationsTodo
+    void: propagateProxy(our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque) <- {
+        aItem.mergeFinished <- true
+        me bool: LHSitrBeginning <- aItem.LHSItr!=NULL and LHSPov===aItem.LHSItr.topPOV
+        me int: prediction <- 0; if(LHSitrBeginning){prediction <- 1}
+        if (aItem.pendingTasks+prediction == 0) {
+            fulfillSubscriptions(aItem);
+            our PropagateRecord:: propRec
+            propRec.aItem     <- aItem
+            propRec.LHSPov    <- LHSPov
+            propRec.RHSPov    <- RHSPov
+            propRec.remainder <- remainder
+            propRec.looseSize <- looseSize
+            propRec.dontEnque <- dontEnque
+            propagationsTodo.append(propRec)
+        } else {
+            our AItem: nextAItem <- propagate(aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque)
+            if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
+            if (nextAItem){addAItemToAgenda(nextAItem);}
+        }
+
     }
 
     void: processAgendaItem(our AItem: aItem, me int: AlternativesNestLvl)<-{
@@ -1751,7 +1752,18 @@ void: waitForExtractionThread(our POV: crntPov, me bool: itrBeginning) <- {
                             if(CI.type!=NULL and CI.type.usePOS==posNoun and CI.intersectPos==ipNoIntersect and aItem.distanceToTop()<=2){ // Add this to context
                                 agent.context.addContextItem(aItem.LHS_item.dpItem())
                             }
-                            doFulfillSubs <- true
+                            CI.wasProcessed <- true
+                            if(CI.doReply){
+                                CI.doReply <- false
+                                print("\nDO_REPLY-PAI:"+CI.mySymbol()+"  originID:"+toString(CI.originID) + "  CI:"+shortedStr(toString(CI),100)+"\n")
+                                agent.CORE.submitProteusResult(CI.originID, CI.infCharPos, toString(CI))
+                            }
+
+                            while(!propagationsTodo.isEmpty()){
+                                our PropagateRecord: propRec <-propagationsTodo.first(); propagationsTodo.popFirst()
+                                callPropagate(propRec.aItem, propRec.LHSPov, propRec.RHSPov, propRec.remainder, propRec.looseSize, propRec.dontEnque)
+                            }
+
                             our AItem: aParent <- aItem.parent
                             if(aParent != NULL){
                                 aParent.pendingTasks <-- 1
@@ -1761,12 +1773,8 @@ void: waitForExtractionThread(our POV: crntPov, me bool: itrBeginning) <- {
                                     addAItemToAgenda(aParent)
                                 }
                             }else {logSeg("-NoAParent")}
-                            CI.wasProcessed <- true
-                            if(CI.doReply){
-                                CI.doReply <- false
-                                print("\nDO_REPLY-PAI:"+CI.mySymbol()+"  originID:"+toString(CI.originID) + "  CI:"+shortedStr(toString(CI),100)+"\n")
-                                agent.CORE.submitProteusResult(CI.originID, CI.infCharPos, toString(CI))
-                            }
+
+                            doFulfillSubs <- true
                         } else {logSeg("-TASKS>0:"+toString(aItem.pendingTasks))}
                     }
                     if(!continueLoop){
@@ -1775,7 +1783,6 @@ void: waitForExtractionThread(our POV: crntPov, me bool: itrBeginning) <- {
                     }
                 }
                 case rsMerge:{
-                    our AItem: nextAItem
                     if(aItem.mergeFinished){
                         if(aItem.mergeStatus==msUnknown){
                             if(aItem.LHS_item.applyAsNot(aItem.RHS)){aItem.mergeStatus<-msReject}
@@ -1786,17 +1793,15 @@ void: waitForExtractionThread(our POV: crntPov, me bool: itrBeginning) <- {
                         fulfillSubscriptions(aItem)
                         logSegOut("MFIN")
                         logSeg("}")
-         logSegClear()//               logFlush()
+                        logFlush()
                         return()
                     }
                     if(aItem.RHS==NULL){
                         logSeg("-MG_NoRHS"); endBracket<-"{"
                 //log("NO_RHS:"+ toString(aItem.LHS_item.pItem) + ": "+ aItem.LHS_item.pItem.mySymbol())
                         if(aItem.LHS_item.pItem.value.fType == LST){initListIterators(aItem)}
-                        nextAItem <- propagate(aItem, aItem.LHS_item, NULL, NULL, false, false)
-                        if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
-                        if(nextAItem){addAItemToAgenda(nextAItem)}
-                        aItem.mergeFinished <- true
+
+                        propagateProxy(aItem, aItem.LHS_item, NULL, NULL, false, false)
                     } else {
         if(aItem.step ==0){aItem.step <- 1; endBracket<-"{"}  //TODO: optimize so that skipping step 0 isn't needed.
                         switch(aItem.step){
@@ -1805,8 +1810,7 @@ void: waitForExtractionThread(our POV: crntPov, me bool: itrBeginning) <- {
                                 addAItemToAgenda(PIVA)
                                 logSeg("-MG0"); logSegStartCol("-PIVA->"+PIVA.mySymbol(),col2)
                                 aItem.step <- 1
-                                continueLoop <- true
-                                continue()
+                                continueLoop <- true; continue(); //TODO: Why not just go straight to case 1?
                             }
                             case 1:{
                                 me bool: invertAcceptance <- aItem.LHS_item.applyAsNot(aItem.RHS)
@@ -1835,20 +1839,14 @@ void: waitForExtractionThread(our POV: crntPov, me bool: itrBeginning) <- {
                                         aItem.LHS_item.pItem.proxy <- aItem.RHS.pItem
                                     }
                                     me bool: dontEnque <- false // parentListIsAsNot and mrgParent.mergeStatus==msAccept //aItem.mergeStatus==msReject and aItem.parent.candidateForLast
-                                    nextAItem <- propagate(aItem, aItem.LHS_item, RHSSide, remainder, aItem.looseSize, dontEnque)
-                                    if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
-                                    aItem.mergeFinished <- true
-                                    if(nextAItem){addAItemToAgenda(nextAItem)}
+                                    propagateProxy(aItem, aItem.LHS_item, RHSSide, remainder, aItem.looseSize, dontEnque)
                                 } else{logSeg("-MG1-REJCT")
                                     if(parentListIsAsNot){mrgParent.mergeStatus<-msAccept logSeg("-INV_ACPT")}
                                     their POV: pParent <- aItem.LHS_item.pParent
                                     me bool: parentInfonIsNullableList <- (pParent!=NULL and pParent.pItem.value.items.size()==1 and pParent.pItem.value.tailUnfinished)
                                     if(aItem.parent.candidateForLast or parentInfonIsNullableList or parentListIsAsNot){
                                         me bool: dontEnque <- !parentListIsAsNot // aItem.mergeStatus==msReject and (aItem.parent.candidateForLast or parentInfonIsNullableList)
-                                        nextAItem <- propagate(aItem, aItem.LHS_item, RHSSide, remainder, aItem.looseSize, dontEnque)
-                                        if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
-                                        aItem.mergeFinished <- true
-                                        if(nextAItem){addAItemToAgenda(nextAItem)}
+                                        propagateProxy(aItem, aItem.LHS_item, RHSSide, remainder, aItem.looseSize, dontEnque)
                                     } else {
                                         if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
                                     }
@@ -1862,7 +1860,6 @@ void: waitForExtractionThread(our POV: crntPov, me bool: itrBeginning) <- {
                 case rsIntersect:{
                     our infon: CI   <- aItem.LHS_item.pItem
                     our infon: innr <- CI.innr
-                    our AItem: nextAItem
                     switch(aItem.step){
                         case 0:{
                             endBracket<-"{"
@@ -2104,7 +2101,7 @@ struct ThreadedNormalizer: inherits=Threads {
         if(streamingNormMode){
             me MutexMngr: MtxMgr{streamingNormMutex}
             //    log("    stillParsing:" + toString(item.stillParsing) + ";  isEmpty{}:" + toString(item.value.items.isEmpty()) )
-            while(item.stillParsing and (item.value.items.isEmpty() or !canStreamThoNotDone(item.value.items.first()))){
+            while(item.stillParsing and (item.value.items.isEmpty() and !canStreamThoNotDone(item))){
                 //log("streamingNormLock.wait::ThreadedNormalizer: "+infonSourceStr)
                 streamingNormLock.wait(MtxMgr)
                 //log("streamingNormLock.DONE::ThreadedNormalizer: "+infonSourceStr)
