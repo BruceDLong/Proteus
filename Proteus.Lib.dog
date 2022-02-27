@@ -105,7 +105,6 @@ model infon{
     our infon: funcArgs
     our infon: dotPath
     our infon: innr
-    our infon: proxy
     our WordUse: type
     our WordDefn: definedWord
     me List<our TypeSpec>: typeSpecs
@@ -635,6 +634,33 @@ struct pureInfon{
 
 struct GLOBAL{me ModelManager: modelMngr}
 
+struct Agenda{
+    our POV: topPOV
+    me Multimap<me int64, our AItem>: AItems
+    me Mutex: agendaDoneMutex
+    me SyncLock: agendaDoneLock
+    void: insert(our AItem: aItem, me int64: priority) <- {AItems.insert(priority, aItem)}
+
+    me bool: povIsOnAgenda(our POV:pov)<-{
+        withEach aItem in AItems{
+            if(aItem.ruleSet==rsInfon and aItem.LHS_item===pov){return(true)}
+        }
+        return(false)
+    }
+    me bool: addAItemToAgenda(our AItem: aItem) <- {
+        me bool: itmAdded <- true
+        me string: logStr <- "        ADD_TO_AGENDA:"+shortedStr(toString(aItem),120)+"  PRIORITY:"+toString(aItem.priority)
+        if(aItem.ruleSet == rsInfon){
+            //if(!aItem.LHS_item.pItem.isOnAgenda){
+                insert(aItem, aItem.priority)
+                aItem.LHS_item.pItem.isOnAgenda <- true
+            //} else {logStr <- logStr + " Already on agenda!"; itmAdded <- false}
+        }else{insert(aItem, aItem.priority)}
+        log(logStr)
+        return(itmAdded)
+    }
+}
+
 struct PropagateRecord{  // Store a call to propagateProxy and propagate it later. Because propagate may block so we need to delay it.
     our AItem: aItem
     our POV: LHSPov
@@ -646,33 +672,14 @@ struct PropagateRecord{  // Store a call to propagateProxy and propagate it late
 
 struct WorldManager{
     their Agent: agent
-    me Multimap<me int64, our AItem>: agenda
     const int: col1 <- 75
     const int: col2 <- 130
     const int: col3 <- 150
     const int: col4 <- 162
 
     // AGENDA PROCESSING FUNCTIONS
-    me bool: povIsOnAgenda(our POV:pov)<-{
-        withEach aItem in agenda{
-            if(aItem.ruleSet==rsInfon and aItem.LHS_item===pov){return(true)}
-        }
-        return(false)
-    }
-    me bool: addAItemToAgenda(our AItem: aItem) <- {
-        me bool: itmAdded <- true
-        me string: logStr <- "        ADD_TO_AGENDA:"+shortedStr(toString(aItem),120)+"  PRIORITY:"+toString(aItem.priority)
-        if(aItem.ruleSet == rsInfon){
-            //if(!aItem.LHS_item.pItem.isOnAgenda){
-                agenda.insert(aItem.priority, aItem)
-                aItem.LHS_item.pItem.isOnAgenda <- true
-            //} else {logStr <- logStr + " Already on agenda!"; itmAdded <- false}
-        }else{agenda.insert(aItem.priority, aItem)}
-        log(logStr)
-        return(itmAdded)
-    }
-    our AItem: processInfonViaAgenda(our POV: pov, our AItem: subscriber, our AItem: aParent, me int64: priority)<-{
-        if(povIsOnAgenda(pov)){return(NULL)}
+    our AItem: processInfonViaAgenda(their Agenda: agenda, our POV: pov, our AItem: subscriber, our AItem: aParent, me int64: priority)<-{
+        if(agenda.povIsOnAgenda(pov)){return(NULL)}
         our AItem:: newAItem
         newAItem.ruleSet   <- rsInfon
         newAItem.LHS_item  <- pov
@@ -697,7 +704,7 @@ struct WorldManager{
     //else{log("Parent_NULL; subscriber:"+subscriber.mySymbol() +"  yields:"+newAItem.mySymbol())}
         return(newAItem)
     }
-    our AItem: processMergeViaAgenda(our POV: LHS, our POV: RHS, me bool: looseSize, our AItem: subscriber, our AItem: aParent, me int64: priority)<-{
+    our AItem: processMergeViaAgenda(their Agenda: agenda, our POV: LHS, our POV: RHS, me bool: looseSize, our AItem: subscriber, our AItem: aParent, me int64: priority)<-{
         our AItem:: newAItem
         newAItem.ruleSet   <- rsMerge
         newAItem.LHS_item  <- LHS
@@ -717,11 +724,11 @@ struct WorldManager{
             newAItem.parent <- aParent
             if(!(subscriber===aParent)) {newAItem.parent.pendingTasks <+- 1}
         }
-        addAItemToAgenda(newAItem)
+        agenda.addAItemToAgenda(newAItem)
         logSegStartCol("-PMVA->"+newAItem.mySymbol(),col2)
         return(newAItem)
     }
-    our AItem: processIntersectViaAgenda(our POV: pov, our AItem: subscriber, me int64: priority)<-{
+    our AItem: processIntersectViaAgenda(their Agenda: agenda, our POV: pov, our AItem: subscriber, me int64: priority)<-{
         //log("processINTERSECTViaAgenda:"+ pov.stringify())
         //if(subscriber.parent!=NULL and subscriber.parent.LHSItr!=NULL){log("     LHSItr:"+subscriber.parent.LHSItr.topPOV.stringify())}
         our AItem:: newAItem
@@ -742,26 +749,26 @@ struct WorldManager{
             }
             newAItem.parent <- subscriber
         }
-        addAItemToAgenda(newAItem)
+        agenda.addAItemToAgenda(newAItem)
         logSegStartCol("-PIcVA->"+newAItem.mySymbol(),col2)
         return(newAItem)
     }
-    void: fulfillSubscriptions(our AItem: aItem) <- {
+    void: fulfillSubscriptions(their Agenda: agenda, our AItem: aItem) <- {
         me string: S
         while(!aItem.subscribers.isEmpty()){
             our AItem: sub <- aItem.subscribers.first()
             aItem.subscribers.popFirst()
             sub.LHS_item.pItem.isNormed <- false
             sub.notFirstVisit <- true
-            me bool: itmAdded <- addAItemToAgenda(sub)
+            me bool: itmAdded <- agenda.addAItemToAgenda(sub)
             if(itmAdded){S<+-":"+sub.mySymbol()}
         }
         if(S != ""){logSegStartCol("-FFS"+S,col3)}
     }
-    void: appendToUnfinishedList(our AItem: aItem, our infon: inf) <- {
+    void: appendToUnfinishedList(their Agenda: agenda, our AItem: aItem, our infon: inf) <- {
         if(!inf.value.tailUnfinished){logFatalError("ERROR: tailUnfinished FALSE:"+ toString(inf))}
         inf.value.items.append(inf)
-        addAItemToAgenda(aItem)
+        agenda.addAItemToAgenda(aItem)
     }
 
     // rsINFON UTILITY FUNCTIONS: PREP WORKLIST FUNCTIONS
@@ -893,15 +900,15 @@ struct WorldManager{
         }
         return(changeMade)
     }
-    me bool: function_altRules(our AItem: aItem) <- {
+    me bool: func_altRules(their Agenda: agenda, our AItem: aItem) <- {
         our infon: CI <- aItem.LHS_item.pItem
         if(CI.altRulesApplied){return(false)}
         else{CI.altRulesApplied <- true}
         me bool: stopAndWait <- false
         if(CI.intersectPos != ipNoIntersect){
             logSegIn("fALTS")
-            log("function_altRules:"+aItem.mySymbol())
-            processIntersectViaAgenda(aItem.LHS_item, aItem, aItem.priority)
+            log("func_altRules:"+aItem.mySymbol())
+            processIntersectViaAgenda(agenda, aItem.LHS_item, aItem, aItem.priority)
             logSegOut("")
             stopAndWait <- true
         }
@@ -937,7 +944,7 @@ struct WorldManager{
         }
         return(changeMade)
     }
-    me bool: wrkLstRules(our AItem: aItem) <- {
+    me bool: wrkLstRules(their Agenda: agenda, our AItem: aItem) <- {
         ////////// If "{[....]| ... } <~ outr", prepend outr to wrkList
         logSegIn("WRKLST")
         our infon: lSpecItem <- aItem.LHS_item.pItem
@@ -965,14 +972,14 @@ struct WorldManager{
             LHSPov.hasPropagated <- true
             if(!aItem.dontProcess){
                 logSeg("-MrgWrkItm:"+RHSPov.stringify())
-                processMergeViaAgenda(LHSPov, RHSPov, looseSize, aItem, aItem, aItem.priority)
+                processMergeViaAgenda(agenda, LHSPov, RHSPov, looseSize, aItem, aItem, aItem.priority)
                 stopAndWait <- true
             }else{logSeg("-dontProcess")}
         }
         if(!LHSPov.hasPropagated){
             if(!aItem.dontProcess){
                 logSeg("-MrgLHS")
-                processMergeViaAgenda(LHSPov, RHSPov, false, aItem, aItem, aItem.priority)
+                processMergeViaAgenda(agenda, LHSPov, RHSPov, false, aItem, aItem, aItem.priority)
                 stopAndWait <- true
                 LHSPov.hasPropagated <- true
             }else{logSeg("-dontProcess_LHS")}
@@ -1136,7 +1143,7 @@ struct WorldManager{
         if(JoinIfConcat(aItem.LHS_item)){changeMade <- true}
         return(changeMade)
     }
-    me bool: partsRules(our AItem: aItem) <- {
+    me bool: partsRules(their Agenda: agenda, our AItem: aItem) <- {
         me bool: changeMade <- false
         our infon: CI        <- aItem.LHS_item.pItem
         if(CI.partRef!=NULL){
@@ -1222,9 +1229,9 @@ struct WorldManager{
                 }else{
                     our POV:: pathPov
                     pathPov.pItem <- newPath
-                    our AItem: newAItem <-  processInfonViaAgenda(pathPov, NULL, aItem, aItem.priority)
+                    our AItem: newAItem <-  processInfonViaAgenda(agenda, pathPov, NULL, aItem, aItem.priority)
                     logSegStartCol("-PIVA->"+newAItem.mySymbol(),col2)
-                    addAItemToAgenda(newAItem)
+                    agenda.addAItemToAgenda(newAItem)
                 }
                 changeMade <- true
                 logSegOut("")
@@ -1408,7 +1415,7 @@ struct WorldManager{
         if(aItem.LHSItr==NULL){
             Allocate(aItem.LHSItr); aItem.LHSItr.initialize(aItem.LHS_item)
             lastLineAltID <+- 1; aItem.LHSItr.lineAltID <- lastLineAltID
-me string: nodeID <- aItem.LHSItr.mySymbol()+"L"
+///me string: nodeID <- aItem.LHSItr.mySymbol()+"L"
 //log("InitInfItr:"+nodeID+" ID:"+toString(lastLineAltID) + "   AITEM:"+aItem.mySymbol()+":"+aItem.stringify())
 ///grapher.addNode(nodeID, nodeID, "style=filled color=red")
 ///grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=purple")
@@ -1421,7 +1428,7 @@ me string: nodeID <- aItem.LHSItr.mySymbol()+"L"
         if(aItem.RHS!=NULL and aItem.RHSItr==NULL){
             Allocate(aItem.RHSItr)
             aItem.RHSItr.initialize(aItem.RHS)
-me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
+///me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
 ///grapher.addNode(nodeID, nodeID, "style=filled color=orange")
 ///grapher.addArrow(nodeID, aItem.mySymbol(), "topPov", "color=green")
             our AItem: intPrnt <- aItem.prntOrSub().prntOrSub()
@@ -1497,7 +1504,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
         return(RHSPovNxt)
     }
 
-    our AItem: propagate(our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque) <- {
+    our AItem: propagate(their Agenda: agenda, our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque) <- {
         // Log LHS==RHS
         me string: idnt <- indentStr(aItem.indentLvl)
         me string: logStr <- idnt+"    PROPAGATE:"+shortedStr(toString(LHSPov.pItem), 100)
@@ -1644,7 +1651,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
         // Schedule Process Infon Via Agenda
         our AItem: PIVA
         if(RhsAttached){
-            PIVA <- processInfonViaAgenda(LHSPovNext, NULL, nxtsParent, aItem.priority+1)
+            PIVA <- processInfonViaAgenda(agenda, LHSPovNext, NULL, nxtsParent, aItem.priority+1)
             if(PIVA){PIVA.candidateForLast <- candidateForLast}
             logSegStartCol("-PropPIVA->"+PIVA.mySymbol(),col2)
         }
@@ -1654,18 +1661,18 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
         logSegOut("");
         return(PIVA)
     }
-    void: callPropagate(our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque) <- {
-        our AItem: nextAItem <- propagate(aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque)
-        if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
-        if(nextAItem){addAItemToAgenda(nextAItem)}
+    void: callPropagate(their Agenda: agenda, our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque) <- {
+        our AItem: nextAItem <- propagate(agenda, aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque)
+        if(aItem.pendingTasks==0){fulfillSubscriptions(agenda, aItem)}
+        if(nextAItem){agenda.addAItemToAgenda(nextAItem)}
     }
     me List<our PropagateRecord>: propagationsTodo
-    void: propagateProxy(our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque) <- {
+    void: propagateProxy(their Agenda: agenda, our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque) <- {
         aItem.mergeFinished <- true
         me bool: LHSitrBeginning <- aItem.LHSItr!=NULL and LHSPov===aItem.LHSItr.topPOV
         me int: prediction <- 0; if(LHSitrBeginning){prediction <- 1}
         if (aItem.pendingTasks+prediction == 0) {
-            fulfillSubscriptions(aItem);
+            fulfillSubscriptions(agenda, aItem);
             our PropagateRecord:: propRec
             propRec.aItem     <- aItem
             propRec.LHSPov    <- LHSPov
@@ -1675,14 +1682,14 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
             propRec.dontEnque <- dontEnque
             propagationsTodo.append(propRec)
         } else {
-            our AItem: nextAItem <- propagate(aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque)
-            if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
-            if (nextAItem){addAItemToAgenda(nextAItem);}
+            our AItem: nextAItem <- propagate(agenda, aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque)
+            if(aItem.pendingTasks==0){fulfillSubscriptions(agenda, aItem)}
+            if (nextAItem){agenda.addAItemToAgenda(nextAItem);}
         }
 
     }
 
-    void: processAgendaItem(our AItem: aItem, me int: AlternativesNestLvl)<-{
+    void: processAgendaItem(their Agenda: agenda, our AItem: aItem, me int: AlternativesNestLvl)<-{
         //log("________________________________________")
         me bool: continueLoop    <- true
         me bool: doFulfillSubs <- false
@@ -1701,7 +1708,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
             switch(aItem.ruleSet){
                 case rsInfon:{
                     if(aItem.LHS_item.pItem.isNormed){
-                        fulfillSubscriptions(aItem)
+                        fulfillSubscriptions(agenda, aItem)
                         logSegOut("NRMD")
                         logSeg("{}")
                 logSegClear()//        logFlush()
@@ -1717,7 +1724,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                         if(!aItem.LHS_item.hasPropagated){
                             if(!aItem.dontProcess){
                                 logSeg("-MrgLHS")
-                                processMergeViaAgenda(aItem.LHS_item, aItem.RHS, false, aItem, aItem, aItem.priority)
+                                processMergeViaAgenda(agenda, aItem.LHS_item, aItem.RHS, false, aItem, aItem, aItem.priority)
                                 //stopAndWait <- true
                                 aItem.LHS_item.hasPropagated <- true
                             }
@@ -1726,16 +1733,16 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
 
                         continueLoop <- false
                     }
-                    else if(wordDefRules(aItem))  {continueLoop <- true}
-                    else if(rangeRules(aItem))    {continueLoop <- true}
-                    else if(splitLangText(aItem)) {continueLoop <- true}
-                    else if(derefWordRules(aItem)){continueLoop <- true}
-                    else if(funcArgRules(aItem))  {continueLoop <- true}
-                    else if(function_altRules(aItem)){continueLoop <- false}
-                    else if(lookUpCursorRules(aItem)){continueLoop <- true}
-                    else if(wrkLstRules(aItem))   {continueLoop <- false}
+                    else if(wordDefRules(aItem))          {continueLoop <- true}
+                    else if(rangeRules(aItem))            {continueLoop <- true}
+                    else if(splitLangText(aItem))         {continueLoop <- true}
+                    else if(derefWordRules(aItem))        {continueLoop <- true}
+                    else if(funcArgRules(aItem))          {continueLoop <- true}
+                    else if(func_altRules(agenda, aItem)) {continueLoop <- false}
+                    else if(lookUpCursorRules(aItem))     {continueLoop <- true}
+                    else if(wrkLstRules(agenda, aItem))   {continueLoop <- false}
                     else if(processConcat(aItem)) {continueLoop <- true}
-                    else if(partsRules(aItem))    {continueLoop <- true}
+                    else if(partsRules(agenda, aItem))            {continueLoop <- true}
                     else{
                         if(aItem.pendingTasks < 0){log("WARNING!:"+aItem.parent.mySymbol()+".PT="+toString(aItem.pendingTasks))}
                         if(aItem.pendingTasks==0){
@@ -1761,7 +1768,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
 
                             while(!propagationsTodo.isEmpty()){
                                 our PropagateRecord: propRec <-propagationsTodo.first(); propagationsTodo.popFirst()
-                                callPropagate(propRec.aItem, propRec.LHSPov, propRec.RHSPov, propRec.remainder, propRec.looseSize, propRec.dontEnque)
+                                callPropagate(agenda, propRec.aItem, propRec.LHSPov, propRec.RHSPov, propRec.remainder, propRec.looseSize, propRec.dontEnque)
                             }
 
                             our AItem: aParent <- aItem.parent
@@ -1770,7 +1777,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                                 logSeg(" --"+aParent.mySymbol()+"_PT-f="+toString(aParent.pendingTasks))
                                 if(aParent.pendingTasks == 0){
                                     logSegStartCol("-ADP:"+aParent.mySymbol(),col3)
-                                    addAItemToAgenda(aParent)
+                                    agenda.addAItemToAgenda(aParent)
                                 }
                             }else {logSeg("-NoAParent")}
 
@@ -1790,7 +1797,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                         }
                         logSeg("-MG2-"+mergeStatusStrings[aItem.mergeStatus])
                         if(aItem.LHS_item.pItem.value.tailUnfinished and aItem.LHS_item.pItem.infSize.format==fLiteral){aItem.LHS_item.pItem.countSize(true)}
-                        fulfillSubscriptions(aItem)
+                        fulfillSubscriptions(agenda, aItem)
                         logSegOut("MFIN")
                         logSeg("}")
                         logFlush()
@@ -1801,13 +1808,13 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                 //log("NO_RHS:"+ toString(aItem.LHS_item.pItem) + ": "+ aItem.LHS_item.pItem.mySymbol())
                         if(aItem.LHS_item.pItem.value.fType == LST){initListIterators(aItem)}
 
-                        propagateProxy(aItem, aItem.LHS_item, NULL, NULL, false, false)
+                        propagateProxy(agenda, aItem, aItem.LHS_item, NULL, NULL, false, false)
                     } else {
         if(aItem.step ==0){aItem.step <- 1; endBracket<-"{"}  //TODO: optimize so that skipping step 0 isn't needed.
                         switch(aItem.step){
                             case 0:{
-                                our AItem: PIVA <- processInfonViaAgenda(aItem.RHS, aItem, NULL, aItem.priority)
-                                addAItemToAgenda(PIVA)
+                                our AItem: PIVA <- processInfonViaAgenda(agenda, aItem.RHS, aItem, NULL, aItem.priority)
+                                agenda.addAItemToAgenda(PIVA)
                                 logSeg("-MG0"); logSegStartCol("-PIVA->"+PIVA.mySymbol(),col2)
                                 aItem.step <- 1
                                 continueLoop <- true; continue(); //TODO: Why not just go straight to case 1?
@@ -1839,16 +1846,16 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                                         aItem.LHS_item.pItem.proxy <- aItem.RHS.pItem
                                     }
                                     me bool: dontEnque <- false // parentListIsAsNot and mrgParent.mergeStatus==msAccept //aItem.mergeStatus==msReject and aItem.parent.candidateForLast
-                                    propagateProxy(aItem, aItem.LHS_item, RHSSide, remainder, aItem.looseSize, dontEnque)
+                                    propagateProxy(agenda, aItem, aItem.LHS_item, RHSSide, remainder, aItem.looseSize, dontEnque)
                                 } else{logSeg("-MG1-REJCT")
                                     if(parentListIsAsNot){mrgParent.mergeStatus<-msAccept logSeg("-INV_ACPT")}
                                     their POV: pParent <- aItem.LHS_item.pParent
                                     me bool: parentInfonIsNullableList <- (pParent!=NULL and pParent.pItem.value.items.size()==1 and pParent.pItem.value.tailUnfinished)
                                     if(aItem.parent.candidateForLast or parentInfonIsNullableList or parentListIsAsNot){
                                         me bool: dontEnque <- !parentListIsAsNot // aItem.mergeStatus==msReject and (aItem.parent.candidateForLast or parentInfonIsNullableList)
-                                        propagateProxy(aItem, aItem.LHS_item, RHSSide, remainder, aItem.looseSize, dontEnque)
+                                        propagateProxy(agenda, aItem, aItem.LHS_item, RHSSide, remainder, aItem.looseSize, dontEnque)
                                     } else {
-                                        if(aItem.pendingTasks==0){fulfillSubscriptions(aItem)}
+                                        if(aItem.pendingTasks==0){fulfillSubscriptions(agenda, aItem)}
                                     }
                                 }
                               } else {log("mergeStatusPENDING:")}
@@ -1875,9 +1882,9 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                                     our POV: innrPov <- innr.value.items.head
                                     while(innrPov != NULL){
                                         if(innrPov.outerPOV==NULL){innrPov.outerPOV <- aItem.LHS_item}
-                                        our AItem: PIVA <- processInfonViaAgenda(innrPov, NULL, aItem, aItem.priority)
+                                        our AItem: PIVA <- processInfonViaAgenda(agenda, innrPov, NULL, aItem, aItem.priority)
                                         PIVA.LHS_item.pItem.takeWrkListFrom(aItem.LHS_item.pItem, false)
-                                        addAItemToAgenda(PIVA)
+                                        agenda.addAItemToAgenda(PIVA)
                                         logSeg(" "+PIVA.mySymbol())
                                         innrPov <- innrPov.next
                                     }
@@ -1886,8 +1893,8 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                                 logSeg("]")
                             } else {  // CI is FunctionLike
                                 our POV:: srcPOV; srcPOV.pItem <- innr
-                                our AItem: PIVA <- processInfonViaAgenda(srcPOV, aItem, NULL, aItem.priority)
-                                addAItemToAgenda(PIVA)
+                                our AItem: PIVA <- processInfonViaAgenda(agenda, srcPOV, aItem, NULL, aItem.priority)
+                                agenda.addAItemToAgenda(PIVA)
                                 logSeg("-IC0-FUNC"); logSegStartCol("-PIVA->"+PIVA.mySymbol(),col2)
                             }
                             aItem.step <- 1
@@ -1970,21 +1977,21 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
             }
             count <+- 1
         }
-        if(doFulfillSubs){fulfillSubscriptions(aItem)}
+        if(doFulfillSubs){fulfillSubscriptions(agenda, aItem)}
         //aItem.LHS_item.pItem.isNormed <- true
         //logSegStartCol("<<:DONE", col4)
         logSegOut("")
         logSeg(endBracket)
        logFlush()
     }
-    void: processAgenda()<-{
+    void: processAgenda(their Agenda: agenda)<-{
         me bool: makeDebugGraph <-false  // Set to true for a graph
         me Map<me string, me string>: labels; me string: label; me string: recSym; me string: attrs
         if(makeDebugGraph){grapher.clear(); grapher.addItem("rankdir=RL; ordering=out;")}
         me int: count <- 0
-        while(!agenda.isEmpty()) {
+        while(!agenda.AItems.isEmpty()) {
             //if (count > 500){log("Infinite LOOP -- FAIL"); break()}  //TODO: remove this when safe
-            our AItem: aItem <- agenda.first(); agenda.popFirst()
+            our AItem: aItem <- agenda.AItems.popFirst()
             me bool: graphNodeFirstTime <- false
             if(makeDebugGraph){
                 attrs <- "";
@@ -2004,7 +2011,7 @@ me string: nodeID <- aItem.RHSItr.mySymbol()+"R"
                     }
                 }
             }
-            processAgendaItem(aItem, 0)
+            processAgendaItem(agenda, aItem, 0)
             if(makeDebugGraph){
                 label <+- "\n"+aItem.stringify()
                 if(aItem.mergeStatus==msReject){label<+-"-R"}
@@ -2040,10 +2047,11 @@ struct Agent{
        // print("INFON ERROR: " + errorMesg+"\n")
     }
     void: normalize(our POV: normPov) <- {
-        our AItem: normPIVA <- worldMgr.processInfonViaAgenda(normPov, NULL, NULL, 1)
-        worldMgr.addAItemToAgenda(normPIVA)
+        our Agenda:: agenda{normPov}
+        our AItem: normPIVA <- worldMgr.processInfonViaAgenda(agenda, normPov, NULL, NULL, 1)
+        agenda.addAItemToAgenda(normPIVA)
         //log("Norm_PIVA:"+toString(normPIVA))
-        worldMgr.processAgenda()
+        worldMgr.processAgenda(agenda)
         log("NORMED:" + shortedStr(toString(normPov.pItem),100))
     }
     void: extendAndNorm(our infon: toExtend, our infon: extension) <- {
