@@ -6,6 +6,7 @@ struct infon{
     flag: invertFunc
     flag: stillParsing
     mode[seprNone, seprComma, seprBar]: seperator
+    mode[parseStarted, parseListReady, parseDone]: streamState
 
     void: moveThisToInnr() <- {
         Allocate(innr)
@@ -115,6 +116,15 @@ struct ProteusParser{
     me string: errorMesg
     me bool: errorSet
 
+    void: notifyStreamState(our infon: infn, me int: stateMrk) <- {
+        log("   NOTIFY:"+shortedStr(toString(infn),120))
+        {
+            me MutexMngr: MtxMgr{streamingNormMutex}
+            infn.streamState <- stateMrk
+        }
+        streamingNormLock.notifyOne()
+    }
+
     void: setError(me string: errMsg) <- {
         errorSet <- true
         errorMesg <- errMsg
@@ -213,7 +223,7 @@ me int64: parseWordDefn(our infon: infn, me int64: pos) <- {
         // Read optional ~size
         if(chkStrWSC(cPos,"~")){
             our pureInfon:: size
-            cPos <+- parsePureInfon(size, cPos)
+            cPos <+- parsePureInfon(size, cPos, NULL)
             if(size.fType!=NUM){setError("Size of infons must be numeric")}
             pureInfn.size <- size
         }
@@ -275,7 +285,7 @@ me int64: parseWordDefn(our infon: infn, me int64: pos) <- {
         return(cPos-pos)
     }
 
-    me int64: parsePureInfon(their pureInfon: pureInfn, me int64: pos) <- {
+    me int64: parsePureInfon(their pureInfon: pureInfn, me int64: pos, our infon: parent) <- {
         me int64: cPos <- pos
         me int64: len
 
@@ -343,11 +353,14 @@ me int64: parseWordDefn(our infon: infn, me int64: pos) <- {
 
             if(chk(parseListInfo(pureInfn, cPos), cPos,len)){
             }
+            me int64: count<-0
             while(peekWSC(cPos) != ender){
                 our infon:: item
+                pureInfn.items.append(item)
+                if(count==0 and parent!=NULL){notifyStreamState(parent, parseListReady)}  // Notify this is a list with its first item loaded.
                 chk(parseListItem(item, cPos), cPos,len)
              //   if(len <= 0){break()}  // Don't infinite-loop
-                pureInfn.items.append(item)
+                count <+- 1
             }
             cPos <+- 1
 
@@ -456,7 +469,7 @@ me int64: parseWordDefn(our infon: infn, me int64: pos) <- {
                 cPos <+- 1
                 if(peek=="/"){infn.infSize.inverted <- true}
                 infn.value.sizeMode <- fromGiven
-                cPos <+- parsePureInfon(infn.infSize, cPos)
+                cPos <+- parsePureInfon(infn.infSize, cPos, NULL)
                 if(infn.infSize.fType!=NUM){setError("Size of infons must be numeric")}
                 requirePlusMinusSign <- true
                 peek <- peekWSC(cPos)
@@ -469,14 +482,14 @@ me int64: parseWordDefn(our infon: infn, me int64: pos) <- {
                 cPos <+- 1
                 if(peek=="-"){infn.value.inverted <- true}
                 if(!requirePlusMinusSign){infn.value.sizeMode <- fromContext}
-                cPos <+- parsePureInfon(infn.value, cPos)
+                cPos <+- parsePureInfon(infn.value, cPos, infn)
             } else if(requirePlusMinusSign){
                 setError("Expected '+' or '-'")
             } else {
                 infn.value.sizeMode <- fromCount
-                if(!chk(parsePureInfon(infn.value, cPos), cPos,len)){}//setError("Expected number infon, string, list or '?' or %tag")}
+                if(!chk(parsePureInfon(infn.value, cPos, infn), cPos,len)){}//setError("Expected number infon, string, list or '?' or %tag")}
             }
-if(infn.value.tailUnfinished == false){infn.countSize(false)}
+            if(infn.value.tailUnfinished == false){infn.countSize(false)}
         }
 
         if(errorSet){return(-1)}
@@ -486,6 +499,9 @@ if(infn.value.tailUnfinished == false){infn.countSize(false)}
         me int64: cPos <- pos  // Current position
         me int64: len
         me bool: fetchInnerInfon <- true
+        infn.originID <- originID
+        infn.infCharPos <- pos
+        infn.streamState <- parseStarted // parsing has started
 
         // Check for '!' asNot
         if(chkStrWSC(cPos, "!")){
@@ -534,24 +550,23 @@ if(infn.value.tailUnfinished == false){infn.countSize(false)}
         // Adjust arrangement of [...]
         if(infn.value.intersectPosParse == ipSquareBrackets and infn.innr==NULL){
             infn.moveThisToInnr()
-            if(infn.invertFunc){
-                infn.intersectPos <- ipGetFirst
-            } else {
-                infn.intersectPos <- ipGetLast
-            }
+            if(infn.invertFunc){infn.intersectPos <- ipGetFirst}
+            else {infn.intersectPos <- ipGetLast}
         }
+        infn.stillParsing <- false
+        notifyStreamState(infn, parseDone)  // ParsingIsDone
 
         if(errorSet){return(-1)}
         return(cPos-pos)
     }
 
-    void: doParse(our infon:: infn) <- {
+    void: doParse(our infon: infn) <- {
         errorSet <- false
         errorMesg <- ""
         parseInfon(infn, 0, true)
     }
 
-    me bool: doesParseHaveError() <- {return(false)}
+    me bool: doesParseHaveError() <- {return(errorSet)}
 
     void: initParseFromStream(their strBuf: streamBuffer) <- {
         text <- streamBuffer
