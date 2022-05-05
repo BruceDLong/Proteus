@@ -165,11 +165,12 @@ model POV{ // Point-Of-View
         }else if(lenStatus == "G"){log("INFON TOO BIG")}
         return(NULL)
     }
-    our POV: getFirst(me int64: skipDots) <- { // WARNING: pItem must be a literal List.
+    our POV: getFirst(me int64: skipDots, their int:waitState) <- { // WARNING: pItem must be a literal List.
         if (streamingNormMode) {
             me MutexMngr: mtxMgr{streamingNormMutex}
             while(pItem.streamState==parseStarted){
                 //log("### >>NORM getFirstPOV-LOCKING:"+toString(pItem.streamState)+":: "+pItem.mySymbol()+" = "+shortedStr(toString(pItem),100))
+                if(waitState){waitState<-1; return(NULL)}
                 streamingNormLock.wait(mtxMgr)
                 //log("### NORM getFirstPOV-UNLOCKED:"+pItem.mySymbol())
             }
@@ -188,6 +189,7 @@ model POV{ // Point-Of-View
                 me MutexMngr: mtxMgr{streamingNormMutex}
                 while(firstNode.pItem.streamState==parseStarted){
                     //log("### >>NORM getFirstPOV-LOCKING:"+toString(firstNode.pItem.streamState)+":: "+firstNode.mySymbol()+" = "+shortedStr(toString(firstNode),100))
+                    if(waitState){waitState<-1; return(NULL)}
                     streamingNormLock.wait(mtxMgr)
                     //log("### NORM getFirstPOV-UNLOCKED:"+pItem.mySymbol())
                 }
@@ -198,12 +200,13 @@ model POV{ // Point-Of-View
         firstNode.pParent <- self
         return(firstNode)
     }
-    our POV: getNext(me int64: skipDots) <- {
+    our POV: getNext(me int64: skipDots, their int:waitState) <- {
         if (streamingNormMode) {
             me MutexMngr: mtxMgr{streamingNormMutex}
             while(!((next==NULL and ((pParent != NULL and !pParent.pItem.stillParsing) or (pParent==NULL and !pItem.stillParsing)))
                or (next!=NULL and next.pItem.streamState!=parseStarted))){
                 //log("### >>NORM getNextPOV-LOCKING:"+pItem.mySymbol()+" = "+shortedStr(toString(pItem),100))
+                if(waitState){waitState<-1; return(NULL)}
                 streamingNormLock.wait(mtxMgr)
                 //log("### NORM getNextPOV-UNLOCKED:"+pItem.mySymbol())
             }
@@ -223,26 +226,28 @@ model POV{ // Point-Of-View
         if(nextNode != NULL){nextNode.pParent <- pParent}
         return(nextNode)
     }
-    our POV: getFirstTight(our infItr: ii, me int64: skipDots, their int64: numLvlsUp) <- {
+    our POV: getFirstTight(our infItr: ii, me int64: skipDots, their int64: numLvlsUp, their int:waitState) <- {
         //log("[GFT: infItr:"+ii.mySymbol())
         me int64: dummyFlag
-        our POV: nextPOV <- getFirst(skipDots)
+        our POV: nextPOV <- getFirst(skipDots, waitState)
+        if(nextPOV == NULL and (waitState!=NULL and waitState==1)){return(NULL)}
         if(nextPOV != NULL and nextPOV.pItem.itmMode == mSubItems){
-            our POV: firstPOV <- nextPOV.getFirstTight(ii, skipDots, dummyFlag)
-            if(firstPOV == NULL){nextPOV <- nextPOV.getNextTight(ii, skipDots, numLvlsUp, false, false)}
+            our POV: firstPOV <- nextPOV.getFirstTight(ii, skipDots, dummyFlag, waitState)
+            if(firstPOV == NULL){nextPOV <- nextPOV.getNextTight(ii, skipDots, numLvlsUp, false, false, waitState)}
             else{nextPOV <- firstPOV}
         }
         //log("]gft")
         return(nextPOV)
     }
-    our POV: getNextTight(our infItr: ii, me int64: skipDots, their int64: numLvlsUp, me bool: getDeep, me bool: itrBeginning) <- {
+    our POV: getNextTight(our infItr: ii, me int64: skipDots, their int64: numLvlsUp, me bool: getDeep, me bool: itrBeginning, their int:waitState) <- {
         //log("[GNT: infItr:"+ii.mySymbol()+"  skipdots:"+toString(skipDots)+"   pItem:"+pItem.mySymbol()+":"+toString(pItem))
         our POV: nextPOV
         me int64: dummyFlag
-        if(itrBeginning){nextPOV <- getFirstTight(ii, skipDots, numLvlsUp)}
+        if(itrBeginning){nextPOV <- getFirstTight(ii, skipDots, numLvlsUp, waitState)}
         else{
-            nextPOV <- getNext(skipDots)
+            nextPOV <- getNext(skipDots, waitState)
             if(nextPOV == NULL){
+                if(waitState!=NULL and waitState==1){return(NULL)}
                 our infItr: nxtInfItr <- ii
                 if(pParent==NULL or pParent.pItem.itmMode != mSubItems){
                     numLvlsUp <+- 1
@@ -250,17 +255,17 @@ model POV{ // Point-Of-View
                     if(ii.iParent!=NULL){nxtInfItr <- ii.iParent}
                 }else if(pParent === ii.topPOV){/*log("]gnt-NULLb")*/ return(NULL)}
                 if(pParent.outerPOV!=NULL){//log("UP-OTR")
-                    nextPOV <- pParent.outerPOV.getNextTight(nxtInfItr, skipDots-1, numLvlsUp, getDeep, itrBeginning)
+                    nextPOV <- pParent.outerPOV.getNextTight(nxtInfItr, skipDots-1, numLvlsUp, getDeep, itrBeginning, waitState)
                 }else{//log("UP")
-                    nextPOV <- pParent.getNextTight(nxtInfItr, skipDots-1, numLvlsUp, getDeep, itrBeginning)
+                    nextPOV <- pParent.getNextTight(nxtInfItr, skipDots-1, numLvlsUp, getDeep, itrBeginning, waitState)
                 }
             }else if(nextPOV.pItem.itmMode == mSubItems or (nextPOV.pItem.value.fType==LST and getDeep)){
-                our POV: firstPOV <- nextPOV.getFirstTight(ii, skipDots, dummyFlag)
-                if(firstPOV == NULL){nextPOV <- nextPOV.getNextTight(ii, skipDots, numLvlsUp, getDeep, itrBeginning)}
+                our POV: firstPOV <- nextPOV.getFirstTight(ii, skipDots, dummyFlag, waitState)
+                if(firstPOV == NULL){nextPOV <- nextPOV.getNextTight(ii, skipDots, numLvlsUp, getDeep, itrBeginning, waitState)}
                 else{nextPOV <- firstPOV}
             }
         }
-        if(nextPOV!=NULL and nextPOV.altPOV==NULL and nextPOV.pItem.isTentative){nextPOV.altPOV <- nextPOV.getNextTight(ii, INT64_MAX, dummyFlag, getDeep, false)}
+        if(nextPOV!=NULL and (waitState==NULL or waitState==0) and nextPOV.altPOV==NULL and nextPOV.pItem.isTentative){nextPOV.altPOV <- nextPOV.getNextTight(ii, INT64_MAX, dummyFlag, getDeep, false, waitState)}
         //if(nextPOV){log("]gntA:"+nextPOV.stringify())} else{log("]gntA: NULL")}
         return(nextPOV)
     }
