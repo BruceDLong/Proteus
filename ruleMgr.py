@@ -638,7 +638,7 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
         ifsCode =  "        our POV: remainder <- NULL\n"
         ifsCode += '        logSeg("-mRUl")\n'
         ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
-        ifsCode += '        else {log("MERGE_RULE_MISSING: "+ toString(aItem));log("          LHS fType:"+ fTypeStrings[aItem.LHS_item.pItem.value.fType]);log("          LHS format:"+ formatStrings[aItem.LHS_item.pItem.value.format]);log("          RHS fType:"+ fTypeStrings[aItem.RHS.pItem.value.fType]); exit(2);}\n'
+        ifsCode += '        else {log("MERGE_RULE_MISSING: "+ toString(aItem));log("          LHS fType:"+ fTypeStrings[aItem.LHS_item.pItem.value.fType]);log("          LHS format:"+ formatStrings[aItem.LHS_item.pItem.value.format]);log("          RHS fType:"+ fTypeStrings[aItem.RHS.pItem.value.fType]); log("EXITING"); exit(2);}\n'
         ifsCode += "        return(remainder)"
         funcCode = "    our POV: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
     else:
