@@ -28,6 +28,7 @@ struct infon{
     }
 }
 
+#define WCHK_PEEK(POS,RET) <%if(posIsAtEOB_butNotClosed(POS)){return(RET)}else{peek<-text.at(cPos)}%>
 struct ProteusParser{
     their ProteusCore: CORE
     me bool: streamingMode
@@ -103,7 +104,140 @@ struct ProteusParser{
         if(rLen>0){cPos <+- rLen; outLen <deep- rLen; return(true)}
         return(false)
     }
+///////////////////////////////////  Pre-parse checking
+// checkParseStatus:
+    const int: valid_EOB       <- -1
+    const int: valid_notDone   <- 1
+    const int: valid_maybeDone <- 2
+    const int: valid_done      <- 3
+    const int: syntax_error    <- 4
+    const int: other_error     <- 5
 
+    me bool: posIsAtEOB_butNotClosed(their int64: cPos) <- {
+        cPos <+- text.scrapeWSC(cPos)
+        return(cPos==text.crntStreamSize-1 and !text.bufferClosed)
+    }
+    me int: preChkID(me string: wanted, me string: given) <- {
+        if(wanted.size()<given.size()){return(syntax_error)}
+        if(wanted==given){return(valid_done)}
+        if(wanted.subStr(0,given.size()) == given){return(valid_notDone)}
+        return(syntax_error)
+    }
+    me int: preCheckWSC(me int64: pos) <- {
+
+    }
+    me int: preCheckWordDefn(me int64: pos) <- {
+        me int64: cPos <- pos
+        me int64: len
+        me char: peek; WCHK_PEEK(cPos,valid_notDone)
+
+        return(valid_done)
+    }
+    me int: preCheckPureInfon(me int64: pos) <- {
+        me int64: cPos <- pos
+        me int64: len
+        me char: peek; WCHK_PEEK(cPos,valid_notDone)
+        if(chkPeek(cPos, peek, "_")){return(valid_done)}
+        if(chkPeek(cPos, peek, "$")){return(valid_done)}
+        if(isdigit(peek){
+        }else if(peek=="\'"){
+        }else if(peek=="\""){
+        } else if(peek=="{" or peek=="[" or peek=="("){
+            cPos <+- 1
+        }
+        return(valid_done)
+    }
+    me int: preCheckFileID(me int64: pos) <- {
+        me int64: cPos <- pos
+        me int64: len
+        me char: peek; WCHK_PEEK(cPos,valid_notDone)
+        if(chk(text.scrapeToEOL(cPos), cPos,len)){
+            me string: includeSpec <- makeStr(cPos-len, cPos)
+            trimWS(includeSpec)
+            // TODO: check for valid or likely valid resourseID
+        }
+        return(valid_done)
+    }
+    me int: preCheckListItem(me int64: pos) <- {
+        me int64: cPos <- pos
+        me int64: len
+        me char: peek; WCHK_PEEK(cPos,valid_notDone)
+        if(chkPeek(cPos, peek, "@"))                    {return(preCheckWordDefn(cPos))}
+        else if(peek=="." and chkStr(cPos, "..."))      {return(valid_done)}
+        else if(chkPeek(cPos, peek, "&"))               {return(preCheckInfon(cPos))}
+        else if(chkStr(cPos, "%INSERT"))                {return(preCheckFileID(cPos))}
+        else if(chkStr(cPos, "%PROTEUS"))               {return(preCheckInfon(cPos))}
+        return(preCheckInfon(cPos))
+    }
+    me int: preCheckFuncParts(me int64: pos) <- {
+        me int64: cPos <- pos
+        me int64: len
+        me char: peek; WCHK_PEEK(cPos,valid_notDone)
+        return(valid_done)
+    }
+    me int: preCheckInnerInfon(their int64: cPos) <- {
+        me int64: len
+        me int:status
+        me char: peek; WCHK_PEEK(cPos,valid_notDone)
+        if(chkPeek(cPos, peek, "?"))         {return(valid_done)}
+        else if(chkPeek(cPos, peek, "%"))    {
+            if(chk(text.scrapeCID(cPos), cPos,len)){
+                me string: tag <- makeStr(cPos-len, cPos)
+                me string: firstCH <- tag.subStr(0,1)
+                switch(firstCH){
+                    case "s":{return(preChkID("self", tag))}
+                    case "W":{return(preChkID("W", tag))}
+                    case "U":{return(preChkID("U", tag))}
+                    case "c":{return(preChkID("ctx", tag))}
+                    case "a":{return(preChkID("args", tag))}
+                    case "v":{return(preChkID("vars", tag))}
+                    default:{setError("Invalid %tag ('"+tag+"')"); return(syntax_error)}
+                }
+
+            } else {setError("Expected a %tag"); return(syntax_error)}
+        } else { //*_+...
+            me bool: requirePlusMinusSign <- false
+            if(peek=="*" or peek=="/"){
+                cPos <+- 1
+                WCHK_PEEK(cPos,valid_notDone)
+                status <- preCheckPureInfon(cPos) // TODO: This should always be numeric
+                requirePlusMinusSign <- true
+            }
+            if(peek=="+" or peek=="-"){
+                cPos <+- 1
+                WCHK_PEEK(cPos,valid_notDone)
+                status <- preCheckPureInfon(cPos)
+            } else if(requirePlusMinusSign){
+                WCHK_PEEK(cPos,valid_notDone)
+                setError("Expected '+' or '-'"); return(syntax_error)
+            } else {
+                WCHK_PEEK(cPos,valid_notDone)
+                status <- preCheckPureInfon(cPos)
+            }
+        }
+        return(valid_done)
+    }
+    me int: preCheckInfon(me int64: pos) <- {
+        me int64: cPos <- pos
+        me int64: len
+        me char: peek; WCHK_PEEK(cPos,valid_notDone)
+        me bool: fetchInnerInfon <- true
+        if(chkPeek(cPos, peek, "!")){print("! "); WCHK_PEEK(cPos,valid_notDone) print("!+ ");}
+        if(chk(text.scrapeUniID(cPos), cPos,len)){print("abc ");
+            WCHK_PEEK(cPos,valid_maybeDone)print("abc+ ");
+            if(chkPeek(cPos, peek, ":")){WCHK_PEEK(cPos,valid_notDone)}
+            else{fetchInnerInfon<-false}
+        }
+        if(fetchInnerInfon){
+            me int:status <- preCheckInnerInfon(cPos)//setError("Literal infon or %tag expected")}
+            if(status!=valid_maybeDone and status!=valid_done){return(status)}
+            WCHK_PEEK(cPos,valid_maybeDone)
+        }
+        return(preCheckFuncParts(cPos))
+    }
+
+
+/////////////////////////////////// Parsers
     me int64: parseWordDefn(our infon: infn, me int64: pos) <- {
         me int64: cPos <- pos
         me int64: len
@@ -264,14 +398,13 @@ struct ProteusParser{
                     pureInfn.str <- makeStr((cPos-len)+1, cPos-1)
                     pureInfn.format <- fLiteral
                     //pureInfn.quoteType <- qSingle
-
                 }
             }
             else if(peek=="\""){
                 if(chk(text.scrapeQuotedStr2(cPos), cPos,len)){
                     pureInfn.str <- makeStr((cPos-len)+1, cPos-1)
                     pureInfn.format <- fLiteral
-                    //pureInfn.quoteType <- qSingle
+                    //pureInfn.quoteType <- qDouble
                 }
             }
         } else if(peek=="{" or peek=="[" or peek=="("){
@@ -284,12 +417,23 @@ struct ProteusParser{
             else if(peek=="("){pureInfn.format <- fConcat;  pureInfn.intersectPosParse<-ipDefault;        ender<-tmp[2]}
 
             if(chk(parseListInfo(pureInfn, cPos), cPos,len)){
+                print("LISTINFO|",cPos,"/",len,"\n")
             }
             me int64: count<-0
             while(peekWSC(cPos) != ender){
+                text.consumerStatus <- 0
+                while(text.interactiveMode){
+                    text.consumerStatus <- preCheckListItem(cPos)
+                    print("WAITING:", text.consumerStatus,"... ")
+                    if(text.consumerStatus!=valid_done or text.pre_parse_only){me MutexMngr: bufMtxMgr{text.bufMutex} text.bufLock.wait(bufMtxMgr)}
+                    else{text.pre_parse_only <- true; break()}
+                }
+                    print("DONE:",text.at(cPos),"\n")
                 our infon:: item
                 item.streamState <- parseStarted
-                chk(parseListItem(item, pureInfn, parent, cPos), cPos,len)
+                if(chk(parseListItem(item, pureInfn, parent, cPos), cPos,len)){
+                    print("PARSED:",shortedStr(toString(item),100),"\n")
+                } else{print("PARSE_SKIPPED\n")}
              //   if(len <= 0){break()}  // Don't infinite-loop
                 count <+- 1
             }
@@ -303,7 +447,7 @@ struct ProteusParser{
                     pureInfn.items.popLast()
                 }
             }
-        } else{}//setError("Expected a number, string or list")}
+        } else{setError("Expected a number, string or list")}
 
         if(errorSet){return(-1)}
         return(cPos-pos)
@@ -386,7 +530,7 @@ struct ProteusParser{
             if(chk(text.scrapeCID(cPos), cPos,len)){
                 me string: tag <- makeStr(cPos-len, cPos)
                 switch(tag){
-                    case "this":{infn.cursorMode <- cThis}
+                    case "self":{infn.cursorMode <- cThis}
                     case "W":   {infn.cursorMode <- cWorld}
                     case "U":   {infn.cursorMode <- cUser}
                     case "ctx": {infn.cursorMode <- cContext}
