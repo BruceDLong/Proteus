@@ -190,7 +190,70 @@ struct ProteusParser{
         me bool: WFB <- waitingForBuffer(cPos)
         return(WFB)
     }
-
+    me int64: checkUTF8Char(me int64: pos, their int32: out) <- {
+        if(waitingForBuffer(pos)){return(-1)}
+        our strBufItr: txtItr <- text.getItrAt(pos)
+        me int: count <- 0
+        me int: expectedBytes <- -1
+        me string: bufr <- ""
+        while(txtItr != NULL and txtItr.status==bfOK){
+            me char: ch <- txtItr.ch()
+            if(count==0){
+                expectedBytes <- remainingOctets(ch) + 1
+            }
+            bufr  <+- ch
+            count <+- 1
+            if(count==expectedBytes){break()}
+            if(waitingForBuffer(pos+1)){return(-1)}
+            txtItr.goNext()
+        }
+        if(count!=expectedBytes){return(-1)}
+        me int64: p<-0
+        packUTF8Char(bufr, p, out)
+        return(expectedBytes)
+    }
+    me int64: checkUnicodeWordContinue(me int64: pos) <- {
+        me int64: cPos <- pos
+        me int64: charsUsed <- 0
+        if(waitingForBuffer(cPos)){return(-1)}
+        our strBufItr: txtItr <- text.getItrAt(pos)
+        while(txtItr != NULL and txtItr.status==bfOK){
+            me int32: ch
+            me int64: bytesUsed <- checkUTF8Char(cPos, ch)
+            if(charsUsed==0 and bytesUsed<=0){return(-1)}
+            if (!(unicodeMgr.isUnicodeWordContinue(ch))){
+                if(charsUsed==0){return(-1)}
+                else{return(charsUsed)}
+            }
+            cPos <+- bytesUsed
+            charsUsed <+- bytesUsed
+            if(waitingForBuffer(cPos)){return(charsUsed)}
+            txtItr.goNext()
+        }
+        if(charsUsed==0){return(-1)}
+        return(charsUsed)
+    }
+    me int64: checkUniID(me int64: pos) <- {
+        me int64: cPos <- pos
+        me int32: ch
+        //
+        me int64: bytesUsed <- checkUTF8Char(pos, ch)
+        if(bytesUsed<=0){return(-1)}
+        me int: tmpCh <- ch
+        if(unicodeMgr.isUnicodeWordStart(ch)){
+            me int64: charsUsed <- checkUnicodeWordContinue(pos+bytesUsed)
+            if(charsUsed==-1){charsUsed<-0}
+            me string:TXT
+            withEach idx in RANGE(pos..pos+charsUsed+bytesUsed){
+                if(waitingForBuffer(idx)){return(-1)}
+                me char: tChr <- text.at(idx)
+                TXT <+- tChr
+            }
+            if(charsUsed<0){return(1)}
+            else{return(charsUsed+bytesUsed)}
+        }
+        return(-1)
+    }
     me int64: checkAlphaNum_Seq(me int64: pos) <- {
         me int64: charsUsed <- 0
         if(waitingForBuffer(pos)){return(-1)}
@@ -225,9 +288,28 @@ struct ProteusParser{
     }
     me int: preCheckWordDefn(me int64: pos) <- {
         me int64: cPos <- pos
-        me int64: len
         me char: peek; WCHK_PEEK(cPos,valid_notDone)
-
+        me int64: len
+        cPos <+- checkWSC(cPos)
+        if(chk(checkUniID(cPos), cPos,len)){
+            me string: tag <- makeStr(cPos-len, cPos)
+            WCHK_PEEK(cPos,valid_notDone)
+            if(peek=="<"){
+                cPos <+- 1
+                WCHK_PEEK(cPos,valid_notDone)
+                while(peek != ">"){
+                    cPos <+- 1
+                    WCHK_PEEK(cPos,valid_notDone)
+                }
+                cPos <+- 1
+            }
+            WCHK_PEEK(cPos,valid_notDone)
+            if(peek!="="){return(syntax_error)}
+            else{
+                cPos <+- 1
+                return(preCheckInfon(cPos))
+            }
+        }
         return(valid_done)
     }
     me int: preCheckPureInfon(me int64: pos) <- {
