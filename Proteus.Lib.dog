@@ -594,9 +594,10 @@ model AItem{
                 case rsMerge:{
                     S <+- "MRG:"+ toString(LHS_item.pItem)
                     if(RHS!=NULL) {
-                        me string: equalStr <- " '=' "
-                        if (RHS.looseType()){equalStr <- " '==' "}
-                        S <+- equalStr+ toString(RHS.pItem)
+                        me string: equalStr <- "="
+                        if (RHS.looseType()){equalStr <- "=="}
+                        if(RHS.looseTop){ S <+- ":"}
+                        S <+- " '"+equalStr+"' "+ toString(RHS.pItem)
                     }
                 }
                 case rsIntersect:{
@@ -1146,8 +1147,9 @@ struct WorldManager{
         if(JoinIfConcat(aItem.LHS_item)){changeMade <- true}
         return(changeMade)
     }
-    me bool: partsRules(their Agenda: agenda, our AItem: aItem) <- {
+    me bool: partsRules(their Agenda: agenda, our AItem: aItem, their bool: nxtAction) <- {
         me bool: changeMade <- false
+        nxtAction <- true
         our infon: CI        <- aItem.LHS_item.pItem
         if(CI.partRef!=NULL){
             //log("PART2REF:"+toString(CI.partRef.path))
@@ -1235,12 +1237,14 @@ struct WorldManager{
                 if(!part.hasSemiColon){
                     aItem.LHS_item.pItem <- newPath
              //aItem.LHS_item.hasPropagated <- false
+                    nxtAction <- true
                 }else{
                     our POV:: pathPov
                     pathPov.pItem <- newPath
                     our AItem: newAItem <-  processInfonViaAgenda(agenda, pathPov, NULL, aItem, aItem.priority)
                     logSegStartCol("-pPIVA->"+newAItem.mySymbol(),col2)
                     agenda.addAItemToAgenda(newAItem)
+                    nxtAction <- false
                 }
                 changeMade <- true
                 logSegOut("")
@@ -1717,6 +1721,7 @@ struct WorldManager{
         logSegIn("PAI")
         while(continueLoop){
             continueLoop <- false // True: keep doing these steps now. False: Stop and wait for other agenda items to complete and fulfill your subscription.
+            me bool: act          // Can be used to alter the next action for continueLoop
             switch(aItem.ruleSet){
                 case rsInfon:{
                     if(aItem.LHS_item.pItem.isNormed){
@@ -1752,7 +1757,7 @@ struct WorldManager{
                     else if(funcArgRules(aItem))          {continueLoop <- true}
                     else if(func_altRules(agenda, aItem)) {continueLoop <- false}
                     else if(lookUpCursorRules(aItem))     {continueLoop <- true}
-                    else if(partsRules(agenda, aItem))    {continueLoop <- true}
+                    else if(partsRules(agenda,aItem,act)) {continueLoop <- act}
                     else if(wrkLstRules(agenda, aItem))   {continueLoop <- false}
                     else if(processConcat(aItem))         {continueLoop <- true}
                     else{
@@ -1913,17 +1918,15 @@ struct WorldManager{
                                 CI.innr.funcArgs <- NULL
                             }
                             if(CI.isOrLike()){
-                                logSeg("-IC0-OR"); logSegStartCol("-PIVA->[",col2)
+                                logSeg("-IC0-OR:[")
                                 if(!innr.value.tailUnfinished){
                                     our POV: innrPov <- innr.value.items.head
-                                    me int: count <- 0
                                     while(innrPov != NULL){
                                         if(innrPov.outerPOV==NULL){innrPov.outerPOV <- aItem.LHS_item}
-                                        our AItem: PIVA <- processInfonViaAgenda(agenda, innrPov, NULL, aItem, aItem.priority+count)
-                                        count <+- 1
+                                        our AItem: PIVA <- processInfonViaAgenda(agenda, innrPov, NULL, aItem, aItem.priority)
                                         PIVA.LHS_item.pItem.takeWrkListFrom(aItem.LHS_item.pItem, false)
+                                        logSeg(" -PIVA->"+PIVA.mySymbol())
                                         agenda.addAItemToAgenda(PIVA)
-                                        logSeg(" "+PIVA.mySymbol())
                                         innrPov <- innrPov.next
                                     }
                                     aItem.LHS_item.pItem.wrkList.clear() //TODO: is this necessary?
@@ -1933,7 +1936,7 @@ struct WorldManager{
                                 our POV:: srcPOV; srcPOV.pItem <- innr
                                 our AItem: PIVA <- processInfonViaAgenda(agenda, srcPOV, aItem, NULL, aItem.priority)
                                 agenda.addAItemToAgenda(PIVA)
-                                logSeg("-IC0-FUNC"); logSegStartCol("-PIVA->"+PIVA.mySymbol(),col2)
+                                logSeg("-IC0-FUNC: -PIVA->"+PIVA.mySymbol())
                             }
                             aItem.step <- 1
                         }
@@ -1942,7 +1945,7 @@ struct WorldManager{
                             endBracket<-"}"
                             our infon: newTop    <- NULL
                             if(CI.isOrLike()){  // Eliminate if only 1 non - reject.
-                                logSeg("-IS_OR_LIKE")
+                                logSeg("-IS_OR_LIKE:"+aItem.mySymbol())
                                 //TODO: Perhaps we can skip the following if there is exactly one candidateForLast
                                 if(!innr.value.tailUnfinished){
                                     our POV: lastOK   <- NULL
