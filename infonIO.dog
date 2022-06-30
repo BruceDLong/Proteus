@@ -190,6 +190,36 @@ struct ProteusParser{
         me bool: WFB <- waitingForBuffer(cPos)
         return(WFB)
     }
+    me int64: escapedCheckUntil(me int64:pos, me string:endChar, their int64: len) <- {
+        me string: prevCharStr <- " "
+        me char: prevChar <- prevCharStr[0]
+        me char: ender <- endChar[0]
+        me string: escCharStr <- "\\ "
+        me char: escChar <- escCharStr[0]
+        if(waitingForBuffer(pos)){
+            len <- 0
+            return(valid_notDone)
+        }
+        me int64: charsUsed <- 0
+        our strBufItr: txtItr <- text.getItrAt(pos)
+        while(txtItr != NULL and txtItr.status==bfOK){
+            me char: ch <- txtItr.ch()
+            me int64: p <- txtItr.crntAbsPos()
+            if(prevChar!=escChar and ch==ender){
+                len <- p-pos
+                return(valid_done)
+            }
+            if(prevChar==escChar and ch==escChar) {prevChar<-escCharStr[1]}
+            else {prevChar <- ch}
+            charsUsed <+- 1
+            if(waitingForBuffer(pos+charsUsed)){
+                len <- pos
+                return(valid_notDone)
+            }
+            txtItr.goNext()
+        }
+        return(-1)
+    }
     me int64: checkUTF8Char(me int64: pos, their int32: out) <- {
         if(waitingForBuffer(pos)){return(-1)}
         our strBufItr: txtItr <- text.getItrAt(pos)
@@ -211,6 +241,58 @@ struct ProteusParser{
         me int64: p<-0
         packUTF8Char(bufr, p, out)
         return(expectedBytes)
+    }
+    me int: checkUintSeq(me int64: pos, their int64: len) <- {
+        me int64: charsUsed <- 0
+        if(waitingForBuffer(pos)){return(-1)} // should never happen
+        our strBufItr: txtItr <- text.getItrAt(pos)
+        while(txtItr != NULL){
+            me char: ch <- txtItr.ch()
+            if(!isdigit(ch)){
+                if(charsUsed==0){return(-1)}  // should never happen
+                else{return(valid_done)}
+            }
+            charsUsed <+- 1
+            if(waitingForBuffer(pos+charsUsed)){return(valid_maybeDone)}
+            len <+- 1
+            txtItr.goNext()
+        }
+        return(-1) // should never happen
+    }
+    me int: checkHexNum(me int64: pos, their int64: len) <- {
+        me int64: charsUsed <- 0
+        if(waitingForBuffer(pos)){return(valid_notDone)}
+        our strBufItr: txtItr <- text.getItrAt(pos)
+        while(txtItr != NULL){
+            me char: ch <- txtItr.ch()
+            if(!isxdigit(ch)){
+                if(charsUsed==0){return(-1)}  // should never happen
+                else{return(valid_done)}
+            }
+            charsUsed <+- 1
+            if(waitingForBuffer(pos+charsUsed)){return(valid_maybeDone)}
+            len <+- 1
+            txtItr.goNext()
+        }
+        return(-1) // should never happen
+    }
+    me int: checkBinNum(me int64: pos, their int64: len) <- {
+        me int64: charsUsed <- 0
+        if(waitingForBuffer(pos)){return(valid_notDone)}
+        our strBufItr: txtItr <- text.getItrAt(pos)
+        while(txtItr != NULL){
+            me char: ch <- txtItr.ch()
+            if(!isxdigit(ch)){
+                if(charsUsed==0){return(-1)}  // should never happen
+                else{return(valid_done)}
+            }
+            if(ch!="0" and ch!="1"){return(syntax_error)}
+            charsUsed <+- 1
+            if(waitingForBuffer(pos+charsUsed)){return(valid_maybeDone)}
+            len <+- 1
+            txtItr.goNext()
+        }
+        return(-1) // should never happen
     }
     me int64: checkUnicodeWordContinue(me int64: pos) <- {
         me int64: cPos <- pos
@@ -270,6 +352,34 @@ struct ProteusParser{
         }
         return(charsUsed)
     }
+    me int: checkQuotedStr1(me int64: pos, their int64: len) <- {
+        if(waitingForBuffer(pos)){return(valid_notDone)}
+        if(checkStr(pos, "'")>=0){
+            pos <- pos+1
+        }else{
+            return(-1)
+        }
+        me int: status <- escapedCheckUntil(pos, "'", len)
+        if(status==-1){
+            return(status)
+        }
+        len <+- 2
+        return(status)
+    }
+    me int: checkQuotedStr2(me int64: pos, their int64: len) <- {
+        if(waitingForBuffer(pos)){return(valid_notDone)}
+        if(checkStr(pos, "\"")>=0){
+            pos <- pos+1
+        }else{
+            return(-1)
+        }
+        me int: status <- escapedCheckUntil(pos, "\"", len)
+        if(status==-1){
+            return(status)
+        }
+        len <+- 2
+        return(status)
+    }
     me int64: checkCID(me int64: pos) <- {
         me int64: cPos <- pos
         if(waitingForBuffer(cPos)){return(0)}
@@ -312,15 +422,47 @@ struct ProteusParser{
         }
         return(valid_done)
     }
-    me int: preCheckPureInfon(me int64: pos) <- {
+    me int: preCheckPureInfon(me int64: pos, their int64: len) <- {
         me int64: cPos <- pos
-        me int64: len
         me char: peek; WCHK_PEEK(cPos,valid_notDone)
         if(chkPeek(cPos, peek, "_")){return(valid_done)}
         if(chkPeek(cPos, peek, "$")){return(valid_done)}
+        me int: status
         if(isdigit(peek)){
+            me bool: numNotLoaded <- true
+            if(peek=="0"){
+                if(waitingForBuffer(cPos+1)){
+                    len <- cPos
+                    return(valid_maybeDone)
+                }
+                me char: peek2 <- toUpper(text.at(cPos+1))
+                if(peek2=="X"){
+                    cPos <+- 2
+                    len  <+- 2
+                    status <- checkHexNum(cPos, len)
+                    if(status==-1){print("WARNING: status=-1 from checkHexNum\n")}
+                    numNotLoaded <- false
+                    return(status)
+                }
+                if(peek2=="B"){
+                    cPos <+- 2
+                    status <- checkBinNum(cPos, len)
+                    if(status==-1){print("WARNING: status=-1 from checkBinNum\n")}
+                    numNotLoaded <- false
+                    return(status)
+                }
+            }
+            if(numNotLoaded){
+                status <- checkUintSeq(cPos, len)
+                if(status==-1){print("WARNING: status=-1 from checkUintSeq\n")}
+                return(status)
+            }
         }else if(peek=="\'"){
+            status <- checkQuotedStr1(cPos, len)
+            return(status)
         }else if(peek=="\""){
+            status <- checkQuotedStr2(cPos, len)
+            return(status)
         } else if(peek=="{" or peek=="[" or peek=="("){
             cPos <+- 1
         }
@@ -356,8 +498,8 @@ struct ProteusParser{
         return(valid_done)
     }
     me int: preCheckInnerInfon(their int64: cPos) <- {
-        me int64: len
-        me int:status
+        me int64: len <- 0
+        me int: status
         me char: peek; WCHK_PEEK(cPos,valid_notDone)
         if(chkPeek(cPos, peek, "?"))         {return(valid_done)}
         else if(chkPeek(cPos, peek, "%"))    {
@@ -384,19 +526,39 @@ struct ProteusParser{
             if(peek=="*" or peek=="/"){
                 cPos <+- 1
                 WCHK_PEEK(cPos,valid_notDone)
-                status <- preCheckPureInfon(cPos) // TODO: This should always be numeric
-                requirePlusMinusSign <- true
+                status <- preCheckPureInfon(cPos, len) // TODO: This should always be numeric
+                if(status==valid_done){
+                    requirePlusMinusSign <- true
+                    status <- valid_notDone
+                }
             }
             if(peek=="+" or peek=="-"){
                 cPos <+- 1
                 WCHK_PEEK(cPos,valid_notDone)
-                status <- preCheckPureInfon(cPos)
+                status <- preCheckPureInfon(cPos, len)
+                return(status)
             } else if(requirePlusMinusSign){
+                cPos <+-len
                 WCHK_PEEK(cPos,valid_notDone)
-                setError("Expected '+' or '-'"); return(syntax_error)
+                if(peek==" "){
+                    cPos <+- 1
+                    WCHK_PEEK(cPos,valid_notDone)
+                }
+                if(peek!="+" and peek!="-"){
+                    return(syntax_error)
+                }
+                cPos <+- 1
+                WCHK_PEEK(cPos,valid_notDone)
+                if(peek==" "){
+                    cPos <+- 1
+                    WCHK_PEEK(cPos,valid_notDone)
+                }
+                status <- preCheckPureInfon(cPos, len)
+                return(status)
             } else {
                 WCHK_PEEK(cPos,valid_notDone)
-                status <- preCheckPureInfon(cPos)
+                status <- preCheckPureInfon(cPos, len)
+                return(status)
             }
         }
         return(valid_done)
@@ -603,22 +765,20 @@ struct ProteusParser{
             else if(peek=="("){pureInfn.format <- fConcat;  pureInfn.intersectPosParse<-ipDefault;        ender<-tmp[2]}
 
             if(chk(parseListInfo(pureInfn, cPos), cPos,len)){
-                print("LISTINFO|",cPos,"/",len,"\n")
             } else {clearError()}
             me int64: count<-0
             while(peekWSC(cPos) != ender){
                 text.consumerStatus <- 0
                 while(text.interactiveMode){
                     text.consumerStatus <- preCheckListItem(cPos)
-                    print("WAITING:", text.consumerStatus,"... ")
+                    print("WAITING:", text.consumerStatus,"... \n")
                     if(text.consumerStatus!=valid_done or text.pre_parse_only){me MutexMngr: bufMtxMgr{text.bufMutex} text.bufLock.wait(bufMtxMgr)}
                     else{text.pre_parse_only <- true; break()}
                 }
-                    print("DONE:",text.at(cPos),"\n")
                 our infon:: item
                 item.streamState <- parseStarted
                 if(chk(parseListItem(item, pureInfn, parent, cPos), cPos,len)){
-                    print("PARSED:",shortedStr(toString(item),100),"\n")
+                    //print("PARSED:",shortedStr(toString(item),100),"\n")
                 } else{print("PARSE_SKIPPED\n")}
              //   if(len <= 0){break()}  // Don't infinite-loop
                 count <+- 1
