@@ -81,9 +81,7 @@ model pureInfon{
             pov <- pov.next
         }
     }
-
     void: clear() <- {num<-0 str<-""; items.clear(); listSpec<-NULL}
-  //  void: init() <- {Allocate(items)}
 }
 model infon{
     flag: asNot
@@ -106,6 +104,7 @@ model infon{
     our infon: funcArgs
     our infon: dotPath
     our infon: innr
+    flag: isInnr         // This item is the innr of [....]
     our WordUse: type
     our WordDefn: definedWord
     me List<our TypeSpec>: typeSpecs
@@ -318,6 +317,7 @@ model infon{
         intersectPos    <- ipGetLast
         infSize.format  <- fUnknown
         innr            <- newInnr
+        innr.isInnr     <- true
         innr.value.sizeMode <- sMode
 
     }
@@ -491,6 +491,7 @@ struct GLOBAL{
         newListInfon.infSize.num    <- 1
         newListInfon.value.fType    <- LST
         newListInfon.value.format   <- fLiteral
+        newListInfon.isInnr         <- true
         return(newListInfon)
     }
     our POV: makeOrPov(our POV: nextPov, our POV: pred) <- {
@@ -640,6 +641,9 @@ struct Agenda{
     me Multimap<me int64, our AItem>: AItems
     me Mutex: agendaDoneMutex
     me SyncLock: agendaDoneLock
+
+    me List<our PropagateRecord>: propagationsTodo // Buffer for propagations
+
     void: insert(our AItem: aItem, me int64: priority) <- {AItems.insert(priority, aItem)}
 
     me bool: povIsOnAgenda(our POV:pov)<-{
@@ -1191,13 +1195,12 @@ struct WorldManager{
                                 skipPart.infSize.fType        <- NUM
                                 skipPart.infSize.format       <- fUnknown
                                 skipPart.value.listSpec       <- skipPtn
-                                //skipPart.useMode              <- umQuestion
                             our infon: newInnr <- makeInnrInfon()
                                 newInnr.value.items.append(skipPart)
                                 newInnr.value.items.append(part.path)
                             Allocate(newPath)
                                 newPath.convertThisToIntersection(newInnr, fromGiven)
-                                newPath.doReply        <- doReply
+                        newPath.doReply        <- doReply
                                 newInnr.value.sizeMode <- fromCount
                                 newPath.value.sizeMode <- fromCount
                                 newPath.infSize.fType  <- NUM
@@ -1551,7 +1554,10 @@ struct WorldManager{
         our POV: RHSPovNext
         me int64: lvlsUpOnLeft
         me int64: lvlsUpOnRight
-        if(!RHSExists and !adjLhsPOV.pItem.hasInnrOutr and adjLhsPOV.pItem.value.items.isEmpty()){LHSitrBeginning <- false}
+        if(!RHSExists and !adjLhsPOV.pItem.hasInnrOutr){
+            while(streamingNormMode and adjLhsPOV.pItem.value.fType==LST and (adjLhsPOV.pItem.value.items.isEmpty() and adjLhsPOV.pItem.stillParsing)){log("WAIT_4_Itm"); sleep(1)}
+            if(adjLhsPOV.pItem.value.items.isEmpty()){LHSitrBeginning <- false}
+        }
         our AItem: aParent <- aItem
         if(!LHSitrBeginning){
             if(aItem.ruleSet==rsInfon){aParent <- aItem.parent}
@@ -1685,7 +1691,6 @@ struct WorldManager{
         if(aItem.pendingTasks==0){fulfillSubscriptions(agenda, aItem)}
         if(nextAItem){agenda.addAItemToAgenda(nextAItem)}
     }
-    me List<our PropagateRecord>: propagationsTodo
     void: propagateProxy(their Agenda: agenda, our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque) <- {
         aItem.mergeFinished <- true
         me bool: LHSitrBeginning <- aItem.LHSItr!=NULL and LHSPov===aItem.LHSItr.topPOV
@@ -1699,7 +1704,7 @@ struct WorldManager{
             propRec.remainder <- remainder
             propRec.looseSize <- looseSize
             propRec.dontEnque <- dontEnque
-            propagationsTodo.append(propRec)
+            agenda.propagationsTodo.append(propRec)
 //log("PropProxy:"+propRec.aItem.mySymbol()+" = "+shortedStr(propRec.aItem.stringify(),30)+"   IN-Q ")
         } else {
 //log("PropProxy:"+aItem.mySymbol()+" = "+shortedStr(aItem.stringify(),30)+"   IN-N")
@@ -1798,20 +1803,22 @@ aItem.LHS_item.pItem.streamState <- parseStarted
 
                             // Propagate queued AItems
                             logSegIn("-PQA")
-                            while(!propagationsTodo.isEmpty()){
-                                our PropagateRecord: propRec <-propagationsTodo.first();
-                                propagationsTodo.popFirst()
+                            while(!agenda.propagationsTodo.isEmpty()){
+                                our PropagateRecord: propRec <- agenda.propagationsTodo.first();
                                 me int:waitState <- 0
                                     callPropagate(agenda, propRec.aItem, propRec.LHSPov, propRec.RHSPov, propRec.remainder, propRec.looseSize, propRec.dontEnque, waitState)
                                     if(waitState==1){
-                                        if(!propRec.LHSPov.pItem.doReply /*or propRec.LHSPov.pItem.intersectPos!=ipNoIntersect*/){
-                                            logSeg(":WAIT:"+propRec.aItem.mySymbol())
+                                        if(!propRec.LHSPov.pItem.doReply and
+                                            (propRec.LHSPov.pItem.intersectPos==ipNoIntersect and
+                                               (propRec.LHSPov.outerPOV==NULL or propRec.LHSPov.outerPOV.pItem.intersectPos==ipNoIntersect))){ // if this will come thru here again...
+                                            log(":WAIT:"+propRec.LHSPov.pItem.mySymbol())
+                                            if(propRec.LHSPov.outerPOV){log(":WAIT-Outter:"+propRec.LHSPov.outerPOV.pItem.mySymbol())}
                                             callPropagate(agenda, propRec.aItem, propRec.LHSPov, propRec.RHSPov, propRec.remainder, propRec.looseSize, propRec.dontEnque, NULL)
+                                            logSeg(":POP.a"); agenda.propagationsTodo.popFirst()
                                         } else {
-                                            logSeg(":BREAK:"+propRec.aItem.mySymbol())
+                                            log(":BREAK:"+propRec.aItem.mySymbol())
                                             break()}
-                                    }
-                                logSeg(":POP")
+                                    } else {logSeg(":POP.b"); agenda.propagationsTodo.popFirst()}
                             }
                             logSegOut("")
 
@@ -1943,8 +1950,8 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                                         our AItem: PIVA <- processInfonViaAgenda(agenda, innrPov, NULL, aItem, aItem.priority)
                                         PIVA.LHS_item.pItem.takeWrkListFrom(aItem.LHS_item.pItem, false)
                                         PIVA.LHS_item.accessMode    <- aRefTo
-                                        PIVA.LHS_item.pItem.useMode <- umQuestion
-                                        PIVA.LHS_item.pItem.doReply <- true
+                            PIVA.LHS_item.pItem.useMode <- umQuestion
+//                            log("QUESTION-in-b:"+PIVA.LHS_item.pItem.mySymbol()+" = "+toString(PIVA.LHS_item.pItem))
 //                                      print("REF_TO:"+PIVA.LHS_item.mySymbol()+" = "+PIVA.LHS_item.stringify()+"\n")
                                         agenda.addAItemToAgenda(PIVA)
                                         innrPov <- innrPov.next
@@ -1981,7 +1988,7 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                                         } else {log(idnt+"          x ALT:"+ pov.mySymbol()+":"+ shortedStr(pov.stringify(),100) + shortedStr(logPredString,100))}
                                         pov <- pov.next
                                     }
-                                    if(numOK == 1){
+                                    if(numOK==1){
                                         newTop <- lastOK.pItem
                                         aItem.parent.dontProcess <- true
                                         aItem.LHS_item.forLastUseOutrPov <- true
@@ -2181,7 +2188,7 @@ struct ThreadedNormalizer: inherits=Threads {
         log("OPENED NORM_THREAD: "+infonSourceStr)
         agent.normalize(pov)
         log("CLOSING NORM_THREAD: "+infonSourceStr)
-        //print("CLOSING NORM_THREAD: "+infonSourceStr+"\n")
+        print("CLOSING NORM_THREAD: "+infonSourceStr+"\n")
         log("RESULT:"+shortedStr(pov.stringify(),100))
     }
 }
