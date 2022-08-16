@@ -91,6 +91,7 @@ mergeRules = {
         'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.pItem.value.num != aItem.RHS.pItem.value.num){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
         'copyType':                 'if(aItem.RHS.pItem.type!=NULL){aItem.LHS_item.pItem.type <- aItem.RHS.pItem.type}',
         'StartMergePropogation':    'startPropRules(aItem)',
+        'copyIdOrStartMergProp':    'if(aItem.LHS_item.accessMode==aRefTo){copyIdentity(aItem)}else{startPropRules(aItem)}',
         'MergeLooseStrings':        'remainder <- mergeLooseStrings(aItem)',
         'mergeRHSIntersect':        'mergeRHSIntersect(aItem)',
         'mergeANDRanges':           'mergeANDRanges(aItem)',
@@ -118,9 +119,9 @@ mergeRules = {
         ["merge:lSTR||=|rNUM,rLST|",                      "REJECT"],
         ["merge:lLST|lfUnknown,lfLiteral|=|rNUM,rSTR|",   "REJECT"],
 
-        ["merge:lNUM|lfUnknown|=|rNUM|rfUnknown",         "NONE"],
+        ["merge:lNUM|lfUnknown|=|rNUM|rfUnknown",         "copyIdentity"],
         ["merge:lNUM|lfUnknown|=|rNUM|rfLiteral",         "copyValueRHStoLHS"],
-        ["merge:lNUM|lfLiteral|=|rNUM|rfUnknown",         "copyValueLHStoRHS"],
+        ["merge:lNUM|lfLiteral|=|rNUM|rfUnknown",         "NONE"],
         ["merge:lNUM|lfLiteral|=|rNUM|rfLiteral",         "rejectIfValueNumNotEqual"],
 
         ["merge:lSTR|lfUnknown|=|rSTR|rfUnknown",         "copyIdentity"],
@@ -131,7 +132,7 @@ mergeRules = {
         ["merge:lLST|lfUnknown|=|rLST|rfUnknown",        "ACTION"],
         ["merge:lLST|lfUnknown|=|rLST|rfLiteral",        "ACTION"],
         ["merge:lLST|lfLiteral|=|rLST|rfUnknown",        "ACTION"],
-        ["merge:lLST|lfLiteral|=|rLST|rfLiteral",        "StartMergePropogation"],
+        ["merge:lLST|lfLiteral|=|rLST|rfLiteral",        "copyIdOrStartMergProp"],
 
         # LooseSize
         ["merge:lNUM||==|rSTR,rLST|rfUnknown,rfLiteral",   "ACTION"],
@@ -140,12 +141,12 @@ mergeRules = {
 
         ["merge:lNUM|lfUnknown|==|rNUM|rfUnknown",         "NONE"],
         ["merge:lNUM|lfUnknown|==|rNUM|rfLiteral",         "checkNumRangeDoCpy"], # remember size to copy
-        ["merge:lNUM|lfLiteral|==|rNUM|rfUnknown",         "copyValueLHStoRHS"],
+        ["merge:lNUM|lfLiteral|==|rNUM|rfUnknown",         "NONE"],
         ["merge:lNUM|lfLiteral|==|rNUM|rfLiteral",         "ACTION"], #break into 2 cases: LHS.infSize.format = rfUnknown, rfLiteral.  see tryMergeValue()
 
         ["merge:lSTR|lfUnknown|==|rSTR|rfUnknown",         "NONE"],
         ["merge:lSTR|lfUnknown|==|rSTR|rfLiteral",         "MergeLooseStrings"], # sizeToCopy, handleRemainder
-        ["merge:lSTR|lfLiteral|==|rSTR|rfUnknown",         "copyValueLHStoRHS"],
+        ["merge:lSTR|lfLiteral|==|rSTR|rfUnknown",         "NONE"],
         ["merge:lSTR|lfLiteral|==|rSTR|rfLiteral",         "MergeLooseStrings"],   #break into 2 cases: LHS.infSize.format = rfUnknown, rfLiteral.  see tryMergeValue()
 
         ["merge:lLST|lfUnknown|==|rLST|rfUnknown",        "ACTION"],
@@ -635,7 +636,8 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
     markHandledCases(ruleSetID, untagedRules, cases, points)
     if ruleSetID =="merge":
         #print("ruleSetID:"+ruleSetID)
-        ifsCode =  "        our POV: remainder <- NULL\n"
+        ifsCode =  '        //if(aItem.LHS_item.accessMode==aRefTo){log("REF_TO:"+aItem.stringify())}\n'
+        ifsCode += '        our POV: remainder <- NULL\n'
         ifsCode += '        logSeg("-mRUl")\n'
         ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
         ifsCode += '        else {log("MERGE_RULE_MISSING: "+ toString(aItem));log("          LHS fType:"+ fTypeStrings[aItem.LHS_item.pItem.value.fType]);log("          LHS format:"+ formatStrings[aItem.LHS_item.pItem.value.format]);log("          RHS fType:"+ fTypeStrings[aItem.RHS.pItem.value.fType]); log("EXITING"); exit(2);}\n'
