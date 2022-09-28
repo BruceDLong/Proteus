@@ -31,6 +31,8 @@ struct infon{
 }
 
 #define WCHK_PEEK(POS,RET) <%if(posIsAtEOB_butNotClosed(POS)){return(RET)}else{peek<-text.at(cPos)}%>
+
+struct ppStatus:inherits=<mode[valid_EOB, valid_notDone, valid_maybeDone, valid_done, syntax_error, other_error]>{}
 struct ProteusParser{
     their ProteusCore: CORE
     me bool: streamingMode
@@ -88,142 +90,139 @@ struct ProteusParser{
         return(N)
     }
 
-    me char: peekWSC(their int64: cPos)<-{
-        cPos <+- text.scrapeWSC(cPos)
-        return(text.at(cPos))
-    }
-    me bool: chkPeek(their int64: cPos, me char: peek, me string: str) <- {
-        if(peek==str[0]){cPos <+- 1; return(true)}
+    me bool: chkPeek(their int64: pos, me char: peek, me string: str) <- {
+        if(peek==str[0]){pos <+- 1; return(true)}
         else{return(false)}
     }
-    me bool: chkStr(their int64: cPos, me string: str) <- {
-        me int64: len <- text.chkStr(cPos, str)
-        if(len>=0){
-            cPos <+- len
-            return(true)
-        }
-        return(false)
-    }
-    me bool: chkStrWSC(their int64: cPos, me string: str)<-{
-        cPos <+- text.scrapeWSC(cPos)
-        return(chkStr(cPos, str))
-    }
-    me bool: chk(me int64: rLen, their int64: cPos, their int64: outLen) <- {
-        if(rLen>0){cPos <+- rLen; outLen <deep- rLen; return(true)}
+    me bool: chk(me int64: rLen, their int64: pos, their int64: outLen) <- {
+        if(rLen>0){pos <+- rLen; outLen <deep- rLen; return(true)}
         return(false)
     }
 ///////////////////////////////////  Pre-parse checking
-// checkParseStatus:
-    const int: valid_EOB       <- -1
-    const int: valid_notDone   <- 1
-    const int: valid_maybeDone <- 2
-    const int: valid_done      <- 3
-    const int: syntax_error    <- 4
-    const int: other_error     <- 5
 
-    me bool: waitingForBuffer(me int64: cPos) <- {
-        return(cPos>=text.crntStreamSize and !text.bufferClosed)
+    me bool: waitingForBuffer(me int64: pos) <- {
+        return(pos>=text.crntStreamSize and !text.bufferClosed)
     }
-
-    me int64: checkCComment(me int64: pos) <- {
-        if(waitingForBuffer(pos)){return(0)}
-        me char: ch <- text.at(pos)
-        if(ch=="/"){
-            if(waitingForBuffer(pos+1)){return(-1)}
-            me char: nextCh <- text.at(pos+1)
-            if(nextCh=="/"){
-                return(text.scrapeToEOL(pos))
-            } else if(nextCh=="*"){
-                return(text.scrapeUntil(pos+2, "*/")+2)
-            }
-        }
-        return(0)
-    }
-    me int64: checkWSC(me int64: pos) <- {
-        me int64: charsUsed <- 0
+    me bool: posIsAtEOB_butNotClosed(their int64: pos) <- {
         me int64: cPos <- pos
-        while(true){
-            me int64: prevP <- cPos
-            if(waitingForBuffer(cPos)){return(charsUsed)}
-            me char: ch <- text.at(cPos)
-            if(isspace(ch)){cPos <+- 1; charsUsed <+- 1}
-            else if(ch=="/"){
-                me int64: cmntLen <- checkCComment(cPos)
-                if(cmntLen>0){cPos <+- cmntLen; charsUsed <+- cmntLen}
-            }
-            if(prevP == cPos){
-                if(charsUsed==0){return(0)}
-                else{return(charsUsed)}
-            }
-        }
-        return(0) // Never reached
-    }
-    me int64: checkWS(me int64: pos) <- {
-        me int64: charsUsed <- 0
-        if(waitingForBuffer(pos)){return(0)}
-        our strBufItr: txtItr <- text.getItrAt(pos)
-        while(txtItr != NULL and txtItr.status==bfOK){
-            me char: ch <- txtItr.ch()
-            if(!isspace(ch)){return(charsUsed)}
-            if(waitingForBuffer(pos+charsUsed)){return(charsUsed)}
-            txtItr.goNext()
-            charsUsed <+- 1
-        }
-        return(charsUsed)
-    }
-    me bool: checkStr(their int64: cPos, me string: s) <- {
-        me char: peek; WCHK_PEEK(cPos,false)
-        me int64: len <- s.size()
-        our strBufItr: txtItr <- text.getItrAt(cPos)
-        withEach i in RANGE(0 .. len){
-            if(txtItr == NULL or txtItr.status!=bfOK or txtItr.ch() != s[i]){return(false)}
-            if(posIsAtEOB_butNotClosed(cPos+i+1)){return(false)}
-            txtItr.goNext()
-        }
-        if(len>=0){
-            cPos <+- len
-            return(true)
-        }
-        return(false)
-    }
-
-    me bool: posIsAtEOB_butNotClosed(me int64: cPos) <- {
-        cPos <+- checkWSC(cPos)
+        me ppStatus: status <- checkWSC(cPos)
+        if(status==valid_done){pos <deep- cPos}
         me bool: WFB <- waitingForBuffer(cPos)
         return(WFB)
     }
-    me int64: escapedCheckUntil(me int64:pos, me string:endChar, their int64: len) <- {
-        me string: prevCharStr <- " "
-        me char: prevChar <- prevCharStr[0]
-        me char: ender <- endChar[0]
-        me string: escCharStr <- "\\ "
-        me char: escChar <- escCharStr[0]
-        if(waitingForBuffer(pos)){
-            len <- 0
-            return(valid_notDone)
-        }
-        me int64: charsUsed <- 0
-        our strBufItr: txtItr <- text.getItrAt(pos)
-        while(txtItr != NULL and txtItr.status==bfOK){
-            me char: ch <- txtItr.ch()
-            me int64: p <- txtItr.crntAbsPos()
-            if(prevChar!=escChar and ch==ender){
-                len <- p-pos
-                return(valid_done)
-            }
-            if(prevChar==escChar and ch==escChar) {prevChar<-escCharStr[1]}
-            else {prevChar <- ch}
-            charsUsed <+- 1
-            if(waitingForBuffer(pos+charsUsed)){
-                len <- pos
+    me ppStatus: preChkStr(their int64: pos, me string:str) <- {
+        me int64: cPos <- pos
+        me int64: len <- str.size()
+        if(waitingForBuffer(cPos)){return(valid_notDone)}
+        our strBufItr: txtItr <- text.getItrAt(cPos)
+        withEach i in RANGE(0 .. len){
+            if(txtItr == NULL or txtItr.status!=bfOK){return(other_error)}
+            if(txtItr.ch() != str[i]){return(syntax_error)}
+            cPos <+- 1
+            if(waitingForBuffer(cPos)){
                 return(valid_notDone)
             }
             txtItr.goNext()
         }
-        return(-1)
+        return(valid_done)
     }
-    me int64: checkUTF8Char(me int64: pos, their int32: out) <- {
-        if(waitingForBuffer(pos)){return(-1)}
+    me bool: statusOK(me ppStatus: statusIn, their ppStatus: statusOut) <- {
+        statusOut <deep- statusIn
+        if(statusIn==valid_done or statusIn==valid_notDone or statusIn==valid_maybeDone){
+            return(true)
+        }
+        return(false)
+    }
+    me ppStatus: checkUntil(their int64: pos, me string:endStr) <- {
+        me int64: cPos <- pos
+        me char: ender <- endStr[0]
+        if(waitingForBuffer(cPos)){return(valid_EOB)}
+        our strBufItr: txtItr <- text.getItrAt(cPos)
+        while(txtItr != NULL and txtItr.status==bfOK){
+            me char: ch <- txtItr.ch()
+            if(ch==ender){
+                me int64: endPos <- cPos
+                me ppStatus: strChkStatus <- preChkStr(endPos, endStr)
+                if(strChkStatus == valid_done){pos <- endPos; return(valid_done)}
+            }
+            cPos <+- 1
+            if(waitingForBuffer(cPos)){pos <deep- cPos; return(valid_notDone)}
+            txtItr.goNext()
+        }
+        return(other_error)
+    }
+    me ppStatus: checkCComment(their int64: pos) <- {
+        if(waitingForBuffer(pos)){return(valid_EOB)}
+        me char: ch <- text.at(pos)
+        if(ch=="/"){
+            if(waitingForBuffer(pos+1)){return(valid_EOB)}
+            me char: nextCh <- text.at(pos+1)
+            if(nextCh=="/"){
+                return(checkToEOL(pos))
+            } else if(nextCh=="*"){
+                pos <+- 2
+                return(checkUntil(pos, "*/"))
+            }
+        }
+        return(syntax_error)
+    }
+    me ppStatus: checkWSC(their int64: pos) <- {
+        me int64: cPos <- pos
+        if(waitingForBuffer(cPos)){return(valid_EOB)}
+        our strBufItr: txtItr <- text.getItrAt(cPos)
+        while(txtItr != NULL and txtItr.status==bfOK){
+            me int64: prevP <- cPos
+            me char: ch <- txtItr.ch()
+            if(isspace(ch)){cPos <+- 1}
+            else if(ch=="/"){
+                me int64: endPos <- cPos
+                me ppStatus: CCStatus <- checkCComment(endPos)
+                if(CCStatus == valid_done){cPos <- endPos}
+            }
+            if(prevP == cPos){pos <deep- cPos; return(valid_done)}
+            if(waitingForBuffer(cPos)){pos <deep- cPos; return(valid_notDone)}
+            txtItr.goNext()
+        }
+        return(other_error)
+    }
+    me ppStatus: checkWS(their int64: pos) <- {
+        me int64: cPos <- pos
+        if(waitingForBuffer(cPos)){return(valid_EOB)}
+        our strBufItr: txtItr <- text.getItrAt(cPos)
+        while(txtItr != NULL and txtItr.status==bfOK){
+            me int64: prevP <- cPos
+            me char: ch <- txtItr.ch()
+            if(isspace(ch)){cPos <+- 1}
+            if(prevP == cPos){pos <deep- cPos; return(valid_done)}
+            if(waitingForBuffer(cPos)){pos <deep- cPos; return(valid_notDone)}
+            txtItr.goNext()
+        }
+        return(other_error)
+    }
+    me ppStatus: escapedCheckUntil(their int64:pos, me string:endStr) <- {
+        me int64: cPos <- pos
+        me char: ender <- endStr[0]
+        me string: escCharStr <- "\\ "
+        me char: escChar <- escCharStr[0]
+        me char: prevCh
+        if(waitingForBuffer(cPos)){return(valid_notDone)}
+        our strBufItr: txtItr <- text.getItrAt(cPos)
+        while(txtItr != NULL and txtItr.status==bfOK){
+            me char: ch <- txtItr.ch()
+            if(ch==ender and prevCh!=escChar){
+                me int64: endPos <- cPos
+                pos <- endPos
+                return(valid_done)
+            }
+            prevCh <- ch
+            cPos <+- 1
+            if(waitingForBuffer(cPos)){pos <deep- cPos; return(valid_notDone)}
+            txtItr.goNext()
+        }
+        return(other_error)
+    }
+    me ppStatus: checkUTF8Char(their int64: pos, their int32: out) <- {
+        if(waitingForBuffer(pos)){return(valid_EOB)}
         our strBufItr: txtItr <- text.getItrAt(pos)
         me int: count <- 0
         me int: expectedBytes <- -1
@@ -235,167 +234,147 @@ struct ProteusParser{
             }
             bufr  <+- ch
             count <+- 1
-            if(count==expectedBytes){break()}
-            if(waitingForBuffer(pos+1)){return(-1)}
+            if(count==expectedBytes){ break()}
+            if(waitingForBuffer(pos+count)){return(valid_notDone)}
             txtItr.goNext()
         }
-        if(count!=expectedBytes){return(-1)}
+        if(count!=expectedBytes){return(other_error)}
         me int64: p<-0
         packUTF8Char(bufr, p, out)
-        return(expectedBytes)
+        pos <+- count
+        return(valid_done)
     }
-    me int: checkUintSeq(me int64: pos, their int64: len) <- {
+    me ppStatus: checkUintSeq(their int64: pos) <- {
         me int64: charsUsed <- 0
-        if(waitingForBuffer(pos)){return(-1)} // should never happen
-        our strBufItr: txtItr <- text.getItrAt(pos)
-        while(txtItr != NULL){
-            me char: ch <- txtItr.ch()
-            if(!isdigit(ch)){
-                if(charsUsed==0){return(-1)}  // should never happen
-                else{return(valid_done)}
-            }
-            charsUsed <+- 1
-            if(waitingForBuffer(pos+charsUsed)){return(valid_maybeDone)}
-            len <+- 1
-            txtItr.goNext()
-        }
-        return(-1) // should never happen
-    }
-    me int: checkHexNum(me int64: pos, their int64: len) <- {
-        me int64: charsUsed <- 0
-        if(waitingForBuffer(pos)){return(valid_notDone)}
-        our strBufItr: txtItr <- text.getItrAt(pos)
-        while(txtItr != NULL){
-            me char: ch <- txtItr.ch()
-            if(!isxdigit(ch)){
-                if(charsUsed==0){return(-1)}  // should never happen
-                else{return(valid_done)}
-            }
-            charsUsed <+- 1
-            if(waitingForBuffer(pos+charsUsed)){return(valid_maybeDone)}
-            len <+- 1
-            txtItr.goNext()
-        }
-        return(-1) // should never happen
-    }
-    me int: checkBinNum(me int64: pos, their int64: len) <- {
-        me int64: charsUsed <- 0
-        if(waitingForBuffer(pos)){return(valid_notDone)}
-        our strBufItr: txtItr <- text.getItrAt(pos)
-        while(txtItr != NULL){
-            me char: ch <- txtItr.ch()
-            if(!isxdigit(ch)){
-                if(charsUsed==0){return(-1)}  // should never happen
-                else{return(valid_done)}
-            }
-            if(ch!="0" and ch!="1"){return(syntax_error)}
-            charsUsed <+- 1
-            if(waitingForBuffer(pos+charsUsed)){return(valid_maybeDone)}
-            len <+- 1
-            txtItr.goNext()
-        }
-        return(-1) // should never happen
-    }
-    me int64: checkUnicodeWordContinue(me int64: pos) <- {
-        me int64: cPos <- pos
-        me int64: charsUsed <- 0
-        if(waitingForBuffer(cPos)){return(-1)}
+        if(waitingForBuffer(pos)){return(valid_EOB)}
         our strBufItr: txtItr <- text.getItrAt(pos)
         while(txtItr != NULL and txtItr.status==bfOK){
-            me int32: ch
-            me int64: bytesUsed <- checkUTF8Char(cPos, ch)
-            if(charsUsed==0 and bytesUsed<=0){return(-1)}
-            if (!(unicodeMgr.isUnicodeWordContinue(ch))){
-                if(charsUsed==0){return(-1)}
-                else{return(charsUsed)}
+            me char: ch <- txtItr.ch()
+            if(!isdigit(ch)){
+                if(charsUsed==0 or !isspace(ch)){return(syntax_error)}
+                else{pos <+- charsUsed; return(valid_done)}
             }
-            cPos <+- bytesUsed
-            charsUsed <+- bytesUsed
-            if(waitingForBuffer(cPos)){return(charsUsed)}
+            charsUsed <+- 1
+            if(waitingForBuffer(pos+charsUsed)){return(valid_maybeDone)}
             txtItr.goNext()
         }
-        if(charsUsed==0){return(-1)}
-        return(charsUsed)
+        return(other_error)
     }
-    me int64: checkUniID(me int64: pos) <- {
+    me ppStatus: checkHexNum(their int64: pos) <- {
+        me int64: charsUsed <- 0
+        if(waitingForBuffer(pos)){return(valid_notDone)}
+        our strBufItr: txtItr <- text.getItrAt(pos)
+        while(txtItr != NULL and txtItr.status==bfOK){
+            me char: ch <- txtItr.ch()
+            if(!isxdigit(ch)){
+                if(charsUsed==0 or !isspace(ch)){return(syntax_error)}
+                else{pos <+- charsUsed; return(valid_done)}
+            }
+            charsUsed <+- 1
+            if(waitingForBuffer(pos+charsUsed)){return(valid_maybeDone)}
+            txtItr.goNext()
+        }
+        return(other_error)
+    }
+    me ppStatus: checkBinNum(their int64: pos) <- {
+        me int64: charsUsed <- 0
+        if(waitingForBuffer(pos)){return(valid_notDone)}
+        our strBufItr: txtItr <- text.getItrAt(pos)
+        while(txtItr != NULL and txtItr.status==bfOK){
+            me char: ch <- txtItr.ch()
+            if(ch!="0" and ch!="1"){
+                if(charsUsed==0 or !isspace(ch)){return(syntax_error)}
+                else{pos <+- charsUsed; return(valid_done)}
+            }
+            charsUsed <+- 1
+            if(waitingForBuffer(pos+charsUsed)){return(valid_maybeDone)}
+            txtItr.goNext()
+        }
+        return(other_error)
+    }
+    me ppStatus: checkUnicodeWordContinue(their int64: pos) <- {
+        // TODO!
+        me int64: cPos <- pos
+        me int64: charsUsed <- 0
+        if(waitingForBuffer(cPos)){return(valid_notDone)}
+        our strBufItr: txtItr <- text.getItrAt(cPos)
+        while(txtItr != NULL and txtItr.status==bfOK){
+            me int32: ch
+            me ppStatus: CCStatus <- checkUTF8Char(cPos, ch)
+            if(CCStatus != valid_done){return(syntax_error)}
+            if (!(unicodeMgr.isUnicodeWordContinue(ch))){
+                if(charsUsed==0){return(syntax_error)}
+                else{pos <deep- cPos; return(valid_notDone)}
+            }
+            charsUsed <+- 1
+            if(waitingForBuffer(cPos)){return(valid_maybeDone)}
+            txtItr.goNext()
+        }
+        return(other_error)
+    }
+    me ppStatus: checkUniID(their int64: pos) <- {
+        // TODO: verify this works properly with ppStatus
         me int64: cPos <- pos
         me int32: ch
-        //
-        me int64: bytesUsed <- checkUTF8Char(pos, ch)
-        if(bytesUsed<=0){return(-1)}
-        me int: tmpCh <- ch
+        me ppStatus: status <- checkUTF8Char(cPos, ch)
+        if(status != valid_done){return(syntax_error)}
         if(unicodeMgr.isUnicodeWordStart(ch)){
-            me int64: charsUsed <- checkUnicodeWordContinue(pos+bytesUsed)
-            if(charsUsed==-1){charsUsed<-0}
-            me string:TXT
-            withEach idx in RANGE(pos..pos+charsUsed+bytesUsed){
-                if(waitingForBuffer(idx)){return(-1)}
+            status <- checkUnicodeWordContinue(cPos)
+            withEach idx in RANGE(pos..cPos){
+                if(waitingForBuffer(idx)){return(valid_notDone)}
                 me char: tChr <- text.at(idx)
-                TXT <+- tChr
             }
-            if(charsUsed<0){return(1)}
-            else{return(charsUsed+bytesUsed)}
+            return(status)
         }
-        return(-1)
+        return(syntax_error)
     }
-    me int64: checkAlphaNum_Seq(me int64: pos) <- {
+    me ppStatus: checkAlphaNum_Seq(their int64: pos) <- {
         me int64: charsUsed <- 0
-        if(waitingForBuffer(pos)){return(-1)}
+        if(waitingForBuffer(pos)){return(valid_EOB)}
         our strBufItr: txtItr <- text.getItrAt(pos)
         while(txtItr != NULL and txtItr.status==bfOK){
             me char: ch <- txtItr.ch()
             if (!(isalnum(ch) or ch=="_")){
-                if(charsUsed==0){return(-1)}
-                else{return(charsUsed)}
+                if(charsUsed==0){return(syntax_error)}
+                else{pos <+- charsUsed; return(valid_done)}
             }
             charsUsed <+- 1
-            if(waitingForBuffer(pos+charsUsed)){return(charsUsed)}
+            if(waitingForBuffer(pos+charsUsed)){return(valid_maybeDone)}
             txtItr.goNext()
         }
-        return(charsUsed)
+        return(other_error)
     }
-    me int: checkQuotedStr1(me int64: pos, their int64: len) <- {
+    me ppStatus: checkQuotedStr1(their int64: pos) <- {
         if(waitingForBuffer(pos)){return(valid_notDone)}
-        if(checkStr(pos, "'")>=0){
-            pos <- pos+1
-        }else{
-            return(-1)
-        }
-        me int: status <- escapedCheckUntil(pos, "'", len)
-        if(status==-1){
-            return(status)
-        }
-        len <+- 2
-        return(status)
+        me char: peek <- text.at(pos)
+        if(peek != "'"){return(syntax_error)}
+        pos <+- 1
+        return(escapedCheckUntil(pos, "'"))
     }
-    me int: checkQuotedStr2(me int64: pos, their int64: len) <- {
+    me ppStatus: checkQuotedStr2(their int64: pos) <- {
         if(waitingForBuffer(pos)){return(valid_notDone)}
-        if(checkStr(pos, "\"")>=0){
-            pos <- pos+1
-        }else{
-            return(-1)
-        }
-        me int: status <- escapedCheckUntil(pos, "\"", len)
-        if(status==-1){
-            return(status)
-        }
-        len <+- 2
-        return(status)
+        me char: peek <- text.at(pos)
+        if(peek != "\""){return(syntax_error)}
+        pos <+- 1
+        return(escapedCheckUntil(pos, "\""))
     }
-    me int64: checkCID(me int64: pos) <- {
-        me int64: cPos <- pos
-        if(waitingForBuffer(cPos)){return(0)}
-        me char: ch <- text.at(cPos)
-        if(isalpha(ch)){return(checkAlphaNum_Seq(cPos))}
-        return(-1)
+    me ppStatus: checkToEOL(their int64: pos) <- {
+        return(checkUntil(pos, "\n"))
     }
-    me int: preChkID(me string: wanted, me string: given) <- {
+    me ppStatus: preCheckCID(their int64: pos) <- {
+        if(waitingForBuffer(pos)){return(valid_EOB)}
+        me char: ch <- text.at(pos)
+        if(isalpha(ch)){return(checkAlphaNum_Seq(pos))}
+        return(syntax_error)
+    }
+    me ppStatus: preChkID(me string: wanted, me string: given) <- {
         if(wanted.size()<given.size()){return(syntax_error)}
         if(wanted==given){return(valid_done)}
         if(wanted.subStr(0,given.size()) == given){return(valid_notDone)}
         return(syntax_error)
     }
     me int: preCheckWordDefn(me int64: pos) <- {
+        // TODO: make this work with ppStatus
         me int64: cPos <- pos
         me char: peek; WCHK_PEEK(cPos,valid_notDone)
         me int64: len
@@ -421,12 +400,13 @@ struct ProteusParser{
         }
         return(valid_done)
     }
-    me int: preCheckPureInfon(me int64: pos, their int64: len) <- {
+    me ppStatus: preCheckPureInfon(their int64: pos) <- {
+        me int64: len
         me int64: cPos <- pos
         me char: peek; WCHK_PEEK(cPos,valid_notDone)
-        if(chkPeek(cPos, peek, "_")){len <+- 1; return(valid_maybeDone)}
-        if(chkPeek(cPos, peek, "$")){len <+- 1; return(valid_maybeDone)}
-        me int: status
+        if(chkPeek(cPos, peek, "_")){pos <deep- cPos; return(valid_done)}
+        if(chkPeek(cPos, peek, "$")){pos <deep- cPos; return(valid_done)}
+        me ppStatus: status
         if(isdigit(peek)){
             me bool: numNotLoaded <- true
             if(peek=="0"){
@@ -438,29 +418,29 @@ struct ProteusParser{
                 if(peek2=="X"){
                     cPos <+- 2
                     len  <+- 2
-                    status <- checkHexNum(cPos, len)
+                    status <- checkHexNum(cPos)
                     if(status==-1){print("WARNING: status=-1 from checkHexNum\n")}
                     numNotLoaded <- false
                     return(status)
                 }
                 if(peek2=="B"){
                     cPos <+- 2
-                    status <- checkBinNum(cPos, len)
+                    status <- checkBinNum(cPos)
                     if(status==-1){print("WARNING: status=-1 from checkBinNum\n")}
                     numNotLoaded <- false
                     return(status)
                 }
             }
             if(numNotLoaded){
-                status <- checkUintSeq(cPos, len)
-                if(status==-1){print("WARNING: status=-1 from checkUintSeq\n")}
+                status <- checkUintSeq(cPos)
+                if(status==valid_done){pos <deep- cPos}
                 return(status)
             }
         }else if(peek=="\'"){
-            status <- checkQuotedStr1(cPos, len)
+            status <- checkQuotedStr1(cPos)
             return(status)
         }else if(peek=="\""){
-            status <- checkQuotedStr2(cPos, len)
+            status <- checkQuotedStr2(cPos)
             return(status)
         } else if(peek=="{" or peek=="[" or peek=="("){
             cPos <+- 1
@@ -468,122 +448,133 @@ struct ProteusParser{
         return(valid_done)
     }
     me int: preCheckFileID(me int64: pos) <- {
+        // TODO: make this work with ppStatus
         me int64: cPos <- pos
         me int64: len
         me char: peek; WCHK_PEEK(cPos,valid_notDone)
-        if(chk(text.scrapeToEOL(cPos), cPos,len)){
+        if(chk(checkToEOL(cPos), cPos,len)){
             me string: includeSpec <- makeStr(cPos-len, cPos)
             trimWS(includeSpec)
             // TODO: check for valid or likely valid resourseID
         }
         return(valid_done)
     }
-    me int: preCheckListItem(me int64: pos) <- {
-        me int64: cPos <- pos
-        me int64: len
+    me ppStatus: preCheckListItem(their int64: cPos) <- {
+        // TODO: verify this works properly with ppStatus
+        me ppStatus: status
         me char: peek;
         WCHK_PEEK(cPos,valid_notDone)
         if(chkPeek(cPos, peek, "@"))                      {return(preCheckWordDefn(cPos))}
-        else if(peek=="." and checkStr(cPos, "..."))      {return(valid_done)}
         else if(chkPeek(cPos, peek, "&"))                 {return(preCheckInfon(cPos, true))}
-        else if(checkStr(cPos, "%INSERT"))                {return(preCheckFileID(cPos))}
-        else if(checkStr(cPos, "%PROTEUS"))               {return(preCheckInfon(cPos, true))}
+        else if(statusOK(preChkStr(cPos, "%INSERT"), status))           {return(status)}
+        else if(statusOK(preChkStr(cPos, "%PROTEUS"), status))          {return(status)}
+        else if(peek=="." and statusOK(preChkStr(cPos, "..."), status)) {return(status)}
         return(preCheckInfon(cPos, true))
     }
     me int: preCheckFuncParts(me int64: pos, me bool: allowIDs) <- {
+        // TODO: make this work with ppStatus
         me int64: cPos <- pos
         me int64: len
         me char: peek; WCHK_PEEK(cPos,valid_notDone)
         return(valid_done)
     }
-    me int: preCheckInnerInfon(their int64: cPos) <- {
-        me int64: len <- 0
-        me int: status
+    me ppStatus: preCheckInnerInfon(their int64: pos) <- {
+        me int64: cPos <- pos
+        me ppStatus: status
         me char: peek; WCHK_PEEK(cPos,valid_notDone)
         if(chkPeek(cPos, peek, "?"))         {return(valid_done)}
         else if(chkPeek(cPos, peek, "%"))    {
             WCHK_PEEK(cPos,valid_notDone)
-            len <- checkCID(cPos)
-            if(len==0){return(valid_notDone)}
-            if(len>0){
-                cPos <+- len
-                me string: tag <- makeStr(cPos-len, cPos)
-                me string: firstCH <- tag.subStr(0,1)
-                switch(firstCH){
-                    case "s":{return(preChkID("self", tag))}
-                    case "W":{return(preChkID("W", tag))}
-                    case "U":{return(preChkID("U", tag))}
-                    case "c":{return(preChkID("ctx", tag))}
-                    case "a":{return(preChkID("args", tag))}
-                    case "v":{return(preChkID("vars", tag))}
-                    default:{setError("Invalid %tag ('"+tag+"')"); return(syntax_error)}
-                }
-
-            } else {setError("Expected a %tag"); return(syntax_error)}
+            if(cPos==pos){return(valid_notDone)}
+            me string: tag <- makeStr(pos+1, cPos+1)
+            me string: firstCH <- tag.subStr(0,1)
+            switch(firstCH){
+                case "s":{if(statusOK(preChkStr(cPos, "self"), status)) {return(status)}}
+                case "W":{if(statusOK(preChkStr(cPos, "W"), status))    {return(status)}}
+                case "U":{if(statusOK(preChkStr(cPos, "U"), status))    {return(status)}}
+                case "c":{if(statusOK(preChkStr(cPos, "ctx"), status))  {return(status)}}
+                case "a":{if(statusOK(preChkStr(cPos, "args"), status)) {return(status)}}
+                case "v":{if(statusOK(preChkStr(cPos, "vars"), status)) {return(status)}}
+                default:{setError("Invalid %tag ('"+tag+"')"); return(syntax_error)}
+            }
         } else { //*_+...
             me bool: requirePlusMinusSign <- false
             if(peek=="*" or peek=="/"){
                 cPos <+- 1
                 WCHK_PEEK(cPos,valid_notDone)
-                status <- preCheckPureInfon(cPos, len) // TODO: This should always be numeric
-                if(status==valid_done){
-                    requirePlusMinusSign <- true
-                    status <- valid_notDone
+                status <- preCheckPureInfon(cPos) // TODO: This should always be numeric
+                if(status!=valid_done){
+                    if(status==valid_maybeDone){status <- valid_notDone}
+                    return(status)
                 }
+                requirePlusMinusSign <- true
+                status <- valid_notDone
             }
             if(peek=="+" or peek=="-"){
                 cPos <+- 1
                 WCHK_PEEK(cPos,valid_notDone)
-                status <- preCheckPureInfon(cPos, len)
+                status <- preCheckPureInfon(cPos)
+                if(status==valid_done){pos <deep- cPos}
                 return(status)
             } else if(requirePlusMinusSign){
-                cPos <+- len
                 WCHK_PEEK(cPos,valid_notDone)
-                if(peek==" "){
-                    cPos <+- 1
-                    WCHK_PEEK(cPos,valid_notDone)
-                }
                 if(peek!="+" and peek!="-"){
                     return(syntax_error)
                 }
                 cPos <+- 1
                 WCHK_PEEK(cPos,valid_notDone)
-                if(peek==" "){
-                    cPos <+- 1
-                    WCHK_PEEK(cPos,valid_notDone)
-                }
-                status <- preCheckPureInfon(cPos, len)
+                status <- preCheckPureInfon(cPos)
+                if(status==valid_done){pos <deep- cPos}
                 return(status)
             } else {
                 WCHK_PEEK(cPos,valid_notDone)
-                status <- preCheckPureInfon(cPos, len)
+                status <- preCheckPureInfon(cPos)
+                if(status==valid_done){pos <deep- cPos}
                 return(status)
             }
         }
         return(valid_done)
     }
-    me int: preCheckInfon(me int64: pos, me bool: allowIDs) <- {
+    me ppStatus: preCheckInfon(me int64: pos, me bool: allowIDs) <- {
+        // TODO: verify this works properly with ppStatus
         me int64: cPos <- pos
         me int64: len
-        me char: peek; WCHK_PEEK(cPos,valid_notDone)
-        me bool: fetchInnerInfon <- true
-        if(chkPeek(cPos, peek, "!")){print("! "); WCHK_PEEK(cPos,valid_notDone) print("!+ ");}
-        if(chk(text.scrapeUniID(cPos), cPos,len)){print("abc ");
-            WCHK_PEEK(cPos,valid_maybeDone)print("abc+ ");
+        me ppStatus: status
+        me char:  peek; WCHK_PEEK(cPos,valid_notDone)
+        me bool:  fetchInnerInfon <- true
+        if(chkPeek(cPos, peek, "!")){WCHK_PEEK(cPos,valid_notDone)}
+        if(statusOK(checkUniID(cPos), status)){
+            WCHK_PEEK(cPos,valid_maybeDone)
             if(chkPeek(cPos, peek, ":")){WCHK_PEEK(cPos,valid_notDone)}
             else{fetchInnerInfon<-false}
         }
         if(fetchInnerInfon){
-            me int:status <- preCheckInnerInfon(cPos)//setError("Literal infon or %tag expected")}
-            if(status!=valid_maybeDone and status!=valid_done){return(status)}
-            WCHK_PEEK(cPos+1,status)        // TODO: verify this is correct
-            cPos <+- 1
+            status <- preCheckInnerInfon(cPos)//setError("Literal infon or %tag expected")}
         }
+        if(status!=valid_done){return(status)}
+        WCHK_PEEK(cPos,valid_done)
         return(preCheckFuncParts(cPos, allowIDs))
     }
 
-
 /////////////////////////////////// Parsers
+
+    me char: peekWSC(their int64: cPos)<-{
+        cPos <+- text.scrapeWSC(cPos)
+        return(text.at(cPos))
+    }
+    me bool: chkStr(their int64: cPos, me string: str) <- {
+        me int64: len <- text.chkStr(cPos, str)
+        if(len>=0){
+            cPos <+- len
+            return(true)
+        }
+        return(false)
+    }
+    me bool: chkStrWSC(their int64: cPos, me string: str)<-{
+        cPos <+- text.scrapeWSC(cPos)
+        return(chkStr(cPos, str))
+    }
+
     me int64: parseWordDefn(our infon: infn, me int64: pos) <- {
         me int64: cPos <- pos
         me int64: len
@@ -654,6 +645,10 @@ struct ProteusParser{
         me int64: len
 
         me bool: itemWasAppended <- false
+
+        // Unordered infon marker
+        if(chkStrWSC(cPos,"~")){infn.seperator <- seprComma}
+
         me char: peek <- peekWSC(cPos)
         if(chkPeek(cPos, peek, "@")){
             infn.itmMode <- mWordDefn
@@ -694,7 +689,6 @@ struct ProteusParser{
             infn.stillParsing <- false
             notifyStreamState(infn, parseDone)  // ParsingIsDone
         }
-
         if(!itemWasAppended){
             pureInfn.items.append(infn)
             if(parent!=NULL and pureInfn.items.size()==1){notifyStreamState(parent, parseListReady)}
@@ -774,12 +768,12 @@ struct ProteusParser{
             me int64: count<-0
             while(peekWSC(cPos) != ender){
                 text.consumerStatus <- 0
-                while(text.interactiveMode){
-                    text.consumerStatus <- preCheckListItem(cPos)
+                //while(text.interactiveMode){
+                    //text.consumerStatus <- preCheckListItem(cPos)
                     //print("WAITING:", text.consumerStatus,"... \n")
-                    if(text.consumerStatus!=valid_done or text.pre_parse_only){me MutexMngr: bufMtxMgr{text.bufMutex} text.bufLock.wait(bufMtxMgr)}
-                    else{text.pre_parse_only <- true; break()}
-                }
+                    //if(text.consumerStatus!=valid_done or text.pre_parse_only){me MutexMngr: bufMtxMgr{text.bufMutex} text.bufLock.wait(bufMtxMgr)}
+                    //else{text.pre_parse_only <- true; break()}
+                //}
                 our infon:: item
                 item.originID <- parent.originID
                 item.streamState <- parseStarted
@@ -1007,7 +1001,6 @@ struct ProteusParser{
     void: initParseFromStream(their strBuf: streamBuffer) <- {
         text <- streamBuffer
     }
-
     void: initParseFromString(me string: streamName, me string: txt) <- {
         their strBuf:: bufToParse
         bufToParse.init(streamName)
@@ -1149,7 +1142,7 @@ struct InfonPrinter{
             me bool: firstTime <- true
             while(itemItr){
                 if(!firstTime){
-                    if(parentInfon.unordered){S <+- ", "}
+                    if(itemItr.pItem.seperator==seprComma){S <+- ", "}
                     else{S <+- " "}
                 } else {firstTime <- false}
                 S <+- printInfonActual(itemItr.pItem, used)
