@@ -96,7 +96,7 @@ model infon{
     mode[umAssert, umQuestion, umCommand]: useMode
     me pureInfon: infSize
     me pureInfon: value
-    flag: unordered
+    bool: unordered
     flag: isNormed
     flag: doCursorLookup
     flag: hasInnrOutr
@@ -151,6 +151,15 @@ model infon{
     me FlexNum: fetchFlexNum() <- {return(value.getValAsNum())}
     me int64:   fetchInt()     <- {return(value.getValAsNum().convertToInt())}
     me double:  fetchDouble()  <- {return(value.num.convertToFloat())}
+
+    our infon: findMatchingItem(our infon: pattern) <- {
+        me string: fieldName <- pattern.type.asGiven
+    print("FINDING:"+fieldName+"\n")
+        our POV: pov <- fetchField(fieldName)
+        if(pov){
+            return(pov.pItem)
+        } else {return(NULL)}
+    }
 
     me FlexNum: sizeIfKnown() <- {
         if(infSize.format == fLiteral){return(infSize.num)}
@@ -1169,72 +1178,77 @@ struct WorldManager{
                 if(part.wasTransfered){continue()}else{part.wasTransfered <- true}
                 //log("@@PART:"+toString(part.path)+" infMode:"+infModeStrings[part.path.infMode] + "  CI:"+toString(CI))
                 logSegIn("PART")
-                switch(part.pathMode){
-                    case dotField:{
-                        logSeg("-DOT."+partTag)
-                        if(part.path.type != NULL){
-                            if(partTag == "first"){newPath <- CI.getFirstItem()}
-                            else if(partTag == "last") {newPath <- CI.getLastInfon()}
-                            //else if(partTag == "size"){newPath <- gteSizeInfon}
-                            else{} //TODO: lookup in index to optimize
+                    print("PART_PART:"+toString(part.path)+"\n")
+                if(CI.unordered){
+                    newPath <- CI.findMatchingItem(part.path)
+                } else {
+                    switch(part.pathMode){
+                        case dotField:{
+                            logSeg("-DOT."+partTag)
+                            if(part.path.type != NULL){
+                                if(partTag == "first"){newPath <- CI.getFirstItem()}
+                                else if(partTag == "last") {newPath <- CI.getLastInfon()}
+                                //else if(partTag == "size"){newPath <- gteSizeInfon}
+                                else{} //TODO: lookup in index to optimize
+                            }
+                            if(!newPath){
+                                me bool: doReply <- CI.doReply
+                                if(doReply){CI.doReply <- false}
+                                our infon:: skipPtn
+                                    part.path.copyAsTypeTo(skipPtn, false)
+                                    skipPtn.asNot                 <- true
+                                our infon:: skipPart  //TODO: Fill these with constructors or utility func.
+                                    skipPart.value.fType          <- LST
+                                    skipPart.value.sizeMode       <- fromCount
+                                    skipPart.value.format         <- fLiteral
+                                    skipPart.value.tailUnfinished <- true
+                                    skipPart.infMode              <- isLiteral
+                                    skipPart.itmMode              <- mSubItems
+                                    skipPart.infSize.fType        <- NUM
+                                    skipPart.infSize.format       <- fUnknown
+                                    skipPart.value.listSpec       <- skipPtn
+                                our infon: newInnr <- makeInnrInfon()
+                                    newInnr.value.items.append(skipPart)
+                                    newInnr.value.items.append(part.path)
+                                Allocate(newPath)
+                                    newPath.convertThisToIntersection(newInnr, fromGiven)
+                                    newPath.doReply        <- doReply
+                                    newInnr.value.sizeMode <- fromCount
+                                    newPath.value.sizeMode <- fromCount
+                                    newPath.infSize.fType  <- NUM
+                                    newPath.originID       <- CI.originID
+                                    newPath.infCharPos     <- CI.infCharPos
+                                    newPath.unordered      <- CI.unordered
+                                    if(part.path.partRef!=NULL){
+                                        newPath.partRef    <- part.path.partRef
+                                        part.path.partRef  <- NULL
+                                    }else{
+                                        newPath.parts      <- part.path.parts
+                                    }
+                        //print("newPath.infCharPos:", newPath.infCharPos, "\n")
+                                newPov <- newPath.innr.addInfonToWrkList(CI, true)
+                                newPov.looseMode <- false; newPov.looseTop  <- true
+                            }
                         }
-                        if(!newPath){
-                            me bool: doReply <- CI.doReply
-                            if(doReply){CI.doReply <- false}
-                            our infon:: skipPtn
-                                part.path.copyAsTypeTo(skipPtn, false)
-                                skipPtn.asNot                 <- true
-                            our infon:: skipPart  //TODO: Fill these with constructors or utility func.
-                                skipPart.value.fType          <- LST
-                                skipPart.value.sizeMode       <- fromCount
-                                skipPart.value.format         <- fLiteral
-                                skipPart.value.tailUnfinished <- true
-                                skipPart.infMode              <- isLiteral
-                                skipPart.itmMode              <- mSubItems
-                                skipPart.infSize.fType        <- NUM
-                                skipPart.infSize.format       <- fUnknown
-                                skipPart.value.listSpec       <- skipPtn
-                            our infon: newInnr <- makeInnrInfon()
-                                newInnr.value.items.append(skipPart)
-                                newInnr.value.items.append(part.path)
-                            Allocate(newPath)
-                                newPath.convertThisToIntersection(newInnr, fromGiven)
-                                newPath.doReply        <- doReply
-                                newInnr.value.sizeMode <- fromCount
-                                newPath.value.sizeMode <- fromCount
-                                newPath.infSize.fType  <- NUM
-                                newPath.originID       <- CI.originID
-                                newPath.infCharPos     <- CI.infCharPos
-                                newPath.unordered      <- CI.unordered
-                                if(part.path.partRef!=NULL){
-                                    newPath.partRef    <- part.path.partRef
-                                    part.path.partRef  <- NULL
-                                }else{
-                                    newPath.parts      <- part.path.parts
-                                }
-                    //print("newPath.infCharPos:", newPath.infCharPos, "\n")
-                            newPov <- newPath.innr.addInfonToWrkList(CI, true)
-                            newPov.looseMode <- false; newPov.looseTop  <- true
+                        case upField:{
+                            logSeg("-^"+partTag)
+                            //if(partTag == "pred"){}
                         }
-                    }
-                    case upField:{
-                        logSeg("-^"+partTag)
-                        //if(partTag == "pred"){}
-                    }
-                    case idxField:{
-                        logSeg("-#"+partTag)
-                        if(part.path.value.fType == NUM){
-                            our infon: newInnr <- makeInnrInfon()
-                                newInnr.value.tailUnfinished <- true
-                            Allocate(newPath)
-                                newPath.convertThisToIntersection(newInnr, fromGiven)
-                                newInnr.infSize              <- part.path.value
-                                newInnr.value.sizeMode       <- fromGiven
-                            newPov <- newPath.innr.addInfonToWrkList(CI, true)
-                            newPov.looseMode <- false; newPov.looseTop  <- true
+                        case idxField:{
+                            logSeg("-#"+partTag)
+                            if(part.path.value.fType == NUM){
+                                our infon: newInnr <- makeInnrInfon()
+                                    newInnr.value.tailUnfinished <- true
+                                Allocate(newPath)
+                                    newPath.convertThisToIntersection(newInnr, fromGiven)
+                                    newInnr.infSize              <- part.path.value
+                                    newInnr.value.sizeMode       <- fromGiven
+                                newPov <- newPath.innr.addInfonToWrkList(CI, true)
+                                newPov.looseMode <- false; newPov.looseTop  <- true
+                            }
                         }
+                        case colonField:{}
                     }
-                    case colonField:{}
                 }
                 if(newPath==NULL){logFatalError("Handle newPath is null")}
                 newPath.takeWrkListFrom(part.path, true)
@@ -1862,7 +1876,8 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                         logFlush()
                         return()
                     }
-                    // Handle unordered infons // @@
+                    aItem.mergeStatus <- msAccept
+                    // Handle unordered infons
                     me bool: LHSUnordered <- aItem.LHS_item.pItem.unordered
                     me bool: RHSUnordered <- false
                     if(aItem.RHS){RHSUnordered <- aItem.RHS.pItem.unordered}
@@ -1890,6 +1905,7 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                             }
                             aItem.RHS <- NULL
                         } else {
+                            aItem.mergeStatus <- msReject
                             log("Unordered infon + ordered infon not yet handled. "+toString(aItem)+"\n")
                         }
                     }
@@ -1921,7 +1937,6 @@ if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
                                 our AItem: mrgParent <- aItem.parentListsMrgAItem()
                                 me bool: parentListIsAsNot <- mrgParent!=NULL and mrgParent.LHS_item.applyAsNot(mrgParent.RHS)
                                 our POV: remainder
-                                aItem.mergeStatus <- msAccept
                                 if(aItem.RHS.pItem.intersectPos == ipNoIntersect){
                                     me int: isCompatible <- aItem.LHS_item.pItem.type.isCompatibleWith(aItem.RHS.pItem.type)
                                     if(!aItem.looseSize){
