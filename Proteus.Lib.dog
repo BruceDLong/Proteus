@@ -858,8 +858,8 @@ struct WorldManager{
         }
         return(changeMade)
     }
-    me bool: derefWordRules(our AItem: aItem) <- {
-        our POV: CIPov       <- aItem.LHS_item
+    me bool: derefInfon(our POV: CIPov) <- {
+        if(CIPov==NULL){return(false)}
         our infon: CI        <- CIPov.pItem
         if(CI.wordDerefed){return(false)}
         me bool: changeMade  <- false
@@ -890,14 +890,24 @@ struct WorldManager{
                 agent.setErrorState(CIPov, "'"+CI.type.asGiven+"' is not defined\n\n")
                 //print("\n\n The word '"+CI.type.asGiven+"' is not defined\n\n"); exit(3)
             }
+            changeMade     <- true
+            CI.wordDerefed <-true
+        }
+        return(changeMade)
+    }
+    me bool: derefWordRules(our AItem: aItem) <- {
+        our POV: CIPov    <- aItem.LHS_item
+        our infon: CI     <- CIPov.pItem
+        me bool: derefLHS <- derefInfon(CIPov)
+        me bool: derefRHS <- derefInfon(aItem.RHS)
+        if(derefLHS){
             if(CIPov.pParent!=NULL and CIPov.pParent.pItem!=NULL){
                 CIPov.pParent.pItem.value.index.insert(CI.type.asGiven, CI)
             }else{ // This section is to get items into World. In a fully streaming mode this isn't needed.
                 agent.world.value.index.insert(CI.type.asGiven, CI)
             }
-            CI.wordDerefed<-true
         }
-        return(changeMade)
+        return(derefLHS or derefRHS)
     }
     me bool: funcArgRules(our AItem: aItem) <- {
         our infon: CI        <- aItem.LHS_item.pItem
@@ -1185,7 +1195,7 @@ struct WorldManager{
                 if(part.wasTransfered){continue()}else{part.wasTransfered <- true}
                 //log("@@PART:"+toString(part.path)+" infMode:"+infModeStrings[part.path.infMode] + "  CI:"+toString(CI))
                 logSegIn("PART")
-                    print("PART_PART:"+toString(part.path)+"\n")
+                //print("PART_PART:"+toString(part.path)+"\n")
                 if(CI.unordered){
                     newPath <- CI.findMatchingItem(part.path)
                 } else {
@@ -1739,7 +1749,42 @@ struct WorldManager{
         }
 
     }
-
+    me bool: processUnorderedInfons(our AItem: aItem) <- {
+        // Handle unordered infons
+        me bool: LHSUnordered <- aItem.LHS_item.pItem.isUnordered()
+        me bool: RHSUnordered <- false
+        if(aItem.RHS){RHSUnordered <- aItem.RHS.pItem.isUnordered()}
+        if(aItem.RHS!=NULL and(LHSUnordered or RHSUnordered)){
+            if(LHSUnordered and RHSUnordered){
+                // with each item in RHS
+                me int: count <- 0
+                our POV: RHS_pov <- aItem.RHS.pItem.value.items.head
+                while(RHS_pov != NULL){
+                    our infon: RHS_item <- RHS_pov.pItem
+                    our infon: LHS_item <- aItem.LHS_item.pItem
+                    me string: fieldName <- ""
+                    if(RHS_item.type!=NULL){
+                        fieldName <- unicodeMgr.normalizeStr(RHS_item.type.asGiven) // TODO: norm asGiven elsewhere to avoid redundant calls.
+                        our POV: LHS_Pov <- LHS_item.fetchField(fieldName)
+                        if(LHS_Pov){
+                            LHS_Pov.pItem.addPOVToWrkList(RHS_pov)
+                        } else {
+                            print("WARNING: LHS infon Field not found: ",fieldName,"\n")
+                            log("WARNING: LHS infon Field not found. "+toString(aItem))
+                        }
+                    } else {logFatalError("RHS infon Field not identified.\n")} // TODO: Try . find
+                    count <- count+1
+                    RHS_pov <- RHS_pov.next
+                }
+                aItem.RHS <- NULL
+            } else {
+                aItem.mergeStatus <- msReject
+                log("Unordered infon + ordered infon not yet handled. "+toString(aItem)+"\n")
+            }
+            return(true)
+        }
+        return(false)
+    }
     void: processAgendaItem(their Agenda: agenda, our AItem: aItem, me int: AlternativesNestLvl)<-{
         //log("________________________________________")
         me bool: continueLoop    <- true
@@ -1884,47 +1929,12 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                         return()
                     }
                     aItem.mergeStatus <- msAccept
-                    // Handle unordered infons
-                    me bool: LHSUnordered <- aItem.LHS_item.pItem.isUnordered()
-                    me bool: RHSUnordered <- false
-                    if(aItem.RHS){
-                        RHSUnordered <- aItem.RHS.pItem.isUnordered()
-                   }
-                    if(aItem.RHS!=NULL and(LHSUnordered or RHSUnordered)){
-                        if(LHSUnordered and RHSUnordered){
-                            // with each item in RHS
-                            me int: count <- 0
-                            our POV: RHS_pov <- aItem.RHS.pItem.value.items.head
-                            while(RHS_pov != NULL){
-                                our infon: RHS_item <- RHS_pov.pItem
-                                our infon: LHS_item <- aItem.LHS_item.pItem
-                                me string: fieldName <- ""
-                                if(RHS_item.type!=NULL){
-                                    fieldName <- unicodeMgr.normalizeStr(RHS_item.type.asGiven) // TODO: norm asGiven elsewhere to avoid redundant calls.
-                                    our POV: LHS_Pov <- LHS_item.fetchField(fieldName)
-                                    if(LHS_Pov){
-                                        LHS_Pov.pItem.addPOVToWrkList(RHS_pov)
-                                    } else {
-                                        print("WARNING: LHS infon Field not found: ",fieldName,"\n")
-                                        log("WARNING: LHS infon Field not found. "+toString(aItem))
-                                    }
-                                } else {logFatalError("RHS infon Field not identified.\n")} // TODO: Try . find
-                                count <- count+1
-                                RHS_pov <- RHS_pov.next
-                            }
-                            aItem.RHS <- NULL
-                        } else {
-                            aItem.mergeStatus <- msReject
-                            log("Unordered infon + ordered infon not yet handled. "+toString(aItem)+"\n")
-                        }
-                    }
                     if(aItem.RHS==NULL){
                         logSeg("-MG_NoRHS"); endBracket<-"{"
                         //log("NO_RHS:"+ toString(aItem.LHS_item.pItem) + ": "+ aItem.LHS_item.pItem.mySymbol())
                         if(!aItem.LHS_item.pItem.wasProcessed){
                             if(aItem.LHS_item.pItem.value.fType == LST){initListIterators(aItem)}
                         }
-
                         propagateProxy(agenda, aItem, aItem.LHS_item, NULL, NULL, false, false)
                     } else {
 if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
@@ -1939,7 +1949,7 @@ if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
                                 agenda.addAItemToAgenda(PIVA)
                                 logSeg("-MG0-PIVA->"+PIVA.mySymbol())
                                 aItem.step <- 1
-                                continueLoop <- true; continue(); //TODO: Why not just go straight to case 1?
+                                continueLoop <- true; continue()
                             }
                             case 1:{
                                 me bool: invertAcceptance <- aItem.LHS_item.applyAsNot(aItem.RHS)
@@ -1961,10 +1971,21 @@ if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
                                         }
                                     }
                                 }
-                                if(aItem.mergeStatus!=msReject){mergeSizeRules(aItem)}
+                                if(aItem.mergeStatus!=msReject and !aItem.LHS_item.pItem.isUnordered()){mergeSizeRules(aItem)}
                                 if(aItem.mergeStatus!=msReject){
                                     if(aItem.RHS.forceID){log("FORCE_ID:"+aItem.stringify()); aItem.RHS.pItem.copyAsTypeTo(aItem.LHS_item.pItem, false)}
-                                    else{remainder <- mergeRules(aItem)}
+                                    else{
+                                        if(processUnorderedInfons(aItem)){
+                                            if(!aItem.LHS_item.pItem.wasProcessed){
+                                                if(aItem.LHS_item.pItem.value.fType == LST){initListIterators(aItem)}
+                                            }
+                                            propagateProxy(agenda, aItem, aItem.LHS_item, NULL, NULL, false, false)
+                                            break()
+                                        }
+                                        else{
+                                            remainder <- mergeRules(aItem)
+                                        }
+                                    }
                                 }
                                 if(invertAcceptance){
                                     if(aItem.mergeStatus==msAccept){
