@@ -28,6 +28,7 @@ infonDumpMode='text'
 
 struct SizeMode: inherits=<mode[fromCount, fromContext, fromGiven]> {}
 struct evalRangeMode: inherits=<mode[error, unknown, reject, pass]> {}
+struct OrderMode: inherits=<mode[uUnknown, uOrdered, uUnordered]> {}
 
 model pureInfon{
     mode[tUnset, tUnknown, NUM, STR, LST]: fType
@@ -96,7 +97,7 @@ model infon{
     mode[umAssert, umQuestion, umCommand]: useMode
     me pureInfon: infSize
     me pureInfon: value
-    bool: unordered
+    me OrderMode: orderMode
     flag: isNormed
     flag: doCursorLookup
     flag: hasInnrOutr
@@ -219,13 +220,11 @@ model infon{
     }
     me bool: isASeq() <- {return((value.format==fLiteral and value.fType==LST) or value.format==fConcat)}
     me bool: isOrLike() <- {return(intersectPos==ipGetLast and innr!=NULL and innr.infSize.format==fUnknown and innr.value.sizeMode==fromGiven and innr.value.format==fLiteral)}
-    me bool: isUnordered() <- {
+    me OrderMode: getOrderMode() <- {
         if(type!=NULL and type.baseDefinition!=NULL){
-            unordered <- type.baseDefinition.meaning.unordered
-        }
-        else{
-        }
-        return(unordered)
+            orderMode <- type.baseDefinition.meaning.orderMode
+        }else{}
+        return(orderMode)
     }
     our POV: getNthInfon(me FlexNum: N) <-{
         our POV: NthPov
@@ -311,7 +310,7 @@ model infon{
         to.originID   <- originID
         to.infCharPos <- infCharPos
         to.useMode    <- useMode
-        to.unordered  <- unordered
+        to.orderMode  <- orderMode
         to.intersectPos <- intersectPos
         infSize.copyAsTypeTo(to.infSize)
         value.copyAsTypeTo(to.value)
@@ -960,18 +959,18 @@ struct WorldManager{
                 case cVars:   {} //{newTop <- next}
             }
             if(newTop!=NULL) {
-                our PartPath: partRef <- CI.partRef
-                me bool: doReply      <- CI.doReply
-                me uint64: originID   <- CI.originID
-                me uint64: infCharPos <- CI.infCharPos
-                me bool: unordered    <- CI.unordered
+                our PartPath: partRef   <- CI.partRef
+                me bool: doReply        <- CI.doReply
+                me uint64: originID     <- CI.originID
+                me uint64: infCharPos   <- CI.infCharPos
+                me OrderMode: orderMode <- CI.orderMode
                 // Debugging? more items from CI may need to go here.
                 CI <deep- newTop
                 CI.partRef    <- partRef
                 CI.doReply    <- doReply
                 CI.originID   <- originID
                 CI.infCharPos <- infCharPos
-                CI.infCharPos <- unordered
+                CI.orderMode  <- orderMode
                 changeMade <- true
             }
         }
@@ -1196,7 +1195,7 @@ struct WorldManager{
                 //log("@@PART:"+toString(part.path)+" infMode:"+infModeStrings[part.path.infMode] + "  CI:"+toString(CI))
                 logSegIn("PART")
                 //print("PART_PART:"+toString(part.path)+"\n")
-                if(CI.unordered){
+                if(CI.orderMode==uUnordered){
                     newPath <- CI.findMatchingItem(part.path)
                 } else {
                     switch(part.pathMode){
@@ -1235,7 +1234,7 @@ struct WorldManager{
                                     newPath.infSize.fType  <- NUM
                                     newPath.originID       <- CI.originID
                                     newPath.infCharPos     <- CI.infCharPos
-                                    newPath.unordered      <- CI.unordered
+                                    newPath.orderMode      <- CI.orderMode
                                     if(part.path.partRef!=NULL){
                                         newPath.partRef    <- part.path.partRef
                                         part.path.partRef  <- NULL
@@ -1750,12 +1749,13 @@ struct WorldManager{
 
     }
     me bool: processUnorderedInfons(our AItem: aItem) <- {
-        // Handle unordered infons
-        me bool: LHSUnordered <- aItem.LHS_item.pItem.isUnordered()
-        me bool: RHSUnordered <- false
-        if(aItem.RHS){RHSUnordered <- aItem.RHS.pItem.isUnordered()}
-        if(aItem.RHS!=NULL and(LHSUnordered or RHSUnordered)){
-            if(LHSUnordered and RHSUnordered){
+        // Handle Unordered infons
+        me OrderMode: LHSOrderMode <- aItem.LHS_item.pItem.getOrderMode()
+        me OrderMode: RHSOrderMode <- uOrdered
+        //log("LHSOrderMode: "+OrderModeStrings[LHSOrderMode]+" RHSOrderMode:"+OrderModeStrings[RHSOrderMode])
+        if(aItem.RHS){RHSOrderMode <- aItem.RHS.pItem.getOrderMode()}
+        if(aItem.RHS!=NULL and(LHSOrderMode==uUnordered or RHSOrderMode==uUnordered)){
+            if(LHSOrderMode==uUnordered and RHSOrderMode==uUnordered){
                 // with each item in RHS
                 me int: count <- 0
                 our POV: RHS_pov <- aItem.RHS.pItem.value.items.head
@@ -1949,7 +1949,6 @@ if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
                                 agenda.addAItemToAgenda(PIVA)
                                 logSeg("-MG0-PIVA->"+PIVA.mySymbol())
                                 aItem.step <- 1
-                                continueLoop <- true; continue()
                             }
                             case 1:{
                                 me bool: invertAcceptance <- aItem.LHS_item.applyAsNot(aItem.RHS)
@@ -1971,7 +1970,7 @@ if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
                                         }
                                     }
                                 }
-                                if(aItem.mergeStatus!=msReject and !aItem.LHS_item.pItem.isUnordered()){mergeSizeRules(aItem)}
+                                if(aItem.mergeStatus!=msReject and aItem.LHS_item.pItem.getOrderMode()!=uUnordered){mergeSizeRules(aItem)}
                                 if(aItem.mergeStatus!=msReject){
                                     if(aItem.RHS.forceID){log("FORCE_ID:"+aItem.stringify()); aItem.RHS.pItem.copyAsTypeTo(aItem.LHS_item.pItem, false)}
                                     else{
