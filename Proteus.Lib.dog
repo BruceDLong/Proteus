@@ -220,11 +220,41 @@ model infon{
     }
     me bool: isASeq() <- {return((value.format==fLiteral and value.fType==LST) or value.format==fConcat)}
     me bool: isOrLike() <- {return(intersectPos==ipGetLast and innr!=NULL and innr.infSize.format==fUnknown and innr.value.sizeMode==fromGiven and innr.value.format==fLiteral)}
-    me OrderMode: getOrderMode() <- {
-        if(type!=NULL and type.baseDefinition!=NULL){
-            orderMode <- type.baseDefinition.meaning.orderMode
-        }else{}
+    me OrderMode: getOrderMode(their Agent: agent) <- {
+        if(orderMode!=uUnknown){return(orderMode)}
+        if(type!=NULL){
+            me vocabularySpec: vSpec
+            vSpec.init(agent.getLocaleBaseName())
+            me List<our WordDefn>: resultDefns
+            me int: numAdded <- modelMngr.lookupWord(type.asGiven, vSpec, resultDefns)
+            if(!resultDefns.isEmpty()){
+                our WordDefn: def <- resultDefns[0]
+                orderMode <- def.meaning.orderMode
+            }
+        }
         return(orderMode)
+    }
+    void: setOrderMode() <- {
+        if(funcArgs!=NULL){
+            if(funcArgs.orderMode!=uUnknown){
+                orderMode <- funcArgs.orderMode
+            }
+            else{
+                if(funcArgs.type!=NULL){
+                    me vocabularySpec: vSpec
+                    if(!definedWord.UsageTags.isEmpty()){
+                        vSpec.init(definedWord.UsageTags[0])
+                    }
+                    me List<our WordDefn>: resultDefns
+                    me int: numAdded <- modelMngr.lookupWord(funcArgs.type.asGiven, vSpec, resultDefns)
+                    if(!resultDefns.isEmpty()){
+                        our WordDefn: def <- resultDefns[0]
+                        orderMode <- def.meaning.orderMode
+                    }
+                }
+                funcArgs.orderMode <- orderMode
+            }
+        }
     }
     our POV: getNthInfon(me FlexNum: N) <-{
         our POV: NthPov
@@ -799,6 +829,8 @@ struct WorldManager{
         me bool: changeMade  <- false
         if(CI.itmMode==mWordDefn and !CI.defnRegistered){
             logSeg("-WrdDefn")
+            CI.setOrderMode()
+            // TODO: if(CI.orderMode==uUnknown){ Set word type modelMngr.wordsWaitingForDefinition}
             modelMngr.indexDefinition(agent, CI.definedWord, CI.funcArgs)
             CI.defnRegistered <- true
             changeMade <- true
@@ -863,8 +895,9 @@ struct WorldManager{
         if(CI.wordDerefed){return(false)}
         me bool: changeMade  <- false
         if(CI.type!=NULL and CI.itmMode!=mWordDefn){
-            their vocabularySpec:: vSpec
-            vSpec.init(agent.getLocaleBaseName())
+// TODO: move vSpec into agent
+me vocabularySpec: vSpec
+vSpec.init(agent.getLocaleBaseName())
             our infon: infModel  <- modelMngr.constructAltModelFromWord(agent, CI.type, vSpec, "scope")
             if(infModel){
                 infModel.generality <- gAbstract
@@ -1750,19 +1783,11 @@ struct WorldManager{
     }
     me bool: processUnorderedInfons(our AItem: aItem) <- {
         // Handle Unordered infons
-        me OrderMode: LHSOrderMode <- aItem.LHS_item.pItem.getOrderMode()
+        me OrderMode: LHSOrderMode <- aItem.LHS_item.pItem.getOrderMode(agent)
         me OrderMode: RHSOrderMode <- uOrdered
         //log("LHSOrderMode: "+OrderModeStrings[LHSOrderMode]+" RHSOrderMode:"+OrderModeStrings[RHSOrderMode])
-        if(aItem.RHS){RHSOrderMode <- aItem.RHS.pItem.getOrderMode()}
+        if(aItem.RHS){RHSOrderMode <- aItem.RHS.pItem.getOrderMode(agent)}
         if(aItem.RHS!=NULL and(LHSOrderMode==uUnordered or RHSOrderMode==uUnordered)){
-if(RHSOrderMode==uUnknown){ // Find OrderMode more comprehensively
-    our WordUse: Ltype <- aItem.LHS_item.pItem.type
-    our infon: RdefToUse <- aItem.RHS.pItem.type.defToUse
-    if(Ltype.asGiven==RdefToUse.type.asGiven){
-        //aItem.RHS.pItem.orderMode <- LHSOrderMode
-        RHSOrderMode    <- LHSOrderMode
-    }
-}
             if(LHSOrderMode==uUnordered and RHSOrderMode==uUnordered){
                 // with each item in RHS
                 me int: count <- 0
@@ -1978,7 +2003,7 @@ if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
                                         }
                                     }
                                 }
-                                if(aItem.mergeStatus!=msReject and aItem.LHS_item.pItem.getOrderMode()!=uUnordered){mergeSizeRules(aItem)}
+                                if(aItem.mergeStatus!=msReject and aItem.LHS_item.pItem.getOrderMode(agent)!=uUnordered){mergeSizeRules(aItem)}
                                 if(aItem.mergeStatus!=msReject){
                                     if(aItem.RHS.forceID){log("FORCE_ID:"+aItem.stringify()); aItem.RHS.pItem.copyAsTypeTo(aItem.LHS_item.pItem, false)}
                                     else{
