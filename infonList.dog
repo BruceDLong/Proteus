@@ -32,6 +32,7 @@ model POV{ // Point-Of-View
     me int: linearAltID
     flag: rejected         // At least one item on the worklist was rejected.
     flag: doReply          // Flag that this should reply back to user/stream.
+    flag: doNotEnter       // use for single level normalizing
 
     our infon: dpItem() <- {
         our infon: retVal <- NULL
@@ -151,7 +152,7 @@ model POV{ // Point-Of-View
         }
         newInfon.itmMode       <- mItem
         if(pItem.itmMode==mSubItems){
-            if(pParent.pItem.isInnr or pItem.useMode==umQuestion){
+            if((pParent!=NULL and pParent.pItem.isInnr) or pItem.useMode==umQuestion){
                 //log("QUESTION pParent:"+pParent.pItem.mySymbol()+" = "+toString(pParent.pItem))
                 newInfon.useMode <- umQuestion
                 //log("QUESTION-in-c:"+newInfon.mySymbol()+" = "+toString(newInfon))
@@ -238,24 +239,35 @@ model POV{ // Point-Of-View
         if(nextNode != NULL){nextNode.pParent <- pParent}
         return(nextNode)
     }
-    our POV: getFirstTight(our infItr: ii, me int64: skipDots, their int64: numLvlsUp, their int:waitState) <- {
+    our POV: getFirstTight(our infItr: ii, me int64: skipDots, their int64: numLvlsUp, their int:waitState, their Agent: agent) <- {
         //log("[GFT: infItr:"+ii.mySymbol())
         me int64: dummyFlag
         our POV: nextPOV <- getFirst(skipDots, waitState)
         if(nextPOV == NULL and (waitState!=NULL and waitState==1)){return(NULL)}
         if(nextPOV != NULL and nextPOV.pItem.itmMode == mSubItems){
-            our POV: firstPOV <- nextPOV.getFirstTight(ii, skipDots, dummyFlag, waitState)
-            if(firstPOV == NULL){nextPOV <- nextPOV.getNextTight(ii, skipDots, numLvlsUp, false, false, waitState)}
+            me bool: setProp <- false
+            if(nextPOV.pItem.value.format!=fLiteral or nextPOV.pItem.intersectPos!=ipNoIntersect){
+                logFlush()
+                agent.normalizeOneLevel(nextPOV)
+                setProp <- true
+            }
+            our POV: firstPOV <- nextPOV.getFirstTight(ii, skipDots, dummyFlag, waitState, agent)
+            if(firstPOV == NULL){nextPOV <- nextPOV.getNextTight(ii, skipDots, numLvlsUp, false, false, waitState, agent)}
             else{nextPOV <- firstPOV}
         }
         //log("]gft")
         return(nextPOV)
     }
-    our POV: getNextTight(our infItr: ii, me int64: skipDots, their int64: numLvlsUp, me bool: getDeep, me bool: itrBeginning, their int:waitState) <- {
+    our POV: getNextTight(our infItr: ii, me int64: skipDots, their int64: numLvlsUp, me bool: getDeep, me bool: itrBeginning, their int:waitState, their Agent: agent) <- {
         //log("[GNT: infItr:"+ii.mySymbol()+"  skipdots:"+toString(skipDots)+"   pItem:"+pItem.mySymbol()+":"+toString(pItem))
         our POV: nextPOV
         me int64: dummyFlag
-        if(itrBeginning){nextPOV <- getFirstTight(ii, skipDots, numLvlsUp, waitState)}
+        if(itrBeginning){
+            if(doNotEnter){
+                return(NULL)
+            }
+            nextPOV <- getFirstTight(ii, skipDots, numLvlsUp, waitState, agent)
+        }
         else{
             nextPOV <- getNext(skipDots, waitState)
             if(nextPOV == NULL){
@@ -263,17 +275,17 @@ model POV{ // Point-Of-View
                 our infItr: nxtInfItr <- ii
                 if(pParent==NULL or pParent.pItem.itmMode != mSubItems){
                     numLvlsUp <+- 1
-                if(pParent==NULL){/*log("]gnt-NULLa")*/ return(NULL)} else {skipDots <+- 1}
-                    if(ii != NULL and ii.iParent!=NULL){nxtInfItr <- ii.iParent}
+                    if(pParent==NULL){/*log("]gnt-NULLa")*/ return(NULL)} else {skipDots <+- 1}
+                        if(ii != NULL and ii.iParent!=NULL){nxtInfItr <- ii.iParent}
                 }else if(pParent === ii.topPOV){/*log("]gnt-NULLb")*/ return(NULL)}
                 if(pParent.outerPOV!=NULL){//log("UP-OTR")
-                    nextPOV <- pParent.outerPOV.getNextTight(nxtInfItr, skipDots-1, numLvlsUp, getDeep, itrBeginning, waitState)
+                    nextPOV <- pParent.outerPOV.getNextTight(nxtInfItr, skipDots-1, numLvlsUp, getDeep, itrBeginning, waitState, agent)
                 }else{//log("UP")
-                    nextPOV <- pParent.getNextTight(nxtInfItr, skipDots-1, numLvlsUp, getDeep, itrBeginning, waitState)
+                    nextPOV <- pParent.getNextTight(nxtInfItr, skipDots-1, numLvlsUp, getDeep, itrBeginning, waitState, agent)
                 }
             }else if(nextPOV.pItem.itmMode == mSubItems or (nextPOV.pItem.value.fType==LST and getDeep)){
-                our POV: firstPOV <- nextPOV.getFirstTight(ii, skipDots, dummyFlag, waitState)
-                if(firstPOV == NULL){nextPOV <- nextPOV.getNextTight(ii, skipDots, numLvlsUp, getDeep, itrBeginning, waitState)}
+                our POV: firstPOV <- nextPOV.getFirstTight(ii, skipDots, dummyFlag, waitState, agent)
+                if(firstPOV == NULL){nextPOV <- nextPOV.getNextTight(ii, skipDots, numLvlsUp, getDeep, itrBeginning, waitState, agent)}
                 else{nextPOV <- firstPOV}
             }
         }
@@ -281,7 +293,7 @@ model POV{ // Point-Of-View
             me int: tmpWS<- -2
             if(waitState!=NULL){tmpWS <- waitState}
             //log("GETTING_ALT: AlreadyGot:"+nextPOV.stringify()+"  waitState:"+toString(tmpWS));
-            nextPOV.altPOV <- nextPOV.getNextTight(ii, INT64_MAX, dummyFlag, getDeep, false, waitState)
+            nextPOV.altPOV <- nextPOV.getNextTight(ii, INT64_MAX, dummyFlag, getDeep, false, waitState, agent)
         if(waitState!=NULL){tmpWS <- waitState}
             //log("GETTING_ALT: ALT:"+nextPOV.altPOV.mySymbol()+"  waitState:"+toString(tmpWS));
             //if(nextPOV.altPOV){log("  altPOV = "+nextPOV.altPOV.stringify())}
