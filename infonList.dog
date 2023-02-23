@@ -22,6 +22,7 @@ model POV{ // Point-Of-View
     flag: keepDots
     flag: listClosed
     flag: hasPropagated
+    flag: isSubItm
     me int: AlternativesNestLvl
     me Map<me string, our POV>: pctTags
     me List<our POV>: predecessors
@@ -64,12 +65,12 @@ model POV{ // Point-Of-View
     }
     void: insertChildDotsBefore(our POV: position) <- {
         our infon:: newSubDots
-        newSubDots.itmMode <- mSubItems
         newSubDots.infMode <- isLiteral
         newSubDots.value.tailUnfinished <- true
         newSubDots.value.fType <- LST
         newSubDots.value.format <- fLiteral
-        pItem.value.items.insertBefore(position, newSubDots)
+        our POV: newPOV <- pItem.value.items.insertBefore(position, newSubDots)
+        newPOV.isSubItm <- true
         pItem.value.tailUnfinished <- false
     }
     void: closeItemsAtPOV(our POV: lastItem) <- {
@@ -126,7 +127,7 @@ model POV{ // Point-Of-View
                 newTypeSpecs.prepend(newTypeSpec)
                 typesAdded <+- 1
             }
-            if(lSpec.pItem.itmMode==mSubItems){lSpec <- lSpec.pParent}
+            if(lSpec.isSubItm){lSpec <- lSpec.pParent}
             else{lSpec <- NULL}
         }
         if(typesAdded==0){return(false)}
@@ -151,7 +152,7 @@ model POV{ // Point-Of-View
             newInfon.infMode       <- isUnknown
         }
         newInfon.itmMode       <- mItem
-        if(pItem.itmMode==mSubItems){
+        if(isSubItm){
             if((pParent!=NULL and pParent.pItem.isInnr) or pItem.useMode==umQuestion){
                 //log("QUESTION pParent:"+pParent.pItem.mySymbol()+" = "+toString(pParent.pItem))
                 newInfon.useMode <- umQuestion
@@ -164,7 +165,7 @@ model POV{ // Point-Of-View
         me string: lenStatus <- pItem.lengthStatus()
         if(lenStatus == "L" or lenStatus == "?"){
             our infon: newInfon <- makePotentialMemberInfon()
-            our POV: newInfNode <- pItem.value.items.append(newInfon)
+            our POV: newInfNode <- pItem.value.items.append(newInfon, false)
             if(lenStatus == "?"){
                 newInfon.isTentative  <- true
                 newInfNode.tentFromDots <- true
@@ -232,7 +233,7 @@ model POV{ // Point-Of-View
                 if(pParent != NULL and pParent.pItem != NULL and pParent.pItem.value.tailUnfinished){
                     nextNode <- pParent.tryAddingTentativeChild()
                 }
-            } else if(skipDots<1000000 and pParent != NULL and pParent.pItem != NULL and pParent.pItem.itmMode != mSubItems){ //log("FINISHING:"+pParent.stringify());
+            } else if(skipDots<1000000 and pParent != NULL and pParent.pItem != NULL and !pParent.isSubItm){ //log("FINISHING:"+pParent.stringify());
                 pParent.forLastUseLastItem<-true;
             }
         }//else{seedTypeSpecs(nextNode.pItem, false)}
@@ -244,7 +245,7 @@ model POV{ // Point-Of-View
         me int64: dummyFlag
         our POV: nextPOV <- getFirst(skipDots, waitState)
         if(nextPOV == NULL and (waitState!=NULL and waitState==1)){return(NULL)}
-        if(nextPOV != NULL and nextPOV.pItem.itmMode == mSubItems){
+        if(nextPOV != NULL and nextPOV.isSubItm){
             me bool: setProp <- false
             if(nextPOV.pItem.value.format!=fLiteral or nextPOV.pItem.intersectPos!=ipNoIntersect){
                 logFlush()
@@ -273,7 +274,7 @@ model POV{ // Point-Of-View
             if(nextPOV == NULL){
                 if(waitState!=NULL and waitState==1){return(NULL)}
                 our infItr: nxtInfItr <- ii
-                if(pParent==NULL or pParent.pItem.itmMode != mSubItems){
+                if(pParent==NULL or !pParent.isSubItm){
                     numLvlsUp <+- 1
                     if(pParent==NULL){/*log("]gnt-NULLa")*/ return(NULL)} else {skipDots <+- 1}
                         if(ii != NULL and ii.iParent!=NULL){nxtInfItr <- ii.iParent}
@@ -283,7 +284,7 @@ model POV{ // Point-Of-View
                 }else{//log("UP")
                     nextPOV <- pParent.getNextTight(nxtInfItr, skipDots-1, numLvlsUp, getDeep, itrBeginning, waitState, agent)
                 }
-            }else if(nextPOV.pItem.itmMode == mSubItems or (nextPOV.pItem.value.fType==LST and getDeep)){
+            }else if(nextPOV.isSubItm or (nextPOV.pItem.value.fType==LST and getDeep)){
                 our POV: firstPOV <- nextPOV.getFirstTight(ii, skipDots, dummyFlag, waitState, agent)
                 if(firstPOV == NULL){nextPOV <- nextPOV.getNextTight(ii, skipDots, numLvlsUp, getDeep, itrBeginning, waitState, agent)}
                 else{nextPOV <- firstPOV}
@@ -359,21 +360,22 @@ model PovList: implements = list {
         return(newNode)
     }
 
-    our POV: append_actual_(our infon: i) <- {
+    our POV: append_actual_(our infon: i, me bool: isSubItm) <- {
         our POV:: newNode
         newNode.pItem <- i
         newNode.next  <- NULL
         newNode.prev  <- tail
+        newNode.isSubItm <- isSubItm
         if(tail!=NULL) {tail.next <- newNode}
         if(head==NULL) {head <- newNode}
         tail <- newNode
         return(newNode)
     }
 
-    our POV: append(our infon: i) <- {
+    our POV: append(our infon: i, me bool: isSubItm) <- {
         our POV: newNode
         protect(povLstMtx){
-            newNode <- append_actual_(i)
+            newNode <- append_actual_(i, isSubItm)
         }
         return(newNode)
     }
@@ -392,7 +394,7 @@ model PovList: implements = list {
     our POV: pushAsAlt(our POV: pov, our infon: toPush, our POV: pred) <- {
         our POV: newAlt
         protect(povLstMtx){
-            newAlt <- append_actual_(toPush)
+            newAlt <- append_actual_(toPush, pov.isSubItm)
             newAlt.outerPOV <- pov
                 newAlt.looseInhtd <- pov.looseInhtd
                 newAlt.looseTop   <- pov.looseTop
