@@ -657,12 +657,13 @@ struct ProteusParser{
         me bool: itemWasAppended <- false
 
         me char: peek <- peekWSC(cPos)
+        me bool: isSubItm <- false
         if(chkPeek(cPos, peek, "@")){
             infn.itmMode <- mWordDefn
             if(chk(parseWordDefn(infn, cPos), cPos,len)){}
             notifyStreamState(infn, parseDone)
         } else if(peek=="." and chkStr(cPos, "...")){
-            infn.itmMode        <- mSubItems
+            isSubItm            <- true
             infn.infMode        <- isLiteral
             infn.infSize.format <- fUnknown
             infn.value.format   <- fLiteral
@@ -670,7 +671,7 @@ struct ProteusParser{
             infn.value.tailUnfinished  <- true
             notifyStreamState(infn, parseDone)
         } else if(chkPeek(cPos, peek, "&")){
-            infn.itmMode <- mSubItems
+            isSubItm            <- true
             cPos <+- parseInfon(infn, cPos, true)
         } else if(chkStr(cPos, "%INSERT")){
             infn.itmMode <- mIncludeStream
@@ -688,7 +689,7 @@ struct ProteusParser{
             notifyStreamState(infn, parseDone)
         } else{
             infn.itmMode <- mItem
-            pureInfn.items.append(infn)
+            pureInfn.items.append(infn, false)
             if(parent!=NULL and pureInfn.items.size()==1){notifyStreamState(parent, parseListReady)}
             itemWasAppended <- true
             cPos <+- parseInfon(infn, cPos, true, false)
@@ -697,7 +698,7 @@ struct ProteusParser{
             notifyStreamState(infn, parseDone)  // ParsingIsDone
         }
         if(!itemWasAppended){
-            pureInfn.items.append(infn)
+            pureInfn.items.append(infn, isSubItm)
             if(parent!=NULL and pureInfn.items.size()==1){notifyStreamState(parent, parseListReady)}
         }
 
@@ -808,8 +809,9 @@ struct ProteusParser{
 
             // If the last item is ..., merge/remove it.
             if(pureInfn.items.size() > 0){
-                our infon: lastItem <- pureInfn.items.last()
-                if(lastItem.value.tailUnfinished and lastItem.itmMode == mSubItems and lastItem.infSize.format == fUnknown){
+                our POV: lastPOV    <- pureInfn.items.back()
+                our infon: lastItem <- lastPOV.pItem
+                if(lastItem.value.tailUnfinished and lastPOV.isSubItm and lastItem.infSize.format == fUnknown){
                     pureInfn.tailUnfinished <- true
                     pureInfn.items.popLast()
                 }
@@ -1155,7 +1157,7 @@ struct InfonPrinter{
             if(pure.size!=NULL and pure.format==fLiteral){S <+- "~"+printPureInfon(pure.size, NULL, false, parentInfon, used) showBar<-true}
             if(pure.listSpec!=NULL and !isNiceList(pure, parentInfon)){
                 if(showBar){S <+- " "}
-                S <+- printInfonActual(pure.listSpec, used)
+                S <+- printInfonActual(pure.listSpec, used, false)
                 showBar<-true
             }
             if(showBar){S <+- "| "}
@@ -1166,7 +1168,7 @@ struct InfonPrinter{
                     if(parentInfon.orderMode==uUnordered){S <+- ", "}
                     else{S <+- " "}
                 } else {firstTime <- false}
-                S <+- printInfonActual(itemItr.pItem, used)
+                S <+- printInfonActual(itemItr.pItem, used, itemItr.isSubItm)
                 itemItr <- itemItr.next
             }
             if(pure.tailUnfinished or parentInfon.streamState==parseStarted){
@@ -1181,7 +1183,7 @@ struct InfonPrinter{
         return(S)
     }
 
-    me string: printInfonActual(their infon: i, our Map<me string, me int>: used) <- {
+    me string: printInfonActual(their infon: i, our Map<me string, me int>: used, me bool: isSubItm) <- {
         me string: S <- ""
         if(i ==  NULL){return("NULL")}
         if(i.isTentative){S <+- "t"}
@@ -1198,7 +1200,7 @@ struct InfonPrinter{
             }else{S <+- ":"}
         }
         me bool: isMDots
-        if(i.itmMode==mSubItems){
+        if(isSubItm){
             if((i.value.tailUnfinished and i.infSize.format==fUnknown and i.value.items.size()==0) and i.value.listSpec==NULL){
                 S<+-"..."
                 isMDots <- true
@@ -1211,7 +1213,7 @@ struct InfonPrinter{
                         me bool: firstTime <- true
                         while(itemItr){
                             if(!firstTime){S <+- " "} else {firstTime <- false}
-                            S <+- printInfonActual(itemItr.pItem, used)
+                            S <+- printInfonActual(itemItr.pItem, used, false)
                             itemItr <- itemItr.next
                         }
                         if(i.value.tailUnfinished){S <+- " ... "}
@@ -1227,7 +1229,7 @@ struct InfonPrinter{
                 S <+- usageTag+" "
             }
             if(! i.definedWord.UsageTags.isEmpty()){S<+-">"}
-            S<+-"= "+printInfonActual(i.funcArgs, used)
+            S<+-"= "+printInfonActual(i.funcArgs, used, false)
             if(i.doReply){S <+- "~"}
             return(S)
         }
@@ -1253,7 +1255,7 @@ struct InfonPrinter{
                 } else {
                     S <+- printPureInfon(i.innr.value, i.innr.infSize, true, i, used)
                     if (i.innr.argPos != apNoArgs){
-                        S <- addFuncArgs(S, printInfonActual(i.innr.funcArgs, used), i.innr.argsOnLeft, i.innr.argPos, "")
+                        S <- addFuncArgs(S, printInfonActual(i.innr.funcArgs, used, false), i.innr.argsOnLeft, i.innr.argPos, "")
                     }
                 }
             } else {logFatalError("Invalid infMode in printInfonActual()\n")}
@@ -1266,11 +1268,11 @@ struct InfonPrinter{
                 else { S <+- "=="}
                 if(WorkItm.looseTop){ S <+- ":"}
                 S <+- " "
-                S <+- printInfonActual(WorkItm.pItem, used)
+                S <+- printInfonActual(WorkItm.pItem, used, false)
             }
 
             if (i.argPos != apNoArgs){
-                S <- addFuncArgs(S, printInfonActual(i.funcArgs, used), i.argsOnLeft, i.argPos, "")
+                S <- addFuncArgs(S, printInfonActual(i.funcArgs, used, false), i.argsOnLeft, i.argPos, "")
             }
         }
 
@@ -1278,14 +1280,14 @@ struct InfonPrinter{
             if(! part.wasTransfered){
                 if(part.pathMode == dotField){S <+- "."}
                 else if(part.pathMode == colonField){S <+- ":"}
-                S <+- printInfonActual(part.path, used)
+                S <+- printInfonActual(part.path, used, false)
                 if(part.hasSemiColon){S <+- "; "}
             }
         }
         if(i.partRef != NULL){
             if(i.partRef.pathMode == dotField){S <+- "."}
             else if(i.partRef.pathMode == colonField){S <+- ":"}
-            S <+- printInfonActual(i.partRef.path, used)
+            S <+- printInfonActual(i.partRef.path, used, false)
         }
 if(i.doReply){S <+- "~"}
 //S <- "("+S+")"
@@ -1295,7 +1297,7 @@ if(i.doReply){S <+- "~"}
         me string: retVal
         our Map<me string, me int>:: used
         protect(infPrintMtx){
-            retVal <- printInfonActual(i, used)
+            retVal <- printInfonActual(i, used, false)
         }
         return(retVal)
     }
