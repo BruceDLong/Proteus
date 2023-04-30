@@ -670,9 +670,6 @@ struct ProteusParser{
             infn.value.fType    <- LST
             infn.value.tailUnfinished  <- true
             notifyStreamState(infn, parseDone)
-        } else if(chkPeek(cPos, peek, "&")){
-            isSubItm            <- true
-            cPos <+- parseInfon(infn, cPos, true)
         } else if(chkStr(cPos, "%INSERT")){
             infn.itmMode <- mIncludeStream
             if(chk(text.scrapeToEOL(cPos), cPos,len)){
@@ -687,15 +684,38 @@ struct ProteusParser{
             cPos <+- parseInfon(item, cPos, true)
             infn.includeInfn <- item
             notifyStreamState(infn, parseDone)
-        } else{
-            infn.itmMode <- mItem
-            pureInfn.items.append(infn, false)
-            if(parent!=NULL and pureInfn.items.size()==1){notifyStreamState(parent, parseListReady)}
-            itemWasAppended <- true
-            cPos <+- parseInfon(infn, cPos, true, false)
-            if(chkStrWSC(cPos, "`")){infn.doReply<-true}
-            infn.stillParsing <- false
-            notifyStreamState(infn, parseDone)  // ParsingIsDone
+        } else {
+            me bool: intersectGetMarked <- false
+            if(parent.value.intersectPosParse == ipSquareBrackets){
+                if(chkPeek(cPos, peek, "<")){
+                    peek <- peekWSC(cPos)
+                        if(intersectGetMarked == true){setError("Multiple <...> in [...] not supported yet")}
+                        else{
+                            parent.intersectPos <- ipGetMarked
+                            parent.intersectMarkedRet <- infn
+                            intersectGetMarked <- true
+                        }
+                }
+            }
+            if(chkPeek(cPos, peek, "&")){
+                isSubItm <- true
+                cPos <+- parseInfon(infn, cPos, true)
+            } else {
+                infn.itmMode <- mItem
+                pureInfn.items.append(infn, false)
+                if(parent!=NULL and pureInfn.items.size()==1){notifyStreamState(parent, parseListReady)}
+                itemWasAppended <- true
+                cPos <+- parseInfon(infn, cPos, true, false)
+                if(chkStrWSC(cPos, "`")){infn.doReply<-true}
+                infn.stillParsing <- false
+                notifyStreamState(infn, parseDone)  // ParsingIsDone
+            }
+            if(intersectGetMarked){
+                peek <- peekWSC(cPos)
+                if(!chkPeek(cPos, peek, ">")){
+                  setError("Expected '>'")
+                }
+            }
         }
         if(!itemWasAppended){
             pureInfn.items.append(infn, isSubItm)
@@ -843,6 +863,7 @@ struct ProteusParser{
         }
 
         // FUNC_LIKE
+        me bool: isAFunc <- true
         me char: peek <- peekWSC(cPos)
         if(peek=="<" or peek==":" or peek=="!"){
             me char: peek2 <- text.at(cPos+1)
@@ -852,12 +873,15 @@ struct ProteusParser{
             else if(opStr=="<!"){infn.isFunc <- true;  infn.isFuncArg <- false; infn.invertFunc <- true;  cPos<+-2}
             else if(opStr=="!>"){infn.isFunc <- false; infn.isFuncArg <- true;  infn.invertFunc <- true;  cPos<+-2}
             else if(opStr=="<~"){infn.hasInnrOutr <- true;  cPos<+-2}
+            else {isAFunc <- false}
 
-            our infon:: funcArg
-            funcArg.originID <- infn.originID
-            cPos <+- parseInfon(funcArg, cPos, true)
-            infn.funcArgs <- funcArg
-            peek <- peekWSC(cPos)
+            if(isAFunc){
+                our infon:: funcArg
+                funcArg.originID <- infn.originID
+                cPos <+- parseInfon(funcArg, cPos, true)
+                infn.funcArgs <- funcArg
+                peek <- peekWSC(cPos)
+            }
         }
 
         // PART_PATHS
@@ -1002,8 +1026,10 @@ struct ProteusParser{
         // Adjust arrangement of [...]
         if(infn.value.intersectPosParse == ipSquareBrackets and infn.innr==NULL){
             infn.moveThisToInnr()
-            if(infn.invertFunc){infn.intersectPos <- ipGetFirst}
-            else {infn.intersectPos <- ipGetLast}
+            if(infn.intersectPos==ipNoIntersect){
+                if(infn.invertFunc){infn.intersectPos <- ipGetFirst}
+                else {infn.intersectPos <- ipGetLast}
+            }
         }
         if(doNotifyStateChange){
             infn.stillParsing <- false
@@ -1171,7 +1197,12 @@ struct InfonPrinter{
                     if(parentInfon.orderMode==uUnordered){S <+- ", "}
                     else{S <+- " "}
                 } else {firstTime <- false}
-                S <+- printInfonActual(itemItr.pItem, used, itemItr.isSubItm)
+                me string: itmStr
+                itmStr <- printInfonActual(itemItr.pItem, used, itemItr.isSubItm)
+                if(parentInfon.intersectPos == ipGetMarked and itemItr.pItem===parentInfon.intersectMarkedRet){
+                    itmStr <- "<"+itmStr+">"
+                }
+                S <+- itmStr
                 itemItr <- itemItr.next
             }
             if(pure.tailUnfinished or parentInfon.streamState==parseStarted){
