@@ -153,6 +153,25 @@ model infon{
         }
         return(NULL)
     }
+    our POV: fetchCompatibleField(their Agent: agent, our infon: pattern) <- {
+        our WordUse: patternType <- pattern.type
+        if(patternType==NULL){return(NULL)}
+        //me string: patternStr <- unicodeMgr.normalizeStr(patternType.asGiven)   // TODO: fix asGiven elsewhere to avoid redundant calls.v
+        if(value.items.isEmpty()){return(NULL)}
+        fleshOutWord(agent, pattern)
+        me int: count <- 0
+        our POV: pov <- value.items.head
+        while(pov != NULL){
+            our infon: inf <- pov.pItem
+            fleshOutWord(agent, inf)
+            if(inf.type!=NULL and inf.type.isCompatibleWith(patternType)==tvTrue){
+                return(pov)
+            }
+            count <- count+1
+            pov <- pov.next
+        }
+        return(NULL)
+    }
     me string:  fetchString()  <- {return(value.str)}
     me FlexNum: fetchFlexNum() <- {return(value.getValAsNum())}
     me int64:   fetchInt()     <- {return(value.getValAsNum().convertToInt())}
@@ -567,6 +586,10 @@ struct GLOBAL{
             }
         }
     }
+    void: fleshOutWord(their Agent: agent, our infon: infn) <- {//  if type and no defn look up defn call derefInf()
+        if(infn.type==NULL or infn.type.defToUse!=NULL){return()}
+        agent.worldMgr.derefInfon(infn)
+    }
 
     me string: toString(our AItem: aItem) <- {
         me string: S <- aItem.mySymbol()+":"+aItem.stringify()
@@ -888,9 +911,7 @@ struct WorldManager{
         }
         return(changeMade)
     }
-    me bool: derefInfon(our POV: CIPov) <- {
-        if(CIPov==NULL){return(false)}
-        our infon: CI        <- CIPov.pItem
+    me bool: derefInfon(our infon: CI) <- {
         if(CI.wordDerefed){return(false)}
         me bool: changeMade  <- false
         modelMngr.completeItemsType(CI)
@@ -920,7 +941,7 @@ vSpec.init(agent.getLocaleBaseName())
                     changeMade <- true
                 }
             }else{logSeg("-isWord:ERROR")
-                agent.setErrorState(CIPov, "'"+CI.type.asGiven+"' is not defined\n\n")
+                agent.setErrorState("'"+CI.type.asGiven+"' is not defined\n\n")
                 //print("\n\n The word '"+CI.type.asGiven+"' is not defined\n\n"); exit(3)
             }
             changeMade     <- true
@@ -931,8 +952,10 @@ vSpec.init(agent.getLocaleBaseName())
     me bool: derefWordRules(our AItem: aItem) <- {
         our POV: CIPov    <- aItem.LHS_item
         our infon: CI     <- CIPov.pItem
-        me bool: derefLHS <- derefInfon(CIPov)
-        me bool: derefRHS <- derefInfon(aItem.RHS)
+        me bool: derefLHS <- NULL
+        if(CIPov!=NULL){derefLHS <- derefInfon(CIPov.pItem)}
+        me bool: derefRHS <- NULL
+        if(aItem.RHS!=NULL){derefInfon(aItem.RHS.pItem)}
         if(derefLHS){
             if(CIPov.pParent!=NULL and CIPov.pParent.pItem!=NULL){
                 CIPov.pParent.pItem.value.index.insert(CI.type.asGiven, CI)
@@ -1867,8 +1890,7 @@ vSpec.init(agent.getLocaleBaseName())
                     our infon: LHS_item <- aItem.LHS_item.pItem
                     me string: fieldName <- ""
                     if(RHS_item.type!=NULL){
-                        fieldName <- unicodeMgr.normalizeStr(RHS_item.type.asGiven) // TODO: norm asGiven elsewhere to avoid redundant calls.
-                        our POV: LHS_Pov <- LHS_item.fetchField(fieldName)
+                        our POV: LHS_Pov <- LHS_item.fetchCompatibleField(agent, RHS_item)
                         if(LHS_Pov){
                             LHS_Pov.pItem.addPOVToWrkList(RHS_pov)
                         } else {
@@ -2322,7 +2344,7 @@ struct Agent{
     me int: errorStatus
     me string: errorMesg
 
-    void: setErrorState(our POV: POVWithError, me string: errorMesg) <- {
+    void: setErrorState(me string: errorMesg) <- {
         //log("INFON ERROR: " + errorMesg)
        // print("INFON ERROR: " + errorMesg+"\n")
     }
