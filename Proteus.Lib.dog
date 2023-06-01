@@ -75,7 +75,7 @@ model pureInfon{
             our infon: newInfon
             Allocate(newInfon)
             pov.pItem.copyAsTypeTo(newInfon, true)
-            our POV: newPOV <- to.items.append(newInfon, pov.isSubItm)
+            our POV: newPOV <- to.items.append(newInfon, pov.isSubItm, 1)
             //newPOV.pParent <-  //TODO
             //log("copyAsTypeTo newPOV:"+newPOV.mySymbol()+".pParent:"+newPOV.pParent.mySymbol())
             if(pov.pItem.type!=NULL and pov.pItem.type.asGiven!=""){
@@ -441,19 +441,19 @@ model infon{
         isNormed <- false
         wrkList.append(pov)
     }
-    our POV: addInfonToWrkList(our infon: i, me bool: internalIdent) <- {
-        our POV:: newPov
+    our POV: addInfonToWrkList(our infon: i, me bool: internalIdent, me int: source) <- {
+        our POV:: newPov{source}
         //i.asRHSInternalIdent <- internalIdent     // Maybe needed for pronouns
         newPov.pItem <- i
         addPOVToWrkList(newPov)
         return(newPov)
     }
     our POV: addInfonToWorkListWithPriority(our infon: i, me bool: internalIdent) <- {
-        our POV:: newPov
+        our POV:: newPov{2}
         i.asRHSInternalIdent <- internalIdent
         newPov.pItem <- i
         isNormed <- false
-        wrkList.prepend(newPov)
+        wrkList.prepend(newPov, 3)
         return(newPov)
     }
     void: takeWrkListFrom(our infon:from, me bool: doClear) <- {
@@ -568,7 +568,7 @@ struct GLOBAL{
         our POV: newAlt <- newListInfon.value.items.pushAsAlt(nextPov, nextPov.pItem, pred)  // Make a POV for the item.
         our infon:: newAltInfon; newAltInfon.value.fType   <- tUnknown
             newAltInfon.convertThisToIntersection(newListInfon, fromGiven) // Make [ ] and add innr to it
-        our POV:: newAltInfPov                                  // Make the POV pointing to the [...]
+        our POV:: newAltInfPov{4}                                  // Make the POV pointing to the [...]
             newAltInfPov.pItem <- newAltInfon
         newAlt.looseInhtd <- nextPov.looseInhtd
         newAlt.looseTop   <- nextPov.looseTop
@@ -607,7 +607,9 @@ struct GLOBAL{
     }
     me int: lastLineAltID <- 0
 }
-
+struct AItemPedigree{
+    me int: source
+}
 model AItem{
     mode[rsInfon, rsMerge, rsIntersect, rsPure]: ruleSet
     our POV: LHS_item
@@ -628,6 +630,7 @@ model AItem{
     me int: pendingTasks
     FlexNum: sizeToCopy
     me List<our AItem>: subscribers
+    me AItemPedigree: pedigree
     our AItem: parent
     me int: indentLvl
     flag: initRulesApplied
@@ -690,6 +693,21 @@ model AItem{
         return (S)
     }
     void: INIT() <- {clearSymbol(self)}
+    none: AItem(me int: source) <- {
+        INIT()  // TODO:
+        flags     <- 0
+        LHS_item  <- NULL
+        RHS       <- NULL
+        LHSItr    <- NULL
+        RHSItr    <- NULL
+        parent    <- NULL
+        priority  <- 0
+        step      <- 0
+        pendingTasks <- 0
+        sizeToCopy   <- 0
+        indentLvl    <- 0
+        pedigree.source <- source
+    }
 }
 struct AItem{}
 model PartPath{
@@ -754,16 +772,16 @@ struct WorldManager{
     their Agent: agent
 
     // AGENDA PROCESSING FUNCTIONS
-    our AItem: processInfonViaAgenda(their Agenda: agenda, our POV: pov, our AItem: subscriber, our AItem: aParent, me int64: priority)<-{
+    our AItem: processInfonViaAgenda(their Agenda: agenda, our POV: pov, our AItem: subscriber, our AItem: aParent, me int64: priority, me int: source)<-{
         if(agenda.povIsOnAgenda(pov)){return(NULL)}
-        our AItem:: newAItem
+        our AItem:: newAItem{source}
         newAItem.ruleSet   <- rsInfon
         newAItem.LHS_item  <- pov
         newAItem.priority  <- priority
         newAItem.step      <- 0
         newAItem.indentLvl <- 0
         if(subscriber != NULL){
-            newAItem.subscribers.prepend(subscriber)
+            newAItem.subscribers.prepend(subscriber, 5)
             subscriber.pendingTasks <+- 1
             //logSeg(" ++"+subscriber.mySymbol()+"_PT-a="+toString(subscriber.pendingTasks))
             newAItem.indentLvl <- subscriber.indentLvl+1
@@ -780,8 +798,8 @@ struct WorldManager{
     //else{log("Parent_NULL; subscriber:"+subscriber.mySymbol() +"  yields:"+newAItem.mySymbol())}
         return(newAItem)
     }
-    our AItem: processMergeViaAgenda(their Agenda: agenda, our POV: LHS, our POV: RHS, me bool: looseSize, our AItem: subscriber, our AItem: aParent, me int64: priority)<-{
-        our AItem:: newAItem
+    our AItem: processMergeViaAgenda(their Agenda: agenda, our POV: LHS, our POV: RHS, me bool: looseSize, our AItem: subscriber, our AItem: aParent, me int64: priority, me int: source)<-{
+        our AItem:: newAItem{source}
         newAItem.ruleSet   <- rsMerge
         newAItem.LHS_item  <- LHS
         newAItem.RHS       <- RHS
@@ -791,7 +809,7 @@ struct WorldManager{
         newAItem.indentLvl <- 0
         aParent.taskEnqueued <- true
         if(subscriber != NULL){
-            newAItem.subscribers.prepend(subscriber)
+            newAItem.subscribers.prepend(subscriber, 6)
             subscriber.pendingTasks <+- 1
             //logSeg(" ++"+subscriber.mySymbol()+"_PT-c="+toString(subscriber.pendingTasks))
             newAItem.indentLvl <- subscriber.indentLvl+1
@@ -806,7 +824,7 @@ struct WorldManager{
     our AItem: processIntersectViaAgenda(their Agenda: agenda, our POV: pov, our AItem: subscriber, me int64: priority)<-{
         //log("processINTERSECTViaAgenda:"+ pov.stringify())
         //if(subscriber.parent!=NULL and subscriber.parent.LHSItr!=NULL){log("     LHSItr:"+subscriber.parent.LHSItr.topPOV.stringify())}
-        our AItem:: newAItem
+        our AItem:: newAItem{1024}
         newAItem.ruleSet   <- rsIntersect
         newAItem.LHS_item  <- pov
         newAItem.priority  <- priority
@@ -814,7 +832,7 @@ struct WorldManager{
         newAItem.indentLvl <- 0
         if(subscriber != NULL){
             subscriber.taskEnqueued <- true
-            newAItem.subscribers.prepend(subscriber)
+            newAItem.subscribers.prepend(subscriber, 7)
             subscriber.pendingTasks <+- 1
             //logSeg(" ++"+subscriber.mySymbol()+"_PT-d="+toString(subscriber.pendingTasks))
             newAItem.indentLvl <- subscriber.indentLvl+1
@@ -901,7 +919,7 @@ struct WorldManager{
                         our infon:: newWord
                         Allocate(newWord.type)
                         newWord.type.asGiven <- word
-                        our POV: newPOV <- CI.value.items.append(newWord, CIPov.isSubItm)
+                        our POV: newPOV <- CI.value.items.append(newWord, CIPov.isSubItm, 8)
                         word <- ""
                     }
                 }
@@ -974,7 +992,7 @@ vSpec.init(agent.getLocaleBaseName())
             if(CI.argPos == apArgIsFirstItem){tmp <- CI.getFirstItem(aItem.LHS_item.isSubItm)}
             else {tmp <- CI.getLastInfon()}
             if(tmp!=NULL){
-                our POV:: newPov
+                our POV:: newPov{9}
                 newPov.pItem    <- CI.funcArgs
                 newPov.pItem.asRHSInternalIdent <- true
                 tmp.addPOVToWrkList(newPov)
@@ -1038,13 +1056,13 @@ vSpec.init(agent.getLocaleBaseName())
         me bool: stopAndWait <- false
         our pureInfon: infSize <- aItem.LHS_item.pItem.infSize
         if(infSize.format==fConcat and infSize.fType!=STR){
-            our POV:: tmpPov
+            our POV:: tmpPov{10}
             our infon:: tmpInfon
                 tmpInfon.value   <- aItem.LHS_item.pItem.infSize
                 tmpInfon.itmMode <- mItem
                 tmpInfon.infMode <- isLiteral
             tmpPov.pItem <- tmpInfon
-            our AItem: newAItem <-  processInfonViaAgenda(agenda, tmpPov, NULL, aItem, aItem.priority)
+            our AItem: newAItem <-  processInfonViaAgenda(agenda, tmpPov, NULL, aItem, aItem.priority, 1001)
             if(newAItem){
                 logSeg("-sizePIVA->"+newAItem.mySymbol())
                 agenda.addAItemToAgenda(newAItem)
@@ -1061,7 +1079,7 @@ vSpec.init(agent.getLocaleBaseName())
         if(lSpec!=NULL and lSpecItem.hasInnrOutr and lSpecItem.intersectPos==ipNoIntersect and lSpec.intersectPos!=ipNoIntersect){
             //log("OUTR: lSpecItem: "+toString(lSpecItem) + "   lSpec:" +toString(lSpec) + "   outr:" +toString(lSpecItem.funcArgs))
             logSeg("-Otr")
-            our POV:: newPov; newPov.pItem <- lSpecItem.funcArgs; newPov.looseMode <- true; newPov.isOutrFeed<-true; newPov.pItem.asRHSInternalIdent <- true
+            our POV:: newPov{11}; newPov.pItem <- lSpecItem.funcArgs; newPov.looseMode <- true; newPov.isOutrFeed<-true; newPov.pItem.asRHSInternalIdent <- true
             lSpecItem.addPOVToWrkList(newPov)
             lSpecItem.hasInnrOutr<-false;  lSpecItem.funcArgs <- NULL
             lSpec.asWrkLstOutr <- true
@@ -1080,14 +1098,14 @@ vSpec.init(agent.getLocaleBaseName())
             looseSize <- RHSPov.looseSize()
             LHSPov.hasPropagated <- true
             if(!aItem.dontProcess){
-                our AItem: newAItem <- processMergeViaAgenda(agenda, LHSPov, RHSPov, looseSize, aItem, aItem, aItem.priority)
+                our AItem: newAItem <- processMergeViaAgenda(agenda, LHSPov, RHSPov, looseSize, aItem, aItem, aItem.priority, 1010)
                 logSeg("Itm_PMVA->"+newAItem.mySymbol())
                 stopAndWait <- true
             }else{logSeg("-dontProcess")}
         }
         if(!LHSPov.hasPropagated){
             if(!aItem.dontProcess){
-                our AItem: newAItem <- processMergeViaAgenda(agenda, LHSPov, RHSPov, false, aItem, aItem, aItem.priority)
+                our AItem: newAItem <- processMergeViaAgenda(agenda, LHSPov, RHSPov, false, aItem, aItem, aItem.priority, 1011)
                 logSeg("LHS_PMVA->"+newAItem.mySymbol())
                 stopAndWait <- true
                 LHSPov.hasPropagated <- true
@@ -1206,7 +1224,7 @@ vSpec.init(agent.getLocaleBaseName())
                         our POV: povElement <- RHS.value.items.head
                         while(povElement != NULL){
                             our infon: pItemElement <- povElement.pItem
-                            LHS.value.items.append(pItemElement, povElement.isSubItm)
+                            LHS.value.items.append(pItemElement, povElement.isSubItm, 12)
                             povElement <- povElement.next
                         }
                         logSeg("-CCatLST")
@@ -1297,8 +1315,8 @@ vSpec.init(agent.getLocaleBaseName())
                                     skipPart.infSize.format       <- fUnknown
                                     skipPart.value.listSpec       <- skipPtn
                                 our infon: newInnr <- makeInnrInfon()
-                                    newInnr.value.items.append(skipPart, true)
-                                    newInnr.value.items.append(part.path, false)
+                                    newInnr.value.items.append(skipPart, true, 13)
+                                    newInnr.value.items.append(part.path, false, 14)
                                 Allocate(newPath)
                                     newPath.convertThisToIntersection(newInnr, fromGiven)
                                     newPath.doReply        <- doReply
@@ -1315,7 +1333,7 @@ vSpec.init(agent.getLocaleBaseName())
                                         newPath.parts      <- part.path.parts
                                     }
                         //print("newPath.infCharPos:", newPath.infCharPos, "\n")
-                                newPov <- newPath.innr.addInfonToWrkList(CI, true)
+                                newPov <- newPath.innr.addInfonToWrkList(CI, true, 15)
                                 newPov.looseMode <- false; newPov.looseTop  <- true
                             }
                         }
@@ -1346,7 +1364,7 @@ vSpec.init(agent.getLocaleBaseName())
                                         }
                                         newInnr.infSize              <deep- part.path.value
                                         newInnr.value.sizeMode       <- fromCount
-                                    newPov <- newPath.innr.addInfonToWrkList(CI, true)
+                                    newPov <- newPath.innr.addInfonToWrkList(CI, true, 16)
                                     newPov.looseMode <- false; newPov.looseTop  <- true
                                 }
                             }else{
@@ -1360,8 +1378,8 @@ vSpec.init(agent.getLocaleBaseName())
                                     our infon: partSpec     <- part.spec
                                     our infon: newInnr <- makeInnrInfon()
                                         newInnr.value.tailUnfinished <- false
-                                        newInnr.value.items.append(skipPart, true)
-                                        our POV: partPov <- newInnr.value.items.append(partSpec, false)
+                                        newInnr.value.items.append(skipPart, true, 17)
+                                        our POV: partPov <- newInnr.value.items.append(partSpec, false, 18)
                                         partPov.isSubItm <- true
                                     Allocate(newPath)
                                         newPath.convertThisToIntersection(newInnr, fromGiven)
@@ -1378,7 +1396,7 @@ vSpec.init(agent.getLocaleBaseName())
                                         }else{
                                             newPath.parts      <- part.path.parts
                                         }
-                                    newPov <- newPath.innr.addInfonToWrkList(CI, true)
+                                    newPov <- newPath.innr.addInfonToWrkList(CI, true, 19)
                                     newPov.looseMode <- false; newPov.looseTop  <- true
                                 }
                             }
@@ -1393,9 +1411,9 @@ vSpec.init(agent.getLocaleBaseName())
              //aItem.LHS_item.hasPropagated <- false
                     nxtAction <- true
                 }else{
-                    our POV:: pathPov
+                    our POV:: pathPov{20}
                     pathPov.pItem <- newPath
-                    our AItem: newAItem <-  processInfonViaAgenda(agenda, pathPov, NULL, aItem, aItem.priority)
+                    our AItem: newAItem <-  processInfonViaAgenda(agenda, pathPov, NULL, aItem, aItem.priority, 1002)
                     logSeg("-pPIVA->"+newAItem.mySymbol())
                     agenda.addAItemToAgenda(newAItem)
                     nxtAction <- false
@@ -1548,7 +1566,7 @@ vSpec.init(agent.getLocaleBaseName())
         if(sizeDiff > 0 ){
             me string: remainderStr <- RHS.value.str.subStr(convertToIntVal(RSize -sizeDiff), convertToIntVal(sizeDiff))
             our infon: remainderInfon; Allocate(remainderInfon,remainderStr)
-            our POV:: remainder
+            our POV:: remainder{21}
             remainder       <deep- aItem.RHS
             remainder.pItem     <- remainderInfon
             aItem.sizeToCopy    <- RSize - sizeDiff
@@ -1623,9 +1641,9 @@ vSpec.init(agent.getLocaleBaseName())
                     our infon:: altItem
                     LHS.copyAsTypeTo(altItem,false)
                     altItem.isTentative <- true
-                    our POV:: RHSPov; RHSPov <deep- pov
+                    our POV:: RHSPov{22}; RHSPov <deep- pov
                     altItem.addPOVToWrkList(RHSPov)
-                    our POV: LHSPOV <- newListInfon.value.items.append(altItem, pov.isSubItm)
+                    our POV: LHSPOV <- newListInfon.value.items.append(altItem, pov.isSubItm, 23)
                     if(isFromAlt) {LHSPOV.isFromALT <- true}
                     LHSPOV.outerPOV <- aItem.LHS_item
                     LHSPOV.predecessors <- pov.predecessors
@@ -1648,7 +1666,7 @@ vSpec.init(agent.getLocaleBaseName())
         aItem.LHS_item.pItem <- aItem.RHS.pItem
         if(type!=NULL){aItem.LHS_item.pItem.type <- type}
         if(listSpec!=NULL){aItem.LHS_item.pItem.value.listSpec <- listSpec}
-        log("COW: ",toString(aItem))
+        log("/// COW: "+toString(aItem))
         //print("\nCOW: ",toString(aItem))
         // ERROR??? Copy workList
     }
@@ -1773,11 +1791,13 @@ vSpec.init(agent.getLocaleBaseName())
                     if(LHSitrBeginning){ //log(idnt+"   candidatesForLastItem:" + adjLhsPOV.stringify() + "   EndsOnA:"+LHSPovNext.stringify())
                         if(LHSPovNext){
                             povParent.addCandidateForLastItem(LHSPovNext)
+                            log("// AppendLast:"+povParent.mySymbol()+"::"+toString(povParent.candidatesForLastItem.size()))
                             candidateForLast <- true
                         }
                     }else{
                         if(LHSPov.pItem.intersectPos == ipNoIntersect and povParent!=NULL){
                             povParent.addCandidateForLastItem(LHSPov)
+                            log("// AppendLast:"+povParent.mySymbol()+"::"+toString(povParent.candidatesForLastItem.size()))
                             candidateForLast <- true
                         }//else {log("NO_candidatesForLastItem due to [...] or atTop")}
                     }
@@ -1800,7 +1820,8 @@ vSpec.init(agent.getLocaleBaseName())
                         logSeg("-?=?")
                         LHSAlt.addNewSubDots <- true
                         LHSAlt.pParent.keepDots <- true
-         //               log(idnt+"    ENQUEq:"+  LHSAlt.stringify() + " === " + RHSAlt.stringify())
+                        log("// keepDots TRUE:"+LHSAlt.pParent.mySymbol())
+                        //log(idnt+"    ENQUEq:"+  LHSAlt.stringify() + " === " + RHSAlt.stringify())
                     } else {
                         if((lCount>0 and (LHSHasAlt or RHSHasAlt)) or LHSIsFromALT){    /// if(numRHSs>1 or lCount>0){
                                 if(nxtsParent.RHS){ // TODO: should these really be nxtParent instead or aParent? Check: when LHS is a list | left/right-wasSecondVisit | lCount/rCount >0
@@ -1837,7 +1858,7 @@ vSpec.init(agent.getLocaleBaseName())
         // Schedule Process Infon Via Agenda
         our AItem: PIVA
         if(RhsAttached){
-            PIVA <- processInfonViaAgenda(agenda, LHSPovNext, NULL, nxtsParent, aItem.priority+1)
+            PIVA <- processInfonViaAgenda(agenda, LHSPovNext, NULL, nxtsParent, aItem.priority+1, 1003)
             if(PIVA){PIVA.candidateForLast <- candidateForLast}
             logSeg("-PropPIVA->"+PIVA.mySymbol())
         }
@@ -1897,7 +1918,10 @@ vSpec.init(agent.getLocaleBaseName())
                                 print("WARNING: LHS infon Field not found: '",fieldName,"'\n")
                                 log("WARNING: LHS infon Field not found. '"+fieldName+"'::"+toString(aItem))
                         }
-                    } else {logFatalError("RHS infon Field not identified:'"+fieldName+"'::"+toString(aItem))} // TODO: Try . find
+                    } else {
+                        //logFatalError("RHS infon Field not identified:'"+fieldName+"'::"+toString(aItem))
+                        log("RHS infon Field not identified:'"+fieldName+"'::"+toString(aItem))
+                    } // TODO: Try . find
                     count <- count+1
                     RHS_pov <- RHS_pov.next
                 }
@@ -2081,7 +2105,7 @@ if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
                         switch(aItem.step){
                             case 0:{
                                 logSeg("-MG0")
-                                our AItem: PIVA <- processInfonViaAgenda(agenda, aItem.RHS, aItem, NULL, aItem.priority)
+                                our AItem: PIVA <- processInfonViaAgenda(agenda, aItem.RHS, aItem, NULL, aItem.priority, 1004)
                                 if(PIVA){
                                     agenda.addAItemToAgenda(PIVA)
                                     logSeg("-PIVA->"+PIVA.mySymbol())
@@ -2152,6 +2176,15 @@ if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
                                             me bool: dontEnque <- !parentListIsAsNot // aItem.mergeStatus==msReject and (aItem.parent.candidateForLast or parentInfonIsNullableList)
                                             propagateProxy(agenda, aItem, aItem.LHS_item, RHSSide, remainder, aItem.looseSize, dontEnque)
                                         } else {
+                                            me bool: candidatesEmpty <- true
+                                            if(pParent!=NULL and !pParent.candidatesForLastItem.isEmpty()){
+                                                candidatesEmpty <- false
+                                            }
+                                            if(!aItem.looseSize and !aItem.LHS_item.pItem.isTentative and !aItem.RHS.pItem.isTentative and candidatesEmpty){
+                                                // log LHS & RHS separately
+                                                log("// Proteus NOTICE: LHS:"+aItem.LHS_item.stringify()+"   RHS:"+aItem.RHS.stringify()+"      AItem pedigree: "+toString(aItem.pedigree.source)+" LHS pedigree: "+toString(aItem.LHS_item.pedigree.source)+"  RHS pedigree: "+toString(aItem.RHS.pedigree.source))
+                                                agent.CORE.handleProteusError(aItem.LHS_item.pItem.originID, "Proteus NOTICE: LHS:"+aItem.LHS_item.stringify()+"   RHS:"+aItem.RHS.stringify())
+                                            }
                                             if(aItem.pendingTasks==0){fulfillSubscriptions(agenda, aItem)}
                                         }
                                     }
@@ -2168,7 +2201,7 @@ if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
                         case 0:{
                             endBracket<-"{"
                             if(CI.hasInnrOutr){
-                                our POV: newPOV  <- CI.innr.addInfonToWrkList(CI.innr.funcArgs, true)
+                                our POV: newPOV  <- CI.innr.addInfonToWrkList(CI.innr.funcArgs, true, 24)
                                 newPOV.looseTop  <- true
                                 CI.hasInnrOutr   <- false
                                 CI.innr.funcArgs <- NULL
@@ -2179,7 +2212,7 @@ if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
                                     our POV: innrPov <- innr.value.items.head
                                     while(innrPov != NULL){
                                         if(innrPov.outerPOV==NULL){innrPov.outerPOV <- aItem.LHS_item}
-                                        our AItem: PIVA <- processInfonViaAgenda(agenda, innrPov, NULL, aItem, aItem.priority)
+                                        our AItem: PIVA <- processInfonViaAgenda(agenda, innrPov, NULL, aItem, aItem.priority, 1005)
                                         PIVA.LHS_item.pItem.takeWrkListFrom(aItem.LHS_item.pItem, false)
                                         PIVA.LHS_item.accessMode    <- aRefTo
                                 PIVA.LHS_item.pItem.useMode <- umQuestion
@@ -2192,8 +2225,8 @@ if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
                                 }
                                 logSeg("]")
                             } else {  // CI is FunctionLike
-                                our POV:: srcPOV; srcPOV.pItem <- innr
-                                our AItem: PIVA <- processInfonViaAgenda(agenda, srcPOV, aItem, NULL, aItem.priority)
+                                our POV:: srcPOV{25}; srcPOV.pItem <- innr
+                                our AItem: PIVA <- processInfonViaAgenda(agenda, srcPOV, aItem, NULL, aItem.priority, 1006)
                                 agenda.addAItemToAgenda(PIVA)
                                 logSeg("IC0_func-PIVA->"+PIVA.mySymbol())
                             }
@@ -2350,7 +2383,7 @@ struct Agent{
     }
     void: normalize(our POV: normPov) <- {
         our Agenda:: agenda{normPov}
-        our AItem: normPIVA <- worldMgr.processInfonViaAgenda(agenda, normPov, NULL, NULL, 1)
+        our AItem: normPIVA <- worldMgr.processInfonViaAgenda(agenda, normPov, NULL, NULL, 1, 1007)
         agenda.addAItemToAgenda(normPIVA)
         //log("Norm_PIVA:"+toString(normPIVA))
         worldMgr.processAgenda(agenda)
@@ -2374,7 +2407,7 @@ if(!normPov.pItem.value.items.isEmpty()){
     }
     void: appendToWorld(our infon: newInfon) <- {
         our infon: dotsAtTheEnd <- world.value.items.last()  //TODO: What is this line for?
-        world.value.items.append(newInfon, false)
+        world.value.items.append(newInfon, false, 26)
     }
     void: initUser() <- {}
     void: setLocale(me string: loc) <- {
@@ -2486,7 +2519,7 @@ struct ProteusCore{
             return(false)
         }
         agent.world <- WORLD
-        our POV:: normPov; normPov.pItem <- agent.world
+        our POV:: normPov{27}; normPov.pItem <- agent.world
         agent.normalize(normPov)
         return(true)
     }
@@ -2525,7 +2558,7 @@ struct ProteusCore{
         // Parse -> extract -> normalize -> sessionFile
         our infon: result <- parseAndExtractString(qry, "query")
         if(result == NULL){log("Syntax Error in input: " + qry)}
-        our POV:: normPov; normPov.pItem <- result
+        our POV:: normPov{28}; normPov.pItem <- result
         agent.normalize(normPov)
         if(writeToSession){addStatementToSession(remNewLines(qry))}
         return(normPov.pItem)
