@@ -487,20 +487,20 @@ def genActionCode(ruleSetID, codeKeyWords, rule, codeSnips, indent):
     S = ""
     if codeKeyWords == "ACTION":
         if debugMode:
-            S= indent + 'log(indentStr(aItem.indentLvl)+"        TODO: unfinished")\n'
+            S= indent + '//:l/merge::log(indentStr(aItem.indentLvl)+"        TODO: unfinished")\n'
         else:
             S= indent + "//TODO: unfinished\n"
         return(S)
     if codeKeyWords == "NONE":
         if debugMode:
-            S= indent + 'log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':Do Nothing")\n'
+            S= indent + '//:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':Do Nothing")\n'
         else:
             S= indent + "//Do Nothing\n"
         return(S)
     codeKeyWordList = codeKeyWords.split(",")
     for KW in codeKeyWordList:
         S+= indent + codeSnips[KW]+"\n"
-    if debugMode: S = indent+'log(indentStr(aItem.indentLvl)+"        '+ruleSetID+'  '+rule+'\t'+KW+'")\n' +S
+    if debugMode: S = indent+'//:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+'  '+rule+'\t'+KW+'")\n' +S
     return(S)
 
 def genIfs(ruleSetID, ifsTree, binaryPts, ifSnips, codeSnips, indent = "        "):
@@ -576,12 +576,12 @@ def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
             actionCode = ""
             if codeKeyWords =='ACTION':
                 if debugMode:
-                    actionCode = indent + '    //log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':TODO: unfinished")\n'
+                    actionCode = indent + '    //:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':TODO: unfinished")\n'
                 else:
                     actionCode = indent + "    //TODO: unfinished\n"
             elif codeKeyWords == "NONE":
                 if debugMode:
-                    actionCode = indent + '    //log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':Do Nothing")\n'
+                    actionCode = indent + '    //:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':Do Nothing")\n'
                 else:
                     actionCode = indent + "    //Do Nothing\n"
             else:
@@ -591,7 +591,7 @@ def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
                     actionCode+= indent +"    " + codeSnips[KW]+"\n"
                 if ruleSetID !="merge": actionCode+= indent +"    changeMade <- true\n"
                 if debugMode:
-                    actionCode = indent+'    //log(indentStr(aItem.indentLvl)+"        '+ruleSetID+'  '+triggers+'\t'+KW+'")\n' + actionCode
+                    actionCode = indent+'    //:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+'  '+triggers+'\t'+KW+'")\n' + actionCode
             if ruleCount >0: conditionKW = "else if"
             else: conditionKW = "if"
             conditionCode = conditionKW+"("+conditionCode+")"
