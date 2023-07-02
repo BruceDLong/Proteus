@@ -30,6 +30,7 @@ model WordUse{
     me string: modelID
     our WordDefn: baseDefinition
     our infon: defToUse
+    me List<me string>: typeNames
     mode[mpNotDone, normIsBase, N2Plural, N2Genative, N2PluralGenative, V2S_form, V2ed, V2ing,
          adj2er, adj2est, edv2er, adv2est, adj2adv_ly, wordFromAffixes, compoundWord, mpOther]: mapFromBase
     mode[posUnknown, posNone, posFuncWord, posNoun, posVerb, posAdj, posAdv, posNegotiator, posName, posNum]: usePOS
@@ -43,20 +44,28 @@ model WordUse{
     flag: possessive
     flag: base_ING_AsGerund   // Change a verb to a noun: *Swimming* is fun. *Eating sweets* can harm your teeth
 
-    void: clear() <- {asGiven<-""}
+    void: setAsGiven(me string: given) <- {
+        asGiven<-given
+        typeNames.clear()
+        typeNames.prepend(unicodeMgr.normalizeStr(given))
+    }
+    me string: givenType() <- {
+        if(typeNames.isEmpty()){return("")}
+        return(typeNames[0])
+    }
+    void: clear() <- {asGiven<-""; typeNames.clear()}
     me string: stringify() <- {
         me string: S <- ""
-        if(asGiven!=''){S<+-" asGiven:"+asGiven}
+        if(asGiven!=""){S<+-" asGiven:"+asGiven}
         if(defToUse){S<+-" defToUse:"+toString(defToUse)}
         return(S)
     }
     none: WordUse(me string: word, our WordDefn: wordD) <- {
-        asGiven        <- word
+        setAsGiven(word)
         modelID        <- wordD.modelID
         baseDefinition <- wordD
         defToUse       <- wordD.meaning
         usePOS         <- wordD.defPOS
-    //me int: POS <- usePOS; log("WORD_CONSTRUCT:'"+asGiven+"' POS:"+toString(POS))
     }
 }
 struct WordUse{}
@@ -137,9 +146,9 @@ struct ModelManager {
             if(val.fType==LST and val.format==fLiteral){
                 our infon: listSpec <- val.listSpec
                 if(listSpec!=NULL and listSpec.type!=NULL and listSpec.type.asGiven!="" and listSpec.type.plural==false){
-                    me string: newTypeStr <- inflect.convert_to_modern_plural(listSpec.type.asGiven)
+                    me string: newTypeStr <- inflect.convert_to_modern_plural(listSpec.type.givenType())
                     our WordUse:: newType
-                    newType.asGiven <- unicodeMgr.normalizeStr(newTypeStr)   // TODO: fix asGiven elsewhere to avoid redundant calls.v
+                    newType.setAsGiven(newTypeStr)
                     newType.plural  <- true
                     item.type       <- newType
                     item.wordDerefed <- true
@@ -304,13 +313,13 @@ resultDefns[idx].defPOS<-posNoun
 
 
     our infon: constructAltModelFromWord(their Agent: agent, our WordUse: wordS, their vocabularySpec: vSpec, me string: scopeID) <- {
+        me string: wordsType <- wordS.givenType()
         if(wordS.nextStage==wmPreFetch){
             // Normalize and separate the word and modelID
-            wordS.asGiven <- unicodeMgr.normalizeStr(wordS.asGiven)
-            me int: underScorePos <- findString(wordS.asGiven, "_")
+            me int: underScorePos <- findString(wordsType, "_")
             if(underScorePos!=-1){
-                wordS.modelID <- wordS.asGiven.subStr(underScorePos+1, wordS.asGiven.size())
-                wordS.asGiven <- wordS.asGiven.subStr(0, underScorePos)
+                wordS.modelID <- wordsType.subStr(underScorePos+1, wordS.asGiven.size())
+                wordS.asGiven <- wordsType.subStr(0, underScorePos)
             }
             // TODO: As optimization, if modelID is given, look it up and verify that a word derivable from asGiven matches. Then skip stage 1.
 
@@ -318,9 +327,9 @@ resultDefns[idx].defPOS<-posNoun
         }
         me List<our WordUse>: results
         if(wordS.nextStage==wmFetchModels){
-            me int: numAlts <- FetchBasePlusPOS_forms_stage1(wordS.asGiven, vSpec, results)
+            me int: numAlts <- FetchBasePlusPOS_forms_stage1(wordsType, vSpec, results)
             if(numAlts==0){
-                numAlts <- FetchBasePlusPOS_forms_stage2(wordS.asGiven, vSpec, results)
+                numAlts <- FetchBasePlusPOS_forms_stage2(wordsType, vSpec, results)
             }
             if(numAlts==0){
                 wordS.defToUse <- NULL

@@ -81,8 +81,8 @@ model pureInfon{
             our POV: newPOV <- to.items.append(newInfon, pov.isSubItm, 1)
             //newPOV.pParent <-  //TODO
             //log("copyAsTypeTo newPOV:"+newPOV.mySymbol()+".pParent:"+newPOV.pParent.mySymbol())
-            if(pov.pItem.type!=NULL and pov.pItem.type.asGiven!=""){
-                to.index.insert(pov.pItem.type.asGiven, newInfon)
+            if(pov.pItem.type!=NULL and pov.pItem.type.givenType()!=""){
+                to.index.insert(pov.pItem.type.givenType(), newInfon)
             }
             pov <- pov.next
         }
@@ -116,7 +116,7 @@ model infon{
     flag: isInnr         // This item is the innr of [....]
     our WordUse: type
     our WordDefn: definedWord
-    me List<our TypeSpec>: typeSpecs
+    me List<our WordUse>: addedTypes
     me List<our POV>: wrkList
     me List<our POV>: usedWrkList
     me List<our PartPath>: parts
@@ -135,7 +135,7 @@ model infon{
     flag: defnRegistered
     flag: sizeNormed
     flag: wordDerefed
-    flag: typeSpecsAlreadyCopied
+    flag: addedTypesAlreadyCopied
     flag: hasTypeAndValue
     flag: wasProcessed  // This has been through the cycle
     flag: dontProcess
@@ -148,7 +148,7 @@ model infon{
         our POV: pov <- value.items.head
         while(pov != NULL){
             our infon: inf <- pov.pItem
-            if(inf.type!=NULL and unicodeMgr.normalizeStr(inf.type.asGiven)==fieldname){  // TODO: fix asGiven elsewhere to avoid redundant calls.
+            if(inf.type!=NULL and inf.type.givenType()==fieldname){
                 return(pov)
             }
             count <- count+1
@@ -162,29 +162,22 @@ model infon{
         if(typeLHS==NULL){return(tvTrue)}
         else if(typeRHS==NULL){return(tvUnknown)}
         if(typeLHS.asGiven == "" or typeRHS.asGiven == ""){return(tvTrue)}
-        me string: rhsAsGiven <- unicodeMgr.normalizeStr(typeRHS.asGiven)   // TODO: fix asGiven elsewhere to avoid redundant calls.v
-        me string: lhsAsGiven <- unicodeMgr.normalizeStr(typeLHS.asGiven)   // TODO: fix asGiven elsewhere to avoid redundant calls.v
+        me string: rhsAsGiven <- typeRHS.givenType()
+        me string: lhsAsGiven <- typeLHS.givenType()
         if(lhsAsGiven == rhsAsGiven){return(tvTrue)}
-        their List<our TypeSpec>: loopLst <- RHSInf.typeSpecs
-        if(trueByDefinition){// TODO: find better swap condition compat old/new mismatch in cube/tmp for solvedstate != rcxstate
-            typeRHS <- type
-            typeLHS <- RHSInf.type
-            loopLst <- typeSpecs
-            lhsAsGiven <- rhsAsGiven
+
+        withEach LHSSpec in addedTypes{
+            if(LHSSpec.givenType() == rhsAsGiven){return(tvTrue)}
         }
-        withEach spec in loopLst{
-            if(!spec.constModel.type){continue()}
-            rhsAsGiven <- unicodeMgr.normalizeStr(spec.constModel.type.asGiven)   // TODO: fix asGiven elsewhere to avoid redundant calls.v
-            if(lhsAsGiven == rhsAsGiven){
-                return(tvTrue)
-            }
+        withEach RHSSpec in RHSInf.addedTypes{
+            if(RHSSpec.givenType() == lhsAsGiven){return(tvTrue)}
         }
         return(tvFalse)
     }
     our POV: fetchCompatibleField(their Agent: agent, our infon: pattern) <- {
         our WordUse: patternType <- pattern.type
         if(patternType==NULL){return(NULL)}
-        //me string: patternStr <- unicodeMgr.normalizeStr(patternType.asGiven)   // TODO: fix asGiven elsewhere to avoid redundant calls.v
+        //me string: patternStr <- patternType.givenType()
         if(value.items.isEmpty()){return(NULL)}
         fleshOutWord(agent, pattern)
         me int: count <- 0
@@ -206,7 +199,7 @@ model infon{
     me double:  fetchDouble()  <- {if(value.inverted){return(-value.num.convertToFloat())}else{return(value.num.convertToFloat())}}
 
     our infon: findMatchingItem(our infon: pattern) <- {
-        me string: fieldName <- pattern.type.asGiven
+        me string: fieldName <- pattern.type.givenType()
         our POV: pov <- fetchField(fieldName)
         if(pov){
             return(pov.pItem)
@@ -277,7 +270,7 @@ model infon{
             me vocabularySpec: vSpec
             vSpec.init(agent.getLocaleBaseName())
             me List<our WordDefn>: resultDefns
-            me int: numAdded <- modelMngr.lookupWord(type.asGiven, vSpec, resultDefns)
+            me int: numAdded <- modelMngr.lookupWord(type.givenType(), vSpec, resultDefns)
             if(!resultDefns.isEmpty()){
                 our WordDefn: def <- resultDefns[0]
                 orderMode <- def.meaning.orderMode
@@ -297,7 +290,7 @@ model infon{
                         vSpec.init(definedWord.UsageTags[0])
                     }
                     me List<our WordDefn>: resultDefns
-                    me int: numAdded <- modelMngr.lookupWord(funcArgs.type.asGiven, vSpec, resultDefns)
+                    me int: numAdded <- modelMngr.lookupWord(funcArgs.type.givenType(), vSpec, resultDefns)
                     if(!resultDefns.isEmpty()){
                         our WordDefn: def <- resultDefns[0]
                         orderMode <- def.meaning.orderMode
@@ -308,7 +301,7 @@ model infon{
         }
     }
     me string: getTypeStr() <- {
-        if(type){return(type.asGiven)}
+        if(type){return(type.givenType())}
         return("")
     }
     our POV: getNthInfon(me FlexNum: N) <-{
@@ -492,7 +485,7 @@ model infon{
     }
     our infon: findPartPathByWord(me string: wordName) <- {
         withEach part in parts{
-            if(part.path.type != NULL and part.path.type.asGiven == wordName){
+            if(part.path.type != NULL and part.path.type.givenType() == wordName){
                 return(part.path)
             }
         }
@@ -536,11 +529,11 @@ model infon{
     void: setSelfAsAPluralOf(our infon: toPluralize) <-{
         setToList()
         value.listSpec <- toPluralize
-        if(toPluralize!=NULL and toPluralize.type!=NULL and toPluralize.type.asGiven!=""){
+        if(toPluralize!=NULL and toPluralize.type!=NULL and toPluralize.type.givenType()!=""){
+            me string: plural <- inflect.convert_to_modern_plural(toPluralize.type.givenType())
             Allocate(type)
-            me string: plural <- inflect.convert_to_modern_plural(toPluralize.type.asGiven)
             log("\n @@@@@@ PLURALIZING:",plural)
-            type.asGiven <- plural
+            type.setAsGiven(plural)
             print("\n@@@@@@@@@@@@@ Pluralizing:"+toString(toPluralize)+"\n")
         }
     }
@@ -564,17 +557,6 @@ model infItr{
     void: initialize(our POV: pov) <- {topPOV <- pov}
     void: INIT() <- {clearSymbol(self);}
 }
-model TypeSpec{
-    our infon: constModel
-    mode[tmListSpec, tmWordUse]: typeMode
-    flag: wasIntegrated
-    // shortcutSpecs
-    none: TypeSpec(our infon: inf, me int: type) <- {
-        constModel    <- inf
-        typeMode      <- type
-        wasIntegrated <- false
-    }
-} struct TypeSpec{}
 
 struct GLOBAL{
     me bool: streamingNormMode
@@ -782,7 +764,7 @@ struct Agenda{
 
     me bool: povIsOnAgenda(our POV:pov)<-{
         withEach aItem in AItems{
-            if(aItem.val.ruleSet==rsInfon and aItem.val.LHS_item===pov){return(true)}   //
+            if(aItem.ruleSet==rsInfon and aItem.LHS_item===pov){return(true)}   //
         }
         return(false)
     }
@@ -948,13 +930,13 @@ struct WorldManager{
         our POV: CIPov      <- aItem.LHS_item
         our infon: CI       <- CIPov.pItem
         me bool: changeMade <- false
-        if(CI.type!=NULL and CI.type.asGiven=="english-text" and CI.value.fType==STR and CI.value.format==fLiteral){
+        if(CI.type!=NULL and CI.type.givenType()=="english-text" and CI.value.fType==STR and CI.value.format==fLiteral){
             me string: text <- CI.value.str
-            CI.type.asGiven <- "english-phrase"
+            CI.type.setAsGiven("english-phrase")
             CI.value.fType  <- LST
             Allocate(CI.value.listSpec)
             Allocate(CI.value.listSpec.type)
-            CI.value.listSpec.type.asGiven <- "word"
+            CI.value.listSpec.type.setAsGiven("word")
             me int64: strLen <- text.size()-1
             me int64: pos    <- 0
             me string: word  <- ""
@@ -966,7 +948,7 @@ struct WorldManager{
                         //log("EXTRACTED_WORD:" + word)
                         our infon:: newWord
                         Allocate(newWord.type)
-                        newWord.type.asGiven <- word
+                        newWord.type.setAsGiven(word)
                         our POV: newPOV <- CI.value.items.append(newWord, CIPov.isSubItm, 8)
                         word <- ""
                     }
@@ -1002,15 +984,15 @@ vSpec.init(agent.getLocaleBaseName())
                     me List<our PartPath>: parts <- CI.parts
                     our PartPath: partRef <- CI.partRef
                     infModel.copyAsTypeTo(CI, false)
- CI.type    <- CIsType        // needed for word/setColor, causes cube/tmp fail
+                    CI.addedTypes.append(CI.type)
+
+                    CI.type    <- CIsType        // needed for word/setColor, causes cube/tmp fail
                     CI.asNot   <- asNot
                     CI.parts   <- parts
                     CI.partRef <- partRef
                     CI.itmMode <- itmMode
                     changeMade <- true
                 }
-                our TypeSpec:: newTypeSpec{infModel, tmWordUse}
-                CI.typeSpecs.prepend(newTypeSpec)
             }else{
                 //:l/PAI::logSeg("-isWord:ERROR")
                 agent.setErrorState("'"+CI.type.asGiven+"' is not defined\n\n")
@@ -1025,15 +1007,15 @@ vSpec.init(agent.getLocaleBaseName())
     me bool: derefWordRules(our AItem: aItem) <- {
         our POV: CIPov    <- aItem.LHS_item
         our infon: CI     <- CIPov.pItem
-        me bool: derefLHS <- NULL
+        me bool: derefLHS <- false
         if(CIPov!=NULL){derefLHS <- derefInfon(CIPov.pItem)}
-        me bool: derefRHS <- NULL
+        me bool: derefRHS <- false
         if(aItem.RHS!=NULL){derefInfon(aItem.RHS.pItem)}
         if(derefLHS){
             if(CIPov.pParent!=NULL and CIPov.pParent.pItem!=NULL){
-                CIPov.pParent.pItem.value.index.insert(CI.type.asGiven, CI)
+                CIPov.pParent.pItem.value.index.insert(CI.type.givenType(), CI)
             }else{ // This section is to get items into World. In a fully streaming mode this isn't needed.
-                agent.world.value.index.insert(CI.type.asGiven, CI)
+                agent.world.value.index.insert(CI.type.givenType(), CI)
             }
         }
         return(derefLHS or derefRHS)
@@ -1344,7 +1326,7 @@ vSpec.init(agent.getLocaleBaseName())
         if(!CI.parts.isEmpty()){
             withEach part in CI.parts{
                 me string: partTag
-                if(part.path.type){partTag <- part.path.type.asGiven}
+                if(part.path.type){partTag <- part.path.type.givenType()}
                 our infon: newPath
                 our POV: newPov
                 if(part.wasTransfered){continue()}else{part.wasTransfered <- true}
@@ -1989,7 +1971,7 @@ vSpec.init(agent.getLocaleBaseName())
                     our infon: RHS_item <- RHS_pov.pItem
                     me string: fieldName <- ""
                     if(RHS_item.type!=NULL){
-                        fieldName <- RHS_item.type.asGiven
+                        fieldName <- RHS_item.type.givenType()
                         our POV: LHS_Pov <- LHS_item.fetchCompatibleField(agent, RHS_item)
                         if(LHS_Pov){
                             LHS_Pov.pItem.addPOVToWrkList(RHS_pov)
