@@ -92,6 +92,7 @@ mergeRules = {
         'copyType':                 'if(aItem.RHS.pItem.type!=NULL){aItem.LHS_item.pItem.type <- aItem.RHS.pItem.type}',
         'StartMergePropogation':    'startPropRules(aItem)',
         'copyIdOrStartMergProp':    'if(aItem.LHS_item.accessMode==aRefTo){copyIdentity(aItem)}else{startPropRules(aItem)}',
+        'ifRefCopyIdentity':        'if(aItem.LHS_item.accessMode==aRefTo){copyIdentity(aItem)}',
         'MergeLooseStrings':        'remainder <- mergeLooseStrings(aItem)',
         'mergeRHSIntersect':        'mergeRHSIntersect(aItem)',
         'mergeANDRanges':           'mergeANDRanges(aItem)',
@@ -119,12 +120,12 @@ mergeRules = {
         ["merge:lSTR||=|rNUM,rLST|",                      "REJECT"],
         ["merge:lLST|lfUnknown,lfLiteral|=|rNUM,rSTR|",   "REJECT"],
 
-        ["merge:lNUM|lfUnknown|=|rNUM|rfUnknown",         "copyIdentity"],
+        ["merge:lNUM|lfUnknown|=|rNUM|rfUnknown",         "ifRefCopyIdentity"],
         ["merge:lNUM|lfUnknown|=|rNUM|rfLiteral",         "copyValueRHStoLHS"],
         ["merge:lNUM|lfLiteral|=|rNUM|rfUnknown",         "NONE"],
         ["merge:lNUM|lfLiteral|=|rNUM|rfLiteral",         "rejectIfValueNumNotEqual"],
 
-        ["merge:lSTR|lfUnknown|=|rSTR|rfUnknown",         "copyIdentity"],
+        ["merge:lSTR|lfUnknown|=|rSTR|rfUnknown",         "ifRefCopyIdentity"],
         ["merge:lSTR|lfUnknown|=|rSTR|rfLiteral",         "copyValueRHStoLHS"],
         ["merge:lSTR|lfLiteral|=|rSTR|rfUnknown",         "NONE"],  # Copy LHS to RHS?
         ["merge:lSTR|lfLiteral|=|rSTR|rfLiteral",         "rejectIfValueStrNotEqual"],
