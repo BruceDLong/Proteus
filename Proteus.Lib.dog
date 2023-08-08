@@ -395,21 +395,13 @@ model infon{
         to.intersectPos <- intersectPos
         to.isFromDefn   <- isFromDefn
         if(type){to.type<- type}
+        to.addedTypes   <- addedTypes
         infSize.copyAsTypeTo(to.infSize)
         value.copyAsTypeTo(to.value)
         if(funcArgs){funcArgs.copyAsTypeTo(to.funcArgs, true)}
         if(dotPath){dotPath.copyAsTypeTo(to.dotPath, true)}
         if(innr){Allocate(to.innr); innr.copyAsTypeTo(to.innr, true)}
-        if(copyWrkList){
-            withEach wrkListItem in wrkList {
-                our POV: pov
-                Allocate(pov)
-                pov <deep- wrkListItem
-                Allocate(pov.pItem)
-                wrkListItem.pItem.copyAsTypeTo(pov.pItem, true)
-                to.wrkList.append(pov)
-            }
-        }
+        if(copyWrkList){to.copyWrkListFrom(self)}
     }
     void: convertThisToIntersection(our infon: newInnr, me SizeMode: sMode) <- {
         itmMode         <- mItem
@@ -460,24 +452,43 @@ model infon{
         }
         //log("AddedAltToLineAlt:"+povToPushTo.mySymbol()+":"+povToPushTo.stringify()+" <pred- "+pred.mySymbol()+":"+pred.stringify())
     }
+    bool: workListContainsInfon(our infon: inf) <- {
+        withEach wrkListItem in wrkList{
+            if(wrkListItem.pItem===inf){return(true)}
+        }
+        return(false)
+    }
     void: addPOVToWrkList(our POV: pov) <- {
+        if(workListContainsInfon(pov.pItem)){return()}
         isNormed <- false
         wrkList.append(pov)
     }
     our POV: addInfonToWrkList(our infon: i, me bool: internalIdent, me int: source) <- {
+        if(workListContainsInfon(i)){return(NULL)}
         our POV:: newPov{source}
         //i.asRHSInternalIdent <- internalIdent     // Maybe needed for pronouns
         newPov.pItem <- i
-        addPOVToWrkList(newPov)
+        isNormed <- false
+        wrkList.append(newPov)
         return(newPov)
     }
     our POV: addInfonToWorkListWithPriority(our infon: i, me bool: internalIdent) <- {
+        if(workListContainsInfon(i)){return(NULL)}
         our POV:: newPov{2}
         i.asRHSInternalIdent <- internalIdent
         newPov.pItem <- i
         isNormed <- false
         wrkList.prepend(newPov, 3)
         return(newPov)
+    }
+    void: copyWrkListFrom(their infon:from) <- {
+        withEach wrkListItem in from.wrkList {
+            our POV:: pov
+            pov <deep- wrkListItem
+            Allocate(pov.pItem)
+            wrkListItem.pItem.copyAsTypeTo(pov.pItem, true)
+            wrkList.append(pov)
+        }
     }
     void: takeWrkListFrom(our infon:from, me bool: doClear) <- {
         withEach wrkItm in from.wrkList{
@@ -682,6 +693,7 @@ model AItem{
     flag: dontProcess
     flag: notFirstVisit
     flag: candidateForLast
+    flag: skipRHSUsageInPAI  // With unordered lists, we get the RHS another way.
     me int:  step
     me int: pendingTasks
     FlexNum: sizeToCopy
@@ -1003,13 +1015,15 @@ me vocabularySpec: vSpec
 vSpec.init(agent.getLocaleBaseName())
             our infon: infModel  <- modelMngr.constructAltModelFromWord(agent, CI.type, vSpec, "scope")
             if(infModel){
-                log("derefWord:'"+CI.type.asGiven+"'    infModel:"+toString(infModel))
+                //log("derefWord:'"+CI.type.asGiven+"'    infModel:"+toString(infModel))
                 infModel.generality <- gAbstract
-                if(CI.hasTypeAndValue or CI.infMode!=isUnknown){
-                    //:l/PAI::logSeg("-isWord-withValue:'"+CI.type.asGiven+"'    infModel:"+toString(infModel))
-                    CI.generality <- gConcrete  // TODO: This may not always be the case.
-                    our POV: newPov <- CI.addInfonToWorkListWithPriority(infModel, true)
-                    newPov.trueByDefinition <- true
+                if(CI.infMode!=isUnknown){
+                    if(infModel.infMode==isUnknown){
+                        //:l/PAI::logSeg("-isWord-withValue:'"+CI.type.asGiven+"'    infModel:"+toString(infModel))
+                        CI.generality <- gConcrete  // TODO: This may not always be the case.
+                        our POV: newPov <- CI.addInfonToWorkListWithPriority(infModel, true)
+                        newPov.trueByDefinition <- true
+                    }// else{log("SKIPPED:"+toString(infModel)}
                 }else{
                     //:l/PAI::logSeg("-isWord-noValue:"+CI.type.asGiven)
                     our WordUse:CIsType <- CI.type
@@ -1924,7 +1938,7 @@ vSpec.init(agent.getLocaleBaseName())
                         //log(idnt+"    ENQUEq:"+  LHSAlt.stringify() + " === " + RHSAlt.stringify())
                     } else {
                         if((lCount>0 and (LHSHasAlt or RHSHasAlt)) or LHSIsFromALT){    /// if(numRHSs>1 or lCount>0){
-                                if(nxtsParent.RHS){ // TODO: should these really be nxtParent instead or aParent? Check: when LHS is a list | left/right-wasSecondVisit | lCount/rCount >0
+                                if(nxtsParent.RHS){
                                     RHSAlt.looseInhtd <- nxtsParent.RHS.looseInhtd or nxtsParent.RHS.looseMode
                                     RHSAlt.looseTop   <- false
                                 }
@@ -1961,9 +1975,11 @@ vSpec.init(agent.getLocaleBaseName())
         our AItem: PIVA
         if(RhsAttached){
             PIVA <- processInfonViaAgenda(agenda, LHSPovNext, NULL, nxtsParent, aItem.priority+1, 1003)
-            if(PIVA){PIVA.candidateForLast <- candidateForLast}
-            //:l/PAI::logSeg("-PropPIVA->"+PIVA.mySymbol())
-            addDebugEvent("RegisterPIVA to propagate "+LHSPovNext.pItem.mySymbol()+":"+toString(LHSPovNext.pItem), LHSPovNext.pItem)
+            if(PIVA){
+                PIVA.candidateForLast <- candidateForLast
+                //:l/PAI::logSeg("-PropPIVA->"+PIVA.mySymbol())
+                addDebugEvent("RegisterPIVA to propagate "+aItem.stringify()+"\n    TO:"+LHSPovNext.pItem.mySymbol()+":"+toString(LHSPovNext.pItem)+"\n", LHSPovNext.pItem)
+            }
         }
         // Clean and return
         if(!candidateForLast){LHSPovNext.altPOV <- NULL}
@@ -2023,8 +2039,8 @@ vSpec.init(agent.getLocaleBaseName())
                             if(RHS_item.isFromDefn){ // Create the field. Optimize: Only do this when needed; COW
                                 print("Creating field: '",fieldName,"' in :",toString(LHS_item),"\n")
                                 our infon:: newField
-                                RHS_item.copyAsTypeTo(newField, true)
-                                LHS_item.value.items.append(newField, RHS_pov.isSubItm, RHS_pov.pedigree.source)
+                                our POV: newPov <- LHS_item.value.items.append(newField, RHS_pov.isSubItm, RHS_pov.pedigree.source)
+                                newPov.pItem.addPOVToWrkList(RHS_pov)
                             } else {
                                 print("WARNING: compatable LHS infon Field not found: '",fieldName,"'\n")
                                 log("// Proteus WARNING: compatable LHS infon Field not found. '"+fieldName+"'::"+toString(aItem))
@@ -2037,7 +2053,7 @@ vSpec.init(agent.getLocaleBaseName())
                     count <- count+1
                     RHS_pov <- RHS_pov.next
                 }
-                aItem.RHS <- NULL
+                aItem.skipRHSUsageInPAI <- true
             } else {
                 if(aItem.RHS!=NULL and aItem.RHS.pItem.intersectPos==ipNoIntersect){
                     aItem.mergeStatus <- msReject
@@ -2197,12 +2213,17 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                         if(aItem.LHS_item.pItem.value.tailUnfinished and aItem.LHS_item.pItem.infSize.format==fLiteral){
                             aItem.LHS_item.pItem.countSize(true)
                         }
+                        if(aItem.skipRHSUsageInPAI){
+                            aItem.LHSItr <- NULL
+                            aItem.RHSItr <- NULL
+                            propagateProxy(agenda, aItem, aItem.LHS_item, aItem.RHS, NULL, false, false)
+                        }
                         doFulfillSubs <- true
                         //:l/PAI::endBracket<-"{"
                         break()
                     }
                     aItem.mergeStatus <- msAccept
-                    if(aItem.RHS==NULL){
+                    if(aItem.RHS==NULL or aItem.skipRHSUsageInPAI){
                         //:l/PAI::logSeg("-MG_NoRHS")
                         //:l/PAI::endBracket<-"{"
                         //log("NO_RHS:"+ toString(aItem.LHS_item.pItem) + ": "+ aItem.LHS_item.pItem.mySymbol())
@@ -2214,6 +2235,7 @@ aItem.LHS_item.pItem.streamState <- parseStarted
 if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
     our infon: RHS <- aItem.RHS.pItem
     if((RHS.type==NULL or RHS.itmMode==mWordDefn or RHS.isFromDefn) and RHS.cursorMode==cNone){
+        fleshOutWord(agent, aItem.RHS.pItem)
         aItem.step <- 1;
         //:l/PAI::endBracket<-"{"
     }
@@ -2222,7 +2244,7 @@ if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
                         switch(aItem.step){
                             case 0:{ //:l/PAI::logSeg("-MG0")
                                 our AItem: PIVA <- processInfonViaAgenda(agenda, aItem.RHS, aItem, NULL, aItem.priority, 1004)
-                                if(PIVA){ //:l/PAI::logSeg("-PIVA->"+PIVA.mySymbol())
+                                if(PIVA){ //:l/PAI::logSeg("-RHS_PIVA->"+PIVA.mySymbol())
                                     addDebugEvent("\nRegisterPIVA to norm RHS "+aItem.RHS.pItem.mySymbol()+":"+toString(aItem.RHS.pItem)+"\n", aItem.RHS.pItem)
                                     agenda.addAItemToAgenda(PIVA)
                                 }
@@ -2254,7 +2276,12 @@ if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
                                         aItem.RHS.pItem.copyAsTypeTo(aItem.LHS_item.pItem, false)
                                     }else{
                                         if(processUnorderedInfons(aItem)){
-                                            if(aItem.LHS_item.pItem.value.fType == LST){initListIterators(aItem)}
+                                            if(aItem.LHS_item.pItem.value.fType == LST){
+                                                our POV: tmp <- aItem.RHS
+                                                aItem.RHS <- NULL
+                                                initListIterators(aItem)
+                                                aItem.RHS <- tmp
+                                            }
                                         }
                                         else{
                                             if(aItem.RHS.pItem.infMode == isUnknown){
