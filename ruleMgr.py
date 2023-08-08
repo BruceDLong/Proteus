@@ -92,7 +92,7 @@ mergeRules = {
         'copyType':                 'if(aItem.RHS.pItem.type!=NULL){aItem.LHS_item.pItem.type <- aItem.RHS.pItem.type}',
         'StartMergePropogation':    'startPropRules(aItem)',
         'copyIdOrStartMergProp':    'if(aItem.LHS_item.accessMode==aRefTo){copyIdentity(aItem)}else{startPropRules(aItem)}',
-        'ifRefCopyIdentity':        'if(aItem.LHS_item.accessMode==aRefTo){copyIdentity(aItem)}',
+        'ifRefCopyIdentity':        'if(aItem.LHS_item.accessMode==aRefTo){copyIdentity(aItem)}else if(!aItem.RHS.pItem.wrkList.isEmpty()){aItem.LHS_item.pItem.copyWrkListFrom(aItem.RHS.pItem)}',
         'MergeLooseStrings':        'remainder <- mergeLooseStrings(aItem)',
         'mergeRHSIntersect':        'mergeRHSIntersect(aItem)',
         'mergeANDRanges':           'mergeANDRanges(aItem)',
