@@ -109,6 +109,8 @@ model infon{
     flag: asWrkLstOutr   // When true in an RHS, the RHS is an outr infon
     flag: cnvtToFunc     // Convert this to a [ ] before evaluating.
     flag: isFromDefn
+    flag: isTypeExample         // This can be used to type-check an RHS
+    flag: alreadyTypeChecked    // This need not be re-checked
     our infon: funcArgs
     our infon: dotPath
     our infon: innr
@@ -458,6 +460,15 @@ model infon{
         }
         return(false)
     }
+    bool: infonHasType(me string: typeIDStr) <- {
+        if(type!=NULL and type.normalType()==typeIDStr){return(alreadyTypeChecked)}
+            withEach subType in addedTypes{
+            if (subType.normalType() == typeIDStr  and subType.typeInitialized) {
+                return(true)
+            }
+        }
+        return(false)
+    }
     void: addPOVToWrkList(our POV: pov) <- {
         if(workListContainsInfon(pov.pItem)){return()}
         isNormed <- false
@@ -669,7 +680,7 @@ struct GLOBAL{
     }
     void: addDebugEvent(me string: eventDescription, our infon: crntInfon) <- {
         if(infonToMonitor!=NULL){
-            debugEventList <+- setTextColor(1) + eventDescription+ setDefaultColor() + "; "
+            debugEventList <+- tam.setTextColor(2) + eventDescription+ tam.setDefaultColor() + "; "
         }
     }
 
@@ -1018,7 +1029,7 @@ vSpec.init(agent.getLocaleBaseName())
                 //log("derefWord:'"+CI.type.asGiven+"'    infModel:"+toString(infModel))
                 infModel.generality <- gAbstract
                 if(CI.infMode!=isUnknown){
-                    if(infModel.infMode==isUnknown){
+                    if(infModel.infMode!=isUnknown){
                         //:l/PAI::logSeg("-isWord-withValue:'"+CI.type.asGiven+"'    infModel:"+toString(infModel))
                         CI.generality <- gConcrete  // TODO: This may not always be the case.
                         our POV: newPov <- CI.addInfonToWorkListWithPriority(infModel, true)
@@ -1037,8 +1048,10 @@ vSpec.init(agent.getLocaleBaseName())
                     CI.parts   <- parts
                     CI.partRef <- partRef
                     CI.itmMode <- itmMode
+                    CI.isTypeExample <- true
+                    CI.alreadyTypeChecked <- true
                 }
-                if(infModel.type!=NULL){CI.addedTypes.append(infModel.type)}
+                if(infModel.type!=NULL and !CI.infonHasType(infModel.type.normalType())){CI.addedTypes.append(infModel.type)}
                 changeMade <- true
             }else{
                 //:l/PAI::logSeg("-isWord:ERROR")
@@ -2029,15 +2042,18 @@ vSpec.init(agent.getLocaleBaseName())
                 while(RHS_pov != NULL){
                     our infon: RHS_item <- RHS_pov.pItem
                     me string: fieldName <- ""
-                    if(RHS_item.type==NULL){fleshOutWord(agent, RHS_item)}
+                    fleshOutWord(agent, RHS_item)
                     if(RHS_item.type!=NULL){
                         fieldName <- RHS_item.type.normalType()
                         our POV: LHS_Pov <- LHS_item.fetchCompatibleField(agent, RHS_item)
                         if(LHS_Pov){
-                            LHS_Pov.pItem.addPOVToWrkList(RHS_pov)
+                            // This 'if' is an optimization. Something similar can be done for "ordered" infons.
+                            if(!(LHS_Pov.pItem.type!=NULL and RHS_item.type!=NULL and RHS_item.isTypeExample and LHS_Pov.pItem.infonHasType(RHS_item.type.normalType()))){
+                                LHS_Pov.pItem.addPOVToWrkList(RHS_pov)
+                            }
                         } else {
                             if(RHS_item.isFromDefn){ // Create the field. Optimize: Only do this when needed; COW
-                                print("Creating field: '",fieldName,"' in :",toString(LHS_item),"\n")
+                                //print("Creating field: '",fieldName,"' in :",toString(LHS_item),"\n")
                                 our infon:: newField
                                 our POV: newPov <- LHS_item.value.items.append(newField, RHS_pov.isSubItm, RHS_pov.pedigree.source)
                                 newPov.pItem.addPOVToWrkList(RHS_pov)
@@ -2068,7 +2084,7 @@ vSpec.init(agent.getLocaleBaseName())
     }
     void: processAgendaItem(their Agenda: agenda, our AItem: aItem, me int: AlternativesNestLvl)<-{
 //if(aItem.LHS_item.pItem.mySymbol()=="infon284"){setInfonToMonitor(aItem.LHS_item.pItem)}
-if(aItem.LHS_item.pItem.type!=NULL and aItem.LHS_item.pItem.type.normalType()=="solvedstate"){setInfonToMonitor(aItem.LHS_item.pItem)}
+//if(aItem.LHS_item.pItem.type!=NULL and aItem.LHS_item.pItem.type.normalType()=="solvedstate"){setInfonToMonitor(aItem.LHS_item.pItem)}
         //log("________________________________________")
         me bool: continueLoop    <- true
         me bool: doFulfillSubs <- false
@@ -2234,10 +2250,9 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                     } else {
 if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
     our infon: RHS <- aItem.RHS.pItem
-    if((RHS.type==NULL or RHS.itmMode==mWordDefn or RHS.isFromDefn) and RHS.cursorMode==cNone){
-        fleshOutWord(agent, aItem.RHS.pItem)
+    fleshOutWord(agent, RHS)
+    if((RHS.type==NULL or RHS.itmMode==mWordDefn or RHS.isFromDefn) and RHS.cursorMode==cNone){//:l/PAI::endBracket<-"{"
         aItem.step <- 1;
-        //:l/PAI::endBracket<-"{"
     }
 }
                         addDebugEvent("\nMERGE LHS:"+aItem.LHS_item.pItem.mySymbol()+"  ==  RHS:"+aItem.RHS.pItem.mySymbol()+"\n", NULL)
@@ -2308,6 +2323,17 @@ if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
                                 our POV: RHSSide; if(remainder==NULL){RHSSide <- aItem.RHS}
                                 if(aItem.mergeStatus!=msPending){
                                     if(aItem.mergeStatus!=msReject){ //:l/PAI::logSeg("-MG1-"+mergeStatusStrings[aItem.mergeStatus])
+
+                                    // Optimization: propagate "already initialized" state to avoid extra inits.
+                                    if(aItem.RHS!=NULL and aItem.RHS.pItem.isTypeExample){
+                                        me string: typeIDStr <- aItem.RHS.pItem.type.normalType()
+                                        withEach LHSSpec in aItem.LHS_item.pItem.addedTypes{
+                                            if(LHSSpec.normalType()==typeIDStr){
+                                                LHSSpec.typeInitialized <- true
+                                                break();
+                                            }
+                                        }
+                                    }
                                         if(!aItem.looseSize and aItem.RHS!=NULL and aItem.RHS.pItem.generality==gConcrete){
                                             aItem.LHS_item.pItem.generality <- gConcrete
                                             aItem.LHS_item.pItem.proxy <- aItem.RHS.pItem
