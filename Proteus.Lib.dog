@@ -68,7 +68,7 @@ model pureInfon{
         if(inverted){return(-num)}
         else{return(num)}
     }
-    void: copyAsTypeTo(their pureInfon: to, me bool: copyPartRef) <- {
+    void: copyAsTypeTo(their pureInfon: to, our infon: topThis, their List<their infon>: copied) <- {
         to <deep- self
         to.isFromDefn <- isFromDefn
         to.items.clear()
@@ -77,7 +77,7 @@ model pureInfon{
         while(pov != NULL){
             our infon: newInfon
             Allocate(newInfon)
-            pov.pItem.copyAsTypeTo(newInfon, true, copyPartRef)
+            pov.pItem._copyAsTypeTo(newInfon, true, true, topThis, copied)
             our POV: newPOV <- to.items.append(newInfon, pov.isSubItm, 1)
             //newPOV.pParent <-  //TODO
             //log("copyAsTypeTo newPOV:"+newPOV.mySymbol()+".pParent:"+newPOV.pParent.mySymbol())
@@ -115,6 +115,7 @@ model infon{
     our infon: dotPath
     our infon: innr
     our infon: intersectMarkedRet
+    our infon: thisPtr
     flag: isInnr         // This item is the innr of [....]
     our WordUse: type
     our WordDefn: definedWord
@@ -384,7 +385,9 @@ model infon{
         }
         return(NULL)
     }
-    void: copyAsTypeTo(our infon: to, me bool: copyWrkList, me bool: copyPartRef) <- {
+    void: _copyAsTypeTo(our infon: to, me bool: copyWrkList, me bool: copyPartRef, our infon: topThis, their List<their infon>: copied) <- {
+        withEach item in copied{if(item===this){return()}}
+        copied.append(self)
         to.flags      <- flags
         to.doReply    <- false
         to.itmMode    <- itmMode
@@ -396,15 +399,27 @@ model infon{
         to.isFromDefn <- false
         to.intersectPos <- intersectPos
         to.isFromDefn   <- isFromDefn
-        if(type){to.type<- type}
+        to.thisPtr      <- topThis
         to.addedTypes   <- addedTypes
-        infSize.copyAsTypeTo(to.infSize, copyPartRef)
-        value.copyAsTypeTo(to.value, copyPartRef)
-        if(funcArgs){funcArgs.copyAsTypeTo(to.funcArgs, true, false)}
-        if(dotPath){dotPath.copyAsTypeTo(to.dotPath, true, false)}
-        if(innr){Allocate(to.innr); innr.copyAsTypeTo(to.innr, true, false)}
+        if(type){to.type<- type}
+        if(copyPartRef and partRef!=NULL){
+            Allocate(to.partRef)
+            to.partRef <deep- partRef
+        }
+        infSize.copyAsTypeTo(to.infSize, topThis, copied)
+        value.copyAsTypeTo(to.value, topThis, copied)
+        if(funcArgs){funcArgs.copyAsTypeTo(to.funcArgs, true, true)}
+        if(dotPath){dotPath.copyAsTypeTo(to.dotPath, true, true)}
+        if(innr){Allocate(to.innr); innr.copyAsTypeTo(to.innr, true, true)}
         if(copyWrkList){to.copyWrkListFrom(self)}
-        if(copyPartRef){to.partRef <- partRef}
+    }
+    void: copyAsTypeTo(our infon: to, me bool: copyWrkList, me bool: copyPartRef) <- {
+        me List<their infon>: copied
+        if(thisPtr==NULL){
+            _copyAsTypeTo(to, copyWrkList, copyPartRef, to, copied)
+        }else{
+            _copyAsTypeTo(to, copyWrkList, copyPartRef, thisPtr, copied)
+        }
     }
     void: convertThisToIntersection(our infon: newInnr, me SizeMode: sMode) <- {
         itmMode         <- mItem
@@ -456,6 +471,7 @@ model infon{
         //log("AddedAltToLineAlt:"+povToPushTo.mySymbol()+":"+povToPushTo.stringify()+" <pred- "+pred.mySymbol()+":"+pred.stringify())
     }
     bool: workListContainsInfon(our infon: inf) <- {
+        if(self===inf){return(true)}
         withEach wrkListItem in wrkList{
             if(wrkListItem.pItem===inf){return(true)}
         }
@@ -498,7 +514,7 @@ model infon{
             our POV:: pov
             pov <deep- wrkListItem
             Allocate(pov.pItem)
-            wrkListItem.pItem.copyAsTypeTo(pov.pItem, true, false)
+            wrkListItem.pItem.copyAsTypeTo(pov.pItem, true, true)
             wrkList.append(pov)
         }
     }
@@ -1034,7 +1050,8 @@ vSpec.init(agent.getLocaleBaseName())
                         //:l/PAI::logSeg("-isWord-withValue:'"+CI.type.asGiven+"'    infModel:"+toString(infModel))
                         CI.generality <- gConcrete  // TODO: This may not always be the case.
                         our POV: newPov <- CI.addInfonToWorkListWithPriority(infModel, true)
-                        newPov.trueByDefinition <- true
+                        if(newPov===NULL){return(false)}
+                        else{newPov.trueByDefinition <- true}
                     }// else{log("SKIPPED:"+toString(infModel)}
                 }else{
                     //:l/PAI::logSeg("-isWord-noValue:"+CI.type.asGiven)
@@ -1043,7 +1060,7 @@ vSpec.init(agent.getLocaleBaseName())
                     me uint64: itmMode <- CI.itmMode
                     me List<our PartPath>: parts <- CI.parts
                     our PartPath: partRef <- CI.partRef
-                    infModel.copyAsTypeTo(CI, false, true)
+                    infModel.copyAsTypeTo(CI, false, false)
                     CI.type    <- CIsType
                     CI.asNot   <- asNot
                     CI.parts   <- parts
@@ -1126,13 +1143,7 @@ vSpec.init(agent.getLocaleBaseName())
                 case cWorld:  {newTop <- agent.world}
                 case cContext:{newTop <- agent.context.topicHistory; aItem.dontProcess<-true}
                 case cUser:   {newTop <- agent.user}
-                case cThis:   {
-                    their POV: pov <- aItem.LHS_item
-                    while(pov!=NULL and pov.pItem.type==NULL){
-                        pov <- pov.pParent
-                    }
-                    newTop <- pov.pItem
-                }
+                case cThis:   {newTop <- CI.thisPtr}
                 case cArgs:   {newTop <- aItem.LHS_item.pParent.pItem.value.items.first()}
                 case cVars:   {} //{newTop <- next}
             }
@@ -1149,6 +1160,8 @@ vSpec.init(agent.getLocaleBaseName())
                 CI.originID   <- originID
                 CI.infCharPos <- infCharPos
                 CI.itmMode    <- itmMode
+                aItem.LHS_item.hasPropagated <- true
+                CI.wrkList.clear()
                 changeMade <- true
             }
         }
@@ -1520,7 +1533,7 @@ vSpec.init(agent.getLocaleBaseName())
                 if(newPath==NULL){logFatalError("Handle newPath is null")}
                 newPath.takeWrkListFrom(part.path, true)
                 if(!part.hasSemiColon){
-                    aItem.LHS_item.pItem <- newPath
+                    aItem.LHS_item.pItem <deep- newPath
              //aItem.LHS_item.hasPropagated <- false
                     nxtAction <- true
                 }else{
@@ -1760,7 +1773,7 @@ vSpec.init(agent.getLocaleBaseName())
                 while(pov != NULL){
                     // TODO: if(sizesNotCompatable()){markAsReject or notLast}
                     our infon:: altItem
-                    LHS.copyAsTypeTo(altItem,false, false)
+                    LHS.copyAsTypeTo(altItem,false, true)
                     altItem.isTentative <- true
                     our POV:: RHSPov{22}; RHSPov <deep- pov
                     altItem.addPOVToWrkList(RHSPov)
@@ -2061,18 +2074,21 @@ vSpec.init(agent.getLocaleBaseName())
                         if(LHS_Pov){
                             // This 'if' is an optimization. Something similar can be done for "ordered" infons.
                             if(!(LHS_Pov.pItem.type!=NULL and RHS_item.type!=NULL and RHS_item.isTypeExample and LHS_Pov.pItem.infonHasType(RHS_item.type.typeID()))){
-                                LHS_Pov.pItem.addInfonToWrkList(RHS_item, true, 17)
-                                if(LHS_Pov.hasPropagated){
+                                our POV: pov <- LHS_Pov.pItem.addInfonToWrkList(RHS_item, true, 17)
+                                if(pov!=NULL and LHS_Pov.hasPropagated){
                                     our AItem: PIVA <- processInfonViaAgenda(agenda, LHS_Pov, NULL, aItem, aItem.priority, 1008)
-                                    if(PIVA){agenda.addAItemToAgenda(PIVA)}
-                                    contnue <- false
+                                    if(PIVA){
+                                        //:l/PAI::logSeg("-UNORD_PIVA->"+PIVA.mySymbol())
+                                        agenda.addAItemToAgenda(PIVA)
+                                        contnue <- false
+                                    }
                                 }
                               //  S <+- "    FOUND("+fieldName+"):"+LHS_Pov.pItem.type.typeID()+" = "+toString(RHS_item)+"\n"
                             }//else{S <+- "    SKIPPING "+fieldName+"\n"}
                         } else {
                             if(RHS_item.isFromDefn){ // Create the field. Optimize: Only do this when needed; COW
                                 our infon:: newField
-                                RHS_item.copyAsTypeTo(newField,true, false)
+                                newField <deep- RHS_item
                                 our POV: newPov <- LHS_item.value.items.append(newField, RHS_pov.isSubItm, RHS_pov.pedigree.source)
                                 LHS_item.infSize.num <+- 1
                               //  S <+- "    Creating field: '"+fieldName+"' = "+toString(RHS_item)+"\n"
@@ -2160,7 +2176,7 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                     else if(derefWordRules(aItem))        {continueLoop <- true}
                     else if(funcArgRules(aItem))          {continueLoop <- true}
                     else if(func_altRules(agenda, aItem)) {continueLoop <- false}
-                    else if(lookUpCursorRules(aItem))     {continueLoop <- true}
+                    else if(lookUpCursorRules(aItem))     {partsRules(agenda,aItem,act); continueLoop <- act}
                     else if(normSize(agenda, aItem))      {continueLoop <- false}
                     else if(wrkLstRules(agenda, aItem))   {continueLoop <- false}
                     else if(partsRules(agenda,aItem,act)) {continueLoop <- act}
@@ -2308,12 +2324,16 @@ if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
                                 if(aItem.mergeStatus!=msReject and aItem.LHS_item.pItem.getOrderMode(agent)!=uUnordered){mergeSizeRules(aItem)}
                                 if(aItem.mergeStatus!=msReject){
                                     if(aItem.RHS.forceID){ //log("FORCE_ID:"+aItem.stringify());
-                                        aItem.RHS.pItem.copyAsTypeTo(aItem.LHS_item.pItem, false, false)
+                                        aItem.RHS.pItem.copyAsTypeTo(aItem.LHS_item.pItem, false, true)
                                     }else{
                                         me bool: contnue <- true
                                         if(processUnorderedInfons(agenda, aItem, contnue)){
                                             if(!contnue){
                                                 aItem.mergeFinished <- true
+
+                                                //:l/PAI::logSegOut("")
+                                                //:l/PAI::logSeg("}")
+                                                //:l/PAI::logFlush()
                                                 return()
                                             }
                                             if(aItem.LHS_item.pItem.value.fType == LST){
