@@ -639,7 +639,7 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
         #print("ruleSetID:"+ruleSetID)
         ifsCode =  '        //if(aItem.LHS_item.accessMode==aRefTo){log("REF_TO:"+aItem.stringify())}\n'
         ifsCode += '        our POV: remainder <- NULL\n'
-        ifsCode += '        logSeg("-mRUl")\n'
+        ifsCode += '        logSeg(" mRUl")\n'
         ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
         ifsCode += '        else {log("MERGE_RULE_MISSING: "+ toString(aItem));log("          LHS fType:"+ fTypeStrings[aItem.LHS_item.pItem.value.fType]);log("          LHS format:"+ formatStrings[aItem.LHS_item.pItem.value.format]);log("          RHS fType:"+ fTypeStrings[aItem.RHS.pItem.value.fType]); log("EXITING"); exit(2);}\n'
         ifsCode += "        return(remainder)"
