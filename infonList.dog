@@ -150,6 +150,7 @@ model POV{ // Point-Of-View
         if(lenStatus == "L" or lenStatus == "?"){
             our infon: newInfon <- makePotentialMemberInfon()
             our POV: newInfNode <- pItem.value.items.append(newInfon, false, 103)
+           newInfNode.pParent <- self
             if(lenStatus == "?"){
                 newInfon.isTentative  <- true
                 newInfNode.tentFromDots <- true
@@ -164,8 +165,8 @@ model POV{ // Point-Of-View
     our POV: getFirst(me int64: skipDots, their int:waitState) <- { // WARNING: pItem must be a literal List.
         if (streamingNormMode) {
             me MutexMngr: mtxMgr{streamingNormMutex}
-            while(pItem.streamState==parseStarted){
-                if(waitState){waitState<-1; return(NULL)}
+            while(pItem.streamState == parseStarted){
+                if(waitState!=NULL){waitState<-1; return(NULL)}
                 log("### >>NORM getFirstPOV-LOCKING-a:"+toString(pItem.streamState)+":: "+pItem.mySymbol()+" = "+shortedStr(toString(pItem),100))
                 streamingNormLock.wait(mtxMgr)
                 //log("### NORM getFirstPOV-UNLOCKED:"+pItem.mySymbol())
@@ -183,8 +184,8 @@ model POV{ // Point-Of-View
             firstNode <- pItem.value.items.begin()
             if (streamingNormMode) {
                 me MutexMngr: mtxMgr{streamingNormMutex}
-                while(firstNode.pItem.streamState==parseStarted){
-                    if(waitState){waitState<-1; return(NULL)}
+                while(firstNode.pItem.streamState == parseStarted){
+                    if(waitState!=NULL){waitState<-1; return(NULL)}
                     //log("### >>NORM getFirstPOV-LOCKING-b:"+toString(firstNode.pItem.streamState)+":: "+firstNode.mySymbol()+" = "+shortedStr(toString(firstNode.pItem),100))
                     streamingNormLock.wait(mtxMgr)
                     //log("### NORM getFirstPOV-UNLOCKED:"+pItem.mySymbol())
@@ -196,11 +197,35 @@ model POV{ // Point-Of-View
         firstNode.pParent <- self
         return(firstNode)
     }
+    me bool: canAdvance() <- {
+        // Case A: There is a known next sibling.
+        if (next != NULL) {
+            // Safe to descend into a list once the list structure is ready.
+            log("CanAdvance check with next: " + pItem.mySymbol() + " state=" + toString(pItem.streamState) + "  next=" + next.pItem.mySymbol() + " state=" + toString(next.pItem.streamState))
+            return(next.pItem.streamState != parseStarted)
+        }
+        // Case B: No known next sibling yet; only stop waiting if the current level is closed.
+        if (pParent != NULL) {
+            log("Non-top-level canAdvance check: " + pItem.mySymbol() + " state=" + toString(pItem.streamState) + "  parent=" + pParent.pItem.mySymbol() + " state=" + toString(pParent.pItem.streamState))
+            return(pParent.pItem.streamState == parseDone or pParent.pItem.streamState == notParsing)
+        } else {
+            // Top-level: done when the top item is done.
+            if (pItem.streamState == notParsing) {
+                // Since this was generated not parsed, assume the sibling is also generated.
+                // These come from POVs with pedigree.source of 402, 417 or 700.
+                return(true)
+            }
+            log("Top-level canAdvance check: " + pItem.mySymbol()
+               +"   pItem:" + shortedStr(toString(pItem),100)
+               +" source=" + toString(pedigree.source))
+            return(true)
+        }
+    }
     our POV: getNext(me int64: skipDots, their int:waitState) <- {
         if (streamingNormMode) {
             me MutexMngr: mtxMgr{streamingNormMutex}
-            while(!((next==NULL and ((pParent != NULL and !pParent.pItem.stillParsing) or (pParent==NULL and !pItem.stillParsing)))
-               or (next!=NULL and (next.pItem.streamState!=parseStarted or next.pItem.value.fType==LST)))){
+            while(!canAdvance()){
+                if(waitState!=NULL){waitState<-1; return(NULL)}
                     //log("   getNext: next:"+next.mySymbol())
                     //if(next){log("     next.streamState:"+streamStateStrings[next.pItem.streamState])}
                     if(waitState){waitState<-1; return(NULL)}

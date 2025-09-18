@@ -1,10 +1,11 @@
 // This file implements parsing and printing of infons
 
+struct parseContext:inherits=<mode[pcMainInfn, pcRHS, pcFuncLike, pcPartPaths, pcListSpec, pcDefn]>{}
+
 struct infon{
     flag: isFunc
     flag: isFuncArg
     flag: invertFunc
-    flag: stillParsing
     mode[seprNone, seprComma, seprBar]: separator
     mode[notParsing, parseStarted, parseListReady, parseDone]: streamState
 
@@ -49,7 +50,7 @@ struct ProteusParser{
             me MutexMngr: MtxMgr{streamingNormMutex}
             infn.streamState <- stateMrk
         }
-        streamingNormLock.notifyOne()
+        streamingNormLock.notifyAll()
     }
 
     void: setError(me string: errMsg) <- {
@@ -365,12 +366,12 @@ struct ProteusParser{
             if(peek!="="){return(syntax_error)}
             else{
                 cPos <+- 1
-                return(preCheckInfon(cPos, true))
+                return(preCheckInfon(cPos, true, pcDefn))
             }
         }
         return(valid_done)
     }
-    me ppStatus: preCheckPureInfon(their int64: pos) <- {
+    me ppStatus: preCheckPureInfon(their int64: pos, me parseContext: prsCtxt) <- {
         me int64: len
         me int64: cPos <- pos
         me char: peek; WCHK_PEEK(cPos,valid_notDone)
@@ -429,17 +430,23 @@ struct ProteusParser{
         }
         return(valid_done)
     }
-    me ppStatus: preCheckListItem(their int64: cPos) <- {
+    me ppStatus: preCheckListItem(their int64: cPos, me parseContext: prsCtxt) <- {
         // TODO: verify this works properly with ppStatus
         me ppStatus: status
         me char: peek;
         WCHK_PEEK(cPos,valid_notDone)
         if(chkPeek(cPos, peek, "@"))                      {return(preCheckWordDefn(cPos))}
-        else if(chkPeek(cPos, peek, "&"))                 {return(preCheckInfon(cPos, true))}
+        else if(chkPeek(cPos, peek, "&"))                 {return(preCheckInfon(cPos, true, prsCtxt))}
         else if(statusOK(preChkStr(cPos, "%INSERT"), status))           {return(status)}
         else if(statusOK(preChkStr(cPos, "%PROTEUS"), status))          {return(status)}
-        else if(peek=="." and statusOK(preChkStr(cPos, "..."), status)) {return(status)}
-        return(preCheckInfon(cPos, true))
+        else if(peek=="." and statusOK(preChkStr(cPos, "..."), status)) {
+            if(text.interactiveMode and prsCtxt==pcMainInfn){
+                //setError("... not allowed in main infon in interactive mode")
+                return(syntax_error)
+            }
+            return(status)
+        }
+        return(preCheckInfon(cPos, true, prsCtxt))
     }
     me ppStatus: preCheckFuncParts(their int64: pos, me bool: allowIDs) <- {
         me int64: cPos <- pos
@@ -454,7 +461,7 @@ struct ProteusParser{
                 CHK_PEEK(cPos,valid_notDone)
                 if(chkPeek(cPos, peek, "=")){CHK_PEEK(cPos,valid_notDone)}
                 if(chkPeek(cPos, peek, ":")){CHK_PEEK(cPos,valid_notDone)}
-                if(statusNotDone(preCheckInfon(cPos, false), status)){U_RETURN(status)}
+                if(statusNotDone(preCheckInfon(cPos, false, pcRHS), status)){U_RETURN(status)}
                 WCHK_PEEK(cPos,valid_maybeDone)
             }
         }
@@ -467,7 +474,7 @@ struct ProteusParser{
             op <+- peek
             if(op != "<:" and op != ":>" and op != "<!" and op != "!>" and op != "<~"){return(syntax_error)}
             WCHK_PEEK(cPos,valid_notDone)
-            if(statusNotDone(preCheckInfon(cPos, true), status)){U_RETURN(status)}
+            if(statusNotDone(preCheckInfon(cPos, true, pcFuncLike), status)){U_RETURN(status)}
             WCHK_PEEK(cPos,valid_maybeDone)
         }
 
@@ -476,14 +483,14 @@ struct ProteusParser{
             CHK_PEEK(cPos,valid_notDone)
             if(peek == '.'){return(syntax_error)}
 
-            if(statusNotDone(preCheckInfon(cPos, true), status)){U_RETURN(status)}
+            if(statusNotDone(preCheckInfon(cPos, true, pcPartPaths), status)){U_RETURN(status)}
             WCHK_PEEK(cPos,valid_maybeDone)
             if(chkPeek(cPos, peek, ";")){WCHK_PEEK(cPos,valid_maybeDone)}
             else {break()}
         }
         U_RETURN(valid_done)
     }
-    me ppStatus: preCheckInnerInfon(their int64: pos) <- {
+    me ppStatus: preCheckInnerInfon(their int64: pos, me parseContext: prsCtxt) <- {
         me int64: cPos <- pos
         me ppStatus: status
         me char: peek; WCHK_PEEK(cPos,valid_notDone)
@@ -507,7 +514,7 @@ struct ProteusParser{
             if(peek=="*" or peek=="/"){
                 cPos <+- 1
                 WCHK_PEEK(cPos,valid_notDone)
-                status <- preCheckPureInfon(cPos) // TODO: This should always be numeric
+                status <- preCheckPureInfon(cPos, prsCtxt) // TODO: This should always be numeric
                 if(status!=valid_done){
                     if(status==valid_maybeDone){status <- valid_notDone}
                     return(status)
@@ -518,7 +525,7 @@ struct ProteusParser{
             if(peek=="+" or peek=="-"){
                 cPos <+- 1
                 WCHK_PEEK(cPos,valid_notDone)
-                status <- preCheckPureInfon(cPos)
+                status <- preCheckPureInfon(cPos, prsCtxt)
                 if(status==valid_done){pos <deep- cPos}
                 return(status)
             } else if(requirePlusMinusSign){
@@ -528,19 +535,19 @@ struct ProteusParser{
                 }
                 cPos <+- 1
                 WCHK_PEEK(cPos,valid_notDone)
-                status <- preCheckPureInfon(cPos)
+                status <- preCheckPureInfon(cPos, prsCtxt)
                 if(status==valid_done){pos <deep- cPos}
                 return(status)
             } else {
                 WCHK_PEEK(cPos,valid_notDone)
-                status <- preCheckPureInfon(cPos)
+                status <- preCheckPureInfon(cPos, prsCtxt)
                 if(status==valid_done){pos <deep- cPos}
                 return(status)
             }
         }
         return(valid_done)
     }
-    me ppStatus: preCheckInfon(their int64: pos, me bool: allowIDs) <- {
+    me ppStatus: preCheckInfon(their int64: pos, me bool: allowIDs, me parseContext: prsCtxt) <- {
         me int64: cPos <- pos
         me ppStatus: status
         me char:  peek; WCHK_PEEK(cPos,valid_notDone)
@@ -552,7 +559,7 @@ struct ProteusParser{
             else{fetchInnerInfon<-false}
         }
         if(fetchInnerInfon){
-            status <- preCheckInnerInfon(cPos)//setError("Literal infon or %tag expected")}
+            status <- preCheckInnerInfon(cPos, prsCtxt)//setError("Literal infon or %tag expected")}
         }
         pos <deep- cPos
         if(status!=valid_done){return(status)}
@@ -633,7 +640,7 @@ struct ProteusParser{
                 cPos <+- 1
                 our infon:: defMeaning
                 defMeaning.originID <- infn.originID
-                cPos <+- parseInfon(defMeaning, cPos, true, true)
+                cPos <+- parseInfon(defMeaning, cPos, true, true, pcDefn)
                 infn.funcArgs <- defMeaning
             }
         } else{setError("Invalid unicode identifier")}
@@ -650,7 +657,7 @@ struct ProteusParser{
         // Read optional ~size
         if(chkStrWSC(cPos,"~")){
             our pureInfon:: size
-            cPos <+- parsePureInfon(size, cPos, NULL, isFromDefn)
+            cPos <+- parsePureInfon(size, cPos, NULL, isFromDefn, pcListSpec)
             if(size.fType!=NUM){setError("Size of infons must be numeric")}
             pureInfn.size <- size
         }
@@ -660,7 +667,7 @@ struct ProteusParser{
         me uint64: prevPos <- cPos
         our infon:: item
         item.originID <- parent.originID
-        if(chk(parseInfon(item, cPos, true, isFromDefn), cPos,len)){
+        if(chk(parseInfon(item, cPos, true, isFromDefn, pcListSpec), cPos,len)){
             infonFound <- true
         }
         if(peekWSC(cPos)=="|"){
@@ -675,7 +682,7 @@ struct ProteusParser{
         return(cPos-pos)
     }
 
-    me int64: parseListItem(our infon: infn, their pureInfon: pureInfn, our infon: parent, me int64: pos, me bool: isFromDefn) <- {
+    me int64: parseListItem(our infon: infn, their pureInfon: pureInfn, our infon: parent, me int64: pos, me bool: isFromDefn, me parseContext: prsCtxt) <- {
         me int64: cPos <- pos
         me int64: len
 
@@ -700,13 +707,17 @@ struct ProteusParser{
             if(chk(text.scrapeToEOL(cPos), cPos,len)){
                 infn.includeSpec <- makeStr(cPos-len, cPos)
                 trimWS(infn.includeSpec)
+                notifyStreamState(infn, parseDone)
+        log("XXXX Infon include spec: '"+infn.includeSpec+"'")
+            } else{
+                setError("Invalid %INSERT specification")
+                return(-1)
             }
-            notifyStreamState(infn, parseDone)
         } else if(chkStr(cPos, "%PROTEUS")){
             infn.itmMode <- mIncludeParseStr
             our infon:: item
             item.originID <- infn.originID
-            cPos <+- parseInfon(item, cPos, true, isFromDefn)
+            cPos <+- parseInfon(item, cPos, true, isFromDefn, prsCtxt)
             infn.includeInfn <- item
             notifyStreamState(infn, parseDone)
         } else {
@@ -714,27 +725,28 @@ struct ProteusParser{
             if(parent.value.intersectPosParse == ipSquareBrackets){
                 if(chkPeek(cPos, peek, "<")){
                     peek <- peekWSC(cPos)
-                        if(intersectGetMarked == true){setError("Multiple <...> in [...] not supported yet")}
-                        else{
-                            parent.intersectPos <- ipGetMarked
-                            parent.intersectMarkedRet <- infn
-                            intersectGetMarked <- true
-                        }
+                    if(intersectGetMarked == true){setError("Multiple <...> in [...] not supported yet")}
+                    else{
+                        parent.intersectPos <- ipGetMarked
+                        parent.intersectMarkedRet <- infn
+                        intersectGetMarked <- true
+                    }
                 }
             }
             if(chkPeek(cPos, peek, "&")){
                 isSubItm <- true
-                cPos <+- parseInfon(infn, cPos, true, isFromDefn)
+                cPos <+- parseInfon(infn, cPos, true, isFromDefn, prsCtxt)
             } else {
                 infn.itmMode <- mItem
                 pureInfn.items.append(infn, false, 301)
                 if(parent!=NULL and pureInfn.items.size()==1){notifyStreamState(parent, parseListReady)}
                 itemWasAppended <- true
-                cPos <+- parseInfon(infn, cPos, true, isFromDefn, false)
+                cPos <+- parseInfon(infn, cPos, true, isFromDefn, prsCtxt)
                 if(chkStrWSC(cPos, "`")){infn.doReply<-true}
                 infn.stillParsing <- false
                 notifyStreamState(infn, parseDone)  // ParsingIsDone
             }
+
             if(intersectGetMarked){
                 peek <- peekWSC(cPos)
                 if(!chkPeek(cPos, peek, ">")){
@@ -751,7 +763,7 @@ struct ProteusParser{
         return(cPos-pos)
     }
 
-    me int64: parsePureInfon(their pureInfon: pureInfn, me int64: pos, our infon: parent, me bool: isFromDefn) <- {
+    me int64: parsePureInfon(their pureInfon: pureInfn, me int64: pos, our infon: parent, me bool: isFromDefn, me parseContext: prsCtxt) <- {
         me int64: cPos      <- pos
         me int64: len
         pureInfn.isFromDefn <- isFromDefn
@@ -819,6 +831,7 @@ struct ProteusParser{
 
             if(chk(parseListInfo(pureInfn, cPos, parent, isFromDefn), cPos,len)){
             } else {clearError()}
+
             me int64: count<-0
             while(peekWSC(cPos) != ender){
                 text.consumerStatus <- 0
@@ -831,7 +844,7 @@ struct ProteusParser{
                 our infon:: item
                 item.originID <- parent.originID
                 item.streamState <- parseStarted
-                if(chk(parseListItem(item, pureInfn, parent, cPos, isFromDefn), cPos,len)){
+                if(chk(parseListItem(item, pureInfn, parent, cPos, isFromDefn, prsCtxt), cPos,len)){
                     //print("PARSED:",shortedStr(toString(item),100),"\n")
                     if(count==0 or parent.separator!=seprNone){
                         peek <- peekWSC(cPos)
@@ -868,7 +881,7 @@ struct ProteusParser{
         return(cPos-pos)
     }
 
-    me int64: parseFuncParts(our infon: infn, me int64: pos, me bool: allowIDs, me bool: isFromDefn) <- {
+    me int64: parseFuncParts(our infon: infn, me int64: pos, me bool: allowIDs, me bool: isFromDefnn) <- {
         me int64: cPos <- pos
         // WORK_LIST
         if(allowIDs){
@@ -882,7 +895,7 @@ struct ProteusParser{
                 if(chkPeek(cPos, text.at(cPos), ":")){pov.looseTop <- true}
                 our infon:: RHS
                 RHS.originID <- infn.originID
-                cPos <+- parseInfon(RHS, cPos, false, isFromDefn)
+                cPos <+- parseInfon(RHS, cPos, false, isFromDefn, pcRHS)
                 pov.pItem <- RHS
                 infn.wrkList.append(pov)
             }
@@ -904,7 +917,7 @@ struct ProteusParser{
             if(isAFunc){
                 our infon:: funcArg
                 funcArg.originID <- infn.originID
-                cPos <+- parseInfon(funcArg, cPos, true, isFromDefn)
+                cPos <+- parseInfon(funcArg, cPos, true, isFromDefn, pcFuncLike)
                 infn.funcArgs <- funcArg
                 peek <- peekWSC(cPos)
             }
@@ -920,7 +933,7 @@ struct ProteusParser{
             else if(peek=="#"){ part.pathMode <- idxField}
             our infon:: pathSeg
             pathSeg.originID <- infn.originID
-            cPos <+- parseInfon(pathSeg, cPos, true, isFromDefn)
+            cPos <+- parseInfon(pathSeg, cPos, true, isFromDefn, pcPartPaths)
             part.path <- pathSeg
             peek <- peekWSC(cPos)
 
@@ -928,7 +941,7 @@ struct ProteusParser{
                 cPos<+-1
                 our infon:: pathSpecSeg
                 pathSpecSeg.originID <- infn.originID
-                cPos <+- parseInfon(pathSpecSeg, cPos, true, isFromDefn)
+                cPos <+- parseInfon(pathSpecSeg, cPos, true, isFromDefn, pcPartPaths)
                 part.spec <- pathSpecSeg
             }
 
@@ -945,7 +958,7 @@ struct ProteusParser{
         if(errorSet){return(-1)}
         return(cPos-pos)
     }
-    me int64: parseInnerInfon(our infon: infn, me int64: pos, me bool: isFromDefn) <- {
+    me int64: parseInnerInfon(our infon: infn, me int64: pos, me bool: isFromDefn, me parseContext: prsCtxt) <- {
         me int64: cPos <- pos
         me int64: len
 
@@ -975,7 +988,7 @@ struct ProteusParser{
                 cPos <+- 1
                 if(peek=="/"){infn.infSize.inverted <- true}
                 infn.value.sizeMode <- fromGiven
-                cPos <+- parsePureInfon(infn.infSize, cPos, infn, isFromDefn)
+                cPos <+- parsePureInfon(infn.infSize, cPos, infn, isFromDefn, prsCtxt)
                 //TODO: add new if Conditions
                 //if(infn.infSize.fType!=NUM){setError("Size of infons must be numeric")}
                 requirePlusMinusSign <- true
@@ -989,12 +1002,12 @@ struct ProteusParser{
                 cPos <+- 1
                 if(peek=="-"){infn.value.inverted <- true}
                 if(!requirePlusMinusSign){infn.value.sizeMode <- fromContext}
-                cPos <+- parsePureInfon(infn.value, cPos, infn, isFromDefn)
+                cPos <+- parsePureInfon(infn.value, cPos, infn, isFromDefn, prsCtxt)
             } else if(requirePlusMinusSign){
                 setError("Expected '+' or '-'")
             } else {
                 infn.value.sizeMode <- fromCount
-                if(!chk(parsePureInfon(infn.value, cPos, infn, isFromDefn), cPos,len)){}//setError("Expected number infon, string, list or '?' or %tag")}
+                if(!chk(parsePureInfon(infn.value, cPos, infn, isFromDefn, prsCtxt), cPos,len)){}//setError("Expected number infon, string, list or '?' or %tag")}
             }
             if(infn.value.tailUnfinished == false){infn.countSize(false)}
         }
@@ -1002,9 +1015,8 @@ struct ProteusParser{
         if(errorSet){return(-1)}
         return(cPos-pos)
     }
-    me int64: parseInfon(our infon: infn, me int64: pos, me bool: allowIDs, me bool: isFromDefn, me bool: doNotifyStateChange<-true) <- {
+    me int64: parseInfon(our infon: infn, me int64: pos, me bool: allowIDs, me bool: isFromDefn, me parseContext: prsCtxt <- pcMainInfn) <- {
         infn.streamState  <- parseStarted // parsing has started
-        infn.stillParsing <- true
         infn.isFromDefn   <- isFromDefn
         me int64: cPos    <- pos  // Current position
         me int64: len
@@ -1028,7 +1040,7 @@ struct ProteusParser{
             if(chkStrWSC(cPos, ":")){
                 wordsFound <- chk(text.scrapeUniID(cPos), cPos,len)
                 if(!wordsFound){
-                   // cPos <+- parseInfon(infn, cPos, allowIDs, isFromDefn, doNotifyStateChange)
+                   // cPos <+- parseInfon(infn, cPos, allowIDs, isFromDefn, prsCtxt)
                     infn.hasTypeAndValue <- true
                    // fetchInnerInfon<-false
                 }
@@ -1037,7 +1049,7 @@ struct ProteusParser{
 
         // InnerInfon
         if(fetchInnerInfon){
-            if(!chk(parseInnerInfon(infn, cPos, isFromDefn), cPos,len)){}//setError("Literal infon or %tag expected")}
+            if(!chk(parseInnerInfon(infn, cPos, isFromDefn, prsCtxt), cPos,len)){}//setError("Literal infon or %tag expected")}
         }
 
         // FuncParts
