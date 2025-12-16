@@ -737,6 +737,7 @@ model AItem{
     me List<our AItem>: subscribers
     me AItemPedigree: pedigree
     our AItem: parent
+    our AItem: debugArg     // For debugSystems validateAItem()
     me int: indentLvl
     flag: initRulesApplied
     me int: distanceToTop() <- {
@@ -960,6 +961,10 @@ struct WorldManager{
         me string: S
         while(!aItem.subscribers.isEmpty()){
             our AItem: sub <- aItem.subscribers.first()
+            if(sub.ruleSet==rsInfon){
+                sub.step <+- 1
+                sub.priority <- aItem.priority
+            }
             aItem.subscribers.popFirst()
             sub.LHS_item.pItem.isNormed <- false
             sub.notFirstVisit <- true
@@ -1227,6 +1232,7 @@ vSpec.init(agent.getLocaleBaseName())
             LHSPov.hasPropagated <- true
             if(!aItem.dontProcess){
                 our AItem: newAItem <- processMergeViaAgenda(agenda, LHSPov, RHSPov, looseSize, aItem, aItem, aItem.priority, srcPMVA1)
+                newAItem.debugArg <- aItem // For validateAItem debugging
                 //:l/PAI::logSeg(" Itm_PMVA:"+newAItem.mySymbol())
                 stopAndWait <- true
             }else{
@@ -1237,6 +1243,7 @@ vSpec.init(agent.getLocaleBaseName())
         if(!LHSPov.hasPropagated){
             if(!aItem.dontProcess){
                 our AItem: newAItem <- processMergeViaAgenda(agenda, LHSPov, RHSPov, false, aItem, aItem, aItem.priority, srcPMVA2)
+                newAItem.debugArg <- aItem // For validateAItem debugging
                 //:l/PAI::logSeg(" LHS_PMVA:"+newAItem.mySymbol())
                 stopAndWait <- true
                 LHSPov.hasPropagated <- true
@@ -2028,6 +2035,7 @@ vSpec.init(agent.getLocaleBaseName())
             PIVA <- processInfonViaAgenda(agenda, LHSPovNext, NULL, nxtsParent, aItem.priority+1, srcPropagate)
             if(PIVA){
                 PIVA.candidateForLast <- candidateForLast
+                PIVA.debugArg <- aParent
                 //:l/PAI::logSeg(" PropPIVA:"+PIVA.mySymbol())
                 addDebugEvent("RegisterPIVA to propagate "+aItem.stringify()+"\n    TO:"+LHSPovNext.pItem.mySymbol()+":"+toString(LHSPovNext.pItem)+"\n", LHSPovNext.pItem)
             }
@@ -2043,33 +2051,26 @@ vSpec.init(agent.getLocaleBaseName())
         if(aItem.pendingTasks==0){fulfillSubscriptions(agenda, aItem)}
         if(nextAItem){agenda.addAItemToAgenda(nextAItem)}
     }
-    void: propagateProxy(their Agenda: agenda, our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque) <- {
-        aItem.mergeFinished <- true
-        me bool: LHSitrBeginning <- aItem.LHSItr!=NULL and LHSPov===aItem.LHSItr.topPOV
-        me int: prediction <- 0; if(LHSitrBeginning){prediction <- 1}
-    log("   propagateProxy: aItem.pendingTasks:"+toString(aItem.pendingTasks)+"  prediction:"+toString(prediction))
-//    if(aItem.pendingTasks>0){print("WARNING: Skipping PropProxy due to pendingTasks." )}
-//    if(prediction>0){print("WARNING: Skipping PropProxy due to prediction." )}
-//    print("PropData: aItem.pendingTasks:" + toString(aItem.pendingTasks) +"   PRED:"+toString(prediction))
-        if (false and prediction == 0) {
-            fulfillSubscriptions(agenda, aItem);
-            our PropagateRecord:: propRec
-            propRec.aItem     <- aItem
-            propRec.LHSPov    <- LHSPov
-            propRec.RHSPov    <- RHSPov
-            propRec.remainder <- remainder
-            propRec.looseSize <- looseSize
-            propRec.dontEnque <- dontEnque
-            agenda.propagationsTodo.append(propRec)
-log("PropProxy:"+propRec.aItem.mySymbol()+" = "+shortedStr(propRec.aItem.stringify(),30)+"   IN-Q ")
-        } else {
-log("PropProxy:"+aItem.mySymbol()+" = "+shortedStr(aItem.stringify(),30)+"   IN-N")
-            our AItem: nextAItem <- propagate(agenda, aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque, NULL)
-            if(aItem.pendingTasks==0){fulfillSubscriptions(agenda, aItem)}
-            if (nextAItem){agenda.addAItemToAgenda(nextAItem);}
-        }
 
+    void: addQueuedAItemsToAgenda(their Agenda: agenda) <- {
+        // Propagate queued AItems
+        while(!agenda.propagationsTodo.isEmpty()){
+            our PropagateRecord: propRec <- agenda.propagationsTodo.last();
+            agenda.propagationsTodo.popLast()
+            callPropagate(agenda, propRec.aItem, propRec.LHSPov, propRec.RHSPov, propRec.remainder, propRec.looseSize, propRec.dontEnque, NULL) 
+        }
     }
+    
+    void: propagateProxy(their Agenda: agenda, our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque) <- {
+        aItem.mergeFinished <- true // This is SUS but it fixes many streaming issues.
+        if (true){ // CHANGE TO 'if(false)' TO DISABLE PROPAGATE PROXY QUEUEING
+            our PropagateRecord:: propRec{aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque}
+            agenda.propagationsTodo.append(propRec)  // CHANGE TO PREPEND
+        } else { 
+            callPropagate(agenda, aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque, NULL)
+        }
+    }
+
     me bool: processUnorderedInfons(their Agenda: agenda, our AItem: aItem, their bool: contnue) <- {
         // Handle Unordered infons
         me OrderMode: LHSOrderMode <- aItem.LHS_item.pItem.getOrderMode(agent)
@@ -2141,7 +2142,6 @@ log("PropProxy:"+aItem.mySymbol()+" = "+shortedStr(aItem.stringify(),30)+"   IN-
         return(false)
     }
     void: processAgendaItem(their Agenda: agenda, our AItem: aItem, me int: AlternativesNestLvl)<-{
-        agent.numProcessedAgendaItems <+- 1
 //if(aItem.LHS_item.pItem.mySymbol()=="infon284"){setInfonToMonitor(aItem.LHS_item.pItem)}
 //if(aItem.LHS_item.pItem.type!=NULL and aItem.LHS_item.pItem.type.normalType()=="solvedstate"){setInfonToMonitor(aItem.LHS_item.pItem)}
         //log("________________________________________")
@@ -2226,7 +2226,7 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                                 }
                             }
 
-                            // Propagate queued AItems
+        addQueuedAItemsToAgenda(agenda)
                             //:l/PAI::logSegIn(" PQA")
 //                            log("PropQueue.size:"+toString(agenda.propagationsTodo.size()))
                             while(!agenda.propagationsTodo.isEmpty()){
@@ -2284,7 +2284,6 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                         if(aItem.mergeStatus==msAccept){
                             //:l/PAI::logSeg(":ACC")
                         } else if(aItem.mergeStatus==msReject){
-                        if(aItem.mergeStatus==msReject){
                             //:l/PAI::logSeg(":REJ")
                         }
                         if(aItem.LHS_item.pItem.value.tailUnfinished and aItem.LHS_item.pItem.infSize.format==fLiteral){
@@ -2396,7 +2395,6 @@ if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
                                         if(aItem.mergeStatus==msAccept){
                                             //:l/PAI::logSeg(":ACC")
                                         } else if(aItem.mergeStatus==msReject){
-                                        if(aItem.mergeStatus==msReject){
                                             //:l/PAI::logSeg(":REJ")
                                         }
                                         // Optimization: propagate "already initialized" state to avoid extra inits.
@@ -2564,48 +2562,32 @@ if(aItem.step ==0){ //TODO: optimize so that skipping step 0 isn't needed
             }
             count <+- 1
         }
+
         if(doFulfillSubs){fulfillSubscriptions(agenda, aItem)}
-        //aItem.LHS_item.pItem.isNormed <- true
+        //aItem.LHS_item.pItem.isNormed <- true // Uncommenting this makes everything fail, but why? It should be there...
         //logSegStartCol("<<:DONE", col4)
         //:l/PAI::logSegOut("")
         //:l/PAI::logSeg(endBracket)
         //:l/PAI::logFlush()
     }
     void: processAgenda(their Agenda: agenda)<-{
+        me AItemValidator: validator
+        me bool: validateAitems <- true // Set to true to validate AItems
+        me string: recordKey
         me bool: makeDebugGraph <-false  // Set to true for a graph
-        me Map<me string, me string>: labels; me string: label; me string: recSym; me string: attrs
+        me AItemGrapherData: grapherData
         if(makeDebugGraph){grapher.clear(); grapher.addItem("rankdir=RL; ordering=out;")}
         me int: count <- 0
         while(!agenda.AItems.isEmpty()) {
             our AItem: aItem <- agenda.AItems.popFirst()
-            me bool: graphNodeFirstTime <- false
-            if(makeDebugGraph){
-                attrs <- "";
-                if(aItem.ruleSet==rsInfon){attrs <- "style=filled color=skyblue"}
-                else if(aItem.ruleSet==rsMerge){attrs <- "style=filled color=steelblue2"}
-                else if(aItem.ruleSet==rsIntersect){attrs <- "style=filled color=royalblue3"}
-                recSym <- aItem.mySymbol()
-                label <- labels[recSym]
-                if(label==""){
-                    graphNodeFirstTime<-true
-                    label <- recSym +":" +toString(count) + "\n" +aItem.stringify()
-                    if(aItem.parent!=NULL){grapher.addArrow(recSym, aItem.parent.mySymbol(), "parent", "color=magenta weight=1000")}
-                    else {
-                        if(!aItem.subscribers.isEmpty()){
-                            grapher.addArrow(recSym, aItem.subscribers[0].mySymbol(), "subscriber", "color=brown weight=1000")
-                        }
-                    }
-                }
-            }
+            if(makeDebugGraph){GraphNode_prePAI(aItem, grapherData)}
+
+            if(validateAitems){recordKey <- validator.validateAItem(agenda, aItem)}
             processAgendaItem(agenda, aItem, 0)
-            if(makeDebugGraph){
-                label <+- "\n"+aItem.stringify()
-                if(aItem.mergeStatus==msReject){label<+-"-R"}
-                labels[recSym] <- label
-                grapher.addNode(recSym, label, attrs)
-                if(graphNodeFirstTime and aItem.RHSItr!=NULL){grapher.addArrow(recSym, aItem.RHSItr.mySymbol()+"R", "RHSItr", "color=orange")}
-                if(graphNodeFirstTime and aItem.LHSItr!=NULL){grapher.addArrow(recSym, aItem.LHSItr.mySymbol()+"L", "LHSItr", "color=gold")}
-            }
+            if(validateAitems){validator.closeRecord(recordKey)}
+            addQueuedAItemsToAgenda(agenda)
+            if(makeDebugGraph){ GraphNode_postPAI(aItem, grapherData)}
+
             //aItem.LHS_item.pItem.isOnAgenda <- false
             count <+- 1
         }
@@ -2627,7 +2609,6 @@ struct Agent{
     our Map<string, string>: settings
     me int: errorStatus
     me string: errorMesg
-    me int: numProcessedAgendaItems
 
     void: setErrorState(me string: errorMesg) <- {
         //log("INFON ERROR: " + errorMesg)
