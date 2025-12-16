@@ -1,0 +1,259 @@
+////////////////////////////////////////////////////////////////////////
+//// Validate Various rules about AItems
+
+// aitemSrcID: [srcPMVA, srcPiCVA, srcNrmSize, srcNormInit, srcMrg0, srcPropagate, srcPartsPath, srcItsALT, srcItsFunc, srcUnordd]> {}
+
+struct AItemValidator {
+    Map<string, int>: aItemRecords
+
+    void: NotifyOfError(me string: recordKey, me string: msg) <- {
+        me string: error <- "DEBSYS_ERROR:" + recordKey + " :: " + msg
+        log(error)
+    }
+
+    me string: getFullKey(our AItem: aItem) <- {
+        me string: key <- aItem.mySymbol()+":"+aitemSrcIDStrings[aItem.pedigree.source]+":"+toString(aItem.step)
+        return(key)
+    }
+
+    me string: getPartialKey(our AItem: aItem) <-{
+        me string: key <- aItem.mySymbol()+":"+aitemSrcIDStrings[aItem.pedigree.source]
+        return(key)
+    }
+
+    me string: makeSteppedKey(our AItem: aItem, me int: step) <- {
+        me string: key <- getPartialKey(aItem)+":"+toString(step)
+        return(key)
+    }
+
+    me int: getSteppedKeyValue(our AItem: aItem, me int: step) <- {
+        me string: key <- makeSteppedKey(aItem, step)
+        if(aItemRecords.containsKey(key)){
+            return(aItemRecords[key])
+        }
+        return(-1)
+    }
+
+    me int: getFullKeyValue(our AItem: aItem) <- {
+        me string: key <- getFullKey(aItem)
+        if(aItemRecords.containsKey(key)){
+            return(aItemRecords[key])
+        }
+        return(-1)
+    }
+
+    me int: getLastPartialKeyValue(our AItem: aItem) <- {
+        me string: key <- getPartialKey(aItem)
+        itr Map<string, int>: upper <- aItemRecords.upper_bound(key)
+        if(upper == aItemRecords.end()){
+            return(-1)
+        }
+        return(upper.val)
+    }
+
+    me string: getSubscriberKey(our AItem: aItem) <- {
+        if(!aItem.subscribers.isEmpty()){
+            our AItem: subscriber <- aItem.subscribers[0]
+            me string: key <- getPartialKey(subscriber)
+            return(key)
+        }
+        return("")
+    }
+
+    me int: getSubscriberKeyValue(our AItem: aItem) <- {
+        if(!aItem.subscribers.isEmpty()){
+            our AItem: subscriber <- aItem.subscribers[0]
+            me int: key <- getLastPartialKeyValue(subscriber)
+            return(key)
+        }
+        return(-1)
+    }
+
+    me string: getParentKey(our AItem: aItem) <- {
+        if(aItem.parent!=NULL){
+            our AItem: parent <- aItem.parent
+            me string: key <- getPartialKey(parent)
+            return(key)
+        }
+        return("")
+    }
+
+    me int: getParentKeyValue(our AItem: aItem) <- {
+        if(aItem.parent!=NULL){
+            our AItem: parent <- aItem.parent
+            me int: key <- getLastPartialKeyValue(parent)
+            return(key)
+        }
+        return(-1)
+    }
+
+    me void: assertStep0Complete(our AItem: aItem, me string: errMsg) <- {
+        me string: step0Key <- makeSteppedKey(aItem, 0)
+        if(!aItemRecords.containsKey(step0Key)){
+            NotifyOfError(step0Key, errMsg+" Step 0 key not found. :: "+step0Key)
+        } else if(aItemRecords[step0Key]<1){
+            NotifyOfError(step0Key, errMsg +" Step 0 key not closed. :: "+step0Key)
+        }
+    }
+
+    me void: assertStep1NotExists(our AItem: aItem, me string: errMsg) <- {
+        me string: step1Key <- makeSteppedKey(aItem, 1)
+        if(aItemRecords.containsKey(step1Key)){
+            NotifyOfError(step1Key, errMsg+" :: "+step1Key)
+        }
+    }
+
+    me void: logAitemData(our AItem: aItem, me string: label) <- {
+        log(" AItem_Label: "+label)
+        if(aItem==NULL){
+            log("   AItem is NULL!\n")
+            return()
+        }
+        log("    record: "+getFullKey(aItem)+" = "+toString(getFullKeyValue(aItem)))
+        log("    string: "+aItem.stringify()+"\n")
+    }
+
+    me string: validateAItem(their Agenda: agenda, our AItem: aItem) <- {
+        me string: recordKey <- getFullKey(aItem)
+        log(" Validating AItem recordKey: "+recordKey)
+
+        // Check if already recorded
+        if(aItemRecords.containsKey(recordKey)){
+            NotifyOfError(recordKey, " Duplicate AItem record!")
+        }
+
+        // If step > 0, ensure previous step exists and is closed
+        if(aItem.step > 0){
+            if(!(getSteppedKeyValue(aItem, aItem.step-1) >= 0)){
+                NotifyOfError(recordKey, " Previous step not found")
+            }
+        }
+
+        // Validate according to ruleset and source
+        switch(aItem.pedigree.source){
+            case srcPropagate:{ // Subscriber: NULL    Parent: Yes
+                me string: parentKey <- getParentKey(aItem)
+
+                if(aItem.step==0){
+                    // Predecessor must exist and be closed
+                    if(aItem.debugArg!=NULL){
+                        // debugArg is a merge. Get the pred from it.
+                        our AItem: predAItem <- aItem.debugArg.debugArg
+                        if(predAItem==NULL){
+                            NotifyOfError(recordKey, " debugArg's debugArg (predAItem) is NULL!")
+                            break()
+                        }
+                        me int: prevItmKeyVal <- getLastPartialKeyValue(predAItem)
+                        if(prevItmKeyVal<=0){ // print for now
+                            NotifyOfError(recordKey, " prevItm AItem not closed yet!")
+                        }
+                    }
+
+                    // Parent must have step 0 but not 1
+                    if(aItem.parent==NULL){
+                        NotifyOfError(recordKey, " Parent is NULL!")
+                    } else if(aItem.parent.parent==NULL){
+                        NotifyOfError(recordKey, " Parent's list is NULL!")
+                    } else {
+                        our AItem: parentList <- aItem.parent.parent
+                        assertStep0Complete(parentList, "Parent list step 0 is not complete.")
+                        assertStep1NotExists(parentList, "Parent list step 1 should not have started yet.")
+                    }
+                    me AItem: parentList <- aItem.parent.parent
+                }
+             //   logAitemData(aItem, "srcPropagateTEST")
+             //   logAitemData(aItem.parent, "srcPropagateTEST_PARENT")
+            }
+            case srcNrmSize:{ // Subscriber: NULL    Parent: Yes
+                me string: parentKey <- getParentKey(aItem)
+                log("  $ srcNrmSize recordKey: "+recordKey+"         parentKey: "+parentKey)
+            }
+            case srcNormInit:{ // Subscriber: NULL    Parent: NULL
+            }
+            case srcItsALT:{ // Subscriber: NULL    Parent: Yes
+                me string: parentKey <- getParentKey(aItem)
+                log("  $ srcItsALT recordKey: "+recordKey+"         parentKey: "+parentKey)
+            }
+            case srcItsFunc:{ // Subscriber: Yes    Parent: NULL
+                me string: subKey <- getSubscriberKey(aItem)
+                log("  $ srcItsFunc recordKey: "+recordKey+"         subscriberKey: "+subKey)
+            }
+            case srcUnordd:{ // Subscriber: NULL    Parent: Yes
+                me string: parentKey <- getParentKey(aItem)
+                log("  $ Unord recordKey: "+recordKey+"         parentKey: "+parentKey)
+            }
+            case srcPartsPath:{ // Subscriber: NULL    Parent: Yes
+                me string: parentKey <- getParentKey(aItem)
+                log("  $ srcPartsPath recordKey: "+recordKey+"         parentKey: "+parentKey)
+            }
+            case srcMrg0:{ // Subscriber: Yes    Parent: NULL
+                me string: subKey <- getSubscriberKey(aItem)
+                log("  $ srcMrg0 recordKey: "+recordKey+"         subscriberKey: "+subKey)
+            }
+            case srcPMVA1:{ // Subscriber: NULL    Parent: Yes
+                me string: parentKey <- getParentKey(aItem)
+                log("  $ srcPMVA1 recordKey: "+recordKey+"         parentKey: "+parentKey)
+            }
+            case srcPMVA2:{ // Subscriber: NULL    Parent: Yes
+                me string: parentKey <- getParentKey(aItem)
+                log("  $ srcPMVA recordKey: "+recordKey+"         parentKey: "+parentKey)
+            }
+            case srcPiCVA:{ // Subscriber: NULL    Parent: Yes
+                me string: parentKey <- getParentKey(aItem)
+                log("  $ srcPiCVA recordKey: "+recordKey+"         parentKey: "+parentKey)
+            }
+
+            default:{
+                print("FATAL ERROR: AItem recordKey with invalid source! :: "+aItem.mySymbol()+"   source:"+aitemSrcIDStrings[aItem.pedigree.source]+"\n")
+            }
+        }
+        aItemRecords[recordKey] <- 0
+        return(recordKey)
+    }
+
+    void: closeRecord(me string: recordKey) <- {
+        aItemRecords[recordKey] <- 1
+    }
+}
+
+////////////////////////////////////////////////////////////////////////
+//// AItem Graph Creator
+struct AItemGrapherData{
+    bool: graphNodeFirstTime <- false
+    string: recSym
+    string: label
+    string: attrs
+    Map<string,string>: labels // recSym -> label
+    int: count <- 0
+}
+
+struct GLOBAL {
+    void: GraphNode_prePAI(our AItem: aItem, their AItemGrapherData: GD) <- {
+        GD.attrs <- "";
+        if(aItem.ruleSet==rsInfon){GD.attrs <- "style=filled color=skyblue"}
+        else if(aItem.ruleSet==rsMerge){GD.attrs <- "style=filled color=steelblue2"}
+        else if(aItem.ruleSet==rsIntersect){GD.attrs <- "style=filled color=royalblue3"}
+        GD.recSym <- aItem.mySymbol()
+        GD.label <- GD.labels[GD.recSym]
+        if(GD.label==""){
+            GD.graphNodeFirstTime<-true
+            GD.label <- GD.recSym +":" +toString(GD.count) + "\n" +aItem.stringify()
+            if(aItem.parent!=NULL){grapher.addArrow(GD.recSym, aItem.parent.mySymbol(), "parent", "color=magenta weight=1000")}
+            else {
+                if(!aItem.subscribers.isEmpty()){
+                    grapher.addArrow(GD.recSym, aItem.subscribers[0].mySymbol(), "subscriber", "color=brown weight=1000")
+                }
+            }
+        }
+    }
+
+    void: GraphNode_postPAI(our AItem: aItem, their AItemGrapherData: GD) <- {
+        GD.label <+- "\n"+aItem.stringify()
+        if(aItem.mergeStatus==msReject){GD.label<+-"-R"}
+        GD.labels[GD.recSym] <- GD.label
+        grapher.addNode(GD.recSym, GD.label, GD.attrs)
+        if(GD.graphNodeFirstTime and aItem.RHSItr!=NULL){grapher.addArrow(GD.recSym, aItem.RHSItr.mySymbol()+"R", "RHSItr", "color=orange")}
+        if(GD.graphNodeFirstTime and aItem.LHSItr!=NULL){grapher.addArrow(GD.recSym, aItem.LHSItr.mySymbol()+"L", "LHSItr", "color=gold")}
+        GD.count <- GD.count + 1
+    }
+}
