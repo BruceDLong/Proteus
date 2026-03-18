@@ -730,7 +730,7 @@ model AItem{
     flag: notFirstVisit
     flag: candidateForLast
     flag: skipRHSUsageInPAI  // With unordered lists, we get the RHS another way.
-    me int:  step
+    me int: step
     me int: pendingTasks
     FlexNum: sizeToCopy
     me List<our AItem>: subscribers
@@ -1621,6 +1621,7 @@ vSpec.init(agent.getLocaleBaseName())
                 }
             }else{logStr <+- ":EXIT_"+toString(pov.predecessors.size())+"_PREDS"; pov <- NULL}
             //log(logStr)
+
         }
     }
     void: cleanUpInfon(our AItem: aItem) <- {
@@ -2051,7 +2052,7 @@ vSpec.init(agent.getLocaleBaseName())
     void: callPropagate(their Agenda: agenda, our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque, their int:waitState) <- {
         our AItem: nextAItem <- propagate(agenda, aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque, waitState)
         if(aItem.pendingTasks==0){fulfillSubscriptions(agenda, aItem)}
-        if(nextAItem){agenda.addAItemToAgenda(nextAItem)}
+        if(nextAItem){agenda.addAItemToAgenda(nextAItem)}   // callPropagate
     }
 
     bool: addQueuedAItemsToAgenda(their Agenda: agenda) <- {
@@ -2070,12 +2071,64 @@ vSpec.init(agent.getLocaleBaseName())
         return(false)
     }
     
+
+
+// There is a lot of experimental stuff here. 
+// One thing to try is to centralizeg pendingTasks in addAItemTOAgenda() and remove the 'notFirstTime' hack.
+// OR replace the notFirstTIme hack with initializing aItem's pendingTask to 1 instead of 0.
     void: propagateProxy(their Agenda: agenda, our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque) <- {
         if (true){ // CHANGE TO 'if(false)' TO DISABLE PROPAGATE PROXY QUEUEING
-            our PropagateRecord:: propRec{aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque}
-            agenda.propagationsTodo.prepend(propRec)  // CHANGE TO PREPEND
-        } else { 
+            // We need to calculate whether pendingTasks will be 0 after the propagate, 
+            // If so, it is safe to fulfill subscriptions before the call to propagate
+
+            me int: prePTasks <- aItem.pendingTasks
+            me bool: lhsItrBeginning <- (aItem.LHSItr != NULL and LHSPov === aItem.LHSItr.topPOV)
+            me bool: hasDots <- aItem.LHS_item.pItem.value.tailUnfinished
+            me bool: CrntInfIsLST <- (aItem.LHS_item.pItem.value.fType==LST)
+// NOTE: The commented out part of the next line also seems to work but may be semantically unclear.
+            me bool: doPreFFS// <- ((aItem.pendingTasks == 0 and !CrntInfIsLST) or aItem.LHS_item.pItem.doReply)
+
+            our infon: subProxy <- aItem.LHS_item.pItem // Because the relevant subscriber will have the same infon as aItem in this narrow case.
+            me bool: infIsLST <- (subProxy.value.fType==LST)
+me bool: listClosed <- (subProxy.streamState == notParsing or subProxy.streamState == parseDone)
+// print("\nproxy type=", toString(subProxy.value.fType),
+//       " doReply=", toString(subProxy.doReply),
+//       " streamState=", toString(subProxy.streamState),
+//       " infon=", toString(subProxy))
+//if(subProxy.doReply){print("\nsubProxy.doReply is true for: ", toString(aItem))}
+doPreFFS <- subProxy.doReply and (!infIsLST or listClosed) // or (infIsLST and (subProxy.streamState==notParsing or subProxy.streamState==parseDone)))
+            if(doPreFFS){
+                print("\nFFS before propagateProxy: ", toString(aItem))
+                fulfillSubscriptions(agenda, aItem)
+            //}
+                our PropagateRecord:: propRec{aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque}
+                agenda.propagationsTodo.prepend(propRec)  // CHANGE TO PREPEND
+            } else {
+                callPropagate(agenda, aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque, NULL)
+            }
+        } else {
+            me int: prePTasks <- aItem.pendingTasks
+            me int: numSubs <- aItem.subscribers.size()
+me bool: lhsItrBeginning <- (aItem.LHSItr != NULL and LHSPov === aItem.LHSItr.topPOV)
+me bool: hasDots <- aItem.LHS_item.pItem.value.tailUnfinished
+me bool: CrntInfIsLST <- (aItem.LHS_item.pItem.value.fType==LST)
+me bool: doPreFFS <- (aItem.pendingTasks == 0 and !(lhsItrBeginning and CrntInfIsLST))
+our infon: subProxy <- aItem.LHS_item.pItem // Because the relevant subscriber will have the same infon as aItem in this narrow case.
+me bool: infIsLST <- (subProxy.value.fType==LST)
+doPreFFS <- (!infIsLST) // or (infIsLST and (subProxy.streamState==notParsing or subProxy.streamState==parseDone)))
+//if(doPreFFS){fulfillSubscriptions(agenda, aItem)}       
+            // me string: firstSubStr
+            // if(numSubs>0){
+            //     our AItem: firstSub <- aItem.subscribers.first()
+            //     firstSubStr <- toString(firstSub)
+            // }
+            // else{firstSubStr <- "N/A"}
             callPropagate(agenda, aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque, NULL)
+            me int: postPTasks <- aItem.pendingTasks
+            log("PROP_PROXY \t:  prePTasks:"+toString(prePTasks)+" postPTasks:"+toString(postPTasks)
+                    + "  lhsItrBeginning:"+toString(lhsItrBeginning)+" CrntInfIsLST:"+toString(CrntInfIsLST)
+                     + "  doPreFFS:"+toString(doPreFFS)
+                    + "\t :: \t" + toString(aItem))
         }
     }
 
@@ -2164,6 +2217,7 @@ vSpec.init(agent.getLocaleBaseName())
             aItem.pendingTasks <-- 1
             //:l/PAI/PT::logSeg(" --"+aItem.mySymbol()+"_PT:e="+toString(aItem.pendingTasks))
         }
+        
         me string: endBracket<-""
         me int: count <- 0
         while(continueLoop){
@@ -2238,10 +2292,11 @@ aItem.LHS_item.pItem.streamState <- parseStarted
 
                             our AItem: aParent <- aItem.parent
                             if(aParent != NULL){
+                              //  print("\naParent pendingTask:", toString(aParent.pendingTasks))
                                 aParent.pendingTasks <-- 1
                                 if(aParent.pendingTasks == 0){ //:l/PAI::logSeg(" ADP:"+aParent.mySymbol())
                                     aParent.pendingTasks <+- 1
-                                    agenda.addAItemToAgenda(aParent)  // Restart merge task
+                                    agenda.addAItemToAgenda(aParent)  // Restart parent task
                                 } else {
                                     //:l/PAI/PT::logSeg(" --"+aParent.mySymbol()+"_PT:f="+toString(aParent.pendingTasks))
                                 }
@@ -2470,6 +2525,13 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                                 }
                                 //:l/PAI::logSeg("]")
                             } else {  // CI is FunctionLike
+                    // Intermittant bug!!! srcPOV isn't attached to anything so it eventually gets Garbage collected
+                    //   It leaves a their pointer because POV.pParent is not an 'our' pointer. 
+                    //   This causes (rare) random crashes later when the garbage collector deletes the srcPOV
+                    //   But it's the result of normalizing still contains a pPointer to the srcPOV.
+                    //   This manefests in infonList in getFirst() and getNext() where pParent is accessed and 
+                    //   sometimes points to the now deleted srcPOV.
+                    // Fixing will require a pretty indepth analysis of what is happening and what the pParent SHOULD be.
                                 our POV:: srcPOV{25}; srcPOV.pItem <- innr
                                 our AItem: PIVA <- processInfonViaAgenda(agenda, srcPOV, aItem, NULL, aItem.priority, srcItsFunc)
                                 if(PIVA){
@@ -2583,7 +2645,12 @@ aItem.LHS_item.pItem.streamState <- parseStarted
             processAgendaItem(agenda, aItem, 0)
             if(validateAitems){validator.closeRecord(recordKey)}
 
-            addQueuedAItemsToAgenda(agenda)
+// These lines should NOT be here. But It is sometimes useful for experimental diagnostics.
+// That is because a new aItem should be enqueued every single time through ProcessAgendaItem except the last time.
+// So it should never be empty early.
+// Remove them eventually when streaming works well enough.
+//  if(agenda.AItems.isEmpty()){addQueuedAItemsToAgenda(agenda)}
+//  else{addQueuedAItemsToAgenda(agenda)}
 
             if(makeDebugGraph){ GraphNode_postPAI(aItem, grapherData)}
 
