@@ -69,7 +69,7 @@ codedog Proteus.Lib.dog
 ./TestProteus
 
 # Compile and run the C++ test harness separately
-g++ -o infonTest infonTest.cpp && ./infonTest
+g++ -g -std=c++11 infonTest.cpp -o infonTest && ./infonTest
 ```
 
 ## Project Structure
