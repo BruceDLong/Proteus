@@ -2,6 +2,29 @@
 
 **Proteus** is an information-theoretic programming language and inference engine built around the concept of *infons* -- structured information units that can represent numbers, strings, lists, and complex nested data. Proteus aims to bridge programming and natural language by combining a formal data model with natural language understanding capabilities.
 
+## Why Proteus?
+
+Most programming languages treat data and natural language as fundamentally separate concerns. Proteus takes a different approach: its core data structure -- the *infon* -- ties formal types directly to vocabulary, so a data schema is also a semantic definition. A field named `color` isn't just a label; it carries the linguistic meaning and type constraints of the English word "color."
+
+This matters when you need:
+
+- **Executable specifications** -- Business rules, compliance policies, or domain models written in near-English that a machine can also reason about. No separate "requirements doc" that drifts from the implementation.
+- **Knowledge bases with built-in inference** -- Define facts, constraints, and relationships as infons. The agenda-driven engine normalizes and merges them automatically, resolving ambiguities without hand-coded logic.
+- **Semantic data modeling** -- Schema definitions where types are grounded in vocabulary, not arbitrary strings. Type-checking catches semantic mismatches, not just structural ones.
+- **Natural language interfaces** -- Parse English input into typed infon structures using the built-in translator, then run inference over the result.
+
+Proteus is not a general-purpose application language. It is a **knowledge representation and inference engine** designed for problems where the gap between human meaning and machine processing is the core challenge.
+
+## Use Cases
+
+**Knowledge Engineering** -- Build ontologies where facts are queryable and composable. The `bike.pr` example defines a bicycle as a composition of typed parts (`frame`, `seat`, `chain`), each with inherited properties from a base `thing` type. The engine can infer relationships and validate consistency across the model.
+
+**Domain-Specific Language Definition** -- The `toyLang.pr` example defines a grammar (identifiers, comparison operators, loops, statements) entirely in Proteus syntax. The inference engine handles parsing and type-checking for the defined language, making Proteus a meta-tool for building other languages.
+
+**Natural Language Processing Research** -- The English translator includes thousands of inflection rules (plurals, verb forms, possessives, irregular cases). Researchers can test theories about how formal semantics and natural language interact using a system that treats both as first-class concerns.
+
+**Business Rules and Compliance** -- Encode rules in a form that is both human-auditable and machine-executable. Because infons preserve linguistic meaning alongside formal structure, rule bases can be reviewed by domain experts who don't need to read code.
+
 ## Key Features
 
 - **Infon-based data model** -- Programs are expressed as structured information ("infons") that support numbers, strings, lists, typed fields, and nested structures.
