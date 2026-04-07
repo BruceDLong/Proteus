@@ -17,9 +17,9 @@ Proteus is not a general-purpose application language. It is a **knowledge repre
 
 ## Use Cases
 
-**Knowledge Engineering** -- Build ontologies where facts are queryable and composable. The `bike.pr` example defines a bicycle as a composition of typed parts (`frame`, `seat`, `chain`), each with inherited properties from a base `thing` type. The engine can infer relationships and validate consistency across the model.
+**Knowledge Engineering** -- Build ontologies where facts are queryable and composable. The `Resources/bike.pr` example defines a bicycle as a composition of typed parts (`frame`, `seat`, `chain`), each with inherited properties from a base `thing` type. The engine can infer relationships and validate consistency across the model.
 
-**Domain-Specific Language Definition** -- The `toyLang.pr` example defines a grammar (identifiers, comparison operators, loops, statements) entirely in Proteus syntax. The inference engine handles parsing and type-checking for the defined language, making Proteus a meta-tool for building other languages.
+**Domain-Specific Language Definition** -- The `Resources/toyLang.pr` example defines a grammar (identifiers, comparison operators, loops, statements) entirely in Proteus syntax. The inference engine handles parsing and type-checking for the defined language, making Proteus a meta-tool for building other languages.
 
 **Natural Language Processing Research** -- The English translator includes thousands of inflection rules (plurals, verb forms, possessives, irregular cases). Researchers can test theories about how formal semantics and natural language interact using a system that treats both as first-class concerns.
 
@@ -163,6 +163,6 @@ Proteus is under active development (version **0.8**). Current work includes:
 
 All Rights Reserved.
 
-> "This file is part of the Proteus Language suite. All Rights Reserved."
+> "This file is part of the "Proteus Language suite" All Rights Reserved."
 
 Copyright (c) 2015-2023 Bruce Long
