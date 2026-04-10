@@ -100,7 +100,7 @@ model infon{
     mode[ipNoIntersect, ipGetLast, ipGetFirst, ipGetMarked]: intersectPos
     mode[apNoArgs, apArgIsFirstItem, apArgIsLastItem]: argPos
     flag: argsOnLeft
-    mode[cNone, cThis, cWorld, cContext, cUser, cArgs, cVars]:  cursorMode
+    mode[cNone, cThis, cWorld, cContext, cUser, cArgs, cVars, cPrev, cNext]:  cursorMode
     mode[gUnset, gAbstract, gConcrete]: generality
     mode[umAssert, umQuestion, umCommand]: useMode
     our pureInfon: infSize
@@ -718,6 +718,7 @@ model AItem{
     mode[rsInfon, rsMerge, rsIntersect, rsPure]: ruleSet
     our POV: LHS_item
     our POV: RHS
+    our POV: cursorAnchor
     our infItr: LHSItr
     our infItr: RHSItr
     me int64: priority
@@ -890,6 +891,7 @@ struct WorldManager{
             subscriber.pendingTasks <+- 1
             //:l/PAI/PT::logSeg(" ++"+subscriber.mySymbol()+"_PT:a="+toString(subscriber.pendingTasks))
             newAItem.indentLvl <- subscriber.indentLvl+1
+            newAItem.cursorAnchor <- subscriber.cursorAnchor
         }
         if(aParent != NULL){
             aParent.taskEnqueued <- true
@@ -899,6 +901,7 @@ struct WorldManager{
                 //:l/PAI/PT::logSeg(" ++"+aParent.mySymbol()+"_PT:b="+toString(aParent.pendingTasks))
             }
             newAItem.indentLvl <- aParent.indentLvl+1
+            newAItem.cursorAnchor <- aParent.cursorAnchor
         }else{
             //log("Parent_NULL; subscriber:"+subscriber.mySymbol() +"  yields:"+newAItem.mySymbol())
             //if(subscriber==NULL){log("// Proteus NOTICE: PIVA Parent_NULL; subscriber:"+subscriber.mySymbol() +"  yields:"+newAItem.mySymbol())}
@@ -920,6 +923,7 @@ struct WorldManager{
             subscriber.pendingTasks <+- 1
             //:l/PAI/PT::logSeg(" ++"+subscriber.mySymbol()+"_PT:c="+toString(subscriber.pendingTasks))
             newAItem.indentLvl <- subscriber.indentLvl+1
+            newAItem.cursorAnchor <- subscriber.cursorAnchor
         }
         if(aParent != NULL){
             newAItem.parent <- aParent
@@ -949,6 +953,7 @@ struct WorldManager{
             subscriber.pendingTasks <+- 1
             //:l/PAI/PT::logSeg(" ++"+subscriber.mySymbol()+"_PT:d="+toString(subscriber.pendingTasks))
             newAItem.indentLvl <- subscriber.indentLvl+1
+            newAItem.cursorAnchor <- subscriber.cursorAnchor
             if(subscriber.parent!=NULL){
                 newAItem.LHSItr <- subscriber.parent.LHSItr
                 newAItem.RHSItr <- subscriber.parent.RHSItr
@@ -1153,6 +1158,7 @@ vSpec.init(agent.getLocaleBaseName())
     me bool: lookUpCursorRules(our AItem: aItem) <- {
         our infon: CI        <- aItem.LHS_item.pItem
         our infon: newTop    <- NULL
+        our POV:   anchor    <- aItem.cursorAnchor
         me bool: changeMade  <- false
         if(CI.infMode==newCursor) {
             //:l/PAI::logSeg(" %*")
@@ -1160,9 +1166,37 @@ vSpec.init(agent.getLocaleBaseName())
                 case cWorld:  {newTop <- agent.world}
                 case cContext:{newTop <- agent.context.topicHistory; aItem.dontProcess<-true}
                 case cUser:   {newTop <- agent.user}
-                case cThis:   {newTop <- CI.thisPtr}
                 case cArgs:   {newTop <- aItem.LHS_item.pParent.pItem.value.items.first()}
                 case cVars:   {} //{newTop <- next}
+                case cThis:   {
+                    if(anchor!=NULL){newTop <- anchor.pItem}
+                    else            {newTop <- CI.thisPtr}
+                    print("Anchor: "+toString(anchor.pItem))
+                    print("CURSOR_THIS: "+toString(newTop))
+                }
+                case cPrev: {
+                    if(anchor==NULL){
+                        print("CURSOR_PREV: anchor is NULL")
+                    }else if(anchor.prev==NULL){
+                        print("CURSOR_PREV: anchor exists but anchor.prev is NULL. anchor item: "+toString(anchor.pItem))
+                    }else{
+                        print("CURSOR_PREV via anchor. anchor item: "+toString(anchor.pItem)
+                            +" prev item: "+toString(anchor.prev.pItem))
+                        newTop <- anchor.prev.pItem
+                    }
+
+                    if(newTop==NULL){
+                        if(aItem.LHS_item.prev!=NULL){
+                            newTop <- aItem.LHS_item.prev.pItem
+                            print("CURSOR_PREV via LHS_item: "+toString(newTop))
+                        }else{
+                            print("CURSOR_PREV: No previous item!")
+                        }
+                    }
+                }
+                case cNext:   {
+                    if(anchor!=NULL and anchor.next!=NULL){newTop <- anchor.next.pItem}
+                }
             }
             if(newTop!=NULL) {
                 our PartPath: partRef   <- CI.partRef
@@ -2366,6 +2400,7 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                         our AItem: PIVA <- processInfonViaAgenda(agenda, aItem.RHS, aItem, NULL, aItem.priority, srcMrg0)
                         if(PIVA){ //:l/PAI::logSeg(" RHS_PIVA:"+PIVA.mySymbol())
                             addDebugEvent("\nRegisterPIVA to norm RHS "+aItem.RHS.pItem.mySymbol()+":"+toString(aItem.RHS.pItem)+"\n", aItem.RHS.pItem)
+                            PIVA.cursorAnchor <- aItem.LHS_item
                             agenda.addAItemToAgenda(PIVA)
                         }
                         aItem.step <- 1
