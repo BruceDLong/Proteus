@@ -106,6 +106,10 @@ model infon{
     mode[umAssert, umQuestion, umCommand]: useMode
     our pureInfon: infSize
     our pureInfon: value
+
+    our infon: copySource // What infon was this a copy of? Definition or listSpec
+    mode[cstNone, cstDefinition, cstListSpec]: copySourceType // What kind ot copy was this? E.g. a copy of a definition
+    
     me OrderMode: orderMode
     flag: isNormed
     flag: doCursorLookup
@@ -394,6 +398,7 @@ model infon{
         withEach item in copied{if(item===this){return()}}
         copied.append(self)
         to.flags      <- flags
+        to.copySource <- copySource
         to.doReply    <- false
         to.itmMode    <- itmMode
         to.infMode    <- infMode
@@ -568,6 +573,7 @@ model infon{
         infSize.clear()
         value.clear()
         resetFlagsAndModes()
+        copySource <- NULL
         funcArgs   <- NULL
         dotPath    <- NULL
         innr       <- NULL
@@ -1089,6 +1095,8 @@ vSpec.init(agent.getLocaleBaseName())
                     me List<our PartPath>: parts <- CI.parts
                     our PartPath: partRef <- CI.partRef
                     infModel.copyAsTypeTo(CI, false, false)
+                    CI.copySource <- infModel
+                    CI.copySourceType <- cstDefinition
                     CI.type    <- CIsType
                     CI.asNot   <- asNot
                     CI.parts   <- parts
@@ -1161,11 +1169,38 @@ vSpec.init(agent.getLocaleBaseName())
         }
         return(stopAndWait)
     }
+    ////////////
+    // Support for evaluating %, %prev and %next
+    our infon: getSelfInfon(our POV: startAnchor,our POV: cursorAnchor) <- {
+        their POV: anchor <- startAnchor
+        if(cursorAnchor!=NULL){anchor <- cursorAnchor}
+        while(anchor!=NULL and anchor.pItem.copySourceType!=cstDefinition){
+            anchor <- anchor.pParent
+        }
+        if(anchor!=NULL and anchor.pItem!=NULL){
+            return(anchor.pItem)
+        }
+        return(NULL)
+    }
+
+    their POV: getRelativeAnchor(our POV: startAnchor,our POV: cursorAnchor) <- {
+        their POV: anchor <- startAnchor
+        if(cursorAnchor!=NULL){anchor <- cursorAnchor print("CURSOR: Starting anchor for relative search:"+toString(anchor.pItem)+"  cst:"+toString(anchor.pItem.copySourceType)+"\n")}
+        while(anchor.pParent!=NULL and anchor.pItem.copySourceType!=cstListSpec){
+            print("     -getRelAnchor: "+toString(anchor.pItem)+"  cst:"+toString(anchor.pItem.copySourceType)+"\n")
+            anchor <- anchor.pParent
+        }
+        if(anchor!=NULL){
+            print("-ANK: "+toString(anchor.pItem),"\n")
+            return(anchor)
+        }
+        print("\nCURSOR: No anchor found! Returning NULL\n")
+    return(NULL)
+    }
+
     me bool: lookUpCursorRules(our AItem: aItem) <- {
         our infon: CI        <- aItem.LHS_item.pItem
         our infon: newTop    <- NULL
-        our POV:   anchor    <- aItem.cursorAnchor
-        if(anchor==NULL){anchor <- aItem.LHS_item}
         me bool: changeMade  <- false
         if(CI.infMode==newCursor) {
             //:l/PAI::logSeg(" %*")
@@ -1175,24 +1210,27 @@ vSpec.init(agent.getLocaleBaseName())
                 case cUser:   {newTop <- agent.user}
                 case cArgs:   {newTop <- aItem.LHS_item.pParent.pItem.value.items.first()}
                 case cVars:   {} //{newTop <- next}
-                case cThis:   {
-                    if(anchor!=NULL){newTop <- anchor.pItem}
-                    else            {newTop <- CI.thisPtr}
-                    print("Anchor: "+toString(anchor.pItem))
-                    print("CURSOR_THIS: "+toString(newTop))
-                }
+                case cThis:   {newTop <- getSelfInfon(aItem.LHS_item, aItem.cursorAnchor)}
                 case cPrev: {
-                    if(anchor!=NULL and anchor.prev!=NULL){newTop <- anchor.prev.pItem}
+                    their POV: anchor <- getRelativeAnchor(aItem.LHS_item, aItem.cursorAnchor)
+                    if(anchor!=NULL and anchor.prev!=NULL){
+                        print("-ANK: "+toString(anchor.pItem),"\n")
+                        newTop <- anchor.prev.pItem
+                        }
                     else {
                         CI.value.undefined <- true
-                        print("CURSOR_PREV: No anchor for prev! Setting undefined flag on CI\n")
+                        print("\nCURSOR_PREV: No anchor for prev! Setting undefined flag on CI\n")
                     }
                 }
-                case cNext:   {
-                    if(anchor!=NULL and anchor.next!=NULL){newTop <- anchor.next.pItem}
+                case cNext: {
+                    their POV: anchor <- getRelativeAnchor(aItem.LHS_item, aItem.cursorAnchor)
+                    if(anchor!=NULL and anchor.next!=NULL){
+                        print("-ANK: "+toString(anchor.pItem),"\n")
+                        newTop <- anchor.next.pItem
+                        }
                     else {
                         CI.value.undefined <- true
-                        print("CURSOR_NEXT: No anchor for next! Setting undefined flag on CI\n")
+                        print("\nCURSOR_NEXT: No anchor for next! Setting undefined flag on CI\n")
                     }
                 }
             }
@@ -1431,6 +1469,7 @@ vSpec.init(agent.getLocaleBaseName())
     me bool: JoinIfConcat(our POV: pov) <- {
         me bool: changeMade  <- false
         if(pov.pParent!=NULL and (pov.pParent.pItem.value.format==fConcat)){
+        print("\nprocessConcat: "+toString(pov.pItem)+"  (",pov.pItem.value.undefined,")\n")
             if(pov.isFirst()){ // Set Parent's type
             } else {
                 our POV: prev <- pov.prev
@@ -2220,6 +2259,8 @@ doPreFFS <- (!infIsLST) // or (infIsLST and (subProxy.streamState==notParsing or
                             if(RHS_item.isFromDefn){ // Create the field. Optimize: Only do this when needed; COW
                                 our infon:: newField
                                 newField <deep- RHS_item
+                                newField.copySource <- RHS_item
+                                newField.copySourceType <- cstDefinition
                                 our POV: newPov <- LHS_item.value.items.append(newField, RHS_pov.isSubItm, 444)
                                 LHS_item.infSize.num <+- 1
                               //  S <+- "    Creating field: '"+fieldName+"' = "+toString(RHS_item)+"\n"
@@ -2396,6 +2437,9 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                         }
                     }
                     if(aItem.step==0){ //:l/PAI::logSeg(" MG0")
+                    if(aItem.RHS.pItem.value.format==fConcat){
+                        print("\nAdding RHS" + toString(aItem.RHS.pItem) + aItem.RHS.pItem.mySymbol()+"\n")
+                    }
                         our AItem: PIVA <- processInfonViaAgenda(agenda, aItem.RHS, aItem, NULL, aItem.priority, srcMrg0)
                         if(PIVA){ //:l/PAI::logSeg(" RHS_PIVA:"+PIVA.mySymbol())
                             addDebugEvent("\nRegisterPIVA to norm RHS "+aItem.RHS.pItem.mySymbol()+":"+toString(aItem.RHS.pItem)+"\n", aItem.RHS.pItem)
