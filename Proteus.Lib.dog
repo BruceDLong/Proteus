@@ -1203,10 +1203,37 @@ vSpec.init(agent.getLocaleBaseName())
     return(NULL)
     }
 
+    me bool: infonContainsNestedCursorLookup(their infon: infn, their List<their infon>: seen) <- {
+        if(infn==NULL){return(false)}
+        withEach seenInfn in seen{
+            if(seenInfn===infn){return(false)}
+        }
+        seen.append(infn)
+        if(infn.infMode==newCursor or infn.cursorMode!=cNone){return(true)}
+        our POV: child <- infn.value.items.head
+        while(child!=NULL){
+            if(infonContainsNestedCursorLookup(child.pItem, seen)){return(true)}
+            child <- child.next
+        }
+        withEach wrkPov in infn.wrkList{
+            if(infonContainsNestedCursorLookup(wrkPov.pItem, seen)){return(true)}
+        }
+        if(infonContainsNestedCursorLookup(infn.funcArgs, seen)){return(true)}
+        if(infonContainsNestedCursorLookup(infn.innr, seen)){return(true)}
+        return(false)
+    }
+
+    me bool: RHSNeedsNestedCursorNormalization(their infon: infn) <- {
+        // TODO: Returning true should be valid but it causes a lot of test fails.
+        me List<their infon>: seen
+        return(infonContainsNestedCursorLookup(infn, seen))
+    }
+
     me bool: lookUpCursorRules(our AItem: aItem) <- {
         our infon: CI        <- aItem.LHS_item.pItem
         our infon: newTop    <- NULL
         me bool: changeMade  <- false
+        me bool: detachCursorResult <- false
         if(CI.infMode==newCursor) {
             //:l/PAI::logSeg(" %*")
             switch(CI.cursorMode){
@@ -1221,6 +1248,7 @@ vSpec.init(agent.getLocaleBaseName())
                     if(anchor!=NULL and anchor.prev!=NULL){
                         print("-ANK: "+toString(anchor.pItem),"\n")
                         newTop <- anchor.prev.pItem
+                        detachCursorResult <- true
                         }
                     else {
                         CI.value.undefined <- true
@@ -1232,6 +1260,7 @@ vSpec.init(agent.getLocaleBaseName())
                     if(anchor!=NULL and anchor.next!=NULL){
                         print("-ANK: "+toString(anchor.pItem),"\n")
                         newTop <- anchor.next.pItem
+                        detachCursorResult <- true
                         }
                     else {
                         CI.value.undefined <- true
@@ -1245,8 +1274,14 @@ vSpec.init(agent.getLocaleBaseName())
                 me uint64: originID     <- CI.originID
                 me uint64: infCharPos   <- CI.infCharPos
                 me uint64: itmMode      <- CI.itmMode
-                // Debugging? more items from CI may need to go here.
-                CI <deep- newTop
+                if(detachCursorResult){
+                    our infon:: detachedTop
+                    newTop.copyAsTypeTo(detachedTop, false, false)
+                    CI <deep- detachedTop
+                }else{
+                    // Debugging? more items from CI may need to go here.
+                    CI <deep- newTop
+                }
                 CI.partRef    <- partRef
                 CI.doReply    <- doReply
                 CI.originID   <- originID
@@ -2433,7 +2468,8 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                                 our infon: RHS <- aItem.RHS.pItem
                                 fleshOutWord(agent, RHS)
                                 if((RHS.type==NULL or RHS.itmMode==mWordDefn or RHS.isFromDefn)
-                                   and RHS.cursorMode==cNone and RHS.value.format!=fConcat){
+                                   and RHS.cursorMode==cNone and RHS.value.format!=fConcat
+                                   and !RHSNeedsNestedCursorNormalization(RHS)){
                                     //:l/PAI::endBracket<-"{"
                                     logSeg(":setStep1:a")
                                     aItem.step <- 1;
@@ -2448,7 +2484,9 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                         our AItem: PIVA <- processInfonViaAgenda(agenda, aItem.RHS, aItem, NULL, aItem.priority, srcMrg0)
                         if(PIVA){ //:l/PAI::logSeg(" RHS_PIVA:"+PIVA.mySymbol())
                             addDebugEvent("\nRegisterPIVA to norm RHS "+aItem.RHS.pItem.mySymbol()+":"+toString(aItem.RHS.pItem)+"\n", aItem.RHS.pItem)
-                            PIVA.cursorAnchor <- aItem.LHS_item
+                            // Preserve the outer relative-cursor context when normalizing nested RHS.
+                            if(aItem.cursorAnchor!=NULL){PIVA.cursorAnchor <- aItem.cursorAnchor}
+                            else{PIVA.cursorAnchor <- aItem.LHS_item}
                             agenda.addAItemToAgenda(PIVA)
                         }
                         aItem.step <- 1
