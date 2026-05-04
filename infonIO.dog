@@ -43,6 +43,10 @@ struct ProteusParser{
     their strBuf: text
     me string: errorMesg
     me bool: errorSet
+    me int64: errAbsPos
+    me int64: errLineNum
+    me int64: errCharPos
+    me int64: errorSuppressDepth
 
     void: notifyStreamState(our infon: infn, me int: stateMrk) <- {
         //log("   NOTIFY:"+infn.mySymbol()+" = "+shortedStr(toString(infn),120)+"  STATE:"+toString(stateMrk))
@@ -53,14 +57,61 @@ struct ProteusParser{
         streamingNormLock.notifyAll()
     }
 
-    void: setError(me string: errMsg) <- {
+    void: setErrorPos(me int64: errPos) <- {
+        errAbsPos  <- errPos
+        errLineNum <- 1
+        errCharPos <- 1
+        if(errPos < 0){return()}
+        their strInnerBuf: bufWithChar <- text.findInrBufWithPos(errPos)
+        if(bufWithChar == NULL){return()}
+        me int64: lastLinePos <- -1
+        if(bufWithChar.prev){
+            errLineNum <- bufWithChar.prev.endingLineNumber + 1
+        }
+        me int: bufSize <- bufWithChar.buf.size()
+        withEach idx in range 0 .. bufSize {
+            if(bufWithChar.myOffset + idx > errPos){
+                break()
+            }
+            if(bufWithChar.buf[idx] == "\n"){
+                errLineNum <+- 1
+                lastLinePos <- idx
+            }
+        }
+        errCharPos <- errPos-(lastLinePos+bufWithChar.myOffset)
+    }
+    me string: formattedError(me bool: includeStreamName <- true) <- {
+        me string: msg <- "Parse error"
+        if(errAbsPos >= 0){
+            msg <- msg+" at "
+            if(includeStreamName and text!=NULL and text.streamName!=""){
+                msg <- msg+text.streamName+":"
+            }
+            msg <- msg+toString(errLineNum)+":"+toString(errCharPos)
+        }
+        if(errorMesg != ""){
+            msg <- msg+": "+errorMesg
+        }
+        return(msg)
+    }
+    void: setError(me string: errMsg, me int64: errPos <- -1) <- {
+        if(errorSuppressDepth > 0){return()}
+        if(errorSet){return()}
         errorSet <- true
         errorMesg <- errMsg
-        print("ERROR:"+errorMesg+".\n")
+        setErrorPos(errPos)
+        if(CORE!=NULL){
+            CORE.handleSyntaxError(originID, formattedError(true))
+        } else {
+            print(formattedError(true)+"\n")
+        }
     }
     void: clearError() <- {
         errorSet <- false
         errorMesg <- ""
+        errAbsPos <- -1
+        errLineNum <- 0
+        errCharPos <- 0
     }
     me string: makeStr(me int64: startPos, me int64: endPos) <- {
         me string: S <- ""
@@ -507,7 +558,7 @@ struct ProteusParser{
                 case "c":{if(statusOK(preChkStr(cPos, "ctx"), status))  {return(status)}}
                 case "a":{if(statusOK(preChkStr(cPos, "args"), status)) {return(status)}}
                 case "v":{if(statusOK(preChkStr(cPos, "vars"), status)) {return(status)}}
-                default:{setError("Invalid %tag ('"+tag+"')"); return(syntax_error)}
+                default:{setError("Invalid %tag '%"+tag+"'", pos); return(syntax_error)}
             }
         } else { //*_+...
             me bool: requirePlusMinusSign <- false
@@ -635,15 +686,17 @@ struct ProteusParser{
                 }
                 chkStr(cPos,">")
             }
-            if(peekWSC(cPos)!="="){setError("No description found in the definition of "+infn.definedWord.defWord)}
+            me int64: eqPos <- cPos
+            eqPos <+- text.scrapeWSC(eqPos)
+            if(text.at(eqPos)!="="){setError("Expected '=' in the definition of "+infn.definedWord.defWord, eqPos)}
             else{
-                cPos <+- 1
+                cPos <- eqPos + 1
                 our infon:: defMeaning
                 defMeaning.originID <- infn.originID
                 cPos <+- parseInfon(defMeaning, cPos, true, true, pcDefn)
                 infn.funcArgs <- defMeaning
             }
-        } else{setError("Invalid unicode identifier at position:"+toString(cPos))}
+        } else{setError("Expected a word name after '@'", cPos)}
 
         if(errorSet){return(-1)}
         return(cPos-pos)
@@ -657,7 +710,12 @@ struct ProteusParser{
         // Read optional ~size
         if(chkStrWSC(cPos,"~")){
             our pureInfon:: size
-            cPos <+- parsePureInfon(size, cPos, NULL, isFromDefn, pcListSpec)
+            me int64: sizeLen <- parsePureInfon(size, cPos, NULL, isFromDefn, pcListSpec)
+            if(sizeLen <= 0){
+                if(!errorSet){setError("Expected a list size after '~'", cPos)}
+                return(-1)
+            }
+            cPos <+- sizeLen
             if(size.fType!=NUM){setError("Size of infons must be numeric")}
             pureInfn.size <- size
         }
@@ -667,7 +725,10 @@ struct ProteusParser{
         me uint64: prevPos <- cPos
         our infon:: item
         item.originID <- parent.originID
-        if(chk(parseInfon(item, cPos, true, isFromDefn, pcListSpec), cPos,len)){
+        errorSuppressDepth <- errorSuppressDepth + 1
+        me int64: itemLen <- parseInfon(item, cPos, true, isFromDefn, pcListSpec)
+        errorSuppressDepth <- errorSuppressDepth - 1
+        if(chk(itemLen, cPos,len)){
             infonFound <- true
         }
         if(peekWSC(cPos)=="|"){
@@ -713,7 +774,7 @@ struct ProteusParser{
                 trimWS(infn.includeSpec)
                 notifyStreamState(infn, parseDone)
             } else{
-                setError("Invalid %INSERT specification")
+                setError("Expected a resource name after %INSERT", cPos)
                 return(-1)
             }
         } else if(chkStr(cPos, "%PROTEUS")){
@@ -728,7 +789,7 @@ struct ProteusParser{
             if(parent.value.intersectPosParse == ipSquareBrackets){
                 if(chkPeek(cPos, peek, "<")){
                     peek <- peekWSC(cPos)
-                    if(intersectGetMarked == true){setError("Multiple <...> in [...] not supported yet")}
+                    if(intersectGetMarked == true){setError("Multiple <...> selectors in one [...] list are not supported", cPos-1)}
                     else{
                         parent.intersectPos <- ipGetMarked
                         parent.intersectMarkedRet <- infn
@@ -761,7 +822,7 @@ struct ProteusParser{
             if(intersectGetMarked){
                 peek <- peekWSC(cPos)
                 if(!chkPeek(cPos, peek, ">")){
-                  setError("Expected '>'")
+                  setError("Expected '>' to close the marked selector", cPos)
                 }
             }
         }
@@ -841,7 +902,9 @@ struct ProteusParser{
             else if(peek=="("){pureInfn.format <- fConcat;  pureInfn.intersectPosParse<-ipDefault;        ender<-tmp[2]}
 
             if(chk(parseListInfo(pureInfn, cPos, parent, isFromDefn), cPos,len)){
-            } else {clearError()}
+            } else if(errorSet){
+                return(-1)
+            }
 
             me int64: count<-0
             while(peekWSC(cPos) != ender){
@@ -863,9 +926,9 @@ struct ProteusParser{
                     log("Checking separator at pos " + toString(cPos) + ": " + peek)
                     if(chkPeek(cPos, peek, ",")){
                         log("Found ',' separator at pos " + toString(cPos) + "\n")
-                        if(ender!="}"){setError("',' is only allowed in {...} lists.")}
+                        if(ender!="}"){setError("',' is only allowed in {...} lists", cPos-1)}
                         if(parent.separator==seprNone){parent.separator <- seprComma; parent.orderMode <- uUnordered}
-                        else if(parent.separator!=seprComma){setError("Separator must remain ','")}
+                        else if(parent.separator!=seprComma){setError("List separators must stay consistent", cPos-1)}
                         // // The following is for [ 1 | 2 | 3 ] syntactic sugar.
                         //else if(chkPeek(cPos, peek, "|")){
                         //    if(ender!="]"){setError("'|' as a separator is only allowed in [...] lists.")}
@@ -876,7 +939,7 @@ struct ProteusParser{
                 } else {
                     if(itemLen < 0){return(-1)}
                     if(waitingForBuffer(cPos)){break()}
-                    setError("Expected list item at position: "+toString(cPos))
+                    setError("Expected a list item", cPos)
                     return(-1)
                 }
                 count <+- 1
@@ -892,6 +955,11 @@ struct ProteusParser{
                     pureInfn.items.popLast()
                 }
             }
+        }
+
+        else{
+            setError("Expected a number, string, '$', '_', or list literal", cPos)
+            return(-1)
         }
 
         if(errorSet){return(-1)}
@@ -997,7 +1065,7 @@ struct ProteusParser{
                     case "vars":{infn.cursorMode <- cVars}
                     case "prev":{infn.cursorMode <- cPrev}
                     case "next":{infn.cursorMode <- cNext}
-                    default:{setError("Invalid %tag ('"+tag+"')")}
+                    default:{setError("Invalid %tag '%"+tag+"'", cPos-len-1)}
                 }
             } else {infn.cursorMode <- cThis}
         } else {
@@ -1007,7 +1075,16 @@ struct ProteusParser{
                 cPos <+- 1
                 if(peek=="/"){infn.infSize.inverted <- true}
                 infn.value.sizeMode <- fromGiven
-                cPos <+- parsePureInfon(infn.infSize, cPos, infn, isFromDefn, prsCtxt)
+                me int64: sizeLen <- parsePureInfon(infn.infSize, cPos, infn, isFromDefn, prsCtxt)
+                if(sizeLen <= 0){
+                    if(!errorSet){
+                        me string: opStr <- ""
+                        opStr <+- peek
+                        setError("Expected a size expression after '"+opStr+"'", cPos)
+                    }
+                    return(-1)
+                }
+                cPos <+- sizeLen
                 //TODO: add new if Conditions
                 //if(infn.infSize.fType!=NUM){setError("Size of infons must be numeric")}
                 requirePlusMinusSign <- true
@@ -1021,12 +1098,23 @@ struct ProteusParser{
                 cPos <+- 1
                 if(peek=="-"){infn.value.inverted <- true}
                 if(!requirePlusMinusSign){infn.value.sizeMode <- fromContext}
-                cPos <+- parsePureInfon(infn.value, cPos, infn, isFromDefn, prsCtxt)
+                me int64: valueLen <- parsePureInfon(infn.value, cPos, infn, isFromDefn, prsCtxt)
+                if(valueLen <= 0){
+                    if(!errorSet){
+                        me string: opStr <- ""
+                        opStr <+- peek
+                        setError("Expected a value after '"+opStr+"'", cPos)
+                    }
+                    return(-1)
+                }
+                cPos <+- valueLen
             } else if(requirePlusMinusSign){
-                setError("Expected '+' or '-'")
+                setError("Expected '+' or '-' after the size expression", cPos)
             } else {
                 infn.value.sizeMode <- fromCount
-                if(!chk(parsePureInfon(infn.value, cPos, infn, isFromDefn, prsCtxt), cPos,len)){}//setError("Expected number infon, string, list or '?' or %tag")}
+                if(!chk(parsePureInfon(infn.value, cPos, infn, isFromDefn, prsCtxt), cPos,len)){
+                    if(!errorSet){setError("Expected a value literal, '?', or %tag", cPos)}
+                }
             }
             if(infn.value.tailUnfinished == false){infn.countSize(false)}
         }
@@ -1068,7 +1156,9 @@ struct ProteusParser{
 
         // InnerInfon
         if(fetchInnerInfon){
-            if(!chk(parseInnerInfon(infn, cPos, isFromDefn, prsCtxt), cPos,len)){}//setError("Literal infon or %tag expected")}
+            if(!chk(parseInnerInfon(infn, cPos, isFromDefn, prsCtxt), cPos,len)){
+                if(!errorSet){setError("Expected an infon value", cPos)}
+            }
         }
 ///if(chkStrWSC(cPos, "`")){
    // log("Infon marked for reply in doParse at pos " + toString(cPos) + "\n")
@@ -1127,8 +1217,7 @@ struct ProteusParser{
     }
 
     void: doParse(our infon: infn) <- {
-        errorSet <- false
-        errorMesg <- ""
+        clearError()
         parseInfon(infn, 0, true, false)
         if(streamingMode){
             notifyStreamState(infn, parseDone)
