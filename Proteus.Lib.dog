@@ -688,6 +688,20 @@ struct GLOBAL{
     void: fleshOutWord(their Agent: agent, our infon: infn) <- {//  if type and no defn look up defn call derefInf()
         agent.worldMgr.derefInfon(infn)
     }
+    me bool: checkIfReplyRequested(their POV: pov) <- {
+        if(pov==NULL or pov.pItem==NULL){return(false)}
+        our infon: inf <- pov.pItem
+        if(!streamingNormMode or inf.value.fType!=LST or pov.pParent==NULL){
+            return(inf.doReply)
+        }
+        if(inf.streamState==parseListReady){
+            me MutexMngr: MtxMgr{streamingNormMutex}
+            while(inf.streamState==parseListReady){
+                streamingNormLock.wait(MtxMgr)
+            }
+        }
+        return(inf.doReply)
+    }
 
     me string: toString(our AItem: aItem) <- {
         me string: S <- aItem.mySymbol()+":"+aItem.stringify()
@@ -2198,64 +2212,21 @@ vSpec.init(agent.getLocaleBaseName())
         return(false)
     }
     
-
-
-// There is a lot of experimental stuff here. 
-// One thing to try is to centralizeg pendingTasks in addAItemTOAgenda() and remove the 'notFirstTime' hack.
-// OR replace the notFirstTIme hack with initializing aItem's pendingTask to 1 instead of 0.
     void: propagateProxy(their Agenda: agenda, our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque) <- {
-        if (true){ // CHANGE TO 'if(false)' TO DISABLE PROPAGATE PROXY QUEUEING
-            // We need to calculate whether pendingTasks will be 0 after the propagate, 
-            // If so, it is safe to fulfill subscriptions before the call to propagate
-
-            me int: prePTasks <- aItem.pendingTasks
-            me bool: lhsItrBeginning <- (aItem.LHSItr != NULL and LHSPov === aItem.LHSItr.topPOV)
-            me bool: hasDots <- aItem.LHS_item.pItem.value.tailUnfinished
-            me bool: CrntInfIsLST <- (aItem.LHS_item.pItem.value.fType==LST)
-// NOTE: The commented out part of the next line also seems to work but may be semantically unclear.
-            me bool: doPreFFS// <- ((aItem.pendingTasks == 0 and !CrntInfIsLST) or aItem.LHS_item.pItem.doReply)
-
-            our infon: subProxy <- aItem.LHS_item.pItem // Because the relevant subscriber will have the same infon as aItem in this narrow case.
-            me bool: infIsLST <- (subProxy.value.fType==LST)
-me bool: listClosed <- (subProxy.streamState == notParsing or subProxy.streamState == parseDone)
-// print("\nproxy type=", toString(subProxy.value.fType),
-//       " doReply=", toString(subProxy.doReply),
-//       " streamState=", toString(subProxy.streamState),
-//       " infon=", toString(subProxy))
-//if(subProxy.doReply){print("\nsubProxy.doReply is true for: ", toString(aItem))}
-doPreFFS <- subProxy.doReply and (!infIsLST or listClosed) // or (infIsLST and (subProxy.streamState==notParsing or subProxy.streamState==parseDone)))
-            if(doPreFFS){
-                print("\nFFS before propagateProxy: ", shortedStr(toString(aItem), 60))
-                fulfillSubscriptions(agenda, aItem)
-            //}
-                our PropagateRecord:: propRec{aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque}
-                agenda.propagationsTodo.prepend(propRec)  // CHANGE TO PREPEND
-            } else {
-                callPropagate(agenda, aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque, NULL)
-            }
+        // ORIGIN-BASED GATE: this aItem is "the last in the rsInfon sequence" exactly
+        // when its parent and its first subscriber both originated from a propagate
+        // step (srcPropagate) AND we're at the last step of the merge (step==2).
+        our infon: subProxy <- aItem.LHS_item.pItem
+        me bool: doReplyRequested <- checkIfReplyRequested(aItem.LHS_item)
+        me bool: parentFromPropagate <- (aItem.parent != NULL and aItem.parent.pedigree.source == srcPropagate)
+        me bool: subFromPropagate    <- (!aItem.subscribers.isEmpty() and aItem.subscribers.first().pedigree.source == srcPropagate)
+        if(parentFromPropagate and subFromPropagate and doReplyRequested){
+            withEach sub in aItem.subscribers{sub.closingForDoReply <- true}
+            fulfillSubscriptions(agenda, aItem)
+            our PropagateRecord:: propRec{aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque}
+            agenda.propagationsTodo.prepend(propRec)
         } else {
-            me int: prePTasks <- aItem.pendingTasks
-            me int: numSubs <- aItem.subscribers.size()
-me bool: lhsItrBeginning <- (aItem.LHSItr != NULL and LHSPov === aItem.LHSItr.topPOV)
-me bool: hasDots <- aItem.LHS_item.pItem.value.tailUnfinished
-me bool: CrntInfIsLST <- (aItem.LHS_item.pItem.value.fType==LST)
-me bool: doPreFFS <- (aItem.pendingTasks == 0 and !(lhsItrBeginning and CrntInfIsLST))
-our infon: subProxy <- aItem.LHS_item.pItem // Because the relevant subscriber will have the same infon as aItem in this narrow case.
-me bool: infIsLST <- (subProxy.value.fType==LST)
-doPreFFS <- (!infIsLST) // or (infIsLST and (subProxy.streamState==notParsing or subProxy.streamState==parseDone)))
-//if(doPreFFS){fulfillSubscriptions(agenda, aItem)}       
-            // me string: firstSubStr
-            // if(numSubs>0){
-            //     our AItem: firstSub <- aItem.subscribers.first()
-            //     firstSubStr <- toString(firstSub)
-            // }
-            // else{firstSubStr <- "N/A"}
             callPropagate(agenda, aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque, NULL)
-            me int: postPTasks <- aItem.pendingTasks
-            log("PROP_PROXY \t:  prePTasks:"+toString(prePTasks)+" postPTasks:"+toString(postPTasks)
-                    + "  lhsItrBeginning:"+toString(lhsItrBeginning)+" CrntInfIsLST:"+toString(CrntInfIsLST)
-                     + "  doPreFFS:"+toString(doPreFFS)
-                    + "\t :: \t" + toString(aItem))
         }
     }
 
