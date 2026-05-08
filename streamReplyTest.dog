@@ -1,0 +1,190 @@
+// streamReplyTest.dog
+// Experiment: drive a streaming parser+normalizer pair against an open list `{|`
+// and observe whether `123`` produces a doReply echo immediately or only after
+// later infons are pushed.
+
+LinuxBuild: Platform='Linux' CPU='amd64' Lang='CPP' LangVersion='GNU' optimize='speed';
+
+Title = "Proteus - streamReplyTest"
+FileName = "streamReplyTest"
+Version = "0.1"
+CopyrightMesg = "Copyright (c) 2026 Bruce Long"
+Authors = "Bruce Long"
+Description = "Experiment for streaming-list doReply latency"
+ProgramOrLibrary = "program"
+
+featuresNeeded = [Proteus, Logger, Unicode, BigNumbers, Threads, IOBuffer, List]
+
+LicenseText = `Part of the Proteus suite. All Rights Reserved.`
+
+runCode=`
+    log("streamReplyTest started")
+    CommandLineManager.defineOption("SRT", "First", "-f", "--first", "First item selector (1, 2, or 3)", "1")
+    me string: firstSel <- CommandLineManager.getOption("SRT", "First")
+    me StreamReplyTest: tester
+    tester.run(firstSel)
+`
+
+infonDumpMode='text'
+
+do ManageCmdLine(cmd)
+
+struct ReplyParserThread: inherits=Threads {
+    our ProteusParser: parser
+    our infon: result
+    me string: name
+    me bool: parseCompleted
+    me Mutex: chkParseDone
+    me SyncLock: parseDoneLock
+
+    void: initAndStart(our ProteusParser: pParser, their strBuf: streamToParse, our infon: topItem, me string: Name) <- {
+        parser <- pParser
+        result <- topItem
+        name   <- Name
+        parseCompleted <- false
+        parser.initParseFromStream(streamToParse)
+        start(name)
+    }
+    void: run() <- {
+        log("OPENING PARSE_THREAD:" + name)
+        parser.doParse(result)
+        if(parser.doesParseHaveError()){
+            log("Syntax Error: " + parser.formattedError())
+        }
+        log("CLOSING PARSE_THREAD:" + name)
+        protect(chkParseDone){
+            parseCompleted <- true
+            parseDoneLock.notifyOne()
+        }
+    }
+    void: waitForParseCompletion() <- {
+        me MutexMngr: MtxMgr{chkParseDone}
+        while(!parseCompleted){parseDoneLock.wait(MtxMgr)}
+    }
+}
+
+struct StreamReplyTest: inherits=ProteusCore {
+    me int: replyCount
+    me string: lastReply
+    me Mutex: replyMtx
+    me SyncLock: replyLock
+
+    me int: WAIT_MS <- 800        // How long to wait for a reply after each push.
+    me int: SETTLE_MS <- 200      // Small pause after each push before checking.
+    me int: CHAR_DELAY_MS <- 50   // Delay between characters to mimic terminal typing.
+
+    void: submitProteusResult(me uint64: originID, me uint64: pos, me string: mesg) <- {
+        protect(replyMtx){
+            replyCount <+- 1
+            lastReply <- mesg
+            replyLock.notifyOne()
+        }
+        print("REPLY[" + toString(replyCount) + "]: " + mesg + "\n")
+    }
+
+    me int: getReplyCount() <- {
+        me int: c
+        protect(replyMtx){c <- replyCount}
+        return(c)
+    }
+
+    void: pushChars(their strBuf: buf, me string: data) <- {
+        withEach idx in range 0 .. data.size(){
+            buf.putStr(data.subStr(idx, 1))
+            sleep(CHAR_DELAY_MS)
+        }
+    }
+
+    void: pushAndCheck(their strBuf: buf, me string: data, me int: expectedAfter, me string: label) <- {
+        print("\n--- PUSH " + label + ": " + data + " ---\n")
+        me int: before <- getReplyCount()
+        pushChars(buf, data)
+        sleep(SETTLE_MS)
+        // Wait up to WAIT_MS for replyCount to advance.
+        me int: waited <- 0
+        while(waited < WAIT_MS and getReplyCount() == before){
+            sleep(50)
+            waited <+- 50
+        }
+        me int: after <- getReplyCount()
+        me string: verdict <- "FAIL"
+        if(after >= expectedAfter){verdict <- "OK"}
+        print("    replyCount before=" + toString(before)
+              + " after=" + toString(after)
+              + " expected>=" + toString(expectedAfter)
+              + "  [" + verdict + "]\n")
+    }
+
+    me bool: loadUserKB(me string: filename) <- {
+        me string: userStr <- readAssetAsString(filename)
+        if(userStr==""){
+            log("UserKB file '"+filename+"' not found in assets/")
+            return(false)
+        }
+        our infon: userInf <- parseAndExtractString(userStr, filename)
+        if(userInf==NULL){
+            log("UserKB file '"+filename+"' did not parse: "+errorMesg)
+            return(false)
+        }
+        agent.user <- userInf
+        our POV:: normPov{27}; normPov.pItem <- agent.user
+        agent.normalize(normPov)
+        log("UserKB loaded: "+filename)
+        return(true)
+    }
+
+    me string: chooseFirst(me string: sel) <- {
+        // -f 1 = literal number    -f 2 = list literal    -f 3 = userKB path lookup
+        if(sel=="2"){return("{1 2 3}` ")}
+        if(sel=="3"){return("%U.bruceLong.projects.properties.title` ")}
+        return("123` ")
+    }
+    me string: firstLabel(me string: sel) <- {
+        if(sel=="2"){return("first  ({1 2 3}`)")}
+        if(sel=="3"){return("first  (%U.title)")}
+        return("first  (123`)")
+    }
+
+    void: run(me string: firstSel) <- {
+        replyCount <- 0
+        // Load userKB.pr in non-streaming mode so %U.<path> resolves.
+        init("", false)
+        loadUserKB("userKB.pr")
+        // Switch to streaming mode for the actual experiment.
+        setStreamingMode(true)
+        streamingNormMode <- true
+
+        me strBuf: inputBuf
+        inputBuf.init("streamReplyTest")
+        our infon:: topInfon
+        me uint64: originID <- 1
+        topInfon.originID <- originID
+
+        our ProteusParser:: parser{self, true, originID}
+        me ThreadedNormalizer: normer
+        normer.init(agent, topInfon)
+        normer.start("SRT_NRM")
+
+        me ReplyParserThread: parserThread
+        parserThread.initAndStart(parser, inputBuf, topInfon, "SRT_PnE")
+
+        me string: firstItem  <- chooseFirst(firstSel)
+        me string: firstLbl   <- firstLabel(firstSel)
+        print("\n=== streamReplyTest -f "+firstSel+"  first="+firstItem+" ===\n")
+
+        pushAndCheck(inputBuf, "{|",   0, "open-list")   // no reply expected
+        pushAndCheck(inputBuf, firstItem, 1, firstLbl)
+        pushAndCheck(inputBuf, "1` ",   2, "second (1`)")
+        pushAndCheck(inputBuf, "2` ",   3, "third  (2`)")
+        pushAndCheck(inputBuf, "3` ",   4, "fourth (3`)")
+
+        print("\n=== FINAL replyCount = " + toString(getReplyCount()) + " (expected 4) ===\n")
+
+        // Close the list. With `{|` ... `}` the list ends and the last reply should drain.
+        pushAndCheck(inputBuf, "}", 4, "close-list")
+        inputBuf.close()
+        parserThread.waitForExit()
+        normer.waitForExit()
+        log("streamReplyTest done")
+    }
+}

@@ -767,8 +767,10 @@ model AItem{
     flag: notFirstVisit
     flag: candidateForLast
     flag: skipRHSUsageInPAI  // With unordered lists, we get the RHS another way.
+    flag: wokenEarly
     me int: step
     me int: pendingTasks
+    me int: heldPendingTasks
     FlexNum: sizeToCopy
     me List<our AItem>: subscribers
     me AItemPedigree: pedigree
@@ -846,6 +848,7 @@ model AItem{
         priority  <- 0
         step      <- 0
         pendingTasks <- 0
+        heldPendingTasks <- 0
         sizeToCopy   <- 0
         indentLvl    <- 0
         pedigree.source <- source
@@ -1000,6 +1003,21 @@ struct WorldManager{
         //:l/PAI::logSeg(" PIcVA:"+newAItem.mySymbol())
         return(newAItem)
     }
+    // Wake an rsInfon subscriber early so it can emit a streaming doReply before
+    // deeper propagate work blocks, while keeping the subscriber edge outstanding
+    // for the later real fulfillSubscriptions() pass.
+    void: wakeSubscriptions(their Agenda: agenda, our AItem: aItem) <- {
+        while(!aItem.subscribers.isEmpty()){
+            our AItem: sub <- aItem.subscribers.first()
+            if(sub.ruleSet!=rsInfon or sub.wokenEarly){break()}
+            sub.heldPendingTasks <+- 1
+            sub.wokenEarly <- true
+            sub.priority <- aItem.priority
+            sub.LHS_item.pItem.isNormed <- false
+            agenda.addAItemToAgenda(sub)
+            break()
+        }
+    }
     void: fulfillSubscriptions(their Agenda: agenda, our AItem: aItem) <- {
         me string: S
         while(!aItem.subscribers.isEmpty()){
@@ -1011,6 +1029,10 @@ struct WorldManager{
             }
             aItem.subscribers.popFirst()
             sub.LHS_item.pItem.isNormed <- false
+            if(sub.wokenEarly){
+                if(sub.heldPendingTasks>0){sub.heldPendingTasks <-- 1}
+                sub.wokenEarly <- false
+            }
             sub.notFirstVisit <- true
             me bool: itmAdded <- agenda.addAItemToAgenda(sub) // FFS
             if(itmAdded){S<+-":"+sub.mySymbol()}
@@ -2213,16 +2235,15 @@ vSpec.init(agent.getLocaleBaseName())
     }
     
     void: propagateProxy(their Agenda: agenda, our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque) <- {
-        // ORIGIN-BASED GATE: this aItem is "the last in the rsInfon sequence" exactly
-        // when its parent and its first subscriber both originated from a propagate
-        // step (srcPropagate) AND we're at the last step of the merge (step==2).
+        // ORIGIN-BASED GATE: when a propagated merge is about to continue deeper into
+        // a replyable child, wake the subscriber early but keep the dependency edge
+        // alive so the later real fulfill still owns pendingTasks bookkeeping.
         our infon: subProxy <- aItem.LHS_item.pItem
         me bool: doReplyRequested <- checkIfReplyRequested(aItem.LHS_item)
         me bool: parentFromPropagate <- (aItem.parent != NULL and aItem.parent.pedigree.source == srcPropagate)
         me bool: subFromPropagate    <- (!aItem.subscribers.isEmpty() and aItem.subscribers.first().pedigree.source == srcPropagate)
         if(parentFromPropagate and subFromPropagate and doReplyRequested){
-            withEach sub in aItem.subscribers{sub.closingForDoReply <- true}
-            fulfillSubscriptions(agenda, aItem)
+            wakeSubscriptions(agenda, aItem)
             our PropagateRecord:: propRec{aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque}
             agenda.propagationsTodo.prepend(propRec)
         } else {
@@ -2365,11 +2386,23 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                     else if(partsRules(agenda,aItem,act)) {continueLoop <- act}
                     else if(processConcat(aItem))         {continueLoop <- true}
                     else{
-                        if(aItem.pendingTasks < 0){
-                            log("WARNING!:"+aItem.mySymbol()+"_PT="+toString(aItem.pendingTasks)+":"+toString(aItem))
+                        me int: readyPendingTasks <- aItem.pendingTasks - aItem.heldPendingTasks
+                        if(readyPendingTasks < 0){
+                            log("WARNING!:"+aItem.mySymbol()+"_PT="+toString(aItem.pendingTasks)+" held="+toString(aItem.heldPendingTasks)+":"+toString(aItem))
                         }
-                        if(aItem.pendingTasks==0){
+                        if(readyPendingTasks==0){
                             our infon: CI <- aItem.LHS_item.pItem;
+                            if(aItem.heldPendingTasks>0){
+                                if(CI.doReply){
+                                    CI.doReply <- false
+                                    log("DO_REPLY-PAI:"+CI.mySymbol()+"  originID:"+toString(CI.originID) + "  CI:"+shortedStr(toString(CI),100))
+                                    if(CI.originID>0){
+                                        agent.CORE.submitProteusResult(CI.originID, CI.infCharPos, toString(CI))
+                                    }
+                                }
+                                addQueuedAItemsToAgenda(agenda)
+                                break()
+                            }
                             cleanUpInfon(aItem)
                             if(CI.cnvtToFunc){ //:l/PAI::logSeg(" ReFn")
                                 //log("REFUNC:"+toString(CI))
