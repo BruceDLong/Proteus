@@ -704,7 +704,13 @@ struct GLOBAL{
     me bool: checkIfReplyRequested(their POV: pov) <- {
         if(pov==NULL or pov.pItem==NULL){return(false)}
         our infon: inf <- pov.pItem
-        if(inf.doReply){return(true)}
+        // Only fire the early-wake gate when the reply is actually ready: doReply is set
+        // AND there is no pending path navigation. For path expressions, intermediate
+        // infons carry doReply forward through partRef/parts; firing the gate while
+        // navigation is still pending wakes the parent rsInfon prematurely and skips
+        // segments.
+        me bool: pathPending <- (inf.partRef!=NULL or !inf.parts.isEmpty())
+        if(inf.doReply and !pathPending){return(true)}
         // For a streaming list at parseListReady, doReply might be set when the closing
         // `}` and `\`` are parsed. Wait briefly for that — but only when we won't end up
         // blocked on an unfinished nested sub-list (whose own close gates the parent's).
@@ -715,9 +721,9 @@ struct GLOBAL{
                 streamingNormLock.wait(MtxMgr)
             }
         }
-        return(inf.doReply)
+        pathPending <- (inf.partRef!=NULL or !inf.parts.isEmpty())
+        return(inf.doReply and !pathPending)
     }
-
     me string: toString(our AItem: aItem) <- {
         me string: S <- aItem.mySymbol()+":"+aItem.stringify()
         if(! aItem.subscribers.isEmpty()){
@@ -1422,6 +1428,25 @@ vSpec.init(agent.getLocaleBaseName())
         }
         //:l/PAI::logSegOut("")
         return(stopAndWait)
+    }
+    me bool: povIsUnderIncompleteStream(their POV: pov) <- {
+        their POV: crnt <- pov
+        while(crnt!=NULL){
+            if(crnt.pItem!=NULL and (crnt.pItem.streamState==parseStarted or crnt.pItem.streamState==parseListReady)){return(true)}
+            crnt <- crnt.pParent
+        }
+        return(false)
+    }
+    me bool: hasLocalNullableContinuation(our AItem: aItem) <- {
+        if(!povIsUnderIncompleteStream(aItem.LHS_item)){return(false)}
+        our infon: CI <- aItem.LHS_item.pItem
+        return(CI.partRef!=NULL or !CI.parts.isEmpty())
+    }
+    me bool: localNullableContinuationRules(their Agenda: agenda, our AItem: aItem, their bool: nxtAction) <- {
+        if(hasLocalNullableContinuation(aItem)){
+            return(partsRules(agenda, aItem, nxtAction))
+        }
+        return(false)
     }
     // rsINFON UTILITY FUNCTIONS: CONCAT FUNCTIONS
     me int: evalForRange(our infon: infn, their FlexNum: lowest, their FlexNum: highest) <- {
@@ -2351,7 +2376,7 @@ vSpec.init(agent.getLocaleBaseName())
         //:l/PAI::logSeg(indentedStr(">>"+shortedStr(toString(aItem),1000), aItem.indentLvl, 0))
         //:l/PAI::logSegStartCol("",150)
         //:l/PAI::logSegIn(" PAI")
-        if(aItem.notFirstVisit){
+        if(aItem.notFirstVisit and !aItem.wokenEarly){
             aItem.pendingTasks <-- 1
             //:l/PAI/PT::logSeg(" --"+aItem.mySymbol()+"_PT:e="+toString(aItem.pendingTasks))
         }
@@ -2397,6 +2422,7 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                     else if(func_altRules(agenda, aItem)) {continueLoop <- false}
                     else if(lookUpCursorRules(aItem))     {partsRules(agenda,aItem,act); continueLoop <- act}
                     else if(normSize(agenda, aItem))      {continueLoop <- false}
+                    else if(localNullableContinuationRules(agenda, aItem, act)) {continueLoop <- act}
                     else if(wrkLstRules(agenda, aItem))   {continueLoop <- false}
                     else if(partsRules(agenda,aItem,act)) {continueLoop <- act}
                     else if(processConcat(aItem))         {continueLoop <- true}
