@@ -688,15 +688,30 @@ struct GLOBAL{
     void: fleshOutWord(their Agent: agent, our infon: infn) <- {//  if type and no defn look up defn call derefInf()
         agent.worldMgr.derefInfon(infn)
     }
+    me bool: descendantOwnsReply(our infon: inf) <- {
+        // Returns true if a child of `inf` (or a deeper descendant via still-parsing sub-list)
+        // already owns the doReply, meaning waiting on `inf` itself for parseDone is wrong.
+        our POV: crntPov <- inf.value.items.head
+        while(crntPov != NULL){
+            if(crntPov.pItem.doReply){return(true)}
+            if(crntPov.pItem.value.fType==LST and crntPov.pItem.streamState!=parseDone and crntPov.pItem.streamState!=notParsing){
+                return(true)
+            }
+            crntPov <- crntPov.next
+        }
+        return(false)
+    }
     me bool: checkIfReplyRequested(their POV: pov) <- {
         if(pov==NULL or pov.pItem==NULL){return(false)}
         our infon: inf <- pov.pItem
-        if(!streamingNormMode or inf.value.fType!=LST or pov.pParent==NULL){
-            return(inf.doReply)
-        }
-        if(inf.streamState==parseListReady){
+        if(inf.doReply){return(true)}
+        // For a streaming list at parseListReady, doReply might be set when the closing
+        // `}` and `\`` are parsed. Wait briefly for that — but only when we won't end up
+        // blocked on an unfinished nested sub-list (whose own close gates the parent's).
+        if(streamingNormMode and inf.value.fType==LST and pov.pParent!=NULL and inf.streamState==parseListReady){
             me MutexMngr: MtxMgr{streamingNormMutex}
             while(inf.streamState==parseListReady){
+                if(descendantOwnsReply(inf)){break()}
                 streamingNormLock.wait(MtxMgr)
             }
         }

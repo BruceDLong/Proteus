@@ -19,10 +19,27 @@ LicenseText = `Part of the Proteus suite. All Rights Reserved.`
 
 runCode=`
     log("streamReplyTest started")
-    CommandLineManager.defineOption("SRT", "First", "-f", "--first", "First item selector (1, 2, or 3)", "1")
+    CommandLineManager.defineOption("SRT", "First", "-f", "--first", "First item selector (1, 2, 3, 4, or 'all')", "all")
     me string: firstSel <- CommandLineManager.getOption("SRT", "First")
-    me StreamReplyTest: tester
-    tester.run(firstSel)
+    if(firstSel=="all"){
+        me int: totalChecks <- 0
+        me int: totalFailures <- 0
+        me string: cases <- "1 2 3 4"
+        withEach idx in range 0 .. cases.size(){
+            me string: c <- cases.subStr(idx, 1)
+            if(c==" "){continue()}
+            me StreamReplyTest: tester
+            tester.run(c)
+            totalChecks <+- tester.totalChecks
+            totalFailures <+- tester.totalFailures
+        }
+        print("\n=== SUITE TOTAL: " + toString(totalChecks-totalFailures) + "/" + toString(totalChecks) + " checks passed ===\n")
+        if(totalFailures==0){print("=== SUITE PASSED ===\n")}
+        else{print("=== SUITE FAILED ===\n")}
+    } else {
+        me StreamReplyTest: tester
+        tester.run(firstSel)
+    }
 `
 
 infonDumpMode='text'
@@ -68,6 +85,10 @@ struct StreamReplyTest: inherits=ProteusCore {
     me string: lastReply
     me Mutex: replyMtx
     me SyncLock: replyLock
+    bool: needsUserKB <- false
+
+    me int: totalChecks
+    me int: totalFailures
 
     me int: WAIT_MS <- 800        // How long to wait for a reply after each push.
     me int: SETTLE_MS <- 200      // Small pause after each push before checking.
@@ -109,6 +130,8 @@ struct StreamReplyTest: inherits=ProteusCore {
         me int: after <- getReplyCount()
         me string: verdict <- "FAIL"
         if(after >= expectedAfter){verdict <- "OK"}
+        else{totalFailures <+- 1}
+        totalChecks <+- 1
         print("    replyCount before=" + toString(before)
               + " after=" + toString(after)
               + " expected>=" + toString(expectedAfter)
@@ -134,7 +157,8 @@ struct StreamReplyTest: inherits=ProteusCore {
     }
 
     me string: chooseFirst(me string: sel) <- {
-        // -f 1 = literal number    -f 2 = list literal    -f 3 = userKB path lookup
+        // -f 1 = literal number    -f 2 = list literal
+        // -f 3 = userKB path lookup
         if(sel=="2"){return("{1 2 3}` ")}
         if(sel=="3"){return("%U.bruceLong.projects.properties.title` ")}
         return("123` ")
@@ -144,12 +168,31 @@ struct StreamReplyTest: inherits=ProteusCore {
         if(sel=="3"){return("first  (%U.title)")}
         return("first  (123`)")
     }
+    void: runNestedNestedReplyCase(their strBuf: inputBuf) <- {
+        print("\n=== streamReplyTest -f 4  nested nested 123` ===\n")
+        pushAndCheck(inputBuf, "{|",   0, "open-list")
+        pushAndCheck(inputBuf, "{| ",   0, "open outer nested list")
+        pushAndCheck(inputBuf, "{ ",   0, "open inner nested list")
+        pushAndCheck(inputBuf, "123` ", 1, "inner item (123`)")
+
+        print("\n=== FINAL replyCount = " + toString(getReplyCount()) + " (expected 1) ===\n")
+
+        pushAndCheck(inputBuf, "} ", 1, "close inner nested list")
+        pushAndCheck(inputBuf, "} ", 1, "close outer nested list")
+        pushAndCheck(inputBuf, "}",  1, "close top-level list")
+    }
 
     void: run(me string: firstSel) <- {
         replyCount <- 0
         // Load userKB.pr in non-streaming mode so %U.<path> resolves.
         init("", false)
-        loadUserKB("userKB.pr")
+        if(firstSel=="3"){
+             needsUserKB <- true
+        }
+        if(needsUserKB and !loadUserKB("userKB.pr")){
+            print("Failed to load userKB.pr, aborting test.\n")
+            return()
+        }
         // Switch to streaming mode for the actual experiment.
         setStreamingMode(true)
         streamingNormMode <- true
@@ -170,21 +213,28 @@ struct StreamReplyTest: inherits=ProteusCore {
 
         me string: firstItem  <- chooseFirst(firstSel)
         me string: firstLbl   <- firstLabel(firstSel)
-        print("\n=== streamReplyTest -f "+firstSel+"  first="+firstItem+" ===\n")
+        if(firstSel=="4"){
+            runNestedNestedReplyCase(inputBuf)
+        }else{
+            print("\n=== streamReplyTest -f "+firstSel+"  first="+firstItem+" ===\n")
 
-        pushAndCheck(inputBuf, "{|",   0, "open-list")   // no reply expected
-        pushAndCheck(inputBuf, firstItem, 1, firstLbl)
-        pushAndCheck(inputBuf, "1` ",   2, "second (1`)")
-        pushAndCheck(inputBuf, "2` ",   3, "third  (2`)")
-        pushAndCheck(inputBuf, "3` ",   4, "fourth (3`)")
+            pushAndCheck(inputBuf, "{|",   0, "open-list")   // no reply expected
+            pushAndCheck(inputBuf, firstItem, 1, firstLbl)
+            pushAndCheck(inputBuf, "1` ",   2, "second (1`)")
+            pushAndCheck(inputBuf, "2` ",   3, "third  (2`)")
+            pushAndCheck(inputBuf, "3` ",   4, "fourth (3`)")
 
-        print("\n=== FINAL replyCount = " + toString(getReplyCount()) + " (expected 4) ===\n")
+            print("\n=== FINAL replyCount = " + toString(getReplyCount()) + " (expected 4) ===\n")
 
-        // Close the list. With `{|` ... `}` the list ends and the last reply should drain.
-        pushAndCheck(inputBuf, "}", 4, "close-list")
+            // Close the list. With `{|` ... `}` the list ends and the last reply should drain.
+            pushAndCheck(inputBuf, "}", 4, "close-list")
+        }
         inputBuf.close()
         parserThread.waitForExit()
         normer.waitForExit()
+        print("\n=== streamReplyTest -f " + firstSel + ": " + toString(totalChecks-totalFailures) + "/" + toString(totalChecks) + " checks passed ===\n")
+        if(totalFailures==0){print("=== -f " + firstSel + " PASSED ===\n")}
+        else{print("=== -f " + firstSel + " FAILED (" + toString(totalFailures) + " failure(s)) ===\n")}
         log("streamReplyTest done")
     }
 }
