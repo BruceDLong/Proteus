@@ -121,7 +121,7 @@ model infon{
     flag: alreadyTypeChecked    // This need not be re-checked
     our infon: funcArgs
     our infon: innr
-    our infon: intersectMarkedRet
+    our POV: intersectMarkedRetPOV
     our infon: thisPtr
     flag: isInnr         // This item is the innr of [....]
     our WordUse: type
@@ -430,6 +430,18 @@ model infon{
         }
         infSize.copyAsTypeTo(to.infSize, topThis, copied)
         value.copyAsTypeTo(to.value, topThis, copied)
+        if(intersectMarkedRetPOV!=NULL){
+            our POV: srcPov <- value.items.head
+            our POV: dstPov <- to.value.items.head
+            while(srcPov!=NULL and dstPov!=NULL){
+                if(srcPov===intersectMarkedRetPOV){
+                    to.intersectMarkedRetPOV <- dstPov
+                    break()
+                }
+                srcPov <- srcPov.next
+                dstPov <- dstPov.next
+            }
+        }
         if(funcArgs){funcArgs.copyAsTypeTo(to.funcArgs, true, true)}
         if(innr){Allocate(to.innr); innr.copyAsTypeTo(to.innr, true, true)}
         if(copyWrkList){to.copyWrkListFrom(self)}
@@ -1730,7 +1742,7 @@ vSpec.init(agent.getLocaleBaseName())
                                     newPath.originID       <- CI.originID
                                     newPath.infCharPos     <- CI.infCharPos
                                     newPath.intersectPos <- ipGetMarked
-                                    newPath.intersectMarkedRet <- partSpec
+                                    newPath.intersectMarkedRetPOV <- partPov
                                     if(part.path.partRef!=NULL){
                                         newPath.partRef    <- part.path.partRef
                                         part.path.partRef  <- NULL
@@ -2152,6 +2164,22 @@ vSpec.init(agent.getLocaleBaseName())
                     aParent.mergeStatus<-msReject
                     LHSPovNext.rejected <- true
                     dontEnque  <- true
+                }
+            }
+        }
+
+        if(aParent!=NULL and aParent.LHS_item.pItem.intersectMarkedRetPOV!=NULL){
+            // getFirst/NextTight can step through a marked transparent &{...} and return
+            // one of its inner POVs. If that inner LHS POV matches here, use the matched
+            // RHS POV as the source-backed marked return so writes target the source list.
+            our POV: markedMatch <- NULL
+            if(LHSPov.markedOuterPOV!=NULL and RHSExists){markedMatch <- RHSPov}
+            if(LHSPovNext!=NULL and LHSPovNext.markedOuterPOV!=NULL and RHSPovNext!=NULL){markedMatch <- RHSPovNext}
+            if(markedMatch!=NULL){
+                aParent.LHS_item.pItem.intersectMarkedRetPOV <- markedMatch
+                if(markedMatch.pItem.isTentative){
+                    markedMatch.addNewSubDots <- true
+                    if(markedMatch.pParent!=NULL){markedMatch.pParent.keepDots <- true}
                 }
             }
         }
@@ -2711,6 +2739,9 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                                 CI.hasInnrOutr   <- false
                                 CI.innr.funcArgs <- NULL
                             }
+                            if(CI.intersectMarkedRetPOV!=NULL){
+                                CI.innr.intersectMarkedRetPOV <- CI.intersectMarkedRetPOV
+                            }
                             if(CI.isOrLike()){
                                 //:l/PAI::logSeg(" IC0_OR:[")
                                 if(!innr.value.tailUnfinished){
@@ -2758,7 +2789,7 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                                         // TODO: if(sizesNotCompatable()){markAsReject or notLast}
                                         me string: logPredString; if(!pov.predecessors.isEmpty()){logPredString<-"  Pred:"+ pov.predecessors[0].stringify()}
                                         // Is the next line really valid? This could be the correct item but just be unknown. However, tests fail without it.
-                                        me bool: unresolvedAlt <- pov.pItem.infMode==isUnknown and (pov.pItem.value.fType==tUnknown or pov.pItem.value.fType==tUnset)
+                                        me bool: unresolvedAlt <- pov.pItem.type==NULL and pov.pItem.infMode==isUnknown and (pov.pItem.value.fType==tUnknown or pov.pItem.value.fType==tUnset)
                                         if(!pov.rejected and !unresolvedAlt){
                                             //:l/PAI::log(idnt+"            ALT:"+ pov.mySymbol()+":"+ shortedStr(pov.stringify(),100) + shortedStr(logPredString,100))
                                             numOK <+- 1
@@ -2800,7 +2831,23 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                                 switch(CI.intersectPos){
                                     case ipGetLast   : {newTop <- innr.getLastInfon()}
                                     case ipGetFirst  : {newTop <- innr.getFirstItem(aItem.LHS_item.isSubItm)}
-                                    case ipGetMarked : {newTop <- CI.intersectMarkedRet}
+                                    case ipGetMarked : {
+                                        if(innr.intersectMarkedRetPOV!=NULL and 
+                                                innr.intersectMarkedRetPOV.pItem.isTentative and 
+                                                innr.intersectMarkedRetPOV.pParent!=NULL and 
+                                                !(innr.intersectMarkedRetPOV.pParent.pItem===innr)){
+                                            Allocate(newTop)
+                                            newTop.infMode <- isLiteral
+                                            newTop.infSize.format <- fUnknown
+                                            newTop.value.format <- fLiteral
+                                            newTop.value.fType <- LST
+                                            innr.intersectMarkedRetPOV.addNewSubDots <- true
+                                            newTop.value.items.append(innr.intersectMarkedRetPOV.pItem, innr.intersectMarkedRetPOV.isSubItm, 304)
+                                            newTop.countSize(false)
+                                        }else{
+                                            if(CI.intersectMarkedRetPOV!=NULL){newTop <- CI.intersectMarkedRetPOV.pItem}
+                                        }
+                                    }
                                 }
                                 if(newTop!=NULL){
                                     newTop.takeWrkListFrom(CI, true)

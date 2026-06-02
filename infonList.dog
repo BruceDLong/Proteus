@@ -32,6 +32,7 @@ model POV{ // Point-Of-View
     flag: forLastUseLastItem
     flag: forLastUseOutrPov
     flag: isOutrFeed
+    our POV: markedOuterPOV
     me int: linearAltID
     flag: rejected         // At least one item on the worklist was rejected.
     flag: doReply          // Flag that this should reply back to user/stream.
@@ -52,6 +53,16 @@ model POV{ // Point-Of-View
     me bool: isLast()  <- {return(next==NULL)}
     me bool: looseSize() <- {return(looseInhtd or looseTop)}
     me bool: looseType() <- {return(looseMode or looseTop or looseInhtd)}
+    void: noteMarkedOuterFrom(our POV: transparentPOV) <- {
+        if(markedOuterPOV!=NULL or transparentPOV==NULL){return()}
+        // Tight traversal treats &{...} as transparent and returns an inner POV.
+        // When the skipped transparent POV was marked with <...>, keep that origin
+        // on the returned inner POV so Propagate can map its LHS match to the RHS source.
+        if(transparentPOV.markedOuterPOV!=NULL){markedOuterPOV <- transparentPOV.markedOuterPOV}
+        else if(transparentPOV.pParent!=NULL and transparentPOV.pParent.pItem.intersectMarkedRetPOV===transparentPOV){
+            markedOuterPOV <- transparentPOV
+        }
+    }
     void: insertNewPctTag(me string: tag, our POV: newPOV) <- {
         /*our POV[itr map string]: tagPOV <- pctTags.find(tag)
         if(tagPOV == pctTags.end()){
@@ -84,6 +95,10 @@ model POV{ // Point-Of-View
         }
         our POV: pov <- pItem.value.items.head
         while(pov != NULL){
+            // Remove exploatory tentatives
+            if(pov.isSubItm and pov.pItem.value.tailUnfinished and !pov.pItem.value.items.isEmpty() and pov.pItem.value.items.last().isTentative){
+                pov.pItem.value.items.popLast()
+            }
             if(pov.pItem.isTentative){
                 //:l/PAI::logSeg(" resetTent:A")
             }
@@ -269,6 +284,7 @@ model POV{ // Point-Of-View
                 setProp <- true
             }
             our POV: firstPOV <- nextPOV.getFirstTight(ii, skipDots, dummyFlag, waitState, agent)
+            if(firstPOV!=NULL){firstPOV.noteMarkedOuterFrom(nextPOV)}
             if(firstPOV == NULL){nextPOV <- nextPOV.getNextTight(ii, skipDots, numLvlsUp, false, false, waitState, agent)}
             else{nextPOV <- firstPOV}
         }
@@ -302,9 +318,13 @@ model POV{ // Point-Of-View
                 }
             }else if(nextPOV.isSubItm or (nextPOV.pItem.value.fType==LST and getDeep)){
                 our POV: firstPOV <- nextPOV.getFirstTight(ii, skipDots, dummyFlag, waitState, agent)
+                if(firstPOV!=NULL){firstPOV.noteMarkedOuterFrom(nextPOV)}
                 if(firstPOV == NULL){nextPOV <- nextPOV.getNextTight(ii, skipDots, numLvlsUp, getDeep, itrBeginning, waitState, agent)}
                 else{nextPOV <- firstPOV}
             }
+        }
+        if(nextPOV!=NULL and markedOuterPOV!=NULL and nextPOV.markedOuterPOV==NULL){
+            nextPOV.markedOuterPOV <- markedOuterPOV
         }
         if(nextPOV!=NULL and (waitState==NULL or waitState==0) and nextPOV.altPOV==NULL and nextPOV.pItem.isTentative){
             me int: tmpWS<- -2
