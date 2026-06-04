@@ -49,3 +49,23 @@ Other files:
  This code is very precisely written to handle a wide variety of exceptional cases. Be very through in looking for side-effects of seemlingly innocent code changes. Change as little as possible and use good programing techniques like avoid special-casing or quick fixes for a bug that fix the symptom but not the underlying cause. Always test to verify that your theory about what is causing a bug is actually the real cause. Discuss with the user when in doubt.
 
  Make sure the user understands what changes have been made. If the user cannot grok what is going on progress will or should stop.
+
+
+ =========================
+Build LinuxTestBuild/TestProteus with codeDog Proteus.Lib.dog
+
+Run default tests (which are in defaultTests.tst) with:
+     ./TestProteus
+
+    or:  ./TestProteus -t ./defaultTests.tst:
+
+    Specific test: ./TestProteus -t ./defaultTests.tst:query/getNthSub
+
+    Add -T 3 to run with crash protection after 3 seconds. (Takes longer)
+
+
+The build from scratch can take a minute. If you are doing quick experiments you can just edit the intermediate c++ file. Rebuild it from the LinuxTestBuild folder with "codeDog -b TestProteus"
+
+
+
+ 

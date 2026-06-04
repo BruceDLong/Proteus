@@ -139,7 +139,7 @@ func/anonFunc1,        test anon functions,            [_ 456 789] <: +123,     
 # parse/select1st,	Parse & select option 1	[...]=='AARONdacks' :== {'AARON' 'ARON'} 	('AARON')	norm
 # parse/2Itms,	Two item parse	{[...] :== {'AARON' 'BOBO' 'ARON' 'AAAROM'}   'dac'} ==  'ARONdacks'	({'ARON' 'dac' })	norm
 # parse/2ItmsGet1st,	Two item parse: get first option	{[...] :== {'ARON' 'BOBO' 'AARON' 'CeCe'}   'dac'} ==  'ARONdacks'	({'ARON' 'dac' })	norm
-innr/oneOf,            Choose one of,                  [...] <~ {'ARON' 'AARON' 'ERIN'} =='AARONDacs',                          'AARON',                        norm
+innr/oneOf,            Choose one of,                  *_+[...] <~ {'ARON' 'AARON' 'ERIN'} =='AARONDacs',                          'AARON',                        norm
 query/first,           Get first item,                 *1+['Cat' 'Hat' 'Bat' 'Dog'],                                           'Cat',                          norm
 query/getNth,          Get Nth item,                   *3+['Cat' 'Hat' 'Bat' 'Dog'],                                           'Bat',                          norm
 # query/firstStrA,	Get first String	[&{&{_|...} $} =: {2 3 'Cat' 'Hat'}]	'Cat'	norm
