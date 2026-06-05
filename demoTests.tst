@@ -53,8 +53,8 @@ slice/afterDog_assertObject, Assert object after dog, [& { ! dog | ...} dog <&{.
 slice/afterDog_assertSequence, Assert sequence after dog, [& { ! dog | ...} dog <&{...}> ] <~ %W#5 ={... goat bike ...} \n %W#5//:{cat bat ... dog &{ ... } goat bike ... }, -, world, TestFiles/insertIntoLists.pr
 
 # Candidate cookbook tests once the corresponding slice-boundary syntax is committed:
-# slice/beforeDog_read, Select items before dog,       [& <&{!dog|...}> dog {...} ] <~ {cat bat dog goat pig},                            {cat bat},                       norm
-# slice/betweenCatDog_read, Select between cat and dog,[& { ! cat | ...} cat <&{...}> dog {...} ] <~ {cat bat dog goat pig},               {bat},                           norm
-# slice/catThroughDog_read, Select cat through dog,    [& { ! cat | ...} <&{cat ... dog}> {...} ] <~ {ant cat bat dog eel},                {cat bat dog},                    norm
-# slice/untilEvent_read, Select until event,           [& <&{!dog|...}> dog {...} ] <~ {cat bat dog goat pig},                            {cat bat},                       norm
-# slice/fromEventForLength, Select after event length, [& { ! dog | ...} dog <&*2+{...}> ] <~ {cat bat dog goat pig eel},                  {goat pig},                      norm
+slice/beforeDog_read,       Select items before dog,        [<&{...}> dog {...} ] <~ {cat bat dog goat pig},                                    {cat bat},                       norm
+slice/betweenCatDog_read,   Select between cat and dog,     [& { ! cat | ...} cat <&*1+{...}> dog {...} ] <~ {cat bat dog goat pig},             {bat},                           norm
+slice/catThroughDog_read,  Select cat through dog,         [& { ! cat | ...} <&{cat ... dog}> {...} ] <~ {ant cat bat dog eel},                {cat bat dog},                    norm
+slice/untilEvent_read,      Select until event,             [<&{...}> dog {...} ] <~ {cat bat dog goat pig},                                    {cat bat},                       norm
+slice/fromEventForLength,   Select after event length,      [& { ! dog | ...} dog <&*2+{...}> ] <~ {cat bat dog goat pig eel},                  {goat pig},                      norm
