@@ -1,6 +1,6 @@
 // infonExper.dog
 
-LinuxBuild: Platform='Linux' CPU='amd64' Lang='CPP' LangVersion='GNU' optimize='speed';
+WindowsBuild: Platform='Windows' CPU='amd64' Lang='CPP' LangVersion='MSVC' optimize='speed';
 
 Title = "infon Experimenter"
 FileName = "infonExper"
@@ -10,7 +10,7 @@ Authors = "Bruce Long"
 Description = "Run experiments on infons"
 ProgramOrLibrary = "program"
 
-featuresNeeded = [Logger, GUI_ToolKit, Dashboard, List]
+featuresNeeded = [Logger, List]
 
 LicenseText = `All Rights Reserved.`
 
@@ -29,38 +29,40 @@ runCode=`
     testQ.doTest()
 `
 
-do makeStyler(mainStyle)
-do makeGUI(GUI_Spec)
+//~ do makeStyler(mainStyle)
+//~ do makeGUI(GUI_Spec)
 
 struct GLOBAL{
 
     me string:zeroOrOneMode <- "zero" // Change to switch mode
 
-    me List<me cdColor>: cosetColors
+    //~ me List<me cdColor>: cosetColors
 
     me int: globalItemIdx <- 0 // Used to check which item is being processed
 
-    void: drawArrow(their GUI_ctxt: cr, me int: startX, me int: startY, me int: endX, me int: endY) <- {
-        me double: tipLength <- 10
-        me double: tipAngle <- 0.35
-
-        me double: angle <- atan2(double(endY) - double(startY), double(endX) - double(startX)) + 3.14159265359
-
-        me double: x1 <- double(endX) + tipLength * cos(angle - tipAngle)
-        me double: y1 <- double(endY) + tipLength * sin(angle - tipAngle)
-        me double: x2 <- double(endX) + tipLength * cos(angle + tipAngle)
-        me double: y2 <- double(endY) + tipLength * sin(angle + tipAngle)
-
-        cr.moveTo(startX, startY)
-        cr.lineTo(endX, endY)
-        cr.lineTo(x1, y1)
-        cr.lineTo(x2, y2)
-        cr.lineTo(endX, endY)
-        cr.closePath()
-        cr.fillKeep()
-        cr.strokeNow()
-    }
-
+// /* Graphics disabled for console theory build.
+//     void: drawArrow(their GUI_ctxt: cr, me int: startX, me int: startY, me int: endX, me int: endY) <- {
+//         me double: tipLength <- 10
+//         me double: tipAngle <- 0.35
+// 
+//         me double: angle <- atan2(double(endY) - double(startY), double(endX) - double(startX)) + 3.14159265359
+// 
+//         me double: x1 <- double(endX) + tipLength * cos(angle - tipAngle)
+//         me double: y1 <- double(endY) + tipLength * sin(angle - tipAngle)
+//         me double: x2 <- double(endX) + tipLength * cos(angle + tipAngle)
+//         me double: y2 <- double(endY) + tipLength * sin(angle + tipAngle)
+// 
+//         cr.moveTo(startX, startY)
+//         cr.lineTo(endX, endY)
+//         cr.lineTo(x1, y1)
+//         cr.lineTo(x2, y2)
+//         cr.lineTo(endX, endY)
+//         cr.closePath()
+//         cr.fillKeep()
+//         cr.strokeNow()
+//     }
+// 
+// */
     bool: isSmallPrime(me int: n) <- {
         if(n==3 or n==5 or n==7 or n==11 or n==13){return(true)}
         return(false)
@@ -214,9 +216,62 @@ struct inf{
         return(-1)
     }
 
+    me int: countResidualInBaseSpan(our inf: parent, our inf: startItm, our inf: targetItm, me int: spanSize) <- {
+        me int: parentSize <- parent.items.size()
+        our inf: crntItm <- startItm
+        me int: residualStep <- 0
+        me int: distance <- 0
+        while(distance < parentSize and !(crntItm===targetItm)){
+            crntItm <- parent.baseline.findNext(crntItm, 1, parentSize)
+            distance <+- 1
+            residualStep <+- 1
+            if(residualStep == spanSize){
+                residualStep <- 0
+            }
+        }
+        if(distance >= parentSize){
+            print("Could not infer quotient residual step.\n")
+        }
+        return(residualStep)
+    }
+
+    me int: inferQuotientTraversalStepFromBase(our inf: parent, me int: quotient) <- {
+        me int: parentSize <- parent.items.size()
+        if(quotient <= 1 or parentSize <= 1 or parent.allIdent){return(0)}
+
+        me List<me int>: candidateSteps
+        me List<me int>: stepCounts
+        withEach idx in range 0 .. parentSize-1{
+            me int: step <- countResidualInBaseSpan(parent, parent.items[idx], parent.items[idx+1], quotient)
+            me bool: found <- false
+            withEach candidateIdx in range 0 .. candidateSteps.size(){
+                if(candidateSteps[candidateIdx] == step){
+                    stepCounts[candidateIdx] <+- 1
+                    found <- true
+                    break()
+                }
+            }
+            if(!found){
+                candidateSteps.append(step)
+                stepCounts.append(1)
+            }
+        }
+
+        me int: bestStep <- 0
+        me int: bestCount <- 0
+        withEach candidateIdx in range 0 .. candidateSteps.size(){
+            if(stepCounts[candidateIdx] > bestCount){
+                bestStep <- candidateSteps[candidateIdx]
+                bestCount <- stepCounts[candidateIdx]
+            }
+        }
+        return(bestStep)
+    }
+
     void: initAsQuotient(our inf: parent, me int: divisor) <-{
         me int: parentSize <- parent.items.size()
         me int: resultSize <- parentSize/divisor
+        allIdent <- (inferQuotientTraversalStepFromBase(parent, resultSize) == 0)
 
         our inf: startItm <- parent.items[0%parentSize]
         our inf: crntItm <- startItm
@@ -251,7 +306,62 @@ struct inf{
 
     }
 
-    void: initAsDivisor(our inf: parent, me int: quotient, me int:phase, me int: projValue) <-{
+    me int: countQuotientSpansInBase(our inf: parent, our inf: startItm, our inf: targetItm, me int: quotient) <- {
+        me int: parentSize <- parent.items.size()
+        our inf: crntItm <- startItm
+        me int: withinQuotient <- 0
+        me int: traversalStep <- 0
+        me int: distance <- 0
+        while(distance < parentSize and !(crntItm===targetItm)){
+            crntItm <- parent.baseline.findNext(crntItm, 1, parentSize)
+            distance <+- 1
+            withinQuotient <+- 1
+            if(withinQuotient == quotient){
+                traversalStep <+- 1
+                withinQuotient <- 0
+            }
+        }
+        if(distance >= parentSize){
+            print("Could not infer divisor traversal step.\n")
+        }
+        return(traversalStep)
+    }
+
+    me int: inferTraversalStepFromBase(our inf: parent, me int: quotient) <- {
+        me int: resultSize <- items.size()
+        me int: parentSize <- parent.items.size()
+        if(resultSize <= 1 or parentSize <= 1 or parent.allIdent){return(0)}
+
+        me List<me int>: candidateSteps
+        me List<me int>: stepCounts
+        withEach idx in range 0 .. parentSize-1{
+            me int: step <- countQuotientSpansInBase(parent, parent.items[idx], parent.items[idx+1], quotient)
+            me bool: found <- false
+            withEach candidateIdx in range 0 .. candidateSteps.size(){
+                if(candidateSteps[candidateIdx] == step){
+                    stepCounts[candidateIdx] <+- 1
+                    found <- true
+                    break()
+                }
+            }
+            if(!found){
+                candidateSteps.append(step)
+                stepCounts.append(1)
+            }
+        }
+
+        me int: bestStep <- 0
+        me int: bestCount <- 0
+        withEach candidateIdx in range 0 .. candidateSteps.size(){
+            if(stepCounts[candidateIdx] > bestCount){
+                bestStep <- candidateSteps[candidateIdx]
+                bestCount <- stepCounts[candidateIdx]
+            }
+        }
+        return(bestStep)
+    }
+
+    void: initAsDivisor(our inf: parent, me int: quotient, me int:phase) <-{
         // Determine the roles of value and base for flexibility
         our inf: val <- parent; // Default: use parent for value
         our inf: base <- parent.baseline; // Default: use baseline for base
@@ -308,159 +418,146 @@ struct inf{
         }
 //        print("]\n")
 
-        // Map the collected items back to the baseline
-        our inf: lastItem <- base.items[baseItems[baseItems.size()-1]]
-        me int: lastIdx <- base.indexOf(lastItem)
-        allIdent <- (lastIdx <= quotient)
-   //     if(allIdent){print(" ALLIDENT ")}
-   
-        me int: count <- 0
-        me int: idx <- 0
-        withEach item in parent.baseline.items{
-            withEach result in baseItems{
-                if(item.mySymbol()==parent.baseline.items[result].mySymbol()){
-                    if(doCarry and lastItem.mySymbol()==item.mySymbol() and (idx == 1) and count+1<resultSize){
-                        print(" TAILED ",lastItem.mySymbol(), " idx:",idx," resultSize:",resultSize ,"\n")
-
-                    }
-                    else {
-                        baseline.items[count] <- parent.baseline.items[result]
-                        count <+- 1
-                    }
-                    break()
-                }
+        // Map the selected value singlets into baseline slots by walking
+        // the divisor traversal inferred from the parent's regular
+        // reference-order transition, ignoring coset-boundary jumps.
+        me int: resultValue <- inferTraversalStepFromBase(parent, quotient)
+        allIdent <- (resultValue == 0)
+        me int: crntBaseIdx <- 0
+        me int: startBaseIdx <- 0
+        withEach idx in range 0 .. resultSize{
+            baseline.items[crntBaseIdx] <- items[idx]
+            crntBaseIdx <- (crntBaseIdx + resultValue) % resultSize
+            if(crntBaseIdx == startBaseIdx){
+                crntBaseIdx <- (crntBaseIdx + 1) % resultSize
+                startBaseIdx <- crntBaseIdx
             }
-            idx <+- 1
-        }
-        if(count < baseItems.size()){
-            baseline.items[count] <- lastItem
-     //       print("SET baseline.items[",count,"] to ",lastItem.mySymbol(),"\n")
         }
     print(stringifyFull("Result infon"),"\n")
 
     }
 
-/*
-me int: findCycleID(our inf: item, our inf: parent, me int: parentProjValue) <-{
-    me int: idx <- parent.indexOf(item)
-    if(idx == -1){
-        print("Error: Item not found in parent.items\n")
-        return(0)
-    }
-    me List<me int>: visited
-    me int: cycleID <- 0
-    me int: size <- parent.items.size()
-    me int: maxIterations <- size  // Prevent infinite loop
-    me int: iterCount <- 0
-    while(!visited.contains(idx) and iterCount < maxIterations){
-        visited.append(idx)
-        our inf: nextItem <- parent.findNext(parent.items[idx], parentProjValue, size)
-        idx <- parent.indexOf(nextItem)
-        if(idx == -1){
-            print("Error: Next item not found in parent.items\n")
-            return(cycleID)
-        }
-        if(idx == visited[0]){
-            cycleID <+- 1
-            visited.clear()
-        }
-        iterCount <+- 1
-    }
-    if(iterCount >= maxIterations){
-        print("Error: Max iterations reached in findCycleID\n")
-    }
-    return(cycleID)
-}
-
-void: initAsDivisor(our inf: parent, me int: quotient, me int: phase, me int: projValue) <-{
-    // Initialize
-    our inf: val <- parent
-    our inf: base <- parent.baseline
-    me int: parentSize <- val.items.size()
-    me int: resultSize <- parentSize/quotient
-    if (parentSize % quotient != 0) {
-        print("Warning: Parent size not divisible by quotient.\n")
-    }
-    me int: startIndex <- (phase * resultSize) % parentSize
-    our inf: startItm <- val.items[startIndex]
-    our inf: crntItm <- startItm
-    our inf:: bLine
-    bLine.initAsBaseline(resultSize, bLine)
-    baseline <- bLine
-    me int: parentValue <- parent.value()
-    me List<me int>: baseItems
-    me List<me int>: cycleIndices
-    me bool: doCarry <- false
-    me int: crntInfIdx <- 0
-    me int: prevInfIdx <- 0
-    // Collect items and track cycles
-    me List<me int>: cycleGroups
-    me List<our inf>: items
-    withEach idx in range 0 .. resultSize{
-        me int: newIDX <- base.indexOf(crntItm)
-        baseItems.append(newIDX)
-        items.append(crntItm)
-        // Find cycle using parent’s permutation
-        me int: cycleID <- findCycleID(crntItm, parent, parentValue)
-        cycleGroups.append(cycleID)
-        prevInfIdx <- crntInfIdx
-        crntInfIdx <- val.findNextIdx(crntItm, 1, parentSize)
-        crntItm <- val.items[crntInfIdx]
-        // Detect partial cycles
-        if(idx > 0 and cycleGroups[idx] != cycleGroups[idx-1] and idx < resultSize-1){
-            doCarry <- true
-            cycleIndices.append(idx)
-        }
-    }
-    // Reorder for partial cycles
-    me List<me int>: newBaseItems
-    me List<our inf>: completeItems
-    me List<our inf>: partialItems
-    withEach i in range 0 .. resultSize{
-        if(cycleIndices.contains(i)){
-            partialItems.append(items[i])
-            newBaseItems.append(baseItems[i])
-        } else {
-            completeItems.append(items[i])
-            newBaseItems.append(baseItems[i])
-        }
-    }
-    // Reorder items explicitly
-    items.clear()
-    withEach i in range 0 .. completeItems.size(){
-        items.append(completeItems[i])
-    }
-    withEach i in range 0 .. partialItems.size(){
-        items.append(partialItems[i])
-    }
-    baseItems <- newBaseItems
-    // Generate S-IFY for validation (printed)
-    me List<me int>: sify
-    me int: size <- resultSize
-    withEach i in range 0 .. size{
-        me int: nextIdx <- baseline.findNextIdx(items[i], projValue, size)
-        sify.append(nextIdx)
-    }
-    // Map to baseline
-    me int: count <- 0
-    withEach item in parent.baseline.items{
-        withEach result in baseItems{
-            if(item.mySymbol() == parent.baseline.items[result].mySymbol()){
-                baseline.items[count] <- parent.baseline.items[result]
-                count <+- 1
-                break()
-            }
-        }
-    }
-    // Validate permutation
-    if(!isValid(projValue)){
-        print("Invalid permutation for *", resultSize, "+", projValue, "\n")
-    } else {
-        print("Valid permutation for *", resultSize, "+", projValue, "\n")
-    }
-    print(stringifyFull("Result infon"),"\n")
-}
-*/
+// /*
+// me int: findCycleID(our inf: item, our inf: parent, me int: parentProjValue) <-{
+//     me int: idx <- parent.indexOf(item)
+//     if(idx == -1){
+//         print("Error: Item not found in parent.items\n")
+//         return(0)
+//     }
+//     me List<me int>: visited
+//     me int: cycleID <- 0
+//     me int: size <- parent.items.size()
+//     me int: maxIterations <- size  // Prevent infinite loop
+//     me int: iterCount <- 0
+//     while(!visited.contains(idx) and iterCount < maxIterations){
+//         visited.append(idx)
+//         our inf: nextItem <- parent.findNext(parent.items[idx], parentProjValue, size)
+//         idx <- parent.indexOf(nextItem)
+//         if(idx == -1){
+//             print("Error: Next item not found in parent.items\n")
+//             return(cycleID)
+//         }
+//         if(idx == visited[0]){
+//             cycleID <+- 1
+//             visited.clear()
+//         }
+//         iterCount <+- 1
+//     }
+//     if(iterCount >= maxIterations){
+//         print("Error: Max iterations reached in findCycleID\n")
+//     }
+//     return(cycleID)
+// }
+// 
+// void: initAsDivisor(our inf: parent, me int: quotient, me int: phase, me int: projValue) <-{
+//     // Initialize
+//     our inf: val <- parent
+//     our inf: base <- parent.baseline
+//     me int: parentSize <- val.items.size()
+//     me int: resultSize <- parentSize/quotient
+//     if (parentSize % quotient != 0) {
+//         print("Warning: Parent size not divisible by quotient.\n")
+//     }
+//     me int: startIndex <- (phase * resultSize) % parentSize
+//     our inf: startItm <- val.items[startIndex]
+//     our inf: crntItm <- startItm
+//     our inf:: bLine
+//     bLine.initAsBaseline(resultSize, bLine)
+//     baseline <- bLine
+//     me int: parentValue <- parent.value()
+//     me List<me int>: baseItems
+//     me List<me int>: cycleIndices
+//     me bool: doCarry <- false
+//     me int: crntInfIdx <- 0
+//     me int: prevInfIdx <- 0
+//     // Collect items and track cycles
+//     me List<me int>: cycleGroups
+//     me List<our inf>: items
+//     withEach idx in range 0 .. resultSize{
+//         me int: newIDX <- base.indexOf(crntItm)
+//         baseItems.append(newIDX)
+//         items.append(crntItm)
+//         // Find cycle using parent’s permutation
+//         me int: cycleID <- findCycleID(crntItm, parent, parentValue)
+//         cycleGroups.append(cycleID)
+//         prevInfIdx <- crntInfIdx
+//         crntInfIdx <- val.findNextIdx(crntItm, 1, parentSize)
+//         crntItm <- val.items[crntInfIdx]
+//         // Detect partial cycles
+//         if(idx > 0 and cycleGroups[idx] != cycleGroups[idx-1] and idx < resultSize-1){
+//             doCarry <- true
+//             cycleIndices.append(idx)
+//         }
+//     }
+//     // Reorder for partial cycles
+//     me List<me int>: newBaseItems
+//     me List<our inf>: completeItems
+//     me List<our inf>: partialItems
+//     withEach i in range 0 .. resultSize{
+//         if(cycleIndices.contains(i)){
+//             partialItems.append(items[i])
+//             newBaseItems.append(baseItems[i])
+//         } else {
+//             completeItems.append(items[i])
+//             newBaseItems.append(baseItems[i])
+//         }
+//     }
+//     // Reorder items explicitly
+//     items.clear()
+//     withEach i in range 0 .. completeItems.size(){
+//         items.append(completeItems[i])
+//     }
+//     withEach i in range 0 .. partialItems.size(){
+//         items.append(partialItems[i])
+//     }
+//     baseItems <- newBaseItems
+//     // Generate S-IFY for validation (printed)
+//     me List<me int>: sify
+//     me int: size <- resultSize
+//     withEach i in range 0 .. size{
+//         me int: nextIdx <- baseline.findNextIdx(items[i], projValue, size)
+//         sify.append(nextIdx)
+//     }
+//     // Map to baseline
+//     me int: count <- 0
+//     withEach item in parent.baseline.items{
+//         withEach result in baseItems{
+//             if(item.mySymbol() == parent.baseline.items[result].mySymbol()){
+//                 baseline.items[count] <- parent.baseline.items[result]
+//                 count <+- 1
+//                 break()
+//             }
+//         }
+//     }
+//     // Validate permutation
+//     if(!isValid(projValue)){
+//         print("Invalid permutation for *", resultSize, "+", projValue, "\n")
+//     } else {
+//         print("Valid permutation for *", resultSize, "+", projValue, "\n")
+//     }
+//     print(stringifyFull("Result infon"),"\n")
+// }
+// */
 
     me int: negMod(me int:val, me int:mod) <- {
         if(val<0){return(val+mod)}
@@ -498,7 +595,7 @@ void: initAsDivisor(our inf: parent, me int: quotient, me int: phase, me int: pr
              me int: prevIDX <- baseline.indexOf(items[negMod(zeroIDX+1,size)])
              if(prevIDX==-1){print("\nAt: Val4\n"); print("in ",mySymbol(),"\n"); exit(1);}
              if(prevIDX==1){
-     //            if(allIdent){prevIDX <- 0}
+                 if(allIdent){prevIDX <- 0}
              }
              return(prevIDX)
         }
@@ -574,72 +671,76 @@ void: initAsDivisor(our inf: parent, me int: quotient, me int: phase, me int: pr
         }
     }
 
-    void: draw(their GUI_ctxt: cr, me int: xLoc, me int: yLoc, me float: scale <- 1.0) <- {
-        cairo_save(cr)
-        cr.setScale(scale, scale)
-        xLoc <- xLoc*(1/scale)
-        yLoc <- yLoc*(1/scale)
-        if(self==NULL){
-            cr.setColor(styler.Black)
-            renderText(cr, "NULL ", textFont, xLoc, yLoc)
-            cr.strokeNow()
-            cairo_restore(cr)
-            return()
-        }
-        me string: S <- stringify()+":"
-        if(isBase){S <- " Ref:"}
-        cr.setColor(styler.Black)
-        renderText(cr, S, textFont, xLoc, yLoc+20)
-        renderText(cr, " Ref:", textFont, xLoc, yLoc+70)
-        cr.strokeNow()
-
-        me int: size <- items.size()
-        me int: itemsPerCoset <- numItemsInCoset()
-
-        me int: xpos <- xLoc+65
-        //cr.rectangle(xpos, yLoc, size*30, 25); cr.strokeNow()
-        me int: count <- 0
-        me int: count2 <- 0
-        me int: crntCoset <- 0
-        withEach idx in range 0 .. size{
-            if(count == itemsPerCoset){
-                count <- 0
-                crntCoset <+- 1
-            }
-            me int: alpha <- 255
-            if(dispMode == 1 and idx%dispArg != 0){alpha <- 10}
-            if(dispMode == 2 and idx >= dispArg){alpha <- 10}
-            me int: baseIdx  <- baseline.indexOf(items[idx])
-            me cdColor: c <- cosetColors[crntCoset]
-            me cdColor: color <- cdColor(c.red, c.green, c.blue, alpha)
-            cr.setColor(color)
-            cr.rectangle(xpos+((idx)*30), yLoc, 30, 25)
-            cr.rectangle(xpos+((baseIdx)*30), yLoc+50, 30, 25)
-            cr.fillNow()
-            cr.setColor(cdColor(0,0,0,alpha*3))
-            cr.rectangle(xpos+((idx)*30), yLoc, 30, 25)
-            cr.rectangle(xpos+((baseIdx)*30), yLoc+50, 30, 25)
-            cr.strokeNow()
-
-            cr.setColor(cdColor(0,0,0,alpha*3))
-            renderText(cr, toString(count2), textFont, xpos+((idx)*30)+8, yLoc-2)
-            cr.fillNow()
-            drawArrow(cr, xpos+((idx)*30)+15, yLoc+20, xpos+((baseIdx)*30)+15, yLoc+60)
-
-            count <+-1
-            count2 <+-1
-        }
-      //  cr.strokeNow()
-        //~ if(!isBase){
-            //~ cr.setColor(styler.Black)
-            //~ withEach idx in range 0 .. size{
-                //~ me int: baseIdx  <- baseline.indexOf(items[idx])
-                //~ drawArrow(cr, xpos+((idx)*30)+15, yLoc+20, xpos+((baseIdx)*30)+15, yLoc+60)
-            //~ }
-        //~ }
-        cairo_restore(cr)
-    }
-
+// /* Graphics disabled for console theory build.
+//     void: draw(their GUI_ctxt: cr, me int: xLoc, me int: yLoc, me float: scale <- 1.0) <- {
+//         cairo_save(cr)
+//         cr.setScale(scale, scale)
+//         xLoc <- xLoc*(1/scale)
+//         yLoc <- yLoc*(1/scale)
+//         if(self==NULL){
+//             cr.setColor(styler.Black)
+//             renderText(cr, "NULL ", textFont, xLoc, yLoc)
+//             cr.strokeNow()
+//             cairo_restore(cr)
+//             return()
+//         }
+//         me string: S <- stringify()+":"
+//         if(isBase){S <- " Ref:"}
+//         cr.setColor(styler.Black)
+//         renderText(cr, S, textFont, xLoc, yLoc+20)
+//         renderText(cr, " Ref:", textFont, xLoc, yLoc+70)
+//         cr.strokeNow()
+// 
+//         me int: size <- items.size()
+//         me int: itemsPerCoset <- numItemsInCoset()
+// 
+//         me int: xpos <- xLoc+65
+//         //cr.rectangle(xpos, yLoc, size*30, 25); cr.strokeNow()
+//         me int: count <- 0
+//         me int: count2 <- 0
+//         me int: crntCoset <- 0
+//         withEach idx in range 0 .. size{
+//             if(count == itemsPerCoset){
+//                 count <- 0
+//                 crntCoset <+- 1
+//             }
+//             me int: alpha <- 255
+//             if(dispMode == 1 and idx%dispArg != 0){alpha <- 10}
+//             if(dispMode == 2 and idx >= dispArg){alpha <- 10}
+//             me int: baseIdx  <- baseline.indexOf(items[idx])
+//             me cdColor: c <- cosetColors[crntCoset]
+//             me cdColor: color <- cdColor(c.red, c.green, c.blue, alpha)
+//             cr.setColor(color)
+//             cr.rectangle(xpos+((idx)*30), yLoc, 30, 25)
+//             cr.rectangle(xpos+((baseIdx)*30), yLoc+50, 30, 25)
+//             cr.fillNow()
+//             cr.setColor(cdColor(0,0,0,alpha*3))
+//             cr.rectangle(xpos+((idx)*30), yLoc, 30, 25)
+//             cr.rectangle(xpos+((baseIdx)*30), yLoc+50, 30, 25)
+//             cr.strokeNow()
+// 
+//             cr.setColor(cdColor(0,0,0,alpha*3))
+//             renderText(cr, toString(count2), textFont, xpos+((idx)*30)+8, yLoc-2)
+//             cr.fillNow()
+//             drawArrow(cr, xpos+((idx)*30)+15, yLoc+20, xpos+((baseIdx)*30)+15, yLoc+60)
+// 
+//             count <+-1
+//             count2 <+-1
+//         }
+//       //  cr.strokeNow()
+//         //~ if(!isBase){
+//             //~ cr.setColor(styler.Black)
+//             //~ withEach idx in range 0 .. size{
+//                 //~ me int: baseIdx  <- baseline.indexOf(items[idx])
+//                 //~ drawArrow(cr, xpos+((idx)*30)+15, yLoc+20, xpos+((baseIdx)*30)+15, yLoc+60)
+//             //~ }
+//         //~ }
+//         cairo_restore(cr)
+//     }
+// 
+// }
+// 
+// */
 }
 
 struct testConstructing{
@@ -783,7 +884,7 @@ struct testQuotients{
     void: checkJoin(our inf: term, me int: size, me int: value, me int: quotient, me int:phase <- 0) <- {
         me int: divisor <- size / quotient
         me inf: D
-        D.initAsDivisor(term, quotient, phase, value)
+        D.initAsDivisor(term, quotient, phase)
         our inf:: Q
         Q.initAsQuotient(term, divisor)
 //print("INF-Q:",Q.mySymbol(),"\n")
@@ -883,177 +984,184 @@ struct testQuotients{
     }
 }
 
-struct infonWidget: inherits=DashboardWidget{
-    me List<our inf>: infons
-
-    void: addInfonToScene(me int: size, me int: val, me int: dispMode <- 0, me int: dispArg <- 0) <- {
-        our inf:: masterBaseline
-        masterBaseline.initAsBaseline(size, masterBaseline)
-        our inf:: term; term.initInf(masterBaseline, size, val)
-        term.dispMode <- dispMode
-        term.dispArg <- dispArg
-        infons.append(term)
-    }
-
-    void: init() <- {
-        cosetColors.append(cdColor(255,0,0,255))
-        cosetColors.append(cdColor(0,255,0,255))
-        cosetColors.append(styler.Yellow)
-        cosetColors.append(cdColor(255,12,200,255))
-        cosetColors.append(cdColor(2,200,200,255))
-        cosetColors.append(styler.Orange)
-        Allocate(textFont,"Ariel", "12")
-
-//Shouldn't fail
-addInfonToScene(5, 4, 2, 5)	//INVLD  ID:33
-addInfonToScene(6, 5, 2, 6)	//INVLD  ID:57
-addInfonToScene(7, 6, 2, 7)	//INVLD  ID:71
-addInfonToScene(8, 7, 2, 8)	//INVLD  ID:103
-addInfonToScene(9, 8, 2, 9)	//INVLD  ID:130
-
-// Normal fails
-addInfonToScene(6, 3, 2, 3)	//INVLD
-addInfonToScene(8, 3, 2, 4)	//INVLD
-addInfonToScene(9, 5, 2, 3)	//INVLD
-addInfonToScene(10, 3, 2, 5)	//INVLD
-addInfonToScene(10, 5, 2, 5)	//INVLD
-addInfonToScene(10, 7, 2, 5)	//INVLD
-addInfonToScene(12, 3, 2, 6)	//INVLD
-addInfonToScene(12, 4, 2, 4)	//INVLD
-addInfonToScene(12, 5, 2, 4)	//INVLD
-addInfonToScene(12, 5, 2, 6)	//INVLD
-addInfonToScene(12, 6, 2, 3)	//INVLD
-addInfonToScene(12, 7, 2, 3)	//INVLD
-addInfonToScene(12, 8, 2, 4)	//INVLD
-addInfonToScene(12, 9, 2, 6)	//INVLD
-
-        // withEach val in range 0 .. 11{
-        //     addInfonToScene(12, val, 1, 4)
-        //     addInfonToScene(12, val, 2, 4)
-        // }
-
-//exit(1)
-        //~ me innerAdd: iAdd
-        //~ iAdd.init(3, 2, 5)
-
-        //~ me testRebaseCombos: test1
-        //~ test1.doTest(5)
-    }
-    void: draw(their GUI_ctxt: cr) <- {
-        cr.setColor(styler.White)
-        cr.setLineWidth(1)
-        cr.rectangle(0,0,1200,1400)
-        cr.fillNow()
-
-        me int: yPos <- 50
-        me int: xPos <- 40
-        withEach infn in infons{
-            me int: infonSize <- infn.items.size()
-            me int: infonVal <- infn.value()
-            me int: colIdx <- infn.dispArg
-            me int: dispArg <- infn.dispArg
-            me int: dispMode <- infn.dispMode
-            me int: Q_size <- 0
-            me int: D_size <- 0
-
-               D_size <- dispArg
-               Q_size <- infonSize/D_size
-
-            me int: divisorVal <- infonVal / Q_size
-            me int: quotientVal <- infonVal % Q_size
-            me string: label <- 'Expected: {*'+toString(D_size)+'+'+toString(divisorVal)+' *'+toString(Q_size)+'+'+toString(quotientVal)+'} ==  *'+toString(infonSize)+'+'+toString(infonVal)
-            cr.setColor(cdColor(0,0,0,200))
-            cr.rectangle(xPos-5, yPos-20, 330, 90); cr.strokeNow()
-            renderText(cr, label, textFont, xPos, yPos-25)
-            cr.setColor(cdColor(230,230,230,200))
-
-            infn.draw(cr, xPos, yPos, 0.75)
-            if(xPos>700){xPos <- 40; yPos <+- 200}
-            else{xPos <+- 350}
-
-
-        }
-    }
-}
-
-struct infonWidgetTable: inherits=DashboardWidget{
-    me int: infonSize <- 12
-    me List<int>: cols <- [1, 2, 3, 4, 6]
-    our inf: masterBaseline
-
-    void: init() <- {
-        Allocate(masterBaseline)
-        masterBaseline.initAsBaseline(infonSize, masterBaseline)
-
-        cosetColors.append(cdColor(255,0,0,255))
-        cosetColors.append(cdColor(0,255,0,255))
-        cosetColors.append(styler.Yellow)
-        cosetColors.append(cdColor(255,12,200,255))
-        cosetColors.append(cdColor(2,200,200,255))
-        cosetColors.append(styler.Orange)
-        Allocate(textFont,"Ariel", "8")
-        Allocate(hugeFont, "Ariel", "72")
-    }
-
-    void: draw(their GUI_ctxt: cr) <- {
-        cr.setColor(styler.White)
-        cr.setLineWidth(1)
-        cr.rectangle(0,0,2000,2000)
-        cr.fillNow()
-
-        me int: yPos <- 40
-        me string: tsz <- toString(infonSize)
-        withEach row in range 0 .. infonSize{
-            cr.setColor(cdColor(230,230,230,255))
-            renderText(cr, to_string(row), hugeFont, 20, yPos+70)
-            cr.strokeNow()
-
-            our inf:: term; term.initInf(masterBaseline, infonSize, row)
-
-            withEach colIdx in range 0 .. cols.size{
-                me int: Q_size <- cols[colIdx]
-                me int: D_size <- infonSize/Q_size
-                me int: quotientVal <- row / D_size
-                me int: divisorVal <- row % D_size
-                me string: label <- '{*'+toString(Q_size)+'+'+toString(quotientVal)+' *'+toString(infonSize/Q_size)+'+'+toString(divisorVal)+'} ==  *12+'+toString(row)
-                cr.setColor(cdColor(50,50,50,200))
-                me int: xPos <- 150+colIdx*300
-                cr.rectangle(xPos-5, yPos-20, 250, 145); cr.strokeNow()
-                renderText(cr, label, textFont, xPos, yPos-3)
-                term.dispMode <- 2
-                term.dispArg <- Q_size
-                term.draw(cr, xPos, yPos+10, 0.5)
-
-                term.dispMode <- 1
-                term.draw(cr, xPos, yPos+75, 0.5)
-
-            }
-            yPos <+- 150
-        }
-    }
-}
-
-struct GLOBAL{
-    their GUI_canvas: drawing_area
-    their infonWidget: infCanvas            // Uncomment this one to use the infonWidget
-   // their infonWidgetTable: infCanvas     // Uncomment this one to use the display all the size 12s (for example)
-    me int: fontSize
-    our fontSpec:: textFont
-    our fontSpec:: hugeFont
-    me cdColor: lineColor1
-    me cdColor: lineColor2
-}
-
-struct APP{
-    me void: createAppArea(me GUI_Frame: frame) <- {
-        Allocate(infCanvas)
-        infCanvas.init()
-        drawing_area  <- gui.newCanvas()
-        drawing_area.setParent(infCanvas)
-        gui.setWidgetSize(drawing_area, 1800, 1800)
-        infCanvas.EventDispatcher.registerWidgetForEventDispatcher(drawing_area, infCanvas)
-        addToContainerAndExpand (frame, drawing_area)
-    }
-}
+// Graphics widgets disabled for console theory build.
+// struct infonWidget: inherits=DashboardWidget{
+//     me List<our inf>: infons
+// 
+//     void: addInfonToScene(me int: size, me int: val, me int: dispMode <- 0, me int: dispArg <- 0) <- {
+//         our inf:: masterBaseline
+//         masterBaseline.initAsBaseline(size, masterBaseline)
+//         our inf:: term; term.initInf(masterBaseline, size, val)
+//         term.dispMode <- dispMode
+//         term.dispArg <- dispArg
+//         infons.append(term)
+//     }
+// 
+//     void: init() <- {
+//         cosetColors.append(cdColor(255,0,0,255))
+//         cosetColors.append(cdColor(0,255,0,255))
+//         cosetColors.append(styler.Yellow)
+//         cosetColors.append(cdColor(255,12,200,255))
+//         cosetColors.append(cdColor(2,200,200,255))
+//         cosetColors.append(styler.Orange)
+//         Allocate(textFont,"Ariel", "12")
+// 
+// //Shouldn't fail
+// addInfonToScene(5, 4, 2, 5)	//INVLD  ID:33
+// addInfonToScene(6, 5, 2, 6)	//INVLD  ID:57
+// addInfonToScene(7, 6, 2, 7)	//INVLD  ID:71
+// addInfonToScene(8, 7, 2, 8)	//INVLD  ID:103
+// addInfonToScene(9, 8, 2, 9)	//INVLD  ID:130
+// 
+// // Normal fails
+// addInfonToScene(6, 3, 2, 3)	//INVLD
+// addInfonToScene(8, 3, 2, 4)	//INVLD
+// addInfonToScene(9, 5, 2, 3)	//INVLD
+// addInfonToScene(10, 3, 2, 5)	//INVLD
+// addInfonToScene(10, 5, 2, 5)	//INVLD
+// addInfonToScene(10, 7, 2, 5)	//INVLD
+// addInfonToScene(12, 3, 2, 6)	//INVLD
+// addInfonToScene(12, 4, 2, 4)	//INVLD
+// addInfonToScene(12, 5, 2, 4)	//INVLD
+// addInfonToScene(12, 5, 2, 6)	//INVLD
+// addInfonToScene(12, 6, 2, 3)	//INVLD
+// addInfonToScene(12, 7, 2, 3)	//INVLD
+// addInfonToScene(12, 8, 2, 4)	//INVLD
+// addInfonToScene(12, 9, 2, 6)	//INVLD
+// 
+//         // withEach val in range 0 .. 11{
+//         //     addInfonToScene(12, val, 1, 4)
+//         //     addInfonToScene(12, val, 2, 4)
+//         // }
+// 
+// //exit(1)
+//         //~ me innerAdd: iAdd
+//         //~ iAdd.init(3, 2, 5)
+// 
+//         //~ me testRebaseCombos: test1
+//         //~ test1.doTest(5)
+//     }
+//     void: draw(their GUI_ctxt: cr) <- {
+//         cr.setColor(styler.White)
+//         cr.setLineWidth(1)
+//         cr.rectangle(0,0,1200,1400)
+//         cr.fillNow()
+// 
+//         me int: yPos <- 50
+//         me int: xPos <- 40
+//         withEach infn in infons{
+//             me int: infonSize <- infn.items.size()
+//             me int: infonVal <- infn.value()
+//             me int: colIdx <- infn.dispArg
+//             me int: dispArg <- infn.dispArg
+//             me int: dispMode <- infn.dispMode
+//             me int: Q_size <- 0
+//             me int: D_size <- 0
+// 
+//                D_size <- dispArg
+//                Q_size <- infonSize/D_size
+// 
+//             me int: divisorVal <- infonVal / Q_size
+//             me int: quotientVal <- infonVal % Q_size
+//             me string: label <- 'Expected: {*'+toString(D_size)+'+'+toString(divisorVal)+' *'+toString(Q_size)+'+'+toString(quotientVal)+'} ==  *'+toString(infonSize)+'+'+toString(infonVal)
+//             cr.setColor(cdColor(0,0,0,200))
+//             cr.rectangle(xPos-5, yPos-20, 330, 90); cr.strokeNow()
+//             renderText(cr, label, textFont, xPos, yPos-25)
+//             cr.setColor(cdColor(230,230,230,200))
+// 
+//             infn.draw(cr, xPos, yPos, 0.75)
+//             if(xPos>700){xPos <- 40; yPos <+- 200}
+//             else{xPos <+- 350}
+// 
+// 
+//         }
+//     }
+// }
+// 
+// struct infonWidgetTable: inherits=DashboardWidget{
+//     me int: infonSize <- 12
+//     me List<int>: cols <- [1, 2, 3, 4, 6]
+//     our inf: masterBaseline
+// 
+//     void: init() <- {
+//         Allocate(masterBaseline)
+//         masterBaseline.initAsBaseline(infonSize, masterBaseline)
+// 
+//         cosetColors.append(cdColor(255,0,0,255))
+//         cosetColors.append(cdColor(0,255,0,255))
+//         cosetColors.append(styler.Yellow)
+//         cosetColors.append(cdColor(255,12,200,255))
+//         cosetColors.append(cdColor(2,200,200,255))
+//         cosetColors.append(styler.Orange)
+//         Allocate(textFont,"Ariel", "8")
+//         Allocate(hugeFont, "Ariel", "72")
+//     }
+// 
+//     void: draw(their GUI_ctxt: cr) <- {
+//         cr.setColor(styler.White)
+//         cr.setLineWidth(1)
+//         cr.rectangle(0,0,2000,2000)
+//         cr.fillNow()
+// 
+//         me int: yPos <- 40
+//         me string: tsz <- toString(infonSize)
+//         withEach row in range 0 .. infonSize{
+//             cr.setColor(cdColor(230,230,230,255))
+//             renderText(cr, to_string(row), hugeFont, 20, yPos+70)
+//             cr.strokeNow()
+// 
+//             our inf:: term; term.initInf(masterBaseline, infonSize, row)
+// 
+//             withEach colIdx in range 0 .. cols.size{
+//                 me int: Q_size <- cols[colIdx]
+//                 me int: D_size <- infonSize/Q_size
+//                 me int: quotientVal <- row / D_size
+//                 me int: divisorVal <- row % D_size
+//                 me string: label <- '{*'+toString(Q_size)+'+'+toString(quotientVal)+' *'+toString(infonSize/Q_size)+'+'+toString(divisorVal)+'} ==  *12+'+toString(row)
+//                 cr.setColor(cdColor(50,50,50,200))
+//                 me int: xPos <- 150+colIdx*300
+//                 cr.rectangle(xPos-5, yPos-20, 250, 145); cr.strokeNow()
+//                 renderText(cr, label, textFont, xPos, yPos-3)
+//                 term.dispMode <- 2
+//                 term.dispArg <- Q_size
+//                 term.draw(cr, xPos, yPos+10, 0.5)
+// 
+//                 term.dispMode <- 1
+//                 term.draw(cr, xPos, yPos+75, 0.5)
+// 
+//             }
+//             yPos <+- 150
+//         }
+//     }
+// }
+// 
+// struct GLOBAL{
+//     their GUI_canvas: drawing_area
+//     their infonWidget: infCanvas            // Uncomment this one to use the infonWidget
+//    // their infonWidgetTable: infCanvas     // Uncomment this one to use the display all the size 12s (for example)
+//     me int: fontSize
+//     our fontSpec:: textFont
+//     our fontSpec:: hugeFont
+//     me cdColor: lineColor1
+//     me cdColor: lineColor2
+// }
+// 
+// struct APP{
+//     me void: createAppArea(me GUI_Frame: frame) <- {
+//         Allocate(infCanvas)
+//         infCanvas.init()
+//         drawing_area  <- gui.newCanvas()
+//         drawing_area.setParent(infCanvas)
+//         gui.setWidgetSize(drawing_area, 1800, 1800)
+//         infCanvas.EventDispatcher.registerWidgetForEventDispatcher(drawing_area, infCanvas)
+//         addToContainerAndExpand (frame, drawing_area)
+//     }
+// }
+// 
 
 do GeneratePtrSymbols(inf)
+
+
+
+
+
