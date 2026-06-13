@@ -1122,7 +1122,7 @@ function App() {
     <main className="appShell">
       <header className="topBar">
         <div>
-          <h1>Proteus Infon Scaler</h1>
+          <h1>Proteus Infon Decomposer</h1>
           <div className="signature">
             *{size}+{activeValue} = *{model.divisorSize}+{model.divisorStep} x *{effectiveQuotientSize}+
             {model.quotientStep}
