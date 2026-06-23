@@ -147,6 +147,7 @@ struct GLOBAL {
     me Map<me string, me string>: dynamicTestExpected
     me Map<me string, me string>: dynamicTestMode
     me Map<me string, me string>: dynamicTestWorldFile
+    me Map<me string, me string>: dynamicTestIncludedFiles
 
     me string: decodeTestFileEscapes(me string: txt) <- {
         me string: decoded <- ""
@@ -192,6 +193,13 @@ struct GLOBAL {
         dynamicTestExpected.clear()
         dynamicTestMode.clear()
         dynamicTestWorldFile.clear()
+        dynamicTestIncludedFiles.clear()
+    }
+    me bool: isDynamicTestIncludeLine(me string: trimmed) <- {
+        if(trimmed.size()<8){return(false)}
+        if(trimmed.subStr(0,8)!="@include"){return(false)}
+        if(trimmed.size()==8){return(true)}
+        return(trimmed[8]==" " or trimmed[8]=="\t")
     }
     me void: loadDynamicTestLine(me string: fileName, me int: lineNum, me string: lineIn) <- {
         me string: line <- lineIn
@@ -199,6 +207,16 @@ struct GLOBAL {
         me string: trimmed <- trimWS(line)
         if(trimmed==""){return()}
         if(trimmed[0]=="#"){return()}
+        if(isDynamicTestIncludeLine(trimmed)){
+            me string: includedFileName <- trimmed.subStr(8, trimmed.size()-8)
+            includedFileName <- trimWS(includedFileName)
+            if(includedFileName==""){
+                print("Dynamic test parse error in ", fileName, ":", lineNum, " missing @include filename.\n")
+            }else{
+                loadDynamicTestFile(includedFileName)
+            }
+            return()
+        }
 
         me List<me string>: columns
         splitTestFileLine(line, columns)
@@ -233,6 +251,45 @@ struct GLOBAL {
         if(columns.size()>=6){dynamicTestWorldFile[testName] <- decodeTestFileEscapes(trimWS(columns[5]))}
         else{dynamicTestWorldFile[testName] <- ""}
     }
+    me int: loadDynamicTestFile(me string: filename) <- {
+        me string: fileName <- trimWS(filename)
+        if(fileName==""){
+            print("Dynamic test filename is empty.\n")
+            return(0)
+        }
+        me bool: hasTestExt <- false
+        if(fileName.size()>=4 and fileName.subStr(fileName.size()-4,4)==".tst"){hasTestExt <- true}
+        if(!hasTestExt){fileName <+- ".tst"}
+
+        me string: fileText <- readFileAsString(fileName)
+        if(fileText=="" and findString(fileName, "/")==-1 and findString(fileName, "\\")==-1){
+            me string: parentFileName <- "../"+fileName
+            me string: parentText <- readFileAsString(parentFileName)
+            if(parentText!=""){
+                fileName <- parentFileName
+                fileText <- parentText
+            }
+        }
+        if(dynamicTestIncludedFiles.containsKey(fileName)){return(0)}
+        dynamicTestIncludedFiles[fileName] <- "1"
+
+        if(fileText==""){
+            print("Dynamic test file is empty or unreadable: ", fileName, "\n")
+            return(0)
+        }
+
+        me string: line <- ""
+        me int: lineNum <- 1
+        withEach charPos in range 0 .. fileText.size(){
+            if(fileText[charPos]=="\n"){
+                loadDynamicTestLine(fileName, lineNum, line)
+                line <- ""
+                lineNum <+- 1
+            }else{line <+- fileText[charPos]}
+        }
+        if(line!=""){loadDynamicTestLine(fileName, lineNum, line)}
+        return(dynamicTestNames.size())
+    }
     me int: loadTestSpec(me string: filename) <- {
         me string: fileName <- trimWS(filename)
         if(fileName==""){
@@ -247,29 +304,8 @@ struct GLOBAL {
 
         clearDynamicTests()
         dynamicTestsLoaded <- true
-
-        me string: fileText <- readFileAsString(fileName)
-        if(fileText=="" and findString(fileName, "/")==-1 and findString(fileName, "\\")==-1){
-            me string: parentFileName <- "../"+fileName
-            me string: parentText <- readFileAsString(parentFileName)
-            if(parentText!=""){
-                fileName <- parentFileName
-                fileText <- parentText
-            }
-        }
         dynamicTestsFile <- fileName
-        if(fileText==""){print("Dynamic test file is empty or unreadable: ", fileName, "\n")}
-
-        me string: line <- ""
-        me int: lineNum <- 1
-        withEach charPos in range 0 .. fileText.size(){
-            if(fileText[charPos]=="\n"){
-                loadDynamicTestLine(fileName, lineNum, line)
-                line <- ""
-                lineNum <+- 1
-            }else{line <+- fileText[charPos]}
-        }
-        if(line!=""){loadDynamicTestLine(fileName, lineNum, line)}
+        loadDynamicTestFile(fileName)
         return(dynamicTestNames.size())
     }
     me bool: matchesDynamicSelector(me string: testName, me string: selector) <- {

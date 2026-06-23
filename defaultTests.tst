@@ -220,3 +220,7 @@ search/adj1,           Search by adjective,            {{color=red\, ...} { name
 marked/getNotLast,     Select with <...>,              [1 2 3 <4> 5 6],     4, norm
 marked/lookahead,      Select w/lookahead,             [&{_|...} <_> $] <~ {33 22 11 'hi' 'bye' 66 55}, 11, norm
 merge/lookahead,       Merge lookahead,                 {&{_|...} _ $} =: {33 22 11 'hi' 'bye' 66 55}, {&{_| 33 22} 11 'hi'}, norm
+
+# Supplemental suites loaded by the dynamic test runner.
+@include sparseTests.tst
+@include timeTests.tst

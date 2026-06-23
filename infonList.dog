@@ -1,5 +1,10 @@
 
 // Infon List
+struct GLOBAL{
+    const int: povSrcSparseSpanRemainder <- 601
+    const int: povSrcSparseExposedHead   <- 602
+}
+
 struct POVPedigree{
     me int: source
 }
@@ -76,6 +81,87 @@ model POV{ // Point-Of-View
             if(cdat===candidate){return()}
         }
         candidatesForLastItem.append(candidate)
+    }
+    me bool: isSparseOrderedSpan() <- {
+        if(!isSubItm or pItem==NULL){return(false)}
+        if(pItem.value.fType!=LST or pItem.value.format!=fLiteral){return(false)}
+        if(!pItem.value.tailUnfinished){return(false)}
+        if(pItem.value.listSpec==NULL){return(false)}
+        if(pItem.infSize.fType!=NUM or pItem.infSize.format!=fLiteral){return(false)}
+        if(!pItem.value.items.isEmpty()){return(false)}
+        return(true)
+    }
+    me int64: sparseSpanCount() <- {
+        if(!isSparseOrderedSpan()){return(0)}
+        return(pItem.infSize.num.convertToInt())
+    }
+    me string: sparseSpanListSpecTypeID() <- {
+        if(!isSparseOrderedSpan()){return("")}
+        if(pItem.value.listSpec.type==NULL){return("")}
+        return(pItem.value.listSpec.type.typeID())
+    }
+    me bool: sparseSpanCompatibleWith(our POV: other) <- {
+        if(!isSparseOrderedSpan() or other==NULL or !other.isSparseOrderedSpan()){return(false)}
+        me string: mySpec <- sparseSpanListSpecTypeID()
+        me string: otherSpec <- other.sparseSpanListSpecTypeID()
+        if(mySpec=="" or otherSpec==""){return(false)}
+        return(mySpec==otherSpec)
+    }
+    our infon: makeSparseSpanCopy(me int64: count) <- {
+        our infon:: span
+        pItem.copyAsTypeTo(span, false, true)
+        span.value.items.clear()
+        span.value.listSpec <- pItem.value.listSpec
+        span.infSize.fType <- NUM
+        span.infSize.format <- fLiteral
+        span.infSize.num <- count
+        span.value.tailUnfinished <- true
+        return(span)
+    }
+    me bool: isThisPOV(our POV: candidate) <- <%!%1.get()==this%>
+    our POV: listNodeForSelf() <- {
+        if(pParent==NULL or pParent.pItem==NULL){return(NULL)}
+        our POV: candidate <- pParent.pItem.value.items.head
+        while(candidate!=NULL){
+            if(isThisPOV(candidate)){return(candidate)}
+            candidate <- candidate.next
+        }
+        return(NULL)
+    }
+
+    our POV: splitSparseSpanPrefix(me int64: prefixCount) <- {
+        if(!isSparseOrderedSpan() or pParent==NULL or pParent.pItem==NULL){return(NULL)}
+        our POV: spanPOV <- listNodeForSelf()
+        if(spanPOV==NULL){return(NULL)}
+        me int64: totalCount <- sparseSpanCount()
+        if(prefixCount<=0 or prefixCount>=totalCount){return(NULL)}
+
+        our infon: remainder <- makeSparseSpanCopy(totalCount - prefixCount)
+        pItem.infSize.num <- prefixCount
+
+        our POV: remainderPOV <- pParent.pItem.value.items.insertAfter(spanPOV, remainder, povSrcSparseSpanRemainder)
+        remainderPOV.isSubItm <- true
+        remainderPOV.pParent <- pParent
+        return(remainderPOV)
+    }
+    our POV: exposeSparseHead() <- {
+        if(!isSparseOrderedSpan() or pParent==NULL or pParent.pItem==NULL){return(NULL)}
+        our POV: spanPOV <- listNodeForSelf()
+        if(spanPOV==NULL){return(NULL)}
+        me int64: totalCount <- sparseSpanCount()
+        if(totalCount<=0){return(NULL)}
+
+        our infon: headItem <- makePotentialMemberInfon()
+        our POV: headPOV <- pParent.pItem.value.items.insertBefore(spanPOV, headItem, povSrcSparseExposedHead)
+        headPOV.isSubItm <- false
+        headPOV.pParent <- pParent
+
+        if(totalCount==1){
+            pParent.pItem.value.items.erase(spanPOV)
+        }else{
+            pItem.infSize.num <- totalCount - 1
+        }
+        return(headPOV)
     }
     void: insertChildDotsBefore(our POV: position) <- {
         our infon:: newSubDots
@@ -277,7 +363,9 @@ model POV{ // Point-Of-View
         me int64: dummyFlag
         our POV: nextPOV <- getFirst(skipDots, waitState)
         if(nextPOV == NULL and (waitState!=NULL and waitState==1)){return(NULL)}
-        if(nextPOV != NULL and nextPOV.isSubItm){
+        if(nextPOV != NULL and nextPOV.isSparseOrderedSpan()){
+            return(nextPOV)
+        } else if(nextPOV != NULL and nextPOV.isSubItm){
             me bool: setProp <- false
             if(nextPOV.pItem.value.format!=fLiteral or nextPOV.pItem.intersectPos!=ipNoIntersect){
                 agent.normalizeOneLevel(nextPOV)
@@ -316,6 +404,7 @@ model POV{ // Point-Of-View
                 }else{//log("UP")
                     nextPOV <- pParent.getNextTight(nxtInfItr, skipDots-1, numLvlsUp, getDeep, itrBeginning, waitState, agent)
                 }
+            }else if(nextPOV.isSparseOrderedSpan()){
             }else if(nextPOV.isSubItm or (nextPOV.pItem.value.fType==LST and getDeep)){
                 our POV: firstPOV <- nextPOV.getFirstTight(ii, skipDots, dummyFlag, waitState, agent)
                 if(firstPOV!=NULL){firstPOV.noteMarkedOuterFrom(nextPOV)}
