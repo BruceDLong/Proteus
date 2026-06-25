@@ -25,6 +25,7 @@ sparse/traverse/readSecondConcreteBetweenSparseSpans, Sparse read second concret
 sparse/split/writeAfterExactSparseSpan, Sparse write after exact symbolic span, [&*60+{second| ...} <_> &*59+{second| ...} _] <~ %W.twoSparseThenMarker = 80\n[&*60+{second| ...} <_> &*59+{second| ...} _] <~ %W.twoSparseThenMarker, second:80, world, TestFiles/sparseTestCases.pr
 sparse/split/writeInsideFirstSparseRemainder, Sparse write after RHS symbolic span split, [&*59+{second| ...} <_> &*60+{second| ...} _] <~ %W.twoSparseThenMarker = 81\n[&*59+{second| ...} <_> &*60+{second| ...} _] <~ %W.twoSparseThenMarker, second:81, world, TestFiles/sparseTestCases.pr
 sparse/split/writeAfterCrossingSparseBoundary, Sparse write after selector crosses symbolic boundary, [&*61+{second| ...} <_> &*58+{second| ...} _] <~ %W.twoSparseThenMarker = 82\n[&*61+{second| ...} <_> &*58+{second| ...} _] <~ %W.twoSparseThenMarker, second:82, world, TestFiles/sparseTestCases.pr
+sparse/split/writeAfterSparseMinuteSkip, Sparse minute selector skips symbolic seconds, [&*1+{minute| ...} <_> &*3539+{second| ...}] <~ %W.secondRun = 83\n[&*60+{second| ...} <_> &*3539+{second| ...}] <~ %W.secondRun, second:83, world, TestFiles/sparseTestCases.pr
 
 # Repeated edits in the same sparse parent should not make later positions or
 # concrete tail markers unreachable.

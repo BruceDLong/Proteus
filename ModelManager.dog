@@ -150,9 +150,133 @@ struct AgentContext {
         topicHistory.dontProcess <- true
     }
 }
+
+model OrderedSpanMeasure{
+    flag: valid
+    me string: unitTypeID
+    me string: baseTypeID
+    me int64: baseCount
+}
+struct OrderedSpanMeasure{}
+
+model OrderedSpanConverter{
+    flag: valid
+    me string: key
+    me string: fromTypeID
+    me string: toTypeID
+    me string: baseTypeID
+    me int64: fromBaseCount
+    me int64: toBaseCount
+}
+struct OrderedSpanConverter{}
+
+model OrderedSpanTraversalWindow{
+    flag: valid
+    our POV: lhsPOV
+    our POV: rhsPOV
+}
+struct OrderedSpanTraversalWindow{}
+
 struct ModelManager {
     me Multimap<me string, our WordDefn: rangeIteration=logarithmic>: wordToModel
+    me Map<me string, our OrderedSpanConverter>: orderedSpanConverters
     // TODO: me Multimap<me string, our infon>: wordsWaitingForDefinition
+
+    me string: orderedSpanTypeID(our WordUse: unitType) <- {
+        if(unitType==NULL){return("")}
+        me string: typeID <- unitType.typeID()
+        if(typeID==""){typeID <- unitType.normalType()}
+        return(typeID)
+    }
+
+    me string: orderedSpanConverterKey(our WordUse: fromType, our WordUse: toType) <- {
+        me string: fromTypeID <- orderedSpanTypeID(fromType)
+        me string: toTypeID <- orderedSpanTypeID(toType)
+        if(fromTypeID=="" or toTypeID==""){return("")}
+        return(fromTypeID+"@@"+toTypeID)
+    }
+
+    our WordDefn: lookupSingleDefinitionForType(our WordUse: unitType, their vocabularySpec: vSpec) <- {
+        if(unitType==NULL){return(NULL)}
+        me string: wordName <- unitType.normalType()
+        if(wordName==""){wordName <- unitType.asGiven}
+        if(wordName==""){return(NULL)}
+
+        me List<our WordDefn>: resultDefns
+        me int: numAdded <- lookupWord(wordName, vSpec, resultDefns)
+        if(numAdded==0){return(NULL)}
+        if(unitType.modelID!=""){
+            withEach defn in resultDefns{
+                if(defn.modelID==unitType.modelID){return(defn)}
+            }
+            return(NULL)
+        }
+        if(numAdded==1){return(resultDefns[0])}
+        return(NULL)
+    }
+
+    our OrderedSpanMeasure: makeInvalidOrderedSpanMeasure(our WordUse: unitType) <- {
+        our OrderedSpanMeasure:: measure
+        measure.valid <- false
+        measure.unitTypeID <- orderedSpanTypeID(unitType)
+        return(measure)
+    }
+
+    our OrderedSpanMeasure: measureOrderedSpanUnit(our WordUse: unitType, their vocabularySpec: vSpec, me int: depth) <- {
+        if(unitType==NULL or depth>32){return(makeInvalidOrderedSpanMeasure(unitType))}
+
+        our WordDefn: defn <- lookupSingleDefinitionForType(unitType, vSpec)
+        if(defn==NULL or defn.meaning==NULL){return(makeInvalidOrderedSpanMeasure(unitType))}
+
+        our infon: meaning <- defn.meaning
+        our OrderedSpanMeasure:: measure
+        measure.unitTypeID <- orderedSpanTypeID(unitType)
+
+        if(meaning.infMode==isUnknown or meaning.value.format==fUnknown or meaning.value.fType==tUnknown or meaning.value.fType==tUnset){
+            measure.valid <- true
+            measure.baseTypeID <- measure.unitTypeID
+            measure.baseCount <- 1
+            return(measure)
+        }
+
+        if(meaning.value.fType!=LST or meaning.value.format!=fLiteral){return(makeInvalidOrderedSpanMeasure(unitType))}
+        if(!meaning.value.tailUnfinished){return(makeInvalidOrderedSpanMeasure(unitType))}
+        if(!meaning.value.items.isEmpty()){return(makeInvalidOrderedSpanMeasure(unitType))}
+        if(meaning.value.listSpec==NULL or meaning.value.listSpec.type==NULL){return(makeInvalidOrderedSpanMeasure(unitType))}
+        if(meaning.infSize.fType!=NUM or meaning.infSize.format!=fLiteral){return(makeInvalidOrderedSpanMeasure(unitType))}
+
+        our OrderedSpanMeasure: childMeasure <- measureOrderedSpanUnit(meaning.value.listSpec.type, vSpec, depth+1)
+        if(childMeasure==NULL or !childMeasure.valid){return(makeInvalidOrderedSpanMeasure(unitType))}
+
+        measure.valid <- true
+        measure.baseTypeID <- childMeasure.baseTypeID
+        measure.baseCount <- meaning.infSize.num.convertToInt() * childMeasure.baseCount
+        return(measure)
+    }
+
+    our OrderedSpanConverter: getOrderedSpanConverter(our WordUse: fromType, our WordUse: toType, their vocabularySpec: vSpec) <- {
+        me string: key <- orderedSpanConverterKey(fromType, toType)
+        if(key!="" and orderedSpanConverters.containsKey(key)){return(orderedSpanConverters[key])}
+
+        our OrderedSpanConverter:: converter
+        converter.key <- key
+        converter.fromTypeID <- orderedSpanTypeID(fromType)
+        converter.toTypeID <- orderedSpanTypeID(toType)
+        converter.valid <- false
+
+        if(key!=""){
+            our OrderedSpanMeasure: fromMeasure <- measureOrderedSpanUnit(fromType, vSpec, 0)
+            our OrderedSpanMeasure: toMeasure <- measureOrderedSpanUnit(toType, vSpec, 0)
+            if(fromMeasure!=NULL and toMeasure!=NULL and fromMeasure.valid and toMeasure.valid and fromMeasure.baseTypeID==toMeasure.baseTypeID){
+                converter.valid <- true
+                converter.baseTypeID <- fromMeasure.baseTypeID
+                converter.fromBaseCount <- fromMeasure.baseCount
+                converter.toBaseCount <- toMeasure.baseCount
+            }
+            orderedSpanConverters[key] <- converter
+        }
+        return(converter)
+    }
 
     me bool: completeItemsType(our infon: item) <- {
         if(item.type==NULL){
@@ -385,5 +509,5 @@ resultDefns[idx].defPOS<-posNoun
         return(NULL)
     }
 
-    void: clear()<-{wordToModel.clear()}
+    void: clear()<-{wordToModel.clear(); orderedSpanConverters.clear()}
 }

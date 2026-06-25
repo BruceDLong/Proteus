@@ -27,6 +27,7 @@ infonDumpMode='text'
 #include Functions.dog
 #include ModelManager.dog
 #include WorldManager.dog
+#include WorldManagerOrderedSpans.dog
 #include debugSystems.dog
 #include xlators/xlator_en.dog
 //include DB_workAround.dog
@@ -205,6 +206,23 @@ model infon{
             fleshOutWord(agent, inf)
             if(inf.type!=NULL and inf.isCompatibleWith(pattern, pov.trueByDefinition)==tvTrue){
                 return(pov)
+            }
+            pov <- pov.next
+        }
+        return(NULL)
+    }
+    our POV: fetchCompatibleDataField(their Agent: agent, our infon: pattern) <- {
+        our WordUse: patternType <- pattern.type
+        if(patternType==NULL){log("WARNING: field has no type to search on in:"+toString(pattern)); return(NULL)}
+        if(value.items.isEmpty()){return(NULL)}
+        our POV: pov <- value.items.head
+        while(pov != NULL){
+            our infon: inf <- pov.pItem
+            if(inf.itmMode!=mWordDefn){
+                fleshOutWord(agent, inf)
+                if(inf.type!=NULL and inf.isCompatibleWith(pattern, pov.trueByDefinition)==tvTrue){
+                    return(pov)
+                }
             }
             pov <- pov.next
         }
@@ -1691,8 +1709,15 @@ vSpec.init(agent.getLocaleBaseName())
                         } else if(part.path.type != NULL){
                             if(partTag == "first"){newPath <- CI.getFirstItem(aItem.LHS_item.isSubItm)}
                             else if(partTag == "last") {newPath <- CI.getLastInfon()}
+                            else{
+                                our POV: fieldPOV <- CI.fetchCompatibleDataField(agent, part.path)
+                                if(fieldPOV!=NULL){
+                                    me vocabularySpec: vSpec
+                                    vSpec.init(agent.getLocaleBaseName())
+                                    newPath <- resolveTypedFieldPathInfon(fieldPOV, part.path, vSpec)
+                                }
+                            }
                             //else if(partTag == "size"){newPath <- gteSizeInfon}
-                            else{} //TODO: lookup in index to optimize
                         }
                         if(!newPath){
                             me bool: doReply <- CI.doReply
@@ -1822,6 +1847,50 @@ vSpec.init(agent.getLocaleBaseName())
                 }
                 changeMade <- true
                 //:l/PAI::logSegOut("")
+            }
+        }
+        return(changeMade)
+    }
+    me bool: materializedOrderedSpanPathRules(our AItem: aItem, their bool: nxtAction) <- {
+        me bool: changeMade <- false
+        nxtAction <- true
+        our infon: CI <- aItem.LHS_item.pItem
+        if(CI==NULL){return(false)}
+        if(CI.partRef!=NULL){
+            CI.parts.append(CI.partRef)
+            CI.partRef <- NULL
+        }
+        if(CI.parts.isEmpty()){return(false)}
+        withEach part in CI.parts{
+            if(part.wasTransfered){continue()}
+            if(part.pathMode==idxField and part.spec==NULL and part.path.value.fType==NUM){
+                me vocabularySpec: vSpec
+                vSpec.init(agent.getLocaleBaseName())
+                our POV: directChild <- materializedOrderedSpanChildAt(CI, part.path.value.num.convertToInt(), vSpec)
+                if(directChild==NULL){continue()}
+
+                part.wasTransfered <- true
+                our infon: newPath <- directChild.pItem
+                if(directChild.outerPOV!=NULL and directChild.outerPOV.pItem===directChild.pItem){
+                    aItem.LHS_item.outerPOV <- directChild.outerPOV
+                    aItem.LHS_item.accessMode <- aRefTo
+                }
+                if(part.path.partRef!=NULL){
+                    newPath.partRef <- part.path.partRef
+                    part.path.partRef <- NULL
+                    newPath.isNormed <- false
+                    newPath.wasProcessed <- false
+                }else{
+                    newPath.parts <- part.path.parts
+                    if(!part.path.parts.isEmpty()){
+                        newPath.isNormed <- false
+                        newPath.wasProcessed <- false
+                    }
+                }
+                newPath.takeWrkListFrom(part.path, true)
+                aItem.LHS_item.pItem <- newPath
+                changeMade <- true
+                break()
             }
         }
         return(changeMade)
@@ -2099,7 +2168,7 @@ vSpec.init(agent.getLocaleBaseName())
         // Source-backed views share their infon with a real source POV, so preserve
         // that identity instead of replacing only the view's pItem pointer.
         me bool: sourceBackedView <- aItem.LHS_item.accessMode==aRefTo and aItem.LHS_item.outerPOV!=NULL and aItem.LHS_item.outerPOV.pItem===aItem.LHS_item.pItem
-        if(aItem.LHS_item.pItem.isTentative and sourceBackedView){
+        if(sourceBackedView){
             aItem.RHS.pItem.copyAsTypeTo(aItem.LHS_item.pItem, false, true)
             if(!aItem.RHS.pItem.isTentative){aItem.LHS_item.pItem.isTentative <- false}
         }else{
@@ -2220,6 +2289,14 @@ vSpec.init(agent.getLocaleBaseName())
                     LHSPovNext.rejected <- true
                     dontEnque  <- true
                 }
+            }
+        }
+
+        if(LHSPovNext!=NULL and RHSPovNext!=NULL){
+            our OrderedSpanTraversalWindow: spanWindow <- tryBuildOrderedSpanTraversalWindow(LHSPovNext, RHSPovNext)
+            if(spanWindow!=NULL and spanWindow.valid){
+                LHSPovNext <- spanWindow.lhsPOV
+                RHSPovNext <- spanWindow.rhsPOV
             }
         }
 
@@ -2544,6 +2621,7 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                     else if(normSize(agenda, aItem))      {continueLoop <- false}
                     else if(localNullableContinuationRules(agenda, aItem, act)) {continueLoop <- act}
                     else if(wrkLstRules(agenda, aItem))   {continueLoop <- false}
+                    else if(materializedOrderedSpanPathRules(aItem, act)) {continueLoop <- act}
                     else if(partsRules(agenda,aItem,act)) {continueLoop <- act}
                     else if(processConcat(aItem))         {continueLoop <- true}
                     else{
@@ -2668,7 +2746,20 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                         if(aItem.RHS.pItem.intersectPos == ipNoIntersect){
                             me int: isCompatible
                             if(aItem.LHS_item.trueByDefinition){isCompatible <- true}
-                            else{isCompatible <- aItem.LHS_item.pItem.isCompatibleWith(aItem.RHS.pItem, aItem.RHS.trueByDefinition)}
+                            else{
+                                isCompatible <- aItem.LHS_item.pItem.isCompatibleWith(aItem.RHS.pItem, aItem.RHS.trueByDefinition)
+                                if(isCompatible==tvFalse and aItem.LHS_item.isSparseOrderedSpan() and aItem.RHS.isSparseOrderedSpan()){
+                                    me vocabularySpec: vSpec
+                                    vSpec.init(agent.getLocaleBaseName())
+                                    if(sparseOrderedSpanMergeAlignable(aItem.LHS_item, aItem.RHS, vSpec)){isCompatible <- tvTrue}
+                                }
+                                if(isCompatible!=tvTrue and aItem.LHS_item.pItem.type!=NULL and aItem.RHS.pItem.value.fType==LST and aItem.RHS.pItem.value.listSpec!=NULL and aItem.RHS.pItem.value.listSpec.type!=NULL){
+                                    me vocabularySpec: vSpec
+                                    vSpec.init(agent.getLocaleBaseName())
+                                    our OrderedSpanConverter: spanConverter <- modelMngr.getOrderedSpanConverter(aItem.LHS_item.pItem.type, aItem.RHS.pItem.value.listSpec.type, vSpec)
+                                    if(spanConverter!=NULL and spanConverter.valid and spanConverter.fromBaseCount>=spanConverter.toBaseCount){isCompatible <- tvTrue}
+                                }
+                            }
                             if(!aItem.looseSize){
                                 if(isCompatible==tvFalse){ //log("REJECT.a:"+aItem.LHS_item.stringify());
                                     aItem.mergeStatus<-msReject

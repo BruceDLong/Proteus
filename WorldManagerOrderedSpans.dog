@@ -1,0 +1,433 @@
+struct WorldManager{
+    our WordUse: orderedSpanSourceUnitType(our POV: rhsPOV) <- {
+        if(rhsPOV==NULL or rhsPOV.pItem==NULL){return(NULL)}
+        if(rhsPOV.pItem.type!=NULL){return(rhsPOV.pItem.type)}
+        if(rhsPOV.pParent!=NULL and rhsPOV.pParent.pItem!=NULL and rhsPOV.pParent.pItem.value.listSpec!=NULL and rhsPOV.pParent.pItem.value.listSpec.type!=NULL){
+            return(rhsPOV.pParent.pItem.value.listSpec.type)
+        }
+        return(NULL)
+    }
+    our WordUse: orderedSpanContainerType(our POV: rhsPOV) <- {
+        if(rhsPOV==NULL){return(NULL)}
+        their POV: containerPOV <- rhsPOV.pParent
+        while(containerPOV!=NULL){
+            if(containerPOV.pItem!=NULL and containerPOV.pItem.type!=NULL){return(containerPOV.pItem.type)}
+            if(containerPOV.outerPOV!=NULL and containerPOV.outerPOV.pItem!=NULL and containerPOV.outerPOV.pItem.type!=NULL){return(containerPOV.outerPOV.pItem.type)}
+            containerPOV <- containerPOV.pParent
+        }
+        return(NULL)
+    }
+    me bool: isOrderedSpanRequest(our POV: lhsPOV, their vocabularySpec: vSpec) <- {
+        if(lhsPOV==NULL or lhsPOV.pItem==NULL or lhsPOV.pItem.type==NULL){return(false)}
+        if(lhsPOV.pItem.asNot){return(false)}
+        our OrderedSpanMeasure: measure <- modelMngr.measureOrderedSpanUnit(lhsPOV.pItem.type, vSpec, 0)
+        return(measure!=NULL and measure.valid and measure.baseCount>1)
+    }
+    our POV: positiveOrderedSpanAfterNegativeSkip(our POV: lhsPOV, their vocabularySpec: vSpec) <- {
+        if(lhsPOV==NULL or lhsPOV.pItem==NULL or !lhsPOV.pItem.asNot){return(NULL)}
+        if(lhsPOV.pParent==NULL or lhsPOV.pParent.next==NULL){return(NULL)}
+        our POV: candidate <- lhsPOV.pParent.next
+        if(candidate.pItem==NULL or candidate.pItem.type==NULL){return(NULL)}
+        if(lhsPOV.pItem.type!=NULL and lhsPOV.pItem.type.typeID()!=candidate.pItem.type.typeID()){return(NULL)}
+        if(isOrderedSpanRequest(candidate, vSpec)){return(candidate)}
+        return(NULL)
+    }
+    void: removeConsumedOrderedSpanSkipWork(our POV: requestPOV, our POV: skipPOV) <- {
+        if(requestPOV==NULL or requestPOV.pItem==NULL or skipPOV==NULL or skipPOV.pItem==NULL or skipPOV.pItem.type==NULL){return()}
+        me string: skipTypeID <- skipPOV.pItem.type.typeID()
+        if(skipTypeID==""){return()}
+
+        me List<our POV>: retainedWork
+        withEach wrkPOV in requestPOV.pItem.wrkList{
+            me bool: consumedSkip <- false
+            if(wrkPOV!=NULL and wrkPOV.pItem!=NULL and wrkPOV.pItem.asNot and wrkPOV.pItem.type!=NULL and wrkPOV.pItem.type.typeID()==skipTypeID){
+                consumedSkip <- true
+            }
+            if(!consumedSkip){retainedWork.append(wrkPOV)}
+        }
+        requestPOV.pItem.wrkList <- retainedWork
+    }
+    me int64: orderedSpanWindowItemCount(our POV: lhsPOV, our POV: rhsPOV, their vocabularySpec: vSpec) <- {
+        if(!isOrderedSpanRequest(lhsPOV, vSpec) or rhsPOV==NULL or rhsPOV.pItem==NULL){return(0)}
+        return(orderedSpanWindowItemCountForUnit(lhsPOV.pItem.type, rhsPOV, vSpec))
+    }
+    me int64: orderedSpanWindowItemCountForUnit(our WordUse: unitType, our POV: rhsPOV, their vocabularySpec: vSpec) <- {
+        if(unitType==NULL or rhsPOV==NULL or rhsPOV.pItem==NULL){return(0)}
+        our WordUse: rhsUnitType <- orderedSpanSourceUnitType(rhsPOV)
+        if(rhsUnitType!=NULL){
+            our OrderedSpanConverter: converter <- modelMngr.getOrderedSpanConverter(unitType, rhsUnitType, vSpec)
+            if(converter!=NULL and converter.valid and converter.fromBaseCount==converter.toBaseCount){return(1)}
+            if(converter!=NULL and converter.valid and converter.fromBaseCount>converter.toBaseCount and converter.toBaseCount>0){
+                if(converter.fromBaseCount % converter.toBaseCount == 0){return(converter.fromBaseCount / converter.toBaseCount)}
+            }
+            return(0)
+        }
+        our OrderedSpanMeasure: measure <- modelMngr.measureOrderedSpanUnit(unitType, vSpec, 0)
+        if(measure!=NULL and measure.valid and measure.baseCount>1){return(measure.baseCount)}
+        return(0)
+    }
+    me bool: isImplicitOrderedSpanIndexRequest(our POV: lhsPOV) <- {
+        if(lhsPOV==NULL or lhsPOV.pItem==NULL){return(false)}
+        if(lhsPOV.pItem.type!=NULL){return(false)}
+        if(lhsPOV.pItem.infMode!=isUnknown){return(false)}
+        if(lhsPOV.pParent==NULL or lhsPOV.pParent.pItem==NULL){return(false)}
+        if(!lhsPOV.pParent.pItem.isInnr){return(false)}
+        if(lhsPOV.pParent.pItem.value.sizeMode!=fromCount){return(false)}
+        if(lhsPOV.pParent.pItem.infSize.fType!=NUM or lhsPOV.pParent.pItem.infSize.format!=fLiteral){return(false)}
+        return(true)
+    }
+    our WordUse: orderedSpanContainerChildType(our POV: rhsPOV, their vocabularySpec: vSpec) <- {
+        our WordUse: containerType <- orderedSpanContainerType(rhsPOV)
+        if(containerType==NULL){return(NULL)}
+        our WordDefn: defn <- modelMngr.lookupSingleDefinitionForType(containerType, vSpec)
+        if(defn==NULL or defn.meaning==NULL){return(NULL)}
+        our infon: meaning <- defn.meaning
+        if(meaning.value.fType!=LST or meaning.value.format!=fLiteral){return(NULL)}
+        if(!meaning.value.tailUnfinished or !meaning.value.items.isEmpty()){return(NULL)}
+        if(meaning.value.listSpec==NULL or meaning.value.listSpec.type==NULL){return(NULL)}
+        if(meaning.infSize.fType!=NUM or meaning.infSize.format!=fLiteral){return(NULL)}
+        return(meaning.value.listSpec.type)
+    }
+    me bool: orderedSpanTypesMatch(our WordUse: leftType, our WordUse: rightType) <- {
+        if(leftType==NULL or rightType==NULL){return(false)}
+        me string: leftID <- leftType.typeID()
+        if(leftID==""){leftID <- leftType.normalType()}
+        me string: rightID <- rightType.typeID()
+        if(rightID==""){rightID <- rightType.normalType()}
+        if(leftID=="" or rightID==""){return(false)}
+        return(leftID==rightID)
+    }
+    our infon: orderedSpanDefinitionMeaning(our WordUse: unitType, their vocabularySpec: vSpec) <- {
+        if(unitType==NULL){return(NULL)}
+        our WordDefn: defn <- modelMngr.lookupSingleDefinitionForType(unitType, vSpec)
+        if(defn==NULL or defn.meaning==NULL){return(NULL)}
+        our infon: meaning <- defn.meaning
+        if(meaning.value.fType!=LST or meaning.value.format!=fLiteral){return(NULL)}
+        if(!meaning.value.tailUnfinished or !meaning.value.items.isEmpty()){return(NULL)}
+        if(meaning.value.listSpec==NULL or meaning.value.listSpec.type==NULL){return(NULL)}
+        if(meaning.infSize.fType!=NUM or meaning.infSize.format!=fLiteral){return(NULL)}
+        return(meaning)
+    }
+    me int64: orderedSpanDefinitionChildCount(our WordUse: unitType, their vocabularySpec: vSpec) <- {
+        our infon: meaning <- orderedSpanDefinitionMeaning(unitType, vSpec)
+        if(meaning==NULL){return(0)}
+        return(meaning.infSize.num.convertToInt())
+    }
+    our WordUse: orderedSpanDefinitionChildType(our WordUse: unitType, their vocabularySpec: vSpec) <- {
+        our infon: meaning <- orderedSpanDefinitionMeaning(unitType, vSpec)
+        if(meaning==NULL){return(NULL)}
+        return(meaning.value.listSpec.type)
+    }
+    void: markOrderedSpanViewReady(our infon: spanInfon) <- {
+        if(spanInfon==NULL){return()}
+        spanInfon.wordDerefed <- true
+        spanInfon.alreadyTypeChecked <- true
+        spanInfon.isNormed <- true
+        spanInfon.wasProcessed <- true
+        spanInfon.sizeNormed <- true
+        if(spanInfon.value.fType==LST and spanInfon.value.format==fLiteral){
+            our POV: childPOV <- spanInfon.value.items.head
+            while(childPOV!=NULL){
+                markOrderedSpanViewReady(childPOV.pItem)
+                childPOV <- childPOV.next
+            }
+        }
+    }
+    our POV: materializedOrderedSpanChildAt(our infon: container, me int64: itemIndex, their vocabularySpec: vSpec) <- {
+        if(container==NULL or itemIndex<=0){return(NULL)}
+        if(container.type==NULL){return(NULL)}
+        if(container.value.fType!=LST or container.value.format!=fLiteral){return(NULL)}
+        if(container.value.listSpec==NULL or container.value.listSpec.type==NULL){return(NULL)}
+        our WordUse: childType <- orderedSpanDefinitionChildType(container.type, vSpec)
+        if(childType==NULL or !orderedSpanTypesMatch(childType, container.value.listSpec.type)){return(NULL)}
+        me int64: crntIndex <- 1
+        our POV: childPOV <- container.value.items.head
+        while(childPOV!=NULL){
+            if(crntIndex==itemIndex){return(childPOV)}
+            crntIndex <+- 1
+            childPOV <- childPOV.next
+        }
+        return(NULL)
+    }
+    our POV: makeOrderedSpanContainerView(our POV: containerPOV, their vocabularySpec: vSpec) <- {
+        if(containerPOV==NULL or containerPOV.pItem==NULL or containerPOV.pItem.type==NULL){return(NULL)}
+        if(containerPOV.pItem.value.fType!=LST or containerPOV.pItem.value.format!=fLiteral){return(NULL)}
+        if(containerPOV.pItem.value.items.isEmpty()){return(NULL)}
+        our POV: sourceStart <- containerPOV.pItem.value.items.head
+        if(sourceStart==NULL){return(NULL)}
+        sourceStart.pParent <- containerPOV
+        return(makeOrderedSpanUnitView(containerPOV.pItem.type, sourceStart, vSpec, povSrcConcreteSpanPrefix))
+    }
+    our infon: resolveTypedFieldPathInfon(our POV: fieldPOV, our infon: path, their vocabularySpec: vSpec) <- {
+        if(fieldPOV==NULL or fieldPOV.pItem==NULL or path==NULL){return(NULL)}
+
+        our infon: resolved <- fieldPOV.pItem
+        me bool: hasFollowOnPath <- (path.partRef!=NULL or !path.parts.isEmpty())
+        if(!hasFollowOnPath){
+            our POV: fieldView <- makeOrderedSpanContainerView(fieldPOV, vSpec)
+            if(fieldView!=NULL){return(fieldView.pItem)}
+            return(NULL)
+        }
+
+        if(path.partRef!=NULL){
+            resolved.partRef <- path.partRef
+            path.partRef <- NULL
+            resolved.isNormed <- false
+            resolved.wasProcessed <- false
+        }else{
+            resolved.parts <- path.parts
+            if(!path.parts.isEmpty()){
+                resolved.isNormed <- false
+                resolved.wasProcessed <- false
+            }
+        }
+        return(resolved)
+    }
+    our POV: makeDirectOrderedSpanSourceView(our WordUse: unitType, our POV: sourcePOV, me int: source) <- {
+        if(unitType==NULL or sourcePOV==NULL or sourcePOV.pItem==NULL){return(NULL)}
+        our POV:: directPOV{source}
+        directPOV.pItem <- sourcePOV.pItem
+        directPOV.outerPOV <- sourcePOV
+        directPOV.accessMode <- aRefTo
+        directPOV.isSubItm <- sourcePOV.isSubItm
+        directPOV.pParent <- sourcePOV.pParent
+        markOrderedSpanViewReady(directPOV.pItem)
+        return(directPOV)
+    }
+    our POV: makeOrderedSpanUnitView(our WordUse: unitType, our POV: sourcePOV, their vocabularySpec: vSpec, me int: source) <- {
+        if(unitType==NULL or sourcePOV==NULL or sourcePOV.pItem==NULL){return(NULL)}
+        our WordUse: sourceUnitType <- orderedSpanSourceUnitType(sourcePOV)
+        if(sourceUnitType==NULL){return(NULL)}
+
+        our OrderedSpanConverter: unitConverter <- modelMngr.getOrderedSpanConverter(unitType, sourceUnitType, vSpec)
+        if(unitConverter==NULL or !unitConverter.valid){return(NULL)}
+        if(unitConverter.fromBaseCount==unitConverter.toBaseCount){
+            return(makeDirectOrderedSpanSourceView(unitType, sourcePOV, source))
+        }
+        if(unitConverter.fromBaseCount<unitConverter.toBaseCount){return(NULL)}
+        if(unitConverter.toBaseCount<=0 or unitConverter.fromBaseCount % unitConverter.toBaseCount != 0){return(NULL)}
+        me int64: sourceItemsForUnit <- unitConverter.fromBaseCount / unitConverter.toBaseCount
+        if(sourcePOV.countConcreteSiblingsFromHere()<sourceItemsForUnit){return(NULL)}
+
+        our infon: meaning <- orderedSpanDefinitionMeaning(unitType, vSpec)
+        if(meaning==NULL){
+            our POV: flatPOV <- sourcePOV.makeConcreteSiblingSpanView(sourceItemsForUnit, false, source)
+            if(flatPOV!=NULL){
+                flatPOV.pItem.type <- unitType
+                flatPOV.pItem.wordDerefed <- true
+                flatPOV.pItem.alreadyTypeChecked <- true
+            }
+            return(flatPOV)
+        }
+
+        our WordUse: childType <- meaning.value.listSpec.type
+        me int64: childCount <- meaning.infSize.num.convertToInt()
+        if(childCount<=0){return(NULL)}
+        our OrderedSpanConverter: childConverter <- modelMngr.getOrderedSpanConverter(childType, sourceUnitType, vSpec)
+        if(childConverter==NULL or !childConverter.valid){return(NULL)}
+        if(childConverter.fromBaseCount<childConverter.toBaseCount){return(NULL)}
+        if(childConverter.toBaseCount<=0 or childConverter.fromBaseCount % childConverter.toBaseCount != 0){return(NULL)}
+        me int64: sourceItemsForChild <- childConverter.fromBaseCount / childConverter.toBaseCount
+        if(sourceItemsForChild<=0){return(NULL)}
+
+        our infon:: span
+        span.setToList()
+        span.type <- unitType
+        span.value.listSpec <- meaning.value.listSpec
+        span.orderMode <- meaning.orderMode
+        span.value.sizeMode <- fromCount
+        span.value.tailUnfinished <- false
+        span.infSize.fType <- NUM
+        span.infSize.format <- fLiteral
+        span.infSize.num <- childCount
+
+        our POV:: spanPOV{source}
+        spanPOV.pItem <- span
+        spanPOV.accessMode <- aRefTo
+        spanPOV.isSubItm <- true
+        spanPOV.pParent <- sourcePOV.pParent
+
+        me int64: childIndex <- 0
+        me int64: sourceOffset <- 0
+        while(childIndex<childCount){
+            our POV: childSourcePOV <- sourcePOV.siblingAtOffset(sourceOffset)
+            if(childSourcePOV==NULL){return(NULL)}
+            our POV: childPOV <- makeOrderedSpanUnitView(childType, childSourcePOV, vSpec, source)
+            if(childPOV==NULL){return(NULL)}
+            childPOV.isSubItm <- false
+            childPOV.pParent <- spanPOV
+            span.value.items.appendPov(childPOV)
+            childIndex <+- 1
+            sourceOffset <+- sourceItemsForChild
+        }
+        markOrderedSpanViewReady(span)
+        return(spanPOV)
+    }
+    our POV: firstOrderedSpanChildForRequest(our WordUse: requestType, our POV: rhsPOV, their vocabularySpec: vSpec) <- {
+        if(requestType==NULL or rhsPOV==NULL or rhsPOV.pItem==NULL){return(NULL)}
+        if(rhsPOV.pItem.value.fType!=LST or rhsPOV.pItem.value.format!=fLiteral){return(NULL)}
+        if(rhsPOV.pItem.value.items.isEmpty()){return(NULL)}
+        our POV: childPOV <- rhsPOV.pItem.value.items.head
+        if(childPOV==NULL){return(NULL)}
+        childPOV.pParent <- rhsPOV
+
+        our WordUse: childUnitType <- orderedSpanSourceUnitType(childPOV)
+        if(childUnitType==NULL){return(NULL)}
+        our OrderedSpanConverter: childConverter <- modelMngr.getOrderedSpanConverter(requestType, childUnitType, vSpec)
+        if(childConverter==NULL or !childConverter.valid){return(NULL)}
+        if(childConverter.fromBaseCount==childConverter.toBaseCount){return(childPOV)}
+        if(childConverter.fromBaseCount<childConverter.toBaseCount){
+            return(firstOrderedSpanChildForRequest(requestType, childPOV, vSpec))
+        }
+        return(makeOrderedSpanUnitView(requestType, childPOV, vSpec, povSrcConcreteSpanPrefix))
+    }
+    our OrderedSpanTraversalWindow: tryBuildOrderedSpanTraversalWindow(our POV: lhsPOV, our POV: rhsPOV) <- {
+        our OrderedSpanTraversalWindow:: result
+        result.valid <- false
+        if(lhsPOV==NULL or rhsPOV==NULL){return(result)}
+        me vocabularySpec: vSpec
+        vSpec.init(agent.getLocaleBaseName())
+
+        our POV: requestPOV <- lhsPOV
+        our POV: positivePOV <- positiveOrderedSpanAfterNegativeSkip(lhsPOV, vSpec)
+        if(positivePOV!=NULL){
+            removeConsumedOrderedSpanSkipWork(positivePOV, lhsPOV)
+            requestPOV <- positivePOV
+        }
+
+        our WordUse: windowType <- NULL
+        our WordUse: unitTypeForWindow <- requestPOV.pItem.type
+        me bool: implicitIndexRequest <- isImplicitOrderedSpanIndexRequest(requestPOV)
+        if(unitTypeForWindow==NULL and implicitIndexRequest){
+            windowType <- orderedSpanContainerChildType(rhsPOV, vSpec)
+            unitTypeForWindow <- windowType
+        }
+        our WordUse: rhsUnitType <- orderedSpanSourceUnitType(rhsPOV)
+        if(unitTypeForWindow!=NULL and rhsUnitType!=NULL){
+            our OrderedSpanConverter: spanConverter <- modelMngr.getOrderedSpanConverter(unitTypeForWindow, rhsUnitType, vSpec)
+            if(spanConverter!=NULL and spanConverter.valid and spanConverter.fromBaseCount<spanConverter.toBaseCount){
+                our POV: containedPOV <- firstOrderedSpanChildForRequest(unitTypeForWindow, rhsPOV, vSpec)
+                if(containedPOV!=NULL){
+                    result.lhsPOV <- requestPOV
+                    result.rhsPOV <- containedPOV
+                    requestPOV.accessMode <- aRefTo
+                    result.valid <- true
+                    return(result)
+                }
+            }
+        }
+        me int64: itemCount <- orderedSpanWindowItemCountForUnit(unitTypeForWindow, rhsPOV, vSpec)
+        if(itemCount==1 and implicitIndexRequest){
+            result.lhsPOV <- requestPOV
+            result.rhsPOV <- rhsPOV
+            requestPOV.accessMode <- aRefTo
+            result.valid <- true
+            return(result)
+        }
+        if(itemCount<=1){return(result)}
+        if(rhsPOV.countConcreteSiblingsFromHere()<itemCount){return(result)}
+
+        our POV: prefix <- makeOrderedSpanUnitView(unitTypeForWindow, rhsPOV, vSpec, povSrcConcreteSpanPrefix)
+        if(prefix==NULL){prefix <- rhsPOV.makeConcreteSiblingSpanView(itemCount, false, povSrcConcreteSpanPrefix)}
+        if(prefix==NULL){return(result)}
+        if(windowType!=NULL){
+            prefix.pItem.type <- windowType
+            prefix.pItem.wordDerefed <- true
+            prefix.pItem.alreadyTypeChecked <- true
+        }
+
+        our POV: suffixStart <- rhsPOV.siblingAtOffset(itemCount)
+        if(suffixStart!=NULL){
+            prefix.next <- suffixStart
+        }
+
+        result.lhsPOV <- requestPOV
+        result.rhsPOV <- prefix
+        requestPOV.accessMode <- aRefTo
+        result.valid <- true
+        return(result)
+    }
+    me bool: sparseOrderedSpanMergeAlignable(our POV: lhsPOV, our POV: rhsPOV, their vocabularySpec: vSpec) <- {
+        if(lhsPOV==NULL or rhsPOV==NULL or !lhsPOV.isSparseOrderedSpan() or !rhsPOV.isSparseOrderedSpan()){return(false)}
+        if(lhsPOV.sparseSpanCompatibleWith(rhsPOV)){return(true)}
+
+        our OrderedSpanConverter: spanConverter <- modelMngr.getOrderedSpanConverter(lhsPOV.pItem.value.listSpec.type, rhsPOV.pItem.value.listSpec.type, vSpec)
+        if(spanConverter==NULL or !spanConverter.valid){return(false)}
+        me int64: lhsCount <- lhsPOV.sparseSpanCount()
+        me int64: rhsCount <- rhsPOV.sparseSpanCount()
+        me int64: lhsBaseCount <- lhsCount * spanConverter.fromBaseCount
+        me int64: rhsBaseCount <- rhsCount * spanConverter.toBaseCount
+        if(lhsBaseCount==rhsBaseCount){return(true)}
+        if(lhsBaseCount<rhsBaseCount){
+            me int64: rhsPrefixCount <- lhsBaseCount / spanConverter.toBaseCount
+            return(rhsPrefixCount>0 and rhsPrefixCount<rhsCount and rhsPrefixCount*spanConverter.toBaseCount==lhsBaseCount)
+        }
+        me int64: lhsPrefixCount <- rhsBaseCount / spanConverter.fromBaseCount
+        return(lhsPrefixCount>0 and lhsPrefixCount<lhsCount and lhsPrefixCount*spanConverter.fromBaseCount==rhsBaseCount)
+    }
+    our POV: orderedSpanMergeRules(our AItem: aItem, their bool: handled) <- {
+        handled <- false
+        our POV: remainder <- NULL
+        if(aItem.RHS!=NULL and aItem.LHS_item.isSparseOrderedSpan() and aItem.RHS.isSparseOrderedSpan() and aItem.LHS_item.sparseSpanCompatibleWith(aItem.RHS)){
+            me int64: lhsCount <- aItem.LHS_item.sparseSpanCount()
+            me int64: rhsCount <- aItem.RHS.sparseSpanCount()
+            if(lhsCount==rhsCount){
+                aItem.sizeToCopy <- lhsCount
+                handled <- true
+                return(NULL)
+            }
+            if(lhsCount<rhsCount){
+                remainder <- aItem.RHS.splitSparseSpanPrefix(lhsCount)
+                aItem.sizeToCopy <- lhsCount
+                handled <- true
+                return(remainder)
+            }
+            if(rhsCount<lhsCount){
+                aItem.LHS_item.splitSparseSpanPrefix(rhsCount)
+                aItem.sizeToCopy <- rhsCount
+                handled <- true
+                return(NULL)
+            }
+        }
+        if(aItem.RHS!=NULL and aItem.LHS_item.isSparseOrderedSpan() and aItem.RHS.isSparseOrderedSpan()){
+            me vocabularySpec: vSpec
+            vSpec.init(agent.getLocaleBaseName())
+            our OrderedSpanConverter: spanConverter <- modelMngr.getOrderedSpanConverter(aItem.LHS_item.pItem.value.listSpec.type, aItem.RHS.pItem.value.listSpec.type, vSpec)
+            if(spanConverter!=NULL and spanConverter.valid){
+                me int64: lhsCount <- aItem.LHS_item.sparseSpanCount()
+                me int64: rhsCount <- aItem.RHS.sparseSpanCount()
+                me int64: lhsBaseCount <- lhsCount * spanConverter.fromBaseCount
+                me int64: rhsBaseCount <- rhsCount * spanConverter.toBaseCount
+                if(lhsBaseCount==rhsBaseCount){
+                    aItem.sizeToCopy <- lhsCount
+                    handled <- true
+                    return(NULL)
+                }
+                if(lhsBaseCount<rhsBaseCount){
+                    me int64: rhsPrefixCount <- lhsBaseCount / spanConverter.toBaseCount
+                    if(rhsPrefixCount>0 and rhsPrefixCount<rhsCount and rhsPrefixCount*spanConverter.toBaseCount==lhsBaseCount){
+                        remainder <- aItem.RHS.splitSparseSpanPrefix(rhsPrefixCount)
+                        aItem.sizeToCopy <- lhsCount
+                        handled <- true
+                        return(remainder)
+                    }
+                }
+                if(rhsBaseCount<lhsBaseCount){
+                    me int64: lhsPrefixCount <- rhsBaseCount / spanConverter.fromBaseCount
+                    if(lhsPrefixCount>0 and lhsPrefixCount<lhsCount and lhsPrefixCount*spanConverter.fromBaseCount==rhsBaseCount){
+                        aItem.LHS_item.splitSparseSpanPrefix(lhsPrefixCount)
+                        aItem.sizeToCopy <- lhsPrefixCount
+                        handled <- true
+                        return(NULL)
+                    }
+                }
+            }
+        }
+        if(aItem.RHS!=NULL and aItem.LHS_item.accessMode==aRefTo and aItem.LHS_item.outerPOV!=NULL and aItem.LHS_item.outerPOV.pItem===aItem.LHS_item.pItem and !aItem.RHS.pItem.asRHSInternalIdent and !(aItem.RHS.pParent!=NULL and aItem.RHS.pParent.pItem.asRHSInternalIdent)){
+            copyIdentity(aItem)
+            handled <- true
+            return(NULL)
+        }
+        return(NULL)
+    }
+}
