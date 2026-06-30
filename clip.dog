@@ -1,56 +1,520 @@
 // clip.dog
 
-LinuxBuild: Platform='Linux' CPU='amd64' Lang='CPP' LangVersion='GNU' optimize='speed';
+LocalBuild: Platform='Local' optimize='speed';
+//LinuxBuild: Platform='Linux' CPU='amd64' Lang='CPP' LangVersion='GNU' optimize='speed';
 //SwingBuild: Platform='Java' CPU='JavaVM' Lang='Java' optimize='speed';
 //AndroidBuild: Platform='Android' CPU='JavaVM' Lang='Java' optimize='power';
 //iPhoneBuild: Platform='IOS' CPU='amd64' Lang='Swift' optimize='speed';
 
 Title = "Proteus - Clip"
 FileName = "clip"
-Version = "0.8"
-CopyrightMesg = "Copyright (c) 2015-2021 Bruce Long"
+Version = "0.9"
+CopyrightMesg = "Copyright (c) 2015-2026 Bruce Long"
 Authors = "Bruce Long"
 Description = "CLIP - The Command Line Interface to Proteus"
 ProgramOrLibrary = "program"
 
-featuresNeeded = [Proteus, ReadMultiLine, Terminal, Unicode, Logger, BigNumbers, Threads, IOBuffer, List, GraphLogger]
+featuresNeeded = [Proteus, Unicode, Logger, BigNumbers, Threads, IOBuffer, List, GraphLogger]
 
 LicenseText = `This file is part of the "Proteus suite" All Rights Reserved.`
 
-
 runCode=`
     log("Clip started")
-    me Clip: clip
-    CommandLineManager.defineOption("Clip", "RunMode", "-m", "--mode", "stream or command.", "command")
-    CommandLineManager.defineOption("Clip", "topFile", "-f", "--file", "The top-level file to load.", "world.pr")
-    me string: topFile <- CommandLineManager.getOption("Clip", "topFile")
-  //  if(topFile==""){topFile <- "world.pr"}
+    CommandLineManager.processCmdLine(joinCmdStrings(argc, argv), false);
+    CommandLineManager.defineOption("Clip", "RunMode", "-m", "--mode", "load, stream, script, or command.", "stream")
+    CommandLineManager.defineOption("Clip", "foundationFile", "-F", "--foundation", "The protected bootstrap file to load.", "file:///public/foundation.pr")
+    CommandLineManager.defineOption("Clip", "worldFile", "-w", "--world", "The public world file to load.", "file:///public/PublicKB.pr")
+    CommandLineManager.defineOption("Clip", "topFile", "-f", "--file", "Alias for --world.", "")
+    CommandLineManager.defineOption("Clip", "inputFile", "-i", "--input", "Optional stream/script file to feed after loading.", "")
+    CommandLineManager.defineOption("Clip", "wrapInput", "-p", "--wrap", "Wrap stream input in an open list: yes or no.", "yes")
+
     me string: runMode <- CommandLineManager.getOption("Clip", "RunMode")
-    if(runMode == "stream"){
-        log("Running in streaming mode")
-        clip.runStreaming(topFile)
-    } else if(runMode == "command"){
-        log("Running in command mode")
-        clip.runAsComands(topFile)
-    } else {
-        log("Default to running in command mode without a command line flag specified")
-        log(runMode)
-        clip.runAsComands(topFile)
-    }
+    me string: foundationFile <- CommandLineManager.getOption("Clip", "foundationFile")
+    me string: worldFile <- CommandLineManager.getOption("Clip", "worldFile")
+    me string: topFile <- CommandLineManager.getOption("Clip", "topFile")
+    me string: inputFile <- CommandLineManager.getOption("Clip", "inputFile")
+    me string: wrapInput <- CommandLineManager.getOption("Clip", "wrapInput")
+    if(topFile!=""){worldFile <- topFile}
+
+    CORE.run(runMode, foundationFile, worldFile, inputFile, wrapInput)
 `
 
 infonDumpMode='text'
 
 do ManageCmdLine(cmd)
 
-// enum entryColors {ColrDefault=1, ColrParsed, ColrResultOK, ColrResultErr, ColrMesg, ColrCtxtPrmpt, ColrLeftBar};
-// enum entryTags {tagBlank=0, tagEditable=1, tagNotSaved=2, tagRestrictedSave=3, tagPublicSave=4, tagSpecialSave=5, tagResult=6, tagError=7, tagMesg=8, tagCtxt=9};
+struct GLOBAL{
+    me ClipCore: CORE
+}
 
-struct Clip{
-    our infon: topInfon
-    me ProteusCore: CORE
+struct ClipStreamSpec {
+    me string: spec
+    me string: protocolTag
+    me string: connectArgs
+    me string: contentArgs
+    me string: ipAddr
+    me string: portNum
 
-    void: extractSetting(me string: S, our Agent: agent, their readMultiLine: RML) <- {
+    me bool: setSpec(me string: fullSpec)    <- {spec <- fullSpec;     return(toParts())}
+    me bool: setProtocolTag(me string: part) <- {protocolTag <- part;  return(toSpec())}
+    me bool: setConnectArgs(me string: part) <- {connectArgs <- part;  return(toSpec())}
+    me bool: setContentArgs(me string: part) <- {contentArgs <- part;  return(toSpec())}
+
+    me bool: toSpec() <- {
+        spec <- ""
+        if(protocolTag!=""){spec <+- protocolTag+"://"}
+        if(connectArgs!=""){spec <+- connectArgs}
+        if(contentArgs!=""){spec <+- "/"+contentArgs}
+        return(true)
+    }
+
+    me bool: toParts() <- {
+        trimWS(spec)
+        protocolTag <- "file"
+        connectArgs <- ""
+        contentArgs <- ""
+        ipAddr <- ""
+        portNum <- ""
+
+        me string: temp <- spec
+        me int: markPos <- temp.find("://")
+        if(markPos>=0){
+            protocolTag <- temp.subStr(0, markPos)
+            temp <- temp.subStr(markPos+3)
+        }
+
+        markPos <- temp.find("/")
+        if(markPos>=0){
+            connectArgs <- temp.subStr(0, markPos)
+            contentArgs <- temp.subStr(markPos+1)
+        } else {
+            contentArgs <- temp
+        }
+
+        if(connectArgs!=""){
+            temp <- connectArgs
+            markPos <- connectArgs.find("]")
+            if(markPos>=0){
+                 ipAddr <- connectArgs.subStr(1, markPos-1)
+                 temp   <- connectArgs.subStr(markPos+1)
+                 markPos <- temp.find(":")
+                if(markPos>=0){portNum <- temp.subStr(markPos+1)}
+                else {portNum <- "2006"}
+            } else {
+                markPos <- connectArgs.find(":")
+                if(markPos>=0){
+                    ipAddr  <- connectArgs.subStr(0, markPos)
+                    portNum <- connectArgs.subStr(markPos+1)
+                } else {
+                    ipAddr  <- connectArgs
+                    portNum <- "2006"
+                }
+            }
+
+            if(ipAddr!="" and ipAddr[0]=="["){ipAddr <- ipAddr.subStr(1, ipAddr.size()-2)}
+        }
+        return(true)
+    }
+}
+
+model ClipInfonConnector{
+    our ClipStreamSpec: streamSpec
+    me strBuf: inputBuf
+    me strBuf: outputBuf
+    me int:    statusCode
+    me string: statusMesg
+    me bool:   inputEOF
+    me bool:   shutdownRequested
+    me bool:   allowStreamingNormalize
+    their ClipInfonStream: iStreamParent
+
+    void: init(our ClipStreamSpec: SP) <- {}
+    void: pumpInputBuff()        <- {}
+    me string: readInputStream() <- {return("")}
+    bool: pumpOutputBuf(me string: mesg)
+    void: submitProteusResult(me int64: pos, me string: mesg)  <- {if(!shutdownRequested){pumpOutputBuf("RESULT:"+toString(pos)+":"+mesg+"\n")}}
+    void: handleSystemError  (me string: mesg)  <- {if(!shutdownRequested){pumpOutputBuf("SYSERR:"+mesg+"\n")}}
+    void: handleSyntaxError  (me string: mesg)  <- {if(!shutdownRequested){pumpOutputBuf("SYNERR:"+mesg+"\n")}}
+    void: handleProteusError (me string: mesg)  <- {if(!shutdownRequested){pumpOutputBuf("NRMERR:"+mesg+"\n")}}
+}
+struct ClipInfonConnector{}
+
+struct ClipFileConnector: inherits=ClipInfonConnector {
+    me FileStream: dataFile
+
+    void: init(our ClipStreamSpec: SP) <- {
+        streamSpec <- SP
+        inputEOF <- false
+        shutdownRequested <- false
+        allowStreamingNormalize <- false
+        me string: filePath <- getAssetsDir() + "/" + streamSpec.contentArgs
+        dataFile.open(filePath)
+        if(dataFile.failure()){
+            statusCode <- 1
+            statusMesg <- "Failed to open file: " + filePath
+            inputEOF <- true
+            print("SYSERR:"+statusMesg+"\n")
+        } else {
+            statusCode <- 0
+            statusMesg <- "OK"
+            log("Initialized file stream:"+filePath)
+        }
+    }
+
+    void: pumpInputBuff() <- {
+        while(iStreamParent.pumpParserInputBuf()){}
+        inputBuf.close()
+    }
+
+    me string: readInputStream()  <- {
+        me string: data
+        if(inputEOF){return("")}
+        if(!dataFile.EOF()){
+            data <- dataFile.getLine()+"\n"
+        } else {
+            inputEOF <- true
+            log("INPUT_EOF:"+streamSpec.spec)
+        }
+        return(data)
+    }
+
+    bool: pumpOutputBuf(me string: mesg) <- {print(mesg); return(false)}
+}
+
+struct ClipManualConnector: inherits=ClipInfonConnector {
+    void: init(our ClipStreamSpec: SP) <- {
+        streamSpec <- SP
+        inputEOF <- false
+        shutdownRequested <- false
+        allowStreamingNormalize <- true
+        statusCode <- 0
+        statusMesg <- "OK"
+        log("Initialized manual stream:"+streamSpec.spec)
+    }
+
+    void: pumpInputBuff() <- {}
+    me string: readInputStream() <- {return("")}
+    bool: pumpOutputBuf(me string: mesg) <- {print(mesg); return(false)}
+}
+
+struct ClipThreadedInfonParser: inherits=Threads{
+    me string: name
+    our ProteusParser: parser
+    our infon: result
+    our ClipInfonConnector: sourceConnector
+    me bool: parseCompleted
+    me Mutex: chkParseDone
+    me SyncLock: parseDoneLock
+
+    void: waitForParseCompletion()<-{
+        me MutexMngr: MtxMgr{chkParseDone}
+        while(!parseCompleted){
+            parseDoneLock.wait(MtxMgr)
+        }
+    }
+
+    void: initAndStart(our ProteusParser: pParser, their strBuf: streamToParse, our infon: topItem, me string:Name) <- {
+        parser <- pParser
+        result <- topItem
+        name <- Name+"_P"
+        parseCompleted <- false
+        parser.initParseFromStream(streamToParse)
+        start(name)
+    }
+
+    void: run() <- {
+        log("OPENING PARSE_THREAD:" + streamName())
+        parser.doParse(result)
+        if(parser.doesParseHaveError()){
+            handleSyntaxError(parser.formattedError())
+        }
+        log("CLOSING PARSE_THREAD:" + streamName())
+
+        protect(chkParseDone){
+            parseCompleted <- true
+            parseDoneLock.notifyOne()
+        }
+    }
+
+    me string: streamName() <- {return(sourceConnector.streamSpec.spec)}
+    void: handleSyntaxError(me string: mesg) <- {
+        log("Syntax Error:"+mesg)
+        sourceConnector.handleSyntaxError(streamName() + ": " + mesg)
+    }
+}
+
+struct ClipInfonStream{
+    me string: name
+    our ClipInfonConnector: source
+    me uint64: originID
+    their Agent: parentAgent
+    our ProteusParser: parser
+    our infon: toFill
+    me ClipThreadedInfonParser: parserThread
+    me ThreadedNormalizer: normerThread
+
+    bool: pumpParserInputBuf() <- {
+        if(source.inputEOF){return(false)}
+        me string: data <- source.readInputStream()
+        if(!source.inputEOF and data.size()>0){
+            source.inputBuf.putStr(data)
+        }
+        return(!source.inputEOF)
+    }
+
+    bool: pushParserInputBuf(me string: data) <- {
+        if(!source.inputEOF and data.size()>0){
+            source.inputBuf.putStr(data)
+        }
+        return(!source.inputEOF)
+    }
+
+    void: init(our ClipInfonConnector: connector, their Agent: agent, our ProteusParser: pParser, our infon: infToFill, me uint64: OriginID) <- {
+        source   <- connector
+        originID <- OriginID
+        parentAgent <- agent
+        parser <- pParser
+        toFill <- infToFill
+        source.iStreamParent <- self
+        source.inputBuf.init(source.streamSpec.spec)
+        source.outputBuf.init(source.streamSpec.spec+":out")
+        if(toFill==NULL){Allocate(toFill)}
+        toFill.originID <- originID
+        parserThread.sourceConnector <- source
+    }
+
+    void: start(me string:Name) <- {
+        name <- Name
+        normerThread.init(parentAgent, toFill)
+        if(source.allowStreamingNormalize){
+            normerThread.start(name+"_NRM")
+            parserThread.initAndStart(parser, source.inputBuf, toFill, name+"_PnE")
+            source.pumpInputBuff()
+        }else{
+            parserThread.initAndStart(parser, source.inputBuf, toFill, name+"_PnE")
+            source.pumpInputBuff()
+            parserThread.waitForExit()
+            normerThread.start(name+"_NRM")
+        }
+    }
+
+    void: waitForCompletion() <-{
+        parserThread.waitForExit()
+        normerThread.waitForExit()
+    }
+
+    void: closeInput() <- {
+        if(source != NULL){
+            source.inputEOF <- true
+            source.inputBuf.close()
+        }
+    }
+
+    void: requestFinish() <- {
+        if(source != NULL){
+            source.shutdownRequested <- true
+            closeInput()
+        }
+    }
+}
+
+struct ClipConnectionManager{
+    their Agent: agent
+    me int: numFilesLoaded <- 0
+    me Mutex: connMgrMtx
+    me uint64: lastOriginID
+    me Map<uint64, our ClipInfonStream>: infonSourceRecords
+
+    void: init(their Agent: agnt) <- {
+        agent <- agnt
+        lastOriginID <- 0
+        numFilesLoaded <- 0
+    }
+
+    me bool: hasProtocol(me string: specString) <- {
+        me int: markPos <- specString.find("://")
+        return(markPos>=0)
+    }
+
+    me string: canonicalFileSpec(me string: specString) <- {
+        trimWS(specString)
+        if(specString==""){return(specString)}
+        if(hasProtocol(specString)){return(specString)}
+        if(specString[0]=="/" or specString[0]=="\\"){return("file://"+specString)}
+        return("file:///"+specString)
+    }
+
+    me string: parentDirForOrigin(me uint64: originID) <- {
+        me string: parentPath <- ""
+        if(infonSourceRecords.containsKey(originID)){
+            parentPath <- infonSourceRecords[originID].source.streamSpec.spec
+            me int: lastSlashPos <- findLastSubString(parentPath, "/")
+            if(lastSlashPos>=0){
+                parentPath <- parentPath.subStr(0, lastSlashPos+1)
+            }
+        }
+        return(parentPath)
+    }
+
+    me string: resolveStreamSpec(me string: specString, me string: parentPath) <- {
+        trimWS(specString)
+        if(specString==""){return(specString)}
+        if(hasProtocol(specString)){return(specString)}
+        if(specString[0]=="/" or specString[0]=="\\"){
+            specString <- specString.subStr(1, specString.size()-1)
+            if(parentPath!=""){return(parentPath+specString)}
+            return("file:///"+specString)
+        }
+        if(parentPath!=""){return(parentPath+specString)}
+        return(canonicalFileSpec(specString))
+    }
+
+    our ClipInfonStream: startNewConnection(our infon: toFill, me string: specString, me uint64: parentOriginID <- 0) <- {
+        me string: parentPath <- ""
+        if(parentOriginID>0){parentPath <- parentDirForOrigin(parentOriginID)}
+        else if(toFill!=NULL){parentPath <- parentDirForOrigin(toFill.originID)}
+        me string: resolvedSpec <- resolveStreamSpec(specString, parentPath)
+        our ClipInfonConnector: connector <- makeInfonConnector(resolvedSpec)
+        if(connector==NULL){return(NULL)}
+
+        our ClipInfonStream:: iStream
+        protect(connMgrMtx){
+            lastOriginID <+- 1
+            their ClipCore: tmpCore <- CORE
+            our ProteusParser:: parser{tmpCore, true, lastOriginID}
+            iStream.init(connector, agent, parser, toFill, lastOriginID)
+            infonSourceRecords[lastOriginID] <- iStream
+            iStream.start("IS"+toString(numFilesLoaded))
+        }
+        return(iStream)
+    }
+
+    our ClipInfonConnector: makeInfonConnector(me string: specString)<-{
+        numFilesLoaded <+- 1
+        print("LOADING:("+toString(numFilesLoaded)+") "+specString+"\n")
+        our ClipStreamSpec:: SP
+        SP.setSpec(specString)
+
+        switch(SP.protocolTag){
+            case "file":{our ClipFileConnector:: retval;  retval.init(SP); return(retval)}
+            case "clip":{our ClipManualConnector:: retval;  retval.init(SP); return(retval)}
+            case "drct":{our ClipManualConnector:: retval;  retval.init(SP); return(retval)}
+        }
+        print("SYSERR:No connection was made for: "+specString+"\n")
+        return(NULL)
+    }
+
+    void: waitForAllStreams() <- {
+        me int: stablePasses <- 0
+        while(stablePasses < 2){
+            me int: countAtStart <- numFilesLoaded
+            withEach (originID, stream) in infonSourceRecords{
+                if(stream != NULL){stream.waitForCompletion()}
+            }
+            if(numFilesLoaded==countAtStart){stablePasses <+- 1}
+            else{stablePasses <- 0}
+        }
+    }
+
+    void: printLoadedStreams() <- {
+        print("STREAMS_LOADED:"+toString(numFilesLoaded)+"\n")
+        withEach (originID, stream) in infonSourceRecords{
+            if(stream != NULL){
+                print("  #"+toString(originID)+" "+stream.source.streamSpec.spec+"\n")
+            }
+        }
+    }
+
+    void: shutdown() <- {
+        withEach (originID, stream) in infonSourceRecords{
+            if(stream != NULL){stream.requestFinish()}
+        }
+        withEach (originID, stream) in infonSourceRecords{
+            if(stream != NULL){stream.waitForCompletion()}
+        }
+    }
+}
+
+struct ClipCore: inherits=ProteusCore{
+    me ClipConnectionManager: connectionMgr
+    me bool: shutdownStarted
+
+    me bool: startsWith(me string: S, me string: prefix) <- {
+        if(S.size()<prefix.size()){return(false)}
+        return(S.subStr(0, prefix.size())==prefix)
+    }
+
+    me bool: truthy(me string: S) <- {
+        trimWS(S)
+        if(S=="no" or S=="false" or S=="0" or S=="off"){return(false)}
+        return(true)
+    }
+
+    void: initClip() <- {
+        shutdownStarted <- false
+        errorMesg <- ""
+        streamingNormMode <- true
+        initHardFuncNames()
+        setStreamingMode(true)
+        Allocate(agent)
+        agent.init(this)
+        Allocate(agent.foundation)
+        agent.foundation.setToList()
+        agent.locale <- unicodeMgr.getSystemLocale()
+        connectionMgr.init(agent)
+    }
+
+    me bool: normalizeFromStreamSpec(our POV: infToFill, me string: streamSpec) <- {
+        trimWS(streamSpec)
+        me uint64: parentOriginID <- 0
+        if(infToFill!=NULL){
+            if(infToFill.pItem!=NULL and infToFill.pItem.originID>0){parentOriginID <- infToFill.pItem.originID}
+            else if(infToFill.pParent!=NULL and infToFill.pParent.pItem!=NULL){parentOriginID <- infToFill.pParent.pItem.originID}
+        }
+        our ClipInfonStream: stream <- connectionMgr.startNewConnection(infToFill.pItem, streamSpec, parentOriginID)
+        return(stream!=NULL)
+    }
+
+    me string: getOriginIDString(me uint64: originID) <- {
+        if(connectionMgr.infonSourceRecords.containsKey(originID)){
+            return(connectionMgr.infonSourceRecords[originID].source.streamSpec.spec)
+        }
+        return("source#"+toString(originID))
+    }
+
+    void: submitProteusResult(me uint64: originID, me uint64: pos, me string: mesg)  <- {
+        print("RESULT["+getOriginIDString(originID)+":"+toString(pos)+"] "+mesg+"\n")
+    }
+    void: handleSystemError  (me uint64: originID, me string: mesg)  <- {print("SYSERR["+getOriginIDString(originID)+"] "+mesg+"\n")}
+    void: handleSyntaxError  (me uint64: originID, me string: mesg)  <- {print("SYNERR["+getOriginIDString(originID)+"] "+mesg+"\n")}
+    void: handleProteusError (me uint64: originID, me string: mesg)  <- {print("NRMERR["+getOriginIDString(originID)+"] "+mesg+"\n")}
+
+    me bool: loadInto(me string: label, our infon: target, me string: specString) <- {
+        trimWS(specString)
+        if(specString==""){
+            print("LOAD_SKIP:"+label+"\n")
+            return(true)
+        }
+        me string: canonical <- connectionMgr.canonicalFileSpec(specString)
+        print("LOAD_BEGIN:"+label+" "+canonical+"\n")
+        our ClipInfonStream: stream <- connectionMgr.startNewConnection(target, canonical)
+        if(stream==NULL){
+            print("LOAD_FAILED:"+label+" "+canonical+"\n")
+            return(false)
+        }
+        connectionMgr.waitForAllStreams()
+        print("LOAD_DONE:"+label+" "+canonical+"\n")
+        return(true)
+    }
+
+    me bool: loadBootstrap(me string: foundationSpec, me string: worldSpec) <- {
+        if(!loadInto("foundation", agent.foundation, foundationSpec)){return(false)}
+        if(!loadInto("world", agent.world, worldSpec)){return(false)}
+        connectionMgr.printLoadedStreams()
+        return(true)
+    }
+
+    void: extractSetting(me string: S) <- {
         me stringScanner: strScnr
         strScnr.initialize(S)
         me string: cmd <- strScnr.scrapeAlphaNumSeq()
@@ -61,98 +525,172 @@ struct Clip{
         me string: value <- strScnr.scrapeAlphaNumSeq()
         if(value!=""){
             me int: retCode <- agent.setSetting(key,value)
-            if(retCode==1){RML.addUserMesgAndTopBar("Setting:"+key+" = "+value)}
-            else if(retCode==2){RML.addUserMesgAndTopBar("Locale = "+unicodeMgr.localeString(agent.locale))}
+            if(retCode==1){print("Setting:"+key+" = "+value+"\n")}
+            else if(retCode==2){print("Locale = "+unicodeMgr.localeString(agent.locale)+"\n")}
         }
     }
 
-    void: showSetting(me string: S, our Agent: agent, their readMultiLine: RML) <- {
+    void: showSetting(me string: S) <- {
         me stringScanner: strScnr
         strScnr.initialize(S)
         me string: cmd <- strScnr.scrapeAlphaNumSeq()
         if(cmd!="show"){return()}
         me string: setting <- strScnr.scrapeAlphaNumSeq()
         if(setting==""){return()}
-        me string: msgStr
-        if(setting=='locale'){msgStr<-"Locale = "+unicodeMgr.localeString(agent.locale)}
+        if(setting=='locale'){print("Locale = "+unicodeMgr.localeString(agent.locale)+"\n")}
         else{
-            if(agent.settings.containsKey(setting)){msgStr<-"Setting:"+setting+" = "+agent.settings[setting]}
-            else{msgStr<-setting+" not defined."}
+            if(agent.settings.containsKey(setting)){print("Setting:"+setting+" = "+agent.settings[setting]+"\n")}
+            else{print(setting+" not defined.\n")}
         }
-        RML.addUserMesgAndTopBar(msgStr)
     }
 
-    void: runStreaming(me string: worldFileName)<-{
-        streamingNormMode<-true
-  /*      CORE.init(worldFileName, false)
+    void: printHelp() <- {
+        print("Commands: quit, help, set KEY=VALUE, show KEY, :files, :query INFON, :close\n")
+    }
 
-        // The main thread supplies the strBuf and topInfon.
-        // After starting parseAndExtractor.start()
-        // Start a normalize thread on TopInfon. Then, the main thread
-        // begins filling the strBuf.
-        me strBuf: userStream; userStream.init("user-stream")
-        our infon:: topInfon
-     //   if(CORE.infonGrammar==NULL){Allocate(CORE.infonGrammar)}
-        me uint64: originID <- 1
-        our ProteusParser:: parser{CORE, true, originID}
-        me ThreadedNormalizer: normer; normer.init(CORE.agent, topInfon)
-        me Threaded_infonParseAndExtractor: parseAndExtractor
-        parseAndExtractor.start(parser, userStream, topInfon, "clip")
-  //      normer.start()
-
-        their readMultiLine: RML
-        Allocate(RML,1," >~$Ss=?#:")
-        RML.initNCurses()
-        RML.addUserMesg("The Proteus CLI. Type some infons, 'quit' or 'help':", 5+shiftLeft(8, 4))  // ColrMesg + tagMesg
+    void: runCommandLoop() <- {
+        setStreamingMode(false)
+        print("CLIP command mode. Type complete infons, 'quit', or 'help'.\n")
         me bool: done <- false
         while(!done){
-            me string: inputStr <- RML.readLines()
-            // TODO: Handle commands: Help, quit, dict, set, show, etc.
-            if(inputStr=="quit"){break()}
-            if(RML.cmd==4){done<-true}  //rml.cmd==CTRLD
-            if(inputStr[inputStr.size()-1]=="\r"){
-                inputStr <- inputStr.subStr(0, inputStr.size()-1)
-                log("EVALUATE! '"+inputStr+"'")
-            }
-            if(inputStr!=""){
-                inputStr <+- "\n"
-                parser.putString(inputStr)
-            }
-        }
-        userStream.close()
-        log("Waiting for parse & extract To End")
-        // could call parseAndExtractor.waitForExtractCompletion
-        parseAndExtractor.waitForThreadsToExit()
-        normer.start()
-        log("Waiting for normalize To End")
-normer.waitForExit()
-        log("Parsed Infon:"+toString(topInfon))
- */   }
-
-    void: runAsComands(me string: worldFileName)<-{
-        CORE.init(worldFileName, false)
-        their readMultiLine: RML
-        Allocate(RML,1," >~$Ss=?#:")
-        RML.initNCurses()
-        RML.addUserMesg("The Proteus CLI. Type some infons, 'quit' or 'help':", 5+shiftLeft(8, 4))  // ColrMesg + tagMesg
-
-        me bool: done <- false
-        while(!done){
-            me string: inputStr <- RML.readLines()
+            me string: inputStr
+            print("clip> ")
+            input(inputStr)
             trimWS(inputStr)
-            log("___________________")
             log("$: "+inputStr)
-            if(inputStr=="quit" or  RML.cmd==4){break()}  //rml.cmd==CTRLD
-            else if (inputStr=="help"){}
-            else if (inputStr=="dict"){}
-            else if (inputStr.subStr(0,3)=="set"){extractSetting(inputStr, CORE.agent, RML)}
-            else if (inputStr.subStr(0,4)=="show"){showSetting(inputStr, CORE.agent, RML)}
-            else if (inputStr==""){continue()}
+            if(inputStr=="quit"){break()}
+            else if(inputStr=="help"){printHelp()}
+            else if(startsWith(inputStr, "set")){extractSetting(inputStr)}
+            else if(startsWith(inputStr, "show")){showSetting(inputStr)}
+            else if(inputStr==""){continue()}
             else {
-                me string: result <- toString(CORE.query(inputStr, true))
-                RML.message <- result
-                RML.addUserMesg(result, 3+shiftLeft(6, 4))  // ColrResultOK + tagResult
+                me string: result <- toString(query(inputStr, false))
+                print("RESULT[query] "+result+"\n")
             }
         }
+    }
+
+    our ClipInfonStream: startInputStream(me string: name, me bool: wrapInput) <- {
+        setStreamingMode(true)
+        our infon:: inputInf
+        our ClipInfonStream: inputStream <- connectionMgr.startNewConnection(inputInf, "clip://"+name)
+        if(inputStream!=NULL and wrapInput){
+            inputStream.pushParserInputBuf("{|\n")
+        }
+        return(inputStream)
+    }
+
+    void: finishInputStream(our ClipInfonStream: inputStream, me bool: wrapInput) <- {
+        if(inputStream==NULL){return()}
+        if(wrapInput){
+            inputStream.pushParserInputBuf("}\n")
+            sleep(100)
+        }
+        inputStream.closeInput()
+        inputStream.waitForCompletion()
+    }
+
+    me string: scriptPathFromSpec(me string: scriptSpec) <- {
+        trimWS(scriptSpec)
+        if(scriptSpec==""){return("")}
+        if(connectionMgr.hasProtocol(scriptSpec)){
+            our ClipStreamSpec:: SP
+            SP.setSpec(connectionMgr.canonicalFileSpec(scriptSpec))
+            if(SP.protocolTag=="file"){return(SP.contentArgs)}
+        }
+        return(scriptSpec)
+    }
+
+    me bool: feedScriptFile(our ClipInfonStream: inputStream, me string: scriptSpec) <- {
+        if(inputStream==NULL){return(false)}
+        me string: scriptPath <- scriptPathFromSpec(scriptSpec)
+        me FileStream: scriptFile
+        scriptFile.open(scriptPath)
+        if(scriptFile.failure()){
+            me string: assetPath <- getAssetsDir()+"/"+scriptPath
+            scriptFile.open(assetPath)
+            if(scriptFile.failure()){
+                print("SYSERR:Failed to open input script: "+scriptSpec+"\n")
+                return(false)
+            }
+            scriptPath <- assetPath
+        }
+        print("INPUT_BEGIN:"+scriptPath+"\n")
+        while(!scriptFile.EOF()){
+            me string: line <- scriptFile.getLine()
+            inputStream.pushParserInputBuf(line+"\n")
+        }
+        scriptFile.close()
+        print("INPUT_DONE:"+scriptPath+"\n")
+        return(true)
+    }
+
+    me bool: handleStreamCommand(me string: inputStr, our ClipInfonStream: inputStream, me bool: wrapInput) <- {
+        if(inputStr=="help" or inputStr==":help"){printHelp(); return(true)}
+        if(inputStr==":files" or inputStr==":status"){connectionMgr.printLoadedStreams(); return(true)}
+        if(startsWith(inputStr, ":query ")){
+            me string: qry <- inputStr.subStr(7, inputStr.size()-7)
+            me bool: oldMode <- streamingMode
+            setStreamingMode(false)
+            print("RESULT[query] "+toString(query(qry, false))+"\n")
+            setStreamingMode(oldMode)
+            return(true)
+        }
+        if(inputStr==":close"){
+            finishInputStream(inputStream, wrapInput)
+            return(true)
+        }
+        return(false)
+    }
+
+    void: runStreamLoop(me string: inputSpec, me string: wrapSpec) <- {
+        me bool: wrapInput <- truthy(wrapSpec)
+        our ClipInfonStream: inputStream <- startInputStream("interactive", wrapInput)
+        if(inputSpec!=""){
+            feedScriptFile(inputStream, inputSpec)
+            finishInputStream(inputStream, wrapInput)
+            return()
+        }
+        print("CLIP stream mode. Type infons, ':query ...', ':files', ':close', or 'quit'.\n")
+        me bool: done <- false
+        while(!done){
+            me string: inputStr
+            print("clip-stream> ")
+            input(inputStr)
+            trimWS(inputStr)
+            if(inputStr=="quit" or inputStr==":quit"){break()}
+            if(inputStr==""){continue()}
+            if(handleStreamCommand(inputStr, inputStream, wrapInput)){
+                if(inputStr==":close"){inputStream <- startInputStream("interactive", wrapInput)}
+                continue()
+            }
+            inputStream.pushParserInputBuf(inputStr+"\n")
+        }
+        finishInputStream(inputStream, wrapInput)
+    }
+
+    void: shutdown()<-{
+        if(shutdownStarted){return()}
+        shutdownStarted <- true
+        connectionMgr.shutdown()
+    }
+
+    void: run(me string: runMode, me string: foundationSpec, me string: worldSpec, me string: inputSpec, me string: wrapSpec) <- {
+        initClip()
+        if(!loadBootstrap(foundationSpec, worldSpec)){
+            print("BOOTSTRAP_FAILED\n")
+            shutdown()
+            return()
+        }
+        if(runMode=="load"){
+            print("BOOTSTRAP_OK\n")
+        } else if(runMode=="command"){
+            runCommandLoop()
+        } else if(runMode=="script"){
+            runStreamLoop(inputSpec, wrapSpec)
+        } else {
+            runStreamLoop(inputSpec, wrapSpec)
+        }
+        shutdown()
     }
 }
