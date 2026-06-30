@@ -5,6 +5,7 @@ struct GLOBAL{
     const int: povSrcSparseExposedHead   <- 602
     const int: povSrcConcreteSpanPrefix  <- 603
     const int: povSrcConcreteSpanRemainder <- 604
+    const int: povSrcListSpecSparseTail  <- 605
 }
 
 struct POVPedigree{
@@ -146,14 +147,13 @@ model POV{ // Point-Of-View
         remainderPOV.pParent <- pParent
         return(remainderPOV)
     }
-    our POV: exposeSparseHead() <- {
+    our POV: exposeSparseHeadWithItem(our infon: headItem) <- {
         if(!isSparseOrderedSpan() or pParent==NULL or pParent.pItem==NULL){return(NULL)}
         our POV: spanPOV <- listNodeForSelf()
         if(spanPOV==NULL){return(NULL)}
         me int64: totalCount <- sparseSpanCount()
         if(totalCount<=0){return(NULL)}
 
-        our infon: headItem <- makePotentialMemberInfon()
         our POV: headPOV <- pParent.pItem.value.items.insertBefore(spanPOV, headItem, povSrcSparseExposedHead)
         headPOV.isSubItm <- false
         headPOV.pParent <- pParent
@@ -164,6 +164,12 @@ model POV{ // Point-Of-View
             pItem.infSize.num <- totalCount - 1
         }
         return(headPOV)
+    }
+    our POV: exposeSparseHead(me bool: typeOnlyHead <- false) <- {
+        our infon: headItem
+        if(typeOnlyHead){headItem <- makeSparseSpanMemberTypeOnlyInfon()}
+        else{headItem <- makePotentialMemberInfon()}
+        return(exposeSparseHeadWithItem(headItem))
     }
     our POV: siblingAtOffset(me int64: offset) <- {
         if(offset<0){return(NULL)}
@@ -325,7 +331,146 @@ model POV{ // Point-Of-View
         }
         return(newInfon)
     }
+    our infon: makeSparseSpanMemberTypeOnlyInfon() <- {
+        our infon:: newInfon
+        if(pItem!=NULL and pItem.value.listSpec!=NULL and pItem.value.listSpec.type!=NULL){
+            newInfon.type <- pItem.value.listSpec.type
+            newInfon.copySource <- pItem.value.listSpec
+            newInfon.copySourceType <- cstListSpec
+        }
+        newInfon.itmMode <- mItem
+        newInfon.infMode <- isUnknown
+        newInfon.value.fType <- tUnknown
+        newInfon.value.format <- fUnknown
+        newInfon.infSize.format <- fUnknown
+        newInfon.wordDerefed <- true
+        newInfon.alreadyTypeChecked <- true
+        if(isSubItm){
+            if((pParent!=NULL and pParent.pItem.isInnr) or pItem.useMode==umQuestion){
+                newInfon.useMode <- umQuestion
+            }
+        }
+        return(newInfon)
+    }
+    me int64: listSpecSparseRemainingCount() <- {
+        if(pItem==NULL){return(0)}
+        if(pItem.value.fType!=LST or pItem.value.format!=fLiteral){return(0)}
+        if(pItem.value.listSpec==NULL){return(0)}
+        if(pItem.value.listSpec.type==NULL){return(0)}
+        if(pItem.value.listSpec.asWrkLstOutr){return(0)}
+
+        me FlexNum: givenCount <- pItem.countGivenItems()
+        if(givenCount<0){return(0)}
+        me FlexNum: availableCount
+        if(!listSpecSparseAvailableCount(availableCount)){return(0)}
+        me FlexNum: remainingCount <- availableCount - givenCount
+        if(remainingCount<=1){return(0)}
+        return(remainingCount.convertToInt())
+    }
+    me bool: listSpecSparseHasRoom() <- {
+        if(pItem==NULL){return(false)}
+        if(pItem.value.fType!=LST or pItem.value.format!=fLiteral){return(false)}
+        if(pItem.value.listSpec==NULL){return(false)}
+        if(pItem.value.listSpec.type==NULL){return(false)}
+        if(pItem.value.listSpec.asWrkLstOutr){return(false)}
+
+        me FlexNum: givenCount <- pItem.countGivenItems()
+        if(givenCount<0){return(false)}
+        me FlexNum: availableCount
+        if(!listSpecSparseAvailableCount(availableCount)){return(false)}
+        return(givenCount < availableCount)
+    }
+    me bool: evalListSpecSparseRange(our infon: infn, their FlexNum: lowest, their FlexNum: highest) <- {
+        if(infn.value.format!=fConcat){
+            if(infn.value.fType==NUM){
+                if(infn.infSize.format==fLiteral){
+                    if(infn.value.format==fLiteral){
+                        lowest <deep- infn.value.num
+                        highest <deep- lowest
+                        return(true)
+                    }else if(infn.value.format==fUnknown){
+                        lowest <- 0
+                        highest <deep- infn.infSize.num
+                        return(true)
+                    }
+                }else if(infn.infSize.format==fUnknown){
+                    if(infn.value.format==fLiteral){
+                        lowest <deep- infn.value.num
+                        highest <deep- infn.value.num
+                        return(true)
+                    }
+                }
+            }
+            return(false)
+        }
+        if(infn.value.items.size()==2){
+            our infon: first <- infn.value.items.first()
+            our infon: second <- infn.value.items.last()
+            if(first.value.fType==NUM and first.value.format==fUnknown and first.infSize.format==fLiteral and
+               second.value.fType==NUM and second.value.format==fLiteral and second.infSize.format==fUnknown and second.value.sizeMode==fromContext){
+                lowest <deep- second.value.num
+                highest <deep- lowest + first.infSize.num
+                return(true)
+            }
+            if(first.value.fType==NUM and first.value.format==fLiteral and second.value.format==fUnknown){
+                lowest <deep- first.value.num
+                highest <deep- first.value.num
+                return(true)
+            }
+        }
+        return(false)
+    }
+    me bool: listSpecSparseAvailableCount(their FlexNum: availableCount) <- {
+        if(pItem.infSize.format==fLiteral){
+            availableCount <deep- pItem.infSize.num
+            return(true)
+        }
+        if(pItem.infSize.format==fConcat){
+            our infon:: sizeInfon
+            sizeInfon.itmMode <- mItem
+            sizeInfon.infMode <- isLiteral
+            sizeInfon.value <deep- pItem.infSize
+            me FlexNum: lowCount
+            me FlexNum: highCount
+            if(evalListSpecSparseRange(sizeInfon, lowCount, highCount)){
+                availableCount <- max(lowCount, highCount)
+                return(true)
+            }
+        }
+        return(false)
+    }
+    our POV: tryAddingListSpecSparseTail() <- {
+        if(pItem.value.items.tail!=NULL and pItem.value.items.tail.isSparseOrderedSpan()){
+            return(pItem.value.items.tail)
+        }
+        me int64: remainingCount <- listSpecSparseRemainingCount()
+        if(remainingCount<=1){return(NULL)}
+
+        our infon:: sparseTail
+        sparseTail.setToList()
+        sparseTail.value.listSpec <- pItem.value.listSpec
+        sparseTail.orderMode <- pItem.orderMode
+        sparseTail.value.sizeMode <- fromCount
+        sparseTail.value.tailUnfinished <- true
+        sparseTail.infSize.fType <- NUM
+        sparseTail.infSize.format <- fLiteral
+        sparseTail.infSize.num <- remainingCount
+
+        our POV: tailPOV <- pItem.value.items.append(sparseTail, true, povSrcListSpecSparseTail)
+        tailPOV.pParent <- self
+        return(tailPOV)
+    }
     our POV: tryAddingTentativeChild() <- {
+        our POV: sparseTail <- tryAddingListSpecSparseTail()
+        if(sparseTail!=NULL){return(sparseTail)}
+        if(pItem.value.listSpec!=NULL and pItem.value.listSpec.type!=NULL and !listSpecSparseHasRoom()){
+            me FlexNum: availableCount
+            if(listSpecSparseAvailableCount(availableCount)){
+                pItem.value.tailUnfinished <- false
+                return(NULL)
+            }
+        }
+        if(!pItem.value.tailUnfinished and !listSpecSparseHasRoom()){return(NULL)}
         me string: lenStatus <- pItem.lengthStatus()
         if(lenStatus == "L" or lenStatus == "?"){
             our infon: newInfon <- makePotentialMemberInfon()
@@ -356,7 +501,7 @@ model POV{ // Point-Of-View
 
         our POV: firstNode
         if(pItem.value.items.isEmpty()){
-            if(skipDots<=0 and pItem.value.tailUnfinished){
+            if(skipDots<=0 and (pItem.value.tailUnfinished or listSpecSparseHasRoom())){
                 firstNode <- tryAddingTentativeChild()
                 if(firstNode == NULL){return(NULL)}
             }else{return(NULL)}
@@ -416,7 +561,7 @@ model POV{ // Point-Of-View
         our POV: nextNode <- next
         if(nextNode==NULL){
             if(skipDots<=0){ //log("DOTS:"+toString(skipDots))
-                if(pParent != NULL and pParent.pItem != NULL and pParent.pItem.value.tailUnfinished){
+                if(pParent != NULL and pParent.pItem != NULL and (pParent.pItem.value.tailUnfinished or pParent.listSpecSparseHasRoom())){
                     nextNode <- pParent.tryAddingTentativeChild()
                 }
             } else if(skipDots<1000000 and pParent != NULL and pParent.pItem != NULL and !pParent.isSubItm){ //log("FINISHING:"+pParent.stringify());

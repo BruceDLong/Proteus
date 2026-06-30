@@ -29,15 +29,16 @@ unit/day/fromSeconds/readSecondHour, Day from seconds: second hour, day:{second|
 unit/day/fromSeconds/readThirdMinute, Day from seconds: third minute, day:{second| 1 2 3 4 5 6 7 8 9 10 11 12}#2#1, minute:{7 8 9}, world, TestFiles/timeTestCases.pr
 
 # Day spans defined in minutes, then read as hours and seconds.
-unit/day/fromMinutes/readFirstHour, Day from minutes: first hour, day:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6} minute:{second| 7 8 9} minute:{second| 10 11 12}}.hour, hour:{minute:{1 2 3} minute:{4 5 6}}, world, TestFiles/timeTestCases.pr
-unit/day/fromMinutes/readSecondHour, Day from minutes: second hour, day:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6} minute:{second| 7 8 9} minute:{second| 10 11 12}}#2, hour:{minute:{7 8 9} minute:{10 11 12}}, world, TestFiles/timeTestCases.pr
+unit/day/fromMinutes/readFirstHour, Day from minutes: first hour, day:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6} minute:{second| 7 8 9} minute:{second| 10 11 12}}.hour, hour:{minute:{second| 1 2 3 ... } minute:{second| 4 5 6 ... }}, world, TestFiles/timeTestCases.pr
+unit/day/fromMinutes/readSecondHour, Day from minutes: second hour, day:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6} minute:{second| 7 8 9} minute:{second| 10 11 12}}#2, hour:{minute:{second| 7 8 9 ... } minute:{second| 10 11 12 ... }}, world, TestFiles/timeTestCases.pr
 unit/day/fromMinutes/readTenthSecond, Day from minutes: tenth second, day:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6} minute:{second| 7 8 9} minute:{second| 10 11 12}}#2#2#1, 10, world, TestFiles/timeTestCases.pr
 
 # Day spans defined in hours, then read as minutes and seconds.
-unit/day/fromHours/readFirstMinute, Day from hours: first minute, day:{hour| hour:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6}} hour:{minute| minute:{second| 7 8 9} minute:{second| 10 11 12}}}#1#1, minute:{1 2 3}, world, TestFiles/timeTestCases.pr
+unit/day/fromHours/readFirstMinute, Day from hours: first minute, day:{hour| hour:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6}} hour:{minute| minute:{second| 7 8 9} minute:{second| 10 11 12}}}#1#1, minute:{second| 1 2 3 ... }, world, TestFiles/timeTestCases.pr
 unit/day/fromHours/readEighthSecond, Day from hours: eighth second, day:{hour| hour:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6}} hour:{minute| minute:{second| 7 8 9} minute:{second| 10 11 12}}}#2#1#2, 8, world, TestFiles/timeTestCases.pr
 unit/day/fromHours/readMinuteByType, Day from hours: first minute by type, day:{hour| hour:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6}} hour:{minute| minute:{second| 7 8 9} minute:{second| 10 11 12}}}.minute, minute:{1 2 3}, world, TestFiles/timeTestCases.pr
 
 # Persistent world item: day is defined in seconds in the fixture, then accessed through larger units.
 unit/world/dayFromSeconds/readSecondHour, World day from seconds: second hour, %W.day#2, hour:{minute:{7 8 9} minute:{10 11 12}}, world, TestFiles/timeTestCases.pr
+unit/world/dayFromSeconds/readThirdMinute, World day from seconds: third minute, %W.day#2#1, minute:{7 8 9}, world, TestFiles/timeTestCases.pr
 unit/world/dayFromSeconds/writeNestedSecond, World day from seconds: write nested second, %W.day#2#1#2=80\n%W.day, day:{hour:{minute:{1 2 3} minute:{4 5 6}} hour:{minute:{7 80 9} minute:{10 11 12}}}, world, TestFiles/timeTestCases.pr

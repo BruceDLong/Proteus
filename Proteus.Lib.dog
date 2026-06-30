@@ -182,6 +182,7 @@ model infon{
         our WordUse: typeLHS <- type
         if(typeLHS==NULL){return(tvTrue)}
         else if(typeRHS==NULL){return(tvUnknown)}
+        if(itmMode != mNone and RHSInf.itmMode != mNone and itmMode != RHSInf.itmMode){return(tvFalse)}
         if(typeLHS.asGiven == "" or typeRHS.asGiven == ""){return(tvTrue)}
         // TODO: Make typeID() work when words aren't defined e.g.  word/findPlural lang/splitText user/getNth
         me string: rhsTypeID <- typeRHS.typeID()
@@ -206,23 +207,6 @@ model infon{
             fleshOutWord(agent, inf)
             if(inf.type!=NULL and inf.isCompatibleWith(pattern, pov.trueByDefinition)==tvTrue){
                 return(pov)
-            }
-            pov <- pov.next
-        }
-        return(NULL)
-    }
-    our POV: fetchCompatibleDataField(their Agent: agent, our infon: pattern) <- {
-        our WordUse: patternType <- pattern.type
-        if(patternType==NULL){log("WARNING: field has no type to search on in:"+toString(pattern)); return(NULL)}
-        if(value.items.isEmpty()){return(NULL)}
-        our POV: pov <- value.items.head
-        while(pov != NULL){
-            our infon: inf <- pov.pItem
-            if(inf.itmMode!=mWordDefn){
-                fleshOutWord(agent, inf)
-                if(inf.type!=NULL and inf.isCompatibleWith(pattern, pov.trueByDefinition)==tvTrue){
-                    return(pov)
-                }
             }
             pov <- pov.next
         }
@@ -1362,7 +1346,12 @@ vSpec.init(agent.getLocaleBaseName())
                 me uint64: originID     <- CI.originID
                 me uint64: infCharPos   <- CI.infCharPos
                 me uint64: itmMode      <- CI.itmMode
-                if(detachCursorResult){
+                if(CI.cursorMode==cWorld){inheritDefinitionListShapeForInfon(newTop)}
+                if(CI.cursorMode==cWorld and partRef==NULL and CI.parts.isEmpty()){
+                    aItem.LHS_item.pItem <- newTop
+                    aItem.LHS_item.accessMode <- aRefTo
+                    CI <- aItem.LHS_item.pItem
+                }else if(detachCursorResult){
                     our infon:: detachedTop
                     newTop.copyAsTypeTo(detachedTop, false, false)
                     CI <deep- detachedTop
@@ -1710,7 +1699,7 @@ vSpec.init(agent.getLocaleBaseName())
                             if(partTag == "first"){newPath <- CI.getFirstItem(aItem.LHS_item.isSubItm)}
                             else if(partTag == "last") {newPath <- CI.getLastInfon()}
                             else{
-                                our POV: fieldPOV <- CI.fetchCompatibleDataField(agent, part.path)
+                                our POV: fieldPOV <- CI.fetchCompatibleField(agent, part.path)
                                 if(fieldPOV!=NULL){
                                     me vocabularySpec: vSpec
                                     vSpec.init(agent.getLocaleBaseName())
@@ -2302,12 +2291,20 @@ vSpec.init(agent.getLocaleBaseName())
 
         if(LHSPovNext!=NULL and RHSPovNext!=NULL){
             if(!LHSPovNext.isSparseOrderedSpan() and RHSPovNext.isSparseOrderedSpan()){
-                our POV: exposedRHS <- RHSPovNext.exposeSparseHead()
+                our POV: exposedRHS <- exposeSparseOrderedSpanHeadForTraversal(RHSPovNext)
                 if(exposedRHS!=NULL){RHSPovNext <- exposedRHS}
             }
             if(LHSPovNext!=NULL and RHSPovNext!=NULL and LHSPovNext.isSparseOrderedSpan() and !RHSPovNext.isSparseOrderedSpan()){
-                our POV: exposedLHS <- LHSPovNext.exposeSparseHead()
+                our POV: exposedLHS <- exposeSparseOrderedSpanHeadForTraversal(LHSPovNext)
                 if(exposedLHS!=NULL){LHSPovNext <- exposedLHS}
+            }
+        }
+
+        if(LHSPovNext!=NULL and RHSPovNext!=NULL){
+            our OrderedSpanTraversalWindow: spanWindow <- tryBuildOrderedSpanTraversalWindow(LHSPovNext, RHSPovNext)
+            if(spanWindow!=NULL and spanWindow.valid){
+                LHSPovNext <- spanWindow.lhsPOV
+                RHSPovNext <- spanWindow.rhsPOV
             }
         }
 
@@ -2316,12 +2313,26 @@ vSpec.init(agent.getLocaleBaseName())
             // one of its inner POVs. If that inner LHS POV matches here, use the matched
             // RHS POV as the source-backed marked return so writes target the source list.
             our POV: markedMatch <- NULL
-            if(LHSPov!=NULL and RHSExists and RHSPov.pedigree.source==povSrcSparseExposedHead and aParent.LHS_item.pItem.intersectMarkedRetPOV===LHSPov){markedMatch <- RHSPov}
-            if(LHSPovNext!=NULL and RHSPovNext!=NULL and RHSPovNext.pedigree.source==povSrcSparseExposedHead and aParent.LHS_item.pItem.intersectMarkedRetPOV===LHSPovNext){markedMatch <- RHSPovNext}
-            if(LHSPov!=NULL and RHSExists and RHSPov.pedigree.source==povSrcSparseExposedHead and aParent.LHS_item.pItem.intersectMarkedRetPOV.pItem===LHSPov.pItem){markedMatch <- RHSPov}
-            if(LHSPovNext!=NULL and RHSPovNext!=NULL and RHSPovNext.pedigree.source==povSrcSparseExposedHead and aParent.LHS_item.pItem.intersectMarkedRetPOV.pItem===LHSPovNext.pItem){markedMatch <- RHSPovNext}
-            if(LHSPov.markedOuterPOV!=NULL and RHSExists){markedMatch <- RHSPov}
-            if(LHSPovNext!=NULL and LHSPovNext.markedOuterPOV!=NULL and RHSPovNext!=NULL){markedMatch <- RHSPovNext}
+            our POV: markedPOV <- aParent.LHS_item.pItem.intersectMarkedRetPOV
+            me bool: markedReturnAlreadyMapped <- false
+            if(markedPOV!=NULL and markedPOV.pParent!=NULL){
+                if(!markedPOV.pParent.pItem.isInnr and (aParent.LHS_item.pItem.innr==NULL or !(markedPOV.pParent.pItem===aParent.LHS_item.pItem.innr))){
+                    markedReturnAlreadyMapped <- true
+                }
+            }
+            if(!markedReturnAlreadyMapped){
+                if(LHSPov!=NULL and RHSExists and RHSPov.pedigree.source==povSrcSparseExposedHead and markedPOV===LHSPov){markedMatch <- RHSPov}
+                if(LHSPovNext!=NULL and RHSPovNext!=NULL and RHSPovNext.pedigree.source==povSrcSparseExposedHead and markedPOV===LHSPovNext){markedMatch <- RHSPovNext}
+                if(LHSPov!=NULL and RHSExists and RHSPov.pedigree.source==povSrcSparseExposedHead and markedPOV.pItem===LHSPov.pItem){markedMatch <- RHSPov}
+                if(LHSPovNext!=NULL and RHSPovNext!=NULL and RHSPovNext.pedigree.source==povSrcSparseExposedHead and markedPOV.pItem===LHSPovNext.pItem){markedMatch <- RHSPovNext}
+                if(markedMatch==NULL and LHSPovNext!=NULL and RHSPovNext!=NULL and RHSPovNext.pedigree.source==povSrcSparseExposedHead){
+                    if(markedPOV!=NULL and markedPOV.pItem!=NULL and markedPOV.pItem.type!=NULL and RHSPovNext.pItem!=NULL and RHSPovNext.pItem.type!=NULL){
+                        if(markedPOV.pItem.isCompatibleWith(RHSPovNext.pItem, false)==tvTrue){markedMatch <- RHSPovNext}
+                    }
+                }
+                if(LHSPov.markedOuterPOV!=NULL and RHSExists){markedMatch <- RHSPov}
+                if(LHSPovNext!=NULL and LHSPovNext.markedOuterPOV!=NULL and RHSPovNext!=NULL){markedMatch <- RHSPovNext}
+            }
             if(markedMatch!=NULL){
                 aParent.LHS_item.pItem.intersectMarkedRetPOV <- markedMatch
                 if(markedMatch.pItem.isTentative){
@@ -3253,8 +3264,29 @@ struct ProteusCore{
         }
     }
 
+    me bool: loadFoundationContext() <- {
+        me string: foundationPath <- "public/foundation.pr"
+        me string: foundationStr <- readAssetAsString(foundationPath)
+        if(foundationStr==""){
+            errorMesg <- "Proteus file '"+foundationPath+"' not found"
+            return(false)
+        }
+        our infon: foundationNode <- parseAndExtractString(foundationStr, foundationPath)
+        if(foundationNode == NULL){
+            errorMesg <- "Proteus file '"+foundationPath+"' did not parse correctly"
+            return(false)
+        }
+        agent.foundation <- foundationNode
+        our POV:: foundationPov{29}; foundationPov.pItem <- agent.foundation
+        agent.normalize(foundationPov)
+        return(true)
+    }
+
     me bool: loadWorld(me string: filename) <- {
         me string: worldFilePath <- filename
+        if(findString(worldFilePath, "PublicKB.pr")!=-1){
+            if(!loadFoundationContext()){return(false)}
+        }
         me string: worldStr <- readAssetAsString(worldFilePath)
         if(worldStr==""){
             errorMesg <- "Proteus file '"+worldFilePath+"' not found"
@@ -3345,6 +3377,8 @@ struct ProteusCore{
         setStreamingMode(streamingMode)
         Allocate(agent)
         agent.init(this)
+        Allocate(agent.foundation)
+        agent.foundation.setToList()
         if(worldFileName!=""){
             if(!loadWorld(worldFileName)) {logFatalError(errorMesg)}
         }

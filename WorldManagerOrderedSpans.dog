@@ -23,6 +23,53 @@ struct WorldManager{
         our OrderedSpanMeasure: measure <- modelMngr.measureOrderedSpanUnit(lhsPOV.pItem.type, vSpec, 0)
         return(measure!=NULL and measure.valid and measure.baseCount>1)
     }
+    our POV: exposeSparseOrderedSpanHeadForTraversal(our POV: sparsePOV) <- {
+        if(sparsePOV==NULL){return(NULL)}
+        our infon: compositeHead <- NULL
+        if(sparsePOV.isSparseOrderedSpan() and sparsePOV.pItem.value.listSpec!=NULL and sparsePOV.pItem.value.listSpec.type!=NULL){
+            me vocabularySpec: vSpec
+            vSpec.init(agent.getLocaleBaseName())
+            compositeHead <- makeSparseOrderedSpanCompositeHead(sparsePOV.pItem.value.listSpec.type, vSpec)
+        }
+        if(compositeHead!=NULL){return(sparsePOV.exposeSparseHeadWithItem(compositeHead))}
+        return(sparsePOV.exposeSparseHead(false))
+    }
+    our infon: makeSparseOrderedSpanCompositeHead(our WordUse: unitType, their vocabularySpec: vSpec) <- {
+        if(unitType==NULL){return(NULL)}
+        our infon: meaning <- orderedSpanDefinitionMeaning(unitType, vSpec)
+        if(meaning==NULL){return(NULL)}
+        if(meaning.value.listSpec==NULL or meaning.value.listSpec.type==NULL){return(NULL)}
+
+        me int64: childCount <- meaning.infSize.num.convertToInt()
+        if(childCount<=0){return(NULL)}
+
+        our infon:: span
+        span.setToList()
+        span.type <- unitType
+        span.value.listSpec <- meaning.value.listSpec
+        span.orderMode <- meaning.orderMode
+        span.value.sizeMode <- fromCount
+        span.value.tailUnfinished <- false
+        span.infSize.fType <- NUM
+        span.infSize.format <- fLiteral
+        span.infSize.num <- childCount
+        span.copySource <- meaning
+        span.copySourceType <- cstDefinition
+        span.wordDerefed <- true
+        span.alreadyTypeChecked <- true
+
+        our infon:: childSparse
+        childSparse.setToList()
+        childSparse.value.listSpec <- meaning.value.listSpec
+        childSparse.orderMode <- meaning.orderMode
+        childSparse.value.sizeMode <- fromCount
+        childSparse.value.tailUnfinished <- true
+        childSparse.infSize.fType <- NUM
+        childSparse.infSize.format <- fLiteral
+        childSparse.infSize.num <- childCount
+        span.value.items.append(childSparse, true, povSrcListSpecSparseTail)
+        return(span)
+    }
     our POV: positiveOrderedSpanAfterNegativeSkip(our POV: lhsPOV, their vocabularySpec: vSpec) <- {
         if(lhsPOV==NULL or lhsPOV.pItem==NULL or !lhsPOV.pItem.asNot){return(NULL)}
         if(lhsPOV.pParent==NULL or lhsPOV.pParent.next==NULL){return(NULL)}
@@ -265,21 +312,37 @@ struct WorldManager{
     }
     our POV: firstOrderedSpanChildForRequest(our WordUse: requestType, our POV: rhsPOV, their vocabularySpec: vSpec) <- {
         if(requestType==NULL or rhsPOV==NULL or rhsPOV.pItem==NULL){return(NULL)}
-        if(rhsPOV.pItem.value.fType!=LST or rhsPOV.pItem.value.format!=fLiteral){return(NULL)}
-        if(rhsPOV.pItem.value.items.isEmpty()){return(NULL)}
-        our POV: childPOV <- rhsPOV.pItem.value.items.head
-        if(childPOV==NULL){return(NULL)}
-        childPOV.pParent <- rhsPOV
-
-        our WordUse: childUnitType <- orderedSpanSourceUnitType(childPOV)
-        if(childUnitType==NULL){return(NULL)}
-        our OrderedSpanConverter: childConverter <- modelMngr.getOrderedSpanConverter(requestType, childUnitType, vSpec)
+        our WordUse: sourceUnitType <- orderedSpanSourceUnitType(rhsPOV)
+        if(sourceUnitType==NULL){return(NULL)}
+        our OrderedSpanConverter: childConverter <- modelMngr.getOrderedSpanConverter(requestType, sourceUnitType, vSpec)
         if(childConverter==NULL or !childConverter.valid){return(NULL)}
-        if(childConverter.fromBaseCount==childConverter.toBaseCount){return(childPOV)}
+
+        if(childConverter.fromBaseCount==childConverter.toBaseCount){
+            if(rhsPOV.isSparseOrderedSpan()){return(exposeSparseOrderedSpanHeadForTraversal(rhsPOV))}
+            return(rhsPOV)
+        }
+
         if(childConverter.fromBaseCount<childConverter.toBaseCount){
+            if(rhsPOV.isSparseOrderedSpan()){
+                our POV: exposedPOV <- exposeSparseOrderedSpanHeadForTraversal(rhsPOV)
+                if(exposedPOV==NULL){return(NULL)}
+                return(firstOrderedSpanChildForRequest(requestType, exposedPOV, vSpec))
+            }
+            if(rhsPOV.pItem.value.fType!=LST or rhsPOV.pItem.value.format!=fLiteral){return(NULL)}
+            if(rhsPOV.pItem.value.items.isEmpty()){return(NULL)}
+            our POV: childPOV <- rhsPOV.pItem.value.items.head
+            if(childPOV==NULL){return(NULL)}
+            childPOV.pParent <- rhsPOV
             return(firstOrderedSpanChildForRequest(requestType, childPOV, vSpec))
         }
-        return(makeOrderedSpanUnitView(requestType, childPOV, vSpec, povSrcConcreteSpanPrefix))
+        if(rhsPOV.pItem.value.fType==LST and rhsPOV.pItem.value.format==fLiteral and !rhsPOV.pItem.value.items.isEmpty()){
+            our POV: childPOV <- rhsPOV.pItem.value.items.head
+            if(childPOV!=NULL){
+                childPOV.pParent <- rhsPOV
+                return(makeOrderedSpanUnitView(requestType, childPOV, vSpec, povSrcConcreteSpanPrefix))
+            }
+        }
+        return(makeOrderedSpanUnitView(requestType, rhsPOV, vSpec, povSrcConcreteSpanPrefix))
     }
     our OrderedSpanTraversalWindow: tryBuildOrderedSpanTraversalWindow(our POV: lhsPOV, our POV: rhsPOV) <- {
         our OrderedSpanTraversalWindow:: result

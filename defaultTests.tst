@@ -224,3 +224,4 @@ merge/lookahead,       Merge lookahead,                 {&{_|...} _ $} =: {33 22
 # Supplemental suites loaded by the dynamic test runner.
 @include sparseTests.tst
 @include timeTests.tst
+@include worldLoadTests.tst

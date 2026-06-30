@@ -13,6 +13,13 @@ sparse/split/writeLastSparseSecond, Sparse write last symbolic second, [&*3599+{
 # Huge sparse counts should be skipped symbolically, not item-by-item.
 sparse/scarcity/writeLastBillionSparseSeconds, Sparse write last in billion symbolic seconds, [&*999999999+{second| ...} <_>] <~ %W.billionSecondRun = 80\n%W.billionSecondRun, billionSecondRun:{&seconds:{second|  ... } second:80}, world, TestFiles/sparseTestCases.pr
 sparse/scarcity/readAfterBillionSparsePrefix, Sparse read after billion symbolic seconds, [&*1000000000+{second| ...} <_>] <~ %W.hugeSparseWithTail, 808, world, TestFiles/sparseTestCases.pr
+sparse/scarcity/readAfterBillionSparseMinutes, Sparse read after billion symbolic minutes, [&*1000000000+{minute| ...} <_>] <~ %W.hugeSparseMinutesWithTail, 606, world, TestFiles/sparseTestCases.pr
+
+# A listSpec plus a fixed size should be enough to traverse sparse capacity
+# even when the list does not contain an explicit &*... child span.
+sparse/implicit/readAfterSparsePrefixInSizedList, Sparse read inside implicit typed capacity, [&*15432+{second| ...} <_>] <~ *20000+{second| ...}, second:_, world, TestFiles/sparseTestCases.pr
+sparse/implicit/writeAfterSparsePrefixInSizedList, Sparse write inside implicit typed capacity, [&*15432+{second| ...} <_>] <~ *20000+{second| ...} = 80, second:80, world, TestFiles/sparseTestCases.pr
+sparse/implicit/readAfterSparsePrefixInSizedCompositeList, Sparse read inside implicit composite typed capacity, [&*15432+{minute| ...} <_>] <~ *20000+{minute| ...}, minute:{&seconds:{second|  ... }}, world, TestFiles/sparseTestCases.pr
 
 # Traversal should continue correctly after sparse spans are split or after
 # adjacent sparse spans cover a single selector span.
@@ -26,6 +33,8 @@ sparse/split/writeAfterExactSparseSpan, Sparse write after exact symbolic span, 
 sparse/split/writeInsideFirstSparseRemainder, Sparse write after RHS symbolic span split, [&*59+{second| ...} <_> &*60+{second| ...} _] <~ %W.twoSparseThenMarker = 81\n[&*59+{second| ...} <_> &*60+{second| ...} _] <~ %W.twoSparseThenMarker, second:81, world, TestFiles/sparseTestCases.pr
 sparse/split/writeAfterCrossingSparseBoundary, Sparse write after selector crosses symbolic boundary, [&*61+{second| ...} <_> &*58+{second| ...} _] <~ %W.twoSparseThenMarker = 82\n[&*61+{second| ...} <_> &*58+{second| ...} _] <~ %W.twoSparseThenMarker, second:82, world, TestFiles/sparseTestCases.pr
 sparse/split/writeAfterSparseMinuteSkip, Sparse minute selector skips symbolic seconds, [&*1+{minute| ...} <_> &*3539+{second| ...}] <~ %W.secondRun = 83\n[&*60+{second| ...} <_> &*3539+{second| ...}] <~ %W.secondRun, second:83, world, TestFiles/sparseTestCases.pr
+sparse/split/readAfterTwoSparseMinuteSkip, Sparse two-minute selector skips symbolic seconds, [&*2+{minute| ...} <_>] <~ %W.twoSparseThenMarker, 123, world, TestFiles/sparseTestCases.pr
+sparse/guard/nonAligningMinuteDoesNotSkipHalfMinute, Sparse minute selector does not skip half-minute span, [&*1+{minute| ...} <_>] <~ %W.halfMinuteThenMarker, _, world, TestFiles/sparseTestCases.pr
 
 # Repeated edits in the same sparse parent should not make later positions or
 # concrete tail markers unreachable.
