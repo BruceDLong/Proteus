@@ -357,7 +357,7 @@ model infon{
         return(lastItem)
     }
 
-    our infon: getLastInfon() <- {
+    our POV: getLastPOV() <- {
         our POV: lastPOV
         if(value.sizeMode==fromGiven){
             if(infSize.format==fLiteral){
@@ -378,6 +378,11 @@ model infon{
             }
             lastPOV <- virtualLastItem
         }
+        return(lastPOV)
+    }
+
+    our infon: getLastInfon() <- {
+        our POV: lastPOV <- getLastPOV()
         if(lastPOV==NULL){return(NULL)}
         return(lastPOV.pItem)
     }
@@ -1698,15 +1703,8 @@ vSpec.init(agent.getLocaleBaseName())
                         } else if(part.path.type != NULL){
                             if(partTag == "first"){newPath <- CI.getFirstItem(aItem.LHS_item.isSubItm)}
                             else if(partTag == "last") {newPath <- CI.getLastInfon()}
-                            else{
-                                our POV: fieldPOV <- CI.fetchCompatibleField(agent, part.path)
-                                if(fieldPOV!=NULL){
-                                    me vocabularySpec: vSpec
-                                    vSpec.init(agent.getLocaleBaseName())
-                                    newPath <- resolveTypedFieldPathInfon(fieldPOV, part.path, vSpec)
-                                }
-                            }
-                            //else if(partTag == "size"){newPath <- gteSizeInfon}
+                            //else if(partTag == "size"){newPath <- getSizeInfon}
+                            // else {Later, optimize various lookups}  // Only after non-optimized lookups are robust
                         }
                         if(!newPath){
                             me bool: doReply <- CI.doReply
@@ -1836,50 +1834,6 @@ vSpec.init(agent.getLocaleBaseName())
                 }
                 changeMade <- true
                 //:l/PAI::logSegOut("")
-            }
-        }
-        return(changeMade)
-    }
-    me bool: materializedOrderedSpanPathRules(our AItem: aItem, their bool: nxtAction) <- {
-        me bool: changeMade <- false
-        nxtAction <- true
-        our infon: CI <- aItem.LHS_item.pItem
-        if(CI==NULL){return(false)}
-        if(CI.partRef!=NULL){
-            CI.parts.append(CI.partRef)
-            CI.partRef <- NULL
-        }
-        if(CI.parts.isEmpty()){return(false)}
-        withEach part in CI.parts{
-            if(part.wasTransfered){continue()}
-            if(part.pathMode==idxField and part.spec==NULL and part.path.value.fType==NUM){
-                me vocabularySpec: vSpec
-                vSpec.init(agent.getLocaleBaseName())
-                our POV: directChild <- materializedOrderedSpanChildAt(CI, part.path.value.num.convertToInt(), vSpec)
-                if(directChild==NULL){continue()}
-
-                part.wasTransfered <- true
-                our infon: newPath <- directChild.pItem
-                if(directChild.outerPOV!=NULL and directChild.outerPOV.pItem===directChild.pItem){
-                    aItem.LHS_item.outerPOV <- directChild.outerPOV
-                    aItem.LHS_item.accessMode <- aRefTo
-                }
-                if(part.path.partRef!=NULL){
-                    newPath.partRef <- part.path.partRef
-                    part.path.partRef <- NULL
-                    newPath.isNormed <- false
-                    newPath.wasProcessed <- false
-                }else{
-                    newPath.parts <- part.path.parts
-                    if(!part.path.parts.isEmpty()){
-                        newPath.isNormed <- false
-                        newPath.wasProcessed <- false
-                    }
-                }
-                newPath.takeWrkListFrom(part.path, true)
-                aItem.LHS_item.pItem <- newPath
-                changeMade <- true
-                break()
             }
         }
         return(changeMade)
@@ -2152,21 +2106,70 @@ vSpec.init(agent.getLocaleBaseName())
         // Copying identity here replaces the LHS infon pointer. If the old LHS had pending
         // wrkList constraints, those constraints may no longer participate unless explicitly
         // carried over elsewhere in the flow.
+        our infon: RHS <- aItem.RHS.pItem
         our WordUse:type     <- aItem.LHS_item.pItem.type
         our infon: listSpec  <- aItem.LHS_item.pItem.value.listSpec
-        // Source-backed views share their infon with a real source POV, so preserve
-        // that identity instead of replacing only the view's pItem pointer.
-        me bool: sourceBackedView <- aItem.LHS_item.accessMode==aRefTo and aItem.LHS_item.outerPOV!=NULL and aItem.LHS_item.outerPOV.pItem===aItem.LHS_item.pItem
-        if(sourceBackedView){
+        me uint64: lhsItmMode <- aItem.LHS_item.pItem.itmMode
+
+        if(mergeOpenListShapeIntoConcreteList(aItem, RHS, lhsItmMode)){return()}
+
+        if(isSourceBackedPOV(aItem.LHS_item)){
             aItem.RHS.pItem.copyAsTypeTo(aItem.LHS_item.pItem, false, true)
+            if(lhsItmMode!=mNone){aItem.LHS_item.pItem.itmMode <- lhsItmMode}
             if(!aItem.RHS.pItem.isTentative){aItem.LHS_item.pItem.isTentative <- false}
         }else{
             aItem.LHS_item.pItem <- aItem.RHS.pItem
+            if(lhsItmMode!=mNone){aItem.LHS_item.pItem.itmMode <- lhsItmMode}
         }
-        if(type!=NULL){aItem.LHS_item.pItem.type <- type}
-        if(listSpec!=NULL){aItem.LHS_item.pItem.value.listSpec <- listSpec}
+
+        preserveLHSSlotMetadata(aItem, type, listSpec, RHS)
         //print("\nCOW: ",toString(aItem))
         // ERROR??? Copy workList
+    }
+    me bool: isOpenListShape(our infon: item) <- {
+        return(item!=NULL and item.value.fType==LST and item.value.format==fLiteral and item.value.items.isEmpty() and item.value.tailUnfinished and item.value.listSpec!=NULL)
+    }
+    me bool: hasConcreteLiteralListItems(our infon: item) <- {
+        return(item!=NULL and item.value.fType==LST and item.value.format==fLiteral and !item.value.items.isEmpty())
+    }
+    me bool: hasConcreteListSpec(our infon: item) <- {
+        return(hasConcreteLiteralListItems(item) and item.value.listSpec!=NULL)
+    }
+    me bool: isSourceBackedPOV(our POV: pov) <- {
+        return(pov!=NULL and pov.accessMode==aRefTo and pov.outerPOV!=NULL and pov.outerPOV.pItem===pov.pItem)
+    }
+    me bool: mergeOpenListShapeIntoConcreteList(our AItem: aItem, our infon: RHS, me uint64: lhsItmMode) <- {
+        if(!isOpenListShape(RHS) or !hasConcreteLiteralListItems(aItem.LHS_item.pItem)){return(false)}
+        if(aItem.LHS_item.pItem.type==NULL and RHS.type!=NULL){aItem.LHS_item.pItem.type <- RHS.type}
+        if(aItem.LHS_item.pItem.value.listSpec==NULL and RHS.value.listSpec!=NULL){aItem.LHS_item.pItem.value.listSpec <- RHS.value.listSpec}
+        if(aItem.LHS_item.pItem.orderMode==uUnknown and RHS.orderMode!=uUnknown){aItem.LHS_item.pItem.orderMode <- RHS.orderMode}
+        if(lhsItmMode!=mNone){aItem.LHS_item.pItem.itmMode <- lhsItmMode}
+        return(true)
+    }
+    me void: preserveLHSSlotMetadata(our AItem: aItem, our WordUse: oldType, our infon: oldListSpec, our infon: RHS) <- {
+        if(oldType!=NULL){aItem.LHS_item.pItem.type <- oldType}
+        // A selector's listSpec is only a request shape. If the RHS is already a
+        // concrete typed list, preserve the RHS listSpec so later traversal sees
+        // the real source representation.
+        if(oldListSpec!=NULL and !hasConcreteListSpec(RHS)){aItem.LHS_item.pItem.value.listSpec <- oldListSpec}
+    }
+    me void: carryPassiveScalarSource(our POV: LHSPOV, our POV: RHSPOV) <- {
+        if(LHSPOV==NULL or RHSPOV==NULL or RHSPOV.pItem==NULL){return()}
+        if(RHSPOV.pItem.value.fType==LST){return()}
+        if(RHSPOV.outerPOV!=NULL and RHSPOV.outerPOV.pItem===RHSPOV.pItem){LHSPOV.sourcePOV <- RHSPOV.outerPOV}
+        else{LHSPOV.sourcePOV <- RHSPOV}
+    }
+    our infon: selectReturnedInfonFromPOV(our AItem: aItem, our POV: selectedPOV) <- {
+        if(selectedPOV==NULL){return(NULL)}
+        our infon: selected <- selectedPOV.pItem
+        if(selectedPOV.outerPOV!=NULL and selectedPOV.outerPOV.pItem===selectedPOV.pItem){
+            aItem.LHS_item.outerPOV <- selectedPOV.outerPOV
+            aItem.LHS_item.accessMode <- aRefTo
+        }else if(selectedPOV.sourcePOV!=NULL and selectedPOV.sourcePOV.pItem===selectedPOV.pItem){
+            aItem.LHS_item.outerPOV <- selectedPOV.sourcePOV
+            aItem.LHS_item.accessMode <- aRefTo
+        }
+        return(selected)
     }
 
     // PROPAGATE & PROPAGATE UTILITY FUNCTIONS
@@ -2421,6 +2424,7 @@ vSpec.init(agent.getLocaleBaseName())
                                 RHSAlt.looseTop   <- false
                             }
                             //logSeg(" EnqY")
+                            carryPassiveScalarSource(LHSAlt, RHSAlt)
                             LHSAlt.pItem.addPOVToWrkList(RHSAlt)
          //                   log(idnt+"    ENQUEy:" + LHSAlt.stringify() + " === " + RHSAlt.stringify())
                         }
@@ -2632,7 +2636,6 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                     else if(normSize(agenda, aItem))      {continueLoop <- false}
                     else if(localNullableContinuationRules(agenda, aItem, act)) {continueLoop <- act}
                     else if(wrkLstRules(agenda, aItem))   {continueLoop <- false}
-                    else if(materializedOrderedSpanPathRules(aItem, act)) {continueLoop <- act}
                     else if(partsRules(agenda,aItem,act)) {continueLoop <- act}
                     else if(processConcat(aItem))         {continueLoop <- true}
                     else{
@@ -3012,7 +3015,9 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                             } else {  // CI is FunctionLike
                                 //:l/PAI::logSeg(" FUNC")
                                 switch(CI.intersectPos){
-                                    case ipGetLast   : {newTop <- innr.getLastInfon()}
+                                    case ipGetLast   : {
+                                        newTop <- selectReturnedInfonFromPOV(aItem, innr.getLastPOV())
+                                    }
                                     case ipGetFirst  : {newTop <- innr.getFirstItem(aItem.LHS_item.isSubItm)}
                                     case ipGetMarked : {
                                         if(innr.intersectMarkedRetPOV!=NULL and 
@@ -3033,6 +3038,8 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                                             markedWrapperPOV.tentFromDots <- innr.intersectMarkedRetPOV.tentFromDots
                                             newTop.countSize(false)
                                         }else{
+                                            // TODO: Is the next line a special case that should be generalized?
+                                            //    Before we just had the 2nd line without the 'else'.
                                             if(innr.intersectMarkedRetPOV!=NULL and innr.intersectMarkedRetPOV.pedigree.source==povSrcSparseExposedHead){newTop <- innr.intersectMarkedRetPOV.pItem}
                                             else if(CI.intersectMarkedRetPOV!=NULL){newTop <- CI.intersectMarkedRetPOV.pItem}
                                         }
@@ -3057,7 +3064,7 @@ aItem.LHS_item.pItem.streamState <- parseStarted
                             }
                             doFulfillSubs <- true
                             if(newTop){
-                                newTop.itmMode       <- aItem.LHS_item.pItem.itmMode
+                                if(aItem.LHS_item.pItem.itmMode!=mNone){newTop.itmMode <- aItem.LHS_item.pItem.itmMode}
                                 newTop.doReply       <- aItem.LHS_item.pItem.doReply
                                 newTop.partRef       <- aItem.LHS_item.pItem.partRef
                                 newTop.parts         <- aItem.LHS_item.pItem.parts
