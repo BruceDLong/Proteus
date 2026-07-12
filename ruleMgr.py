@@ -100,7 +100,7 @@ mergeRules = {
         'checkNumRange':            'if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
         'checkNumRangeDeepCpy':     """if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
             me bool: truReject <- aItem.mergeStatus==msReject; if(aItem.LHS_item.applyAsNot(aItem.RHS)){truReject <- !truReject}
-            if(!truReject){aItem.LHS_item.pItem <deep- aItem.RHS.pItem; if(aItem.LHS_item.outerPOV){aItem.LHS_item.outerPOV.pItem.altRulesApplied <- false}}""",
+            if(!truReject){aItem.LHS_item.pItem! <- aItem.RHS.pItem!; if(aItem.LHS_item.outerPOV){aItem.LHS_item.outerPOV.pItem.altRulesApplied <- false}}""",
         'checkNumRangeDoCpy':       """if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
             me bool: truReject <- aItem.mergeStatus==msReject; if(aItem.LHS_item.applyAsNot(aItem.RHS)){truReject <- !truReject}
             if(!truReject){
