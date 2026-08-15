@@ -167,13 +167,13 @@ range/join,            Range joins,                    *10+(2+3),               
 #- The concrete failing symptom is: the current run reaches cleanup with the real last candidate `6` plus a stale extra candidate that has collapsed to `[]`. Because cleanup does not see a singleton, it cannot do `CLEAN_LAST`, and the final result becomes `{2 3 4 5 ?}`.
 #- That extra candidate happens to all the items (1, 2, 3, 4...), not just the last one.
 #- The place where that state becomes visible is the last-candidate registration logic at [Proteus.Lib.dog](/home/bruce/devl/Proteus/Proteus.Lib.dog:2083), especially the adds at [2088](/home/bruce/devl/Proteus/Proteus.Lib.dog:2088) and [2093](/home/bruce/devl/Proteus/Proteus.Lib.dog:2093). In the failing run, extra intermediate nodes get registered there; in the passing run, those parent-level intermediates are never registered.
-#- The first hard control-flow split is the step-0 fastpath gate at [Proteus.Lib.dog](/home/bruce/devl/Proteus/Proteus.Lib.dog:2467). Current code blocks the fastpath when `RHS.value.format==fConcat` at [2471](/home/bruce/devl/Proteus/Proteus.Lib.dog:2471), which forces the `MG0` RHS-normalization path at [2480](/home/bruce/devl/Proteus/Proteus.Lib.dog:2480). That extra subtree is where the intermediate candidates come from.
+#- The first hard control-flow split is the step-0 fastpath gate at [Proteus.Lib.dog](/home/bruce/devl/Proteus/Proteus.Lib.dog:2467). Current code blocks the fastpath when `RHS.value.evalMode==emConcat` at [2471](/home/bruce/devl/Proteus/Proteus.Lib.dog:2471), which forces the `MG0` RHS-normalization path at [2480](/home/bruce/devl/Proteus/Proteus.Lib.dog:2480). That extra subtree is where the intermediate candidates come from.
 #- But that concat guard is not the whole bug. Relaxing it alone was not enough to restore the old behavior, and it regressed `time/t2`.
 #
 # What is not the cause:
 #
 #- The wait-state machinery is not the relevant issue here. That path is streaming-oriented, and changing it did not explain the `range/select1` behavior.
-#- `RHSNeedsNestedCursorNormalization()` is not the blocker in this case; the decisive blocker was the `fConcat` guard.
+#- `RHSNeedsNestedCursorNormalization()` is not the blocker in this case; the decisive blocker was the `emConcat` guard.
 #- `GET_LAST` is downstream, not root cause. By the time `GET_LAST` runs, the candidate set is already wrong.
 #
 # The other proven factor is `propagateProxy()` at [Proteus.Lib.dog](/home/bruce/devl/Proteus/Proteus.Lib.dog:2202). Current code uses the `doReply`/`listClosed` gate at [2216](/home/bruce/devl/Proteus/Proteus.Lib.dog:2216)-[2228](/home/bruce/devl/Proteus/Proteus.Lib.dog:2228), and that changes when propagation happens relative to candidate registration. Instrumentation showed the same intermediate node is skipped in the passing build because its `intersectPos` has already changed, but in the current build it is reached earlier and gets added first. Reverting only `propagateProxy()` did not give a clean fix either; with the current concat guard restored, that combination crashed during cleanup.
