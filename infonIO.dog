@@ -702,7 +702,8 @@ struct ProteusParser{
         if(errorSet){return(-1)}
         return(cPos-pos)
     }
-    me int64: parseListInfo(their pureInfon: pureInfn, me int64: pos, our infon: parent, me bool: isFromDefn) <- {
+
+    me int64: parseListInfo(their pureInfon: pureInfn, their pureInfon: sizeSlot, me int64: pos, our infon: parent, me bool: isFromDefn) <- {
         me int64: cPos <- pos
         me int64: len
 
@@ -710,15 +711,28 @@ struct ProteusParser{
         if(chkStrWSC(cPos,"T")){pureInfn!.timelike<-true}
         // Read optional ~size
         if(chkStrWSC(cPos,"~")){
-            our pureInfon:: size
-            me int64: sizeLen <- parsePureInfon(size, cPos, NULL, isFromDefn, pcListSpec)
+            // Read optional inner ~size.  It is syntactic sugar for the
+            // size slot belonging to this pure infon; do not store a second copy.
+            if(pureInfn!.sizeMode==fromGiven){
+                setError("Infon size cannot be specified both outside and inside the list", cPos-1)
+                return(-1)
+            }
+            if(sizeSlot==NULL){
+                setError("Inner list size has no enclosing infon size slot", cPos-1)
+                return(-1)
+            }
+            me int64: sizeLen <- parsePureInfon(sizeSlot, cPos, parent, isFromDefn, pcListSpec)
             if(sizeLen <= 0){
                 if(!errorSet){setError("Expected a list size after '~'", cPos)}
                 return(-1)
             }
             cPos <+- sizeLen
-            if(size!.fType!=NUM){setError("Size of infons must be numeric")}
-            pureInfn!.size <- size
+            if(sizeSlot!.fType!=NUM){
+                setError("Size of infons must be numeric")
+                return(-1)
+            }
+            pureInfn!.sizeMode <- fromGiven
+            pureInfn!.sizeWasInner <- true
         }
 
         me char: peek <- peekWSC(cPos)
@@ -837,7 +851,7 @@ struct ProteusParser{
         return(cPos-pos)
     }
 
-    me int64: parsePureInfon(their pureInfon: pureInfn, me int64: pos, our infon: parent, me bool: isFromDefn, me parseContext: prsCtxt) <- {
+    me int64: parsePureInfon(their pureInfon: pureInfn, me int64: pos, our infon: parent, me bool: isFromDefn, me parseContext: prsCtxt, their pureInfon: sizeSlot <- NULL) <- {
         me int64: cPos      <- pos
         me int64: len
         pureInfn!.isFromDefn <- isFromDefn
@@ -903,7 +917,7 @@ struct ProteusParser{
             else if(peek=="["){pureInfn!.format <- fLiteral; pureInfn!.intersectPosParse<-ipSquareBrackets; ender<-tmp[1]}
             else if(peek=="("){pureInfn!.format <- fConcat;  pureInfn!.intersectPosParse<-ipDefault;        ender<-tmp[2]}
 
-            if(chk(parseListInfo(pureInfn, cPos, parent, isFromDefn), cPos,len)){
+            if(chk(parseListInfo(pureInfn, sizeSlot, cPos, parent, isFromDefn), cPos,len)){
             } else if(errorSet){
                 return(-1)
             }
@@ -1103,7 +1117,7 @@ struct ProteusParser{
                 cPos <+- 1
                 if(peek=="-"){infn!.value!.inverted <- true}
                 if(!requirePlusMinusSign){infn!.value!.sizeMode <- fromContext}
-                me int64: valueLen <- parsePureInfon(infn!.value, cPos, infn, isFromDefn, prsCtxt)
+                me int64: valueLen <- parsePureInfon(infn!.value, cPos, infn, isFromDefn, prsCtxt, infn!.infSize)
                 if(valueLen <= 0){
                     if(!errorSet){
                         me string: opStr <- ""
@@ -1117,7 +1131,7 @@ struct ProteusParser{
                 setError("Expected '+' or '-' after the size expression", cPos)
             } else {
                 infn!.value!.sizeMode <- fromCount
-                if(!chk(parsePureInfon(infn!.value, cPos, infn, isFromDefn, prsCtxt), cPos,len)){
+                if(!chk(parsePureInfon(infn!.value, cPos, infn, isFromDefn, prsCtxt, infn!.infSize), cPos,len)){
                     if(!errorSet){setError("Expected a value literal, '?', or %tag", cPos)}
                 }
             }
@@ -1333,7 +1347,7 @@ struct InfonPrinter{
         return(parentInfon!.wasProcessed and pure!.format==fLiteral and !pure!.tailUnfinished)
     }
 
-    me string: printPureInfon(their pureInfon: pure, their pureInfon: size, me bool: asInnr, me bool: isSpec, their infon: parentInfon, our Map<me string,me int>: used, me int: verbosity, their infon: special) <- {
+    me string: printPureInfon(their pureInfon: pure, their pureInfon: size, me bool: asInnr, me bool: isSpec, their infon: parentInfon, our Map<me string,me int>: used, me int: verbosity, their infon: special, me bool: suppressSizeOp <- false) <- {
         me string: S <- ""
         me bool: showSize <- size!=NULL and (
             ((((pure!.sizeMode==fromGiven) and (pure!.fType!=LST or pure!.format!=fLiteral))
@@ -1347,10 +1361,10 @@ struct InfonPrinter{
         if(showSize){S <+- printPureInfon(size, NULL, false, isSpec, parentInfon, used, verbosity, special)}
         if(pure!.inverted){
             if(size!=NULL or pure!.sizeMode==fromContext){S <+- "-"}
-            else if(pure!.isLstSize==0){S <+- "/"}
+            else if(!suppressSizeOp){S <+- "/"}
         }else{
             if(showSize or pure!.sizeMode==fromContext){S <+- "+"}
-            else if(size==NULL and pure!.isLstSize==0){S <+- "*"}
+            else if(size==NULL and !suppressSizeOp){S <+- "*"}
         }
         if(pure!.fType == NUM){
             if(pure!.format == fUnknown){S <+- "_"}
@@ -1372,8 +1386,10 @@ struct InfonPrinter{
             else if(pure!.format == fConcat) {strtBrkt<-"("; endBrkt<-")"}
             S <+- strtBrkt
             if(pure!.timelike){S <+- "T "}
-            if(pure!.size!=NULL) {pure!.size!.isLstSize <- true}
-            if(pure!.size!=NULL and pure!.format==fLiteral){S <+- "~"+printPureInfon(pure!.size, NULL, false, isSpec, parentInfon, used, verbosity, special) showBar<-true}
+            if(size!=NULL and pure!.sizeWasInner and pure!.format==fLiteral){
+                S <+- "~"+printPureInfon(size, NULL, false, isSpec, parentInfon, used, verbosity, special, true)
+                showBar<-true
+            }
             if(pure!.listSpec!=NULL and !isNiceList(pure, parentInfon)){
                 if(showBar){S <+- " "}
                 S <+- printInfonActual(pure!.listSpec, used, false, isSpec, verbosity, special)

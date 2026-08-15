@@ -31,6 +31,7 @@ parser/list/defClass,  define a class,                 {'A' class item {1 2 3} 1
 parser/list/classed,   classed list,                   {item| 'A' 12},                                                         {item| 'A' 12},                 parse
 parser/list/sized1,    sized list1,                    {~2| 'A' 12},                                                           {~2| 'A' 12},                   parse
 parser/list/sized2,    sized list2,                    {~2 'A' 12},                                                            {~2| 'A' 12},                   parse
+parser/list/sizedNested, nested inner-sized list,      {1 {~2 3 4}},                                                           {1 {~2| 3 4}},                  parse
 parser/list/CandS1,    Both specs1,                    {~ 2 item| 'A' 12},                                                     {~2 item| 'A' 12},              parse
 parser/list/CandS2,    Both specs2,                    {~2 item | 'A' 12},                                                     {~2 item| 'A' 12},              parse
 parser/list/noC,       No C,                           {item| 'A' 12},                                                         {item| 'A' 12},                 parse
