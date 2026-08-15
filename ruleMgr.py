@@ -15,9 +15,9 @@ mergeSizeRules = {
     ],
     'ifSnips': {
         'l?':            'aItem.LHS_item.pItem.infMode == isUnknown',
-        'lNUM':          'aItem.LHS_item.pItem.value.overlayMode == NUM',
-        'lSTR':          'aItem.LHS_item.pItem.value.overlayMode == STR',
-        'lLST':          'aItem.LHS_item.pItem.value.overlayMode == LST',
+        'lNUM':          'aItem.LHS_item.pItem.value.overlayType == NUM',
+        'lSTR':          'aItem.LHS_item.pItem.value.overlayType == STR',
+        'lLST':          'aItem.LHS_item.pItem.value.overlayType == LST',
 
         'lintersect':    'aItem.LHS_item.pItem.infSize.intersectPosParse == ipSquareBrackets',
         'lemUnknown':     'aItem.LHS_item.pItem.infSize.evalMode == emUnknown',
@@ -25,9 +25,9 @@ mergeSizeRules = {
         'lemLiteral':     'aItem.LHS_item.pItem.infSize.evalMode == emLiteral',
 
         'r?':            'aItem.RHS.pItem.infMode == isUnknown',
-        'rNUM':          'aItem.RHS.pItem.value.overlayMode == NUM',
-        'rSTR':          'aItem.RHS.pItem.value.overlayMode == STR',
-        'rLST':          'aItem.RHS.pItem.value.overlayMode == LST',
+        'rNUM':          'aItem.RHS.pItem.value.overlayType == NUM',
+        'rSTR':          'aItem.RHS.pItem.value.overlayType == STR',
+        'rLST':          'aItem.RHS.pItem.value.overlayType == LST',
 
         'rintersect':    'aItem.RHS.pItem.infSize.intersectPosParse == ipSquareBrackets',
         'remUnknown':     'aItem.RHS.pItem.infSize.evalMode == emUnknown',
@@ -38,7 +38,7 @@ mergeSizeRules = {
         '!looseSize':    '!aItem.looseSize'
     },
     'codeSnips': {
-        'copySizeRHStoLHS':         'if((aItem.LHS_item.pItem.infMode!=isLiteral or aItem.RHS.pItem.value.overlayMode==aItem.LHS_item.pItem.value.overlayMode) and (aItem.LHS_item.pItem.value.listSpec==NULL or !aItem.LHS_item.pItem.value.listSpec.asWrkLstOutr)){DO_COPY(aItem.RHS.pItem.infSize, aItem.LHS_item.pItem.infSize, 0)}',
+        'copySizeRHStoLHS':         'if((aItem.LHS_item.pItem.infMode!=isLiteral or aItem.RHS.pItem.value.overlayType==aItem.LHS_item.pItem.value.overlayType) and (aItem.LHS_item.pItem.value.listSpec==NULL or !aItem.LHS_item.pItem.value.listSpec.asWrkLstOutr)){DO_COPY(aItem.RHS.pItem.infSize, aItem.LHS_item.pItem.infSize, 0)}',
     },
     'rules': [
         ["mergeSize:!looseSize|lemUnknown|rsemLiteral",     "copySizeRHStoLHS"],
@@ -58,9 +58,9 @@ mergeRules = {
     ],
     'ifSnips': {
         'l?':            'aItem.LHS_item.pItem.infMode == isUnknown',
-        'lNUM':          'aItem.LHS_item.pItem.value.overlayMode == NUM',
-        'lSTR':          'aItem.LHS_item.pItem.value.overlayMode == STR',
-        'lLST':          'aItem.LHS_item.pItem.value.overlayMode == LST',
+        'lNUM':          'aItem.LHS_item.pItem.value.overlayType == NUM',
+        'lSTR':          'aItem.LHS_item.pItem.value.overlayType == STR',
+        'lLST':          'aItem.LHS_item.pItem.value.overlayType == LST',
 
         'lintersect':    'aItem.LHS_item.pItem.value.intersectPosParse == ipSquareBrackets',
         'lemUnknown':     'aItem.LHS_item.pItem.value.evalMode == emUnknown',
@@ -68,10 +68,10 @@ mergeRules = {
         'lemLiteral':     'aItem.LHS_item.pItem.value.evalMode == emLiteral',
 
         'r?':            'aItem.RHS.pItem.infMode == isUnknown',
-        'rNUM':          'aItem.RHS.pItem.value.overlayMode == NUM',
-        'rSTR':          'aItem.RHS.pItem.value.overlayMode == STR',
-        'rLST':          'aItem.RHS.pItem.value.overlayMode == LST',
-        'rtUnknown':     'aItem.RHS.pItem.value.overlayMode == tUnknown',
+        'rNUM':          'aItem.RHS.pItem.value.overlayType == NUM',
+        'rSTR':          'aItem.RHS.pItem.value.overlayType == STR',
+        'rLST':          'aItem.RHS.pItem.value.overlayType == LST',
+        'rtUnknown':     'aItem.RHS.pItem.value.overlayType == tUnknown',
 
         'rintersect':    'aItem.RHS.pItem.intersectPos != ipNoIntersect',
         'remUnknown':     'aItem.RHS.pItem.value.evalMode == emUnknown',
@@ -85,7 +85,7 @@ mergeRules = {
         'REJECT':                   'aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true;',
         'copyValueRHStoLHS':        'DO_COPY(aItem.RHS.pItem.value, aItem.LHS_item.pItem.value, aItem.sizeToCopy)',
         'copyValueLHStoRHS':        'DO_COPY(aItem.LHS_item.pItem.value, aItem.RHS.pItem.value, aItem.sizeToCopy)',
-        'copyRHSTypeToLHS':         'aItem.LHS_item.pItem.value.overlayMode <- aItem.RHS.pItem.value.overlayMode; aItem.LHS_item.pItem.infMode <- aItem.RHS.pItem.infMode',
+        'copyRHSTypeToLHS':         'aItem.LHS_item.pItem.value.overlayType <- aItem.RHS.pItem.value.overlayType; aItem.LHS_item.pItem.infMode <- aItem.RHS.pItem.infMode',
         'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.pItem.infSize, aItem.LHS_item.pItem.infSize, 0)',
         'rejectIfValueStrNotEqual': 'if(aItem.LHS_item.pItem.value.str != aItem.RHS.pItem.value.str){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true}',
         'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.pItem.value.num != aItem.RHS.pItem.value.num){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
@@ -644,7 +644,7 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
         ifsCode += '        our POV: orderedSpanRemainder <- orderedSpanMergeRules(aItem, orderedSpanMergeHandled)\n'
         ifsCode += '        if(orderedSpanMergeHandled){return(orderedSpanRemainder)}\n'
         ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
-        ifsCode += '        else {log("MERGE_RULE_MISSING: "+ toString(aItem));log("          LHS overlayMode:"+ overlayModeStrings[aItem.LHS_item.pItem.value.overlayMode]);log("          LHS evalMode:"+ evalModeStrings[aItem.LHS_item.pItem.value.evalMode]);log("          RHS overlayMode:"+ overlayModeStrings[aItem.RHS.pItem.value.overlayMode]); log("EXITING"); exit(2);}\n'
+        ifsCode += '        else {log("MERGE_RULE_MISSING: "+ toString(aItem));log("          LHS overlayType:"+ overlayTypeStrings[aItem.LHS_item.pItem.value.overlayType]);log("          LHS evalMode:"+ evalModeStrings[aItem.LHS_item.pItem.value.evalMode]);log("          RHS overlayType:"+ overlayTypeStrings[aItem.RHS.pItem.value.overlayType]); log("EXITING"); exit(2);}\n'
         ifsCode += "        return(remainder)"
         funcCode = "    our POV: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
     else:

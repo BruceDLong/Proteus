@@ -39,30 +39,61 @@ struct OrderMode: inherits=<mode[uUnknown, uOrdered, uUnordered]> {}
 struct aitemSrcID: inherits=<mode[srcPMVA1, srcPMVA2, srcPiCVA, srcNrmSize, srcNormInit, srcMrg0, srcPropagate, srcPartsPath, srcItsALT, srcItsFunc, srcUnordd]> {}
 
 model infonState{
-    mode[tUnset, tUnknown, NUM, STR, LST]: overlayMode
+    // -----------------------------------------------------------------
+    // Semantic interpretation of this overlay
+    // -----------------------------------------------------------------
+    mode[tUnset, tUnknown, NUM, STR, LST]: overlayType
     mode[emUnknown, emConcat, emLiteral]: evalMode
-    mode[fDefault, fFloat, fFraction, fSingleQuote, fHereDoc, fSizedBin]: literalFormat
-    mode[bDec, bBin, bHex]:numBase
-    mode[ipDefault, ipSquareBrackets]: intersectPosParse
-    flag: inverted
-    flag: timelike
-    flag: sizeWasInner       // Syntax provenance only: size was written as {~S ...}.
-    flag: tailUnfinished
-    flag: isFromDefn
-    flag: undefined     // E.g. %prev when there is no previous item. Or this depends on an undefined item.
-    me FlexNum: num
-    me string: str
-    me PovList: items            //  our list<our infonView, [fast_prepend, fast_delete]>: newItems
-    our infonView: listSpec
     me SizeMode: sizeMode <- fromCount
 
+    flag: inverted
+    flag: undefined
+
+    // -----------------------------------------------------------------
+    // List-specific semantics
+    // -----------------------------------------------------------------
+    flag: timelike
+    flag: tailUnfinished
+
+    // Current representation of [...] parsing/intersection.
+    // Revisit separately when considering emIntersect.
+    mode[ipDefault, ipSquareBrackets]: intersectPosParse
+
+    // -----------------------------------------------------------------
+    // Preferred external representation
+    // These do not change the internally represented state.
+    // -----------------------------------------------------------------
+    mode[fDefault, fFloat, fFraction, fSingleQuote, fHereDoc, fSizedBin]: literalFormat
+    mode[bDec, bBin, bHex]: numBase
+
+    // True when the size was written inside a list as {~S ...}
+    // rather than with the outer *S+ syntax.
+    flag: sizeWasInner
+
+    // -----------------------------------------------------------------
+    // Runtime / copy-on-write provenance
+    // -----------------------------------------------------------------
+    flag: isFromDefn
+
+    // -----------------------------------------------------------------
+    // Overlay payload
+    // Exactly which member is meaningful depends on overlayType.
+    // These are candidates for a union once CodeDog union support
+    // is reliable.
+    // -----------------------------------------------------------------
+    me FlexNum: num
+    me string: str
+
+    me PovList: items
+    our infonView: listSpec
+
     me none: infonState(me int: N) <- {
-        overlayMode <- NUM
+        overlayType <- NUM
         evalMode <- emLiteral
         num <- N
     }
     me none: infonState(me string: S, me bool: isStrInf) <- {
-        overlayMode <- STR
+        overlayType <- STR
         evalMode <- emLiteral
         str <- S
     }
@@ -247,11 +278,11 @@ model infonView{
     their infonState: countSize(me bool: verify) <- {
         if(infSize!.evalMode==emUnknown){verify <- false}
         if(value!.sizeMode!=fromGiven and (infSize!.evalMode==emUnknown or verify)){
-            if(value!.overlayMode==STR and value!.evalMode==emLiteral){
-                infSize!.overlayMode  <- NUM
+            if(value!.overlayType==STR and value!.evalMode==emLiteral){
+                infSize!.overlayType  <- NUM
                 infSize!.evalMode <- emLiteral
                 infSize!.num    <- value!.str.size()
-            } else if(value!.overlayMode==LST and value!.evalMode==emLiteral){
+            } else if(value!.overlayType==LST and value!.evalMode==emLiteral){
                 me FlexNum: acc <- 0
                 our POV: pov <- value!.items.head
                 while(pov != NULL){
@@ -271,7 +302,7 @@ model infonView{
                         value!.tailUnfinished <- false
                     }
                 }else{
-                    infSize!.overlayMode  <- NUM
+                    infSize!.overlayType  <- NUM
                     infSize!.evalMode <- emLiteral
                     infSize!.num    <- acc
                     value!.tailUnfinished <- false
@@ -280,7 +311,7 @@ model infonView{
         }
         return(infSize)
     }
-    me bool: isASeq() <- {return((value!.evalMode==emLiteral and value!.overlayMode==LST) or value!.evalMode==emConcat)}
+    me bool: isASeq() <- {return((value!.evalMode==emLiteral and value!.overlayType==LST) or value!.evalMode==emConcat)}
     me bool: isOrLike() <- {return(intersectPos==ipGetLast and innr!=NULL and innr!.infSize!.evalMode==emUnknown and innr!.value!.sizeMode==fromGiven and innr!.value!.evalMode==emLiteral)}
     me OrderMode: getOrderMode(their Agent: agent) <- {
         if(orderMode!=uUnknown){return(orderMode)}
@@ -346,7 +377,7 @@ model infonView{
     our POV: getLastItem() <- {
         // ASSERT(Should be already normed and a non-concat list)
         our POV: lastItem
-        if(value!.overlayMode!=LST){return(NULL)}
+        if(value!.overlayType!=LST){return(NULL)}
         if(value!.evalMode==emUnknown){return(NULL)}
         if(value!.tailUnfinished){return(NULL)}
         if(value!.items.isEmpty()){return(NULL)}
@@ -399,7 +430,7 @@ model infonView{
     }
     our POV: deleteListNode(our POV: toDel) <- {
         // Low level delete of an item in list. Does not update size.
-        if(value!.overlayMode==LST){
+        if(value!.overlayType==LST){
             return (value!.deleteListNode(toDel))
         }
         return(NULL)
@@ -613,12 +644,12 @@ model infonView{
         clear()
         itmMode      <- mItem
         infMode      <- isLiteral
-        value!.overlayMode  <- LST
+        value!.overlayType  <- LST
         value!.evalMode <- emLiteral
         value!.sizeMode       <- fromCount
         value!.tailUnfinished <- true
 
-        infSize!.overlayMode        <- NUM
+        infSize!.overlayType        <- NUM
         infSize!.evalMode       <- emUnknown
     }
     void: setSelfAsAPluralOf(our infonView: toPluralize) <-{
@@ -672,10 +703,10 @@ struct GLOBAL{
         our infonView:: newListInfon
         newListInfon!.itmMode        <- mItem
         newListInfon!.infMode        <- isLiteral
-        newListInfon!.infSize!.overlayMode  <- NUM
+        newListInfon!.infSize!.overlayType  <- NUM
         newListInfon!.infSize!.evalMode <- emUnknown
         newListInfon!.infSize!.num    <- 1
-        newListInfon!.value!.overlayMode    <- LST
+        newListInfon!.value!.overlayType    <- LST
         newListInfon!.value!.evalMode   <- emLiteral
         newListInfon!.isInnr         <- true
         return(newListInfon)
@@ -683,7 +714,7 @@ struct GLOBAL{
     our POV: makeOrPov(our POV: nextPov, our POV: pred) <- {
         our infonView: newListInfon <- makeInnrInfonView()               // Make {...} to be used as innr
         our POV: newAlt <- newListInfon!.value!.items.pushAsAlt(nextPov, nextPov!.pItem, pred)  // Make a POV for the item.
-        our infonView:: newAltInfon; newAltInfon!.value!.overlayMode   <- tUnknown
+        our infonView:: newAltInfon; newAltInfon!.value!.overlayType   <- tUnknown
             newAltInfon!.convertThisToIntersection(newListInfon, fromGiven) // Make [ ] and add innr to it
         our POV:: newAltInfPov{4}                                  // Make the POV pointing to the [...]
             newAltInfPov!.pItem <- newAltInfon
@@ -713,7 +744,7 @@ struct GLOBAL{
         our POV: crntPov <- inf!.value!.items.head
         while(crntPov != NULL){
             if(crntPov!.pItem!.doReply){return(true)}
-            if(crntPov!.pItem!.value!.overlayMode==LST and crntPov!.pItem!.streamState!=parseDone and crntPov!.pItem!.streamState!=notParsing){
+            if(crntPov!.pItem!.value!.overlayType==LST and crntPov!.pItem!.streamState!=parseDone and crntPov!.pItem!.streamState!=notParsing){
                 return(true)
             }
             crntPov <- crntPov!.next
@@ -733,7 +764,7 @@ struct GLOBAL{
         // For a streaming list at parseListReady, doReply might be set when the closing
         // `}` and `\`` are parsed. Wait briefly for that — but only when we won't end up
         // blocked on an unfinished nested sub-list (whose own close gates the parent's).
-        if(streamingNormMode and inf!.value!.overlayMode==LST and pov!.pParent!=NULL and inf!.streamState==parseListReady){
+        if(streamingNormMode and inf!.value!.overlayType==LST and pov!.pParent!=NULL and inf!.streamState==parseListReady){
             me MutexMngr: MtxMgr{streamingNormMutex}
             while(inf!.streamState==parseListReady){
                 if(descendantOwnsReply(inf)){break()}
@@ -1103,7 +1134,7 @@ struct WorldManager{
         // TODO: Don't do this every time.
         our infonView: LHSInf <- aItem!.LHS_item!.pItem
         // Reduce fraction
-        if(LHSInf!.value!.evalMode == emLiteral and LHSInf!.value!.overlayMode==NUM){
+        if(LHSInf!.value!.evalMode == emLiteral and LHSInf!.value!.overlayType==NUM){
             LHSInf!.value!.num.normalize()
         }
 
@@ -1121,10 +1152,10 @@ struct WorldManager{
         our POV: CIPov      <- aItem!.LHS_item
         our infonView: CI       <- CIPov!.pItem
         me bool: changeMade <- false
-        if(CI!.type!=NULL and CI!.type!.normalType()=="english-text" and CI!.value!.overlayMode==STR and CI!.value!.evalMode==emLiteral){
+        if(CI!.type!=NULL and CI!.type!.normalType()=="english-text" and CI!.value!.overlayType==STR and CI!.value!.evalMode==emLiteral){
             me string: text <- CI!.value!.str
             CI!.type!.setAsGiven("english-phrase")
-            CI!.value!.overlayMode  <- LST
+            CI!.value!.overlayType  <- LST
             Allocate(CI!.value!.listSpec)
             Allocate(CI!.value!.listSpec!.type)
             CI!.value!.listSpec!.type!.setAsGiven("word")
@@ -1234,8 +1265,8 @@ vSpec.init(agent!.getLocaleBaseName())
                 CI!.argPos   <- apNoArgs
                 changeMade  <- true
             }
-            //if(CI!.value!.overlayMode==LST){ciItr.state <- sFirstVisit}
-            //else if(CI!.value!.overlayMode!=LST){ciItr.state <- sNotASeq}
+            //if(CI!.value!.overlayType==LST){ciItr.state <- sFirstVisit}
+            //else if(CI!.value!.overlayType!=LST){ciItr.state <- sNotASeq}
         }
         return(changeMade)
     }
@@ -1379,7 +1410,7 @@ vSpec.init(agent!.getLocaleBaseName())
         if(aItem!.LHS_item!.pItem!.sizeNormed){return(false)}else{aItem!.LHS_item!.pItem!.sizeNormed<-true}
         me bool: stopAndWait <- false
         our infonState: infSize <- aItem!.LHS_item!.pItem!.infSize
-        if(infSize!.evalMode==emConcat and infSize!.overlayMode!=STR){
+        if(infSize!.evalMode==emConcat and infSize!.overlayType!=STR){
             our POV:: tmpPov{10}
             our infonView:: tmpInfon
                 tmpInfon!.value   <- aItem!.LHS_item!.pItem!.infSize
@@ -1473,7 +1504,7 @@ vSpec.init(agent!.getLocaleBaseName())
     // rsINFON UTILITY FUNCTIONS: CONCAT FUNCTIONS
     me int: evalForRange(our infonView: infn, their FlexNum: lowest, their FlexNum: highest) <- {
         if(infn!.value!.evalMode!=emConcat){
-            if(infn!.value!.overlayMode==NUM){
+            if(infn!.value!.overlayType==NUM){
                 if(infn!.infSize!.evalMode==emLiteral){
                     if(infn!.value!.evalMode==emLiteral){// eg: *5+3
                         lowest!  <- infn!.value!.num
@@ -1500,8 +1531,8 @@ vSpec.init(agent!.getLocaleBaseName())
             if(infn!.value!.items.size()==2){
                 our infonView: first  <- infn!.value!.items.first()
                 our infonView: secnd <- infn!.value!.items.last()
-                if(first!.value!.overlayMode==NUM and first!.value!.evalMode==emUnknown and first!.infSize!.evalMode==emLiteral and
-                   secnd!.value!.overlayMode==NUM and secnd!.value!.evalMode==emLiteral and secnd!.infSize!.evalMode==emUnknown and secnd!.value!.sizeMode==fromContext){
+                if(first!.value!.overlayType==NUM and first!.value!.evalMode==emUnknown and first!.infSize!.evalMode==emLiteral and
+                   secnd!.value!.overlayType==NUM and secnd!.value!.evalMode==emLiteral and secnd!.infSize!.evalMode==emUnknown and secnd!.value!.sizeMode==fromContext){
                     lowest!  <- secnd!.value!.num
                     highest! <- lowest! + first!.infSize!.num
                 }
@@ -1516,8 +1547,8 @@ vSpec.init(agent!.getLocaleBaseName())
         if(infn!.value!.items.size()==2){
             our infonView: first  <- infn!.value!.items.first()
             our infonView: secnd <- infn!.value!.items.last()
-            if(first!.value!.overlayMode==NUM and first!.value!.evalMode==emUnknown and first!.infSize!.evalMode==emLiteral and
-               secnd!.value!.overlayMode==NUM and secnd!.value!.evalMode==emLiteral and secnd!.infSize!.evalMode==emUnknown and secnd!.value!.sizeMode==fromContext){
+            if(first!.value!.overlayType==NUM and first!.value!.evalMode==emUnknown and first!.infSize!.evalMode==emLiteral and
+               secnd!.value!.overlayType==NUM and secnd!.value!.evalMode==emLiteral and secnd!.infSize!.evalMode==emUnknown and secnd!.value!.sizeMode==fromContext){
                 secnd!.value!.num <- lowest!
                 first!.infSize!.num <- highest! - lowest!
             }
@@ -1557,8 +1588,8 @@ vSpec.init(agent!.getLocaleBaseName())
     me bool: joinOnRight(our infonView: LHS, our infonView: RHS) <- { // Join RHS into LHS. Return true on success (so need no subscription).
         //:l/PAI::logSeg(" JOR:")
         if(LHS!.value!.evalMode==emLiteral and RHS!.value!.evalMode==emLiteral){
-            me int: LHSType <- LHS!.value!.overlayMode
-            if(LHSType == RHS!.value!.overlayMode){
+            me int: LHSType <- LHS!.value!.overlayType
+            if(LHSType == RHS!.value!.overlayType){
                 switch(LHSType){
                     case NUM: {
                         if(RHS!.value!.sizeMode==fromContext){
@@ -1619,7 +1650,7 @@ vSpec.init(agent!.getLocaleBaseName())
         if(subList==NULL){return(false)}
         if(subList!.infMode!=isLiteral){return(false)}
         if(subList!.type!=NULL){return(false)}
-        if(subList!.value!.overlayMode!=LST or subList!.value!.evalMode!=emLiteral){return(false)}
+        if(subList!.value!.overlayType!=LST or subList!.value!.evalMode!=emLiteral){return(false)}
         if(subList!.value!.tailUnfinished or subList!.value!.listSpec!=NULL){return(false)}
         if(subList!.value!.items.size()!=1){return(false)}
         if(subList!.intersectPos!=ipNoIntersect){return(false)}
@@ -1631,7 +1662,7 @@ vSpec.init(agent!.getLocaleBaseName())
 
     me bool: unwrapSingletonSubItems(our infonView: infn) <- {
         me bool: changeMade <- false
-        if(infn!.value!.overlayMode!=LST or infn!.value!.evalMode!=emLiteral){return(false)}
+        if(infn!.value!.overlayType!=LST or infn!.value!.evalMode!=emLiteral){return(false)}
         if(infn!.value!.items.size()<=1){return(false)}
         our POV: pov <- infn!.value!.items.head
         while(pov!=NULL){
@@ -1718,7 +1749,7 @@ vSpec.init(agent!.getLocaleBaseName())
                             our infonView:: skipPart
                                 skipPart!.setToList()
                                 skipPart!.value!.sizeMode       <- fromCount
-                                skipPart!.infSize!.overlayMode        <- NUM
+                                skipPart!.infSize!.overlayType        <- NUM
                                 skipPart!.infSize!.evalMode       <- emUnknown
                                 skipPart!.value!.listSpec       <- skipPtn
                             our infonView: newInnr <- makeInnrInfonView()
@@ -1730,7 +1761,7 @@ vSpec.init(agent!.getLocaleBaseName())
                                 newPath!.doReply        <- doReply
                                 newInnr!.value!.sizeMode <- fromCount
                                 newPath!.value!.sizeMode <- fromCount
-                                newPath!.infSize!.overlayMode  <- NUM
+                                newPath!.infSize!.overlayType  <- NUM
                                 newPath!.originID       <- CI!.originID
                                 newPath!.infCharPos     <- CI!.infCharPos
                                 // Preserve unordered/ordered semantics when a dot lookup
@@ -1754,7 +1785,7 @@ vSpec.init(agent!.getLocaleBaseName())
                     case idxField:{
                         //:l/PAI::logSeg(" #"+partTag)
                         if(part!.spec==NULL){
-                            if(part!.path!.value!.overlayMode == NUM){
+                            if(part!.path!.value!.overlayType == NUM){
                                 me bool: doReply <- CI!.doReply
                                 if(doReply){CI!.doReply <- false}
                                 our infonView: newInnr <- makeInnrInfonView()
@@ -1763,7 +1794,7 @@ vSpec.init(agent!.getLocaleBaseName())
                                     newPath!.convertThisToIntersection(newInnr, fromGiven)
                                     newPath!.doReply        <- doReply
                                     newPath!.value!.sizeMode <- fromCount
-                                    newPath!.infSize!.overlayMode  <- NUM
+                                    newPath!.infSize!.overlayType  <- NUM
                                     newPath!.originID       <- CI!.originID
                                     newPath!.infCharPos     <- CI!.infCharPos
                                     if(part!.path!.partRef!=NULL){
@@ -1778,7 +1809,7 @@ vSpec.init(agent!.getLocaleBaseName())
                                 newPov!.looseMode <- false; newPov!.looseTop  <- true
                             }
                         }else{
-                            if(part!.path!.value!.overlayMode == NUM){
+                            if(part!.path!.value!.overlayType == NUM){
                                 me bool: doReply <- CI!.doReply
                                 if(doReply){CI!.doReply <- false}
                                 our infonView:: skipPart
@@ -1795,7 +1826,7 @@ vSpec.init(agent!.getLocaleBaseName())
                                     newPath!.convertThisToIntersection(newInnr, fromGiven)
                                     newPath!.doReply        <- doReply
                                     newPath!.value!.sizeMode <- fromGiven
-                                    newPath!.infSize!.overlayMode  <- NUM
+                                    newPath!.infSize!.overlayType  <- NUM
                                     newPath!.originID       <- CI!.originID
                                     newPath!.infCharPos     <- CI!.infCharPos
                                     newPath!.intersectPos <- ipGetMarked
@@ -1906,8 +1937,8 @@ vSpec.init(agent!.getLocaleBaseName())
  /*Resolve the NULL ambiguity*/           aItem!.LHS_item!.pParent!.pItem!.value!.items.erase(aItem!.LHS_item)
             }
         }
-//if(CI!.value!.overlayMode==LST){log("PREDS___\n"+stringifyPreds(aItem!.LHS_item, ""))}
-        if(CI!.value!.overlayMode==LST and CI!.value!.evalMode==emLiteral){
+//if(CI!.value!.overlayType==LST){log("PREDS___\n"+stringifyPreds(aItem!.LHS_item, ""))}
+        if(CI!.value!.overlayType==LST and CI!.value!.evalMode==emLiteral){
             me int: numCandidates <- aItem!.LHS_item!.candidatesForLastItem.size()
             //log("CLEAN_LIST:"+aItem!.LHS_item!.mySymbol()+":"+ aItem!.LHS_item!.stringify()+"  #candidates:"+toString(numCandidates))
             if(numCandidates==1){
@@ -2020,8 +2051,8 @@ vSpec.init(agent!.getLocaleBaseName())
         return(NULL)
     }
     void: DO_COPY(their infonState: from, their infonState: to, me FlexNum: sizeToCopy) <- {
-        me int: fromsType <- from!.overlayMode
-        if(fromsType==to!.overlayMode){
+        me int: fromsType <- from!.overlayType
+        if(fromsType==to!.overlayType){
             to!.evalMode<-from!.evalMode
             to!.sizeMode <- from!.sizeMode
             switch(fromsType){
@@ -2126,10 +2157,10 @@ vSpec.init(agent!.getLocaleBaseName())
         // ERROR??? Copy workList
     }
     me bool: isOpenListShape(our infonView: item) <- {
-        return(item!=NULL and item!.value!.overlayMode==LST and item!.value!.evalMode==emLiteral and item!.value!.items.isEmpty() and item!.value!.tailUnfinished and item!.value!.listSpec!=NULL)
+        return(item!=NULL and item!.value!.overlayType==LST and item!.value!.evalMode==emLiteral and item!.value!.items.isEmpty() and item!.value!.tailUnfinished and item!.value!.listSpec!=NULL)
     }
     me bool: hasConcreteLiteralListItems(our infonView: item) <- {
-        return(item!=NULL and item!.value!.overlayMode==LST and item!.value!.evalMode==emLiteral and !item!.value!.items.isEmpty())
+        return(item!=NULL and item!.value!.overlayType==LST and item!.value!.evalMode==emLiteral and !item!.value!.items.isEmpty())
     }
     me bool: hasConcreteListSpec(our infonView: item) <- {
         return(hasConcreteLiteralListItems(item) and item!.value!.listSpec!=NULL)
@@ -2154,7 +2185,7 @@ vSpec.init(agent!.getLocaleBaseName())
     }
     me void: carryPassiveScalarSource(our POV: LHSPOV, our POV: RHSPOV) <- {
         if(LHSPOV==NULL or RHSPOV==NULL or RHSPOV!.pItem==NULL){return()}
-        if(RHSPOV!.pItem!.value!.overlayMode==LST){return()}
+        if(RHSPOV!.pItem!.value!.overlayType==LST){return()}
         if(RHSPOV!.outerPOV!=NULL and RHSPOV!.outerPOV!.pItem===RHSPOV!.pItem){LHSPOV!.sourcePOV <- RHSPOV!.outerPOV}
         else{LHSPOV!.sourcePOV <- RHSPOV}
     }
@@ -2223,8 +2254,8 @@ vSpec.init(agent!.getLocaleBaseName())
         me bool: RhsAttached<- true
         me bool: RHSExists  <- RHSPov != NULL
         me bool: RorRExists <- RHSExists or remainder!=NULL
-        me bool: LHSIsLST   <- (LHSPov!.pItem!.value!.overlayMode==LST and LHSPov!.pItem!.value!.evalMode!=emConcat)
-        me bool: RHSIsLST   <- (RHSExists and RHSPov!.pItem!.value!.overlayMode==LST and RHSPov!.pItem!.value!.evalMode!=emConcat)
+        me bool: LHSIsLST   <- (LHSPov!.pItem!.value!.overlayType==LST and LHSPov!.pItem!.value!.evalMode!=emConcat)
+        me bool: RHSIsLST   <- (RHSExists and RHSPov!.pItem!.value!.overlayType==LST and RHSPov!.pItem!.value!.evalMode!=emConcat)
         me bool: identIsInternal <- RHSExists and (RHSPov!.pItem!.asRHSInternalIdent or (RHSPov!.pParent!=NULL and RHSPov!.pParent!.pItem!.asRHSInternalIdent))
         me bool: LHSitrBeginning <- aItem!.LHSItr!=NULL and LHSPov===aItem!.LHSItr!.topPOV
         me bool: RHSitrBeginning <- aItem!.RHSItr!=NULL and RHSPov===aItem!.RHSItr!.topPOV
@@ -2560,8 +2591,8 @@ vSpec.init(agent!.getLocaleBaseName())
                 aItem!.skipRHSUsageInPAI <- true
             } else {
                 if(aItem!.RHS!=NULL and aItem!.RHS!.pItem!.intersectPos==ipNoIntersect){
-                    me bool: LHSIsUnresolvedUnknown <- LHS_item!.infMode==isUnknown and (LHS_item!.value!.overlayMode==tUnknown or LHS_item!.value!.overlayMode==tUnset)
-                    me bool: RHSIsUnresolvedUnknown <- aItem!.RHS!.pItem!.infMode==isUnknown and (aItem!.RHS!.pItem!.value!.overlayMode==tUnknown or aItem!.RHS!.pItem!.value!.overlayMode==tUnset)
+                    me bool: LHSIsUnresolvedUnknown <- LHS_item!.infMode==isUnknown and (LHS_item!.value!.overlayType==tUnknown or LHS_item!.value!.overlayType==tUnset)
+                    me bool: RHSIsUnresolvedUnknown <- aItem!.RHS!.pItem!.infMode==isUnknown and (aItem!.RHS!.pItem!.value!.overlayType==tUnknown or aItem!.RHS!.pItem!.value!.overlayType==tUnset)
                     if(LHSIsUnresolvedUnknown or RHSIsUnresolvedUnknown){
                         return(false)
                     }else{
@@ -2709,7 +2740,7 @@ aItem!.LHS_item!.pItem!.streamState <- parseStarted
                             //:l/PAI::endBracket<-"{"
                             //log("NO_RHS:"+ toString(aItem))
                             if(!aItem!.LHS_item!.pItem!.wasProcessed){
-                                if(aItem!.LHS_item!.pItem!.value!.overlayMode == LST){initListIterators(aItem)}
+                                if(aItem!.LHS_item!.pItem!.value!.overlayType == LST){initListIterators(aItem)}
                             }
                             // BDL Uncomment to re-enable reply on single-sided merges
                             // log("PROP_XY:"+aItem!.stringify())
@@ -2766,7 +2797,7 @@ aItem!.LHS_item!.pItem!.streamState <- parseStarted
                                     vSpec.init(agent!.getLocaleBaseName())
                                     if(sparseOrderedSpanMergeAlignable(aItem!.LHS_item, aItem!.RHS, vSpec)){isCompatible <- tvTrue}
                                 }
-                                if(isCompatible!=tvTrue and aItem!.LHS_item!.pItem!.type!=NULL and aItem!.RHS!.pItem!.value!.overlayMode==LST and aItem!.RHS!.pItem!.value!.listSpec!=NULL and aItem!.RHS!.pItem!.value!.listSpec!.type!=NULL){
+                                if(isCompatible!=tvTrue and aItem!.LHS_item!.pItem!.type!=NULL and aItem!.RHS!.pItem!.value!.overlayType==LST and aItem!.RHS!.pItem!.value!.listSpec!=NULL and aItem!.RHS!.pItem!.value!.listSpec!.type!=NULL){
                                     me vocabularySpec: vSpec
                                     vSpec.init(agent!.getLocaleBaseName())
                                     our OrderedSpanConverter: spanConverter <- modelMngr.getOrderedSpanConverter(aItem!.LHS_item!.pItem!.type, aItem!.RHS!.pItem!.value!.listSpec!.type, vSpec)
@@ -2798,7 +2829,7 @@ aItem!.LHS_item!.pItem!.streamState <- parseStarted
                                         //:l/PAI::logFlush()
                                         return()
                                     }
-                                    if(aItem!.LHS_item!.pItem!.value!.overlayMode == LST){
+                                    if(aItem!.LHS_item!.pItem!.value!.overlayType == LST){
                                         our POV: tmp <- aItem!.RHS
                                         aItem!.RHS <- NULL
                                         initListIterators(aItem)
@@ -2810,7 +2841,7 @@ aItem!.LHS_item!.pItem!.streamState <- parseStarted
                                         if(aItem!.RHS!.pItem!.type!=NULL and aItem!.LHS_item!.pItem!.type==NULL){
                                             log(indentStr(aItem!.indentLvl)+"        merge  |||r?|       copyType")
                                             aItem!.LHS_item!.pItem!.type <- aItem!.RHS!.pItem!.type}
-                                            if(aItem!.LHS_item!.pItem!.value!.overlayMode==LST){
+                                            if(aItem!.LHS_item!.pItem!.value!.overlayType==LST){
                                                 aItem!.RHS <- NULL
                                                 initListIterators(aItem)
                                                 aItem!.mergeStatus <- msUnknown
@@ -2974,7 +3005,7 @@ aItem!.LHS_item!.pItem!.streamState <- parseStarted
                                         // TODO: if(sizesNotCompatable()){markAsReject or notLast}
                                         me string: logPredString; if(!pov!.predecessors.isEmpty()){logPredString<-"  Pred:"+ pov!.predecessors[0]!.stringify()}
                                         // Is the next line really valid? This could be the correct item but just be unknown. However, tests fail without it.
-                                        me bool: unresolvedAlt <- pov!.pItem!.type==NULL and pov!.pItem!.infMode==isUnknown and (pov!.pItem!.value!.overlayMode==tUnknown or pov!.pItem!.value!.overlayMode==tUnset)
+                                        me bool: unresolvedAlt <- pov!.pItem!.type==NULL and pov!.pItem!.infMode==isUnknown and (pov!.pItem!.value!.overlayType==tUnknown or pov!.pItem!.value!.overlayType==tUnset)
                                         if(!pov!.rejected and !unresolvedAlt){
                                             //:l/PAI::log(idnt+"            ALT:"+ pov!.mySymbol()+":"+ shortedStr(pov!.stringify(),100) + shortedStr(logPredString,100))
                                             numOK <+- 1
@@ -3027,7 +3058,7 @@ aItem!.LHS_item!.pItem!.streamState <- parseStarted
                                             newTop!.infMode <- isLiteral
                                             newTop!.infSize!.evalMode <- emUnknown
                                             newTop!.value!.evalMode <- emLiteral
-                                            newTop!.value!.overlayMode <- LST
+                                            newTop!.value!.overlayType <- LST
                                             innr!.intersectMarkedRetPOV!.addNewSubDots <- true
                                             // The mark selects a slice position. Keep the list-view
                                             // shape, but tie its first slot back to the source POV.
