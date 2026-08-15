@@ -121,58 +121,163 @@ model infonState{
 
     void: clear() <- {num<-0 str<-""; items.clear(); listSpec<-NULL}
 }
-model infonView{
-    flag: invertmatch
-    mode[mNone, mItem, mWordDefn, mIncludeStream, mIncludeParseStr]:      itmMode
-    mode[vmAny, vmCursor, vmOverlay]:  viewMode
-    mode[ipNoIntersect, ipGetLast, ipGetFirst, ipGetMarked]: intersectPos
-    mode[apNoArgs, apArgIsFirstItem, apArgIsLastItem]: argPos
-    flag: argsOnLeft
+model infonView {
+    // -----------------------------------------------------------------
+    // What kind of view/item is this?
+    // -----------------------------------------------------------------
+    flag: invertMatch
+
+    mode[mNone, mItem, mWordDefn, mIncludeStream, mIncludeParseStr]: itmMode
+
+    mode[vmAny, vmCursor, vmOverlay]: viewMode
+
+    // Meaningful when viewMode == vmCursor
     mode[cmNone, cmSelf, cmWorld, cmContext, cmUser, cmArgs, cmVars, cmPrev, cmNext]:  cursorMode
-    mode[gUnset, gAbstract, gConcrete]: generality
-    mode[umAssert, umQuestion, umCommand]: useMode
+
+    // -----------------------------------------------------------------
+    // State represented by this view
+    // -----------------------------------------------------------------
     our infonState: infSize
     our infonState: value
 
-    our infonView: copySource // What infon was this a copy of? Definition or listSpec
-    mode[cstNone, cstDefinition, cstListSpec]: copySourceType // What kind ot copy was this? E.g. a copy of a definition
-
     me OrderMode: orderMode
-    flag: isNormed
-    flag: hasInnrOutr
-    flag: asWrkLstOutr   // When true in an RHS, the RHS is an outr infon
-    flag: cnvtToFunc     // Convert this to a [ ] before evaluating.
-    flag: isFromDefn
-    flag: isTypeExample         // This can be used to type-check an RHS
-    flag: alreadyTypeChecked    // This need not be re-checked
-    our infonView: funcArgs
+
+    // -----------------------------------------------------------------
+    // Intersection semantics
+    // -----------------------------------------------------------------
+    mode[ipNoIntersect, ipGetLast, ipGetFirst, ipGetMarked]: intersectPos
+
+    // The internal information structure being resolved.
     our infonView: innr
+
+    // Meaningful when intersectPos == ipGetMarked.
+    // Identifies the marked occurrence within innr.
+    // Keep the POV rather than merely its pItem because the occurrence/context
+    // matters, and resolution may write through it.
     our POV: intersectMarkedRetPOV
-    our infonView: thisPtr
-    flag: isInnr         // This item is the innr of [....]
+
+    // Current representation of <~.
+    // Eventually replace this flag + funcArgs overload with:
+    //     our infonView: innrOutr
+    flag: hasInnrOutr
+
+    // -----------------------------------------------------------------
+    // Type / definition semantics
+    // -----------------------------------------------------------------
     our WordUse: type
-    our WordDefn: definedWord
     me List<our WordUse>: addedTypes
+
+    // Meaningful for itmMode == mWordDefn.
+    our WordDefn: definedWord
+
+    // -----------------------------------------------------------------
+    // Transitional mixed fields
+    // These currently contain essential information, so cannot yet
+    // be moved out of the model even though their representation is poor.
+    // -----------------------------------------------------------------
+
+    // Currently overloaded as:
+    //   * definition body
+    //   * <~ innrOutr
+    //   * legacy function argument
+    //
+    // Eventually split into definitionBody / innrOutr and delete
+    // the legacy function use.
+    our infonView: funcArgs
+
+    // Currently mixes persistent identity knowledge with Reasoner work.
+    // Eventually split into semantic identities + Reasoner agenda state.
     me List<our POV>: wrkList
-    me List<our POV>: usedWrkList
-    me List<our POV>: retainedPOVs
+}
+
+struct infonView{
+     // -----------------------------------------------------------------
+    // Legacy intersection-as-function machinery
+    // Remove when the old function syntax is removed.
+    // -----------------------------------------------------------------
+    mode[apNoArgs, apArgIsFirstItem, apArgIsLastItem]: argPos
+    flag: argsOnLeft
+    flag: cnvtToFunc
+
+    // -----------------------------------------------------------------
+    // Context / reference resolution
+    // Needed by the language system, not by identity logic.
+    // -----------------------------------------------------------------
+    mode[gUnset, gAbstract, gConcrete]: generality
+    our infonView: proxy
+
+    // Current ad-hoc instantiation/scope mechanism for
+    // %self, %prev, %next, definition/listSpec copies.
+    our infonView: copySource
+    mode[cstNone, cstDefinition, cstListSpec]: copySourceType
+    our infonView: thisPtr
+
+    // -----------------------------------------------------------------
+    // Part-path theorem execution / syntactic sugar
+    // -----------------------------------------------------------------
     me List<our PartPath>: parts
-    me string: includeSpec // identify a stream to #insert
-    our infonView: includeInfn // infon evaluates to a string to parse as Proteus
     our PartPath: partRef
-    our infonView: proxy       // If not NULL, this is a reference infon/
-    me uint64: originID    // Can be used to track the origin of this infon.
-    me uint64: infCharPos     // if this came from parsing, what char pos was its origin?
-    flag: isTentative   // Does this items validity depend on it having no errors?
-    flag: asRHSInternalIdent  //LHS's invertmatch doesn't apply to internal idents.
+
+    // -----------------------------------------------------------------
+    // External input / stream directives
+    // -----------------------------------------------------------------
+    me string: includeSpec
+    our infonView: includeInfn
+
+    // -----------------------------------------------------------------
+    // Source / stream metadata
+    // -----------------------------------------------------------------
+    me uint64: originID
+    me uint64: infCharPos
+
+    // Someone wants the result delivered back to a stream/request.
+    // Eventually move with origin/routing information into a
+    // request/subscription object.
+    flag: doReply
+
+    // -----------------------------------------------------------------
+    // Old WorldManager / Reasoner state
+    // -----------------------------------------------------------------
+    mode[umAssert, umQuestion, umCommand]: useMode
+
+    flag: isNormed
+
+    // <~ has already been translated into old wrkList machinery.
+    flag: asWrkLstOutr
+
+    // Definition/COW processing provenance.
+    flag: isFromDefn
+
+    // Type-definition application caches.
+    flag: isTypeExample
+    flag: alreadyTypeChecked
+
+    // Child-side marker used by current intersection processing.
+    flag: isInnr
+
+    // Old destructive work-list retry/history state.
+    me List<our POV>: usedWrkList
+
+    // Keep-alive references for temporary POVs.
+    me List<our POV>: retainedPOVs
+
+    // Speculative candidate existence during matching.
+    flag: isTentative
+
+    // Property of a generated identity relation, currently stored
+    // incorrectly on its RHS infon.
+    flag: asRHSInternalIdent
+
+    // One-pass / completion caches.
     flag: altRulesApplied
     flag: defnRegistered
     flag: sizeNormed
     flag: wordDerefed
     flag: addedTypesAlreadyCopied
-    flag: wasProcessed  // This has been through the cycle
-    flag: altUse        // In parsing, this, as a list, should not be stream-parsed.
-    flag: doReply       // Send back the crnt item after it is normed.
+    flag: wasProcessed
+
+    // Parser-specific behavior; investigate/delete with parser cleanup.
+    flag: altUse
 
     our POV: fetchField(me string: fieldname) <- {
         if(value!.items.isEmpty()){return(NULL)}
@@ -180,7 +285,7 @@ model infonView{
         our POV: pov <- value!.items.head
         while(pov != NULL){
             our infonView: inf <- pov!.pItem
-            if(inf!.invertmatch){
+            if(inf!.invertMatch){
                 pov <- pov!.next
                 continue()
             }
@@ -1191,7 +1296,7 @@ vSpec.init(agent!.getLocaleBaseName())
                 }else{
                     //:l/PAI::logSeg(" WRDxVAL:'"+CI!.type!.asGiven+"'")
                     our WordUse:CIsType <- CI!.type
-                    me bool: invertmatch <- CI!.invertmatch
+                    me bool: invertMatch <- CI!.invertMatch
                     me uint64: itmMode <- CI!.itmMode
                     me List<our PartPath>: parts <- CI!.parts
                     our PartPath: partRef <- CI!.partRef
@@ -1199,7 +1304,7 @@ vSpec.init(agent!.getLocaleBaseName())
                     CI!.copySource <- infModel
                     CI!.copySourceType <- cstDefinition
                     CI!.type    <- CIsType
-                    CI!.invertmatch   <- invertmatch
+                    CI!.invertMatch   <- invertMatch
                     CI!.parts   <- parts
                     CI!.partRef <- partRef
                     CI!.itmMode <- itmMode
@@ -1729,7 +1834,7 @@ vSpec.init(agent!.getLocaleBaseName())
                                 part!.path!.copyAsTypeTo(skipPtn, false, false)
                                 // Keep !path as the written selector token; local word defs should not stop the scan.
                                 skipPtn!.wordDerefed          <- true
-                                skipPtn!.invertmatch                 <- true
+                                skipPtn!.invertMatch                 <- true
                             our infonView:: matchPtn
                                 part!.path!.copyAsTypeTo(matchPtn, false, false)
                             our infonView:: skipPart
