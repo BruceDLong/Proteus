@@ -14,7 +14,7 @@ mergeSizeRules = {
 
     ],
     'ifSnips': {
-        'l?':            'aItem.LHS_item.pItem.infMode == isUnknown',
+        'l?':            'aItem.LHS_item.pItem.viewMode == vmAny',
         'lNUM':          'aItem.LHS_item.pItem.value.overlayType == NUM',
         'lSTR':          'aItem.LHS_item.pItem.value.overlayType == STR',
         'lLST':          'aItem.LHS_item.pItem.value.overlayType == LST',
@@ -24,7 +24,7 @@ mergeSizeRules = {
         'lemConcat':      'aItem.LHS_item.pItem.infSize.evalMode == emConcat',
         'lemLiteral':     'aItem.LHS_item.pItem.infSize.evalMode == emLiteral',
 
-        'r?':            'aItem.RHS.pItem.infMode == isUnknown',
+        'r?':            'aItem.RHS.pItem.viewMode == vmAny',
         'rNUM':          'aItem.RHS.pItem.value.overlayType == NUM',
         'rSTR':          'aItem.RHS.pItem.value.overlayType == STR',
         'rLST':          'aItem.RHS.pItem.value.overlayType == LST',
@@ -38,7 +38,7 @@ mergeSizeRules = {
         '!looseSize':    '!aItem.looseSize'
     },
     'codeSnips': {
-        'copySizeRHStoLHS':         'if((aItem.LHS_item.pItem.infMode!=isLiteral or aItem.RHS.pItem.value.overlayType==aItem.LHS_item.pItem.value.overlayType) and (aItem.LHS_item.pItem.value.listSpec==NULL or !aItem.LHS_item.pItem.value.listSpec.asWrkLstOutr)){DO_COPY(aItem.RHS.pItem.infSize, aItem.LHS_item.pItem.infSize, 0)}',
+        'copySizeRHStoLHS':         'if((aItem.LHS_item.pItem.viewMode!=vmOverlay or aItem.RHS.pItem.value.overlayType==aItem.LHS_item.pItem.value.overlayType) and (aItem.LHS_item.pItem.value.listSpec==NULL or !aItem.LHS_item.pItem.value.listSpec.asWrkLstOutr)){DO_COPY(aItem.RHS.pItem.infSize, aItem.LHS_item.pItem.infSize, 0)}',
     },
     'rules': [
         ["mergeSize:!looseSize|lemUnknown|rsemLiteral",     "copySizeRHStoLHS"],
@@ -57,7 +57,7 @@ mergeRules = {
         ['rintersect', 'remUnknown', 'remConcat', 'remLiteral']
     ],
     'ifSnips': {
-        'l?':            'aItem.LHS_item.pItem.infMode == isUnknown',
+        'l?':            'aItem.LHS_item.pItem.viewMode == vmAny',
         'lNUM':          'aItem.LHS_item.pItem.value.overlayType == NUM',
         'lSTR':          'aItem.LHS_item.pItem.value.overlayType == STR',
         'lLST':          'aItem.LHS_item.pItem.value.overlayType == LST',
@@ -67,7 +67,7 @@ mergeRules = {
         'lemConcat':      'aItem.LHS_item.pItem.value.evalMode == emConcat',
         'lemLiteral':     'aItem.LHS_item.pItem.value.evalMode == emLiteral',
 
-        'r?':            'aItem.RHS.pItem.infMode == isUnknown',
+        'r?':            'aItem.RHS.pItem.viewMode == vmAny',
         'rNUM':          'aItem.RHS.pItem.value.overlayType == NUM',
         'rSTR':          'aItem.RHS.pItem.value.overlayType == STR',
         'rLST':          'aItem.RHS.pItem.value.overlayType == LST',
@@ -85,7 +85,7 @@ mergeRules = {
         'REJECT':                   'aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true;',
         'copyValueRHStoLHS':        'DO_COPY(aItem.RHS.pItem.value, aItem.LHS_item.pItem.value, aItem.sizeToCopy)',
         'copyValueLHStoRHS':        'DO_COPY(aItem.LHS_item.pItem.value, aItem.RHS.pItem.value, aItem.sizeToCopy)',
-        'copyRHSTypeToLHS':         'aItem.LHS_item.pItem.value.overlayType <- aItem.RHS.pItem.value.overlayType; aItem.LHS_item.pItem.infMode <- aItem.RHS.pItem.infMode',
+        'copyRHSTypeToLHS':         'aItem.LHS_item.pItem.value.overlayType <- aItem.RHS.pItem.value.overlayType; aItem.LHS_item.pItem.viewMode <- aItem.RHS.pItem.viewMode',
         'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.pItem.infSize, aItem.LHS_item.pItem.infSize, 0)',
         'rejectIfValueStrNotEqual': 'if(aItem.LHS_item.pItem.value.str != aItem.RHS.pItem.value.str){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true}',
         'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.pItem.value.num != aItem.RHS.pItem.value.num){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
