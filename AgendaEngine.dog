@@ -41,7 +41,7 @@ struct InfonProcessor{
             else if(worldManager!.splitLangText(aItem))         {aItem!.phase1RecordHandler("infon:splitLangText", false); continueLoop <- true}
             else if(worldManager!.derefWordRules(aItem))        {aItem!.phase1RecordHandler("infon:derefWordRules", false); continueLoop <- true}
             else if(worldManager!.funcArgRules(aItem))          {aItem!.phase1RecordHandler("infon:funcArgRules", false); continueLoop <- true}
-            else if(worldManager!.func_altRules(agenda, aItem)) {aItem!.phase1RecordHandler("infon:funcAltRules", false); continueLoop <- false}
+            else if(worldManager!.processEvalModes(agenda, aItem)) {aItem!.phase1RecordHandler("infon:funcAltRules", false); continueLoop <- false}
             else if(worldManager!.lookUpCursorRules(aItem))     {aItem!.phase1RecordHandler("infon:lookUpCursorRules", false); worldManager!.partsRules(agenda,aItem,act); continueLoop <- act}
             else if(worldManager!.normSize(agenda, aItem))      {aItem!.phase1RecordHandler("infon:normSize", false); continueLoop <- false}
             else if(worldManager!.localNullableContinuationRules(agenda, aItem, act)) {aItem!.phase1RecordHandler("infon:nullableContinuation", false); continueLoop <- act}
@@ -545,6 +545,112 @@ struct AItemDispatcher{
 struct AgendaEngine{
     me AItemDispatcher: dispatcher
     me AItemLifecycle: aItemLifecycle
+
+    // Route the eval modes that are actionable at this point in the rsInfon stages.
+    // Concat remains in its later stage so cursor, size, and parts processing retain
+    // their existing precedence.
+    me bool: processEvalModes(their Agenda: agenda, our AItem: aItem) <- {
+        our infonView: CI <- aItem!.LHS_item!.pItem
+        if(CI!.altRulesApplied){return(false)}
+        CI!.altRulesApplied <- true
+        if(CI!.value!.evalMode==emIntersection){
+            processIntersectViaAgenda(agenda, aItem!.LHS_item, aItem, aItem!.priority)
+            return(true)
+        }
+        return(false)
+    }
+
+    // Construct ordinary infon work. The caller retains control of whether it is enqueued.
+    our AItem: processInfonViewViaAgenda(their Agenda: agenda, our POV: pov, our AItem: subscriber, our AItem: aParent, me int64: priority, me aitemSrcID: source) <- {
+        if(agenda!.povIsOnAgenda(pov)){return(NULL)}
+        our AItem:: newAItem{source}
+        newAItem!.ruleSet   <- rsInfon
+        newAItem!.LHS_item  <- pov
+        newAItem!.priority  <- priority
+        newAItem!.step      <- 0
+        newAItem!.indentLvl <- 0
+        if(subscriber != NULL){
+            newAItem!.subscribers.prepend(subscriber, 5)
+            subscriber!.pendingTasks <+- 1
+            //:l/PAI/PT::logSeg(" ++"+subscriber!.mySymbol()+"_PT:a="+toString(subscriber!.pendingTasks))
+            newAItem!.indentLvl <- subscriber!.indentLvl+1
+            newAItem!.cursorAnchor <- subscriber!.cursorAnchor
+        }
+        if(aParent != NULL){
+            aParent!.taskEnqueued <- true
+            newAItem!.parent <- aParent
+            if(!(subscriber===aParent)) {
+                aParent!.pendingTasks <+- 1
+                //:l/PAI/PT::logSeg(" ++"+aParent!.mySymbol()+"_PT:b="+toString(aParent!.pendingTasks))
+            }
+            newAItem!.indentLvl <- aParent!.indentLvl+1
+            newAItem!.cursorAnchor <- aParent!.cursorAnchor
+        }else{
+            //log("Parent_NULL; subscriber:"+subscriber!.mySymbol() +"  yields:"+newAItem!.mySymbol())
+            //if(subscriber==NULL){log("// Proteus NOTICE: PIVA Parent_NULL; subscriber:"+subscriber!.mySymbol() +"  yields:"+newAItem!.mySymbol())}
+        }
+        return(newAItem)
+    }
+
+    // Construct and enqueue merge work.
+    our AItem: processMergeViaAgenda(their Agenda: agenda, our POV: LHS, our POV: RHS, me bool: looseSize, our AItem: subscriber, our AItem: aParent, me int64: priority, me aitemSrcID: source) <- {
+        our AItem:: newAItem{source}
+        newAItem!.ruleSet   <- rsMerge
+        newAItem!.LHS_item  <- LHS
+        newAItem!.RHS       <- RHS
+        newAItem!.looseSize <- looseSize
+        newAItem!.priority  <- priority
+        newAItem!.step      <- 0
+        newAItem!.indentLvl <- 0
+        aParent!.taskEnqueued <- true
+        if(subscriber != NULL){
+            newAItem!.subscribers.prepend(subscriber, 6)
+            subscriber!.pendingTasks <+- 1
+            //:l/PAI/PT::logSeg(" ++"+subscriber!.mySymbol()+"_PT:c="+toString(subscriber!.pendingTasks))
+            newAItem!.indentLvl <- subscriber!.indentLvl+1
+            newAItem!.cursorAnchor <- subscriber!.cursorAnchor
+        }
+        if(aParent != NULL){
+            newAItem!.parent <- aParent
+            if(!(subscriber===aParent)){
+                aParent!.pendingTasks <+- 1
+                //:l/PAI/PT::logSeg(" ++"+aParent!.mySymbol()+"_PT:g="+toString(aParent!.pendingTasks))
+            }
+        }else{
+            //if(subscriber==NULL){log("// Proteus NOTICE: PMVA Parent_NULL; subscriber:"+subscriber!.mySymbol() +"  yields:"+newAItem!.mySymbol())}
+            //if(aParent!.parent==NULL){log("// Proteus NOTICE: PMVA aParent!.parent==NULL;   yields:"+newAItem!.mySymbol())}
+        }
+        agenda!.addAItemToAgenda(newAItem) // PMVA
+        return(newAItem)
+    }
+
+    // Construct and enqueue intersection work.
+    our AItem: processIntersectViaAgenda(their Agenda: agenda, our POV: pov, our AItem: subscriber, me int64: priority) <- {
+        //log("processINTERSECTViaAgenda:"+ pov!.stringify())
+        //if(subscriber!.parent!=NULL and subscriber!.parent!.LHSItr!=NULL){log("     LHSItr:"+subscriber!.parent!.LHSItr!.topPOV.stringify())}
+        our AItem:: newAItem{srcPiCVA}
+        newAItem!.ruleSet   <- rsIntersect
+        newAItem!.LHS_item  <- pov
+        newAItem!.priority  <- priority
+        newAItem!.step      <- 0
+        newAItem!.indentLvl <- 0
+        if(subscriber != NULL){
+            subscriber!.taskEnqueued <- true
+            newAItem!.subscribers.prepend(subscriber, 7)
+            subscriber!.pendingTasks <+- 1
+            //:l/PAI/PT::logSeg(" ++"+subscriber!.mySymbol()+"_PT:d="+toString(subscriber!.pendingTasks))
+            newAItem!.indentLvl <- subscriber!.indentLvl+1
+            newAItem!.cursorAnchor <- subscriber!.cursorAnchor
+            if(subscriber!.parent!=NULL){
+                newAItem!.LHSItr <- subscriber!.parent!.LHSItr
+                newAItem!.RHSItr <- subscriber!.parent!.RHSItr
+            }
+            newAItem!.parent <- subscriber
+        }
+        agenda!.addAItemToAgenda(newAItem) //PiCVA
+        //:l/PAI::logSeg(" PIcVA:"+newAItem!.mySymbol())
+        return(newAItem)
+    }
 
     void: processAgendaItem(their WorldManager: worldManager, their Agenda: agenda, our AItem: aItem, me int: alternativesNestLvl) <- {
         aItemLifecycle.beginDispatch(aItem)
