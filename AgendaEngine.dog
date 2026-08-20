@@ -1,7 +1,556 @@
-// Agenda execution control for the active WorldManager.
-// Semantic and lifecycle behavior remains delegated to WorldManager.
+// Owns the ordered rsInfon stage machine and its immediate-retry loop.
+struct InfonProcessor{
+    me bool: process(their WorldManager: worldManager, their Agenda: agenda, our AItem: aItem, me int: alternativesNestLvl) <- {
+        me bool: continueLoop <- true
+        me bool: doFulfillSubs <- false
+        me string: idnt <- indentStr(aItem!.indentLvl)
+        me string: endBracket <- ""
+        while(continueLoop){
+            continueLoop <- false // True: keep doing these steps now. False: Stop and wait for other agenda items to complete and fulfill your subscription.
+            me bool: act          // Can be used to alter the next action for continueLoop
+            if(aItem!.LHS_item!.pItem!.isNormed){
+                aItem!.phase1RecordHandler("infon:alreadyNormed", false)
+                doFulfillSubs <- true
+                //:l/PAI::logSegOut("NRMD")
+                //:l/PAI::logSeg("{}")
+                //:l/PAI::logFlush()
+                break()
+            }
+            if(!aItem!.initRulesApplied){endBracket<-"{"; aItem!.phase1RecordHandler("infon:initRules", false)}
+            worldManager!.initRules(aItem)
+
+            if(aItem!.LHS_item!.pItem!.itmMode==mIncludeStream){ // Normalize the specified SUB-stream
+                aItem!.phase1RecordHandler("infon:includeStream", false)
+                //log("SUB_NORMING:"+aItem!.LHS_item!.pItem!.mySymbol()+" = "+aItem!.LHS_item!.pItem!.includeSpec)
+                aItem!.LHS_item!.pItem!.itmMode <- mItem
+                if(!aItem!.LHS_item!.hasPropagated){
+                    if(!aItem!.dontProcess){
+                        //:l/PAI::logSeg(" MG_SubNorm")
+                        //log("SUB_PROPING:"+aItem!.stringify())
+                        our AItem: nextAItem <- worldManager!.propagate(agenda, aItem,  aItem!.LHS_item, NULL, NULL, false, false, NULL)
+                        if(nextAItem!=NULL){agenda!.addAItemToAgenda(nextAItem)} // #include
+                        aItem!.LHS_item!.hasPropagated <- true
+                    }
+                }
+                aItem!.LHS_item!.pItem!.streamState <- parseStarted
+                worldManager!.agent!.CORE!.normalizeFromStreamSpec(aItem!.LHS_item, aItem!.LHS_item!.pItem!.includeSpec)
+                continueLoop <- false
+            }
+            else if(worldManager!.wordDefRules(aItem))          {aItem!.phase1RecordHandler("infon:wordDefRules", false); continueLoop <- true}
+            else if(worldManager!.rangeRules(aItem))            {aItem!.phase1RecordHandler("infon:rangeRules", false); continueLoop <- true}
+            else if(worldManager!.splitLangText(aItem))         {aItem!.phase1RecordHandler("infon:splitLangText", false); continueLoop <- true}
+            else if(worldManager!.derefWordRules(aItem))        {aItem!.phase1RecordHandler("infon:derefWordRules", false); continueLoop <- true}
+            else if(worldManager!.funcArgRules(aItem))          {aItem!.phase1RecordHandler("infon:funcArgRules", false); continueLoop <- true}
+            else if(worldManager!.func_altRules(agenda, aItem)) {aItem!.phase1RecordHandler("infon:funcAltRules", false); continueLoop <- false}
+            else if(worldManager!.lookUpCursorRules(aItem))     {aItem!.phase1RecordHandler("infon:lookUpCursorRules", false); worldManager!.partsRules(agenda,aItem,act); continueLoop <- act}
+            else if(worldManager!.normSize(agenda, aItem))      {aItem!.phase1RecordHandler("infon:normSize", false); continueLoop <- false}
+            else if(worldManager!.localNullableContinuationRules(agenda, aItem, act)) {aItem!.phase1RecordHandler("infon:nullableContinuation", false); continueLoop <- act}
+            else if(worldManager!.wrkLstRules(agenda, aItem))   {aItem!.phase1RecordHandler("infon:wrkLstRules", false); continueLoop <- false}
+            else if(worldManager!.partsRules(agenda,aItem,act)) {aItem!.phase1RecordHandler("infon:partsRules", false); continueLoop <- act}
+            else if(worldManager!.processConcat(aItem))         {aItem!.phase1RecordHandler("infon:processConcat", false); continueLoop <- true}
+            else{
+                aItem!.phase1RecordHandler("infon:completeOrWait", false)
+                me int: readyPendingTasks <- aItem!.pendingTasks - aItem!.heldPendingTasks
+                if(readyPendingTasks < 0){
+                    log("WARNING!:"+aItem!.mySymbol()+"_PT="+toString(aItem!.pendingTasks)+" held="+toString(aItem!.heldPendingTasks)+":"+toString(aItem))
+                }
+                if(readyPendingTasks==0){
+                    our infonView: CI <- aItem!.LHS_item!.pItem;
+                    if(aItem!.heldPendingTasks>0){
+                        aItem!.phase1RecordHandler("infon:heldPending", false)
+                        if(CI!.doReply){
+                            CI!.doReply <- false
+                            log("DO_REPLY-PAI:"+CI!.mySymbol()+"  originID:"+toString(CI!.originID) + "  CI:"+shortedStr(toString(CI),100))
+                            if(CI!.originID>0){
+                                worldManager!.agent!.CORE!.submitProteusResult(CI!.originID, CI!.infCharPos, toString(CI))
+                            }
+                        }
+                        worldManager!.addQueuedAItemsToAgenda(agenda)
+                        break()
+                    }
+                    worldManager!.cleanUpInfonView(aItem)
+                    aItem!.phase1RecordHandler("infon:cleanUp", false)
+                    if(CI!.cnvtToFunc){ //:l/PAI::logSeg(" ReFn")
+                        aItem!.phase1RecordHandler("infon:reFunctionize", false)
+                        //log("REFUNC:"+toString(CI))
+                        reFunctionize(CI)
+                        CI!.altRulesApplied <- false
+                        continueLoop <- true
+                        continue()
+                    }
+                    if(CI!.type!=NULL and CI!.type!.usePOS==posNoun and CI!.intersectPos==ipNoIntersect and aItem!.distanceToTop()<=2){ // Add this to context
+                        worldManager!.agent!.context.addContextItem(aItem!.LHS_item!.dpItem())
+                    }
+                    CI!.wasProcessed <- true
+                    if(CI!.doReply){
+                        CI!.doReply <- false
+                        log("DO_REPLY-PAI:"+CI!.mySymbol()+"  originID:"+toString(CI!.originID) + "  CI:"+shortedStr(toString(CI),100))
+                        if(CI!.originID>0){
+                            worldManager!.agent!.CORE!.submitProteusResult(CI!.originID, CI!.infCharPos, toString(CI))
+                        }
+                    }
+
+                    worldManager!.addQueuedAItemsToAgenda(agenda)
+
+                    our AItem: aParent <- aItem!.parent
+                    if(aParent != NULL){
+                      //  print("\naParent pendingTask:", toString(aParent!.pendingTasks))
+                        aParent!.pendingTasks <-- 1
+                        if(aParent!.pendingTasks == 0){ //:l/PAI::logSeg(" ADP:"+aParent!.mySymbol())
+                            // Resuming an infon parent after child work is a new agenda pass,
+                            // but merge/intersect parents already encode their own step state.
+                            if(aParent!.ruleSet==rsInfon){aParent!.step <+- 1}
+                            aParent!.pendingTasks <+- 1
+                            agenda!.addAItemToAgenda(aParent)  // Restart parent task
+                        } else {
+                            //:l/PAI/PT::logSeg(" --"+aParent!.mySymbol()+"_PT:f="+toString(aParent!.pendingTasks))
+                        }
+                    }else {
+                        //:l/PAI::logSeg(" NoAParent")
+                    }
+                    doFulfillSubs <- true
+                } else {
+                    //:l/PAI::logSeg(" TASKS>0:"+toString(aItem!.pendingTasks))
+                }
+            }
+            printDebInf("PAI:INF", aItem!.LHS_item!.pItem)
+            if(!continueLoop){if(aItem!.pendingTasks==0){endBracket<+-"}"} else if(endBracket==""){endBracket<-"}{"}}
+        }
+        return(doFulfillSubs)
+    }
+}
+
+// Owns the rsMerge three-step control flow while reusing WorldManager's merge rules.
+struct MergeProcessor{
+    me bool: process(their WorldManager: worldManager, their Agenda: agenda, our AItem: aItem, me int: alternativesNestLvl) <- {
+        me bool: doFulfillSubs <- false
+        me string: endBracket <- ""
+        if(aItem!.step==0){
+            aItem!.mergeStatus <- msAccept
+            if(aItem!.RHS==NULL or aItem!.skipRHSUsageInPAI){
+                aItem!.phase1RecordHandler("merge:step0:singleSided", false)
+                //:l/PAI::logSeg(" MGxR")
+                //:l/PAI::endBracket<-"{"
+                //log("NO_RHS:"+ toString(aItem))
+                if(!aItem!.LHS_item!.pItem!.wasProcessed){
+                    if(aItem!.LHS_item!.pItem!.value!.overlayType == LST){worldManager!.initListIterators(aItem)}
+                }
+                // BDL Uncomment to re-enable reply on single-sided merges
+                // log("PROP_XY:"+aItem!.stringify())
+                // our infonView: CI <- aItem!.LHS_item!.pItem;
+                // if(CI!.doReply){
+                //     log("   PROPx:"+aItem!.stringify())
+                // //    CI!.doReply <- false
+                //     log("DO_REPLY-PAI-b:"+CI!.mySymbol()+"  originID:"+toString(CI!.originID) + "  CI:"+shortedStr(toString(CI),100))
+                //     if(CI!.originID>0){
+                //         worldManager!.agent!.CORE!.submitProteusResult(CI!.originID, CI!.infCharPos, toString(CI))
+                //     }
+                // }
+                aItem!.step <- 2
+                worldManager!.propagateProxy(agenda, aItem, aItem!.LHS_item, NULL, NULL, false, false)
+                return(false)
+            } else {
+                if(aItem!.step ==0){// ###############   TODO: optimize so that skipping step 0 isn't needed #######
+                    aItem!.phase1RecordHandler("merge:step0:inspectRHS", false)
+                    our infonView: RHS <- aItem!.RHS!.pItem
+                    fleshOutWord(worldManager!.agent, RHS)
+                    if((RHS!.type==NULL or RHS!.itmMode==mWordDefn or RHS!.isFromDefn)
+                       and RHS!.cursorMode==cmNone and RHS!.value!.evalMode!=emConcat
+                       and !worldManager!.RHSNeedsNestedCursorNormalization(RHS)){
+                        //:l/PAI::endBracket<-"{"
+                        logSeg(":setStep1:a")
+                        aItem!.step <- 1;
+                    }
+                }// ############### //TODO: optimize above so that skipping step 0 isn't needed ###################
+            }
+        }
+        if(aItem!.step==0){ //:l/PAI::logSeg(" MG0")
+            aItem!.phase1RecordHandler("merge:step0:normalizeRHS", false)
+            our AItem: PIVA <- worldManager!.processInfonViewViaAgenda(agenda, aItem!.RHS, aItem, NULL, aItem!.priority, srcMrg0)
+            if(PIVA!=NULL){ //:l/PAI::logSeg(" RHS_PIVA:"+PIVA!.mySymbol())
+                addDebugEvent("\nRegisterPIVA to norm RHS "+aItem!.RHS!.pItem!.mySymbol()+":"+toString(aItem!.RHS!.pItem)+"\n", aItem!.RHS!.pItem)
+                // Preserve the outer relative-cursor context when normalizing nested RHS.
+                if(aItem!.cursorAnchor!=NULL){PIVA!.cursorAnchor <- aItem!.cursorAnchor}
+                else{PIVA!.cursorAnchor <- aItem!.LHS_item}
+                agenda!.addAItemToAgenda(PIVA)
+            }
+            aItem!.step <- 1
+        }
+        else if(aItem!.step==1){
+            aItem!.phase1RecordHandler("merge:step1", false)
+            me bool: LHSWasTentative <- aItem!.LHS_item!.pItem!.isTentative
+            me bool: invertAcceptance <- aItem!.LHS_item!.applyAsNot(aItem!.RHS)
+            our AItem: mrgParent <- aItem!.parentListsMrgAItem()
+            me bool: parentListIsAsNot <- mrgParent!=NULL and mrgParent!.LHS_item!.applyAsNot(mrgParent!.RHS)
+            our POV: remainder
+            if(aItem!.RHS!.pItem!.intersectPos == ipNoIntersect){
+                me int: isCompatible
+                if(aItem!.LHS_item!.trueByDefinition){isCompatible <- true}
+                else{
+                    isCompatible <- aItem!.LHS_item!.pItem!.isCompatibleWith(aItem!.RHS!.pItem, aItem!.RHS!.trueByDefinition)
+                    if(isCompatible==tvFalse and aItem!.LHS_item!.isSparseOrderedSpan() and aItem!.RHS!.isSparseOrderedSpan()){
+                        me vocabularySpec: vSpec
+                        vSpec.init(worldManager!.agent!.getLocaleBaseName())
+                        if(worldManager!.sparseOrderedSpanMergeAlignable(aItem!.LHS_item, aItem!.RHS, vSpec)){isCompatible <- tvTrue}
+                    }
+                    if(isCompatible!=tvTrue and aItem!.LHS_item!.pItem!.type!=NULL and aItem!.RHS!.pItem!.value!.overlayType==LST and aItem!.RHS!.pItem!.value!.listSpec!=NULL and aItem!.RHS!.pItem!.value!.listSpec!.type!=NULL){
+                        me vocabularySpec: vSpec
+                        vSpec.init(worldManager!.agent!.getLocaleBaseName())
+                        our OrderedSpanConverter: spanConverter <- modelMngr.getOrderedSpanConverter(aItem!.LHS_item!.pItem!.type, aItem!.RHS!.pItem!.value!.listSpec!.type, vSpec)
+                        if(spanConverter!=NULL and spanConverter!.valid and spanConverter!.fromBaseCount>=spanConverter!.toBaseCount){isCompatible <- tvTrue}
+                    }
+                }
+                if(!aItem!.looseSize){
+                    if(isCompatible==tvFalse){ //log("REJECT.a:"+aItem!.LHS_item!.stringify());
+                        aItem!.mergeStatus<-msReject
+                    }
+                    else if(isCompatible==tvUnknown){
+                        if(aItem!.LHS_item!.pItem!.useMode==umQuestion){ //log("REJECT.b:"+aItem!.stringify());
+                            aItem!.mergeStatus<-msReject
+                        }
+                    }
+                }
+            }
+            if(aItem!.mergeStatus!=msReject and aItem!.LHS_item!.pItem!.getOrderMode(worldManager!.agent)!=uUnordered){worldManager!.mergeSizeRules(aItem)}
+            if(aItem!.mergeStatus!=msReject){
+                if(aItem!.RHS!.forceID){ //log("FORCE_ID:"+aItem!.stringify());
+                    aItem!.phase1RecordHandler("merge:forceIdentity", false)
+                    aItem!.RHS!.pItem!.copyAsTypeTo(aItem!.LHS_item!.pItem, false, true)
+                }else{
+                    me bool: contnue <- true
+                    if(worldManager!.processUnorderedInfonViews(agenda, aItem, contnue)){
+                        aItem!.phase1RecordHandler("merge:unordered", false)
+                        if(!contnue){
+                            aItem!.step <- 2
+                            //:l/PAI::logSegOut("")
+                            //:l/PAI::logSeg("}")
+                            //:l/PAI::logFlush()
+                            return(false)
+                        }
+                        if(aItem!.LHS_item!.pItem!.value!.overlayType == LST){
+                            our POV: tmp <- aItem!.RHS
+                            aItem!.RHS <- NULL
+                            worldManager!.initListIterators(aItem)
+                            aItem!.RHS <- tmp
+                        }
+                    }
+                    else{
+                        if(aItem!.RHS!.pItem!.viewMode == vmAny){
+                            aItem!.phase1RecordHandler("merge:rhsAny", false)
+                            if(aItem!.RHS!.pItem!.type!=NULL and aItem!.LHS_item!.pItem!.type==NULL){
+                                log(indentStr(aItem!.indentLvl)+"        merge  |||r?|       copyType")
+                                aItem!.LHS_item!.pItem!.type <- aItem!.RHS!.pItem!.type}
+                                if(aItem!.LHS_item!.pItem!.value!.overlayType==LST){
+                                    aItem!.RHS <- NULL
+                                    worldManager!.initListIterators(aItem)
+                                    aItem!.mergeStatus <- msUnknown
+                                }
+                        } else {
+                            remainder <- worldManager!.mergeRules(aItem)
+                        }
+                    }
+                }
+            }
+            if(invertAcceptance){ //:l/PAI::logSeg(" INVRT")
+                if(aItem!.mergeStatus==msAccept){aItem!.mergeStatus<-msReject}
+                else if(aItem!.mergeStatus==msReject){aItem!.mergeStatus<-msAccept}
+            }
+            if(aItem!.mergeStatus == msReject){aItem!.LHS_item!.rejected <- true}
+            else{aItem!.LHS_item!.rejected <- false}
+            our POV: RHSSide; if(remainder==NULL){RHSSide <- aItem!.RHS}
+            if(aItem!.mergeStatus!=msPending){
+                if(aItem!.mergeStatus!=msReject){
+                    //:l/PAI::logSeg(" MG1")
+                    if(aItem!.mergeStatus==msAccept){
+                        //:l/PAI::logSeg(":ACC")
+                    } else if(aItem!.mergeStatus==msReject){
+                        //:l/PAI::logSeg(":REJ")
+                    }
+                    // Optimization: propagate "already initialized" state to avoid extra inits.
+                    if(aItem!.RHS!=NULL and aItem!.RHS!.pItem!.isTypeExample){
+                        me string: typeIDStr <- aItem!.RHS!.pItem!.type!.typeID()
+                        withEach LHSSpec in aItem!.LHS_item!.pItem!.addedTypes{
+                            if(LHSSpec!.typeID()==typeIDStr){
+                                LHSSpec!.typeInitialized <- true
+                                break();
+                            }
+                        }
+                    }
+                    if(!aItem!.looseSize and aItem!.RHS!=NULL and aItem!.RHS!.pItem!.generality==gConcrete){
+                        aItem!.LHS_item!.pItem!.generality <- gConcrete
+                        aItem!.LHS_item!.pItem!.proxy <- aItem!.RHS!.pItem
+                    }
+                    // propagate() clears accepted dot-created tentatives when it can
+                    // look ahead. A terminal accepted merge has no later propagation.
+                    if(aItem!.RHS!=NULL and LHSWasTentative and aItem!.LHS_item!.tentFromDots and aItem!.LHS_item!.pItem!.isTentative and aItem!.LHS_item!.pItem!.value!.sizeMode!=fromGiven and !aItem!.LHS_item!.applyAsNot(aItem!.RHS) and !aItem!.RHS!.pItem!.isTentative and !aItem!.RHS!.pItem!.asRHSInternalIdent and !(aItem!.RHS!.pParent!=NULL and aItem!.RHS!.pParent!.pItem!.asRHSInternalIdent)){
+                        aItem!.LHS_item!.pItem!.isTentative <- false
+                    }
+                    me bool: dontEnque <- false // parentListIsAsNot and mrgParent!.mergeStatus==msAccept //aItem!.mergeStatus==msReject and aItem!.parent!.candidateForLast
+                    aItem!.step <- 2
+                    worldManager!.propagateProxy(agenda, aItem, aItem!.LHS_item, RHSSide, remainder, aItem!.looseSize, dontEnque)
+                } else{ //:l/PAI::logSeg(" MG1:REJ")
+                    if(parentListIsAsNot){ //:l/PAI::logSeg(" INV_ACPT")
+                        mrgParent!.mergeStatus<-msAccept
+                    }
+                    their POV: pParent <- aItem!.LHS_item!.pParent
+                    me bool: parentInfonIsNullableList <- (pParent!=NULL and pParent!.pItem!.value!.items.size()==1 and pParent!.pItem!.value!.tailUnfinished)
+                    if(aItem!.parent!.candidateForLast or parentInfonIsNullableList or parentListIsAsNot){
+                        me bool: dontEnque <- !parentListIsAsNot // aItem!.mergeStatus==msReject and (aItem!.parent!.candidateForLast or parentInfonIsNullableList)
+                        worldManager!.propagateProxy(agenda, aItem, aItem!.LHS_item, RHSSide, remainder, aItem!.looseSize, dontEnque)
+                    } else {
+                        me bool: candidatesEmpty <- true
+                        if(pParent!=NULL and !pParent!.candidatesForLastItem.isEmpty()){
+                            candidatesEmpty <- false
+                        }
+                        if(!aItem!.looseSize and !aItem!.LHS_item!.pItem!.isTentative and !aItem!.RHS!.pItem!.isTentative and candidatesEmpty){
+                            //log("// Proteus NOTICE: LHS:"+aItem!.LHS_item!.stringify()+"   RHS:"+aItem!.RHS!.stringify()+"      AItem pedigree: "+worldManager!.aItemSourceName(aItem!.pedigree.source)+" LHS pedigree: "+toString(aItem!.LHS_item!.pedigree.source)+"  RHS pedigree: "+toString(aItem!.RHS!.pedigree.source))
+                            //log("     AITEM:"+aItem!.mySymbol()+" = "+shortedStr(aItem!.stringify(),200))
+                            worldManager!.agent!.CORE!.handleProteusError(aItem!.LHS_item!.pItem!.originID, "Proteus NOTICE - Candidates Empty:\n    LHS:"+shortedStr(aItem!.LHS_item!.stringify(),60)+"\n    RHS:"+shortedStr(aItem!.RHS!.stringify(),60)+"\n    AItem pedigree: "+worldManager!.aItemSourceName(aItem!.pedigree.source)+" LHS pedigree: "+toString(aItem!.LHS_item!.pedigree.source)+"  RHS pedigree: "+toString(aItem!.RHS!.pedigree.source))
+                        }
+                        if(aItem!.pendingTasks==0){doFulfillSubs <- true}
+                    }
+                }
+            } else {log("mergeStatusPENDING:")}
+        } else if(aItem!.step==2){
+            aItem!.phase1RecordHandler("merge:step2", false)
+            if(aItem!.mergeStatus==msUnknown){
+                if(aItem!.LHS_item!.applyAsNot(aItem!.RHS)){aItem!.mergeStatus<-msReject}
+                else{aItem!.mergeStatus<-msAccept}
+            }
+            //:l/PAI::logSeg(" MG2")
+            if(aItem!.mergeStatus==msAccept){
+                //:l/PAI::logSeg(":ACC")
+            } else if(aItem!.mergeStatus==msReject){
+                //:l/PAI::logSeg(":REJ")
+            }
+            if(aItem!.LHS_item!.pItem!.value!.tailUnfinished and aItem!.LHS_item!.pItem!.infSize!.evalMode==emLiteral){
+                aItem!.LHS_item!.pItem!.countSize(true)
+            }
+            if(aItem!.skipRHSUsageInPAI or aItem!.LHS_item!.propagateInMrg2){
+                aItem!.LHSItr <- NULL        // Stop infinite loop
+                aItem!.RHSItr <- NULL        // Stop infinite loop
+                worldManager!.propagateProxy(agenda, aItem, aItem!.LHS_item, aItem!.RHS, NULL, false, false)
+            }
+            doFulfillSubs <- true
+            //:l/PAI::endBracket<-"{"
+        }
+
+        printDebInf("PAI:MRG", aItem!.LHS_item!.pItem)
+        if(aItem!.pendingTasks==0){endBracket<-"{}"}
+        return(doFulfillSubs)
+    }
+}
+
+// Owns the rsIntersect continuation state machine.
+struct IntersectProcessor{
+    me bool: process(their WorldManager: worldManager, their Agenda: agenda, our AItem: aItem, me int: alternativesNestLvl) <- {
+        me bool: doFulfillSubs <- false
+        me string: idnt <- indentStr(aItem!.indentLvl)
+        me string: endBracket <- ""
+        aItem!.phase1RecordHandler("intersect:step"+toString(aItem!.step), false)
+        our infonView: CI   <- aItem!.LHS_item!.pItem
+        our infonView: innr <- CI!.innr
+        switch(aItem!.step){
+            case 0:{
+                //:l/PAI::endBracket<-"{"
+                if(CI!.hasInnrOutr){
+                    our POV: newPOV  <- CI!.innr!.addInfonViewToWrkList(CI!.innr!.funcArgs, true, 24)
+                    newPOV!.looseTop  <- true
+                    CI!.hasInnrOutr   <- false
+                    CI!.innr!.funcArgs <- NULL
+                }
+                if(CI!.intersectMarkedRetPOV!=NULL){
+                    CI!.innr!.intersectMarkedRetPOV <- CI!.intersectMarkedRetPOV
+                }
+                if(CI!.isOrLike()){
+                    aItem!.phase1RecordHandler("intersect:normalizeAlternatives", false)
+                    //:l/PAI::logSeg(" IC0_OR:[")
+                    // EXPERIMENT for the innr/oneOf/Aaron bug: always normalize the innr. Its members each normalize
+                    // individually, getting aRefTo (identity) + umQuestion (filter) via the
+                    // child-direction flags propagated through processInfonViewViaAgenda. No
+                    // separate buildIntersectOrAlts pass; step 1 picks the survivor.
+                    // But get the other tests to pass as the above makes many tests fail
+                    if(!innr!.value!.tailUnfinished){
+                        our POV: innrPov <- innr!.value!.items.head
+                        while(innrPov != NULL){
+                            if(innrPov!.outerPOV==NULL){innrPov!.outerPOV <- aItem!.LHS_item}
+                            our AItem: PIVA <- worldManager!.processInfonViewViaAgenda(agenda, innrPov, NULL, aItem, aItem!.priority, srcItsALT)
+                            PIVA!.LHS_item!.pItem!.takeWrkListFrom(aItem!.LHS_item!.pItem, false)
+                            PIVA!.LHS_item!.accessMode    <- aRefTo
+                            PIVA!.LHS_item!.pItem!.useMode <- umQuestion
+                            //log("QUESTION-in-b:"+PIVA!.LHS_item!.pItem!.mySymbol()+" = "+toString(PIVA!.LHS_item!.pItem))
+                            //:l/PAI::logSeg(" IC0_orPIVA:"+PIVA!.mySymbol())
+                            addDebugEvent("RegisterPIVA to integrate OR intersect "+innrPov!.pItem!.mySymbol()+":"+toString(innrPov!.pItem), innrPov!.pItem)
+                            agenda!.addAItemToAgenda(PIVA)  // PIVA
+                            innrPov <- innrPov!.next
+                        }
+                        aItem!.LHS_item!.pItem!.wrkList.clear() //TODO: is this necessary?
+                    }
+                    //:l/PAI::logSeg("]")
+                } else {  // CI is FunctionLike
+                    aItem!.phase1RecordHandler("intersect:normalizeFunction", false)
+                    our POV:: srcPOV{25}; srcPOV!.pItem <- innr
+                    CI!.retainPOV(srcPOV)
+                    our AItem: PIVA <- worldManager!.processInfonViewViaAgenda(agenda, srcPOV, aItem, NULL, aItem!.priority, srcItsFunc)
+                    if(PIVA!=NULL){
+                        //:l/PAI::logSeg(" IC0_funcPIVA:"+PIVA!.mySymbol())
+                        agenda!.addAItemToAgenda(PIVA) // PIVA
+                        //:l/PAI::logSeg(" IC0_funcPIVA:"+PIVA!.mySymbol())
+                        addDebugEvent("RegisterPIVA to integrate func intersect "+srcPOV!.pItem!.mySymbol()+":"+toString(srcPOV!.pItem), srcPOV!.pItem)
+                    }
+                }
+                aItem!.step <- 1
+            }
+            case 1:{
+                //:l/PAI::logSeg(" IC1")
+                //:l/PAI::endBracket<-"}"
+                our infonView: newTop    <- NULL
+                if(CI!.isOrLike()){  // Eliminate if only 1 non - reject.
+                    aItem!.phase1RecordHandler("intersect:selectAlternative", false)
+                    //:l/PAI::logSeg(" IS_OR_LIKE:"+aItem!.mySymbol())
+                    //TODO: Perhaps we can skip the following if there is exactly one candidateForLast
+                    if(!innr!.value!.tailUnfinished){
+                        our POV: lastOK   <- NULL
+                        me int: numOK <- 0
+                        our POV: pov <- innr!.value!.items.head
+                        while(pov != NULL){
+                            // TODO: if(sizesNotCompatable()){markAsReject or notLast}
+                            me string: logPredString; if(!pov!.predecessors.isEmpty()){logPredString<-"  Pred:"+ pov!.predecessors[0]!.stringify()}
+                            // Is the next line really valid? This could be the correct item but just be unknown. However, tests fail without it.
+                            me bool: unresolvedAlt <- pov!.pItem!.type==NULL and pov!.pItem!.viewMode==vmAny and (pov!.pItem!.value!.overlayType==tUnknown or pov!.pItem!.value!.overlayType==tUnset)
+                            if(!pov!.rejected and !unresolvedAlt){
+                                //:l/PAI::log(idnt+"            ALT:"+ pov!.mySymbol()+":"+ shortedStr(pov!.stringify(),100) + shortedStr(logPredString,100))
+                                numOK <+- 1
+                                lastOK <- pov
+                            } else {
+                                //:l/PAI::log(idnt+"          x ALT:"+ pov!.mySymbol()+":"+ shortedStr(pov!.stringify(),100) + shortedStr(logPredString,100))
+                            }
+                            pov <- pov!.next
+                        }
+                        if(numOK==1){
+                            newTop <- lastOK!.pItem
+                            aItem!.parent!.dontProcess <- true
+                            aItem!.LHS_item!.forLastUseOutrPov <- true
+                            //log("NEWTOPING:"+aItem!.LHS_item!.mySymbol()+"   newTop:"+newTop.mySymbol())
+                            if(!(lastOK!.outerPOV != NULL and lastOK!.outerPOV===aItem!.LHS_item)){
+                                aItem!.LHS_item!.predecessors <- lastOK!.predecessors
+                            }
+                            if(newTop!.isTentative){
+/*BDL*/                         newTop!.isTentative <- aItem!.LHS_item!.pItem!.isTentative// false
+                                if(lastOK!.predecessors.size()==1){
+                                    our POV: pred <- lastOK!.predecessors[0]
+                                    //log("-TryCloseTentative " + lastOK.stringify() + "  PREDc:"+pred!.stringify())
+                                    worldManager!.validateItem(pred)
+                                }
+                            }
+                        }else if(numOK==0){
+                            //log("NO_ALTS") // outr/everyOther fails w/o this
+                            innr!.value!.items.clear()
+                            innr!.value!.sizeMode <- fromCount
+                            innr!.infSize!.num <- 0
+                            innr!.infSize!.evalMode <- emLiteral
+                            CI!.value!.undefined <- true
+                            CI!.partRef <- NULL
+                            CI!.parts.clear()
+                        }
+                    } else {log("TODO: IS_OR_LIKE: tailUnfinished")}
+                } else {  // CI is FunctionLike
+                    aItem!.phase1RecordHandler("intersect:selectFunctionResult", false)
+                    //:l/PAI::logSeg(" FUNC")
+                    switch(CI!.intersectPos){
+                        case ipGetLast   : {
+                            newTop <- worldManager!.selectReturnedInfonViewFromPOV(aItem, innr!.getLastPOV())
+                        }
+                        case ipGetFirst  : {newTop <- innr!.getFirstItem(aItem!.LHS_item!.isSubItm)}
+                        case ipGetMarked : {
+                            if(innr!.intersectMarkedRetPOV!=NULL and
+                                    innr!.intersectMarkedRetPOV!.pItem!.isTentative and
+                                    innr!.intersectMarkedRetPOV!.pParent!=NULL and
+                                    !(innr!.intersectMarkedRetPOV!.pParent!.pItem===innr)){
+                                Allocate(newTop)
+                                newTop!.viewMode <- vmOverlay
+                                newTop!.infSize!.evalMode <- emUnknown
+                                newTop!.value!.evalMode <- emLiteral
+                                newTop!.value!.overlayType <- LST
+                                innr!.intersectMarkedRetPOV!.addNewSubDots <- true
+                                // The mark selects a slice position. Keep the list-view
+                                // shape, but tie its first slot back to the source POV.
+                                our POV: markedWrapperPOV <- newTop!.value!.items.append(innr!.intersectMarkedRetPOV!.pItem, innr!.intersectMarkedRetPOV!.isSubItm, 304)
+                                markedWrapperPOV!.outerPOV <- innr!.intersectMarkedRetPOV
+                                markedWrapperPOV!.accessMode <- aRefTo
+                                markedWrapperPOV!.tentFromDots <- innr!.intersectMarkedRetPOV!.tentFromDots
+                                newTop!.countSize(false)
+                            }else{
+                                // TODO: Is the next line a special case that should be generalized?
+                                //    Before we just had the 2nd line without the 'else'.
+                                if(innr!.intersectMarkedRetPOV!=NULL and innr!.intersectMarkedRetPOV!.pedigree.source==povSrcSparseExposedHead){newTop <- innr!.intersectMarkedRetPOV!.pItem}
+                                else if(CI!.intersectMarkedRetPOV!=NULL){newTop <- CI!.intersectMarkedRetPOV!.pItem}
+                            }
+                        }
+                    }
+                    if(newTop!=NULL){
+                        if(CI!.intersectPos==ipGetMarked){
+                            if(CI!.intersectMarkedRetPOV!=NULL and newTop===CI!.intersectMarkedRetPOV!.pItem){
+                                // A marked range object may still have selector-local
+                                // work queued on it; do not project that work outward.
+                                newTop!.wrkList.clear()
+                                CI!.wrkList.clear()
+                            }else{
+                                newTop!.takeWrkListFrom(CI, true)
+                            }
+                        }else{
+                            newTop!.takeWrkListFrom(CI, true)
+                        }
+                        //:l/PAI::logSeg(" GET_LAST")
+                        // log("NEW_TOP_FUNC: RHS:"+ toString(aItem!.LHS_item!.pItem) + "  newTop:" + toString(newTop)+": "+newTop.mySymbol())
+                    }else{CI!.value!.undefined <- true}
+                }
+                doFulfillSubs <- true
+                if(newTop!=NULL){
+                    if(aItem!.LHS_item!.pItem!.itmMode!=mNone){newTop!.itmMode <- aItem!.LHS_item!.pItem!.itmMode}
+                    newTop!.doReply       <- aItem!.LHS_item!.pItem!.doReply
+                    newTop!.partRef       <- aItem!.LHS_item!.pItem!.partRef
+                    newTop!.parts         <- aItem!.LHS_item!.pItem!.parts
+                    newTop!.originID      <- aItem!.LHS_item!.pItem!.originID // TODO: // WRONG! This changes the original, need to track this origin separately in POV or aItem
+                    newTop!.infCharPos    <- aItem!.LHS_item!.pItem!.infCharPos
+                    if(aItem!.LHS_item!.pItem!.value!.undefined){newTop!.value!.undefined <- true}
+                    aItem!.LHS_item!.pItem <- newTop
+                }else{} // TODO: return Subscriptions
+                aItem!.step <- 2
+            }
+        }
+        return(doFulfillSubs)
+    }
+}
+
+// Routes agenda items to their structural processor without owning semantics.
+struct AItemDispatcher{
+    me InfonProcessor: infonProcessor
+    me MergeProcessor: mergeProcessor
+    me IntersectProcessor: intersectProcessor
+
+    me bool: dispatch(their WorldManager: worldManager, their Agenda: agenda, our AItem: aItem, me int: alternativesNestLvl) <- {
+        switch(aItem!.ruleSet){
+            case rsInfon:{return(infonProcessor.process(worldManager, agenda, aItem, alternativesNestLvl))}
+            case rsMerge:{return(mergeProcessor.process(worldManager, agenda, aItem, alternativesNestLvl))}
+            case rsIntersect:{return(intersectProcessor.process(worldManager, agenda, aItem, alternativesNestLvl))}
+            case rsPure:{aItem!.phase1RecordHandler("pure:noOp", false); return(false)}
+            default:{return(false)}
+        }
+        return(false)
+    }
+}
+// Owns agenda execution and applies lifecycle around rule-set dispatch.
+// Semantic helpers remain available through the active WorldManager.
 struct AgendaEngine{
     me AItemDispatcher: dispatcher
+    me AItemLifecycle: aItemLifecycle
+
+    void: processAgendaItem(their WorldManager: worldManager, their Agenda: agenda, our AItem: aItem, me int: alternativesNestLvl) <- {
+        aItemLifecycle.beginDispatch(aItem)
+        me bool: doFulfillSubs <- dispatcher.dispatch(worldManager, agenda, aItem, alternativesNestLvl)
+        aItemLifecycle.completeDispatch(worldManager, agenda, aItem, doFulfillSubs)
+    }
 
     void: processAgenda(their WorldManager: worldManager, their Agenda: agenda) <- {
         me Diagnostics: diagnostics
@@ -13,15 +562,8 @@ struct AgendaEngine{
             agenda!.nextRunID <+- 1
 
             our AItemTrace: phase1Trace <- diagnostics.beginAItem(agenda, aItem)
-            dispatcher.dispatch(worldManager, agenda, aItem, 0)
+            processAgendaItem(worldManager, agenda, aItem, 0)
             diagnostics.endAItem(agenda, aItem, phase1Trace)
-
-// These lines should NOT be here. But It is sometimes useful for experimental diagnostics.
-// That is because a new aItem should be enqueued every single time through ProcessAgendaItem except the last time.
-// So it should never be empty early.
-// Remove them eventually when streaming works well enough.
-//  if(agenda!.AItems.isEmpty()){addQueuedAItemsToAgenda(agenda)}
-//  else{addQueuedAItemsToAgenda(agenda)}
 
             count <+- 1
         }
