@@ -502,6 +502,8 @@ struct WorldManager{
 
 struct WorldManager{
     their Agent: agent
+    me AgendaEngine: agendaEngine
+    me AItemLifecycle: aItemLifecycle
     me string: phase1LastCoverageReport
     me uint64: phase1LastTraceCount <- 0
 
@@ -2128,21 +2130,18 @@ vSpec.init(agent!.getLocaleBaseName())
         }
         return(false)
     }
-    void: processAgendaItem(their Agenda: agenda, our AItem: aItem, me int: AlternativesNestLvl)<-{
+    void: processAgendaItemLegacy(their Agenda: agenda, our AItem: aItem, me int: AlternativesNestLvl)<-{
         //if(aItem!.parent==NULL and aItem!.ruleSet==rsInfon and aItem!.LHS_item!.pParent==NULL){setInfonViewToMonitor(aItem!.LHS_item!.pItem)}
 //if(aItem!.LHS_item!.pItem!.type!=NULL and aItem!.LHS_item!.pItem!.type!.normalType()=="solvedstate"){setInfonViewToMonitor(aItem!.LHS_item!.pItem)}
         //log("________________________________________")
         me bool: continueLoop    <- true
         me bool: doFulfillSubs <- false
-        aItem!.taskEnqueued     <- false
+        aItemLifecycle.beginDispatch(aItem)
         me string: idnt <- indentStr(aItem!.indentLvl)
         //:l/PAI::logSeg(indentedStr(">>"+shortedStr(toString(aItem),1000), aItem!.indentLvl, 0))
         //:l/PAI::logSegStartCol("",150)
         //:l/PAI::logSegIn(" PAI")
-        if(!aItem!.wokenEarly){
-            aItem!.pendingTasks <-- 1
-            //:l/PAI/PT::logSeg(" --"+aItem!.mySymbol()+"_PT:e="+toString(aItem!.pendingTasks))
-        }
+        //:l/PAI/PT::logSeg(" --"+aItem!.mySymbol()+"_PT:e="+toString(aItem!.pendingTasks))
 
         me string: endBracket<-""
         me int: count <- 0
@@ -2654,53 +2653,18 @@ aItem!.LHS_item!.pItem!.streamState <- parseStarted
             count <+- 1
         }
 
-        if(doFulfillSubs){fulfillSubscriptions(agenda, aItem)}
+        aItemLifecycle.completeDispatch(self, agenda, aItem, doFulfillSubs)
         //aItem!.LHS_item!.pItem!.isNormed <- true // Uncommenting this makes everything fail, but why? It should be there...
         //logSegStartCol("<<:DONE", col4)
         //:l/PAI::logSegOut("")
         //:l/PAI::logSeg(endBracket)
         //:l/PAI::logFlush()
     }
+    void: processAgendaItem(their Agenda: agenda, our AItem: aItem, me int: AlternativesNestLvl)<-{
+        processAgendaItemLegacy(agenda, aItem, AlternativesNestLvl)
+    }
     void: processAgenda(their Agenda: agenda)<-{
-        me AItemValidator: validator
-        me bool: validateAitems <- true // Set to true to validate AItems
-        me string: recordKey
-        me bool: makeDebugGraph <-false  // Set to true for a graph
-        me AItemGrapherData: grapherData
-        if(agenda!.normalizationID==0){
-            {
-                me MutexMngr: phase1IDLock{phase1NormalizationIDMutex}
-                agenda!.normalizationID <- phase1NextNormalizationID
-                phase1NextNormalizationID <+- 1
-            }
-        }
-        if(makeDebugGraph){grapher.clear(); grapher.addItem("rankdir=RL; ordering=out;")}
-        me int: count <- 0
-        while(!agenda!.AItems.isEmpty()) {
-            our AItem: aItem <- agenda!.AItems.popFirst()
-            aItem!.runID <- agenda!.nextRunID
-            agenda!.nextRunID <+- 1
-            if(makeDebugGraph){GraphNode_prePAI(aItem, grapherData)}
-
-            our AItemTrace: phase1Trace <- validator.beginAItem(agenda, aItem, validateAitems)
-            processAgendaItem(agenda, aItem, 0)
-            validator.endAItem(agenda, aItem, phase1Trace, validateAitems)
-
-// These lines should NOT be here. But It is sometimes useful for experimental diagnostics.
-// That is because a new aItem should be enqueued every single time through ProcessAgendaItem except the last time.
-// So it should never be empty early.
-// Remove them eventually when streaming works well enough.
-//  if(agenda!.AItems.isEmpty()){addQueuedAItemsToAgenda(agenda)}
-//  else{addQueuedAItemsToAgenda(agenda)}
-
-            if(makeDebugGraph){ GraphNode_postPAI(aItem, grapherData)}
-
-            count <+- 1
-        }
-        phase1LastTraceCount <- validator.traces.size()
-        phase1LastCoverageReport <- validator.coverageReport(agenda!.normalizationID)
-        log(phase1LastCoverageReport)
-        if(makeDebugGraph){grapher.saveGraph("AgendaRun", "AgendaRun.dot")}
+        agendaEngine.processAgenda(self, agenda)
     }
     void: init(their Agent: agnt) <- {agent <- agnt}
 }
