@@ -1,16 +1,93 @@
 #!/usr/bin/env python3
 # Proteus Rule case manager
 from pprint import pprint
+import re
 
 debugMode = True
+
+WORLD_MANAGER_HELPERS = """    me bool: inheritDefinitionListShape(our AItem: aItem) <- {
+        if(aItem!.RHS==NULL or !aItem!.RHS!.trueByDefinition){return(false)}
+        our infonView: LHS <- aItem!.LHS_item!.pItem
+        our infonView: RHS <- aItem!.RHS!.pItem
+        if(LHS==NULL or RHS==NULL){return(false)}
+        if(LHS!.value!.overlayType!=LST or LHS!.value!.evalMode!=emLiteral){return(false)}
+        if(RHS!.value!.overlayType!=LST or RHS!.value!.evalMode!=emLiteral){return(false)}
+
+        me bool: changeMade <- false
+        if(LHS!.value!.listSpec==NULL and RHS!.value!.listSpec!=NULL){
+            LHS!.value!.listSpec <- RHS!.value!.listSpec
+            changeMade <- true
+        }
+        if(LHS!.orderMode==uUnknown and RHS!.orderMode!=uUnknown){
+            LHS!.orderMode <- RHS!.orderMode
+            changeMade <- true
+        }
+        me bool: lhsHasOnlyDefaultZeroSize <- LHS!.value!.items.isEmpty() and LHS!.infSize!.evalMode==emLiteral and LHS!.infSize!.num==0
+        if((LHS!.infSize!.evalMode==emUnknown or lhsHasOnlyDefaultZeroSize) and RHS!.infSize!.evalMode!=emUnknown){
+            LHS!.infSize! <- RHS!.infSize!
+            changeMade <- true
+        }
+        if(RHS!.value!.tailUnfinished and !LHS!.value!.tailUnfinished){
+            LHS!.value!.tailUnfinished <- true
+            changeMade <- true
+        }
+        return(changeMade)
+    }
+    me bool: isDefinitionListShapeOnly(our AItem: aItem) <- {
+        if(aItem!.RHS==NULL or !aItem!.RHS!.trueByDefinition){return(false)}
+        our infonView: RHS <- aItem!.RHS!.pItem
+        if(RHS==NULL){return(false)}
+        if(RHS!.value!.overlayType!=LST or RHS!.value!.evalMode!=emLiteral){return(false)}
+        if(!RHS!.value!.tailUnfinished){return(false)}
+        if(RHS!.value!.listSpec==NULL){return(false)}
+        return(RHS!.value!.items.isEmpty())
+    }
+    me bool: inheritDefinitionListShapeForInfonView(our infonView: target) <- {
+        if(target==NULL or target!.type==NULL){return(false)}
+        if(target!.value!.overlayType!=LST or target!.value!.evalMode!=emLiteral){return(false)}
+        me vocabularySpec: vSpec
+        vSpec.init(agent!.getLocaleBaseName())
+        our WordDefn: defn <- modelMngr.lookupSingleDefinitionForType(target!.type, vSpec)
+        if(defn==NULL or defn!.meaning==NULL){return(false)}
+        our infonView: meaning <- defn!.meaning
+        if(meaning!.value!.overlayType!=LST or meaning!.value!.evalMode!=emLiteral){return(false)}
+        if(!meaning!.value!.tailUnfinished){return(false)}
+        if(!meaning!.value!.items.isEmpty()){return(false)}
+        if(meaning!.value!.listSpec==NULL){return(false)}
+
+        me bool: changeMade <- false
+        if(target!.value!.listSpec==NULL){
+            target!.value!.listSpec <- meaning!.value!.listSpec
+            changeMade <- true
+        }
+        if(target!.orderMode==uUnknown and meaning!.orderMode!=uUnknown){
+            target!.orderMode <- meaning!.orderMode
+            changeMade <- true
+        }
+        me bool: targetHasOnlyDefaultZeroSize <- target!.value!.items.isEmpty() and target!.infSize!.evalMode==emLiteral and target!.infSize!.num==0
+        if((target!.infSize!.evalMode==emUnknown or targetHasOnlyDefaultZeroSize) and meaning!.infSize!.evalMode!=emUnknown){
+            target!.infSize! <- meaning!.infSize!
+            changeMade <- true
+        }
+        if(target!.value!.sizeMode!=meaning!.value!.sizeMode){
+            target!.value!.sizeMode <- meaning!.value!.sizeMode
+            changeMade <- true
+        }
+        if(meaning!.value!.tailUnfinished and !target!.value!.tailUnfinished){
+            target!.value!.tailUnfinished <- true
+            changeMade <- true
+        }
+        return(changeMade)
+    }
+"""
 
 mergeSizeRules = {
     'ID': 'mergeSize',
     'points': [
         # TODO: ['Size-*', 'Size-/'], ["measurable", "!measurable"],l ["sGivn", !sGivn"],
         ['looseSize', '!looseSize'],
-        ['lemUnknown', 'lemConcat', 'lemLiteral', 'lintersect'],
-        ['remUnknown', 'remConcat', 'rsemLiteral', 'rintersect'],
+        ['lemUnknown', 'lemConcat', 'lemLiteral', 'lemIntersection'],
+        ['remUnknown', 'remConcat', 'rsemLiteral', 'remIntersection'],
 
     ],
     'ifSnips': {
@@ -19,7 +96,7 @@ mergeSizeRules = {
         'lSTR':          'aItem.LHS_item.pItem.value.overlayType == STR',
         'lLST':          'aItem.LHS_item.pItem.value.overlayType == LST',
 
-        'lintersect':    'aItem.LHS_item.pItem.infSize.intersectPosParse == ipSquareBrackets',
+        'lemIntersection':    'aItem.LHS_item.pItem.infSize.evalMode == emIntersection',
         'lemUnknown':     'aItem.LHS_item.pItem.infSize.evalMode == emUnknown',
         'lemConcat':      'aItem.LHS_item.pItem.infSize.evalMode == emConcat',
         'lemLiteral':     'aItem.LHS_item.pItem.infSize.evalMode == emLiteral',
@@ -29,7 +106,7 @@ mergeSizeRules = {
         'rSTR':          'aItem.RHS.pItem.value.overlayType == STR',
         'rLST':          'aItem.RHS.pItem.value.overlayType == LST',
 
-        'rintersect':    'aItem.RHS.pItem.infSize.intersectPosParse == ipSquareBrackets',
+        'remIntersection':    'aItem.RHS.pItem.infSize.evalMode == emIntersection',
         'remUnknown':     'aItem.RHS.pItem.infSize.evalMode == emUnknown',
         'remConcat':      'aItem.RHS.pItem.infSize.evalMode == emConcat',
         'rsemLiteral':     'aItem.RHS.pItem.infSize.evalMode == emLiteral',
@@ -51,10 +128,10 @@ mergeRules = {
     'ID': 'merge',
     'points': [
         ['l?', 'lNUM', 'lSTR', 'lLST', 'ltUnknown'],
-        ['lintersect', 'lemUnknown', 'lemConcat', 'lemLiteral'],
+        ['lemIntersection', 'lemUnknown', 'lemConcat', 'lemLiteral'],
         ['=', '=='],
         ['r?', 'rNUM', 'rSTR', 'rLST', 'rtUnknown'],
-        ['rintersect', 'remUnknown', 'remConcat', 'remLiteral']
+        ['remIntersection', 'remUnknown', 'remConcat', 'remLiteral']
     ],
     'ifSnips': {
         'l?':            'aItem.LHS_item.pItem.viewMode == vmAny',
@@ -62,7 +139,7 @@ mergeRules = {
         'lSTR':          'aItem.LHS_item.pItem.value.overlayType == STR',
         'lLST':          'aItem.LHS_item.pItem.value.overlayType == LST',
 
-        'lintersect':    'aItem.LHS_item.pItem.value.intersectPosParse == ipSquareBrackets',
+        'lemIntersection':    'aItem.LHS_item.pItem.value.evalMode == emIntersection',
         'lemUnknown':     'aItem.LHS_item.pItem.value.evalMode == emUnknown',
         'lemConcat':      'aItem.LHS_item.pItem.value.evalMode == emConcat',
         'lemLiteral':     'aItem.LHS_item.pItem.value.evalMode == emLiteral',
@@ -73,7 +150,7 @@ mergeRules = {
         'rLST':          'aItem.RHS.pItem.value.overlayType == LST',
         'rtUnknown':     'aItem.RHS.pItem.value.overlayType == tUnknown',
 
-        'rintersect':    'aItem.RHS.pItem.intersectPos != ipNoIntersect',
+        'remIntersection':    'aItem.RHS.pItem.value.evalMode == emIntersection',
         'remUnknown':     'aItem.RHS.pItem.value.evalMode == emUnknown',
         'remConcat':      'aItem.RHS.pItem.value.evalMode == emConcat',
         'remLiteral':     'aItem.RHS.pItem.value.evalMode == emLiteral',
@@ -91,7 +168,8 @@ mergeRules = {
         'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.pItem.value.num != aItem.RHS.pItem.value.num){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
         'copyType':                 'if(aItem.RHS.pItem.type!=NULL){aItem.LHS_item.pItem.type <- aItem.RHS.pItem.type}',
         'StartMergePropogation':    'startPropRules(aItem)',
-        'copyIdOrStartMergProp':    'if(aItem.LHS_item.accessMode==aRefTo){copyIdentity(aItem)}else{startPropRules(aItem)}',
+        'StartMergePropogationUnlessDefinitionShape': 'if(!isDefinitionListShapeOnly(aItem)){startPropRules(aItem)}',
+        'copyIdOrStartMergProp':    'if(isDefinitionListShapeOnly(aItem)){}\n            else if(aItem.LHS_item.accessMode==aRefTo){copyIdentity(aItem)}else{startPropRules(aItem)}',
         'ifRefCopyIdentity':        'if(aItem.LHS_item.accessMode==aRefTo){copyIdentity(aItem)}else if(!aItem.RHS.pItem.wrkList.isEmpty()){aItem.LHS_item.pItem.copyWrkListFrom(aItem.RHS.pItem)}',
         'MergeLooseStrings':        'remainder <- mergeLooseStrings(aItem)',
         'mergeRHSIntersect':        'mergeRHSIntersect(aItem)',
@@ -100,21 +178,21 @@ mergeRules = {
         'checkNumRange':            'if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
         'checkNumRangeDeepCpy':     """if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
             me bool: truReject <- aItem.mergeStatus==msReject; if(aItem.LHS_item.applyAsNot(aItem.RHS)){truReject <- !truReject}
-            if(!truReject){aItem.LHS_item.pItem! <- aItem.RHS.pItem!; if(aItem.LHS_item.outerPOV){aItem.LHS_item.outerPOV.pItem.altRulesApplied <- false}}""",
+            if(!truReject){aItem.LHS_item.pItem! <- aItem.RHS.pItem!; if(aItem.LHS_item.outerPOV!=NULL){aItem.LHS_item.outerPOV.pItem.altRulesApplied <- false}}""",
         'checkNumRangeDoCpy':       """if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
             me bool: truReject <- aItem.mergeStatus==msReject; if(aItem.LHS_item.applyAsNot(aItem.RHS)){truReject <- !truReject}
             if(!truReject){
                             DO_COPY(aItem.RHS.pItem.value, aItem.LHS_item.pItem.value, aItem.sizeToCopy);
-                            aItem.LHS_item.pItem.invertmatch <- aItem.RHS.pItem.invertmatch
-                            if(aItem.LHS_item.outerPOV){aItem.LHS_item.outerPOV.pItem.altRulesApplied <- false
+                            aItem.LHS_item.pItem.invertMatch <- aItem.RHS.pItem.invertMatch
+                            if(aItem.LHS_item.outerPOV!=NULL){aItem.LHS_item.outerPOV.pItem.altRulesApplied <- false
             }}""",
     },
     'rules': [
         ["merge:|||r?|",                          "copyType"],
         ["merge:l?||=|rNUM,rSTR,rLST|",           "copyIdentity"],  #"copyRHSTypeToLHS,copyValueRHStoLHS,copySizeRHStoLHS"
         ["merge:l?||==|rNUM,rSTR,rLST|",          "copyRHSTypeToLHS,copyValueRHStoLHS"],
-        ["merge:l?||=|rtUnknown|rintersect",      "mergeRHSIntersect"],
-        ["merge:l?||==|rtUnknown|rintersect",     "mergeRHSIntersect"],
+        ["merge:l?||=|rtUnknown|remIntersection",      "mergeRHSIntersect"],
+        ["merge:l?||==|rtUnknown|remIntersection",     "mergeRHSIntersect"],
 
         ["merge:lNUM||=|rSTR,rLST|remUnknown,remLiteral",   "REJECT"],
         ["merge:lSTR||=|rNUM,rLST|",                      "REJECT"],
@@ -153,87 +231,88 @@ mergeRules = {
         ["merge:lLST|lemUnknown|==|rLST|remUnknown",        "ACTION"],
         ["merge:lLST|lemUnknown|==|rLST|remLiteral",        "ACTION"],
         ["merge:lLST|lemLiteral|==|rLST|remUnknown",        "ACTION"],
-        ["merge:lLST|lemLiteral|==|rLST|remLiteral",        "StartMergePropogation"],
+        ["merge:lLST|lemLiteral|==|rLST|remLiteral",        "StartMergePropogationUnlessDefinitionShape", "StartMergePropogation"],
 
         ##### CONCAT and INTERSECT
-        ["merge:lNUM,lSTR,lLST|lemConcat|=,==|lNUM,lSTR,lLST|rintersect",                 "mergeRHSIntersect"],
+        ["merge:lNUM,lSTR,lLST|lemConcat|=,==|lNUM,lSTR,lLST|remIntersection",                 "mergeRHSIntersect"],
 
-        ["merge:lNUM|lemUnknown|=|rtUnknown,rNUM|rintersect",        "mergeRHSIntersect"],
-        ["merge:lNUM|lemLiteral|=|rtUnknown,rNUM|rintersect",        "mergeRHSIntersect"],
-        ["merge:lSTR|lemUnknown|=|rtUnknown,rSTR|rintersect",        "mergeRHSIntersect"],
-        ["merge:lSTR|lemLiteral|=|rtUnknown,rSTR|rintersect",        "mergeRHSIntersect"],
-        ["merge:lLST|lemUnknown|=|rtUnknown,rLST|rintersect",        "mergeRHSIntersect"],
-        ["merge:lLST|lemLiteral|=|rtUnknown,rLST|rintersect",        "mergeRHSIntersect"],
+        ["merge:lNUM|lemUnknown|=|rtUnknown,rNUM|remIntersection",        "mergeRHSIntersect"],
+        ["merge:lNUM|lemLiteral|=|rtUnknown,rNUM|remIntersection",        "mergeRHSIntersect"],
+        ["merge:lSTR|lemUnknown|=|rtUnknown,rSTR|remIntersection",        "mergeRHSIntersect"],
+        ["merge:lSTR|lemLiteral|=|rtUnknown,rSTR|remIntersection",        "mergeRHSIntersect"],
+        ["merge:lLST|lemUnknown|=|rtUnknown,rLST|remIntersection",        "mergeRHSIntersect"],
+        ["merge:lLST|lemLiteral|=|rtUnknown,rLST|remIntersection",        "mergeRHSIntersect"],
+        ["merge:lLST|lemIntersection|=|rtUnknown|remIntersection",        "mergeRHSIntersect"],
 
         ["merge:lNUM|lemUnknown|=|rNUM,rLST|remConcat",     "ACTION"],
         ["merge:lNUM|lemConcat|=|rNUM|remUnknown",          "ACTION"],
         ["merge:lNUM|lemConcat|=|rNUM|remConcat",           "ACTION"],
         ["merge:lNUM,lLST|lemConcat|=|rNUM|remLiteral",               "checkNumRangeDeepCpy"],
         ["merge:lNUM|lemLiteral|=|rNUM,rLST|remConcat",               "checkNumRangeDeepCpy"],
-        ["merge:lNUM|lintersect|=|rNUM|remUnknown",        "ACTION"],
-        ["merge:lNUM|lintersect|=|rNUM|remConcat",         "ACTION"],
-        ["merge:lNUM|lintersect|=|rNUM|remLiteral",        "ACTION"],
-        ["merge:lNUM|lintersect|=|rNUM|rintersect",       "ACTION"],
+        ["merge:lNUM|lemIntersection|=|rNUM|remUnknown",        "ACTION"],
+        ["merge:lNUM|lemIntersection|=|rNUM|remConcat",         "ACTION"],
+        ["merge:lNUM|lemIntersection|=|rNUM|remLiteral",        "ACTION"],
+        ["merge:lNUM|lemIntersection|=|rNUM|remIntersection",       "ACTION"],
 
         ["merge:lSTR|lemUnknown|=|rSTR|remConcat",          "ACTION"],
         ["merge:lSTR|lemConcat|=|rSTR|remUnknown",          "ACTION"],
         ["merge:lSTR|lemConcat|=|rSTR|remConcat",           "ACTION"],
         ["merge:lSTR|lemConcat|=|rSTR|remLiteral",          "ACTION"],
         ["merge:lSTR|lemLiteral|=|rSTR|remConcat",          "ACTION"],
-        ["merge:lSTR|lintersect|=|rSTR|remUnknown",        "ACTION"],
-        ["merge:lSTR|lintersect|=|rSTR|remConcat",         "ACTION"],
-        ["merge:lSTR|lintersect|=|rSTR|remLiteral",        "ACTION"],
-        ["merge:lSTR|lintersect|=|rSTR|rintersect",       "ACTION"],
+        ["merge:lSTR|lemIntersection|=|rSTR|remUnknown",        "ACTION"],
+        ["merge:lSTR|lemIntersection|=|rSTR|remConcat",         "ACTION"],
+        ["merge:lSTR|lemIntersection|=|rSTR|remLiteral",        "ACTION"],
+        ["merge:lSTR|lemIntersection|=|rSTR|remIntersection",       "ACTION"],
 
         ["merge:lLST|lemUnknown|=|rLST|remConcat",         "ACTION"],
         ["merge:lLST|lemConcat|=|rLST|remUnknown",         "ACTION"],
         ["merge:lLST|lemConcat|=|rLST|remConcat",          "mergeANDRanges"],
         ["merge:lLST|lemConcat|=|rLST|remLiteral",         "ACTION"],
         ["merge:lLST|lemLiteral|=|rLST|remConcat",         "ACTION"],
-        ["merge:lLST|lintersect|=|rLST|remUnknown",       "ACTION"],
-        ["merge:lLST|lintersect|=|rLST|remConcat",        "ACTION"],
-        ["merge:lLST|lintersect|=|rLST|remLiteral",       "ACTION"],
-        ["merge:lLST|lintersect|=|rLST|rintersect",      "ACTION"],
+        ["merge:lLST|lemIntersection|=|rLST|remUnknown",       "ACTION"],
+        ["merge:lLST|lemIntersection|=|rLST|remConcat",        "ACTION"],
+        ["merge:lLST|lemIntersection|=|rLST|remLiteral",       "ACTION"],
+        ["merge:lLST|lemIntersection|=|rLST|remIntersection",      "ACTION"],
 
         # LooseSize
-        ["merge:lSTR|lemUnknown|==|rtUnknown,rSTR|rintersect",        "mergeRHSIntersect"],
-        ["merge:lSTR|lemLiteral|==|rtUnknown,rSTR|rintersect",        "mergeRHSIntersect"],
-        ["merge:lLST|lemUnknown|==|rtUnknown,rLST|rintersect",        "mergeRHSIntersect"],
-        ["merge:lLST|lemLiteral|==|rtUnknown,rLST|rintersect",        "mergeRHSIntersect"],
+        ["merge:lSTR|lemUnknown|==|rtUnknown,rSTR|remIntersection",        "mergeRHSIntersect"],
+        ["merge:lSTR|lemLiteral|==|rtUnknown,rSTR|remIntersection",        "mergeRHSIntersect"],
+        ["merge:lLST|lemUnknown|==|rtUnknown,rLST|remIntersection",        "mergeRHSIntersect"],
+        ["merge:lLST|lemLiteral|==|rtUnknown,rLST|remIntersection",        "mergeRHSIntersect"],
 
 
         ["merge:lNUM|lemUnknown|==|rNUM|remConcat",          "ACTION"],
         ["merge:lNUM|lemUnknown|==|rLST|remConcat",          "checkNumRangeDeepCpy"],
-        ["merge:lNUM|lemUnknown|==|rNUM|rintersect",        "ACTION"],
+        ["merge:lNUM|lemUnknown|==|rNUM|remIntersection",        "ACTION"],
         ["merge:lNUM|lemConcat|==|rNUM|remUnknown",          "ACTION"],
         ["merge:lNUM|lemConcat|==|rNUM|remConcat",           "ACTION"],
         ["merge:lNUM,lLST|lemConcat|==|rNUM|remLiteral",          "checkNumRangeDeepCpy"],
         ["merge:lNUM|lemLiteral|==|rNUM,rLST|remConcat",          "checkNumRange"],
-        ["merge:lNUM|lemLiteral|==|rNUM|rintersect",        "ACTION"],
-        ["merge:lNUM|lintersect|==|rNUM|remUnknown",        "ACTION"],
-        ["merge:lNUM|lintersect|==|rNUM|remConcat",         "ACTION"],
-        ["merge:lNUM|lintersect|==|rNUM|remLiteral",        "ACTION"],
-        ["merge:lNUM|lintersect|==|rNUM|rintersect",       "ACTION"],
+        ["merge:lNUM|lemLiteral|==|rNUM|remIntersection",        "ACTION"],
+        ["merge:lNUM|lemIntersection|==|rNUM|remUnknown",        "ACTION"],
+        ["merge:lNUM|lemIntersection|==|rNUM|remConcat",         "ACTION"],
+        ["merge:lNUM|lemIntersection|==|rNUM|remLiteral",        "ACTION"],
+        ["merge:lNUM|lemIntersection|==|rNUM|remIntersection",       "ACTION"],
 
         ["merge:lSTR|lemUnknown|==|rSTR|remConcat",          "ACTION"],
         ["merge:lSTR|lemConcat|==|rSTR|remUnknown",          "ACTION"],
         ["merge:lSTR|lemConcat|==|rSTR|remConcat",           "ACTION"],
         ["merge:lSTR|lemConcat|==|rSTR|remLiteral",          "ACTION"],
         ["merge:lSTR|lemLiteral|==|rSTR|remConcat",          "ACTION"],
-        ["merge:lSTR|lintersect|==|rSTR|remUnknown",        "ACTION"],
-        ["merge:lSTR|lintersect|==|rSTR|remConcat",         "ACTION"],
-        ["merge:lSTR|lintersect|==|rSTR|remLiteral",        "ACTION"],
-        ["merge:lSTR|lintersect|==|rSTR|rintersect",       "ACTION"],
+        ["merge:lSTR|lemIntersection|==|rSTR|remUnknown",        "ACTION"],
+        ["merge:lSTR|lemIntersection|==|rSTR|remConcat",         "ACTION"],
+        ["merge:lSTR|lemIntersection|==|rSTR|remLiteral",        "ACTION"],
+        ["merge:lSTR|lemIntersection|==|rSTR|remIntersection",       "ACTION"],
 
         ["merge:lLST|lemUnknown|==|rLST|remConcat",         "ACTION"],
         ["merge:lLST|lemConcat|==|rLST|remUnknown",         "ACTION"],
         ["merge:lLST|lemConcat|==|rLST|remConcat",          "ACTION"],
         ["merge:lLST|lemConcat|==|rLST|remLiteral",         "ACTION"],
         ["merge:lLST|lemLiteral|==|rLST|remConcat",         "ACTION"],
-        ["merge:lLST|lintersect|==|rLST|remUnknown",       "ACTION"],
-        ["merge:lLST|lintersect|==|rLST|remConcat",        "ACTION"],
-        ["merge:lLST|lintersect|==|rLST|remLiteral",       "ACTION"],
-        ["merge:lLST|lintersect|==|rLST|rintersect",      "ACTION"]
+        ["merge:lLST|lemIntersection|==|rLST|remUnknown",       "ACTION"],
+        ["merge:lLST|lemIntersection|==|rLST|remConcat",        "ACTION"],
+        ["merge:lLST|lemIntersection|==|rLST|remLiteral",       "ACTION"],
+        ["merge:lLST|lemIntersection|==|rLST|remIntersection",      "ACTION"]
     ]
 }
 wrkLstRules = {
@@ -592,7 +671,8 @@ def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
                     actionCode+= indent +"    " + codeSnips[KW]+"\n"
                 if ruleSetID !="merge": actionCode+= indent +"    changeMade <- true\n"
                 if debugMode:
-                    actionCode = indent+'    //:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+'  '+triggers+'\t'+KW+'")\n' + actionCode
+                    actionLabel = rule[2] if len(rule) > 2 else KW
+                    actionCode = indent+'    //:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+'  '+triggers+'\t'+actionLabel+'")\n' + actionCode
             if ruleCount >0: conditionKW = "else if"
             else: conditionKW = "if"
             conditionCode = conditionKW+"("+conditionCode+")"
@@ -625,6 +705,12 @@ def pointIsBinary(pointSet):
             return(True)
     return(False)
 
+def addOwnershipAccess(code):
+    nonOwningMembers = {'items', 'wrkList'}
+    def addMarker(match):
+        return match.group(0) if match.group(1) in nonOwningMembers else match.group(1) + '!.'
+    return re.sub(r'([A-Za-z_][A-Za-z0-9_]*)\.(?=[A-Za-z_])', addMarker, code)
+
 def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
     cases = enumerateAllCombos(points)
     #for case in cases: print(case)
@@ -649,6 +735,8 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
         funcCode = "    our POV: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
     else:
         ifsCode =  "        me bool: changeMade <- false\n"
+        if ruleSetID == "mergeSize":
+            ifsCode += "        if(inheritDefinitionListShape(aItem)){changeMade <- true}\n"
         ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
         ifsCode += '        //else {log("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ '+ruleSetID+' RULE_MISSING");}\n'
         ifsCode += "        return(changeMade)"
@@ -656,10 +744,10 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
     return(funcCode)
 
 def generateXformMgr(ruleSets):
-    structCode = "struct WorldManager{\n"
+    structCode = "struct WorldManager{\n" + WORLD_MANAGER_HELPERS
     for ruleSet in ruleSets:
         funcCode = generateMemberFunc(ruleSet['ID'], ruleSet['points'], ruleSet['rules'], ruleSet['ifSnips'], ruleSet['codeSnips'])
-        structCode+=funcCode
+        structCode += addOwnershipAccess(funcCode)
     structCode += "}"
     with open("WorldManager.dog", "w") as text_file: print(structCode, file=text_file)
 

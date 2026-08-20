@@ -38,26 +38,30 @@ struct OrderMode: inherits=<mode[uUnknown, uOrdered, uUnordered]> {}
 
 struct aitemSrcID: inherits=<mode[srcPMVA1, srcPMVA2, srcPiCVA, srcNrmSize, srcNormInit, srcMrg0, srcPropagate, srcPartsPath, srcItsALT, srcItsFunc, srcUnordd]> {}
 
+
 model infonState{
     // -----------------------------------------------------------------
     // Semantic interpretation of this overlay
     // -----------------------------------------------------------------
     mode[tUnset, tUnknown, NUM, STR, LST]: overlayType
-    mode[emUnknown, emConcat, emLiteral]: evalMode
+    mode[emUnknown, emConcat, emLiteral, emIntersection]: evalMode
     me SizeMode: sizeMode <- fromCount
-
     flag: inverted
     flag: undefined
-
+    // -----------------------------------------------------------------
+    // Overlay payload
+    // Exactly which member is meaningful depends on overlayType.
+    // These are candidates for a union once CodeDog union support is reliable.
+    // -----------------------------------------------------------------
+    me FlexNum: num
+    me string: str
+    me PovList: items
     // -----------------------------------------------------------------
     // List-specific semantics
     // -----------------------------------------------------------------
-    flag: timelike
+    our infonView: listSpec     // Applies to every member as a template
+    flag: timelike              // Additional identities to 
     flag: tailUnfinished
-
-    // Current representation of [...] parsing/intersection.
-    // Revisit separately when considering emIntersect.
-    mode[ipDefault, ipSquareBrackets]: intersectPosParse
 
     // -----------------------------------------------------------------
     // Preferred external representation
@@ -65,22 +69,8 @@ model infonState{
     // -----------------------------------------------------------------
     mode[fDefault, fFloat, fFraction, fSingleQuote, fHereDoc, fSizedBin]: literalFormat
     mode[bDec, bBin, bHex]: numBase
+    flag: sizeWasInner  // True when the size was written inside a list as {~S ...}
 
-    // True when the size was written inside a list as {~S ...}
-    // rather than with the outer *S+ syntax.
-    flag: sizeWasInner
-
-    // -----------------------------------------------------------------
-    // Overlay payload
-    // Exactly which member is meaningful depends on overlayType.
-    // These are candidates for a union once CodeDog union support
-    // is reliable.
-    // -----------------------------------------------------------------
-    me FlexNum: num
-    me string: str
-
-    me PovList: items
-    our infonView: listSpec
 
     me none: infonState(me int: N) <- {
         overlayType <- NUM
@@ -376,7 +366,7 @@ struct infonView{
                 infSize!.overlayType  <- NUM
                 infSize!.evalMode <- emLiteral
                 infSize!.num    <- value!.str.size()
-            } else if(value!.overlayType==LST and value!.evalMode==emLiteral){
+            } else if(value!.overlayType==LST and (value!.evalMode==emLiteral or value!.evalMode==emIntersection)){
                 me FlexNum: acc <- 0
                 our POV: pov <- value!.items.head
                 while(pov != NULL){
@@ -406,7 +396,7 @@ struct infonView{
         return(infSize)
     }
     me bool: isASeq() <- {return((value!.evalMode==emLiteral and value!.overlayType==LST) or value!.evalMode==emConcat)}
-    me bool: isOrLike() <- {return(intersectPos==ipGetLast and innr!=NULL and innr!.infSize!.evalMode==emUnknown and innr!.value!.sizeMode==fromGiven and innr!.value!.evalMode==emLiteral)}
+    me bool: isOrLike() <- {return(value!.evalMode==emIntersection and intersectPos==ipGetLast and innr!=NULL and innr!.infSize!.evalMode==emUnknown and innr!.value!.sizeMode==fromGiven and innr!.value!.evalMode==emLiteral)}
     me OrderMode: getOrderMode(their Agent: agent) <- {
         if(orderMode!=uUnknown){return(orderMode)}
         if(type!=NULL){
@@ -589,6 +579,7 @@ struct infonView{
     void: convertThisToIntersection(our infonView: newInnr, me SizeMode: sMode) <- {
         itmMode         <- mItem
         viewMode         <- vmOverlay
+        value!.evalMode  <- emIntersection
         intersectPos    <- ipGetLast
         infSize!.evalMode  <- emUnknown
         innr            <- newInnr
@@ -1366,7 +1357,7 @@ vSpec.init(agent!.getLocaleBaseName())
         if(CI!.altRulesApplied){return(false)}
         else{CI!.altRulesApplied <- true}
         me bool: stopAndWait <- false
-        if(CI!.intersectPos != ipNoIntersect){
+        if(CI!.value!.evalMode == emIntersection){
             //logSegIn("fALTS")
             //log("func_altRules:"+aItem!.mySymbol())
             processIntersectViaAgenda(agenda, aItem!.LHS_item, aItem, aItem!.priority)
