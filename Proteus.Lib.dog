@@ -26,7 +26,7 @@ infonDumpMode='text'
 #include infonList.dog
 #include Functions.dog
 #include ModelManager.dog
-#include WorldManager_v1.dog
+#include WorldManager.dog
 #include debugSystems.dog
 #include xlators/xlator_en.dog
 //include DB_workAround.dog
@@ -907,6 +907,9 @@ struct AItemPedigree{
 }
 model AItem{
     mode[rsInfon, rsMerge, rsIntersect, rsPure]: ruleSet
+    me uint64: aItemID
+    me uint64: runID
+    me uint64: lastEnqueueID
     our POV: LHS_item
     our POV: RHS
     our POV: cursorAnchor
@@ -932,6 +935,8 @@ model AItem{
     our AItem: debugArg     // For debugSystems validateAItem()
     me int: indentLvl
     flag: initRulesApplied
+    me List<me string>: phase1HandlerEvents
+    me bool: phase1UnsupportedReached
     me int: distanceToTop() <- {
         me int: retVal <- 0
         our AItem: crnt <- parent
@@ -994,6 +999,9 @@ model AItem{
     none: AItem(me aitemSrcID: source) <- {
         INIT()  // TODO:
         flags     <- 0
+        aItemID   <- 0
+        runID     <- 0
+        lastEnqueueID <- 0
         LHS_item  <- NULL
         RHS       <- NULL
         LHSItr    <- NULL
@@ -1008,7 +1016,29 @@ model AItem{
         pedigree.source <- source
     }
 }
-struct AItem{}
+struct AItem{
+    void: phase1BeginRun() <- {
+        phase1HandlerEvents.clear()
+        phase1UnsupportedReached <- false
+    }
+    void: phase1RecordHandler(me string: handlerID, me bool: unsupported) <- {
+        if(unsupported){
+            phase1UnsupportedReached <- true
+            phase1HandlerEvents.append("UNSUPPORTED:"+handlerID)
+        }else{
+            phase1HandlerEvents.append(handlerID)
+        }
+    }
+    me string: phase1HandlerSummary() <- {
+        me string: summary
+        withEach handlerID in phase1HandlerEvents{
+            if(summary!=""){summary <+- ";"}
+            summary <+- handlerID
+        }
+        if(summary==""){summary <- "UNCLASSIFIED"}
+        return(summary)
+    }
+}
 model PartPath{
     our infonView: path
     our infonView: spec
@@ -1026,10 +1056,21 @@ struct infonState{
 //////////////////////////
 // Definition storage
 
-struct GLOBAL{me ModelManager: modelMngr}
+struct GLOBAL{
+    me ModelManager: modelMngr
+    me uint64: phase1NextNormalizationID <- 1
+    me Mutex: phase1NormalizationIDMutex
+}
 
 struct Agenda{
     our POV: topPOV
+    me uint64: normalizationID <- 0
+    me uint64: nextAItemID <- 1
+    me uint64: nextRunID <- 1
+    me uint64: nextEnqueueID <- 1
+    me uint64: totalAItemsAdded <- 0
+    me uint64: totalPropagationsQueued <- 0
+    me uint64: totalPropagationsProcessed <- 0
     me Multimap<me int64, our AItem: rangeIteration=logarithmic>: AItems
     me Mutex: agendaDoneMutex
     me SyncLock: agendaDoneLock
@@ -1046,6 +1087,13 @@ struct Agenda{
     }
     me bool: addAItemToAgenda(our AItem: aItem) <- {
         me bool: itmAdded <- true
+        if(aItem!.aItemID==0){
+            aItem!.aItemID <- nextAItemID
+            nextAItemID <+- 1
+        }
+        aItem!.lastEnqueueID <- nextEnqueueID
+        nextEnqueueID <+- 1
+        totalAItemsAdded <+- 1
         //me string: logStr <- "        ADD_TO_AGENDA:"+shortedStr(toString(aItem),120)+"  PRIORITY:"+toString(aItem!.priority)
         if(aItem!.ruleSet == rsInfon){
                 insert(aItem, aItem!.priority)

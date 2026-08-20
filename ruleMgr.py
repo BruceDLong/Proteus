@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# Proteus Rule case manager
+# Proteus active WorldManager rule case manager.
+# Generates only WorldManagerRules.dog for WorldManager.dog.
 from pprint import pprint
 import re
 
@@ -563,25 +564,32 @@ def genConditionCode(key, ifSnips):
     if count > 1: S = "("+S+")"
     return S
 
+def genHandlerCode(ruleSetID, triggers, action, indent):
+    handlerID = ruleSetID + ":" + triggers + "->" + action
+    unsupported = "true" if action == "ACTION" else "false"
+    return indent + 'aItem.phase1RecordHandler("' + handlerID + '", ' + unsupported + ')\n'
+
 def genActionCode(ruleSetID, codeKeyWords, rule, codeSnips, indent):
-    S = ""
+    handlerCode = genHandlerCode(ruleSetID, rule, codeKeyWords, indent)
     if codeKeyWords == "ACTION":
         if debugMode:
-            S= indent + '//:l/merge::log(indentStr(aItem.indentLvl)+"        TODO: unfinished")\n'
+            actionCode = indent + '//:l/merge::log(indentStr(aItem.indentLvl)+"        TODO: unfinished")\n'
         else:
-            S= indent + "//TODO: unfinished\n"
-        return(S)
+            actionCode = indent + "//TODO: unfinished\n"
+        return(handlerCode + actionCode)
     if codeKeyWords == "NONE":
         if debugMode:
-            S= indent + '//:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':Do Nothing")\n'
+            actionCode = indent + '//:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+rule+':Do Nothing")\n'
         else:
-            S= indent + "//Do Nothing\n"
-        return(S)
+            actionCode = indent + "//Do Nothing\n"
+        return(handlerCode + actionCode)
+    actionCode = ""
     codeKeyWordList = codeKeyWords.split(",")
     for KW in codeKeyWordList:
-        S+= indent + codeSnips[KW]+"\n"
-    if debugMode: S = indent+'//:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+'  '+rule+'\t'+KW+'")\n' +S
-    return(S)
+        actionCode += indent + codeSnips[KW]+"\n"
+    if debugMode:
+        actionCode = indent+'//:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+'  '+rule+'\t'+KW+'")\n' + actionCode
+    return(handlerCode + actionCode)
 
 def genIfs(ruleSetID, ifsTree, binaryPts, ifSnips, codeSnips, indent = "        "):
     count =0
@@ -653,17 +661,17 @@ def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
                 condCount += 1
         if conditionCode != "":
             #print(conditionCode)
-            actionCode = ""
+            actionCode = genHandlerCode(ruleSetID, triggers, codeKeyWords, indent + "    ")
             if codeKeyWords =='ACTION':
                 if debugMode:
-                    actionCode = indent + '    //:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':TODO: unfinished")\n'
+                    actionCode += indent + '    //:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':TODO: unfinished")\n'
                 else:
-                    actionCode = indent + "    //TODO: unfinished\n"
+                    actionCode += indent + "    //TODO: unfinished\n"
             elif codeKeyWords == "NONE":
                 if debugMode:
-                    actionCode = indent + '    //:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':Do Nothing")\n'
+                    actionCode += indent + '    //:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':Do Nothing")\n'
                 else:
-                    actionCode = indent + "    //Do Nothing\n"
+                    actionCode += indent + "    //Do Nothing\n"
             else:
                 #print(codeKeyWords)
                 codeKeyWordList = codeKeyWords.split(",")
@@ -728,9 +736,9 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
         ifsCode += '        logSeg(" mRUl")\n'
         ifsCode += '        me bool: orderedSpanMergeHandled <- false\n'
         ifsCode += '        our POV: orderedSpanRemainder <- orderedSpanMergeRules(aItem, orderedSpanMergeHandled)\n'
-        ifsCode += '        if(orderedSpanMergeHandled){return(orderedSpanRemainder)}\n'
+        ifsCode += '        if(orderedSpanMergeHandled){aItem.phase1RecordHandler("merge:orderedSpan", false); return(orderedSpanRemainder)}\n'
         ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
-        ifsCode += '        else {log("MERGE_RULE_MISSING: "+ toString(aItem));log("          LHS overlayType:"+ overlayTypeStrings[aItem.LHS_item.pItem.value.overlayType]);log("          LHS evalMode:"+ evalModeStrings[aItem.LHS_item.pItem.value.evalMode]);log("          RHS overlayType:"+ overlayTypeStrings[aItem.RHS.pItem.value.overlayType]); log("EXITING"); exit(2);}\n'
+        ifsCode += '        else {aItem.phase1RecordHandler("merge:missing", true); log("MERGE_RULE_MISSING: "+ toString(aItem));log("          LHS overlayType:"+ overlayTypeStrings[aItem.LHS_item.pItem.value.overlayType]);log("          LHS evalMode:"+ evalModeStrings[aItem.LHS_item.pItem.value.evalMode]);log("          RHS overlayType:"+ overlayTypeStrings[aItem.RHS.pItem.value.overlayType]); log("EXITING"); exit(2);}\n'
         ifsCode += "        return(remainder)"
         funcCode = "    our POV: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
     else:
@@ -744,11 +752,16 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
     return(funcCode)
 
 def generateXformMgr(ruleSets):
-    structCode = "struct WorldManager{\n" + WORLD_MANAGER_HELPERS
+    generatedHeader = """// AUTOGENERATED BY ruleMgr.py
+// DO NOT EDIT
+// Used by WorldManager.dog
+
+"""
+    structCode = generatedHeader + "struct WorldManager{\n" + WORLD_MANAGER_HELPERS
     for ruleSet in ruleSets:
         funcCode = generateMemberFunc(ruleSet['ID'], ruleSet['points'], ruleSet['rules'], ruleSet['ifSnips'], ruleSet['codeSnips'])
         structCode += addOwnershipAccess(funcCode)
     structCode += "}"
-    with open("WorldManager.dog", "w") as text_file: print(structCode, file=text_file)
+    with open("WorldManagerRules.dog", "w") as text_file: print(structCode, file=text_file)
 
 generateXformMgr(ruleSets)
