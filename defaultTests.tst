@@ -48,6 +48,8 @@ parser/func/left,      Args on left,                   1:>[_ 2 3],              
 parser/func/rightInv,  Invert on right,                [_ 2 3]<!1,                                                             [_ 2 3]<!1,                     parse
 parser/func/leftInv,   Invert on left,                 1!>[_ 2 3],                                                             1!>[_ 2 3],                     parse
 merge/num/typed1,      typed int merge 1,              *16+10 = *16+10,                                                        *16+10,                         norm
+merge/num/literalEqual, Equal numeric literals,         10 = 10,                                                               10,                             norm
+merge/num/literalSelect, Reject unequal numeric literals, 2 = *_+[1 2 3],                                                      2,                              norm
 merge/num/typed2,      typed int merge 2,              *16+_ = *16+9,                                                          *16+9,                          norm
 merge/num/typed3,      typed int merge 3,              _ = *16+10,                                                             *16+10,                         norm
 merge/num/typed4,      typed int merge 4,              *_+_ = *16+9,                                                           *16+9,                          norm

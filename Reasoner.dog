@@ -1,5 +1,45 @@
 // Owns local infon-state semantics while legacy merge cases remain generated
 // as WorldManager methods.
+struct InfonViewReasoningResult{
+    mode[rrNotApplicable, rrHandledNoChange, rrRejected]: status
+}
+
+// Handles local consolidation cases whose complete outcome can be determined
+// without scheduling or partial graph mutation.
+struct DirectConsolidationStrategy{
+    me bool: referenceIdentityTakesPriority(our AItem: aItem) <- {
+        return(aItem!.LHS_item!.accessMode==aRefTo and
+                aItem!.LHS_item!.outerPOV!=NULL and
+                aItem!.LHS_item!.outerPOV!.pItem===aItem!.LHS_item!.pItem and
+                !aItem!.RHS!.pItem!.asRHSInternalIdent and
+                !(aItem!.RHS!.pParent!=NULL and aItem!.RHS!.pParent!.pItem!.asRHSInternalIdent))
+    }
+
+    me InfonViewReasoningResult: mergeInfonStates(our AItem: aItem) <- {
+        me InfonViewReasoningResult: result
+        result.status <- rrNotApplicable
+        if(aItem==NULL or aItem!.LHS_item==NULL or aItem!.LHS_item!.pItem==NULL or
+                aItem!.RHS==NULL or aItem!.RHS!.pItem==NULL){return(result)}
+
+        our infonView: LHS <- aItem!.LHS_item!.pItem
+        our infonView: RHS <- aItem!.RHS!.pItem
+        if(LHS!.viewMode==vmAny or RHS!.viewMode==vmAny){return(result)}
+        // A self-outer aRefTo carries graph identity semantics that must be
+        // resolved before comparing its current local value.
+        if(referenceIdentityTakesPriority(aItem)){return(result)}
+
+        if(LHS!.value!.overlayType==NUM and LHS!.value!.evalMode==emLiteral and
+                !aItem!.RHS!.looseType() and
+                RHS!.value!.overlayType==NUM and RHS!.value!.evalMode==emLiteral){
+            aItem!.phase1RecordHandler("strategy:directConsolidation", false)
+            aItem!.phase1RecordHandler("direct:numLiteralStrictEquality", false)
+            if(LHS!.value!.num==RHS!.value!.num){result.status <- rrHandledNoChange}
+            else{result.status <- rrRejected}
+        }
+        return(result)
+    }
+}
+
 struct LegacyMergeStrategy{
     our POV: mergeInfonStates(their WorldManager: worldManager, our AItem: aItem) <- {
         aItem!.phase1RecordHandler("strategy:legacyMerge", false)
@@ -8,9 +48,19 @@ struct LegacyMergeStrategy{
 }
 
 struct InfonViewReasoner{
+    me DirectConsolidationStrategy: directConsolidationStrategy
     me LegacyMergeStrategy: legacyMergeStrategy
 
     our POV: mergeInfonStates(their WorldManager: worldManager, our AItem: aItem) <- {
+        me InfonViewReasoningResult: result <- directConsolidationStrategy.mergeInfonStates(aItem)
+        if(result.status==rrRejected){
+            aItem!.mergeStatus <- msReject
+            aItem!.LHS_item!.rejected <- true
+            // Preserve the existing numeric-literal rejection diagnostic.
+            //:l/PAI::logSeg("REJECT")
+            return(NULL)
+        }
+        if(result.status==rrHandledNoChange){return(NULL)}
         return(legacyMergeStrategy.mergeInfonStates(worldManager, aItem))
     }
 }
