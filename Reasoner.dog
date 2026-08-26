@@ -254,7 +254,8 @@ struct DirectConsolidationStrategy{
 // Owns list-state implications that require a propagation continuation rather
 // than a complete local consolidation result.
 struct ListConsolidationStrategy{
-    me InfonViewReasoningResult: planConsolidation(our AItem: aItem) <- {
+    me InfonViewReasoningResult: planConsolidation(their WorldManager: worldManager,
+            our AItem: aItem) <- {
         me InfonViewReasoningResult: result
         result.status <- rrNotApplicable
         result.directCase <- dcNone
@@ -263,6 +264,45 @@ struct ListConsolidationStrategy{
         result.workAction <- waNone
         result.copySize <- false
         result.emitRejectLog <- false
+        if(aItem==NULL or aItem!.LHS_item==NULL or aItem!.LHS_item!.pItem==NULL or
+                aItem!.RHS==NULL or aItem!.RHS!.pItem==NULL){return(result)}
+
+        our infonView: LHS <- aItem!.LHS_item!.pItem
+        our infonView: RHS <- aItem!.RHS!.pItem
+        // Sparse ordered spans have a higher-precedence merge path that can
+        // split either side and return a remainder. Keep that path in the
+        // legacy strategy until its result can be represented explicitly.
+        if(aItem!.LHS_item!.isSparseOrderedSpan() and aItem!.RHS!.isSparseOrderedSpan()){
+            return(result)
+        }
+        if(LHS!.value!.overlayType!=LST or LHS!.value!.evalMode!=emLiteral or
+                RHS!.value!.overlayType!=LST or RHS!.value!.evalMode!=emLiteral or
+                LHS!.invertMatch or RHS!.invertMatch){return(result)}
+
+        if(!aItem!.RHS!.looseType()){
+            result.listCase <- lcStrictLiteralLists
+            if(worldManager!.isDefinitionListShapeOnly(aItem)){
+                result.status <- rrHandledNoChange
+            }
+            else if(aItem!.LHS_item!.accessMode==aRefTo){
+                result.status <- rrPlannedChange
+                result.consolidationAction <- caCopyRHSIdentityToLHS
+            }
+            else{
+                result.status <- rrNeedsWork
+                result.workAction <- waStartListPropagation
+            }
+        }
+        else{
+            result.listCase <- lcLooseLiteralLists
+            if(worldManager!.isDefinitionListShapeOnly(aItem)){
+                result.status <- rrHandledNoChange
+            }
+            else{
+                result.status <- rrNeedsWork
+                result.workAction <- waStartListPropagation
+            }
+        }
         return(result)
     }
 }
@@ -279,10 +319,11 @@ struct InfonViewReasoner{
     me ListConsolidationStrategy: listConsolidationStrategy
     me LegacyMergeStrategy: legacyMergeStrategy
 
-    me InfonViewReasoningResult: planConsolidation(our AItem: aItem) <- {
+    me InfonViewReasoningResult: planConsolidation(their WorldManager: worldManager,
+            our AItem: aItem) <- {
         me InfonViewReasoningResult: result <- directConsolidationStrategy.planConsolidation(aItem)
         if(result.status!=rrNotApplicable){return(result)}
-        return(listConsolidationStrategy.planConsolidation(aItem))
+        return(listConsolidationStrategy.planConsolidation(worldManager, aItem))
     }
 
     me int: evalForRange(our infonView: infn, their FlexNum: lowest,
