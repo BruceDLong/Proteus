@@ -69,6 +69,9 @@ merge/str/typed4,      typed str merge 4,              *_+$ = 'Hello',          
 merge/str/typed5,      typed str merge 5,              'Hello' = *5+$,                                                         'Hello',                        norm
 merge/str/loose,       loose str merge,                $ == 'Hello',                                                           'Hello',                        norm
 merge/str/looseSize,   loose str merge,                $ =: 'Hello',                                                           *_+'Hello',                     norm
+merge/directLooseStr/exactWidthCopy, Loose string consumes an exact-width literal, *5+$ == 'Hello',                            'Hello',                        norm
+merge/directLooseStr/exactLiteralAccept, Equal-width loose literals accept when equal, 'Hello' == 'Hello',                     'Hello',                        norm
+merge/directLooseStr/exactLiteralReject, Equal-width loose literals reject when unequal, 'Hello' == 'World',                   'Hello',                        norm
 merge/directAtomic/numReject, Numeric mismatch does not copy size, *_+8 = *16+9,                                                *_+8,                           norm
 merge/directAtomic/numInvertEqualReject, Inverted equal numeric template rejects without copying size, !*_+8 = *16+8,          !*_+8,                          norm
 merge/directAtomic/numInvertUnequalAccept, Inverted unequal numeric template accepts without copying size, !*_+8 = *16+9,      !*_+8,                          norm
