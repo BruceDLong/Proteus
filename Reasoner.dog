@@ -12,9 +12,11 @@ struct InfonViewReasoningResult{
          dcLooseAnyCopiesValue]: directCase
     mode[lcNone, lcStrictLiteralLists, lcLooseLiteralLists,
          lcLooseListAgainstScalar]: listCase
+    mode[icNone, icStrictScalarAgainstIntersection]: intersectionCase
     mode[caNone, caCopyRHSValueToLHS, caCopyRHSRangeMatchToLHS,
          caCopyRHSWholeStringToLHS, caCopyRHSIdentityToLHS,
-         caCopyRHSWorkListToLHS, caCopyRHSValueAndTypeToLHS]: consolidationAction
+         caCopyRHSWorkListToLHS, caCopyRHSValueAndTypeToLHS,
+         caMergeRHSIntersection]: consolidationAction
     mode[waNone, waStartListPropagation]: workAction
     me bool: copySize
     me bool: emitRejectLog
@@ -101,6 +103,7 @@ struct DirectConsolidationStrategy{
         result.status <- rrNotApplicable
         result.directCase <- dcNone
         result.listCase <- lcNone
+        result.intersectionCase <- icNone
         result.consolidationAction <- caNone
         result.workAction <- waNone
         result.copySize <- false
@@ -261,6 +264,7 @@ struct ListConsolidationStrategy{
         result.status <- rrNotApplicable
         result.directCase <- dcNone
         result.listCase <- lcNone
+        result.intersectionCase <- icNone
         result.consolidationAction <- caNone
         result.workAction <- waNone
         result.copySize <- false
@@ -318,6 +322,39 @@ struct ListConsolidationStrategy{
     }
 }
 
+// Owns conversion of a local constraint against RHS alternatives into an
+// intersection whose alternatives each retain that constraint.
+struct IntersectionConsolidationStrategy{
+    me InfonViewReasoningResult: planConsolidation(our AItem: aItem) <- {
+        me InfonViewReasoningResult: result
+        result.status <- rrNotApplicable
+        result.directCase <- dcNone
+        result.listCase <- lcNone
+        result.intersectionCase <- icNone
+        result.consolidationAction <- caNone
+        result.workAction <- waNone
+        result.copySize <- false
+        result.emitRejectLog <- false
+        if(aItem==NULL or aItem!.LHS_item==NULL or aItem!.LHS_item!.pItem==NULL or
+                aItem!.RHS==NULL or aItem!.RHS!.pItem==NULL){return(result)}
+
+        our infonView: LHS <- aItem!.LHS_item!.pItem
+        our infonView: RHS <- aItem!.RHS!.pItem
+        if(!aItem!.RHS!.looseType() and
+                (LHS!.value!.overlayType==NUM or LHS!.value!.overlayType==STR) and
+                (LHS!.value!.evalMode==emUnknown or LHS!.value!.evalMode==emLiteral) and
+                (RHS!.value!.overlayType==tUnknown or
+                 RHS!.value!.overlayType==LHS!.value!.overlayType) and
+                RHS!.value!.evalMode==emIntersection and
+                !LHS!.invertMatch and !RHS!.invertMatch){
+            result.intersectionCase <- icStrictScalarAgainstIntersection
+            result.status <- rrPlannedChange
+            result.consolidationAction <- caMergeRHSIntersection
+        }
+        return(result)
+    }
+}
+
 struct LegacyMergeStrategy{
     our POV: mergeInfonStates(their WorldManager: worldManager, our AItem: aItem) <- {
         aItem!.phase1RecordHandler("strategy:legacyMerge", false)
@@ -328,13 +365,16 @@ struct LegacyMergeStrategy{
 struct InfonViewReasoner{
     me DirectConsolidationStrategy: directConsolidationStrategy
     me ListConsolidationStrategy: listConsolidationStrategy
+    me IntersectionConsolidationStrategy: intersectionConsolidationStrategy
     me LegacyMergeStrategy: legacyMergeStrategy
 
     me InfonViewReasoningResult: planConsolidation(their WorldManager: worldManager,
             our AItem: aItem) <- {
         me InfonViewReasoningResult: result <- directConsolidationStrategy.planConsolidation(aItem)
         if(result.status!=rrNotApplicable){return(result)}
-        return(listConsolidationStrategy.planConsolidation(worldManager, aItem))
+        result <- listConsolidationStrategy.planConsolidation(worldManager, aItem)
+        if(result.status!=rrNotApplicable){return(result)}
+        return(intersectionConsolidationStrategy.planConsolidation(aItem))
     }
 
     me int: evalForRange(our infonView: infn, their FlexNum: lowest,
@@ -353,6 +393,9 @@ struct InfonViewReasoner{
         }
         else if(result.listCase!=lcNone){
             aItem!.phase1RecordHandler("strategy:listConsolidation", false)
+        }
+        else if(result.intersectionCase!=icNone){
+            aItem!.phase1RecordHandler("strategy:intersectionConsolidation", false)
         }
         else{return()}
         if(result.directCase==dcCopyLiteralValueToUnknown){
@@ -403,6 +446,9 @@ struct InfonViewReasoner{
         else if(result.listCase==lcLooseListAgainstScalar){
             aItem!.phase1RecordHandler("list:looseListAgainstScalar", false)
         }
+        else if(result.intersectionCase==icStrictScalarAgainstIntersection){
+            aItem!.phase1RecordHandler("intersection:strictScalarAgainstIntersection", false)
+        }
     }
 
     void: execConsolidationPlan(their WorldManager: worldManager, our AItem: aItem,
@@ -442,6 +488,9 @@ struct InfonViewReasoner{
             aItem!.LHS_item!.pItem!.viewMode <- aItem!.RHS!.pItem!.viewMode
             worldManager!.DO_COPY(aItem!.RHS!.pItem!.value, aItem!.LHS_item!.pItem!.value,
                     aItem!.sizeToCopy)
+        }
+        else if(result.consolidationAction==caMergeRHSIntersection){
+            worldManager!.mergeRHSIntersect(aItem)
         }
         if(result.workAction==waStartListPropagation){
             worldManager!.startPropRules(aItem)
