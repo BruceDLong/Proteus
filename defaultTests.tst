@@ -77,6 +77,8 @@ merge/directAtomic/strInvertCopy, Inverted string copy does not commit, !*_+$ = 
 merge/directType/numRejectStr, Strict numeric rejects string, _ = 'Hello',                                                     _,                               norm
 merge/directType/strRejectNum, Strict string rejects numeric, $ = 10,                                                          $,                               norm
 merge/directType/listRejectNum, Strict list rejects numeric, {1} = 1,                                                          {1},                             norm
+merge/directUnknown/numNoConstraints, Numeric unknowns need no local update, _ = _,                                            _,                               norm
+merge/directUnknown/strNoConstraints, String unknowns need no local update, $ = $,                                             $,                               norm
 merge/unknown/loose,   unknown merge,                  ? == 'Hello',                                                           'Hello',                        norm
 merge/unknown/looseSize, unknown merge,                ? ==: 'Hello',                                                          *_+'Hello',                     norm
 merge/unknown/typed,   typed merge,                    ? = 'Hello',                                                            'Hello',                        norm
