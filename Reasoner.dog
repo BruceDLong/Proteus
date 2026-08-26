@@ -2,6 +2,8 @@
 // as WorldManager methods.
 struct InfonViewReasoningResult{
     mode[rrNotApplicable, rrHandledNoChange, rrRejected, rrPlannedChange]: status
+    mode[dcNone, dcCopyLiteralValueToUnknown, dcLiteralAlreadyConstrainsUnknown,
+         dcNumLiteralStrictEquality, dcStringLiteralStrictEquality]: directCase
     mode[caNone, caCopyRHSValueToLHS]: consolidationAction
     me bool: emitRejectLog
 }
@@ -17,9 +19,10 @@ struct DirectConsolidationStrategy{
                 !(aItem!.RHS!.pParent!=NULL and aItem!.RHS!.pParent!.pItem!.asRHSInternalIdent))
     }
 
-    me InfonViewReasoningResult: mergeInfonStates(our AItem: aItem) <- {
+    me InfonViewReasoningResult: planConsolidation(our AItem: aItem) <- {
         me InfonViewReasoningResult: result
         result.status <- rrNotApplicable
+        result.directCase <- dcNone
         result.consolidationAction <- caNone
         result.emitRejectLog <- false
         if(aItem==NULL or aItem!.LHS_item==NULL or aItem!.LHS_item!.pItem==NULL or
@@ -36,8 +39,7 @@ struct DirectConsolidationStrategy{
                 RHS!.value!.evalMode==emLiteral and
                 LHS!.value!.overlayType==RHS!.value!.overlayType and
                 (LHS!.value!.overlayType==NUM or LHS!.value!.overlayType==STR)){
-            aItem!.phase1RecordHandler("strategy:directConsolidation", false)
-            aItem!.phase1RecordHandler("direct:copyLiteralValueToUnknown", false)
+            result.directCase <- dcCopyLiteralValueToUnknown
             result.status <- rrPlannedChange
             result.consolidationAction <- caCopyRHSValueToLHS
         }
@@ -45,15 +47,13 @@ struct DirectConsolidationStrategy{
                 RHS!.value!.evalMode==emUnknown and
                 LHS!.value!.overlayType==RHS!.value!.overlayType and
                 (LHS!.value!.overlayType==NUM or LHS!.value!.overlayType==STR)){
-            aItem!.phase1RecordHandler("strategy:directConsolidation", false)
-            aItem!.phase1RecordHandler("direct:literalAlreadyConstrainsUnknown", false)
+            result.directCase <- dcLiteralAlreadyConstrainsUnknown
             result.status <- rrHandledNoChange
         }
         else if(LHS!.value!.overlayType==NUM and LHS!.value!.evalMode==emLiteral and
                 !aItem!.RHS!.looseType() and
                 RHS!.value!.overlayType==NUM and RHS!.value!.evalMode==emLiteral){
-            aItem!.phase1RecordHandler("strategy:directConsolidation", false)
-            aItem!.phase1RecordHandler("direct:numLiteralStrictEquality", false)
+            result.directCase <- dcNumLiteralStrictEquality
             if(LHS!.value!.num==RHS!.value!.num){result.status <- rrHandledNoChange}
             else{
                 result.status <- rrRejected
@@ -63,8 +63,7 @@ struct DirectConsolidationStrategy{
         else if(LHS!.value!.overlayType==STR and LHS!.value!.evalMode==emLiteral and
                 !aItem!.RHS!.looseType() and
                 RHS!.value!.overlayType==STR and RHS!.value!.evalMode==emLiteral){
-            aItem!.phase1RecordHandler("strategy:directConsolidation", false)
-            aItem!.phase1RecordHandler("direct:stringLiteralStrictEquality", false)
+            result.directCase <- dcStringLiteralStrictEquality
             if(LHS!.value!.str==RHS!.value!.str){result.status <- rrHandledNoChange}
             else{result.status <- rrRejected}
         }
@@ -83,6 +82,28 @@ struct InfonViewReasoner{
     me DirectConsolidationStrategy: directConsolidationStrategy
     me LegacyMergeStrategy: legacyMergeStrategy
 
+    me InfonViewReasoningResult: planConsolidation(our AItem: aItem) <- {
+        return(directConsolidationStrategy.planConsolidation(aItem))
+    }
+
+    void: recordDirectConsolidationHandlers(our AItem: aItem,
+            their InfonViewReasoningResult: result) <- {
+        if(result.directCase==dcNone){return()}
+        aItem!.phase1RecordHandler("strategy:directConsolidation", false)
+        if(result.directCase==dcCopyLiteralValueToUnknown){
+            aItem!.phase1RecordHandler("direct:copyLiteralValueToUnknown", false)
+        }
+        else if(result.directCase==dcLiteralAlreadyConstrainsUnknown){
+            aItem!.phase1RecordHandler("direct:literalAlreadyConstrainsUnknown", false)
+        }
+        else if(result.directCase==dcNumLiteralStrictEquality){
+            aItem!.phase1RecordHandler("direct:numLiteralStrictEquality", false)
+        }
+        else if(result.directCase==dcStringLiteralStrictEquality){
+            aItem!.phase1RecordHandler("direct:stringLiteralStrictEquality", false)
+        }
+    }
+
     me bool: execConsolidationPlan(their WorldManager: worldManager, our AItem: aItem,
             their InfonViewReasoningResult: result) <- {
         if(result.consolidationAction==caCopyRHSValueToLHS){
@@ -93,8 +114,9 @@ struct InfonViewReasoner{
         return(false)
     }
 
-    our POV: mergeInfonStates(their WorldManager: worldManager, our AItem: aItem) <- {
-        me InfonViewReasoningResult: result <- directConsolidationStrategy.mergeInfonStates(aItem)
+    our POV: mergeInfonStates(their WorldManager: worldManager, our AItem: aItem,
+            their InfonViewReasoningResult: result) <- {
+        recordDirectConsolidationHandlers(aItem, result)
         if(result.status==rrRejected){
             aItem!.mergeStatus <- msReject
             aItem!.LHS_item!.rejected <- true
