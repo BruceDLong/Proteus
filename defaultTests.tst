@@ -74,6 +74,9 @@ merge/directAtomic/numInvertEqual, Inverted equal literals do not copy size, !*_
 merge/directAtomic/numInvertReject, Inverted unequal literals do not copy size, !*_+8 = *16+9,                                 !*_+8,                          norm
 merge/directAtomic/numInvertCopy, Inverted numeric copy does not commit, !*_+_ = *16+9,                                        !*_+_,                          norm
 merge/directAtomic/strInvertCopy, Inverted string copy does not commit, !*_+$ = *5+'Hello',                                    !*_+$,                          norm
+merge/directType/numRejectStr, Strict numeric rejects string, _ = 'Hello',                                                     _,                               norm
+merge/directType/strRejectNum, Strict string rejects numeric, $ = 10,                                                          $,                               norm
+merge/directType/listRejectNum, Strict list rejects numeric, {1} = 1,                                                          {1},                             norm
 merge/unknown/loose,   unknown merge,                  ? == 'Hello',                                                           'Hello',                        norm
 merge/unknown/looseSize, unknown merge,                ? ==: 'Hello',                                                          *_+'Hello',                     norm
 merge/unknown/typed,   typed merge,                    ? = 'Hello',                                                            'Hello',                        norm
