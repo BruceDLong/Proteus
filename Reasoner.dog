@@ -6,9 +6,9 @@ struct InfonViewReasoningResult{
          dcNumLiteralStrictEquality, dcStringLiteralStrictEquality,
          dcStrictOverlayTypeMismatch, dcScalarUnknownWithoutConstraints,
          dcLooseNumericRangeLiteral, dcLooseStringWholeCopy,
-         dcLooseStringExactLiteral]: directCase
+         dcLooseStringExactLiteral, dcStrictAnyCopiesIdentity]: directCase
     mode[caNone, caCopyRHSValueToLHS, caCopyRHSRangeMatchToLHS,
-         caCopyRHSWholeStringToLHS]: consolidationAction
+         caCopyRHSWholeStringToLHS, caCopyRHSIdentityToLHS]: consolidationAction
     me bool: copySize
     me bool: emitRejectLog
 }
@@ -81,6 +81,14 @@ struct DirectConsolidationStrategy{
         return(true)
     }
 
+    me bool: shouldCopySize(our AItem: aItem, our infonView: LHS,
+            our infonView: RHS) <- {
+        return(!aItem!.looseSize and
+                LHS!.infSize!.evalMode==emUnknown and RHS!.infSize!.evalMode==emLiteral and
+                (LHS!.viewMode!=vmOverlay or RHS!.value!.overlayType==LHS!.value!.overlayType) and
+                (LHS!.value!.listSpec==NULL or !LHS!.value!.listSpec!.asWrkLstOutr))
+    }
+
     me InfonViewReasoningResult: planConsolidation(our AItem: aItem) <- {
         me InfonViewReasoningResult: result
         result.status <- rrNotApplicable
@@ -93,6 +101,19 @@ struct DirectConsolidationStrategy{
 
         our infonView: LHS <- aItem!.LHS_item!.pItem
         our infonView: RHS <- aItem!.RHS!.pItem
+        // An unconstrained strict any takes the candidate's graph identity. The
+        // inverted form remains generated because legacy copyIdentity mutates a
+        // rejected template; that semantic issue must not be reproduced here.
+        if(LHS!.viewMode==vmAny and !aItem!.RHS!.looseType() and
+                (RHS!.value!.overlayType==NUM or RHS!.value!.overlayType==STR or
+                 RHS!.value!.overlayType==LST) and
+                !LHS!.invertMatch and !RHS!.invertMatch){
+            result.directCase <- dcStrictAnyCopiesIdentity
+            result.status <- rrPlannedChange
+            result.consolidationAction <- caCopyRHSIdentityToLHS
+            result.copySize <- shouldCopySize(aItem, LHS, RHS)
+            return(result)
+        }
         if(LHS!.viewMode==vmAny or RHS!.viewMode==vmAny){return(result)}
         // A self-outer aRefTo carries graph identity semantics that must be
         // resolved before comparing its current local value.
@@ -194,10 +215,7 @@ struct DirectConsolidationStrategy{
             if(LHS!.value!.str==RHS!.value!.str){result.status <- rrHandledNoChange}
             else{result.status <- rrRejected}
         }
-        if(result.directCase!=dcNone and !aItem!.looseSize and
-                LHS!.infSize!.evalMode==emUnknown and RHS!.infSize!.evalMode==emLiteral and
-                (LHS!.viewMode!=vmOverlay or RHS!.value!.overlayType==LHS!.value!.overlayType) and
-                (LHS!.value!.listSpec==NULL or !LHS!.value!.listSpec!.asWrkLstOutr)){
+        if(result.directCase!=dcNone and shouldCopySize(aItem, LHS, RHS)){
             result.copySize <- true
         }
         return(result)
@@ -259,6 +277,9 @@ struct InfonViewReasoner{
         else if(result.directCase==dcLooseStringExactLiteral){
             aItem!.phase1RecordHandler("direct:looseStringExactLiteral", false)
         }
+        else if(result.directCase==dcStrictAnyCopiesIdentity){
+            aItem!.phase1RecordHandler("direct:strictAnyCopiesIdentity", false)
+        }
     }
 
     void: execConsolidationPlan(their WorldManager: worldManager, our AItem: aItem,
@@ -286,6 +307,9 @@ struct InfonViewReasoner{
                 aItem!.LHS_item!.pItem!.value!.sizeMode <- fromGiven
             }
             else{aItem!.LHS_item!.pItem!.value!.sizeMode <- fromCount}
+        }
+        else if(result.consolidationAction==caCopyRHSIdentityToLHS){
+            worldManager!.copyIdentity(aItem)
         }
     }
 

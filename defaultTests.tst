@@ -72,6 +72,12 @@ merge/str/looseSize,   loose str merge,                $ =: 'Hello',            
 merge/directLooseStr/exactWidthCopy, Loose string consumes an exact-width literal, *5+$ == 'Hello',                            'Hello',                        norm
 merge/directLooseStr/exactLiteralAccept, Equal-width loose literals accept when equal, 'Hello' == 'Hello',                     'Hello',                        norm
 merge/directLooseStr/exactLiteralReject, Equal-width loose literals reject when unequal, 'Hello' == 'World',                   'Hello',                        norm
+merge/directAny/scalar, Strict any takes scalar identity, ? = 'Hello',                                                        'Hello',                        norm
+merge/directAny/list, Strict any takes list identity, ? = {1 2},                                                             {1 2},                          norm
+# Engine gap: an inverted any rejects its candidate but generated copyIdentity
+# still replaces the template with that rejected candidate. Enable when inverted
+# matches are evaluated without committing their positive-match update.
+# merge/directAny/inverted, Inverted any does not copy rejected candidate, !? = 'Hello',                                       !?,                              norm
 merge/directAtomic/numReject, Numeric mismatch does not copy size, *_+8 = *16+9,                                                *_+8,                           norm
 merge/directAtomic/numInvertEqualReject, Inverted equal numeric template rejects without copying size, !*_+8 = *16+8,          !*_+8,                          norm
 merge/directAtomic/numInvertUnequalAccept, Inverted unequal numeric template accepts without copying size, !*_+8 = *16+9,      !*_+8,                          norm
