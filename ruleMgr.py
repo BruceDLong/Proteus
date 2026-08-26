@@ -116,7 +116,7 @@ mergeSizeRules = {
         '!looseSize':    '!aItem.looseSize'
     },
     'codeSnips': {
-        'copySizeRHStoLHS':         'if((aItem.LHS_item.pItem.viewMode!=vmOverlay or aItem.RHS.pItem.value.overlayType==aItem.LHS_item.pItem.value.overlayType) and (aItem.LHS_item.pItem.value.listSpec==NULL or !aItem.LHS_item.pItem.value.listSpec.asWrkLstOutr)){DO_COPY(aItem.RHS.pItem.infSize, aItem.LHS_item.pItem.infSize, 0)}',
+        'copySizeRHStoLHS':         'if(!sizeCopyPlannedByReasoner and (aItem.LHS_item.pItem.viewMode!=vmOverlay or aItem.RHS.pItem.value.overlayType==aItem.LHS_item.pItem.value.overlayType) and (aItem.LHS_item.pItem.value.listSpec==NULL or !aItem.LHS_item.pItem.value.listSpec.asWrkLstOutr)){DO_COPY(aItem.RHS.pItem.infSize, aItem.LHS_item.pItem.infSize, 0)}',
     },
     'rules': [
         ["mergeSize:!looseSize|lemUnknown|rsemLiteral",     "copySizeRHStoLHS"],
@@ -748,7 +748,10 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
         ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
         ifsCode += '        //else {log("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ '+ruleSetID+' RULE_MISSING");}\n'
         ifsCode += "        return(changeMade)"
-        funcCode = "    me bool: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
+        funcArgs = "our AItem: aItem"
+        if ruleSetID == "mergeSize":
+            funcArgs += ", me bool: sizeCopyPlannedByReasoner"
+        funcCode = "    me bool: "+ruleSetID+"Rules("+funcArgs+") <- {\n"+ifsCode+"\n    }\n"
     return(funcCode)
 
 def generateXformMgr(ruleSets):

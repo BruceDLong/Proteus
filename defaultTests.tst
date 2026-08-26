@@ -69,6 +69,11 @@ merge/str/typed4,      typed str merge 4,              *_+$ = 'Hello',          
 merge/str/typed5,      typed str merge 5,              'Hello' = *5+$,                                                         'Hello',                        norm
 merge/str/loose,       loose str merge,                $ == 'Hello',                                                           'Hello',                        norm
 merge/str/looseSize,   loose str merge,                $ =: 'Hello',                                                           *_+'Hello',                     norm
+merge/directAtomic/numReject, Numeric mismatch does not copy size, *_+8 = *16+9,                                                *_+8,                           norm
+merge/directAtomic/numInvertEqual, Inverted equal literals do not copy size, !*_+8 = *16+8,                                    !*_+8,                          norm
+merge/directAtomic/numInvertReject, Inverted unequal literals do not copy size, !*_+8 = *16+9,                                 !*_+8,                          norm
+merge/directAtomic/numInvertCopy, Inverted numeric copy does not commit, !*_+_ = *16+9,                                        !*_+_,                          norm
+merge/directAtomic/strInvertCopy, Inverted string copy does not commit, !*_+$ = *5+'Hello',                                    !*_+$,                          norm
 merge/unknown/loose,   unknown merge,                  ? == 'Hello',                                                           'Hello',                        norm
 merge/unknown/looseSize, unknown merge,                ? ==: 'Hello',                                                          *_+'Hello',                     norm
 merge/unknown/typed,   typed merge,                    ? = 'Hello',                                                            'Hello',                        norm

@@ -5,6 +5,7 @@ struct InfonViewReasoningResult{
     mode[dcNone, dcCopyLiteralValueToUnknown, dcLiteralAlreadyConstrainsUnknown,
          dcNumLiteralStrictEquality, dcStringLiteralStrictEquality]: directCase
     mode[caNone, caCopyRHSValueToLHS]: consolidationAction
+    me bool: copySize
     me bool: emitRejectLog
 }
 
@@ -24,6 +25,7 @@ struct DirectConsolidationStrategy{
         result.status <- rrNotApplicable
         result.directCase <- dcNone
         result.consolidationAction <- caNone
+        result.copySize <- false
         result.emitRejectLog <- false
         if(aItem==NULL or aItem!.LHS_item==NULL or aItem!.LHS_item!.pItem==NULL or
                 aItem!.RHS==NULL or aItem!.RHS!.pItem==NULL){return(result)}
@@ -67,6 +69,12 @@ struct DirectConsolidationStrategy{
             if(LHS!.value!.str==RHS!.value!.str){result.status <- rrHandledNoChange}
             else{result.status <- rrRejected}
         }
+        if(result.directCase!=dcNone and !aItem!.looseSize and
+                LHS!.infSize!.evalMode==emUnknown and RHS!.infSize!.evalMode==emLiteral and
+                (LHS!.viewMode!=vmOverlay or RHS!.value!.overlayType==LHS!.value!.overlayType) and
+                (LHS!.value!.listSpec==NULL or !LHS!.value!.listSpec!.asWrkLstOutr)){
+            result.copySize <- true
+        }
         return(result)
     }
 }
@@ -104,18 +112,19 @@ struct InfonViewReasoner{
         }
     }
 
-    me bool: execConsolidationPlan(their WorldManager: worldManager, our AItem: aItem,
+    void: execConsolidationPlan(their WorldManager: worldManager, our AItem: aItem,
             their InfonViewReasoningResult: result) <- {
+        if(result.copySize){
+            worldManager!.DO_COPY(aItem!.RHS!.pItem!.infSize, aItem!.LHS_item!.pItem!.infSize, 0)
+        }
         if(result.consolidationAction==caCopyRHSValueToLHS){
             worldManager!.DO_COPY(aItem!.RHS!.pItem!.value, aItem!.LHS_item!.pItem!.value,
                     aItem!.sizeToCopy)
-            return(true)
         }
-        return(false)
     }
 
     our POV: mergeInfonStates(their WorldManager: worldManager, our AItem: aItem,
-            their InfonViewReasoningResult: result) <- {
+            their InfonViewReasoningResult: result, me bool: commitConsolidationPlan) <- {
         recordDirectConsolidationHandlers(aItem, result)
         if(result.status==rrRejected){
             aItem!.mergeStatus <- msReject
@@ -126,8 +135,8 @@ struct InfonViewReasoner{
             }
             return(NULL)
         }
-        if(result.status==rrHandledNoChange){return(NULL)}
-        if(result.status==rrPlannedChange and execConsolidationPlan(worldManager, aItem, result)){
+        if(result.status==rrHandledNoChange or result.status==rrPlannedChange){
+            if(commitConsolidationPlan){execConsolidationPlan(worldManager, aItem, result)}
             return(NULL)
         }
         return(legacyMergeStrategy.mergeInfonStates(worldManager, aItem))
