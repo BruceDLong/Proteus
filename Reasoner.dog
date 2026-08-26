@@ -4,8 +4,9 @@ struct InfonViewReasoningResult{
     mode[rrNotApplicable, rrHandledNoChange, rrRejected, rrPlannedChange]: status
     mode[dcNone, dcCopyLiteralValueToUnknown, dcLiteralAlreadyConstrainsUnknown,
          dcNumLiteralStrictEquality, dcStringLiteralStrictEquality,
-         dcStrictOverlayTypeMismatch, dcScalarUnknownWithoutConstraints]: directCase
-    mode[caNone, caCopyRHSValueToLHS]: consolidationAction
+         dcStrictOverlayTypeMismatch, dcScalarUnknownWithoutConstraints,
+         dcLooseNumericRangeLiteral]: directCase
+    mode[caNone, caCopyRHSValueToLHS, caCopyRHSRangeMatchToLHS]: consolidationAction
     me bool: copySize
     me bool: emitRejectLog
 }
@@ -19,6 +20,63 @@ struct DirectConsolidationStrategy{
                 aItem!.LHS_item!.outerPOV!.pItem===aItem!.LHS_item!.pItem and
                 !aItem!.RHS!.pItem!.asRHSInternalIdent and
                 !(aItem!.RHS!.pParent!=NULL and aItem!.RHS!.pParent!.pItem!.asRHSInternalIdent))
+    }
+
+    me int: evalForRange(our infonView: infn, their FlexNum: lowest,
+            their FlexNum: highest) <- {
+        if(infn!.value!.evalMode!=emConcat){
+            if(infn!.value!.overlayType==NUM){
+                if(infn!.infSize!.evalMode==emLiteral){
+                    if(infn!.value!.evalMode==emLiteral){
+                        lowest! <- infn!.value!.num
+                        highest! <- lowest!
+                    }
+                    else if(infn!.value!.evalMode==emUnknown){
+                        lowest! <- 0
+                        highest! <- infn!.infSize!.num
+                    }
+                    else{return(1)}
+                }
+                else if(infn!.infSize!.evalMode==emUnknown){
+                    if(infn!.value!.evalMode==emLiteral){
+                        lowest! <- infn!.value!.num
+                        highest! <- infn!.value!.num
+                    }
+                    else{return(1)}
+                }
+                else{return(1)}
+            }
+            else{logFatalError("    evalForRange:error")}
+            return(3)
+        }
+        else if(infn!.value!.items.size()==2){
+            our infonView: first <- infn!.value!.items.first()
+            our infonView: secnd <- infn!.value!.items.last()
+            if(first!.value!.overlayType==NUM and first!.value!.evalMode==emUnknown and
+                    first!.infSize!.evalMode==emLiteral and
+                    secnd!.value!.overlayType==NUM and secnd!.value!.evalMode==emLiteral and
+                    secnd!.infSize!.evalMode==emUnknown and
+                    secnd!.value!.sizeMode==fromContext){
+                lowest! <- secnd!.value!.num
+                highest! <- lowest! + first!.infSize!.num
+            }
+            return(3)
+        }
+        return(1)
+    }
+
+    me bool: checkNumRange(our infonView: LHS, our infonView: RHS) <- {
+        me FlexNum: lowestLHS
+        me FlexNum: highestLHS
+        me FlexNum: lowestRHS
+        me FlexNum: highestRHS
+        me int: rangeResultLHS <- evalForRange(LHS, lowestLHS, highestLHS)
+        if(rangeResultLHS!=pass){return(true)}
+        me int: rangeResultRHS <- evalForRange(RHS, lowestRHS, highestRHS)
+        if(rangeResultRHS==pass){
+            return(lowestLHS <= lowestRHS and highestLHS > highestRHS)
+        }
+        return(true)
     }
 
     me InfonViewReasoningResult: planConsolidation(our AItem: aItem) <- {
@@ -95,6 +153,22 @@ struct DirectConsolidationStrategy{
             result.directCase <- dcScalarUnknownWithoutConstraints
             result.status <- rrHandledNoChange
         }
+        // Preserve the generated handling for !unknown until its semantics are
+        // settled independently. Ordinary loose numeric ranges are local.
+        else if(LHS!.value!.overlayType==NUM and LHS!.value!.evalMode==emUnknown and
+                aItem!.RHS!.looseType() and
+                RHS!.value!.overlayType==NUM and RHS!.value!.evalMode==emLiteral and
+                !LHS!.invertMatch and !RHS!.invertMatch){
+            result.directCase <- dcLooseNumericRangeLiteral
+            if(checkNumRange(LHS, RHS)){
+                result.status <- rrPlannedChange
+                result.consolidationAction <- caCopyRHSRangeMatchToLHS
+            }
+            else{
+                result.status <- rrRejected
+                result.emitRejectLog <- true
+            }
+        }
         if(result.directCase!=dcNone and !aItem!.looseSize and
                 LHS!.infSize!.evalMode==emUnknown and RHS!.infSize!.evalMode==emLiteral and
                 (LHS!.viewMode!=vmOverlay or RHS!.value!.overlayType==LHS!.value!.overlayType) and
@@ -120,6 +194,15 @@ struct InfonViewReasoner{
         return(directConsolidationStrategy.planConsolidation(aItem))
     }
 
+    me int: evalForRange(our infonView: infn, their FlexNum: lowest,
+            their FlexNum: highest) <- {
+        return(directConsolidationStrategy.evalForRange(infn, lowest, highest))
+    }
+
+    me bool: checkNumRange(our infonView: LHS, our infonView: RHS) <- {
+        return(directConsolidationStrategy.checkNumRange(LHS, RHS))
+    }
+
     void: recordDirectConsolidationHandlers(our AItem: aItem,
             their InfonViewReasoningResult: result) <- {
         if(result.directCase==dcNone){return()}
@@ -142,6 +225,9 @@ struct InfonViewReasoner{
         else if(result.directCase==dcScalarUnknownWithoutConstraints){
             aItem!.phase1RecordHandler("direct:scalarUnknownWithoutConstraints", false)
         }
+        else if(result.directCase==dcLooseNumericRangeLiteral){
+            aItem!.phase1RecordHandler("direct:looseNumericRangeLiteral", false)
+        }
     }
 
     void: execConsolidationPlan(their WorldManager: worldManager, our AItem: aItem,
@@ -152,6 +238,14 @@ struct InfonViewReasoner{
         if(result.consolidationAction==caCopyRHSValueToLHS){
             worldManager!.DO_COPY(aItem!.RHS!.pItem!.value, aItem!.LHS_item!.pItem!.value,
                     aItem!.sizeToCopy)
+        }
+        else if(result.consolidationAction==caCopyRHSRangeMatchToLHS){
+            worldManager!.DO_COPY(aItem!.RHS!.pItem!.value, aItem!.LHS_item!.pItem!.value,
+                    aItem!.sizeToCopy)
+            aItem!.LHS_item!.pItem!.invertMatch <- aItem!.RHS!.pItem!.invertMatch
+            if(aItem!.LHS_item!.outerPOV!=NULL){
+                aItem!.LHS_item!.outerPOV!.pItem!.altRulesApplied <- false
+            }
         }
     }
 

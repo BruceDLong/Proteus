@@ -70,15 +70,18 @@ merge/str/typed5,      typed str merge 5,              'Hello' = *5+$,          
 merge/str/loose,       loose str merge,                $ == 'Hello',                                                           'Hello',                        norm
 merge/str/looseSize,   loose str merge,                $ =: 'Hello',                                                           *_+'Hello',                     norm
 merge/directAtomic/numReject, Numeric mismatch does not copy size, *_+8 = *16+9,                                                *_+8,                           norm
-merge/directAtomic/numInvertEqual, Inverted equal literals do not copy size, !*_+8 = *16+8,                                    !*_+8,                          norm
-merge/directAtomic/numInvertReject, Inverted unequal literals do not copy size, !*_+8 = *16+9,                                 !*_+8,                          norm
-merge/directAtomic/numInvertCopy, Inverted numeric copy does not commit, !*_+_ = *16+9,                                        !*_+_,                          norm
-merge/directAtomic/strInvertCopy, Inverted string copy does not commit, !*_+$ = *5+'Hello',                                    !*_+$,                          norm
+merge/directAtomic/numInvertEqualReject, Inverted equal numeric template rejects without copying size, !*_+8 = *16+8,          !*_+8,                          norm
+merge/directAtomic/numInvertUnequalAccept, Inverted unequal numeric template accepts without copying size, !*_+8 = *16+9,      !*_+8,                          norm
+merge/directAtomic/numInvertWildcardReject, Inverted numeric wildcard rejects numeric without copying, !*_+_ = *16+9,          !*_+_,                          norm
+merge/directAtomic/strInvertWildcardReject, Inverted string wildcard rejects string without copying, !*_+$ = *5+'Hello',       !*_+$,                          norm
 merge/directType/numRejectStr, Strict numeric rejects string, _ = 'Hello',                                                     _,                               norm
 merge/directType/strRejectNum, Strict string rejects numeric, $ = 10,                                                          $,                               norm
 merge/directType/listRejectNum, Strict list rejects numeric, {1} = 1,                                                          {1},                             norm
 merge/directUnknown/numNoConstraints, Numeric unknowns need no local update, _ = _,                                            _,                               norm
 merge/directUnknown/strNoConstraints, String unknowns need no local update, $ = $,                                             $,                               norm
+merge/directRange/unknownAccept, Loose numeric unknown accepts literal, _ == 7,                                                7,                               norm
+merge/directRange/insideAccept, Loose numeric range accepts contained literal, *4+_ == 3,                                      3,                               norm
+merge/directRange/endReject, Loose numeric range excludes its end, *4+_ == 4,                                                  *4+_,                            norm
 merge/unknown/loose,   unknown merge,                  ? == 'Hello',                                                           'Hello',                        norm
 merge/unknown/looseSize, unknown merge,                ? ==: 'Hello',                                                          *_+'Hello',                     norm
 merge/unknown/typed,   typed merge,                    ? = 'Hello',                                                            'Hello',                        norm
@@ -164,6 +167,13 @@ query/getNth,          Get Nth item,                   *3+['Cat' 'Hat' 'Bat' 'Do
 # query/firstStrA,	Get first String	[&{&{_|...} $} =: {2 3 'Cat' 'Hat'}]	'Cat'	norm
 query/firstStrB,       Get first String,               [&{_|...} $]<~{2 3 'Cat' 'Hat'},                                        'Cat',                          norm
 query/firstStrC,       Get first String,               [&{!$|...} $]<~{2 {'Hi' 3 } 4 'Cat' 'Hat'},                             'Cat',                          norm
+notTemplate/notNum,    Inverted numeric wildcard skips non-numbers, [&{!_|...} _]<~{'A' {1 2} 3 4},                            3,                              norm
+notTemplate/compoundNum, Inverted numeric template accepts either mismatch, [&{!*12+5|...} *12+5]<~{*10+5 *12+4 *12+5},       *12+5,                         norm
+notTemplate/resolvedUnknown, Inverted value template waits for candidate normalization, [&{!*_+5|...} *_+5]<~{(_=6) 5},       *_+5,                          norm
+# Engine gap: an inverted list template currently copies candidate elements and
+# rejects both equal and unequal list sizes. Enable this when list templates use
+# read-only, whole-template matching like the scalar cases above.
+# notTemplate/listSize, Inverted two-item template accepts three-item list, [&{!{_ _}|...} 'stop']<~{{1 2 3} 'stop'},             'stop',                         norm
 write/writeStrA,       Write first String,             {2 3 $ 'Hat'}.$ = 'Cat';,                                               {2 3 'Cat' 'Hat'},              norm
 write/writeByIdx,      Write third item,               {'Cat' 'Hat' $ 'Dog'}#3 = 'Bat';,                                       {'Cat' 'Hat' 'Bat' 'Dog'},      norm
 write/first,           Write first item,               {$ 'Hat' 'Bat' 'Dog'}.first = 'Cat';,                                   {'Cat' 'Hat' 'Bat' 'Dog'},      norm
