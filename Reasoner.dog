@@ -7,7 +7,8 @@ struct InfonViewReasoningResult{
          dcNumLiteralStrictEquality, dcStringLiteralStrictEquality,
          dcStrictOverlayTypeMismatch, dcScalarUnknownWithoutConstraints,
          dcLooseNumericRangeLiteral, dcLooseStringWholeCopy,
-         dcLooseStringExactLiteral, dcStrictAnyCopiesIdentity,
+         dcLooseStringExactLiteral, dcLooseStringRemainder,
+         dcStrictAnyCopiesIdentity,
          dcScalarUnknownCopiesIdentity, dcScalarUnknownCopiesConstraints,
          dcLooseAnyCopiesValue, dcLooseScalarUnknownWithoutConstraints]: directCase
     mode[lcNone, lcStrictLiteralLists, lcLooseLiteralLists,
@@ -18,7 +19,7 @@ struct InfonViewReasoningResult{
     mode[caNone, caCopyRHSValueToLHS, caCopyRHSRangeMatchToLHS,
          caCopyRHSWholeStringToLHS, caCopyRHSIdentityToLHS,
          caCopyRHSWorkListToLHS, caCopyRHSValueAndTypeToLHS,
-         caMergeRHSIntersection]: consolidationAction
+         caMergeRHSIntersection, caMergeLooseStrings]: consolidationAction
     mode[waNone, waStartListPropagation]: workAction
     me bool: copySize
     me bool: emitRejectLog
@@ -88,6 +89,14 @@ struct DirectConsolidationStrategy{
         me int: rangeResultRHS <- evalForRange(RHS, lowestRHS, highestRHS)
         if(rangeResultRHS==pass){
             return(lowestLHS <= lowestRHS and highestLHS > highestRHS)
+        }
+        return(true)
+    }
+
+    me bool: looseStringPrefixesAreCompatible(me string: LHS, me string: RHS) <- {
+        me int64: prefixSize <- min(LHS.size(), RHS.size())
+        withEach pos in range 0 .. prefixSize{
+            if(LHS[pos]!=RHS[pos]){return(false)}
         }
         return(true)
     }
@@ -261,6 +270,21 @@ struct DirectConsolidationStrategy{
             result.directCase <- dcLooseStringExactLiteral
             if(LHS!.value!.str==RHS!.value!.str){result.status <- rrHandledNoChange}
             else{result.status <- rrRejected}
+        }
+        else if(LHS!.value!.overlayType==STR and
+                (LHS!.value!.evalMode==emUnknown or LHS!.value!.evalMode==emLiteral) and
+                aItem!.RHS!.looseType() and
+                RHS!.value!.overlayType==STR and RHS!.value!.evalMode==emLiteral and
+                !LHS!.invertMatch and !RHS!.invertMatch){
+            result.directCase <- dcLooseStringRemainder
+            if(LHS!.value!.evalMode==emLiteral and
+                    !looseStringPrefixesAreCompatible(LHS!.value!.str, RHS!.value!.str)){
+                result.status <- rrRejected
+            }
+            else{
+                result.status <- rrPlannedChange
+                result.consolidationAction <- caMergeLooseStrings
+            }
         }
         if(result.directCase!=dcNone and shouldCopySize(aItem, LHS, RHS)){
             result.copySize <- true
@@ -466,6 +490,9 @@ struct InfonViewReasoner{
         else if(result.directCase==dcLooseStringExactLiteral){
             aItem!.phase1RecordHandler("direct:looseStringExactLiteral", false)
         }
+        else if(result.directCase==dcLooseStringRemainder){
+            aItem!.phase1RecordHandler("direct:looseStringRemainder", false)
+        }
         else if(result.directCase==dcStrictAnyCopiesIdentity){
             aItem!.phase1RecordHandler("direct:strictAnyCopiesIdentity", false)
         }
@@ -507,8 +534,9 @@ struct InfonViewReasoner{
         }
     }
 
-    void: execConsolidationPlan(their WorldManager: worldManager, our AItem: aItem,
+    our POV: execConsolidationPlan(their WorldManager: worldManager, our AItem: aItem,
             their InfonViewReasoningResult: result) <- {
+        our POV: remainder <- NULL
         if(result.copySize){
             worldManager!.DO_COPY(aItem!.RHS!.pItem!.infSize, aItem!.LHS_item!.pItem!.infSize, 0)
         }
@@ -548,9 +576,13 @@ struct InfonViewReasoner{
         else if(result.consolidationAction==caMergeRHSIntersection){
             worldManager!.mergeRHSIntersect(aItem)
         }
+        else if(result.consolidationAction==caMergeLooseStrings){
+            remainder <- worldManager!.mergeLooseStrings(aItem)
+        }
         if(result.workAction==waStartListPropagation){
             worldManager!.startPropRules(aItem)
         }
+        return(remainder)
     }
 
     our POV: mergeInfonStates(their WorldManager: worldManager, our AItem: aItem,
@@ -567,7 +599,9 @@ struct InfonViewReasoner{
         }
         if(result.status==rrHandledNoChange or result.status==rrPlannedChange or
                 result.status==rrNeedsWork){
-            if(commitConsolidationPlan){execConsolidationPlan(worldManager, aItem, result)}
+            if(commitConsolidationPlan){
+                return(execConsolidationPlan(worldManager, aItem, result))
+            }
             return(NULL)
         }
         return(legacyMergeStrategy.mergeInfonStates(worldManager, aItem))
