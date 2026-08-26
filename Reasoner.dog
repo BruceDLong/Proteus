@@ -6,9 +6,11 @@ struct InfonViewReasoningResult{
          dcNumLiteralStrictEquality, dcStringLiteralStrictEquality,
          dcStrictOverlayTypeMismatch, dcScalarUnknownWithoutConstraints,
          dcLooseNumericRangeLiteral, dcLooseStringWholeCopy,
-         dcLooseStringExactLiteral, dcStrictAnyCopiesIdentity]: directCase
+         dcLooseStringExactLiteral, dcStrictAnyCopiesIdentity,
+         dcScalarUnknownCopiesIdentity, dcScalarUnknownCopiesConstraints]: directCase
     mode[caNone, caCopyRHSValueToLHS, caCopyRHSRangeMatchToLHS,
-         caCopyRHSWholeStringToLHS, caCopyRHSIdentityToLHS]: consolidationAction
+         caCopyRHSWholeStringToLHS, caCopyRHSIdentityToLHS,
+         caCopyRHSWorkListToLHS]: consolidationAction
     me bool: copySize
     me bool: emitRejectLog
 }
@@ -114,6 +116,30 @@ struct DirectConsolidationStrategy{
             result.copySize <- shouldCopySize(aItem, LHS, RHS)
             return(result)
         }
+        // Strict scalar unknowns either acquire reference identity, inherit the
+        // candidate's pending constraints, or need no local state change.
+        if((LHS!.value!.overlayType==NUM or LHS!.value!.overlayType==STR) and
+                LHS!.value!.evalMode==emUnknown and !aItem!.RHS!.looseType() and
+                RHS!.value!.overlayType==LHS!.value!.overlayType and
+                RHS!.value!.evalMode==emUnknown and
+                !LHS!.invertMatch and !RHS!.invertMatch){
+            if(aItem!.LHS_item!.accessMode==aRefTo){
+                result.directCase <- dcScalarUnknownCopiesIdentity
+                result.status <- rrPlannedChange
+                result.consolidationAction <- caCopyRHSIdentityToLHS
+            }
+            else if(!RHS!.wrkList.isEmpty()){
+                result.directCase <- dcScalarUnknownCopiesConstraints
+                result.status <- rrPlannedChange
+                result.consolidationAction <- caCopyRHSWorkListToLHS
+            }
+            else{
+                result.directCase <- dcScalarUnknownWithoutConstraints
+                result.status <- rrHandledNoChange
+            }
+            result.copySize <- shouldCopySize(aItem, LHS, RHS)
+            return(result)
+        }
         if(LHS!.viewMode==vmAny or RHS!.viewMode==vmAny){return(result)}
         // A self-outer aRefTo carries graph identity semantics that must be
         // resolved before comparing its current local value.
@@ -162,19 +188,6 @@ struct DirectConsolidationStrategy{
                   (RHS!.value!.overlayType==NUM or RHS!.value!.overlayType==STR)))){
             result.directCase <- dcStrictOverlayTypeMismatch
             result.status <- rrRejected
-        }
-        // Reference identity, inherited constraints, and inverted unknowns have
-        // distinct legacy semantics. This is only the genuinely empty no-op case.
-        else if((LHS!.value!.overlayType==NUM or LHS!.value!.overlayType==STR) and
-                LHS!.value!.evalMode==emUnknown and
-                !aItem!.RHS!.looseType() and
-                RHS!.value!.overlayType==LHS!.value!.overlayType and
-                RHS!.value!.evalMode==emUnknown and
-                aItem!.LHS_item!.accessMode!=aRefTo and
-                aItem!.RHS!.pItem!.wrkList.isEmpty() and
-                !LHS!.invertMatch and !RHS!.invertMatch){
-            result.directCase <- dcScalarUnknownWithoutConstraints
-            result.status <- rrHandledNoChange
         }
         // Preserve the generated handling for !unknown until its semantics are
         // settled independently. Ordinary loose numeric ranges are local.
@@ -280,6 +293,12 @@ struct InfonViewReasoner{
         else if(result.directCase==dcStrictAnyCopiesIdentity){
             aItem!.phase1RecordHandler("direct:strictAnyCopiesIdentity", false)
         }
+        else if(result.directCase==dcScalarUnknownCopiesIdentity){
+            aItem!.phase1RecordHandler("direct:scalarUnknownCopiesIdentity", false)
+        }
+        else if(result.directCase==dcScalarUnknownCopiesConstraints){
+            aItem!.phase1RecordHandler("direct:scalarUnknownCopiesConstraints", false)
+        }
     }
 
     void: execConsolidationPlan(their WorldManager: worldManager, our AItem: aItem,
@@ -310,6 +329,9 @@ struct InfonViewReasoner{
         }
         else if(result.consolidationAction==caCopyRHSIdentityToLHS){
             worldManager!.copyIdentity(aItem)
+        }
+        else if(result.consolidationAction==caCopyRHSWorkListToLHS){
+            aItem!.LHS_item!.pItem!.copyWrkListFrom(aItem!.RHS!.pItem)
         }
     }
 
