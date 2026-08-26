@@ -50,6 +50,8 @@ parser/func/leftInv,   Invert on left,                 1!>[_ 2 3],              
 merge/num/typed1,      typed int merge 1,              *16+10 = *16+10,                                                        *16+10,                         norm
 merge/num/literalEqual, Equal numeric literals,         10 = 10,                                                               10,                             norm
 merge/num/literalSelect, Reject unequal numeric literals, 2 = *_+[1 2 3],                                                      2,                              norm
+merge/num/literalToUnknown, Numeric literal already constrains unknown, 10 = _,                                                10,                             norm
+merge/num/unknownFromLiteral, Numeric unknown takes literal value, _ = 10,                                                      10,                             norm
 merge/num/typed2,      typed int merge 2,              *16+_ = *16+9,                                                          *16+9,                          norm
 merge/num/typed3,      typed int merge 3,              _ = *16+10,                                                             *16+10,                         norm
 merge/num/typed4,      typed int merge 4,              *_+_ = *16+9,                                                           *16+9,                          norm
@@ -59,6 +61,8 @@ merge/num/typed7,      typed int merge 7,              *16+_ = *_+9,            
 merge/str/typed1,      typed str merge 1,              *5+'Hello' = *5+'Hello',                                                *5+'Hello',                     norm
 merge/str/literalEqual, Equal string literals,          'Hello' = 'Hello',                                                      'Hello',                        norm
 merge/str/literalSelect, Reject unequal string literals, 'Beta' = *_+['Alpha' 'Beta'],                                          'Beta',                         norm
+merge/str/literalToUnknown, String literal already constrains unknown, 'Hello' = $,                                             'Hello',                        norm
+merge/str/unknownFromLiteral, String unknown takes literal value, $ = 'Hello',                                                   'Hello',                        norm
 merge/str/typed2,      typed str merge 2,              *5+$ = 'Hello',                                                         'Hello',                        norm
 merge/str/typed3,      typed str merge 3,              $ = 'Hello',                                                            'Hello',                        norm
 merge/str/typed4,      typed str merge 4,              *_+$ = 'Hello',                                                         'Hello',                        norm

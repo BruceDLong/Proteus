@@ -1,11 +1,12 @@
 // Owns local infon-state semantics while legacy merge cases remain generated
 // as WorldManager methods.
 struct InfonViewReasoningResult{
-    mode[rrNotApplicable, rrHandledNoChange, rrRejected]: status
+    mode[rrNotApplicable, rrHandledNoChange, rrRejected, rrPlannedChange]: status
+    mode[caNone, caCopyRHSValueToLHS]: consolidationAction
     me bool: emitRejectLog
 }
 
-// Handles local consolidation cases whose complete outcome can be determined
+// Plans local consolidation cases whose complete outcome can be determined
 // without scheduling or partial graph mutation.
 struct DirectConsolidationStrategy{
     me bool: referenceIdentityTakesPriority(our AItem: aItem) <- {
@@ -19,6 +20,7 @@ struct DirectConsolidationStrategy{
     me InfonViewReasoningResult: mergeInfonStates(our AItem: aItem) <- {
         me InfonViewReasoningResult: result
         result.status <- rrNotApplicable
+        result.consolidationAction <- caNone
         result.emitRejectLog <- false
         if(aItem==NULL or aItem!.LHS_item==NULL or aItem!.LHS_item!.pItem==NULL or
                 aItem!.RHS==NULL or aItem!.RHS!.pItem==NULL){return(result)}
@@ -30,7 +32,24 @@ struct DirectConsolidationStrategy{
         // resolved before comparing its current local value.
         if(referenceIdentityTakesPriority(aItem)){return(result)}
 
-        if(LHS!.value!.overlayType==NUM and LHS!.value!.evalMode==emLiteral and
+        if(!aItem!.RHS!.looseType() and LHS!.value!.evalMode==emUnknown and
+                RHS!.value!.evalMode==emLiteral and
+                LHS!.value!.overlayType==RHS!.value!.overlayType and
+                (LHS!.value!.overlayType==NUM or LHS!.value!.overlayType==STR)){
+            aItem!.phase1RecordHandler("strategy:directConsolidation", false)
+            aItem!.phase1RecordHandler("direct:copyLiteralValueToUnknown", false)
+            result.status <- rrPlannedChange
+            result.consolidationAction <- caCopyRHSValueToLHS
+        }
+        else if(!aItem!.RHS!.looseType() and LHS!.value!.evalMode==emLiteral and
+                RHS!.value!.evalMode==emUnknown and
+                LHS!.value!.overlayType==RHS!.value!.overlayType and
+                (LHS!.value!.overlayType==NUM or LHS!.value!.overlayType==STR)){
+            aItem!.phase1RecordHandler("strategy:directConsolidation", false)
+            aItem!.phase1RecordHandler("direct:literalAlreadyConstrainsUnknown", false)
+            result.status <- rrHandledNoChange
+        }
+        else if(LHS!.value!.overlayType==NUM and LHS!.value!.evalMode==emLiteral and
                 !aItem!.RHS!.looseType() and
                 RHS!.value!.overlayType==NUM and RHS!.value!.evalMode==emLiteral){
             aItem!.phase1RecordHandler("strategy:directConsolidation", false)
@@ -64,6 +83,16 @@ struct InfonViewReasoner{
     me DirectConsolidationStrategy: directConsolidationStrategy
     me LegacyMergeStrategy: legacyMergeStrategy
 
+    me bool: execConsolidationPlan(their WorldManager: worldManager, our AItem: aItem,
+            their InfonViewReasoningResult: result) <- {
+        if(result.consolidationAction==caCopyRHSValueToLHS){
+            worldManager!.DO_COPY(aItem!.RHS!.pItem!.value, aItem!.LHS_item!.pItem!.value,
+                    aItem!.sizeToCopy)
+            return(true)
+        }
+        return(false)
+    }
+
     our POV: mergeInfonStates(their WorldManager: worldManager, our AItem: aItem) <- {
         me InfonViewReasoningResult: result <- directConsolidationStrategy.mergeInfonStates(aItem)
         if(result.status==rrRejected){
@@ -76,6 +105,9 @@ struct InfonViewReasoner{
             return(NULL)
         }
         if(result.status==rrHandledNoChange){return(NULL)}
+        if(result.status==rrPlannedChange and execConsolidationPlan(worldManager, aItem, result)){
+            return(NULL)
+        }
         return(legacyMergeStrategy.mergeInfonStates(worldManager, aItem))
     }
 }
