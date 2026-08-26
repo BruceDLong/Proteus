@@ -23,12 +23,10 @@ struct InfonViewReasoningResult{
          caMergeRHSIntersection, caMergeLooseStrings,
          caCopyRHSInfonToLHS, caMergeANDRanges]: consolidationAction
     mode[waNone, waStartListPropagation]: workAction
+    mode[cpNonInvertedAcceptance, cpPositiveTemplateAcceptance,
+         cpFinalAcceptance]: actionCommitPolicy
     me bool: copySize
     me bool: emitRejectLog
-    // Most legacy actions only describe a positively matched template. A
-    // complemented range also has to materialize the candidate when the
-    // positive template rejects and the final, inverted decision accepts.
-    me bool: commitActionOnFinalAcceptance
 }
 
 // Plans local consolidation cases whose complete outcome can be determined
@@ -123,24 +121,28 @@ struct DirectConsolidationStrategy{
         result.intersectionCase <- icNone
         result.consolidationAction <- caNone
         result.workAction <- waNone
+        result.actionCommitPolicy <- cpNonInvertedAcceptance
         result.copySize <- false
         result.emitRejectLog <- false
-        result.commitActionOnFinalAcceptance <- false
         if(aItem==NULL or aItem!.LHS_item==NULL or aItem!.LHS_item!.pItem==NULL or
                 aItem!.RHS==NULL or aItem!.RHS!.pItem==NULL){return(result)}
 
         our infonView: LHS <- aItem!.LHS_item!.pItem
         our infonView: RHS <- aItem!.RHS!.pItem
-        // An unconstrained strict any takes the candidate's graph identity. The
-        // inverted form remains generated because legacy copyIdentity mutates a
-        // rejected template; that semantic issue must not be reproduced here.
+        // An unconstrained strict any takes the candidate's graph identity.
+        // A tentative complemented traversal node also needs that positive
+        // match materialized before local inversion rejects it, so nested path
+        // traversal can continue through the candidate graph.
         if(LHS!.viewMode==vmAny and !aItem!.RHS!.looseType() and
                 (RHS!.value!.overlayType==NUM or RHS!.value!.overlayType==STR or
                  RHS!.value!.overlayType==LST) and
-                !LHS!.invertMatch and !RHS!.invertMatch){
+                (!LHS!.invertMatch or LHS!.isTentative) and !RHS!.invertMatch){
             result.directCase <- dcStrictAnyCopiesIdentity
             result.status <- rrPlannedChange
             result.consolidationAction <- caCopyRHSIdentityToLHS
+            if(LHS!.invertMatch){
+                result.actionCommitPolicy <- cpPositiveTemplateAcceptance
+            }
             result.copySize <- shouldCopySize(aItem, LHS, RHS)
             return(result)
         }
@@ -249,7 +251,7 @@ struct DirectConsolidationStrategy{
                 !RHS!.invertMatch){
             result.directCase <- dcLooseNumericRangeLiteral
             result.consolidationAction <- caCopyRHSRangeMatchToLHS
-            result.commitActionOnFinalAcceptance <- LHS!.invertMatch
+            if(LHS!.invertMatch){result.actionCommitPolicy <- cpFinalAcceptance}
             if(checkNumRange(LHS, RHS)){
                 result.status <- rrPlannedChange
             }
@@ -267,7 +269,7 @@ struct DirectConsolidationStrategy{
                   RHS!.value!.evalMode==emConcat))){
             result.directCase <- dcNumericRangeDeepCopy
             result.consolidationAction <- caCopyRHSInfonToLHS
-            result.commitActionOnFinalAcceptance <- LHS!.invertMatch
+            if(LHS!.invertMatch){result.actionCommitPolicy <- cpFinalAcceptance}
             if(checkNumRange(LHS, RHS)){
                 result.status <- rrPlannedChange
             }
@@ -341,9 +343,9 @@ struct ListConsolidationStrategy{
         result.intersectionCase <- icNone
         result.consolidationAction <- caNone
         result.workAction <- waNone
+        result.actionCommitPolicy <- cpNonInvertedAcceptance
         result.copySize <- false
         result.emitRejectLog <- false
-        result.commitActionOnFinalAcceptance <- false
         if(aItem==NULL or aItem!.LHS_item==NULL or aItem!.LHS_item!.pItem==NULL or
                 aItem!.RHS==NULL or aItem!.RHS!.pItem==NULL){return(result)}
 
@@ -408,9 +410,9 @@ struct IntersectionConsolidationStrategy{
         result.intersectionCase <- icNone
         result.consolidationAction <- caNone
         result.workAction <- waNone
+        result.actionCommitPolicy <- cpNonInvertedAcceptance
         result.copySize <- false
         result.emitRejectLog <- false
-        result.commitActionOnFinalAcceptance <- false
         if(aItem==NULL or aItem!.LHS_item==NULL or aItem!.LHS_item!.pItem==NULL or
                 aItem!.RHS==NULL or aItem!.RHS!.pItem==NULL){return(result)}
 
@@ -648,7 +650,7 @@ struct InfonViewReasoner{
                 // Preserve the existing numeric-literal rejection diagnostic.
                 //:l/PAI::logSeg("REJECT")
             }
-            if(commitConsolidationPlan and result.commitActionOnFinalAcceptance){
+            if(commitConsolidationPlan and result.actionCommitPolicy==cpFinalAcceptance){
                 return(execConsolidationPlan(worldManager, aItem, result))
             }
             return(NULL)
