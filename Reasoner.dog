@@ -25,6 +25,10 @@ struct InfonViewReasoningResult{
     mode[waNone, waStartListPropagation]: workAction
     me bool: copySize
     me bool: emitRejectLog
+    // Most legacy actions only describe a positively matched template. A
+    // complemented range also has to materialize the candidate when the
+    // positive template rejects and the final, inverted decision accepts.
+    me bool: commitActionOnFinalAcceptance
 }
 
 // Plans local consolidation cases whose complete outcome can be determined
@@ -121,6 +125,7 @@ struct DirectConsolidationStrategy{
         result.workAction <- waNone
         result.copySize <- false
         result.emitRejectLog <- false
+        result.commitActionOnFinalAcceptance <- false
         if(aItem==NULL or aItem!.LHS_item==NULL or aItem!.LHS_item!.pItem==NULL or
                 aItem!.RHS==NULL or aItem!.RHS!.pItem==NULL){return(result)}
 
@@ -234,16 +239,19 @@ struct DirectConsolidationStrategy{
             result.directCase <- dcStrictOverlayTypeMismatch
             result.status <- rrRejected
         }
-        // Preserve the generated handling for !unknown until its semantics are
-        // settled independently. Ordinary loose numeric ranges are local.
+        // A complemented range is evaluated as the ordinary positive range,
+        // but its tentative result is populated only when the final, inverted
+        // decision accepts. RHS inversion remains deferred because combining
+        // two negative constraints needs an explicit constraint model.
         else if(LHS!.value!.overlayType==NUM and LHS!.value!.evalMode==emUnknown and
                 aItem!.RHS!.looseType() and
                 RHS!.value!.overlayType==NUM and RHS!.value!.evalMode==emLiteral and
-                !LHS!.invertMatch and !RHS!.invertMatch){
+                !RHS!.invertMatch){
             result.directCase <- dcLooseNumericRangeLiteral
+            result.consolidationAction <- caCopyRHSRangeMatchToLHS
+            result.commitActionOnFinalAcceptance <- LHS!.invertMatch
             if(checkNumRange(LHS, RHS)){
                 result.status <- rrPlannedChange
-                result.consolidationAction <- caCopyRHSRangeMatchToLHS
             }
             else{
                 result.status <- rrRejected
@@ -334,6 +342,7 @@ struct ListConsolidationStrategy{
         result.workAction <- waNone
         result.copySize <- false
         result.emitRejectLog <- false
+        result.commitActionOnFinalAcceptance <- false
         if(aItem==NULL or aItem!.LHS_item==NULL or aItem!.LHS_item!.pItem==NULL or
                 aItem!.RHS==NULL or aItem!.RHS!.pItem==NULL){return(result)}
 
@@ -400,6 +409,7 @@ struct IntersectionConsolidationStrategy{
         result.workAction <- waNone
         result.copySize <- false
         result.emitRejectLog <- false
+        result.commitActionOnFinalAcceptance <- false
         if(aItem==NULL or aItem!.LHS_item==NULL or aItem!.LHS_item!.pItem==NULL or
                 aItem!.RHS==NULL or aItem!.RHS!.pItem==NULL){return(result)}
 
@@ -636,6 +646,9 @@ struct InfonViewReasoner{
             if(result.emitRejectLog){
                 // Preserve the existing numeric-literal rejection diagnostic.
                 //:l/PAI::logSeg("REJECT")
+            }
+            if(commitConsolidationPlan and result.commitActionOnFinalAcceptance){
+                return(execConsolidationPlan(worldManager, aItem, result))
             }
             return(NULL)
         }
