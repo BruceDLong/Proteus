@@ -11,7 +11,9 @@ struct InfonViewReasoningResult{
          dcStrictAnyCopiesIdentity,
          dcScalarUnknownCopiesIdentity, dcScalarUnknownCopiesConstraints,
          dcLooseAnyCopiesValue, dcLooseScalarUnknownWithoutConstraints,
-         dcNumericRangeDeepCopy, dcConcatRangeIntersection]: directCase
+         dcNumericRangeDeepCopy, dcConcatRangeIntersection,
+         dcEquivalentNumericTemplatePolarity,
+         dcUnresolvedNumericTemplatePolarity]: directCase
     mode[lcNone, lcStrictLiteralLists, lcLooseLiteralLists,
          lcLooseListAgainstScalar]: listCase
     mode[icNone, icStrictScalarAgainstIntersection,
@@ -25,6 +27,10 @@ struct InfonViewReasoningResult{
     mode[waNone, waStartListPropagation]: workAction
     mode[cpNonInvertedAcceptance, cpPositiveTemplateAcceptance,
          cpFinalAcceptance]: actionCommitPolicy
+    me ConstraintDisposition: constraintDisposition <- cdDischarged
+    // True when status already accounts for both top-level template polarities;
+    // AgendaEngine must not apply the legacy LHS-only inversion afterward.
+    me bool: statusIncludesPolarity <- false
     me bool: copySize
     me bool: emitRejectLog
 }
@@ -81,6 +87,84 @@ struct DirectConsolidationStrategy{
             return(3)
         }
         return(1)
+    }
+
+    // Extract the positive numeric set denoted by a fully constrained numeric
+    // template. This deliberately excludes a bare unknown such as `_`: under
+    // template-style negation it contributes no negative constraint.
+    me bool: knownNumericTemplateBounds(our infonView: infn,
+            their FlexNum: lowest, their FlexNum: highest) <- {
+        if(infn==NULL){return(false)}
+        if(infn!.value!.evalMode!=emConcat){
+            if(infn!.value!.overlayType!=NUM){return(false)}
+            if(infn!.infSize!.evalMode==emLiteral){
+                if(infn!.value!.evalMode==emLiteral){
+                    lowest! <- infn!.value!.num
+                    highest! <- lowest!
+                    return(true)
+                }
+                if(infn!.value!.evalMode==emUnknown){
+                    lowest! <- 0
+                    highest! <- infn!.infSize!.num
+                    return(true)
+                }
+                return(false)
+            }
+            if(infn!.infSize!.evalMode==emUnknown and
+                    infn!.value!.evalMode==emLiteral){
+                lowest! <- infn!.value!.num
+                highest! <- lowest!
+                return(true)
+            }
+            return(false)
+        }
+        if(infn!.value!.items.size()!=2){return(false)}
+        our infonView: first <- infn!.value!.items.first()
+        our infonView: secnd <- infn!.value!.items.last()
+        if(first!.value!.overlayType!=NUM or first!.value!.evalMode!=emUnknown or
+                first!.infSize!.evalMode!=emLiteral or
+                secnd!.value!.overlayType!=NUM or secnd!.value!.evalMode!=emLiteral or
+                secnd!.infSize!.evalMode!=emUnknown or
+                secnd!.value!.sizeMode!=fromContext){return(false)}
+        lowest! <- secnd!.value!.num
+        highest! <- lowest! + first!.infSize!.num
+        return(true)
+    }
+
+    me bool: equivalentNumericTemplates(our infonView: LHS,
+            our infonView: RHS) <- {
+        if(LHS==NULL or RHS==NULL or LHS!.getTypeStr()!=RHS!.getTypeStr()){
+            return(false)
+        }
+        me bool: lhsIsConcat <- LHS!.value!.evalMode==emConcat
+        me bool: rhsIsConcat <- RHS!.value!.evalMode==emConcat
+        if(lhsIsConcat!=rhsIsConcat){return(false)}
+        if(!lhsIsConcat){
+            if(LHS!.value!.overlayType!=NUM or RHS!.value!.overlayType!=NUM or
+                    LHS!.value!.evalMode!=RHS!.value!.evalMode or
+                    LHS!.infSize!.evalMode!=RHS!.infSize!.evalMode){
+                return(false)
+            }
+            if(LHS!.value!.evalMode==emLiteral){
+                if(LHS!.value!.num!=RHS!.value!.num){return(false)}
+            }else if(LHS!.value!.evalMode!=emUnknown){return(false)}
+            if(LHS!.infSize!.evalMode==emLiteral){
+                if(LHS!.infSize!.num!=RHS!.infSize!.num){return(false)}
+            }else if(LHS!.infSize!.evalMode!=emUnknown){return(false)}
+            // A bare numeric unknown is an unconstrained template, so its
+            // polarity does not establish an equality or contradiction.
+            return(LHS!.value!.evalMode!=emUnknown or
+                    LHS!.infSize!.evalMode!=emUnknown)
+        }
+        me FlexNum: lowestLHS
+        me FlexNum: highestLHS
+        me FlexNum: lowestRHS
+        me FlexNum: highestRHS
+        if(!knownNumericTemplateBounds(LHS, lowestLHS, highestLHS) or
+                !knownNumericTemplateBounds(RHS, lowestRHS, highestRHS)){
+            return(false)
+        }
+        return(lowestLHS==lowestRHS and highestLHS==highestRHS)
     }
 
     me bool: checkNumRange(our infonView: LHS, our infonView: RHS) <- {
@@ -200,6 +284,44 @@ struct DirectConsolidationStrategy{
         // A self-outer aRefTo carries graph identity semantics that must be
         // resolved before comparing its current local value.
         if(referenceIdentityTakesPriority(aItem)){return(result)}
+
+        // Equal positive numeric templates have a complete polarity relation.
+        // Same polarity is idempotent; opposite polarity is contradictory.
+        // This is equality of represented numeric sets, not graph identity.
+        if(!aItem!.RHS!.looseType() and !RHS!.asRHSInternalIdent and
+                (LHS!.invertMatch or RHS!.invertMatch) and
+                equivalentNumericTemplates(LHS, RHS)){
+            result.directCase <- dcEquivalentNumericTemplatePolarity
+            result.statusIncludesPolarity <- true
+            if(LHS!.invertMatch==RHS!.invertMatch){
+                result.status <- rrHandledNoChange
+                result.constraintDisposition <- cdRedundant
+            }else{
+                result.status <- rrRejected
+                result.constraintDisposition <- cdContradiction
+            }
+            return(result)
+        }
+        // A concrete field in a negative template cannot yet be decided
+        // against the corresponding unknown candidate field. Likewise, two
+        // non-equivalent negative templates need a future conjunction model.
+        // Keep the original semantic obligation on wrkList for a later pass.
+        if(!aItem!.RHS!.looseType() and !RHS!.asRHSInternalIdent and
+                LHS!.value!.overlayType==NUM and RHS!.value!.overlayType==NUM and
+                (LHS!.invertMatch or RHS!.invertMatch) and
+                ((LHS!.invertMatch and RHS!.invertMatch) or
+                 (LHS!.invertMatch and !RHS!.invertMatch and
+                  ((LHS!.value!.evalMode==emLiteral and RHS!.value!.evalMode==emUnknown) or
+                   (LHS!.infSize!.evalMode==emLiteral and RHS!.infSize!.evalMode==emUnknown))) or
+                 (RHS!.invertMatch and !LHS!.invertMatch and
+                  ((RHS!.value!.evalMode==emLiteral and LHS!.value!.evalMode==emUnknown) or
+                   (RHS!.infSize!.evalMode==emLiteral and LHS!.infSize!.evalMode==emUnknown))))){
+            result.directCase <- dcUnresolvedNumericTemplatePolarity
+            result.status <- rrHandledNoChange
+            result.constraintDisposition <- cdRetained
+            result.statusIncludesPolarity <- true
+            return(result)
+        }
 
         if(!aItem!.RHS!.looseType() and LHS!.value!.evalMode==emUnknown and
                 RHS!.value!.evalMode==emLiteral and
@@ -558,6 +680,12 @@ struct InfonViewReasoner{
         else if(result.directCase==dcConcatRangeIntersection){
             aItem!.phase1RecordHandler("direct:concatRangeIntersection", false)
         }
+        else if(result.directCase==dcEquivalentNumericTemplatePolarity){
+            aItem!.phase1RecordHandler("direct:equivalentNumericTemplatePolarity", false)
+        }
+        else if(result.directCase==dcUnresolvedNumericTemplatePolarity){
+            aItem!.phase1RecordHandler("direct:unresolvedNumericTemplatePolarity", false)
+        }
         else if(result.listCase==lcStrictLiteralLists){
             aItem!.phase1RecordHandler("list:strictLiteralLists", false)
         }
@@ -647,6 +775,9 @@ struct InfonViewReasoner{
     our POV: mergeInfonStates(their WorldManager: worldManager, our AItem: aItem,
             their InfonViewReasoningResult: result, me bool: commitConsolidationPlan) <- {
         recordReasoningHandlers(aItem, result)
+        if(aItem!.sourceWorkPOV!=NULL and result.status!=rrNotApplicable){
+            aItem!.constraintDisposition <- result.constraintDisposition
+        }
         if(result.status==rrRejected){
             aItem!.mergeStatus <- msReject
             aItem!.LHS_item!.rejected <- true

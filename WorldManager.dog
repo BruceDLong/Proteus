@@ -99,6 +99,8 @@ struct WorldManager{
             if(!consumedSkip){retainedWork.append(wrkPOV)}
         }
         requestPOV!.pItem!.wrkList <- retainedWork
+        // A consumed skip is terminal; release any stale deferred references.
+        requestPOV!.pItem!.pruneDeferredWrkList()
     }
     me int64: orderedSpanWindowItemCount(our POV: lhsPOV, our POV: rhsPOV, their vocabularySpec: vSpec) <- {
         if(!isOrderedSpanRequest(lhsPOV, vSpec) or rhsPOV==NULL or rhsPOV!.pItem==NULL){return(0)}
@@ -525,6 +527,9 @@ struct WorldManager{
     void: fulfillSubscriptions(their Agenda: agenda, our AItem: aItem) <- {
         agendaEngine.fulfillSubscriptions(agenda, aItem)
     }
+    void: completeAndFulfillSubscriptions(their Agenda: agenda, our AItem: aItem) <- {
+        agendaEngine.completeAndFulfillSubscriptions(agenda, aItem)
+    }
 
     // rsINFON UTILITY FUNCTIONS: PREP WORKLIST FUNCTIONS
     void: initRules(our AItem: aItem) <- {
@@ -807,7 +812,7 @@ struct WorldManager{
                 CI!.infCharPos <- infCharPos
                 CI!.itmMode    <- itmMode
                 aItem!.LHS_item!.propagateInMrg2 <- true
-                CI!.wrkList.clear()
+                CI!.clearWrkList()
                 changeMade <- true
             }
         }
@@ -856,18 +861,31 @@ struct WorldManager{
         me bool: looseSize <- false
         //if(lSpecItem!.wrkList.isEmpty() and LHSPov!.hasPropagated){log("WARNING: NotRePropagating "+LHSPov.stringify())}
         if(!lSpecItem!.wrkList.isEmpty()){
-            RHSPov <- lSpecItem!.wrkList.first()
+            withEach candidateWorkPOV in lSpecItem!.wrkList{
+                me bool: candidateDeferred <- lSpecItem!.deferredWorkListContainsPOV(candidateWorkPOV)
+                if(!candidateDeferred and !(aItem!.inFlightWorkPOV===candidateWorkPOV)){
+                    RHSPov <- candidateWorkPOV
+                    break()
+                }
+            }
+        }
+        if(RHSPov!=NULL){
             //:l/PAI::logSeg(" WLP:"+RHSPov!.mySymbol())
-            lSpecItem!.wrkList.popFirst()
-            lSpecItem!.usedWrkList.append(RHSPov)
             looseSize <- RHSPov!.looseSize()
             LHSPov!.hasPropagated <- true
             if(!aItem!.dontProcess){
                 our AItem: newAItem <- processMergeViaAgenda(agenda, LHSPov, RHSPov, looseSize, aItem, aItem, aItem!.priority, srcPMVA1)
                 newAItem!.debugArg <- aItem // For validateAItem debugging
+                newAItem!.sourceWorkOwner <- lSpecItem
+                newAItem!.sourceWorkPOV <- RHSPov
+                newAItem!.sourceWorkParent <- aItem
+                newAItem!.sourceWorkRevision <- RHSPov!.workRevision
+                newAItem!.constraintDisposition <- cdInFlight
+                aItem!.inFlightWorkPOV <- RHSPov
                 //:l/PAI::logSeg(" Itm_PMVA:"+newAItem!.mySymbol())
                 stopAndWait <- true
             }else{
+                lSpecItem!.discardWrkListPOV(RHSPov)
                 log("DONT_PROCESS-a:"+aItem!.stringify())
                 //:l/PAI::logSeg(" dontProcess")
             }
@@ -1828,7 +1846,10 @@ struct WorldManager{
         // Schedule Process Infon Via Agenda
         our AItem: PIVA
         if(RhsAttached){
-            if(!aParent!.LHS_item!.pItem!.wrkList.isEmpty()){
+            // The source constraint remains on wrkList while this merge is in
+            // flight. It and deferred residuals do not block propagation; a
+            // different ready conjunction term still does.
+            if(aParent!.LHS_item!.pItem!.hasReadyWrkListPOV(aParent!.sourceWorkPOV)){
                 return(NULL)
             }
             PIVA <- processInfonViewViaAgenda(agenda, LHSPovNext, NULL, nxtsParent, aItem!.priority+1, srcPropagate)
@@ -1847,7 +1868,7 @@ struct WorldManager{
     }
     void: callPropagate(their Agenda: agenda, our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque, their int:waitState) <- {
         our AItem: nextAItem <- propagate(agenda, aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque, waitState)
-        if(aItem!.pendingTasks==0){fulfillSubscriptions(agenda, aItem)}
+        if(aItem!.pendingTasks==0){completeAndFulfillSubscriptions(agenda, aItem)}
         if(nextAItem!=NULL){agenda!.addAItemToAgenda(nextAItem)}   // callPropagate
     }
 

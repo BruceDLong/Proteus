@@ -6,6 +6,47 @@ struct AItemDispatchResult{
 
 // Common lifecycle operations surrounding one agenda-item dispatch.
 struct AItemLifecycle{
+    // Complete the lifecycle of a semantic wrkList obligation only after its
+    // child merge has a terminal result. Unresolved obligations remain
+    // printable on wrkList; terminal ones release their work-list POV.
+    void: completeSourceWorkConstraint(our AItem: aItem,
+            their AItemDispatchResult: result) <- {
+        if(!result.fulfillSubscribers or aItem!.sourceWorkPOV==NULL){return()}
+        if(aItem!.sourceWorkParent!=NULL and
+                aItem!.sourceWorkParent!.inFlightWorkPOV===aItem!.sourceWorkPOV){
+            aItem!.sourceWorkParent!.inFlightWorkPOV <- NULL
+        }
+        // Generated legacy handlers do not yet return an explicit disposition.
+        // Preserve their former dequeue-to-history behavior at the shared
+        // lifecycle boundary: a fulfilled non-rejection is discharged. Only
+        // the new reasoner can explicitly retain an unresolved obligation.
+        if(aItem!.constraintDisposition==cdInFlight){
+            if(aItem!.mergeStatus==msReject){aItem!.constraintDisposition <- cdContradiction}
+            else{aItem!.constraintDisposition <- cdDischarged}
+        }
+        if(aItem!.sourceWorkOwner!=NULL){
+            // A changed source was not the source revision the child proved;
+            // leave it ready so the resumed parent evaluates the new revision.
+            if(aItem!.sourceWorkPOV!.workRevision!=aItem!.sourceWorkRevision){
+                aItem!.sourceWorkOwner!.makeWrkListPOVReady(aItem!.sourceWorkPOV)
+            }else if(aItem!.constraintDisposition==cdRetained){
+                aItem!.sourceWorkOwner!.deferWrkListPOV(aItem!.sourceWorkPOV)
+            }else{
+                // A discharged constraint may have supplied context still
+                // reached through raw pParent links in the result. Record that
+                // ownership dependency separately from semantic work. A
+                // redundant or contradictory constraint supplied no result.
+                if(aItem!.constraintDisposition==cdDischarged){
+                    aItem!.sourceWorkOwner!.addSourceGraphDependency(aItem!.sourceWorkPOV)
+                }
+                aItem!.sourceWorkOwner!.discardWrkListPOV(aItem!.sourceWorkPOV)
+            }
+        }
+        aItem!.sourceWorkOwner <- NULL
+        aItem!.sourceWorkPOV <- NULL
+        aItem!.sourceWorkParent <- NULL
+    }
+
     void: beginDispatch(our AItem: aItem) <- {
         aItem!.taskEnqueued <- false
         if(!aItem!.wokenEarly){aItem!.pendingTasks <-- 1}
@@ -70,7 +111,9 @@ struct AItemLifecycle{
         }
     }
 
-    void: completeDispatch(their Agenda: agenda, our AItem: aItem, their AItemDispatchResult: result) <- {
+    void: completeDispatch(their Agenda: agenda, our AItem: aItem,
+            their AItemDispatchResult: result) <- {
+        completeSourceWorkConstraint(aItem, result)
         if(result.resumeParent){resumeParent(agenda, aItem)}
         if(result.fulfillSubscribers){fulfillSubscriptions(agenda, aItem)}
     }

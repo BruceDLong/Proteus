@@ -41,6 +41,18 @@ struct OrderMode: inherits=<mode[uUnknown, uOrdered, uUnordered]> {}
 
 struct aitemSrcID: inherits=<mode[srcPMVA1, srcPMVA2, srcPiCVA, srcNrmSize, srcNormInit, srcMrg0, srcPropagate, srcPartsPath, srcItsALT, srcItsFunc, srcUnordd]> {}
 
+// How processing one wrkList constraint affected its persistent obligation.
+// wrkList remains the semantic AND representation. Terminal constraints are
+// released; only unresolved constraints are indexed as deferred work.
+struct ConstraintDisposition: inherits=<mode[
+    cdNotSourceWork,
+    cdInFlight,
+    cdDischarged,
+    cdRedundant,
+    cdRetained,
+    cdContradiction
+]> {}
+
 
 model infonState{
     // -----------------------------------------------------------------
@@ -248,11 +260,17 @@ struct infonView{
     // Child-side marker used by current intersection processing.
     flag: isInnr
 
-    // Old destructive work-list retry/history state.
-    me List<our POV>: usedWrkList
+    // Secondary execution index over unresolved POVs that remain in wrkList
+    // but should not be retried until they gain information. Membership here
+    // has no additional semantic meaning.
+    me List<our POV>: deferredWrkList
 
     // Keep-alive references for temporary POVs.
     me List<our POV>: retainedPOVs
+
+    // Source graphs still referenced through non-owning POV context links in
+    // this result. These are ownership dependencies, not pending constraints.
+    me List<our POV>: sourceGraphDependencies
 
     // Speculative candidate existence during matching.
     flag: isTentative
@@ -605,19 +623,6 @@ struct infonView{
         withEach wrkItm in wrkList{
             if(wrkItm!.linearAltID==lineID){povToPushTo<-wrkItm; break()}
         }
-        if(povToPushTo == NULL){
-            withEach usdWrkItm in usedWrkList{
-                if(usdWrkItm!.linearAltID==lineID){
-                    povToPushTo<-usdWrkItm
-                    // POP from used, push to wrkList
-                    // DON'T REDO already done alts.
-                //    usedWrkList.erase(usdWrkItm)
-                    //:l/PAI::logSeg(" WLA.a:"+povToPushTo!.mySymbol())
-                    wrkList.append(povToPushTo)
-                    log("TODO: POP, PUSH, Don't REDO") // TODO: POP, PUSH, Don't REDO
-                }
-            }
-        }
         if(povToPushTo == NULL){ // Make an alt item to add.
             povToPushTo <- makeOrPov(rNode, pred)
             povToPushTo!.pItem!.innr!.value!.tailUnfinished <- true
@@ -626,7 +631,12 @@ struct infonView{
             addPOVToWrkList(povToPushTo)
         }else{
             our POV: newAlt <- povToPushTo!.pItem!.addToOrInfonView(rItem, rNode, pred)
-            if(newAlt!=NULL){newAlt!.isFromALT<-true; newAlt!.pParent  <- povToPushTo}
+            if(newAlt!=NULL){
+                newAlt!.isFromALT<-true
+                newAlt!.pParent  <- povToPushTo
+                povToPushTo!.workRevision <+- 1
+                makeWrkListPOVReady(povToPushTo)
+            }
         }
         //log("AddedAltToLineAlt:"+povToPushTo!.mySymbol()+":"+povToPushTo.stringify()+" <pred- "+pred!.mySymbol()+":"+pred!.stringify())
     }
@@ -636,6 +646,67 @@ struct infonView{
             if(wrkListItem!.pItem===inf){return(true)}
         }
         return(false)
+    }
+    bool: workListContainsPOV(our POV: target) <- {
+        withEach wrkListItem in wrkList{
+            if(wrkListItem===target){return(true)}
+        }
+        return(false)
+    }
+    bool: deferredWorkListContainsPOV(our POV: target) <- {
+        withEach wrkListItem in deferredWrkList{
+            if(wrkListItem===target){return(true)}
+        }
+        return(false)
+    }
+    bool: hasReadyWrkListPOV(our POV: excludedPOV) <- {
+        withEach wrkListItem in wrkList{
+            if(!(wrkListItem===excludedPOV) and
+                    !deferredWorkListContainsPOV(wrkListItem)){
+                return(true)
+            }
+        }
+        return(false)
+    }
+    void: removePOVFromWrkList(our POV: target) <- {
+        me List<our POV>: retainedWork
+        withEach wrkListItem in wrkList{
+            if(!(wrkListItem===target)){retainedWork.append(wrkListItem)}
+        }
+        wrkList <- retainedWork
+    }
+    void: removePOVFromDeferredWrkList(our POV: target) <- {
+        me List<our POV>: retainedWork
+        withEach wrkListItem in deferredWrkList{
+            if(!(wrkListItem===target)){retainedWork.append(wrkListItem)}
+        }
+        deferredWrkList <- retainedWork
+    }
+    void: pruneDeferredWrkList() <- {
+        me List<our POV>: retainedDeferredWork
+        withEach deferredWorkPOV in deferredWrkList{
+            if(workListContainsPOV(deferredWorkPOV)){
+                retainedDeferredWork.append(deferredWorkPOV)
+            }
+        }
+        deferredWrkList <- retainedDeferredWork
+    }
+    void: discardWrkListPOV(our POV: target) <- {
+        removePOVFromDeferredWrkList(target)
+        removePOVFromWrkList(target)
+    }
+    void: deferWrkListPOV(our POV: target) <- {
+        if(workListContainsPOV(target) and !deferredWorkListContainsPOV(target)){
+            deferredWrkList.append(target)
+        }
+    }
+    void: makeWrkListPOVReady(our POV: target) <- {
+        removePOVFromDeferredWrkList(target)
+        isNormed <- false
+    }
+    void: clearWrkList() <- {
+        wrkList.clear()
+        deferredWrkList.clear()
     }
     bool: infonViewHasType(me string: typeIDStr) <- {
         if(type!=NULL and type!.typeID()==typeIDStr){return(alreadyTypeChecked)}
@@ -687,10 +758,17 @@ struct infonView{
         withEach wrkItm in from!.wrkList{
             addPOVToWrkList(wrkItm)
         }
-        if(doClear){from!.wrkList.clear()}
+        if(doClear){from!.clearWrkList()}
     }
     void: retainPOV(our POV: pov) <- {
         if(pov!=NULL){retainedPOVs.append(pov)}
+    }
+    void: addSourceGraphDependency(our POV: sourcePOV) <- {
+        if(sourcePOV==NULL){return()}
+        withEach dependencyPOV in sourceGraphDependencies{
+            if(dependencyPOV===sourcePOV){return()}
+        }
+        sourceGraphDependencies.append(sourcePOV)
     }
     our infonView: findPartPathByWord(me string: wordName) <- {
         withEach part in parts{
@@ -727,6 +805,7 @@ struct infonView{
         innr       <- NULL
         type       <- NULL
         retainedPOVs.clear()
+        sourceGraphDependencies.clear()
     }
     void: setToList() <- {
         clear()
@@ -939,6 +1018,16 @@ model AItem{
     me AItemPedigree: pedigree
     our AItem: parent
     our AItem: debugArg     // For debugSystems validateAItem()
+    // Set only on the rsMerge spawned for one semantic wrkList obligation.
+    our infonView: sourceWorkOwner
+    our POV: sourceWorkPOV
+    our AItem: sourceWorkParent
+    me uint64: sourceWorkRevision
+    me ConstraintDisposition: constraintDisposition
+    // Transient rsInfon state. The source constraint stays in wrkList while
+    // one child merge is in flight, and deferred items are skipped for the
+    // remainder of this normalization pass.
+    our POV: inFlightWorkPOV
     me int: indentLvl
     flag: initRulesApplied
     me List<me string>: phase1HandlerEvents
@@ -1013,6 +1102,12 @@ model AItem{
         LHSItr    <- NULL
         RHSItr    <- NULL
         parent    <- NULL
+        sourceWorkOwner <- NULL
+        sourceWorkPOV <- NULL
+        sourceWorkParent <- NULL
+        sourceWorkRevision <- 0
+        constraintDisposition <- cdNotSourceWork
+        inFlightWorkPOV <- NULL
         priority  <- 0
         step      <- 0
         pendingTasks <- 1
