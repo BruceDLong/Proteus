@@ -19,11 +19,14 @@ struct InfonViewReasoningResult{
     mode[icNone, icStrictScalarAgainstIntersection,
          icAnyAgainstIntersection, icStrictListAgainstIntersection,
          icConcatAgainstIntersection, icNestedIntersection]: intersectionCase
+    mode[ocNone, ocExactAlignment, ocSplitRHS, ocSplitLHS]: orderedSpanCase
+    mode[rcNone, rcCopySourceIdentity]: referenceCase
     mode[caNone, caCopyRHSValueToLHS, caCopyRHSRangeMatchToLHS,
          caCopyRHSWholeStringToLHS, caCopyRHSIdentityToLHS,
          caCopyRHSWorkListToLHS, caCopyRHSValueAndTypeToLHS,
          caMergeRHSIntersection, caMergeLooseStrings,
-         caCopyRHSInfonToLHS, caMergeANDRanges]: consolidationAction
+         caCopyRHSInfonToLHS, caMergeANDRanges,
+         caApplyOrderedSpanPlan]: consolidationAction
     mode[waNone, waStartListPropagation]: workAction
     mode[cpNonInvertedAcceptance, cpPositiveTemplateAcceptance,
          cpFinalAcceptance]: actionCommitPolicy
@@ -33,18 +36,55 @@ struct InfonViewReasoningResult{
     me bool: statusIncludesPolarity <- false
     me bool: copySize
     me bool: emitRejectLog
+    me int64: orderedSpanSplitCount
+    me int64: orderedSpanSizeToCopy
+}
+
+// Owns the graph-identity precedence formerly hidden at the end of the
+// ordered-span legacy hook. Local value comparison must stand aside when a
+// source-backed reference is being identified with its candidate.
+struct ReferenceConsolidationStrategy{
+    me bool: identityTakesPriority(our AItem: aItem) <- {
+        return(aItem!=NULL and aItem!.LHS_item!=NULL and
+                aItem!.LHS_item!.accessMode==aRefTo and
+                aItem!.LHS_item!.outerPOV!=NULL and
+                aItem!.LHS_item!.pItem!=NULL and
+                aItem!.LHS_item!.outerPOV!.pItem===aItem!.LHS_item!.pItem and
+                aItem!.RHS!=NULL and aItem!.RHS!.pItem!=NULL and
+                !aItem!.RHS!.pItem!.asRHSInternalIdent and
+                !(aItem!.RHS!.pParent!=NULL and
+                  aItem!.RHS!.pParent!.pItem!.asRHSInternalIdent))
+    }
+
+    me InfonViewReasoningResult: planConsolidation(our AItem: aItem) <- {
+        me InfonViewReasoningResult: result
+        result.status <- rrNotApplicable
+        result.directCase <- dcNone
+        result.listCase <- lcNone
+        result.intersectionCase <- icNone
+        result.orderedSpanCase <- ocNone
+        result.referenceCase <- rcNone
+        result.consolidationAction <- caNone
+        result.workAction <- waNone
+        result.actionCommitPolicy <- cpNonInvertedAcceptance
+        result.copySize <- false
+        result.emitRejectLog <- false
+        if(!identityTakesPriority(aItem)){return(result)}
+
+        result.referenceCase <- rcCopySourceIdentity
+        result.status <- rrPlannedChange
+        result.consolidationAction <- caCopyRHSIdentityToLHS
+        // The legacy path materialized the positive identity before applying
+        // top-level inversion. Preserve that ordering during this migration.
+        result.actionCommitPolicy <- cpPositiveTemplateAcceptance
+        return(result)
+    }
 }
 
 // Plans local consolidation cases whose complete outcome can be determined
 // without scheduling or partial graph mutation.
 struct DirectConsolidationStrategy{
-    me bool: referenceIdentityTakesPriority(our AItem: aItem) <- {
-        return(aItem!.LHS_item!.accessMode==aRefTo and
-                aItem!.LHS_item!.outerPOV!=NULL and
-                aItem!.LHS_item!.outerPOV!.pItem===aItem!.LHS_item!.pItem and
-                !aItem!.RHS!.pItem!.asRHSInternalIdent and
-                !(aItem!.RHS!.pParent!=NULL and aItem!.RHS!.pParent!.pItem!.asRHSInternalIdent))
-    }
+    me ReferenceConsolidationStrategy: referenceConsolidationStrategy
 
     me int: evalForRange(our infonView: infn, their FlexNum: lowest,
             their FlexNum: highest) <- {
@@ -203,6 +243,8 @@ struct DirectConsolidationStrategy{
         result.directCase <- dcNone
         result.listCase <- lcNone
         result.intersectionCase <- icNone
+        result.orderedSpanCase <- ocNone
+        result.referenceCase <- rcNone
         result.consolidationAction <- caNone
         result.workAction <- waNone
         result.actionCommitPolicy <- cpNonInvertedAcceptance
@@ -283,7 +325,7 @@ struct DirectConsolidationStrategy{
         if(LHS!.viewMode==vmAny or RHS!.viewMode==vmAny){return(result)}
         // A self-outer aRefTo carries graph identity semantics that must be
         // resolved before comparing its current local value.
-        if(referenceIdentityTakesPriority(aItem)){return(result)}
+        if(referenceConsolidationStrategy.identityTakesPriority(aItem)){return(result)}
 
         // Equal positive numeric templates have a complete polarity relation.
         // Same polarity is idempotent; opposite polarity is contradictory.
@@ -457,9 +499,183 @@ struct DirectConsolidationStrategy{
     }
 }
 
+// Owns definition-backed list shape inheritance. These are semantic list
+// operations, not generated merge-matrix cases.
+struct ListShapeStrategy{
+    me bool: inheritDefinitionListShape(our AItem: aItem) <- {
+        if(aItem!.RHS==NULL or !aItem!.RHS!.trueByDefinition){return(false)}
+        our infonView: LHS <- aItem!.LHS_item!.pItem
+        our infonView: RHS <- aItem!.RHS!.pItem
+        if(LHS==NULL or RHS==NULL){return(false)}
+        if(LHS!.value!.overlayType!=LST or LHS!.value!.evalMode!=emLiteral){return(false)}
+        if(RHS!.value!.overlayType!=LST or RHS!.value!.evalMode!=emLiteral){return(false)}
+
+        me bool: changeMade <- false
+        if(LHS!.value!.listSpec==NULL and RHS!.value!.listSpec!=NULL){
+            LHS!.value!.listSpec <- RHS!.value!.listSpec
+            changeMade <- true
+        }
+        if(LHS!.orderMode==uUnknown and RHS!.orderMode!=uUnknown){
+            LHS!.orderMode <- RHS!.orderMode
+            changeMade <- true
+        }
+        me bool: lhsHasOnlyDefaultZeroSize <- LHS!.value!.items.isEmpty() and
+                LHS!.infSize!.evalMode==emLiteral and LHS!.infSize!.num==0
+        if((LHS!.infSize!.evalMode==emUnknown or lhsHasOnlyDefaultZeroSize) and
+                RHS!.infSize!.evalMode!=emUnknown){
+            LHS!.infSize! <- RHS!.infSize!
+            changeMade <- true
+        }
+        if(RHS!.value!.tailUnfinished and !LHS!.value!.tailUnfinished){
+            LHS!.value!.tailUnfinished <- true
+            changeMade <- true
+        }
+        return(changeMade)
+    }
+
+    me bool: isDefinitionListShapeOnly(our AItem: aItem) <- {
+        if(aItem!.RHS==NULL or !aItem!.RHS!.trueByDefinition){return(false)}
+        our infonView: RHS <- aItem!.RHS!.pItem
+        if(RHS==NULL){return(false)}
+        if(RHS!.value!.overlayType!=LST or RHS!.value!.evalMode!=emLiteral){return(false)}
+        if(!RHS!.value!.tailUnfinished or RHS!.value!.listSpec==NULL){return(false)}
+        return(RHS!.value!.items.isEmpty())
+    }
+
+    me bool: inheritDefinitionListShapeForInfonView(their WorldManager: worldManager,
+            our infonView: target) <- {
+        if(target==NULL or target!.type==NULL){return(false)}
+        if(target!.value!.overlayType!=LST or target!.value!.evalMode!=emLiteral){
+            return(false)
+        }
+        me vocabularySpec: vSpec
+        vSpec.init(worldManager!.agent!.getLocaleBaseName())
+        our WordDefn: defn <- modelMngr.lookupSingleDefinitionForType(target!.type, vSpec)
+        if(defn==NULL or defn!.meaning==NULL){return(false)}
+        our infonView: meaning <- defn!.meaning
+        if(meaning!.value!.overlayType!=LST or meaning!.value!.evalMode!=emLiteral){
+            return(false)
+        }
+        if(!meaning!.value!.tailUnfinished or !meaning!.value!.items.isEmpty() or
+                meaning!.value!.listSpec==NULL){return(false)}
+
+        me bool: changeMade <- false
+        if(target!.value!.listSpec==NULL){
+            target!.value!.listSpec <- meaning!.value!.listSpec
+            changeMade <- true
+        }
+        if(target!.orderMode==uUnknown and meaning!.orderMode!=uUnknown){
+            target!.orderMode <- meaning!.orderMode
+            changeMade <- true
+        }
+        me bool: targetHasOnlyDefaultZeroSize <- target!.value!.items.isEmpty() and
+                target!.infSize!.evalMode==emLiteral and target!.infSize!.num==0
+        if((target!.infSize!.evalMode==emUnknown or targetHasOnlyDefaultZeroSize) and
+                meaning!.infSize!.evalMode!=emUnknown){
+            target!.infSize! <- meaning!.infSize!
+            changeMade <- true
+        }
+        if(target!.value!.sizeMode!=meaning!.value!.sizeMode){
+            target!.value!.sizeMode <- meaning!.value!.sizeMode
+            changeMade <- true
+        }
+        if(meaning!.value!.tailUnfinished and !target!.value!.tailUnfinished){
+            target!.value!.tailUnfinished <- true
+            changeMade <- true
+        }
+        return(changeMade)
+    }
+}
+
+// Owns the existing pre-consolidation size preparation. This deliberately
+// preserves its current execution order: definition-backed list shape is
+// inherited first, then a strict known RHS size may fill an unknown LHS size.
+// It remains a mutation step rather than pretending to be part of the
+// read-only consolidation plan.
+struct MergeSizeStrategy{
+    me bool: execPreparation(their WorldManager: worldManager, our AItem: aItem,
+            me bool: sizeCopyPlannedByConsolidation) <- {
+        me bool: changeMade <- false
+        if(worldManager!.inheritDefinitionListShape(aItem)){changeMade <- true}
+        if(!aItem!.looseSize and
+                aItem!.LHS_item!.pItem!.infSize!.evalMode==emUnknown and
+                aItem!.RHS!.pItem!.infSize!.evalMode==emLiteral){
+            aItem!.phase1RecordHandler("strategy:mergeSize", false)
+            aItem!.phase1RecordHandler(
+                    "mergeSize:!looseSize|lemUnknown|rsemLiteral->copySizeRHStoLHS",
+                    false)
+            if(!sizeCopyPlannedByConsolidation and
+                    (aItem!.LHS_item!.pItem!.viewMode!=vmOverlay or
+                     aItem!.RHS!.pItem!.value!.overlayType==
+                            aItem!.LHS_item!.pItem!.value!.overlayType) and
+                    (aItem!.LHS_item!.pItem!.value!.listSpec==NULL or
+                     !aItem!.LHS_item!.pItem!.value!.listSpec!.asWrkLstOutr)){
+                worldManager!.DO_COPY(aItem!.RHS!.pItem!.infSize,
+                        aItem!.LHS_item!.pItem!.infSize, 0)
+            }
+            changeMade <- true
+        }
+        return(changeMade)
+    }
+}
+
 // Owns list-state implications that require a propagation continuation rather
 // than a complete local consolidation result.
 struct ListConsolidationStrategy{
+    me bool: execStartPropagation(their WorldManager: worldManager,
+            our AItem: aItem) <- {
+        me bool: changeMade <- false
+        me bool: looseSize <- aItem!.RHS!.looseType()
+        me bool: sizesCompatible <- false
+        if(!looseSize){
+            sizesCompatible <- worldManager!.sizesAreCompatable(
+                    aItem!.LHS_item!.pItem, aItem!.RHS!.pItem)
+        }
+        me bool: lhsEmpty <- !aItem!.LHS_item!.pItem!.value!.tailUnfinished and
+                aItem!.LHS_item!.pItem!.value!.items.size()==0
+        me bool: rhsIsPureDots <- aItem!.RHS!.pItem!.value!.tailUnfinished and
+                aItem!.RHS!.pItem!.value!.items.size()==0
+
+        aItem!.phase1RecordHandler("strategy:listPropagation", false)
+        if(!looseSize and !sizesCompatible){
+            aItem!.phase1RecordHandler(
+                    "startProp:!looseSize|!sizesCompat||->REJECT", false)
+            aItem!.mergeStatus <- msReject
+            aItem!.LHS_item!.rejected <- true
+            changeMade <- true
+        }
+        else if(!looseSize and sizesCompatible and lhsEmpty and !rhsIsPureDots){
+            aItem!.phase1RecordHandler(
+                    "startProp:!looseSize|sizesCompat|LHSEmpty|!RHSisPureDots->SKIP",
+                    false)
+            changeMade <- true
+        }
+        else if(!looseSize and sizesCompatible and rhsIsPureDots){
+            aItem!.phase1RecordHandler(
+                    "startProp:!looseSize|sizesCompat||RHSisPureDots->initListIterators",
+                    false)
+            worldManager!.initListIterators(aItem)
+            aItem!.mergeStatus <- msUnknown
+            changeMade <- true
+        }
+        else if(!looseSize and sizesCompatible and !lhsEmpty and !rhsIsPureDots){
+            aItem!.phase1RecordHandler(
+                    "startProp:!looseSize|sizesCompat|!LHSEmpty|!RHSisPureDots->initListIterators",
+                    false)
+            worldManager!.initListIterators(aItem)
+            aItem!.mergeStatus <- msUnknown
+            changeMade <- true
+        }
+        else if(looseSize){
+            aItem!.phase1RecordHandler(
+                    "startProp:looseSize|||->initListIterators", false)
+            worldManager!.initListIterators(aItem)
+            aItem!.mergeStatus <- msUnknown
+            changeMade <- true
+        }
+        return(changeMade)
+    }
+
     me InfonViewReasoningResult: planConsolidation(their WorldManager: worldManager,
             our AItem: aItem) <- {
         me InfonViewReasoningResult: result
@@ -467,6 +683,8 @@ struct ListConsolidationStrategy{
         result.directCase <- dcNone
         result.listCase <- lcNone
         result.intersectionCase <- icNone
+        result.orderedSpanCase <- ocNone
+        result.referenceCase <- rcNone
         result.consolidationAction <- caNone
         result.workAction <- waNone
         result.actionCommitPolicy <- cpNonInvertedAcceptance
@@ -534,6 +752,8 @@ struct IntersectionConsolidationStrategy{
         result.directCase <- dcNone
         result.listCase <- lcNone
         result.intersectionCase <- icNone
+        result.orderedSpanCase <- ocNone
+        result.referenceCase <- rcNone
         result.consolidationAction <- caNone
         result.workAction <- waNone
         result.actionCommitPolicy <- cpNonInvertedAcceptance
@@ -586,6 +806,105 @@ struct IntersectionConsolidationStrategy{
     }
 }
 
+// Plans sparse ordered-span alignment without mutating either source graph.
+// Execution performs at most one prefix split and returns an RHS remainder
+// through the same propagation contract used by the legacy implementation.
+struct OrderedSpanConsolidationStrategy{
+    me InfonViewReasoningResult: planConsolidation(their WorldManager: worldManager,
+            our AItem: aItem) <- {
+        me InfonViewReasoningResult: result
+        result.status <- rrNotApplicable
+        result.directCase <- dcNone
+        result.listCase <- lcNone
+        result.intersectionCase <- icNone
+        result.orderedSpanCase <- ocNone
+        result.referenceCase <- rcNone
+        result.consolidationAction <- caNone
+        result.workAction <- waNone
+        result.actionCommitPolicy <- cpNonInvertedAcceptance
+        result.copySize <- false
+        result.emitRejectLog <- false
+        if(aItem==NULL or aItem!.LHS_item==NULL or aItem!.RHS==NULL or
+                !aItem!.LHS_item!.isSparseOrderedSpan() or
+                !aItem!.RHS!.isSparseOrderedSpan()){
+            return(result)
+        }
+
+        me int64: lhsCount <- aItem!.LHS_item!.sparseSpanCount()
+        me int64: rhsCount <- aItem!.RHS!.sparseSpanCount()
+        if(aItem!.LHS_item!.sparseSpanCompatibleWith(aItem!.RHS)){
+            if(lhsCount==rhsCount){
+                result.orderedSpanCase <- ocExactAlignment
+                result.orderedSpanSizeToCopy <- lhsCount
+            }
+            else if(lhsCount<rhsCount){
+                result.orderedSpanCase <- ocSplitRHS
+                result.orderedSpanSplitCount <- lhsCount
+                result.orderedSpanSizeToCopy <- lhsCount
+            }
+            else{
+                result.orderedSpanCase <- ocSplitLHS
+                result.orderedSpanSplitCount <- rhsCount
+                result.orderedSpanSizeToCopy <- rhsCount
+            }
+        }
+        else{
+            me vocabularySpec: vSpec
+            vSpec.init(worldManager!.agent!.getLocaleBaseName())
+            our OrderedSpanConverter: spanConverter <- modelMngr.getOrderedSpanConverter(
+                    aItem!.LHS_item!.pItem!.value!.listSpec!.type,
+                    aItem!.RHS!.pItem!.value!.listSpec!.type, vSpec)
+            if(spanConverter==NULL or !spanConverter!.valid){return(result)}
+
+            me int64: lhsBaseCount <- lhsCount * spanConverter!.fromBaseCount
+            me int64: rhsBaseCount <- rhsCount * spanConverter!.toBaseCount
+            if(lhsBaseCount==rhsBaseCount){
+                result.orderedSpanCase <- ocExactAlignment
+                result.orderedSpanSizeToCopy <- lhsCount
+            }
+            else if(lhsBaseCount<rhsBaseCount){
+                me int64: rhsPrefixCount <- lhsBaseCount / spanConverter!.toBaseCount
+                if(rhsPrefixCount<=0 or rhsPrefixCount>=rhsCount or
+                        rhsPrefixCount*spanConverter!.toBaseCount!=lhsBaseCount){
+                    return(result)
+                }
+                result.orderedSpanCase <- ocSplitRHS
+                result.orderedSpanSplitCount <- rhsPrefixCount
+                result.orderedSpanSizeToCopy <- lhsCount
+            }
+            else{
+                me int64: lhsPrefixCount <- rhsBaseCount / spanConverter!.fromBaseCount
+                if(lhsPrefixCount<=0 or lhsPrefixCount>=lhsCount or
+                        lhsPrefixCount*spanConverter!.fromBaseCount!=rhsBaseCount){
+                    return(result)
+                }
+                result.orderedSpanCase <- ocSplitLHS
+                result.orderedSpanSplitCount <- lhsPrefixCount
+                result.orderedSpanSizeToCopy <- lhsPrefixCount
+            }
+        }
+
+        result.status <- rrPlannedChange
+        result.consolidationAction <- caApplyOrderedSpanPlan
+        // Match the legacy merge's positive-template mutation ordering.
+        result.actionCommitPolicy <- cpPositiveTemplateAcceptance
+        return(result)
+    }
+
+    our POV: execConsolidationPlan(our AItem: aItem,
+            their InfonViewReasoningResult: result) <- {
+        our POV: remainder <- NULL
+        aItem!.sizeToCopy <- result.orderedSpanSizeToCopy
+        if(result.orderedSpanCase==ocSplitRHS){
+            remainder <- aItem!.RHS!.splitSparseSpanPrefix(result.orderedSpanSplitCount)
+        }
+        else if(result.orderedSpanCase==ocSplitLHS){
+            aItem!.LHS_item!.splitSparseSpanPrefix(result.orderedSpanSplitCount)
+        }
+        return(remainder)
+    }
+}
+
 struct LegacyMergeStrategy{
     our POV: mergeInfonStates(their WorldManager: worldManager, our AItem: aItem) <- {
         aItem!.phase1RecordHandler("strategy:legacyMerge", false)
@@ -594,9 +913,13 @@ struct LegacyMergeStrategy{
 }
 
 struct InfonViewReasoner{
+    me ListShapeStrategy: listShapeStrategy
+    me MergeSizeStrategy: mergeSizeStrategy
     me DirectConsolidationStrategy: directConsolidationStrategy
     me ListConsolidationStrategy: listConsolidationStrategy
     me IntersectionConsolidationStrategy: intersectionConsolidationStrategy
+    me OrderedSpanConsolidationStrategy: orderedSpanConsolidationStrategy
+    me ReferenceConsolidationStrategy: referenceConsolidationStrategy
     me LegacyMergeStrategy: legacyMergeStrategy
 
     me InfonViewReasoningResult: planConsolidation(their WorldManager: worldManager,
@@ -605,12 +928,36 @@ struct InfonViewReasoner{
         if(result.status!=rrNotApplicable){return(result)}
         result <- listConsolidationStrategy.planConsolidation(worldManager, aItem)
         if(result.status!=rrNotApplicable){return(result)}
-        return(intersectionConsolidationStrategy.planConsolidation(aItem))
+        result <- intersectionConsolidationStrategy.planConsolidation(aItem)
+        if(result.status!=rrNotApplicable){return(result)}
+        result <- orderedSpanConsolidationStrategy.planConsolidation(worldManager, aItem)
+        if(result.status!=rrNotApplicable){return(result)}
+        return(referenceConsolidationStrategy.planConsolidation(aItem))
     }
 
     me int: evalForRange(our infonView: infn, their FlexNum: lowest,
             their FlexNum: highest) <- {
         return(directConsolidationStrategy.evalForRange(infn, lowest, highest))
+    }
+
+    me bool: inheritDefinitionListShape(our AItem: aItem) <- {
+        return(listShapeStrategy.inheritDefinitionListShape(aItem))
+    }
+
+    me bool: isDefinitionListShapeOnly(our AItem: aItem) <- {
+        return(listShapeStrategy.isDefinitionListShapeOnly(aItem))
+    }
+
+    me bool: inheritDefinitionListShapeForInfonView(their WorldManager: worldManager,
+            our infonView: target) <- {
+        return(listShapeStrategy.inheritDefinitionListShapeForInfonView(
+                worldManager, target))
+    }
+
+    me bool: execMergeSizePreparation(their WorldManager: worldManager,
+            our AItem: aItem, me bool: sizeCopyPlannedByConsolidation) <- {
+        return(mergeSizeStrategy.execPreparation(worldManager, aItem,
+                sizeCopyPlannedByConsolidation))
     }
 
     me bool: checkNumRange(our infonView: LHS, our infonView: RHS) <- {
@@ -627,6 +974,12 @@ struct InfonViewReasoner{
         }
         else if(result.intersectionCase!=icNone){
             aItem!.phase1RecordHandler("strategy:intersectionConsolidation", false)
+        }
+        else if(result.orderedSpanCase!=ocNone){
+            aItem!.phase1RecordHandler("strategy:orderedSpanConsolidation", false)
+        }
+        else if(result.referenceCase!=rcNone){
+            aItem!.phase1RecordHandler("strategy:referenceConsolidation", false)
         }
         else{return()}
         if(result.directCase==dcCopyLiteralValueToUnknown){
@@ -710,6 +1063,18 @@ struct InfonViewReasoner{
         else if(result.intersectionCase==icNestedIntersection){
             aItem!.phase1RecordHandler("intersection:nestedIntersection", false)
         }
+        else if(result.orderedSpanCase==ocExactAlignment){
+            aItem!.phase1RecordHandler("orderedSpan:exactAlignment", false)
+        }
+        else if(result.orderedSpanCase==ocSplitRHS){
+            aItem!.phase1RecordHandler("orderedSpan:splitRHS", false)
+        }
+        else if(result.orderedSpanCase==ocSplitLHS){
+            aItem!.phase1RecordHandler("orderedSpan:splitLHS", false)
+        }
+        else if(result.referenceCase==rcCopySourceIdentity){
+            aItem!.phase1RecordHandler("reference:copySourceIdentity", false)
+        }
     }
 
     our POV: execConsolidationPlan(their WorldManager: worldManager, our AItem: aItem,
@@ -766,8 +1131,11 @@ struct InfonViewReasoner{
         else if(result.consolidationAction==caMergeANDRanges){
             worldManager!.mergeANDRanges(aItem)
         }
+        else if(result.consolidationAction==caApplyOrderedSpanPlan){
+            remainder <- orderedSpanConsolidationStrategy.execConsolidationPlan(aItem, result)
+        }
         if(result.workAction==waStartListPropagation){
-            worldManager!.startPropRules(aItem)
+            listConsolidationStrategy.execStartPropagation(worldManager, aItem)
         }
         return(remainder)
     }
