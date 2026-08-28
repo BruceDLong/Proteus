@@ -123,23 +123,23 @@ mergeRules = {
         ["merge:lLST|lemLiteral|=|rLST|remLiteral",        "copyIdOrStartMergProp"],
 
         # LooseSize
-        ["merge:lNUM||==|rSTR,rLST|remUnknown,remLiteral",   "ACTION"],
-        ["merge:lSTR||==|rNUM,rLST|",                      "ACTION"],
+        # TODO: Define loose numeric-to-string/list conversion from a real use case.
+        ["merge:lNUM||==|rSTR,rLST|remUnknown,remLiteral",   "NOT_IMPLEMENTED_YET"],
+        # TODO: Define loose string-to-number/list conversion from a real use case.
+        ["merge:lSTR||==|rNUM,rLST|",                      "NOT_IMPLEMENTED_YET"],
         ["merge:lLST|lemUnknown,lemLiteral|==|rNUM,rSTR|",   "StartMergePropogation"], # ADD NEW AITEM LHS FIRST FROM LIST & THE WHOLE NUTHER RHS, MAYBE PROPAGATE SHOULD HANDLE
 
         ["merge:lNUM|lemUnknown|==|rNUM|remUnknown",         "NONE"],
         ["merge:lNUM|lemUnknown|==|rNUM|remLiteral",         "checkNumRangeDoCpy"], # remember size to copy
         ["merge:lNUM|lemLiteral|==|rNUM|remUnknown",         "NONE"],
-        ["merge:lNUM|lemLiteral|==|rNUM|remLiteral",         "ACTION"], #break into 2 cases: LHS.infSize.evalMode = remUnknown, remLiteral.  see tryMergeValue()
+        # TODO: Define loose numeric literal width and remainder semantics from a real use case.
+        ["merge:lNUM|lemLiteral|==|rNUM|remLiteral",         "NOT_IMPLEMENTED_YET"],
 
         ["merge:lSTR|lemUnknown|==|rSTR|remUnknown",         "NONE"],
         ["merge:lSTR|lemUnknown|==|rSTR|remLiteral",         "MergeLooseStrings"], # sizeToCopy, handleRemainder
         ["merge:lSTR|lemLiteral|==|rSTR|remUnknown",         "NONE"],
         ["merge:lSTR|lemLiteral|==|rSTR|remLiteral",         "MergeLooseStrings"],   #break into 2 cases: LHS.infSize.evalMode = remUnknown, remLiteral.  see tryMergeValue()
 
-        ["merge:lLST|lemUnknown|==|rLST|remUnknown",        "ACTION"],
-        ["merge:lLST|lemUnknown|==|rLST|remLiteral",        "ACTION"],
-        ["merge:lLST|lemLiteral|==|rLST|remUnknown",        "ACTION"],
         ["merge:lLST|lemLiteral|==|rLST|remLiteral",        "StartMergePropogationUnlessDefinitionShape", "StartMergePropogation"],
 
     ]
@@ -394,7 +394,7 @@ def genConditionCode(key, ifSnips):
 
 def genHandlerCode(ruleSetID, triggers, action, indent):
     handlerID = ruleSetID + ":" + triggers + "->" + action
-    unsupported = "true" if action == "ACTION" else "false"
+    unsupported = "true" if action in ("ACTION", "NOT_IMPLEMENTED_YET") else "false"
     return indent + 'aItem.phase1RecordHandler("' + handlerID + '", ' + unsupported + ')\n'
 
 def genActionCode(ruleSetID, codeKeyWords, rule, codeSnips, indent):
@@ -404,6 +404,12 @@ def genActionCode(ruleSetID, codeKeyWords, rule, codeSnips, indent):
             actionCode = indent + '//:l/merge::log(indentStr(aItem.indentLvl)+"        TODO: unfinished")\n'
         else:
             actionCode = indent + "//TODO: unfinished\n"
+        return(handlerCode + actionCode)
+    if codeKeyWords == "NOT_IMPLEMENTED_YET":
+        actionCode = indent + "// TODO: Implement when a real use case establishes the required semantics.\n"
+        actionCode += indent + 'log("Not Implemented Yet: ' + ruleSetID + ':' + rule + '")\n'
+        actionCode += indent + "logFlush()\n"
+        actionCode += indent + "exit(2)\n"
         return(handlerCode + actionCode)
     if codeKeyWords == "NONE":
         if debugMode:
@@ -495,6 +501,11 @@ def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
                     actionCode += indent + '    //:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':TODO: unfinished")\n'
                 else:
                     actionCode += indent + "    //TODO: unfinished\n"
+            elif codeKeyWords == "NOT_IMPLEMENTED_YET":
+                actionCode += indent + "    // TODO: Implement when a real use case establishes the required semantics.\n"
+                actionCode += indent + '    log("Not Implemented Yet: '+ruleSetID+':'+triggers+'")\n'
+                actionCode += indent + "    logFlush()\n"
+                actionCode += indent + "    exit(2)\n"
             elif codeKeyWords == "NONE":
                 if debugMode:
                     actionCode += indent + '    //:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+triggers+':Do Nothing")\n'
