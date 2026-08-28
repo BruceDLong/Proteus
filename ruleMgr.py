@@ -564,9 +564,6 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
         ifsCode =  '        //if(aItem.LHS_item.accessMode==aRefTo){log("REF_TO:"+aItem.stringify())}\n'
         ifsCode += '        our POV: remainder <- NULL\n'
         ifsCode += '        logSeg(" mRUl")\n'
-        ifsCode += '        me bool: orderedSpanMergeHandled <- false\n'
-        ifsCode += '        our POV: orderedSpanRemainder <- orderedSpanMergeRules(aItem, orderedSpanMergeHandled)\n'
-        ifsCode += '        if(orderedSpanMergeHandled){aItem.phase1RecordHandler("merge:orderedSpan", false); return(orderedSpanRemainder)}\n'
         ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
         ifsCode += '        else {aItem.phase1RecordHandler("merge:missing", true); log("MERGE_RULE_MISSING: "+ toString(aItem));log("          LHS overlayType:"+ overlayTypeStrings[aItem.LHS_item.pItem.value.overlayType]);log("          LHS evalMode:"+ evalModeStrings[aItem.LHS_item.pItem.value.evalMode]);log("          RHS overlayType:"+ overlayTypeStrings[aItem.RHS.pItem.value.overlayType]); log("EXITING"); exit(2);}\n'
         ifsCode += "        return(remainder)"
