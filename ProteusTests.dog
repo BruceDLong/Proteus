@@ -19,6 +19,10 @@ TestsToRun = `
     unit/GNextT/t3
     unit/GNextT/t4
     unit/endRelative/resolveOnClose
+    unit/reasoner/strictListUnknownUnknown
+    unit/reasoner/strictListUnknownFromLiteral
+    unit/reasoner/strictListLiteralAgainstUnknown
+    unit/reasoner/strictListUnknownPolarityPending
     parse/errorBadTag
     parse/errorWordDefn
  //   parse/toyLang
@@ -39,6 +43,7 @@ do ManageCmdLine(cmd)
 #define GETFIRSTTIGHT (NAME, MSG, IN, OUT, SKIP) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGETFIRSTTIGHT(tname, IN, OUT, SKIP)}%>
 #define GETNEXTTIGHT (NAME, MSG, IN, OUT, SKIP) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGETNEXTTIGHT(tname, IN, OUT, SKIP)}%>
 #define ENDRELRESOLVE (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeResolveOnClose(tname)}%>
+#define STRICTLISTUNKNOWN (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestStrictListUnknownCase(tname, CASE_ID)}%>
 #define PARSEERR (NAME, MSG, INPUT, ERRTXT, ERRLINE, ERRCOL) <%void: DESLASH(NAME)(me string: tname)<-{testParseError(tname, INPUT, ERRTXT, ERRLINE, ERRCOL)}%>
 
 
@@ -73,6 +78,10 @@ struct GLOBAL {
     GETNEXTTIGHT(unit/GNextT/t3, "get next POV tight",      "{3 &{4 5} 6}", "{3 4 5 6 }", 0)
     GETNEXTTIGHT(unit/GNextT/t4, "get next POV tight",      "{3 4 &{&{5}}}", "{3 4 5 }", 0)
     ENDRELRESOLVE(unit/endRelative/resolveOnClose, "resolve a retained end-relative reference when its list closes")
+    STRICTLISTUNKNOWN(unit/reasoner/strictListUnknownUnknown, "merge strict unknown list constraints", 1)
+    STRICTLISTUNKNOWN(unit/reasoner/strictListUnknownFromLiteral, "copy a strict literal list into an unknown list", 2)
+    STRICTLISTUNKNOWN(unit/reasoner/strictListLiteralAgainstUnknown, "retain a strict literal list while merging unknown list constraints", 3)
+    STRICTLISTUNKNOWN(unit/reasoner/strictListUnknownPolarityPending, "retain an unresolved inverted list constraint", 4)
 
 //    NORMTEST(error/level1,       "level1 mismatch",            "_ = $",  "*16+10")
 
@@ -483,6 +492,106 @@ struct GLOBAL {
         me string: expected <- "true"
         if(resolvedCorrectly){result <- "true"}
         REQUIRE(result==expected)
+        return()
+    }
+    me void: unitTestStrictListUnknownCase(me string: testName, me int: caseID) <- {
+        our infonView:: LHS
+        LHS!.viewMode <- vmOverlay
+        LHS!.value!.overlayType <- LST
+        LHS!.value!.evalMode <- emUnknown
+        LHS!.infSize!.evalMode <- emUnknown
+
+        our infonView:: RHS
+        RHS!.viewMode <- vmOverlay
+        RHS!.value!.overlayType <- LST
+        RHS!.value!.evalMode <- emUnknown
+        RHS!.infSize!.evalMode <- emUnknown
+        RHS!.orderMode <- uOrdered
+        our infonView:: RHSListSpec
+        RHSListSpec!.viewMode <- vmAny
+        RHSListSpec!.value!.overlayType <- NUM
+        RHSListSpec!.value!.evalMode <- emUnknown
+        RHS!.value!.listSpec <- RHSListSpec
+
+        our infonView: originalLHSItem <- NULL
+        our infonView: originalRHSItem <- NULL
+        if(caseID==2 or caseID==4){
+            me int64: literalValue <- 7
+            RHS!.value!.evalMode <- emLiteral
+            Allocate(originalRHSItem)
+            originalRHSItem!.itmMode <- mItem
+            originalRHSItem!.viewMode <- vmOverlay
+            originalRHSItem!.value!.overlayType <- NUM
+            originalRHSItem!.value!.evalMode <- emLiteral
+            originalRHSItem!.value!.num <- literalValue
+            RHS!.value!.items.append(originalRHSItem, false, 607)
+            if(caseID==4){RHS!.invertMatch <- true}
+        }
+        else if(caseID==3){
+            me int64: literalValue <- 5
+            LHS!.value!.evalMode <- emLiteral
+            Allocate(originalLHSItem)
+            originalLHSItem!.itmMode <- mItem
+            originalLHSItem!.viewMode <- vmOverlay
+            originalLHSItem!.value!.overlayType <- NUM
+            originalLHSItem!.value!.evalMode <- emLiteral
+            originalLHSItem!.value!.num <- literalValue
+            LHS!.value!.items.append(originalLHSItem, false, 608)
+        }
+
+        our POV:: LHSPOV{609}
+        LHSPOV!.pItem <- LHS
+        our POV:: RHSPOV{610}
+        RHSPOV!.pItem <- RHS
+        our AItem:: aItem{srcNormInit}
+        aItem!.ruleSet <- rsMerge
+        aItem!.LHS_item <- LHSPOV
+        aItem!.RHS <- RHSPOV
+
+        me InfonViewReasoner: reasoner
+        me InfonViewReasoningResult: result <-
+                reasoner.planConsolidation(NULL, aItem)
+        reasoner.execConsolidationPlan(NULL, aItem, result)
+
+        me bool: passed <- false
+        if(caseID==1){
+            passed <- result.listCase==lcStrictUnknownLists and
+                    result.status==rrPlannedChange and
+                    LHS!.value!.evalMode==emUnknown and
+                    LHS!.value!.listSpec===RHSListSpec and
+                    LHS!.orderMode==uOrdered
+        }
+        else if(caseID==4){
+            passed <- result.listCase==lcUnresolvedListTemplatePolarity and
+                    result.status==rrHandledNoChange and
+                    result.constraintDisposition==cdRetained and
+                    result.statusIncludesPolarity and
+                    LHS!.value!.evalMode==emUnknown and
+                    LHS!.value!.items.isEmpty()
+        }
+        else if(caseID==2){
+            our POV: copiedItem <- LHS!.value!.items.head
+            passed <- result.listCase==lcStrictUnknownFromLiteralList and
+                    result.status==rrPlannedChange and
+                    LHS!.value!.evalMode==emLiteral and copiedItem!=NULL and
+                    copiedItem!.pItem!==originalRHSItem and
+                    copiedItem!.pParent===LHSPOV and
+                    copiedItem!.pItem!.value!.num.convertToInt()==7 and
+                    LHS!.value!.listSpec===RHSListSpec and
+                    LHS!.orderMode==uOrdered
+        }
+        else if(caseID==3){
+            passed <- result.listCase==lcStrictLiteralAgainstUnknownList and
+                    result.status==rrPlannedChange and
+                    LHS!.value!.evalMode==emLiteral and
+                    LHS!.value!.items.head!.pItem===originalLHSItem and
+                    LHS!.value!.listSpec===RHSListSpec and
+                    LHS!.orderMode==uOrdered
+        }
+        me string: actual <- "false"
+        me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
         return()
     }
     me void: processTestLine(me string: testName, our Agent: agent, me string: line) <- {

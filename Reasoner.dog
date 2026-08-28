@@ -14,7 +14,9 @@ struct InfonViewReasoningResult{
          dcNumericRangeDeepCopy, dcConcatRangeIntersection,
          dcEquivalentNumericTemplatePolarity,
          dcUnresolvedNumericTemplatePolarity]: directCase
-    mode[lcNone, lcStrictLiteralLists, lcLooseLiteralLists,
+    mode[lcNone, lcStrictUnknownLists, lcStrictUnknownFromLiteralList,
+         lcStrictLiteralAgainstUnknownList, lcUnresolvedListTemplatePolarity,
+         lcStrictLiteralLists, lcLooseLiteralLists,
          lcLooseListAgainstScalar]: listCase
     mode[icNone, icStrictScalarAgainstIntersection,
          icAnyAgainstIntersection, icStrictListAgainstIntersection,
@@ -26,6 +28,7 @@ struct InfonViewReasoningResult{
          caCopyRHSWorkListToLHS, caCopyRHSValueAndTypeToLHS,
          caMergeRHSIntersection, caMergeLooseStrings,
          caCopyRHSInfonToLHS, caMergeANDRanges,
+         caCopyLiteralListIntoUnknown, caMergeRHSListConstraints,
          caApplyOrderedSpanPlan]: consolidationAction
     mode[waNone, waStartListPropagation]: workAction
     mode[cpNonInvertedAcceptance, cpPositiveTemplateAcceptance,
@@ -887,6 +890,56 @@ struct MergeSizeStrategy{
 // Owns list-state implications that require a propagation continuation rather
 // than a complete local consolidation result.
 struct ListConsolidationStrategy{
+    me bool: hasRHSListConstraintsToMerge(our infonView: LHS,
+            our infonView: RHS) <- {
+        return((LHS!.type==NULL and RHS!.type!=NULL) or
+                (LHS!.value!.listSpec==NULL and RHS!.value!.listSpec!=NULL) or
+                (LHS!.orderMode==uUnknown and RHS!.orderMode!=uUnknown) or
+                !RHS!.wrkList.isEmpty())
+    }
+
+    me void: mergeRHSListConstraints(our AItem: aItem) <- {
+        our infonView: LHS <- aItem!.LHS_item!.pItem
+        our infonView: RHS <- aItem!.RHS!.pItem
+        if(LHS!.type==NULL and RHS!.type!=NULL){LHS!.type <- RHS!.type}
+        if(LHS!.value!.listSpec==NULL and RHS!.value!.listSpec!=NULL){
+            LHS!.value!.listSpec <- RHS!.value!.listSpec
+        }
+        if(LHS!.orderMode==uUnknown and RHS!.orderMode!=uUnknown){
+            LHS!.orderMode <- RHS!.orderMode
+        }
+        if(!RHS!.wrkList.isEmpty()){LHS!.copyWrkListFrom(RHS)}
+    }
+
+    me void: setCopiedListParentLinks(our infonView: listInfon,
+            our POV: listPOV) <- {
+        our POV: childPOV <- listInfon!.value!.items.head
+        while(childPOV!=NULL){
+            childPOV!.pParent <- listPOV
+            if(childPOV!.pItem!.value!.overlayType==LST){
+                setCopiedListParentLinks(childPOV!.pItem, childPOV)
+            }
+            childPOV <- childPOV!.next
+        }
+    }
+
+    me void: copyLiteralListIntoUnknown(our AItem: aItem) <- {
+        our infonView: LHS <- aItem!.LHS_item!.pItem
+        our infonView: RHS <- aItem!.RHS!.pItem
+        our WordUse: lhsType <- LHS!.type
+        our infonView: lhsListSpec <- LHS!.value!.listSpec
+        me OrderMode: lhsOrderMode <- LHS!.orderMode
+        me List<their infonView>: copied
+        RHS!.value!.copyAsTypeTo(LHS!.value, LHS, copied)
+        setCopiedListParentLinks(LHS, aItem!.LHS_item)
+        if(lhsType!=NULL){LHS!.type <- lhsType}
+        else if(RHS!.type!=NULL){LHS!.type <- RHS!.type}
+        if(lhsListSpec!=NULL){LHS!.value!.listSpec <- lhsListSpec}
+        if(lhsOrderMode!=uUnknown){LHS!.orderMode <- lhsOrderMode}
+        else{LHS!.orderMode <- RHS!.orderMode}
+        if(!RHS!.wrkList.isEmpty()){LHS!.copyWrkListFrom(RHS)}
+    }
+
     me bool: execStartPropagation(their WorldManager: worldManager,
             our AItem: aItem) <- {
         me bool: changeMade <- false
@@ -964,6 +1017,57 @@ struct ListConsolidationStrategy{
         // split either side and return a remainder. Keep that path in the
         // legacy strategy until its result can be represented explicitly.
         if(aItem!.LHS_item!.isSparseOrderedSpan() and aItem!.RHS!.isSparseOrderedSpan()){
+            return(result)
+        }
+        if(!aItem!.RHS!.looseType() and
+                LHS!.value!.overlayType==LST and RHS!.value!.overlayType==LST and
+                (LHS!.value!.evalMode==emUnknown or
+                 RHS!.value!.evalMode==emUnknown) and
+                (LHS!.value!.evalMode==emUnknown or
+                 LHS!.value!.evalMode==emLiteral) and
+                (RHS!.value!.evalMode==emUnknown or
+                 RHS!.value!.evalMode==emLiteral)){
+            if(LHS!.invertMatch or RHS!.invertMatch){
+                result.listCase <- lcUnresolvedListTemplatePolarity
+                result.status <- rrHandledNoChange
+                result.constraintDisposition <- cdRetained
+                result.statusIncludesPolarity <- true
+                return(result)
+            }
+            if(LHS!.value!.evalMode==emUnknown and
+                    RHS!.value!.evalMode==emUnknown){
+                result.listCase <- lcStrictUnknownLists
+                if(aItem!.LHS_item!.accessMode==aRefTo){
+                    result.status <- rrPlannedChange
+                    result.consolidationAction <- caCopyRHSIdentityToLHS
+                }
+                else if(hasRHSListConstraintsToMerge(LHS, RHS)){
+                    result.status <- rrPlannedChange
+                    result.consolidationAction <- caMergeRHSListConstraints
+                }
+                else{result.status <- rrHandledNoChange}
+                return(result)
+            }
+            if(LHS!.value!.evalMode==emUnknown){
+                result.listCase <- lcStrictUnknownFromLiteralList
+                result.status <- rrPlannedChange
+                if(aItem!.LHS_item!.accessMode==aRefTo){
+                    result.consolidationAction <- caCopyRHSIdentityToLHS
+                }else{
+                    result.consolidationAction <- caCopyLiteralListIntoUnknown
+                }
+                return(result)
+            }
+            result.listCase <- lcStrictLiteralAgainstUnknownList
+            if(aItem!.LHS_item!.accessMode==aRefTo){
+                result.status <- rrPlannedChange
+                result.consolidationAction <- caCopyRHSIdentityToLHS
+            }
+            else if(hasRHSListConstraintsToMerge(LHS, RHS)){
+                result.status <- rrPlannedChange
+                result.consolidationAction <- caMergeRHSListConstraints
+            }
+            else{result.status <- rrHandledNoChange}
             return(result)
         }
         if(LHS!.value!.overlayType==LST and
@@ -2347,6 +2451,18 @@ struct InfonViewReasoner{
         else if(result.directCase==dcUnresolvedNumericTemplatePolarity){
             aItem!.phase1RecordHandler("direct:unresolvedNumericTemplatePolarity", false)
         }
+        else if(result.listCase==lcStrictUnknownLists){
+            aItem!.phase1RecordHandler("list:strictUnknownLists", false)
+        }
+        else if(result.listCase==lcStrictUnknownFromLiteralList){
+            aItem!.phase1RecordHandler("list:strictUnknownFromLiteralList", false)
+        }
+        else if(result.listCase==lcStrictLiteralAgainstUnknownList){
+            aItem!.phase1RecordHandler("list:strictLiteralAgainstUnknownList", false)
+        }
+        else if(result.listCase==lcUnresolvedListTemplatePolarity){
+            aItem!.phase1RecordHandler("list:unresolvedTemplatePolarity", false)
+        }
         else if(result.listCase==lcStrictLiteralLists){
             aItem!.phase1RecordHandler("list:strictLiteralLists", false)
         }
@@ -2438,6 +2554,12 @@ struct InfonViewReasoner{
         }
         else if(result.consolidationAction==caMergeANDRanges){
             directConsolidationStrategy.mergeANDRanges(aItem)
+        }
+        else if(result.consolidationAction==caCopyLiteralListIntoUnknown){
+            listConsolidationStrategy.copyLiteralListIntoUnknown(aItem)
+        }
+        else if(result.consolidationAction==caMergeRHSListConstraints){
+            listConsolidationStrategy.mergeRHSListConstraints(aItem)
         }
         else if(result.consolidationAction==caApplyOrderedSpanPlan){
             remainder <- orderedSpanReasoner.execConsolidationPlan(aItem, result)

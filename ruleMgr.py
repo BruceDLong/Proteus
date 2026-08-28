@@ -120,9 +120,6 @@ mergeRules = {
         ["merge:lSTR|lemLiteral|=|rSTR|remUnknown",         "NONE"],  # Copy LHS to RHS?
         ["merge:lSTR|lemLiteral|=|rSTR|remLiteral",         "rejectIfValueStrNotEqual"],
 
-        ["merge:lLST|lemUnknown|=|rLST|remUnknown",        "ACTION"],
-        ["merge:lLST|lemUnknown|=|rLST|remLiteral",        "ACTION"],
-        ["merge:lLST|lemLiteral|=|rLST|remUnknown",        "ACTION"],
         ["merge:lLST|lemLiteral|=|rLST|remLiteral",        "copyIdOrStartMergProp"],
 
         # LooseSize
