@@ -79,6 +79,94 @@ struct ReferenceConsolidationStrategy{
         result.actionCommitPolicy <- cpPositiveTemplateAcceptance
         return(result)
     }
+
+    me bool: isOpenListShape(our infonView: item) <- {
+        return(item!=NULL and item!.value!.overlayType==LST and
+                item!.value!.evalMode==emLiteral and
+                item!.value!.items.isEmpty() and
+                item!.value!.tailUnfinished and
+                item!.value!.listSpec!=NULL)
+    }
+
+    me bool: hasConcreteLiteralListItems(our infonView: item) <- {
+        return(item!=NULL and item!.value!.overlayType==LST and
+                item!.value!.evalMode==emLiteral and
+                !item!.value!.items.isEmpty())
+    }
+
+    me bool: hasConcreteListSpec(our infonView: item) <- {
+        return(hasConcreteLiteralListItems(item) and
+                item!.value!.listSpec!=NULL)
+    }
+
+    me bool: isSourceBackedPOV(our POV: pov) <- {
+        return(pov!=NULL and pov!.accessMode==aRefTo and
+                pov!.outerPOV!=NULL and
+                pov!.outerPOV!.pItem===pov!.pItem)
+    }
+
+    me bool: mergeOpenListShapeIntoConcreteList(our AItem: aItem,
+            our infonView: RHS, me uint64: lhsItmMode) <- {
+        if(!isOpenListShape(RHS) or
+                !hasConcreteLiteralListItems(aItem!.LHS_item!.pItem)){
+            return(false)
+        }
+        if(aItem!.LHS_item!.pItem!.type==NULL and RHS!.type!=NULL){
+            aItem!.LHS_item!.pItem!.type <- RHS!.type
+        }
+        if(aItem!.LHS_item!.pItem!.value!.listSpec==NULL and
+                RHS!.value!.listSpec!=NULL){
+            aItem!.LHS_item!.pItem!.value!.listSpec <- RHS!.value!.listSpec
+        }
+        if(aItem!.LHS_item!.pItem!.orderMode==uUnknown and
+                RHS!.orderMode!=uUnknown){
+            aItem!.LHS_item!.pItem!.orderMode <- RHS!.orderMode
+        }
+        if(lhsItmMode!=mNone){
+            aItem!.LHS_item!.pItem!.itmMode <- lhsItmMode
+        }
+        return(true)
+    }
+
+    me void: preserveLHSSlotMetadata(our AItem: aItem,
+            our WordUse: oldType, our infonView: oldListSpec,
+            our infonView: RHS) <- {
+        if(oldType!=NULL){aItem!.LHS_item!.pItem!.type <- oldType}
+        // A selector's listSpec is only a request shape. If the RHS is already
+        // a concrete typed list, preserve the real RHS listSpec.
+        if(oldListSpec!=NULL and !hasConcreteListSpec(RHS)){
+            aItem!.LHS_item!.pItem!.value!.listSpec <- oldListSpec
+        }
+    }
+
+    me void: copyIdentity(our AItem: aItem) <- {
+        our infonView: RHS <- aItem!.RHS!.pItem
+        our WordUse: oldType <- aItem!.LHS_item!.pItem!.type
+        our infonView: oldListSpec <- aItem!.LHS_item!.pItem!.value!.listSpec
+        me uint64: lhsItmMode <- aItem!.LHS_item!.pItem!.itmMode
+
+        if(mergeOpenListShapeIntoConcreteList(aItem, RHS, lhsItmMode)){
+            return()
+        }
+
+        if(isSourceBackedPOV(aItem!.LHS_item)){
+            aItem!.RHS!.pItem!.copyAsTypeTo(
+                    aItem!.LHS_item!.pItem, false, true)
+            if(lhsItmMode!=mNone){
+                aItem!.LHS_item!.pItem!.itmMode <- lhsItmMode
+            }
+            if(!aItem!.RHS!.pItem!.isTentative){
+                aItem!.LHS_item!.pItem!.isTentative <- false
+            }
+        }else{
+            aItem!.LHS_item!.pItem <- aItem!.RHS!.pItem
+            if(lhsItmMode!=mNone){
+                aItem!.LHS_item!.pItem!.itmMode <- lhsItmMode
+            }
+        }
+
+        preserveLHSSlotMetadata(aItem, oldType, oldListSpec, RHS)
+    }
 }
 
 // Plans local consolidation cases whose complete outcome can be determined
@@ -127,6 +215,103 @@ struct DirectConsolidationStrategy{
             return(3)
         }
         return(1)
+    }
+
+    void: resetNumRange(our infonView: infn, their FlexNum: lowest,
+            their FlexNum: highest) <- {
+        if(infn!.value!.evalMode!=emConcat){
+            logFatalError("TODO: handle non-concat in resetNumRange")
+        }
+        if(infn!.value!.items.size()==2){
+            our infonView: first <- infn!.value!.items.first()
+            our infonView: secnd <- infn!.value!.items.last()
+            if(first!.value!.overlayType==NUM and
+                    first!.value!.evalMode==emUnknown and
+                    first!.infSize!.evalMode==emLiteral and
+                    secnd!.value!.overlayType==NUM and
+                    secnd!.value!.evalMode==emLiteral and
+                    secnd!.infSize!.evalMode==emUnknown and
+                    secnd!.value!.sizeMode==fromContext){
+                secnd!.value!.num <- lowest!
+                first!.infSize!.num <- highest! - lowest!
+            }
+        }
+    }
+
+    me bool: mergeANDRanges(our AItem: aItem) <- {
+        me FlexNum: lowestLHS
+        me FlexNum: highestLHS
+        me FlexNum: lowestRHS
+        me FlexNum: highestRHS
+        our infonView: LHSInfon <- aItem!.LHS_item!.pItem
+        me int: rangeResultLHS <- evalForRange(
+                LHSInfon, lowestLHS, highestLHS)
+        if(rangeResultLHS!=pass){return(true)}
+        me int: rangeResultRHS <- evalForRange(
+                aItem!.RHS!.pItem, lowestRHS, highestRHS)
+        if(rangeResultRHS!=pass){return(true)}
+        me FlexNum: lowestNew <- max(lowestLHS, lowestRHS)
+        me FlexNum: highestNew <- min(highestLHS, highestRHS)
+        resetNumRange(LHSInfon, lowestNew, highestNew)
+        return(false)
+    }
+
+    me int: matchLength(me string: left, me string: right) <- {
+        me int: lastChar <- min(left.size(), right.size())
+        if(lastChar==0){return(0)}
+        withEach pos in range 0 .. lastChar{
+            if(left[pos]!=right[pos]){return(pos-1)}
+        }
+        return(lastChar)
+    }
+
+    our POV: mergeLooseStrings(our AItem: aItem) <- {
+        our infonView: LHS <- aItem!.LHS_item!.pItem
+        our infonView: RHS <- aItem!.RHS!.pItem
+        me int64: sizeDiff
+        me int64: RSize <- RHS!.value!.str.size()
+        me int64: LSize
+        if(LHS!.value!.evalMode==emUnknown){
+            if(LHS!.infSize!.evalMode==emUnknown){
+                sizeDiff <- 0
+                LHS!.value!.evalMode <- emLiteral
+                LHS!.value!.str <- RHS!.value!.str
+                LHS!.value!.sizeMode <- fromGiven
+            }else if(LHS!.infSize!.evalMode==emLiteral){
+                LSize <- LHS!.infSize!.num.convertToFloat()
+                sizeDiff <- RSize - LSize
+                LHS!.value!.evalMode <- emLiteral
+                LHS!.value!.str <- RHS!.value!.str.subStr(0, LSize)
+                LHS!.value!.sizeMode <- fromCount
+            }
+        }else{
+            LSize <- LHS!.value!.str.size()
+            me int: matchLen <- matchLength(
+                    LHS!.value!.str, RHS!.value!.str)
+            me bool: matchFailed
+            if(matchLen==-1 or (matchLen<LSize and matchLen<RSize)){
+                matchFailed <- true
+                aItem!.mergeStatus <- msReject
+                aItem!.LHS_item!.rejected <- true
+            }else{
+                sizeDiff <- RSize - LSize
+                matchFailed <- false
+            }
+        }
+        if(sizeDiff>0){
+            me string: remainderStr <- RHS!.value!.str.subStr(
+                    convertToIntVal(RSize-sizeDiff), convertToIntVal(sizeDiff))
+            our infonView: remainderInfon
+            Allocate(remainderInfon,remainderStr)
+            our POV:: remainder{21}
+            remainder! <- aItem!.RHS!
+            remainder!.pItem <- remainderInfon
+            aItem!.sizeToCopy <- RSize - sizeDiff
+            return(remainder)
+        }else if(sizeDiff==0){
+            aItem!.sizeToCopy <- RSize
+        }
+        return(NULL)
     }
 
     // Extract the positive numeric set denoted by a fully constrained numeric
@@ -883,6 +1068,38 @@ struct IntersectionConsolidationStrategy{
             result.consolidationAction <- caMergeRHSIntersection
         }
         return(result)
+    }
+
+    me void: mergeRHSIntersect(our AItem: aItem) <- {
+        our infonView: LHS <- aItem!.LHS_item!.pItem
+        our infonView: RHS <- aItem!.RHS!.pItem
+        if(RHS!.isOrLike()){
+            me bool: isFromAlt <- aItem!.RHS!.linearAltID>0
+            if(true or isFromAlt){RHS!.innr!.value!.tailUnfinished <- false}
+            our infonView: newListInfon <- makeInnrInfonView()
+            our POV: pov <- RHS!.innr!.value!.items.head
+            while(pov!=NULL){
+                our infonView:: altItem
+                LHS!.copyAsTypeTo(altItem, false, true)
+                altItem!.isTentative <- true
+                our POV:: RHSPov{22}
+                RHSPov! <- pov!
+                altItem!.addPOVToWrkList(RHSPov)
+                our POV: LHSPOV <- newListInfon!.value!.items.append(
+                        altItem, pov!.isSubItm, 23)
+                if(isFromAlt){LHSPOV!.isFromALT <- true}
+                LHSPOV!.outerPOV <- aItem!.LHS_item
+                LHSPOV!.predecessors <- pov!.predecessors
+                pov <- pov!.next
+            }
+            LHS!.convertThisToIntersection(newListInfon, fromGiven)
+            LHS!.innr!.value!.tailUnfinished <-
+                    RHS!.innr!.value!.tailUnfinished
+            LHS!.innr!.value!.sizeMode <- fromGiven
+            LHS!.altRulesApplied <- false
+        }else{
+            log("MG_RHS_INSCT_NotAlt:"+aItem!.stringify())
+        }
     }
 }
 
@@ -2196,7 +2413,7 @@ struct InfonViewReasoner{
             else{aItem!.LHS_item!.pItem!.value!.sizeMode <- fromCount}
         }
         else if(result.consolidationAction==caCopyRHSIdentityToLHS){
-            worldManager!.copyIdentity(aItem)
+            referenceConsolidationStrategy.copyIdentity(aItem)
         }
         else if(result.consolidationAction==caCopyRHSWorkListToLHS){
             aItem!.LHS_item!.pItem!.copyWrkListFrom(aItem!.RHS!.pItem)
@@ -2208,10 +2425,10 @@ struct InfonViewReasoner{
                     aItem!.sizeToCopy)
         }
         else if(result.consolidationAction==caMergeRHSIntersection){
-            worldManager!.mergeRHSIntersect(aItem)
+            intersectionConsolidationStrategy.mergeRHSIntersect(aItem)
         }
         else if(result.consolidationAction==caMergeLooseStrings){
-            remainder <- worldManager!.mergeLooseStrings(aItem)
+            remainder <- directConsolidationStrategy.mergeLooseStrings(aItem)
         }
         else if(result.consolidationAction==caCopyRHSInfonToLHS){
             aItem!.LHS_item!.pItem! <- aItem!.RHS!.pItem!
@@ -2220,7 +2437,7 @@ struct InfonViewReasoner{
             }
         }
         else if(result.consolidationAction==caMergeANDRanges){
-            worldManager!.mergeANDRanges(aItem)
+            directConsolidationStrategy.mergeANDRanges(aItem)
         }
         else if(result.consolidationAction==caApplyOrderedSpanPlan){
             remainder <- orderedSpanReasoner.execConsolidationPlan(aItem, result)

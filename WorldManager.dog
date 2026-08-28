@@ -723,33 +723,6 @@ struct WorldManager{
     me int: evalForRange(our infonView: infn, their FlexNum: lowest, their FlexNum: highest) <- {
         return(infonViewReasoner.evalForRange(infn, lowest, highest))
     }
-    void: resetNumRange(our infonView: infn, their FlexNum: lowest, their FlexNum: highest) <- {
-        if(infn!.value!.evalMode!=emConcat){logFatalError("TODO: handle non-concat in resetNumRange")}
-        if(infn!.value!.items.size()==2){
-            our infonView: first  <- infn!.value!.items.first()
-            our infonView: secnd <- infn!.value!.items.last()
-            if(first!.value!.overlayType==NUM and first!.value!.evalMode==emUnknown and first!.infSize!.evalMode==emLiteral and
-               secnd!.value!.overlayType==NUM and secnd!.value!.evalMode==emLiteral and secnd!.infSize!.evalMode==emUnknown and secnd!.value!.sizeMode==fromContext){
-                secnd!.value!.num <- lowest!
-                first!.infSize!.num <- highest! - lowest!
-            }
-        }
-    }
-    me bool: mergeANDRanges(our AItem: aItem) <- {
-        me FlexNum: lowestLHS
-        me FlexNum: highestLHS
-        me FlexNum: lowestRHS
-        me FlexNum: highestRHS
-        our infonView: LHSInfon <- aItem!.LHS_item!.pItem
-        me int: rangeResultLHS <- evalForRange(LHSInfon, lowestLHS, highestLHS)
-        if(rangeResultLHS!=pass){return(true)}
-        me int: rangeResultRHS <- evalForRange(aItem!.RHS!.pItem, lowestRHS, highestRHS)
-        if(rangeResultRHS!=pass){return(true)}
-        me FlexNum: lowestNew <- max(lowestLHS, lowestRHS)
-        me FlexNum: highestNew <- min(highestLHS, highestRHS)
-        resetNumRange(LHSInfon, lowestNew, highestNew)
-        return(false)
-    }
     me bool: checkNumRange(our infonView: LHS, our infonView: RHS) <- { // NUM=(range)
         return(infonViewReasoner.checkNumRange(LHS, RHS))
     }
@@ -918,66 +891,9 @@ struct WorldManager{
     }
 
     // MERGE_RULES UTILITY FUNCTIONS
-    me int: matchLength(me string: A, me string: B)<-{
-        //log("matchLength: '"+A +"'     '" +B+"'")
-        me int: lastChar
-        me int: retVal <-0
-            lastChar <- min(A.size(), B.size())
-        if (lastChar==0){return(0)}
-        withEach pos in range 0 .. lastChar{
-            if(A[pos]!= B[pos]){
-                return(pos-1)
-            }
-        }
-        return(lastChar)
-    }
     our POV: mergeLooseStrings(our AItem: aItem) <- {
-        //log("mergeLooseStrings:"+aItem!.stringify())
-        our infonView: LHS <- aItem!.LHS_item!.pItem
-        our infonView: RHS <- aItem!.RHS!.pItem
-        me int64: sizeDiff
-        me int64: RSize <- RHS!.value!.str.size()
-        me int64: LSize
-        if(LHS!.value!.evalMode==emUnknown){
-            if(LHS!.infSize!.evalMode == emUnknown){
-                sizeDiff            <- 0
-                LHS!.value!.evalMode    <- emLiteral
-                LHS!.value!.str       <- RHS!.value!.str
-                LHS!.value!.sizeMode  <- fromGiven
-            }else if(LHS!.infSize!.evalMode == emLiteral){
-                LSize       <- LHS!.infSize!.num.convertToFloat()
-                sizeDiff            <- RSize - LSize
-                LHS!.value!.evalMode    <- emLiteral
-                LHS!.value!.str       <- RHS!.value!.str.subStr(0, LSize)
-                LHS!.value!.sizeMode  <- fromCount
-            }
-        }
-        else{
-            LSize <- LHS!.value!.str.size()
-            me int: matchLen <- matchLength(LHS!.value!.str, RHS!.value!.str)
-            me bool: matchFailed
-            if(matchLen==-1 or (matchLen < LSize and matchLen < RSize)){
-                matchFailed  <- true
-                aItem!.mergeStatus <- msReject
-                aItem!.LHS_item!.rejected<-true
-            }
-            else{
-                sizeDiff    <- RSize - LSize
-                matchFailed <- false
-            }
-        }
-        if(sizeDiff > 0 ){
-            me string: remainderStr <- RHS!.value!.str.subStr(convertToIntVal(RSize -sizeDiff), convertToIntVal(sizeDiff))
-            our infonView: remainderInfon; Allocate(remainderInfon,remainderStr)
-            our POV:: remainder{21}
-            remainder!       <- aItem!.RHS!
-            remainder!.pItem     <- remainderInfon
-            aItem!.sizeToCopy    <- RSize - sizeDiff
-            return(remainder)
-        } else if(sizeDiff==0){
-            aItem!.sizeToCopy    <- RSize
-        }
-        return(NULL)
+        return(infonViewReasoner.directConsolidationStrategy.
+                mergeLooseStrings(aItem))
     }
     our POV: mergeLooseNums(our AItem: aItem) <- {
         return(NULL)
@@ -1028,92 +944,8 @@ struct WorldManager{
         }
     }
 
-    me void: mergeRHSIntersect(our AItem: aItem) <- {
-        //:l/PAI::logSeg(" mergeRHSIntersect")
-        // TODO: make this work with inverted and marked intersections
-        our infonView: LHS <- aItem!.LHS_item!.pItem
-        our infonView: RHS <- aItem!.RHS!.pItem
-        if(RHS!.isOrLike()){
-            me bool: isFromAlt <- (aItem!.RHS!.linearAltID>0)
-         //   if(isFromAlt){ or RHS!.innr!.value!.tailUnfinished==false){ // TODO: remove the !isFromAlt condition
-       if(true or isFromAlt) {RHS!.innr!.value!.tailUnfinished<-false}  // TODO-WORKING: Mark this elsewhere !!!!!!!!!!!!!!!!!!!!!!!!!!!!!############!!!!!!!!!!!!!!
-                our infonView: newListInfon <- makeInnrInfonView()
-                our POV: pov <- RHS!.innr!.value!.items.head
-                while(pov != NULL){
-                    // TODO: if(sizesNotCompatable()){markAsReject or notLast}
-                    our infonView:: altItem
-                    LHS!.copyAsTypeTo(altItem,false, true)
-                    altItem!.isTentative <- true
-                    our POV:: RHSPov{22}; RHSPov! <- pov!
-                    altItem!.addPOVToWrkList(RHSPov)
-                    our POV: LHSPOV <- newListInfon!.value!.items.append(altItem, pov!.isSubItm, 23)
-                    if(isFromAlt) {LHSPOV!.isFromALT <- true}
-                    LHSPOV!.outerPOV <- aItem!.LHS_item
-                    LHSPOV!.predecessors <- pov!.predecessors
-                    pov <- pov!.next
-                }
-                LHS!.convertThisToIntersection(newListInfon, fromGiven)
-                LHS!.innr!.value!.tailUnfinished <- RHS!.innr!.value!.tailUnfinished
-                LHS!.innr!.value!.sizeMode <- fromGiven
-                LHS!.altRulesApplied <- false
-        }else{
-            log("MG_RHS_INSCT_NotAlt:"+aItem!.stringify())
-              //  aItem!.mergeStatus<-msPending
-            // TODO: subscribe to RHS updates then retry
-        }
-        //  }
-    }
     me void: copyIdentity(our AItem: aItem) <- {
-        // NOTE (search/adj1 investigation, 2026-04):
-        // Copying identity here replaces the LHS infon pointer. If the old LHS had pending
-        // wrkList constraints, those constraints may no longer participate unless explicitly
-        // carried over elsewhere in the flow.
-        our infonView: RHS <- aItem!.RHS!.pItem
-        our WordUse:type     <- aItem!.LHS_item!.pItem!.type
-        our infonView: listSpec  <- aItem!.LHS_item!.pItem!.value!.listSpec
-        me uint64: lhsItmMode <- aItem!.LHS_item!.pItem!.itmMode
-
-        if(mergeOpenListShapeIntoConcreteList(aItem, RHS, lhsItmMode)){return()}
-
-        if(isSourceBackedPOV(aItem!.LHS_item)){
-            aItem!.RHS!.pItem!.copyAsTypeTo(aItem!.LHS_item!.pItem, false, true)
-            if(lhsItmMode!=mNone){aItem!.LHS_item!.pItem!.itmMode <- lhsItmMode}
-            if(!aItem!.RHS!.pItem!.isTentative){aItem!.LHS_item!.pItem!.isTentative <- false}
-        }else{
-            aItem!.LHS_item!.pItem <- aItem!.RHS!.pItem
-            if(lhsItmMode!=mNone){aItem!.LHS_item!.pItem!.itmMode <- lhsItmMode}
-        }
-
-        preserveLHSSlotMetadata(aItem, type, listSpec, RHS)
-        //print("\nCOW: ",toString(aItem))
-        // ERROR??? Copy workList
-    }
-    me bool: isOpenListShape(our infonView: item) <- {
-        return(item!=NULL and item!.value!.overlayType==LST and item!.value!.evalMode==emLiteral and item!.value!.items.isEmpty() and item!.value!.tailUnfinished and item!.value!.listSpec!=NULL)
-    }
-    me bool: hasConcreteLiteralListItems(our infonView: item) <- {
-        return(item!=NULL and item!.value!.overlayType==LST and item!.value!.evalMode==emLiteral and !item!.value!.items.isEmpty())
-    }
-    me bool: hasConcreteListSpec(our infonView: item) <- {
-        return(hasConcreteLiteralListItems(item) and item!.value!.listSpec!=NULL)
-    }
-    me bool: isSourceBackedPOV(our POV: pov) <- {
-        return(pov!=NULL and pov!.accessMode==aRefTo and pov!.outerPOV!=NULL and pov!.outerPOV!.pItem===pov!.pItem)
-    }
-    me bool: mergeOpenListShapeIntoConcreteList(our AItem: aItem, our infonView: RHS, me uint64: lhsItmMode) <- {
-        if(!isOpenListShape(RHS) or !hasConcreteLiteralListItems(aItem!.LHS_item!.pItem)){return(false)}
-        if(aItem!.LHS_item!.pItem!.type==NULL and RHS!.type!=NULL){aItem!.LHS_item!.pItem!.type <- RHS!.type}
-        if(aItem!.LHS_item!.pItem!.value!.listSpec==NULL and RHS!.value!.listSpec!=NULL){aItem!.LHS_item!.pItem!.value!.listSpec <- RHS!.value!.listSpec}
-        if(aItem!.LHS_item!.pItem!.orderMode==uUnknown and RHS!.orderMode!=uUnknown){aItem!.LHS_item!.pItem!.orderMode <- RHS!.orderMode}
-        if(lhsItmMode!=mNone){aItem!.LHS_item!.pItem!.itmMode <- lhsItmMode}
-        return(true)
-    }
-    me void: preserveLHSSlotMetadata(our AItem: aItem, our WordUse: oldType, our infonView: oldListSpec, our infonView: RHS) <- {
-        if(oldType!=NULL){aItem!.LHS_item!.pItem!.type <- oldType}
-        // A selector's listSpec is only a request shape. If the RHS is already a
-        // concrete typed list, preserve the RHS listSpec so later traversal sees
-        // the real source representation.
-        if(oldListSpec!=NULL and !hasConcreteListSpec(RHS)){aItem!.LHS_item!.pItem!.value!.listSpec <- oldListSpec}
+        infonViewReasoner.referenceConsolidationStrategy.copyIdentity(aItem)
     }
     me void: carryPassiveScalarSource(our POV: LHSPOV, our POV: RHSPOV) <- {
         if(LHSPOV==NULL or RHSPOV==NULL or RHSPOV!.pItem==NULL){return()}

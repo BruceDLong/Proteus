@@ -53,10 +53,10 @@ mergeRules = {
     'ID': 'merge',
     'points': [
         ['l?', 'lNUM', 'lSTR', 'lLST', 'ltUnknown'],
-        ['lemIntersection', 'lemUnknown', 'lemConcat', 'lemLiteral'],
+        ['lemUnknown', 'lemLiteral'],
         ['=', '=='],
         ['r?', 'rNUM', 'rSTR', 'rLST', 'rtUnknown'],
-        ['remIntersection', 'remUnknown', 'remConcat', 'remLiteral']
+        ['remUnknown', 'remLiteral']
     ],
     'ifSnips': {
         'l?':            'aItem.LHS_item.pItem.viewMode == vmAny',
@@ -64,9 +64,7 @@ mergeRules = {
         'lSTR':          'aItem.LHS_item.pItem.value.overlayType == STR',
         'lLST':          'aItem.LHS_item.pItem.value.overlayType == LST',
 
-        'lemIntersection':    'aItem.LHS_item.pItem.value.evalMode == emIntersection',
         'lemUnknown':     'aItem.LHS_item.pItem.value.evalMode == emUnknown',
-        'lemConcat':      'aItem.LHS_item.pItem.value.evalMode == emConcat',
         'lemLiteral':     'aItem.LHS_item.pItem.value.evalMode == emLiteral',
 
         'r?':            'aItem.RHS.pItem.viewMode == vmAny',
@@ -75,9 +73,7 @@ mergeRules = {
         'rLST':          'aItem.RHS.pItem.value.overlayType == LST',
         'rtUnknown':     'aItem.RHS.pItem.value.overlayType == tUnknown',
 
-        'remIntersection':    'aItem.RHS.pItem.value.evalMode == emIntersection',
         'remUnknown':     'aItem.RHS.pItem.value.evalMode == emUnknown',
-        'remConcat':      'aItem.RHS.pItem.value.evalMode == emConcat',
         'remLiteral':     'aItem.RHS.pItem.value.evalMode == emLiteral',
 
         '==':           '(aItem.RHS.looseType())',
@@ -97,13 +93,7 @@ mergeRules = {
         'copyIdOrStartMergProp':    'if(isDefinitionListShapeOnly(aItem)){}\n            else if(aItem.LHS_item.accessMode==aRefTo){copyIdentity(aItem)}else{startPropRules(aItem)}',
         'ifRefCopyIdentity':        'if(aItem.LHS_item.accessMode==aRefTo){copyIdentity(aItem)}else if(!aItem.RHS.pItem.wrkList.isEmpty()){aItem.LHS_item.pItem.copyWrkListFrom(aItem.RHS.pItem)}',
         'MergeLooseStrings':        'remainder <- mergeLooseStrings(aItem)',
-        'mergeRHSIntersect':        'mergeRHSIntersect(aItem)',
-        'mergeANDRanges':           'mergeANDRanges(aItem)',
         'copyIdentity':             'copyIdentity(aItem)',
-        'checkNumRange':            'if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
-        'checkNumRangeDeepCpy':     """if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
-            me bool: truReject <- aItem.mergeStatus==msReject; if(aItem.LHS_item.applyAsNot(aItem.RHS)){truReject <- !truReject}
-            if(!truReject){aItem.LHS_item.pItem! <- aItem.RHS.pItem!; if(aItem.LHS_item.outerPOV!=NULL){aItem.LHS_item.outerPOV.pItem.altRulesApplied <- false}}""",
         'checkNumRangeDoCpy':       """if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
             me bool: truReject <- aItem.mergeStatus==msReject; if(aItem.LHS_item.applyAsNot(aItem.RHS)){truReject <- !truReject}
             if(!truReject){
@@ -116,9 +106,6 @@ mergeRules = {
         ["merge:|||r?|",                          "copyType"],
         ["merge:l?||=|rNUM,rSTR,rLST|",           "copyIdentity"],  #"copyRHSTypeToLHS,copyValueRHStoLHS,copySizeRHStoLHS"
         ["merge:l?||==|rNUM,rSTR,rLST|",          "copyRHSTypeToLHS,copyValueRHStoLHS"],
-        ["merge:l?||=|rtUnknown|remIntersection",      "mergeRHSIntersect"],
-        ["merge:l?||==|rtUnknown|remIntersection",     "mergeRHSIntersect"],
-
         ["merge:lNUM||=|rSTR,rLST|remUnknown,remLiteral",   "REJECT"],
         ["merge:lSTR||=|rNUM,rLST|",                      "REJECT"],
         ["merge:lLST|lemUnknown,lemLiteral|=|rNUM,rSTR|",   "REJECT"],
@@ -158,86 +145,6 @@ mergeRules = {
         ["merge:lLST|lemLiteral|==|rLST|remUnknown",        "ACTION"],
         ["merge:lLST|lemLiteral|==|rLST|remLiteral",        "StartMergePropogationUnlessDefinitionShape", "StartMergePropogation"],
 
-        ##### CONCAT and INTERSECT
-        ["merge:lNUM,lSTR,lLST|lemConcat|=,==|lNUM,lSTR,lLST|remIntersection",                 "mergeRHSIntersect"],
-
-        ["merge:lNUM|lemUnknown|=|rtUnknown,rNUM|remIntersection",        "mergeRHSIntersect"],
-        ["merge:lNUM|lemLiteral|=|rtUnknown,rNUM|remIntersection",        "mergeRHSIntersect"],
-        ["merge:lSTR|lemUnknown|=|rtUnknown,rSTR|remIntersection",        "mergeRHSIntersect"],
-        ["merge:lSTR|lemLiteral|=|rtUnknown,rSTR|remIntersection",        "mergeRHSIntersect"],
-        ["merge:lLST|lemUnknown|=|rtUnknown,rLST|remIntersection",        "mergeRHSIntersect"],
-        ["merge:lLST|lemLiteral|=|rtUnknown,rLST|remIntersection",        "mergeRHSIntersect"],
-        ["merge:lLST|lemIntersection|=|rtUnknown|remIntersection",        "mergeRHSIntersect"],
-
-        ["merge:lNUM|lemUnknown|=|rNUM,rLST|remConcat",     "ACTION"],
-        ["merge:lNUM|lemConcat|=|rNUM|remUnknown",          "ACTION"],
-        ["merge:lNUM|lemConcat|=|rNUM|remConcat",           "ACTION"],
-        ["merge:lNUM,lLST|lemConcat|=|rNUM|remLiteral",               "checkNumRangeDeepCpy"],
-        ["merge:lNUM|lemLiteral|=|rNUM,rLST|remConcat",               "checkNumRangeDeepCpy"],
-        ["merge:lNUM|lemIntersection|=|rNUM|remUnknown",        "ACTION"],
-        ["merge:lNUM|lemIntersection|=|rNUM|remConcat",         "ACTION"],
-        ["merge:lNUM|lemIntersection|=|rNUM|remLiteral",        "ACTION"],
-        ["merge:lNUM|lemIntersection|=|rNUM|remIntersection",       "ACTION"],
-
-        ["merge:lSTR|lemUnknown|=|rSTR|remConcat",          "ACTION"],
-        ["merge:lSTR|lemConcat|=|rSTR|remUnknown",          "ACTION"],
-        ["merge:lSTR|lemConcat|=|rSTR|remConcat",           "ACTION"],
-        ["merge:lSTR|lemConcat|=|rSTR|remLiteral",          "ACTION"],
-        ["merge:lSTR|lemLiteral|=|rSTR|remConcat",          "ACTION"],
-        ["merge:lSTR|lemIntersection|=|rSTR|remUnknown",        "ACTION"],
-        ["merge:lSTR|lemIntersection|=|rSTR|remConcat",         "ACTION"],
-        ["merge:lSTR|lemIntersection|=|rSTR|remLiteral",        "ACTION"],
-        ["merge:lSTR|lemIntersection|=|rSTR|remIntersection",       "ACTION"],
-
-        ["merge:lLST|lemUnknown|=|rLST|remConcat",         "ACTION"],
-        ["merge:lLST|lemConcat|=|rLST|remUnknown",         "ACTION"],
-        ["merge:lLST|lemConcat|=|rLST|remConcat",          "mergeANDRanges"],
-        ["merge:lLST|lemConcat|=|rLST|remLiteral",         "ACTION"],
-        ["merge:lLST|lemLiteral|=|rLST|remConcat",         "ACTION"],
-        ["merge:lLST|lemIntersection|=|rLST|remUnknown",       "ACTION"],
-        ["merge:lLST|lemIntersection|=|rLST|remConcat",        "ACTION"],
-        ["merge:lLST|lemIntersection|=|rLST|remLiteral",       "ACTION"],
-        ["merge:lLST|lemIntersection|=|rLST|remIntersection",      "ACTION"],
-
-        # LooseSize
-        ["merge:lSTR|lemUnknown|==|rtUnknown,rSTR|remIntersection",        "mergeRHSIntersect"],
-        ["merge:lSTR|lemLiteral|==|rtUnknown,rSTR|remIntersection",        "mergeRHSIntersect"],
-        ["merge:lLST|lemUnknown|==|rtUnknown,rLST|remIntersection",        "mergeRHSIntersect"],
-        ["merge:lLST|lemLiteral|==|rtUnknown,rLST|remIntersection",        "mergeRHSIntersect"],
-
-
-        ["merge:lNUM|lemUnknown|==|rNUM|remConcat",          "ACTION"],
-        ["merge:lNUM|lemUnknown|==|rLST|remConcat",          "checkNumRangeDeepCpy"],
-        ["merge:lNUM|lemUnknown|==|rNUM|remIntersection",        "ACTION"],
-        ["merge:lNUM|lemConcat|==|rNUM|remUnknown",          "ACTION"],
-        ["merge:lNUM|lemConcat|==|rNUM|remConcat",           "ACTION"],
-        ["merge:lNUM,lLST|lemConcat|==|rNUM|remLiteral",          "checkNumRangeDeepCpy"],
-        ["merge:lNUM|lemLiteral|==|rNUM,rLST|remConcat",          "checkNumRange"],
-        ["merge:lNUM|lemLiteral|==|rNUM|remIntersection",        "ACTION"],
-        ["merge:lNUM|lemIntersection|==|rNUM|remUnknown",        "ACTION"],
-        ["merge:lNUM|lemIntersection|==|rNUM|remConcat",         "ACTION"],
-        ["merge:lNUM|lemIntersection|==|rNUM|remLiteral",        "ACTION"],
-        ["merge:lNUM|lemIntersection|==|rNUM|remIntersection",       "ACTION"],
-
-        ["merge:lSTR|lemUnknown|==|rSTR|remConcat",          "ACTION"],
-        ["merge:lSTR|lemConcat|==|rSTR|remUnknown",          "ACTION"],
-        ["merge:lSTR|lemConcat|==|rSTR|remConcat",           "ACTION"],
-        ["merge:lSTR|lemConcat|==|rSTR|remLiteral",          "ACTION"],
-        ["merge:lSTR|lemLiteral|==|rSTR|remConcat",          "ACTION"],
-        ["merge:lSTR|lemIntersection|==|rSTR|remUnknown",        "ACTION"],
-        ["merge:lSTR|lemIntersection|==|rSTR|remConcat",         "ACTION"],
-        ["merge:lSTR|lemIntersection|==|rSTR|remLiteral",        "ACTION"],
-        ["merge:lSTR|lemIntersection|==|rSTR|remIntersection",       "ACTION"],
-
-        ["merge:lLST|lemUnknown|==|rLST|remConcat",         "ACTION"],
-        ["merge:lLST|lemConcat|==|rLST|remUnknown",         "ACTION"],
-        ["merge:lLST|lemConcat|==|rLST|remConcat",          "ACTION"],
-        ["merge:lLST|lemConcat|==|rLST|remLiteral",         "ACTION"],
-        ["merge:lLST|lemLiteral|==|rLST|remConcat",         "ACTION"],
-        ["merge:lLST|lemIntersection|==|rLST|remUnknown",       "ACTION"],
-        ["merge:lLST|lemIntersection|==|rLST|remConcat",        "ACTION"],
-        ["merge:lLST|lemIntersection|==|rLST|remLiteral",       "ACTION"],
-        ["merge:lLST|lemIntersection|==|rLST|remIntersection",      "ACTION"]
     ]
 }
 wrkLstRules = {
