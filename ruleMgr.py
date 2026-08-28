@@ -5,49 +5,6 @@ import re
 
 debugMode = True
 
-mergeSizeRules = {
-    'ID': 'mergeSize',
-    'points': [
-        # TODO: ['Size-*', 'Size-/'], ["measurable", "!measurable"],l ["sGivn", !sGivn"],
-        ['looseSize', '!looseSize'],
-        ['lemUnknown', 'lemConcat', 'lemLiteral', 'lemIntersection'],
-        ['remUnknown', 'remConcat', 'rsemLiteral', 'remIntersection'],
-
-    ],
-    'ifSnips': {
-        'l?':            'aItem.LHS_item.pItem.viewMode == vmAny',
-        'lNUM':          'aItem.LHS_item.pItem.value.overlayType == NUM',
-        'lSTR':          'aItem.LHS_item.pItem.value.overlayType == STR',
-        'lLST':          'aItem.LHS_item.pItem.value.overlayType == LST',
-
-        'lemIntersection':    'aItem.LHS_item.pItem.infSize.evalMode == emIntersection',
-        'lemUnknown':     'aItem.LHS_item.pItem.infSize.evalMode == emUnknown',
-        'lemConcat':      'aItem.LHS_item.pItem.infSize.evalMode == emConcat',
-        'lemLiteral':     'aItem.LHS_item.pItem.infSize.evalMode == emLiteral',
-
-        'r?':            'aItem.RHS.pItem.viewMode == vmAny',
-        'rNUM':          'aItem.RHS.pItem.value.overlayType == NUM',
-        'rSTR':          'aItem.RHS.pItem.value.overlayType == STR',
-        'rLST':          'aItem.RHS.pItem.value.overlayType == LST',
-
-        'remIntersection':    'aItem.RHS.pItem.infSize.evalMode == emIntersection',
-        'remUnknown':     'aItem.RHS.pItem.infSize.evalMode == emUnknown',
-        'remConcat':      'aItem.RHS.pItem.infSize.evalMode == emConcat',
-        'rsemLiteral':     'aItem.RHS.pItem.infSize.evalMode == emLiteral',
-
-        'looseSize':     'aItem.looseSize',
-        '!looseSize':    '!aItem.looseSize'
-    },
-    'codeSnips': {
-        'copySizeRHStoLHS':         'if(!sizeCopyPlannedByReasoner and (aItem.LHS_item.pItem.viewMode!=vmOverlay or aItem.RHS.pItem.value.overlayType==aItem.LHS_item.pItem.value.overlayType) and (aItem.LHS_item.pItem.value.listSpec==NULL or !aItem.LHS_item.pItem.value.listSpec.asWrkLstOutr)){DO_COPY(aItem.RHS.pItem.infSize, aItem.LHS_item.pItem.infSize, 0)}',
-    },
-    'rules': [
-        ["mergeSize:!looseSize|lemUnknown|rsemLiteral",     "copySizeRHStoLHS"],
-
-    ]
-}
-
-
 mergeRules = {
     'ID': 'merge',
     'points': [
@@ -135,7 +92,6 @@ mergeRules = {
     ]
 }
 ruleSets = [
-    mergeSizeRules,
     mergeRules
 ]
 
@@ -291,26 +247,13 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
     #for case in cases: print(case)
     untagedRules = stripTags(rules)
     markHandledCases(ruleSetID, untagedRules, cases, points)
-    if ruleSetID =="merge":
-        #print("ruleSetID:"+ruleSetID)
-        ifsCode =  '        //if(aItem.LHS_item.accessMode==aRefTo){log("REF_TO:"+aItem.stringify())}\n'
-        ifsCode += '        our POV: remainder <- NULL\n'
-        ifsCode += '        logSeg(" mRUl")\n'
-        ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
-        ifsCode += '        else {aItem.phase1RecordHandler("merge:missing", true); log("MERGE_RULE_MISSING: "+ toString(aItem));log("          LHS overlayType:"+ overlayTypeStrings[aItem.LHS_item.pItem.value.overlayType]);log("          LHS evalMode:"+ evalModeStrings[aItem.LHS_item.pItem.value.evalMode]);log("          RHS overlayType:"+ overlayTypeStrings[aItem.RHS.pItem.value.overlayType]); log("EXITING"); exit(2);}\n'
-        ifsCode += "        return(remainder)"
-        funcCode = "    our POV: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
-    else:
-        ifsCode =  "        me bool: changeMade <- false\n"
-        if ruleSetID == "mergeSize":
-            ifsCode += "        if(inheritDefinitionListShape(aItem)){changeMade <- true}\n"
-        ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
-        ifsCode += '        //else {log("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ '+ruleSetID+' RULE_MISSING");}\n'
-        ifsCode += "        return(changeMade)"
-        funcArgs = "our AItem: aItem"
-        if ruleSetID == "mergeSize":
-            funcArgs += ", me bool: sizeCopyPlannedByReasoner"
-        funcCode = "    me bool: "+ruleSetID+"Rules("+funcArgs+") <- {\n"+ifsCode+"\n    }\n"
+    ifsCode =  '        //if(aItem.LHS_item.accessMode==aRefTo){log("REF_TO:"+aItem.stringify())}\n'
+    ifsCode += '        our POV: remainder <- NULL\n'
+    ifsCode += '        logSeg(" mRUl")\n'
+    ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
+    ifsCode += '        else {aItem.phase1RecordHandler("merge:missing", true); log("MERGE_RULE_MISSING: "+ toString(aItem));log("          LHS overlayType:"+ overlayTypeStrings[aItem.LHS_item.pItem.value.overlayType]);log("          LHS evalMode:"+ evalModeStrings[aItem.LHS_item.pItem.value.evalMode]);log("          RHS overlayType:"+ overlayTypeStrings[aItem.RHS.pItem.value.overlayType]); log("EXITING"); exit(2);}\n'
+    ifsCode += "        return(remainder)"
+    funcCode = "    our POV: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
     return(funcCode)
 
 def generateXformMgr(ruleSets):
