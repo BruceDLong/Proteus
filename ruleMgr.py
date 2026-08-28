@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # Proteus active WorldManager rule case manager.
 # Generates only WorldManagerRules.dog for WorldManager.dog.
-from pprint import pprint
 import re
 
 debugMode = True
@@ -135,178 +134,10 @@ mergeRules = {
 
     ]
 }
-wrkLstRules = {
-    'ID': 'wrkLst',
-    'points': [["wrkLstEmpty", "!wrkLstEmpty"]],
-    'ifSnips': {
-        '!wrkLstEmpty':   '!aItem.LHS_item.pItem.wrkList.isEmpty()',
-        'wrkLstEmpty':    '!aItem.hasPropagated'
-    },
-    'codeSnips': {
-        'enqueueForMerge':  'enqueueForMerge(aItem); aItem.hasPropagated <- true'
-    },
-    'rules': [
-        ["wrkLst:!wrkLstEmpty",     "enqueueForMerge"],
-        ["wrkLst:wrkLstEmpty",      "enqueueForMerge"]
-    ]
-}
-startPropRules = { # Start iterating emLiteral LST = emLiteral LST
-    'ID': 'startProp',
-    'points': [
-        ["looseSize", "!looseSize"],
-        ["sizesCompat", "!sizesCompat"],
-        ["LHSEmpty", "!LHSEmpty"],
-        ["RHSisPureDots", "!RHSisPureDots"]
-       # ["merging", "!merging"]
-    ],
-    'ifSnips': {
-        '!looseSize':       '!(aItem.RHS.looseType())',
-        'looseSize':        '(aItem.RHS.looseType())',
-        'sizesCompat':      'sizesAreCompatable(aItem.LHS_item.pItem, aItem.RHS.pItem)',
-        '!sizesCompat':     '!sizesAreCompatable(aItem.LHS_item.pItem, aItem.RHS.pItem)',
-        'RHSisPureDots':    '(aItem.RHS.pItem.value.tailUnfinished and aItem.RHS.pItem.value.items.size()==0)',
-        '!RHSisPureDots':   '!(aItem.RHS.pItem.value.tailUnfinished and aItem.RHS.pItem.value.items.size()==0)',
-        'LHSEmpty':         '(!aItem.LHS_item.pItem.value.tailUnfinished and aItem.LHS_item.pItem.value.items.size() == 0)',
-        '!LHSEmpty':        '(aItem.LHS_item.pItem.value.tailUnfinished or aItem.LHS_item.pItem.value.items.size() > 0)'
-    },
-    'codeSnips': {
-        'REJECT':   'aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true;',
-        'SKIP':     '//Skip',
-        'initListIterators':   'initListIterators(aItem); aItem.mergeStatus<-msUnknown',
-    },
-    'rules': [
-        ["startProp:!looseSize|!sizesCompat||",                               "REJECT"],
-        ["startProp:!looseSize|sizesCompat|LHSEmpty|!RHSisPureDots",          "SKIP"],
-        ["startProp:!looseSize|sizesCompat||RHSisPureDots",                   "initListIterators"],
-        ["startProp:!looseSize|sizesCompat|!LHSEmpty|!RHSisPureDots",         "initListIterators"], # Get first; account for #{}, ..., .first     "initListIterators"],
-        ["startProp:looseSize|||",                                            "initListIterators"]
-    ]
-}
-propagationRules = {
-    'ID': 'propagation',
-    'points': [["infonMode", "mergeMode"],["skipDots1", "skipDots2", "notSkipDots"]],
-    'ifSnips': {
-        'infonMode':    'aItem.ruleSet == rsInfon',
-        'mergeMode':    'aItem.ruleSet == rsMerge',
-        'skipDots1':    'aItem.LHS_item.pItem.',
-        'skipDots2':    'aItem.',
-        'notSkipDots':  ''
-
-    },
-    'codeSnips': {
-        'getNextExtSkip':   '',
-        'getNextExt':       '',
-        '':    '',
-        '':    ''
-
-    },
-    'rules': [
-        ["propagation:infonMode|skipDots1", "getNextExtSkip"],
-        ["propagation:infonMode|skipDots2", "getNextExtSkip"],
-        ["propagation:infonMode|notSkipDots", "getNextExt"],
-
-        ["propagation:mergeMode|skipDots1", "ACTION"],
-        ["propagation:mergeMode|skipDots2", "ACTION"],
-        ["propagation:mergeMode|notSkipDots", "ACTION"],
-    ]
-}
-resolveRules = {
-    'ID': 'resolve',
-    'points': [["", ""]],
-    'ifSnips': {
-        '':   '',
-        '':   ''
-    },
-    'codeSnips': {
-        '':  ''
-    },
-    'rules': [
-        ["resolve:",     "ACTION"],
-        ["resolve:",     "ACTION"]
-    ]
-}
-symbolRules = {
-    'ID': 'symbol',
-    'points': [["", ""]],
-    'ifSnips': {
-        '':   '',
-        '':   ''
-    },
-    'codeSnips': {
-        '':  ''
-    },
-    'rules': [
-        ["symbol:",     "ACTION"],
-        ["symbol:",     "ACTION"]
-    ]
-}
-rangeRules = {
-    'ID': 'range',
-    'points': [["", ""]],
-    'ifSnips': {
-        '':   '',
-        '':   ''
-    },
-    'codeSnips': {
-        '':  ''
-    },
-    'rules': [
-        ["range:",     "ACTION"],
-        ["range:",     "ACTION"]
-    ]
-}
-timeRules = {
-    'ID': 'time',
-    'points': [["", ""]],
-    'ifSnips': {
-        '':   '',
-        '':   ''
-    },
-    'codeSnips': {
-        '':  ''
-    },
-    'rules': [
-        ["time:",     "ACTION"],
-        ["time:",     "ACTION"]
-    ]
-}
-wordRules = {
-    'ID': 'word',
-    'points': [["", ""]],
-    'ifSnips': {
-        '':   '',
-        '':   ''
-    },
-    'codeSnips': {
-        '':  ''
-    },
-    'rules': [
-        ["word:",     "ACTION"],
-        ["word:",     "ACTION"]
-    ]
-}
 ruleSets = [
     mergeSizeRules,
-    mergeRules,
-    #wrkLstRules,
-    startPropRules,
-    #propagationRules,
-    #resolveRules,
-    #symbolRules,
-    #rangeRules,
-    #timeRules,
-    #wordRules
+    mergeRules
 ]
-
-def countCombinations(caseSpec):
-    combos = 0;
-    for toks in caseSpec:
-        if isinstance(toks, str):
-            combos += 1
-        elif isinstance(toks, list):
-            if combos==0: combos=1
-            combos *= countCombinations(toks)
-    return combos
 
 def enumerateAllCombos(caseSpec):
     firstList = caseSpec[0]
@@ -369,81 +200,10 @@ def markHandledCases(ruleSetID, rules, cases, points):
     print("Total cases - handled cases:" , len(cases), "-", handledCount, "=", len(cases) - handledCount, " ("+str(len(rules))+" "+ruleSetID+" Rules)")
     return(handledCount)
 
-def genConditionCode(key, ifSnips):
-    kSegs= key.split(',')
-    S=""
-    count=0
-    for kSeg in kSegs:
-        if not kSeg in ifSnips:
-            print("key not found in genIfs:",kSeg)
-            exit(2)
-        if count > 0: S+=" or "
-        S += ifSnips[kSeg]
-        count += 1
-    if count > 1: S = "("+S+")"
-    return S
-
 def genHandlerCode(ruleSetID, triggers, action, indent):
     handlerID = ruleSetID + ":" + triggers + "->" + action
     unsupported = "true" if action in ("ACTION", "NOT_IMPLEMENTED_YET") else "false"
     return indent + 'aItem.phase1RecordHandler("' + handlerID + '", ' + unsupported + ')\n'
-
-def genActionCode(ruleSetID, codeKeyWords, rule, codeSnips, indent):
-    handlerCode = genHandlerCode(ruleSetID, rule, codeKeyWords, indent)
-    if codeKeyWords == "ACTION":
-        if debugMode:
-            actionCode = indent + '//:l/merge::log(indentStr(aItem.indentLvl)+"        TODO: unfinished")\n'
-        else:
-            actionCode = indent + "//TODO: unfinished\n"
-        return(handlerCode + actionCode)
-    if codeKeyWords == "NOT_IMPLEMENTED_YET":
-        actionCode = indent + "// TODO: Implement when a real use case establishes the required semantics.\n"
-        actionCode += indent + 'log("Not Implemented Yet: ' + ruleSetID + ':' + rule + '")\n'
-        actionCode += indent + "logFlush()\n"
-        actionCode += indent + "exit(2)\n"
-        return(handlerCode + actionCode)
-    if codeKeyWords == "NONE":
-        if debugMode:
-            actionCode = indent + '//:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+':'+rule+':Do Nothing")\n'
-        else:
-            actionCode = indent + "//Do Nothing\n"
-        return(handlerCode + actionCode)
-    actionCode = ""
-    codeKeyWordList = codeKeyWords.split(",")
-    for KW in codeKeyWordList:
-        actionCode += indent + codeSnips[KW]+"\n"
-    if debugMode:
-        actionCode = indent+'//:l/merge::log(indentStr(aItem.indentLvl)+"        '+ruleSetID+'  '+rule+'\t'+KW+'")\n' + actionCode
-    return(handlerCode + actionCode)
-
-def genIfs(ruleSetID, ifsTree, binaryPts, ifSnips, codeSnips, indent = "        "):
-    count =0
-    S = ""
-    if "__code" in ifsTree: return(genActionCode(ruleSetID, ifsTree["__code"], ifsTree["__rule"], codeSnips, indent))
-    for key,value in ifsTree.items():
-        if key in binaryPts and len(ifsTree) == 2:
-            isBinary = True
-        else: isBinary = False
-        S += indent
-        if isBinary:
-            if count >0:
-                S += "else"
-            else:
-                S += "if("
-                S += genConditionCode(key, ifSnips)
-                S += ")"
-        else:
-            if count >0:
-                S += "else "
-            S += "if("
-            S += genConditionCode(key, ifSnips)
-            S += ")"
-        S += "{\n"
-        S += genIfs(ruleSetID, value, binaryPts, ifSnips, codeSnips, indent + "    ")
-        S += indent+"}\n"
-        count += 1
-        #print("KS:",key,S)
-    return(S)
 
 def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
     S = ""
@@ -520,29 +280,6 @@ def genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips):
         ruleCount +=1
     return(S)
 
-def generateCode(ruleSetID, rules, binaryPts, ifSnips, codeSnips):
-    topIfs = {}
-    for rule in rules:
-        crntIfs = topIfs
-        for rSeg in rule[0].split("|"):
-            if rSeg == "": continue
-            if not rSeg in crntIfs:
-                crntIfs[rSeg] = {}
-            crntIfs = crntIfs[rSeg]
-        crntIfs["__code"]=rule[1]
-        crntIfs["__rule"]=rule[0]
-    #pprint(topIfs)
-    S = genIfs(ruleSetID, topIfs, binaryPts, ifSnips, codeSnips)
-    return(S)
-
-def pointIsBinary(pointSet):
-    if len(pointSet)==2:
-        if pointSet[0][:1] == "!" and pointSet[0][1:] == pointSet[1]:
-            return(True)
-        if pointSet[1][:1] == "!" and pointSet[1][1:] == pointSet[0]:
-            return(True)
-    return(False)
-
 def addOwnershipAccess(code):
     nonOwningMembers = {'items', 'wrkList'}
     def addMarker(match):
@@ -553,11 +290,6 @@ def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
     cases = enumerateAllCombos(points)
     #for case in cases: print(case)
     untagedRules = stripTags(rules)
-    binaryPts = []
-    for pointSet in points:
-         if pointIsBinary(pointSet):
-             for point in pointSet:
-                binaryPts.append(point)
     markHandledCases(ruleSetID, untagedRules, cases, points)
     if ruleSetID =="merge":
         #print("ruleSetID:"+ruleSetID)
