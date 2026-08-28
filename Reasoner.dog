@@ -499,6 +499,86 @@ struct DirectConsolidationStrategy{
     }
 }
 
+// Owns local concat normalization after its members have been normalized by
+// the agenda. This layer joins adjacent literal fragments and collapses a
+// single remaining fragment without making scheduling decisions.
+struct ConcatReasoner{
+    me bool: joinOnRight(our infonView: LHS, our infonView: RHS) <- {
+        if(LHS!.value!.evalMode==emLiteral and RHS!.value!.evalMode==emLiteral){
+            me int: LHSType <- LHS!.value!.overlayType
+            if(LHSType == RHS!.value!.overlayType){
+                switch(LHSType){
+                    case NUM: {
+                        if(RHS!.value!.sizeMode==fromContext){
+                            LHS!.value!.num <+- RHS!.value!.num
+                        }else{
+                            LHS!.infSize!.num <- LHS!.infSize!.num * RHS!.infSize!.num
+                            LHS!.value!.num <- (LHS!.value!.num * RHS!.infSize!.num) + RHS!.value!.num
+                        }
+                    }
+                    case STR: {
+                        LHS!.value!.str.append(RHS!.value!.str)
+                        LHS!.infSize!.num <- LHS!.value!.str.size()
+                    }
+                    case LST: {
+                        our POV: povElement <- RHS!.value!.items.head
+                        while(povElement != NULL){
+                            our infonView: pItemElement <- povElement!.pItem
+                            LHS!.value!.items.append(pItemElement,
+                                    povElement!.isSubItm, 12)
+                            povElement <- povElement!.next
+                        }
+                    }
+                    default: {return(false)}
+                }
+            }
+            return(true)
+        }
+        return(false)
+    }
+
+    me bool: collapseSingletonConcat(our infonView: infn) <- {
+        me bool: changeMade <- false
+        while(infn!.value!.evalMode==emConcat and
+                !infn!.value!.items.isEmpty() and
+                infn!.value!.items.head!.isLast()){
+            if(infn!.infSize!.evalMode!=emUnknown){
+                infn!.value! <- infn!.value!.items.first()!.value!
+                infn!.value!.sizeMode <- fromGiven
+            }else{
+                infn! <- infn!.value!.items.first()!
+            }
+            changeMade <- true
+        }
+        return(changeMade)
+    }
+
+    me bool: joinIfConcat(our POV: pov) <- {
+        me bool: changeMade <- false
+        if(pov!.pParent!=NULL and
+                pov!.pParent!.pItem!.value!.evalMode==emConcat){
+            if(!pov!.isFirst()){
+                our POV: prev <- pov!.prev
+                if(prev!=NULL and joinOnRight(prev!.pItem, pov!.pItem)){
+                    pov!.pParent!.pItem!.value!.items.erase(pov)
+                    changeMade <- true
+                }
+            }
+            our infonView: parentInfonView <- pov!.pParent!.pItem
+            if(collapseSingletonConcat(parentInfonView)){changeMade <- true}
+        }
+        return(changeMade)
+    }
+
+    me bool: processConcat(our AItem: aItem) <- {
+        me bool: changeMade <- false
+        if(aItem!.concatProcessed){return(changeMade)}
+        aItem!.concatProcessed <- true
+        if(joinIfConcat(aItem!.LHS_item)){changeMade <- true}
+        return(changeMade)
+    }
+}
+
 // Owns definition-backed list shape inheritance. These are semantic list
 // operations, not generated merge-matrix cases.
 struct ListShapeStrategy{
@@ -1919,6 +1999,7 @@ struct POVLevelReasoner{
 }
 
 struct InfonViewReasoner{
+    me ConcatReasoner: concatReasoner
     me ListShapeStrategy: listShapeStrategy
     me MergeSizeStrategy: mergeSizeStrategy
     me DirectConsolidationStrategy: directConsolidationStrategy
@@ -1968,6 +2049,10 @@ struct InfonViewReasoner{
 
     me bool: checkNumRange(our infonView: LHS, our infonView: RHS) <- {
         return(directConsolidationStrategy.checkNumRange(LHS, RHS))
+    }
+
+    me bool: processConcat(our AItem: aItem) <- {
+        return(concatReasoner.processConcat(aItem))
     }
 
     void: recordReasoningHandlers(our AItem: aItem,
