@@ -28,6 +28,8 @@ TestsToRun = `
     unit/reasoner/looseListUnknownFromLiteral
     unit/reasoner/looseListLiteralAgainstUnknown
     unit/reasoner/looseListUnknownPolarityPending
+    unit/reasoner/listSizePromotionCommit
+    unit/reasoner/listSizePromotionNoCommit
     parse/errorBadTag
     parse/errorWordDefn
  //   parse/toyLang
@@ -50,6 +52,7 @@ do ManageCmdLine(cmd)
 #define ENDRELRESOLVE (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeResolveOnClose(tname)}%>
 #define STRICTLISTUNKNOWN (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestStrictListUnknownCase(tname, CASE_ID)}%>
 #define LOOSELISTUNKNOWN (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestLooseListUnknownCase(tname, CASE_ID)}%>
+#define LISTSIZEPROMOTION (NAME, MSG, COMMIT_PLAN) <%void: DESLASH(NAME)(me string: tname)<-{unitTestListSizePromotion(tname, COMMIT_PLAN)}%>
 #define PARSEERR (NAME, MSG, INPUT, ERRTXT, ERRLINE, ERRCOL) <%void: DESLASH(NAME)(me string: tname)<-{testParseError(tname, INPUT, ERRTXT, ERRLINE, ERRCOL)}%>
 
 
@@ -93,6 +96,8 @@ struct GLOBAL {
     LOOSELISTUNKNOWN(unit/reasoner/looseListUnknownFromLiteral, "prepare a loose unknown list for literal-list propagation", 2)
     LOOSELISTUNKNOWN(unit/reasoner/looseListLiteralAgainstUnknown, "retain a loose literal list while merging unknown list constraints", 3)
     LOOSELISTUNKNOWN(unit/reasoner/looseListUnknownPolarityPending, "retain an unresolved inverted loose list constraint", 4)
+    LISTSIZEPROMOTION(unit/reasoner/listSizePromotionCommit, "copy list size only when its consolidation plan commits", true)
+    LISTSIZEPROMOTION(unit/reasoner/listSizePromotionNoCommit, "leave list size unchanged when its consolidation plan does not commit", false)
 
 //    NORMTEST(error/level1,       "level1 mismatch",            "_ = $",  "*16+10")
 
@@ -729,6 +734,68 @@ struct GLOBAL {
                     LHS!.value!.evalMode==emUnknown and
                     LHS!.value!.items.isEmpty()
         }
+        me string: actual <- "false"
+        me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+        return()
+    }
+    me void: unitTestListSizePromotion(me string: testName,
+            me bool: commitPlan) <- {
+        our infonView:: LHS
+        LHS!.viewMode <- vmOverlay
+        LHS!.value!.overlayType <- LST
+        LHS!.value!.evalMode <- emUnknown
+        LHS!.infSize!.evalMode <- emUnknown
+
+        our infonView:: RHS
+        RHS!.viewMode <- vmOverlay
+        RHS!.value!.overlayType <- LST
+        RHS!.value!.evalMode <- emUnknown
+        RHS!.infSize!.evalMode <- emLiteral
+        me int64: rhsSize <- 1
+        RHS!.infSize!.num <- rhsSize
+
+        our POV:: LHSPOV{617}
+        LHSPOV!.pItem <- LHS
+        our POV:: RHSPOV{618}
+        RHSPOV!.pItem <- RHS
+        our AItem:: aItem{srcNormInit}
+        aItem!.ruleSet <- rsMerge
+        aItem!.LHS_item <- LHSPOV
+        aItem!.RHS <- RHSPOV
+        our AItem:: mergeParent{srcNormInit}
+        our AItem:: mergeGrandparent{srcNormInit}
+        aItem!.parent <- mergeParent
+        mergeParent!.parent <- mergeGrandparent
+
+        me InfonViewReasoner: reasoner
+        me InfonViewReasoningResult: consolidationPlan <-
+                reasoner.planConsolidation(NULL, aItem)
+        me MergePreparationPlan: preparationPlan <-
+                reasoner.planMergePreparation(aItem, false)
+        reasoner.promoteMergePreparationToConsolidation(
+                consolidationPlan, preparationPlan, true)
+        me WorldManager: worldManager
+        reasoner.execMergePreparation(worldManager, aItem, preparationPlan)
+
+        me bool: sizeUnchangedBeforeCommit <-
+                LHS!.infSize!.evalMode==emUnknown
+        reasoner.mergeInfonStates(worldManager, aItem,
+                consolidationPlan, commitPlan)
+        me bool: sizeHasExpectedFinalState <-
+                LHS!.infSize!.evalMode==emUnknown
+        if(commitPlan){
+            sizeHasExpectedFinalState <-
+                    LHS!.infSize!.evalMode==emLiteral and
+                    LHS!.infSize!.num.convertToInt()==1
+        }
+
+        me bool: passed <-
+                consolidationPlan.listCase==lcStrictUnknownLists and
+                consolidationPlan.copySize and
+                preparationPlan.sizeAction==mpsPromotedToConsolidation and
+                sizeUnchangedBeforeCommit and sizeHasExpectedFinalState
         me string: actual <- "false"
         me string: expected <- "true"
         if(passed){actual <- "true"}

@@ -53,8 +53,8 @@ struct MergePreparationPlan{
     me bool: copyDefinitionOrderMode
     me bool: copyDefinitionSize
     me bool: openDefinitionTail
-    mode[mpsNotApplicable, mpsOwnedByConsolidation, mpsCopyRHSSize,
-         mpsBlocked]: sizeAction
+    mode[mpsNotApplicable, mpsOwnedByConsolidation,
+         mpsPromotedToConsolidation, mpsCopyRHSSize, mpsBlocked]: sizeAction
     me bool: sizeBlockedByOverlayType
     me bool: sizeBlockedByListOutput
 
@@ -901,14 +901,14 @@ struct ListShapeStrategy{
 // plan, while execution only applies already-decided mutations.
 struct MergeSizeStrategy{
     void: planPreparation(our AItem: aItem,
-            me bool: sizeCopyOwnedByConsolidation,
+            me bool: sizeCopyAlreadyOwnedByConsolidation,
             their MergePreparationPlan: plan) <- {
         // A planned definition-size copy happens first and makes the LHS size
         // non-unknown before the old generic rule would inspect it.
         if(!plan.copyDefinitionSize and !aItem!.looseSize and
                 aItem!.LHS_item!.pItem!.infSize!.evalMode==emUnknown and
                 aItem!.RHS!.pItem!.infSize!.evalMode==emLiteral){
-            if(sizeCopyOwnedByConsolidation){
+            if(sizeCopyAlreadyOwnedByConsolidation){
                 plan!.sizeAction <- mpsOwnedByConsolidation
                 return()
             }
@@ -936,6 +936,21 @@ struct MergeSizeStrategy{
         }
     }
 
+    // List propagation and reference identity execution both run through the
+    // consolidation commit boundary. Move their planned size copy into that
+    // plan so an uncommitted plan cannot partially mutate the LHS.
+    void: promoteSizeCopyToConsolidation(
+            their InfonViewReasoningResult: consolidationPlan,
+            their MergePreparationPlan: preparationPlan,
+            me bool: consolidationCanExecute) <- {
+        if(!consolidationCanExecute or
+                preparationPlan.sizeAction!=mpsCopyRHSSize){return()}
+        if(consolidationPlan.listCase==lcNone and
+                consolidationPlan.referenceCase==rcNone){return()}
+        consolidationPlan!.copySize <- true
+        preparationPlan!.sizeAction <- mpsPromotedToConsolidation
+    }
+
     void: recordPreparationHandlers(our AItem: aItem,
             their MergePreparationPlan: plan) <- {
         if(!plan.hasPreparationDecision()){return()}
@@ -959,6 +974,9 @@ struct MergeSizeStrategy{
         if(plan.sizeAction==mpsOwnedByConsolidation){
             aItem!.phase1RecordHandler(
                     "mergePreparation:sizeOwnedByConsolidation", false)
+        }else if(plan.sizeAction==mpsPromotedToConsolidation){
+            aItem!.phase1RecordHandler(
+                    "mergePreparation:sizePromotedToConsolidation", false)
         }else if(plan.sizeAction==mpsCopyRHSSize){
             aItem!.phase1RecordHandler("mergePreparation:sizeCopied", false)
         }else if(plan.sizeAction==mpsBlocked){
@@ -2485,12 +2503,20 @@ struct InfonViewReasoner{
     }
 
     me MergePreparationPlan: planMergePreparation(our AItem: aItem,
-            me bool: sizeCopyOwnedByConsolidation) <- {
+            me bool: sizeCopyAlreadyOwnedByConsolidation) <- {
         me MergePreparationPlan: plan <-
                 listShapeStrategy.planDefinitionListShape(aItem)
         mergeSizeStrategy.planPreparation(aItem,
-                sizeCopyOwnedByConsolidation, plan)
+                sizeCopyAlreadyOwnedByConsolidation, plan)
         return(plan)
+    }
+
+    void: promoteMergePreparationToConsolidation(
+            their InfonViewReasoningResult: consolidationPlan,
+            their MergePreparationPlan: preparationPlan,
+            me bool: consolidationCanExecute) <- {
+        mergeSizeStrategy.promoteSizeCopyToConsolidation(
+                consolidationPlan, preparationPlan, consolidationCanExecute)
     }
 
     void: execMergePreparation(their WorldManager: worldManager,
