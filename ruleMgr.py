@@ -63,9 +63,12 @@ mergeRules = {
         'lNUM':          'aItem.LHS_item.pItem.value.overlayType == NUM',
         'lSTR':          'aItem.LHS_item.pItem.value.overlayType == STR',
         'lLST':          'aItem.LHS_item.pItem.value.overlayType == LST',
+        'ltUnknown':     'aItem.LHS_item.pItem.value.overlayType == tUnknown',
 
         'lemUnknown':     'aItem.LHS_item.pItem.value.evalMode == emUnknown',
+        'lemConcat':      'aItem.LHS_item.pItem.value.evalMode == emConcat',
         'lemLiteral':     'aItem.LHS_item.pItem.value.evalMode == emLiteral',
+        'lemIntersection':'aItem.LHS_item.pItem.value.evalMode == emIntersection',
 
         'r?':            'aItem.RHS.pItem.viewMode == vmAny',
         'rNUM':          'aItem.RHS.pItem.value.overlayType == NUM',
@@ -74,73 +77,61 @@ mergeRules = {
         'rtUnknown':     'aItem.RHS.pItem.value.overlayType == tUnknown',
 
         'remUnknown':     'aItem.RHS.pItem.value.evalMode == emUnknown',
+        'remConcat':      'aItem.RHS.pItem.value.evalMode == emConcat',
         'remLiteral':     'aItem.RHS.pItem.value.evalMode == emLiteral',
+        'remIntersection':'aItem.RHS.pItem.value.evalMode == emIntersection',
 
         '==':           '(aItem.RHS.looseType())',
         '=':            '!(aItem.RHS.looseType())',
     },
-    'codeSnips': {
-        'REJECT':                   'aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true;',
-        'copyValueRHStoLHS':        'DO_COPY(aItem.RHS.pItem.value, aItem.LHS_item.pItem.value, aItem.sizeToCopy)',
-        'copyValueLHStoRHS':        'DO_COPY(aItem.LHS_item.pItem.value, aItem.RHS.pItem.value, aItem.sizeToCopy)',
-        'copyRHSTypeToLHS':         'aItem.LHS_item.pItem.value.overlayType <- aItem.RHS.pItem.value.overlayType; aItem.LHS_item.pItem.viewMode <- aItem.RHS.pItem.viewMode',
-        'copySizeRHStoLHS':         'DO_COPY(aItem.RHS.pItem.infSize, aItem.LHS_item.pItem.infSize, 0)',
-        'rejectIfValueStrNotEqual': 'if(aItem.LHS_item.pItem.value.str != aItem.RHS.pItem.value.str){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true}',
-        'rejectIfValueNumNotEqual': 'if(aItem.LHS_item.pItem.value.num != aItem.RHS.pItem.value.num){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}',
-        'copyType':                 'if(aItem.RHS.pItem.type!=NULL){aItem.LHS_item.pItem.type <- aItem.RHS.pItem.type}',
-        'StartMergePropogation':    'startPropRules(aItem)',
-        'StartMergePropogationUnlessDefinitionShape': 'if(!isDefinitionListShapeOnly(aItem)){startPropRules(aItem)}',
-        'copyIdOrStartMergProp':    'if(isDefinitionListShapeOnly(aItem)){}\n            else if(aItem.LHS_item.accessMode==aRefTo){copyIdentity(aItem)}else{startPropRules(aItem)}',
-        'ifRefCopyIdentity':        'if(aItem.LHS_item.accessMode==aRefTo){copyIdentity(aItem)}else if(!aItem.RHS.pItem.wrkList.isEmpty()){aItem.LHS_item.pItem.copyWrkListFrom(aItem.RHS.pItem)}',
-        'MergeLooseStrings':        'remainder <- mergeLooseStrings(aItem)',
-        'copyIdentity':             'copyIdentity(aItem)',
-        'checkNumRangeDoCpy':       """if(!checkNumRange(aItem.LHS_item.pItem, aItem.RHS.pItem)){aItem.mergeStatus<-msReject; aItem.LHS_item.rejected<-true; logSeg("REJECT")}
-            me bool: truReject <- aItem.mergeStatus==msReject; if(aItem.LHS_item.applyAsNot(aItem.RHS)){truReject <- !truReject}
-            if(!truReject){
-                            DO_COPY(aItem.RHS.pItem.value, aItem.LHS_item.pItem.value, aItem.sizeToCopy);
-                            aItem.LHS_item.pItem.invertMatch <- aItem.RHS.pItem.invertMatch
-                            if(aItem.LHS_item.outerPOV!=NULL){aItem.LHS_item.outerPOV.pItem.altRulesApplied <- false
-            }}""",
-    },
+    # The generated merge rule rows now contain only semantic traps. Executable
+    # actions formerly named by this table are owned by explicit reasoner strategies.
+    'codeSnips': {},
     'rules': [
-        ["merge:|||r?|",                          "copyType"],
-        ["merge:l?||=|rNUM,rSTR,rLST|",           "copyIdentity"],  #"copyRHSTypeToLHS,copyValueRHStoLHS,copySizeRHStoLHS"
-        ["merge:l?||==|rNUM,rSTR,rLST|",          "copyRHSTypeToLHS,copyValueRHStoLHS"],
-        ["merge:lNUM||=|rSTR,rLST|remUnknown,remLiteral",   "REJECT"],
-        ["merge:lSTR||=|rNUM,rLST|",                      "REJECT"],
-        ["merge:lLST|lemUnknown,lemLiteral|=|rNUM,rSTR|",   "REJECT"],
+        # TODO: Define the remaining inverted-any identity/value semantics.
+        ["merge:l?||=|rNUM,rSTR,rLST|",           "NOT_IMPLEMENTED_YET"],
+        ["merge:l?||==|rNUM,rSTR,rLST|",          "NOT_IMPLEMENTED_YET"],
 
-        ["merge:lNUM|lemUnknown|=|rNUM|remUnknown",         "ifRefCopyIdentity"],
-        ["merge:lNUM|lemUnknown|=|rNUM|remLiteral",         "copyValueRHStoLHS"],
-        ["merge:lNUM|lemLiteral|=|rNUM|remUnknown",         "NONE"],
-        ["merge:lNUM|lemLiteral|=|rNUM|remLiteral",         "rejectIfValueNumNotEqual"],
+        # TODO: Define merge semantics for concat/intersection combinations not
+        # claimed by ConcatReasoner or IntersectionConsolidationStrategy.
+        ["merge:|lemConcat,lemIntersection|||",     "NOT_IMPLEMENTED_YET"],
+        ["merge:||||remConcat,remIntersection",     "NOT_IMPLEMENTED_YET"],
 
-        ["merge:lSTR|lemUnknown|=|rSTR|remUnknown",         "ifRefCopyIdentity"],
-        ["merge:lSTR|lemUnknown|=|rSTR|remLiteral",         "copyValueRHStoLHS"],
-        ["merge:lSTR|lemLiteral|=|rSTR|remUnknown",         "NONE"],  # Copy LHS to RHS?
-        ["merge:lSTR|lemLiteral|=|rSTR|remLiteral",         "rejectIfValueStrNotEqual"],
+        # TODO: Define non-vmAny unknown-overlay identity and type propagation.
+        ["merge:ltUnknown||||",                     "NOT_IMPLEMENTED_YET"],
+        ["merge:l?,lNUM,lSTR,lLST|||rtUnknown|",    "NOT_IMPLEMENTED_YET"],
 
-        ["merge:lLST|lemLiteral|=|rLST|remLiteral",        "copyIdOrStartMergProp"],
+        # TODO: Define strict unknown/unknown constraint conjunction for the
+        # reference, pending-work, and string-polarity cases not owned by Reasoner.dog.
+        ["merge:lNUM|lemUnknown|=|rNUM|remUnknown",         "NOT_IMPLEMENTED_YET"],
+        ["merge:lSTR|lemUnknown|=|rSTR|remUnknown",         "NOT_IMPLEMENTED_YET"],
+
+        # TODO: Define inverted and unalignable sparse literal-list conjunction.
+        ["merge:lLST|lemLiteral|=|rLST|remLiteral",         "NOT_IMPLEMENTED_YET"],
 
         # LooseSize
         # TODO: Define loose numeric-to-string/list conversion from a real use case.
         ["merge:lNUM||==|rSTR,rLST|remUnknown,remLiteral",   "NOT_IMPLEMENTED_YET"],
         # TODO: Define loose string-to-number/list conversion from a real use case.
         ["merge:lSTR||==|rNUM,rLST|",                      "NOT_IMPLEMENTED_YET"],
-        ["merge:lLST|lemUnknown,lemLiteral|==|rNUM,rSTR|",   "StartMergePropogation"], # ADD NEW AITEM LHS FIRST FROM LIST & THE WHOLE NUTHER RHS, MAYBE PROPAGATE SHOULD HANDLE
+        # TODO: Define complemented loose list-to-scalar propagation.
+        ["merge:lLST|lemUnknown,lemLiteral|==|rNUM,rSTR|",   "NOT_IMPLEMENTED_YET"],
 
-        ["merge:lNUM|lemUnknown|==|rNUM|remUnknown",         "NONE"],
-        ["merge:lNUM|lemUnknown|==|rNUM|remLiteral",         "checkNumRangeDoCpy"], # remember size to copy
-        ["merge:lNUM|lemLiteral|==|rNUM|remUnknown",         "NONE"],
+        # TODO: Define loose numeric polarity, pending unknowns, and remainder behavior.
+        ["merge:lNUM|lemUnknown|==|rNUM|remUnknown",         "NOT_IMPLEMENTED_YET"],
+        ["merge:lNUM|lemUnknown|==|rNUM|remLiteral",         "NOT_IMPLEMENTED_YET"],
+        ["merge:lNUM|lemLiteral|==|rNUM|remUnknown",         "NOT_IMPLEMENTED_YET"],
         # TODO: Define loose numeric literal width and remainder semantics from a real use case.
         ["merge:lNUM|lemLiteral|==|rNUM|remLiteral",         "NOT_IMPLEMENTED_YET"],
 
-        ["merge:lSTR|lemUnknown|==|rSTR|remUnknown",         "NONE"],
-        ["merge:lSTR|lemUnknown|==|rSTR|remLiteral",         "MergeLooseStrings"], # sizeToCopy, handleRemainder
-        ["merge:lSTR|lemLiteral|==|rSTR|remUnknown",         "NONE"],
-        ["merge:lSTR|lemLiteral|==|rSTR|remLiteral",         "MergeLooseStrings"],   #break into 2 cases: LHS.infSize.evalMode = remUnknown, remLiteral.  see tryMergeValue()
+        # TODO: Define loose string polarity, pending unknowns, and remainder behavior.
+        ["merge:lSTR|lemUnknown|==|rSTR|remUnknown",         "NOT_IMPLEMENTED_YET"],
+        ["merge:lSTR|lemUnknown|==|rSTR|remLiteral",         "NOT_IMPLEMENTED_YET"],
+        ["merge:lSTR|lemLiteral|==|rSTR|remUnknown",         "NOT_IMPLEMENTED_YET"],
+        ["merge:lSTR|lemLiteral|==|rSTR|remLiteral",         "NOT_IMPLEMENTED_YET"],
 
-        ["merge:lLST|lemLiteral|==|rLST|remLiteral",        "StartMergePropogationUnlessDefinitionShape", "StartMergePropogation"],
+        # TODO: Define complemented and unalignable sparse loose-list conjunction.
+        ["merge:lLST|lemLiteral|==|rLST|remLiteral",         "NOT_IMPLEMENTED_YET"],
 
     ]
 }
