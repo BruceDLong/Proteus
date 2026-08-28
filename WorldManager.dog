@@ -18,7 +18,12 @@ struct WorldManager{
     }
 
     me string: aItemSourceName(me aitemSrcID: source) <- {return(aitemSrcIDStrings[source])}
+}
 
+// Owns ordered-span traversal, conversion, and retained generated-rule
+// compatibility. WorldManager exposes only the entry points used by control
+// flow and the generated fallback.
+struct OrderedSpanReasoner{
     our WordUse: orderedSpanSourceUnitType(our POV: rhsPOV) <- {
         if(rhsPOV==NULL or rhsPOV!.pItem==NULL){return(NULL)}
         if(rhsPOV!.pItem!.type!=NULL){return(rhsPOV!.pItem!.type)}
@@ -43,12 +48,11 @@ struct WorldManager{
         our OrderedSpanMeasure: measure <- modelMngr.measureOrderedSpanUnit(lhsPOV!.pItem!.type, vSpec, 0)
         return(measure!=NULL and measure!.valid and measure!.baseCount>1)
     }
-    our POV: exposeSparseOrderedSpanHeadForTraversal(our POV: sparsePOV) <- {
+    our POV: exposeSparseOrderedSpanHeadForTraversal(our POV: sparsePOV,
+            their vocabularySpec: vSpec) <- {
         if(sparsePOV==NULL){return(NULL)}
         our infonView: compositeHead <- NULL
         if(sparsePOV!.isSparseOrderedSpan() and sparsePOV!.pItem!.value!.listSpec!=NULL and sparsePOV!.pItem!.value!.listSpec!.type!=NULL){
-            me vocabularySpec: vSpec
-            vSpec.init(agent!.getLocaleBaseName())
             compositeHead <- makeSparseOrderedSpanCompositeHead(sparsePOV!.pItem!.value!.listSpec!.type, vSpec)
         }
         if(compositeHead!=NULL){return(sparsePOV!.exposeSparseHeadWithItem(compositeHead))}
@@ -341,13 +345,13 @@ struct WorldManager{
         if(childConverter==NULL or !childConverter!.valid){return(NULL)}
 
         if(childConverter!.fromBaseCount==childConverter!.toBaseCount){
-            if(rhsPOV!.isSparseOrderedSpan()){return(exposeSparseOrderedSpanHeadForTraversal(rhsPOV))}
+            if(rhsPOV!.isSparseOrderedSpan()){return(exposeSparseOrderedSpanHeadForTraversal(rhsPOV, vSpec))}
             return(rhsPOV)
         }
 
         if(childConverter!.fromBaseCount<childConverter!.toBaseCount){
             if(rhsPOV!.isSparseOrderedSpan()){
-                our POV: exposedPOV <- exposeSparseOrderedSpanHeadForTraversal(rhsPOV)
+                our POV: exposedPOV <- exposeSparseOrderedSpanHeadForTraversal(rhsPOV, vSpec)
                 if(exposedPOV==NULL){return(NULL)}
                 return(firstOrderedSpanChildForRequest(requestType, exposedPOV, vSpec))
             }
@@ -367,12 +371,14 @@ struct WorldManager{
         }
         return(makeOrderedSpanUnitView(requestType, rhsPOV, vSpec, povSrcConcreteSpanPrefix))
     }
-    our OrderedSpanTraversalWindow: tryBuildOrderedSpanTraversalWindow(our POV: lhsPOV, our POV: rhsPOV) <- {
+    our OrderedSpanTraversalWindow: tryBuildOrderedSpanTraversalWindow(
+            their WorldManager: worldManager, our POV: lhsPOV,
+            our POV: rhsPOV) <- {
         our OrderedSpanTraversalWindow:: result
         result!.valid <- false
         if(lhsPOV==NULL or rhsPOV==NULL){return(result)}
         me vocabularySpec: vSpec
-        vSpec.init(agent!.getLocaleBaseName())
+        vSpec.init(worldManager!.agent!.getLocaleBaseName())
 
         our POV: requestPOV <- lhsPOV
         our POV: positivePOV <- positiveOrderedSpanAfterNegativeSkip(lhsPOV, vSpec)
@@ -451,7 +457,8 @@ struct WorldManager{
         me int64: lhsPrefixCount <- rhsBaseCount / spanConverter!.fromBaseCount
         return(lhsPrefixCount>0 and lhsPrefixCount<lhsCount and lhsPrefixCount*spanConverter!.fromBaseCount==rhsBaseCount)
     }
-    our POV: orderedSpanMergeRules(our AItem: aItem, their bool: handled) <- {
+    our POV: orderedSpanMergeRules(their WorldManager: worldManager,
+            our AItem: aItem, their bool: handled) <- {
         handled! <- false
         our POV: remainder <- NULL
         if(aItem!.RHS!=NULL and aItem!.LHS_item!.isSparseOrderedSpan() and aItem!.RHS!.isSparseOrderedSpan() and aItem!.LHS_item!.sparseSpanCompatibleWith(aItem!.RHS)){
@@ -477,7 +484,7 @@ struct WorldManager{
         }
         if(aItem!.RHS!=NULL and aItem!.LHS_item!.isSparseOrderedSpan() and aItem!.RHS!.isSparseOrderedSpan()){
             me vocabularySpec: vSpec
-            vSpec.init(agent!.getLocaleBaseName())
+            vSpec.init(worldManager!.agent!.getLocaleBaseName())
             our OrderedSpanConverter: spanConverter <- modelMngr.getOrderedSpanConverter(aItem!.LHS_item!.pItem!.value!.listSpec!.type, aItem!.RHS!.pItem!.value!.listSpec!.type, vSpec)
             if(spanConverter!=NULL and spanConverter!.valid){
                 me int64: lhsCount <- aItem!.LHS_item!.sparseSpanCount()
@@ -510,7 +517,7 @@ struct WorldManager{
             }
         }
         if(aItem!.RHS!=NULL and aItem!.LHS_item!.accessMode==aRefTo and aItem!.LHS_item!.outerPOV!=NULL and aItem!.LHS_item!.outerPOV!.pItem===aItem!.LHS_item!.pItem and !aItem!.RHS!.pItem!.asRHSInternalIdent and !(aItem!.RHS!.pParent!=NULL and aItem!.RHS!.pParent!.pItem!.asRHSInternalIdent)){
-            copyIdentity(aItem)
+            worldManager!.copyIdentity(aItem)
             handled! <- true
             return(NULL)
         }
@@ -524,6 +531,31 @@ struct WorldManager{
     me InfonViewReasoner: infonViewReasoner
     me string: phase1LastCoverageReport
     me uint64: phase1LastTraceCount <- 0
+
+    // Compatibility delegates keep ordered-span semantics out of control
+    // ownership while preserving the interfaces used by propagation, agenda
+    // validation, and the retained generated fallback.
+    our POV: exposeSparseOrderedSpanHeadForTraversal(our POV: sparsePOV) <- {
+        me vocabularySpec: vSpec
+        vSpec.init(agent!.getLocaleBaseName())
+        return(infonViewReasoner.orderedSpanReasoner.
+                exposeSparseOrderedSpanHeadForTraversal(sparsePOV, vSpec))
+    }
+    our OrderedSpanTraversalWindow: tryBuildOrderedSpanTraversalWindow(
+            our POV: lhsPOV, our POV: rhsPOV) <- {
+        return(infonViewReasoner.orderedSpanReasoner.
+                tryBuildOrderedSpanTraversalWindow(self, lhsPOV, rhsPOV))
+    }
+    me bool: sparseOrderedSpanMergeAlignable(our POV: lhsPOV,
+            our POV: rhsPOV, their vocabularySpec: vSpec) <- {
+        return(infonViewReasoner.orderedSpanReasoner.
+                sparseOrderedSpanMergeAlignable(lhsPOV, rhsPOV, vSpec))
+    }
+    our POV: orderedSpanMergeRules(our AItem: aItem,
+            their bool: handled) <- {
+        return(infonViewReasoner.orderedSpanReasoner.
+                orderedSpanMergeRules(self, aItem, handled))
+    }
 
     // Compatibility delegates for agenda work creation.
     our AItem: processInfonViewViaAgenda(their Agenda: agenda, our POV: pov, our AItem: subscriber, our AItem: aParent, me int64: priority, me aitemSrcID: source)<-{
