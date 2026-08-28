@@ -917,6 +917,144 @@ struct LegacyMergeStrategy{
 // operation: it discovers the next view and then schedules ordinary infon
 // processing rather than performing local value consolidation itself.
 struct CursorPathResolver{
+    our infonView: getSelfInfonView(our POV: startAnchor,
+            our POV: cursorAnchor) <- {
+        their POV: anchor <- startAnchor
+        if(cursorAnchor!=NULL){anchor <- cursorAnchor}
+        while(anchor!=NULL and
+                anchor!.pItem!.copySourceType!=cstDefinition){
+            anchor <- anchor!.pParent
+        }
+        if(anchor!=NULL and anchor!.pItem!=NULL){return(anchor!.pItem)}
+        return(NULL)
+    }
+
+    their POV: getRelativeAnchor(our POV: startAnchor,
+            our POV: cursorAnchor) <- {
+        their POV: anchor <- startAnchor
+        if(cursorAnchor!=NULL){anchor <- cursorAnchor}
+        while(anchor!.pParent!=NULL and
+                anchor!.pItem!.copySourceType!=cstListSpec){
+            anchor <- anchor!.pParent
+        }
+        if(anchor!=NULL){return(anchor)}
+        return(NULL)
+    }
+
+    me bool: infonViewContainsNestedCursorLookup(their infonView: infn,
+            their List<their infonView>: seen) <- {
+        if(infn==NULL){return(false)}
+        withEach seenInfn in seen{
+            if(seenInfn===infn){return(false)}
+        }
+        seen.append(infn)
+        if(infn!.viewMode==vmCursor or infn!.cursorMode!=cmNone){return(true)}
+        our POV: child <- infn!.value!.items.head
+        while(child!=NULL){
+            if(infonViewContainsNestedCursorLookup(child!.pItem, seen)){
+                return(true)
+            }
+            child <- child!.next
+        }
+        withEach wrkPov in infn!.wrkList{
+            if(infonViewContainsNestedCursorLookup(wrkPov!.pItem, seen)){
+                return(true)
+            }
+        }
+        if(infonViewContainsNestedCursorLookup(infn!.funcArgs, seen)){
+            return(true)
+        }
+        if(infonViewContainsNestedCursorLookup(infn!.innr, seen)){
+            return(true)
+        }
+        return(false)
+    }
+
+    me bool: RHSNeedsNestedCursorNormalization(
+            their infonView: infn) <- {
+        // A true result here prevents the RHS from completing during merge.
+        // That can leave later typed-list alternatives as bare word references
+        // (e.g. rubixCube's second time state remains solvedState2).
+        //me List<their infonView>: seen
+        //return(infonViewContainsNestedCursorLookup(infn, seen))
+        return(false)
+    }
+
+    me bool: lookUpCursor(their WorldManager: worldManager,
+            our AItem: aItem) <- {
+        our infonView: CI <- aItem!.LHS_item!.pItem
+        our infonView: newTop <- NULL
+        me bool: changeMade <- false
+        me bool: detachCursorResult <- false
+        if(CI!.viewMode==vmCursor){
+            switch(CI!.cursorMode){
+                case cmWorld:{newTop <- worldManager!.agent!.world}
+                case cmContext:{
+                    newTop <- worldManager!.agent!.context.topicHistory
+                    aItem!.dontProcess <- true
+                }
+                case cmUser:{newTop <- worldManager!.agent!.user}
+                case cmArgs:{
+                    newTop <- aItem!.LHS_item!.pParent!.pItem!.value!.items.first()
+                }
+                case cmVars:{}
+                case cmSelf:{newTop <- CI!.thisPtr}
+                case cmPrev:{
+                    their POV: anchor <- getRelativeAnchor(
+                            aItem!.LHS_item, aItem!.cursorAnchor)
+                    if(anchor!=NULL and anchor!.prev!=NULL){
+                        newTop <- anchor!.prev!.pItem
+                        detachCursorResult <- true
+                    }else{
+                        CI!.value!.undefined <- true
+                    }
+                }
+                case cmNext:{
+                    their POV: anchor <- getRelativeAnchor(
+                            aItem!.LHS_item, aItem!.cursorAnchor)
+                    if(anchor!=NULL and anchor!.next!=NULL){
+                        newTop <- anchor!.next!.pItem
+                        detachCursorResult <- true
+                    }else{
+                        CI!.value!.undefined <- true
+                    }
+                }
+            }
+            if(newTop!=NULL){
+                our PartPath: partRef <- CI!.partRef
+                me bool: doReply <- CI!.doReply
+                me uint64: originID <- CI!.originID
+                me uint64: infCharPos <- CI!.infCharPos
+                me uint64: itmMode <- CI!.itmMode
+                if(CI!.cursorMode==cmWorld){
+                    worldManager!.infonViewReasoner.inheritDefinitionListShapeForInfonView(
+                            worldManager, newTop)
+                }
+                if(CI!.cursorMode==cmWorld and partRef==NULL and
+                        CI!.parts.isEmpty()){
+                    aItem!.LHS_item!.pItem <- newTop
+                    aItem!.LHS_item!.accessMode <- aRefTo
+                    CI <- aItem!.LHS_item!.pItem
+                }else if(detachCursorResult){
+                    our infonView:: detachedTop
+                    newTop!.copyAsTypeTo(detachedTop, false, false)
+                    CI! <- detachedTop!
+                }else{
+                    CI! <- newTop!
+                }
+                CI!.partRef <- partRef
+                CI!.doReply <- doReply
+                CI!.originID <- originID
+                CI!.infCharPos <- infCharPos
+                CI!.itmMode <- itmMode
+                aItem!.LHS_item!.propagateInMrg2 <- true
+                CI!.clearWrkList()
+                changeMade <- true
+            }
+        }
+        return(changeMade)
+    }
+
     me bool: povIsUnderIncompleteStream(their POV: pov) <- {
         their POV: crnt <- pov
         while(crnt!=NULL){
@@ -1131,6 +1269,32 @@ struct CursorPathResolver{
 // execution index for candidates that cannot make progress yet.
 struct POVLevelReasoner{
     me CursorPathResolver: cursorPathResolver
+
+    our infonView: getSelfInfonView(our POV: startAnchor,
+            our POV: cursorAnchor) <- {
+        return(cursorPathResolver.getSelfInfonView(startAnchor, cursorAnchor))
+    }
+
+    their POV: getRelativeAnchor(our POV: startAnchor,
+            our POV: cursorAnchor) <- {
+        return(cursorPathResolver.getRelativeAnchor(startAnchor, cursorAnchor))
+    }
+
+    me bool: infonViewContainsNestedCursorLookup(their infonView: infn,
+            their List<their infonView>: seen) <- {
+        return(cursorPathResolver.infonViewContainsNestedCursorLookup(
+                infn, seen))
+    }
+
+    me bool: RHSNeedsNestedCursorNormalization(
+            their infonView: infn) <- {
+        return(cursorPathResolver.RHSNeedsNestedCursorNormalization(infn))
+    }
+
+    me bool: lookUpCursor(their WorldManager: worldManager,
+            our AItem: aItem) <- {
+        return(cursorPathResolver.lookUpCursor(worldManager, aItem))
+    }
 
     me bool: povIsUnderIncompleteStream(their POV: pov) <- {
         return(cursorPathResolver.povIsUnderIncompleteStream(pov))
