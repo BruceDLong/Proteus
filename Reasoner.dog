@@ -28,7 +28,7 @@ struct InfonViewReasoningResult{
          caCopyRHSWorkListToLHS, caCopyRHSValueAndTypeToLHS,
          caMergeRHSIntersection, caMergeLooseStrings,
          caCopyRHSInfonToLHS, caMergeANDRanges,
-         caCopyLiteralListIntoUnknown, caMergeRHSListConstraints,
+         caPrepareUnknownListForPropagation, caMergeRHSListConstraints,
          caApplyOrderedSpanPlan]: consolidationAction
     mode[waNone, waStartListPropagation]: workAction
     mode[cpNonInvertedAcceptance, cpPositiveTemplateAcceptance,
@@ -911,33 +911,24 @@ struct ListConsolidationStrategy{
         if(!RHS!.wrkList.isEmpty()){LHS!.copyWrkListFrom(RHS)}
     }
 
-    me void: setCopiedListParentLinks(our infonView: listInfon,
-            our POV: listPOV) <- {
-        our POV: childPOV <- listInfon!.value!.items.head
-        while(childPOV!=NULL){
-            childPOV!.pParent <- listPOV
-            if(childPOV!.pItem!.value!.overlayType==LST){
-                setCopiedListParentLinks(childPOV!.pItem, childPOV)
-            }
-            childPOV <- childPOV!.next
-        }
-    }
-
-    me void: copyLiteralListIntoUnknown(our AItem: aItem) <- {
+    me void: prepareUnknownListForPropagation(our AItem: aItem) <- {
         our infonView: LHS <- aItem!.LHS_item!.pItem
         our infonView: RHS <- aItem!.RHS!.pItem
-        our WordUse: lhsType <- LHS!.type
-        our infonView: lhsListSpec <- LHS!.value!.listSpec
-        me OrderMode: lhsOrderMode <- LHS!.orderMode
-        me List<their infonView>: copied
-        RHS!.value!.copyAsTypeTo(LHS!.value, LHS, copied)
-        setCopiedListParentLinks(LHS, aItem!.LHS_item)
-        if(lhsType!=NULL){LHS!.type <- lhsType}
-        else if(RHS!.type!=NULL){LHS!.type <- RHS!.type}
-        if(lhsListSpec!=NULL){LHS!.value!.listSpec <- lhsListSpec}
-        if(lhsOrderMode!=uUnknown){LHS!.orderMode <- lhsOrderMode}
-        else{LHS!.orderMode <- RHS!.orderMode}
-        if(!RHS!.wrkList.isEmpty()){LHS!.copyWrkListFrom(RHS)}
+        mergeRHSListConstraints(aItem)
+        LHS!.value!.evalMode <- emLiteral
+
+        me bool: rhsIsClosedEmpty <- RHS!.value!.items.isEmpty() and
+                !RHS!.value!.tailUnfinished and
+                (RHS!.streamState==notParsing or RHS!.streamState==parseDone)
+        if(rhsIsClosedEmpty){
+            LHS!.value!.tailUnfinished <- false
+            LHS!.countSize(false)
+        }else{
+            // This is a temporary construction tail. It lets ordinary list
+            // traversal create one tentative LHS slot for each RHS member.
+            // Existing propagation closes it when a finite RHS closes.
+            LHS!.value!.tailUnfinished <- true
+        }
     }
 
     me bool: execStartPropagation(their WorldManager: worldManager,
@@ -1050,11 +1041,13 @@ struct ListConsolidationStrategy{
             }
             if(LHS!.value!.evalMode==emUnknown){
                 result.listCase <- lcStrictUnknownFromLiteralList
-                result.status <- rrPlannedChange
                 if(aItem!.LHS_item!.accessMode==aRefTo){
+                    result.status <- rrPlannedChange
                     result.consolidationAction <- caCopyRHSIdentityToLHS
                 }else{
-                    result.consolidationAction <- caCopyLiteralListIntoUnknown
+                    result.status <- rrNeedsWork
+                    result.consolidationAction <- caPrepareUnknownListForPropagation
+                    result.workAction <- waStartListPropagation
                 }
                 return(result)
             }
@@ -2555,8 +2548,8 @@ struct InfonViewReasoner{
         else if(result.consolidationAction==caMergeANDRanges){
             directConsolidationStrategy.mergeANDRanges(aItem)
         }
-        else if(result.consolidationAction==caCopyLiteralListIntoUnknown){
-            listConsolidationStrategy.copyLiteralListIntoUnknown(aItem)
+        else if(result.consolidationAction==caPrepareUnknownListForPropagation){
+            listConsolidationStrategy.prepareUnknownListForPropagation(aItem)
         }
         else if(result.consolidationAction==caMergeRHSListConstraints){
             listConsolidationStrategy.mergeRHSListConstraints(aItem)

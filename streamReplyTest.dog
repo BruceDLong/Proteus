@@ -19,13 +19,13 @@ LicenseText = `Part of the Proteus suite. All Rights Reserved.`
 
 runCode=`
     log("streamReplyTest started")
-    CommandLineManager.defineOption("SRT", "First", "-f", "--first", "First item selector (1, 2, 3, 4, 5, or 'all'; all runs 1-4)", "all")
+    CommandLineManager.defineOption("SRT", "First", "-f", "--first", "First item selector (1, 2, 3, 4, 5, 6, or 'all'; all runs 1-4 and 6)", "all")
     me string: firstSel <- CommandLineManager.getOption("SRT", "First")
     if(firstSel=="all"){
         me int: totalChecks <- 0
         me int: totalFailures <- 0
         // Keep the default suite green; -f 5 is an explicit repro for the nested list doReply bug.
-        me string: cases <- "1 2 3 4"
+        me string: cases <- "1 2 3 4 6"
         withEach idx in range 0 .. cases.size(){
             me string: c <- cases.subStr(idx, 1)
             if(c==" "){continue()}
@@ -83,6 +83,20 @@ struct ReplyParserThread: inherits=Threads {
     void: waitForParseCompletion() <- {
         me MutexMngr: MtxMgr{chkParseDone}
         while(!parseCompleted){parseDoneLock.wait(MtxMgr)}
+    }
+}
+
+struct ListPropagationNormalizerThread: inherits=Threads {
+    their Agent: agent
+    our POV: targetPOV
+
+    void: initAndStart(their Agent: targetAgent, our POV: target, me string: name) <- {
+        agent <- targetAgent
+        targetPOV <- target
+        start(name)
+    }
+    void: run() <- {
+        agent!.normalize(targetPOV)
     }
 }
 
@@ -199,6 +213,85 @@ struct StreamReplyTest: inherits=ProteusCore {
 
         pushAndCheck(inputBuf, "}", 3, "close top-level list")
     }
+    me bool: waitForPropagatedItem(our infonView: LHS, me int: itemCount,
+            me int64: expectedValue) <- {
+        me int: waited <- 0
+        while(waited<2000){
+            if(LHS!.value!.items.size()>=itemCount){
+                our POV: itemPOV <- LHS!.value!.items.head
+                me int: itemNum <- 1
+                while(itemPOV!=NULL and itemNum<itemCount){
+                    itemPOV <- itemPOV!.next
+                    itemNum <+- 1
+                }
+                if(itemPOV!=NULL and itemPOV!.pItem!.value!.overlayType==NUM and
+                        itemPOV!.pItem!.value!.evalMode==emLiteral and
+                        itemPOV!.pItem!.value!.num.convertToInt()==expectedValue){
+                    return(true)
+                }
+            }
+            sleep(25)
+            waited <+- 25
+        }
+        return(false)
+    }
+    void: recordPropagationCheck(me bool: passed, me string: label) <- {
+        totalChecks <+- 1
+        me string: verdict <- "FAIL"
+        if(passed){verdict <- "OK"}
+        else{totalFailures <+- 1}
+        print("    "+label+"  ["+verdict+"]\n")
+    }
+    void: runUnknownListPropagationCase() <- {
+        print("\n=== streamReplyTest -f 6  unknown list follows incoming literal list ===\n")
+        me strBuf: inputBuf
+        inputBuf.init("streamListPropagation")
+
+        our infonView:: RHS
+        RHS!.originID <- 2
+        our ProteusParser:: parser{self, true, 2}
+        me ReplyParserThread: parserThread
+        parserThread.initAndStart(parser, inputBuf, RHS, "SLP_PARSE")
+
+        our infonView:: LHS
+        LHS!.viewMode <- vmOverlay
+        LHS!.value!.overlayType <- LST
+        LHS!.value!.evalMode <- emUnknown
+        LHS!.infSize!.evalMode <- emUnknown
+        our POV: RHSWorkPOV <- LHS!.addInfonViewToWrkList(RHS, false, 611)
+        our POV:: LHSPOV{612}
+        LHSPOV!.pItem <- LHS
+
+        me ListPropagationNormalizerThread: normer
+        normer.initAndStart(agent, LHSPOV, "SLP_NORM")
+
+        // The following token provides the parser look-ahead that finishes a
+        // numeric item. Check each finished member while a later one is still
+        // arriving, before the list itself closes.
+        pushChars(inputBuf, "{1 2")
+        me bool: firstArrived <- waitForPropagatedItem(LHS, 1, 1)
+        recordPropagationCheck(firstArrived,
+                "first finished RHS member propagated before list close")
+
+        pushChars(inputBuf, " 3")
+        me bool: secondArrived <- waitForPropagatedItem(LHS, 2, 2)
+        recordPropagationCheck(secondArrived,
+                "second finished RHS member propagated before list close")
+
+        pushChars(inputBuf, "}")
+        inputBuf.close()
+        parserThread.waitForExit()
+        normer.waitForExit()
+
+        me bool: finalListCorrect <- LHS!==RHS and
+                LHS!.value!.evalMode==emLiteral and
+                !LHS!.value!.tailUnfinished and
+                LHS!.value!.items.size()==3 and
+                LHS!.infSize!.evalMode==emLiteral and
+                LHS!.infSize!.num.convertToInt()==3
+        recordPropagationCheck(finalListCorrect,
+                "LHS is a distinct closed three-member list after RHS close")
+    }
 
     void: run(me string: firstSel) <- {
         replyCount <- 0
@@ -214,6 +307,24 @@ struct StreamReplyTest: inherits=ProteusCore {
         // Switch to streaming mode for the actual experiment.
         setStreamingMode(true)
         streamingNormMode <- true
+
+        if(firstSel=="6"){
+            runUnknownListPropagationCase()
+            print("\n=== streamReplyTest -f 6: " +
+                    toString(totalChecks-totalFailures) + "/" +
+                    toString(totalChecks) + " checks passed ===\n")
+            if(totalFailures==0){
+                print("=== -f 6 PASSED ===\n")
+                finalReport <+- "Test case -f 6: PASSED with "+
+                        toString(totalChecks)+" checks.\n"
+            }else{
+                print("=== -f 6 FAILED ===\n")
+                finalReport <+- "Test case -f 6: FAILED with "+
+                        toString(totalFailures)+" failure(s) out of "+
+                        toString(totalChecks)+" checks.\n"
+            }
+            return()
+        }
 
         me strBuf: inputBuf
         inputBuf.init("streamReplyTest")

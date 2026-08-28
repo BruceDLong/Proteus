@@ -21,6 +21,7 @@ TestsToRun = `
     unit/endRelative/resolveOnClose
     unit/reasoner/strictListUnknownUnknown
     unit/reasoner/strictListUnknownFromLiteral
+    unit/reasoner/strictListUnknownFromEmptyLiteral
     unit/reasoner/strictListLiteralAgainstUnknown
     unit/reasoner/strictListUnknownPolarityPending
     parse/errorBadTag
@@ -79,7 +80,8 @@ struct GLOBAL {
     GETNEXTTIGHT(unit/GNextT/t4, "get next POV tight",      "{3 4 &{&{5}}}", "{3 4 5 }", 0)
     ENDRELRESOLVE(unit/endRelative/resolveOnClose, "resolve a retained end-relative reference when its list closes")
     STRICTLISTUNKNOWN(unit/reasoner/strictListUnknownUnknown, "merge strict unknown list constraints", 1)
-    STRICTLISTUNKNOWN(unit/reasoner/strictListUnknownFromLiteral, "copy a strict literal list into an unknown list", 2)
+    STRICTLISTUNKNOWN(unit/reasoner/strictListUnknownFromLiteral, "prepare a strict unknown list for literal-list propagation", 2)
+    STRICTLISTUNKNOWN(unit/reasoner/strictListUnknownFromEmptyLiteral, "materialize a strict empty literal list in an unknown list", 5)
     STRICTLISTUNKNOWN(unit/reasoner/strictListLiteralAgainstUnknown, "retain a strict literal list while merging unknown list constraints", 3)
     STRICTLISTUNKNOWN(unit/reasoner/strictListUnknownPolarityPending, "retain an unresolved inverted list constraint", 4)
 
@@ -527,6 +529,9 @@ struct GLOBAL {
             RHS!.value!.items.append(originalRHSItem, false, 607)
             if(caseID==4){RHS!.invertMatch <- true}
         }
+        else if(caseID==5){
+            RHS!.value!.evalMode <- emLiteral
+        }
         else if(caseID==3){
             me int64: literalValue <- 5
             LHS!.value!.evalMode <- emLiteral
@@ -547,11 +552,16 @@ struct GLOBAL {
         aItem!.ruleSet <- rsMerge
         aItem!.LHS_item <- LHSPOV
         aItem!.RHS <- RHSPOV
+        our AItem:: mergeParent{srcNormInit}
+        our AItem:: mergeGrandparent{srcNormInit}
+        aItem!.parent <- mergeParent
+        mergeParent!.parent <- mergeGrandparent
 
         me InfonViewReasoner: reasoner
         me InfonViewReasoningResult: result <-
                 reasoner.planConsolidation(NULL, aItem)
-        reasoner.execConsolidationPlan(NULL, aItem, result)
+        me WorldManager: worldManager
+        reasoner.execConsolidationPlan(worldManager, aItem, result)
 
         me bool: passed <- false
         if(caseID==1){
@@ -570,15 +580,26 @@ struct GLOBAL {
                     LHS!.value!.items.isEmpty()
         }
         else if(caseID==2){
-            our POV: copiedItem <- LHS!.value!.items.head
             passed <- result.listCase==lcStrictUnknownFromLiteralList and
-                    result.status==rrPlannedChange and
-                    LHS!.value!.evalMode==emLiteral and copiedItem!=NULL and
-                    copiedItem!.pItem!==originalRHSItem and
-                    copiedItem!.pParent===LHSPOV and
-                    copiedItem!.pItem!.value!.num.convertToInt()==7 and
+                    result.status==rrNeedsWork and
+                    result.consolidationAction==caPrepareUnknownListForPropagation and
+                    result.workAction==waStartListPropagation and
+                    LHS!.value!.evalMode==emLiteral and
+                    LHS!.value!.tailUnfinished and
+                    LHS!.value!.items.isEmpty() and
                     LHS!.value!.listSpec===RHSListSpec and
-                    LHS!.orderMode==uOrdered
+                    LHS!.orderMode==uOrdered and
+                    aItem!.LHSItr!=NULL and aItem!.RHSItr!=NULL
+        }
+        else if(caseID==5){
+            passed <- result.listCase==lcStrictUnknownFromLiteralList and
+                    result.status==rrNeedsWork and
+                    LHS!.value!.evalMode==emLiteral and
+                    !LHS!.value!.tailUnfinished and
+                    LHS!.value!.items.isEmpty() and
+                    LHS!.infSize!.evalMode==emLiteral and
+                    LHS!.infSize!.num.convertToInt()==0 and
+                    aItem!.LHSItr==NULL and aItem!.RHSItr==NULL
         }
         else if(caseID==3){
             passed <- result.listCase==lcStrictLiteralAgainstUnknownList and
