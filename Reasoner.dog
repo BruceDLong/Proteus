@@ -912,6 +912,91 @@ struct LegacyMergeStrategy{
     }
 }
 
+// Discovers member correspondence for unordered records, placing compatible
+// RHS fields on the matching LHS work lists for ordinary local reasoning.
+struct CorrespondenceReasoner{
+    me bool: processUnorderedInfonViews(their WorldManager: worldManager, their Agenda: agenda, our AItem: aItem, their bool: contnue) <- {
+        // Handle Unordered infons
+        our infonView: LHS_item <- aItem!.LHS_item!.pItem
+        me OrderMode: LHSOrderMode <- LHS_item!.getOrderMode(worldManager!.agent)
+        me OrderMode: RHSOrderMode <- uOrdered
+        //log("LHSOrderMode: "+OrderModeStrings[LHSOrderMode]+" RHSOrderMode:"+OrderModeStrings[RHSOrderMode])
+        if(aItem!.RHS!=NULL){RHSOrderMode <- aItem!.RHS!.pItem!.getOrderMode(worldManager!.agent)}
+        if(aItem!.RHS!=NULL and(LHSOrderMode==uUnordered or RHSOrderMode==uUnordered)){
+            if(LHSOrderMode==uUnordered and RHSOrderMode==uUnordered){
+                me int: count <- 0
+                our POV: RHS_pov <- aItem!.RHS!.pItem!.value!.items.head
+                me int64: crntPriority <- aItem!.priority
+                me int: priorityIdx <- 0
+                while(RHS_pov != NULL){
+                    our infonView: RHS_item <- RHS_pov!.pItem
+                    me string: fieldName <- ""
+                    fleshOutWord(worldManager!.agent, RHS_item)
+                    if(RHS_item!.type!=NULL){
+                        fieldName <- RHS_item!.type!.typeID()
+                        our POV: LHS_Pov <- LHS_item!.fetchCompatibleField(worldManager!.agent, RHS_item)
+                        if(LHS_Pov!=NULL){
+                            // This 'if' is an optimization. Something similar can be done for "ordered" infons.
+                            // NOTE (search/adj1 investigation, 2026-04):
+                            // If this optimization skips merge work for a same-type "type example",
+                            // verify that no concrete constraints are being skipped with it.
+                            if(!(LHS_Pov!.pItem!.type!=NULL and RHS_item!.type!=NULL and RHS_item!.isTypeExample and LHS_Pov!.pItem!.infonViewHasType(RHS_item!.type!.typeID()))){
+                                our POV: pov <- LHS_Pov!.pItem!.addInfonViewToWrkList(RHS_item, true, 417)
+                                RHS_item!.streamState <- notParsing
+                                if(pov!=NULL and LHS_Pov!.hasPropagated){
+                                    our AItem: PIVA <- worldManager!.processInfonViewViaAgenda(agenda, LHS_Pov, NULL, aItem, crntPriority+priorityIdx, srcUnordd)
+                                    if(PIVA!=NULL){
+                                        //:l/PAI::logSeg(" UNORD_PIVA:"+PIVA!.mySymbol())
+                                        agenda!.addAItemToAgenda(PIVA) // PIVA
+                                        contnue! <- false
+                                    }
+                                    priorityIdx <- priorityIdx + 1
+                                }
+                              //  S <+- "    FOUND("+fieldName+"):"+LHS_Pov!.pItem!.type!.typeID()+" = "+toString(RHS_item)+"\n"
+                            }//else{S <+- "    SKIPPING "+fieldName+"\n"}
+                        } else {
+                            if(RHS_item!.isFromDefn){ // Create the field. Optimize: Only do this when needed; COW
+                                our infonView:: newField
+                                newField! <- RHS_item!
+                                newField!.copySource <- RHS_item
+                                newField!.copySourceType <- cstDefinition
+                                our POV: newPov <- LHS_item!.value!.items.append(newField, RHS_pov!.isSubItm, 444)
+                                LHS_item!.infSize!.num <+- 1
+                              //  S <+- "    Creating field: '"+fieldName+"' = "+toString(RHS_item)+"\n"
+                            } else {
+                                print("WARNING: compatable LHS infon Field not found: '",fieldName,"'\n")
+                                log("// Proteus WARNING: compatable LHS infon Field not found. '"+fieldName+"'::"+toString(aItem))
+                            }
+                        }
+                    } else {
+                        //logFatalError("RHS infon Field not identified:'"+fieldName+"'::"+toString(aItem))
+                        print("// Proteus WARNING: could not find:"+toString(RHS_item)+" in:\n    "+toString(LHS_item)+"\n")
+                    } // TODO: Try . find
+                    count <- count+1
+                    RHS_pov <- RHS_pov!.next
+                }
+     // ** This 'regular' norming needs to happen at least once. After that, We can add "FOUND" items directly to the agenda. Should they be interweaved or done 1 at a time with subscriptions?
+                aItem!.skipRHSUsageInPAI <- true
+            } else {
+                if(aItem!.RHS!=NULL and aItem!.RHS!.pItem!.intersectPos==ipNoIntersect){
+                    me bool: LHSIsUnresolvedUnknown <- LHS_item!.viewMode==vmAny and (LHS_item!.value!.overlayType==tUnknown or LHS_item!.value!.overlayType==tUnset)
+                    me bool: RHSIsUnresolvedUnknown <- aItem!.RHS!.pItem!.viewMode==vmAny and (aItem!.RHS!.pItem!.value!.overlayType==tUnknown or aItem!.RHS!.pItem!.value!.overlayType==tUnset)
+                    if(LHSIsUnresolvedUnknown or RHSIsUnresolvedUnknown){
+                        return(false)
+                    }else{
+                        aItem!.mergeStatus <- msReject
+                        print("// Proteus NOTICE: Unordered/ordered missmatch: "+aItem!.stringify()+"\n")
+                    }
+                }
+               // log("Unordered infon + ordered infon not yet handled. "+toString(aItem)+" LHSOrderMode:"+OrderModeStrings[LHSOrderMode]+" RHSOrderMode:"+OrderModeStrings[RHSOrderMode])
+                return(false)
+            }
+            return(true)
+        }
+        return(false)
+    }
+}
+
 // Maps word references and function arguments to the definition-backed or
 // member-backed RHS candidates they imply.
 struct ReferenceMapper{
@@ -1660,6 +1745,7 @@ struct ParentMemberReasoner{
 // wrkList remains the semantic AND representation; deferredWrkList is only its
 // execution index for candidates that cannot make progress yet.
 struct POVLevelReasoner{
+    me CorrespondenceReasoner: correspondenceReasoner
     me ReferenceMapper: referenceMapper
     me CursorPathResolver: cursorPathResolver
     me ParentMemberReasoner: parentMemberReasoner
@@ -1676,6 +1762,13 @@ struct POVLevelReasoner{
 
     me bool: funcArgRules(our AItem: aItem) <- {
         return(referenceMapper.funcArgRules(aItem))
+    }
+
+    me bool: processUnorderedInfonViews(their WorldManager: worldManager,
+            their Agenda: agenda, our AItem: aItem,
+            their bool: contnue) <- {
+        return(correspondenceReasoner.processUnorderedInfonViews(
+                worldManager, agenda, aItem, contnue))
     }
 
     our POV: findNextLHS(their WorldManager: worldManager,
