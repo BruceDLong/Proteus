@@ -405,12 +405,14 @@ struct infonView{
                 if(verify){
                     if(infSize!.evalMode==emLiteral and infSize!.num==acc){
                         value!.tailUnfinished <- false
+                        resolveEndRelativeReferences()
                     }
                 }else{
                     infSize!.overlayType  <- NUM
                     infSize!.evalMode <- emLiteral
                     infSize!.num    <- acc
                     value!.tailUnfinished <- false
+                    resolveEndRelativeReferences()
                 }
             }
         }
@@ -478,6 +480,25 @@ struct infonView{
         }
         return(NthPov)
     }
+    our POV: getNthEndRelativeInfonView(me FlexNum: N) <-{
+        our POV: NthPov
+        me FlexNum: crntIdx <- 0
+        our POV: pov <- value!.items.head
+        while(pov != NULL){
+            if(pov!.isSubItm){
+                me FlexNum: itmSize <- pov!.pItem!.sizeIfKnown()
+                if(itmSize==-1){return(NULL)}
+                me FlexNum: offSet <- crntIdx+itmSize
+                if(N<=offSet){return(pov!.pItem!.getNthEndRelativeInfonView(N-crntIdx))}
+                crntIdx <- offSet
+            }else{
+                crntIdx <+- 1
+                if(crntIdx==N){return(pov)}
+            }
+            pov <- pov!.next
+        }
+        return(NthPov)
+    }
 
     our POV: getLastItem() <- {
         // ASSERT(Should be already normed and a non-concat list)
@@ -492,28 +513,79 @@ struct infonView{
         return(lastItem)
     }
 
+    me bool: endRelativeExtentIsFinal() <- {
+        if(value!.overlayType!=LST or value!.evalMode==emUnknown){return(false)}
+        if(value!.tailUnfinished){return(false)}
+        return(infSize!.evalMode==emLiteral)
+    }
+    our POV: findEndRelativeReference(me int64: offset) <- {
+        withEach retainedPOV in retainedPOVs{
+            if(retainedPOV!=NULL and retainedPOV!.endRelativeReference and retainedPOV!.endRelativeOffset==offset){
+                return(retainedPOV)
+            }
+        }
+        return(NULL)
+    }
+    our POV: resolveEndRelativeReference(our POV: referencePOV) <- {
+        if(referencePOV==NULL or !referencePOV!.endRelativeReference){return(referencePOV)}
+        if(referencePOV!.endRelativeResolved or !endRelativeExtentIsFinal()){return(referencePOV)}
+
+        me int64: finalExtent <- infSize!.num.convertToInt()
+        me int64: ordinal <- finalExtent + referencePOV!.endRelativeOffset + 1
+        if(ordinal<=0){return(referencePOV)}
+        our POV: actualPOV
+        if(referencePOV!.endRelativeOffset==-1){actualPOV <- getLastItem()}
+        else{actualPOV <- getNthEndRelativeInfonView(ordinal)}
+        if(actualPOV==NULL or actualPOV!.pItem==NULL){return(referencePOV)}
+
+        our infonView: actualItem <- actualPOV!.pItem
+        referencePOV!.pItem!.addInfonViewToWrkList(actualItem, true, povSrcEndRelativeReference)
+        referencePOV!.workRevision <+- 1
+        referencePOV!.readyToResolve <- true
+        referencePOV!.endRelativeResolved <- true
+        referencePOV!.pParent <- actualPOV!.pParent
+        actualPOV!.pItem <- referencePOV!.pItem
+        return(referencePOV)
+    }
+    void: resolveEndRelativeReferences() <- {
+        if(!endRelativeExtentIsFinal()){return()}
+        withEach retainedPOV in retainedPOVs{
+            if(retainedPOV!=NULL and retainedPOV!.endRelativeReference and !retainedPOV!.endRelativeResolved){
+                resolveEndRelativeReference(retainedPOV)
+            }
+        }
+    }
+    our POV: getEndRelativePOV(me int64: offset) <- {
+        if(offset>=0){return(NULL)}
+        our POV: retainedReference <- findEndRelativeReference(offset)
+        if(retainedReference!=NULL){return(resolveEndRelativeReference(retainedReference))}
+        if(endRelativeExtentIsFinal()){
+            me int64: ordinal <- infSize!.num.convertToInt() + offset + 1
+            if(ordinal>0){
+                if(offset==-1){return(getLastItem())}
+                return(getNthEndRelativeInfonView(ordinal))
+            }
+        }
+
+        our POV:: virtualItem{povSrcEndRelativeReference}
+        Allocate(virtualItem!.pItem)
+        virtualItem!.pItem!.itmMode <- mItem
+        virtualItem!.pItem!.viewMode <- vmAny
+        virtualItem!.pItem!.infSize!.evalMode <- emUnknown
+        virtualItem!.pItem!.value!.overlayType <- tUnknown
+        virtualItem!.pItem!.value!.evalMode <- emUnknown
+        virtualItem!.endRelativeReference <- true
+        virtualItem!.endRelativeOffset <- offset
+        retainPOV(virtualItem)
+        return(virtualItem)
+    }
     our POV: getLastPOV() <- {
         our POV: lastPOV
-        if(value!.sizeMode==fromGiven){
-            if(infSize!.evalMode==emLiteral){
-                lastPOV <- getNthInfonView(infSize!.num)
-            }
-        }else{
-            lastPOV <- getLastItem()
-        }
-        if(lastPOV==NULL){
-            our POV: virtualLastItem //<- searchWorkListForRelation(asLast)
-            if(virtualLastItem==NULL){
-            // Make a virtual last item to be joined later.
-                Allocate(virtualLastItem)
-                Allocate(virtualLastItem!.pItem)
-                virtualLastItem!.pItem!.infSize!.evalMode <- emUnknown
-                //wrkList.append(virtualLastItem)
-                //TODO: integrate virtualLastItem
-            }
-            lastPOV <- virtualLastItem
-        }
-        return(lastPOV)
+        if(!value!.tailUnfinished and value!.sizeMode==fromGiven and infSize!.evalMode==emLiteral){
+            lastPOV <- getNthInfonView(infSize!.num)
+        }else{lastPOV <- getLastItem()}
+        if(lastPOV!=NULL){return(lastPOV)}
+        return(getEndRelativePOV(-1))
     }
 
     our infonView: getLastInfonView() <- {

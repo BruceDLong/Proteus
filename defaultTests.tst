@@ -187,11 +187,16 @@ notTemplate/resolvedUnknown, Inverted value template waits for candidate normali
 # notTemplate/listSize, Inverted two-item template accepts three-item list, [&{!{_ _}|...} 'stop']<~{{1 2 3} 'stop'},             'stop',                         norm
 write/writeStrA,       Write first String,             {2 3 $ 'Hat'}.$ = 'Cat';,                                               {2 3 'Cat' 'Hat'},              norm
 write/writeByIdx,      Write third item,               {'Cat' 'Hat' $ 'Dog'}#3 = 'Bat';,                                       {'Cat' 'Hat' 'Bat' 'Dog'},      norm
+write/negativeLast,    Write last item by negative index, {'Cat' 'Hat' 'Bat' $}#-1 = 'Dog';,                                  {'Cat' 'Hat' 'Bat' 'Dog'},      norm
+write/openNegativeLast, Open-tail negative write stays pending, {'Cat' 'Hat' ...}#-1 = 'Dog';,                                {'Cat' 'Hat' ... },             norm
 write/first,           Write first item,               {$ 'Hat' 'Bat' 'Dog'}.first = 'Cat';,                                   {'Cat' 'Hat' 'Bat' 'Dog'},      norm
 write/last,            Write last item,                {'Cat' 'Hat' 'Bat' $}.last = 'Dog';,                                    {'Cat' 'Hat' 'Bat' 'Dog'},      norm
 write/1stAndLst,       Write 1st & last item,          {$ 'Hat' 'Bat' $}.first='Cat';.last='Dog';,                             {'Cat' 'Hat' 'Bat' 'Dog'},      norm
 read/readStrA,         Read first String,              {2 3 'Cat' 'Hat'}.$,                                                    'Cat',                          norm
 read/readByIdx,        Read third item,                {'Cat' 'Hat' 'Bat' 'Dog'}#3,                                            'Bat',                          norm
+read/negativeLast,     Read last item by negative index, {'Cat' 'Hat' 'Bat' 'Dog'}#-1,                                        'Dog',                          norm
+read/negativeSecondLast, Read second-last item by negative index, {'Cat' 'Hat' 'Bat' 'Dog'}#-2,                               'Bat',                          norm
+read/negativeAcrossSubitem, Read end-relative item inside a subitem, {'A' &{'B' 'C'} 'D'}#-2,                                 'C',                            norm
 read/first,            Read first item,                {'Cat' 'Hat' 'Bat' 'Dog'}.first,                                        'Cat',                          norm
 read/last,             Read last item,                 {'Cat' 'Hat' 'Bat' 'Dog'}.last,                                         'Dog',                          norm
 word/useTags,          Usage tags,                     {@howdy <en_US southern slang> ='hello'},                               {@howdy <en_US southern slang >= 'hello'}, norm
