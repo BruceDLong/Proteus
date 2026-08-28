@@ -45,6 +45,29 @@ struct InfonViewReasoningResult{
     me int64: orderedSpanSizeToCopy
 }
 
+// Records the mutations, ownership, and blockers discovered by the read-only
+// pre-consolidation inspection. Definition-backed shape changes are planned in
+// their historical order before the generic strict-size decision is made.
+struct MergePreparationPlan{
+    me bool: copyDefinitionListSpec
+    me bool: copyDefinitionOrderMode
+    me bool: copyDefinitionSize
+    me bool: openDefinitionTail
+    mode[mpsNotApplicable, mpsOwnedByConsolidation, mpsCopyRHSSize,
+         mpsBlocked]: sizeAction
+    me bool: sizeBlockedByOverlayType
+    me bool: sizeBlockedByListOutput
+
+    me bool: hasDefinitionListShapeChange() <- {
+        return(copyDefinitionListSpec or copyDefinitionOrderMode or
+                copyDefinitionSize or openDefinitionTail)
+    }
+
+    me bool: hasPreparationDecision() <- {
+        return(hasDefinitionListShapeChange() or sizeAction!=mpsNotApplicable)
+    }
+}
+
 // Owns the graph-identity precedence formerly hidden at the end of the
 // ordered-span legacy hook. Local value comparison must stand aside when a
 // source-backed reference is being identified with its candidate.
@@ -772,35 +795,51 @@ struct ConcatReasoner{
 // Owns definition-backed list shape inheritance. These are semantic list
 // operations, not generated merge-matrix cases.
 struct ListShapeStrategy{
-    me bool: inheritDefinitionListShape(our AItem: aItem) <- {
-        if(aItem!.RHS==NULL or !aItem!.RHS!.trueByDefinition){return(false)}
+    me MergePreparationPlan: planDefinitionListShape(our AItem: aItem) <- {
+        me MergePreparationPlan: plan
+        plan.copyDefinitionListSpec <- false
+        plan.copyDefinitionOrderMode <- false
+        plan.copyDefinitionSize <- false
+        plan.openDefinitionTail <- false
+        plan.sizeAction <- mpsNotApplicable
+        plan.sizeBlockedByOverlayType <- false
+        plan.sizeBlockedByListOutput <- false
+
+        if(aItem!.RHS==NULL or !aItem!.RHS!.trueByDefinition){return(plan)}
         our infonView: LHS <- aItem!.LHS_item!.pItem
         our infonView: RHS <- aItem!.RHS!.pItem
-        if(LHS==NULL or RHS==NULL){return(false)}
-        if(LHS!.value!.overlayType!=LST or LHS!.value!.evalMode!=emLiteral){return(false)}
-        if(RHS!.value!.overlayType!=LST or RHS!.value!.evalMode!=emLiteral){return(false)}
+        if(LHS==NULL or RHS==NULL){return(plan)}
+        if(LHS!.value!.overlayType!=LST or LHS!.value!.evalMode!=emLiteral){return(plan)}
+        if(RHS!.value!.overlayType!=LST or RHS!.value!.evalMode!=emLiteral){return(plan)}
 
-        me bool: changeMade <- false
         if(LHS!.value!.listSpec==NULL and RHS!.value!.listSpec!=NULL){
-            LHS!.value!.listSpec <- RHS!.value!.listSpec
-            changeMade <- true
+            plan.copyDefinitionListSpec <- true
         }
         if(LHS!.orderMode==uUnknown and RHS!.orderMode!=uUnknown){
-            LHS!.orderMode <- RHS!.orderMode
-            changeMade <- true
+            plan.copyDefinitionOrderMode <- true
         }
         me bool: lhsHasOnlyDefaultZeroSize <- LHS!.value!.items.isEmpty() and
                 LHS!.infSize!.evalMode==emLiteral and LHS!.infSize!.num==0
         if((LHS!.infSize!.evalMode==emUnknown or lhsHasOnlyDefaultZeroSize) and
                 RHS!.infSize!.evalMode!=emUnknown){
-            LHS!.infSize! <- RHS!.infSize!
-            changeMade <- true
+            plan.copyDefinitionSize <- true
         }
         if(RHS!.value!.tailUnfinished and !LHS!.value!.tailUnfinished){
-            LHS!.value!.tailUnfinished <- true
-            changeMade <- true
+            plan.openDefinitionTail <- true
         }
-        return(changeMade)
+        return(plan)
+    }
+
+    void: execDefinitionListShape(our AItem: aItem,
+            their MergePreparationPlan: plan) <- {
+        our infonView: LHS <- aItem!.LHS_item!.pItem
+        our infonView: RHS <- aItem!.RHS!.pItem
+        if(plan.copyDefinitionListSpec){
+            LHS!.value!.listSpec <- RHS!.value!.listSpec
+        }
+        if(plan.copyDefinitionOrderMode){LHS!.orderMode <- RHS!.orderMode}
+        if(plan.copyDefinitionSize){LHS!.infSize! <- RHS!.infSize!}
+        if(plan.openDefinitionTail){LHS!.value!.tailUnfinished <- true}
     }
 
     me bool: isDefinitionListShapeOnly(our AItem: aItem) <- {
@@ -857,35 +896,90 @@ struct ListShapeStrategy{
     }
 }
 
-// Owns the existing pre-consolidation size preparation. This deliberately
-// preserves its current execution order: definition-backed list shape is
-// inherited first, then a strict known RHS size may fill an unknown LHS size.
-// It remains a mutation step rather than pretending to be part of the
-// read-only consolidation plan.
+// Owns the generic strict-size part of pre-consolidation preparation. Planning
+// observes the effective state after the preceding definition-backed shape
+// plan, while execution only applies already-decided mutations.
 struct MergeSizeStrategy{
-    me bool: execPreparation(their WorldManager: worldManager, our AItem: aItem,
-            me bool: sizeCopyPlannedByConsolidation) <- {
-        me bool: changeMade <- false
-        if(worldManager!.inheritDefinitionListShape(aItem)){changeMade <- true}
-        if(!aItem!.looseSize and
+    void: planPreparation(our AItem: aItem,
+            me bool: sizeCopyOwnedByConsolidation,
+            their MergePreparationPlan: plan) <- {
+        // A planned definition-size copy happens first and makes the LHS size
+        // non-unknown before the old generic rule would inspect it.
+        if(!plan.copyDefinitionSize and !aItem!.looseSize and
                 aItem!.LHS_item!.pItem!.infSize!.evalMode==emUnknown and
                 aItem!.RHS!.pItem!.infSize!.evalMode==emLiteral){
-            aItem!.phase1RecordHandler("strategy:mergeSize", false)
-            aItem!.phase1RecordHandler(
-                    "mergeSize:!looseSize|lemUnknown|rsemLiteral->copySizeRHStoLHS",
-                    false)
-            if(!sizeCopyPlannedByConsolidation and
-                    (aItem!.LHS_item!.pItem!.viewMode!=vmOverlay or
-                     aItem!.RHS!.pItem!.value!.overlayType==
-                            aItem!.LHS_item!.pItem!.value!.overlayType) and
-                    (aItem!.LHS_item!.pItem!.value!.listSpec==NULL or
-                     !aItem!.LHS_item!.pItem!.value!.listSpec!.asWrkLstOutr)){
-                worldManager!.DO_COPY(aItem!.RHS!.pItem!.infSize,
-                        aItem!.LHS_item!.pItem!.infSize, 0)
+            if(sizeCopyOwnedByConsolidation){
+                plan!.sizeAction <- mpsOwnedByConsolidation
+                return()
             }
-            changeMade <- true
+            plan!.sizeBlockedByOverlayType <-
+                    aItem!.LHS_item!.pItem!.viewMode==vmOverlay and
+                    aItem!.RHS!.pItem!.value!.overlayType!=
+                            aItem!.LHS_item!.pItem!.value!.overlayType
+
+            // Definition-backed list-spec inheritance also precedes this
+            // decision, so use the source spec when that copy is planned.
+            if(plan.copyDefinitionListSpec){
+                plan!.sizeBlockedByListOutput <-
+                        aItem!.RHS!.pItem!.value!.listSpec!=NULL and
+                        aItem!.RHS!.pItem!.value!.listSpec!.asWrkLstOutr
+            }else{
+                plan!.sizeBlockedByListOutput <-
+                        aItem!.LHS_item!.pItem!.value!.listSpec!=NULL and
+                        aItem!.LHS_item!.pItem!.value!.listSpec!.asWrkLstOutr
+            }
+            if(plan.sizeBlockedByOverlayType or plan.sizeBlockedByListOutput){
+                plan!.sizeAction <- mpsBlocked
+            }else{
+                plan!.sizeAction <- mpsCopyRHSSize
+            }
         }
-        return(changeMade)
+    }
+
+    void: recordPreparationHandlers(our AItem: aItem,
+            their MergePreparationPlan: plan) <- {
+        if(!plan.hasPreparationDecision()){return()}
+        aItem!.phase1RecordHandler("strategy:mergePreparation", false)
+        if(plan.copyDefinitionListSpec){
+            aItem!.phase1RecordHandler(
+                    "mergePreparation:definitionListSpecCopied", false)
+        }
+        if(plan.copyDefinitionOrderMode){
+            aItem!.phase1RecordHandler(
+                    "mergePreparation:definitionOrderModeCopied", false)
+        }
+        if(plan.copyDefinitionSize){
+            aItem!.phase1RecordHandler(
+                    "mergePreparation:definitionSizeCopied", false)
+        }
+        if(plan.openDefinitionTail){
+            aItem!.phase1RecordHandler(
+                    "mergePreparation:definitionTailOpened", false)
+        }
+        if(plan.sizeAction==mpsOwnedByConsolidation){
+            aItem!.phase1RecordHandler(
+                    "mergePreparation:sizeOwnedByConsolidation", false)
+        }else if(plan.sizeAction==mpsCopyRHSSize){
+            aItem!.phase1RecordHandler("mergePreparation:sizeCopied", false)
+        }else if(plan.sizeAction==mpsBlocked){
+            if(plan.sizeBlockedByOverlayType){
+                aItem!.phase1RecordHandler(
+                        "mergePreparation:sizeBlockedByOverlayType", false)
+            }
+            if(plan.sizeBlockedByListOutput){
+                aItem!.phase1RecordHandler(
+                        "mergePreparation:sizeBlockedByListOutput", false)
+            }
+        }
+    }
+
+    void: execPreparation(their WorldManager: worldManager, our AItem: aItem,
+            their MergePreparationPlan: plan) <- {
+        recordPreparationHandlers(aItem, plan)
+        if(plan.sizeAction==mpsCopyRHSSize){
+            worldManager!.DO_COPY(aItem!.RHS!.pItem!.infSize,
+                    aItem!.LHS_item!.pItem!.infSize, 0)
+        }
     }
 }
 
@@ -2380,10 +2474,6 @@ struct InfonViewReasoner{
         return(referenceConsolidationStrategy.planConsolidation(aItem))
     }
 
-    me bool: inheritDefinitionListShape(our AItem: aItem) <- {
-        return(listShapeStrategy.inheritDefinitionListShape(aItem))
-    }
-
     me bool: isDefinitionListShapeOnly(our AItem: aItem) <- {
         return(listShapeStrategy.isDefinitionListShapeOnly(aItem))
     }
@@ -2394,10 +2484,19 @@ struct InfonViewReasoner{
                 worldManager, target))
     }
 
-    me bool: execMergeSizePreparation(their WorldManager: worldManager,
-            our AItem: aItem, me bool: sizeCopyPlannedByConsolidation) <- {
-        return(mergeSizeStrategy.execPreparation(worldManager, aItem,
-                sizeCopyPlannedByConsolidation))
+    me MergePreparationPlan: planMergePreparation(our AItem: aItem,
+            me bool: sizeCopyOwnedByConsolidation) <- {
+        me MergePreparationPlan: plan <-
+                listShapeStrategy.planDefinitionListShape(aItem)
+        mergeSizeStrategy.planPreparation(aItem,
+                sizeCopyOwnedByConsolidation, plan)
+        return(plan)
+    }
+
+    void: execMergePreparation(their WorldManager: worldManager,
+            our AItem: aItem, their MergePreparationPlan: plan) <- {
+        listShapeStrategy.execDefinitionListShape(aItem, plan)
+        mergeSizeStrategy.execPreparation(worldManager, aItem, plan)
     }
 
     me bool: processConcat(our AItem: aItem) <- {
