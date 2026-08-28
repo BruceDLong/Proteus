@@ -3,6 +3,8 @@
 #include WorldManagerRules.dog
 
 struct WorldManager{
+    me POVLevelReasoner: povLevelReasoner
+
     // Compatibility delegates keep the retained generated fallback independent
     // of where the handwritten list-shape semantics are implemented.
     me bool: inheritDefinitionListShape(our AItem: aItem) <- {
@@ -853,90 +855,17 @@ struct WorldManager{
         return(stopAndWait)
     }
     me bool: wrkLstRules(their Agenda: agenda, our AItem: aItem) <- {
-        ////////// If "{[....]| ... } <~ outr", prepend outr to wrkList
-        //:l/PAI::logSegIn(" WL")
-        our infonView: lSpecItem <- aItem!.LHS_item!.pItem
-        our infonView: lSpec <- lSpecItem!.value!.listSpec
-        if(lSpec!=NULL and lSpecItem!.hasInnrOutr and lSpecItem!.intersectPos==ipNoIntersect and lSpec!.intersectPos!=ipNoIntersect){
-            //log("OUTR: lSpecItem: "+toString(lSpecItem) + "   lSpec:" +toString(lSpec) + "   outr:" +toString(lSpecItem!.funcArgs))
-            //:l/PAI::logSeg(" Otr")
-            our POV:: newPov{11}; newPov!.pItem <- lSpecItem!.funcArgs; newPov!.looseMode <- true; newPov!.isOutrFeed<-true; newPov!.pItem!.asRHSInternalIdent <- true
-            lSpecItem!.addPOVToWrkList(newPov)
-            lSpecItem!.hasInnrOutr<-false;  lSpecItem!.funcArgs <- NULL
-            lSpec!.asWrkLstOutr <- true
-        }
-
-        ////////// Handle items on WrkList
-        me bool: stopAndWait <- false
-        our POV: LHSPov    <- aItem!.LHS_item
-        our POV: RHSPov    <- NULL
-        me bool: looseSize <- false
-        //if(lSpecItem!.wrkList.isEmpty() and LHSPov!.hasPropagated){log("WARNING: NotRePropagating "+LHSPov.stringify())}
-        if(!lSpecItem!.wrkList.isEmpty()){
-            withEach candidateWorkPOV in lSpecItem!.wrkList{
-                me bool: candidateDeferred <- lSpecItem!.deferredWorkListContainsPOV(candidateWorkPOV)
-                if(!candidateDeferred and !(aItem!.inFlightWorkPOV===candidateWorkPOV)){
-                    RHSPov <- candidateWorkPOV
-                    break()
-                }
-            }
-        }
-        if(RHSPov!=NULL){
-            //:l/PAI::logSeg(" WLP:"+RHSPov!.mySymbol())
-            looseSize <- RHSPov!.looseSize()
-            LHSPov!.hasPropagated <- true
-            if(!aItem!.dontProcess){
-                our AItem: newAItem <- processMergeViaAgenda(agenda, LHSPov, RHSPov, looseSize, aItem, aItem, aItem!.priority, srcPMVA1)
-                newAItem!.debugArg <- aItem // For validateAItem debugging
-                newAItem!.sourceWorkOwner <- lSpecItem
-                newAItem!.sourceWorkPOV <- RHSPov
-                newAItem!.sourceWorkParent <- aItem
-                newAItem!.sourceWorkRevision <- RHSPov!.workRevision
-                newAItem!.constraintDisposition <- cdInFlight
-                aItem!.inFlightWorkPOV <- RHSPov
-                //:l/PAI::logSeg(" Itm_PMVA:"+newAItem!.mySymbol())
-                stopAndWait <- true
-            }else{
-                lSpecItem!.discardWrkListPOV(RHSPov)
-                log("DONT_PROCESS-a:"+aItem!.stringify())
-                //:l/PAI::logSeg(" dontProcess")
-            }
-        }
-        if(!LHSPov!.hasPropagated){
-            if(!aItem!.dontProcess){
-                our AItem: newAItem <- processMergeViaAgenda(agenda, LHSPov, RHSPov, false, aItem, aItem, aItem!.priority, srcPMVA2)
-                newAItem!.debugArg <- aItem // For validateAItem debugging
-                //:l/PAI::logSeg(" LHS_PMVA:"+newAItem!.mySymbol())
-                stopAndWait <- true
-                LHSPov!.hasPropagated <- true
-            }else{
-                log("DONT_PROCESS-b:"+aItem!.stringify())
-                //:l/PAI::logSeg(" dontProcess_LHS")
-            }
-        }else{
-            //:l/PAI::logSeg(" NoProp")
-        }
-        //:l/PAI::logSegOut("")
-        return(stopAndWait)
+        return(povLevelReasoner.processWorkList(self, agenda, aItem))
     }
     me bool: povIsUnderIncompleteStream(their POV: pov) <- {
-        their POV: crnt <- pov
-        while(crnt!=NULL){
-            if(crnt!.pItem!=NULL and (crnt!.pItem!.streamState==parseStarted or crnt!.pItem!.streamState==parseListReady)){return(true)}
-            crnt <- crnt!.pParent
-        }
-        return(false)
+        return(povLevelReasoner.povIsUnderIncompleteStream(pov))
     }
     me bool: hasLocalNullableContinuation(our AItem: aItem) <- {
-        if(!povIsUnderIncompleteStream(aItem!.LHS_item)){return(false)}
-        our infonView: CI <- aItem!.LHS_item!.pItem
-        return(CI!.partRef!=NULL or !CI!.parts.isEmpty())
+        return(povLevelReasoner.hasLocalNullableContinuation(aItem))
     }
     me bool: localNullableContinuationRules(their Agenda: agenda, our AItem: aItem, their bool: nxtAction) <- {
-        if(hasLocalNullableContinuation(aItem)){
-            return(partsRules(agenda, aItem, nxtAction))
-        }
-        return(false)
+        return(povLevelReasoner.processLocalNullableContinuation(
+                self, agenda, aItem, nxtAction))
     }
     // rsINFON UTILITY FUNCTIONS: CONCAT FUNCTIONS
     me int: evalForRange(our infonView: infn, their FlexNum: lowest, their FlexNum: highest) <- {
@@ -1093,174 +1022,7 @@ struct WorldManager{
         return(changeMade)
     }
     me bool: partsRules(their Agenda: agenda, our AItem: aItem, their bool: nxtAction) <- {
-        me bool: changeMade <- false
-        nxtAction! <- true
-        our infonView: CI        <- aItem!.LHS_item!.pItem
-        if(CI!.partRef!=NULL){
-            //log("PART2REF:"+toString(CI!.partRef!.path))
-            //:l/PAI::logSeg(" Part2Ref")
-            CI!.parts.append(CI!.partRef)
-            CI!.partRef<-NULL
-        }
-        if(!CI!.parts.isEmpty()){
-            withEach part in CI!.parts{
-                me string: partTag
-                if(part!.path!.type != NULL){partTag <- part!.path!.type!.typeID()}
-                our infonView: newPath
-                our POV: newPov
-                if(part!.wasTransfered){continue()}else{part!.wasTransfered <- true}
-                //log("@@PART:"+toString(part!.path)+" viewMode:"+viewModeStrings[part!.path.viewMode] + "  CI:"+toString(CI))
-                //:l/PAI::logSegIn(" PART")
-                //print("PART_PART:"+toString(part!.path)+"\n")
-                switch(part!.pathMode){
-                    case dotField:{
-                        //:l/PAI::logSeg(" DOT."+partTag)
-                        if(CI!.orderMode==uUnordered){
-                            newPath <- CI!.findMatchingItem(part!.path)
-                        } else if(part!.path!.type != NULL){
-                            if(partTag == "first"){newPath <- CI!.getFirstItem(aItem!.LHS_item!.isSubItm)}
-                            else if(partTag == "last") {newPath <- CI!.getLastInfonView()}
-                            //else if(partTag == "size"){newPath <- getSizeInfonView}
-                            // else {Later, optimize various lookups}  // Only after non-optimized lookups are robust
-                        }
-                        if(newPath==NULL){
-                            me bool: doReply <- CI!.doReply
-                            if(doReply){CI!.doReply <- false}
-                            our infonView:: skipPtn
-                                part!.path!.copyAsTypeTo(skipPtn, false, false)
-                                // Keep !path as the written selector token; local word defs should not stop the scan.
-                                skipPtn!.wordDerefed          <- true
-                                skipPtn!.invertMatch                 <- true
-                            our infonView:: matchPtn
-                                part!.path!.copyAsTypeTo(matchPtn, false, false)
-                            our infonView:: skipPart
-                                skipPart!.setToList()
-                                skipPart!.value!.sizeMode       <- fromCount
-                                skipPart!.infSize!.overlayType        <- NUM
-                                skipPart!.infSize!.evalMode       <- emUnknown
-                                skipPart!.value!.listSpec       <- skipPtn
-                            our infonView: newInnr <- makeInnrInfonView()
-                                newInnr!.value!.items.append(skipPart, true, 13)
-                                newInnr!.value!.items.append(matchPtn, false, 14)
-                                newInnr!.orderMode      <- CI!.orderMode
-                            Allocate(newPath)
-                                newPath!.convertThisToIntersection(newInnr, fromGiven)
-                                newPath!.doReply        <- doReply
-                                newInnr!.value!.sizeMode <- fromCount
-                                newPath!.value!.sizeMode <- fromCount
-                                newPath!.infSize!.overlayType  <- NUM
-                                newPath!.originID       <- CI!.originID
-                                newPath!.infCharPos     <- CI!.infCharPos
-                                // Preserve unordered/ordered semantics when a dot lookup
-                                // falls back to a synthetic intersection such as {!color|...} color.
-                                newPath!.orderMode      <- CI!.orderMode
-                                if(part!.path!.partRef!=NULL){
-                                    newPath!.partRef    <- part!.path!.partRef
-                                    part!.path!.partRef  <- NULL
-                                }else{
-                                    newPath!.parts      <- part!.path!.parts
-                                }
-                    //print("newPath!.infCharPos:", newPath!.infCharPos, "\n")
-                            newPov <- newPath!.innr!.addInfonViewToWrkList(CI, true, 15)
-                            newPov!.looseMode <- false; newPov!.looseTop  <- true
-                        }
-                    }
-                    case upField:{
-                        //:l/PAI::logSeg(" ^"+partTag)
-                        //if(partTag == "pred"){}
-                    }
-                    case idxField:{
-                        //:l/PAI::logSeg(" #"+partTag)
-                        if(part!.spec==NULL){
-                            if(part!.path!.value!.overlayType == NUM){
-                                if(part!.path!.value!.evalMode==emLiteral and part!.path!.value!.inverted){
-                                    me int64: endOffset <- 0 - part!.path!.value!.num.convertToInt()
-                                    newPov <- CI!.getEndRelativePOV(endOffset)
-                                    if(newPov!=NULL){newPath <- newPov!.pItem}
-                                }
-                            }
-                            if(newPath==NULL and part!.path!.value!.overlayType == NUM){
-                                me bool: doReply <- CI!.doReply
-                                if(doReply){CI!.doReply <- false}
-                                our infonView: newInnr <- makeInnrInfonView()
-                                    newInnr!.value!.tailUnfinished <- true
-                                Allocate(newPath)
-                                    newPath!.convertThisToIntersection(newInnr, fromGiven)
-                                    newPath!.doReply        <- doReply
-                                    newPath!.value!.sizeMode <- fromCount
-                                    newPath!.infSize!.overlayType  <- NUM
-                                    newPath!.originID       <- CI!.originID
-                                    newPath!.infCharPos     <- CI!.infCharPos
-                                    if(part!.path!.partRef!=NULL){
-                                        newPath!.partRef    <- part!.path!.partRef
-                                        part!.path!.partRef  <- NULL
-                                    }else{
-                                        newPath!.parts      <- part!.path!.parts
-                                    }
-                                    newInnr!.infSize!              <- part!.path!.value!
-                                    newInnr!.value!.sizeMode       <- fromCount
-                                newPov <- newPath!.innr!.addInfonViewToWrkList(CI, true, 16)
-                                newPov!.looseMode <- false; newPov!.looseTop  <- true
-                            }
-                        }else{
-                            if(part!.path!.value!.overlayType == NUM){
-                                me bool: doReply <- CI!.doReply
-                                if(doReply){CI!.doReply <- false}
-                                our infonView:: skipPart
-                                skipPart!.setToList()
-                                skipPart!.infSize!        <- part!.path!.value!
-                                skipPart!.value!.sizeMode <- fromGiven
-                                our infonView: partSpec     <- part!.spec
-                                our infonView: newInnr <- makeInnrInfonView()
-                                    newInnr!.value!.tailUnfinished <- false
-                                    newInnr!.value!.items.append(skipPart, true, 17)
-                                    our POV: partPov <- newInnr!.value!.items.append(partSpec, false, 18)
-                                    partPov!.isSubItm <- true
-                                Allocate(newPath)
-                                    newPath!.convertThisToIntersection(newInnr, fromGiven)
-                                    newPath!.doReply        <- doReply
-                                    newPath!.value!.sizeMode <- fromGiven
-                                    newPath!.infSize!.overlayType  <- NUM
-                                    newPath!.originID       <- CI!.originID
-                                    newPath!.infCharPos     <- CI!.infCharPos
-                                    newPath!.intersectPos <- ipGetMarked
-                                    newPath!.intersectMarkedRetPOV <- partPov
-                                    if(part!.path!.partRef!=NULL){
-                                        newPath!.partRef    <- part!.path!.partRef
-                                        part!.path!.partRef  <- NULL
-                                    }else{
-                                        newPath!.parts      <- part!.path!.parts
-                                    }
-                                newPov <- newPath!.innr!.addInfonViewToWrkList(CI, true, 19)
-                                newPov!.looseMode <- false; newPov!.looseTop  <- true
-                            }
-                        }
-                    }
-                    case colonField:{}
-                }
-                if(newPath==NULL){logFatalError("Handle newPath is null")}
-                newPath!.takeWrkListFrom(part!.path, true)
-                if(!part!.hasSemiColon){
-                    aItem!.LHS_item!.pItem <- newPath
-             //aItem!.LHS_item!.hasPropagated <- false
-                    nxtAction! <- true
-                }else{
-                    our POV:: pathPov{20}
-                    pathPov!.pItem <- newPath
-                    aItem!.LHS_item!.pItem!.retainPOV(pathPov)
-                    our AItem: newAItem <-  processInfonViewViaAgenda(agenda, pathPov, NULL, aItem, aItem!.priority, srcPartsPath)
-                    if(newAItem!=NULL){
-                        //:l/PAI::logSeg(" pPIVA:"+newAItem!.mySymbol())
-                        addDebugEvent("RegisterPIVA to integrate "+newPath!.mySymbol()+":"+toString(newPath), newPath)
-                        agenda!.addAItemToAgenda(newAItem) // PIVA
-                    }
-                    nxtAction! <- false
-                }
-                changeMade <- true
-                //:l/PAI::logSegOut("")
-            }
-        }
-        return(changeMade)
+        return(povLevelReasoner.resolveParts(self, agenda, aItem, nxtAction))
     }
     // rsINFON UTILITY FUNCTIONS: CLEAN INFON FUNCTIONS
     void: closeIntersectAt(our POV: pov) <- {
