@@ -912,6 +912,100 @@ struct LegacyMergeStrategy{
     }
 }
 
+// Maps word references and function arguments to the definition-backed or
+// member-backed RHS candidates they imply.
+struct ReferenceMapper{
+    me bool: derefInfonView(their WorldManager: worldManager, our infonView: CI) <- {
+        if(CI!.wordDerefed){return(false)}
+        me bool: changeMade  <- false
+        modelMngr.completeItemsType(CI)
+        if(CI!.wordDerefed){return(true)}
+        if(CI!.type!=NULL and CI!.itmMode!=mWordDefn){
+        // TODO: move vSpec into agent
+        me vocabularySpec: vSpec
+        vSpec.init(worldManager!.agent!.getLocaleBaseName())
+            our infonView: infModel  <- modelMngr.constructAltModelFromWord(worldManager!.agent, CI!.type, vSpec, "scope")
+            if(infModel!=NULL){
+                //log("derefWord:'"+CI!.type!.asGiven+"'    infModel:"+toString(infModel))
+                infModel!.generality <- gAbstract
+                if(CI!.viewMode!=vmAny){
+                    if(infModel!.viewMode!=vmAny){
+                        //:l/PAI::logSeg(" WRD_VAL:'"+CI!.type!.asGiven+"'")
+                        CI!.generality <- gConcrete  // TODO: This may not always be the case.
+                        our POV: newPov <- CI!.addInfonViewToWorkListWithPriority(infModel, true)
+                        if(newPov===NULL){return(false)}
+                        else{newPov!.trueByDefinition <- true}
+                    }// else{log("SKIPPED:"+toString(infModel)}
+                }else{
+                    //:l/PAI::logSeg(" WRDxVAL:'"+CI!.type!.asGiven+"'")
+                    our WordUse:CIsType <- CI!.type
+                    me bool: invertMatch <- CI!.invertMatch
+                    me uint64: itmMode <- CI!.itmMode
+                    me List<our PartPath>: parts <- CI!.parts
+                    our PartPath: partRef <- CI!.partRef
+                    infModel!.copyAsTypeTo(CI, false, false)
+                    CI!.copySource <- infModel
+                    CI!.copySourceType <- cstDefinition
+                    CI!.type    <- CIsType
+                    CI!.invertMatch   <- invertMatch
+                    CI!.parts   <- parts
+                    CI!.partRef <- partRef
+                    CI!.itmMode <- itmMode
+                    CI!.isTypeExample <- true
+                    CI!.alreadyTypeChecked <- true
+                }
+                if(infModel!.type!=NULL and !CI!.infonViewHasType(infModel!.type!.typeID())){CI!.addedTypes.append(infModel!.type)}
+                changeMade <- true
+            }else{
+                //:l/PAI::logSeg(" WRD:ERR")
+                worldManager!.agent!.setErrorState("'"+CI!.type!.asGiven+"' is not defined\n\n")
+                //print("\n\n The word '"+CI!.type!.asGiven+"' is not defined\n\n"); exit(3)
+                //log("// Proteus NOTICE: The word '"+CI!.type!.asGiven+"' is not defined")
+            }
+            CI!.wordDerefed <-true
+        }
+        return(changeMade)
+    }
+    me bool: derefWordRules(their WorldManager: worldManager, our AItem: aItem) <- {
+        our POV: CIPov    <- aItem!.LHS_item
+        our infonView: CI     <- CIPov!.pItem
+        me bool: derefLHS <- false
+        if(CIPov!=NULL){derefLHS <- derefInfonView(worldManager, CIPov!.pItem)}
+        me bool: derefRHS <- false
+        if(aItem!.RHS!=NULL){derefInfonView(worldManager, aItem!.RHS!.pItem)}
+        if(derefLHS){
+            if(CIPov!.pParent!=NULL and CIPov!.pParent!.pItem!=NULL){
+                CIPov!.pParent!.pItem!.value!.index.insert(CI!.type!.typeID(), CI)
+            }else{ // This section is to get items into World. In a fully streaming mode this isn't needed.
+                worldManager!.agent!.world!.value!.index.insert(CI!.type!.typeID(), CI)
+            }
+        }
+        return(derefLHS or derefRHS)
+    }
+    me bool: funcArgRules(our AItem: aItem) <- {
+        our infonView: CI        <- aItem!.LHS_item!.pItem
+        me bool: changeMade  <- false
+        if(CI!.argPos != apNoArgs){
+            //:l/PAI::logSeg(" fArgs")
+            our infonView: tmp
+            if(CI!.argPos == apArgIsFirstItem){tmp <- CI!.getFirstItem(aItem!.LHS_item!.isSubItm)}
+            else {tmp <- CI!.getLastInfonView()}
+            if(tmp!=NULL){
+                our POV:: newPov{9}
+                newPov!.pItem    <- CI!.funcArgs
+                newPov!.pItem!.asRHSInternalIdent <- true
+                tmp!.addPOVToWrkList(newPov)
+                CI!.funcArgs <- NULL
+                CI!.argPos   <- apNoArgs
+                changeMade  <- true
+            }
+            //if(CI!.value!.overlayType==LST){ciItr.state <- sFirstVisit}
+            //else if(CI!.value!.overlayType!=LST){ciItr.state <- sNotASeq}
+        }
+        return(changeMade)
+    }
+}
+
 // Resolves deferred path navigation once its source POV has enough structure
 // to identify the requested field or position.  This remains a POV-level
 // operation: it discovers the next view and then schedules ordinary infon
@@ -1566,8 +1660,23 @@ struct ParentMemberReasoner{
 // wrkList remains the semantic AND representation; deferredWrkList is only its
 // execution index for candidates that cannot make progress yet.
 struct POVLevelReasoner{
+    me ReferenceMapper: referenceMapper
     me CursorPathResolver: cursorPathResolver
     me ParentMemberReasoner: parentMemberReasoner
+
+    me bool: derefInfonView(their WorldManager: worldManager,
+            our infonView: CI) <- {
+        return(referenceMapper.derefInfonView(worldManager, CI))
+    }
+
+    me bool: derefWordRules(their WorldManager: worldManager,
+            our AItem: aItem) <- {
+        return(referenceMapper.derefWordRules(worldManager, aItem))
+    }
+
+    me bool: funcArgRules(our AItem: aItem) <- {
+        return(referenceMapper.funcArgRules(aItem))
+    }
 
     our POV: findNextLHS(their WorldManager: worldManager,
             our POV: LHSPov, our infItr: ii, me int64: skipDots,
