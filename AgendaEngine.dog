@@ -402,59 +402,27 @@ struct MergeProcessor{
 struct IntersectProcessor{
     me AItemDispatchResult: process(their WorldManager: worldManager, their Agenda: agenda, our AItem: aItem, me int: alternativesNestLvl) <- {
         me AItemDispatchResult: result
-        me string: idnt <- indentStr(aItem!.indentLvl)
         me string: endBracket <- ""
         aItem!.phase1RecordHandler("intersect:step"+toString(aItem!.step), false)
         our infonView: CI   <- aItem!.LHS_item!.pItem
-        our infonView: innr <- CI!.innr
         switch(aItem!.step){
             case 0:{
                 //:l/PAI::endBracket<-"{"
-                if(CI!.hasInnrOutr){
-                    our POV: newPOV  <- CI!.innr!.addInfonViewToWrkList(CI!.innr!.funcArgs, true, 24)
-                    newPOV!.looseTop  <- true
-                    CI!.hasInnrOutr   <- false
-                    CI!.innr!.funcArgs <- NULL
-                }
-                if(CI!.intersectMarkedRetPOV!=NULL){
-                    CI!.innr!.intersectMarkedRetPOV <- CI!.intersectMarkedRetPOV
-                }
+                worldManager!.infonViewReasoner.prepareIntersectionContext(
+                        aItem)
                 if(CI!.isOrLike()){
                     aItem!.phase1RecordHandler("intersect:normalizeAlternatives", false)
                     //:l/PAI::logSeg(" IC0_OR:[")
-                    // EXPERIMENT for the innr/oneOf/Aaron bug: always normalize the innr. Its members each normalize
-                    // individually, getting aRefTo (identity) + umQuestion (filter) via the
-                    // child-direction flags propagated through prepareInfonWork. No
-                    // separate buildIntersectOrAlts pass; step 1 picks the survivor.
-                    // But get the other tests to pass as the above makes many tests fail
-                    if(!innr!.value!.tailUnfinished){
-                        our POV: innrPov <- innr!.value!.items.head
-                        while(innrPov != NULL){
-                            if(innrPov!.outerPOV==NULL){innrPov!.outerPOV <- aItem!.LHS_item}
-                            our AItem: PIVA <- worldManager!.prepareInfonWork(agenda, innrPov, NULL, aItem, aItem!.priority, srcItsALT)
-                            PIVA!.LHS_item!.pItem!.takeWrkListFrom(aItem!.LHS_item!.pItem, false)
-                            PIVA!.LHS_item!.accessMode    <- aRefTo
-                            PIVA!.LHS_item!.pItem!.useMode <- umQuestion
-                            //log("QUESTION-in-b:"+PIVA!.LHS_item!.pItem!.mySymbol()+" = "+toString(PIVA!.LHS_item!.pItem))
-                            //:l/PAI::logSeg(" IC0_orPIVA:"+PIVA!.mySymbol())
-                            addDebugEvent("RegisterPIVA to integrate OR intersect "+innrPov!.pItem!.mySymbol()+":"+toString(innrPov!.pItem), innrPov!.pItem)
-                            result.requestedWork.append(PIVA)  // PIVA
-                            innrPov <- innrPov!.next
-                        }
-                        aItem!.LHS_item!.pItem!.clearWrkList() //TODO: is this necessary?
-                    }
+                    worldManager!.infonViewReasoner.
+                            prepareIntersectionAlternatives(
+                                    worldManager, agenda, aItem,
+                                    result.requestedWork)
                     //:l/PAI::logSeg("]")
                 } else {  // CI is FunctionLike
                     aItem!.phase1RecordHandler("intersect:normalizeFunction", false)
-                    our POV:: srcPOV{25}; srcPOV!.pItem <- innr
-                    CI!.retainPOV(srcPOV)
-                    our AItem: PIVA <- worldManager!.prepareInfonWork(agenda, srcPOV, aItem, NULL, aItem!.priority, srcItsFunc)
-                    if(PIVA!=NULL){
-                        //:l/PAI::logSeg(" IC0_funcPIVA:"+PIVA!.mySymbol())
-                        result.requestedWork.append(PIVA) // PIVA
-                        //:l/PAI::logSeg(" IC0_funcPIVA:"+PIVA!.mySymbol())
-                        addDebugEvent("RegisterPIVA to integrate func intersect "+srcPOV!.pItem!.mySymbol()+":"+toString(srcPOV!.pItem), srcPOV!.pItem)
-                    }
+                    worldManager!.infonViewReasoner.prepareIntersectionFunction(
+                            worldManager, agenda, aItem,
+                            result.requestedWork)
                 }
                 aItem!.step <- 1
             }
@@ -465,114 +433,18 @@ struct IntersectProcessor{
                 if(CI!.isOrLike()){  // Eliminate if only 1 non - reject.
                     aItem!.phase1RecordHandler("intersect:selectAlternative", false)
                     //:l/PAI::logSeg(" IS_OR_LIKE:"+aItem!.mySymbol())
-                    //TODO: Perhaps we can skip the following if there is exactly one candidateForLast
-                    if(!innr!.value!.tailUnfinished){
-                        our POV: lastOK   <- NULL
-                        me int: numOK <- 0
-                        our POV: pov <- innr!.value!.items.head
-                        while(pov != NULL){
-                            // TODO: if(sizesNotCompatable()){markAsReject or notLast}
-                            me string: logPredString; if(!pov!.predecessors.isEmpty()){logPredString<-"  Pred:"+ pov!.predecessors[0]!.stringify()}
-                            // Is the next line really valid? This could be the correct item but just be unknown. However, tests fail without it.
-                            me bool: unresolvedAlt <- pov!.pItem!.type==NULL and pov!.pItem!.viewMode==vmAny and (pov!.pItem!.value!.overlayType==tUnknown or pov!.pItem!.value!.overlayType==tUnset)
-                            if(!pov!.rejected and !unresolvedAlt){
-                                //:l/PAI::log(idnt+"            ALT:"+ pov!.mySymbol()+":"+ shortedStr(pov!.stringify(),100) + shortedStr(logPredString,100))
-                                numOK <+- 1
-                                lastOK <- pov
-                            } else {
-                                //:l/PAI::log(idnt+"          x ALT:"+ pov!.mySymbol()+":"+ shortedStr(pov!.stringify(),100) + shortedStr(logPredString,100))
-                            }
-                            pov <- pov!.next
-                        }
-                        if(numOK==1){
-                            newTop <- lastOK!.pItem
-                            aItem!.parent!.dontProcess <- true
-                            aItem!.LHS_item!.forLastUseOutrPov <- true
-                            //log("NEWTOPING:"+aItem!.LHS_item!.mySymbol()+"   newTop:"+newTop.mySymbol())
-                            if(!(lastOK!.outerPOV != NULL and lastOK!.outerPOV===aItem!.LHS_item)){
-                                aItem!.LHS_item!.predecessors <- lastOK!.predecessors
-                            }
-                            if(newTop!.isTentative){
-                         newTop!.isTentative <- aItem!.LHS_item!.pItem!.isTentative// false
-                                if(lastOK!.predecessors.size()==1){
-                                    our POV: pred <- lastOK!.predecessors[0]
-                                    //log("-TryCloseTentative " + lastOK.stringify() + "  PREDc:"+pred!.stringify())
-                                    worldManager!.validateItem(pred)
-                                }
-                            }
-                        }else if(numOK==0){
-                            //log("NO_ALTS") // outr/everyOther fails w/o this
-                            innr!.value!.items.clear()
-                            innr!.value!.sizeMode <- fromCount
-                            innr!.infSize!.num <- 0
-                            innr!.infSize!.evalMode <- emLiteral
-                            CI!.value!.undefined <- true
-                            CI!.partRef <- NULL
-                            CI!.parts.clear()
-                        }
-                    } else {log("TODO: IS_OR_LIKE: tailUnfinished")}
+                    newTop <- worldManager!.infonViewReasoner.
+                            selectIntersectionAlternative(worldManager, aItem)
                 } else {  // CI is FunctionLike
                     aItem!.phase1RecordHandler("intersect:selectFunctionResult", false)
                     //:l/PAI::logSeg(" FUNC")
-                    switch(CI!.intersectPos){
-                        case ipGetLast   : {
-                            newTop <- worldManager!.selectReturnedInfonViewFromPOV(aItem, innr!.getLastPOV())
-                        }
-                        case ipGetFirst  : {newTop <- innr!.getFirstItem(aItem!.LHS_item!.isSubItm)}
-                        case ipGetMarked : {
-                            if(innr!.intersectMarkedRetPOV!=NULL and
-                                    innr!.intersectMarkedRetPOV!.pItem!.isTentative and
-                                    innr!.intersectMarkedRetPOV!.pParent!=NULL and
-                                    !(innr!.intersectMarkedRetPOV!.pParent!.pItem===innr)){
-                                Allocate(newTop)
-                                newTop!.viewMode <- vmOverlay
-                                newTop!.infSize!.evalMode <- emUnknown
-                                newTop!.value!.evalMode <- emLiteral
-                                newTop!.value!.overlayType <- LST
-                                innr!.intersectMarkedRetPOV!.addNewSubDots <- true
-                                // The mark selects a slice position. Keep the list-view
-                                // shape, but tie its first slot back to the source POV.
-                                our POV: markedWrapperPOV <- newTop!.value!.items.append(innr!.intersectMarkedRetPOV!.pItem, innr!.intersectMarkedRetPOV!.isSubItm, 304)
-                                markedWrapperPOV!.outerPOV <- innr!.intersectMarkedRetPOV
-                                markedWrapperPOV!.accessMode <- aRefTo
-                                markedWrapperPOV!.tentFromDots <- innr!.intersectMarkedRetPOV!.tentFromDots
-                                newTop!.countSize(false)
-                            }else{
-                                // TODO: Is the next line a special case that should be generalized?
-                                //    Before we just had the 2nd line without the 'else'.
-                                if(innr!.intersectMarkedRetPOV!=NULL and innr!.intersectMarkedRetPOV!.pedigree.source==povSrcSparseExposedHead){newTop <- innr!.intersectMarkedRetPOV!.pItem}
-                                else if(CI!.intersectMarkedRetPOV!=NULL){newTop <- CI!.intersectMarkedRetPOV!.pItem}
-                            }
-                        }
-                    }
-                    if(newTop!=NULL){
-                        if(CI!.intersectPos==ipGetMarked){
-                            if(CI!.intersectMarkedRetPOV!=NULL and newTop===CI!.intersectMarkedRetPOV!.pItem){
-                                // A marked range object may still have selector-local
-                                // work queued on it; do not project that work outward.
-                                newTop!.clearWrkList()
-                                CI!.clearWrkList()
-                            }else{
-                                newTop!.takeWrkListFrom(CI, true)
-                            }
-                        }else{
-                            newTop!.takeWrkListFrom(CI, true)
-                        }
-                        //:l/PAI::logSeg(" GET_LAST")
-                        // log("NEW_TOP_FUNC: RHS:"+ toString(aItem!.LHS_item!.pItem) + "  newTop:" + toString(newTop)+": "+newTop.mySymbol())
-                    }else{CI!.value!.undefined <- true}
+                    newTop <- worldManager!.infonViewReasoner.
+                            selectIntersectionFunctionResult(
+                                    worldManager, aItem)
                 }
                 result.fulfillSubscribers <- true
-                if(newTop!=NULL){
-                    if(aItem!.LHS_item!.pItem!.itmMode!=mNone){newTop!.itmMode <- aItem!.LHS_item!.pItem!.itmMode}
-                    newTop!.doReply       <- aItem!.LHS_item!.pItem!.doReply
-                    newTop!.partRef       <- aItem!.LHS_item!.pItem!.partRef
-                    newTop!.parts         <- aItem!.LHS_item!.pItem!.parts
-                    newTop!.originID      <- aItem!.LHS_item!.pItem!.originID // TODO: // WRONG! This changes the original, need to track this origin separately in POV or aItem
-                    newTop!.infCharPos    <- aItem!.LHS_item!.pItem!.infCharPos
-                    if(aItem!.LHS_item!.pItem!.value!.undefined){newTop!.value!.undefined <- true}
-                    aItem!.LHS_item!.pItem <- newTop
-                }else{} // TODO: return Subscriptions
+                worldManager!.infonViewReasoner.installIntersectionResult(
+                        aItem, newTop)
                 aItem!.step <- 2
             }
         }

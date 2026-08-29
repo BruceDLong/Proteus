@@ -1406,6 +1406,233 @@ struct IntersectionConsolidationStrategy{
     }
 }
 
+// Owns local intersection semantics. IntersectProcessor retains only the
+// rsIntersect continuation state machine, handler tracing, and lifecycle
+// result; this reasoner prepares inner work and selects or installs results.
+struct IntersectionReasoner{
+    me IntersectionConsolidationStrategy: consolidationStrategy
+
+    me InfonViewReasoningResult: planConsolidation(our AItem: aItem) <- {
+        return(consolidationStrategy.planConsolidation(aItem))
+    }
+
+    me void: mergeRHSIntersect(our AItem: aItem) <- {
+        consolidationStrategy.mergeRHSIntersect(aItem)
+    }
+
+    me void: prepareInnerContext(our AItem: aItem) <- {
+        our infonView: CI <- aItem!.LHS_item!.pItem
+        if(CI!.hasInnrOutr){
+            our POV: newPOV <- CI!.innr!.addInfonViewToWrkList(
+                    CI!.innr!.funcArgs, true, 24)
+            newPOV!.looseTop <- true
+            CI!.hasInnrOutr <- false
+            CI!.innr!.funcArgs <- NULL
+        }
+        if(CI!.intersectMarkedRetPOV!=NULL){
+            CI!.innr!.intersectMarkedRetPOV <- CI!.intersectMarkedRetPOV
+        }
+    }
+
+    me void: prepareAlternatives(their WorldManager: worldManager,
+            their Agenda: agenda, our AItem: aItem,
+            their List<our AItem>: requestedWork) <- {
+        our infonView: CI <- aItem!.LHS_item!.pItem
+        our infonView: innr <- CI!.innr
+        // EXPERIMENT for the innr/oneOf/Aaron bug: always normalize the innr.
+        // Its members each normalize individually, getting aRefTo (identity)
+        // + umQuestion (filter) via the child-direction flags propagated
+        // through prepareInfonWork. No separate buildIntersectOrAlts pass;
+        // selection later picks the survivor. But get the other tests to pass
+        // as the above makes many tests fail.
+        if(!innr!.value!.tailUnfinished){
+            our POV: innrPov <- innr!.value!.items.head
+            while(innrPov != NULL){
+                if(innrPov!.outerPOV==NULL){
+                    innrPov!.outerPOV <- aItem!.LHS_item
+                }
+                our AItem: PIVA <- worldManager!.prepareInfonWork(
+                        agenda, innrPov, NULL, aItem, aItem!.priority,
+                        srcItsALT)
+                PIVA!.LHS_item!.pItem!.takeWrkListFrom(
+                        aItem!.LHS_item!.pItem, false)
+                PIVA!.LHS_item!.accessMode <- aRefTo
+                PIVA!.LHS_item!.pItem!.useMode <- umQuestion
+                //log("QUESTION-in-b:"+PIVA!.LHS_item!.pItem!.mySymbol()+" = "+toString(PIVA!.LHS_item!.pItem))
+                //:l/PAI::logSeg(" IC0_orPIVA:"+PIVA!.mySymbol())
+                addDebugEvent("RegisterPIVA to integrate OR intersect "+
+                        innrPov!.pItem!.mySymbol()+":"+
+                        toString(innrPov!.pItem), innrPov!.pItem)
+                requestedWork.append(PIVA)
+                innrPov <- innrPov!.next
+            }
+            aItem!.LHS_item!.pItem!.clearWrkList() //TODO: is this necessary?
+        }
+    }
+
+    me void: prepareFunction(their WorldManager: worldManager,
+            their Agenda: agenda, our AItem: aItem,
+            their List<our AItem>: requestedWork) <- {
+        our infonView: CI <- aItem!.LHS_item!.pItem
+        our POV:: srcPOV{25}
+        srcPOV!.pItem <- CI!.innr
+        CI!.retainPOV(srcPOV)
+        our AItem: PIVA <- worldManager!.prepareInfonWork(
+                agenda, srcPOV, aItem, NULL, aItem!.priority, srcItsFunc)
+        if(PIVA!=NULL){
+            //:l/PAI::logSeg(" IC0_funcPIVA:"+PIVA!.mySymbol())
+            requestedWork.append(PIVA)
+            //:l/PAI::logSeg(" IC0_funcPIVA:"+PIVA!.mySymbol())
+            addDebugEvent("RegisterPIVA to integrate func intersect "+
+                    srcPOV!.pItem!.mySymbol()+":"+toString(srcPOV!.pItem),
+                    srcPOV!.pItem)
+        }
+    }
+
+    our infonView: selectAlternative(their WorldManager: worldManager,
+            our AItem: aItem) <- {
+        our infonView: CI <- aItem!.LHS_item!.pItem
+        our infonView: innr <- CI!.innr
+        our infonView: newTop <- NULL
+        me string: idnt <- indentStr(aItem!.indentLvl)
+        // Eliminate if only 1 non-rejected alternative remains.
+        //TODO: Perhaps we can skip the following if there is exactly one candidateForLast
+        if(!innr!.value!.tailUnfinished){
+            our POV: lastOK <- NULL
+            me int: numOK <- 0
+            our POV: pov <- innr!.value!.items.head
+            while(pov != NULL){
+                // TODO: if(sizesNotCompatable()){markAsReject or notLast}
+                me string: logPredString
+                if(!pov!.predecessors.isEmpty()){
+                    logPredString <- "  Pred:"+pov!.predecessors[0]!.stringify()
+                }
+                // Is this really valid? The correct item could merely be
+                // unknown. Existing tests currently depend on this filter.
+                me bool: unresolvedAlt <- pov!.pItem!.type==NULL and
+                        pov!.pItem!.viewMode==vmAny and
+                        (pov!.pItem!.value!.overlayType==tUnknown or
+                         pov!.pItem!.value!.overlayType==tUnset)
+                if(!pov!.rejected and !unresolvedAlt){
+                    //:l/PAI::log(idnt+"            ALT:"+ pov!.mySymbol()+":"+ shortedStr(pov!.stringify(),100) + shortedStr(logPredString,100))
+                    numOK <+- 1
+                    lastOK <- pov
+                }else{
+                    //:l/PAI::log(idnt+"          x ALT:"+ pov!.mySymbol()+":"+ shortedStr(pov!.stringify(),100) + shortedStr(logPredString,100))
+                }
+                pov <- pov!.next
+            }
+            if(numOK==1){
+                newTop <- lastOK!.pItem
+                aItem!.parent!.dontProcess <- true
+                aItem!.LHS_item!.forLastUseOutrPov <- true
+                if(!(lastOK!.outerPOV!=NULL and
+                        lastOK!.outerPOV===aItem!.LHS_item)){
+                    aItem!.LHS_item!.predecessors <- lastOK!.predecessors
+                }
+                if(newTop!.isTentative){
+                    newTop!.isTentative <- aItem!.LHS_item!.pItem!.isTentative
+                    if(lastOK!.predecessors.size()==1){
+                        our POV: pred <- lastOK!.predecessors[0]
+                        worldManager!.validateItem(pred)
+                    }
+                }
+            }else if(numOK==0){
+                innr!.value!.items.clear()
+                innr!.value!.sizeMode <- fromCount
+                innr!.infSize!.num <- 0
+                innr!.infSize!.evalMode <- emLiteral
+                CI!.value!.undefined <- true
+                CI!.partRef <- NULL
+                CI!.parts.clear()
+            }
+        }else{log("TODO: IS_OR_LIKE: tailUnfinished")}
+        return(newTop)
+    }
+
+    our infonView: selectFunctionResult(their WorldManager: worldManager,
+            our AItem: aItem) <- {
+        our infonView: CI <- aItem!.LHS_item!.pItem
+        our infonView: innr <- CI!.innr
+        our infonView: newTop <- NULL
+        switch(CI!.intersectPos){
+            case ipGetLast:{
+                newTop <- worldManager!.selectReturnedInfonViewFromPOV(
+                        aItem, innr!.getLastPOV())
+            }
+            case ipGetFirst:{
+                newTop <- innr!.getFirstItem(aItem!.LHS_item!.isSubItm)
+            }
+            case ipGetMarked:{
+                if(innr!.intersectMarkedRetPOV!=NULL and
+                        innr!.intersectMarkedRetPOV!.pItem!.isTentative and
+                        innr!.intersectMarkedRetPOV!.pParent!=NULL and
+                        !(innr!.intersectMarkedRetPOV!.pParent!.pItem===innr)){
+                    Allocate(newTop)
+                    newTop!.viewMode <- vmOverlay
+                    newTop!.infSize!.evalMode <- emUnknown
+                    newTop!.value!.evalMode <- emLiteral
+                    newTop!.value!.overlayType <- LST
+                    innr!.intersectMarkedRetPOV!.addNewSubDots <- true
+                    // The mark selects a slice position. Keep the list-view
+                    // shape, but tie its first slot back to the source POV.
+                    our POV: markedWrapperPOV <- newTop!.value!.items.append(
+                            innr!.intersectMarkedRetPOV!.pItem,
+                            innr!.intersectMarkedRetPOV!.isSubItm, 304)
+                    markedWrapperPOV!.outerPOV <- innr!.intersectMarkedRetPOV
+                    markedWrapperPOV!.accessMode <- aRefTo
+                    markedWrapperPOV!.tentFromDots <-
+                            innr!.intersectMarkedRetPOV!.tentFromDots
+                    newTop!.countSize(false)
+                }else{
+                    // TODO: Is this sparse exposed-head case special, or
+                    // should it be generalized?
+                    if(innr!.intersectMarkedRetPOV!=NULL and
+                            innr!.intersectMarkedRetPOV!.pedigree.source==
+                                    povSrcSparseExposedHead){
+                        newTop <- innr!.intersectMarkedRetPOV!.pItem
+                    }else if(CI!.intersectMarkedRetPOV!=NULL){
+                        newTop <- CI!.intersectMarkedRetPOV!.pItem
+                    }
+                }
+            }
+        }
+        if(newTop!=NULL){
+            if(CI!.intersectPos==ipGetMarked){
+                if(CI!.intersectMarkedRetPOV!=NULL and
+                        newTop===CI!.intersectMarkedRetPOV!.pItem){
+                    // A marked range object may still have selector-local
+                    // work queued on it; do not project that work outward.
+                    newTop!.clearWrkList()
+                    CI!.clearWrkList()
+                }else{
+                    newTop!.takeWrkListFrom(CI, true)
+                }
+            }else{
+                newTop!.takeWrkListFrom(CI, true)
+            }
+            //:l/PAI::logSeg(" GET_LAST")
+        }else{CI!.value!.undefined <- true}
+        return(newTop)
+    }
+
+    me void: installSelectedResult(our AItem: aItem,
+            our infonView: newTop) <- {
+        if(newTop==NULL){return()}
+        our infonView: CI <- aItem!.LHS_item!.pItem
+        if(CI!.itmMode!=mNone){newTop!.itmMode <- CI!.itmMode}
+        newTop!.doReply <- CI!.doReply
+        newTop!.partRef <- CI!.partRef
+        newTop!.parts <- CI!.parts
+        // TODO: This changes the original; origin probably belongs on the POV
+        // or AItem instead.
+        newTop!.originID <- CI!.originID
+        newTop!.infCharPos <- CI!.infCharPos
+        if(CI!.value!.undefined){newTop!.value!.undefined <- true}
+        aItem!.LHS_item!.pItem <- newTop
+    }
+}
+
 // Plans sparse ordered-span alignment without mutating either source graph.
 // Execution performs at most one prefix split and returns an RHS remainder
 // through the same propagation contract used by the legacy implementation.
@@ -2549,7 +2776,7 @@ struct InfonViewReasoner{
     me MergeSizeStrategy: mergeSizeStrategy
     me DirectConsolidationStrategy: directConsolidationStrategy
     me ListConsolidationStrategy: listConsolidationStrategy
-    me IntersectionConsolidationStrategy: intersectionConsolidationStrategy
+    me IntersectionReasoner: intersectionReasoner
     me OrderedSpanReasoner: orderedSpanReasoner
     me ReferenceConsolidationStrategy: referenceConsolidationStrategy
     me GeneratedMergeTrapStrategy: generatedMergeTrapStrategy
@@ -2560,7 +2787,7 @@ struct InfonViewReasoner{
         if(result.status!=rrNotApplicable){return(result)}
         result <- listConsolidationStrategy.planConsolidation(worldManager, aItem)
         if(result.status!=rrNotApplicable){return(result)}
-        result <- intersectionConsolidationStrategy.planConsolidation(aItem)
+        result <- intersectionReasoner.planConsolidation(aItem)
         if(result.status!=rrNotApplicable){return(result)}
         result <- orderedSpanReasoner.planConsolidation(worldManager, aItem)
         if(result.status!=rrNotApplicable){return(result)}
@@ -2603,6 +2830,42 @@ struct InfonViewReasoner{
 
     me bool: processConcat(our AItem: aItem) <- {
         return(concatReasoner.processConcat(aItem))
+    }
+
+    me void: prepareIntersectionContext(our AItem: aItem) <- {
+        intersectionReasoner.prepareInnerContext(aItem)
+    }
+
+    me void: prepareIntersectionAlternatives(
+            their WorldManager: worldManager, their Agenda: agenda,
+            our AItem: aItem,
+            their List<our AItem>: requestedWork) <- {
+        intersectionReasoner.prepareAlternatives(
+                worldManager, agenda, aItem, requestedWork)
+    }
+
+    me void: prepareIntersectionFunction(
+            their WorldManager: worldManager, their Agenda: agenda,
+            our AItem: aItem,
+            their List<our AItem>: requestedWork) <- {
+        intersectionReasoner.prepareFunction(
+                worldManager, agenda, aItem, requestedWork)
+    }
+
+    our infonView: selectIntersectionAlternative(
+            their WorldManager: worldManager, our AItem: aItem) <- {
+        return(intersectionReasoner.selectAlternative(worldManager, aItem))
+    }
+
+    our infonView: selectIntersectionFunctionResult(
+            their WorldManager: worldManager, our AItem: aItem) <- {
+        return(intersectionReasoner.selectFunctionResult(
+                worldManager, aItem))
+    }
+
+    me void: installIntersectionResult(our AItem: aItem,
+            our infonView: newTop) <- {
+        intersectionReasoner.installSelectedResult(aItem, newTop)
     }
 
     void: recordReasoningHandlers(our AItem: aItem,
@@ -2783,7 +3046,7 @@ struct InfonViewReasoner{
                     aItem!.sizeToCopy)
         }
         else if(result.consolidationAction==caMergeRHSIntersection){
-            intersectionConsolidationStrategy.mergeRHSIntersect(aItem)
+            intersectionReasoner.mergeRHSIntersect(aItem)
         }
         else if(result.consolidationAction==caMergeLooseStrings){
             remainder <- directConsolidationStrategy.mergeLooseStrings(aItem)
