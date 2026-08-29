@@ -913,7 +913,12 @@ struct WorldManager{
             me bool: looseSize, bool: dontEnque, their int:waitState,
             their AItemDispatchResult: dispatchResult) <- {
         our AItem: nextAItem <- propagate(agenda, aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque, waitState)
-        if(aItem!.pendingListChildren==0){
+        // Waiting for another member of the current list keeps this source's
+        // dependency edge alive.  Once traversal has crossed that list's end,
+        // its source may complete even if an outer streaming list is open.
+        me bool: sourceReachedCompletionBoundary <- waitState==NULL or
+                waitState! != propWaitWithinList
+        if(aItem!.pendingListChildren==0 and sourceReachedCompletionBoundary){
             our AItemLifecycleRequest:: request
             request!.target <- aItem
             request!.completeSourceWork <- true
@@ -923,25 +928,29 @@ struct WorldManager{
         if(nextAItem!=NULL){dispatchResult.requestedWork.append(nextAItem)}
     }
 
-    bool: collectQueuedPropagationWork(their Agenda: agenda,
+    me int: collectQueuedPropagationWork(their Agenda: agenda,
             their AItemDispatchResult: dispatchResult) <- {
         // Convert queued propagation records into returned agenda work.
-        // Return true if a wait occurred.
+        // A waiting record remains in the buffer so AgendaEngine can retain
+        // normalization liveness and retry it after parser input arrives.
         while(!agenda!.propagationsTodo.isEmpty()){
             our PropagateRecord: propRec <- agenda!.propagationsTodo.last();
-            me int:waitState <- 0
+            me int:waitState <- propWaitNone
             callPropagate(agenda, propRec!.aItem, propRec!.LHSPov,
                     propRec!.RHSPov, propRec!.remainder, propRec!.looseSize,
-                    propRec!.dontEnque, NULL, dispatchResult)
-            if(waitState==1){// Stop processing if a wait is needed.
-            log("PAI_PROPAGATE_WAITING")
-                return(true)
+                    propRec!.dontEnque, waitState, dispatchResult)
+            if(waitState==propWaitWithinList){// Stop processing if a wait is needed.
+                log("PAI_PROPAGATE_WAITING")
+                return(pqsWaitingWithinList)
+            } else if(waitState==propWaitAfterListBoundary){
+                log("PAI_PROPAGATE_WAITING_AFTER_LIST_BOUNDARY")
+                return(pqsWaitingAfterListBoundary)
             } else {
                 agenda!.propagationsTodo.popLast()
                 agenda!.totalPropagationsProcessed <+- 1
             }
         }
-        return(false)
+        return(pqsDrained)
     }
 
     void: propagateProxy(their Agenda: agenda, our AItem: aItem,

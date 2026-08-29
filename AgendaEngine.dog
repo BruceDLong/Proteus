@@ -86,8 +86,6 @@ struct InfonProcessor{
                                 worldManager!.agent!.CORE!.submitProteusResult(CI!.originID, CI!.infCharPos, toString(CI))
                             }
                         }
-                        worldManager!.collectQueuedPropagationWork(
-                                agenda, result)
                         break()
                     }
                     worldManager!.cleanUpInfonView(aItem)
@@ -111,9 +109,6 @@ struct InfonProcessor{
                             worldManager!.agent!.CORE!.submitProteusResult(CI!.originID, CI!.infCharPos, toString(CI))
                         }
                     }
-
-                    worldManager!.collectQueuedPropagationWork(
-                            agenda, result)
 
                     if(aItem!.countsTowardParentListCompletion){
                         result.completeListChild <- true
@@ -405,20 +400,55 @@ struct AgendaEngine{
         enqueueReturnedWork(agenda, result)
     }
 
+    // Run propagation only when ordinary agenda work has drained.  A
+    // nonblocking traversal may release lifecycle work even when it stops for
+    // parser input; apply that work before deciding whether the scheduler
+    // itself must wait.
+    me int: processQueuedPropagation(
+            their WorldManager: worldManager, their Agenda: agenda) <- {
+        me AItemDispatchResult: result
+        me int: propagationQueueStatus <-
+                worldManager!.collectQueuedPropagationWork(agenda, result)
+        aItemLifecycle.completeRequestedLifecycle(agenda, result)
+        enqueueReturnedWork(agenda, result)
+        return(propagationQueueStatus)
+    }
+
     void: processAgenda(their WorldManager: worldManager, their Agenda: agenda) <- {
         me Diagnostics: diagnostics
         diagnostics.beginAgenda(agenda)
         me int: count <- 0
-        while(!agenda!.AItems.isEmpty()) {
-            our AItem: aItem <- agenda!.AItems.popFirst()
-            aItem!.runID <- agenda!.nextRunID
-            agenda!.nextRunID <+- 1
+        while(!agenda!.AItems.isEmpty() or
+                !agenda!.propagationsTodo.isEmpty()) {
+            if(!agenda!.AItems.isEmpty()){
+                our AItem: aItem <- agenda!.AItems.popFirst()
+                aItem!.runID <- agenda!.nextRunID
+                agenda!.nextRunID <+- 1
 
-            our AItemTrace: phase1Trace <- diagnostics.beginAItem(agenda, aItem)
-            processAgendaItem(worldManager, agenda, aItem, 0)
-            diagnostics.endAItem(agenda, aItem, phase1Trace)
+                our AItemTrace: phase1Trace <- diagnostics.beginAItem(agenda, aItem)
+                processAgendaItem(worldManager, agenda, aItem, 0)
+                diagnostics.endAItem(agenda, aItem, phase1Trace)
 
-            count <+- 1
+                count <+- 1
+                continue()
+            }
+
+            // Capture the parser revision before attempting propagation.  If
+            // input arrives during the attempt, the changed revision causes
+            // an immediate retry instead of a lost-notification wait.
+            me uint64: observedStreamRevision
+            protect(streamingNormMutex){
+                observedStreamRevision <- streamingStateRevision
+            }
+            me int: propagationStatus <-
+                    processQueuedPropagation(worldManager, agenda)
+            if(!agenda!.AItems.isEmpty()){continue()}
+            if(propagationStatus!=pqsDrained){
+                me MutexMngr: streamMtxMgr{streamingNormMutex}
+                while(streamingStateRevision==observedStreamRevision){
+                    streamingNormLock.wait(streamMtxMgr)
+                }
+            }
         }
         diagnostics.completeAgenda(worldManager, agenda)
     }
