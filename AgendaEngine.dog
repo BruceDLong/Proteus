@@ -115,7 +115,9 @@ struct InfonProcessor{
                     worldManager!.collectQueuedPropagationWork(
                             agenda, result)
 
-                    result.resumeParent <- true
+                    if(aItem!.countsTowardParentListCompletion){
+                        result.completeListChild <- true
+                    }
                     result.fulfillSubscribers <- true
                 } else {
                     //:l/PAI::logSeg(" LIST_CHILDREN>0:"+toString(aItem!.pendingListChildren))
@@ -147,7 +149,9 @@ struct MergeProcessor{
         }
         if(aItem!.step==0){ //:l/PAI::logSeg(" MG0")
             aItem!.phase1RecordHandler("merge:step0:normalizeRHS", false)
-            our AItem: PIVA <- worldManager!.prepareInfonWork(agenda, aItem!.RHS, aItem, NULL, aItem!.priority, srcMrg0)
+            our AItem: PIVA <- worldManager!.prepareInfonWork(agenda,
+                    aItem!.RHS, aItem, NULL, aprNoParent,
+                    aItem!.priority, srcMrg0)
             if(PIVA!=NULL){ //:l/PAI::logSeg(" RHS_PIVA:"+PIVA!.mySymbol())
                 addDebugEvent("\nRegisterPIVA to norm RHS "+aItem!.RHS!.pItem!.mySymbol()+":"+toString(aItem!.RHS!.pItem)+"\n", aItem!.RHS!.pItem)
                 // Preserve the outer relative-cursor context when normalizing nested RHS.
@@ -306,7 +310,10 @@ struct AgendaEngine{
     }
 
     // Construct ordinary infon work. The caller retains control of whether it is enqueued.
-    our AItem: prepareInfonWork(their Agenda: agenda, our POV: pov, our AItem: subscriber, our AItem: aParent, me int64: priority, me aitemSrcID: source) <- {
+    our AItem: prepareInfonWork(their Agenda: agenda, our POV: pov,
+            our AItem: subscriber, our AItem: parent,
+            me AItemParentRole: parentRole, me int64: priority,
+            me aitemSrcID: source) <- {
         if(agenda!.povIsOnAgenda(pov)){return(NULL)}
         our AItem:: newAItem{source}
         newAItem!.ruleSet   <- rsInfon
@@ -319,13 +326,10 @@ struct AgendaEngine{
             newAItem!.indentLvl <- subscriber!.indentLvl+1
             newAItem!.cursorAnchor <- subscriber!.cursorAnchor
         }
-        if(aParent != NULL){
-            aParent!.taskEnqueued <- true
-            if(!(subscriber===aParent)) {
-                aItemLifecycle.registerListChild(aParent, newAItem)
-            }else{newAItem!.parent <- aParent}
-            newAItem!.indentLvl <- aParent!.indentLvl+1
-            newAItem!.cursorAnchor <- aParent!.cursorAnchor
+        aItemLifecycle.attachParent(parent, newAItem, parentRole)
+        if(parent != NULL){
+            newAItem!.indentLvl <- parent!.indentLvl+1
+            newAItem!.cursorAnchor <- parent!.cursorAnchor
         }else{
             //log("Parent_NULL; subscriber:"+subscriber!.mySymbol() +"  yields:"+newAItem!.mySymbol())
             //if(subscriber==NULL){log("// Proteus NOTICE: PIVA Parent_NULL; subscriber:"+subscriber!.mySymbol() +"  yields:"+newAItem!.mySymbol())}
@@ -334,7 +338,10 @@ struct AgendaEngine{
     }
 
     // Construct merge work. The caller returns it to the engine.
-    our AItem: prepareMergeWork(their Agenda: agenda, our POV: LHS, our POV: RHS, me bool: looseSize, our AItem: subscriber, our AItem: aParent, me int64: priority, me aitemSrcID: source) <- {
+    our AItem: prepareMergeWork(their Agenda: agenda, our POV: LHS,
+            our POV: RHS, me bool: looseSize, our AItem: subscriber,
+            our AItem: parent, me AItemParentRole: parentRole,
+            me int64: priority, me aitemSrcID: source) <- {
         our AItem:: newAItem{source}
         newAItem!.ruleSet   <- rsMerge
         newAItem!.LHS_item  <- LHS
@@ -343,20 +350,12 @@ struct AgendaEngine{
         newAItem!.priority  <- priority
         newAItem!.step      <- 0
         newAItem!.indentLvl <- 0
-        aParent!.taskEnqueued <- true
         if(subscriber != NULL){
             newAItem!.subscribers.prepend(subscriber, 6)
             newAItem!.indentLvl <- subscriber!.indentLvl+1
             newAItem!.cursorAnchor <- subscriber!.cursorAnchor
         }
-        if(aParent != NULL){
-            if(!(subscriber===aParent)){
-                aItemLifecycle.registerListChild(aParent, newAItem)
-            }else{newAItem!.parent <- aParent}
-        }else{
-            //if(subscriber==NULL){log("// Proteus NOTICE: PMVA Parent_NULL; subscriber:"+subscriber!.mySymbol() +"  yields:"+newAItem!.mySymbol())}
-            //if(aParent!.parent==NULL){log("// Proteus NOTICE: PMVA aParent!.parent==NULL;   yields:"+newAItem!.mySymbol())}
-        }
+        aItemLifecycle.attachParent(parent, newAItem, parentRole)
         return(newAItem)
     }
 
@@ -371,7 +370,6 @@ struct AgendaEngine{
         newAItem!.step      <- 0
         newAItem!.indentLvl <- 0
         if(subscriber != NULL){
-            subscriber!.taskEnqueued <- true
             newAItem!.subscribers.prepend(subscriber, 7)
             newAItem!.indentLvl <- subscriber!.indentLvl+1
             newAItem!.cursorAnchor <- subscriber!.cursorAnchor
@@ -379,7 +377,8 @@ struct AgendaEngine{
                 newAItem!.LHSItr <- subscriber!.parent!.LHSItr
                 newAItem!.RHSItr <- subscriber!.parent!.RHSItr
             }
-            newAItem!.parent <- subscriber
+            aItemLifecycle.attachParent(
+                    subscriber, newAItem, aprContextOnly)
         }
         //:l/PAI::logSeg(" PIcVA:"+newAItem!.mySymbol())
         return(newAItem)
@@ -401,7 +400,6 @@ struct AgendaEngine{
     }
 
     void: processAgendaItem(their WorldManager: worldManager, their Agenda: agenda, our AItem: aItem, me int: alternativesNestLvl) <- {
-        aItemLifecycle.beginDispatch(aItem)
         me AItemDispatchResult: result <- dispatcher.dispatch(worldManager, agenda, aItem, alternativesNestLvl)
         aItemLifecycle.completeDispatch(agenda, aItem, result)
         enqueueReturnedWork(agenda, result)

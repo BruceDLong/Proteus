@@ -36,6 +36,7 @@ TestsToRun = `
     unit/lifecycle/fulfillOnly
     unit/lifecycle/completeAndFulfill
     unit/lifecycle/neither
+    unit/lifecycle/workParentRoles
     unit/lifecycle/listCompletionBarrier
     parse/errorBadTag
     parse/errorWordDefn
@@ -62,6 +63,7 @@ do ManageCmdLine(cmd)
 #define LISTSIZEPROMOTION (NAME, MSG, COMMIT_PLAN) <%void: DESLASH(NAME)(me string: tname)<-{unitTestListSizePromotion(tname, COMMIT_PLAN)}%>
 #define DEFINITIONSHAPECOMMIT (NAME, MSG, COMMIT_PLAN) <%void: DESLASH(NAME)(me string: tname)<-{unitTestDefinitionShapeCommit(tname, COMMIT_PLAN)}%>
 #define LIFECYCLEINDEPENDENCE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestLifecycleIndependence(tname, CASE_ID)}%>
+#define WORKPARENTROLES (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestWorkParentRoles(tname)}%>
 #define LISTCOMPLETIONBARRIER (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestListCompletionBarrier(tname)}%>
 #define PARSEERR (NAME, MSG, INPUT, ERRTXT, ERRLINE, ERRCOL) <%void: DESLASH(NAME)(me string: tname)<-{testParseError(tname, INPUT, ERRTXT, ERRLINE, ERRCOL)}%>
 
@@ -114,6 +116,7 @@ struct GLOBAL {
     LIFECYCLEINDEPENDENCE(unit/lifecycle/fulfillOnly, "fulfill subscribers without completing source work", 2)
     LIFECYCLEINDEPENDENCE(unit/lifecycle/completeAndFulfill, "complete source work and fulfill subscribers", 3)
     LIFECYCLEINDEPENDENCE(unit/lifecycle/neither, "leave source work and subscribers untouched", 4)
+    WORKPARENTROLES(unit/lifecycle/workParentRoles, "attach context and list-completion parents explicitly")
     LISTCOMPLETIONBARRIER(unit/lifecycle/listCompletionBarrier, "restart a list parent after its final registered child")
 
 //    NORMTEST(error/level1,       "level1 mismatch",            "_ = $",  "*16+10")
@@ -990,6 +993,59 @@ struct GLOBAL {
         REQUIRE(actual==expected)
         return()
     }
+    me void: unitTestWorkParentRoles(me string: testName) <- {
+        our Agenda:: agenda
+        me AgendaEngine: engine
+
+        our infonView:: directView
+        our POV:: directPOV{623}
+        directPOV!.pItem <- directView
+        our AItem:: directSubscriber{srcNormInit}
+        our AItem: directChild <- engine.prepareInfonWork(agenda, directPOV,
+                directSubscriber, NULL, aprNoParent, 1, srcItsFunc)
+        me bool: directCorrect <-
+                directChild!.subscribers.size()==1 and
+                directChild!.subscribers.first()===directSubscriber and
+                directChild!.parent==NULL and
+                directSubscriber!.pendingListChildren==0
+
+        our infonView:: contextLHSView
+        our infonView:: contextRHSView
+        our POV:: contextLHS{624}
+        our POV:: contextRHS{625}
+        contextLHS!.pItem <- contextLHSView
+        contextRHS!.pItem <- contextRHSView
+        our AItem:: contextParent{srcNormInit}
+        our AItem: contextChild <- engine.prepareMergeWork(agenda,
+                contextLHS, contextRHS, false, contextParent, contextParent,
+                aprContextOnly, 1, srcPMVA1)
+        me bool: contextCorrect <-
+                contextChild!.subscribers.size()==1 and
+                contextChild!.subscribers.first()===contextParent and
+                contextChild!.parent===contextParent and
+                !contextChild!.countsTowardParentListCompletion and
+                contextParent!.pendingListChildren==0 and
+                !contextParent!.waitingForListChildren
+
+        our infonView:: listView
+        our POV:: listPOV{626}
+        listPOV!.pItem <- listView
+        our AItem:: listParent{srcNormInit}
+        our AItem: listChild <- engine.prepareInfonWork(agenda, listPOV,
+                NULL, listParent, aprListCompletion, 1, srcPropagate)
+        me bool: listCorrect <-
+                listChild!.subscribers.isEmpty() and
+                listChild!.parent===listParent and
+                listChild!.countsTowardParentListCompletion and
+                listParent!.pendingListChildren==1 and
+                listParent!.waitingForListChildren
+
+        me string: actual <- "false"
+        me string: expected <- "true"
+        if(directCorrect and contextCorrect and listCorrect){actual <- "true"}
+        REQUIRE(actual==expected)
+        return()
+    }
     me void: unitTestListCompletionBarrier(me string: testName) <- {
         our AItem:: parent{srcNormInit}
         parent!.ruleSet <- rsInfon
@@ -1008,7 +1064,7 @@ struct GLOBAL {
                 secondChild!.parent===parent
 
         me AItemDispatchResult: result
-        result.resumeParent <- true
+        result.completeListChild <- true
         our Agenda:: agenda
         lifecycle.completeDispatch(agenda, firstChild, result)
         me bool: firstCompletionCorrect <-

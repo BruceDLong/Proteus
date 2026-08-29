@@ -15,7 +15,7 @@ struct AItemDispatchResult{
     // Completing one wrkList attempt does not itself consume dependency edges.
     me bool: completeSourceWork <- false
     me bool: fulfillSubscribers <- false
-    me bool: resumeParent <- false
+    me bool: completeListChild <- false
     // Lifecycle effects discovered during semantic dispatch are applied at
     // the common completion boundary in their original request order.
     me List<our AItemLifecycleRequest>: lifecycleRequests
@@ -36,10 +36,8 @@ struct AItemLifecycle{
                 aItem!.sourceWorkParent!.inFlightWorkPOV===aItem!.sourceWorkPOV){
             aItem!.sourceWorkParent!.inFlightWorkPOV <- NULL
         }
-        // Generated legacy handlers do not yet return an explicit disposition.
-        // Preserve their former dequeue-to-history behavior when source-work
-        // completion is requested: a non-rejection is discharged. Only the
-        // new reasoner can explicitly retain an unresolved obligation.
+        // Reasoning paths that do not yet return an explicit disposition keep
+        // the former dequeue-to-history behavior: a non-rejection is discharged.
         if(aItem!.constraintDisposition==cdInFlight){
             if(aItem!.mergeStatus==msReject){aItem!.constraintDisposition <- cdContradiction}
             else{aItem!.constraintDisposition <- cdDischarged}
@@ -67,10 +65,6 @@ struct AItemLifecycle{
         aItem!.sourceWorkParent <- NULL
     }
 
-    void: beginDispatch(our AItem: aItem) <- {
-        aItem!.taskEnqueued <- false
-    }
-
     // Register one child in the current list-completion batch. The normalizer
     // runs agenda dispatches serially, so all children discovered by the
     // current parent dispatch are registered before any can complete.
@@ -81,6 +75,26 @@ struct AItemLifecycle{
         child!.countsTowardParentListCompletion <- true
         parent!.pendingListChildren <+- 1
         parent!.waitingForListChildren <- true
+    }
+
+    // Attach execution ancestry independently from direct subscription. The
+    // explicit role prevents pointer equality from deciding list semantics.
+    void: attachParent(our AItem: parent, our AItem: child,
+            me AItemParentRole: parentRole) <- {
+        if(parentRole==aprNoParent){
+            if(parent!=NULL){
+                logFatalError("A parent was supplied with aprNoParent")
+            }
+            return()
+        }
+        if(parent==NULL or child==NULL){
+            logFatalError("A parent role requires both parent and child")
+        }
+        if(parentRole==aprListCompletion){
+            registerListChild(parent, child)
+        }else{
+            child!.parent <- parent
+        }
     }
 
     // Allow one rsInfon subscriber to emit an early streaming reply while
@@ -120,23 +134,23 @@ struct AItemLifecycle{
 
     // Complete one member of a parent's list-child batch. The last child
     // restarts the parent exactly once.
-    void: resumeParent(their Agenda: agenda, our AItem: aItem) <- {
-        our AItem: aParent <- aItem!.parent
-        if(aParent==NULL or
+    void: completeListChild(their Agenda: agenda, our AItem: aItem) <- {
+        our AItem: parent <- aItem!.parent
+        if(parent==NULL or
                 !aItem!.countsTowardParentListCompletion){return()}
         aItem!.countsTowardParentListCompletion <- false
-        if(aParent!.pendingListChildren<=0){
+        if(parent!.pendingListChildren<=0){
             logFatalError("List child completed without a pending parent slot: "+
                     toString(aItem))
         }
-        aParent!.pendingListChildren <-- 1
-        if(aParent!.pendingListChildren==0 and
-                aParent!.waitingForListChildren){
-            aParent!.waitingForListChildren <- false
+        parent!.pendingListChildren <-- 1
+        if(parent!.pendingListChildren==0 and
+                parent!.waitingForListChildren){
+            parent!.waitingForListChildren <- false
             // Resuming an infon parent after list-child work is a new agenda
             // pass; merge/intersect parents encode their own step state.
-            if(aParent!.ruleSet==rsInfon){aParent!.step <+- 1}
-            agenda!.addAItemToAgenda(aParent)
+            if(parent!.ruleSet==rsInfon){parent!.step <+- 1}
+            agenda!.addAItemToAgenda(parent)
         }
     }
 
@@ -154,7 +168,7 @@ struct AItemLifecycle{
             }
         }
         if(result.completeSourceWork){completeSourceWorkConstraint(aItem)}
-        if(result.resumeParent){resumeParent(agenda, aItem)}
+        if(result.completeListChild){completeListChild(agenda, aItem)}
         if(result.fulfillSubscribers){fulfillSubscriptions(agenda, aItem)}
     }
 }
