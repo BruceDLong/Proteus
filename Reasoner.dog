@@ -1,5 +1,5 @@
-// Owns local infon-state semantics while legacy merge cases remain generated
-// as WorldManager methods.
+// Owns local infon-state semantics while unimplemented merge families remain
+// generated as explicit WorldManager semantic traps.
 struct InfonViewReasoningResult{
     mode[rrNotApplicable, rrHandledNoChange, rrRejected, rrPlannedChange,
          rrNeedsWork]: status
@@ -40,6 +40,13 @@ struct InfonViewReasoningResult{
     // AgendaEngine must not apply the legacy LHS-only inversion afterward.
     me bool: statusIncludesPolarity <- false
     me bool: copySize
+    // Definition-backed list shape is a consequence of accepting this merge,
+    // not prerequisite normalization. Keep each effect explicit so execution
+    // can commit the complete accepted shape without re-deciding semantics.
+    me bool: copyDefinitionListSpec <- false
+    me bool: copyDefinitionOrderMode <- false
+    me bool: copyDefinitionSize <- false
+    me bool: openDefinitionTail <- false
     me bool: emitRejectLog
     me int64: orderedSpanSplitCount
     me int64: orderedSpanSizeToCopy
@@ -53,8 +60,10 @@ struct MergePreparationPlan{
     me bool: copyDefinitionOrderMode
     me bool: copyDefinitionSize
     me bool: openDefinitionTail
+    mode[mdsNotApplicable, mdsPromotedToConsolidation,
+         mdsUnclaimed]: definitionShapeAction
     mode[mpsNotApplicable, mpsOwnedByConsolidation,
-         mpsPromotedToConsolidation, mpsCopyRHSSize, mpsBlocked]: sizeAction
+         mpsPromotedToConsolidation, mpsUnclaimed, mpsBlocked]: sizeAction
     me bool: sizeBlockedByOverlayType
     me bool: sizeBlockedByListOutput
 
@@ -801,6 +810,7 @@ struct ListShapeStrategy{
         plan.copyDefinitionOrderMode <- false
         plan.copyDefinitionSize <- false
         plan.openDefinitionTail <- false
+        plan.definitionShapeAction <- mdsNotApplicable
         plan.sizeAction <- mpsNotApplicable
         plan.sizeBlockedByOverlayType <- false
         plan.sizeBlockedByListOutput <- false
@@ -827,19 +837,56 @@ struct ListShapeStrategy{
         if(RHS!.value!.tailUnfinished and !LHS!.value!.tailUnfinished){
             plan.openDefinitionTail <- true
         }
+        if(plan.hasDefinitionListShapeChange()){
+            plan.definitionShapeAction <- mdsUnclaimed
+        }
         return(plan)
     }
 
+    // Attach definition-derived shape to an already-claimed local merge. The
+    // preparation plan remains read-only; no LHS field changes here.
+    void: promoteDefinitionListShapeToConsolidation(
+            their InfonViewReasoningResult: consolidationPlan,
+            their MergePreparationPlan: preparationPlan,
+            me bool: consolidationCanExecute) <- {
+        if(!preparationPlan.hasDefinitionListShapeChange()){return()}
+        if(!consolidationCanExecute or
+                consolidationPlan.status==rrNotApplicable){return()}
+        consolidationPlan!.copyDefinitionListSpec <-
+                preparationPlan.copyDefinitionListSpec
+        consolidationPlan!.copyDefinitionOrderMode <-
+                preparationPlan.copyDefinitionOrderMode
+        consolidationPlan!.copyDefinitionSize <-
+                preparationPlan.copyDefinitionSize
+        consolidationPlan!.openDefinitionTail <-
+                preparationPlan.openDefinitionTail
+        preparationPlan!.definitionShapeAction <- mdsPromotedToConsolidation
+    }
+
     void: execDefinitionListShape(our AItem: aItem,
-            their MergePreparationPlan: plan) <- {
+            their InfonViewReasoningResult: plan) <- {
         our infonView: LHS <- aItem!.LHS_item!.pItem
         our infonView: RHS <- aItem!.RHS!.pItem
         if(plan.copyDefinitionListSpec){
             LHS!.value!.listSpec <- RHS!.value!.listSpec
+            aItem!.phase1RecordHandler(
+                    "mergePreparation:definitionListSpecCopied", false)
         }
-        if(plan.copyDefinitionOrderMode){LHS!.orderMode <- RHS!.orderMode}
-        if(plan.copyDefinitionSize){LHS!.infSize! <- RHS!.infSize!}
-        if(plan.openDefinitionTail){LHS!.value!.tailUnfinished <- true}
+        if(plan.copyDefinitionOrderMode){
+            LHS!.orderMode <- RHS!.orderMode
+            aItem!.phase1RecordHandler(
+                    "mergePreparation:definitionOrderModeCopied", false)
+        }
+        if(plan.copyDefinitionSize){
+            LHS!.infSize! <- RHS!.infSize!
+            aItem!.phase1RecordHandler(
+                    "mergePreparation:definitionSizeCopied", false)
+        }
+        if(plan.openDefinitionTail){
+            LHS!.value!.tailUnfinished <- true
+            aItem!.phase1RecordHandler(
+                    "mergePreparation:definitionTailOpened", false)
+        }
     }
 
     me bool: isDefinitionListShapeOnly(our AItem: aItem) <- {
@@ -896,9 +943,9 @@ struct ListShapeStrategy{
     }
 }
 
-// Owns the generic strict-size part of pre-consolidation preparation. Planning
+// Owns the generic strict-size part of pre-consolidation inspection. Planning
 // observes the effective state after the preceding definition-backed shape
-// plan, while execution only applies already-decided mutations.
+// plan. Validation rejects any effect that has no atomic consolidation owner.
 struct MergeSizeStrategy{
     void: planPreparation(our AItem: aItem,
             me bool: sizeCopyAlreadyOwnedByConsolidation,
@@ -931,22 +978,24 @@ struct MergeSizeStrategy{
             if(plan.sizeBlockedByOverlayType or plan.sizeBlockedByListOutput){
                 plan!.sizeAction <- mpsBlocked
             }else{
-                plan!.sizeAction <- mpsCopyRHSSize
+                // No mutation is permitted without an explicit accepting
+                // consolidation owner. Promotion below either supplies that
+                // owner or leaves an explicit semantic trap.
+                plan!.sizeAction <- mpsUnclaimed
             }
         }
     }
 
-    // List propagation and reference identity execution both run through the
-    // consolidation commit boundary. Move their planned size copy into that
-    // plan so an uncommitted plan cannot partially mutate the LHS.
+    // Every claimed local strategy runs through the consolidation commit
+    // boundary. Move the generic size effect into that plan so an uncommitted
+    // or rejected plan cannot partially mutate the LHS.
     void: promoteSizeCopyToConsolidation(
             their InfonViewReasoningResult: consolidationPlan,
             their MergePreparationPlan: preparationPlan,
             me bool: consolidationCanExecute) <- {
         if(!consolidationCanExecute or
-                preparationPlan.sizeAction!=mpsCopyRHSSize){return()}
-        if(consolidationPlan.listCase==lcNone and
-                consolidationPlan.referenceCase==rcNone){return()}
+                preparationPlan.sizeAction!=mpsUnclaimed){return()}
+        if(consolidationPlan.status==rrNotApplicable){return()}
         consolidationPlan!.copySize <- true
         preparationPlan!.sizeAction <- mpsPromotedToConsolidation
     }
@@ -955,21 +1004,13 @@ struct MergeSizeStrategy{
             their MergePreparationPlan: plan) <- {
         if(!plan.hasPreparationDecision()){return()}
         aItem!.phase1RecordHandler("strategy:mergePreparation", false)
-        if(plan.copyDefinitionListSpec){
+        if(plan.definitionShapeAction==mdsPromotedToConsolidation){
             aItem!.phase1RecordHandler(
-                    "mergePreparation:definitionListSpecCopied", false)
-        }
-        if(plan.copyDefinitionOrderMode){
+                    "mergePreparation:definitionShapePromotedToConsolidation",
+                    false)
+        }else if(plan.definitionShapeAction==mdsUnclaimed){
             aItem!.phase1RecordHandler(
-                    "mergePreparation:definitionOrderModeCopied", false)
-        }
-        if(plan.copyDefinitionSize){
-            aItem!.phase1RecordHandler(
-                    "mergePreparation:definitionSizeCopied", false)
-        }
-        if(plan.openDefinitionTail){
-            aItem!.phase1RecordHandler(
-                    "mergePreparation:definitionTailOpened", false)
+                    "mergePreparation:definitionShapeUnclaimed", true)
         }
         if(plan.sizeAction==mpsOwnedByConsolidation){
             aItem!.phase1RecordHandler(
@@ -977,8 +1018,9 @@ struct MergeSizeStrategy{
         }else if(plan.sizeAction==mpsPromotedToConsolidation){
             aItem!.phase1RecordHandler(
                     "mergePreparation:sizePromotedToConsolidation", false)
-        }else if(plan.sizeAction==mpsCopyRHSSize){
-            aItem!.phase1RecordHandler("mergePreparation:sizeCopied", false)
+        }else if(plan.sizeAction==mpsUnclaimed){
+            aItem!.phase1RecordHandler(
+                    "mergePreparation:sizeUnclaimed", true)
         }else if(plan.sizeAction==mpsBlocked){
             if(plan.sizeBlockedByOverlayType){
                 aItem!.phase1RecordHandler(
@@ -991,12 +1033,22 @@ struct MergeSizeStrategy{
         }
     }
 
-    void: execPreparation(their WorldManager: worldManager, our AItem: aItem,
+    void: validatePreparation(our AItem: aItem,
             their MergePreparationPlan: plan) <- {
         recordPreparationHandlers(aItem, plan)
-        if(plan.sizeAction==mpsCopyRHSSize){
-            worldManager!.DO_COPY(aItem!.RHS!.pItem!.infSize,
-                    aItem!.LHS_item!.pItem!.infSize, 0)
+        if(plan.definitionShapeAction==mdsUnclaimed){
+            // TODO: Give the special-precedence merge path an explicit atomic
+            // owner if a real case reaches this boundary.
+            log("Not Implemented Yet: definition-backed list shape has no atomic consolidation owner: "+toString(aItem))
+            logFlush()
+            exit(2)
+        }
+        if(plan.sizeAction==mpsUnclaimed){
+            // TODO: Classify the reached merge family and make its accepting
+            // strategy own this size effect before enabling it.
+            log("Not Implemented Yet: merge size copy has no atomic consolidation owner: "+toString(aItem))
+            logFlush()
+            exit(2)
         }
     }
 }
@@ -2515,14 +2567,15 @@ struct InfonViewReasoner{
             their InfonViewReasoningResult: consolidationPlan,
             their MergePreparationPlan: preparationPlan,
             me bool: consolidationCanExecute) <- {
+        listShapeStrategy.promoteDefinitionListShapeToConsolidation(
+                consolidationPlan, preparationPlan, consolidationCanExecute)
         mergeSizeStrategy.promoteSizeCopyToConsolidation(
                 consolidationPlan, preparationPlan, consolidationCanExecute)
     }
 
-    void: execMergePreparation(their WorldManager: worldManager,
-            our AItem: aItem, their MergePreparationPlan: plan) <- {
-        listShapeStrategy.execDefinitionListShape(aItem, plan)
-        mergeSizeStrategy.execPreparation(worldManager, aItem, plan)
+    void: validateMergePreparation(our AItem: aItem,
+            their MergePreparationPlan: plan) <- {
+        mergeSizeStrategy.validatePreparation(aItem, plan)
     }
 
     me bool: processConcat(our AItem: aItem) <- {
@@ -2666,7 +2719,11 @@ struct InfonViewReasoner{
     our POV: execConsolidationPlan(their WorldManager: worldManager, our AItem: aItem,
             their InfonViewReasoningResult: result) <- {
         our POV: remainder <- NULL
-        if(result.copySize){
+        // Definition-backed shape is committed first, preserving its historical
+        // order relative to ordinary size/value effects while remaining atomic
+        // with the accepted consolidation plan.
+        listShapeStrategy.execDefinitionListShape(aItem, result)
+        if(result.copySize and !result.copyDefinitionSize){
             worldManager!.DO_COPY(aItem!.RHS!.pItem!.infSize, aItem!.LHS_item!.pItem!.infSize, 0)
         }
         if(result.consolidationAction==caCopyRHSValueToLHS){
