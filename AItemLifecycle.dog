@@ -1,7 +1,24 @@
+// An ordered lifecycle effect requested during semantic dispatch. The target
+// may differ from the currently dispatched item when queued propagation work
+// completes an older dependency.
+struct AItemLifecycleRequest{
+    our AItem: target
+    me bool: wakeSubscribers <- false
+    // These are independent lifecycle facts. Current propagation completion
+    // requests both, but future semantic paths may request either one alone.
+    me bool: completeSourceWork <- false
+    me bool: fulfillSubscribers <- false
+}
+
 // Explicit control result returned by an AItem processor.
 struct AItemDispatchResult{
+    // Completing one wrkList attempt does not itself consume dependency edges.
+    me bool: completeSourceWork <- false
     me bool: fulfillSubscribers <- false
     me bool: resumeParent <- false
+    // Lifecycle effects discovered during semantic dispatch are applied at
+    // the common completion boundary in their original request order.
+    me List<our AItemLifecycleRequest>: lifecycleRequests
     // Work constructed during semantic dispatch but not yet placed on the
     // agenda. AgendaEngine owns the returned-work enqueue boundary after
     // lifecycle processing, so reasoning code never owns the queue.
@@ -13,17 +30,16 @@ struct AItemLifecycle{
     // Complete the lifecycle of a semantic wrkList obligation only after its
     // child merge has a terminal result. Unresolved obligations remain
     // printable on wrkList; terminal ones release their work-list POV.
-    void: completeSourceWorkConstraint(our AItem: aItem,
-            their AItemDispatchResult: result) <- {
-        if(!result.fulfillSubscribers or aItem!.sourceWorkPOV==NULL){return()}
+    void: completeSourceWorkConstraint(our AItem: aItem) <- {
+        if(aItem!.sourceWorkPOV==NULL){return()}
         if(aItem!.sourceWorkParent!=NULL and
                 aItem!.sourceWorkParent!.inFlightWorkPOV===aItem!.sourceWorkPOV){
             aItem!.sourceWorkParent!.inFlightWorkPOV <- NULL
         }
         // Generated legacy handlers do not yet return an explicit disposition.
-        // Preserve their former dequeue-to-history behavior at the shared
-        // lifecycle boundary: a fulfilled non-rejection is discharged. Only
-        // the new reasoner can explicitly retain an unresolved obligation.
+        // Preserve their former dequeue-to-history behavior when source-work
+        // completion is requested: a non-rejection is discharged. Only the
+        // new reasoner can explicitly retain an unresolved obligation.
         if(aItem!.constraintDisposition==cdInFlight){
             if(aItem!.mergeStatus==msReject){aItem!.constraintDisposition <- cdContradiction}
             else{aItem!.constraintDisposition <- cdDischarged}
@@ -117,7 +133,18 @@ struct AItemLifecycle{
 
     void: completeDispatch(their Agenda: agenda, our AItem: aItem,
             their AItemDispatchResult: result) <- {
-        completeSourceWorkConstraint(aItem, result)
+        withEach request in result.lifecycleRequests{
+            if(request!.wakeSubscribers){
+                wakeSubscriptions(agenda, request!.target)
+            }
+            if(request!.completeSourceWork){
+                completeSourceWorkConstraint(request!.target)
+            }
+            if(request!.fulfillSubscribers){
+                fulfillSubscriptions(agenda, request!.target)
+            }
+        }
+        if(result.completeSourceWork){completeSourceWorkConstraint(aItem)}
         if(result.resumeParent){resumeParent(agenda, aItem)}
         if(result.fulfillSubscribers){fulfillSubscriptions(agenda, aItem)}
     }

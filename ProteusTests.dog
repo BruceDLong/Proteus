@@ -32,6 +32,10 @@ TestsToRun = `
     unit/reasoner/listSizePromotionNoCommit
     unit/reasoner/definitionShapeCommit
     unit/reasoner/definitionShapeNoCommit
+    unit/lifecycle/completeSourceOnly
+    unit/lifecycle/fulfillOnly
+    unit/lifecycle/completeAndFulfill
+    unit/lifecycle/neither
     parse/errorBadTag
     parse/errorWordDefn
  //   parse/toyLang
@@ -56,6 +60,7 @@ do ManageCmdLine(cmd)
 #define LOOSELISTUNKNOWN (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestLooseListUnknownCase(tname, CASE_ID)}%>
 #define LISTSIZEPROMOTION (NAME, MSG, COMMIT_PLAN) <%void: DESLASH(NAME)(me string: tname)<-{unitTestListSizePromotion(tname, COMMIT_PLAN)}%>
 #define DEFINITIONSHAPECOMMIT (NAME, MSG, COMMIT_PLAN) <%void: DESLASH(NAME)(me string: tname)<-{unitTestDefinitionShapeCommit(tname, COMMIT_PLAN)}%>
+#define LIFECYCLEINDEPENDENCE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestLifecycleIndependence(tname, CASE_ID)}%>
 #define PARSEERR (NAME, MSG, INPUT, ERRTXT, ERRLINE, ERRCOL) <%void: DESLASH(NAME)(me string: tname)<-{testParseError(tname, INPUT, ERRTXT, ERRLINE, ERRCOL)}%>
 
 
@@ -103,6 +108,10 @@ struct GLOBAL {
     LISTSIZEPROMOTION(unit/reasoner/listSizePromotionNoCommit, "leave list size unchanged when its consolidation plan does not commit", false)
     DEFINITIONSHAPECOMMIT(unit/reasoner/definitionShapeCommit, "commit definition-backed list shape with its consolidation plan", true)
     DEFINITIONSHAPECOMMIT(unit/reasoner/definitionShapeNoCommit, "leave definition-backed list shape unchanged without consolidation commit", false)
+    LIFECYCLEINDEPENDENCE(unit/lifecycle/completeSourceOnly, "complete source work without fulfilling subscribers", 1)
+    LIFECYCLEINDEPENDENCE(unit/lifecycle/fulfillOnly, "fulfill subscribers without completing source work", 2)
+    LIFECYCLEINDEPENDENCE(unit/lifecycle/completeAndFulfill, "complete source work and fulfill subscribers", 3)
+    LIFECYCLEINDEPENDENCE(unit/lifecycle/neither, "leave source work and subscribers untouched", 4)
 
 //    NORMTEST(error/level1,       "level1 mismatch",            "_ = $",  "*16+10")
 
@@ -887,6 +896,91 @@ struct GLOBAL {
                 preparationPlan.definitionShapeAction==
                         mdsPromotedToConsolidation and
                 unchangedBeforeCommit and expectedFinalState
+        me string: actual <- "false"
+        me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+        return()
+    }
+    me bool: lifecycleIndependenceCase(me int: caseID,
+            me bool: viaLifecycleRequest) <- {
+        our infonView:: sourceOwner
+        our infonView:: sourceConstraint
+        our POV:: sourcePOV{621}
+        sourcePOV!.pItem <- sourceConstraint
+        sourceOwner!.addPOVToWrkList(sourcePOV)
+
+        our AItem:: sourceParent{srcNormInit}
+        sourceParent!.inFlightWorkPOV <- sourcePOV
+        our AItem:: sourceWorkItem{srcPMVA1}
+        sourceWorkItem!.sourceWorkOwner <- sourceOwner
+        sourceWorkItem!.sourceWorkPOV <- sourcePOV
+        sourceWorkItem!.sourceWorkParent <- sourceParent
+        sourceWorkItem!.sourceWorkRevision <- sourcePOV!.workRevision
+        sourceWorkItem!.constraintDisposition <- cdRetained
+
+        our infonView:: subscriberView
+        our POV:: subscriberPOV{622}
+        subscriberPOV!.pItem <- subscriberView
+        our AItem:: subscriber{srcNormInit}
+        subscriber!.ruleSet <- rsMerge
+        subscriber!.LHS_item <- subscriberPOV
+        sourceWorkItem!.subscribers.prepend(subscriber, 7)
+
+        me bool: expectSourceCompletion <- caseID==1 or caseID==3
+        me bool: expectSubscriberFulfillment <- caseID==2 or caseID==3
+        me AItemDispatchResult: result
+        if(viaLifecycleRequest){
+            our AItemLifecycleRequest:: request
+            request!.target <- sourceWorkItem
+            request!.completeSourceWork <- expectSourceCompletion
+            request!.fulfillSubscribers <- expectSubscriberFulfillment
+            result.lifecycleRequests.append(request)
+        }else{
+            result.completeSourceWork <- expectSourceCompletion
+            result.fulfillSubscribers <- expectSubscriberFulfillment
+        }
+
+        our Agenda:: agenda
+        me AItemLifecycle: lifecycle
+        lifecycle.completeDispatch(agenda, sourceWorkItem, result)
+
+        me bool: sourceStateCorrect <-
+                sourceOwner!.workListContainsPOV(sourcePOV)
+        if(expectSourceCompletion){
+            sourceStateCorrect <- sourceStateCorrect and
+                    sourceOwner!.deferredWorkListContainsPOV(sourcePOV) and
+                    sourceParent!.inFlightWorkPOV==NULL and
+                    sourceWorkItem!.sourceWorkOwner==NULL and
+                    sourceWorkItem!.sourceWorkPOV==NULL and
+                    sourceWorkItem!.sourceWorkParent==NULL
+        }else{
+            sourceStateCorrect <- sourceStateCorrect and
+                    !sourceOwner!.deferredWorkListContainsPOV(sourcePOV) and
+                    sourceParent!.inFlightWorkPOV===sourcePOV and
+                    sourceWorkItem!.sourceWorkOwner===sourceOwner and
+                    sourceWorkItem!.sourceWorkPOV===sourcePOV and
+                    sourceWorkItem!.sourceWorkParent===sourceParent
+        }
+
+        me bool: subscriberStateCorrect
+        if(expectSubscriberFulfillment){
+            subscriberStateCorrect <-
+                    sourceWorkItem!.subscribers.isEmpty() and
+                    agenda!.AItems.size()==1
+        }else{
+            subscriberStateCorrect <-
+                    sourceWorkItem!.subscribers.size()==1 and
+                    agenda!.AItems.isEmpty()
+        }
+
+        return(sourceStateCorrect and subscriberStateCorrect)
+    }
+    me void: unitTestLifecycleIndependence(me string: testName,
+            me int: caseID) <- {
+        me bool: passed <-
+                lifecycleIndependenceCase(caseID, false) and
+                lifecycleIndependenceCase(caseID, true)
         me string: actual <- "false"
         me string: expected <- "true"
         if(passed){actual <- "true"}

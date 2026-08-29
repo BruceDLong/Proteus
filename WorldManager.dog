@@ -458,6 +458,7 @@ struct OrderedSpanReasoner{
 struct WorldManager{
     their Agent: agent
     me AgendaEngine: agendaEngine
+    me MergeReasoner: mergeReasoner
     me InfonViewReasoner: infonViewReasoner
     me string: phase1LastCoverageReport
     me uint64: phase1LastTraceCount <- 0
@@ -494,15 +495,6 @@ struct WorldManager{
     }
     void: enqueueInitialWork(their Agenda: agenda, our AItem: aItem) <- {
         agendaEngine.enqueueInitialWork(agenda, aItem)
-    }
-    void: wakeSubscriptions(their Agenda: agenda, our AItem: aItem) <- {
-        agendaEngine.wakeSubscriptions(agenda, aItem)
-    }
-    void: fulfillSubscriptions(their Agenda: agenda, our AItem: aItem) <- {
-        agendaEngine.fulfillSubscriptions(agenda, aItem)
-    }
-    void: completeAndFulfillSubscriptions(their Agenda: agenda, our AItem: aItem) <- {
-        agendaEngine.completeAndFulfillSubscriptions(agenda, aItem)
     }
 
     // rsINFON UTILITY FUNCTIONS: PREP WORKLIST FUNCTIONS
@@ -910,14 +902,20 @@ struct WorldManager{
     void: callPropagate(their Agenda: agenda, our AItem: aItem,
             our POV: LHSPov, our POV: RHSPov, our POV: remainder,
             me bool: looseSize, bool: dontEnque, their int:waitState,
-            their List<our AItem>: requestedWork) <- {
+            their AItemDispatchResult: dispatchResult) <- {
         our AItem: nextAItem <- propagate(agenda, aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque, waitState)
-        if(aItem!.pendingTasks==0){completeAndFulfillSubscriptions(agenda, aItem)}
-        if(nextAItem!=NULL){requestedWork.append(nextAItem)}
+        if(aItem!.pendingTasks==0){
+            our AItemLifecycleRequest:: request
+            request!.target <- aItem
+            request!.completeSourceWork <- true
+            request!.fulfillSubscribers <- true
+            dispatchResult.lifecycleRequests.append(request)
+        }
+        if(nextAItem!=NULL){dispatchResult.requestedWork.append(nextAItem)}
     }
 
     bool: collectQueuedPropagationWork(their Agenda: agenda,
-            their List<our AItem>: requestedWork) <- {
+            their AItemDispatchResult: dispatchResult) <- {
         // Convert queued propagation records into returned agenda work.
         // Return true if a wait occurred.
         while(!agenda!.propagationsTodo.isEmpty()){
@@ -925,7 +923,7 @@ struct WorldManager{
             me int:waitState <- 0
             callPropagate(agenda, propRec!.aItem, propRec!.LHSPov,
                     propRec!.RHSPov, propRec!.remainder, propRec!.looseSize,
-                    propRec!.dontEnque, NULL, requestedWork)
+                    propRec!.dontEnque, NULL, dispatchResult)
             if(waitState==1){// Stop processing if a wait is needed.
             log("PAI_PROPAGATE_WAITING")
                 return(true)
@@ -940,7 +938,7 @@ struct WorldManager{
     void: propagateProxy(their Agenda: agenda, our AItem: aItem,
             our POV: LHSPov, our POV: RHSPov, our POV: remainder,
             me bool: looseSize, bool: dontEnque,
-            their List<our AItem>: requestedWork) <- {
+            their AItemDispatchResult: dispatchResult) <- {
         // ORIGIN-BASED GATE: when a propagated merge is about to continue deeper into
         // a replyable child, wake the subscriber early but keep the dependency edge
         // alive so the later real fulfill still owns pendingTasks bookkeeping.
@@ -949,13 +947,16 @@ struct WorldManager{
         me bool: parentFromPropagate <- (aItem!.parent != NULL and aItem!.parent!.pedigree.source == srcPropagate)
         me bool: subFromPropagate    <- (!aItem!.subscribers.isEmpty() and aItem!.subscribers.first()!.pedigree.source == srcPropagate)
         if(parentFromPropagate and subFromPropagate and doReplyRequested){
-            wakeSubscriptions(agenda, aItem)
+            our AItemLifecycleRequest:: request
+            request!.target <- aItem
+            request!.wakeSubscribers <- true
+            dispatchResult.lifecycleRequests.append(request)
             our PropagateRecord:: propRec{aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque}
             agenda!.propagationsTodo.prepend(propRec)
             agenda!.totalPropagationsQueued <+- 1
         } else {
             callPropagate(agenda, aItem, LHSPov, RHSPov, remainder,
-                    looseSize, dontEnque, NULL, requestedWork)
+                    looseSize, dontEnque, NULL, dispatchResult)
         }
     }
 
