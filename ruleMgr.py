@@ -43,6 +43,24 @@ mergeRules = {
     # The generated merge rule rows now contain only semantic traps. Executable
     # actions formerly named by this table are owned by explicit reasoner strategies.
     'codeSnips': {},
+    # These cases never reach the generated fallback. Express their ownership
+    # in the same matrix vocabulary so generation can prove that every case is
+    # either claimed by the reasoner or guarded by a semantic trap.
+    'reasonerOwnedCases': [
+        ["merge:l?,lNUM,lSTR,lLST|||r?|", "MergeReasoner.rhsAny"],
+
+        ["merge:lNUM||=|rSTR,rLST|", "DirectConsolidationStrategy.typeMismatch"],
+        ["merge:lSTR||=|rNUM,rLST|", "DirectConsolidationStrategy.typeMismatch"],
+        ["merge:lLST||=|rNUM,rSTR|", "DirectConsolidationStrategy.typeMismatch"],
+
+        ["merge:lNUM|lemUnknown|=|rNUM|remLiteral", "DirectConsolidationStrategy.scalar"],
+        ["merge:lNUM|lemLiteral|=|rNUM|remUnknown,remLiteral", "DirectConsolidationStrategy.scalar"],
+        ["merge:lSTR|lemUnknown|=|rSTR|remLiteral", "DirectConsolidationStrategy.scalar"],
+        ["merge:lSTR|lemLiteral|=|rSTR|remUnknown,remLiteral", "DirectConsolidationStrategy.scalar"],
+
+        ["merge:lLST|lemUnknown|=,==|rLST|remUnknown,remLiteral", "InfonViewReasoner.list"],
+        ["merge:lLST|lemLiteral|=,==|rLST|remUnknown", "InfonViewReasoner.list"],
+    ],
     'rules': [
         # TODO: Define the remaining inverted-any identity/value semantics.
         ["merge:l?||=|rNUM,rSTR,rLST|",           "NOT_IMPLEMENTED_YET"],
@@ -120,41 +138,59 @@ def doesCaseMatchPattern(toMatch, case):
             return(False)
     return(True)
 
-def stripTags(rules):
+def withoutRuleSetTag(rules):
+    retRules = []
     for rule in rules:
-        ruleStr = rule[0]
-        ruleStr = ruleStr[ruleStr.find(":")+1:]
-        rule[0] = ruleStr
-    return(rules)
+        ruleCopy = list(rule)
+        ruleCopy[0] = ruleCopy[0][ruleCopy[0].find(":")+1:]
+        retRules.append(ruleCopy)
+    return(retRules)
 
-def markHandledCases(ruleSetID, rules, cases, points):
-    handledCount = 0
-    for rule in rules:
-        patternSegs = rule[0].split('|')
-        toMatch = []
-        idx = 0
-        for pseg in patternSegs:
-            if pseg =="":
-                toMatch.append(points[idx])
-            else:
-                toMatch.append(pseg.split(','))
-            idx += 1
-        count = 0
-        matchCount = 0
-        for case in cases:
-            if case[0:2] == "##": print("rules overlap:",case); exit(2)
-            if case[0] == "#": caseToPass = case[1:]
-            else: caseToPass = case
-            if doesCaseMatchPattern(toMatch, caseToPass):
-                #if cases[count] != caseToPass: print("cases != case:",case)
-                cases[count] = "#"+case
-                if case[0]=="#": print("rules overlap:",case); exit(2)
-                matchCount += 1
-            count +=1
-        #print("matchCount:",matchCount)
-        handledCount += matchCount
-    print("Total cases - handled cases:" , len(cases), "-", handledCount, "=", len(cases) - handledCount, " ("+str(len(rules))+" "+ruleSetID+" Rules)")
-    return(handledCount)
+def expandPattern(pattern, points):
+    pattern = pattern[pattern.find(":")+1:]
+    patternSegs = pattern.split('|')
+    if len(patternSegs) != len(points):
+        print("ERROR: pattern and case lengths do not match:", pattern)
+        exit(1)
+    toMatch = []
+    for idx in range(0, len(patternSegs)):
+        if patternSegs[idx] == "":
+            toMatch.append(points[idx])
+        else:
+            toMatch.append(patternSegs[idx].split(','))
+    return(toMatch)
+
+def auditCaseOwnership(ruleSet):
+    cases = enumerateAllCombos(ruleSet['points'])
+    claims = {}
+    categories = [
+        ("reasoner-owned", ruleSet.get('reasonerOwnedCases', [])),
+        ("semantic-trap", ruleSet['rules']),
+    ]
+    categoryCounts = {}
+    for category, rules in categories:
+        categoryCounts[category] = 0
+        for rule in rules:
+            toMatch = expandPattern(rule[0], ruleSet['points'])
+            for case in cases:
+                if doesCaseMatchPattern(toMatch, case):
+                    if case in claims:
+                        print("ERROR: merge case claimed twice:", case)
+                        print("    first:", claims[case])
+                        print("    second:", category, rule[0])
+                        exit(2)
+                    claims[case] = (category, rule[1], rule[0])
+                    categoryCounts[category] += 1
+    unclaimed = [case for case in cases if case not in claims]
+    print(ruleSet['ID']+" case audit:",
+          len(cases), "total;",
+          categoryCounts['reasoner-owned'], "reasoner-owned;",
+          categoryCounts['semantic-trap'], "semantic traps;",
+          len(unclaimed), "unclaimed")
+    if len(unclaimed)>0:
+        for case in unclaimed:
+            print("    UNCLAIMED:", case)
+        exit(2)
 
 def genHandlerCode(ruleSetID, triggers, action, indent):
     handlerID = ruleSetID + ":" + triggers + "->" + action
@@ -243,14 +279,11 @@ def addOwnershipAccess(code):
     return re.sub(r'([A-Za-z_][A-Za-z0-9_]*)\.(?=[A-Za-z_])', addMarker, code)
 
 def generateMemberFunc(ruleSetID, points, rules, ifSnips, codeSnips):
-    cases = enumerateAllCombos(points)
-    #for case in cases: print(case)
-    untagedRules = stripTags(rules)
-    markHandledCases(ruleSetID, untagedRules, cases, points)
+    untaggedRules = withoutRuleSetTag(rules)
     ifsCode =  '        //if(aItem.LHS_item.accessMode==aRefTo){log("REF_TO:"+aItem.stringify())}\n'
     ifsCode += '        our POV: remainder <- NULL\n'
     ifsCode += '        logSeg(" mRUl")\n'
-    ifsCode += genCodeFullIfs(ruleSetID, rules, ifSnips, codeSnips)
+    ifsCode += genCodeFullIfs(ruleSetID, untaggedRules, ifSnips, codeSnips)
     ifsCode += '        else {aItem.phase1RecordHandler("merge:missing", true); log("MERGE_RULE_MISSING: "+ toString(aItem));log("          LHS overlayType:"+ overlayTypeStrings[aItem.LHS_item.pItem.value.overlayType]);log("          LHS evalMode:"+ evalModeStrings[aItem.LHS_item.pItem.value.evalMode]);log("          RHS overlayType:"+ overlayTypeStrings[aItem.RHS.pItem.value.overlayType]); log("EXITING"); exit(2);}\n'
     ifsCode += "        return(remainder)"
     funcCode = "    our POV: "+ruleSetID+"Rules(our AItem: aItem) <- {\n"+ifsCode+"\n    }\n"
@@ -264,6 +297,7 @@ def generateXformMgr(ruleSets):
 """
     structCode = generatedHeader + "struct WorldManager{\n"
     for ruleSet in ruleSets:
+        auditCaseOwnership(ruleSet)
         funcCode = generateMemberFunc(ruleSet['ID'], ruleSet['points'], ruleSet['rules'], ruleSet['ifSnips'], ruleSet['codeSnips'])
         structCode += addOwnershipAccess(funcCode)
     structCode += "}"
