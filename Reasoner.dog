@@ -2347,11 +2347,88 @@ struct ParentMemberReasoner{
     }
 }
 
-// Discovers persistent constraints and path-derived relationships attached to
-// a POV, then schedules ordinary local infon-state reasoning for each one. The
-// wrkList remains the semantic AND representation; deferredWrkList is only its
-// execution index for candidates that cannot make progress yet.
+// Selects persistent constraints attached to a POV and prepares ordinary
+// local merge work for the next eligible one. The wrkList remains the
+// semantic AND representation; deferredWrkList is only its execution index
+// for candidates that cannot make progress yet.
+struct WorkListReasoner{
+    me bool: processWorkList(their WorldManager: worldManager,
+            their Agenda: agenda, our AItem: aItem,
+            their List<our AItem>: requestedWork) <- {
+        // If "{[....]| ... } <~ outr", prepend outr to wrkList.
+        our infonView: lSpecItem <- aItem!.LHS_item!.pItem
+        our infonView: lSpec <- lSpecItem!.value!.listSpec
+        if(lSpec!=NULL and lSpecItem!.hasInnrOutr and
+                lSpecItem!.intersectPos==ipNoIntersect and
+                lSpec!.intersectPos!=ipNoIntersect){
+            our POV:: newPov{11}
+            newPov!.pItem <- lSpecItem!.funcArgs
+            newPov!.looseMode <- true
+            newPov!.isOutrFeed <- true
+            newPov!.pItem!.asRHSInternalIdent <- true
+            lSpecItem!.addPOVToWrkList(newPov)
+            lSpecItem!.hasInnrOutr <- false
+            lSpecItem!.funcArgs <- NULL
+            lSpec!.asWrkLstOutr <- true
+        }
+
+        me bool: stopAndWait <- false
+        our POV: LHSPov <- aItem!.LHS_item
+        our POV: RHSPov <- NULL
+        me bool: looseSize <- false
+        if(!lSpecItem!.wrkList.isEmpty()){
+            withEach candidateWorkPOV in lSpecItem!.wrkList{
+                me bool: candidateDeferred <-
+                        lSpecItem!.deferredWorkListContainsPOV(candidateWorkPOV)
+                if(!candidateDeferred and
+                        !(aItem!.inFlightWorkPOV===candidateWorkPOV)){
+                    RHSPov <- candidateWorkPOV
+                    break()
+                }
+            }
+        }
+        if(RHSPov!=NULL){
+            looseSize <- RHSPov!.looseSize()
+            LHSPov!.hasPropagated <- true
+            if(!aItem!.dontProcess){
+                our AItem: newAItem <- worldManager!.prepareMergeWork(
+                        agenda, LHSPov, RHSPov, looseSize, aItem, aItem,
+                        aItem!.priority, srcPMVA1)
+                newAItem!.debugArg <- aItem
+                newAItem!.sourceWorkOwner <- lSpecItem
+                newAItem!.sourceWorkPOV <- RHSPov
+                newAItem!.sourceWorkParent <- aItem
+                newAItem!.sourceWorkRevision <- RHSPov!.workRevision
+                newAItem!.constraintDisposition <- cdInFlight
+                aItem!.inFlightWorkPOV <- RHSPov
+                requestedWork.append(newAItem)
+                stopAndWait <- true
+            }else{
+                lSpecItem!.discardWrkListPOV(RHSPov)
+                log("DONT_PROCESS-a:"+aItem!.stringify())
+            }
+        }
+        if(!LHSPov!.hasPropagated){
+            if(!aItem!.dontProcess){
+                our AItem: newAItem <- worldManager!.prepareMergeWork(
+                        agenda, LHSPov, RHSPov, false, aItem, aItem,
+                        aItem!.priority, srcPMVA2)
+                newAItem!.debugArg <- aItem
+                requestedWork.append(newAItem)
+                stopAndWait <- true
+                LHSPov!.hasPropagated <- true
+            }else{
+                log("DONT_PROCESS-b:"+aItem!.stringify())
+            }
+        }
+        return(stopAndWait)
+    }
+}
+
+// Coordinates POV-level candidate discovery while delegating each source to
+// its owning reasoner.
 struct POVLevelReasoner{
+    me WorkListReasoner: workListReasoner
     me CorrespondenceReasoner: correspondenceReasoner
     me ReferenceMapper: referenceMapper
     me CursorPathResolver: cursorPathResolver
@@ -2461,73 +2538,8 @@ struct POVLevelReasoner{
     me bool: processWorkList(their WorldManager: worldManager,
             their Agenda: agenda, our AItem: aItem,
             their List<our AItem>: requestedWork) <- {
-        // If "{[....]| ... } <~ outr", prepend outr to wrkList.
-        our infonView: lSpecItem <- aItem!.LHS_item!.pItem
-        our infonView: lSpec <- lSpecItem!.value!.listSpec
-        if(lSpec!=NULL and lSpecItem!.hasInnrOutr and
-                lSpecItem!.intersectPos==ipNoIntersect and
-                lSpec!.intersectPos!=ipNoIntersect){
-            our POV:: newPov{11}
-            newPov!.pItem <- lSpecItem!.funcArgs
-            newPov!.looseMode <- true
-            newPov!.isOutrFeed <- true
-            newPov!.pItem!.asRHSInternalIdent <- true
-            lSpecItem!.addPOVToWrkList(newPov)
-            lSpecItem!.hasInnrOutr <- false
-            lSpecItem!.funcArgs <- NULL
-            lSpec!.asWrkLstOutr <- true
-        }
-
-        me bool: stopAndWait <- false
-        our POV: LHSPov <- aItem!.LHS_item
-        our POV: RHSPov <- NULL
-        me bool: looseSize <- false
-        if(!lSpecItem!.wrkList.isEmpty()){
-            withEach candidateWorkPOV in lSpecItem!.wrkList{
-                me bool: candidateDeferred <-
-                        lSpecItem!.deferredWorkListContainsPOV(candidateWorkPOV)
-                if(!candidateDeferred and
-                        !(aItem!.inFlightWorkPOV===candidateWorkPOV)){
-                    RHSPov <- candidateWorkPOV
-                    break()
-                }
-            }
-        }
-        if(RHSPov!=NULL){
-            looseSize <- RHSPov!.looseSize()
-            LHSPov!.hasPropagated <- true
-            if(!aItem!.dontProcess){
-                our AItem: newAItem <- worldManager!.prepareMergeWork(
-                        agenda, LHSPov, RHSPov, looseSize, aItem, aItem,
-                        aItem!.priority, srcPMVA1)
-                newAItem!.debugArg <- aItem
-                newAItem!.sourceWorkOwner <- lSpecItem
-                newAItem!.sourceWorkPOV <- RHSPov
-                newAItem!.sourceWorkParent <- aItem
-                newAItem!.sourceWorkRevision <- RHSPov!.workRevision
-                newAItem!.constraintDisposition <- cdInFlight
-                aItem!.inFlightWorkPOV <- RHSPov
-                requestedWork.append(newAItem)
-                stopAndWait <- true
-            }else{
-                lSpecItem!.discardWrkListPOV(RHSPov)
-                log("DONT_PROCESS-a:"+aItem!.stringify())
-            }
-        }
-        if(!LHSPov!.hasPropagated){
-            if(!aItem!.dontProcess){
-                our AItem: newAItem <- worldManager!.prepareMergeWork(
-                        agenda, LHSPov, RHSPov, false, aItem, aItem,
-                        aItem!.priority, srcPMVA2)
-                newAItem!.debugArg <- aItem
-                requestedWork.append(newAItem)
-                stopAndWait <- true
-                LHSPov!.hasPropagated <- true
-            }else{
-                log("DONT_PROCESS-b:"+aItem!.stringify())
-            }
-        }
-        return(stopAndWait)
+        return(workListReasoner.processWorkList(
+                worldManager, agenda, aItem, requestedWork))
     }
 }
 
