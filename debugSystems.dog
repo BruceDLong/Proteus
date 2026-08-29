@@ -20,10 +20,8 @@ model AItemTrace{
     me string: invariantFailures
     me int: stepBefore
     me int: stepAfter
-    me int: pendingBefore
-    me int: pendingAfter
-    me int: heldPendingBefore
-    me int: heldPendingAfter
+    me int: pendingListChildrenBefore
+    me int: pendingListChildrenAfter
     me uint64: aItemsAddedBefore
     me uint64: aItemsAddedAfter
     me uint64: propagationsQueuedBefore
@@ -37,7 +35,7 @@ model AItemTrace{
     me bool: propagationQueued
     me bool: propagationProcessed
     me bool: stepChanged
-    me bool: pendingChanged
+    me bool: pendingListChildrenChanged
     me bool: unsupportedReached
 }
 struct AItemTrace{}
@@ -183,8 +181,14 @@ struct AItemValidator {
     }
 
     void: validateRepresentation(our AItemTrace: trace, our AItem: aItem, me string: phase) <- {
-        if(aItem!.pendingTasks<0){addInvariantFailure(trace, phase, "pendingTasks<0")}
-        if(aItem!.heldPendingTasks<0){addInvariantFailure(trace, phase, "heldPendingTasks<0")}
+        if(aItem!.pendingListChildren<0){
+            addInvariantFailure(trace, phase, "pendingListChildren<0")
+        }
+        if(aItem!.waitingForListChildren and
+                aItem!.pendingListChildren==0){
+            addInvariantFailure(trace, phase,
+                    "waitingForListChildren with no pending children")
+        }
         if(aItem!.step<0){addInvariantFailure(trace, phase, "step<0")}
         if(aItem!.LHS_item!=NULL and aItem!.LHS_item!.pItem==NULL){addInvariantFailure(trace, phase, "LHS POV has no pItem")}
         if(aItem!.RHS!=NULL and aItem!.RHS!.pItem==NULL){addInvariantFailure(trace, phase, "RHS POV has no pItem")}
@@ -217,8 +221,7 @@ struct AItemValidator {
         trace!.lhsBefore <- povSnapshot(aItem!.LHS_item)
         trace!.rhsBefore <- povSnapshot(aItem!.RHS)
         trace!.stepBefore <- aItem!.step
-        trace!.pendingBefore <- aItem!.pendingTasks
-        trace!.heldPendingBefore <- aItem!.heldPendingTasks
+        trace!.pendingListChildrenBefore <- aItem!.pendingListChildren
         trace!.aItemsAddedBefore <- agenda!.totalAItemsAdded
         trace!.propagationsQueuedBefore <- agenda!.totalPropagationsQueued
         trace!.propagationsProcessedBefore <- agenda!.totalPropagationsProcessed
@@ -284,15 +287,16 @@ struct AItemValidator {
         effects <+- ",propagationQueued="+boolString(trace!.propagationQueued)
         effects <+- ",propagationProcessed="+boolString(trace!.propagationProcessed)
         effects <+- ",stepChanged="+boolString(trace!.stepChanged)
-        effects <+- ",pendingChanged="+boolString(trace!.pendingChanged)
+        effects <+- ",pendingListChildrenChanged="+
+                boolString(trace!.pendingListChildrenChanged)
         effects <+- ",unsupported="+boolString(trace!.unsupportedReached)
         me string: line <- "PHASE1_TRACE|normalization="+toString(trace!.normalizationID)
         line <+- "|run="+toString(trace!.runID)+"|aItem="+toString(trace!.aItemID)+"|enqueue="+toString(trace!.enqueueID)
         line <+- "|semantic={"+trace!.semanticCaseKey+"}|execution={"+trace!.executionContextKey+"}"
         line <+- "|handlers={"+trace!.handlerEvents+"}|legacy={"+trace!.observedLegacyOutcome+"}"
         line <+- "|effects={"+effects+"}|invariants={"+trace!.invariantFailures+"}"
-        line <+- "|before={LHS:"+shortedStr(trace!.lhsBefore, 500)+" RHS:"+shortedStr(trace!.rhsBefore, 500)+" step:"+toString(trace!.stepBefore)+" pending:"+toString(trace!.pendingBefore)+" held:"+toString(trace!.heldPendingBefore)+"}"
-        line <+- "|after={LHS:"+shortedStr(trace!.lhsAfter, 500)+" RHS:"+shortedStr(trace!.rhsAfter, 500)+" step:"+toString(trace!.stepAfter)+" pending:"+toString(trace!.pendingAfter)+" held:"+toString(trace!.heldPendingAfter)+"}"
+        line <+- "|before={LHS:"+shortedStr(trace!.lhsBefore, 500)+" RHS:"+shortedStr(trace!.rhsBefore, 500)+" step:"+toString(trace!.stepBefore)+" pendingListChildren:"+toString(trace!.pendingListChildrenBefore)+"}"
+        line <+- "|after={LHS:"+shortedStr(trace!.lhsAfter, 500)+" RHS:"+shortedStr(trace!.rhsAfter, 500)+" step:"+toString(trace!.stepAfter)+" pendingListChildren:"+toString(trace!.pendingListChildrenAfter)+"}"
         return(line)
     }
 
@@ -300,8 +304,7 @@ struct AItemValidator {
         trace!.lhsAfter <- povSnapshot(aItem!.LHS_item)
         trace!.rhsAfter <- povSnapshot(aItem!.RHS)
         trace!.stepAfter <- aItem!.step
-        trace!.pendingAfter <- aItem!.pendingTasks
-        trace!.heldPendingAfter <- aItem!.heldPendingTasks
+        trace!.pendingListChildrenAfter <- aItem!.pendingListChildren
         trace!.aItemsAddedAfter <- agenda!.totalAItemsAdded
         trace!.propagationsQueuedAfter <- agenda!.totalPropagationsQueued
         trace!.propagationsProcessedAfter <- agenda!.totalPropagationsProcessed
@@ -313,7 +316,9 @@ struct AItemValidator {
         trace!.propagationQueued <- trace!.propagationsQueuedAfter>trace!.propagationsQueuedBefore
         trace!.propagationProcessed <- trace!.propagationsProcessedAfter>trace!.propagationsProcessedBefore
         trace!.stepChanged <- trace!.stepBefore!=trace!.stepAfter
-        trace!.pendingChanged <- trace!.pendingBefore!=trace!.pendingAfter or trace!.heldPendingBefore!=trace!.heldPendingAfter
+        trace!.pendingListChildrenChanged <-
+                trace!.pendingListChildrenBefore!=
+                trace!.pendingListChildrenAfter
         trace!.unsupportedReached <- aItem!.phase1UnsupportedReached
         trace!.observedLegacyOutcome <- safeMergeStatus(aItem!.mergeStatus)+",rejected="+boolString(trace!.rejected)
         validateRepresentation(trace, aItem, "after")
@@ -510,9 +515,10 @@ struct AItemValidator {
                     } else {
                         our AItem: parentList <- aItem!.parent!.parent
                         assertStep0Complete(parentList, "Parent list step 0 is not complete.")
-                        if(parentList!.pendingTasks==0){
-                        assertStep1NotExists(parentList, "Parent list step 1 should not have started yet.")
-                    }
+                        if(parentList!.waitingForListChildren){
+                            assertStep1NotExists(parentList,
+                                    "Parent list step 1 should not have started yet.")
+                        }
                     }
                 }
              //   logAitemData(aItem, "srcPropagateTEST")

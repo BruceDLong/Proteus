@@ -69,7 +69,18 @@ struct AItemLifecycle{
 
     void: beginDispatch(our AItem: aItem) <- {
         aItem!.taskEnqueued <- false
-        if(!aItem!.wokenEarly){aItem!.pendingTasks <-- 1}
+    }
+
+    // Register one child in the current list-completion batch. The normalizer
+    // runs agenda dispatches serially, so all children discovered by the
+    // current parent dispatch are registered before any can complete.
+    void: registerListChild(our AItem: parent, our AItem: child) <- {
+        if(parent==NULL or child==NULL){return()}
+        child!.parent <- parent
+        if(child!.countsTowardParentListCompletion){return()}
+        child!.countsTowardParentListCompletion <- true
+        parent!.pendingListChildren <+- 1
+        parent!.waitingForListChildren <- true
     }
 
     // Allow one rsInfon subscriber to emit an early streaming reply while
@@ -78,7 +89,6 @@ struct AItemLifecycle{
         while(!aItem!.subscribers.isEmpty()){
             our AItem: sub <- aItem!.subscribers.first()
             if(sub!.ruleSet!=rsInfon or sub!.wokenEarly){break()}
-            sub!.heldPendingTasks <+- 1
             sub!.wokenEarly <- true
             sub!.priority <- aItem!.priority
             sub!.LHS_item!.pItem!.isNormed <- false
@@ -99,10 +109,7 @@ struct AItemLifecycle{
             }
             aItem!.subscribers.popFirst()
             sub!.LHS_item!.pItem!.isNormed <- false
-            if(sub!.wokenEarly){
-                if(sub!.heldPendingTasks>0){sub!.heldPendingTasks <-- 1}
-                sub!.wokenEarly <- false
-            }
+            if(sub!.wokenEarly){sub!.wokenEarly <- false}
             me bool: itmAdded <- agenda!.addAItemToAgenda(sub) // FFS
             if(itmAdded){S<+-":"+sub!.mySymbol()}
         }
@@ -111,23 +118,25 @@ struct AItemLifecycle{
         }
     }
 
-    // Complete the dependency edge from a finished rsInfon child to its parent.
+    // Complete one member of a parent's list-child batch. The last child
+    // restarts the parent exactly once.
     void: resumeParent(their Agenda: agenda, our AItem: aItem) <- {
         our AItem: aParent <- aItem!.parent
-        if(aParent != NULL){
-          //  print("\naParent pendingTask:", toString(aParent!.pendingTasks))
-            aParent!.pendingTasks <-- 1
-            if(aParent!.pendingTasks == 0){ //:l/PAI::logSeg(" ADP:"+aParent!.mySymbol())
-                // Resuming an infon parent after child work is a new agenda pass,
-                // but merge/intersect parents already encode their own step state.
-                if(aParent!.ruleSet==rsInfon){aParent!.step <+- 1}
-                aParent!.pendingTasks <+- 1
-                agenda!.addAItemToAgenda(aParent)  // Restart parent task
-            } else {
-                //:l/PAI/PT::logSeg(" --"+aParent!.mySymbol()+"_PT:f="+toString(aParent!.pendingTasks))
-            }
-        }else {
-            //:l/PAI::logSeg(" NoAParent")
+        if(aParent==NULL or
+                !aItem!.countsTowardParentListCompletion){return()}
+        aItem!.countsTowardParentListCompletion <- false
+        if(aParent!.pendingListChildren<=0){
+            logFatalError("List child completed without a pending parent slot: "+
+                    toString(aItem))
+        }
+        aParent!.pendingListChildren <-- 1
+        if(aParent!.pendingListChildren==0 and
+                aParent!.waitingForListChildren){
+            aParent!.waitingForListChildren <- false
+            // Resuming an infon parent after list-child work is a new agenda
+            // pass; merge/intersect parents encode their own step state.
+            if(aParent!.ruleSet==rsInfon){aParent!.step <+- 1}
+            agenda!.addAItemToAgenda(aParent)
         }
     }
 
