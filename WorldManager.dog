@@ -481,15 +481,19 @@ struct WorldManager{
         return(infonViewReasoner.orderedSpanReasoner.
                 sparseOrderedSpanMergeAlignable(lhsPOV, rhsPOV, vSpec))
     }
-    // Compatibility delegates for agenda work creation.
-    our AItem: processInfonViewViaAgenda(their Agenda: agenda, our POV: pov, our AItem: subscriber, our AItem: aParent, me int64: priority, me aitemSrcID: source)<-{
-        return(agendaEngine.processInfonViewViaAgenda(agenda, pov, subscriber, aParent, priority, source))
+    // Compatibility delegates for explicit work preparation. These methods
+    // construct AItems but never insert them into the agenda.
+    our AItem: prepareInfonWork(their Agenda: agenda, our POV: pov, our AItem: subscriber, our AItem: aParent, me int64: priority, me aitemSrcID: source)<-{
+        return(agendaEngine.prepareInfonWork(agenda, pov, subscriber, aParent, priority, source))
     }
-    our AItem: processMergeViaAgenda(their Agenda: agenda, our POV: LHS, our POV: RHS, me bool: looseSize, our AItem: subscriber, our AItem: aParent, me int64: priority, me aitemSrcID: source)<-{
-        return(agendaEngine.processMergeViaAgenda(agenda, LHS, RHS, looseSize, subscriber, aParent, priority, source))
+    our AItem: prepareMergeWork(their Agenda: agenda, our POV: LHS, our POV: RHS, me bool: looseSize, our AItem: subscriber, our AItem: aParent, me int64: priority, me aitemSrcID: source)<-{
+        return(agendaEngine.prepareMergeWork(agenda, LHS, RHS, looseSize, subscriber, aParent, priority, source))
     }
-    our AItem: processIntersectViaAgenda(their Agenda: agenda, our POV: pov, our AItem: subscriber, me int64: priority)<-{
-        return(agendaEngine.processIntersectViaAgenda(agenda, pov, subscriber, priority))
+    our AItem: prepareIntersectWork(their Agenda: agenda, our POV: pov, our AItem: subscriber, me int64: priority)<-{
+        return(agendaEngine.prepareIntersectWork(agenda, pov, subscriber, priority))
+    }
+    void: enqueueInitialWork(their Agenda: agenda, our AItem: aItem) <- {
+        agendaEngine.enqueueInitialWork(agenda, aItem)
     }
     void: wakeSubscriptions(their Agenda: agenda, our AItem: aItem) <- {
         agendaEngine.wakeSubscriptions(agenda, aItem)
@@ -622,7 +626,7 @@ struct WorldManager{
                 tmpInfon!.itmMode <- mItem
                 tmpInfon!.viewMode <- vmOverlay
             tmpPov!.pItem <- tmpInfon
-            our AItem: newAItem <-  processInfonViewViaAgenda(agenda, tmpPov, NULL, aItem, aItem!.priority, srcNrmSize)
+            our AItem: newAItem <-  prepareInfonWork(agenda, tmpPov, NULL, aItem, aItem!.priority, srcNrmSize)
             if(newAItem!=NULL){
                 //:l/PAI::logSeg(" sizePIVA:"+newAItem!.mySymbol())
                 requestedWork.append(newAItem)
@@ -633,8 +637,10 @@ struct WorldManager{
         }
         return(stopAndWait)
     }
-    me bool: wrkLstRules(their Agenda: agenda, our AItem: aItem) <- {
-        return(povLevelReasoner.processWorkList(self, agenda, aItem))
+    me bool: wrkLstRules(their Agenda: agenda, our AItem: aItem,
+            their List<our AItem>: requestedWork) <- {
+        return(povLevelReasoner.processWorkList(
+                self, agenda, aItem, requestedWork))
     }
     me bool: povIsUnderIncompleteStream(their POV: pov) <- {
         return(povLevelReasoner.povIsUnderIncompleteStream(pov))
@@ -642,9 +648,11 @@ struct WorldManager{
     me bool: hasLocalNullableContinuation(our AItem: aItem) <- {
         return(povLevelReasoner.hasLocalNullableContinuation(aItem))
     }
-    me bool: localNullableContinuationRules(their Agenda: agenda, our AItem: aItem, their bool: nxtAction) <- {
+    me bool: localNullableContinuationRules(their Agenda: agenda,
+            our AItem: aItem, their bool: nxtAction,
+            their List<our AItem>: requestedWork) <- {
         return(povLevelReasoner.processLocalNullableContinuation(
-                self, agenda, aItem, nxtAction))
+                self, agenda, aItem, nxtAction, requestedWork))
     }
     // rsINFON UTILITY FUNCTIONS: CONCAT FUNCTIONS
     me bool: canUnwrapSingletonSubItem(our POV: pov) <- {
@@ -691,8 +699,11 @@ struct WorldManager{
     me bool: processConcat(our AItem: aItem) <- {
         return(infonViewReasoner.processConcat(aItem))
     }
-    me bool: partsRules(their Agenda: agenda, our AItem: aItem, their bool: nxtAction) <- {
-        return(povLevelReasoner.resolveParts(self, agenda, aItem, nxtAction))
+    me bool: partsRules(their Agenda: agenda, our AItem: aItem,
+            their bool: nxtAction,
+            their List<our AItem>: requestedWork) <- {
+        return(povLevelReasoner.resolveParts(
+                self, agenda, aItem, nxtAction, requestedWork))
     }
     // rsINFON UTILITY FUNCTIONS: CLEAN INFON FUNCTIONS
     void: closeIntersectAt(our POV: pov) <- {
@@ -896,18 +907,25 @@ struct WorldManager{
         return(povLevelReasoner.propagate(self, agenda, aItem, LHSPov,
                 RHSPov, remainder, looseSize, dontEnque, waitState))
     }
-    void: callPropagate(their Agenda: agenda, our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque, their int:waitState) <- {
+    void: callPropagate(their Agenda: agenda, our AItem: aItem,
+            our POV: LHSPov, our POV: RHSPov, our POV: remainder,
+            me bool: looseSize, bool: dontEnque, their int:waitState,
+            their List<our AItem>: requestedWork) <- {
         our AItem: nextAItem <- propagate(agenda, aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque, waitState)
         if(aItem!.pendingTasks==0){completeAndFulfillSubscriptions(agenda, aItem)}
-        if(nextAItem!=NULL){agenda!.addAItemToAgenda(nextAItem)}   // callPropagate
+        if(nextAItem!=NULL){requestedWork.append(nextAItem)}
     }
 
-    bool: addQueuedAItemsToAgenda(their Agenda: agenda) <- {
-        // Propagate queued AItems. Return true if a wait occurred.
+    bool: collectQueuedPropagationWork(their Agenda: agenda,
+            their List<our AItem>: requestedWork) <- {
+        // Convert queued propagation records into returned agenda work.
+        // Return true if a wait occurred.
         while(!agenda!.propagationsTodo.isEmpty()){
             our PropagateRecord: propRec <- agenda!.propagationsTodo.last();
             me int:waitState <- 0
-            callPropagate(agenda, propRec!.aItem, propRec!.LHSPov, propRec!.RHSPov, propRec!.remainder, propRec!.looseSize, propRec!.dontEnque, NULL)
+            callPropagate(agenda, propRec!.aItem, propRec!.LHSPov,
+                    propRec!.RHSPov, propRec!.remainder, propRec!.looseSize,
+                    propRec!.dontEnque, NULL, requestedWork)
             if(waitState==1){// Stop processing if a wait is needed.
             log("PAI_PROPAGATE_WAITING")
                 return(true)
@@ -919,7 +937,10 @@ struct WorldManager{
         return(false)
     }
 
-    void: propagateProxy(their Agenda: agenda, our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque) <- {
+    void: propagateProxy(their Agenda: agenda, our AItem: aItem,
+            our POV: LHSPov, our POV: RHSPov, our POV: remainder,
+            me bool: looseSize, bool: dontEnque,
+            their List<our AItem>: requestedWork) <- {
         // ORIGIN-BASED GATE: when a propagated merge is about to continue deeper into
         // a replyable child, wake the subscriber early but keep the dependency edge
         // alive so the later real fulfill still owns pendingTasks bookkeeping.
@@ -933,14 +954,16 @@ struct WorldManager{
             agenda!.propagationsTodo.prepend(propRec)
             agenda!.totalPropagationsQueued <+- 1
         } else {
-            callPropagate(agenda, aItem, LHSPov, RHSPov, remainder, looseSize, dontEnque, NULL)
+            callPropagate(agenda, aItem, LHSPov, RHSPov, remainder,
+                    looseSize, dontEnque, NULL, requestedWork)
         }
     }
 
     me bool: processUnorderedInfonViews(their Agenda: agenda,
-            our AItem: aItem, their bool: contnue) <- {
+            our AItem: aItem, their bool: contnue,
+            their List<our AItem>: requestedWork) <- {
         return(povLevelReasoner.processUnorderedInfonViews(
-                self, agenda, aItem, contnue))
+                self, agenda, aItem, contnue, requestedWork))
     }
     void: processAgendaItem(their Agenda: agenda, our AItem: aItem, me int: AlternativesNestLvl)<-{
         agendaEngine.processAgendaItem(self, agenda, aItem, AlternativesNestLvl)

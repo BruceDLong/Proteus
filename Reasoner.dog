@@ -1517,7 +1517,9 @@ struct GeneratedMergeTrapStrategy{
 // Discovers member correspondence for unordered records, placing compatible
 // RHS fields on the matching LHS work lists for ordinary local reasoning.
 struct CorrespondenceReasoner{
-    me bool: processUnorderedInfonViews(their WorldManager: worldManager, their Agenda: agenda, our AItem: aItem, their bool: contnue) <- {
+    me bool: processUnorderedInfonViews(their WorldManager: worldManager,
+            their Agenda: agenda, our AItem: aItem, their bool: contnue,
+            their List<our AItem>: requestedWork) <- {
         // Handle Unordered infons
         our infonView: LHS_item <- aItem!.LHS_item!.pItem
         me OrderMode: LHSOrderMode <- LHS_item!.getOrderMode(worldManager!.agent)
@@ -1546,10 +1548,10 @@ struct CorrespondenceReasoner{
                                 our POV: pov <- LHS_Pov!.pItem!.addInfonViewToWrkList(RHS_item, true, 417)
                                 RHS_item!.streamState <- notParsing
                                 if(pov!=NULL and LHS_Pov!.hasPropagated){
-                                    our AItem: PIVA <- worldManager!.processInfonViewViaAgenda(agenda, LHS_Pov, NULL, aItem, crntPriority+priorityIdx, srcUnordd)
+                                    our AItem: PIVA <- worldManager!.prepareInfonWork(agenda, LHS_Pov, NULL, aItem, crntPriority+priorityIdx, srcUnordd)
                                     if(PIVA!=NULL){
                                         //:l/PAI::logSeg(" UNORD_PIVA:"+PIVA!.mySymbol())
-                                        agenda!.addAItemToAgenda(PIVA) // PIVA
+                                        requestedWork.append(PIVA) // PIVA
                                         contnue! <- false
                                     }
                                     priorityIdx <- priorityIdx + 1
@@ -1857,16 +1859,19 @@ struct CursorPathResolver{
 
     me bool: processLocalNullableContinuation(their WorldManager: worldManager,
             their Agenda: agenda, our AItem: aItem,
-            their bool: nxtAction) <- {
+            their bool: nxtAction,
+            their List<our AItem>: requestedWork) <- {
         if(hasLocalNullableContinuation(aItem)){
-            return(resolveParts(worldManager, agenda, aItem, nxtAction))
+            return(resolveParts(worldManager, agenda, aItem, nxtAction,
+                    requestedWork))
         }
         return(false)
     }
 
     me bool: resolveParts(their WorldManager: worldManager,
             their Agenda: agenda, our AItem: aItem,
-            their bool: nxtAction) <- {
+            their bool: nxtAction,
+            their List<our AItem>: requestedWork) <- {
         me bool: changeMade <- false
         nxtAction! <- true
         our infonView: CI <- aItem!.LHS_item!.pItem
@@ -2027,13 +2032,13 @@ struct CursorPathResolver{
                     our POV:: pathPov{20}
                     pathPov!.pItem <- newPath
                     aItem!.LHS_item!.pItem!.retainPOV(pathPov)
-                    our AItem: newAItem <- worldManager!.processInfonViewViaAgenda(
+                    our AItem: newAItem <- worldManager!.prepareInfonWork(
                             agenda, pathPov, NULL, aItem, aItem!.priority,
                             srcPartsPath)
                     if(newAItem!=NULL){
                         addDebugEvent("RegisterPIVA to integrate "+
                                 newPath!.mySymbol()+":"+toString(newPath), newPath)
-                        agenda!.addAItemToAgenda(newAItem)
+                        requestedWork.append(newAItem)
                     }
                     nxtAction! <- false
                 }
@@ -2326,7 +2331,7 @@ struct ParentMemberReasoner{
             if(aParent!.LHS_item!.pItem!.hasReadyWrkListPOV(aParent!.sourceWorkPOV)){
                 return(NULL)
             }
-            PIVA <- worldManager!.processInfonViewViaAgenda(agenda, LHSPovNext, NULL, nxtsParent, aItem!.priority+1, srcPropagate)
+            PIVA <- worldManager!.prepareInfonWork(agenda, LHSPovNext, NULL, nxtsParent, aItem!.priority+1, srcPropagate)
             if(PIVA!=NULL){
                 PIVA!.candidateForLast <- candidateForLast
                 PIVA!.debugArg <- aParent
@@ -2368,9 +2373,10 @@ struct POVLevelReasoner{
 
     me bool: processUnorderedInfonViews(their WorldManager: worldManager,
             their Agenda: agenda, our AItem: aItem,
-            their bool: contnue) <- {
+            their bool: contnue,
+            their List<our AItem>: requestedWork) <- {
         return(correspondenceReasoner.processUnorderedInfonViews(
-                worldManager, agenda, aItem, contnue))
+                worldManager, agenda, aItem, contnue, requestedWork))
     }
 
     our POV: findNextLHS(their WorldManager: worldManager,
@@ -2438,20 +2444,23 @@ struct POVLevelReasoner{
 
     me bool: processLocalNullableContinuation(
             their WorldManager: worldManager, their Agenda: agenda,
-            our AItem: aItem, their bool: nxtAction) <- {
+            our AItem: aItem, their bool: nxtAction,
+            their List<our AItem>: requestedWork) <- {
         return(cursorPathResolver.processLocalNullableContinuation(
-                worldManager, agenda, aItem, nxtAction))
+                worldManager, agenda, aItem, nxtAction, requestedWork))
     }
 
     me bool: resolveParts(their WorldManager: worldManager,
             their Agenda: agenda, our AItem: aItem,
-            their bool: nxtAction) <- {
+            their bool: nxtAction,
+            their List<our AItem>: requestedWork) <- {
         return(cursorPathResolver.resolveParts(
-                worldManager, agenda, aItem, nxtAction))
+                worldManager, agenda, aItem, nxtAction, requestedWork))
     }
 
     me bool: processWorkList(their WorldManager: worldManager,
-            their Agenda: agenda, our AItem: aItem) <- {
+            their Agenda: agenda, our AItem: aItem,
+            their List<our AItem>: requestedWork) <- {
         // If "{[....]| ... } <~ outr", prepend outr to wrkList.
         our infonView: lSpecItem <- aItem!.LHS_item!.pItem
         our infonView: lSpec <- lSpecItem!.value!.listSpec
@@ -2488,7 +2497,7 @@ struct POVLevelReasoner{
             looseSize <- RHSPov!.looseSize()
             LHSPov!.hasPropagated <- true
             if(!aItem!.dontProcess){
-                our AItem: newAItem <- worldManager!.processMergeViaAgenda(
+                our AItem: newAItem <- worldManager!.prepareMergeWork(
                         agenda, LHSPov, RHSPov, looseSize, aItem, aItem,
                         aItem!.priority, srcPMVA1)
                 newAItem!.debugArg <- aItem
@@ -2498,6 +2507,7 @@ struct POVLevelReasoner{
                 newAItem!.sourceWorkRevision <- RHSPov!.workRevision
                 newAItem!.constraintDisposition <- cdInFlight
                 aItem!.inFlightWorkPOV <- RHSPov
+                requestedWork.append(newAItem)
                 stopAndWait <- true
             }else{
                 lSpecItem!.discardWrkListPOV(RHSPov)
@@ -2506,10 +2516,11 @@ struct POVLevelReasoner{
         }
         if(!LHSPov!.hasPropagated){
             if(!aItem!.dontProcess){
-                our AItem: newAItem <- worldManager!.processMergeViaAgenda(
+                our AItem: newAItem <- worldManager!.prepareMergeWork(
                         agenda, LHSPov, RHSPov, false, aItem, aItem,
                         aItem!.priority, srcPMVA2)
                 newAItem!.debugArg <- aItem
+                requestedWork.append(newAItem)
                 stopAndWait <- true
                 LHSPov!.hasPropagated <- true
             }else{
