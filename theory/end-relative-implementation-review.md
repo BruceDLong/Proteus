@@ -7,9 +7,10 @@ one local, recursively source-mapped construction contract. R6 now validates
 and commits mapped writes transactionally. R7 now removes the remaining
 compatibility inference from result selection and work transfer. R8 now lowers
 negative item and single-unit typed-span `#` syntax through the same
-end-relative intersection engine.
+end-relative intersection engine. R9 adds fixed repeated typed spans, and R10
+adds finer-unit traversal across concrete nested source boundaries.
 
-Source basis: local branch `proteus3b` through the R8 changes described here.
+Source basis: local branch `proteus3b` through the R10 changes described here.
 
 Related documents:
 
@@ -89,17 +90,21 @@ The regenerated `LocalBuild/TestProteus` executable currently demonstrates:
 - natural-child-unit inference for typed negative item indexes;
 - explicit single-unit negative span reads and mapped writes through
   `#-k:span`;
+- fixed repeated typed-span reads and mapped writes through both `#` sugar and
+  direct negative-sized intersections;
+- end-relative selection in a finer unit than the source's immediate concrete
+  children, including a selected span that crosses a nested child boundary;
+- a locally zero-based finer-unit projection whose root source context remains
+  the outer source and whose start POV is the first nested selected unit;
 - equivalent normalized source mappings for typed sugar and its low-level
   intersection form;
 - preservation of the established positive nested write; and
 - preservation of `range/select1`.
 
-The ordinary and protected full runs report `4/374`. Relative to the R7
-`8/367` checkpoint, all three compiled index-lowering tests and all four new
-dynamic negative-index/span tests pass, as do the four formerly unsupported
-negative `#` time tests. The remaining failures are the four older baseline
-failures. This is a regression checkpoint, not a claim that the full suite is
-clean.
+The ordinary and protected full runs report `4/385`. The time suite passes
+`36/36`, and the sparse suite passes `22/22`. The remaining failures are the
+four older baseline failures. This is a regression checkpoint, not a claim
+that the full suite is clean.
 
 ## R1 characterization baseline
 
@@ -844,6 +849,37 @@ Before moving code, cover:
   across coarser typed source children; that requires a traversal coordinate
   finer than the source context's immediate logical items. It also does not
   change the existing residual-pattern presentation of rejected intersections.
+
+### Checkpoint R10: traverse concrete nested sources in a finer unit
+
+- Complete on 2026-09-05.
+- Separated the selected pattern coordinate from the source's initial storage
+  coordinate. Generated wildcard suffixes remain in the marked selection's
+  unit even when the traversal coordinate changes.
+- Added unit-aware source extent measurement and recursive logical lookup. A
+  global finer-unit index is reduced to an outer child index and a local child
+  index until the requested typed POV is reached.
+- Added a locally zero-based source projection for that traversal coordinate.
+  It can cross an outer-child boundary while its root `viewMap.sourcePov`
+  remains the outer source context and `viewMap.startPov` identifies the first
+  nested selected unit.
+- Kept untyped intersections on the existing logical-item availability path.
+  A finer coordinate is selected only when an actual nested unit can be
+  located, so a coarse sparse run with no structural children still rejects a
+  finer request rather than inventing materialized positions.
+- Fixed direct low-level patterns whose counted typed run stores its unit on
+  the run's `listSpec`. This makes the direct form
+  `*(-3)+[<&*2+{minute| ...}> *1+{minute| ...}]` agree with
+  `#-3:*2+{minute| ...}` for both reads and mapped writes.
+- Added a compiled provenance test across two concrete nested hours, plus four
+  dynamic tests covering sugar and direct-intersection reads and writes across
+  the corresponding logical hour boundary in a named world value.
+- Regenerated and inspected `LocalBuild/TestProteus.cpp`. The time suite passes
+  `36/36`, the sparse suite passes `22/22`, and ordinary and protected nominal
+  runs report only the four established unrelated failures at `4/385`.
+- This checkpoint requires structurally represented nested finer units. It
+  does not expose implied finer positions inside an unmaterialized coarse
+  sparse span, and it does not add variable calendar-unit conversion.
 
 ## Completion criteria for the refactor
 

@@ -49,6 +49,12 @@ unit/day/fromHours/readFirstMinute, Day from hours: first minute, day:{hour| hou
 unit/day/fromHours/readEighthSecond, Day from hours: eighth second, day:{hour| hour:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6}} hour:{minute| minute:{second| 7 8 9} minute:{second| 10 11 12}}}#2#1#2, 8, world, TestFiles/timeTestCases.pr
 unit/day/fromHours/readMinuteByType, Day from hours: first minute by type, day:{hour| hour:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6}} hour:{minute| minute:{second| 7 8 9} minute:{second| 10 11 12}}}.minute, minute:{1 2 3}, world, TestFiles/timeTestCases.pr
 
+# Named nested day: select and write minutes across its internal hour boundary.
+unit/nestedDay/readMinutesAcrossHourNegativeSpan, Nested day: read two minutes across an hour boundary, %W.nestedDay#-3:*2+{minute| ...}, {minute:{4 5 6} minute:{7 8 9}}, world, TestFiles/timeTestCases.pr
+unit/nestedDay/writeMinutesAcrossHourNegativeSpan, Nested day: write two minutes across an hour boundary, %W.nestedDay#-3:*2+{minute| ...}={minute:{40 50 60} minute:{70 80 90}}\n%W.nestedDay, nestedDay:{1 2 3 40 50 60 70 80 90 10 11 12}, world, TestFiles/timeTestCases.pr
+unit/nestedDay/readMinutesAcrossHourNegativeIntersection, Nested day: direct intersection reads two minutes across an hour boundary, *(-3)+[<&*2+{minute| ...}> *1+{minute| ...}] <~ %W.nestedDay, {minute:{4 5 6} minute:{7 8 9}}, world, TestFiles/timeTestCases.pr
+unit/nestedDay/writeMinutesAcrossHourNegativeIntersection, Nested day: direct intersection writes two minutes across an hour boundary, *(-3)+[<&*2+{minute| ...}> *1+{minute| ...}] <~ %W.nestedDay = {minute:{40 50 60} minute:{70 80 90}}\n%W.nestedDay, nestedDay:{1 2 3 40 50 60 70 80 90 10 11 12}, world, TestFiles/timeTestCases.pr
+
 # Persistent world item: day is defined in seconds in the fixture, then accessed through larger units.
 unit/world/dayFromSeconds/readSecondHour, World day from seconds: second hour, %W.day#2, hour:{minute:{7 8 9} minute:{10 11 12}}, world, TestFiles/timeTestCases.pr
 unit/world/dayFromSeconds/readThirdMinute, World day from seconds: third minute, %W.day#2#1, minute:{7 8 9}, world, TestFiles/timeTestCases.pr

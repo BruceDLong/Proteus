@@ -2043,7 +2043,8 @@ struct IntersectionReasoner{
     // origin, not a negative local cardinality. Resolve that origin into a
     // source-backed view before ordinary intersection propagation begins.
     our POV: prepareEndRelativeSourceView(our POV: lhsPOV,
-            our POV: sourcePOV, me int64: sourceItemCount) <- {
+            our POV: sourcePOV, me int64: sourceItemCount,
+            our POV: preparedViewPOV) <- {
         if(lhsPOV==NULL or lhsPOV!.pItem==NULL or sourcePOV==NULL or
                 sourcePOV!.pItem==NULL){return(sourcePOV)}
         our infonView: lhs <- lhsPOV!.pItem
@@ -2055,9 +2056,12 @@ struct IntersectionReasoner{
         me int64: offset <- lhs!.infSize!.num.convertToInt()
         me int64: patternItemCount <- 0 - offset
         if(sourceItemCount<=0){sourceItemCount <- patternItemCount}
-        our POV: viewPOV <- sourcePOV!.makeEndRelativeSpanView(
-                sourcePOV, 0 - sourceItemCount,
-                povSrcEndRelativeView)
+        our POV: viewPOV <- preparedViewPOV
+        if(viewPOV==NULL){
+            viewPOV <- sourcePOV!.makeEndRelativeSpanView(
+                    sourcePOV, 0 - sourceItemCount,
+                    povSrcEndRelativeView)
+        }
         if(viewPOV==NULL){return(sourcePOV)}
 
         viewPOV!.looseMode <- sourcePOV!.looseMode
@@ -3673,13 +3677,6 @@ struct InfonViewReasoner{
         plan!.sourceContextPOV <- sourcePOV
         plan!.retainDependency(sourcePOV)
 
-        me EndRelativeExtentResult: extent <-
-                sourcePOV!.pItem!.endRelativeExtent()
-        plan!.extentStatus <- extent.status
-        if(extent.status==eresExact){
-            plan!.sourceLogicalExtent <- extent.exactExtent
-        }
-
         me vocabularySpec: vSpec
         vSpec.init(worldManager!.agent!.getLocaleBaseName())
         me EndRelativePatternMeasureResult: measurement <-
@@ -3690,6 +3687,14 @@ struct InfonViewReasoner{
         plan!.sourceWindowLogicalExtent <-
                 measurement.sourceLogicalExtent
         plan!.traversalUnit <- measurement.traversalUnit
+
+        me EndRelativeExtentResult: extent <- orderedSpanReasoner.
+                measureSourceExtentInUnit(
+                        sourcePOV, plan!.traversalUnit, vSpec)
+        plan!.extentStatus <- extent.status
+        if(extent.status==eresExact){
+            plan!.sourceLogicalExtent <- extent.exactExtent
+        }
 
         if(extent.status==eresIncompatible){
             plan!.status <- itpRejected
@@ -3722,10 +3727,17 @@ struct InfonViewReasoner{
             return(plan)
         }
 
-        me EndRelativeWindowAvailability: availability <-
-                sourcePOV!.endRelativeWindowAvailability(
-                        0-plan!.sourceWindowLogicalExtent,
-                        plan!.sourceWindowLogicalExtent)
+        me EndRelativeWindowAvailability: availability
+        if(plan!.traversalUnit==NULL){
+            availability <- sourcePOV!.endRelativeWindowAvailability(
+                    0-plan!.sourceWindowLogicalExtent,
+                    plan!.sourceWindowLogicalExtent)
+        }else{
+            availability <- orderedSpanReasoner.endRelativeWindowInUnit(
+                    sourcePOV, plan!.traversalUnit,
+                    0-plan!.sourceWindowLogicalExtent,
+                    plan!.sourceWindowLogicalExtent, vSpec)
+        }
         plan!.windowContentStatus <- availability.status
         plan!.sourceStartIndex <- availability.startIndex
         if(availability.status==erwcPending){
@@ -3750,13 +3762,29 @@ struct InfonViewReasoner{
     }
 
     our POV: realizeEndRelativeIntersectionTraversal(
+            their WorldManager: worldManager,
             our POV: lhsPOV, our POV: sourcePOV,
             our IntersectionTraversalPlan: plan) <- {
         if(plan==NULL or plan!.status!=itpResolved){return(sourcePOV)}
+        our POV: preparedViewPOV <- NULL
+        me vocabularySpec: vSpec
+        vSpec.init(worldManager!.agent!.getLocaleBaseName())
+        our WordUse: immediateSourceUnit <-
+                orderedSpanReasoner.orderedSpanImmediateUnitType(sourcePOV)
+        if(plan!.traversalUnit!=NULL and immediateSourceUnit!=NULL and
+                !orderedSpanReasoner.orderedSpanTypesMatch(
+                        plan!.traversalUnit, immediateSourceUnit)){
+            preparedViewPOV <- orderedSpanReasoner.
+                    makeEndRelativeTraversalUnitView(
+                            sourcePOV, plan!.traversalUnit,
+                            plan!.sourceStartIndex,
+                            plan!.sourceWindowLogicalExtent, vSpec)
+        }
         our POV: localSourceViewPOV <-
                 intersectionReasoner.prepareEndRelativeSourceView(
                         lhsPOV, sourcePOV,
-                        plan!.sourceWindowLogicalExtent)
+                        plan!.sourceWindowLogicalExtent,
+                        preparedViewPOV)
         if(localSourceViewPOV==NULL or localSourceViewPOV===sourcePOV){
             plan!.status <- itpRejected
             plan!.diagnostic <-

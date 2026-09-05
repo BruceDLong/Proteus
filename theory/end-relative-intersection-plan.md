@@ -1,12 +1,10 @@
 # End-relative selection through intersections
 
-Status: design exploration and implementation plan for review. No engine change
-is authorized by this document. The representation choice and semantic gates
-below must be reviewed before implementation.
+Status: approved design and staged implementation record. The engine currently
+implements the R10 boundary described below; the remaining deferrals are
+called out explicitly.
 
-Source basis: local branch `proteus3b` at
-`bce565d3c7ba042cf615457f155ea508271b875a`, including the uncommitted
-`ViewMap`, retained-POV lifetime transfer, and four negative typed-time tests.
+Source basis: local branch `proteus3b` through the R10 changes described here.
 
 Related drafts:
 
@@ -580,12 +578,18 @@ This is the proof that the feature belongs to intersections.
 
 The existing positive `#n` and positive slice suites must remain green.
 
-Implemented through R9 for negative item indexes, single-unit typed spans, and
-fixed repeated typed spans whose requested unit is the source traversal unit or
-is coarser than it. Compact `#` lowering and the transparent low-level
-intersection form now share the same composite mapping and write behavior.
-Direct traversal in a finer unit than the source context's immediate typed
-children remains a later extension.
+Implemented through R10 for negative item indexes, single-unit typed spans,
+fixed repeated typed spans, and finer-unit traversal across concrete nested
+source children. Compact `#` lowering and the transparent low-level
+intersection form share the same composite mapping and write behavior, even
+when a selected span crosses an outer child boundary. The resulting
+`infonView` remains locally zero-based; its root `ViewMap` retains the outer
+source as the traversal boundary and the first nested unit as its origin.
+
+Finer positions implied only by a coarse sparse count remain a later
+extension. Without concrete nested children, the engine rejects the finer
+coordinate instead of materializing or inventing those positions. Variable
+calendar-unit conversion also remains out of scope.
 
 ### Checkpoint 6: writes
 
@@ -639,17 +643,16 @@ The plan must yield distinct messages/states for:
 A normal pending end-relative expression must not be printed as `UNDEFINED`.
 An actual final mismatch must not remain pending forever.
 
-## Recommendation for review
+## Implemented direction
 
-Proceed with candidate E: an explicit source-end boundary constraint on an
-ordinary `emIntersection`, executed by resolving a forward traversal window.
-Prefer a small outer boundary mode over a zero-width pseudo-item, provided the
-same mode receives a genuine low-level parse/print form before `#-n` uses it.
+Candidate E is implemented: an ordinary `emIntersection` carries the
+source-end request as a negative size and resolves it into a forward traversal
+window. `#-n` lowers to that representation rather than owning separate
+navigation semantics.
 
-Before code changes, review the two Checkpoint 0 decisions and three details:
+The settled implementation choices are:
 
-1. the desired low-level textual notation for source-end alignment;
-2. whether the first implementation may reject variable-length anchored
-   suffixes instead of backtracking; and
-3. whether composite span writes must be atomic in the first write checkpoint
-   or may land after scalar/chained writes.
+1. parenthesized negative intersection size is the low-level textual form;
+2. fixed anchored patterns are supported, while variable-length anchored
+   suffixes remain deferred rather than introducing backtracking; and
+3. composite span writes are validated and committed atomically.

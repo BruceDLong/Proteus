@@ -58,12 +58,27 @@ struct OrderedSpanReasoner{
             requestPOV!.pParent <- lhsPOV
 
             our WordUse: unitType <- requestPOV!.pItem!.type
+            if(unitType==NULL and requestPOV!.hasSparseOrderedSpanValue() and
+                    requestPOV!.pItem!.value!.listSpec!=NULL){
+                // A directly written counted typed run carries its logical
+                // member unit on the run's listSpec rather than on the run
+                // container itself.
+                unitType <- requestPOV!.pItem!.value!.listSpec!.type
+            }
             if(unitType==NULL and
                     isImplicitOrderedSpanIndexRequest(requestPOV)){
+                if(result.patternCoordinateUnit!=NULL){
+                    // Generated wildcard suffixes align in the marked
+                    // selection's unit, independent of whether storage is
+                    // finer or coarser than that unit.
+                    unitType <- result.patternCoordinateUnit
+                }
                 // An implicit index asks for the natural child of the selected
                 // source context.  Looking at its first stored leaf loses that
                 // container relationship (for example, hour -> minute).
-                unitType <- orderedSpanContainerChildType(rhsPOV, vSpec)
+                if(unitType==NULL){
+                    unitType <- orderedSpanContainerChildType(rhsPOV, vSpec)
+                }
                 if(unitType==NULL and rhsPOV!.pItem!.type!=NULL){
                     // The source container type fixes the natural child unit
                     // even before its first value arrives. An untyped source
@@ -74,32 +89,55 @@ struct OrderedSpanReasoner{
                 if(unitType!=NULL){requestPOV!.pItem!.type <- unitType}
             }
 
+            if(result.patternCoordinateUnit==NULL and unitType!=NULL){
+                result.patternCoordinateUnit <- unitType
+            }
+
             me int64: sourceItemsForPatternItem <- 1
             if(unitType!=NULL){
-                if(sourceUnitType==NULL){
+                our WordUse: measurementUnit <- result.traversalUnit
+                if(measurementUnit==NULL){
                     result.status <- erpmIncompatibleUnit
                     result.failingPatternIndex <- patternIndex
                     return(result)
                 }
-                if(!orderedSpanTypesMatch(unitType, sourceUnitType)){
+                if(!orderedSpanTypesMatch(unitType, measurementUnit)){
                     our OrderedSpanConverter: converter <-
                             modelMngr.getOrderedSpanConverter(
-                                    unitType, sourceUnitType, vSpec)
+                                    unitType, measurementUnit, vSpec)
                     if(converter==NULL or !converter!.valid){
                         result.status <- erpmIncompatibleUnit
                         result.failingPatternIndex <- patternIndex
                         return(result)
                     }
-                    if(converter!.fromBaseCount<converter!.toBaseCount or
-                            converter!.toBaseCount<=0 or
-                            converter!.fromBaseCount %
-                                    converter!.toBaseCount != 0){
-                        result.status <- erpmNonIntegralUnit
-                        result.failingPatternIndex <- patternIndex
-                        return(result)
+                    if(converter!.fromBaseCount<converter!.toBaseCount){
+                        // The first explicit term may choose a finer traversal
+                        // coordinate than the source's immediate children.
+                        // Later refinement would require rescaling already
+                        // measured prefix terms, so reject that ambiguous form.
+                        if(result.sourceLogicalExtent!=0 or
+                                converter!.fromBaseCount<=0 or
+                                converter!.toBaseCount %
+                                        converter!.fromBaseCount != 0 or
+                                logicalOrderedSpanUnitAtIndex(
+                                        rhsPOV, unitType, 0, vSpec)==NULL){
+                            result.status <- erpmNonIntegralUnit
+                            result.failingPatternIndex <- patternIndex
+                            return(result)
+                        }
+                        result.traversalUnit <- unitType
+                    }else{
+                        if(converter!.toBaseCount<=0 or
+                                converter!.fromBaseCount %
+                                        converter!.toBaseCount != 0){
+                            result.status <- erpmNonIntegralUnit
+                            result.failingPatternIndex <- patternIndex
+                            return(result)
+                        }
+                        sourceItemsForPatternItem <-
+                                converter!.fromBaseCount /
+                                converter!.toBaseCount
                     }
-                    sourceItemsForPatternItem <- converter!.fromBaseCount /
-                            converter!.toBaseCount
                 }
             }
             // A counted sparse pattern is one structural run. Measure it
@@ -161,6 +199,136 @@ struct OrderedSpanReasoner{
             return(rhsPOV!.pParent!.pItem!.value!.listSpec!.type)
         }
         return(NULL)
+    }
+    our WordUse: orderedSpanImmediateUnitType(our POV: sourcePOV) <- {
+        if(sourcePOV==NULL or sourcePOV!.pItem==NULL or
+                sourcePOV!.pItem!.value!.overlayType!=LST){return(NULL)}
+        our POV: firstItemPOV <- sourcePOV!.logicalItemAtIndex(0)
+        if(firstItemPOV!=NULL){
+            our WordUse: firstItemType <-
+                    orderedSpanSourceUnitType(firstItemPOV)
+            if(firstItemType!=NULL){return(firstItemType)}
+        }
+        if(sourcePOV!.pItem!.value!.listSpec!=NULL){
+            return(sourcePOV!.pItem!.value!.listSpec!.type)
+        }
+        return(NULL)
+    }
+    me EndRelativeExtentResult: measureSourceExtentInUnit(
+            our POV: sourcePOV, our WordUse: traversalUnit,
+            their vocabularySpec: vSpec) <- {
+        me EndRelativeExtentResult: result
+        if(sourcePOV==NULL or sourcePOV!.pItem==NULL){
+            result.status <- eresIncompatible
+            return(result)
+        }
+        result <- sourcePOV!.pItem!.endRelativeExtent()
+        if(result.status!=eresExact or traversalUnit==NULL){return(result)}
+        our WordUse: sourceUnit <- orderedSpanImmediateUnitType(sourcePOV)
+        if(sourceUnit==NULL or
+                orderedSpanTypesMatch(traversalUnit, sourceUnit)){
+            return(result)
+        }
+        our OrderedSpanConverter: converter <-
+                modelMngr.getOrderedSpanConverter(
+                        traversalUnit, sourceUnit, vSpec)
+        if(converter==NULL or !converter!.valid or
+                converter!.fromBaseCount<=0 or
+                converter!.toBaseCount<=0){
+            result.status <- eresIncompatible
+            return(result)
+        }
+        if(converter!.fromBaseCount<converter!.toBaseCount){
+            if(converter!.toBaseCount % converter!.fromBaseCount != 0){
+                result.status <- eresIncompatible
+                return(result)
+            }
+            me int64: traversalItemsPerSourceItem <-
+                    converter!.toBaseCount / converter!.fromBaseCount
+            if(result.exactExtent>
+                    INT64_MAX/traversalItemsPerSourceItem){
+                result.status <- eresIncompatible
+                return(result)
+            }
+            result.exactExtent <-
+                    result.exactExtent * traversalItemsPerSourceItem
+            return(result)
+        }
+        if(converter!.fromBaseCount % converter!.toBaseCount != 0){
+            result.status <- eresIncompatible
+            return(result)
+        }
+        me int64: sourceItemsPerTraversalItem <-
+                converter!.fromBaseCount / converter!.toBaseCount
+        if(sourceItemsPerTraversalItem<=0 or
+                result.exactExtent % sourceItemsPerTraversalItem != 0){
+            result.status <- eresIncompatible
+            return(result)
+        }
+        result.exactExtent <-
+                result.exactExtent / sourceItemsPerTraversalItem
+        return(result)
+    }
+    our POV: logicalOrderedSpanUnitAtIndex(our POV: sourcePOV,
+            our WordUse: traversalUnit, me int64: itemIndex,
+            their vocabularySpec: vSpec) <- {
+        if(sourcePOV==NULL or traversalUnit==NULL or itemIndex<0){return(NULL)}
+        our WordUse: sourceUnit <- orderedSpanImmediateUnitType(sourcePOV)
+        if(sourceUnit==NULL){return(NULL)}
+        if(orderedSpanTypesMatch(traversalUnit, sourceUnit)){
+            return(sourcePOV!.logicalItemAtIndex(itemIndex))
+        }
+        our OrderedSpanConverter: converter <-
+                modelMngr.getOrderedSpanConverter(
+                        traversalUnit, sourceUnit, vSpec)
+        if(converter==NULL or !converter!.valid or
+                converter!.fromBaseCount<=0 or
+                converter!.toBaseCount<=converter!.fromBaseCount or
+                converter!.toBaseCount % converter!.fromBaseCount != 0){
+            return(NULL)
+        }
+        me int64: traversalItemsPerSourceItem <-
+                converter!.toBaseCount / converter!.fromBaseCount
+        me int64: sourceItemIndex <-
+                itemIndex / traversalItemsPerSourceItem
+        me int64: nestedItemIndex <-
+                itemIndex % traversalItemsPerSourceItem
+        our POV: sourceItemPOV <-
+                sourcePOV!.logicalItemAtIndex(sourceItemIndex)
+        if(sourceItemPOV==NULL){return(NULL)}
+        return(logicalOrderedSpanUnitAtIndex(
+                sourceItemPOV, traversalUnit, nestedItemIndex, vSpec))
+    }
+    me EndRelativeWindowAvailability: endRelativeWindowInUnit(
+            our POV: sourcePOV, our WordUse: traversalUnit,
+            me int64: offset, me int64: itemCount,
+            their vocabularySpec: vSpec) <- {
+        me EndRelativeWindowAvailability: result
+        result.itemCount <- itemCount
+        result.extent <- measureSourceExtentInUnit(
+                sourcePOV, traversalUnit, vSpec)
+        if(result.extent.status==eresIncompatible){
+            result.status <- erwcIncompatible
+            return(result)
+        }
+        if(result.extent.status!=eresExact){return(result)}
+        result.startIndex <- result.extent.exactExtent + offset
+        if(offset>=0 or itemCount<=0 or result.startIndex<0 or
+                itemCount>result.extent.exactExtent-result.startIndex){
+            result.status <- erwcOutOfRange
+            return(result)
+        }
+        me int64: itemIndex <- result.startIndex
+        while(itemIndex<result.startIndex+itemCount){
+            our POV: itemPOV <- logicalOrderedSpanUnitAtIndex(
+                    sourcePOV, traversalUnit, itemIndex, vSpec)
+            if(itemPOV==NULL){return(result)}
+            if(result.firstSourcePOV==NULL){result.firstSourcePOV <- itemPOV}
+            result.lastSourcePOV <- itemPOV
+            itemIndex <+- 1
+        }
+        result.status <- erwcAvailable
+        return(result)
     }
     our WordUse: orderedSpanContainerType(our POV: rhsPOV) <- {
         if(rhsPOV==NULL){return(NULL)}
@@ -574,6 +742,56 @@ struct OrderedSpanReasoner{
         markOrderedSpanViewReady(span)
         return(spanPOV)
     }
+    // Build the local matching window in a traversal unit finer than the
+    // source context's immediate children. Each lookup remains bounded by the
+    // supplied source context, even when successive units cross a nested
+    // child boundary.
+    our POV: makeEndRelativeTraversalUnitView(
+            our POV: sourceContextPOV, our WordUse: traversalUnit,
+            me int64: startIndex, me int64: itemCount,
+            their vocabularySpec: vSpec) <- {
+        if(sourceContextPOV==NULL or traversalUnit==NULL or
+                startIndex<0 or itemCount<=0){return(NULL)}
+        our POV: firstSourcePOV <- logicalOrderedSpanUnitAtIndex(
+                sourceContextPOV, traversalUnit, startIndex, vSpec)
+        if(firstSourcePOV==NULL){return(NULL)}
+
+        our infonView:: span
+        span!.setToList()
+        span!.orderMode <- sourceContextPOV!.pItem!.orderMode
+        span!.value!.sizeMode <- fromCount
+        span!.value!.tailUnfinished <- false
+        span!.infSize!.overlayType <- NUM
+        span!.infSize!.evalMode <- emLiteral
+        span!.infSize!.num <- itemCount
+
+        our POV:: spanPOV{povSrcEndRelativeView}
+        spanPOV!.pItem <- span
+        spanPOV!.isSubItm <- true
+        spanPOV!.pParent <- sourceContextPOV!.pParent
+        spanPOV!.mapViewToSource(sourceContextPOV, firstSourcePOV)
+
+        me int64: itemOffset <- 0
+        while(itemOffset<itemCount){
+            our POV: itemSourcePOV <- logicalOrderedSpanUnitAtIndex(
+                    sourceContextPOV, traversalUnit,
+                    startIndex + itemOffset, vSpec)
+            if(itemSourcePOV==NULL){return(NULL)}
+            our POV: itemPOV <- makeOrderedSpanUnitView(
+                    traversalUnit, sourceContextPOV, itemSourcePOV,
+                    vSpec, povSrcEndRelativeView)
+            if(itemPOV==NULL){return(NULL)}
+            if(itemPOV!.pItem!.type==NULL){
+                itemPOV!.pItem!.type <- traversalUnit
+            }
+            itemPOV!.isSubItm <- false
+            itemPOV!.pParent <- spanPOV
+            span!.value!.items.appendPov(itemPOV)
+            itemOffset <+- 1
+        }
+        markOrderedSpanViewReady(span)
+        return(spanPOV)
+    }
     our POV: firstOrderedSpanChildForRequest(our WordUse: requestType,
             our POV: sourceContextPOV, our POV: rhsPOV,
             their vocabularySpec: vSpec) <- {
@@ -731,7 +949,7 @@ struct WorldManager{
             our POV: lhsPOV, our POV: sourcePOV,
             our IntersectionTraversalPlan: plan) <- {
         return(infonViewReasoner.realizeEndRelativeIntersectionTraversal(
-                lhsPOV, sourcePOV, plan))
+                self, lhsPOV, sourcePOV, plan))
     }
 
     me EndRelativePatternMeasureResult: measureEndRelativeFixedPattern(
