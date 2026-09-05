@@ -812,10 +812,38 @@ Before moving code, cover:
 - Added three compiled tests for the lowered graph, typed sugar/non-sugar
   mapping equivalence, and span-work ownership. Added dynamic reads for `#-2`
   and `#-1:minute`, an explicit span write, and a sparse-prefix scarcity case.
-- The current boundary is one selected logical item or one explicitly typed
-  unit span. Compact sugar for an arbitrary multi-unit selection such as
-  `#-3:*2+{hour| ...}` remains a later extension; low-level mapped span
-  intersections remain the working mechanism for those selections.
+- R8's boundary was one selected logical item or one explicitly typed unit
+  span. R9 extends the same intersection path to fixed repeated typed spans.
+
+### Checkpoint R9: map fixed repeated typed spans
+
+- Complete on 2026-09-05.
+- Negative `#` lowering makes a repeated selected span transparent within the
+  pattern while keeping one-unit item/span targets opaque. Consequently the
+  declared negative size measures the selected logical units plus any sparse
+  unselected suffix.
+- Fixed-pattern measurement consumes counted sparse pattern runs
+  arithmetically and rejects a run that exceeds the negative anchor instead of
+  silently measuring only its prefix.
+- Marked-span correspondence preserves the established same-unit sparse path.
+  When the requested unit is coarser than storage, it constructs one ordinary
+  ordered-span view per requested unit and maps the composite root and every
+  descendant back to the accepted source occurrence.
+- The canonical low-level equivalent remains transparent:
+  `*(-2)+[<&*2+{minute| ...}>]`. An opaque marked list denotes one list item,
+  not two transparent pattern positions.
+- Added dynamic coverage for positive typed repetition, negative repetition,
+  a direct low-level equivalent, an unselected trailing suffix, and sugar and
+  low-level mapped writes. Added a compiled assertion for a repeated pattern
+  wider than its negative anchor.
+- Regenerated and inspected `LocalBuild/TestProteus.cpp`. The time suite passes
+  `32/32`, the sparse suite passes `22/22`, and both ordinary and protected
+  nominal runs report only the four established unrelated failures at
+  `4/380`.
+- This checkpoint does not make a finer requested unit directly traversable
+  across coarser typed source children; that requires a traversal coordinate
+  finer than the source context's immediate logical items. It also does not
+  change the existing residual-pattern presentation of rejected intersections.
 
 ## Completion criteria for the refactor
 

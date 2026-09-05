@@ -2818,7 +2818,6 @@ struct CursorPathResolver{
             newInnr!.infSize!.evalMode <- emLiteral
             newInnr!.infSize!.inverted <- false
             newInnr!.infSize!.num <- signedIndex
-            targetPOV <- newInnr!.value!.items.append(target, false, 18)
 
             me int64: selectedExtent <- 1
             if(hasSpec and target!.value!.overlayType==LST and
@@ -2827,6 +2826,10 @@ struct CursorPathResolver{
                     target!.infSize!.num>0){
                 selectedExtent <- target!.infSize!.num.convertToInt()
             }
+            // A repeated span contributes each of its logical units to the
+            // end-relative pattern. A one-unit item/span remains opaque.
+            targetPOV <- newInnr!.value!.items.append(
+                    target, selectedExtent>1, 18)
             me int64: suffixCount <- 0 - signedIndex - selectedExtent
             if(suffixCount>0){
                 our infonView:: suffixSpec
@@ -3066,44 +3069,6 @@ struct ParentMemberReasoner{
         return(RHSPovNxt)
     }
 
-    // Capture a marked sparse occurrence as a locally zero-based view before
-    // traversal splits either side. The local listSpec is authoritative for
-    // member typing, so storage-only types introduced by sparse
-    // materialization are redundant in the returned view.
-    our POV: makeMappedMarkedSparseSpan(our POV: markedPOV,
-            our POV: sourceContextPOV, our POV: sourceStartPOV) <- {
-        if(markedPOV==NULL or sourceContextPOV==NULL or
-                sourceStartPOV==NULL or
-                !markedPOV!.hasSparseOrderedSpanValue()){
-            return(NULL)
-        }
-        me int64: markedItemCount <- markedPOV!.sparseSpanCount()
-        if(markedItemCount<=0){return(NULL)}
-        our POV: mappedMarkedView <- sourceStartPOV!.
-                makeLogicalSiblingSpanView(
-                        sourceContextPOV, markedItemCount, false,
-                        povSrcConcreteSpanPrefix, true)
-        if(mappedMarkedView==NULL){return(NULL)}
-        mappedMarkedView!.pItem!.type <- markedPOV!.pItem!.type
-        mappedMarkedView!.pItem!.value!.listSpec <-
-                markedPOV!.pItem!.value!.listSpec
-
-        our POV: mappedChildPOV <-
-                mappedMarkedView!.pItem!.value!.items.head
-        while(mappedChildPOV!=NULL){
-            if(mappedChildPOV!.pItem!.type!=NULL and
-                    mappedMarkedView!.pItem!.value!.listSpec!=NULL and
-                    mappedMarkedView!.pItem!.value!.listSpec!.type!=NULL and
-                    mappedChildPOV!.pItem!.type!.typeID()==
-                            mappedMarkedView!.pItem!.value!.
-                                    listSpec!.type!.typeID()){
-                mappedChildPOV!.pItem!.type <- NULL
-            }
-            mappedChildPOV <- mappedChildPOV!.next
-        }
-        return(mappedMarkedView)
-    }
-
     our AItem: propagate(their WorldManager: worldManager, their Agenda: agenda, our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque, their int:waitState) <- {
         // Log LHS==RHS
         me string: idnt <- indentStr(aItem!.indentLvl)
@@ -3228,9 +3193,10 @@ struct ParentMemberReasoner{
                         LHSPovNext and
                 LHSPovNext!.hasSparseOrderedSpanValue() and
                 !RHSPovNext!.isSparseOrderedSpan()){
-            our POV: mappedMarkedView <- makeMappedMarkedSparseSpan(
-                    LHSPovNext, orderedSpanSourceContextPOV,
-                    RHSPovNext)
+            our POV: mappedMarkedView <- worldManager!.
+                    makeMappedMarkedSparseSpan(
+                            LHSPovNext, orderedSpanSourceContextPOV,
+                            RHSPovNext)
             if(mappedMarkedView!=NULL){
                 aParent!.LHS_item!.pItem!.intersectMarkedRetPOV <-
                         mappedMarkedView
@@ -3301,9 +3267,11 @@ struct ParentMemberReasoner{
                         // extent crosses this source span's boundary.
                         markedMatch <- RHSPovNext
                     }else{
-                        markedMatch <- makeMappedMarkedSparseSpan(
-                                markedPOV, orderedSpanSourceContextPOV,
-                                RHSPovNext)
+                        markedMatch <- worldManager!.
+                                makeMappedMarkedSparseSpan(
+                                        markedPOV,
+                                        orderedSpanSourceContextPOV,
+                                        RHSPovNext)
                     }
                 }
                 if(markedMatch==NULL and LHSPov!=NULL and RHSExists and RHSPov!.pedigree.source==povSrcSparseExposedHead and markedPOV===LHSPov){markedMatch <- RHSPov}

@@ -102,14 +102,45 @@ struct OrderedSpanReasoner{
                             converter!.toBaseCount
                 }
             }
-            if(sourceItemsForPatternItem>
-                    INT64_MAX-result.sourceLogicalExtent){
+            // A counted sparse pattern is one structural run. Measure it
+            // arithmetically instead of visiting every logical position, and
+            // reject a run that crosses the pattern width declared by the
+            // negative intersection size.
+            me int64: patternRunCount <- 1
+            if(requestPOV!.isImplicitItemPOV() and
+                    requestPOV!.implicitItem.sourcePov!=NULL and
+                    requestPOV!.implicitItem.sourcePov!.
+                            hasSparseOrderedSpanValue()){
+                patternRunCount <- requestPOV!.implicitItem.sourcePov!.
+                        sparseSpanCount() -
+                        requestPOV!.implicitItem.sourceIndex
+                if(patternRunCount<=0 or
+                        patternRunCount>patternItemCount-patternIndex){
+                    result.status <- erpmInvalidRequest
+                    result.failingPatternIndex <- patternIndex
+                    return(result)
+                }
+            }
+            if(sourceItemsForPatternItem>0 and
+                    patternRunCount>
+                            (INT64_MAX-result.sourceLogicalExtent)/
+                                    sourceItemsForPatternItem){
                 result.status <- erpmExtentOverflow
                 result.failingPatternIndex <- patternIndex
                 return(result)
             }
-            result.sourceLogicalExtent <+- sourceItemsForPatternItem
-            patternIndex <+- 1
+            result.sourceLogicalExtent <+-
+                    sourceItemsForPatternItem * patternRunCount
+            patternIndex <+- patternRunCount
+        }
+        // A negative intersection size declares the complete logical pattern
+        // width. Do not silently truncate a wider marked term to that width;
+        // the same invariant applies whether the pattern came from # sugar or
+        // was written directly as an intersection.
+        if(lhsPOV!.logicalItemAtIndex(patternItemCount)!=NULL){
+            result.status <- erpmInvalidRequest
+            result.failingPatternIndex <- patternItemCount
+            return(result)
         }
         result.status <- erpmResolved
         return(result)
@@ -117,6 +148,14 @@ struct OrderedSpanReasoner{
 
     our WordUse: orderedSpanSourceUnitType(our POV: rhsPOV) <- {
         if(rhsPOV==NULL or rhsPOV!.pItem==NULL){return(NULL)}
+        // A counted sparse POV represents a run of its listSpec members. Its
+        // own type may be the plural/container type (seconds), which is not
+        // the unit traversed at each logical position (second).
+        if(rhsPOV!.hasSparseOrderedSpanValue() and
+                rhsPOV!.pItem!.value!.listSpec!=NULL and
+                rhsPOV!.pItem!.value!.listSpec!.type!=NULL){
+            return(rhsPOV!.pItem!.value!.listSpec!.type)
+        }
         if(rhsPOV!.pItem!.type!=NULL){return(rhsPOV!.pItem!.type)}
         if(rhsPOV!.pParent!=NULL and rhsPOV!.pParent!.pItem!=NULL and rhsPOV!.pParent!.pItem!.value!.listSpec!=NULL and rhsPOV!.pParent!.pItem!.value!.listSpec!.type!=NULL){
             return(rhsPOV!.pParent!.pItem!.value!.listSpec!.type)
@@ -442,6 +481,99 @@ struct OrderedSpanReasoner{
         markOrderedSpanViewReady(span)
         return(spanPOV)
     }
+    // Reify a marked counted span in its requested unit shape. The source may
+    // store a finer unit, so the count on the marked pattern cannot be used as
+    // a raw source-sibling count. Each requested unit becomes one mapped local
+    // child whose own tree is built by the ordinary ordered-span conversion.
+    our POV: makeMappedMarkedSparseSpan(our POV: markedPOV,
+            our POV: sourceContextPOV, our POV: sourceStartPOV,
+            their vocabularySpec: vSpec) <- {
+        if(markedPOV==NULL or sourceContextPOV==NULL or
+                sourceStartPOV==NULL or
+                !markedPOV!.hasSparseOrderedSpanValue()){
+            return(NULL)
+        }
+        me int64: markedItemCount <- markedPOV!.sparseSpanCount()
+        if(markedItemCount<=0){return(NULL)}
+
+        our POV: mappedSourceStartPOV <-
+                sourceStartPOV!.ultimateMappedSourcePOV()
+        if(mappedSourceStartPOV==NULL){mappedSourceStartPOV <- sourceStartPOV}
+
+        our WordUse: unitType <- markedPOV!.pItem!.value!.listSpec!.type
+        if(unitType==NULL){
+            return(mappedSourceStartPOV!.makeLogicalSiblingSpanView(
+                    sourceContextPOV, markedItemCount, false,
+                    povSrcConcreteSpanPrefix, true))
+        }
+        our WordUse: acceptedSourceUnitType <-
+                orderedSpanSourceUnitType(sourceStartPOV)
+        if(acceptedSourceUnitType!=NULL and
+                orderedSpanTypesMatch(unitType, acceptedSourceUnitType)){
+            our POV: sameUnitView <- sourceStartPOV!.
+                    makeLogicalSiblingSpanView(
+                            sourceContextPOV, markedItemCount, false,
+                            povSrcConcreteSpanPrefix, true)
+            if(sameUnitView==NULL){return(NULL)}
+            sameUnitView!.pItem!.type <- markedPOV!.pItem!.type
+            sameUnitView!.pItem!.value!.listSpec <-
+                    markedPOV!.pItem!.value!.listSpec
+            our POV: sameUnitChild <-
+                    sameUnitView!.pItem!.value!.items.head
+            while(sameUnitChild!=NULL){
+                if(sameUnitChild!.pItem!.type!=NULL and
+                        sameUnitChild!.pItem!.type!.typeID()==
+                                unitType!.typeID()){
+                    sameUnitChild!.pItem!.type <- NULL
+                }
+                sameUnitChild <- sameUnitChild!.next
+            }
+            return(sameUnitView)
+        }
+        me int64: sourceItemsForUnit <- orderedSpanWindowItemCountForUnit(
+                unitType, mappedSourceStartPOV, vSpec)
+        if(sourceItemsForUnit<=0 or
+                markedItemCount>INT64_MAX/sourceItemsForUnit){return(NULL)}
+        me int64: sourceItemCount <- markedItemCount * sourceItemsForUnit
+        if(!mappedSourceStartPOV!.hasLogicalItemsFromHere(sourceItemCount)){
+            return(NULL)
+        }
+
+        our infonView:: span
+        span!.setToList()
+        span!.type <- markedPOV!.pItem!.type
+        span!.orderMode <- markedPOV!.pItem!.orderMode
+        span!.value!.sizeMode <- fromCount
+        span!.value!.tailUnfinished <- false
+        span!.infSize!.overlayType <- NUM
+        span!.infSize!.evalMode <- emLiteral
+        span!.infSize!.num <- markedItemCount
+
+        our POV:: spanPOV{povSrcConcreteSpanPrefix}
+        spanPOV!.pItem <- span
+        spanPOV!.isSubItm <- true
+        spanPOV!.pParent <- mappedSourceStartPOV!.pParent
+        spanPOV!.mapViewToSource(sourceContextPOV, mappedSourceStartPOV)
+
+        me int64: itemIndex <- 0
+        me int64: sourceOffset <- 0
+        while(itemIndex<markedItemCount){
+            our POV: itemSourcePOV <- mappedSourceStartPOV!.
+                    logicalSiblingAtOffset(sourceOffset)
+            if(itemSourcePOV==NULL){return(NULL)}
+            our POV: itemPOV <- makeOrderedSpanUnitView(
+                    unitType, sourceContextPOV, itemSourcePOV,
+                    vSpec, povSrcConcreteSpanPrefix)
+            if(itemPOV==NULL){return(NULL)}
+            itemPOV!.isSubItm <- false
+            itemPOV!.pParent <- spanPOV
+            span!.value!.items.appendPov(itemPOV)
+            itemIndex <+- 1
+            sourceOffset <+- sourceItemsForUnit
+        }
+        markOrderedSpanViewReady(span)
+        return(spanPOV)
+    }
     our POV: firstOrderedSpanChildForRequest(our WordUse: requestType,
             our POV: sourceContextPOV, our POV: rhsPOV,
             their vocabularySpec: vSpec) <- {
@@ -626,6 +758,14 @@ struct WorldManager{
         return(infonViewReasoner.orderedSpanReasoner.
                 tryBuildOrderedSpanTraversalWindow(
                         self, lhsPOV, sourceContextPOV, rhsPOV))
+    }
+    our POV: makeMappedMarkedSparseSpan(our POV: markedPOV,
+            our POV: sourceContextPOV, our POV: sourceStartPOV) <- {
+        me vocabularySpec: vSpec
+        vSpec.init(agent!.getLocaleBaseName())
+        return(infonViewReasoner.orderedSpanReasoner.
+                makeMappedMarkedSparseSpan(markedPOV,
+                        sourceContextPOV, sourceStartPOV, vSpec))
     }
     me bool: sparseOrderedSpanMergeAlignable(our POV: lhsPOV,
             our POV: rhsPOV, their vocabularySpec: vSpec) <- {

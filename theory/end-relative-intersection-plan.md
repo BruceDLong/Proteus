@@ -580,10 +580,12 @@ This is the proof that the feature belongs to intersections.
 
 The existing positive `#n` and positive slice suites must remain green.
 
-Implemented through R8 for negative item indexes and single-unit typed spans.
-Arbitrary multi-unit negative span sugar remains separate; its low-level
-intersection form must stay authoritative until compact lowering preserves the
-same composite mapping and write behavior.
+Implemented through R9 for negative item indexes, single-unit typed spans, and
+fixed repeated typed spans whose requested unit is the source traversal unit or
+is coarser than it. Compact `#` lowering and the transparent low-level
+intersection form now share the same composite mapping and write behavior.
+Direct traversal in a finer unit than the source context's immediate typed
+children remains a later extension.
 
 ### Checkpoint 6: writes
 

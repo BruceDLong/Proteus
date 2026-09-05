@@ -22,6 +22,10 @@ unit/hour/fromSeconds/readLastMinuteNegative, Hour from seconds: last minute by 
 unit/hour/fromSeconds/readPreviousMinuteNegative, Hour from seconds: previous minute by negative index, hour:{second| 1 2 3 4 5 6}#-2, minute:{1 2 3}, world, TestFiles/timeTestCases.pr
 unit/hour/fromSeconds/readLastMinuteNegativeSpan, Hour from seconds: last minute by explicit negative span, hour:{second| 1 2 3 4 5 6}#-1:minute, minute:{4 5 6}, world, TestFiles/timeTestCases.pr
 unit/hour/fromSeconds/readLastMinuteNegativeIntersection, Hour from seconds: last minute by negative-sized intersection, *(-1)+[<minute>] <~ hour:{second| 1 2 3 4 5 6}, minute:{4 5 6}, world, TestFiles/timeTestCases.pr
+unit/hour/fromSeconds/readTwoMinutesPositiveSpan, Hour from seconds: two minutes by positive span, hour:{second| 1 2 3 4 5 6}#0:*2+{minute| ...}, {minute:{1 2 3} minute:{4 5 6}}, world, TestFiles/timeTestCases.pr
+unit/hour/fromSeconds/readTwoMinutesNegativeSpan, Hour from seconds: two minutes by negative span, hour:{second| 1 2 3 4 5 6}#-2:*2+{minute| ...}, {minute:{1 2 3} minute:{4 5 6}}, world, TestFiles/timeTestCases.pr
+unit/hour/fromSeconds/readTwoMinutesNegativeIntersection, Hour from seconds: two minutes by negative-sized intersection, *(-2)+[<&*2+{minute| ...}>] <~ hour:{second| 1 2 3 4 5 6}, {minute:{1 2 3} minute:{4 5 6}}, world, TestFiles/timeTestCases.pr
+unit/hour/fromSeconds/readTwoMinutesWithSuffix, Hour from seconds: two minutes followed by an unselected minute, hour:{second| 1 2 3 4 5 6 7 8 9}#-3:*2+{minute| ...}, {minute:{1 2 3} minute:{4 5 6}}, world, TestFiles/timeTestCases.pr
 
 # Hour spans defined in minutes, then read as seconds.
 unit/hour/fromMinutes/readFirstSecond, Hour from minutes: first second, hour:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6}}#1#1, 1, world, TestFiles/timeTestCases.pr
@@ -52,3 +56,5 @@ unit/world/dayFromSeconds/writeNestedSecond, World day from seconds: write neste
 unit/world/dayFromSeconds/writeNestedLastSecondNegative, World day from seconds: write nested last second by negative indexes, %W.day#-1#-1#-1=80\n%W.day, day:{1 2 3 4 5 6 7 8 9 10 11 80}, world, TestFiles/timeTestCases.pr
 unit/world/dayFromSeconds/writeLastMinuteNegativeSpan, World day from seconds: write final minute by explicit negative span, %W.day#-1:minute=minute:{100 110 120}\n%W.day, day:{1 2 3 4 5 6 7 8 9 100 110 120}, world, TestFiles/timeTestCases.pr
 unit/world/dayFromSeconds/writeLastMinuteNegativeIntersection, World day from seconds: write final minute through negative-sized intersection, *(-1)+[<minute>] <~ %W.day = minute:{100 110 120}\n%W.day, day:{1 2 3 4 5 6 7 8 9 100 110 120}, world, TestFiles/timeTestCases.pr
+unit/world/dayFromSeconds/writeTwoMinutesNegativeSpan, World day from seconds: write final two minutes by negative span, %W.day#-2:*2+{minute| ...}={minute:{100 110 120} minute:{130 140 150}}\n%W.day, day:{1 2 3 4 5 6 100 110 120 130 140 150}, world, TestFiles/timeTestCases.pr
+unit/world/dayFromSeconds/writeTwoMinutesNegativeIntersection, World day from seconds: write final two minutes through negative-sized intersection, *(-2)+[<&*2+{minute| ...}>] <~ %W.day = {minute:{100 110 120} minute:{130 140 150}}\n%W.day, day:{1 2 3 4 5 6 100 110 120 130 140 150}, world, TestFiles/timeTestCases.pr
