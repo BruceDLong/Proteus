@@ -2,11 +2,12 @@
 
 Status: representation decisions approved on 2026-09-04. R1 characterization,
 R2 extent/availability separation, the R3 traversal plan, and R4 accepted-match
-correspondence recording are complete. R5 unified view construction is next.
-No negative `#` sugar has been added.
+correspondence recording are complete. R5 now gives every ordered-span result
+one local, recursively source-mapped construction contract. R6 transactional
+mapped writes is next. No negative `#` sugar has been added.
 
 Source basis: local branch `proteus3b` at
-`0b95f74`, plus the R4 correspondence changes described here.
+`8bc2cd5`, plus the R5 unified-view changes described here.
 
 Related documents:
 
@@ -28,8 +29,10 @@ to maintain when negative `#` sugar, open streams, view-of-view selection,
 sparse writes, stable named spans, and calendar boundaries are added.
 
 The implementation now has one explicit intersection traversal plan beside the
-existing projection path. Correspondence recording, unified view construction,
-and transactional mapped writes remain deliberately separate checkpoints.
+existing projection path, records accepted correspondence, and constructs
+positive, negative, direct, recursive, and sparse ordered-span views under the
+same local mapping rules. Transactional mapped writes remains a deliberately
+separate checkpoint.
 
 ## Current verified boundary
 
@@ -55,12 +58,18 @@ The regenerated `LocalBuild/TestProteus` executable currently demonstrates:
   and sparse results;
 - complete `ViewMap`s on selected end-relative composites and their writable
   descendants;
+- local copies with complete recursive `ViewMap`s for positive, negative,
+  direct, recursive typed, and sparse ordered-span views;
+- view-of-view mappings whose source context is the immediate source view, so
+  traversal cannot escape that boundary;
+- separation of mapping provenance from write authority: a complete `ViewMap`
+  alone does not permit source mutation;
 - end-relative marked selection without selection-time first-child mapping
   recovery;
 - preservation of the established positive nested write; and
 - preservation of `range/select1`.
 
-The protected full run reports `9/352`. The failures are the five known
+The protected full run reports `9/357`. The failures are the five known
 baseline failures plus the four intentionally unsupported negative `#` sugar
 tests. This is a regression checkpoint, not a claim that the full suite is
 clean.
@@ -215,6 +224,46 @@ at `5/10`, `timeTests.tst` remains at `4/23`, `range/select1` and
 `marked/lookahead` pass, and the protected full suite remains at its approved
 `9/352` result.
 
+## R5 implementation record
+
+R5 gives all ordered-span builders the same representation. Each accepts an
+explicit source traversal context, constructs a locally owned root and
+descendants, and recursively maps those POVs back to their corresponding
+source POVs. Positive sibling selection, negative end-relative selection,
+direct same-unit selection, recursive typed conversion, and sparse logical
+positions no longer choose between shared and copied source items according to
+how the source was reached.
+
+View-of-view construction deliberately preserves its immediate boundary. Its
+`ViewMap.sourcePov` is the source view, and its `startPov` is the matching local
+item inside that view. Following mappings to an ultimate source is a separate
+navigation operation. Mapped local copies do not use `outerPOV`; that field
+remains available for its existing alternative/validation role.
+
+R5 also separates provenance from permission. A complete `ViewMap` says where
+a local result came from, but does not by itself authorize source mutation.
+Final selection grants `viewMapWriteEnabled` only when the selected result has
+pending consumer work. Reference consolidation follows a mapping only when
+that authority is present, so ordinary mapped reads continue to refine and
+return their local projections. R7 will replace the remaining work-list proxy
+with an explicit consumer-work classification.
+
+During validation, traversal was found to leave inherited `cstListSpec` work
+on a source item immediately before replacing it with a local projection. The
+local builder already materializes that represented type shape. It therefore
+consumes that specific seeded source work after mapping the local copy, without
+moving unrelated work or resetting the source's copy guard. This prevents a
+later source-side normalization from replaying work already represented by the
+view.
+
+Five compiled R5 cases cover positive flat and recursive views, direct views,
+view-of-view boundaries, and non-materialized sparse views. The regenerated
+build passes those `5/5`, all `25/25` compiled `unit/endRelative/` cases,
+`range/select1`, and `marked/lookahead`. The isolated R1 suite remains at its
+approved `5/10` checkpoint, `timeTests.tst` remains at `4/23` for unsupported
+negative `#` sugar, and the protected full suite is `9/357`: the five known
+baseline failures plus those four sugar cases.
+
 ## Foundations worth keeping
 
 ### Negative size is the low-level request
@@ -274,10 +323,13 @@ The current path is spread across several layers:
 5. When a descendant merge accepts, `recordAcceptedCorrespondence()` records
    its exact pattern/local/source relation and populates the selected mapping.
 6. `IntersectionReasoner.selectFunctionResult()` returns the already mapped
-   end-relative marked result. Ordinary positive views still have their legacy
-   compatibility recovery until R5.
-7. `ReferenceConsolidationStrategy` recognizes the mapped result and writes
-   scalar or flattened composite values to the mapped source POVs.
+   marked result. Unified builders supply positive and negative maps directly;
+   first-child recovery remains only as an R7 compatibility fallback for
+   ordinary non-builder paths.
+7. Final result selection grants explicit mapped-write authority when consumer
+   equality work is present; a passive mapped read remains local.
+8. `ReferenceConsolidationStrategy` recognizes the authorized mapped result
+   and writes scalar or flattened composite values to the mapped source POVs.
 
 The traversal plan now states the end-relative operation and its accepted
 correspondences. View construction, work ownership, and mapped-write validation
@@ -385,30 +437,30 @@ pending. A live source without an exact size cannot resolve an end-relative
 coordinate. Both queries must be about the selected source/view context, not
 an unrelated outer list.
 
-### G5: ordered-span builders have two construction policies
+### G5: ordered-span construction is now unified
 
-The builders share source `pItem`s for ordinary positive paths but copy local
-items and populate `ViewMap` when the source is already derived. This preserves
-existing positive behavior, but it makes construction depend on how the source
-was reached rather than what kind of result is being built.
+R5 removes the construction split. Positive sibling spans, negative
+end-relative spans, direct same-unit spans, recursive typed spans, and sparse
+positions all return local copies. The root and every copied descendant have a
+complete `ViewMap`; no mapped local copy uses `outerPOV` as provenance.
 
-Risks:
+Every builder receives its source context explicitly. A view built from
+another view maps to that immediate view, rather than silently flattening to
+the ultimate source. This makes the traversal stop boundary part of the
+constructed graph and preserves local zero-based indexing at every layer.
 
-- positive and negative routes can produce observably different view graphs;
-- a view-of-view accumulates compatibility branches;
-- source mutation can occur accidentally when a shared item was expected to be
-  a local projection; and
-- future callers must know which builder policy they received.
-
-Desired invariant: every derived ordered-span result has the same local-copy
-and `ViewMap` contract. Migrate ordinary positive paths only after
-characterization tests show that the unified contract preserves behavior.
+One traversal interaction required an explicit ownership rule. Logical
+traversal may seed inherited `cstListSpec` work on a source item before the
+local replacement is built. Because the local copy materializes that same type
+shape, construction consumes only that represented seed from the source while
+leaving persistent source work intact.
 
 ### G6: correspondence is reconstructed during result selection
 
-R4 resolves this for end-relative traversal plans. The recovery described below
-remains only for ordinary positive intersections until their view construction
-is unified in R5.
+R4 resolves this for end-relative traversal plans, and R5 builders now supply
+the positive mappings directly. The recovery described below remains only as
+an R7 compatibility fallback for ordinary paths that do not use a unified
+builder.
 
 `IntersectionReasoner.selectFunctionResult()` first checks the marked match. If
 that POV lacks a usable mapping and the selected result is a list, it uses the
@@ -678,11 +730,16 @@ Before moving code, cover:
 
 ### Checkpoint R5: unify view construction
 
-- Make every derived ordered-span view local and source-mapped.
-- Migrate positive ordered-span selectors through the same contract.
-- Remove derived-versus-ordinary construction branches after positive tests
-  prove parity.
-- Keep direct non-derived identities outside `ViewMap`.
+- Complete on 2026-09-04.
+- Made every ordered-span result local and recursively source-mapped.
+- Migrated positive and direct ordered-span selectors through the same
+  construction contract as end-relative selectors.
+- Removed derived-versus-ordinary construction branches after positive,
+  recursive, view-of-view, and sparse parity tests passed.
+- Kept `ViewMap` as provenance and added separate, selection-time mapped-write
+  authority so passive mapped reads cannot change their sources.
+- Preserved immediate view boundaries and left `outerPOV` out of mapped local
+  provenance.
 
 ### Checkpoint R6: make mapped writes transactional
 

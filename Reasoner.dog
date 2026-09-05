@@ -107,12 +107,13 @@ struct ReferenceConsolidationStrategy{
         return(aItem!=NULL and aItem!.LHS_item!=NULL and
                 aItem!.LHS_item!.accessMode==aRefTo and
                 aItem!.LHS_item!.pItem!=NULL and
-                ((aItem!.LHS_item!.outerPOV!=NULL and
-                  aItem!.LHS_item!.outerPOV!.pItem===aItem!.LHS_item!.pItem) or
-                 (aItem!.LHS_item!.viewMap.sourcePov!=NULL and
+                ((aItem!.LHS_item!.viewMap.sourcePov!=NULL and
                   aItem!.LHS_item!.viewMap.startPov!=NULL and
-                  !(aItem!.LHS_item!.viewMap.sourcePov===
-                    aItem!.LHS_item!.viewMap.startPov))) and
+                  aItem!.LHS_item!.viewMapWriteEnabled) or
+                 ((aItem!.LHS_item!.viewMap.sourcePov==NULL or
+                   aItem!.LHS_item!.viewMap.startPov==NULL) and
+                  aItem!.LHS_item!.outerPOV!=NULL and
+                  aItem!.LHS_item!.outerPOV!.pItem===aItem!.LHS_item!.pItem)) and
                 aItem!.RHS!=NULL and aItem!.RHS!.pItem!=NULL and
                 !aItem!.RHS!.pItem!.asRHSInternalIdent and
                 !(aItem!.RHS!.pParent!=NULL and
@@ -182,13 +183,12 @@ struct ReferenceConsolidationStrategy{
 
     our POV: mappedWriteSourcePOV(our POV: viewPOV) <- {
         if(viewPOV==NULL){return(NULL)}
-        if(viewPOV!.viewMap.startPov!=NULL){
-            return(viewPOV!.viewMap.startPov)
-        }
+        our POV: mappedSourcePOV <- viewPOV!.ultimateMappedSourcePOV()
+        if(mappedSourcePOV!=NULL){return(mappedSourcePOV)}
         if(viewPOV!.outerPOV!=NULL){
-            if(viewPOV!.outerPOV!.viewMap.startPov!=NULL){
-                return(viewPOV!.outerPOV!.viewMap.startPov)
-            }
+            mappedSourcePOV <-
+                    viewPOV!.outerPOV!.ultimateMappedSourcePOV()
+            if(mappedSourcePOV!=NULL){return(mappedSourcePOV)}
             if(viewPOV!.outerPOV!.pItem===viewPOV!.pItem){
                 return(viewPOV!.outerPOV)
             }
@@ -198,7 +198,8 @@ struct ReferenceConsolidationStrategy{
 
     me bool: copyMappedCompositeIdentity(our AItem: aItem,
             our infonView: RHS) <- {
-        if(aItem!.LHS_item!.viewMap.sourcePov==NULL or
+        if(!aItem!.LHS_item!.viewMapWriteEnabled or
+                aItem!.LHS_item!.viewMap.sourcePov==NULL or
                 aItem!.LHS_item!.viewMap.startPov==NULL or
                 aItem!.LHS_item!.pItem!.value!.overlayType!=LST or
                 RHS!.value!.overlayType!=LST){return(false)}
@@ -263,11 +264,13 @@ struct ReferenceConsolidationStrategy{
 
     me bool: isSourceBackedPOV(our POV: pov) <- {
         return(pov!=NULL and pov!.accessMode==aRefTo and
-                ((pov!.outerPOV!=NULL and
-                  pov!.outerPOV!.pItem===pov!.pItem) or
-                 (pov!.viewMap.sourcePov!=NULL and
+                ((pov!.viewMap.sourcePov!=NULL and
                   pov!.viewMap.startPov!=NULL and
-                  !(pov!.viewMap.sourcePov===pov!.viewMap.startPov))))
+                  pov!.viewMapWriteEnabled) or
+                 ((pov!.viewMap.sourcePov==NULL or
+                   pov!.viewMap.startPov==NULL) and
+                  pov!.outerPOV!=NULL and
+                  pov!.outerPOV!.pItem===pov!.pItem)))
     }
 
     me bool: mergeOpenListShapeIntoConcreteList(our AItem: aItem,
@@ -307,9 +310,10 @@ struct ReferenceConsolidationStrategy{
     me void: copyIdentity(our AItem: aItem) <- {
         our infonView: RHS <- aItem!.RHS!.pItem
         if(copyMappedCompositeIdentity(aItem, RHS)){return()}
-        our POV: mappedSourcePOV <- aItem!.LHS_item!.viewMap.startPov
-        if(aItem!.LHS_item!.viewMap.sourcePov===mappedSourcePOV){
-            mappedSourcePOV <- NULL
+        me bool: writeToSource <- isSourceBackedPOV(aItem!.LHS_item)
+        our POV: mappedSourcePOV
+        if(writeToSource){
+            mappedSourcePOV <- mappedWriteSourcePOV(aItem!.LHS_item)
         }
         our infonView: target <- aItem!.LHS_item!.pItem
         if(mappedSourcePOV!=NULL and mappedSourcePOV!.pItem!=NULL){
@@ -323,7 +327,7 @@ struct ReferenceConsolidationStrategy{
             return()
         }
 
-        if(isSourceBackedPOV(aItem!.LHS_item)){
+        if(writeToSource){
             aItem!.RHS!.pItem!.copyAsTypeTo(
                     target, false, true)
             aItem!.LHS_item!.pItem <- target
@@ -1688,22 +1692,14 @@ struct IntersectionReasoner{
         me int64: patternItemCount <- 0 - offset
         if(sourceItemCount<=0){sourceItemCount <- patternItemCount}
         our POV: viewPOV <- sourcePOV!.makeEndRelativeSpanView(
-                0 - sourceItemCount, povSrcEndRelativeView)
+                sourcePOV, 0 - sourceItemCount,
+                povSrcEndRelativeView)
         if(viewPOV==NULL){return(sourcePOV)}
 
-        viewPOV!.mapViewToSource(
-                sourcePOV, viewPOV!.viewMap.startPov)
         viewPOV!.looseMode <- sourcePOV!.looseMode
         viewPOV!.looseTop <- sourcePOV!.looseTop
         viewPOV!.looseInhtd <- sourcePOV!.looseInhtd
         viewPOV!.isOutrFeed <- sourcePOV!.isOutrFeed
-        our POV: localPOV <- viewPOV!.pItem!.value!.items.head
-        while(localPOV!=NULL){
-            if(localPOV!.outerPOV!=NULL){
-                localPOV!.mapViewToSource(sourcePOV, localPOV!.outerPOV)
-            }
-            localPOV <- localPOV!.next
-        }
         lhs!.infSize!.num <- patternItemCount
         lhs!.retainPOV(viewPOV)
         return(viewPOV)
@@ -1916,10 +1912,14 @@ struct IntersectionReasoner{
                     mappedSelectionPOV!.viewMap.sourcePov
             aItem!.LHS_item!.viewMap.startPov <-
                     mappedSelectionPOV!.viewMap.startPov
-            if(CI!.partRef==NULL and CI!.parts.isEmpty()){
+            if(CI!.partRef==NULL and CI!.parts.isEmpty() and
+                    !CI!.wrkList.isEmpty()){
+                mappedSelectionPOV!.viewMapWriteEnabled <- true
                 aItem!.LHS_item!.accessMode <- aRefTo
+                aItem!.LHS_item!.viewMapWriteEnabled <- true
             }
-            if(CI!.intersectMarkedRetPOV!=NULL and
+            if(aItem!.LHS_item!.viewMapWriteEnabled and
+                    CI!.intersectMarkedRetPOV!=NULL and
                     CI!.intersectMarkedRetPOV!.pItem!=NULL and
                     CI!.intersectMarkedRetPOV!.pItem!.value!.overlayType!=LST){
                 newTop <- mappedSelectionPOV!.
@@ -2748,8 +2748,28 @@ struct ParentMemberReasoner{
             }
         }
 
-        if(LHSPovNext!=NULL and RHSPovNext!=NULL){
-            our OrderedSpanTraversalWindow: spanWindow <- worldManager!.tryBuildOrderedSpanTraversalWindow(LHSPovNext, RHSPovNext)
+        our POV: orderedSpanSourceContextPOV <- RHSPovNext
+        if(aParent!=NULL and aParent!.RHS!=NULL){
+            orderedSpanSourceContextPOV <- aParent!.RHS
+        }
+        our IntersectionTraversalPlan: activeTraversalPlan
+        if(aParent!=NULL){
+            activeTraversalPlan <-
+                    aParent!.activeIntersectionTraversalPlan()
+        }
+        if(activeTraversalPlan!=NULL and
+                activeTraversalPlan!.status==itpResolved and
+                activeTraversalPlan!.sourceContextPOV!=NULL){
+            orderedSpanSourceContextPOV <-
+                    activeTraversalPlan!.sourceContextPOV
+        }
+
+        if(LHSPovNext!=NULL and RHSPovNext!=NULL and
+                orderedSpanSourceContextPOV!=NULL){
+            our OrderedSpanTraversalWindow: spanWindow <- worldManager!.
+                    tryBuildOrderedSpanTraversalWindow(
+                            LHSPovNext, orderedSpanSourceContextPOV,
+                            RHSPovNext)
             if(spanWindow!=NULL and spanWindow!.valid){
                 LHSPovNext <- spanWindow!.lhsPOV
                 RHSPovNext <- spanWindow!.rhsPOV
@@ -2767,8 +2787,12 @@ struct ParentMemberReasoner{
             }
         }
 
-        if(LHSPovNext!=NULL and RHSPovNext!=NULL){
-            our OrderedSpanTraversalWindow: spanWindow <- worldManager!.tryBuildOrderedSpanTraversalWindow(LHSPovNext, RHSPovNext)
+        if(LHSPovNext!=NULL and RHSPovNext!=NULL and
+                orderedSpanSourceContextPOV!=NULL){
+            our OrderedSpanTraversalWindow: spanWindow <- worldManager!.
+                    tryBuildOrderedSpanTraversalWindow(
+                            LHSPovNext, orderedSpanSourceContextPOV,
+                            RHSPovNext)
             if(spanWindow!=NULL and spanWindow!.valid){
                 LHSPovNext <- spanWindow!.lhsPOV
                 RHSPovNext <- spanWindow!.rhsPOV

@@ -55,6 +55,9 @@ model POV{ // Point-Of-View
     // infonView remains locally zero-based; origins and traversal boundaries
     // for derived views/spans are represented by POV navigation.
     me ViewMap: viewMap
+    // Provenance is present on every local view. Only final result selection
+    // grants a mapped POV authority to write through that provenance.
+    flag: viewMapWriteEnabled
     // Set only when this ordinary POV represents a logical source item that
     // has not been expanded into the physical POV list.
     me ImplicitItemMap: implicitItem
@@ -94,6 +97,59 @@ model POV{ // Point-Of-View
         viewMap.sourcePov <- sourceContextPOV
         viewMap.startPov <- sourceStartPOV
         accessMode <- aRefTo
+    }
+    // Traversal seeds inherited list-spec work on the source item before an
+    // ordered-span replacement can be built. The replacement materializes
+    // that type shape, so consume only the represented seed; persistent source
+    // constraints remain in place.
+    void: consumeSeededListSpecWorkForLocalCopy() <- {
+        if(pItem==NULL){return()}
+        me List<our POV>: retainedSourceWork
+        me bool: consumedSeededWork <- false
+        withEach sourceWorkPOV in pItem!.wrkList{
+            if(sourceWorkPOV!=NULL and sourceWorkPOV!.pItem!=NULL and
+                    sourceWorkPOV!.pItem!.copySourceType==cstListSpec){
+                consumedSeededWork <- true
+            }else{
+                retainedSourceWork.append(sourceWorkPOV)
+            }
+        }
+        if(consumedSeededWork){
+            pItem!.wrkList <- retainedSourceWork
+            pItem!.pruneDeferredWrkList()
+        }
+    }
+    // Map a recursively copied local item to the source item with the same
+    // shape. Structural parent links remain local; ViewMap carries source
+    // provenance for the copied root and every corresponding descendant.
+    void: mapLocalCopyTreeToSource(our POV: sourceContextPOV,
+            our POV: sourceStartPOV) <- {
+        if(sourceContextPOV==NULL or sourceStartPOV==NULL or
+                pItem==NULL or sourceStartPOV!.pItem==NULL){return()}
+        mapViewToSource(sourceContextPOV, sourceStartPOV)
+        sourceStartPOV!.consumeSeededListSpecWorkForLocalCopy()
+        if(pItem!.value!.overlayType!=LST or
+                sourceStartPOV!.pItem!.value!.overlayType!=LST){return()}
+        our POV: localChild <- pItem!.value!.items.head
+        our POV: sourceChild <- sourceStartPOV!.pItem!.value!.items.head
+        while(localChild!=NULL and sourceChild!=NULL){
+            localChild!.pParent <- self
+            localChild!.mapLocalCopyTreeToSource(
+                    sourceContextPOV, sourceChild)
+            localChild <- localChild!.next
+            sourceChild <- sourceChild!.next
+        }
+    }
+    // Follow only ViewMap relationships. Legacy outer identity remains a
+    // separate fallback at the write site.
+    our POV: ultimateMappedSourcePOV() <- {
+        our POV: immediateSourcePOV <- viewMap.startPov
+        if(immediateSourcePOV==NULL){return(NULL)}
+        if(immediateSourcePOV===self){return(immediateSourcePOV)}
+        our POV: ultimateSourcePOV <-
+                immediateSourcePOV!.ultimateMappedSourcePOV()
+        if(ultimateSourcePOV!=NULL){return(ultimateSourcePOV)}
+        return(immediateSourcePOV)
     }
     void: noteMarkedOuterFrom(our POV: transparentPOV) <- {
         if(markedOuterPOV!=NULL or transparentPOV==NULL){return()}
@@ -292,7 +348,9 @@ model POV{ // Point-Of-View
     }
     // Build a locally zero-based view over the final -offset logical items.
     // sourcePov remains the traversal boundary even when startPov is nested.
-    our POV: makeEndRelativeSpanView(me int64: offset, me int: source) <- {
+    our POV: makeEndRelativeSpanView(our POV: sourceContextPOV,
+            me int64: offset, me int: source) <- {
+        if(sourceContextPOV==NULL){return(NULL)}
         me int64: itemCount <- 0 - offset
         me EndRelativeWindowAvailability: availability <-
                 endRelativeWindowAvailability(offset, itemCount)
@@ -313,10 +371,9 @@ model POV{ // Point-Of-View
 
         our POV:: spanPOV{source}
         spanPOV!.pItem <- span
-        spanPOV!.accessMode <- aRefTo
         spanPOV!.isSubItm <- true
         spanPOV!.pParent <- pParent
-        spanPOV!.viewMap.startPov <- firstSourcePOV
+        spanPOV!.mapViewToSource(sourceContextPOV, firstSourcePOV)
 
         me int64: itemIndex <- startIndex
         while(itemIndex<finalExtent){
@@ -329,10 +386,10 @@ model POV{ // Point-Of-View
             sourceItemPOV!.pItem!.copyAsTypeTo(localItem, false, false)
             our POV: localPOV <- span!.value!.items.append(
                     localItem, sourceItemPOV!.isSubItm, source)
-            localPOV!.outerPOV <- sourceItemPOV
-            localPOV!.accessMode <- aRefTo
             localPOV!.pParent <- spanPOV
             localPOV!.tentFromDots <- sourceItemPOV!.tentFromDots
+            localPOV!.mapLocalCopyTreeToSource(
+                    sourceContextPOV, sourceItemPOV)
             itemIndex <+- 1
         }
         return(spanPOV)
@@ -434,8 +491,9 @@ model POV{ // Point-Of-View
         if(pParent==NULL or pParent!.pItem==NULL){return(false)}
         return(pParent!.pItem!.value!.tailUnfinished)
     }
-    our POV: makeLogicalSiblingSpanView(me int64: itemCount, me bool: keepTail, me int: source) <- {
-        if(pItem==NULL or itemCount<0){return(NULL)}
+    our POV: makeLogicalSiblingSpanView(our POV: sourceContextPOV,
+            me int64: itemCount, me bool: keepTail, me int: source) <- {
+        if(pItem==NULL or sourceContextPOV==NULL or itemCount<0){return(NULL)}
         if(itemCount==0 and !keepTail){return(NULL)}
         our POV: firstSibling
         if(isImplicitItemPOV()){firstSibling <- logicalSiblingAtOffset(0)}
@@ -466,18 +524,21 @@ model POV{ // Point-Of-View
 
         our POV:: spanPOV{source}
         spanPOV!.pItem <- span
-        spanPOV!.accessMode <- aRefTo
         spanPOV!.isSubItm <- true
         spanPOV!.pParent <- spanParent
+        spanPOV!.mapViewToSource(sourceContextPOV, firstSibling)
 
         me int64: copied <- 0
         our POV: itemPOV <- firstSibling
         while(itemPOV!=NULL and copied<itemCount){
-            our POV: newPOV <- span!.value!.items.append(itemPOV!.pItem, itemPOV!.isSubItm, source)
-            newPOV!.outerPOV <- itemPOV
-            newPOV!.accessMode <- aRefTo
+            our infonView:: localItem
+            itemPOV!.pItem!.copyAsTypeTo(localItem, false, false)
+            our POV: newPOV <- span!.value!.items.append(
+                    localItem, itemPOV!.isSubItm, source)
             newPOV!.pParent <- spanPOV
             newPOV!.tentFromDots <- itemPOV!.tentFromDots
+            newPOV!.mapLocalCopyTreeToSource(
+                    sourceContextPOV, itemPOV)
             copied <+- 1
             if(itemPOV!.isImplicitItemPOV()){
                 itemPOV <- itemPOV!.logicalNextItemPOV()
