@@ -1,0 +1,691 @@
+# End-relative intersection implementation review
+
+Status: representation decisions approved on 2026-09-04. R1 characterization,
+R2 extent/availability separation, and the R3 traversal plan are complete.
+R4 correspondence recording is next. No negative `#` sugar has been added.
+
+Source basis: local branch `proteus3b` at
+`bce565d3c7ba042cf615457f155ea508271b875a`, including the uncommitted
+end-relative intersection, `ViewMap`, implicit logical-position, mapped-write,
+and test changes present on 2026-09-04.
+
+Related documents:
+
+- `theory/end-relative-intersection-plan.md`
+- `theory/negative-index-time-design.md`
+- `theory/negative-index-time-implementation-guide.md`
+
+## Executive assessment
+
+The current code is a successful vertical prototype. It proves that a
+negative-sized intersection can locate an end-relative source window, run the
+ordinary forward intersection machinery, return typed time spans, and write a
+selected composite span back to its source.
+
+It should not yet be treated as the final architecture. Several passing paths
+depend on conventions reconstructed in later phases rather than facts recorded
+at the point where they become known. Those conventions will become difficult
+to maintain when negative `#` sugar, open streams, view-of-view selection,
+sparse writes, stable named spans, and calendar boundaries are added.
+
+The implementation now has one explicit intersection traversal plan beside the
+existing projection path. Correspondence recording, unified view construction,
+and transactional mapped writes remain deliberately separate checkpoints.
+
+## Current verified boundary
+
+The regenerated `LocalBuild/TestProteus` executable currently demonstrates:
+
+- parsing and printing parenthesized negative sizes such as `*(-1)`;
+- selection of the final item and earlier end-relative items;
+- forward selection across a transparent nested sublist;
+- selection of an end-relative multi-item span;
+- selection of a final `minute` from seconds;
+- selection of a final `hour` from seconds;
+- writing a selected final `minute` through to `%W.day`;
+- explicit resolved, pending, and rejected traversal plans owned by merge
+  AItems;
+- retention and parser-revision wake-up of pending end-relative merges;
+- exact pending coordinates without guessed source values;
+- stable nested and derived-view traversal boundaries;
+- rejection plans for out-of-range, incompatible-unit, and nonintegral-unit
+  requests;
+- direct logical lookup of typed sparse root positions without source
+  materialization;
+- preservation of the established positive nested write; and
+- preservation of `range/select1`.
+
+The protected full run reports `9/347`. The failures are the five known
+baseline failures plus the four intentionally unsupported negative `#` sugar
+tests. This is a regression checkpoint, not a claim that the full suite is
+clean.
+
+## R1 characterization baseline
+
+`endRelativeR1Tests.tst` is intentionally not included by `defaultTests.tst`.
+It records the approved contracts without changing the established full-suite
+baseline. Run it from `LocalBuild` with:
+
+```sh
+./TestProteus -T 3 -t ../endRelativeR1Tests.tst:
+```
+
+The current vertical prototype reports `5/10` failures.
+
+Passing contracts:
+
+- a closed concrete list selects its final item;
+- an exact sparse extent locates its final logical position even while that
+  position's value remains unknown;
+- a marked term after the first pattern item returns the correct final item;
+- a content-constrained typed match selects the actual final compatible span;
+  and
+- a short composite RHS rejects before changing any source value.
+
+Recorded gaps after R3:
+
+- out-of-range, incompatible-unit, and nonintegral-unit requests now produce
+  rejected traversal plans, but enclosing intersection result installation
+  still prints a residual pattern instead of `UNDEFINED`;
+- a recursively incompatible RHS with the same flattened leaf count mutates
+  the source; and
+- a large sparse suffix avoids expanding the million-item source prefix but
+  returns a local 60-position view rather than the requested compressed sparse
+  `minute` view.
+
+The test file also lists lifecycle cases that cannot be characterized by a
+final normalized string. R2 added compiled assertions for pending open sources,
+exact-coordinate/content-pending separation, derived-view stop boundaries, and
+stable resolved views after ultimate-source extension. Post-wrapper lifetime
+and duplicate-target behavior remain R4 and R6 concerns respectively.
+
+## R2 implementation record
+
+R2 replaces the ambiguous `endRelativeExtentIsFinal()` Boolean with three
+typed results while leaving merge control flow on the existing projection
+path:
+
+- `EndRelativeExtentResult` distinguishes `exact`,
+  `unknown-or-unbounded`, and `incompatible` and carries the exact extent;
+- `EndRelativeWindowAvailability` independently distinguishes `available`,
+  `pending`, `out-of-range`, and `incompatible` for one offset and item count;
+  and
+- `EndRelativePatternMeasureResult` measures every fixed pattern position in
+  source logical units and reports `resolved`, `pending`, invalid request,
+  incompatible unit, nonintegral unit, or extent overflow.
+
+The old extent helper's callers now have explicit meanings:
+
+- scalar end-relative references ask only whether an exact ordinal exists;
+  a closed `-1` still uses the authoritative concrete tail, while an exact but
+  unfinished list uses logical ordinal traversal;
+- retained-reference scans run only when the extent is exact;
+- end-relative span construction requires the complete requested window to be
+  available and retains the POV-local boundary;
+- the current mapped-write tail completion check asks only for exact extent;
+  that legacy completion action is still scheduled for removal in R6; and
+- negative-intersection preparation consumes the complete-pattern measurement
+  only when it is resolved. At the R2 checkpoint, pending and rejection statuses
+  were intentionally not yet merge lifecycle decisions; R3 gives those states
+  an owning traversal plan.
+
+At the R2 checkpoint, the compiled `unit/endRelative/` group passed `11/11`.
+It covered closed, pending, open, incompatible, and out-of-range extent/window
+states; stable derived-view boundaries; and resolved, pending, incompatible,
+and nonintegral complete-pattern measurements. The isolated R1 contract suite
+remained `5/10`, and the protected full suite remained at its expected `9/338`
+baseline.
+
+## R3 implementation record
+
+R3 introduces `IntersectionTraversalPlan` without replacing the existing
+forward matcher or changing `infonView` indexing. The merge AItem receives the
+plan before a negative request can be rewritten as a positive local window.
+The plan records:
+
+- source-start versus source-end origin;
+- exact, unknown, or incompatible source extent;
+- resolved, pending, out-of-range, or incompatible window content;
+- pattern and source-window logical extents plus traversal unit;
+- the source traversal context, source start POV, and local zero-based
+  projection; and
+- the source/view dependencies needed for the plan's lifetime.
+
+Resolved plans construct the existing local projection and assert that its
+`ViewMap.sourcePov` and `ViewMap.startPov` equal the context and start selected
+by the planner. Pending plans leave the negative request and original RHS
+unchanged. Rejected plans set the merge rejection state without constructing a
+projection.
+
+Pending ownership is explicit: `Agenda` retains the merge AItem, compares the
+plan's observed parser revision with the current revision, and re-enqueues the
+same AItem at merge step 1 when input advances. Any other enqueue transfers the
+AItem out of the pending list first, preventing duplicate ownership. A static
+normalization with no advancing parser exits without a retry loop.
+
+R3 also distinguishes an intrinsically counted sparse value from whether its
+POV is transparent in an outer list. Direct logical indexing can therefore
+produce canonical implicit positions for a typed sparse root while outer-list
+flattening still requires `isSubItm`. This keeps sparse end-relative lookup
+proportional to the selected window and does not materialize source items.
+
+One test-fixture gotcha was confirmed: assigning an integer literal directly
+to `FlexNum` generates a C++ conversion that selects the `int` formatting
+constructor, so the numeric value remains zero. R3 tests assign through an
+explicit `int64` value, matching the normalized engine state. This is a
+CodeDog/FlexNum overload issue, not an end-relative semantic exception.
+
+The regenerated build passes `unit/endRelative/` at `20/20`, including nine R3
+plan/lifecycle assertions. The isolated R1 suite remains at its approved `5/10`
+checkpoint, `timeTests.tst` remains at `4/23` for the unsupported negative `#`
+sugar cases, `range/select1` passes, and the protected full suite remains at
+`9/347`.
+
+## Foundations worth keeping
+
+### Negative size is the low-level request
+
+For the current approved low-level syntax, a negative intersection size means
+that the pattern begins relative to the source end:
+
+```proteus
+*(-2)+[<_> _] <~ {1 2 3 4}
+```
+
+The pattern still matches forward. Its negative size determines an
+end-relative origin; it does not make local indexing negative or reverse the
+result.
+
+### `ViewMap` owns view provenance
+
+`POV.viewMap.sourcePov` is the source traversal context and stopping boundary.
+`POV.viewMap.startPov` is the source item corresponding to local item zero.
+The selected `infonView` remains locally zero-based.
+
+This separation is the correct foundation for nested sources, view-of-view
+selection, stable named spans, and writes.
+
+### Implicit logical positions preserve sparse structure
+
+`ImplicitItemMap` gives positions inside a counted sparse span stable POV
+identity without physically expanding the source list. Canonical implicit POVs
+are retained by the sparse source infon. This is preferable to creating a
+different temporary POV on each lookup or materializing every preceding item.
+
+### Selection uses local projections
+
+`POV.makeEndRelativeSpanView()` copies source values into a local projection
+for matching. Matching can refine that projection without changing the source.
+A later assignment reaches the source only through `ViewMap`.
+
+### Existing lifetime ownership is reused
+
+`IntersectionReasoner.installSelectedResult()` transfers retained POVs from the
+intersection wrapper to the selected result. This is a necessary ownership
+rule, not an end-relative special case.
+
+## Current execution path
+
+The current path is spread across several layers:
+
+1. `MergeReasoner.processStep1()` asks
+   `prepareEndRelativeIntersectionSourceView()` to examine the LHS and RHS.
+2. `OrderedSpanReasoner.endRelativePatternSourceItemCount()` converts the
+   negative pattern count to a count in source logical items when a typed unit
+   such as `minute` or `hour` is requested.
+3. `IntersectionReasoner.prepareEndRelativeSourceView()` creates an
+   end-relative local source projection, converts the negative pattern size to
+   a positive local cardinality, and substitutes the projection as the RHS.
+4. Ordinary forward intersection propagation matches against the projection.
+5. `IntersectionReasoner.selectFunctionResult()` recovers the source mapping
+   from the marked match or the first selected child and promotes it to the
+   selected LHS POV.
+6. `ReferenceConsolidationStrategy` recognizes the mapped result and writes
+   scalar or flattened composite values to the mapped source POVs.
+
+Each step has a reasonable local purpose. The problem is that no single record
+states the complete operation, so later steps infer facts established earlier.
+
+## Gotcha register
+
+### G1: `ViewMap` equality is used as an identity category
+
+`WorldManager.carryPassiveScalarSource()` populates `ViewMap` for an ordinary
+passive scalar and sets `sourcePov == startPov`. Other code then uses equality
+or inequality of the two fields to distinguish ordinary identity from a
+derived span.
+
+Populating the map is not itself wrong. The former `POV.sourcePOV` field was
+passive correspondence metadata, and moving that relationship into `ViewMap`
+means an LHS scalar matched to an RHS source scalar is a derived/mapped POV. A
+scalar mapping may naturally have the same POV as both its traversal context
+and local item zero.
+
+Risks:
+
+- equality is a valid mapping state, especially for a scalar context;
+- traversal provenance is being used as semantic-identity evidence; and
+- several callers must repeat the same undocumented category test.
+
+Desired invariant:
+
+```text
+ViewMap is populated when a POV is derived from or corresponds to a source
+POV, including a passive scalar match.
+A POV with no derived/source correspondence leaves both fields NULL.
+Mapped source-backed behavior tests ViewMap validity, not field equality.
+Operation role is represented independently of traversal provenance.
+```
+
+### G2: the request is destructively normalized before matching
+
+`prepareEndRelativeSourceView()` changes the negative size to a positive local
+cardinality after it creates the source projection. That makes the existing
+matcher usable, but the resulting intersection no longer carries its original
+end-relative constraint.
+
+Risks:
+
+- retries, diagnostics, and graph inspection cannot see why the source began
+  at that position;
+- a copied or retained normalized expression can lose the source-end relation;
+- pending versus resolved behavior depends on exactly when the mutation occurs;
+  and
+- it is difficult to assert that the source window still matches the request.
+
+Desired invariant: keep the negative size as request information until a
+resolved traversal plan exists. The matcher may consume a positive local
+window, but the plan should retain the relation that produced it.
+
+### G3: typed measurement inspects only the first pattern and source items
+
+`endRelativePatternSourceItemCount()` determines the requested unit from the
+first pattern POV and measures it against the first source logical item. It
+then multiplies that conversion by the absolute negative count.
+
+This is sufficient for the current `*(-1)+[<minute>]` and
+`*(-1)+[<hour>]` cases. It is not yet a measurement of an arbitrary anchored
+intersection pattern.
+
+Risks include mixed fixed units, a marked term that is not first, alternative
+patterns, nonintegral conversions, and view-local source units that differ from
+the ultimate source's first item.
+
+Desired invariant: measure the complete fixed anchored pattern in one selected
+base unit and return `resolved`, `pending`, or a specific rejection.
+
+### G4: known end position is conflated with content completion
+
+`infonView.endRelativeExtentIsFinal()` now treats any literal list size as a
+usable end extent, even when `tailUnfinished` is true. Runtime inspection of
+the `%W.day` write case showed a parsed source with `streamState=parseDone`,
+`sizeMode=fromCount`, literal size 12, and 12 concrete items, while
+`tailUnfinished` was still true after definition-shape inheritance.
+
+The literal size is mathematically enough to locate an end-relative position.
+The tail flag instead describes whether more value structure may need to be
+constructed or matched. The current helper's name and callers conflate those
+two facts.
+
+Risks:
+
+- a caller may treat a known coordinate as proof that selected contents are
+  already available;
+- a caller may unnecessarily wait for stream closure even when an exact size
+  fixes the logical end; and
+- source representation artifacts can determine whether a list looks
+  complete.
+
+Desired invariant: use two independent results:
+
+```text
+extent: exact | unknown-or-unbounded | incompatible
+contents at requested window: available | pending | incompatible
+```
+
+An exact literal size may establish the end coordinate while contents remain
+pending. A live source without an exact size cannot resolve an end-relative
+coordinate. Both queries must be about the selected source/view context, not
+an unrelated outer list.
+
+### G5: ordered-span builders have two construction policies
+
+The builders share source `pItem`s for ordinary positive paths but copy local
+items and populate `ViewMap` when the source is already derived. This preserves
+existing positive behavior, but it makes construction depend on how the source
+was reached rather than what kind of result is being built.
+
+Risks:
+
+- positive and negative routes can produce observably different view graphs;
+- a view-of-view accumulates compatibility branches;
+- source mutation can occur accidentally when a shared item was expected to be
+  a local projection; and
+- future callers must know which builder policy they received.
+
+Desired invariant: every derived ordered-span result has the same local-copy
+and `ViewMap` contract. Migrate ordinary positive paths only after
+characterization tests show that the unified contract preserves behavior.
+
+### G6: correspondence is reconstructed during result selection
+
+`IntersectionReasoner.selectFunctionResult()` first checks the marked match. If
+that POV lacks a usable mapping and the selected result is a list, it uses the
+first selected child's mapping as the composite mapping.
+
+Risks:
+
+- the first child may not identify the selected composite's full context;
+- same-typed positions can be confused if the actual match is not recorded;
+- scalar, wrapper, sparse, and composite cases need separate recovery logic;
+  and
+- result selection now owns source-correspondence semantics.
+
+Desired invariant: when a pattern POV is satisfied by a source POV/window, the
+matching/correspondence layer records that exact relation. Selection merely
+returns the already mapped marked result.
+
+### G7: work-list ownership is inferred from mapping shape
+
+An ordinary marked range clears selector-local work rather than projecting it
+outward. A mapped span must retain outside assignment work. The current code
+chooses between those behaviors by testing whether `sourcePov` and `startPov`
+are distinct.
+
+Risks:
+
+- the test depends on G1's equality convention;
+- a legitimate scalar or narrow view may choose the wrong branch;
+- mapping provenance and work ownership are different concepts; and
+- another view category could silently inherit selector-local work.
+
+Desired invariant: work records state whether they belong to the selector or
+to the expression consuming the selected result. Selection transfers only the
+consumer work, independent of source mapping shape.
+
+### G8: composite writes are only partially transactional
+
+`copyMappedCompositeIdentity()` first flattens LHS and RHS leaves, checks equal
+leaf counts, and confirms every LHS leaf has a target. It then copies each RHS
+leaf directly to its target while preserving selected target metadata.
+
+That prevents a missing mapping discovered late from causing a partial write,
+but it is not yet the full mapped-write transaction described by the design.
+
+Missing validation includes:
+
+- recursive list/unit shape compatibility;
+- exact ordered-unit conversion;
+- target reachability within the mapped source context;
+- duplicate/conflicting target detection;
+- compatibility with the established scalar source-backed write operation for
+  each leaf;
+- sparse split/materialization validation; and
+- rollback or detached publication if a commit-time merge fails.
+
+Desired invariant: build and validate a complete mapped-write plan without
+source mutation, then commit each pair through the same source-backed write
+semantics used for a directly selected scalar. Composite selection must not
+invent a second meaning for assignment.
+
+### G9: assignment directly changes source completion state
+
+After a mapped composite write, the implementation closes
+`sourceContextPOV.pItem.value.tailUnfinished` when the final mapped leaf is the
+known final source item. This makes current typed-time output canonical, but an
+assignment should not normally decide whether the source can receive future
+items.
+
+Risks:
+
+- writing the final current position of a live source can close it;
+- output normalization and structural completion become coupled to assignment;
+- the behavior depends on whether the assignment happened to include the last
+  position; and
+- the underlying representation discrepancy remains hidden.
+
+Desired invariant: mapped assignment never toggles `tailUnfinished` directly.
+After its mapped writes commit, the general list-completion mechanism may
+re-evaluate the source and close structural work when all exact positions and
+constraints are satisfied. That rule belongs to list normalization, not to
+end-relative assignment.
+
+### G10: logical navigation mutates parent metadata during reads
+
+The logical sparse/nested navigation helpers assign `pParent` while locating
+or crossing positions. They do not expand the physical list, but navigation is
+not entirely observational.
+
+Risks:
+
+- the same POV reused in another traversal context may retain the latest
+  parent;
+- concurrent or nested traversal can make parent provenance order-dependent;
+  and
+- a future stable named view may depend on metadata installed by a prior read.
+
+Desired invariant: canonical source POVs have stable structural parents.
+Traversal-specific ascent state belongs to the traversal plan or iterator.
+
+### G11: lifetime correctness is distributed
+
+Canonical implicit POVs are retained by their source infon, end-relative views
+retain source positions, and selected results inherit the intersection's
+retained POVs. These are individually sensible, but there is no single
+statement of which object owns an entire selected mapping graph.
+
+Risks:
+
+- a new view builder may omit one retention edge;
+- non-owning `pParent` or `outerPOV` links can outlive their owners;
+- layout-sensitive crashes can reappear far from the missing edge; and
+- retained graphs can grow without a clear release boundary.
+
+Desired invariant: the selected result owns one resolved traversal/mapping
+plan or an explicit set of all POVs required by that mapping. Installation
+transfers that ownership exactly once.
+
+## Proposed simplification
+
+Introduce one temporary reasoning record, provisionally named
+`IntersectionTraversalPlan`. It is not an `infonView` and does not change local
+indexing.
+
+Conceptually:
+
+```text
+IntersectionTraversalPlan {
+    status: not-applicable | pending | resolved | rejected
+    origin: source-start | source-end
+    extentStatus: exact | unknown-or-unbounded | incompatible
+    windowContentStatus: available | pending | incompatible
+    sourceContextPov
+    sourceStartPov
+    sourceLogicalExtent
+    patternLogicalExtent
+    traversalUnit
+    localSourceView
+    correspondences[]
+    retainedDependencies[]
+    diagnostic
+}
+
+IntersectionCorrespondence {
+    patternPov
+    localViewPov
+    sourceContextPov
+    sourceStartPov
+}
+```
+
+The plan should be owned by the intersection AItem while work is pending. If a
+resolved plan can always be recomputed cheaply and deterministically, only the
+retained source dependencies need to persist; that should be demonstrated
+rather than assumed.
+
+### Simplified pipeline
+
+1. Recognize a negative-sized intersection without changing its size.
+2. Ask one planner to determine the applicable source context, exact extent,
+   requested-content availability, unit, measured pattern extent, and forward
+   source start.
+3. Return `pending` without guessing if the source extent is unknown. If the
+   extent is exact but requested contents are unavailable, retain the resolved
+   coordinate and wait for those contents.
+4. Build one locally zero-based source view as an adapter for the existing
+   forward matcher. The plan, rather than the substituted RHS alone, records
+   why and where that view exists.
+5. As propagation satisfies pattern POVs, record their exact local/source
+   correspondences in the plan and populate `ViewMap` through one helper.
+6. Return the already mapped marked result. `selectFunctionResult()` performs
+   no first-child or type-based mapping recovery.
+7. Classify selector-local and consumer work explicitly, then transfer only
+   the consumer work to the selected result.
+8. For assignment, derive a `MappedSpanWritePlan` from the mapped result,
+   validate it completely, and commit it through the established scalar
+   source-backed write operation.
+9. Let ordinary list normalization re-evaluate completion after mapped merges;
+   do not toggle source completion inside the mapped-write operation.
+
+This may add one explicit record initially, but it should remove conditions
+from `MergeReasoner`, `selectFunctionResult()`, passive-source propagation,
+ordered-span view construction, and reference consolidation.
+
+## Recommended representation decisions
+
+The following decisions were approved on 2026-09-04:
+
+1. **`ViewMap` validity:** `sourcePov != NULL && startPov != NULL` means the POV
+   is derived from or corresponds to a source POV. Passive scalar matches may
+   populate `ViewMap`; POVs with no source correspondence leave it empty.
+2. **Mapped scalar validity:** a mapped scalar remains valid even if
+   `sourcePov === startPov`; equality never classifies the mapping.
+3. **Extent versus contents:** an exact literal extent fixes the end coordinate
+   even if contents remain pending. Track exact extent separately from window
+   content availability and structural/stream completion.
+4. **Correspondence:** map every selected composite node and every writable
+   leaf at the moment of actual matching.
+5. **Write semantics:** recursively validate compatible structure and apply
+   the established scalar source-backed write operation at mapped targets;
+   leaf count alone is insufficient.
+6. **Work ownership:** identify selector-local versus consumer work directly,
+   not through view provenance.
+7. **Source completion:** mapped assignment does not directly close a source.
+   Ordinary list normalization may recognize completion after mapped merges
+   satisfy all exact positions.
+
+## Safe migration checkpoints
+
+### Checkpoint R0: preserve the working behavior
+
+- Keep the current source changes intact while the redesign is reviewed.
+- Retain the current focused tests as behavioral evidence.
+- Do not add negative `#` lowering or named-span behavior yet.
+
+### Checkpoint R1: add characterization tests
+
+Before moving code, cover:
+
+- a closed list, an exact-sized list with pending contents, and a live list
+  without an exact extent;
+- resolution before and after stream closure;
+- a view whose end differs from its ultimate source end;
+- multiple same-typed candidate spans;
+- a negative pattern with the marked term after its first item;
+- an out-of-range negative extent;
+- a nonintegral or incompatible unit conversion;
+- a failed composite write that leaves every source value unchanged;
+- duplicate mapped targets;
+- a sparse source large enough to prove non-materializing traversal; and
+- a selected/named view used after its original intersection wrapper is gone.
+
+### Checkpoint R2: separate extent, availability, and completion
+
+- Complete on 2026-09-04.
+- Added separate exact-extent and requested-content availability results without
+  changing callers.
+- Characterized every former `endRelativeExtentIsFinal()` caller.
+- Replaced the helper so a known coordinate is not described as a
+  fully final source.
+- Distinguished exact-sized pending values from live sources with no exact end.
+- Added complete fixed-pattern measurement returning resolved, pending, or a
+  specific rejection.
+
+### Checkpoint R3: introduce the traversal plan beside the current path
+
+- Complete on 2026-09-04.
+- Built `IntersectionTraversalPlan` from the same negative-sized request while
+  retaining the existing projection path.
+- Added assertions that plan context, nested or derived start, logical extent,
+  and local projection agree.
+- Added explicit Agenda ownership and parser-revision wake-up for pending merge
+  AItems, including transfer out of pending ownership on any other enqueue.
+- Preserved negative requests while pending and locally zero-based projections
+  after resolution.
+
+### Checkpoint R4: record correspondence during matching
+
+- Add one correspondence helper at the point where LHS and RHS POVs actually
+  match.
+- Populate complete `ViewMap`s for scalar, flat, recursive typed, and sparse
+  results.
+- Remove first-child mapping recovery only after equivalence tests pass.
+- Preserve `range/select1` and ordinary marked-range work behavior at every
+  step.
+
+### Checkpoint R5: unify view construction
+
+- Make every derived ordered-span view local and source-mapped.
+- Migrate positive ordered-span selectors through the same contract.
+- Remove derived-versus-ordinary construction branches after positive tests
+  prove parity.
+- Keep direct non-derived identities outside `ViewMap`.
+
+### Checkpoint R6: make mapped writes transactional
+
+- Build recursive write pairs without mutation.
+- Validate structure, unit compatibility, reachability, uniqueness,
+  source-backed write acceptance, and sparse materialization.
+- Commit only after validation succeeds.
+- Remove assignment-driven tail closure and invoke general list-completion
+  reasoning after mapped merges.
+
+### Checkpoint R7: remove compatibility inference
+
+The following should no longer be needed:
+
+- `sourcePov === startPov` as an identity category;
+- first-child mapping recovery in result selection;
+- mapped-span detection as a work-list ownership proxy;
+- separate source-sharing policies for positive and derived span builders; and
+- source-tail closure inside mapped assignment.
+
+Run the full protected suite and compare failures with the recorded baseline
+after every removal.
+
+## Completion criteria for the refactor
+
+The implementation is ready for negative `#` sugar only when:
+
+- the negative request remains observable until its traversal plan resolves;
+- unknown source extents wait, exact end coordinates resolve deterministically,
+  and unavailable window contents remain pending;
+- source/view boundaries are explicit and view-of-view traversal cannot escape;
+- actual match correspondence supplies every selected mapping;
+- `selectFunctionResult()` only selects and installs an already mapped result;
+- no semantic decision depends on `sourcePov === startPov`;
+- failed composite writes cannot partially mutate the source;
+- mapped writes do not directly alter source completion state;
+- sparse reads remain proportional to structural boundaries rather than the
+  numeric distance from the beginning; and
+- the focused negative intersection tests, existing positive time tests,
+  `range/select1`, generated build, `git diff --check`, and full protected suite
+  all match their approved expectations.
+
+## Scope beyond this review
+
+This review does not settle calendar naming conventions, the precise meaning
+of the 20th Century, temporal relation authority, historical-span persistence,
+or negative `#` syntax. Those remain later semantic stages. The traversal and
+mapping invariants above should be stable enough that those stages do not need
+another positional engine.

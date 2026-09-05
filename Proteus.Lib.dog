@@ -62,6 +62,94 @@ struct ConstraintDisposition: inherits=<mode[
     cdContradiction
 ]> {}
 
+// End-relative navigation needs an exact coordinate, not a generally closed
+// list.  Keep extent knowledge independent from availability of the logical
+// positions at a requested window.
+struct EndRelativeExtentStatus: inherits=<mode[
+    eresExact,
+    eresUnknownOrUnbounded,
+    eresIncompatible
+]> {}
+
+struct EndRelativeWindowContentStatus: inherits=<mode[
+    erwcAvailable,
+    erwcPending,
+    erwcOutOfRange,
+    erwcIncompatible
+]> {}
+
+struct EndRelativePatternMeasureStatus: inherits=<mode[
+    erpmResolved,
+    erpmPending,
+    erpmInvalidRequest,
+    erpmIncompatibleUnit,
+    erpmNonIntegralUnit,
+    erpmExtentOverflow
+]> {}
+
+struct EndRelativeExtentResult{
+    me EndRelativeExtentStatus: status <- eresUnknownOrUnbounded
+    me int64: exactExtent <- 0
+}
+
+struct EndRelativeWindowAvailability{
+    me EndRelativeWindowContentStatus: status <- erwcPending
+    me EndRelativeExtentResult: extent
+    me int64: startIndex <- -1
+    me int64: itemCount <- 0
+    our POV: firstSourcePOV
+    our POV: lastSourcePOV
+}
+
+struct EndRelativePatternMeasureResult{
+    me EndRelativePatternMeasureStatus: status <- erpmInvalidRequest
+    me int64: patternLogicalExtent <- 0
+    me int64: sourceLogicalExtent <- 0
+    me int64: failingPatternIndex <- -1
+    our WordUse: traversalUnit
+}
+
+struct IntersectionTraversalPlanStatus: inherits=<mode[
+    itpNotApplicable,
+    itpPending,
+    itpResolved,
+    itpRejected
+]> {}
+
+struct IntersectionTraversalOrigin: inherits=<mode[
+    itoSourceStart,
+    itoSourceEnd
+]> {}
+
+model IntersectionTraversalPlan{
+    me IntersectionTraversalPlanStatus: status <- itpNotApplicable
+    me IntersectionTraversalOrigin: origin <- itoSourceStart
+    me EndRelativeExtentStatus: extentStatus <- eresUnknownOrUnbounded
+    me EndRelativeWindowContentStatus: windowContentStatus <- erwcPending
+    me EndRelativePatternMeasureStatus: patternMeasureStatus <- erpmInvalidRequest
+    our POV: sourceContextPOV
+    our POV: sourceStartPOV
+    me int64: sourceLogicalExtent <- 0
+    me int64: patternLogicalExtent <- 0
+    me int64: sourceWindowLogicalExtent <- 0
+    me int64: sourceStartIndex <- -1
+    me int64: patternOffset <- 0
+    our WordUse: traversalUnit
+    our POV: localSourceViewPOV
+    me List<our POV>: retainedDependencies
+    me uint64: observedStreamingRevision <- 0
+    me string: diagnostic
+}
+struct IntersectionTraversalPlan{
+    void: retainDependency(our POV: dependencyPOV) <- {
+        if(dependencyPOV==NULL){return()}
+        withEach retainedPOV in retainedDependencies{
+            if(retainedPOV===dependencyPOV){return()}
+        }
+        retainedDependencies.append(dependencyPOV)
+    }
+}
+
 
 model infonState{
     // -----------------------------------------------------------------
@@ -522,10 +610,24 @@ struct infonView{
         return(lastItem)
     }
 
-    me bool: endRelativeExtentIsFinal() <- {
-        if(value!.overlayType!=LST or value!.evalMode==emUnknown){return(false)}
-        if(value!.tailUnfinished){return(false)}
-        return(infSize!.evalMode==emLiteral)
+    me EndRelativeExtentResult: endRelativeExtent() <- {
+        me EndRelativeExtentResult: result
+        if(value!.overlayType==tUnknown or value!.overlayType==tUnset or
+                value!.evalMode==emUnknown){
+            return(result)
+        }
+        if(value!.overlayType!=LST){
+            result.status <- eresIncompatible
+            return(result)
+        }
+        if(infSize!.evalMode!=emLiteral){return(result)}
+        if(infSize!.overlayType!=NUM or infSize!.num<0){
+            result.status <- eresIncompatible
+            return(result)
+        }
+        result.status <- eresExact
+        result.exactExtent <- infSize!.num.convertToInt()
+        return(result)
     }
     our POV: findEndRelativeReference(me int64: offset) <- {
         withEach retainedPOV in retainedPOVs{
@@ -537,14 +639,19 @@ struct infonView{
     }
     our POV: resolveEndRelativeReference(our POV: referencePOV) <- {
         if(referencePOV==NULL or !referencePOV!.endRelativeReference){return(referencePOV)}
-        if(referencePOV!.endRelativeResolved or !endRelativeExtentIsFinal()){return(referencePOV)}
-
-        me int64: finalExtent <- infSize!.num.convertToInt()
-        me int64: ordinal <- finalExtent + referencePOV!.endRelativeOffset + 1
+        if(referencePOV!.endRelativeResolved){return(referencePOV)}
+        me EndRelativeExtentResult: extent <- endRelativeExtent()
+        if(extent.status!=eresExact){return(referencePOV)}
+        me int64: ordinal <- extent.exactExtent +
+                referencePOV!.endRelativeOffset + 1
         if(ordinal<=0){return(referencePOV)}
         our POV: actualPOV
-        if(referencePOV!.endRelativeOffset==-1){actualPOV <- getLastItem()}
-        else{actualPOV <- getNthEndRelativeInfonView(ordinal)}
+        if(referencePOV!.endRelativeOffset==-1 and
+                !value!.tailUnfinished){
+            actualPOV <- getLastItem()
+        }else{
+            actualPOV <- getNthEndRelativeInfonView(ordinal)
+        }
         if(actualPOV==NULL or actualPOV!.pItem==NULL){return(referencePOV)}
 
         our infonView: actualItem <- actualPOV!.pItem
@@ -557,7 +664,8 @@ struct infonView{
         return(referencePOV)
     }
     void: resolveEndRelativeReferences() <- {
-        if(!endRelativeExtentIsFinal()){return()}
+        me EndRelativeExtentResult: extent <- endRelativeExtent()
+        if(extent.status!=eresExact){return()}
         withEach retainedPOV in retainedPOVs{
             if(retainedPOV!=NULL and retainedPOV!.endRelativeReference and !retainedPOV!.endRelativeResolved){
                 resolveEndRelativeReference(retainedPOV)
@@ -568,10 +676,13 @@ struct infonView{
         if(offset>=0){return(NULL)}
         our POV: retainedReference <- findEndRelativeReference(offset)
         if(retainedReference!=NULL){return(resolveEndRelativeReference(retainedReference))}
-        if(endRelativeExtentIsFinal()){
-            me int64: ordinal <- infSize!.num.convertToInt() + offset + 1
+        me EndRelativeExtentResult: extent <- endRelativeExtent()
+        if(extent.status==eresExact){
+            me int64: ordinal <- extent.exactExtent + offset + 1
             if(ordinal>0){
-                if(offset==-1){return(getLastItem())}
+                if(offset==-1 and !value!.tailUnfinished){
+                    return(getLastItem())
+                }
                 return(getNthEndRelativeInfonView(ordinal))
             }
         }
@@ -1093,6 +1204,10 @@ model AItem{
     our POV: LHS_item
     our POV: RHS
     our POV: cursorAnchor
+    // Negative-sized intersections keep their navigation decision on the
+    // AItem that owns the merge lifecycle. The plan is not an infonView and
+    // therefore cannot change the locally zero-based value model.
+    our IntersectionTraversalPlan: intersectionTraversalPlan
     our infItr: LHSItr
     our infItr: RHSItr
     me int64: priority
@@ -1196,6 +1311,7 @@ model AItem{
         lastEnqueueID <- 0
         LHS_item  <- NULL
         RHS       <- NULL
+        intersectionTraversalPlan <- NULL
         LHSItr    <- NULL
         RHSItr    <- NULL
         parent    <- NULL
@@ -1269,6 +1385,9 @@ struct Agenda{
     me uint64: totalPropagationsQueued <- 0
     me uint64: totalPropagationsProcessed <- 0
     me Multimap<me int64, our AItem: rangeIteration=logarithmic>: AItems
+    // Pending end-relative merges remain owned by this normalization run.
+    // A parser revision moves them back to AItems for deterministic replanning.
+    me List<our AItem>: pendingIntersectionTraversalAItems
     me Mutex: agendaDoneMutex
     me SyncLock: agendaDoneLock
 
@@ -1283,6 +1402,10 @@ struct Agenda{
         return(false)
     }
     me bool: addAItemToAgenda(our AItem: aItem) <- {
+        // An ordinary wake-up transfers ownership back to AItems. This also
+        // prevents a non-parser dependency from leaving a stale copy in the
+        // traversal-pending owner list.
+        releasePendingIntersectionTraversal(aItem)
         me bool: itmAdded <- true
         if(aItem!.aItemID==0){
             aItem!.aItemID <- nextAItemID
@@ -1297,6 +1420,60 @@ struct Agenda{
         }else{insert(aItem, aItem!.priority)}
         //log(logStr)
         return(itmAdded)
+    }
+
+    void: releasePendingIntersectionTraversal(our AItem: aItem) <- {
+        if(aItem==NULL or pendingIntersectionTraversalAItems.isEmpty()){
+            return()
+        }
+        me List<our AItem>: retainedAItems
+        withEach pendingAItem in pendingIntersectionTraversalAItems{
+            if(!(pendingAItem===aItem)){retainedAItems.append(pendingAItem)}
+        }
+        pendingIntersectionTraversalAItems <- retainedAItems
+    }
+
+    void: retainPendingIntersectionTraversal(our AItem: aItem) <- {
+        if(aItem==NULL or aItem!.intersectionTraversalPlan==NULL or
+                aItem!.intersectionTraversalPlan!.status!=itpPending){return()}
+        withEach pendingAItem in pendingIntersectionTraversalAItems{
+            if(pendingAItem===aItem){return()}
+        }
+        pendingIntersectionTraversalAItems.append(aItem)
+    }
+
+    me bool: pendingIntersectionTraversalNeedsRetry(
+            me uint64: currentStreamingRevision) <- {
+        withEach pendingAItem in pendingIntersectionTraversalAItems{
+            if(pendingAItem!=NULL and
+                    pendingAItem!.intersectionTraversalPlan!=NULL and
+                    pendingAItem!.intersectionTraversalPlan!.
+                            observedStreamingRevision!=currentStreamingRevision){
+                return(true)
+            }
+        }
+        return(false)
+    }
+
+    me bool: pendingIntersectionTraversalMayAdvance() <- {
+        if(pendingIntersectionTraversalAItems.isEmpty() or
+                topPOV==NULL or topPOV!.pItem==NULL){return(false)}
+        return(topPOV!.pItem!.streamState==parseStarted or
+               topPOV!.pItem!.streamState==parseListReady)
+    }
+
+    void: wakePendingIntersectionTraversals() <- {
+        while(!pendingIntersectionTraversalAItems.isEmpty()){
+            our AItem: pendingAItem <-
+                    pendingIntersectionTraversalAItems.first()
+            pendingIntersectionTraversalAItems.popFirst()
+            if(pendingAItem!=NULL){
+                // Step 0 originally established positive acceptance before
+                // entering step 1; a retry resumes at that same boundary.
+                pendingAItem!.mergeStatus <- msAccept
+                addAItemToAgenda(pendingAItem)
+            }
+        }
     }
 }
 

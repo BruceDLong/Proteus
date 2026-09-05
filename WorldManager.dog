@@ -20,6 +20,114 @@ struct WorldManager{
 // Owns ordered-span traversal and conversion. WorldManager exposes only the
 // entry points used by control flow.
 struct OrderedSpanReasoner{
+    void: mapOrderedSpanViewToSource(our POV: viewPOV,
+            our POV: sourcePOV) <- {
+        if(viewPOV==NULL or sourcePOV==NULL){return()}
+        our POV: sourceContextPOV <- sourcePOV
+        our POV: sourceStartPOV <- sourcePOV
+        if(sourcePOV!.viewMap.sourcePov!=NULL){
+            sourceContextPOV <- sourcePOV!.viewMap.sourcePov
+        }else if(sourcePOV!.pParent!=NULL and
+                sourcePOV!.pParent!.viewMap.sourcePov!=NULL){
+            sourceContextPOV <- sourcePOV!.pParent!.viewMap.sourcePov
+        }
+        if(sourcePOV!.viewMap.startPov!=NULL){
+            sourceStartPOV <- sourcePOV!.viewMap.startPov
+        }else if(sourcePOV!.outerPOV!=NULL and
+                sourcePOV!.outerPOV!.pItem===sourcePOV!.pItem){
+            sourceStartPOV <- sourcePOV!.outerPOV
+        }
+        // Projection construction is read-only.  Selection promotes the
+        // chosen projection to an active reference when a write follows.
+        viewPOV!.viewMap.sourcePov <- sourceContextPOV
+        viewPOV!.viewMap.startPov <- sourceStartPOV
+    }
+
+    me EndRelativePatternMeasureResult: measureEndRelativeFixedPattern(
+            our POV: lhsPOV, our POV: rhsPOV,
+            me int64: patternItemCount,
+            their vocabularySpec: vSpec) <- {
+        me EndRelativePatternMeasureResult: result
+        result.patternLogicalExtent <- patternItemCount
+        if(lhsPOV==NULL or lhsPOV!.pItem==NULL or rhsPOV==NULL or
+                rhsPOV!.pItem==NULL or patternItemCount<=0){return(result)}
+
+        our POV: firstSourceItem <- rhsPOV!.logicalItemAtIndex(0)
+        our WordUse: sourceUnitType
+        if(firstSourceItem!=NULL){
+            sourceUnitType <- orderedSpanSourceUnitType(firstSourceItem)
+        }else if(rhsPOV!.pItem!.value!.overlayType==LST and
+                rhsPOV!.pItem!.value!.listSpec!=NULL){
+            sourceUnitType <- rhsPOV!.pItem!.value!.listSpec!.type
+        }
+        result.traversalUnit <- sourceUnitType
+
+        me int64: patternIndex <- 0
+        while(patternIndex<patternItemCount){
+            our POV: requestPOV <- lhsPOV!.logicalItemAtIndex(patternIndex)
+            if(requestPOV==NULL or requestPOV!.pItem==NULL){
+                result.status <- erpmPending
+                result.failingPatternIndex <- patternIndex
+                return(result)
+            }
+            requestPOV!.pParent <- lhsPOV
+
+            our WordUse: unitType <- requestPOV!.pItem!.type
+            if(unitType==NULL and
+                    isImplicitOrderedSpanIndexRequest(requestPOV)){
+                if(firstSourceItem!=NULL){
+                    unitType <- orderedSpanContainerChildType(
+                            firstSourceItem, vSpec)
+                }else if(rhsPOV!.pItem!.type!=NULL){
+                    // The source container type fixes the natural child unit
+                    // even before its first value arrives. An untyped source
+                    // still has a well-defined one-logical-item request.
+                    unitType <- orderedSpanDefinitionChildType(
+                            rhsPOV!.pItem!.type, vSpec)
+                }
+            }
+
+            me int64: sourceItemsForPatternItem <- 1
+            if(unitType!=NULL){
+                if(sourceUnitType==NULL){
+                    result.status <- erpmIncompatibleUnit
+                    result.failingPatternIndex <- patternIndex
+                    return(result)
+                }
+                if(!orderedSpanTypesMatch(unitType, sourceUnitType)){
+                    our OrderedSpanConverter: converter <-
+                            modelMngr.getOrderedSpanConverter(
+                                    unitType, sourceUnitType, vSpec)
+                    if(converter==NULL or !converter!.valid){
+                        result.status <- erpmIncompatibleUnit
+                        result.failingPatternIndex <- patternIndex
+                        return(result)
+                    }
+                    if(converter!.fromBaseCount<converter!.toBaseCount or
+                            converter!.toBaseCount<=0 or
+                            converter!.fromBaseCount %
+                                    converter!.toBaseCount != 0){
+                        result.status <- erpmNonIntegralUnit
+                        result.failingPatternIndex <- patternIndex
+                        return(result)
+                    }
+                    sourceItemsForPatternItem <- converter!.fromBaseCount /
+                            converter!.toBaseCount
+                }
+            }
+            if(sourceItemsForPatternItem>
+                    INT64_MAX-result.sourceLogicalExtent){
+                result.status <- erpmExtentOverflow
+                result.failingPatternIndex <- patternIndex
+                return(result)
+            }
+            result.sourceLogicalExtent <+- sourceItemsForPatternItem
+            patternIndex <+- 1
+        }
+        result.status <- erpmResolved
+        return(result)
+    }
+
     our WordUse: orderedSpanSourceUnitType(our POV: rhsPOV) <- {
         if(rhsPOV==NULL or rhsPOV!.pItem==NULL){return(NULL)}
         if(rhsPOV!.pItem!.type!=NULL){return(rhsPOV!.pItem!.type)}
@@ -255,11 +363,24 @@ struct OrderedSpanReasoner{
     our POV: makeDirectOrderedSpanSourceView(our WordUse: unitType, our POV: sourcePOV, me int: source) <- {
         if(unitType==NULL or sourcePOV==NULL or sourcePOV!.pItem==NULL){return(NULL)}
         our POV:: directPOV{source}
-        directPOV!.pItem <- sourcePOV!.pItem
+        me bool: sourceIsDerivedView <-
+                sourcePOV!.viewMap.sourcePov!=NULL and
+                sourcePOV!.viewMap.startPov!=NULL
+        if(sourceIsDerivedView){
+            our infonView:: directItem
+            sourcePOV!.pItem!.copyAsTypeTo(directItem, false, false)
+            directPOV!.pItem <- directItem
+            directPOV!.accessMode <- aCopyOf
+        }else{
+            directPOV!.pItem <- sourcePOV!.pItem
+            directPOV!.accessMode <- aRefTo
+        }
         directPOV!.outerPOV <- sourcePOV
-        directPOV!.accessMode <- aRefTo
         directPOV!.isSubItm <- sourcePOV!.isSubItm
         directPOV!.pParent <- sourcePOV!.pParent
+        if(sourceIsDerivedView){
+            mapOrderedSpanViewToSource(directPOV, sourcePOV)
+        }
         if(directPOV!.pItem!.itmMode==mNone){directPOV!.pItem!.itmMode <- mItem}
         markOrderedSpanViewReady(directPOV!.pItem)
         return(directPOV)
@@ -277,11 +398,11 @@ struct OrderedSpanReasoner{
         if(unitConverter!.fromBaseCount<unitConverter!.toBaseCount){return(NULL)}
         if(unitConverter!.toBaseCount<=0 or unitConverter!.fromBaseCount % unitConverter!.toBaseCount != 0){return(NULL)}
         me int64: sourceItemsForUnit <- unitConverter!.fromBaseCount / unitConverter!.toBaseCount
-        if(sourcePOV!.countConcreteSiblingsFromHere()<sourceItemsForUnit){return(NULL)}
+        if(!sourcePOV!.hasLogicalItemsFromHere(sourceItemsForUnit)){return(NULL)}
 
         our infonView: meaning <- orderedSpanDefinitionMeaning(unitType, vSpec)
         if(meaning==NULL){
-            our POV: flatPOV <- sourcePOV!.makeConcreteSiblingSpanView(sourceItemsForUnit, false, source)
+            our POV: flatPOV <- sourcePOV!.makeLogicalSiblingSpanView(sourceItemsForUnit, false, source)
             if(flatPOV!=NULL){
                 flatPOV!.pItem!.type <- unitType
                 flatPOV!.pItem!.wordDerefed <- true
@@ -313,9 +434,16 @@ struct OrderedSpanReasoner{
 
         our POV:: spanPOV{source}
         spanPOV!.pItem <- span
-        spanPOV!.accessMode <- aRefTo
+        me bool: sourceIsDerivedView <-
+                sourcePOV!.viewMap.sourcePov!=NULL and
+                sourcePOV!.viewMap.startPov!=NULL
+        if(sourceIsDerivedView){spanPOV!.accessMode <- aCopyOf}
+        else{spanPOV!.accessMode <- aRefTo}
         spanPOV!.isSubItm <- true
         spanPOV!.pParent <- sourcePOV!.pParent
+        if(sourceIsDerivedView){
+            mapOrderedSpanViewToSource(spanPOV, sourcePOV)
+        }
 
         me int64: childIndex <- 0
         me int64: sourceOffset <- 0
@@ -413,10 +541,10 @@ struct OrderedSpanReasoner{
             return(result)
         }
         if(itemCount<=1){return(result)}
-        if(rhsPOV!.countConcreteSiblingsFromHere()<itemCount){return(result)}
+        if(!rhsPOV!.hasLogicalItemsFromHere(itemCount)){return(result)}
 
         our POV: prefix <- makeOrderedSpanUnitView(unitTypeForWindow, rhsPOV, vSpec, povSrcConcreteSpanPrefix)
-        if(prefix==NULL){prefix <- rhsPOV!.makeConcreteSiblingSpanView(itemCount, false, povSrcConcreteSpanPrefix)}
+        if(prefix==NULL){prefix <- rhsPOV!.makeLogicalSiblingSpanView(itemCount, false, povSrcConcreteSpanPrefix)}
         if(prefix==NULL){return(result)}
         if(windowType!=NULL){
             prefix!.pItem!.type <- windowType
@@ -462,6 +590,28 @@ struct WorldManager{
     me InfonViewReasoner: infonViewReasoner
     me string: phase1LastCoverageReport
     me uint64: phase1LastTraceCount <- 0
+
+    our IntersectionTraversalPlan: planEndRelativeIntersectionTraversal(
+            our POV: lhsPOV, our POV: sourcePOV) <- {
+        return(infonViewReasoner.planEndRelativeIntersectionTraversal(
+                self, lhsPOV, sourcePOV))
+    }
+
+    our POV: realizeEndRelativeIntersectionTraversal(
+            our POV: lhsPOV, our POV: sourcePOV,
+            our IntersectionTraversalPlan: plan) <- {
+        return(infonViewReasoner.realizeEndRelativeIntersectionTraversal(
+                lhsPOV, sourcePOV, plan))
+    }
+
+    me EndRelativePatternMeasureResult: measureEndRelativeFixedPattern(
+            our POV: lhsPOV, our POV: rhsPOV,
+            me int64: patternItemCount,
+            their vocabularySpec: vSpec) <- {
+        return(infonViewReasoner.orderedSpanReasoner.
+                measureEndRelativeFixedPattern(
+                        lhsPOV, rhsPOV, patternItemCount, vSpec))
+    }
 
     // Compatibility delegates keep ordered-span semantics out of control
     // ownership while preserving the interfaces used by propagation and
@@ -873,18 +1023,50 @@ struct WorldManager{
     me void: carryPassiveScalarSource(our POV: LHSPOV, our POV: RHSPOV) <- {
         if(LHSPOV==NULL or RHSPOV==NULL or RHSPOV!.pItem==NULL){return()}
         if(RHSPOV!.pItem!.value!.overlayType==LST){return()}
-        if(RHSPOV!.outerPOV!=NULL and RHSPOV!.outerPOV!.pItem===RHSPOV!.pItem){LHSPOV!.sourcePOV <- RHSPOV!.outerPOV}
-        else{LHSPOV!.sourcePOV <- RHSPOV}
+        our POV: sourceStartPOV <- RHSPOV
+        if(RHSPOV!.outerPOV!=NULL and
+                RHSPOV!.outerPOV!.pItem===RHSPOV!.pItem){
+            sourceStartPOV <- RHSPOV!.outerPOV
+        }else if(RHSPOV!.viewMap.startPov!=NULL){
+            sourceStartPOV <- RHSPOV!.viewMap.startPov
+        }
+        // An ordinary passive identity has no broader traversal context.  A
+        // derived span keeps its containing source as the distinct boundary.
+        our POV: sourceContextPOV <- sourceStartPOV
+        if(RHSPOV!.viewMap.sourcePov!=NULL){
+            sourceContextPOV <- RHSPOV!.viewMap.sourcePov
+        }else if(RHSPOV!.pParent!=NULL and
+                RHSPOV!.pParent!.viewMap.sourcePov!=NULL){
+            sourceContextPOV <- RHSPOV!.pParent!.viewMap.sourcePov
+        }
+        LHSPOV!.viewMap.sourcePov <- sourceContextPOV
+        LHSPOV!.viewMap.startPov <- sourceStartPOV
     }
     our infonView: selectReturnedInfonViewFromPOV(our AItem: aItem, our POV: selectedPOV) <- {
         if(selectedPOV==NULL){return(NULL)}
         our infonView: selected <- selectedPOV!.pItem
+        me bool: hasFollowOnPath <- (aItem!.LHS_item!.pItem!.partRef!=NULL or
+                !aItem!.LHS_item!.pItem!.parts.isEmpty())
         if(selectedPOV!.outerPOV!=NULL and selectedPOV!.outerPOV!.pItem===selectedPOV!.pItem){
             aItem!.LHS_item!.outerPOV <- selectedPOV!.outerPOV
-            aItem!.LHS_item!.accessMode <- aRefTo
-        }else if(selectedPOV!.sourcePOV!=NULL and selectedPOV!.sourcePOV!.pItem===selectedPOV!.pItem){
-            aItem!.LHS_item!.outerPOV <- selectedPOV!.sourcePOV
-            aItem!.LHS_item!.accessMode <- aRefTo
+            if(!hasFollowOnPath){aItem!.LHS_item!.accessMode <- aRefTo}
+        }else if(selectedPOV!.viewMap.sourcePov!=NULL and
+                selectedPOV!.viewMap.startPov!=NULL){
+            me bool: ordinaryPassiveIdentity <-
+                    selectedPOV!.viewMap.sourcePov===
+                            selectedPOV!.viewMap.startPov
+            if(!ordinaryPassiveIdentity or
+                    selectedPOV!.viewMap.startPov!.pItem===selected){
+                aItem!.LHS_item!.viewMap.sourcePov <-
+                        selectedPOV!.viewMap.sourcePov
+                aItem!.LHS_item!.viewMap.startPov <-
+                        selectedPOV!.viewMap.startPov
+                if(ordinaryPassiveIdentity){
+                    aItem!.LHS_item!.outerPOV <-
+                            selectedPOV!.viewMap.startPov
+                }
+                if(!hasFollowOnPath){aItem!.LHS_item!.accessMode <- aRefTo}
+            }
         }
         return(selected)
     }

@@ -180,6 +180,9 @@ struct MergeProcessor{
             if(semanticResult.fulfillSubscribers){
                 result.fulfillSubscribers <- true
             }
+            if(semanticResult.retainPendingIntersectionTraversal){
+                result.retainPendingIntersectionTraversal <- true
+            }
             if(semanticResult.stopCurrentDispatch){return(result)}
         } else if(aItem!.step==2){
             aItem!.phase1RecordHandler("merge:step2", false)
@@ -419,7 +422,8 @@ struct AgendaEngine{
         diagnostics.beginAgenda(agenda)
         me int: count <- 0
         while(!agenda!.AItems.isEmpty() or
-                !agenda!.propagationsTodo.isEmpty()) {
+                !agenda!.propagationsTodo.isEmpty() or
+                !agenda!.pendingIntersectionTraversalAItems.isEmpty()) {
             if(!agenda!.AItems.isEmpty()){
                 our AItem: aItem <- agenda!.AItems.popFirst()
                 aItem!.runID <- agenda!.nextRunID
@@ -448,6 +452,26 @@ struct AgendaEngine{
                 while(streamingStateRevision==observedStreamRevision){
                     streamingNormLock.wait(streamMtxMgr)
                 }
+            }else if(!agenda!.pendingIntersectionTraversalAItems.isEmpty()){
+                me bool: traversalNeedsRetry <- false
+                protect(streamingNormMutex){
+                    traversalNeedsRetry <- agenda!.
+                            pendingIntersectionTraversalNeedsRetry(
+                                    streamingStateRevision)
+                }
+                if(traversalNeedsRetry){
+                    agenda!.wakePendingIntersectionTraversals()
+                    continue()
+                }
+                if(!streamingNormMode or
+                        !agenda!.pendingIntersectionTraversalMayAdvance()){
+                    break()
+                }
+                me MutexMngr: streamMtxMgr{streamingNormMutex}
+                while(streamingStateRevision==observedStreamRevision){
+                    streamingNormLock.wait(streamMtxMgr)
+                }
+                agenda!.wakePendingIntersectionTraversals()
             }
         }
         diagnostics.completeAgenda(worldManager, agenda)

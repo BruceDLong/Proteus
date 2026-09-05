@@ -7,10 +7,25 @@ struct GLOBAL{
     const int: povSrcConcreteSpanRemainder <- 604
     const int: povSrcListSpecSparseTail  <- 605
     const int: povSrcEndRelativeReference <- 606
+    const int: povSrcImplicitItem        <- 607
+    const int: povSrcEndRelativeView     <- 608
 }
 
 struct POVPedigree{
     me int: source
+}
+struct ViewMap{
+    // NULL means this POV is not derived as a view/span of another POV.
+    // Otherwise, this POV defines the traversal context and stopping boundary.
+    our POV: sourcePov
+    // The source item corresponding to local item 0 in the derived view/span.
+    our POV: startPov
+}
+struct ImplicitItemMap{
+    // Non-owning because sourcePov.pItem retains the canonical implicit POV.
+    their POV: sourcePov
+    // Zero-based position in sourcePov's logical item sequence.
+    me int64: sourceIndex
 }
 model POV{ // Point-Of-View
     our infonView: pItem   // The POV item
@@ -18,7 +33,6 @@ model POV{ // Point-Of-View
     our POV: prev
     our POV: altPOV     // NEXT OR
     our POV: outerPOV   // POV outside of an alt
-    our POV: sourcePOV  // Passive source identity; promoted to outerPOV only when selected.
     their POV: pParent
     mode[aCopyOf, aRefTo]: accessMode
     flag: forceID
@@ -38,6 +52,12 @@ model POV{ // Point-Of-View
     me int: AlternativesNestLvl
     me List<our POV>: predecessors
     me POVPedigree: pedigree
+    // infonView remains locally zero-based; origins and traversal boundaries
+    // for derived views/spans are represented by POV navigation.
+    me ViewMap: viewMap
+    // Set only when this ordinary POV represents a logical source item that
+    // has not been expanded into the physical POV list.
+    me ImplicitItemMap: implicitItem
     me List<our POV>: candidatesForLastItem
     flag: endRelativeReference
     flag: endRelativeResolved
@@ -68,6 +88,13 @@ model POV{ // Point-Of-View
     me bool: isLast()  <- {return(next==NULL)}
     me bool: looseSize() <- {return(looseInhtd or looseTop)}
     me bool: looseType() <- {return(looseMode or looseTop or looseInhtd)}
+    void: mapViewToSource(our POV: sourceContextPOV,
+            our POV: sourceStartPOV) <- {
+        if(sourceContextPOV==NULL or sourceStartPOV==NULL){return()}
+        viewMap.sourcePov <- sourceContextPOV
+        viewMap.startPov <- sourceStartPOV
+        accessMode <- aRefTo
+    }
     void: noteMarkedOuterFrom(our POV: transparentPOV) <- {
         if(markedOuterPOV!=NULL or transparentPOV==NULL){return()}
         // Tight traversal treats &{...} as transparent and returns an inner POV.
@@ -92,8 +119,8 @@ model POV{ // Point-Of-View
         }
         candidatesForLastItem.append(candidate)
     }
-    me bool: isSparseOrderedSpan() <- {
-        if(!isSubItm or pItem==NULL){return(false)}
+    me bool: hasSparseOrderedSpanValue() <- {
+        if(pItem==NULL){return(false)}
         if(pItem!.value!.overlayType!=LST or pItem!.value!.evalMode!=emLiteral){return(false)}
         if(!pItem!.value!.tailUnfinished){return(false)}
         if(pItem!.value!.listSpec==NULL){return(false)}
@@ -101,9 +128,214 @@ model POV{ // Point-Of-View
         if(!pItem!.value!.items.isEmpty()){return(false)}
         return(true)
     }
+    me bool: isSparseOrderedSpan() <- {
+        return(isSubItm and hasSparseOrderedSpanValue())
+    }
     me int64: sparseSpanCount() <- {
-        if(!isSparseOrderedSpan()){return(0)}
+        if(!hasSparseOrderedSpanValue()){return(0)}
         return(pItem!.infSize!.num.convertToInt())
+    }
+    me bool: isImplicitItemPOV() <- {
+        return(implicitItem.sourcePov!=NULL)
+    }
+    our POV: findImplicitItemPOV(me int64: sourceIndex) <- {
+        if(pItem==NULL or sourceIndex<0){return(NULL)}
+        withEach retainedPOV in pItem!.retainedPOVs{
+            if(retainedPOV!=NULL and retainedPOV!.implicitItem.sourcePov===self and
+               retainedPOV!.implicitItem.sourceIndex==sourceIndex){
+                return(retainedPOV)
+            }
+        }
+        return(NULL)
+    }
+    our POV: getOrCreateImplicitItemPOV(me int64: sourceIndex) <- {
+        if(!hasSparseOrderedSpanValue() or sourceIndex<0 or
+                sourceIndex>=sparseSpanCount()){return(NULL)}
+        our POV: implicitPOV <- findImplicitItemPOV(sourceIndex)
+        if(implicitPOV!=NULL){return(implicitPOV)}
+
+        Allocate(implicitPOV, povSrcImplicitItem)
+        implicitPOV!.pItem <- makeSparseSpanMemberTypeOnlyInfonView()
+        implicitPOV!.implicitItem.sourcePov <- self
+        implicitPOV!.implicitItem.sourceIndex <- sourceIndex
+        pItem!.retainPOV(implicitPOV)
+        return(implicitPOV)
+    }
+    // Navigate compressed logical items arithmetically. This may retain a
+    // canonical implicit POV, but never changes the physical source list.
+    our POV: logicalSiblingAtOffset(me int64: offset) <- {
+        if(offset<0){return(NULL)}
+        our POV: pov
+        if(isImplicitItemPOV()){
+            their POV: sourcePOV <- implicitItem.sourcePov
+            if(sourcePOV==NULL or
+                    !sourcePOV!.hasSparseOrderedSpanValue()){return(NULL)}
+            me int64: available <- sourcePOV!.sparseSpanCount() - implicitItem.sourceIndex
+            if(available<=0){return(NULL)}
+            if(offset<available){
+                return(sourcePOV!.getOrCreateImplicitItemPOV(
+                        implicitItem.sourceIndex + offset))
+            }
+            if(!sourcePOV!.isSubItm){return(NULL)}
+            offset <- offset - available
+            pov <- sourcePOV!.next
+            if(pov!=NULL){pov!.pParent <- sourcePOV!.pParent}
+        }else{
+            pov <- listNodeForSelf()
+            if(pov==NULL){
+                if(hasSparseOrderedSpanValue() and
+                        offset<sparseSpanCount()){
+                    return(getOrCreateImplicitItemPOV(offset))
+                }
+                return(NULL)
+            }
+        }
+
+        while(pov!=NULL){
+            if(pov!.isSparseOrderedSpan()){
+                me int64: spanCount <- pov!.sparseSpanCount()
+                if(offset<spanCount){return(pov!.getOrCreateImplicitItemPOV(offset))}
+                offset <- offset - spanCount
+            }else{
+                if(offset==0){return(pov)}
+                offset <-- 1
+            }
+            our POV: priorPOV <- pov
+            pov <- pov!.next
+            if(pov!=NULL){pov!.pParent <- priorPOV!.pParent}
+        }
+        return(NULL)
+    }
+    our POV: logicalNextItemPOV() <- {
+        return(logicalSiblingAtOffset(1))
+    }
+    me bool: hasLogicalItemsFromHere(me int64: itemCount) <- {
+        if(itemCount<=0){return(true)}
+        return(logicalSiblingAtOffset(itemCount - 1)!=NULL)
+    }
+    // Find a zero-based logical item within this traversal context. Subitems
+    // are transparent, and counted sparse spans yield canonical implicit POVs.
+    our POV: logicalItemAtIndex(me int64: itemIndex) <- {
+        if(itemIndex<0 or pItem==NULL or
+                pItem!.value!.overlayType!=LST or
+                pItem!.value!.evalMode==emUnknown){return(NULL)}
+        // A counted typed sparse POV is itself the compressed run. It has no
+        // material child node to enter, but each logical position still has a
+        // canonical implicit POV.
+        if(hasSparseOrderedSpanValue()){
+            if(itemIndex>=sparseSpanCount()){return(NULL)}
+            return(getOrCreateImplicitItemPOV(itemIndex))
+        }
+        our POV: childPOV <- pItem!.value!.items.head
+        while(childPOV!=NULL){
+            childPOV!.pParent <- self
+            if(childPOV!.isSparseOrderedSpan()){
+                me int64: spanCount <- childPOV!.sparseSpanCount()
+                if(itemIndex<spanCount){
+                    return(childPOV!.getOrCreateImplicitItemPOV(itemIndex))
+                }
+                itemIndex <- itemIndex - spanCount
+            }else if(childPOV!.isSubItm){
+                me FlexNum: childSize <- childPOV!.pItem!.sizeIfKnown()
+                if(childSize==-1){return(NULL)}
+                me int64: childCount <- childSize.convertToInt()
+                if(itemIndex<childCount){
+                    return(childPOV!.logicalItemAtIndex(itemIndex))
+                }
+                itemIndex <- itemIndex - childCount
+            }else{
+                if(itemIndex==0){return(childPOV)}
+                itemIndex <-- 1
+            }
+            childPOV <- childPOV!.next
+        }
+        return(NULL)
+    }
+    // Resolve a window coordinate relative to this POV's own logical end.
+    // Exact extent and position availability are deliberately separate: a
+    // counted list can establish the coordinate before all positions exist.
+    me EndRelativeWindowAvailability: endRelativeWindowAvailability(
+            me int64: offset, me int64: itemCount) <- {
+        me EndRelativeWindowAvailability: result
+        result.itemCount <- itemCount
+        if(pItem==NULL){
+            result.status <- erwcIncompatible
+            result.extent.status <- eresIncompatible
+            return(result)
+        }
+        result.extent <- pItem!.endRelativeExtent()
+        if(result.extent.status==eresIncompatible){
+            result.status <- erwcIncompatible
+            return(result)
+        }
+        if(result.extent.status!=eresExact){return(result)}
+
+        result.startIndex <- result.extent.exactExtent + offset
+        if(offset>=0 or itemCount<=0 or result.startIndex<0 or
+                itemCount>result.extent.exactExtent-result.startIndex){
+            result.status <- erwcOutOfRange
+            return(result)
+        }
+
+        me int64: itemIndex <- result.startIndex
+        while(itemIndex<result.startIndex+itemCount){
+            our POV: sourceItemPOV <- logicalItemAtIndex(itemIndex)
+            if(sourceItemPOV==NULL){return(result)}
+            if(result.firstSourcePOV==NULL){
+                result.firstSourcePOV <- sourceItemPOV
+            }
+            result.lastSourcePOV <- sourceItemPOV
+            itemIndex <+- 1
+        }
+        result.status <- erwcAvailable
+        return(result)
+    }
+    // Build a locally zero-based view over the final -offset logical items.
+    // sourcePov remains the traversal boundary even when startPov is nested.
+    our POV: makeEndRelativeSpanView(me int64: offset, me int: source) <- {
+        me int64: itemCount <- 0 - offset
+        me EndRelativeWindowAvailability: availability <-
+                endRelativeWindowAvailability(offset, itemCount)
+        if(availability.status!=erwcAvailable){return(NULL)}
+        me int64: finalExtent <- availability.extent.exactExtent
+        me int64: startIndex <- availability.startIndex
+        our POV: firstSourcePOV <- availability.firstSourcePOV
+
+        our infonView:: span
+        span!.setToList()
+        span!.value!.listSpec <- pItem!.value!.listSpec
+        span!.orderMode <- pItem!.orderMode
+        span!.value!.sizeMode <- fromCount
+        span!.value!.tailUnfinished <- false
+        span!.infSize!.overlayType <- NUM
+        span!.infSize!.evalMode <- emLiteral
+        span!.infSize!.num <- itemCount
+
+        our POV:: spanPOV{source}
+        spanPOV!.pItem <- span
+        spanPOV!.accessMode <- aRefTo
+        spanPOV!.isSubItm <- true
+        spanPOV!.pParent <- pParent
+        spanPOV!.viewMap.startPov <- firstSourcePOV
+
+        me int64: itemIndex <- startIndex
+        while(itemIndex<finalExtent){
+            our POV: sourceItemPOV <- logicalItemAtIndex(itemIndex)
+            if(sourceItemPOV==NULL){return(NULL)}
+            // Matching a view must refine only the local projection.  The
+            // source is changed later, through ViewMap, if the selected view
+            // is assigned to.
+            our infonView:: localItem
+            sourceItemPOV!.pItem!.copyAsTypeTo(localItem, false, false)
+            our POV: localPOV <- span!.value!.items.append(
+                    localItem, sourceItemPOV!.isSubItm, source)
+            localPOV!.outerPOV <- sourceItemPOV
+            localPOV!.accessMode <- aRefTo
+            localPOV!.pParent <- spanPOV
+            localPOV!.tentFromDots <- sourceItemPOV!.tentFromDots
+            itemIndex <+- 1
+        }
+        return(spanPOV)
     }
     me string: sparseSpanListSpecTypeID() <- {
         if(!isSparseOrderedSpan()){return("")}
@@ -180,6 +412,7 @@ model POV{ // Point-Of-View
     }
     our POV: siblingAtOffset(me int64: offset) <- {
         if(offset<0){return(NULL)}
+        if(isImplicitItemPOV()){return(logicalSiblingAtOffset(offset))}
         our POV: pov <- listNodeForSelf()
         while(pov!=NULL and offset>0){
             pov <- pov!.next
@@ -201,17 +434,24 @@ model POV{ // Point-Of-View
         if(pParent==NULL or pParent!.pItem==NULL){return(false)}
         return(pParent!.pItem!.value!.tailUnfinished)
     }
-    our POV: makeConcreteSiblingSpanView(me int64: itemCount, me bool: keepTail, me int: source) <- {
+    our POV: makeLogicalSiblingSpanView(me int64: itemCount, me bool: keepTail, me int: source) <- {
         if(pItem==NULL or itemCount<0){return(NULL)}
         if(itemCount==0 and !keepTail){return(NULL)}
-        our POV: firstSibling <- listNodeForSelf()
+        our POV: firstSibling
+        if(isImplicitItemPOV()){firstSibling <- logicalSiblingAtOffset(0)}
+        else{firstSibling <- listNodeForSelf()}
         if(firstSibling==NULL){return(NULL)}
 
         our infonView:: span
         span!.setToList()
-        if(pParent!=NULL and pParent!.pItem!=NULL){
-            span!.value!.listSpec <- pParent!.pItem!.value!.listSpec
-            span!.orderMode <- pParent!.pItem!.orderMode
+        their POV: spanParent <- pParent
+        if(isImplicitItemPOV() and implicitItem.sourcePov!=NULL){
+            spanParent <- implicitItem.sourcePov!.pParent
+            span!.value!.listSpec <- implicitItem.sourcePov!.pItem!.value!.listSpec
+            span!.orderMode <- implicitItem.sourcePov!.pItem!.orderMode
+        }else if(spanParent!=NULL and spanParent!.pItem!=NULL){
+            span!.value!.listSpec <- spanParent!.pItem!.value!.listSpec
+            span!.orderMode <- spanParent!.pItem!.orderMode
         }
         span!.value!.sizeMode <- fromCount
         span!.value!.tailUnfinished <- keepTail
@@ -228,7 +468,7 @@ model POV{ // Point-Of-View
         spanPOV!.pItem <- span
         spanPOV!.accessMode <- aRefTo
         spanPOV!.isSubItm <- true
-        spanPOV!.pParent <- pParent
+        spanPOV!.pParent <- spanParent
 
         me int64: copied <- 0
         our POV: itemPOV <- firstSibling
@@ -239,7 +479,9 @@ model POV{ // Point-Of-View
             newPOV!.pParent <- spanPOV
             newPOV!.tentFromDots <- itemPOV!.tentFromDots
             copied <+- 1
-            itemPOV <- itemPOV!.next
+            if(itemPOV!.isImplicitItemPOV()){
+                itemPOV <- itemPOV!.logicalNextItemPOV()
+            }else{itemPOV <- itemPOV!.next}
         }
         if(copied<itemCount){return(NULL)}
         return(spanPOV)
@@ -565,6 +807,8 @@ model POV{ // Point-Of-View
             log("### <<NORM getNextPOV-DONE_WAITING on:"+pItem!.mySymbol()+" = "+shortedStr(toString(pItem),100))
         }
 
+        if(isImplicitItemPOV()){return(logicalNextItemPOV())}
+
         our POV: nextNode <- next
         if(nextNode==NULL){
             if(skipDots<=0){ //log("DOTS:"+toString(skipDots))
@@ -613,16 +857,20 @@ model POV{ // Point-Of-View
             nextPOV <- getNext(skipDots, waitState)
             if(nextPOV == NULL){
                 if(waitState!=NULL and waitState! != propWaitNone){return(NULL)}
+                their POV: traversalPOV <- self
+                if(isImplicitItemPOV() and implicitItem.sourcePov!=NULL){
+                    traversalPOV <- implicitItem.sourcePov
+                }
                 our infItr: nxtInfItr <- ii
-                if(pParent==NULL or !pParent!.isSubItm){
+                if(traversalPOV!.pParent==NULL or !traversalPOV!.pParent!.isSubItm){
                     numLvlsUp! <+- 1
-                    if(pParent==NULL){/*log("]gnt-NULLa")*/ return(NULL)} else {skipDots <+- 1}
+                    if(traversalPOV!.pParent==NULL){/*log("]gnt-NULLa")*/ return(NULL)} else {skipDots <+- 1}
                     if(ii != NULL and ii!.iParent!=NULL){nxtInfItr <- ii!.iParent}
-                }else if(pParent === ii!.topPOV){/*log("]gnt-NULLb")*/ return(NULL)}
-                if(pParent!.outerPOV!=NULL){//log("UP-OTR")
-                    nextPOV <- pParent!.outerPOV!.getNextTight(nxtInfItr, skipDots-1, numLvlsUp, getDeep, itrBeginning, waitState, agent)
+                }else if(traversalPOV!.pParent === ii!.topPOV){/*log("]gnt-NULLb")*/ return(NULL)}
+                if(traversalPOV!.pParent!.outerPOV!=NULL){//log("UP-OTR")
+                    nextPOV <- traversalPOV!.pParent!.outerPOV!.getNextTight(nxtInfItr, skipDots-1, numLvlsUp, getDeep, itrBeginning, waitState, agent)
                 }else{//log("UP")
-                    nextPOV <- pParent!.getNextTight(nxtInfItr, skipDots-1, numLvlsUp, getDeep, itrBeginning, waitState, agent)
+                    nextPOV <- traversalPOV!.pParent!.getNextTight(nxtInfItr, skipDots-1, numLvlsUp, getDeep, itrBeginning, waitState, agent)
                 }
             }else if(nextPOV!.isSparseOrderedSpan()){
             }else if(nextPOV!.isSubItm or (nextPOV!.pItem!.value!.overlayType==LST and getDeep)){
@@ -688,12 +936,15 @@ model POV{ // Point-Of-View
         prev      <- NULL
         altPOV    <- NULL
         outerPOV  <- NULL
-        sourcePOV <- NULL
         pParent   <- NULL
         AlternativesNestLvl <- 0
         linearAltID <- 0
         workRevision <- 0
         pedigree.source <- source
+        viewMap.sourcePov <- NULL
+        viewMap.startPov <- NULL
+        implicitItem.sourcePov <- NULL
+        implicitItem.sourceIndex <- -1
     }
 }
 

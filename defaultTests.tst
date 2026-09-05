@@ -11,6 +11,7 @@ parser/misc/vars,      vars cursor,                    %vars,                   
 parser/num/bare,       Simple number,                  34,                                                                     34,                             parse
 parser/num/plus,       Positive number,                +34,                                                                    +34,                            parse
 parser/num/sized,      Sized number,                   *64+34 ,                                                                *64+34,                         parse
+parser/num/parenthesizedNegativeSize, Parenthesized negative size, *(-1)+34,                                                   *(-1)+34,                        parse
 parser/num/divd,       Sized number,                   /64-34,                                                                 /64-34,                         parse
 parser/num/unknown,    Unknown number,                 _,                                                                      _,                              parse
 parser/num/neg,        Negative number,                -34,                                                                    -34,                            parse
@@ -109,6 +110,7 @@ merge/list/nums,       Simple list merge,              {_ _ _} = {2 3 4},       
 merge/list/misc,       Merge misc items,               *4+{3 _ $ *3+{...}} = *4+{3 4 'hi' {5 6 7}},                            {3 4 'hi' {5 6 7}},             norm
 merge/list/multiID,    Merge many idents,              {_ _ _} = {_ 2 _} = { 1 _ _} = { _ _ 3},                                {1 2 3},                        norm
 merge/calcSize,        Merge calc'd size,              *(10)+5,                                                                *10+5,                          norm
+merge/calcNegativeSize, Merge calc'd negative size,    *(-1)+5,                                                               *(-1)+5,                        norm
 trav/list/withEmpty,   traverse over {},               {{1 2} {} {_=3} _=4},                                                   {{1 2} {} {3} 4},               norm
 merge/intersect/onRHS, When [] is on RHS,              _ = *_+[5 6 7],                                                         *_+[t5 t6 t7],                  norm
 noRHS/dots/simple,     Test dots in LHS,               {...},                                                                  { ... },                        norm
@@ -231,6 +233,11 @@ range/concat1,         Overlapping range,              *10+(*5+_+2) = *10+(*4+_+
 range/dot,             Find with dot,                  {1 0 6 7 8 4 5 6 7}.*10+(*3+_+2) ,                                      4,                              norm
 # range/alts	    Select alts	{[&{!*_+[*10+(*3+_+2) *10+(*3+_+6)]|  ... } *_+[*10+(*3+_+2) *10+(*3+_+6)]] | ...} <~ {1 2 3 4 5 6 7 8 9}	{2 3 4 6 7 8}	norm
 slice/select,          Select slice,                   [& *3+{...} <&*4+{...}> ] <~ {3 4 5 6 7 8 9 0},                         {6 7 8 9},                      norm
+slice/endRelativeLast, Select last item with negative-sized intersection, *(-1)+[<_>] <~ {1 2 3 4},                            4,                              norm
+slice/endRelativeSecondLast, Select second-last item with negative-sized intersection, *(-2)+[<_> _] <~ {1 2 3 4},             3,                              norm
+slice/endRelativeString, Select final string with a negative-sized intersection, *(-1)+[<$>] <~ {'Cat' 'Hat' 'Bat' 'Dog'},      'Dog',                          norm
+slice/endRelativeNested, Keep source boundary when negative start is nested, *(-2)+[<_> _] <~ {1 &{2 3} 4},                    3,                              norm
+slice/endRelativeSpan, Select final span with a negative-sized intersection, *(-2)+[<&{_ _}>] <~ {1 2 3 4},                    {3 4},                          norm
 slice/sugar,           Select sugar,                   {1 2 3 4 5 6 7 8 9 0}#3:*4+{ ... } ;,                                   {4 5 6 7},                      norm
 lang/splitText,        Split English text,             {english-text:"Whoever says they can't is right"},                      {english-phrase:{Whoever says they can't is right}}, norm
 temp/t1,               Merge many idents,              _=_=321,                                                                321,                            norm

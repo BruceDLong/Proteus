@@ -16,6 +16,7 @@ struct MergeStepSemanticResult{
     me bool: propagationDontEnque <- false
     me bool: completeSourceWork <- false
     me bool: fulfillSubscribers <- false
+    me bool: retainPendingIntersectionTraversal <- false
     me List<our AItem>: requestedWork
 }
 
@@ -105,9 +106,13 @@ struct ReferenceConsolidationStrategy{
     me bool: identityTakesPriority(our AItem: aItem) <- {
         return(aItem!=NULL and aItem!.LHS_item!=NULL and
                 aItem!.LHS_item!.accessMode==aRefTo and
-                aItem!.LHS_item!.outerPOV!=NULL and
                 aItem!.LHS_item!.pItem!=NULL and
-                aItem!.LHS_item!.outerPOV!.pItem===aItem!.LHS_item!.pItem and
+                ((aItem!.LHS_item!.outerPOV!=NULL and
+                  aItem!.LHS_item!.outerPOV!.pItem===aItem!.LHS_item!.pItem) or
+                 (aItem!.LHS_item!.viewMap.sourcePov!=NULL and
+                  aItem!.LHS_item!.viewMap.startPov!=NULL and
+                  !(aItem!.LHS_item!.viewMap.sourcePov===
+                    aItem!.LHS_item!.viewMap.startPov))) and
                 aItem!.RHS!=NULL and aItem!.RHS!.pItem!=NULL and
                 !aItem!.RHS!.pItem!.asRHSInternalIdent and
                 !(aItem!.RHS!.pParent!=NULL and
@@ -157,10 +162,112 @@ struct ReferenceConsolidationStrategy{
                 item!.value!.listSpec!=NULL)
     }
 
+    void: collectMappedWriteLeaves(our infonView: item,
+            their List<our POV>: leaves) <- {
+        if(item==NULL or item!.value!.overlayType!=LST or
+                item!.value!.evalMode!=emLiteral){return()}
+        our POV: childPOV <- item!.value!.items.head
+        while(childPOV!=NULL){
+            if(childPOV!.pItem!=NULL and
+                    childPOV!.pItem!.value!.overlayType==LST and
+                    childPOV!.pItem!.value!.evalMode==emLiteral and
+                    !childPOV!.pItem!.value!.items.isEmpty()){
+                collectMappedWriteLeaves(childPOV!.pItem, leaves)
+            }else{
+                leaves!.append(childPOV)
+            }
+            childPOV <- childPOV!.next
+        }
+    }
+
+    our POV: mappedWriteSourcePOV(our POV: viewPOV) <- {
+        if(viewPOV==NULL){return(NULL)}
+        if(viewPOV!.viewMap.startPov!=NULL){
+            return(viewPOV!.viewMap.startPov)
+        }
+        if(viewPOV!.outerPOV!=NULL){
+            if(viewPOV!.outerPOV!.viewMap.startPov!=NULL){
+                return(viewPOV!.outerPOV!.viewMap.startPov)
+            }
+            if(viewPOV!.outerPOV!.pItem===viewPOV!.pItem){
+                return(viewPOV!.outerPOV)
+            }
+        }
+        return(NULL)
+    }
+
+    me bool: copyMappedCompositeIdentity(our AItem: aItem,
+            our infonView: RHS) <- {
+        if(aItem!.LHS_item!.viewMap.sourcePov==NULL or
+                aItem!.LHS_item!.viewMap.startPov==NULL or
+                aItem!.LHS_item!.pItem!.value!.overlayType!=LST or
+                RHS!.value!.overlayType!=LST){return(false)}
+        me List<our POV>: lhsLeaves
+        me List<our POV>: rhsLeaves
+        collectMappedWriteLeaves(aItem!.LHS_item!.pItem, lhsLeaves)
+        collectMappedWriteLeaves(RHS, rhsLeaves)
+        if(lhsLeaves.isEmpty() or lhsLeaves.size()!=rhsLeaves.size()){
+            aItem!.mergeStatus <- msReject
+            aItem!.LHS_item!.rejected <- true
+            return(true)
+        }
+        withEach lhsLeaf in lhsLeaves{
+            our POV: targetPOV <- mappedWriteSourcePOV(lhsLeaf)
+            if(targetPOV==NULL or targetPOV!.pItem==NULL){
+                aItem!.mergeStatus <- msReject
+                aItem!.LHS_item!.rejected <- true
+                return(true)
+            }
+        }
+
+        me int64: itemIndex <- 0
+        while(itemIndex<lhsLeaves.size()){
+            our POV: lhsLeaf <- lhsLeaves[itemIndex]
+            our POV: rhsLeaf <- rhsLeaves[itemIndex]
+            our POV: targetPOV <- mappedWriteSourcePOV(lhsLeaf)
+            our infonView: target <- targetPOV!.pItem
+            our WordUse: oldType <- target!.type
+            our infonView: oldListSpec <- target!.value!.listSpec
+            me uint64: oldItmMode <- target!.itmMode
+            rhsLeaf!.pItem!.copyAsTypeTo(target, false, true)
+            if(oldType!=NULL){target!.type <- oldType}
+            if(oldListSpec!=NULL){target!.value!.listSpec <- oldListSpec}
+            if(oldItmMode!=mNone){target!.itmMode <- oldItmMode}
+            lhsLeaf!.pItem <- target
+            itemIndex <+- 1
+        }
+        // Definition-backed concrete lists can retain an open-tail marker
+        // even when their exact extent is known.  A mapped replacement that
+        // reaches that known final item completes the concrete source list.
+        our POV: sourceContextPOV <- aItem!.LHS_item!.viewMap.sourcePov
+        if(sourceContextPOV!=NULL and sourceContextPOV!.pItem!=NULL and
+                sourceContextPOV!.pItem!.value!.overlayType==LST and
+                !sourceContextPOV!.pItem!.value!.items.isEmpty() and
+                sourceContextPOV!.pItem!.endRelativeExtent().status==eresExact){
+            me int64: sourceExtent <- sourceContextPOV!.pItem!.
+                    infSize!.num.convertToInt()
+            if(sourceExtent>0){
+                our POV: finalSourcePOV <- sourceContextPOV!.
+                        logicalItemAtIndex(sourceExtent - 1)
+                our POV: finalWrittenPOV <- mappedWriteSourcePOV(
+                        lhsLeaves[lhsLeaves.size() - 1])
+                if(finalSourcePOV!=NULL and finalWrittenPOV!=NULL and
+                        (finalSourcePOV===finalWrittenPOV or
+                         finalSourcePOV!.pItem===finalWrittenPOV!.pItem)){
+                    sourceContextPOV!.pItem!.value!.tailUnfinished <- false
+                }
+            }
+        }
+        return(true)
+    }
+
     me bool: isSourceBackedPOV(our POV: pov) <- {
         return(pov!=NULL and pov!.accessMode==aRefTo and
-                pov!.outerPOV!=NULL and
-                pov!.outerPOV!.pItem===pov!.pItem)
+                ((pov!.outerPOV!=NULL and
+                  pov!.outerPOV!.pItem===pov!.pItem) or
+                 (pov!.viewMap.sourcePov!=NULL and
+                  pov!.viewMap.startPov!=NULL and
+                  !(pov!.viewMap.sourcePov===pov!.viewMap.startPov))))
     }
 
     me bool: mergeOpenListShapeIntoConcreteList(our AItem: aItem,
@@ -199,9 +306,18 @@ struct ReferenceConsolidationStrategy{
 
     me void: copyIdentity(our AItem: aItem) <- {
         our infonView: RHS <- aItem!.RHS!.pItem
-        our WordUse: oldType <- aItem!.LHS_item!.pItem!.type
-        our infonView: oldListSpec <- aItem!.LHS_item!.pItem!.value!.listSpec
-        me uint64: lhsItmMode <- aItem!.LHS_item!.pItem!.itmMode
+        if(copyMappedCompositeIdentity(aItem, RHS)){return()}
+        our POV: mappedSourcePOV <- aItem!.LHS_item!.viewMap.startPov
+        if(aItem!.LHS_item!.viewMap.sourcePov===mappedSourcePOV){
+            mappedSourcePOV <- NULL
+        }
+        our infonView: target <- aItem!.LHS_item!.pItem
+        if(mappedSourcePOV!=NULL and mappedSourcePOV!.pItem!=NULL){
+            target <- mappedSourcePOV!.pItem
+        }
+        our WordUse: oldType <- target!.type
+        our infonView: oldListSpec <- target!.value!.listSpec
+        me uint64: lhsItmMode <- target!.itmMode
 
         if(mergeOpenListShapeIntoConcreteList(aItem, RHS, lhsItmMode)){
             return()
@@ -209,7 +325,8 @@ struct ReferenceConsolidationStrategy{
 
         if(isSourceBackedPOV(aItem!.LHS_item)){
             aItem!.RHS!.pItem!.copyAsTypeTo(
-                    aItem!.LHS_item!.pItem, false, true)
+                    target, false, true)
+            aItem!.LHS_item!.pItem <- target
             if(lhsItmMode!=mNone){
                 aItem!.LHS_item!.pItem!.itmMode <- lhsItmMode
             }
@@ -1441,6 +1558,44 @@ struct IntersectionReasoner{
         consolidationStrategy.mergeRHSIntersect(aItem)
     }
 
+    // A negative size on an intersection inner list is an end-relative
+    // origin, not a negative local cardinality. Resolve that origin into a
+    // source-backed view before ordinary intersection propagation begins.
+    our POV: prepareEndRelativeSourceView(our POV: lhsPOV,
+            our POV: sourcePOV, me int64: sourceItemCount) <- {
+        if(lhsPOV==NULL or lhsPOV!.pItem==NULL or sourcePOV==NULL or
+                sourcePOV!.pItem==NULL){return(sourcePOV)}
+        our infonView: lhs <- lhsPOV!.pItem
+        if(!lhs!.isInnr or lhs!.infSize!.overlayType!=NUM or
+                lhs!.infSize!.evalMode!=emLiteral or lhs!.infSize!.num>=0){
+            return(sourcePOV)
+        }
+
+        me int64: offset <- lhs!.infSize!.num.convertToInt()
+        me int64: patternItemCount <- 0 - offset
+        if(sourceItemCount<=0){sourceItemCount <- patternItemCount}
+        our POV: viewPOV <- sourcePOV!.makeEndRelativeSpanView(
+                0 - sourceItemCount, povSrcEndRelativeView)
+        if(viewPOV==NULL){return(sourcePOV)}
+
+        viewPOV!.mapViewToSource(
+                sourcePOV, viewPOV!.viewMap.startPov)
+        viewPOV!.looseMode <- sourcePOV!.looseMode
+        viewPOV!.looseTop <- sourcePOV!.looseTop
+        viewPOV!.looseInhtd <- sourcePOV!.looseInhtd
+        viewPOV!.isOutrFeed <- sourcePOV!.isOutrFeed
+        our POV: localPOV <- viewPOV!.pItem!.value!.items.head
+        while(localPOV!=NULL){
+            if(localPOV!.outerPOV!=NULL){
+                localPOV!.mapViewToSource(sourcePOV, localPOV!.outerPOV)
+            }
+            localPOV <- localPOV!.next
+        }
+        lhs!.infSize!.num <- patternItemCount
+        lhs!.retainPOV(viewPOV)
+        return(viewPOV)
+    }
+
     me void: prepareInnerContext(our AItem: aItem) <- {
         our infonView: CI <- aItem!.LHS_item!.pItem
         if(CI!.hasInnrOutr){
@@ -1619,12 +1774,57 @@ struct IntersectionReasoner{
                 }
             }
         }
+        our POV: mappedSelectionPOV <- NULL
+        if(CI!.intersectPos==ipGetMarked and innr!=NULL){
+            mappedSelectionPOV <- innr!.intersectMarkedRetPOV
+        }
+        // Ordered-span matching may construct the marked composite locally
+        // while mapping each of its children to the source.  In that case the
+        // selected span still begins at the first mapped child and has the
+        // same traversal context.
+        if(CI!.intersectPos==ipGetMarked and newTop!=NULL and
+                (mappedSelectionPOV==NULL or
+                 mappedSelectionPOV!.viewMap.sourcePov==NULL or
+                 mappedSelectionPOV!.viewMap.startPov==NULL) and
+                newTop!.value!.overlayType==LST and
+                !newTop!.value!.items.isEmpty()){
+            our POV: firstSelectedPOV <- newTop!.value!.items.head
+            if(firstSelectedPOV!.viewMap.sourcePov!=NULL and
+                    firstSelectedPOV!.viewMap.startPov!=NULL){
+                mappedSelectionPOV <- firstSelectedPOV
+            }
+        }
+        if(CI!.intersectPos==ipGetMarked and
+                mappedSelectionPOV!=NULL and
+                mappedSelectionPOV!.viewMap.sourcePov!=NULL and
+                mappedSelectionPOV!.viewMap.startPov!=NULL){
+            aItem!.LHS_item!.viewMap.sourcePov <-
+                    mappedSelectionPOV!.viewMap.sourcePov
+            aItem!.LHS_item!.viewMap.startPov <-
+                    mappedSelectionPOV!.viewMap.startPov
+            if(CI!.partRef==NULL and CI!.parts.isEmpty()){
+                aItem!.LHS_item!.accessMode <- aRefTo
+            }
+            if(CI!.intersectMarkedRetPOV!=NULL and
+                    CI!.intersectMarkedRetPOV!.pItem!=NULL and
+                    CI!.intersectMarkedRetPOV!.pItem!.value!.overlayType!=LST){
+                newTop <- mappedSelectionPOV!.
+                        viewMap.startPov!.pItem
+            }
+        }
+        me bool: selectedMappedSpan <-
+                aItem!.LHS_item!.viewMap.sourcePov!=NULL and
+                aItem!.LHS_item!.viewMap.startPov!=NULL and
+                !(aItem!.LHS_item!.viewMap.sourcePov===
+                  aItem!.LHS_item!.viewMap.startPov)
         if(newTop!=NULL){
             if(CI!.intersectPos==ipGetMarked){
-                if(CI!.intersectMarkedRetPOV!=NULL and
+                if(!selectedMappedSpan and
+                        CI!.intersectMarkedRetPOV!=NULL and
                         newTop===CI!.intersectMarkedRetPOV!.pItem){
-                    // A marked range object may still have selector-local
-                    // work queued on it; do not project that work outward.
+                    // An ordinary marked range object may still have
+                    // selector-local work queued on it; do not project that
+                    // work outward.
                     newTop!.clearWrkList()
                     CI!.clearWrkList()
                 }else{
@@ -1651,6 +1851,13 @@ struct IntersectionReasoner{
         newTop!.originID <- CI!.originID
         newTop!.infCharPos <- CI!.infCharPos
         if(CI!.value!.undefined){newTop!.value!.undefined <- true}
+        if(newTop!==CI){
+            // The selected graph may still reach temporary POVs through
+            // non-owning pParent links after the intersection wrapper is gone.
+            withEach retainedPOV in CI!.retainedPOVs{
+                newTop!.retainPOV(retainedPOV)
+            }
+        }
         aItem!.LHS_item!.pItem <- newTop
     }
 }
@@ -2813,6 +3020,143 @@ struct InfonViewReasoner{
     me DirectConsolidationStrategy: directConsolidationStrategy
     me ListConsolidationStrategy: listConsolidationStrategy
     me IntersectionReasoner: intersectionReasoner
+
+    our IntersectionTraversalPlan: planEndRelativeIntersectionTraversal(
+            their WorldManager: worldManager, our POV: lhsPOV,
+            our POV: sourcePOV) <- {
+        our IntersectionTraversalPlan:: plan
+        if(lhsPOV==NULL or lhsPOV!.pItem==NULL){return(plan)}
+        our infonView: lhs <- lhsPOV!.pItem
+        if(!lhs!.isInnr or lhs!.infSize!.overlayType!=NUM or
+                lhs!.infSize!.evalMode!=emLiteral or lhs!.infSize!.num>=0){
+            return(plan)
+        }
+
+        plan!.origin <- itoSourceEnd
+        protect(streamingNormMutex){
+            plan!.observedStreamingRevision <- streamingStateRevision
+        }
+        me int64: maxPatternExtent <- INT64_MAX
+        me FlexNum: maxPatternExtentNum <- maxPatternExtent
+        me FlexNum: minimumPatternOffset <- -maxPatternExtentNum
+        if(lhs!.infSize!.num < minimumPatternOffset){
+            plan!.status <- itpRejected
+            plan!.patternMeasureStatus <- erpmInvalidRequest
+            plan!.diagnostic <- "end-relative pattern extent exceeds int64"
+            return(plan)
+        }
+        plan!.patternOffset <- lhs!.infSize!.num.convertToInt()
+        plan!.patternLogicalExtent <- 0 - plan!.patternOffset
+        if(sourcePOV==NULL or sourcePOV!.pItem==NULL){
+            plan!.status <- itpRejected
+            plan!.extentStatus <- eresIncompatible
+            plan!.windowContentStatus <- erwcIncompatible
+            plan!.diagnostic <- "end-relative traversal has no source POV"
+            return(plan)
+        }
+        plan!.sourceContextPOV <- sourcePOV
+        plan!.retainDependency(sourcePOV)
+
+        me EndRelativeExtentResult: extent <-
+                sourcePOV!.pItem!.endRelativeExtent()
+        plan!.extentStatus <- extent.status
+        if(extent.status==eresExact){
+            plan!.sourceLogicalExtent <- extent.exactExtent
+        }
+
+        me vocabularySpec: vSpec
+        vSpec.init(worldManager!.agent!.getLocaleBaseName())
+        me EndRelativePatternMeasureResult: measurement <-
+                orderedSpanReasoner.measureEndRelativeFixedPattern(
+                        lhsPOV, sourcePOV,
+                        plan!.patternLogicalExtent, vSpec)
+        plan!.patternMeasureStatus <- measurement.status
+        plan!.sourceWindowLogicalExtent <-
+                measurement.sourceLogicalExtent
+        plan!.traversalUnit <- measurement.traversalUnit
+
+        if(extent.status==eresIncompatible){
+            plan!.status <- itpRejected
+            plan!.windowContentStatus <- erwcIncompatible
+            plan!.diagnostic <- "end-relative source is not a logical list"
+            return(plan)
+        }
+        if(extent.status!=eresExact){
+            plan!.status <- itpPending
+            plan!.diagnostic <- "end-relative source extent is not exact"
+            return(plan)
+        }
+        if(measurement.status==erpmPending){
+            plan!.status <- itpPending
+            plan!.diagnostic <- "end-relative pattern measurement is pending"
+            return(plan)
+        }
+        if(measurement.status!=erpmResolved){
+            plan!.status <- itpRejected
+            plan!.windowContentStatus <- erwcIncompatible
+            if(measurement.status==erpmNonIntegralUnit){
+                plan!.diagnostic <- "end-relative unit conversion is nonintegral"
+            }else if(measurement.status==erpmIncompatibleUnit){
+                plan!.diagnostic <- "end-relative unit is incompatible with source"
+            }else if(measurement.status==erpmExtentOverflow){
+                plan!.diagnostic <- "end-relative measured extent exceeds int64"
+            }else{
+                plan!.diagnostic <- "end-relative pattern measurement is invalid"
+            }
+            return(plan)
+        }
+
+        me EndRelativeWindowAvailability: availability <-
+                sourcePOV!.endRelativeWindowAvailability(
+                        0-plan!.sourceWindowLogicalExtent,
+                        plan!.sourceWindowLogicalExtent)
+        plan!.windowContentStatus <- availability.status
+        plan!.sourceStartIndex <- availability.startIndex
+        if(availability.status==erwcPending){
+            plan!.status <- itpPending
+            plan!.diagnostic <- "end-relative source window is pending"
+            return(plan)
+        }
+        if(availability.status!=erwcAvailable){
+            plan!.status <- itpRejected
+            if(availability.status==erwcOutOfRange){
+                plan!.diagnostic <- "end-relative source window is out of range"
+            }else{
+                plan!.diagnostic <- "end-relative source window is incompatible"
+            }
+            return(plan)
+        }
+
+        plan!.sourceStartPOV <- availability.firstSourcePOV
+        plan!.retainDependency(plan!.sourceStartPOV)
+        plan!.status <- itpResolved
+        return(plan)
+    }
+
+    our POV: realizeEndRelativeIntersectionTraversal(
+            our POV: lhsPOV, our POV: sourcePOV,
+            our IntersectionTraversalPlan: plan) <- {
+        if(plan==NULL or plan!.status!=itpResolved){return(sourcePOV)}
+        our POV: localSourceViewPOV <-
+                intersectionReasoner.prepareEndRelativeSourceView(
+                        lhsPOV, sourcePOV,
+                        plan!.sourceWindowLogicalExtent)
+        if(localSourceViewPOV==NULL or localSourceViewPOV===sourcePOV){
+            plan!.status <- itpRejected
+            plan!.diagnostic <-
+                    "resolved end-relative projection could not be constructed"
+            return(sourcePOV)
+        }
+        if(localSourceViewPOV!.viewMap.sourcePov!==
+                    plan!.sourceContextPOV or
+                localSourceViewPOV!.viewMap.startPov!==
+                    plan!.sourceStartPOV){
+            logFatalError("End-relative traversal plan disagrees with projection")
+        }
+        plan!.localSourceViewPOV <- localSourceViewPOV
+        plan!.retainDependency(localSourceViewPOV)
+        return(localSourceViewPOV)
+    }
     me OrderedSpanReasoner: orderedSpanReasoner
     me ReferenceConsolidationStrategy: referenceConsolidationStrategy
     me GeneratedMergeTrapStrategy: generatedMergeTrapStrategy
@@ -2821,6 +3165,19 @@ struct InfonViewReasoner{
             our AItem: aItem) <- {
         me InfonViewReasoningResult: result <- directConsolidationStrategy.planConsolidation(aItem)
         if(result.status!=rrNotApplicable){return(result)}
+        // A mapped composite span identifies storage, so it must be handled
+        // before ordinary list merging can consume it as a local value. Keep
+        // the established ordering for every non-derived merge.
+        if(aItem!.LHS_item!.viewMap.sourcePov!=NULL and
+                aItem!.LHS_item!.viewMap.startPov!=NULL and
+                !(aItem!.LHS_item!.viewMap.sourcePov===
+                  aItem!.LHS_item!.viewMap.startPov) and
+                aItem!.LHS_item!.pItem!.value!.overlayType==LST and
+                aItem!.RHS!=NULL and aItem!.RHS!.pItem!=NULL and
+                aItem!.RHS!.pItem!.value!.overlayType==LST){
+            result <- referenceConsolidationStrategy.planConsolidation(aItem)
+            if(result.status!=rrNotApplicable){return(result)}
+        }
         result <- listConsolidationStrategy.planConsolidation(worldManager, aItem)
         if(result.status!=rrNotApplicable){return(result)}
         result <- intersectionReasoner.planConsolidation(aItem)
@@ -3172,10 +3529,43 @@ struct MergeReasoner{
         return(result)
     }
 
+    // Attach one plan to the merge AItem before any negative-sized request is
+    // rewritten into the ordinary forward projection. Pending plans keep the
+    // request negative and ask Agenda to retain this same lifecycle owner.
+    me bool: applyEndRelativeIntersectionTraversalPlan(
+            their WorldManager: worldManager, our AItem: aItem,
+            their MergeStepSemanticResult: result) <- {
+        our IntersectionTraversalPlan: plan <-
+                worldManager!.planEndRelativeIntersectionTraversal(
+                        aItem!.LHS_item, aItem!.RHS)
+        if(plan==NULL or plan!.status==itpNotApplicable){return(false)}
+        aItem!.intersectionTraversalPlan <- plan
+        if(plan!.status==itpPending){
+            aItem!.mergeStatus <- msPending
+            result!.retainPendingIntersectionTraversal <- true
+            result!.stopCurrentDispatch <- true
+            return(true)
+        }
+        if(plan!.status==itpRejected){
+            aItem!.mergeStatus <- msReject
+            return(false)
+        }
+
+        aItem!.RHS <- worldManager!.
+                realizeEndRelativeIntersectionTraversal(
+                        aItem!.LHS_item, aItem!.RHS, plan)
+        if(plan!.status==itpRejected){aItem!.mergeStatus <- msReject}
+        return(false)
+    }
+
     me MergeStepSemanticResult: processStep1(
             their WorldManager: worldManager, their Agenda: agenda,
             our AItem: aItem) <- {
         me MergeStepSemanticResult: result
+        if(applyEndRelativeIntersectionTraversalPlan(
+                worldManager, aItem, result)){
+            return(result)
+        }
         me bool: LHSWasTentative <- aItem!.LHS_item!.pItem!.isTentative
         me bool: invertAcceptance <- aItem!.LHS_item!.applyAsNot(aItem!.RHS)
         our AItem: mrgParent <- aItem!.parentListsMrgAItem()
