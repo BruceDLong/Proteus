@@ -58,6 +58,9 @@ TestsToRun = `
     unit/resultSelection/consumerWorkOnly
     unit/resultSelection/equalSourceAndStartMapped
     unit/resultSelection/noFirstChildRecovery
+    unit/indexLowering/negativeMarkedSuffixGraph
+    unit/indexLowering/typedSugarMatchesIntersection
+    unit/indexLowering/spanConsumerWorkMoved
     unit/implicitItem/canonical
     unit/implicitItem/distinctPositions
     unit/implicitItem/nonMaterializing
@@ -111,6 +114,7 @@ do ManageCmdLine(cmd)
 #define ORDEREDSPANVIEW (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestOrderedSpanView(tname, CASE_ID)}%>
 #define MAPPEDWRITE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestMappedWrite(tname, CASE_ID)}%>
 #define RESULTSELECTION (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestResultSelection(tname, CASE_ID)}%>
+#define INDEXLOWERING (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestIndexLowering(tname, CASE_ID)}%>
 #define IMPLICITITEM (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestImplicitItem(tname, CASE_ID)}%>
 #define STRICTLISTUNKNOWN (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestStrictListUnknownCase(tname, CASE_ID)}%>
 #define LOOSELISTUNKNOWN (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestLooseListUnknownCase(tname, CASE_ID)}%>
@@ -192,6 +196,9 @@ struct GLOBAL {
     RESULTSELECTION(unit/resultSelection/consumerWorkOnly, "transfer consumer work without using view provenance", 1)
     RESULTSELECTION(unit/resultSelection/equalSourceAndStartMapped, "accept an equal source and start as a valid mapped scalar", 2)
     RESULTSELECTION(unit/resultSelection/noFirstChildRecovery, "do not reconstruct a composite map from its first child", 3)
+    INDEXLOWERING(unit/indexLowering/negativeMarkedSuffixGraph, "lower a negative item index to a sparse marked suffix", 1)
+    INDEXLOWERING(unit/indexLowering/typedSugarMatchesIntersection, "give sugar and low-level typed selections equivalent mappings", 2)
+    INDEXLOWERING(unit/indexLowering/spanConsumerWorkMoved, "move span assignment work from the pattern to the selected result", 3)
     IMPLICITITEM(unit/implicitItem/canonical, "reuse the canonical POV for one implicit source position", 1)
     IMPLICITITEM(unit/implicitItem/distinctPositions, "keep distinct implicit source positions distinct", 2)
     IMPLICITITEM(unit/implicitItem/nonMaterializing, "look up an implicit item without expanding the source list", 3)
@@ -1535,6 +1542,107 @@ struct GLOBAL {
                     resultPOV!.viewMap.sourcePov==NULL and
                     resultPOV!.viewMap.startPov==NULL and
                     !resultPOV!.viewMapWriteEnabled
+        }
+
+        me string: actual <- "false"
+        me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+        modelMngr.clear()
+        return()
+    }
+    me void: unitTestIndexLowering(
+            me string: testName, me int: caseID) <- {
+        me bool: passed <- false
+        if(caseID==1){
+            our infonView: source <- parseAndExtract(
+                    testName, "{1 2 3 4}#-2")
+            our PartPath: part <- source!.partRef
+            me CursorPathResolver: resolver
+            our infonView: selector <-
+                    resolver.buildIndexIntersection(source, part)
+            our infonView: pattern
+            our POV: marked
+            our POV: suffix
+            our POV: sourceWork
+            if(selector!=NULL){
+                pattern <- selector!.innr
+                marked <- selector!.intersectMarkedRetPOV
+            }
+            if(pattern!=NULL){
+                suffix <- pattern!.value!.items.tail
+                if(!pattern!.wrkList.isEmpty()){
+                    sourceWork <- pattern!.wrkList.first()
+                }
+            }
+            passed <- selector!=NULL and pattern!=NULL and marked!=NULL and
+                    suffix!=NULL and sourceWork!=NULL and
+                    selector!.value!.evalMode==emIntersection and
+                    selector!.intersectPos==ipGetMarked and
+                    marked===pattern!.value!.items.head and
+                    pattern!.infSize!.overlayType==NUM and
+                    pattern!.infSize!.evalMode==emLiteral and
+                    pattern!.infSize!.num.convertToInt()==-2 and
+                    pattern!.value!.items.size()==2 and
+                    suffix!.isSparseOrderedSpan() and
+                    suffix!.sparseSpanCount()==1 and
+                    sourceWork!.pItem===source and
+                    sourceWork!.selectorLocalWork
+        }else if(caseID==2){
+            me ProteusCore: CORE
+            CORE.init("TestFiles/timeTestCases.pr", false)
+            our infonView: sugar <- parseAndExtract(testName,
+                    "hour:{second| 1 2 3 4 5 6}#-1")
+            our infonView: lowLevel <- parseAndExtract(testName,
+                    "*(-1)+[<minute>] <~ hour:{second| 1 2 3 4 5 6}")
+            our POV:: sugarPOV{povSrcEndRelativeView}
+            sugarPOV!.pItem <- sugar
+            our POV:: lowLevelPOV{povSrcEndRelativeView}
+            lowLevelPOV!.pItem <- lowLevel
+            CORE.agent!.normalize(sugarPOV)
+            CORE.agent!.normalize(lowLevelPOV)
+            our POV: sugarFirst <- sugarPOV!.pItem!.value!.items.head
+            our POV: lowLevelFirst <- lowLevelPOV!.pItem!.value!.items.head
+            passed <- sugarPOV!.pItem!.type!=NULL and
+                    lowLevelPOV!.pItem!.type!=NULL and
+                    sugarPOV!.pItem!.type!.typeID()=="minute" and
+                    lowLevelPOV!.pItem!.type!.typeID()=="minute" and
+                    sugarPOV!.viewMap.sourcePov!=NULL and
+                    sugarPOV!.viewMap.startPov!=NULL and
+                    lowLevelPOV!.viewMap.sourcePov!=NULL and
+                    lowLevelPOV!.viewMap.startPov!=NULL and
+                    sugarPOV!.viewMap.startPov!.pItem!.value!.num.
+                            convertToInt()==4 and
+                    lowLevelPOV!.viewMap.startPov!.pItem!.value!.num.
+                            convertToInt()==4 and
+                    sugarFirst!=NULL and lowLevelFirst!=NULL and
+                    sugarFirst!.viewMap.startPov!=NULL and
+                    lowLevelFirst!.viewMap.startPov!=NULL and
+                    sugarFirst!.viewMap.startPov!.pItem!.value!.num.
+                            convertToInt()==4 and
+                    lowLevelFirst!.viewMap.startPov!.pItem!.value!.num.
+                            convertToInt()==4
+            modelMngr.clear()
+        }else{
+            our infonView: source <- parseAndExtract(testName,
+                    "hour:{second| 1 2 3 4 5 6}#-1:minute=minute:{100 110 120}")
+            our PartPath: part <- source!.partRef
+            our infonView: target
+            if(part!=NULL){target <- part!.spec}
+            me CursorPathResolver: resolver
+            our infonView: selector <-
+                    resolver.buildIndexIntersection(source, part)
+            our POV: sourceWork
+            if(selector!=NULL and selector!.innr!=NULL and
+                    !selector!.innr!.wrkList.isEmpty()){
+                sourceWork <- selector!.innr!.wrkList.first()
+            }
+            passed <- selector!=NULL and target!=NULL and sourceWork!=NULL and
+                    target!.wrkList.isEmpty() and
+                    selector!.hasConsumerWork() and
+                    selector!.wrkList.size()==1 and
+                    sourceWork!.selectorLocalWork and
+                    sourceWork!.pItem===source
         }
 
         me string: actual <- "false"

@@ -580,6 +580,11 @@ This is the proof that the feature belongs to intersections.
 
 The existing positive `#n` and positive slice suites must remain green.
 
+Implemented through R8 for negative item indexes and single-unit typed spans.
+Arbitrary multi-unit negative span sugar remains separate; its low-level
+intersection form must stay authoritative until compact lowering preserves the
+same composite mapping and write behavior.
+
 ### Checkpoint 6: writes
 
 - generalize source-backed scalar detection to `ViewMap`;

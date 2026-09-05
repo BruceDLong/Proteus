@@ -5,10 +5,11 @@ R2 extent/availability separation, the R3 traversal plan, and R4 accepted-match
 correspondence recording are complete. R5 now gives every ordered-span result
 one local, recursively source-mapped construction contract. R6 now validates
 and commits mapped writes transactionally. R7 now removes the remaining
-compatibility inference from result selection and work transfer. No negative
-`#` sugar has been added.
+compatibility inference from result selection and work transfer. R8 now lowers
+negative item and single-unit typed-span `#` syntax through the same
+end-relative intersection engine.
 
-Source basis: local branch `proteus3b` through the R7 changes described here.
+Source basis: local branch `proteus3b` through the R8 changes described here.
 
 Related documents:
 
@@ -26,8 +27,8 @@ selected composite span back to its source.
 It should not yet be treated as the final architecture. Several passing paths
 depend on conventions reconstructed in later phases rather than facts recorded
 at the point where they become known. Those conventions will become difficult
-to maintain when negative `#` sugar, open streams, view-of-view selection,
-sparse writes, stable named spans, and calendar boundaries are added.
+to maintain when arbitrary multi-unit span sugar, stable named spans, and
+calendar boundaries are added.
 
 The implementation now has one explicit intersection traversal plan beside the
 existing projection path, records accepted correspondence, and constructs
@@ -35,7 +36,8 @@ positive, negative, direct, recursive, and sparse ordered-span views under the
 same local mapping rules. Mapped assignments now build and validate a complete
 operation before publishing any source changes. Result selection now consumes
 explicit mapping and work-role facts rather than reconstructing them from field
-equality or mapping shape.
+equality or mapping shape. Negative indexes now construct ordinary
+negative-sized intersections instead of calling direct end-relative navigation.
 
 ## Current verified boundary
 
@@ -82,16 +84,22 @@ The regenerated `LocalBuild/TestProteus` executable currently demonstrates:
 - explicit selector-local versus consumer work classification and
   consumer-only result transfer;
 - valid mapped scalar behavior when `sourcePov` and `startPov` are equal;
+- negative `#-k` item lowering to a marked, end-aligned intersection with a
+  sparse counted suffix;
+- natural-child-unit inference for typed negative item indexes;
+- explicit single-unit negative span reads and mapped writes through
+  `#-k:span`;
+- equivalent normalized source mappings for typed sugar and its low-level
+  intersection form;
 - preservation of the established positive nested write; and
 - preservation of `range/select1`.
 
-The ordinary and protected full runs report `8/367`. Relative to the R5
-`9/357` checkpoint, all seven compiled mapped-write tests and all three R7
-result-selection tests pass, and the former
-`sparse/pending/writeSpanAcrossSparseConcreteSparse` baseline failure now
-passes. The remaining failures are the four older baseline failures plus the
-four intentionally unsupported negative `#` sugar tests. This is a regression
-checkpoint, not a claim that the full suite is clean.
+The ordinary and protected full runs report `4/374`. Relative to the R7
+`8/367` checkpoint, all three compiled index-lowering tests and all four new
+dynamic negative-index/span tests pass, as do the four formerly unsupported
+negative `#` time tests. The remaining failures are the four older baseline
+failures. This is a regression checkpoint, not a claim that the full suite is
+clean.
 
 ## R1 characterization baseline
 
@@ -786,9 +794,32 @@ Before moving code, cover:
   suite passes `21/21`, result-selection tests pass `3/3`, and both ordinary
   and protected full suites match the R6 failure set at `8/367`.
 
+### Checkpoint R8: lower negative `#` syntax
+
+- Complete on 2026-09-05.
+- Replaced the direct negative `getEndRelativePOV()` branch with one
+  `buildIndexIntersection()` construction boundary for numeric item/span paths.
+- Lowered a negative item to a marked first target plus a counted sparse suffix
+  inside the existing negative-sized intersection representation; the suffix
+  does not allocate one wildcard per offset.
+- Derived an implicit pattern's natural child unit from the source traversal
+  context and recorded that unit on the pattern before ordinary ordered-span
+  matching. This is what turns an hour's end-relative logical item into a
+  minute view rather than its first stored second.
+- Moved consumer work parsed on an explicit span target to the intersection
+  wrapper so selected mapped spans receive write authority while matching work
+  stays selector-local.
+- Added three compiled tests for the lowered graph, typed sugar/non-sugar
+  mapping equivalence, and span-work ownership. Added dynamic reads for `#-2`
+  and `#-1:minute`, an explicit span write, and a sparse-prefix scarcity case.
+- The current boundary is one selected logical item or one explicitly typed
+  unit span. Compact sugar for an arbitrary multi-unit selection such as
+  `#-3:*2+{hour| ...}` remains a later extension; low-level mapped span
+  intersections remain the working mechanism for those selections.
+
 ## Completion criteria for the refactor
 
-The implementation is ready for negative `#` sugar only when:
+The implemented negative `#` lowering remains valid only while:
 
 - the negative request remains observable until its traversal plan resolves;
 - unknown source extents wait, exact end coordinates resolve deterministically,

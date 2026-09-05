@@ -14,6 +14,7 @@ sparse/split/writeLastSparseSecond, Sparse write last symbolic second, [&*3599+{
 sparse/scarcity/writeLastBillionSparseSeconds, Sparse write last in billion symbolic seconds, [&*999999999+{second| ...} <_>] <~ %W.billionSecondRun = 80\n%W.billionSecondRun, billionSecondRun:{&seconds:{second|  ... } second:80}, world, TestFiles/sparseTestCases.pr
 sparse/scarcity/readAfterBillionSparsePrefix, Sparse read after billion symbolic seconds, [&*1000000000+{second| ...} <_>] <~ %W.hugeSparseWithTail, 808, world, TestFiles/sparseTestCases.pr
 sparse/scarcity/readAfterBillionSparseMinutes, Sparse read after billion symbolic minutes, [&*1000000000+{minute| ...} <_>] <~ %W.hugeSparseMinutesWithTail, 606, world, TestFiles/sparseTestCases.pr
+sparse/scarcity/readSecondLastByNegativeIndex, Sparse negative index stays independent of the billion-item prefix, *1000000000+{second| ...}#-2, second:_, world, TestFiles/sparseTestCases.pr
 
 # A listSpec plus a fixed size should be enough to traverse sparse capacity
 # even when the list does not contain an explicit &*... child span.

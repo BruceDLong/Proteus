@@ -2778,6 +2778,142 @@ struct CursorPathResolver{
         return(false)
     }
 
+    // # is only syntax sugar. Construct its item/span forms at one intersection
+    // boundary, with the signed index deciding whether the unselected extent is
+    // a forward prefix or an end-aligned suffix.
+    our infonView: buildIndexIntersection(our infonView: source,
+            our PartPath: part) <- {
+        if(source==NULL or part==NULL or part!.path==NULL or
+                part!.path!.value!.overlayType!=NUM){return(NULL)}
+
+        me bool: doReply <- source!.doReply
+        if(doReply){source!.doReply <- false}
+
+        me bool: hasSpec <- part!.spec!=NULL
+        our infonView: target
+        if(hasSpec){
+            target <- part!.spec
+        }else{
+            Allocate(target)
+            target!.itmMode <- mItem
+            target!.viewMode <- vmAny
+            target!.infSize!.evalMode <- emUnknown
+            target!.value!.evalMode <- emUnknown
+        }
+
+        our infonView: newInnr <- makeInnrInfonView()
+        our POV: targetPOV
+        me bool: literalIndex <-
+                part!.path!.value!.evalMode==emLiteral
+        me int64: signedIndex <- 0
+        if(literalIndex){signedIndex <- part!.path!.fetchInt()}
+
+        if(literalIndex and signedIndex<0){
+            // The negative size is the low-level source-end anchor.  Keep the
+            // marked target first, then represent the remaining suffix as one
+            // counted wildcard span so large offsets stay sparse.
+            newInnr!.value!.tailUnfinished <- false
+            newInnr!.value!.sizeMode <- fromCount
+            newInnr!.infSize!.overlayType <- NUM
+            newInnr!.infSize!.evalMode <- emLiteral
+            newInnr!.infSize!.inverted <- false
+            newInnr!.infSize!.num <- signedIndex
+            targetPOV <- newInnr!.value!.items.append(target, false, 18)
+
+            me int64: selectedExtent <- 1
+            if(hasSpec and target!.value!.overlayType==LST and
+                    target!.infSize!.overlayType==NUM and
+                    target!.infSize!.evalMode==emLiteral and
+                    target!.infSize!.num>0){
+                selectedExtent <- target!.infSize!.num.convertToInt()
+            }
+            me int64: suffixCount <- 0 - signedIndex - selectedExtent
+            if(suffixCount>0){
+                our infonView:: suffixSpec
+                suffixSpec!.itmMode <- mItem
+                suffixSpec!.viewMode <- vmAny
+                suffixSpec!.infSize!.evalMode <- emUnknown
+                suffixSpec!.value!.evalMode <- emUnknown
+                our infonView:: suffixPart
+                suffixPart!.setToList()
+                suffixPart!.value!.listSpec <- suffixSpec
+                suffixPart!.value!.sizeMode <- fromGiven
+                suffixPart!.infSize!.overlayType <- NUM
+                suffixPart!.infSize!.evalMode <- emLiteral
+                suffixPart!.infSize!.num <- suffixCount
+                newInnr!.value!.items.append(suffixPart, true, 17)
+            }
+        }else if(literalIndex and hasSpec){
+            // Item indexes are one-based, while span indexes are zero-based
+            // boundary counts.  A positive span becomes a forward prefix
+            // followed by the same marked target term.
+            me int64: prefixCount <- signedIndex
+            our infonView:: skipPart
+            skipPart!.setToList()
+            skipPart!.infSize!.overlayType <- NUM
+            skipPart!.infSize!.evalMode <- emLiteral
+            skipPart!.infSize!.num <- prefixCount
+            skipPart!.value!.sizeMode <- fromGiven
+            newInnr!.value!.tailUnfinished <- false
+            newInnr!.value!.items.append(skipPart, true, 17)
+            targetPOV <- newInnr!.value!.items.append(target, true, 18)
+        }else if(hasSpec){
+            // Preserve general, unresolved forward-index behavior until the
+            // index expression becomes literal.
+            our infonView:: skipPart
+            skipPart!.setToList()
+            skipPart!.infSize! <- part!.path!.value!
+            skipPart!.value!.sizeMode <- fromGiven
+            newInnr!.value!.tailUnfinished <- false
+            newInnr!.value!.items.append(skipPart, true, 17)
+            targetPOV <- newInnr!.value!.items.append(target, true, 18)
+        }else{
+            // Preserve the established forward item-index representation. Its
+            // generated final position remains the ordinary ipGetLast result;
+            // negative literals have already taken the marked path above.
+            newInnr!.value!.tailUnfinished <- true
+            newInnr!.infSize! <- part!.path!.value!
+            newInnr!.value!.sizeMode <- fromCount
+        }
+
+        our infonView:: result
+        result!.convertThisToIntersection(newInnr, fromGiven)
+        if(!hasSpec or (literalIndex and signedIndex<0)){
+            newInnr!.value!.sizeMode <- fromCount
+        }
+        result!.doReply <- doReply
+        result!.value!.sizeMode <- fromCount
+        if(hasSpec){result!.value!.sizeMode <- fromGiven}
+        result!.infSize!.overlayType <- NUM
+        result!.originID <- source!.originID
+        result!.infCharPos <- source!.infCharPos
+        if(targetPOV!=NULL){
+            result!.intersectPos <- ipGetMarked
+            result!.intersectMarkedRetPOV <- targetPOV
+        }
+        if(part!.path!.partRef!=NULL){
+            result!.partRef <- part!.path!.partRef
+            part!.path!.partRef <- NULL
+        }else{
+            result!.parts <- part!.path!.parts
+        }
+
+        // Work parsed on the selector target belongs to the selected result,
+        // not to the pattern used to locate it.  Move it to the wrapper before
+        // source is attached as selector-local input so a composite marked
+        // result receives mapped-write authority.
+        result!.takeConsumerWorkFrom(target, true)
+        result!.takeConsumerWorkFrom(source, true)
+        me int: sourcePedigree <- 16
+        if(hasSpec){sourcePedigree <- 19}
+        our POV: sourceWorkPOV <- result!.innr!.addInfonViewToWrkList(
+                source, true, sourcePedigree)
+        sourceWorkPOV!.selectorLocalWork <- true
+        sourceWorkPOV!.looseMode <- false
+        sourceWorkPOV!.looseTop <- true
+        return(result)
+    }
+
     me bool: resolveParts(their WorldManager: worldManager,
             their Agenda: agenda, our AItem: aItem,
             their bool: nxtAction,
@@ -2859,80 +2995,7 @@ struct CursorPathResolver{
                     }
                     case upField:{}
                     case idxField:{
-                        if(part!.spec==NULL){
-                            if(part!.path!.value!.overlayType == NUM){
-                                if(part!.path!.value!.evalMode==emLiteral and
-                                        part!.path!.value!.inverted){
-                                    me int64: endOffset <-
-                                            0 - part!.path!.value!.num.convertToInt()
-                                    newPov <- CI!.getEndRelativePOV(endOffset)
-                                    if(newPov!=NULL){newPath <- newPov!.pItem}
-                                }
-                            }
-                            if(newPath==NULL and
-                                    part!.path!.value!.overlayType == NUM){
-                                me bool: doReply <- CI!.doReply
-                                if(doReply){CI!.doReply <- false}
-                                our infonView: newInnr <- makeInnrInfonView()
-                                    newInnr!.value!.tailUnfinished <- true
-                                Allocate(newPath)
-                                    newPath!.convertThisToIntersection(newInnr, fromGiven)
-                                    newPath!.doReply <- doReply
-                                    newPath!.value!.sizeMode <- fromCount
-                                    newPath!.infSize!.overlayType <- NUM
-                                    newPath!.originID <- CI!.originID
-                                    newPath!.infCharPos <- CI!.infCharPos
-                                    if(part!.path!.partRef!=NULL){
-                                        newPath!.partRef <- part!.path!.partRef
-                                        part!.path!.partRef <- NULL
-                                    }else{
-                                        newPath!.parts <- part!.path!.parts
-                                    }
-                                    newInnr!.infSize! <- part!.path!.value!
-                                    newInnr!.value!.sizeMode <- fromCount
-                                newPov <- newPath!.innr!.addInfonViewToWrkList(
-                                        CI, true, 16)
-                                newPov!.selectorLocalWork <- true
-                                newPov!.looseMode <- false
-                                newPov!.looseTop <- true
-                            }
-                        }else{
-                            if(part!.path!.value!.overlayType == NUM){
-                                me bool: doReply <- CI!.doReply
-                                if(doReply){CI!.doReply <- false}
-                                our infonView:: skipPart
-                                skipPart!.setToList()
-                                skipPart!.infSize! <- part!.path!.value!
-                                skipPart!.value!.sizeMode <- fromGiven
-                                our infonView: partSpec <- part!.spec
-                                our infonView: newInnr <- makeInnrInfonView()
-                                    newInnr!.value!.tailUnfinished <- false
-                                    newInnr!.value!.items.append(skipPart, true, 17)
-                                    our POV: partPov <- newInnr!.value!.items.append(
-                                            partSpec, false, 18)
-                                    partPov!.isSubItm <- true
-                                Allocate(newPath)
-                                    newPath!.convertThisToIntersection(newInnr, fromGiven)
-                                    newPath!.doReply <- doReply
-                                    newPath!.value!.sizeMode <- fromGiven
-                                    newPath!.infSize!.overlayType <- NUM
-                                    newPath!.originID <- CI!.originID
-                                    newPath!.infCharPos <- CI!.infCharPos
-                                    newPath!.intersectPos <- ipGetMarked
-                                    newPath!.intersectMarkedRetPOV <- partPov
-                                    if(part!.path!.partRef!=NULL){
-                                        newPath!.partRef <- part!.path!.partRef
-                                        part!.path!.partRef <- NULL
-                                    }else{
-                                        newPath!.parts <- part!.path!.parts
-                                    }
-                                newPov <- newPath!.innr!.addInfonViewToWrkList(
-                                        CI, true, 19)
-                                newPov!.selectorLocalWork <- true
-                                newPov!.looseMode <- false
-                                newPov!.looseTop <- true
-                            }
-                        }
+                        newPath <- buildIndexIntersection(CI, part)
                     }
                     case colonField:{}
                 }
