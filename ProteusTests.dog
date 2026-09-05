@@ -48,6 +48,13 @@ TestsToRun = `
     unit/orderedSpanView/directLocalMap
     unit/orderedSpanView/viewOfViewBoundary
     unit/orderedSpanView/positiveSparseLocalMap
+    unit/mappedWrite/shapeMismatchRejected
+    unit/mappedWrite/conflictingDuplicateRejected
+    unit/mappedWrite/outOfContextRejected
+    unit/mappedWrite/validCommitAndCompletion
+    unit/mappedWrite/equivalentDuplicateCoalesced
+    unit/mappedWrite/sparseMaterialization
+    unit/mappedWrite/staleSparsePlanRejected
     unit/implicitItem/canonical
     unit/implicitItem/distinctPositions
     unit/implicitItem/nonMaterializing
@@ -99,6 +106,7 @@ do ManageCmdLine(cmd)
 #define ENDRELPLAN (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeTraversalPlan(tname, CASE_ID)}%>
 #define ENDRELCORRESPONDENCE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeCorrespondence(tname, CASE_ID)}%>
 #define ORDEREDSPANVIEW (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestOrderedSpanView(tname, CASE_ID)}%>
+#define MAPPEDWRITE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestMappedWrite(tname, CASE_ID)}%>
 #define IMPLICITITEM (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestImplicitItem(tname, CASE_ID)}%>
 #define STRICTLISTUNKNOWN (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestStrictListUnknownCase(tname, CASE_ID)}%>
 #define LOOSELISTUNKNOWN (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestLooseListUnknownCase(tname, CASE_ID)}%>
@@ -170,6 +178,13 @@ struct GLOBAL {
     ORDEREDSPANVIEW(unit/orderedSpanView/directLocalMap, "copy and map a direct same-unit ordered span", 3)
     ORDEREDSPANVIEW(unit/orderedSpanView/viewOfViewBoundary, "keep a positive view-of-view bounded by its immediate source view", 4)
     ORDEREDSPANVIEW(unit/orderedSpanView/positiveSparseLocalMap, "map a positive sparse window without materializing its source", 5)
+    MAPPEDWRITE(unit/mappedWrite/shapeMismatchRejected, "reject a recursive shape mismatch before changing a target", 1)
+    MAPPEDWRITE(unit/mappedWrite/conflictingDuplicateRejected, "reject conflicting writes to one mapped target", 2)
+    MAPPEDWRITE(unit/mappedWrite/outOfContextRejected, "reject a mapped target outside its source context", 3)
+    MAPPEDWRITE(unit/mappedWrite/validCommitAndCompletion, "commit a validated plan and let general size reasoning close the source", 4)
+    MAPPEDWRITE(unit/mappedWrite/equivalentDuplicateCoalesced, "coalesce equivalent writes to one mapped target", 5)
+    MAPPEDWRITE(unit/mappedWrite/sparseMaterialization, "materialize only the mapped sparse positions after validation", 6)
+    MAPPEDWRITE(unit/mappedWrite/staleSparsePlanRejected, "reject an invalidated sparse plan before publishing any position", 7)
     IMPLICITITEM(unit/implicitItem/canonical, "reuse the canonical POV for one implicit source position", 1)
     IMPLICITITEM(unit/implicitItem/distinctPositions, "keep distinct implicit source positions distinct", 2)
     IMPLICITITEM(unit/implicitItem/nonMaterializing, "look up an implicit item without expanding the source list", 3)
@@ -1220,6 +1235,205 @@ struct GLOBAL {
                                 sourceIndex==3 and
                         resultPOV!.viewMap.sourcePov!.pItem!.
                                 value!.items.isEmpty()
+            }
+        }
+
+        me string: actual <- "false"
+        me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+        modelMngr.clear()
+        return()
+    }
+    me void: unitTestMappedWrite(me string: testName, me int: caseID) <- {
+        me ProteusCore: CORE
+        CORE.init("TestFiles/timeTestCases.pr", false)
+        me ReferenceConsolidationStrategy: writeStrategy
+        me bool: passed <- false
+
+        if(caseID<=5){
+            our infonView: source <- parseAndExtract(
+                    testName, "minute:{second| 1 2 3}")
+            source!.value!.tailUnfinished <- true
+            source!.value!.sizeMode <- fromCount
+            source!.infSize!.overlayType <- NUM
+            source!.infSize!.evalMode <- emLiteral
+            me int64: exactSourceSize <- 3
+            source!.infSize!.num <- exactSourceSize
+            our POV:: sourcePOV{povSrcConcreteSpanPrefix}
+            sourcePOV!.pItem <- source
+            our POV: sourceFirst <- source!.value!.items.head
+            our POV: sourceSecond
+            our POV: sourceThird
+            our POV: localViewPOV
+            if(sourceFirst!=NULL){
+                sourceFirst!.pParent <- sourcePOV
+                sourceSecond <- sourceFirst!.next
+                sourceThird <- source!.value!.items.tail
+                localViewPOV <- sourceFirst!.makeLogicalSiblingSpanView(
+                        sourcePOV, 3, false,
+                        povSrcConcreteSpanPrefix)
+            }
+            our POV: localFirst
+            our POV: localSecond
+            if(localViewPOV!=NULL){
+                localViewPOV!.viewMapWriteEnabled <- true
+                localViewPOV!.accessMode <- aRefTo
+                localFirst <- localViewPOV!.pItem!.value!.items.head
+                if(localFirst!=NULL){localSecond <- localFirst!.next}
+            }
+
+            our infonView: RHS
+            if(caseID==1){
+                RHS <- parseAndExtract(
+                        testName, "minute:{second| 100 {110 120}}")
+            }else if(caseID==5){
+                RHS <- parseAndExtract(
+                        testName, "minute:{second| 100 100 300}")
+            }else{
+                RHS <- parseAndExtract(
+                        testName, "minute:{second| 100 200 300}")
+            }
+            our POV:: rhsPOV{povSrcConcreteSpanPrefix}
+            rhsPOV!.pItem <- RHS
+
+            our infonView: foreign
+            our POV: foreignFirst
+            if(caseID==2 or caseID==5){
+                if(localSecond!=NULL){
+                    localSecond!.viewMap.startPov <- sourceFirst
+                }
+            }else if(caseID==3){
+                foreign <- parseAndExtract(testName, "{9}")
+                our POV:: foreignPOV{povSrcConcreteSpanPrefix}
+                foreignPOV!.pItem <- foreign
+                foreignFirst <- foreign!.value!.items.head
+                if(foreignFirst!=NULL){foreignFirst!.pParent <- foreignPOV}
+                if(localSecond!=NULL){
+                    localSecond!.viewMap.startPov <- foreignFirst
+                }
+            }
+
+            our MappedSpanWritePlan: plan <- writeStrategy.
+                    buildMappedSpanWritePlan(
+                            CORE.agent!.worldMgr,
+                            localViewPOV, rhsPOV)
+            if(caseID==1){
+                passed <- plan!=NULL and plan!.status==mwpRejected and
+                        plan!.diagnostic=="mapped-write-list-extent" and
+                        sourceFirst!.pItem!.value!.num==1 and
+                        sourceSecond!.pItem!.value!.num==2 and
+                        sourceThird!.pItem!.value!.num==3
+            }else if(caseID==2){
+                passed <- plan!=NULL and plan!.status==mwpRejected and
+                        plan!.diagnostic=="mapped-write-conflicting-target" and
+                        sourceFirst!.pItem!.value!.num==1 and
+                        sourceSecond!.pItem!.value!.num==2 and
+                        sourceThird!.pItem!.value!.num==3
+            }else if(caseID==3){
+                passed <- plan!=NULL and plan!.status==mwpRejected and
+                        plan!.diagnostic=="mapped-write-unresolved-target" and
+                        sourceFirst!.pItem!.value!.num==1 and
+                        sourceSecond!.pItem!.value!.num==2 and
+                        sourceThird!.pItem!.value!.num==3 and
+                        foreignFirst!.pItem!.value!.num==9
+            }else if(caseID==4){
+                me bool: committed <- writeStrategy.
+                        commitMappedSpanWritePlan(plan)
+                passed <- committed and plan!.status==mwpCommitted and
+                        plan!.pairs.size()==3 and
+                        sourceFirst!.pItem!.value!.num==100 and
+                        sourceSecond!.pItem!.value!.num==200 and
+                        sourceThird!.pItem!.value!.num==300 and
+                        !source!.value!.tailUnfinished and
+                        localFirst!.pItem===sourceFirst!.pItem
+            }else{
+                me bool: committed <- writeStrategy.
+                        commitMappedSpanWritePlan(plan)
+                passed <- committed and plan!.status==mwpCommitted and
+                        plan!.pairs.size()==2 and
+                        plan!.pairs[0]!.localViewPOVs.size()==2 and
+                        sourceFirst!.pItem!.value!.num==100 and
+                        sourceSecond!.pItem!.value!.num==2 and
+                        sourceThird!.pItem!.value!.num==300
+            }
+        }else{
+            our infonView: source <- parseAndExtract(
+                    testName, "{&*3+{second| ...} 99}")
+            our POV:: sourcePOV{povSrcConcreteSpanPrefix}
+            sourcePOV!.pItem <- source
+            our POV: sourceSparsePOV <- source!.value!.items.head
+            if(sourceSparsePOV!=NULL){
+                sourceSparsePOV!.pParent <- sourcePOV
+                sourceSparsePOV!.isSubItm <- true
+            }
+            our infonView:: localSparse
+            our POV:: localSparsePOV{povSrcConcreteSpanPrefix}
+            if(sourceSparsePOV!=NULL){
+                sourceSparsePOV!.pItem!.copyAsTypeTo(
+                        localSparse, false, false)
+                localSparsePOV!.pItem <- localSparse
+                localSparsePOV!.isSubItm <- true
+                localSparsePOV!.mapLocalCopyTreeToSource(
+                        sourcePOV, sourceSparsePOV)
+                localSparsePOV!.viewMapWriteEnabled <- true
+            }
+            our infonView: RHS <- parseAndExtract(testName, "{10 20 30}")
+            our POV:: rhsPOV{povSrcConcreteSpanPrefix}
+            rhsPOV!.pItem <- RHS
+            our MappedSpanWritePlan: plan <- writeStrategy.
+                    buildMappedSpanWritePlan(
+                            CORE.agent!.worldMgr,
+                            localSparsePOV, rhsPOV)
+            me bool: ready <- plan!=NULL and plan!.status==mwpReady and
+                    plan!.pairs.size()==3 and
+                    source!.value!.items.size()==2 and
+                    sourceSparsePOV!.sparseSpanCount()==3
+            me bool: committed <- false
+            if(ready and caseID==6){
+                // Publication order is a commit concern, not an assumption
+                // about the local view's traversal order.
+                our MappedWritePair: firstPair <- plan!.pairs[0]
+                our MappedWritePair: secondPair <- plan!.pairs[1]
+                our MappedWritePair: thirdPair <- plan!.pairs[2]
+                plan!.pairs.clear()
+                plan!.pairs.append(thirdPair)
+                plan!.pairs.append(firstPair)
+                plan!.pairs.append(secondPair)
+                committed <- writeStrategy.commitMappedSpanWritePlan(plan)
+            }else if(ready){
+                // Simulate a source revision between planning and commit.
+                // Preflight must reject before exposing any sparse position.
+                me int64: staleSourceSize <- 2
+                sourceSparsePOV!.pItem!.infSize!.num <- staleSourceSize
+                committed <- writeStrategy.commitMappedSpanWritePlan(plan)
+            }
+            our POV: firstWritten <- source!.value!.items.head
+            our POV: secondWritten
+            our POV: thirdWritten
+            our POV: following
+            if(firstWritten!=NULL){secondWritten <- firstWritten!.next}
+            if(secondWritten!=NULL){thirdWritten <- secondWritten!.next}
+            if(thirdWritten!=NULL){following <- thirdWritten!.next}
+            if(caseID==6){
+                passed <- ready and committed and
+                        plan!.status==mwpCommitted and
+                        source!.value!.items.size()==4 and
+                        firstWritten!=NULL and secondWritten!=NULL and
+                        thirdWritten!=NULL and following!=NULL and
+                        firstWritten!.pItem!.value!.num==10 and
+                        secondWritten!.pItem!.value!.num==20 and
+                        thirdWritten!.pItem!.value!.num==30 and
+                        following!.pItem!.value!.num==99
+            }else{
+                passed <- ready and !committed and
+                        plan!.status==mwpRejected and
+                        plan!.diagnostic=="mapped-write-stale-sparse-plan" and
+                        source!.value!.items.size()==2 and
+                        firstWritten===sourceSparsePOV and
+                        sourceSparsePOV!.sparseSpanCount()==2 and
+                        secondWritten!=NULL and
+                        secondWritten!.pItem!.value!.num==99
             }
         }
 

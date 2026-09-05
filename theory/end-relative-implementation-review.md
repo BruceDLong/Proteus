@@ -3,11 +3,12 @@
 Status: representation decisions approved on 2026-09-04. R1 characterization,
 R2 extent/availability separation, the R3 traversal plan, and R4 accepted-match
 correspondence recording are complete. R5 now gives every ordered-span result
-one local, recursively source-mapped construction contract. R6 transactional
-mapped writes is next. No negative `#` sugar has been added.
+one local, recursively source-mapped construction contract. R6 now validates
+and commits mapped writes transactionally. R7 compatibility-inference cleanup
+is next. No negative `#` sugar has been added.
 
 Source basis: local branch `proteus3b` at
-`8bc2cd5`, plus the R5 unified-view changes described here.
+`bb1ad55`, plus the R6 transactional-write changes described here.
 
 Related documents:
 
@@ -31,8 +32,9 @@ sparse writes, stable named spans, and calendar boundaries are added.
 The implementation now has one explicit intersection traversal plan beside the
 existing projection path, records accepted correspondence, and constructs
 positive, negative, direct, recursive, and sparse ordered-span views under the
-same local mapping rules. Transactional mapped writes remains a deliberately
-separate checkpoint.
+same local mapping rules. Mapped assignments now build and validate a complete
+operation before publishing any source changes. The remaining refactor work is
+the R7 removal of compatibility inference and work-ownership proxies.
 
 ## Current verified boundary
 
@@ -64,15 +66,27 @@ The regenerated `LocalBuild/TestProteus` executable currently demonstrates:
   traversal cannot escape that boundary;
 - separation of mapping provenance from write authority: a complete `ViewMap`
   alone does not permit source mutation;
+- recursive mapped-write planning with structure, target reachability,
+  compatibility, and duplicate-target validation before mutation;
+- coalescing of equivalent duplicate writes and rejection of conflicting
+  duplicate writes;
+- sparse-write preflight, order-independent descending publication, and
+  rejection of invalidated sparse plans before any position is exposed;
+- sparse span selection and write-back across sparse/concrete/sparse
+  boundaries;
+- source completion through general `countSize(true)` reasoning rather than a
+  mapped-assignment tail toggle;
 - end-relative marked selection without selection-time first-child mapping
   recovery;
 - preservation of the established positive nested write; and
 - preservation of `range/select1`.
 
-The protected full run reports `9/357`. The failures are the five known
-baseline failures plus the four intentionally unsupported negative `#` sugar
-tests. This is a regression checkpoint, not a claim that the full suite is
-clean.
+The full run reports `8/364`. Relative to the R5 `9/357` checkpoint,
+all seven new compiled mapped-write tests pass and the former
+`sparse/pending/writeSpanAcrossSparseConcreteSparse` baseline failure now
+passes. The remaining failures are the four older baseline failures plus the
+four intentionally unsupported negative `#` sugar tests. This is a regression
+checkpoint, not a claim that the full suite is clean.
 
 ## R1 characterization baseline
 
@@ -84,7 +98,7 @@ baseline. Run it from `LocalBuild` with:
 ./TestProteus -T 3 -t ../endRelativeR1Tests.tst:
 ```
 
-The current vertical prototype reports `5/10` failures.
+The current implementation reports `4/10` failures.
 
 Passing contracts:
 
@@ -93,16 +107,14 @@ Passing contracts:
   position's value remains unknown;
 - a marked term after the first pattern item returns the correct final item;
 - a content-constrained typed match selects the actual final compatible span;
-  and
-- a short composite RHS rejects before changing any source value.
+- a short composite RHS rejects before changing any source value; and
+- a recursively incompatible RHS rejects before changing any source value.
 
 Recorded gaps after R3:
 
 - out-of-range, incompatible-unit, and nonintegral-unit requests now produce
   rejected traversal plans, but enclosing intersection result installation
   still prints a residual pattern instead of `UNDEFINED`;
-- a recursively incompatible RHS with the same flattened leaf count mutates
-  the source; and
 - a large sparse suffix avoids expanding the million-item source prefix but
   returns a local 60-position view rather than the requested compressed sparse
   `minute` view.
@@ -111,7 +123,8 @@ The test file also lists lifecycle cases that cannot be characterized by a
 final normalized string. R2 added compiled assertions for pending open sources,
 exact-coordinate/content-pending separation, derived-view stop boundaries, and
 stable resolved views after ultimate-source extension. Post-wrapper lifetime
-and duplicate-target behavior remain R4 and R6 concerns respectively.
+is covered by the retained local-view ownership added in R4. Duplicate-target
+behavior is now covered by R6 compiled tests.
 
 ## R2 implementation record
 
@@ -496,52 +509,29 @@ Desired invariant: work records state whether they belong to the selector or
 to the expression consuming the selected result. Selection transfers only the
 consumer work, independent of source mapping shape.
 
-### G8: composite writes are only partially transactional
+### G8: resolved in R6 by a mapped-write transaction
 
-`copyMappedCompositeIdentity()` first flattens LHS and RHS leaves, checks equal
-leaf counts, and confirms every LHS leaf has a target. It then copies each RHS
-leaf directly to its target while preserving selected target metadata.
+`MappedSpanWritePlan` now recursively records each local view, resolved source
+target, RHS assertion, and target metadata without mutating the source. Planning
+rejects incompatible recursive shape, incompatible scalar or ordered-unit
+types, targets outside the declared source context, incomplete mappings, and
+conflicting duplicate targets. Equivalent duplicate assertions coalesce into
+one source write.
 
-That prevents a missing mapping discovered late from causing a partial write,
-but it is not yet the full mapped-write transaction described by the design.
+Sparse targets remain canonical implicit positions during planning. Commit
+preflights every sparse target against the unchanged source and publishes them
+in descending logical-index order, independent of pair traversal order. A
+stale sparse plan rejects before exposing any position. After publication, all
+pairs use the same metadata-preserving scalar copy operation used by direct
+source-backed writes.
 
-Missing validation includes:
+### G9: resolved in R6 through general completion reasoning
 
-- recursive list/unit shape compatibility;
-- exact ordered-unit conversion;
-- target reachability within the mapped source context;
-- duplicate/conflicting target detection;
-- compatibility with the established scalar source-backed write operation for
-  each leaf;
-- sparse split/materialization validation; and
-- rollback or detached publication if a commit-time merge fails.
-
-Desired invariant: build and validate a complete mapped-write plan without
-source mutation, then commit each pair through the same source-backed write
-semantics used for a directly selected scalar. Composite selection must not
-invent a second meaning for assignment.
-
-### G9: assignment directly changes source completion state
-
-After a mapped composite write, the implementation closes
-`sourceContextPOV.pItem.value.tailUnfinished` when the final mapped leaf is the
-known final source item. This makes current typed-time output canonical, but an
-assignment should not normally decide whether the source can receive future
-items.
-
-Risks:
-
-- writing the final current position of a live source can close it;
-- output normalization and structural completion become coupled to assignment;
-- the behavior depends on whether the assignment happened to include the last
-  position; and
-- the underlying representation discrepancy remains hidden.
-
-Desired invariant: mapped assignment never toggles `tailUnfinished` directly.
-After its mapped writes commit, the general list-completion mechanism may
-re-evaluate the source and close structural work when all exact positions and
-constraints are satisfied. That rule belongs to list normalization, not to
-end-relative assignment.
+Mapped assignment no longer toggles `tailUnfinished`. After mapped leaf commits,
+the existing `countSize(true)` list reasoning is invoked on affected ancestors
+and the source context. An exact list can therefore close when its ordinary
+size constraints are satisfied, while assignment itself does not declare a
+live source complete.
 
 ### G10: logical navigation mutates parent metadata during reads
 
@@ -743,12 +733,26 @@ Before moving code, cover:
 
 ### Checkpoint R6: make mapped writes transactional
 
-- Build recursive write pairs without mutation.
-- Validate structure, unit compatibility, reachability, uniqueness,
-  source-backed write acceptance, and sparse materialization.
-- Commit only after validation succeeds.
-- Remove assignment-driven tail closure and invoke general list-completion
-  reasoning after mapped merges.
+- Complete on 2026-09-05.
+- Replaced flattened immediate writes with recursive `MappedSpanWritePlan`
+  construction that does not mutate source state.
+- Validated recursive structure, scalar and ordered-unit compatibility, source
+  context reachability, complete leaf mappings, and duplicate target
+  assertions before commit.
+- Coalesced equivalent duplicates and rejected conflicts before the first
+  source write.
+- Preflighted sparse materialization, made publication independent of plan pair
+  order, and rejected stale sparse plans before exposing a source position.
+- Routed composite leaves and legacy scalar source-backed writes through the
+  same metadata-preserving commit operation.
+- Removed assignment-driven tail closure and invoked ordinary
+  `countSize(true)` reasoning after mapped commits.
+- Captured marked sparse correspondence before destructive traversal exposure,
+  allowing selection and write-back across sparse/concrete/sparse boundaries
+  while preserving exact compatible sparse spans in compressed form.
+- Added seven compiled transaction tests; improved the R1 characterization
+  suite from `5/10` to `4/10` failures and the full suite from the R5
+  `9/357` checkpoint to `8/364`.
 
 ### Checkpoint R7: remove compatibility inference
 

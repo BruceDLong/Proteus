@@ -99,6 +99,27 @@ struct MergePreparationPlan{
     }
 }
 
+model MappedWritePair{
+    me List<our POV>: localViewPOVs
+    our POV: targetSourcePOV
+    our POV: rhsPOV
+    our WordUse: preservedTargetType
+    our infonView: preservedTargetListSpec
+    me uint64: preservedTargetItemMode
+    flag: materializeSparseTarget
+}
+struct MappedWritePair{}
+
+model MappedSpanWritePlan{
+    mode[mwpNotApplicable, mwpRejected,
+         mwpReady, mwpCommitted]: status
+    our POV: selectedViewPOV
+    our POV: sourceContextPOV
+    me List<our MappedWritePair>: pairs
+    me string: diagnostic
+}
+struct MappedSpanWritePlan{}
+
 // Owns the graph-identity precedence formerly hidden at the end of the
 // ordered-span legacy hook. Local value comparison must stand aside when a
 // source-backed reference is being identified with its candidate.
@@ -163,24 +184,6 @@ struct ReferenceConsolidationStrategy{
                 item!.value!.listSpec!=NULL)
     }
 
-    void: collectMappedWriteLeaves(our infonView: item,
-            their List<our POV>: leaves) <- {
-        if(item==NULL or item!.value!.overlayType!=LST or
-                item!.value!.evalMode!=emLiteral){return()}
-        our POV: childPOV <- item!.value!.items.head
-        while(childPOV!=NULL){
-            if(childPOV!.pItem!=NULL and
-                    childPOV!.pItem!.value!.overlayType==LST and
-                    childPOV!.pItem!.value!.evalMode==emLiteral and
-                    !childPOV!.pItem!.value!.items.isEmpty()){
-                collectMappedWriteLeaves(childPOV!.pItem, leaves)
-            }else{
-                leaves!.append(childPOV)
-            }
-            childPOV <- childPOV!.next
-        }
-    }
-
     our POV: mappedWriteSourcePOV(our POV: viewPOV) <- {
         if(viewPOV==NULL){return(NULL)}
         our POV: mappedSourcePOV <- viewPOV!.ultimateMappedSourcePOV()
@@ -196,68 +199,430 @@ struct ReferenceConsolidationStrategy{
         return(NULL)
     }
 
-    me bool: copyMappedCompositeIdentity(our AItem: aItem,
-            our infonView: RHS) <- {
-        if(!aItem!.LHS_item!.viewMapWriteEnabled or
-                aItem!.LHS_item!.viewMap.sourcePov==NULL or
-                aItem!.LHS_item!.viewMap.startPov==NULL or
-                aItem!.LHS_item!.pItem!.value!.overlayType!=LST or
-                RHS!.value!.overlayType!=LST){return(false)}
-        me List<our POV>: lhsLeaves
-        me List<our POV>: rhsLeaves
-        collectMappedWriteLeaves(aItem!.LHS_item!.pItem, lhsLeaves)
-        collectMappedWriteLeaves(RHS, rhsLeaves)
-        if(lhsLeaves.isEmpty() or lhsLeaves.size()!=rhsLeaves.size()){
-            aItem!.mergeStatus <- msReject
-            aItem!.LHS_item!.rejected <- true
-            return(true)
+    me void: rejectMappedWritePlan(our MappedSpanWritePlan: plan,
+            me string: diagnostic) <- {
+        if(plan==NULL or plan!.status==mwpRejected){return()}
+        plan!.status <- mwpRejected
+        plan!.diagnostic <- diagnostic
+    }
+
+    me bool: sourceContextContainsPOV(our POV: sourceContextPOV,
+            their POV: candidatePOV, me int: depth) <- {
+        if(sourceContextPOV==NULL or candidatePOV==NULL or depth>128){return(false)}
+        if(sourceContextPOV===candidatePOV){return(true)}
+        if(candidatePOV!.viewMap.sourcePov===sourceContextPOV and
+                candidatePOV!.viewMap.startPov!=NULL){
+            return(sourceContextContainsPOV(sourceContextPOV,
+                    candidatePOV!.viewMap.startPov, depth + 1))
         }
-        withEach lhsLeaf in lhsLeaves{
-            our POV: targetPOV <- mappedWriteSourcePOV(lhsLeaf)
-            if(targetPOV==NULL or targetPOV!.pItem==NULL){
-                aItem!.mergeStatus <- msReject
-                aItem!.LHS_item!.rejected <- true
-                return(true)
+        if(candidatePOV!.isImplicitItemPOV()){
+            return(sourceContextContainsPOV(sourceContextPOV,
+                    candidatePOV!.implicitItem.sourcePov, depth + 1))
+        }
+        if(sourceContextPOV!.pItem==NULL or
+                sourceContextPOV!.pItem!.value!.overlayType!=LST){return(false)}
+        our POV: childPOV <- sourceContextPOV!.pItem!.value!.items.head
+        while(childPOV!=NULL){
+            if(sourceContextContainsPOV(
+                    childPOV, candidatePOV, depth + 1)){return(true)}
+            childPOV <- childPOV!.next
+        }
+        return(false)
+    }
+
+    our POV: validatedMappedWriteSourcePOV(our POV: viewPOV,
+            me int: depth) <- {
+        if(viewPOV==NULL or depth>128 or
+                viewPOV!.viewMap.sourcePov==NULL or
+                viewPOV!.viewMap.startPov==NULL){return(NULL)}
+        our POV: sourceContextPOV <- viewPOV!.viewMap.sourcePov
+        our POV: sourceStartPOV <- viewPOV!.viewMap.startPov
+        if(!sourceContextContainsPOV(
+                sourceContextPOV, sourceStartPOV, 0)){return(NULL)}
+        if(sourceStartPOV===viewPOV){return(sourceStartPOV)}
+        if(sourceStartPOV!.viewMap.sourcePov!=NULL or
+                sourceStartPOV!.viewMap.startPov!=NULL){
+            if(sourceStartPOV!.viewMap.sourcePov==NULL or
+                    sourceStartPOV!.viewMap.startPov==NULL){return(NULL)}
+            return(validatedMappedWriteSourcePOV(
+                    sourceStartPOV, depth + 1))
+        }
+        return(sourceStartPOV)
+    }
+
+    me bool: mappedWriteTypesAreCompatible(
+            their WorldManager: worldManager,
+            our infonView: selected, our infonView: RHS) <- {
+        if(selected==NULL or RHS==NULL){return(false)}
+        me int: compatibility <- selected!.isCompatibleWith(RHS, false)
+        if(compatibility!=tvFalse){return(true)}
+        if(selected!.value!.overlayType!=LST or
+                RHS!.value!.overlayType!=LST or
+                selected!.type==NULL or RHS!.type==NULL){return(false)}
+        me vocabularySpec: vSpec
+        vSpec.init(worldManager!.agent!.getLocaleBaseName())
+        our OrderedSpanConverter: converter <- modelMngr.
+                getOrderedSpanConverter(selected!.type, RHS!.type, vSpec)
+        return(converter!=NULL and converter!.valid and
+                converter!.fromBaseCount==converter!.toBaseCount)
+    }
+
+    me bool: mappedRHSAssertionsAreEquivalent(
+            our infonView: first, our infonView: second) <- {
+        if(first==NULL or second==NULL){return(false)}
+        if(first===second){return(true)}
+        if(first!.value!.overlayType!=second!.value!.overlayType or
+                first!.value!.evalMode!=second!.value!.evalMode or
+                first!.infSize!.evalMode!=second!.infSize!.evalMode){
+            return(false)
+        }
+        if(first!.type!=NULL and second!.type!=NULL and
+                first!.type!.typeID()!=second!.type!.typeID()){return(false)}
+        if(first!.value!.evalMode==emLiteral){
+            if(first!.value!.overlayType==NUM){
+                if(first!.value!.num!=second!.value!.num){return(false)}
+            }else if(first!.value!.overlayType==STR){
+                if(first!.value!.str!=second!.value!.str){return(false)}
+            }else{return(false)}
+        }
+        if(first!.infSize!.evalMode==emLiteral and
+                first!.infSize!.num!=second!.infSize!.num){return(false)}
+        return(true)
+    }
+
+    our MappedWritePair: makeMappedWritePair(our POV: localViewPOV,
+            our POV: targetSourcePOV, our POV: rhsPOV) <- {
+        if(localViewPOV==NULL or targetSourcePOV==NULL or
+                targetSourcePOV!.pItem==NULL or rhsPOV==NULL or
+                rhsPOV!.pItem==NULL){return(NULL)}
+        our MappedWritePair:: pair
+        pair!.localViewPOVs.append(localViewPOV)
+        pair!.targetSourcePOV <- targetSourcePOV
+        pair!.rhsPOV <- rhsPOV
+        pair!.preservedTargetType <- targetSourcePOV!.pItem!.type
+        if(targetSourcePOV!.pItem!.value!.listSpec!=NULL and
+                !hasConcreteListSpec(rhsPOV!.pItem)){
+            pair!.preservedTargetListSpec <-
+                    targetSourcePOV!.pItem!.value!.listSpec
+        }
+        pair!.preservedTargetItemMode <- targetSourcePOV!.pItem!.itmMode
+        if(targetSourcePOV!.isImplicitItemPOV() and
+                targetSourcePOV!.implicitItem.sourcePov!=NULL and
+                targetSourcePOV!.implicitItem.sourcePov!.isSparseOrderedSpan()){
+            pair!.materializeSparseTarget <- true
+        }
+        return(pair)
+    }
+
+    me void: appendMappedWritePair(their WorldManager: worldManager,
+            our POV: localViewPOV, our POV: rhsPOV,
+            our MappedSpanWritePlan: plan) <- {
+        if(plan==NULL or plan!.status!=mwpReady){return()}
+        if(localViewPOV==NULL or rhsPOV==NULL or
+                localViewPOV!.viewMap.sourcePov!==plan!.sourceContextPOV){
+            rejectMappedWritePlan(plan, "mapped-write-source-context")
+            return()
+        }
+        our POV: targetSourcePOV <-
+                validatedMappedWriteSourcePOV(localViewPOV, 0)
+        if(targetSourcePOV==NULL or targetSourcePOV!.pItem==NULL){
+            rejectMappedWritePlan(plan, "mapped-write-unresolved-target")
+            return()
+        }
+        if(!mappedWriteTypesAreCompatible(
+                worldManager, targetSourcePOV!.pItem, rhsPOV!.pItem)){
+            rejectMappedWritePlan(plan, "mapped-write-target-type")
+            return()
+        }
+        withEach existingPair in plan!.pairs{
+            if(existingPair!.targetSourcePOV===targetSourcePOV or
+                    existingPair!.targetSourcePOV!.pItem===
+                            targetSourcePOV!.pItem){
+                if(!mappedRHSAssertionsAreEquivalent(
+                        existingPair!.rhsPOV!.pItem, rhsPOV!.pItem)){
+                    rejectMappedWritePlan(
+                            plan, "mapped-write-conflicting-target")
+                    return()
+                }
+                existingPair!.localViewPOVs.append(localViewPOV)
+                return()
+            }
+        }
+        our MappedWritePair: pair <- makeMappedWritePair(
+                localViewPOV, targetSourcePOV, rhsPOV)
+        if(pair==NULL){
+            rejectMappedWritePlan(plan, "mapped-write-invalid-pair")
+            return()
+        }
+        if(pair!.materializeSparseTarget){
+            their POV: sparseSourcePOV <-
+                    targetSourcePOV!.implicitItem.sourcePov
+            if(sparseSourcePOV==NULL or
+                    targetSourcePOV!.implicitItem.sourceIndex<0 or
+                    targetSourcePOV!.implicitItem.sourceIndex>=
+                            sparseSourcePOV!.sparseSpanCount() or
+                    sparseSourcePOV!.listNodeForSelf()==NULL){
+                rejectMappedWritePlan(
+                        plan, "mapped-write-sparse-materialization")
+                return()
+            }
+        }
+        plan!.pairs.append(pair)
+    }
+
+    me void: planMappedWriteNode(their WorldManager: worldManager,
+            our POV: localViewPOV, our POV: rhsPOV,
+            our MappedSpanWritePlan: plan) <- {
+        if(plan==NULL or plan!.status!=mwpReady){return()}
+        if(localViewPOV==NULL or localViewPOV!.pItem==NULL or
+                rhsPOV==NULL or rhsPOV!.pItem==NULL){
+            rejectMappedWritePlan(plan, "mapped-write-missing-node")
+            return()
+        }
+        our infonView: selected <- localViewPOV!.pItem
+        our infonView: RHS <- rhsPOV!.pItem
+        me bool: selectedIsList <- selected!.value!.overlayType==LST
+        me bool: rhsIsList <- RHS!.value!.overlayType==LST
+        if(selectedIsList!=rhsIsList){
+            rejectMappedWritePlan(plan, "mapped-write-shape")
+            return()
+        }
+        if(!mappedWriteTypesAreCompatible(worldManager, selected, RHS)){
+            rejectMappedWritePlan(plan, "mapped-write-type")
+            return()
+        }
+        if(!selectedIsList){
+            if(selected!.value!.overlayType!=tUnknown and
+                    selected!.value!.overlayType!=tUnset and
+                    RHS!.value!.overlayType!=tUnknown and
+                    RHS!.value!.overlayType!=tUnset and
+                    selected!.value!.overlayType!=RHS!.value!.overlayType){
+                rejectMappedWritePlan(plan, "mapped-write-scalar-shape")
+                return()
+            }
+            appendMappedWritePair(
+                    worldManager, localViewPOV, rhsPOV, plan)
+            return()
+        }
+        if(selected!.value!.evalMode!=emLiteral or
+                RHS!.value!.evalMode!=emLiteral){
+            rejectMappedWritePlan(plan, "mapped-write-list-state")
+            return()
+        }
+
+        if(selected!.value!.items.isEmpty() and
+                localViewPOV!.hasSparseOrderedSpanValue()){
+            me int64: selectedCount <- localViewPOV!.sparseSpanCount()
+            if(selectedCount<=0 or RHS!.value!.items.size()!=selectedCount){
+                rejectMappedWritePlan(plan, "mapped-write-list-extent")
+                return()
+            }
+            our POV: sourceStartPOV <- localViewPOV!.viewMap.startPov
+            if(sourceStartPOV==NULL){
+                rejectMappedWritePlan(plan, "mapped-write-sparse-origin")
+                return()
+            }
+            our POV: rhsChildPOV <- RHS!.value!.items.head
+            me int64: childIndex <- 0
+            while(childIndex<selectedCount and rhsChildPOV!=NULL){
+                our POV: localChildPOV <- localViewPOV!.
+                        getOrCreateImplicitItemPOV(childIndex)
+                our POV: sourceChildPOV <- sourceStartPOV!.
+                        logicalSiblingAtOffset(childIndex)
+                if(localChildPOV==NULL or sourceChildPOV==NULL){
+                    rejectMappedWritePlan(
+                            plan, "mapped-write-sparse-position")
+                    return()
+                }
+                localChildPOV!.mapViewToSource(
+                        plan!.sourceContextPOV, sourceChildPOV)
+                planMappedWriteNode(worldManager,
+                        localChildPOV, rhsChildPOV, plan)
+                childIndex <+- 1
+                rhsChildPOV <- rhsChildPOV!.next
+            }
+            return()
+        }
+
+        if(selected!.value!.items.size()!=RHS!.value!.items.size()){
+            rejectMappedWritePlan(plan, "mapped-write-list-extent")
+            return()
+        }
+        our POV: selectedChildPOV <- selected!.value!.items.head
+        our POV: rhsChildPOV <- RHS!.value!.items.head
+        while(selectedChildPOV!=NULL and rhsChildPOV!=NULL){
+            planMappedWriteNode(worldManager,
+                    selectedChildPOV, rhsChildPOV, plan)
+            if(plan!.status==mwpRejected){return()}
+            selectedChildPOV <- selectedChildPOV!.next
+            rhsChildPOV <- rhsChildPOV!.next
+        }
+    }
+
+    our MappedSpanWritePlan: buildMappedSpanWritePlan(
+            their WorldManager: worldManager, our POV: selectedViewPOV,
+            our POV: rhsPOV) <- {
+        our MappedSpanWritePlan:: plan
+        if(selectedViewPOV==NULL or !selectedViewPOV!.viewMapWriteEnabled or
+                selectedViewPOV!.viewMap.sourcePov==NULL or
+                selectedViewPOV!.viewMap.startPov==NULL){return(plan)}
+        plan!.status <- mwpReady
+        plan!.selectedViewPOV <- selectedViewPOV
+        plan!.sourceContextPOV <- selectedViewPOV!.viewMap.sourcePov
+        if(!sourceContextContainsPOV(plan!.sourceContextPOV,
+                selectedViewPOV!.viewMap.startPov, 0)){
+            rejectMappedWritePlan(plan, "mapped-write-root-context")
+            return(plan)
+        }
+        planMappedWriteNode(
+                worldManager, selectedViewPOV, rhsPOV, plan)
+        if(plan!.status==mwpReady and plan!.pairs.isEmpty()){
+            rejectMappedWritePlan(plan, "mapped-write-empty")
+        }
+        return(plan)
+    }
+
+    me bool: materializeMappedWritePairTarget(
+            our MappedWritePair: pair) <- {
+        if(pair==NULL or !pair!.materializeSparseTarget){return(true)}
+        our POV: implicitTargetPOV <- pair!.targetSourcePOV
+        if(implicitTargetPOV==NULL or
+                !implicitTargetPOV!.isImplicitItemPOV()){return(false)}
+        their POV: sparseSourcePOV <-
+                implicitTargetPOV!.implicitItem.sourcePov
+        me int64: sourceIndex <-
+                implicitTargetPOV!.implicitItem.sourceIndex
+        if(sparseSourcePOV==NULL or !sparseSourcePOV!.isSparseOrderedSpan() or
+                sourceIndex<0 or sourceIndex>=sparseSourcePOV!.sparseSpanCount()){
+            return(false)
+        }
+        our POV: selectedSparsePOV <- sparseSourcePOV!.listNodeForSelf()
+        if(selectedSparsePOV==NULL){return(false)}
+        if(sourceIndex>0){
+            selectedSparsePOV <- sparseSourcePOV!.
+                    splitSparseSpanPrefix(sourceIndex)
+        }
+        if(selectedSparsePOV==NULL){return(false)}
+        our POV: concreteTargetPOV <- selectedSparsePOV!.
+                exposeSparseHeadWithItem(implicitTargetPOV!.pItem)
+        if(concreteTargetPOV==NULL){return(false)}
+        pair!.targetSourcePOV <- concreteTargetPOV
+        pair!.materializeSparseTarget <- false
+        return(true)
+    }
+
+    // Validate every sparse publication against the still-unmodified source,
+    // then publish higher logical indexes first within each sparse span. Once
+    // this preflight succeeds, the ordered operations cannot invalidate a
+    // later target in the single-threaded normalization transaction.
+    me bool: materializeMappedWriteTargets(
+            our MappedSpanWritePlan: plan) <- {
+        if(plan==NULL or plan!.status!=mwpReady){return(false)}
+        withEach pair in plan!.pairs{
+            if(pair==NULL){return(false)}
+            if(pair!.materializeSparseTarget){
+                our POV: implicitTargetPOV <- pair!.targetSourcePOV
+                if(implicitTargetPOV==NULL or
+                        !implicitTargetPOV!.isImplicitItemPOV() or
+                        implicitTargetPOV!.implicitItem.sourcePov==NULL or
+                        !implicitTargetPOV!.implicitItem.sourcePov!.
+                                isSparseOrderedSpan() or
+                        implicitTargetPOV!.implicitItem.sourceIndex<0 or
+                        implicitTargetPOV!.implicitItem.sourceIndex>=
+                                implicitTargetPOV!.implicitItem.sourcePov!.
+                                        sparseSpanCount() or
+                        implicitTargetPOV!.implicitItem.sourcePov!.
+                                listNodeForSelf()==NULL){
+                    return(false)
+                }
             }
         }
 
-        me int64: itemIndex <- 0
-        while(itemIndex<lhsLeaves.size()){
-            our POV: lhsLeaf <- lhsLeaves[itemIndex]
-            our POV: rhsLeaf <- rhsLeaves[itemIndex]
-            our POV: targetPOV <- mappedWriteSourcePOV(lhsLeaf)
-            our infonView: target <- targetPOV!.pItem
-            our WordUse: oldType <- target!.type
-            our infonView: oldListSpec <- target!.value!.listSpec
-            me uint64: oldItmMode <- target!.itmMode
-            rhsLeaf!.pItem!.copyAsTypeTo(target, false, true)
-            if(oldType!=NULL){target!.type <- oldType}
-            if(oldListSpec!=NULL){target!.value!.listSpec <- oldListSpec}
-            if(oldItmMode!=mNone){target!.itmMode <- oldItmMode}
-            lhsLeaf!.pItem <- target
-            itemIndex <+- 1
-        }
-        // Definition-backed concrete lists can retain an open-tail marker
-        // even when their exact extent is known.  A mapped replacement that
-        // reaches that known final item completes the concrete source list.
-        our POV: sourceContextPOV <- aItem!.LHS_item!.viewMap.sourcePov
-        if(sourceContextPOV!=NULL and sourceContextPOV!.pItem!=NULL and
-                sourceContextPOV!.pItem!.value!.overlayType==LST and
-                !sourceContextPOV!.pItem!.value!.items.isEmpty() and
-                sourceContextPOV!.pItem!.endRelativeExtent().status==eresExact){
-            me int64: sourceExtent <- sourceContextPOV!.pItem!.
-                    infSize!.num.convertToInt()
-            if(sourceExtent>0){
-                our POV: finalSourcePOV <- sourceContextPOV!.
-                        logicalItemAtIndex(sourceExtent - 1)
-                our POV: finalWrittenPOV <- mappedWriteSourcePOV(
-                        lhsLeaves[lhsLeaves.size() - 1])
-                if(finalSourcePOV!=NULL and finalWrittenPOV!=NULL and
-                        (finalSourcePOV===finalWrittenPOV or
-                         finalSourcePOV!.pItem===finalWrittenPOV!.pItem)){
-                    sourceContextPOV!.pItem!.value!.tailUnfinished <- false
+        while(true){
+            our MappedWritePair: nextPair <- NULL
+            withEach pair in plan!.pairs{
+                if(pair!.materializeSparseTarget and
+                        (nextPair==NULL or
+                         pair!.targetSourcePOV!.implicitItem.sourceIndex>
+                                nextPair!.targetSourcePOV!.
+                                        implicitItem.sourceIndex)){
+                    nextPair <- pair
                 }
             }
+            if(nextPair==NULL){break()}
+            if(!materializeMappedWritePairTarget(nextPair)){
+                // Preflight plus descending publication makes this an engine
+                // invariant, not a recoverable half-committed write.
+                logFatalError(
+                        "Mapped sparse publication invalidated its plan")
+                return(false)
+            }
+        }
+        return(true)
+    }
+
+    me void: commitMappedWritePair(our MappedWritePair: pair) <- {
+        our infonView: target <- pair!.targetSourcePOV!.pItem
+        pair!.rhsPOV!.pItem!.copyAsTypeTo(target, false, true)
+        if(pair!.preservedTargetType!=NULL){
+            target!.type <- pair!.preservedTargetType
+        }
+        if(pair!.preservedTargetListSpec!=NULL){
+            target!.value!.listSpec <- pair!.preservedTargetListSpec
+        }
+        if(pair!.preservedTargetItemMode!=mNone){
+            target!.itmMode <- pair!.preservedTargetItemMode
+        }
+        withEach localViewPOV in pair!.localViewPOVs{
+            localViewPOV!.pItem <- target
+        }
+    }
+
+    me void: reevaluateMappedWriteCompletion(our POV: changedPOV) <- {
+        their POV: parentPOV <- NULL
+        if(changedPOV!=NULL){parentPOV <- changedPOV!.pParent}
+        while(parentPOV!=NULL){
+            if(parentPOV!.pItem!=NULL and
+                    parentPOV!.pItem!.value!.overlayType==LST and
+                    parentPOV!.pItem!.value!.tailUnfinished and
+                    parentPOV!.pItem!.infSize!.evalMode==emLiteral){
+                parentPOV!.pItem!.countSize(true)
+            }
+            parentPOV <- parentPOV!.pParent
+        }
+    }
+
+    me bool: commitMappedSpanWritePlan(our MappedSpanWritePlan: plan) <- {
+        if(plan==NULL or plan!.status!=mwpReady){return(false)}
+        if(!materializeMappedWriteTargets(plan)){
+            rejectMappedWritePlan(
+                    plan, "mapped-write-stale-sparse-plan")
+            return(false)
+        }
+        withEach pair in plan!.pairs{commitMappedWritePair(pair)}
+        withEach pair in plan!.pairs{
+            reevaluateMappedWriteCompletion(pair!.targetSourcePOV)
+        }
+        if(plan!.sourceContextPOV!=NULL and
+                plan!.sourceContextPOV!.pItem!=NULL and
+                plan!.sourceContextPOV!.pItem!.value!.overlayType==LST and
+                plan!.sourceContextPOV!.pItem!.value!.tailUnfinished and
+                plan!.sourceContextPOV!.pItem!.infSize!.evalMode==emLiteral){
+            plan!.sourceContextPOV!.pItem!.countSize(true)
+        }
+        plan!.status <- mwpCommitted
+        return(true)
+    }
+
+    me bool: executeMappedWrite(their WorldManager: worldManager,
+            our AItem: aItem) <- {
+        our MappedSpanWritePlan: plan <- buildMappedSpanWritePlan(
+                worldManager, aItem!.LHS_item, aItem!.RHS)
+        if(plan!.status==mwpNotApplicable){return(false)}
+        if(plan!.status==mwpRejected or
+                !commitMappedSpanWritePlan(plan)){
+            aItem!.mergeStatus <- msReject
+            aItem!.LHS_item!.rejected <- true
         }
         return(true)
     }
@@ -307,9 +672,10 @@ struct ReferenceConsolidationStrategy{
         }
     }
 
-    me void: copyIdentity(our AItem: aItem) <- {
+    me void: copyIdentity(their WorldManager: worldManager,
+            our AItem: aItem) <- {
         our infonView: RHS <- aItem!.RHS!.pItem
-        if(copyMappedCompositeIdentity(aItem, RHS)){return()}
+        if(executeMappedWrite(worldManager, aItem)){return()}
         me bool: writeToSource <- isSourceBackedPOV(aItem!.LHS_item)
         our POV: mappedSourcePOV
         if(writeToSource){
@@ -328,12 +694,9 @@ struct ReferenceConsolidationStrategy{
         }
 
         if(writeToSource){
-            aItem!.RHS!.pItem!.copyAsTypeTo(
-                    target, false, true)
-            aItem!.LHS_item!.pItem <- target
-            if(lhsItmMode!=mNone){
-                aItem!.LHS_item!.pItem!.itmMode <- lhsItmMode
-            }
+            our MappedWritePair: scalarPair <- makeMappedWritePair(
+                    aItem!.LHS_item, mappedSourcePOV, aItem!.RHS)
+            commitMappedWritePair(scalarPair)
             if(!aItem!.RHS!.pItem!.isTentative){
                 aItem!.LHS_item!.pItem!.isTentative <- false
             }
@@ -1912,6 +2275,10 @@ struct IntersectionReasoner{
                     mappedSelectionPOV!.viewMap.sourcePov
             aItem!.LHS_item!.viewMap.startPov <-
                     mappedSelectionPOV!.viewMap.startPov
+            if(mappedSelectionPOV!.pItem!=NULL and
+                    mappedSelectionPOV!.pItem!.value!.overlayType==LST){
+                newTop <- mappedSelectionPOV!.pItem
+            }
             if(CI!.partRef==NULL and CI!.parts.isEmpty() and
                     !CI!.wrkList.isEmpty()){
                 mappedSelectionPOV!.viewMapWriteEnabled <- true
@@ -2664,6 +3031,44 @@ struct ParentMemberReasoner{
         return(RHSPovNxt)
     }
 
+    // Capture a marked sparse occurrence as a locally zero-based view before
+    // traversal splits either side. The local listSpec is authoritative for
+    // member typing, so storage-only types introduced by sparse
+    // materialization are redundant in the returned view.
+    our POV: makeMappedMarkedSparseSpan(our POV: markedPOV,
+            our POV: sourceContextPOV, our POV: sourceStartPOV) <- {
+        if(markedPOV==NULL or sourceContextPOV==NULL or
+                sourceStartPOV==NULL or
+                !markedPOV!.hasSparseOrderedSpanValue()){
+            return(NULL)
+        }
+        me int64: markedItemCount <- markedPOV!.sparseSpanCount()
+        if(markedItemCount<=0){return(NULL)}
+        our POV: mappedMarkedView <- sourceStartPOV!.
+                makeLogicalSiblingSpanView(
+                        sourceContextPOV, markedItemCount, false,
+                        povSrcConcreteSpanPrefix, true)
+        if(mappedMarkedView==NULL){return(NULL)}
+        mappedMarkedView!.pItem!.type <- markedPOV!.pItem!.type
+        mappedMarkedView!.pItem!.value!.listSpec <-
+                markedPOV!.pItem!.value!.listSpec
+
+        our POV: mappedChildPOV <-
+                mappedMarkedView!.pItem!.value!.items.head
+        while(mappedChildPOV!=NULL){
+            if(mappedChildPOV!.pItem!.type!=NULL and
+                    mappedMarkedView!.pItem!.value!.listSpec!=NULL and
+                    mappedMarkedView!.pItem!.value!.listSpec!.type!=NULL and
+                    mappedChildPOV!.pItem!.type!.typeID()==
+                            mappedMarkedView!.pItem!.value!.
+                                    listSpec!.type!.typeID()){
+                mappedChildPOV!.pItem!.type <- NULL
+            }
+            mappedChildPOV <- mappedChildPOV!.next
+        }
+        return(mappedMarkedView)
+    }
+
     our AItem: propagate(their WorldManager: worldManager, their Agenda: agenda, our AItem: aItem, our POV: LHSPov, our POV: RHSPov, our POV: remainder, me bool: looseSize, bool: dontEnque, their int:waitState) <- {
         // Log LHS==RHS
         me string: idnt <- indentStr(aItem!.indentLvl)
@@ -2776,6 +3181,27 @@ struct ParentMemberReasoner{
             }
         }
 
+        // A sparse marked span may have to be exposed one logical item at a
+        // time to match concrete source items. Capture the whole occurrence
+        // before that destructive refinement changes the marked span's size.
+        // This is ordinary intersection correspondence; selection and writes
+        // consume the resulting ViewMap without knowing how the mark was
+        // spelled.
+        if(aParent!=NULL and LHSPovNext!=NULL and RHSPovNext!=NULL and
+                orderedSpanSourceContextPOV!=NULL and
+                aParent!.LHS_item!.pItem!.intersectMarkedRetPOV===
+                        LHSPovNext and
+                LHSPovNext!.hasSparseOrderedSpanValue() and
+                !RHSPovNext!.isSparseOrderedSpan()){
+            our POV: mappedMarkedView <- makeMappedMarkedSparseSpan(
+                    LHSPovNext, orderedSpanSourceContextPOV,
+                    RHSPovNext)
+            if(mappedMarkedView!=NULL){
+                aParent!.LHS_item!.pItem!.intersectMarkedRetPOV <-
+                        mappedMarkedView
+            }
+        }
+
         if(LHSPovNext!=NULL and RHSPovNext!=NULL){
             if(!LHSPovNext!.isSparseOrderedSpan() and RHSPovNext!.isSparseOrderedSpan()){
                 our POV: exposedRHS <- worldManager!.exposeSparseOrderedSpanHeadForTraversal(RHSPovNext)
@@ -2812,20 +3238,63 @@ struct ParentMemberReasoner{
                 }
             }
             if(!markedReturnAlreadyMapped){
-                if(LHSPov!=NULL and RHSExists and RHSPov!.pedigree.source==povSrcSparseExposedHead and markedPOV===LHSPov){markedMatch <- RHSPov}
-                if(LHSPovNext!=NULL and RHSPovNext!=NULL and RHSPovNext!.pedigree.source==povSrcSparseExposedHead and markedPOV===LHSPovNext){markedMatch <- RHSPovNext}
-                if(LHSPov!=NULL and RHSExists and RHSPov!.pedigree.source==povSrcSparseExposedHead and markedPOV!.pItem===LHSPov!.pItem){markedMatch <- RHSPov}
-                if(LHSPovNext!=NULL and RHSPovNext!=NULL and RHSPovNext!.pedigree.source==povSrcSparseExposedHead and markedPOV!.pItem===LHSPovNext!.pItem){markedMatch <- RHSPovNext}
+                // An exact sparse-span match is a composite occurrence, not
+                // merely a compatible type. Record that concrete pairing so
+                // selection can route its later write through ViewMap.
+                if(LHSPov!=NULL and RHSExists and
+                        markedPOV===LHSPov and
+                        markedPOV!.hasSparseOrderedSpanValue() and
+                        RHSPov!.hasSparseOrderedSpanValue()){
+                    markedMatch <- RHSPov
+                }
+                if(LHSPovNext!=NULL and RHSPovNext!=NULL and
+                        markedPOV===LHSPovNext and
+                        markedPOV!.hasSparseOrderedSpanValue() and
+                        orderedSpanSourceContextPOV!=NULL){
+                    if(RHSPovNext!.hasSparseOrderedSpanValue() and
+                            markedPOV!.pItem!.value!.listSpec!=NULL and
+                            markedPOV!.pItem!.value!.listSpec!.type!=NULL and
+                            RHSPovNext!.pItem!.value!.listSpec!=NULL and
+                            RHSPovNext!.pItem!.value!.listSpec!.type!=NULL and
+                            markedPOV!.pItem!.value!.listSpec!.type!.typeID()==
+                                    RHSPovNext!.pItem!.value!.
+                                            listSpec!.type!.typeID() and
+                            markedPOV!.sparseSpanCount()==
+                                    RHSPovNext!.sparseSpanCount()){
+                        // Preserve an exact sparse occurrence as compressed.
+                        // Logical expansion is only needed when the selected
+                        // extent crosses this source span's boundary.
+                        markedMatch <- RHSPovNext
+                    }else{
+                        markedMatch <- makeMappedMarkedSparseSpan(
+                                markedPOV, orderedSpanSourceContextPOV,
+                                RHSPovNext)
+                    }
+                }
+                if(markedMatch==NULL and LHSPov!=NULL and RHSExists and RHSPov!.pedigree.source==povSrcSparseExposedHead and markedPOV===LHSPov){markedMatch <- RHSPov}
+                if(markedMatch==NULL and LHSPovNext!=NULL and RHSPovNext!=NULL and RHSPovNext!.pedigree.source==povSrcSparseExposedHead and markedPOV===LHSPovNext){markedMatch <- RHSPovNext}
+                if(markedMatch==NULL and LHSPov!=NULL and RHSExists and RHSPov!.pedigree.source==povSrcSparseExposedHead and markedPOV!.pItem===LHSPov!.pItem){markedMatch <- RHSPov}
+                if(markedMatch==NULL and LHSPovNext!=NULL and RHSPovNext!=NULL and RHSPovNext!.pedigree.source==povSrcSparseExposedHead and markedPOV!.pItem===LHSPovNext!.pItem){markedMatch <- RHSPovNext}
                 if(markedMatch==NULL and LHSPovNext!=NULL and RHSPovNext!=NULL and RHSPovNext!.pedigree.source==povSrcSparseExposedHead){
                     if(markedPOV!=NULL and markedPOV!.pItem!=NULL and markedPOV!.pItem!.type!=NULL and RHSPovNext!.pItem!=NULL and RHSPovNext!.pItem!.type!=NULL){
                         if(markedPOV!.pItem!.isCompatibleWith(RHSPovNext!.pItem, false)==tvTrue){markedMatch <- RHSPovNext}
                     }
                 }
-                if(LHSPov!.markedOuterPOV!=NULL and RHSExists){markedMatch <- RHSPov}
-                if(LHSPovNext!=NULL and LHSPovNext!.markedOuterPOV!=NULL and RHSPovNext!=NULL){markedMatch <- RHSPovNext}
+                if(markedMatch==NULL and LHSPov!.markedOuterPOV!=NULL and RHSExists){markedMatch <- RHSPov}
+                if(markedMatch==NULL and LHSPovNext!=NULL and LHSPovNext!.markedOuterPOV!=NULL and RHSPovNext!=NULL){markedMatch <- RHSPovNext}
             }
             if(markedMatch!=NULL){
-                aParent!.LHS_item!.pItem!.intersectMarkedRetPOV <- markedMatch
+                if(markedPOV!.hasSparseOrderedSpanValue() and
+                        markedMatch!.hasSparseOrderedSpanValue() and
+                        orderedSpanSourceContextPOV!=NULL){
+                    markedPOV!.mapViewToSource(
+                            orderedSpanSourceContextPOV, markedMatch)
+                    aParent!.LHS_item!.pItem!.intersectMarkedRetPOV <-
+                            markedPOV
+                }else{
+                    aParent!.LHS_item!.pItem!.intersectMarkedRetPOV <-
+                            markedMatch
+                }
                 if(markedMatch!.pItem!.isTentative){
                     markedMatch!.addNewSubDots <- true
                     if(markedMatch!.pParent!=NULL){markedMatch!.pParent!.keepDots <- true}
@@ -3573,7 +4042,7 @@ struct InfonViewReasoner{
             else{aItem!.LHS_item!.pItem!.value!.sizeMode <- fromCount}
         }
         else if(result.consolidationAction==caCopyRHSIdentityToLHS){
-            referenceConsolidationStrategy.copyIdentity(aItem)
+            referenceConsolidationStrategy.copyIdentity(worldManager, aItem)
         }
         else if(result.consolidationAction==caCopyRHSWorkListToLHS){
             aItem!.LHS_item!.pItem!.copyWrkListFrom(aItem!.RHS!.pItem)
