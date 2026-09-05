@@ -4,11 +4,11 @@ Status: representation decisions approved on 2026-09-04. R1 characterization,
 R2 extent/availability separation, the R3 traversal plan, and R4 accepted-match
 correspondence recording are complete. R5 now gives every ordered-span result
 one local, recursively source-mapped construction contract. R6 now validates
-and commits mapped writes transactionally. R7 compatibility-inference cleanup
-is next. No negative `#` sugar has been added.
+and commits mapped writes transactionally. R7 now removes the remaining
+compatibility inference from result selection and work transfer. No negative
+`#` sugar has been added.
 
-Source basis: local branch `proteus3b` at
-`bb1ad55`, plus the R6 transactional-write changes described here.
+Source basis: local branch `proteus3b` through the R7 changes described here.
 
 Related documents:
 
@@ -33,8 +33,9 @@ The implementation now has one explicit intersection traversal plan beside the
 existing projection path, records accepted correspondence, and constructs
 positive, negative, direct, recursive, and sparse ordered-span views under the
 same local mapping rules. Mapped assignments now build and validate a complete
-operation before publishing any source changes. The remaining refactor work is
-the R7 removal of compatibility inference and work-ownership proxies.
+operation before publishing any source changes. Result selection now consumes
+explicit mapping and work-role facts rather than reconstructing them from field
+equality or mapping shape.
 
 ## Current verified boundary
 
@@ -78,11 +79,15 @@ The regenerated `LocalBuild/TestProteus` executable currently demonstrates:
   mapped-assignment tail toggle;
 - end-relative marked selection without selection-time first-child mapping
   recovery;
+- explicit selector-local versus consumer work classification and
+  consumer-only result transfer;
+- valid mapped scalar behavior when `sourcePov` and `startPov` are equal;
 - preservation of the established positive nested write; and
 - preservation of `range/select1`.
 
-The full run reports `8/364`. Relative to the R5 `9/357` checkpoint,
-all seven new compiled mapped-write tests pass and the former
+The ordinary and protected full runs report `8/367`. Relative to the R5
+`9/357` checkpoint, all seven compiled mapped-write tests and all three R7
+result-selection tests pass, and the former
 `sparse/pending/writeSpanAcrossSparseConcreteSparse` baseline failure now
 passes. The remaining failures are the four older baseline failures plus the
 four intentionally unsupported negative `#` sugar tests. This is a regression
@@ -258,8 +263,8 @@ a local result came from, but does not by itself authorize source mutation.
 Final selection grants `viewMapWriteEnabled` only when the selected result has
 pending consumer work. Reference consolidation follows a mapping only when
 that authority is present, so ordinary mapped reads continue to refine and
-return their local projections. R7 will replace the remaining work-list proxy
-with an explicit consumer-work classification.
+return their local projections. R7 replaces the former work-list proxy with an
+explicit consumer-work classification.
 
 During validation, traversal was found to leave inherited `cstListSpec` work
 on a source item immediately before replacing it with a local projection. The
@@ -337,25 +342,25 @@ The current path is spread across several layers:
    its exact pattern/local/source relation and populates the selected mapping.
 6. `IntersectionReasoner.selectFunctionResult()` returns the already mapped
    marked result. Unified builders supply positive and negative maps directly;
-   first-child recovery remains only as an R7 compatibility fallback for
-   ordinary non-builder paths.
-7. Final result selection grants explicit mapped-write authority when consumer
-   equality work is present; a passive mapped read remains local.
+   selection performs no first-child mapping recovery.
+7. Final result selection grants explicit mapped-write authority only when an
+   explicitly classified consumer work item is present; a passive mapped read
+   remains local.
 8. `ReferenceConsolidationStrategy` recognizes the authorized mapped result
    and writes scalar or flattened composite values to the mapped source POVs.
 
 The traversal plan now states the end-relative operation and its accepted
 correspondences. View construction, work ownership, and mapped-write validation
-remain the later simplification boundaries.
+now have explicit representation boundaries.
 
 ## Gotcha register
 
-### G1: `ViewMap` equality is used as an identity category
+### G1: resolved by treating every complete `ViewMap` as valid
 
 `WorldManager.carryPassiveScalarSource()` populates `ViewMap` for an ordinary
-passive scalar and sets `sourcePov == startPov`. Other code then uses equality
-or inequality of the two fields to distinguish ordinary identity from a
-derived span.
+passive scalar and may set `sourcePov == startPov`. Before R7, other code used
+equality or inequality of the two fields to distinguish ordinary identity from
+a derived span.
 
 Populating the map is not itself wrong. The former `POV.sourcePOV` field was
 passive correspondence metadata, and moving that relationship into `ViewMap`
@@ -378,6 +383,11 @@ A POV with no derived/source correspondence leaves both fields NULL.
 Mapped source-backed behavior tests ViewMap validity, not field equality.
 Operation role is represented independently of traversal provenance.
 ```
+
+R7 removes every semantic comparison between `ViewMap.sourcePov` and
+`ViewMap.startPov`. Result selection copies any complete map, and consolidation
+priority is selected by `viewMapWriteEnabled` rather than by map shape. An equal
+source and start remains an ordinary valid scalar mapping.
 
 ### G2: the request is destructively normalized before matching
 
@@ -468,16 +478,15 @@ local replacement is built. Because the local copy materializes that same type
 shape, construction consumes only that represented seed from the source while
 leaving persistent source work intact.
 
-### G6: correspondence is reconstructed during result selection
+### G6: resolved by consuming correspondence recorded before selection
 
-R4 resolves this for end-relative traversal plans, and R5 builders now supply
-the positive mappings directly. The recovery described below remains only as
-an R7 compatibility fallback for ordinary paths that do not use a unified
-builder.
+R4 resolves this for end-relative traversal plans, and R5 builders supply the
+positive mappings directly. R7 removes the last result-selection recovery
+branch.
 
-`IntersectionReasoner.selectFunctionResult()` first checks the marked match. If
-that POV lacks a usable mapping and the selected result is a list, it uses the
-first selected child's mapping as the composite mapping.
+`IntersectionReasoner.selectFunctionResult()` now accepts only the mapping on
+the selected marked POV. A mapped first child cannot cause an unmapped
+composite root to acquire inferred provenance.
 
 Risks:
 
@@ -491,12 +500,11 @@ Desired invariant: when a pattern POV is satisfied by a source POV/window, the
 matching/correspondence layer records that exact relation. Selection merely
 returns the already mapped marked result.
 
-### G7: work-list ownership is inferred from mapping shape
+### G7: resolved with explicit work-record ownership
 
 An ordinary marked range clears selector-local work rather than projecting it
-outward. A mapped span must retain outside assignment work. The current code
-chooses between those behaviors by testing whether `sourcePov` and `startPov`
-are distinct.
+outward. A mapped span must retain outside assignment work. R7 records this
+distinction directly on each work POV with `selectorLocalWork`.
 
 Risks:
 
@@ -508,6 +516,12 @@ Risks:
 Desired invariant: work records state whether they belong to the selector or
 to the expression consuming the selected result. Selection transfers only the
 consumer work, independent of source mapping shape.
+
+Parser-created `=` work is consumer work. `<~` feeds, generated path/index
+selector sources, propagated matching constraints, intersection alternatives,
+and marked list-spec outer feeds are selector-local. Result selection discards
+selector-local work already present on the selected value and transfers only
+consumer work from the intersection wrapper.
 
 ### G8: resolved in R6 by a mapped-write transaction
 
@@ -756,16 +770,21 @@ Before moving code, cover:
 
 ### Checkpoint R7: remove compatibility inference
 
-The following should no longer be needed:
-
-- `sourcePov === startPov` as an identity category;
-- first-child mapping recovery in result selection;
-- mapped-span detection as a work-list ownership proxy;
-- separate source-sharing policies for positive and derived span builders; and
-- source-tail closure inside mapped assignment.
-
-Run the full protected suite and compare failures with the recorded baseline
-after every removal.
+- Complete on 2026-09-05.
+- Removed every semantic `sourcePov === startPov` test. Complete-map validity
+  and explicit `viewMapWriteEnabled` authority now select the relevant paths.
+- Removed first-child mapping recovery from result selection.
+- Added `POV.selectorLocalWork`, classified selector construction sites, and
+  transferred only consumer work to selected results.
+- Confirmed the R5 local-copy/recursive-map construction contract remains the
+  sole policy for positive, negative, direct, recursive, and sparse span views.
+- Confirmed mapped assignment contains no source-tail closure; R6's ordinary
+  `countSize(true)` re-evaluation remains the only post-write completion step.
+- Added three compiled result-selection tests covering consumer-only transfer,
+  an equal source/start scalar mapping, and rejection of first-child recovery.
+- Regenerated and inspected `LocalBuild/TestProteus.cpp`. The focused sparse
+  suite passes `21/21`, result-selection tests pass `3/3`, and both ordinary
+  and protected full suites match the R6 failure set at `8/367`.
 
 ## Completion criteria for the refactor
 

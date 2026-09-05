@@ -55,6 +55,9 @@ TestsToRun = `
     unit/mappedWrite/equivalentDuplicateCoalesced
     unit/mappedWrite/sparseMaterialization
     unit/mappedWrite/staleSparsePlanRejected
+    unit/resultSelection/consumerWorkOnly
+    unit/resultSelection/equalSourceAndStartMapped
+    unit/resultSelection/noFirstChildRecovery
     unit/implicitItem/canonical
     unit/implicitItem/distinctPositions
     unit/implicitItem/nonMaterializing
@@ -107,6 +110,7 @@ do ManageCmdLine(cmd)
 #define ENDRELCORRESPONDENCE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeCorrespondence(tname, CASE_ID)}%>
 #define ORDEREDSPANVIEW (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestOrderedSpanView(tname, CASE_ID)}%>
 #define MAPPEDWRITE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestMappedWrite(tname, CASE_ID)}%>
+#define RESULTSELECTION (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestResultSelection(tname, CASE_ID)}%>
 #define IMPLICITITEM (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestImplicitItem(tname, CASE_ID)}%>
 #define STRICTLISTUNKNOWN (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestStrictListUnknownCase(tname, CASE_ID)}%>
 #define LOOSELISTUNKNOWN (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestLooseListUnknownCase(tname, CASE_ID)}%>
@@ -185,6 +189,9 @@ struct GLOBAL {
     MAPPEDWRITE(unit/mappedWrite/equivalentDuplicateCoalesced, "coalesce equivalent writes to one mapped target", 5)
     MAPPEDWRITE(unit/mappedWrite/sparseMaterialization, "materialize only the mapped sparse positions after validation", 6)
     MAPPEDWRITE(unit/mappedWrite/staleSparsePlanRejected, "reject an invalidated sparse plan before publishing any position", 7)
+    RESULTSELECTION(unit/resultSelection/consumerWorkOnly, "transfer consumer work without using view provenance", 1)
+    RESULTSELECTION(unit/resultSelection/equalSourceAndStartMapped, "accept an equal source and start as a valid mapped scalar", 2)
+    RESULTSELECTION(unit/resultSelection/noFirstChildRecovery, "do not reconstruct a composite map from its first child", 3)
     IMPLICITITEM(unit/implicitItem/canonical, "reuse the canonical POV for one implicit source position", 1)
     IMPLICITITEM(unit/implicitItem/distinctPositions, "keep distinct implicit source positions distinct", 2)
     IMPLICITITEM(unit/implicitItem/nonMaterializing, "look up an implicit item without expanding the source list", 3)
@@ -1435,6 +1442,99 @@ struct GLOBAL {
                         secondWritten!=NULL and
                         secondWritten!.pItem!.value!.num==99
             }
+        }
+
+        me string: actual <- "false"
+        me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+        modelMngr.clear()
+        return()
+    }
+    me void: unitTestResultSelection(
+            me string: testName, me int: caseID) <- {
+        me bool: passed <- false
+        if(caseID==1){
+            our infonView:: selector
+            our infonView:: selected
+            our infonView:: selectorConstraint
+            our infonView:: consumerConstraint
+            our infonView:: selectedConstraint
+            our POV:: selectorWorkPOV{povSrcEndRelativeView}
+            selectorWorkPOV!.pItem <- selectorConstraint
+            selectorWorkPOV!.selectorLocalWork <- true
+            our POV:: consumerWorkPOV{povSrcEndRelativeView}
+            consumerWorkPOV!.pItem <- consumerConstraint
+            our POV:: selectedWorkPOV{povSrcEndRelativeView}
+            selectedWorkPOV!.pItem <- selectedConstraint
+            selectedWorkPOV!.selectorLocalWork <- true
+            selector!.addPOVToWrkList(selectorWorkPOV)
+            selector!.addPOVToWrkList(consumerWorkPOV)
+            selected!.addPOVToWrkList(selectedWorkPOV)
+
+            selected!.discardSelectorLocalWork()
+            selected!.takeConsumerWorkFrom(selector, true)
+            passed <- selector!.wrkList.isEmpty() and
+                    selected!.wrkList.size()==1 and
+                    selected!.wrkList.first()===consumerWorkPOV and
+                    selected!.hasConsumerWork()
+        }else if(caseID==2){
+            our infonView: source <- parseAndExtract(testName, "7")
+            our POV:: sourcePOV{povSrcEndRelativeView}
+            sourcePOV!.pItem <- source
+            our infonView: selected <- parseAndExtract(testName, "7")
+            our POV:: selectedPOV{povSrcEndRelativeView}
+            selectedPOV!.pItem <- selected
+            selectedPOV!.mapViewToSource(sourcePOV, sourcePOV)
+
+            our infonView:: selector
+            our infonView:: assertion
+            our POV:: assertionPOV{povSrcEndRelativeView}
+            assertionPOV!.pItem <- assertion
+            selector!.addPOVToWrkList(assertionPOV)
+            our POV:: resultPOV{povSrcEndRelativeView}
+            resultPOV!.pItem <- selector
+            our AItem:: aItem{srcMrg0}
+            aItem!.LHS_item <- resultPOV
+            me WorldManager: worldManager
+            our infonView: result <- worldManager.
+                    selectReturnedInfonViewFromPOV(aItem, selectedPOV)
+            passed <- result===selected and
+                    resultPOV!.viewMap.sourcePov===sourcePOV and
+                    resultPOV!.viewMap.startPov===sourcePOV and
+                    resultPOV!.viewMapWriteEnabled and
+                    resultPOV!.accessMode==aRefTo
+        }else{
+            our infonView: source <- parseAndExtract(testName, "{1 2}")
+            our POV:: sourcePOV{povSrcEndRelativeView}
+            sourcePOV!.pItem <- source
+            our POV: sourceFirst <- source!.value!.items.head
+
+            our infonView: marked <- parseAndExtract(testName, "{1 2}")
+            our POV:: markedPOV{povSrcEndRelativeView}
+            markedPOV!.pItem <- marked
+            our POV: markedFirst <- marked!.value!.items.head
+            if(markedFirst!=NULL and sourceFirst!=NULL){
+                markedFirst!.mapViewToSource(sourcePOV, sourceFirst)
+            }
+            our infonView: innr <- parseAndExtract(testName, "{}")
+            innr!.intersectMarkedRetPOV <- markedPOV
+            our infonView:: selector
+            selector!.convertThisToIntersection(innr, fromGiven)
+            selector!.intersectPos <- ipGetMarked
+            selector!.intersectMarkedRetPOV <- markedPOV
+            our POV:: resultPOV{povSrcEndRelativeView}
+            resultPOV!.pItem <- selector
+            our AItem:: aItem{srcMrg0}
+            aItem!.LHS_item <- resultPOV
+            me WorldManager: worldManager
+            me IntersectionReasoner: reasoner
+            our infonView: result <-
+                    reasoner.selectFunctionResult(worldManager, aItem)
+            passed <- result===marked and
+                    resultPOV!.viewMap.sourcePov==NULL and
+                    resultPOV!.viewMap.startPov==NULL and
+                    !resultPOV!.viewMapWriteEnabled
         }
 
         me string: actual <- "false"
