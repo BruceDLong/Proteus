@@ -1550,6 +1550,119 @@ struct IntersectionConsolidationStrategy{
 struct IntersectionReasoner{
     me IntersectionConsolidationStrategy: consolidationStrategy
 
+    me ViewMap: matchedSourceMap(our POV: localViewPOV,
+            our IntersectionTraversalPlan: plan) <- {
+        me ViewMap: sourceMap
+        if(localViewPOV==NULL){return(sourceMap)}
+        if(localViewPOV!.viewMap.sourcePov!=NULL and
+                localViewPOV!.viewMap.startPov!=NULL){
+            sourceMap.sourcePov <- localViewPOV!.viewMap.sourcePov
+            sourceMap.startPov <- localViewPOV!.viewMap.startPov
+            return(sourceMap)
+        }
+        if(localViewPOV!.outerPOV!=NULL and
+                !(localViewPOV!.outerPOV===localViewPOV)){
+            sourceMap <- matchedSourceMap(localViewPOV!.outerPOV, plan)
+            if(sourceMap.sourcePov!=NULL and sourceMap.startPov!=NULL){
+                return(sourceMap)
+            }
+        }
+        if(localViewPOV!.pItem!=NULL and
+                localViewPOV!.pItem!.value!.overlayType==LST and
+                !localViewPOV!.pItem!.value!.items.isEmpty()){
+            sourceMap <- matchedSourceMap(
+                    localViewPOV!.pItem!.value!.items.head, plan)
+            if(sourceMap.sourcePov!=NULL and sourceMap.startPov!=NULL){
+                return(sourceMap)
+            }
+        }
+        if(plan!=NULL and plan!.status==itpResolved and
+                localViewPOV===plan!.localSourceViewPOV){
+            sourceMap.sourcePov <- plan!.sourceContextPOV
+            sourceMap.startPov <- plan!.sourceStartPOV
+        }
+        return(sourceMap)
+    }
+
+    void: mapAcceptedLocalViewTree(
+            our IntersectionTraversalPlan: plan,
+            our POV: localViewPOV) <- {
+        if(plan==NULL or localViewPOV==NULL or localViewPOV!.pItem==NULL or
+                localViewPOV!.pItem!.value!.overlayType!=LST){return()}
+        our POV: localChild <- localViewPOV!.pItem!.value!.items.head
+        while(localChild!=NULL){
+            me ViewMap: childSourceMap <- matchedSourceMap(localChild, plan)
+            if(childSourceMap.sourcePov!=NULL and
+                    childSourceMap.startPov!=NULL){
+                localChild!.mapViewToSource(
+                        childSourceMap.sourcePov,
+                        childSourceMap.startPov)
+            }
+            mapAcceptedLocalViewTree(plan, localChild)
+            localChild <- localChild!.next
+        }
+    }
+
+    void: recordAcceptedPOVPair(
+            our IntersectionTraversalPlan: plan,
+            our POV: patternPOV, our POV: localViewPOV) <- {
+        if(plan==NULL or patternPOV==NULL or localViewPOV==NULL or
+                patternPOV!.pItem==NULL or localViewPOV!.pItem==NULL){return()}
+        me ViewMap: sourceMap <- matchedSourceMap(localViewPOV, plan)
+        if(sourceMap.sourcePov==NULL or sourceMap.startPov==NULL){return()}
+        localViewPOV!.mapViewToSource(
+                sourceMap.sourcePov, sourceMap.startPov)
+        patternPOV!.mapViewToSource(
+                sourceMap.sourcePov, sourceMap.startPov)
+        plan!.recordCorrespondence(patternPOV, localViewPOV,
+                sourceMap.sourcePov, sourceMap.startPov)
+        mapAcceptedLocalViewTree(plan, localViewPOV)
+
+        if(patternPOV!.pItem!.value!.overlayType!=LST or
+                localViewPOV!.pItem!.value!.overlayType!=LST or
+                patternPOV!.pItem!.value!.items.size()!=
+                        localViewPOV!.pItem!.value!.items.size()){
+            return()
+        }
+        our POV: patternChild <- patternPOV!.pItem!.value!.items.head
+        our POV: localChild <- localViewPOV!.pItem!.value!.items.head
+        while(patternChild!=NULL and localChild!=NULL){
+            recordAcceptedPOVPair(plan, patternChild, localChild)
+            patternChild <- patternChild!.next
+            localChild <- localChild!.next
+        }
+    }
+
+    // Record source provenance only after this merge has accepted the POV
+    // pair. Candidate propagation is not proof that the pair matched.
+    void: recordAcceptedCorrespondence(our AItem: aItem) <- {
+        if(aItem==NULL or aItem!.mergeStatus!=msAccept or
+                aItem!.LHS_item==NULL or aItem!.RHS==NULL or
+                aItem!.RHS!.pItem==NULL){return()}
+        our IntersectionTraversalPlan: plan <-
+                aItem!.activeIntersectionTraversalPlan()
+        if(plan!=NULL and plan!.status==itpResolved){
+            recordAcceptedPOVPair(plan, aItem!.LHS_item, aItem!.RHS)
+            if(aItem!.LHS_item!.markedOuterPOV!=NULL and
+                    aItem!.RHS!.pParent!=NULL and
+                    aItem!.RHS!.pParent!.pItem!=NULL){
+                // Tight traversal matched a child of a transparent marked
+                // span. Reify the already matched local parent as the window
+                // POV so the outer mark and every child receive one complete
+                // correspondence instead of reconstructing it at selection.
+                our POV:: matchedWindowPOV{povSrcConcreteSpanPrefix}
+                matchedWindowPOV!.pItem <- aItem!.RHS!.pParent!.pItem
+                recordAcceptedPOVPair(plan,
+                        aItem!.LHS_item!.markedOuterPOV,
+                        matchedWindowPOV)
+            }
+            return()
+        }
+
+        // Ordinary intersections retain their established propagation-time
+        // correspondence until their view construction is migrated in R5.
+    }
+
     me InfonViewReasoningResult: planConsolidation(our AItem: aItem) <- {
         return(consolidationStrategy.planConsolidation(aItem))
     }
@@ -1778,11 +1891,12 @@ struct IntersectionReasoner{
         if(CI!.intersectPos==ipGetMarked and innr!=NULL){
             mappedSelectionPOV <- innr!.intersectMarkedRetPOV
         }
-        // Ordered-span matching may construct the marked composite locally
-        // while mapping each of its children to the source.  In that case the
-        // selected span still begins at the first mapped child and has the
-        // same traversal context.
-        if(CI!.intersectPos==ipGetMarked and newTop!=NULL and
+        // Ordinary marked ranges still use their established composite
+        // recovery until R5 gives every positive view the unified local-map
+        // contract. Resolved end-relative work must use recorded matching
+        // correspondence and never enters this compatibility branch.
+        if(aItem!.activeIntersectionTraversalPlan()==NULL and
+                CI!.intersectPos==ipGetMarked and newTop!=NULL and
                 (mappedSelectionPOV==NULL or
                  mappedSelectionPOV!.viewMap.sourcePov==NULL or
                  mappedSelectionPOV!.viewMap.startPov==NULL) and
@@ -2774,7 +2888,11 @@ struct ParentMemberReasoner{
                                 RHSAlt!.looseTop   <- false
                             }
                             //logSeg(" EnqY")
-                            worldManager!.carryPassiveScalarSource(LHSAlt, RHSAlt)
+                            if(aParent!.
+                                    activeIntersectionTraversalPlan()==NULL){
+                                worldManager!.carryPassiveScalarSource(
+                                        LHSAlt, RHSAlt)
+                            }
                             LHSAlt!.pItem!.addPOVToWrkList(RHSAlt)
          //                   log(idnt+"    ENQUEy:" + LHSAlt.stringify() + " === " + RHSAlt.stringify())
                         }
@@ -3261,6 +3379,10 @@ struct InfonViewReasoner{
         intersectionReasoner.installSelectedResult(aItem, newTop)
     }
 
+    void: recordAcceptedIntersectionCorrespondence(our AItem: aItem) <- {
+        intersectionReasoner.recordAcceptedCorrespondence(aItem)
+    }
+
     void: recordReasoningHandlers(our AItem: aItem,
             their InfonViewReasoningResult: result) <- {
         if(result.directCase!=dcNone){
@@ -3709,6 +3831,11 @@ struct MergeReasoner{
         }
         aItem!.LHS_item!.rejected <- aItem!.mergeStatus==msReject
 
+        if(aItem!.mergeStatus==msAccept){
+            worldManager!.infonViewReasoner.
+                    recordAcceptedIntersectionCorrespondence(aItem)
+        }
+
         our POV: RHSSide
         if(remainder==NULL){RHSSide <- aItem!.RHS}
         if(aItem!.mergeStatus!=msPending){
@@ -3793,7 +3920,8 @@ struct MergeReasoner{
         return(result)
     }
 
-    me MergeStepSemanticResult: processStep2(our AItem: aItem) <- {
+    me MergeStepSemanticResult: processStep2(
+            their WorldManager: worldManager, our AItem: aItem) <- {
         me MergeStepSemanticResult: result
         if(aItem!.mergeStatus==msUnknown){
             if(aItem!.LHS_item!.applyAsNot(aItem!.RHS)){
@@ -3803,6 +3931,10 @@ struct MergeReasoner{
         if(aItem!.LHS_item!.pItem!.value!.tailUnfinished and
                 aItem!.LHS_item!.pItem!.infSize!.evalMode==emLiteral){
             aItem!.LHS_item!.pItem!.countSize(true)
+        }
+        if(aItem!.mergeStatus==msAccept){
+            worldManager!.infonViewReasoner.
+                    recordAcceptedIntersectionCorrespondence(aItem)
         }
         if(aItem!.skipRHSUsageInPAI or
                 aItem!.LHS_item!.propagateInMrg2){

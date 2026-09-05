@@ -121,6 +121,14 @@ struct IntersectionTraversalOrigin: inherits=<mode[
     itoSourceEnd
 ]> {}
 
+model IntersectionCorrespondence{
+    our POV: patternPOV
+    our POV: localViewPOV
+    our POV: sourceContextPOV
+    our POV: sourceStartPOV
+}
+struct IntersectionCorrespondence{}
+
 model IntersectionTraversalPlan{
     me IntersectionTraversalPlanStatus: status <- itpNotApplicable
     me IntersectionTraversalOrigin: origin <- itoSourceStart
@@ -136,11 +144,32 @@ model IntersectionTraversalPlan{
     me int64: patternOffset <- 0
     our WordUse: traversalUnit
     our POV: localSourceViewPOV
+    me List<our IntersectionCorrespondence>: correspondences
     me List<our POV>: retainedDependencies
     me uint64: observedStreamingRevision <- 0
     me string: diagnostic
 }
 struct IntersectionTraversalPlan{
+    void: recordCorrespondence(our POV: patternPOV,
+            our POV: localViewPOV, our POV: sourceContextPOV,
+            our POV: sourceStartPOV) <- {
+        if(patternPOV==NULL or localViewPOV==NULL or
+                sourceContextPOV==NULL or sourceStartPOV==NULL){return()}
+        withEach existing in correspondences{
+            if(existing!.patternPOV===patternPOV and
+                    existing!.localViewPOV===localViewPOV){return()}
+        }
+        our IntersectionCorrespondence:: correspondence
+        correspondence!.patternPOV <- patternPOV
+        correspondence!.localViewPOV <- localViewPOV
+        correspondence!.sourceContextPOV <- sourceContextPOV
+        correspondence!.sourceStartPOV <- sourceStartPOV
+        correspondences.append(correspondence)
+        retainDependency(patternPOV)
+        retainDependency(localViewPOV)
+        retainDependency(sourceContextPOV)
+        retainDependency(sourceStartPOV)
+    }
     void: retainDependency(our POV: dependencyPOV) <- {
         if(dependencyPOV==NULL){return()}
         withEach retainedPOV in retainedDependencies{
@@ -1204,8 +1233,9 @@ model AItem{
     our POV: LHS_item
     our POV: RHS
     our POV: cursorAnchor
-    // Negative-sized intersections keep their navigation decision on the
-    // AItem that owns the merge lifecycle. The plan is not an infonView and
+    // Negative-sized intersections create their navigation decision on the
+    // merge AItem that owns the lifecycle. Resolved descendant work borrows
+    // the same record as matching context. The plan is not an infonView and
     // therefore cannot change the locally zero-based value model.
     our IntersectionTraversalPlan: intersectionTraversalPlan
     our infItr: LHSItr
@@ -1267,6 +1297,20 @@ model AItem{
             crnt <- crnt!.prntOrSub()
         }
         return(crnt)
+    }
+
+    our IntersectionTraversalPlan: activeIntersectionTraversalPlan() <- {
+        if(intersectionTraversalPlan!=NULL){
+            return(intersectionTraversalPlan)
+        }
+        our AItem: crnt <- parent
+        while(crnt!=NULL){
+            if(crnt!.intersectionTraversalPlan!=NULL){
+                return(crnt!.intersectionTraversalPlan)
+            }
+            crnt <- crnt!.parent
+        }
+        return(NULL)
     }
 
     me string: stringify() <- {

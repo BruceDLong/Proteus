@@ -1,13 +1,12 @@
 # End-relative intersection implementation review
 
 Status: representation decisions approved on 2026-09-04. R1 characterization,
-R2 extent/availability separation, and the R3 traversal plan are complete.
-R4 correspondence recording is next. No negative `#` sugar has been added.
+R2 extent/availability separation, the R3 traversal plan, and R4 accepted-match
+correspondence recording are complete. R5 unified view construction is next.
+No negative `#` sugar has been added.
 
 Source basis: local branch `proteus3b` at
-`bce565d3c7ba042cf615457f155ea508271b875a`, including the uncommitted
-end-relative intersection, `ViewMap`, implicit logical-position, mapped-write,
-and test changes present on 2026-09-04.
+`0b95f74`, plus the R4 correspondence changes described here.
 
 Related documents:
 
@@ -52,10 +51,16 @@ The regenerated `LocalBuild/TestProteus` executable currently demonstrates:
   requests;
 - direct logical lookup of typed sparse root positions without source
   materialization;
+- accepted-match correspondence records for scalar, flat, recursive typed,
+  and sparse results;
+- complete `ViewMap`s on selected end-relative composites and their writable
+  descendants;
+- end-relative marked selection without selection-time first-child mapping
+  recovery;
 - preservation of the established positive nested write; and
 - preservation of `range/select1`.
 
-The protected full run reports `9/347`. The failures are the five known
+The protected full run reports `9/352`. The failures are the five known
 baseline failures plus the four intentionally unsupported negative `#` sugar
 tests. This is a regression checkpoint, not a claim that the full suite is
 clean.
@@ -181,6 +186,35 @@ checkpoint, `timeTests.tst` remains at `4/23` for the unsupported negative `#`
 sugar cases, `range/select1` passes, and the protected full suite remains at
 `9/347`.
 
+## R4 implementation record
+
+R4 adds `IntersectionCorrespondence` records to the resolved traversal plan.
+Each record retains the pattern POV, the local matched POV, and the exact
+source context/start pair. The merge AItem still owns the plan; descendant
+merge work and subscription continuations borrow that same plan so the record
+is available at the merge that actually accepts a POV pair.
+
+`IntersectionReasoner.recordAcceptedCorrespondence()` is the single write
+point. It runs only after a merge reaches `msAccept`, maps the accepted pattern
+and local POV through `POV.mapViewToSource()`, and recursively supplies mappings
+for selected composite descendants. Repeated acceptance handling is harmless:
+the plan deduplicates an identical pattern/local pair and retains every POV
+needed by the correspondence.
+
+End-relative propagation no longer treats candidate pairing as proof by calling
+the ordinary passive-scalar mapping helper. Its marked-result selection also no
+longer reconstructs a composite mapping from the first selected child. Ordinary
+positive intersections retain both compatibility paths until R5 gives their
+views the same local mapped construction contract; this preserves existing
+marked-range behavior without mixing it into the new end-relative path.
+
+Five compiled R4 cases cover acceptance timing/deduplication and scalar, flat,
+recursive typed, and non-materialized sparse mappings. The regenerated build
+passes all 25 compiled `unit/endRelative/` cases. The isolated R1 suite remains
+at `5/10`, `timeTests.tst` remains at `4/23`, `range/select1` and
+`marked/lookahead` pass, and the protected full suite remains at its approved
+`9/352` result.
+
 ## Foundations worth keeping
 
 ### Negative size is the low-level request
@@ -237,14 +271,17 @@ The current path is spread across several layers:
    end-relative local source projection, converts the negative pattern size to
    a positive local cardinality, and substitutes the projection as the RHS.
 4. Ordinary forward intersection propagation matches against the projection.
-5. `IntersectionReasoner.selectFunctionResult()` recovers the source mapping
-   from the marked match or the first selected child and promotes it to the
-   selected LHS POV.
-6. `ReferenceConsolidationStrategy` recognizes the mapped result and writes
+5. When a descendant merge accepts, `recordAcceptedCorrespondence()` records
+   its exact pattern/local/source relation and populates the selected mapping.
+6. `IntersectionReasoner.selectFunctionResult()` returns the already mapped
+   end-relative marked result. Ordinary positive views still have their legacy
+   compatibility recovery until R5.
+7. `ReferenceConsolidationStrategy` recognizes the mapped result and writes
    scalar or flattened composite values to the mapped source POVs.
 
-Each step has a reasonable local purpose. The problem is that no single record
-states the complete operation, so later steps infer facts established earlier.
+The traversal plan now states the end-relative operation and its accepted
+correspondences. View construction, work ownership, and mapped-write validation
+remain the later simplification boundaries.
 
 ## Gotcha register
 
@@ -368,6 +405,10 @@ and `ViewMap` contract. Migrate ordinary positive paths only after
 characterization tests show that the unified contract preserves behavior.
 
 ### G6: correspondence is reconstructed during result selection
+
+R4 resolves this for end-relative traversal plans. The recovery described below
+remains only for ordinary positive intersections until their view construction
+is unified in R5.
 
 `IntersectionReasoner.selectFunctionResult()` first checks the marked match. If
 that POV lacks a usable mapping and the selected result is a list, it uses the
@@ -625,13 +666,15 @@ Before moving code, cover:
 
 ### Checkpoint R4: record correspondence during matching
 
-- Add one correspondence helper at the point where LHS and RHS POVs actually
-  match.
-- Populate complete `ViewMap`s for scalar, flat, recursive typed, and sparse
-  results.
-- Remove first-child mapping recovery only after equivalence tests pass.
-- Preserve `range/select1` and ordinary marked-range work behavior at every
-  step.
+- Complete on 2026-09-04.
+- Added one accepted-match correspondence helper and retained records on the
+  owning traversal plan.
+- Populated complete `ViewMap`s for scalar, flat, recursive typed, and sparse
+  end-relative results.
+- Removed first-child mapping recovery from the end-relative selection path
+  after equivalence tests passed; retained it for ordinary positive views until
+  R5 unifies their construction.
+- Preserved `range/select1`, `marked/lookahead`, and the full-suite baseline.
 
 ### Checkpoint R5: unify view construction
 
