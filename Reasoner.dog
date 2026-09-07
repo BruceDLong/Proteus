@@ -54,7 +54,8 @@ struct InfonViewReasoningResult{
          caCopyRHSInfonToLHS, caMergeANDRanges,
          caPrepareUnknownListForPropagation, caMergeRHSListConstraints,
          caApplyOrderedSpanPlan]: consolidationAction
-    mode[waNone, waStartListPropagation]: workAction
+    mode[waNone, waStartListPropagation,
+         waInstantiateDefinitionListMembers]: workAction
     mode[cpNonInvertedAcceptance, cpPositiveTemplateAcceptance,
          cpFinalAcceptance]: actionCommitPolicy
     me ConstraintDisposition: constraintDisposition <- cdDischarged
@@ -1403,6 +1404,15 @@ struct ListShapeStrategy{
         return(RHS!.value!.items.isEmpty())
     }
 
+    me bool: definitionListShapeNeedsMemberInstantiation(
+            our AItem: aItem) <- {
+        if(!isDefinitionListShapeOnly(aItem)){return(false)}
+        our infonView: memberTemplate <-
+                aItem!.RHS!.pItem!.value!.listSpec
+        return(memberTemplate!.value!.overlayType==LST and
+                memberTemplate!.value!.evalMode==emLiteral)
+    }
+
     me bool: inheritDefinitionListShapeForInfonView(their WorldManager: worldManager,
             our infonView: target) <- {
         if(target==NULL or target!.type==NULL){return(false)}
@@ -1656,6 +1666,40 @@ struct ListConsolidationStrategy{
         return(changeMade)
     }
 
+    // A definition such as {T {memberType}| ... } supplies a template for
+    // existing members, but its open tail is a compact promise of possible
+    // future members. Snapshot the materialized prefix and instantiate only
+    // those members; ordinary normalization then resolves each private copy.
+    me void: prepareDefinitionListMemberWork(
+            their WorldManager: worldManager, their Agenda: agenda,
+            our AItem: aItem,
+            their List<our AItem>: requestedWork) <- {
+        me List<our POV>: materializedMembers
+        our POV: member <- aItem!.LHS_item!.pItem!.value!.items.head
+        while(member!=NULL){
+            if(!member!.isSparseOrderedSpan()){
+                materializedMembers.append(member)
+            }
+            member <- member!.next
+        }
+
+        withEach materializedMember in materializedMembers{
+            if(materializedMember!.pParent==NULL){
+                materializedMember!.pParent <- aItem!.LHS_item
+            }
+            if(aItem!.LHS_item!.seedNewlyVisibleTypeSpecs(
+                    materializedMember!.pItem, false)){
+                our AItem: memberWork <- worldManager!.prepareInfonWork(
+                        agenda, materializedMember, NULL, aItem,
+                        aprListCompletion, aItem!.priority+1,
+                        srcPropagate)
+                if(memberWork!=NULL){requestedWork.append(memberWork)}
+            }
+        }
+        aItem!.phase1RecordHandler(
+                "strategy:definitionListMembers", false)
+    }
+
     me InfonViewReasoningResult: planConsolidation(their WorldManager: worldManager,
             our AItem: aItem) <- {
         me InfonViewReasoningResult: result
@@ -1791,7 +1835,15 @@ struct ListConsolidationStrategy{
         if(!aItem!.RHS!.looseType()){
             result.listCase <- lcStrictLiteralLists
             if(worldManager!.isDefinitionListShapeOnly(aItem)){
-                result.status <- rrHandledNoChange
+                if(LHS!.value!.items.isEmpty() or
+                        !worldManager!.
+                        definitionListShapeNeedsMemberInstantiation(aItem)){
+                    result.status <- rrHandledNoChange
+                }else{
+                    result.status <- rrNeedsWork
+                    result.workAction <-
+                            waInstantiateDefinitionListMembers
+                }
             }
             else if(aItem!.LHS_item!.accessMode==aRefTo){
                 result.status <- rrPlannedChange
@@ -1805,7 +1857,15 @@ struct ListConsolidationStrategy{
         else{
             result.listCase <- lcLooseLiteralLists
             if(worldManager!.isDefinitionListShapeOnly(aItem)){
-                result.status <- rrHandledNoChange
+                if(LHS!.value!.items.isEmpty() or
+                        !worldManager!.
+                        definitionListShapeNeedsMemberInstantiation(aItem)){
+                    result.status <- rrHandledNoChange
+                }else{
+                    result.status <- rrNeedsWork
+                    result.workAction <-
+                            waInstantiateDefinitionListMembers
+                }
             }
             else{
                 result.status <- rrNeedsWork
@@ -3157,6 +3217,53 @@ struct ParentMemberReasoner{
             }
         }
 
+        // A generated sparse head is transparent: after its nested member is
+        // normalized, LHS traversal continues into the still-compressed
+        // remainder. The matching concrete RHS member can be nested inside
+        // wrappers, so its inner iterator stops even though an enclosing typed
+        // list still has materialized siblings. Resume only the nearest RHS
+        // iterator with the same list-spec type as the sparse LHS remainder.
+        if(RHSPovNext==NULL and LHSPovNext!=NULL and
+                LHSPovNext!.isSparseOrderedSpan() and RhsAttached and
+                aParent!=NULL and aParent!.RHS!=NULL and
+                aParent!.RHSItr!=NULL){
+            me string: sparseLHSListSpecTypeID <-
+                    LHSPovNext!.sparseSpanListSpecTypeID()
+            our infItr: enclosingRHSItr <- aParent!.RHSItr!.iParent
+            while(enclosingRHSItr!=NULL){
+                if(sparseLHSListSpecTypeID!="" and
+                        enclosingRHSItr!.topPOV!=NULL and
+                        enclosingRHSItr!.topPOV!.pItem!.value!.listSpec!=NULL and
+                        enclosingRHSItr!.topPOV!.pItem!.value!.
+                                listSpec!.type!=NULL and
+                        enclosingRHSItr!.topPOV!.pItem!.value!.listSpec!.
+                                type!.typeID()==sparseLHSListSpecTypeID){
+                    break()
+                }
+                enclosingRHSItr <- enclosingRHSItr!.iParent
+            }
+            if(enclosingRHSItr!=NULL){
+                me int64: enclosingLvlsUpOnRight
+                me int64: enclosingSkipDotsR <- 0
+                if(dontEnque){enclosingSkipDotsR<-INT64_MAX}
+                RHSPovNext <- findNextRHS(
+                        worldManager, aParent!.RHS,
+                        enclosingRHSItr, enclosingSkipDotsR,
+                        enclosingLvlsUpOnRight, false,
+                        LHSIsLST, RHSIsLST, waitState)
+                if(waitState!=NULL and waitState! != propWaitNone){
+                    if(waitState! == propWaitWithinList and
+                            enclosingLvlsUpOnRight>0){
+                        waitState! <- propWaitAfterListBoundary
+                    }
+                    return(NULL)
+                }
+                if(RHSPovNext!=NULL){
+                    lvlsUpOnRight <- enclosingLvlsUpOnRight
+                }
+            }
+        }
+
         our POV: orderedSpanSourceContextPOV <- RHSPovNext
         if(aParent!=NULL and aParent!.RHS!=NULL){
             orderedSpanSourceContextPOV <- aParent!.RHS
@@ -3834,6 +3941,12 @@ struct InfonViewReasoner{
         return(listShapeStrategy.isDefinitionListShapeOnly(aItem))
     }
 
+    me bool: definitionListShapeNeedsMemberInstantiation(
+            our AItem: aItem) <- {
+        return(listShapeStrategy.
+                definitionListShapeNeedsMemberInstantiation(aItem))
+    }
+
     me bool: inheritDefinitionListShapeForInfonView(their WorldManager: worldManager,
             our infonView: target) <- {
         return(listShapeStrategy.inheritDefinitionListShapeForInfonView(
@@ -4343,6 +4456,15 @@ struct MergeReasoner{
                                 mergeInfonStates(worldManager, aItem,
                                         consolidationPlan,
                                         commitConsolidationPlan)
+                        if(commitConsolidationPlan and
+                                consolidationPlan.workAction==
+                                waInstantiateDefinitionListMembers){
+                            worldManager!.infonViewReasoner.
+                                    listConsolidationStrategy.
+                                    prepareDefinitionListMemberWork(
+                                            worldManager, agenda, aItem,
+                                            result.requestedWork)
+                        }
                     }
                 }
             }
@@ -4422,6 +4544,13 @@ struct MergeReasoner{
                             !aItem!.LHS_item!.pItem!.isTentative and
                             !aItem!.RHS!.pItem!.isTentative and
                             candidatesEmpty){
+                        // A completed list-spec group can speculatively carry
+                        // its member type into the following group and reject
+                        // here without corrupting the result.  Do not suppress
+                        // that propagation merely to remove this notice: it
+                        // currently also wakes normalization of later groups
+                        // (e.g. Slipstream's Rubix widget).  First decouple that
+                        // lifecycle scheduling from the speculative merge.
                         worldManager!.agent!.CORE!.handleProteusError(
                                 aItem!.LHS_item!.pItem!.originID,
                                 "Proteus NOTICE - Candidates Empty:\n    LHS:"+
