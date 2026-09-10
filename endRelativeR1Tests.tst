@@ -20,7 +20,7 @@ r1/correspondence/contentConstrainedSuffix, Content constraint maps the actual f
 
 # Invalid unit requests must reject instead of manufacturing a typed result.
 r1/unit/incompatibleRejects, Incompatible requested unit rejects, *(-1)+[<minute>] <~ {'a' 'b' 'c'}, UNDEFINED, world, TestFiles/timeTestCases.pr
-r1/unit/nonintegralRejects, Nonintegral source-unit conversion rejects, {@second=_ @pair=*2+{second| ...} @triple=*3+{second| ...}}\n*(-1)+[<triple>] <~ *2+{pair| pair:{second| 1 2} pair:{second| 3 4}}//:UNDEFINED, -, multi
+r1/unit/nonintegralRejects, Nonintegral source-unit conversion rejects, {#second=_ #pair=*2+{second| ...} #triple=*3+{second| ...}}\n*(-1)+[<triple>] <~ *2+{pair| pair:{second| 1 2} pair:{second| 3 4}}//:UNDEFINED, -, multi
 
 # Composite writes validate the entire operation before changing any source
 # leaf. The source's inherited unfinished-tail representation is part of the

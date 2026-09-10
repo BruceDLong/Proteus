@@ -23,7 +23,7 @@ Implement one path that can:
 7. relate a thing/event/state to an instant or span without shifting the time
    sequence.
 
-The work is not complete when `#-1:hour` merely prints the right value. It is
+The work is not complete when `@[-1:hour]` merely prints the right value. It is
 complete only when selection provenance, nested traversal, sparse scarcity,
 source writes, lifetime, named-span stability, and temporal relations all pass
 their acceptance tests.
@@ -66,7 +66,7 @@ source#index:spec
 
 `PartPath.path` contains the index expression and `PartPath.spec` contains the
 optional span specification. No grammar change is required for
-`source#-1:hour` if `hour` already parses as an infon.
+`source@[-1:hour]` if `hour` already parses as an infon.
 
 `ParentMemberReasoner::resolveParts()` currently has two separate paths:
 
@@ -359,7 +359,7 @@ Resolution must identify one unit before applying the signed number:
 5. Do not treat variable calendar units such as arbitrary months as fixed
    base-count units. Calendar boundary logic resolves those separately.
 
-This rule is essential for expressions such as `day#-1:hour`: `-1` means one
+This rule is essential for expressions such as `day@[-1:hour]`: `-1` means one
 hour, not one underlying second.
 
 ### Locate a logical boundary
@@ -404,7 +404,7 @@ optional logical suffix
 ```
 
 The implementation may construct the same `emIntersection` graph currently
-used by positive `#index:spec`. It must set `ipGetMarked` and keep a direct
+used by positive `@[index:spec]`. It must set `ipGetMarked` and keep a direct
 reference to the marked request POV.
 
 The prefix and suffix are constraints, not materialized lists. A sparse prefix
@@ -834,7 +834,7 @@ expand large spans.
 
 ### Checkpoint 4: negative slice sugar
 
-- route `#negative:spec` through the same planner;
+- route `@[negative:spec]` through the same planner;
 - compare parsed/lowered graphs with the non-sugar form; and
 - add printer round-trip tests.
 

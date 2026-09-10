@@ -85,11 +85,11 @@ The regenerated `LocalBuild/TestProteus` executable currently demonstrates:
 - explicit selector-local versus consumer work classification and
   consumer-only result transfer;
 - valid mapped scalar behavior when `sourcePov` and `startPov` are equal;
-- negative `#-k` item lowering to a marked, end-aligned intersection with a
+- negative `@[-k]` item lowering to a marked, end-aligned intersection with a
   sparse counted suffix;
 - natural-child-unit inference for typed negative item indexes;
 - explicit single-unit negative span reads and mapped writes through
-  `#-k:span`;
+  `@[-k:span]`;
 - fixed repeated typed-span reads and mapped writes through both `#` sugar and
   direct negative-sized intersections;
 - end-relative selection in a finer unit than the source's immediate concrete
@@ -815,8 +815,8 @@ Before moving code, cover:
   wrapper so selected mapped spans receive write authority while matching work
   stays selector-local.
 - Added three compiled tests for the lowered graph, typed sugar/non-sugar
-  mapping equivalence, and span-work ownership. Added dynamic reads for `#-2`
-  and `#-1:minute`, an explicit span write, and a sparse-prefix scarcity case.
+  mapping equivalence, and span-work ownership. Added dynamic reads for `@[-2]`
+  and `@[-1:minute]`, an explicit span write, and a sparse-prefix scarcity case.
 - R8's boundary was one selected logical item or one explicitly typed unit
   span. R9 extends the same intersection path to fixed repeated typed spans.
 
@@ -870,7 +870,7 @@ Before moving code, cover:
 - Fixed direct low-level patterns whose counted typed run stores its unit on
   the run's `listSpec`. This makes the direct form
   `*(-3)+[<&*2+{minute| ...}> *1+{minute| ...}]` agree with
-  `#-3:*2+{minute| ...}` for both reads and mapped writes.
+  `@[-3:*2+{minute| ...}]` for both reads and mapped writes.
 - Added a compiled provenance test across two concrete nested hours, plus four
   dynamic tests covering sugar and direct-intersection reads and writes across
   the corresponding logical hour boundary in a named world value.

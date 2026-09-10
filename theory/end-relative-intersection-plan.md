@@ -14,7 +14,7 @@ Related drafts:
 This document corrects one architectural assumption in the implementation
 guide: end-relative selection must not be resolved by a separate index planner
 before an intersection is built. The canonical semantic operation must itself
-be an intersection. `#n` only constructs that operation.
+be an intersection. `@[n]` only constructs that operation.
 
 ## Question being answered
 
@@ -32,9 +32,9 @@ span is positioned relative to the end of an ordered source, while preserving:
 The immediate failures are negative typed item selections such as:
 
 ```proteus
-hour:{second| 1 2 3 4 5 6}#-1
-day:{second| 1 2 3 4 5 6 7 8 9 10 11 12}#-1
-%W.day#-1#-1#-1 = 80
+hour:{second| 1 2 3 4 5 6}@[-1]
+day:{second| 1 2 3 4 5 6 7 8 9 10 11 12}@[-1]
+%W.day@[-1]@[-1]@[-1] = 80
 ```
 
 The design must also cover explicit span selection and mapped span writes. A
@@ -42,7 +42,7 @@ fix that only makes these three shapes pass is incomplete.
 
 ## Established facts
 
-### `#n` currently has two execution paths
+### `@[n]` currently has two execution paths
 
 `infonIO.dog` parses `#` into a `PartPath`. The semantic split is later in
 `ParentMemberReasoner.resolveParts()`:
@@ -100,7 +100,7 @@ outer list. `POV.viewMap.sourcePov` supplies that context and
 
 ## Invariants
 
-1. `#n` is syntax sugar. After lowering, no matcher, navigator, selector, or
+1. `@[n]` is syntax sugar. After lowering, no matcher, navigator, selector, or
    write path may need to know that `#` was used.
 2. The outer object remains an `emIntersection`; its inner value remains the
    literal pattern. Do not introduce a second negative-index evaluation mode.
@@ -150,7 +150,7 @@ child in a writeable view. Extending it would create a second intersection
 engine under another name.
 
 Decision: reject as the canonical design. The helper may remain temporarily
-for parity during migration, then should cease to implement `#-n`.
+for parity during migration, then should cease to implement `@[-n]`.
 
 ### B. Convert a negative index to a positive prefix before intersection
 
@@ -259,14 +259,14 @@ position explicit. The four canonical lowerings are:
 
 | Sugar | Prefix before mark | Marked term | Suffix after mark | Boundary |
 | --- | ---: | --- | ---: | --- |
-| `#p`, `p > 0` | `p - 1` items | one logical item | none | current/default |
-| `#i:span`, `i >= 0` | `i` units | `span` | none | current/default |
-| `#-k`, `k > 0` | none | one logical item | `k - 1` items | source-end |
-| `#-k:span` | none | `span` | semantic-dependent | source-end |
+| `@[p]`, `p > 0` | `p - 1` items | one logical item | none | current/default |
+| `@[i:span]`, `i >= 0` | `i` units | `span` | none | current/default |
+| `@[-k]`, `k > 0` | none | one logical item | `k - 1` items | source-end |
+| `@[-k:span]` | none | `span` | semantic-dependent | source-end |
 
 This deliberately preserves the existing distinction: positive item syntax is
 one-based, while positive slice syntax uses a zero-based boundary count.
-`#0` is invalid as an item, but `#0:span` begins at boundary zero.
+`@[0]` is invalid as an item, but `@[0:span]` begins at boundary zero.
 
 The negative pattern is an end-aligned suffix in normal forward order. The
 marked term is followed by enough fixed suffix constraint to place it relative
@@ -281,7 +281,7 @@ trailing extent = k - 1 logical units
 boundary constraint = pattern end equals source end
 ```
 
-Thus `#-1` has a one-unit pattern and no trailing term; `#-2` has a marked
+Thus `@[-1]` has a one-unit pattern and no trailing term; `@[-2]` has a marked
 one-unit target followed by one unit. The entire pattern matches forward.
 
 For `source#-k:span`, under the start-boundary proposal in the companion
@@ -299,7 +299,7 @@ instead chooses an end-boundary interpretation for negative slices, only this
 lowering formula changes; the intersection boundary mechanism does not.
 
 No concrete Proteus notation is asserted here. Conceptually, the low-level
-form for `#-2` is:
+form for `@[-2]` is:
 
 ```text
 end-aligned-intersection [ <target> one-unit-suffix ] <~ source
@@ -321,7 +321,7 @@ parent merely to find a convenient closed list.
 
 - An explicit marked span supplies its ordered unit.
 - An implicit item request uses the logical child unit of the typed source,
-  exactly as positive `#n` currently does.
+  exactly as positive `@[n]` currently does.
 - An untyped source uses its ordinary logical item unit.
 - Mixed fixed units reduce through `getOrderedSpanConverter()` to a common
   base unit.
@@ -415,7 +415,7 @@ cannot identify which of several same-typed source positions was matched.
 
 Once an end-aligned selection returns an exact mapped scalar, ordinary copy or
 merge semantics must target `viewMap.startPov`. The chain
-`%W.day#-1#-1#-1=80` should therefore work because each selected typed view
+`%W.day@[-1]@[-1]@[-1]=80` should therefore work because each selected typed view
 preserves the next source context/origin.
 
 ### Composite span writes
@@ -500,7 +500,7 @@ deferral before implementation is called complete.
 
 Important concrete cases include:
 
-- `#-1`, `#-2`, and `#-extent` on a flat closed list;
+- `@[-1]`, `@[-2]`, and `@[-extent]` on a flat closed list;
 - an out-of-range `#-(extent+1)`;
 - a negative selection whose local origin is in a nested sublist but whose
   suffix crosses back into its enclosing source context;
@@ -525,7 +525,7 @@ one change.
 
 Approve or revise:
 
-1. whether `#-k:span` names the span start `k` units before the end; and
+1. whether `@[-k:span]` names the span start `k` units before the end; and
 2. whether the low-level representation is an outer intersection boundary
    mode or a zero-width boundary term.
 
@@ -540,7 +540,7 @@ syntax do not block the generic intersection work and should remain separate.
 - expose it in diagnostic graph/string output; and
 - prove that default intersections round-trip unchanged.
 
-No `#-n` lowering changes yet.
+No `@[-n]` lowering changes yet.
 
 ### Checkpoint 2: measure and wait without selecting
 
@@ -576,7 +576,7 @@ This is the proof that the feature belongs to intersections.
 - use the approved negative-span formula; and
 - prove sugar/non-sugar equivalence from normalized behavior, not just output.
 
-The existing positive `#n` and positive slice suites must remain green.
+The existing positive `@[n]` and positive slice suites must remain green.
 
 Implemented through R10 for negative item indexes, single-unit typed spans,
 fixed repeated typed spans, and finer-unit traversal across concrete nested
@@ -647,7 +647,7 @@ An actual final mismatch must not remain pending forever.
 
 Candidate E is implemented: an ordinary `emIntersection` carries the
 source-end request as a negative size and resolves it into a forward traversal
-window. `#-n` lowers to that representation rather than owning separate
+window. `@[-n]` lowers to that representation rather than owning separate
 navigation semantics.
 
 The settled implementation choices are:

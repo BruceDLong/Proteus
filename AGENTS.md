@@ -22,6 +22,13 @@ Typical usage of the library
  If a sub-infon (in the streaming Proteus code) in a list is followed by a tilde '~', it requires that when the infon is normalized
  the resulting infon should be stringified and sent back to the GUI or other consumer. This allows query to yield results.
 
+ Word definitions begin with `#`, for example `#minute = *60+{second| ...}`.
+ `@` is reserved for bracketed postfix selection and is not a definition marker.
+
+ Ordered item and span selection use bracketed postfix syntax: `items@[3]` and
+ `items@[3:*5+{ ... }]`. The former unbracketed `items#3` spelling is not part
+ of the current syntax.
+
 Files
 -----
 

@@ -20,5 +20,5 @@ ln -s ../../World/public Resources/public
 Verify the link before building:
 
 ```sh
-test -f Resources/public/foundation.pr
+test -f Resources/public/KernelKB.pr
 ```

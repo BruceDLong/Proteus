@@ -34,26 +34,26 @@ navigation operations used by their non-sugar forms.
 Ordinary item syntax is one-based:
 
 ```proteus
-{'Cat' 'Hat' 'Bat' 'Dog'}#3       // 'Bat'
+{'Cat' 'Hat' 'Bat' 'Dog'}@[3]       // 'Bat'
 ```
 
 Current negative item syntax is end-relative:
 
 ```proteus
-{'Cat' 'Hat' 'Bat' 'Dog'}#-1      // 'Dog'
-{'Cat' 'Hat' 'Bat' 'Dog'}#-2      // 'Bat'
+{'Cat' 'Hat' 'Bat' 'Dog'}@[-1]      // 'Dog'
+{'Cat' 'Hat' 'Bat' 'Dog'}@[-2]      // 'Bat'
 ```
 
 The end-relative traversal is structural rather than limited to direct list
-children. For example, `{'A' &{'B' 'C'} 'D'}#-2` selects `C`.
+children. For example, `{'A' &{'B' 'C'} 'D'}@[-2]` selects `C`.
 
 For a closed source with flattened extent `E`, the current item-coordinate
 rules are:
 
 ```text
-#p,  p > 0       -> local item index p - 1
-#-k, k > 0       -> local item index E - k
-#0               -> invalid as an item reference
+@[p],  p > 0       -> local item index p - 1
+@[-k], k > 0       -> local item index E - k
+@[0]                -> invalid as an item reference
 ```
 
 If the source extent is not final, a negative item reference remains pending.
@@ -65,7 +65,7 @@ read or write is not left pointing at a destroyed temporary object.
 The existing slice form uses a boundary count, not an item ordinal:
 
 ```proteus
-{0 1 2 3 4 5 6 7 8 9}#6:*3+{ ... }   // {6 7 8}
+{0 1 2 3 4 5 6 7 8 9}@[6:*3+{ ... }]   // {6 7 8}
 ```
 
 Its non-sugar form is:
@@ -74,8 +74,8 @@ Its non-sugar form is:
 [& *6+{...} <&*3+{...}> ] <~ {0 1 2 3 4 5 6 7 8 9}
 ```
 
-Therefore `#6:span` means “start the selected span after six source items.”
-This is intentionally different from item expression `#6`, which means “the
+Therefore `@[6:span]` means “start the selected span after six source items.”
+This is intentionally different from item expression `@[6]`, which means “the
 sixth item.” The documentation and parser tests must keep this distinction
 visible.
 
@@ -85,10 +85,10 @@ A typed time unit is currently modeled as a fixed-size ordered span over a
 smaller unit. Test definitions use small cardinalities:
 
 ```proteus
-@second = _
-@minute = *3+{second| ...}
-@hour   = *2+{minute| ...}
-@day    = *2+{hour| ...}
+#second = _
+#minute = *3+{second| ...}
+#hour   = *2+{minute| ...}
+#day    = *2+{hour| ...}
 ```
 
 The normalizer can view a source represented in seconds as minutes, hours, or
@@ -113,7 +113,7 @@ known not to move for the operation being resolved.
 ### Item coordinate
 
 A zero-based internal coordinate naming one logical source item. User-facing
-ordinary `#p` item syntax remains one-based.
+ordinary `@[p]` item syntax remains one-based.
 
 ### Boundary coordinate
 
@@ -158,20 +158,20 @@ start + length(spanSpec) <= E
 Examples for a two-hour day:
 
 ```proteus
-day#0:hour       // first hour:  [0, 1)
-day#1:hour       // second hour: [1, 2)
-day#-1:hour      // last hour:   [E - 1, E)
+day@[0:hour]       // first hour:  [0, 1)
+day@[1:hour]       // second hour: [1, 2)
+day@[-1:hour]      // last hour:   [E - 1, E)
 ```
 
 For a 24-hour day:
 
 ```proteus
-day#-3:*2+{hour| ...}   // the two hours starting three hours before the end
+day@[-3:*2+{hour| ...}]   // the two hours starting three hours before the end
 ```
 
 This chooses the start-boundary interpretation rather than making the negative
 number identify the selected span's end. It is consistent with current
-end-relative item lookup: both `source#-1` and `source#-1:oneItemSpan` begin at
+end-relative item lookup: both `source@[-1]` and `source@[-1:oneItemSpan]` begin at
 the final logical item.
 
 The unit of `i` is the unit implied by `spanSpec` when a valid ordered-span
@@ -181,7 +181,7 @@ rejected; it must not round.
 
 ### 2. Negative indexing is relative to a view boundary, not calendar zero
 
-`#-1` always means “relative to the final boundary of this source/view.” It
+`@[-1]` always means “relative to the final boundary of this source/view.” It
 does **not** mean year 1 BCE and it does not by itself select a calendar era.
 
 Signed calendar labels belong to a calendar mapping. This keeps generic list
@@ -401,10 +401,10 @@ is provisional until the decisions below are approved.
 
 ```proteus
 // Read the last hour of a day.
-day#-1:hour
+day@[-1:hour]
 
 // Write the last two hours without shifting the day.
-day#-2:*2+{hour| ...} = replacement-hours
+day@[-2:*2+{hour| ...}] = replacement-hours
 
 // Bind a stable historical span obtained from a calendar mapping.
 20th-Century = Gregorian-CE.span(century:20)
@@ -413,7 +413,7 @@ day#-2:*2+{hour| ...} = replacement-hours
 event:{during = 20th-Century}
 
 // Add information at a location addressed relative to a stable source end.
-timeline#-3:year.contents = {... event ...}
+timeline@[-3:year].contents = {... event ...}
 ```
 
 The final example must add temporal content or refine the selected year. It
@@ -449,8 +449,8 @@ coordinates.
 ### D1. Negative slice anchor
 
 Proposed: `source#-k:span` starts `k` logical units before the source end.
-Thus `#-1:hour` selects the last hour. The alternative is to treat `-k` as the
-span's end boundary, which would make `#-1:hour` select the hour immediately
+Thus `@[-1:hour]` selects the last hour. The alternative is to treat `-k` as the
+span's end boundary, which would make `@[-1:hour]` select the hour immediately
 before the last hour and would disagree with negative item lookup.
 
 ### D2. Meaning of “insert into time”
@@ -484,7 +484,7 @@ time slices.
 
 Once D1–D5 are settled, the implementation guide must include:
 
-- exact parser AST/lowering rules for positive and negative `#index:spec`;
+- exact parser AST/lowering rules for positive and negative `@[index:spec]`;
 - a single coordinate-resolution API for item and boundary coordinates;
 - traversal pseudocode that uses `sourcePov` and `startPov` across nesting;
 - `ViewMap` construction and propagation rules for scalar, flat-span, and

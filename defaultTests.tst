@@ -41,6 +41,11 @@ parser/list/embedded,  Embedded list,                  {1 2 &{3 4 5} 6 7},      
 parser/list/concat,    concated list,                  (1 2 3),                                                                (1 2 3),                        parse
 parser/list/square,    square brackets,                [1 2 3],                                                                [1 2 3],                        parse
 parser/list/commas,    comma list,                     {2\, 3\, 4 \, 5 },                                                      {2\, 3\, 4\, 5},                parse
+parser/definition/hash, Hash definition marker,        {#thing=1},                                                             {#thing = 1},                   parse
+parser/definition/adjacent, Definitions after an item, {1 #thing=2 #other=3},                                                  {1 #thing = 2 #other = 3},      parse
+parser/index/bracketed, Bracketed index syntax,         {'A' 'B'}@[2],                                                          {'A' 'B'}@[2],                  parse
+parser/index/simpleSpan, Simple bracketed span syntax,  {1 2 3 4 5 6 7}@[3:5],                                                 {1 2 3 4 5 6 7}@[3:5],         parse
+parser/index/span, Bracketed span syntax,               {1 2 3 4}@[1:*2+{ ... }] ;,                                            {1 2 3 4}@[1:*2+{ ... }]; ,    parse
 parser/ident/bare,     Simple identity,                _=34,                                                                   _ = 34,                         parse
 parser/ident/force,    Force identity,                 123<<=456,                                                              123 <<= 456,                    parse
 merge/ident/force,     Force identity,                 123<<=456,                                                              456,                            norm
@@ -188,20 +193,22 @@ notTemplate/resolvedUnknown, Inverted value template waits for candidate normali
 # read-only, whole-template matching like the scalar cases above.
 # notTemplate/listSize, Inverted two-item template accepts three-item list, [&{!{_ _}|...} 'stop']<~{{1 2 3} 'stop'},             'stop',                         norm
 write/writeStrA,       Write first String,             {2 3 $ 'Hat'}.$ = 'Cat';,                                               {2 3 'Cat' 'Hat'},              norm
-write/writeByIdx,      Write third item,               {'Cat' 'Hat' $ 'Dog'}#3 = 'Bat';,                                       {'Cat' 'Hat' 'Bat' 'Dog'},      norm
-write/negativeLast,    Write last item by negative index, {'Cat' 'Hat' 'Bat' $}#-1 = 'Dog';,                                  {'Cat' 'Hat' 'Bat' 'Dog'},      norm
-write/openNegativeLast, Open-tail negative write stays pending, {'Cat' 'Hat' ...}#-1 = 'Dog';,                                {'Cat' 'Hat' ... },             norm
+write/writeByIdx,      Write third item,               {'Cat' 'Hat' $ 'Dog'}@[3] = 'Bat';,                                     {'Cat' 'Hat' 'Bat' 'Dog'},      norm
+write/negativeLast,    Write last item by negative index, {'Cat' 'Hat' 'Bat' $}@[-1] = 'Dog';,                                {'Cat' 'Hat' 'Bat' 'Dog'},      norm
+write/openNegativeLast, Open-tail negative write stays pending, {'Cat' 'Hat' ...}@[-1] = 'Dog';,                              {'Cat' 'Hat' ... },             norm
 write/first,           Write first item,               {$ 'Hat' 'Bat' 'Dog'}.first = 'Cat';,                                   {'Cat' 'Hat' 'Bat' 'Dog'},      norm
 write/last,            Write last item,                {'Cat' 'Hat' 'Bat' $}.last = 'Dog';,                                    {'Cat' 'Hat' 'Bat' 'Dog'},      norm
 write/1stAndLst,       Write 1st & last item,          {$ 'Hat' 'Bat' $}.first='Cat';.last='Dog';,                             {'Cat' 'Hat' 'Bat' 'Dog'},      norm
 read/readStrA,         Read first String,              {2 3 'Cat' 'Hat'}.$,                                                    'Cat',                          norm
-read/readByIdx,        Read third item,                {'Cat' 'Hat' 'Bat' 'Dog'}#3,                                            'Bat',                          norm
-read/negativeLast,     Read last item by negative index, {'Cat' 'Hat' 'Bat' 'Dog'}#-1,                                        'Dog',                          norm
-read/negativeSecondLast, Read second-last item by negative index, {'Cat' 'Hat' 'Bat' 'Dog'}#-2,                               'Bat',                          norm
-read/negativeAcrossSubitem, Read end-relative item inside a subitem, {'A' &{'B' 'C'} 'D'}#-2,                                 'C',                            norm
+read/readByIdx,        Read third item,                {'Cat' 'Hat' 'Bat' 'Dog'}@[3],                                          'Bat',                          norm
+read/negativeLast,     Read last item by negative index, {'Cat' 'Hat' 'Bat' 'Dog'}@[-1],                                      'Dog',                          norm
+read/negativeSecondLast, Read second-last item by negative index, {'Cat' 'Hat' 'Bat' 'Dog'}@[-2],                             'Bat',                          norm
+read/negativeAcrossSubitem, Read end-relative item inside a subitem, {'A' &{'B' 'C'} 'D'}@[-2],                               'C',                            norm
+read/nestedIndex,      Read through chained indexes,   {{1 2} {3 4}}@[2]@[1],                                                  3,                              norm
+read/indexThenField,   Read a field after an index,    {{a:1} {a:2}}@[2].a,                                                    a:2,                            norm
 read/first,            Read first item,                {'Cat' 'Hat' 'Bat' 'Dog'}.first,                                        'Cat',                          norm
 read/last,             Read last item,                 {'Cat' 'Hat' 'Bat' 'Dog'}.last,                                         'Dog',                          norm
-word/useTags,          Usage tags,                     {@howdy <en_US southern slang> ='hello'},                               {@howdy <en_US southern slang >= 'hello'}, norm
+word/useTags,          Usage tags,                     {#howdy <en_US southern slang> ='hello'},                               {#howdy <en_US southern slang >= 'hello'}, norm
 word/pluralize,        Singular to plural,             {bike| ... },                                                           bikes:{bike|  ... },            norm
 word/findPlural,       Find plural,                    {123\, foot\, {foot|foot1\,foot2}}.feet,                                feet:{foot1\, foot2},           norm
 neg/simple,            Negative cnvt,                  *10-1,                                                                  *10+9,                          norm
@@ -238,28 +245,29 @@ slice/endRelativeSecondLast, Select second-last item with negative-sized interse
 slice/endRelativeString, Select final string with a negative-sized intersection, *(-1)+[<$>] <~ {'Cat' 'Hat' 'Bat' 'Dog'},      'Dog',                          norm
 slice/endRelativeNested, Keep source boundary when negative start is nested, *(-2)+[<_> _] <~ {1 &{2 3} 4},                    3,                              norm
 slice/endRelativeSpan, Select final span with a negative-sized intersection, *(-2)+[<&{_ _}>] <~ {1 2 3 4},                    {3 4},                          norm
-slice/sugar,           Select sugar,                   {1 2 3 4 5 6 7 8 9 0}#3:*4+{ ... } ;,                                   {4 5 6 7},                      norm
+slice/simpleSugar,     Select with a simple bracketed spec, {1 2 3 4 5 6 7}@[3:5],                                             5,                              norm
+slice/sugar,           Select sugar,                   {1 2 3 4 5 6 7 8 9 0}@[3:*4+{ ... }],                                   {4 5 6 7},                      norm
 lang/splitText,        Split English text,             {english-text:"Whoever says they can't is right"},                      {english-phrase:{Whoever says they can't is right}}, norm
 temp/t1,               Merge many idents,              _=_=321,                                                                321,                            norm
 time/t2,               Simple T-infon,                 *5+{T *256+_ = (*256+3) | 1 ...},                                       {T 1 *256+3 *256+3 *256+3 *256+3}, norm
 prev/plus1,            Simple T-infon,                 *5+{T *256+_ = (%prev+1) | 3 ...},                                      {T 3 4 5 6 7},                  norm
 
 
-query/getNthSub,       Get Nth item,                   {@myLst={'Cat' 'Hat' 'Bat' 'Dog'}}\n*3+[& myLst]//:'Bat',               -,                              multi
-query/getNthSub2,      Get Nth item,                   {@Axx={bat:{cat:{dog:{eel:{fox:{AA:'aaa' BB:'bbb' CC:'ccc' DD:'ddd'}}}}}}}\n*3+[& Axx.bat.cat.dog.eel.fox]//:CC:'ccc', -, multi
-word/types,            Check types1,                   {@position=_ @torque=_ @pedals={...}}\npedals:{position=321 torque:4}//:pedals:{position:321 torque:4}, -, multi
-word/deref,            deref word1,                    {@tag={1 2 3}}\ntag//:tag:{1 2 3},                                      -,                              multi
-query/firstType,       Find by type,                   {@wheel='wheel' @chain='chain' @seat='seat'}\n [&{wheel|...} chain]<~{wheel wheel chain seat}//:chain:'chain', -, multi
-query/byType1,         Find by type,                   {@pedals={position:_ torque:_} @wheel={position:_ torque:_}}\n{pedals:{position:321 torque:4} wheel:{position:210 torque:5} breaks}.wheel//:wheel:{position:210 torque:5}, -, multi
-query/chain,           Find by type,                   {@pedals={position:_ torque:_} @wheel={position:_ torque:_}}\n{pedals:{position:321 torque:4} wheel:{position:210 torque:5} breaks}.wheel.position//:position:210, -, multi
-query/chain2,          Find by type,                   {@color=$ @length=_ @spoke={color:$ length:_} @wheel={position:_ torque:_ spoke} @pedals={position:_ torque:_} @bike={pedals wheel}}\n {pedals:{position:321 torque:4} wheel:{position:210 torque:5 spoke:{length:234}}}.wheel.spoke.length //:length:234, -, multi
-query/chain3,          Find by type,                   {@color=$ @length=_ @spoke={color:$ length:_} @wheel={position:_ torque:_ spoke} @pedals={position:_ torque:_} @bike={pedals wheel}}\n {pedals:{position:321 torque:4} wheel:{position:210 torque:5 spoke:{length:_}}}.wheel.spoke.length=123; //:spoke:{length:123}, -, multi
-query/chain4,          Find by type,                   {@color=$ @length=_ @spoke={color:$ length:_} @wheel={position:_ torque:_ spoke} @pedals={position:_ torque:_} @bike={pedals wheel}}\n {pedals:{position:321 torque:4} wheel:{position:210 torque:5 spoke:{length:_}}}.wheel.spoke.length=123;; //:wheel:{position:210 torque:5 spoke:{length:123}}, -, multi
-parse/lang,            Complex parse,                  {@Fri='Fri'}\n{@Sat='Sat'}\n{@Sun='Sun'}\n{@statement=*_+[ Fri Sat Sun]}\n{@littleLang={statement|...}}\nlittleLang == 'SatFriSunSat'//:littleLang:{Sat:'Sat' Fri:'Fri' Sun:'Sun' Sat:'Sat'}, -, multi
+query/getNthSub,       Get Nth item,                   {#myLst={'Cat' 'Hat' 'Bat' 'Dog'}}\n*3+[& myLst]//:'Bat',               -,                              multi
+query/getNthSub2,      Get Nth item,                   {#Axx={bat:{cat:{dog:{eel:{fox:{AA:'aaa' BB:'bbb' CC:'ccc' DD:'ddd'}}}}}}}\n*3+[& Axx.bat.cat.dog.eel.fox]//:CC:'ccc', -, multi
+word/types,            Check types1,                   {#position=_ #torque=_ #pedals={...}}\npedals:{position=321 torque:4}//:pedals:{position:321 torque:4}, -, multi
+word/deref,            deref word1,                    {#tag={1 2 3}}\ntag//:tag:{1 2 3},                                      -,                              multi
+query/firstType,       Find by type,                   {#wheel='wheel' #chain='chain' #seat='seat'}\n [&{wheel|...} chain]<~{wheel wheel chain seat}//:chain:'chain', -, multi
+query/byType1,         Find by type,                   {#pedals={position:_ torque:_} #wheel={position:_ torque:_}}\n{pedals:{position:321 torque:4} wheel:{position:210 torque:5} breaks}.wheel//:wheel:{position:210 torque:5}, -, multi
+query/chain,           Find by type,                   {#pedals={position:_ torque:_} #wheel={position:_ torque:_}}\n{pedals:{position:321 torque:4} wheel:{position:210 torque:5} breaks}.wheel.position//:position:210, -, multi
+query/chain2,          Find by type,                   {#color=$ #length=_ #spoke={color:$ length:_} #wheel={position:_ torque:_ spoke} #pedals={position:_ torque:_} #bike={pedals wheel}}\n {pedals:{position:321 torque:4} wheel:{position:210 torque:5 spoke:{length:234}}}.wheel.spoke.length //:length:234, -, multi
+query/chain3,          Find by type,                   {#color=$ #length=_ #spoke={color:$ length:_} #wheel={position:_ torque:_ spoke} #pedals={position:_ torque:_} #bike={pedals wheel}}\n {pedals:{position:321 torque:4} wheel:{position:210 torque:5 spoke:{length:_}}}.wheel.spoke.length=123; //:spoke:{length:123}, -, multi
+query/chain4,          Find by type,                   {#color=$ #length=_ #spoke={color:$ length:_} #wheel={position:_ torque:_ spoke} #pedals={position:_ torque:_} #bike={pedals wheel}}\n {pedals:{position:321 torque:4} wheel:{position:210 torque:5 spoke:{length:_}}}.wheel.spoke.length=123;; //:wheel:{position:210 torque:5 spoke:{length:123}}, -, multi
+parse/lang,            Complex parse,                  {#Fri='Fri'}\n{#Sat='Sat'}\n{#Sun='Sun'}\n{#statement=*_+[ Fri Sat Sun]}\n{#littleLang={statement|...}}\nlittleLang == 'SatFriSunSat'//:littleLang:{Sat:'Sat' Fri:'Fri' Sun:'Sun' Sat:'Sat'}, -, multi
 outr/test1,            Outer test1,                    {shape| &*2+{circle|...} &*2+{square|...}}={1 2 3 4},                   -,                              multi
 outr/everyOther1,      Every 2nd,                      {[_ _]| ...} <~ {1 2 3 4 5 6 7 8}//:{2 4 6 8},                          -,                              multi
 outr/everyOther2,      Every 2nd,                      {*2+[...]| ...} <~ {1 2 3 4 5 6 7 8}//:{2 4 6 8},                          -,                              multi
-unordered/seq1,        unordered in seq,               {@color={hue\, bright\, saturation}}\n{_ color _ _}={2 color:{hue:5\, bright:6\, saturation:7} 3 _=4}//:{2 color:{hue:5\, bright:6\, saturation:7} 3 4}, -, multi
+unordered/seq1,        unordered in seq,               {#color={hue\, bright\, saturation}}\n{_ color _ _}={2 color:{hue:5\, bright:6\, saturation:7} 3 _=4}//:{2 color:{hue:5\, bright:6\, saturation:7} 3 4}, -, multi
 cube/getLstSpec,       get list spec,                  %W.myStuff.rubixCube//:rubixCube:{{&thing}|  ... },                     -,                              world, cube.pr
 rubix/materializedDefinitionMembers, expand two materialized states without expanding the sparse tail, %W.myStuff.rubixCube//:rubixCube:{T {thing:{777}\, solvedState:{centercubes:{centerCube:{thing:{101}\, sides:{side:{1111} side:{2222}}} centerCube:{thing:{102}\, sides:{side:{1111} side:{2222}}} centerCube:{thing:{103}\, sides:{side:{1111} side:{2222}}}}}} {thing:{888}\, solvedState2:{centercubes:{centerCube:{thing:{201}\, sides:{side:{1111} side:{2222}}} centerCube:{thing:{202}\, sides:{side:{1111} side:{2222}}} centerCube:{thing:{203}\, sides:{side:{1111} side:{2222}}}}}}}, -, world, rubix_copy_when_needed.pr
 rubix/sparseNestedContinuation, continue a sparse typed list after nested member normalization, *1+[& %W.myStuff.rubixCube].solvedState.edgecubes//:solvedState:{edgecubes:{edgeCube:{thing:{orientation:{xRot:0\, yRot:0\, zRot:0}\, location:{xLoc:0\, yLoc:-1.1\, zLoc:1.1}}\, sides:{side:{color:{hue:345\, saturation\, brightness}} side:{color:{hue:345\, saturation\, brightness}} side:{color:{hue:345\, saturation\, brightness}} side:{color:{hue:345\, saturation\, brightness}} side:{color:{hue:30\, saturation\, brightness}} side:{color:{hue:345\, saturation\, brightness}}}} edgeCube:{thing:{orientation:{xRot:0\, yRot:0\, zRot:0}\, location:{xLoc:0\, yLoc:1.1\, zLoc:1.1}}\, sides:{side:{color:{hue:55\, saturation\, brightness}} side:{color:{hue:345\, saturation\, brightness}} side:{color:{hue:345\, saturation\, brightness}} side:{color:{hue:345\, saturation\, brightness}} side:{color:{hue:30\, saturation\, brightness}} side:{color:{hue:345\, saturation\, brightness}}}}}}, -, world, rubix_sparse_nested.pr
@@ -267,7 +275,7 @@ user/getUser,          getUser,                        %W.bruceLong//:bruceLong:
 user/getUser3,         getUser,                        %W.bruceLong.projects.properties.title//:title:'Slipstream Projects',   -,                              world, user_3.pr
 user/getNth,           getNth,                         *2 + [& %W.bruceLong.projects.data.boardElement.data.TaskList.data].properties.member//:member:'Tiffany', -, world, user_3.pr
 user/setNth,           setNth,                         *2 + [& %W.bruceLong.projects.data.boardElement.data.TaskList.data].properties.member <<= 'KTiffany'\n*2 + [& %W.bruceLong.projects.data.boardElement.data.TaskList.data].properties.member//:member:'KTiffany', -, world, user_3.pr
-this/lvl1,             this lvl1,                      {@hue=_ @color={hue}  @red=color:{hue:0} @pink=color:{hue:345} @paper = paper:{red\, {{%.color}{pink}}}}\npaper//:paper:{red:{hue:0}\,{{red:{hue:0}} {pink:{hue:345}}}}, -, multi
+this/lvl1,             this lvl1,                      {#hue=_ #color={hue}  #red=color:{hue:0} #pink=color:{hue:345} #paper = paper:{red\, {{%.color}{pink}}}}\npaper//:paper:{red:{hue:0}\,{{red:{hue:0}} {pink:{hue:345}}}}, -, multi
 word/setColor,         setColor,                       color=red//:color:{hue:0\, saturation:5\, brightness},                  -,                              world, bike.pr
 search/adj1,           Search by adjective,            {{color=red\, ...} { name='Bob'\, color=blue\, ...} {color=green\, ...} {name='Wally'\, color=blue\, ...}}.{color=blue\, ...}//:{name:'Bob'\, color = blue\, ... }, -, world, bike.pr
 

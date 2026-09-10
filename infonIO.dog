@@ -491,7 +491,7 @@ struct ProteusParser{
         me ppStatus: status
         me char: peek;
         WCHK_PEEK(cPos!,valid_notDone)
-        if(chkPeek(cPos, peek, "@"))                      {return(preCheckWordDefn(cPos))}
+        if(chkPeek(cPos, peek, "#"))                      {return(preCheckWordDefn(cPos))}
         else if(chkPeek(cPos, peek, "&"))                 {return(preCheckInfonView(cPos, true, prsCtxt))}
         else if(statusOK(preChkStr(cPos, "%INSERT"), status))           {return(status)}
         else if(statusOK(preChkStr(cPos, "%PROTEUS"), status))          {return(status)}
@@ -504,7 +504,7 @@ struct ProteusParser{
         }
         return(preCheckInfonView(cPos, true, prsCtxt))
     }
-    me ppStatus: preCheckFuncParts(their int64: pos, me bool: allowIDs) <- {
+    me ppStatus: preCheckFuncParts(their int64: pos, me bool: allowIDs, me bool: postfixOnly <- false) <- {
         me int64: cPos <- pos
         me ppStatus: status
         me char: peek; WCHK_PEEK(cPos,valid_maybeDone)
@@ -524,7 +524,7 @@ struct ProteusParser{
         // TODO: finish
         // FUNC_LIKE
         WCHK_PEEK(cPos,valid_maybeDone)
-        if(peek=="<" or peek==":" or peek=="!"){
+        if(!postfixOnly and (peek=="<" or peek==":" or peek=="!")){
             me string: op <- ""+ peek
             CHK_PEEK(cPos,valid_notDone)
             op <+- peek
@@ -535,11 +535,24 @@ struct ProteusParser{
         }
 
         // PART_PATHS
-        while(peek=="." or peek=="^" or peek=="#"){
-            CHK_PEEK(cPos,valid_notDone)
-            if(peek == '.'){return(syntax_error)}
-
-            if(statusNotDone(preCheckInfonView(cPos, true, pcPartPaths), status)){U_RETURN(status)}
+        while(peek=="." or peek=="^" or peek=="@"){
+            if(peek=="@"){
+                if(waitingForBuffer(cPos+1)){U_RETURN(valid_notDone)}
+                if(text!.at(cPos+1)!="["){break()}
+                cPos <+- 2
+                if(statusNotDone(preCheckInfonView(cPos, true, pcPartPaths), status)){U_RETURN(status)}
+                WCHK_PEEK(cPos,valid_maybeDone)
+                if(chkPeek(cPos, peek, ":")){
+                    if(statusNotDone(preCheckInfonView(cPos, true, pcPartPaths), status)){U_RETURN(status)}
+                    WCHK_PEEK(cPos,valid_maybeDone)
+                }
+                if(!chkPeek(cPos, peek, "]")){return(syntax_error)}
+                if(statusNotDone(preCheckFuncParts(cPos, allowIDs, true), status)){U_RETURN(status)}
+            }else{
+                CHK_PEEK(cPos,valid_notDone)
+                if(peek == '.'){return(syntax_error)}
+                if(statusNotDone(preCheckInfonView(cPos, true, pcPartPaths), status)){U_RETURN(status)}
+            }
             WCHK_PEEK(cPos,valid_maybeDone)
             if(chkPeek(cPos, peek, ";")){WCHK_PEEK(cPos,valid_maybeDone)}
             else {break()}
@@ -701,7 +714,7 @@ struct ProteusParser{
                 cPos <+- parseInfonView(defMeaning, cPos, true, true, pcDefn)
                 infn!.funcArgs <- defMeaning
             }
-        } else{setError("Expected a word name after '@'", cPos)}
+        } else{setError("Expected a word name after '#'", cPos)}
 
         if(errorSet){return(-1)}
         return(cPos-pos)
@@ -740,7 +753,7 @@ struct ProteusParser{
         }
 
         me char: peek <- peekWSC(cPos)
-        if(peek=="." or peek=="@" or peek=="&" or peek=="%"){return(-1)} // Skip checking if list item
+        if(peek=="." or peek=="@" or peek=="#" or peek=="&" or peek=="%"){return(-1)} // Skip checking if list item
         me uint64: prevPos <- cPos
         our infonView:: item
         item!.originID <- parent!.originID
@@ -771,10 +784,14 @@ struct ProteusParser{
 
         me char: peek <- peekWSC(cPos)
         me bool: isSubItm <- false
-        if(chkPeek(cPos, peek, "@")){
+        if(peek=="#"){
+            cPos <+- 1
             infn!.itmMode <- mWordDefn
             if(chk(parseWordDefn(infn, cPos), cPos,len)){}
             notifyStreamState(infn, parseDone)
+        } else if(peek=="@"){
+            setError("Legacy '@' definition syntax is no longer supported; use '#'", cPos)
+            return(-1)
         } else if(peek=="." and chkStr(cPos, "...")){
             // if(text!.interactiveMode and prsCtxt==pcMainInfn){
             //     setError("... not allowed in main infon in interactive mode")
@@ -984,12 +1001,12 @@ struct ProteusParser{
         return(cPos-pos)
     }
 
-    me int64: parseFuncParts(our infonView: infn, me int64: pos, me bool: allowIDs, me bool: isFromDefnn) <- {
+    me int64: parseFuncParts(our infonView: infn, me int64: pos, me bool: allowIDs, me bool: isFromDefnn, me bool: postfixOnly <- false) <- {
         me int64: cPos <- pos
         // FUNC_LIKE
         me bool: isAFunc <- true
         me char: peek <- peekWSC(cPos)
-        if(peek=="<" or peek==":" or peek=="!"){ // TODO: The '<' here slightly conflicts with the [ <...> ...] syntax.
+        if(!postfixOnly and (peek=="<" or peek==":" or peek=="!")){ // TODO: The '<' here slightly conflicts with the [ <...> ...] syntax.
             me char: peek2 <- text!.at(cPos+1)
             me string: opStr <- ""; opStr <+- peek; opStr <+- peek2
             if     (opStr=="<:"){infn!.isFunc <- true;  infn!.isFuncArg <- false; infn!.invertFunc <- false; cPos<+-2}
@@ -1033,13 +1050,20 @@ struct ProteusParser{
         }
 
         // PART_PATHS
-        while(peek=="." or peek=="^" or peek=="#"){
-            if(text!.at(cPos+1)=="."){break()}
-            cPos<+-1
+        while(peek=="." or peek=="^" or peek=="@"){
+            me bool: isBracketedIndex <- false
+            if(peek=="@"){
+                if(text!.at(cPos+1)!="["){break()}
+                isBracketedIndex <- true
+                cPos <+- 2
+            }else{
+                if(text!.at(cPos+1)=="."){break()}
+                cPos<+-1
+            }
             our PartPath:: part
             if(peek=="."){      part!.pathMode <- dotField}
             else if(peek=="^"){ part!.pathMode <- upField}
-            else if(peek=="#"){ part!.pathMode <- idxField}
+            else if(isBracketedIndex){part!.pathMode <- idxField}
             our infonView:: pathSeg
             pathSeg!.originID <- infn!.originID
             cPos <+- parseInfonView(pathSeg, cPos, allowIDs, isFromDefn, pcPartPaths)
@@ -1052,6 +1076,24 @@ struct ProteusParser{
                 pathSpecSeg!.originID <- infn!.originID
                 cPos <+- parseInfonView(pathSpecSeg, cPos, allowIDs, isFromDefn, pcPartPaths)
                 part!.spec <- pathSpecSeg
+                peek <- peekWSC(cPos)
+            }
+
+            if(isBracketedIndex){
+                if(!chkPeek(cPos, peek, "]")){
+                    setError("Expected ']' to close the index", cPos)
+                    return(-1)
+                }
+                our infonView:: continuation
+                continuation!.originID <- infn!.originID
+                me int64: continuationLen <- parseFuncParts(
+                        continuation, cPos, allowIDs, isFromDefn, true)
+                if(continuationLen<0){return(-1)}
+                if(continuationLen>0){
+                    cPos <+- continuationLen
+                    part!.continuation <- continuation
+                }
+                peek <- peekWSC(cPos)
             }
 
             if(chkPeek(cPos, peek, ";")){
@@ -1242,7 +1284,13 @@ struct ProteusParser{
 
     void: doParse(our infonView: infn) <- {
         clearError()
-        parseInfonView(infn, 0, true, false)
+        me int64: parsedLen <- parseInfonView(infn, 0, true, false)
+        if(!errorSet and !streamingMode and parsedLen>0){
+            me int64: trailingPos <- parsedLen
+            if(peekWSC(trailingPos)=="#"){
+                setError("Legacy '#' index syntax is no longer supported; use '@[...]'", trailingPos)
+            }
+        }
         if(streamingMode){
             notifyStreamState(infn, parseDone)
         }
@@ -1436,6 +1484,68 @@ struct InfonViewPrinter{
         return(S)
     }
 
+    me string: printWorkList(their infonView: i,
+            our Map<me string, me int>: used, me bool: isSpec,
+            me int: verbosity, their infonView: special) <- {
+        me string: S
+        if(i==NULL or i!.isNormed){return(S)}
+        withEach WorkItm in i!.wrkList{
+            if(WorkItm!.forceID){S <+- " <<"}
+            else{S <+- " "}
+            if(!WorkItm!.looseMode and !WorkItm!.looseInhtd){S <+- "="}
+            else{S <+- "=="}
+            if(WorkItm!.looseTop){S <+- ":"}
+            S <+- " "
+            S <+- printInfonViewActual(WorkItm!.pItem, used, false,
+                    isSpec, verbosity, special)
+        }
+        return(S)
+    }
+
+    me string: printPartPath(their PartPath: part,
+            our Map<me string, me int>: used, me bool: isSpec,
+            me int: verbosity, their infonView: special) <- {
+        me string: S
+        if(part==NULL){return(S)}
+        if(part!.pathMode==dotField){S <+- "."}
+        else if(part!.pathMode==upField){S <+- "^"}
+        else if(part!.pathMode==idxField){S <+- "@["}
+        else if(part!.pathMode==colonField){S <+- ":"}
+        S <+- printInfonViewActual(part!.path, used, false,
+                isSpec, verbosity, special)
+        if(part!.pathMode==idxField){
+            if(part!.spec!=NULL){
+                S <+- ":"+printInfonViewActual(part!.spec, used, false,
+                        true, verbosity, special)
+            }
+            S <+- "]"
+        }
+        if(part!.continuation!=NULL){
+            S <+- printWorkList(part!.continuation, used, isSpec,
+                    verbosity, special)
+            S <+- printPathSuffix(part!.continuation, used, isSpec,
+                    verbosity, special)
+        }
+        if(part!.hasSemiColon){S <+- "; "}
+        return(S)
+    }
+
+    me string: printPathSuffix(their infonView: i,
+            our Map<me string, me int>: used, me bool: isSpec,
+            me int: verbosity, their infonView: special) <- {
+        me string: S
+        if(i==NULL){return(S)}
+        withEach part in i!.parts{
+            if(!part!.wasTransfered){
+                S <+- printPartPath(part, used, isSpec, verbosity, special)
+            }
+        }
+        if(i!.partRef!=NULL){
+            S <+- printPartPath(i!.partRef, used, isSpec, verbosity, special)
+        }
+        return(S)
+    }
+
     me string: printInfonViewActual(their infonView: i, our Map<me string, me int>: used, me bool: isSubItm, me bool: isSpec, me int: verbosity, their infonView: special) <- {
         me string: S <- ""
         if(i ==  NULL){return("NULL")}
@@ -1483,7 +1593,7 @@ struct InfonViewPrinter{
             }
         }
         else if(i!.itmMode==mWordDefn){
-            S<+-"@"+i!.definedWord!.defWord +" "
+            S<+-"#"+i!.definedWord!.defWord +" "
             if(! i!.definedWord!.UsageTags.isEmpty()){S<+-"<"}
             withEach usageTag in i!.definedWord!.UsageTags{
                 S <+- usageTag+" "
@@ -1524,39 +1634,14 @@ struct InfonViewPrinter{
             } else {logFatalError("Invalid viewMode in printInfonViewActual()\n")}
         }
         if(i!.isNormed == false){
-            withEach WorkItm in i!.wrkList{
-                if(WorkItm!.forceID){S <+- " <<"}
-                else{S <+- " "}
-                if(!WorkItm!.looseMode and !WorkItm!.looseInhtd){ S <+- "="}
-                else { S <+- "=="}
-                if(WorkItm!.looseTop){ S <+- ":"}
-                S <+- " "
-                S <+- printInfonViewActual(WorkItm!.pItem, used, false, isSpec, verbosity, special)
-            }
+            S <+- printWorkList(i, used, isSpec, verbosity, special)
 
             if (i!.argPos != apNoArgs){
                 S <- addFuncArgs(S, printInfonViewActual(i!.funcArgs, used, false, isSpec, verbosity, special), i!.argsOnLeft, i!.argPos, "")
             }
         }
 
-        withEach part in i!.parts{
-            if(! part!.wasTransfered){
-                if(part!.pathMode == dotField){S <+- "."}
-                else if(part!.pathMode == idxField){S <+- "#"}
-                else if(part!.pathMode == colonField){S <+- ":"}
-                S <+- printInfonViewActual(part!.path, used, false, isSpec, verbosity, special)
-                if(part!.hasSemiColon){S <+- "; "}
-            }
-        }
-        if(i!.partRef != NULL){
-            if(i!.partRef!.pathMode == dotField){S <+- "."}
-            else if(i!.partRef!.pathMode == idxField){S <+- "#"}
-            else if(i!.partRef!.pathMode == colonField){S <+- ":"}
-            S <+- printInfonViewActual(i!.partRef!.path, used, false, isSpec, verbosity, special)
-            if(i!.partRef!.pathMode == idxField and i!.partRef!.spec != NULL){
-                S <+- ":" + printInfonViewActual(i!.partRef!.spec, used, false, true, verbosity, special)
-            }
-        }
+        S <+- printPathSuffix(i, used, isSpec, verbosity, special)
 if(i!.doReply){S <+- "~"}
 //S <- "("+S+")"
 if(resetColor){
