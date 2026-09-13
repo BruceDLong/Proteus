@@ -18,6 +18,8 @@ TestsToRun = `
     unit/GNextT/t2
     unit/GNextT/t3
     unit/GNextT/t4
+    unit/temporal/boundaryViews
+    unit/temporal/boundaryIdentityBidirectional
     unit/endRelative/resolveOnClose
     unit/endRelative/exactClosedWindow
     unit/endRelative/exactPendingWindow
@@ -111,6 +113,8 @@ do ManageCmdLine(cmd)
 #define GETNEXT (NAME, MSG, IN, OUT, SKIP) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGETNEXT(tname, IN, OUT, SKIP)}%>
 #define GETFIRSTTIGHT (NAME, MSG, IN, OUT, SKIP) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGETFIRSTTIGHT(tname, IN, OUT, SKIP)}%>
 #define GETNEXTTIGHT (NAME, MSG, IN, OUT, SKIP) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGETNEXTTIGHT(tname, IN, OUT, SKIP)}%>
+#define TEMPORALBOUNDARYVIEWS (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestTemporalBoundaryViews(tname)}%>
+#define TEMPORALBOUNDARY (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestTemporalBoundaryIdentity(tname)}%>
 #define ENDRELRESOLVE (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeResolveOnClose(tname)}%>
 #define ENDRELQUERY (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeQuery(tname, CASE_ID)}%>
 #define ENDRELPLAN (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeTraversalPlan(tname, CASE_ID)}%>
@@ -161,6 +165,8 @@ struct GLOBAL {
     GETNEXTTIGHT(unit/GNextT/t2, "get next POV tight",      "{3 &{} 4 5}", "{3 4 5 }", 0)
     GETNEXTTIGHT(unit/GNextT/t3, "get next POV tight",      "{3 &{4 5} 6}", "{3 4 5 6 }", 0)
     GETNEXTTIGHT(unit/GNextT/t4, "get next POV tight",      "{3 4 &{&{5}}}", "{3 4 5 }", 0)
+    TEMPORALBOUNDARYVIEWS(unit/temporal/boundaryViews, "preserve temporal cut identity behind begin and end")
+    TEMPORALBOUNDARY(unit/temporal/boundaryIdentityBidirectional, "store one adjacent-span identity and traverse it in both directions")
     ENDRELRESOLVE(unit/endRelative/resolveOnClose, "resolve a retained end-relative reference when its list closes")
     ENDRELQUERY(unit/endRelative/exactClosedWindow, "separate an exact closed extent from its available window", 1)
     ENDRELQUERY(unit/endRelative/exactPendingWindow, "retain an exact coordinate while requested positions are pending", 2)
@@ -625,6 +631,195 @@ struct GLOBAL {
         }
         result <+- "}"
         REQUIRE(result==expected)
+        return()
+    }
+    me void: unitTestTemporalBoundaryViews(me string: testName) <- {
+        me TemporalIdentityReasoner: reasoner
+        our infonView: closedSpan <- parseAndExtract(testName, "{T 1 2}")
+        our POV:: closedSpanPOV{628}
+        closedSpanPOV!.pItem <- closedSpan
+        our POV: beginBoundary <-
+                reasoner.makeTemporalBoundaryPOV(closedSpanPOV, false)
+        our POV: duplicateBegin <-
+                reasoner.makeTemporalBoundaryPOV(closedSpanPOV, false)
+        our POV: endBoundary <-
+                reasoner.makeTemporalBoundaryPOV(closedSpanPOV, true)
+        our infonView: otherSpan <- parseAndExtract(testName, "{T 1 2}")
+        our POV:: otherSpanPOV{628}
+        otherSpanPOV!.pItem <- otherSpan
+        our POV: otherBegin <-
+                reasoner.makeTemporalBoundaryPOV(otherSpanPOV, false)
+
+        our infonView: emptySpan <- parseAndExtract(testName, "{T}")
+        our POV:: emptySpanPOV{628}
+        emptySpanPOV!.pItem <- emptySpan
+        our POV: emptyBegin <-
+                reasoner.makeTemporalBoundaryPOV(emptySpanPOV, false)
+        our POV: emptyEnd <-
+                reasoner.makeTemporalBoundaryPOV(emptySpanPOV, true)
+
+        our infonView: openSpan <- parseAndExtract(testName, "{T 1 ...}")
+        our POV:: openSpanPOV{628}
+        openSpanPOV!.pItem <- openSpan
+        our POV: openEnd <-
+                reasoner.makeTemporalBoundaryPOV(openSpanPOV, true)
+
+        our infonView: structuralList <- parseAndExtract(testName, "{1 2}")
+        our POV:: structuralListPOV{628}
+        structuralListPOV!.pItem <- structuralList
+        our POV: invalidBoundary <-
+                reasoner.makeTemporalBoundaryPOV(structuralListPOV, false)
+
+        me ProteusCore: CORE
+        CORE.init("", false)
+        our infonView: beginExpression <-
+                parseAndExtract(testName, "{T 1 2}.begin")
+        our POV:: beginExpressionPOV{628}
+        beginExpressionPOV!.pItem <- beginExpression
+        CORE.agent!.normalize(beginExpressionPOV)
+        our infonView: endExpression <-
+                parseAndExtract(testName, "{T 1 2}.end")
+        our POV:: endExpressionPOV{628}
+        endExpressionPOV!.pItem <- endExpression
+        CORE.agent!.normalize(endExpressionPOV)
+        our infonView: openEndExpression <-
+                parseAndExtract(testName, "{T 1 ...}.end")
+        our POV:: openEndExpressionPOV{628}
+        openEndExpressionPOV!.pItem <- openEndExpression
+        CORE.agent!.normalize(openEndExpressionPOV)
+
+        me bool: directViewsCorrect <-
+                beginBoundary!=NULL and duplicateBegin!=NULL and
+                endBoundary!=NULL and toString(beginBoundary!.pItem)=="0" and
+                toString(endBoundary!.pItem)=="0" and
+                beginBoundary!.temporalBoundary.sourcePov===closedSpanPOV and
+                beginBoundary!.temporalBoundary.cutIndexKnown and
+                beginBoundary!.temporalBoundary.cutIndex==0 and
+                !beginBoundary!.temporalBoundary.tracksEnd and
+                endBoundary!.temporalBoundary.sourcePov===closedSpanPOV and
+                endBoundary!.temporalBoundary.cutIndexKnown and
+                endBoundary!.temporalBoundary.cutIndex==2 and
+                endBoundary!.temporalBoundary.tracksEnd and
+                reasoner.sameTemporalBoundary(
+                        beginBoundary, duplicateBegin) and
+                !reasoner.sameTemporalBoundary(beginBoundary, endBoundary) and
+                !reasoner.sameTemporalBoundary(beginBoundary, otherBegin)
+        me bool: extentCasesCorrect <-
+                emptyBegin!=NULL and emptyEnd!=NULL and
+                reasoner.sameTemporalBoundary(emptyBegin, emptyEnd) and
+                openEnd!=NULL and openEnd!.temporalBoundary.tracksEnd and
+                !openEnd!.temporalBoundary.cutIndexKnown and
+                invalidBoundary==NULL
+        me bool: selectorsPreserveViews <-
+                toString(beginExpressionPOV!.pItem)=="0" and
+                beginExpressionPOV!.temporalBoundary.sourcePov!=NULL and
+                beginExpressionPOV!.temporalBoundary.cutIndexKnown and
+                beginExpressionPOV!.temporalBoundary.cutIndex==0 and
+                !beginExpressionPOV!.temporalBoundary.tracksEnd and
+                toString(endExpressionPOV!.pItem)=="0" and
+                endExpressionPOV!.temporalBoundary.sourcePov!=NULL and
+                endExpressionPOV!.temporalBoundary.cutIndexKnown and
+                endExpressionPOV!.temporalBoundary.cutIndex==2 and
+                endExpressionPOV!.temporalBoundary.tracksEnd and
+                toString(openEndExpressionPOV!.pItem)=="0" and
+                openEndExpressionPOV!.temporalBoundary.sourcePov!=NULL and
+                openEndExpressionPOV!.temporalBoundary.tracksEnd and
+                !openEndExpressionPOV!.temporalBoundary.cutIndexKnown
+        me string: actual <- "false"
+        me string: expected <- "true"
+        if(directViewsCorrect and extentCasesCorrect and
+                selectorsPreserveViews){actual <- "true"}
+        REQUIRE(actual==expected)
+        return()
+    }
+    me void: unitTestTemporalBoundaryIdentity(me string: testName) <- {
+        our infonView: timeline <- parseAndExtract(
+                testName, "{T {T 1 2} {T 3 4} {T 5 6}}")
+        if(timeline==NULL){FAIL("Unable to parse temporal identity fixture")}
+        our POV:: timelinePOV{628}
+        timelinePOV!.pItem <- timeline
+        me TemporalIdentityReasoner: reasoner
+
+        reasoner.enumerateAdjacentSpanBoundaryIdentities(timelinePOV)
+        our POV: endingSpan <- timeline!.value!.items.head
+        our POV: beginningSpan <- endingSpan!.next
+        our POV: thirdSpan <- beginningSpan!.next
+        our POV: endingOccurrence <-
+                reasoner.lastTemporalOccurrence(endingSpan, 0)
+        our POV: beginningOccurrence <-
+                reasoner.firstTemporalOccurrence(beginningSpan, 0)
+        our POV: inferredPrevious <- reasoner.temporalNeighborFromIdentity(
+                beginningOccurrence, true)
+        our POV: inferredNext <- reasoner.temporalNeighborFromIdentity(
+                endingOccurrence, false)
+
+        our infonView: openTimeline <- parseAndExtract(
+                testName, "{T {T 1 ...} {T 2}}")
+        our POV:: openTimelinePOV{628}
+        openTimelinePOV!.pItem <- openTimeline
+        reasoner.enumerateAdjacentSpanBoundaryIdentities(openTimelinePOV)
+        our TemporalBoundaryIdentity: symbolicIdentity
+        if(!openTimeline!.temporalBoundaryIdentities.isEmpty()){
+            symbolicIdentity <-
+                    openTimeline!.temporalBoundaryIdentities.first()
+        }
+
+        // Re-enumeration, including that done by both lookups above, must not
+        // turn direct identities into a transitive cache or duplicate them.
+        reasoner.enumerateAdjacentSpanBoundaryIdentities(timelinePOV)
+        our TemporalBoundaryIdentity: identity
+        our TemporalBoundaryIdentity: followingIdentity
+        if(!timeline!.temporalBoundaryIdentities.isEmpty()){
+            identity <- timeline!.temporalBoundaryIdentities.first()
+        }
+        if(timeline!.temporalBoundaryIdentities.size()>1){
+            followingIdentity <- timeline!.temporalBoundaryIdentities[1]
+        }
+        me bool: relationCorrect <- false
+        if(identity!=NULL and followingIdentity!=NULL){
+            relationCorrect <- identity!.endingSpan===endingSpan and
+                    identity!.beginningSpan===beginningSpan and
+                    identity!.endingBoundary!=NULL and
+                    identity!.beginningBoundary!=NULL and
+                    identity!.endingBoundary!.temporalBoundary.sourcePov===
+                            endingSpan and
+                    identity!.endingBoundary!.temporalBoundary.tracksEnd and
+                    identity!.endingBoundary!.temporalBoundary.cutIndexKnown and
+                    identity!.endingBoundary!.temporalBoundary.cutIndex==2 and
+                    identity!.beginningBoundary!.temporalBoundary.sourcePov===
+                            beginningSpan and
+                    !identity!.beginningBoundary!.temporalBoundary.tracksEnd and
+                    identity!.beginningBoundary!.temporalBoundary.cutIndexKnown and
+                    identity!.beginningBoundary!.temporalBoundary.cutIndex==0 and
+                    reasoner.boundaryAcrossIdentity(identity,
+                            identity!.endingBoundary)===
+                            identity!.beginningBoundary and
+                    reasoner.boundaryAcrossIdentity(identity,
+                            identity!.beginningBoundary)===
+                            identity!.endingBoundary and
+                    followingIdentity!.endingSpan===beginningSpan and
+                    followingIdentity!.beginningSpan===thirdSpan
+        }
+        me bool: passed <-
+                timeline!.temporalBoundaryIdentities.size()==2 and
+                relationCorrect and inferredPrevious===endingOccurrence and
+                inferredNext===beginningOccurrence and
+                openTimeline!.temporalBoundaryIdentities.size()==1 and
+                symbolicIdentity!=NULL and
+                symbolicIdentity!.endingBoundary!=NULL and
+                symbolicIdentity!.beginningBoundary!=NULL and
+                symbolicIdentity!.endingBoundary!.temporalBoundary.tracksEnd and
+                !symbolicIdentity!.endingBoundary!.temporalBoundary.
+                        cutIndexKnown and
+                reasoner.boundaryAcrossIdentity(symbolicIdentity,
+                        symbolicIdentity!.endingBoundary)===
+                        symbolicIdentity!.beginningBoundary and
+                reasoner.lastTemporalOccurrence(
+                        symbolicIdentity!.endingSpan, 0)==NULL
+        me string: actual <- "false"
+        me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
         return()
     }
     me void: unitTestEndRelativeResolveOnClose(me string: testName) <- {

@@ -8,6 +8,8 @@ parser/misc/world,     World cursor,                   %W,                      
 parser/misc/self,      self cursor,                    %self,                                                                  %,                              parse
 parser/misc/args,      args cursor,                    %args,                                                                  %args,                          parse
 parser/misc/vars,      vars cursor,                    %vars,                                                                  %vars,                          parse
+parser/misc/tprev,     temporal previous cursor,       %tprev,                                                                 %tprev,                         parse
+parser/misc/tnext,     temporal next cursor,           %tnext,                                                                 %tnext,                         parse
 parser/num/bare,       Simple number,                  34,                                                                     34,                             parse
 parser/num/plus,       Positive number,                +34,                                                                    +34,                            parse
 parser/num/sized,      Sized number,                   *64+34 ,                                                                *64+34,                         parse
@@ -26,6 +28,8 @@ parser/str/unknown,    Unknown string,                 $,                       
 parser/str/sized,      Size given,                     *4+$,                                                                   *4+$,                           parse
 parser/list/simple,    simple list,                    {'A' 12 {1 2 3}},                                                       {'A' 12 {1 2 3}},               parse
 parser/list/time,      time list,                      {T 'A' 12},                                                             {T 'A' 12},                     parse
+parser/list/timePrevHead, time list beginning with temporal previous, {T %tprev 4},                                           {T %tprev 4},                    parse
+parser/list/timeNextHead, time list beginning with temporal next, {T %tnext 4},                                               {T %tnext 4},                    parse
 parser/list/empty,     empty list,                     {},                                                                     {},                             parse
 parser/list/unknown,   Unknown list,                   {1 ... 3},                                                              {1 ... 3},                      parse
 parser/list/defClass,  define a class,                 {'A' class item {1 2 3} 12},                                            {'A' class item {1 2 3} 12},    parse
@@ -251,6 +255,19 @@ lang/splitText,        Split English text,             {english-text:"Whoever sa
 temp/t1,               Merge many idents,              _=_=321,                                                                321,                            norm
 time/t2,               Simple T-infon,                 *5+{T *256+_ = (*256+3) | 1 ...},                                       {T 1 *256+3 *256+3 *256+3 *256+3}, norm
 prev/plus1,            Simple T-infon,                 *5+{T *256+_ = (%prev+1) | 3 ...},                                      {T 3 4 5 6 7},                  norm
+tprev/plus1,           Temporal previous state,        *5+{T *256+_ = (%tprev+1) | 3 ...},                                     {T 3 4 5 6 7},                  norm
+temporal/beginBoundary, Temporal begin is the null value at cut zero, {T 1 2}.begin,                                           0,                              norm
+temporal/endBoundary, Temporal end is the null value at the exact extent, {T 1 2}.end,                                        0,                              norm
+temporal/namedBoundaries, Named T-list boundaries resolve after definition lookup, {#timeline={T 1 2}}\ntimeline.begin//:0\ntimeline.end//:0,                   -,                              multi
+temporal/sBeginField, S-list begin remains an ordinary named field, {#begin=_}\n{begin:7}.begin//:begin:7,                                      -,                              multi
+temporal/identityCarriesT, List identity retains T context, {1 2} = {T 1 2},                                                   {T 1 2},                        norm
+temporal/openShapeCarriesT, Open list identity retains T context, {1 2} = {T _ | ...},                                        {T 1 2},                        norm
+temporal/definitionCarriesT, Definition-backed list retains T context, {#timeline = {T _ | ...}}\ntimeline:{1 2}//:timeline:{T _| 1 2 ... }, -, multi
+temporal/directTPrev, Temporal previous resolves at a T occurrence, {T 1 %tprev 3},                                           {T 1 1 3},                      norm
+temporal/directTNext, Temporal next resolves at a T occurrence, {T 1 %tnext 3},                                               {T 1 3 3},                      norm
+temporal/nestedBoundaryPrev, First occurrence follows the preceding T-span end, {T {T 1 2} {T %tprev 4}},                     {T {T 1 2} {T 2 4}},            norm
+temporal/nestedBoundaryNext, Last occurrence precedes the following T-span start, {T {T 1 %tnext} {T 3 4}},                   {T {T 1 3} {T 3 4}},            norm
+temporal/noSListFallback, Temporal previous does not fall back in an S-list, {1 %tprev 3},                                    {1 UNDEFINED 3},                norm
 
 
 query/getNthSub,       Get Nth item,                   {#myLst={'Cat' 'Hat' 'Bat' 'Dog'}}\n*3+[& myLst]//:'Bat',               -,                              multi
@@ -268,7 +285,7 @@ outr/test1,            Outer test1,                    {shape| &*2+{circle|...} 
 outr/everyOther1,      Every 2nd,                      {[_ _]| ...} <~ {1 2 3 4 5 6 7 8}//:{2 4 6 8},                          -,                              multi
 outr/everyOther2,      Every 2nd,                      {*2+[...]| ...} <~ {1 2 3 4 5 6 7 8}//:{2 4 6 8},                          -,                              multi
 unordered/seq1,        unordered in seq,               {#color={hue\, bright\, saturation}}\n{_ color _ _}={2 color:{hue:5\, bright:6\, saturation:7} 3 _=4}//:{2 color:{hue:5\, bright:6\, saturation:7} 3 4}, -, multi
-cube/getLstSpec,       get list spec,                  %W.myStuff.rubixCube//:rubixCube:{{&thing}|  ... },                     -,                              world, cube.pr
+cube/getLstSpec,       get list spec,                  %W.myStuff.rubixCube//:rubixCube:{T {&thing}|  ... },                   -,                              world, cube.pr
 rubix/materializedDefinitionMembers, expand two materialized states without expanding the sparse tail, %W.myStuff.rubixCube//:rubixCube:{T {thing:{777}\, solvedState:{centercubes:{centerCube:{thing:{101}\, sides:{side:{1111} side:{2222}}} centerCube:{thing:{102}\, sides:{side:{1111} side:{2222}}} centerCube:{thing:{103}\, sides:{side:{1111} side:{2222}}}}}} {thing:{888}\, solvedState2:{centercubes:{centerCube:{thing:{201}\, sides:{side:{1111} side:{2222}}} centerCube:{thing:{202}\, sides:{side:{1111} side:{2222}}} centerCube:{thing:{203}\, sides:{side:{1111} side:{2222}}}}}}}, -, world, rubix_copy_when_needed.pr
 rubix/sparseNestedContinuation, continue a sparse typed list after nested member normalization, *1+[& %W.myStuff.rubixCube].solvedState.edgecubes//:solvedState:{edgecubes:{edgeCube:{thing:{orientation:{xRot:0\, yRot:0\, zRot:0}\, location:{xLoc:0\, yLoc:-1.1\, zLoc:1.1}}\, sides:{side:{color:{hue:345\, saturation\, brightness}} side:{color:{hue:345\, saturation\, brightness}} side:{color:{hue:345\, saturation\, brightness}} side:{color:{hue:345\, saturation\, brightness}} side:{color:{hue:30\, saturation\, brightness}} side:{color:{hue:345\, saturation\, brightness}}}} edgeCube:{thing:{orientation:{xRot:0\, yRot:0\, zRot:0}\, location:{xLoc:0\, yLoc:1.1\, zLoc:1.1}}\, sides:{side:{color:{hue:55\, saturation\, brightness}} side:{color:{hue:345\, saturation\, brightness}} side:{color:{hue:345\, saturation\, brightness}} side:{color:{hue:345\, saturation\, brightness}} side:{color:{hue:30\, saturation\, brightness}} side:{color:{hue:345\, saturation\, brightness}}}}}}, -, world, rubix_sparse_nested.pr
 user/getUser,          getUser,                        %W.bruceLong//:bruceLong:{1 2 3},                                       -,                              world, user.pr

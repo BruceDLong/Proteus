@@ -70,6 +70,10 @@ struct InfonViewReasoningResult{
     me bool: copyDefinitionOrderMode <- false
     me bool: copyDefinitionSize <- false
     me bool: openDefinitionTail <- false
+    // Identity with a T-list makes the result a T-list.  Keep this separate
+    // from definition-shape copying because it is implied by every accepted
+    // list identity, not only by definitions.
+    me bool: copyRHSTimelikeToLHS <- false
     me bool: emitRejectLog
     me int64: orderedSpanSplitCount
     me int64: orderedSpanSizeToCopy
@@ -1304,6 +1308,285 @@ struct ConcatReasoner{
         aItem!.concatProcessed <- true
         if(joinIfConcat(aItem!.LHS_item)){changeMade <- true}
         return(changeMade)
+    }
+}
+
+// T-LIST IDENTITY INVENTORY
+//
+// `timelike` is semantic compression: setting it implies identities in
+// addition to ordinary ordered-list identities.  Keep those implications
+// named here so extending T semantics is an explicit two-part change:
+// change the model field, then enumerate/implement its identity consequences.
+//
+// Implemented:
+//   1. list-context identity
+//      LHS = RHS(T)  =>  LHS is interpreted in the same T-context.
+//
+// Present in lower-level cursor/list machinery, but not yet represented as
+// generated semantic identities:
+//   2. current.%prev = previous structural item in an ordered list;
+//   3. current.%next = next structural item in an ordered list;
+//
+// Implemented as explicit identity implications:
+//   4. L.begin and L.end are identity-bearing views of cuts in L.  Both have
+//      the algebraic null value, but boundaries at different cuts remain
+//      distinct; an unknown L.end remains a symbolic end-relative boundary;
+//   5. adjacent T-spans imply preceding.end = following.begin.  The stored
+//      relation contains those actual boundary views, not merely the spans;
+//   6. current.%tprev/current.%tnext is identified with the occurrence proved
+//      by local adjacency or one of those boundary identities.  Both
+//      directions use the same stored relation, even when cursor evaluation
+//      materializes the selected value directly.  Temporal navigation never
+//      falls back to an S-list.
+//
+// Not yet implemented:
+//   7. a transition identity reads RHS references from its entry/previous
+//      S-context and constrains its exit/next S-context;
+//   8. each unchanged component of adjacent S-contexts is identical
+//      (component-wise persistence, never whole-state identity);
+//   9. a nested T-list's entry is identical to its host entry, and its exit is
+//      identical to the enclosing continuation's entry;
+//  10. each repeated T-description's exit is identical to the next
+//      repetition's entry;
+//  11. rooted containment identifies aligned parent/child temporal
+//      occurrences while preserving distinct occurrence identity.
+//
+// Items 7-11 deliberately have no fallback mutation here.  Each must become a
+// concrete identity-expansion plan with tests before it affects normalization.
+struct TemporalIdentityReasoner{
+    me bool: isTemporalSpanPOV(their POV: pov) <- {
+        return(pov!=NULL and pov!.pItem!=NULL and
+                pov!.pItem!.value!.overlayType==LST and
+                pov!.pItem!.value!.timelike)
+    }
+
+    me bool: temporalSpanHasKnownEnd(their POV: spanPOV) <- {
+        if(!isTemporalSpanPOV(spanPOV)){return(false)}
+        me EndRelativeExtentResult: extent <-
+                spanPOV!.pItem!.endRelativeExtent()
+        return(extent.status==eresExact)
+    }
+
+    // A boundary's value is the unique null state.  Its identity lives on the
+    // POV map below, so equal zero values at different cuts never collapse the
+    // cuts themselves.
+    our POV: makeTemporalBoundaryPOV(their POV: sourceSpan,
+            me bool: tracksEnd) <- {
+        if(!isTemporalSpanPOV(sourceSpan)){return(NULL)}
+        our POV:: boundaryPOV{povSrcTemporalBoundary}
+        Allocate(boundaryPOV!.pItem)
+        boundaryPOV!.pItem!.itmMode <- mItem
+        boundaryPOV!.pItem!.viewMode <- vmOverlay
+        boundaryPOV!.pItem!.infSize!.overlayType <- NUM
+        boundaryPOV!.pItem!.infSize!.evalMode <- emUnknown
+        boundaryPOV!.pItem!.value!.overlayType <- NUM
+        boundaryPOV!.pItem!.value!.evalMode <- emLiteral
+        boundaryPOV!.pItem!.value!.sizeMode <- fromCount
+        boundaryPOV!.pItem!.value!.num <- 0
+        boundaryPOV!.pItem!.originID <- sourceSpan!.pItem!.originID
+        boundaryPOV!.pItem!.infCharPos <- sourceSpan!.pItem!.infCharPos
+        boundaryPOV!.pParent <- sourceSpan!.pParent
+        boundaryPOV!.accessMode <- aRefTo
+        boundaryPOV!.temporalBoundary.sourcePov <- sourceSpan
+        boundaryPOV!.temporalBoundary.tracksEnd <- tracksEnd
+        if(!tracksEnd){
+            boundaryPOV!.temporalBoundary.cutIndexKnown <- true
+            boundaryPOV!.temporalBoundary.cutIndex <- 0
+        }else{
+            me EndRelativeExtentResult: extent <-
+                    sourceSpan!.pItem!.endRelativeExtent()
+            if(extent.status==eresExact){
+                boundaryPOV!.temporalBoundary.cutIndexKnown <- true
+                boundaryPOV!.temporalBoundary.cutIndex <- extent.exactExtent
+            }
+        }
+        return(boundaryPOV)
+    }
+
+    // Part resolution replaces its working POV's pItem.  Preserve the source
+    // view in a separate POV before constructing a boundary that refers to it.
+    our POV: snapshotTemporalSourcePOV(their POV: sourcePOV) <- {
+        if(sourcePOV==NULL or sourcePOV!.pItem==NULL){return(NULL)}
+        our POV:: snapshot{povSrcTemporalBoundary}
+        snapshot!.pItem <- sourcePOV!.pItem
+        snapshot!.pParent <- sourcePOV!.pParent
+        snapshot!.accessMode <- sourcePOV!.accessMode
+        snapshot!.isSubItm <- sourcePOV!.isSubItm
+        snapshot!.viewMap.sourcePov <- sourcePOV!.viewMap.sourcePov
+        snapshot!.viewMap.startPov <- sourcePOV!.viewMap.startPov
+        snapshot!.viewMapWriteEnabled <- sourcePOV!.viewMapWriteEnabled
+        snapshot!.implicitItem.sourcePov <- sourcePOV!.implicitItem.sourcePov
+        snapshot!.implicitItem.sourceIndex <- sourcePOV!.implicitItem.sourceIndex
+        return(snapshot)
+    }
+
+    me bool: sameTemporalBoundary(their POV: first,
+            their POV: second) <- {
+        if(first===second){return(true)}
+        if(first==NULL or second==NULL or
+                first!.temporalBoundary.sourcePov==NULL or
+                second!.temporalBoundary.sourcePov==NULL or
+                first!.temporalBoundary.sourcePov!==
+                        second!.temporalBoundary.sourcePov){return(false)}
+        if(first!.temporalBoundary.cutIndexKnown and
+                second!.temporalBoundary.cutIndexKnown){
+            return(first!.temporalBoundary.cutIndex==
+                    second!.temporalBoundary.cutIndex)
+        }
+        return(first!.temporalBoundary.tracksEnd and
+                second!.temporalBoundary.tracksEnd)
+    }
+
+    // Identity traversal is deliberately symmetric.  Callers may ask from
+    // either endpoint; no merge direction is encoded in the identity.
+    our POV: boundaryAcrossIdentity(their TemporalBoundaryIdentity: identity,
+            their POV: knownBoundary) <- {
+        if(identity==NULL or knownBoundary==NULL){return(NULL)}
+        if(sameTemporalBoundary(
+                knownBoundary, identity!.endingBoundary)){
+            return(identity!.beginningBoundary)
+        }
+        if(sameTemporalBoundary(
+                knownBoundary, identity!.beginningBoundary)){
+            return(identity!.endingBoundary)
+        }
+        return(NULL)
+    }
+
+    me bool: boundaryIdentityAlreadyRecorded(our infonView: owner,
+            our POV: endingSpan, our POV: beginningSpan) <- {
+        withEach identity in owner!.temporalBoundaryIdentities{
+            if(identity!.endingSpan===endingSpan and
+                    identity!.beginningSpan===beginningSpan){return(true)}
+        }
+        return(false)
+    }
+
+    // Enumerate only identities implied by direct sequence adjacency.  Sharing
+    // a temporal root is intentionally insufficient: an intervening non-T
+    // item prevents this identity from being emitted.  An unknown prior end
+    // does not: it contributes a symbolic end boundary that can be resolved
+    // later, without pretending that a concrete last occurrence is available.
+    me void: enumerateAdjacentSpanBoundaryIdentities(their POV: ownerPOV) <- {
+        if(!isTemporalSpanPOV(ownerPOV)){return()}
+        our infonView: owner <- ownerPOV!.pItem
+        our POV: precedingSpan <- NULL
+        our POV: child <- owner!.value!.items.head
+        while(child!=NULL){
+            child!.pParent <- ownerPOV
+            if(isTemporalSpanPOV(child)){
+                if(precedingSpan!=NULL and
+                        !boundaryIdentityAlreadyRecorded(
+                                owner, precedingSpan, child)){
+                    our POV: endingBoundary <-
+                            makeTemporalBoundaryPOV(precedingSpan, true)
+                    our POV: beginningBoundary <-
+                            makeTemporalBoundaryPOV(child, false)
+                    if(endingBoundary==NULL or beginningBoundary==NULL){
+                        precedingSpan <- child
+                        child <- child!.next
+                        continue()
+                    }
+                    our TemporalBoundaryIdentity:: identity
+                    identity!.endingSpan <- precedingSpan
+                    identity!.beginningSpan <- child
+                    identity!.endingBoundary <- endingBoundary
+                    identity!.beginningBoundary <- beginningBoundary
+                    owner!.temporalBoundaryIdentities.append(identity)
+                }
+                precedingSpan <- child
+            }else{
+                // Only immediately adjacent spans share a boundary by syntax.
+                precedingSpan <- NULL
+            }
+            child <- child!.next
+        }
+    }
+
+    our POV: firstTemporalOccurrence(our POV: spanPOV, me int: depth) <- {
+        if(!isTemporalSpanPOV(spanPOV) or depth>128){return(NULL)}
+        our POV: first <- spanPOV!.pItem!.value!.items.head
+        if(first==NULL){return(NULL)}
+        first!.pParent <- spanPOV
+        if(isTemporalSpanPOV(first)){
+            return(firstTemporalOccurrence(first, depth + 1))
+        }
+        return(first)
+    }
+
+    our POV: lastTemporalOccurrence(our POV: spanPOV, me int: depth) <- {
+        if(!temporalSpanHasKnownEnd(spanPOV) or depth>128){return(NULL)}
+        our POV: last <- spanPOV!.pItem!.value!.items.tail
+        if(last==NULL){return(NULL)}
+        last!.pParent <- spanPOV
+        if(isTemporalSpanPOV(last)){
+            return(lastTemporalOccurrence(last, depth + 1))
+        }
+        return(last)
+    }
+
+    // Apply the same symmetric end=begin evidence in either direction.  This
+    // is deliberately separate from cursor evaluation so later theorem search
+    // can enumerate the identity without executing a cursor.
+    our POV: occurrenceAcrossAdjacentSpanBoundary(their POV: anchor,
+            me bool: previous) <- {
+        if(anchor==NULL or anchor!.pParent==NULL){return(NULL)}
+        their POV: currentSpan <- anchor!.pParent
+        if(!isTemporalSpanPOV(currentSpan) or
+                currentSpan!.pParent==NULL){return(NULL)}
+        their POV: ownerPOV <- currentSpan!.pParent
+        if(!isTemporalSpanPOV(ownerPOV)){return(NULL)}
+        enumerateAdjacentSpanBoundaryIdentities(ownerPOV)
+        our POV: currentBoundary <-
+                makeTemporalBoundaryPOV(currentSpan, !previous)
+        withEach identity in ownerPOV!.pItem!.
+                temporalBoundaryIdentities{
+            our POV: oppositeBoundary <-
+                    boundaryAcrossIdentity(identity, currentBoundary)
+            if(oppositeBoundary!=NULL){
+                if(previous and oppositeBoundary!.temporalBoundary.
+                        sourcePov===identity!.endingSpan){
+                    return(lastTemporalOccurrence(identity!.endingSpan, 0))
+                }
+                if(!previous and oppositeBoundary!.temporalBoundary.
+                        sourcePov===identity!.beginningSpan){
+                    return(firstTemporalOccurrence(
+                            identity!.beginningSpan, 0))
+                }
+            }
+        }
+        return(NULL)
+    }
+
+    our POV: temporalNeighborFromIdentity(their POV: anchor,
+            me bool: previous) <- {
+        if(anchor==NULL){return(NULL)}
+        if(previous and anchor!.prev!=NULL){return(anchor!.prev)}
+        if(!previous and anchor!.next!=NULL){return(anchor!.next)}
+        return(occurrenceAcrossAdjacentSpanBoundary(anchor, previous))
+    }
+
+    void: enumerateListIdentityImplications(our AItem: aItem,
+            their InfonViewReasoningResult: plan) <- {
+        if(aItem==NULL or aItem!.LHS_item==NULL or
+                aItem!.LHS_item!.pItem==NULL or aItem!.RHS==NULL or
+                aItem!.RHS!.pItem==NULL){return()}
+        if(plan.status==rrNotApplicable or plan.status==rrRejected){return()}
+        our infonView: LHS <- aItem!.LHS_item!.pItem
+        our infonView: RHS <- aItem!.RHS!.pItem
+        if(LHS!.value!.overlayType==LST and
+                RHS!.value!.overlayType==LST and
+                !LHS!.value!.timelike and RHS!.value!.timelike){
+            plan!.copyRHSTimelikeToLHS <- true
+        }
+    }
+
+    void: execListIdentityImplications(our AItem: aItem,
+            their InfonViewReasoningResult: plan) <- {
+        if(!plan.copyRHSTimelikeToLHS){return()}
+        aItem!.LHS_item!.pItem!.value!.timelike <- true
+        aItem!.phase1RecordHandler(
+                "temporalIdentity:listContextCopied", false)
     }
 }
 
@@ -2698,6 +2981,37 @@ struct CursorPathResolver{
         return(NULL)
     }
 
+    // Find the current occurrence at the nearest enclosing T-level.  This is
+    // intentionally different from getRelativeAnchor(): copied ListSpecs and
+    // nested S-lists are execution/structure boundaries, not temporal levels.
+    their POV: getTemporalRelativeAnchor(our POV: startAnchor,
+            our POV: cursorAnchor) <- {
+        their POV: anchor <- startAnchor
+        if(startAnchor!=NULL and startAnchor!.pItem!=NULL and
+                startAnchor!.pItem!.copySourceType==cstListSpec and
+                cursorAnchor!=NULL){anchor <- cursorAnchor}
+        while(anchor!=NULL){
+            if(anchor!.pParent!=NULL and anchor!.pParent!.pItem!=NULL and
+                    anchor!.pParent!.pItem!.value!.overlayType==LST and
+                    anchor!.pParent!.pItem!.value!.timelike){
+                return(anchor)
+            }
+            anchor <- anchor!.pParent
+        }
+        // A copied ListSpec cursor may not itself be attached at the runtime
+        // occurrence. Only then use the explicit execution anchor.
+        anchor <- cursorAnchor
+        while(anchor!=NULL){
+            if(anchor!.pParent!=NULL and anchor!.pParent!.pItem!=NULL and
+                    anchor!.pParent!.pItem!.value!.overlayType==LST and
+                    anchor!.pParent!.pItem!.value!.timelike){
+                return(anchor)
+            }
+            anchor <- anchor!.pParent
+        }
+        return(NULL)
+    }
+
     me bool: infonViewContainsNestedCursorLookup(their infonView: infn,
             their List<their infonView>: seen) <- {
         if(infn==NULL){return(false)}
@@ -2738,7 +3052,8 @@ struct CursorPathResolver{
     }
 
     me bool: lookUpCursor(their WorldManager: worldManager,
-            our AItem: aItem) <- {
+            our AItem: aItem,
+            their TemporalIdentityReasoner: temporalIdentityReasoner) <- {
         our infonView: CI <- aItem!.LHS_item!.pItem
         our infonView: newTop <- NULL
         me bool: changeMade <- false
@@ -2771,6 +3086,30 @@ struct CursorPathResolver{
                             aItem!.LHS_item, aItem!.cursorAnchor)
                     if(anchor!=NULL and anchor!.next!=NULL){
                         newTop <- anchor!.next!.pItem
+                        detachCursorResult <- true
+                    }else{
+                        CI!.value!.undefined <- true
+                    }
+                }
+                case cmTPrev:{
+                    their POV: anchor <- getTemporalRelativeAnchor(
+                            aItem!.LHS_item, aItem!.cursorAnchor)
+                    our POV: temporalSource <- temporalIdentityReasoner!.
+                            temporalNeighborFromIdentity(anchor, true)
+                    if(temporalSource!=NULL){
+                        newTop <- temporalSource!.pItem
+                        detachCursorResult <- true
+                    }else{
+                        CI!.value!.undefined <- true
+                    }
+                }
+                case cmTNext:{
+                    their POV: anchor <- getTemporalRelativeAnchor(
+                            aItem!.LHS_item, aItem!.cursorAnchor)
+                    our POV: temporalSource <- temporalIdentityReasoner!.
+                            temporalNeighborFromIdentity(anchor, false)
+                    if(temporalSource!=NULL){
+                        newTop <- temporalSource!.pItem
                         detachCursorResult <- true
                     }else{
                         CI!.value!.undefined <- true
@@ -2834,10 +3173,11 @@ struct CursorPathResolver{
     me bool: processLocalNullableContinuation(their WorldManager: worldManager,
             their Agenda: agenda, our AItem: aItem,
             their bool: nxtAction,
-            their List<our AItem>: requestedWork) <- {
+            their List<our AItem>: requestedWork,
+            their TemporalIdentityReasoner: temporalIdentityReasoner) <- {
         if(hasLocalNullableContinuation(aItem)){
             return(resolveParts(worldManager, agenda, aItem, nxtAction,
-                    requestedWork))
+                    requestedWork, temporalIdentityReasoner))
         }
         return(false)
     }
@@ -2987,7 +3327,8 @@ struct CursorPathResolver{
     me bool: resolveParts(their WorldManager: worldManager,
             their Agenda: agenda, our AItem: aItem,
             their bool: nxtAction,
-            their List<our AItem>: requestedWork) <- {
+            their List<our AItem>: requestedWork,
+            their TemporalIdentityReasoner: temporalIdentityReasoner) <- {
         me bool: changeMade <- false
         nxtAction! <- true
         our infonView: CI <- aItem!.LHS_item!.pItem
@@ -3003,6 +3344,7 @@ struct CursorPathResolver{
                 }
                 our infonView: newPath
                 our POV: newPov
+                our POV: selectedTemporalBoundary
                 if(part!.wasTransfered){
                     continue()
                 }else{
@@ -3010,9 +3352,31 @@ struct CursorPathResolver{
                 }
                 switch(part!.pathMode){
                     case dotField:{
-                        if(CI!.orderMode==uUnordered){
+                        if(CI!.value!.overlayType==LST and
+                                CI!.value!.timelike and
+                                part!.path!.type!=NULL and
+                                (partTag=="begin" or partTag=="end")){
+                            // The working POV is about to be replaced by the
+                            // selected result.  Give the boundary a stable
+                            // source view that survives that replacement.
+                            our POV: sourceSnapshot <-
+                                    temporalIdentityReasoner!.
+                                    snapshotTemporalSourcePOV(
+                                            aItem!.LHS_item)
+                            selectedTemporalBoundary <-
+                                    temporalIdentityReasoner!.
+                                    makeTemporalBoundaryPOV(sourceSnapshot,
+                                            partTag=="end")
+                            if(selectedTemporalBoundary!=NULL){
+                                selectedTemporalBoundary!.pItem!.
+                                        addSourceGraphDependency(
+                                                sourceSnapshot)
+                                newPath <- selectedTemporalBoundary!.pItem
+                            }
+                        }
+                        if(newPath==NULL and CI!.orderMode==uUnordered){
                             newPath <- CI!.findMatchingItem(part!.path)
-                        } else if(part!.path!.type != NULL){
+                        } else if(newPath==NULL and part!.path!.type != NULL){
                             if(partTag == "first"){
                                 newPath <- CI!.getFirstItem(aItem!.LHS_item!.isSubItm)
                             }
@@ -3073,10 +3437,44 @@ struct CursorPathResolver{
                 newPath!.takeWrkListFrom(part!.path, true)
                 if(!part!.hasSemiColon){
                     aItem!.LHS_item!.pItem <- newPath
+                    aItem!.LHS_item!.temporalBoundary.sourcePov <- NULL
+                    aItem!.LHS_item!.temporalBoundary.tracksEnd <- false
+                    aItem!.LHS_item!.temporalBoundary.cutIndexKnown <- false
+                    aItem!.LHS_item!.temporalBoundary.cutIndex <- -1
+                    if(selectedTemporalBoundary!=NULL){
+                        aItem!.LHS_item!.temporalBoundary.sourcePov <-
+                                selectedTemporalBoundary!.
+                                temporalBoundary.sourcePov
+                        aItem!.LHS_item!.temporalBoundary.tracksEnd <-
+                                selectedTemporalBoundary!.
+                                temporalBoundary.tracksEnd
+                        aItem!.LHS_item!.temporalBoundary.cutIndexKnown <-
+                                selectedTemporalBoundary!.
+                                temporalBoundary.cutIndexKnown
+                        aItem!.LHS_item!.temporalBoundary.cutIndex <-
+                                selectedTemporalBoundary!.
+                                temporalBoundary.cutIndex
+                        aItem!.LHS_item!.accessMode <- aRefTo
+                    }
                     nxtAction! <- true
                 }else{
                     our POV:: pathPov{20}
                     pathPov!.pItem <- newPath
+                    if(selectedTemporalBoundary!=NULL){
+                        pathPov!.temporalBoundary.sourcePov <-
+                                selectedTemporalBoundary!.
+                                temporalBoundary.sourcePov
+                        pathPov!.temporalBoundary.tracksEnd <-
+                                selectedTemporalBoundary!.
+                                temporalBoundary.tracksEnd
+                        pathPov!.temporalBoundary.cutIndexKnown <-
+                                selectedTemporalBoundary!.
+                                temporalBoundary.cutIndexKnown
+                        pathPov!.temporalBoundary.cutIndex <-
+                                selectedTemporalBoundary!.
+                                temporalBoundary.cutIndex
+                        pathPov!.accessMode <- aRefTo
+                    }
                     aItem!.LHS_item!.pItem!.retainPOV(pathPov)
                     our AItem: newAItem <- worldManager!.prepareInfonWork(
                             agenda, pathPov, NULL, aItem,
@@ -3633,6 +4031,7 @@ struct POVLevelReasoner{
     me ReferenceMapper: referenceMapper
     me CursorPathResolver: cursorPathResolver
     me ParentMemberReasoner: parentMemberReasoner
+    me TemporalIdentityReasoner: temporalIdentityReasoner
 
     me bool: derefInfonView(their WorldManager: worldManager,
             our infonView: CI) <- {
@@ -3708,7 +4107,8 @@ struct POVLevelReasoner{
 
     me bool: lookUpCursor(their WorldManager: worldManager,
             our AItem: aItem) <- {
-        return(cursorPathResolver.lookUpCursor(worldManager, aItem))
+        return(cursorPathResolver.lookUpCursor(
+                worldManager, aItem, temporalIdentityReasoner))
     }
 
     me bool: povIsUnderIncompleteStream(their POV: pov) <- {
@@ -3724,7 +4124,8 @@ struct POVLevelReasoner{
             our AItem: aItem, their bool: nxtAction,
             their List<our AItem>: requestedWork) <- {
         return(cursorPathResolver.processLocalNullableContinuation(
-                worldManager, agenda, aItem, nxtAction, requestedWork))
+                worldManager, agenda, aItem, nxtAction, requestedWork,
+                temporalIdentityReasoner))
     }
 
     me bool: resolveParts(their WorldManager: worldManager,
@@ -3732,7 +4133,8 @@ struct POVLevelReasoner{
             their bool: nxtAction,
             their List<our AItem>: requestedWork) <- {
         return(cursorPathResolver.resolveParts(
-                worldManager, agenda, aItem, nxtAction, requestedWork))
+                worldManager, agenda, aItem, nxtAction, requestedWork,
+                temporalIdentityReasoner))
     }
 
     me bool: processWorkList(their WorldManager: worldManager,
@@ -3914,11 +4316,16 @@ struct InfonViewReasoner{
     me OrderedSpanReasoner: orderedSpanReasoner
     me ReferenceConsolidationStrategy: referenceConsolidationStrategy
     me GeneratedMergeTrapStrategy: generatedMergeTrapStrategy
+    me TemporalIdentityReasoner: temporalIdentityReasoner
 
     me InfonViewReasoningResult: planConsolidation(their WorldManager: worldManager,
             our AItem: aItem) <- {
         me InfonViewReasoningResult: result <- directConsolidationStrategy.planConsolidation(aItem)
-        if(result.status!=rrNotApplicable){return(result)}
+        if(result.status!=rrNotApplicable){
+            temporalIdentityReasoner.enumerateListIdentityImplications(
+                    aItem, result)
+            return(result)
+        }
         // A mapped composite span identifies storage, so it must be handled
         // before ordinary list merging can consume it as a local value. Keep
         // the established ordering for every non-derived merge.
@@ -3929,15 +4336,34 @@ struct InfonViewReasoner{
                 aItem!.RHS!=NULL and aItem!.RHS!.pItem!=NULL and
                 aItem!.RHS!.pItem!.value!.overlayType==LST){
             result <- referenceConsolidationStrategy.planConsolidation(aItem)
-            if(result.status!=rrNotApplicable){return(result)}
+            if(result.status!=rrNotApplicable){
+                temporalIdentityReasoner.enumerateListIdentityImplications(
+                        aItem, result)
+                return(result)
+            }
         }
         result <- listConsolidationStrategy.planConsolidation(worldManager, aItem)
-        if(result.status!=rrNotApplicable){return(result)}
+        if(result.status!=rrNotApplicable){
+            temporalIdentityReasoner.enumerateListIdentityImplications(
+                    aItem, result)
+            return(result)
+        }
         result <- intersectionReasoner.planConsolidation(aItem)
-        if(result.status!=rrNotApplicable){return(result)}
+        if(result.status!=rrNotApplicable){
+            temporalIdentityReasoner.enumerateListIdentityImplications(
+                    aItem, result)
+            return(result)
+        }
         result <- orderedSpanReasoner.planConsolidation(worldManager, aItem)
-        if(result.status!=rrNotApplicable){return(result)}
-        return(referenceConsolidationStrategy.planConsolidation(aItem))
+        if(result.status!=rrNotApplicable){
+            temporalIdentityReasoner.enumerateListIdentityImplications(
+                    aItem, result)
+            return(result)
+        }
+        result <- referenceConsolidationStrategy.planConsolidation(aItem)
+        temporalIdentityReasoner.enumerateListIdentityImplications(
+                aItem, result)
+        return(result)
     }
 
     me bool: isDefinitionListShapeOnly(our AItem: aItem) <- {
@@ -4161,6 +4587,7 @@ struct InfonViewReasoner{
     our POV: execConsolidationPlan(their WorldManager: worldManager, our AItem: aItem,
             their InfonViewReasoningResult: result) <- {
         our POV: remainder <- NULL
+        temporalIdentityReasoner.execListIdentityImplications(aItem, result)
         // Definition-backed shape is committed first, preserving its historical
         // order relative to ordinary size/value effects while remaining atomic
         // with the accepted consolidation plan.
