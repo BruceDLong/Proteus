@@ -1,0 +1,391 @@
+// Shared asynchronous loading mechanism for Proteus-based cores.
+//
+// Proteus owns stream parsing, normalization, origin tracking, relative stream
+// resolution, and lifetime management.  A derived ProteusCore owns protocol
+// policy by implementing makeInfonConnector().  This keeps file, terminal,
+// network, or application-specific loading out of Proteus Core itself.
+
+struct InfonStreamSpec {
+    me string: spec
+    me string: protocolTag
+    me string: connectArgs
+    me string: contentArgs
+    me string: ipAddr
+    me string: portNum
+
+    me bool: setSpec(me string: fullSpec)    <- {spec <- fullSpec;     return(toParts())}
+    me bool: setProtocolTag(me string: part) <- {protocolTag <- part;  return(toSpec())}
+    me bool: setConnectArgs(me string: part) <- {connectArgs <- part;  return(toSpec())}
+    me bool: setContentArgs(me string: part) <- {contentArgs <- part;  return(toSpec())}
+
+    me bool: toSpec() <- {
+        spec <- ""
+        if(protocolTag!=""){spec <+- protocolTag+"://"}
+        if(connectArgs!=""){spec <+- connectArgs}
+        if(contentArgs!=""){spec <+- "/"+contentArgs}
+        return(true)
+    }
+
+    me bool: toParts() <- {
+        trimWS(spec)
+        protocolTag <- "file"
+        connectArgs <- ""
+        contentArgs <- ""
+        ipAddr <- ""
+        portNum <- ""
+
+        me string: temp <- spec
+        me int: markPos <- temp.find("://")
+        if(markPos>=0){
+            protocolTag <- temp.subStr(0, markPos)
+            temp <- temp.subStr(markPos+3)
+        }
+
+        markPos <- temp.find("/")
+        if(markPos>=0){
+            connectArgs <- temp.subStr(0, markPos)
+            contentArgs <- temp.subStr(markPos+1)
+        } else {
+            contentArgs <- temp
+        }
+
+        if(connectArgs!=""){
+            temp <- connectArgs
+            markPos <- connectArgs.find("]")
+            if(markPos>=0){
+                ipAddr <- connectArgs.subStr(1, markPos-1)
+                temp <- connectArgs.subStr(markPos+1)
+                markPos <- temp.find(":")
+                if(markPos>=0){portNum <- temp.subStr(markPos+1)}
+            } else {
+                markPos <- connectArgs.find(":")
+                if(markPos>=0){
+                    ipAddr  <- connectArgs.subStr(0, markPos)
+                    portNum <- connectArgs.subStr(markPos+1)
+                } else {ipAddr <- connectArgs}
+            }
+
+            if(ipAddr!="" and ipAddr[0]=="["){
+                ipAddr <- ipAddr.subStr(1, ipAddr.size()-2)
+            }
+        }
+        return(true)
+    }
+}
+
+// A core-specific connector is the boundary between an external protocol and
+// the shared Proteus parse/normalize stream.  Immediate connection rejection
+// is represented by a NULL connector; later errors travel through these
+// callbacks and therefore remain under the connector/core's control.
+model InfonConnector{
+    our InfonStreamSpec: streamSpec
+    me strBuf: inputBuf
+    me strBuf: outputBuf
+    me int:    statusCode
+    me string: statusMesg
+    me bool:   inputEOF
+    me bool:   shutdownRequested
+    me bool:   allowStreamingNormalize
+    their InfonStream: iStreamParent
+
+    void: init(our InfonStreamSpec: SP) <- {}
+    void: pumpInputBuff() <- {}
+    me string: readInputStream() <- {return("")}
+    bool: pumpOutputBuf(me string: mesg)
+    void: submitProteusResult(me int64: pos, me string: mesg) <- {
+        if(!shutdownRequested){pumpOutputBuf("RESULT:"+toString(pos)+":"+mesg+"\n")}
+    }
+    void: handleSystemError(me string: mesg) <- {
+        if(!shutdownRequested){pumpOutputBuf("SYSERR:"+mesg+"\n")}
+    }
+    void: handleSyntaxError(me string: mesg) <- {
+        if(!shutdownRequested){pumpOutputBuf("SYNERR:"+mesg+"\n")}
+    }
+    void: handleProteusError(me string: mesg) <- {
+        if(!shutdownRequested){pumpOutputBuf("NRMERR:"+mesg+"\n")}
+    }
+}
+struct InfonConnector{}
+
+struct ThreadedInfonParser: inherits=Threads{
+    me string: name
+    our ProteusParser: parser
+    our infonView: result
+    our InfonConnector: sourceConnector
+    me bool: parseCompleted
+    me Mutex: chkParseDone
+    me SyncLock: parseDoneLock
+
+    void: waitForParseCompletion() <- {
+        me MutexMngr: MtxMgr{chkParseDone}
+        while(!parseCompleted){
+            parseDoneLock.wait(MtxMgr)
+        }
+    }
+
+    void: initAndStart(our ProteusParser: pParser, their strBuf: streamToParse,
+            our infonView: topItem, me string: Name) <- {
+        parser <- pParser
+        result <- topItem
+        name <- Name+"_P"
+        parseCompleted <- false
+        parser!.initParseFromStream(streamToParse)
+        start(name)
+    }
+
+    void: run() <- {
+        log("OPENING PARSE_THREAD:"+streamName())
+        parser!.doParse(result)
+        if(parser!.doesParseHaveError()){
+            handleSyntaxError(parser!.formattedError())
+        }
+        log("CLOSING PARSE_THREAD:"+streamName())
+
+        protect(chkParseDone){
+            parseCompleted <- true
+            parseDoneLock.notifyOne()
+        }
+    }
+
+    me string: streamName() <- {return(sourceConnector.streamSpec.spec)}
+    void: handleSyntaxError(me string: mesg) <- {
+        log("Syntax Error:"+mesg)
+        sourceConnector.handleSyntaxError(streamName()+": "+mesg)
+    }
+}
+
+struct InfonStream{ // InfonConnector -> Parse -> Extract -> Normalize
+    me string: name
+    our InfonConnector: source
+    me uint64: originID
+    their Agent: parentAgent
+    our ProteusParser: parser
+    our infonView: toFill
+    me ThreadedInfonParser: parserThread
+    me ThreadedNormalizer: normerThread
+
+    bool: pumpParserInputBuf() <- {
+        if(source.inputEOF){return(false)}
+        me string: data <- source.readInputStream()
+        if(!source.inputEOF and data.size()>0){
+            source.inputBuf.putStr(data)
+        }
+        return(!source.inputEOF)
+    }
+
+    bool: pushParserInputBuf(me string: data) <- {
+        if(!source.inputEOF and data.size()>0){
+            source.inputBuf.putStr(data)
+        }
+        return(!source.inputEOF)
+    }
+
+    void: init(our InfonConnector: connector, their Agent: agent,
+            our ProteusParser: pParser, our infonView: infToFill,
+            me uint64: OriginID) <- {
+        source <- connector
+        originID <- OriginID
+        parentAgent <- agent
+        parser <- pParser
+        toFill <- infToFill
+        source.iStreamParent <- self
+        source.inputBuf.init(source.streamSpec.spec)
+        source.outputBuf.init(source.streamSpec.spec+":out")
+        if(toFill==NULL){Allocate(toFill)}
+        toFill.originID <- originID
+        parserThread.sourceConnector <- source
+    }
+
+    void: start(me string: Name) <- {
+        name <- Name
+        normerThread.init(parentAgent, toFill)
+        if(source.allowStreamingNormalize){
+            normerThread.start(name+"_NRM")
+            parserThread.initAndStart(parser, source.inputBuf, toFill, name+"_PnE")
+            source.pumpInputBuff()
+        } else {
+            parserThread.initAndStart(parser, source.inputBuf, toFill, name+"_PnE")
+            source.pumpInputBuff()
+            parserThread.waitForExit()
+            normerThread.start(name+"_NRM")
+        }
+    }
+
+    void: waitForCompletion() <- {
+        parserThread.waitForExit()
+        normerThread.waitForExit()
+    }
+
+    void: closeInput() <- {
+        if(source!=NULL){
+            source.inputEOF <- true
+            source.inputBuf.close()
+        }
+    }
+
+    void: requestFinish() <- {
+        if(source!=NULL){
+            source.shutdownRequested <- true
+            closeInput()
+        }
+    }
+}
+
+// Shared stream lifecycle.  A non-NULL return means that the core accepted and
+// started the request.  Parsing and normalization can still report errors
+// asynchronously through the connector callbacks.
+struct InfonStreamLoader{
+    their Agent: agent
+    their ProteusCore: core
+    me int: numFilesLoaded <- 0
+    me Mutex: connMgrMtx
+    me uint64: lastOriginID
+    me Map<uint64, our InfonStream>: infonSourceRecords
+
+    void: init(their Agent: agnt, their ProteusCore: owningCore) <- {
+        agent <- agnt
+        core <- owningCore
+        lastOriginID <- 0
+        numFilesLoaded <- 0
+    }
+
+    me bool: hasProtocol(me string: specString) <- {
+        me int: markPos <- specString.find("://")
+        return(markPos>=0)
+    }
+
+    me string: canonicalFileSpec(me string: specString) <- {
+        trimWS(specString)
+        if(specString==""){return(specString)}
+        if(hasProtocol(specString)){return(specString)}
+        if(specString[0]=="/" or specString[0]=="\\"){
+            return("file://"+specString)
+        }
+        return("file:///"+specString)
+    }
+
+    me string: parentDirForOrigin(me uint64: originID) <- {
+        me string: parentPath <- ""
+        protect(connMgrMtx){
+            if(infonSourceRecords.containsKey(originID) and
+                    infonSourceRecords[originID]!=NULL and
+                    infonSourceRecords[originID].source!=NULL){
+                parentPath <- infonSourceRecords[originID].source.streamSpec.spec
+                me int: lastSlashPos <- findLastSubString(parentPath, "/")
+                if(lastSlashPos>=0){
+                    parentPath <- parentPath.subStr(0, lastSlashPos+1)
+                }
+            }
+        }
+        return(parentPath)
+    }
+
+    me string: resolveStreamSpec(me string: specString, me string: parentPath) <- {
+        trimWS(specString)
+        if(specString==""){return(specString)}
+        if(hasProtocol(specString)){return(specString)}
+        if(specString[0]=="/" or specString[0]=="\\"){
+            specString <- specString.subStr(1, specString.size()-1)
+            if(parentPath!=""){return(parentPath+specString)}
+            return("file:///"+specString)
+        }
+        if(parentPath!=""){return(parentPath+specString)}
+        return(canonicalFileSpec(specString))
+    }
+
+    our InfonStream: startNewConnection(our infonView: toFill,
+            me string: specString, me uint64: parentOriginID <- 0) <- {
+        me string: parentPath <- ""
+        if(parentOriginID>0){parentPath <- parentDirForOrigin(parentOriginID)}
+        else if(toFill!=NULL){parentPath <- parentDirForOrigin(toFill.originID)}
+        me string: resolvedSpec <- resolveStreamSpec(specString, parentPath)
+
+        me int: loadNumber
+        protect(connMgrMtx){
+            numFilesLoaded <+- 1
+            loadNumber <- numFilesLoaded
+        }
+        our InfonConnector: connector <- core!.makeInfonConnector(resolvedSpec, loadNumber)
+        if(connector==NULL){return(NULL)}
+
+        our InfonStream:: iStream
+        protect(connMgrMtx){
+            lastOriginID <+- 1
+            me uint64: originID <- lastOriginID
+            our ProteusParser:: parser{core, true, originID}
+            iStream.init(connector, agent, parser, toFill, originID)
+            infonSourceRecords[originID] <- iStream
+        }
+        iStream.start("IS"+toString(loadNumber))
+        return(iStream)
+    }
+
+    void: waitForAllStreams() <- {
+        me int: stablePasses <- 0
+        while(stablePasses<2){
+            me int: countAtStart
+            me List<our InfonStream>: streamsToWaitFor
+            protect(connMgrMtx){
+                countAtStart <- numFilesLoaded
+                withEach (originID, stream) in infonSourceRecords{
+                    streamsToWaitFor.append(stream)
+                }
+            }
+            withEach stream in streamsToWaitFor{
+                if(stream!=NULL){stream.waitForCompletion()}
+            }
+            me int: countAfterWait
+            protect(connMgrMtx){countAfterWait <- numFilesLoaded}
+            if(countAfterWait==countAtStart){stablePasses <+- 1}
+            else {stablePasses <- 0}
+        }
+    }
+
+    void: printLoadedStreams() <- {
+        protect(connMgrMtx){
+            print("STREAMS_LOADED:"+toString(numFilesLoaded)+"\n")
+            withEach (originID, stream) in infonSourceRecords{
+                if(stream!=NULL){
+                    print("  #"+toString(originID)+" "+stream.source.streamSpec.spec+"\n")
+                }
+            }
+        }
+    }
+
+    me string: getOriginIDString(me uint64: originID) <- {
+        me string: sourceName <- "source#"+toString(originID)
+        protect(connMgrMtx){
+            if(infonSourceRecords.containsKey(originID) and
+                    infonSourceRecords[originID]!=NULL and
+                    infonSourceRecords[originID].source!=NULL){
+                sourceName <- infonSourceRecords[originID].source.streamSpec.spec
+            }
+        }
+        return(sourceName)
+    }
+
+    our InfonStream: getStreamForOrigin(me uint64: originID) <- {
+        our InfonStream: stream
+        protect(connMgrMtx){
+            if(infonSourceRecords.containsKey(originID)){
+                stream <- infonSourceRecords[originID]
+            }
+        }
+        return(stream)
+    }
+
+    void: shutdown() <- {
+        me List<our InfonStream>: streamsToStop
+        protect(connMgrMtx){
+            withEach (originID, stream) in infonSourceRecords{
+                streamsToStop.append(stream)
+            }
+        }
+        withEach stream in streamsToStop{
+            if(stream!=NULL){stream.requestFinish()}
+        }
+        withEach stream in streamsToStop{
+            if(stream!=NULL){stream.waitForCompletion()}
+        }
+    }
+}
