@@ -49,6 +49,10 @@ TestsToRun = `
     unit/endRelative/correspondenceSparseMap
     unit/referenceRegistry/partPathSelection
     unit/referenceRegistry/intersectionPartPathSelection
+    unit/referenceRegistry/positiveIndexSelection
+    unit/referenceRegistry/firstSelection
+    unit/referenceRegistry/lastSelection
+    unit/referenceRegistry/positiveSpanSelection
     unit/orderedSpanView/positiveFlatLocalMap
     unit/orderedSpanView/positiveRecursiveLocalMap
     unit/orderedSpanView/directLocalMap
@@ -131,6 +135,7 @@ do ManageCmdLine(cmd)
 #define ENDRELPLAN (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeTraversalPlan(tname, CASE_ID)}%>
 #define ENDRELCORRESPONDENCE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeCorrespondence(tname, CASE_ID)}%>
 #define SELECTIONREFERENCE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestSelectionReference(tname, CASE_ID)}%>
+#define POSITIONALSELECTION (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestPositionalSelectionReference(tname, CASE_ID)}%>
 #define ORDEREDSPANVIEW (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestOrderedSpanView(tname, CASE_ID)}%>
 #define MAPPEDWRITE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestMappedWrite(tname, CASE_ID)}%>
 #define RESULTSELECTION (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestResultSelection(tname, CASE_ID)}%>
@@ -310,6 +315,10 @@ struct GLOBAL {
     ENDRELCORRESPONDENCE(unit/endRelative/correspondenceSparseMap, "map an accepted sparse position without materializing its source", 5)
     SELECTIONREFERENCE(unit/referenceRegistry/partPathSelection, "record direct part selection without asserting identity", 1)
     SELECTIONREFERENCE(unit/referenceRegistry/intersectionPartPathSelection, "record intersection-lowered part selection without asserting identity", 2)
+    POSITIONALSELECTION(unit/referenceRegistry/positiveIndexSelection, "record a positive index result by exact source POV", 1)
+    POSITIONALSELECTION(unit/referenceRegistry/firstSelection, "record first-item navigation by exact source POV", 2)
+    POSITIONALSELECTION(unit/referenceRegistry/lastSelection, "record last-item navigation by exact source POV", 3)
+    POSITIONALSELECTION(unit/referenceRegistry/positiveSpanSelection, "record a positive span by its exact first source POV", 4)
     ORDEREDSPANVIEW(unit/orderedSpanView/positiveFlatLocalMap, "build a positive flat span from local mapped copies", 1)
     ORDEREDSPANVIEW(unit/orderedSpanView/positiveRecursiveLocalMap, "map every level of a positive recursive typed span", 2)
     ORDEREDSPANVIEW(unit/orderedSpanView/directLocalMap, "copy and map a direct same-unit ordered span", 3)
@@ -1781,6 +1790,84 @@ struct GLOBAL {
                     registeredReference!.resultPOV===resultPOV and
                     registeredReference!.sourceStartPOV!.pItem===
                             resultPOV!.pItem
+        }
+        me string: actual <- "false"
+        me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+        modelMngr.clear()
+        return()
+    }
+    me void: unitTestPositionalSelectionReference(
+            me string: testName, me int: caseID) <- {
+        me ProteusCore: CORE
+        CORE.init("", false)
+        me string: expression <- "{10 20 30}@[2]"
+        me int64: expectedValue <- 20
+        if(caseID==2){
+            expression <- "{10 20 30}.first"
+            expectedValue <- 10
+        }else if(caseID==3){
+            expression <- "{10 20 30}.last"
+            expectedValue <- 30
+        }else if(caseID==4){
+            expression <- "{10 20 30 40}@[1:*2+{ ... }]"
+            expectedValue <- 20
+        }
+        our infonView: result <- parseAndExtract(testName, expression)
+        our POV:: resultPOV{povSrcPartPathSelection}
+        resultPOV!.pItem <- result
+        CORE.agent!.normalize(resultPOV)
+
+        our SelectionReference: registeredReference
+        me int: positionalReferenceCount <- 0
+        withEach reference in
+                CORE.agent!.identityRegistry!.selectionReferences{
+            if(reference!.referenceKind==srkPositionalSelection){
+                positionalReferenceCount <+- 1
+                registeredReference <- reference
+            }
+        }
+        me List<our SelectionReference>: sourceReferences
+        if(registeredReference!=NULL){
+            CORE.agent!.identityRegistry!.
+                    collectSelectionReferencesForSource(
+                            registeredReference!.sourceContextPOV,
+                            registeredReference!.sourceStartPOV,
+                            sourceReferences)
+        }
+
+        me bool: passed <- registeredReference!=NULL and
+                positionalReferenceCount==1 and
+                sourceReferences.size()==1 and
+                sourceReferences.first()===registeredReference and
+                CORE.agent!.identityRegistry!.identities.isEmpty() and
+                registeredReference!.queryPOV!=NULL and
+                registeredReference!.resultPOV!=NULL and
+                registeredReference!.resultPOV!.pItem===resultPOV!.pItem and
+                registeredReference!.sourceContextPOV!=NULL and
+                registeredReference!.sourceContextPOV!.pItem!=NULL and
+                registeredReference!.sourceContextPOV!.pItem!.value!.
+                        overlayType==LST and
+                registeredReference!.sourceStartPOV!=NULL and
+                registeredReference!.sourceStartPOV!.pItem!=NULL and
+                registeredReference!.sourceStartPOV!.pItem!.
+                        value!.num.convertToInt()==expectedValue
+        if(caseID==4){
+            our POV: firstResultPOV <-
+                    resultPOV!.pItem!.value!.items.head
+            our POV: secondResultPOV <-
+                    resultPOV!.pItem!.value!.items.tail
+            passed <- passed and firstResultPOV!=NULL and
+                    secondResultPOV!=NULL and
+                    firstResultPOV!.pItem!.value!.
+                            num.convertToInt()==20 and
+                    secondResultPOV!.pItem!.value!.
+                            num.convertToInt()==30
+        }else{
+            passed <- passed and
+                    resultPOV!.pItem!.value!.
+                            num.convertToInt()==expectedValue
         }
         me string: actual <- "false"
         me string: expected <- "true"

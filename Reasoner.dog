@@ -2311,6 +2311,36 @@ struct IntersectionReasoner{
                 srkIntersectionCorrespondence, 0)
     }
 
+    void: recordSelectedFunctionReference(
+            our AItem: aItem, our POV: selectedPOV,
+            our infonView: selectedResult) <- {
+        if(aItem==NULL or aItem!.LHS_item==NULL or
+                selectedPOV==NULL or selectedResult==NULL){return()}
+        me ViewMap: sourceMap <-
+                matchedSourceMap(aItem!.LHS_item, NULL)
+        if(sourceMap.sourcePov==NULL or sourceMap.startPov==NULL){
+            sourceMap <- matchedSourceMap(selectedPOV, NULL)
+        }
+        if((sourceMap.sourcePov==NULL or sourceMap.startPov==NULL) and
+                selectedResult!.value!.overlayType==LST and
+                !selectedResult!.value!.items.isEmpty()){
+            // A selected span may deliberately keep its root ViewMap empty so
+            // it cannot acquire write-through authority from one child. The
+            // first child's exact source still names the span's beginning for
+            // a read-only selection relation.
+            sourceMap <- matchedSourceMap(
+                    selectedResult!.value!.items.head, NULL)
+        }
+        if(sourceMap.sourcePov==NULL or sourceMap.startPov==NULL){return()}
+        their IdentityRegistry: registry <-
+                sourceMap.sourcePov!.effectiveIdentityRegistry()
+        if(registry==NULL){return()}
+        registry!.recordSelectionReference(
+                selectedPOV, aItem!.LHS_item,
+                sourceMap.sourcePov, sourceMap.startPov,
+                srkPositionalSelection, 0)
+    }
+
     me ViewMap: matchedSourceMap(our POV: localViewPOV,
             our IntersectionTraversalPlan: plan) <- {
         me ViewMap: sourceMap
@@ -2614,6 +2644,7 @@ struct IntersectionReasoner{
         our infonView: CI <- aItem!.LHS_item!.pItem
         our infonView: innr <- CI!.innr
         our infonView: newTop <- NULL
+        our POV: selectedResultPOV
         switch(CI!.intersectPos){
             case ipGetLast:{
                 our POV: innrSourcePOV <- NULL
@@ -2633,11 +2664,20 @@ struct IntersectionReasoner{
                             effectiveIdentityRegistry())
                     CI!.retainPOV(innrSourcePOV)
                 }
+                selectedResultPOV <- innrSourcePOV!.getLastPOV()
                 newTop <- worldManager!.selectReturnedInfonViewFromPOV(
-                        aItem, innrSourcePOV!.getLastPOV())
+                        aItem, selectedResultPOV)
             }
             case ipGetFirst:{
                 newTop <- innr!.getFirstItem(aItem!.LHS_item!.isSubItm)
+                selectedResultPOV <- innr!.value!.items.head
+                if(selectedResultPOV!=NULL and
+                        selectedResultPOV!.pItem!==newTop){
+                    // getFirstItem may descend through a subitem. Preserve
+                    // that established behavior until its exact nested POV
+                    // is returned by the navigation API.
+                    selectedResultPOV <- NULL
+                }
             }
             case ipGetMarked:{
                 if(innr!.intersectMarkedRetPOV!=NULL and
@@ -2676,6 +2716,7 @@ struct IntersectionReasoner{
         our POV: mappedSelectionPOV <- NULL
         if(CI!.intersectPos==ipGetMarked and innr!=NULL){
             mappedSelectionPOV <- innr!.intersectMarkedRetPOV
+            selectedResultPOV <- mappedSelectionPOV
         }
         if(CI!.intersectPos==ipGetMarked and
                 mappedSelectionPOV!=NULL and
@@ -2704,6 +2745,8 @@ struct IntersectionReasoner{
             }
         }
         if(newTop!=NULL){
+            recordSelectedFunctionReference(
+                    aItem, selectedResultPOV, newTop)
             // The selected value owns only work from its consumer. Matching
             // obligations remain local to the selector that created them.
             newTop!.discardSelectorLocalWork()
@@ -3427,6 +3470,8 @@ struct CursorPathResolver{
                 our POV: selectionSourceSnapshot
                 our POV: selectionQueryPOV
                 our POV: selectionResultPOV
+                me SelectionReferenceKind: selectionReferenceKind <-
+                        srkPartPathSelection
                 if(part!.wasTransfered){
                     continue()
                 }else{
@@ -3459,26 +3504,40 @@ struct CursorPathResolver{
                             selectedSourcePOV <- CI!.fetchField(partTag)
                             if(selectedSourcePOV!=NULL){
                                 newPath <- selectedSourcePOV!.pItem
-                                selectionSourceSnapshot <-
-                                        aItem!.LHS_item!.snapshotView(
-                                                povSrcPartPathSelection)
-                                if(selectionSourceSnapshot!=NULL){
-                                    our POV:: queryPOV{
-                                            povSrcPartPathSelection}
-                                    queryPOV!.pItem <- part!.path
-                                    queryPOV!.bindIdentityRegistry(
-                                            selectionSourceSnapshot!.
-                                            effectiveIdentityRegistry())
-                                    selectionQueryPOV <- queryPOV
-                                }
                             }
                         } else if(newPath==NULL and part!.path!.type != NULL){
                             if(partTag == "first"){
                                 newPath <- CI!.getFirstItem(aItem!.LHS_item!.isSubItm)
+                                selectedSourcePOV <- CI!.value!.items.head
+                                if(selectedSourcePOV!=NULL and
+                                        selectedSourcePOV!.pItem!==newPath){
+                                    selectedSourcePOV <- NULL
+                                }
+                                selectionReferenceKind <-
+                                        srkPositionalSelection
                             }
                             else if(partTag == "last"){
-                                newPath <- aItem!.LHS_item!.
-                                        getLastInfonView()
+                                selectedSourcePOV <-
+                                        aItem!.LHS_item!.getLastPOV()
+                                if(selectedSourcePOV!=NULL){
+                                    newPath <- selectedSourcePOV!.pItem
+                                }
+                                selectionReferenceKind <-
+                                        srkPositionalSelection
+                            }
+                        }
+                        if(selectedSourcePOV!=NULL){
+                            selectionSourceSnapshot <-
+                                    aItem!.LHS_item!.snapshotView(
+                                            povSrcPartPathSelection)
+                            if(selectionSourceSnapshot!=NULL){
+                                our POV:: queryPOV{
+                                        povSrcPartPathSelection}
+                                queryPOV!.pItem <- part!.path
+                                queryPOV!.bindIdentityRegistry(
+                                        selectionSourceSnapshot!.
+                                        effectiveIdentityRegistry())
+                                selectionQueryPOV <- queryPOV
                             }
                         }
                         if(newPath==NULL){
@@ -3596,7 +3655,7 @@ struct CursorPathResolver{
                         registry!.recordSelectionReference(
                                 selectionQueryPOV, selectionResultPOV,
                                 selectionSourceSnapshot, selectedSourcePOV,
-                                srkPartPathSelection,
+                                selectionReferenceKind,
                                 agenda!.normalizationID)
                     }
                 }
