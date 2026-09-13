@@ -47,6 +47,7 @@ TestsToRun = `
     unit/endRelative/correspondenceFlatSpanMap
     unit/endRelative/correspondenceRecursiveTypedMap
     unit/endRelative/correspondenceSparseMap
+    unit/referenceRegistry/partPathSelection
     unit/orderedSpanView/positiveFlatLocalMap
     unit/orderedSpanView/positiveRecursiveLocalMap
     unit/orderedSpanView/directLocalMap
@@ -128,6 +129,7 @@ do ManageCmdLine(cmd)
 #define ENDRELQUERY (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeQuery(tname, CASE_ID)}%>
 #define ENDRELPLAN (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeTraversalPlan(tname, CASE_ID)}%>
 #define ENDRELCORRESPONDENCE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeCorrespondence(tname, CASE_ID)}%>
+#define SELECTIONREFERENCE (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestSelectionReference(tname)}%>
 #define ORDEREDSPANVIEW (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestOrderedSpanView(tname, CASE_ID)}%>
 #define MAPPEDWRITE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestMappedWrite(tname, CASE_ID)}%>
 #define RESULTSELECTION (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestResultSelection(tname, CASE_ID)}%>
@@ -305,6 +307,7 @@ struct GLOBAL {
     ENDRELCORRESPONDENCE(unit/endRelative/correspondenceFlatSpanMap, "map an accepted flat span and every writable child", 3)
     ENDRELCORRESPONDENCE(unit/endRelative/correspondenceRecursiveTypedMap, "map an accepted recursive typed span at every level", 4)
     ENDRELCORRESPONDENCE(unit/endRelative/correspondenceSparseMap, "map an accepted sparse position without materializing its source", 5)
+    SELECTIONREFERENCE(unit/referenceRegistry/partPathSelection, "record direct part selection without asserting identity")
     ORDEREDSPANVIEW(unit/orderedSpanView/positiveFlatLocalMap, "build a positive flat span from local mapped copies", 1)
     ORDEREDSPANVIEW(unit/orderedSpanView/positiveRecursiveLocalMap, "map every level of a positive recursive typed span", 2)
     ORDEREDSPANVIEW(unit/orderedSpanView/directLocalMap, "copy and map a direct same-unit ordered span", 3)
@@ -1556,8 +1559,10 @@ struct GLOBAL {
 
         if(caseID==1){
             our infonView: source <- parseAndExtract(testName, "{1 2}")
+            our IdentityRegistry:: identityRegistry
             our POV:: sourcePOV{povSrcEndRelativeView}
             sourcePOV!.pItem <- source
+            sourcePOV!.bindIdentityRegistry(identityRegistry)
             our POV: sourceStartPOV <- sourcePOV!.logicalItemAtIndex(1)
             our infonView: localItem <- parseAndExtract(testName, "2")
             our POV:: localPOV{povSrcEndRelativeView}
@@ -1582,7 +1587,9 @@ struct GLOBAL {
             CORE.agent!.worldMgr.infonViewReasoner.
                     recordAcceptedIntersectionCorrespondence(accepted)
             me bool: emptyBeforeAcceptance <-
-                    plan!.correspondences.isEmpty()
+                    plan!.correspondences.isEmpty() and
+                    identityRegistry!.selectionReferences.isEmpty() and
+                    identityRegistry!.identities.isEmpty()
             accepted!.mergeStatus <- msAccept
             CORE.agent!.worldMgr.infonViewReasoner.
                     recordAcceptedIntersectionCorrespondence(accepted)
@@ -1592,13 +1599,27 @@ struct GLOBAL {
             if(!plan!.correspondences.isEmpty()){
                 correspondence <- plan!.correspondences.first()
             }
+            our SelectionReference: registeredReference
+            if(!identityRegistry!.selectionReferences.isEmpty()){
+                registeredReference <-
+                        identityRegistry!.selectionReferences.first()
+            }
             passed <- emptyBeforeAcceptance and
                     plan!.correspondences.size()==1 and
+                    identityRegistry!.selectionReferences.size()==1 and
+                    identityRegistry!.identities.isEmpty() and
                     correspondence!=NULL and
                     correspondence!.patternPOV===patternPOV and
                     correspondence!.localViewPOV===localPOV and
                     correspondence!.sourceContextPOV===sourcePOV and
                     correspondence!.sourceStartPOV===sourceStartPOV and
+                    registeredReference!=NULL and
+                    registeredReference!.referenceKind==
+                            srkIntersectionCorrespondence and
+                    registeredReference!.queryPOV===patternPOV and
+                    registeredReference!.resultPOV===localPOV and
+                    registeredReference!.sourceContextPOV===sourcePOV and
+                    registeredReference!.sourceStartPOV===sourceStartPOV and
                     patternPOV!.viewMap.sourcePov===sourcePOV and
                     patternPOV!.viewMap.startPov===sourceStartPOV
         }else{
@@ -1673,6 +1694,49 @@ struct GLOBAL {
             }
         }
 
+        me string: actual <- "false"
+        me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+        modelMngr.clear()
+        return()
+    }
+    me void: unitTestSelectionReference(me string: testName) <- {
+        me ProteusCore: CORE
+        CORE.init("", false)
+        our infonView: result <- parseAndExtract(
+                testName, "{a:1, b:2}.b")
+        our POV:: resultPOV{povSrcPartPathSelection}
+        resultPOV!.pItem <- result
+        CORE.agent!.normalize(resultPOV)
+
+        our SelectionReference: registeredReference
+        me int: partPathReferenceCount <- 0
+        withEach reference in
+                CORE.agent!.identityRegistry!.selectionReferences{
+            if(reference!.referenceKind==srkPartPathSelection){
+                partPathReferenceCount <+- 1
+                registeredReference <- reference
+            }
+        }
+
+        me bool: passed <- registeredReference!=NULL and
+                partPathReferenceCount==1 and
+                CORE.agent!.identityRegistry!.identities.isEmpty() and
+                registeredReference!.queryPOV!=NULL and
+                registeredReference!.queryPOV!.pItem!=NULL and
+                registeredReference!.queryPOV!.pItem!.type!=NULL and
+                registeredReference!.queryPOV!.pItem!.type!.typeID()=="b" and
+                registeredReference!.resultPOV===resultPOV and
+                registeredReference!.sourceContextPOV!=NULL and
+                registeredReference!.sourceContextPOV!.pItem!=NULL and
+                registeredReference!.sourceContextPOV!.pItem!.value!.
+                        overlayType==LST and
+                registeredReference!.sourceStartPOV!=NULL and
+                registeredReference!.sourceStartPOV!.pItem===resultPOV!.pItem and
+                resultPOV!.pItem!.type!=NULL and
+                resultPOV!.pItem!.type!.typeID()=="b" and
+                resultPOV!.pItem!.value!.num.convertToInt()==2
         me string: actual <- "false"
         me string: expected <- "true"
         if(passed){actual <- "true"}

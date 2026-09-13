@@ -114,6 +114,27 @@ model EndRelativeReference{
 }
 struct EndRelativeReference{}
 
+// Selection provenance names the exact source location found by a query or
+// projection.  It is intentionally not IdentityRelation evidence: matching a
+// source does not by itself assert that the query/result wrapper is identical
+// to that source.
+struct SelectionReferenceKind: inherits=<mode[
+    srkIntersectionCorrespondence,
+    srkPartPathSelection
+]> {}
+
+model SelectionReference{
+    me uint64: referenceID <- 0
+    me SelectionReferenceKind: referenceKind <-
+            srkIntersectionCorrespondence
+    me uint64: normalizationID <- 0
+    our POV: queryPOV
+    our POV: resultPOV
+    our POV: sourceContextPOV
+    our POV: sourceStartPOV
+}
+struct SelectionReference{}
+
 // One logical member of a repetition.  occurrenceToken is opaque and stable;
 // ordinal is optional knowledge about that occurrence, not its identity.
 model RepetitionOccurrence{
@@ -147,6 +168,7 @@ model IdentityRegistry{
     me uint64: nextOccurrenceToken <- 1
     me List<our IdentityRelation>: identities
     me List<our EndRelativeReference>: endRelativeReferences
+    me List<our SelectionReference>: selectionReferences
     me List<our RepetitionFamily>: repetitionFamilies
     me Mutex: registryMutex
 }
@@ -229,6 +251,37 @@ struct IdentityRegistry{
                     reference!.retired <- true
                 }
             }
+        }
+    }
+
+    our SelectionReference: recordSelectionReference(
+            our POV: queryPOV, our POV: resultPOV,
+            our POV: sourceContextPOV, our POV: sourceStartPOV,
+            me SelectionReferenceKind: referenceKind,
+            me uint64: normalizationID) <- {
+        if(queryPOV==NULL or resultPOV==NULL or
+                sourceContextPOV==NULL or sourceStartPOV==NULL){return(NULL)}
+        protect(registryMutex){
+            withEach reference in selectionReferences{
+                if(reference!.referenceKind==referenceKind and
+                        reference!.queryPOV===queryPOV and
+                        reference!.resultPOV===resultPOV and
+                        reference!.sourceContextPOV===sourceContextPOV and
+                        reference!.sourceStartPOV===sourceStartPOV){
+                    return(reference)
+                }
+            }
+            our SelectionReference:: reference
+            reference!.referenceID <- nextReferenceID
+            nextReferenceID <+- 1
+            reference!.referenceKind <- referenceKind
+            reference!.normalizationID <- normalizationID
+            reference!.queryPOV <- queryPOV
+            reference!.resultPOV <- resultPOV
+            reference!.sourceContextPOV <- sourceContextPOV
+            reference!.sourceStartPOV <- sourceStartPOV
+            selectionReferences.append(reference)
+            return(reference)
         }
     }
 

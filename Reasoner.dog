@@ -1407,9 +1407,10 @@ struct TemporalIdentityReasoner{
 
     // Part resolution replaces its working POV's pItem.  Preserve the source
     // view in a separate POV before constructing a boundary that refers to it.
-    our POV: snapshotTemporalSourcePOV(their POV: sourcePOV) <- {
+    our POV: snapshotSourcePOV(their POV: sourcePOV,
+            me int: sourcePedigree) <- {
         if(sourcePOV==NULL or sourcePOV!.pItem==NULL){return(NULL)}
-        our POV:: snapshot{povSrcTemporalBoundary}
+        our POV:: snapshot{sourcePedigree}
         snapshot!.pItem <- sourcePOV!.pItem
         snapshot!.pParent <- sourcePOV!.pParent
         snapshot!.accessMode <- sourcePOV!.accessMode
@@ -2352,6 +2353,14 @@ struct IntersectionReasoner{
                 sourceMap.sourcePov, sourceMap.startPov)
         plan!.recordCorrespondence(patternPOV, localViewPOV,
                 sourceMap.sourcePov, sourceMap.startPov)
+        their IdentityRegistry: registry <-
+                sourceMap.sourcePov!.effectiveIdentityRegistry()
+        if(registry!=NULL){
+            registry!.recordSelectionReference(
+                    patternPOV, localViewPOV,
+                    sourceMap.sourcePov, sourceMap.startPov,
+                    srkIntersectionCorrespondence, 0)
+        }
         mapAcceptedLocalViewTree(plan, localViewPOV)
 
         if(patternPOV!.pItem!.value!.overlayType!=LST or
@@ -3389,6 +3398,10 @@ struct CursorPathResolver{
                 our infonView: newPath
                 our POV: newPov
                 our POV: selectedTemporalBoundary
+                our POV: selectedSourcePOV
+                our POV: selectionSourceSnapshot
+                our POV: selectionQueryPOV
+                our POV: selectionResultPOV
                 if(part!.wasTransfered){
                     continue()
                 }else{
@@ -3405,8 +3418,9 @@ struct CursorPathResolver{
                             // source view that survives that replacement.
                             our POV: sourceSnapshot <-
                                     temporalIdentityReasoner!.
-                                    snapshotTemporalSourcePOV(
-                                            aItem!.LHS_item)
+                                    snapshotSourcePOV(
+                                            aItem!.LHS_item,
+                                            povSrcTemporalBoundary)
                             selectedTemporalBoundary <-
                                     temporalIdentityReasoner!.
                                     makeTemporalBoundaryPOV(sourceSnapshot,
@@ -3419,7 +3433,24 @@ struct CursorPathResolver{
                             }
                         }
                         if(newPath==NULL and CI!.orderMode==uUnordered){
-                            newPath <- CI!.findMatchingItem(part!.path)
+                            selectedSourcePOV <- CI!.fetchField(partTag)
+                            if(selectedSourcePOV!=NULL){
+                                newPath <- selectedSourcePOV!.pItem
+                                selectionSourceSnapshot <-
+                                        temporalIdentityReasoner!.
+                                        snapshotSourcePOV(
+                                                aItem!.LHS_item,
+                                                povSrcPartPathSelection)
+                                if(selectionSourceSnapshot!=NULL){
+                                    our POV:: queryPOV{
+                                            povSrcPartPathSelection}
+                                    queryPOV!.pItem <- part!.path
+                                    queryPOV!.bindIdentityRegistry(
+                                            selectionSourceSnapshot!.
+                                            effectiveIdentityRegistry())
+                                    selectionQueryPOV <- queryPOV
+                                }
+                            }
                         } else if(newPath==NULL and part!.path!.type != NULL){
                             if(partTag == "first"){
                                 newPath <- CI!.getFirstItem(aItem!.LHS_item!.isSubItm)
@@ -3502,6 +3533,7 @@ struct CursorPathResolver{
                         aItem!.LHS_item!.accessMode <- aRefTo
                     }
                     nxtAction! <- true
+                    selectionResultPOV <- aItem!.LHS_item
                 }else{
                     our POV:: pathPov{20}
                     pathPov!.pItem <- newPath
@@ -3530,6 +3562,22 @@ struct CursorPathResolver{
                         requestedWork.append(newAItem)
                     }
                     nxtAction! <- false
+                    selectionResultPOV <- pathPov
+                }
+                if(selectionQueryPOV!=NULL and
+                        selectionResultPOV!=NULL and
+                        selectionSourceSnapshot!=NULL and
+                        selectedSourcePOV!=NULL){
+                    their IdentityRegistry: registry <-
+                            selectionSourceSnapshot!.
+                            effectiveIdentityRegistry()
+                    if(registry!=NULL){
+                        registry!.recordSelectionReference(
+                                selectionQueryPOV, selectionResultPOV,
+                                selectionSourceSnapshot, selectedSourcePOV,
+                                srkPartPathSelection,
+                                agenda!.normalizationID)
+                    }
                 }
                 changeMade <- true
             }
