@@ -48,6 +48,7 @@ TestsToRun = `
     unit/endRelative/correspondenceRecursiveTypedMap
     unit/endRelative/correspondenceSparseMap
     unit/referenceRegistry/partPathSelection
+    unit/referenceRegistry/intersectionPartPathSelection
     unit/orderedSpanView/positiveFlatLocalMap
     unit/orderedSpanView/positiveRecursiveLocalMap
     unit/orderedSpanView/directLocalMap
@@ -129,7 +130,7 @@ do ManageCmdLine(cmd)
 #define ENDRELQUERY (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeQuery(tname, CASE_ID)}%>
 #define ENDRELPLAN (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeTraversalPlan(tname, CASE_ID)}%>
 #define ENDRELCORRESPONDENCE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeCorrespondence(tname, CASE_ID)}%>
-#define SELECTIONREFERENCE (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestSelectionReference(tname)}%>
+#define SELECTIONREFERENCE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestSelectionReference(tname, CASE_ID)}%>
 #define ORDEREDSPANVIEW (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestOrderedSpanView(tname, CASE_ID)}%>
 #define MAPPEDWRITE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestMappedWrite(tname, CASE_ID)}%>
 #define RESULTSELECTION (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestResultSelection(tname, CASE_ID)}%>
@@ -307,7 +308,8 @@ struct GLOBAL {
     ENDRELCORRESPONDENCE(unit/endRelative/correspondenceFlatSpanMap, "map an accepted flat span and every writable child", 3)
     ENDRELCORRESPONDENCE(unit/endRelative/correspondenceRecursiveTypedMap, "map an accepted recursive typed span at every level", 4)
     ENDRELCORRESPONDENCE(unit/endRelative/correspondenceSparseMap, "map an accepted sparse position without materializing its source", 5)
-    SELECTIONREFERENCE(unit/referenceRegistry/partPathSelection, "record direct part selection without asserting identity")
+    SELECTIONREFERENCE(unit/referenceRegistry/partPathSelection, "record direct part selection without asserting identity", 1)
+    SELECTIONREFERENCE(unit/referenceRegistry/intersectionPartPathSelection, "record intersection-lowered part selection without asserting identity", 2)
     ORDEREDSPANVIEW(unit/orderedSpanView/positiveFlatLocalMap, "build a positive flat span from local mapped copies", 1)
     ORDEREDSPANVIEW(unit/orderedSpanView/positiveRecursiveLocalMap, "map every level of a positive recursive typed span", 2)
     ORDEREDSPANVIEW(unit/orderedSpanView/directLocalMap, "copy and map a direct same-unit ordered span", 3)
@@ -1701,11 +1703,18 @@ struct GLOBAL {
         modelMngr.clear()
         return()
     }
-    me void: unitTestSelectionReference(me string: testName) <- {
+    me void: unitTestSelectionReference(
+            me string: testName, me int: caseID) <- {
         me ProteusCore: CORE
         CORE.init("", false)
+        me string: expression <- "{a:1, b:2}.b"
+        me SelectionReferenceKind: expectedKind <- srkPartPathSelection
+        if(caseID==2){
+            expression <- "{a:1 b:2}.b"
+            expectedKind <- srkIntersectionCorrespondence
+        }
         our infonView: result <- parseAndExtract(
-                testName, "{a:1, b:2}.b")
+                testName, expression)
         our POV:: resultPOV{povSrcPartPathSelection}
         resultPOV!.pItem <- result
         CORE.agent!.normalize(resultPOV)
@@ -1714,29 +1723,65 @@ struct GLOBAL {
         me int: partPathReferenceCount <- 0
         withEach reference in
                 CORE.agent!.identityRegistry!.selectionReferences{
-            if(reference!.referenceKind==srkPartPathSelection){
+            if(reference!.referenceKind==expectedKind){
                 partPathReferenceCount <+- 1
                 registeredReference <- reference
             }
         }
+        me List<our SelectionReference>: queryReferences
+        me List<our SelectionReference>: resultReferences
+        me List<our SelectionReference>: sourceReferences
+        if(registeredReference!=NULL){
+            CORE.agent!.identityRegistry!.
+                    collectSelectionReferencesForQuery(
+                            registeredReference!.queryPOV,
+                            queryReferences)
+            CORE.agent!.identityRegistry!.
+                    collectSelectionReferencesForResult(
+                            registeredReference!.resultPOV,
+                            resultReferences)
+            CORE.agent!.identityRegistry!.
+                    collectSelectionReferencesForSource(
+                            registeredReference!.sourceContextPOV,
+                            registeredReference!.sourceStartPOV,
+                            sourceReferences)
+        }
 
         me bool: passed <- registeredReference!=NULL and
                 partPathReferenceCount==1 and
+                queryReferences.size()==1 and
+                queryReferences.first()===registeredReference and
+                resultReferences.size()==1 and
+                resultReferences.first()===registeredReference and
+                sourceReferences.size()==1 and
+                sourceReferences.first()===registeredReference and
                 CORE.agent!.identityRegistry!.identities.isEmpty() and
                 registeredReference!.queryPOV!=NULL and
                 registeredReference!.queryPOV!.pItem!=NULL and
                 registeredReference!.queryPOV!.pItem!.type!=NULL and
                 registeredReference!.queryPOV!.pItem!.type!.typeID()=="b" and
-                registeredReference!.resultPOV===resultPOV and
+                registeredReference!.resultPOV!=NULL and
+                registeredReference!.resultPOV!.pItem===resultPOV!.pItem and
                 registeredReference!.sourceContextPOV!=NULL and
                 registeredReference!.sourceContextPOV!.pItem!=NULL and
                 registeredReference!.sourceContextPOV!.pItem!.value!.
                         overlayType==LST and
                 registeredReference!.sourceStartPOV!=NULL and
-                registeredReference!.sourceStartPOV!.pItem===resultPOV!.pItem and
+                registeredReference!.sourceStartPOV!.pItem!=NULL and
+                registeredReference!.sourceStartPOV!.pItem!.type!=NULL and
+                registeredReference!.sourceStartPOV!.pItem!.
+                        type!.typeID()=="b" and
+                registeredReference!.sourceStartPOV!.pItem!.
+                        value!.num.convertToInt()==2 and
                 resultPOV!.pItem!.type!=NULL and
                 resultPOV!.pItem!.type!.typeID()=="b" and
                 resultPOV!.pItem!.value!.num.convertToInt()==2
+        if(caseID==1){
+            passed <- passed and
+                    registeredReference!.resultPOV===resultPOV and
+                    registeredReference!.sourceStartPOV!.pItem===
+                            resultPOV!.pItem
+        }
         me string: actual <- "false"
         me string: expected <- "true"
         if(passed){actual <- "true"}
