@@ -23,10 +23,17 @@ struct ViewMap{
     our POV: startPov
 }
 struct ImplicitItemMap{
-    // Non-owning because sourcePov.pItem retains the canonical implicit POV.
+    // Non-owning because the repetition family retains the canonical
+    // occurrence POV while the source span supplies its current local mapping.
     their POV: sourcePov
     // Zero-based position in sourcePov's logical item sequence.
     me int64: sourceIndex
+}
+struct RepetitionSpanMap{
+    // All split spans retain one logical repetition family.  startOrdinal maps
+    // local sparse indexes into that family's stable coordinate space.
+    our RepetitionFamily: family
+    me int64: startOrdinal
 }
 struct TemporalBoundaryViewMap{
     // The ordered T-list view containing this cut.  Keep this non-owning like
@@ -76,6 +83,13 @@ model POV{ // Point-Of-View
     // Set only when this ordinary POV represents a logical source item that
     // has not been expanded into the physical POV list.
     me ImplicitItemMap: implicitItem
+    // Non-owning access to the semantic universe that owns identities for this
+    // POV.  Agent owns the registry; repetition records retain their POVs.
+    their IdentityRegistry: identityRegistry
+    me RepetitionSpanMap: repetitionSpan
+    // Present on both a virtual repetition reference and its concrete
+    // materialization, allowing either side to recover the same occurrence.
+    their RepetitionOccurrence: repetitionOccurrence
     // A boundary is an identity-bearing view of a cut in one T-list.  Its
     // pItem is only the algebraic null value and must not define its identity.
     me TemporalBoundaryViewMap: temporalBoundary
@@ -212,28 +226,37 @@ model POV{ // Point-Of-View
     me bool: isImplicitItemPOV() <- {
         return(implicitItem.sourcePov!=NULL)
     }
+    void: bindIdentityRegistry(our IdentityRegistry: registry) <- {
+        if(registry!=NULL){identityRegistry <- registry}
+    }
+    their IdentityRegistry: effectiveIdentityRegistry() <- {
+        if(identityRegistry!=NULL){return(identityRegistry)}
+        if(repetitionSpan.family!=NULL and
+                repetitionSpan.family!.registry!=NULL){
+            return(repetitionSpan.family!.registry)
+        }
+        if(implicitItem.sourcePov!=NULL){
+            return(implicitItem.sourcePov!.effectiveIdentityRegistry())
+        }
+        if(viewMap.sourcePov!=NULL){
+            return(viewMap.sourcePov!.effectiveIdentityRegistry())
+        }
+        if(pParent!=NULL){return(pParent!.effectiveIdentityRegistry())}
+        return(NULL)
+    }
     our POV: findImplicitItemPOV(me int64: sourceIndex) <- {
         if(pItem==NULL or sourceIndex<0){return(NULL)}
-        withEach retainedPOV in pItem!.retainedPOVs{
-            if(retainedPOV!=NULL and retainedPOV!.implicitItem.sourcePov===self and
-               retainedPOV!.implicitItem.sourceIndex==sourceIndex){
-                return(retainedPOV)
-            }
-        }
-        return(NULL)
+        their IdentityRegistry: registry <- effectiveIdentityRegistry()
+        if(registry==NULL){return(NULL)}
+        return(registry!.findIndexedRepetitionOccurrence(self, sourceIndex))
     }
     our POV: getOrCreateImplicitItemPOV(me int64: sourceIndex) <- {
         if(!hasSparseOrderedSpanValue() or sourceIndex<0 or
                 sourceIndex>=sparseSpanCount()){return(NULL)}
-        our POV: implicitPOV <- findImplicitItemPOV(sourceIndex)
-        if(implicitPOV!=NULL){return(implicitPOV)}
-
-        Allocate(implicitPOV, povSrcImplicitItem)
-        implicitPOV!.pItem <- makeSparseSpanMemberTypeOnlyInfonView()
-        implicitPOV!.implicitItem.sourcePov <- self
-        implicitPOV!.implicitItem.sourceIndex <- sourceIndex
-        pItem!.retainPOV(implicitPOV)
-        return(implicitPOV)
+        their IdentityRegistry: registry <- effectiveIdentityRegistry()
+        if(registry==NULL){return(NULL)}
+        return(registry!.getOrCreateIndexedRepetitionOccurrence(
+                self, sourceIndex))
     }
     // Navigate compressed logical items arithmetically. This may retain a
     // canonical implicit POV, but never changes the physical source list.
@@ -457,11 +480,22 @@ model POV{ // Point-Of-View
         if(prefixCount<=0 or prefixCount>=totalCount){return(NULL)}
 
         our infonView: remainder <- makeSparseSpanCopy(totalCount - prefixCount)
+        me int64: oldStartOrdinal <- repetitionSpan.startOrdinal
+        me int64: oldEndOrdinal <- oldStartOrdinal + totalCount
         pItem!.infSize!.num <- prefixCount
 
         our POV: remainderPOV <- pParent!.pItem!.value!.items.insertAfter(spanPOV, remainder, povSrcSparseSpanRemainder)
         remainderPOV!.isSubItm <- true
         remainderPOV!.pParent <- pParent
+        remainderPOV!.identityRegistry <- effectiveIdentityRegistry()
+        remainderPOV!.repetitionSpan.family <- repetitionSpan.family
+        remainderPOV!.repetitionSpan.startOrdinal <-
+                oldStartOrdinal + prefixCount
+        their IdentityRegistry: registry <- effectiveIdentityRegistry()
+        if(registry!=NULL and repetitionSpan.family!=NULL){
+            registry!.remapSplitRepetitionOccurrences(
+                    self, remainderPOV, oldEndOrdinal)
+        }
         return(remainderPOV)
     }
     our POV: exposeSparseHeadWithItem(our infonView: headItem) <- {
@@ -470,15 +504,34 @@ model POV{ // Point-Of-View
         if(spanPOV==NULL){return(NULL)}
         me int64: totalCount <- sparseSpanCount()
         if(totalCount<=0){return(NULL)}
+        me int64: oldStartOrdinal <- repetitionSpan.startOrdinal
+        me int64: oldEndOrdinal <- oldStartOrdinal + totalCount
+        // Exact head exposure is the materialization of this repetition
+        // occurrence.  Name it even when no earlier selection demanded it so
+        // the identity is explicit and reversible in either direction.
+        our POV: occurrenceReference <- getOrCreateImplicitItemPOV(0)
 
         our POV: headPOV <- pParent!.pItem!.value!.items.insertBefore(spanPOV, headItem, povSrcSparseExposedHead)
         headPOV!.isSubItm <- false
         headPOV!.pParent <- pParent
+        headPOV!.identityRegistry <- effectiveIdentityRegistry()
 
         if(totalCount==1){
             pParent!.pItem!.value!.items.erase(spanPOV)
         }else{
             pItem!.infSize!.num <- totalCount - 1
+            repetitionSpan.startOrdinal <+- 1
+            their IdentityRegistry: registry <- effectiveIdentityRegistry()
+            if(registry!=NULL and repetitionSpan.family!=NULL){
+                registry!.remapExposedHeadRemainder(self, oldEndOrdinal)
+            }
+        }
+        if(occurrenceReference!=NULL){
+            their IdentityRegistry: registry <- effectiveIdentityRegistry()
+            if(registry!=NULL){
+                registry!.recordRepetitionMaterialization(
+                        occurrenceReference, headPOV, 0)
+            }
         }
         return(headPOV)
     }
@@ -1049,6 +1102,10 @@ model POV{ // Point-Of-View
         viewMap.startPov <- NULL
         implicitItem.sourcePov <- NULL
         implicitItem.sourceIndex <- -1
+        identityRegistry <- NULL
+        repetitionSpan.family <- NULL
+        repetitionSpan.startOrdinal <- 0
+        repetitionOccurrence <- NULL
         temporalBoundary.sourcePov <- NULL
         temporalBoundary.cutIndex <- -1
     }

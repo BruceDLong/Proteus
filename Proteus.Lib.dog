@@ -79,6 +79,256 @@ struct EndRelativeWindowContentStatus: inherits=<mode[
     erwcIncompatible
 ]> {}
 
+// Semantic identity evidence is distinct from selection provenance.  A
+// repetition lookup names an existing logical occurrence; it does not by
+// itself assert that a different infon is identical to that occurrence.
+struct IdentityEvidenceKind: inherits=<mode[
+    iekAssertion,
+    iekTemporalBoundary,
+    iekRepetitionMaterialization
+]> {}
+
+model IdentityRelation{
+    me uint64: evidenceID <- 0
+    me IdentityEvidenceKind: evidenceKind <- iekAssertion
+    me uint64: normalizationID <- 0
+    our POV: leftPOV
+    our POV: rightPOV
+}
+struct IdentityRelation{}
+
+// One logical member of a repetition.  occurrenceToken is opaque and stable;
+// ordinal is optional knowledge about that occurrence, not its identity.
+model RepetitionOccurrence{
+    me uint64: occurrenceToken <- 0
+    flag: ordinalKnown
+    me int64: ordinal <- -1
+    our POV: referencePOV
+    our POV: materializedPOV
+}
+struct RepetitionOccurrence{}
+
+// A split sparse span keeps this family and changes only the local coordinate
+// range represented by each resulting span POV.
+model RepetitionFamily{
+    me uint64: repetitionID <- 0
+    their IdentityRegistry: registry
+    their POV: originalSpanPOV
+    me List<our RepetitionOccurrence>: occurrences
+    // Only demanded, ordinal-known occurrences are indexed.  Repetition size
+    // never determines registry size.
+    me Map<me int64, our RepetitionOccurrence>: ordinalOccurrences
+}
+struct RepetitionFamily{}
+
+// One registry belongs to one Agent/semantic universe.  Direct unit-level POV
+// use may bind an explicitly constructed registry with the same contract.
+model IdentityRegistry{
+    me uint64: nextEvidenceID <- 1
+    me uint64: nextRepetitionID <- 1
+    me uint64: nextOccurrenceToken <- 1
+    me List<our IdentityRelation>: identities
+    me List<our RepetitionFamily>: repetitionFamilies
+    me Mutex: registryMutex
+}
+struct IdentityRegistry{
+    our RepetitionFamily: getOrCreateRepetitionFamily(their POV: sourcePOV) <- {
+        if(sourcePOV==NULL){return(NULL)}
+        protect(registryMutex){
+            if(sourcePOV!.repetitionSpan.family!=NULL){
+                return(sourcePOV!.repetitionSpan.family)
+            }
+            our RepetitionFamily:: family
+            family!.repetitionID <- nextRepetitionID
+            nextRepetitionID <+- 1
+            family!.registry <- self
+            family!.originalSpanPOV <- sourcePOV
+            repetitionFamilies.append(family)
+            sourcePOV!.identityRegistry <- self
+            sourcePOV!.repetitionSpan.family <- family
+            sourcePOV!.repetitionSpan.startOrdinal <- 0
+            return(family)
+        }
+    }
+
+    our RepetitionOccurrence: findOrdinalOccurrence(
+            their RepetitionFamily: family, me int64: ordinal) <- {
+        if(family==NULL or ordinal<0){return(NULL)}
+        protect(registryMutex){
+            if(family!.ordinalOccurrences.containsKey(ordinal)){
+                return(family!.ordinalOccurrences[ordinal])
+            }
+        }
+        return(NULL)
+    }
+
+    our POV: findIndexedRepetitionOccurrence(
+            their POV: sourcePOV, me int64: sourceIndex) <- {
+        if(sourcePOV==NULL or sourceIndex<0 or
+                sourcePOV!.repetitionSpan.family==NULL){return(NULL)}
+        me int64: ordinal <- sourcePOV!.repetitionSpan.startOrdinal + sourceIndex
+        our RepetitionOccurrence: occurrence <- findOrdinalOccurrence(
+                sourcePOV!.repetitionSpan.family, ordinal)
+        if(occurrence==NULL){return(NULL)}
+        if(occurrence!.materializedPOV!=NULL){
+            return(occurrence!.materializedPOV)
+        }
+        return(occurrence!.referencePOV)
+    }
+
+    our POV: getOrCreateIndexedRepetitionOccurrence(
+            their POV: sourcePOV, me int64: sourceIndex) <- {
+        if(sourcePOV==NULL or !sourcePOV!.hasSparseOrderedSpanValue() or
+                sourceIndex<0 or sourceIndex>=sourcePOV!.sparseSpanCount()){
+            return(NULL)
+        }
+        our RepetitionFamily: family <- getOrCreateRepetitionFamily(sourcePOV)
+        if(family==NULL){return(NULL)}
+        me int64: ordinal <- sourcePOV!.repetitionSpan.startOrdinal + sourceIndex
+        protect(registryMutex){
+            if(family!.ordinalOccurrences.containsKey(ordinal)){
+                our RepetitionOccurrence: occurrence <-
+                        family!.ordinalOccurrences[ordinal]
+                if(occurrence!.materializedPOV!=NULL){
+                    return(occurrence!.materializedPOV)
+                }
+                occurrence!.referencePOV!.implicitItem.sourcePov <- sourcePOV
+                occurrence!.referencePOV!.implicitItem.sourceIndex <- sourceIndex
+                return(occurrence!.referencePOV)
+            }
+
+            our POV:: occurrencePOV{povSrcImplicitItem}
+            occurrencePOV!.pItem <-
+                    sourcePOV!.makeSparseSpanMemberTypeOnlyInfonView()
+            occurrencePOV!.identityRegistry <- self
+            occurrencePOV!.implicitItem.sourcePov <- sourcePOV
+            occurrencePOV!.implicitItem.sourceIndex <- sourceIndex
+
+            our RepetitionOccurrence:: occurrence
+            occurrence!.occurrenceToken <- nextOccurrenceToken
+            nextOccurrenceToken <+- 1
+            occurrence!.ordinalKnown <- true
+            occurrence!.ordinal <- ordinal
+            occurrence!.referencePOV <- occurrencePOV
+            occurrencePOV!.repetitionOccurrence <- occurrence
+            family!.occurrences.append(occurrence)
+            family!.ordinalOccurrences[ordinal] <- occurrence
+            return(occurrencePOV)
+        }
+    }
+
+    void: remapSplitRepetitionOccurrences(their POV: originalSpanPOV,
+            our POV: remainderPOV, me int64: oldEndOrdinal) <- {
+        if(originalSpanPOV==NULL or remainderPOV==NULL or
+                originalSpanPOV!.repetitionSpan.family==NULL){return()}
+        me int64: remainderStart <- remainderPOV!.repetitionSpan.startOrdinal
+        protect(registryMutex){
+            withEach occurrence in originalSpanPOV!.repetitionSpan.family!.
+                    occurrences{
+                if(occurrence!.materializedPOV==NULL and
+                        occurrence!.ordinalKnown and
+                        occurrence!.ordinal>=remainderStart and
+                        occurrence!.ordinal<oldEndOrdinal){
+                    occurrence!.referencePOV!.implicitItem.sourcePov <-
+                            remainderPOV
+                    occurrence!.referencePOV!.implicitItem.sourceIndex <-
+                            occurrence!.ordinal - remainderStart
+                }
+            }
+        }
+    }
+
+    void: remapExposedHeadRemainder(their POV: remainingSpanPOV,
+            me int64: oldEndOrdinal) <- {
+        if(remainingSpanPOV==NULL or
+                remainingSpanPOV!.repetitionSpan.family==NULL){return()}
+        me int64: remainingStart <-
+                remainingSpanPOV!.repetitionSpan.startOrdinal
+        protect(registryMutex){
+            withEach occurrence in remainingSpanPOV!.repetitionSpan.family!.
+                    occurrences{
+                if(occurrence!.materializedPOV==NULL and
+                        occurrence!.ordinalKnown and
+                        occurrence!.ordinal>=remainingStart and
+                        occurrence!.ordinal<oldEndOrdinal){
+                    occurrence!.referencePOV!.implicitItem.sourcePov <-
+                            remainingSpanPOV
+                    occurrence!.referencePOV!.implicitItem.sourceIndex <-
+                            occurrence!.ordinal - remainingStart
+                }
+            }
+        }
+    }
+
+    our IdentityRelation: recordIdentity(our POV: leftPOV,
+            our POV: rightPOV, me IdentityEvidenceKind: evidenceKind,
+            me uint64: normalizationID) <- {
+        if(leftPOV==NULL or rightPOV==NULL or leftPOV===rightPOV){return(NULL)}
+        protect(registryMutex){
+            withEach identity in identities{
+                if((identity!.leftPOV===leftPOV and
+                        identity!.rightPOV===rightPOV) or
+                   (identity!.leftPOV===rightPOV and
+                        identity!.rightPOV===leftPOV)){
+                    return(identity)
+                }
+            }
+            our IdentityRelation:: identity
+            identity!.evidenceID <- nextEvidenceID
+            nextEvidenceID <+- 1
+            identity!.evidenceKind <- evidenceKind
+            identity!.normalizationID <- normalizationID
+            identity!.leftPOV <- leftPOV
+            identity!.rightPOV <- rightPOV
+            identities.append(identity)
+            return(identity)
+        }
+    }
+
+    me bool: areIdentical(our POV: firstPOV, our POV: secondPOV) <- {
+        if(firstPOV==NULL or secondPOV==NULL){return(false)}
+        if(firstPOV===secondPOV){return(true)}
+        me List<our POV>: visited
+        me List<our POV>: pending
+        pending.append(firstPOV)
+        protect(registryMutex){
+            while(!pending.isEmpty()){
+                our POV: current <- pending.first()
+                pending.popFirst()
+                me bool: alreadyVisited <- false
+                withEach visitedPOV in visited{
+                    if(visitedPOV===current){alreadyVisited <- true; break()}
+                }
+                if(alreadyVisited){continue()}
+                visited.append(current)
+                withEach identity in identities{
+                    our POV: neighbor <- NULL
+                    if(identity!.leftPOV===current){neighbor <- identity!.rightPOV}
+                    else if(identity!.rightPOV===current){neighbor <- identity!.leftPOV}
+                    if(neighbor===secondPOV){return(true)}
+                    if(neighbor!=NULL){pending.append(neighbor)}
+                }
+            }
+        }
+        return(false)
+    }
+
+    void: recordRepetitionMaterialization(our POV: occurrenceReferencePOV,
+            our POV: materializedPOV, me uint64: normalizationID) <- {
+        if(occurrenceReferencePOV==NULL or materializedPOV==NULL or
+                occurrenceReferencePOV!.repetitionOccurrence==NULL){return()}
+        their RepetitionOccurrence: occurrence <-
+                occurrenceReferencePOV!.repetitionOccurrence
+        occurrence!.materializedPOV <- materializedPOV
+        materializedPOV!.identityRegistry <- self
+        materializedPOV!.repetitionOccurrence <- occurrence
+        recordIdentity(occurrenceReferencePOV, materializedPOV,
+                iekRepetitionMaterialization, normalizationID)
+        occurrenceReferencePOV!.implicitItem.sourcePov <- NULL
+        occurrenceReferencePOV!.implicitItem.sourceIndex <- -1
+    }
+}
+
 // One bidirectional identity implied by temporal sequence composition:
 //
 //     endingSpan.end = beginningSpan.begin
@@ -1605,12 +1855,14 @@ struct Agent{
     our Map<string, string>: settings
     me int: errorStatus
     me string: errorMesg
+    our IdentityRegistry: identityRegistry
 
     void: setErrorState(me string: errorMesg) <- {
         //log("INFON ERROR: " + errorMesg)
        // print("INFON ERROR: " + errorMesg+"\n")
     }
     void: normalize(our POV: normPov) <- {
+        if(identityRegistry!=NULL){normPov!.bindIdentityRegistry(identityRegistry)}
         our Agenda:: agenda{normPov}
         our AItem: normPIVA <- worldMgr.prepareInfonWork(
                 agenda, normPov, NULL, NULL, aprNoParent, 1, srcNormInit)
@@ -1658,6 +1910,7 @@ struct Agent{
     }
     void: init(their ProteusCore: core) <- {
         Allocate(settings)
+        Allocate(identityRegistry)
         CORE <- core
         Allocate(device); device!.setToList()
         Allocate(user);   user!.setToList()

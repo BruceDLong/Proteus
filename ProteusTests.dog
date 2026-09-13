@@ -74,6 +74,11 @@ TestsToRun = `
     unit/implicitItem/orderedSpanWindow
     unit/implicitItem/nestedTraversalBoundary
     unit/implicitItem/splitRemainderSizeFromGiven
+    unit/implicitItem/stableAcrossSplit
+    unit/implicitItem/materializationIdentity
+    unit/implicitItem/billionItemRegistry
+    unit/identityRegistry/symmetricTransitive
+    unit/implicitItem/directExposureIdentity
     unit/reasoner/strictListUnknownUnknown
     unit/reasoner/strictListUnknownFromLiteral
     unit/reasoner/strictListUnknownFromEmptyLiteral
@@ -226,6 +231,11 @@ struct GLOBAL {
     IMPLICITITEM(unit/implicitItem/orderedSpanWindow, "build an ordered span window from an implicit source position", 6)
     IMPLICITITEM(unit/implicitItem/nestedTraversalBoundary, "honor the selected context while traversing out of a nested sparse span", 7)
     IMPLICITITEM(unit/implicitItem/splitRemainderSizeFromGiven, "keep an explicitly sized sparse split remainder fromGiven", 8)
+    IMPLICITITEM(unit/implicitItem/stableAcrossSplit, "preserve one occurrence token and POV across a sparse split", 9)
+    IMPLICITITEM(unit/implicitItem/materializationIdentity, "identify a virtual repetition occurrence with its concrete materialization", 10)
+    IMPLICITITEM(unit/implicitItem/billionItemRegistry, "retain only demanded occurrences from a billion-item repetition", 11)
+    IMPLICITITEM(unit/identityRegistry/symmetricTransitive, "traverse registered identities in either direction and transitively", 12)
+    IMPLICITITEM(unit/implicitItem/directExposureIdentity, "record identity when sparse exposure has no prior occurrence reference", 13)
     STRICTLISTUNKNOWN(unit/reasoner/strictListUnknownUnknown, "merge strict unknown list constraints", 1)
     STRICTLISTUNKNOWN(unit/reasoner/strictListUnknownFromLiteral, "prepare a strict unknown list for literal-list propagation", 2)
     STRICTLISTUNKNOWN(unit/reasoner/strictListUnknownFromEmptyLiteral, "materialize a strict empty literal list in an unknown list", 5)
@@ -995,6 +1005,7 @@ struct GLOBAL {
             }
             our POV:: sourcePOV{povSrcEndRelativeView}
             sourcePOV!.pItem <- source
+            sourcePOV!.bindIdentityRegistry(CORE.agent!.identityRegistry)
             our POV:: patternPOV{povSrcEndRelativeView}
             patternPOV!.pItem <- pattern
             me EndRelativePatternMeasureResult: measurement <-
@@ -1312,6 +1323,7 @@ struct GLOBAL {
             }
             our POV:: sourcePOV{povSrcEndRelativeView}
             sourcePOV!.pItem <- source
+            sourcePOV!.bindIdentityRegistry(CORE.agent!.identityRegistry)
             our POV:: patternPOV{povSrcEndRelativeView}
             patternPOV!.pItem <- intersection!.innr
             patternPOV!.pItem!.infSize!.overlayType <- NUM
@@ -1624,6 +1636,7 @@ struct GLOBAL {
                     testName, "{&*3+{second| ...} 99}")
             our POV:: sourcePOV{povSrcConcreteSpanPrefix}
             sourcePOV!.pItem <- source
+            sourcePOV!.bindIdentityRegistry(CORE.agent!.identityRegistry)
             our POV: sourceSparsePOV <- source!.value!.items.head
             if(sourceSparsePOV!=NULL){
                 sourceSparsePOV!.pParent <- sourcePOV
@@ -2076,6 +2089,7 @@ struct GLOBAL {
             our POV:: sourcePOV{povSrcImplicitItem}
             sourcePOV!.pItem <- source
             sourcePOV!.isSubItm <- true
+            sourcePOV!.bindIdentityRegistry(CORE.agent!.identityRegistry)
             our POV: sourceSeventh <-
                     sourcePOV!.getOrCreateImplicitItemPOV(6)
             our infonView: request <- parseAndExtract(testName, "hour")
@@ -2174,6 +2188,8 @@ struct GLOBAL {
         our POV:: sourcePOV{povSrcImplicitItem}
         sourcePOV!.pItem <- source
         sourcePOV!.isSubItm <- true
+        our IdentityRegistry:: identityRegistry
+        sourcePOV!.bindIdentityRegistry(identityRegistry)
 
         me bool: passed <- false
         if(caseID==1){
@@ -2183,7 +2199,13 @@ struct GLOBAL {
                       firstLookup!.pItem!=NULL and firstLookup!.pItem!.type===source!.value!.listSpec!.type and
                       firstLookup!.isImplicitItemPOV() and firstLookup!.implicitItem.sourcePov===sourcePOV and
                       firstLookup!.implicitItem.sourceIndex==2 and firstLookup!.viewMap.sourcePov==NULL and
-                      source!.retainedPOVs.size()==1 and
+                      source!.retainedPOVs.isEmpty() and
+                      sourcePOV!.repetitionSpan.family!=NULL and
+                      sourcePOV!.repetitionSpan.family!.occurrences.size()==1 and
+                      firstLookup!.repetitionOccurrence!=NULL and
+                      firstLookup!.repetitionOccurrence!.ordinalKnown and
+                      firstLookup!.repetitionOccurrence!.ordinal==2 and
+                      firstLookup!.repetitionOccurrence!.occurrenceToken>0 and
                       sourcePOV!.getOrCreateImplicitItemPOV(-1)==NULL and
                       sourcePOV!.getOrCreateImplicitItemPOV(4)==NULL
         }else if(caseID==2){
@@ -2191,8 +2213,13 @@ struct GLOBAL {
             our POV: secondPosition <- sourcePOV!.getOrCreateImplicitItemPOV(2)
             passed <- firstPosition!=NULL and secondPosition!=NULL and
                       !(firstPosition===secondPosition) and
+                      !(firstPosition!.pItem===secondPosition!.pItem) and
                       firstPosition!.implicitItem.sourceIndex==1 and
-                      secondPosition!.implicitItem.sourceIndex==2 and source!.retainedPOVs.size()==2
+                      secondPosition!.implicitItem.sourceIndex==2 and
+                      firstPosition!.repetitionOccurrence!.occurrenceToken!=
+                            secondPosition!.repetitionOccurrence!.occurrenceToken and
+                      source!.retainedPOVs.isEmpty() and
+                      sourcePOV!.repetitionSpan.family!.occurrences.size()==2
         }else if(caseID==3){
             our POV: implicitPOV <- sourcePOV!.getOrCreateImplicitItemPOV(2)
             passed <- implicitPOV!=NULL and source!.value!.items.size()==0 and
@@ -2226,6 +2253,7 @@ struct GLOBAL {
             if(sparsePOV!=NULL){
                 sparsePOV!.pParent <- parentPOV
                 sparsePOV!.isSubItm <- true
+                sparsePOV!.bindIdentityRegistry(identityRegistry)
                 thirdItem <- sparsePOV!.getOrCreateImplicitItemPOV(2)
             }
             if(thirdItem!=NULL){fourthItem <- thirdItem!.logicalNextItemPOV()}
@@ -2249,6 +2277,7 @@ struct GLOBAL {
             our POV:: secondSpanPOV{povSrcImplicitItem}
             secondSpanPOV!.pItem <- secondSpan
             secondSpanPOV!.isSubItm <- true
+            secondSpanPOV!.bindIdentityRegistry(identityRegistry)
             our POV: seventhSecond <- secondSpanPOV!.getOrCreateImplicitItemPOV(6)
             our infonView: hourRequest <- parseAndExtract(testName, "hour")
             our POV:: hourRequestPOV{povSrcImplicitItem}
@@ -2289,7 +2318,9 @@ struct GLOBAL {
                       firstMinute!.pItem!.value!.items.head!.outerPOV==NULL and
                       secondMinute!.pItem!.value!.items.tail!.outerPOV==NULL and
                       secondSpan!.value!.items.isEmpty() and
-                      secondSpan!.retainedPOVs.size()==6
+                      secondSpan!.retainedPOVs.isEmpty() and
+                      secondSpanPOV!.repetitionSpan.family!=NULL and
+                      secondSpanPOV!.repetitionSpan.family!.occurrences.size()==6
             modelMngr.clear()
         }else if(caseID==7){
             our infonView: outer <- parseAndExtract(
@@ -2307,6 +2338,7 @@ struct GLOBAL {
             if(sparsePOV!=NULL){
                 sparsePOV!.pParent <- innerPOV
                 sparsePOV!.isSubItm <- true
+                sparsePOV!.bindIdentityRegistry(identityRegistry)
                 lastImplicit <- sparsePOV!.getOrCreateImplicitItemPOV(3)
             }
             me int64: outerLevelsUp <- 0
@@ -2332,7 +2364,7 @@ struct GLOBAL {
                       crossedToOuterSibling!.pItem!.value!.num.convertToInt()==99 and
                       stoppedAtInnerBoundary==NULL and
                       sparsePOV!.pItem!.value!.items.isEmpty()
-        }else{
+        }else if(caseID==8){
             our infonView: parent <- parseAndExtract(
                     testName, "{&*4+{item| ...} 99}")
             our POV:: parentPOV{povSrcImplicitItem}
@@ -2342,6 +2374,7 @@ struct GLOBAL {
             if(sparsePOV!=NULL){
                 sparsePOV!.pParent <- parentPOV
                 sparsePOV!.isSubItm <- true
+                sparsePOV!.bindIdentityRegistry(identityRegistry)
                 remainderPOV <- sparsePOV!.splitSparseSpanPrefix(2)
             }
             passed <- sparsePOV!=NULL and remainderPOV!=NULL and
@@ -2351,6 +2384,150 @@ struct GLOBAL {
                       remainderPOV!.sparseSpanCount()==2 and
                       remainderPOV!.isSubItm and
                       remainderPOV!.pParent===parentPOV
+        }else if(caseID==9){
+            our infonView: parent <- parseAndExtract(
+                    testName, "{&*6+{item| ...} 99}")
+            our POV:: parentPOV{povSrcImplicitItem}
+            parentPOV!.pItem <- parent
+            parentPOV!.bindIdentityRegistry(identityRegistry)
+            our POV: sparsePOV <- parent!.value!.items.head
+            our POV: beforeSplit
+            our POV: remainderPOV
+            our POV: afterSplit
+            me uint64: occurrenceToken <- 0
+            if(sparsePOV!=NULL){
+                sparsePOV!.pParent <- parentPOV
+                sparsePOV!.isSubItm <- true
+                beforeSplit <- sparsePOV!.getOrCreateImplicitItemPOV(4)
+            }
+            if(beforeSplit!=NULL){
+                occurrenceToken <- beforeSplit!.repetitionOccurrence!.
+                        occurrenceToken
+                remainderPOV <- sparsePOV!.splitSparseSpanPrefix(3)
+            }
+            if(remainderPOV!=NULL){
+                afterSplit <- remainderPOV!.getOrCreateImplicitItemPOV(1)
+            }
+            passed <- beforeSplit!=NULL and remainderPOV!=NULL and
+                      afterSplit!=NULL and beforeSplit===afterSplit and
+                      afterSplit!.repetitionOccurrence!.occurrenceToken==
+                            occurrenceToken and
+                      afterSplit!.repetitionOccurrence!.ordinal==4 and
+                      afterSplit!.implicitItem.sourcePov===remainderPOV and
+                      afterSplit!.implicitItem.sourceIndex==1 and
+                      sparsePOV!.repetitionSpan.family===
+                            remainderPOV!.repetitionSpan.family and
+                      sparsePOV!.sparseSpanCount()==3 and
+                      remainderPOV!.sparseSpanCount()==3 and
+                      parent!.value!.items.size()==3
+        }else if(caseID==10){
+            our infonView: parent <- parseAndExtract(
+                    testName, "{&*3+{item| ...} 99}")
+            our POV:: parentPOV{povSrcImplicitItem}
+            parentPOV!.pItem <- parent
+            parentPOV!.bindIdentityRegistry(identityRegistry)
+            our POV: sparsePOV <- parent!.value!.items.head
+            our POV: occurrenceReference
+            our POV: concretePOV
+            our POV: nextOccurrence
+            if(sparsePOV!=NULL){
+                sparsePOV!.pParent <- parentPOV
+                sparsePOV!.isSubItm <- true
+                occurrenceReference <-
+                        sparsePOV!.getOrCreateImplicitItemPOV(0)
+            }
+            if(occurrenceReference!=NULL){
+                concretePOV <- sparsePOV!.exposeSparseHeadWithItem(
+                        occurrenceReference!.pItem)
+                nextOccurrence <- sparsePOV!.getOrCreateImplicitItemPOV(0)
+            }
+            passed <- occurrenceReference!=NULL and concretePOV!=NULL and
+                      nextOccurrence!=NULL and
+                      !(occurrenceReference===concretePOV) and
+                      !(occurrenceReference===nextOccurrence) and
+                      identityRegistry!.areIdentical(
+                            occurrenceReference, concretePOV) and
+                      identityRegistry!.areIdentical(
+                            concretePOV, occurrenceReference) and
+                      identityRegistry!.identities.size()==1 and
+                      occurrenceReference!.repetitionOccurrence!.
+                            materializedPOV===concretePOV and
+                      concretePOV!.repetitionOccurrence===
+                            occurrenceReference!.repetitionOccurrence and
+                      !occurrenceReference!.isImplicitItemPOV() and
+                      sparsePOV!.repetitionSpan.startOrdinal==1 and
+                      nextOccurrence!.repetitionOccurrence!.ordinal==1 and
+                      sparsePOV!.sparseSpanCount()==2 and
+                      parent!.value!.items.size()==3
+        }else if(caseID==11){
+            our infonView: hugeSource <- parseAndExtract(
+                    testName, "*1000000000+{item| ...}")
+            our POV:: hugeSourcePOV{povSrcImplicitItem}
+            hugeSourcePOV!.pItem <- hugeSource
+            hugeSourcePOV!.isSubItm <- true
+            hugeSourcePOV!.bindIdentityRegistry(identityRegistry)
+            our POV: lastOccurrence <- hugeSourcePOV!.
+                    getOrCreateImplicitItemPOV(999999999)
+            passed <- lastOccurrence!=NULL and
+                      lastOccurrence!.repetitionOccurrence!=NULL and
+                      lastOccurrence!.repetitionOccurrence!.ordinal==999999999 and
+                      hugeSource!.value!.items.isEmpty() and
+                      hugeSourcePOV!.sparseSpanCount()==1000000000 and
+                      hugeSourcePOV!.repetitionSpan.family!=NULL and
+                      hugeSourcePOV!.repetitionSpan.family!.occurrences.size()==1 and
+                      identityRegistry!.repetitionFamilies.size()==1
+        }else if(caseID==12){
+            our POV:: firstPOV{povSrcImplicitItem}
+            our POV:: secondPOV{povSrcImplicitItem}
+            our POV:: thirdPOV{povSrcImplicitItem}
+            our infonView:: first
+            our infonView:: second
+            our infonView:: third
+            firstPOV!.pItem <- first
+            secondPOV!.pItem <- second
+            thirdPOV!.pItem <- third
+            our IdentityRelation: firstIdentity <- identityRegistry!.
+                    recordIdentity(firstPOV, secondPOV,
+                            iekAssertion, 1)
+            our IdentityRelation: secondIdentity <- identityRegistry!.
+                    recordIdentity(secondPOV, thirdPOV,
+                            iekAssertion, 1)
+            our IdentityRelation: duplicateIdentity <- identityRegistry!.
+                    recordIdentity(secondPOV, firstPOV,
+                            iekAssertion, 1)
+            passed <- firstIdentity!=NULL and secondIdentity!=NULL and
+                      duplicateIdentity===firstIdentity and
+                      identityRegistry!.identities.size()==2 and
+                      identityRegistry!.areIdentical(firstPOV, thirdPOV) and
+                      identityRegistry!.areIdentical(thirdPOV, firstPOV)
+        }else{
+            our infonView: parent <- parseAndExtract(
+                    testName, "{&*2+{item| ...} 99}")
+            our POV:: parentPOV{povSrcImplicitItem}
+            parentPOV!.pItem <- parent
+            parentPOV!.bindIdentityRegistry(identityRegistry)
+            our POV: sparsePOV <- parent!.value!.items.head
+            our POV: concretePOV
+            their RepetitionOccurrence: occurrence
+            if(sparsePOV!=NULL){
+                sparsePOV!.pParent <- parentPOV
+                sparsePOV!.isSubItm <- true
+                concretePOV <- sparsePOV!.exposeSparseHead(false)
+            }
+            if(concretePOV!=NULL){
+                occurrence <- concretePOV!.repetitionOccurrence
+            }
+            passed <- concretePOV!=NULL and occurrence!=NULL and
+                      occurrence!.referencePOV!=NULL and
+                      occurrence!.materializedPOV===concretePOV and
+                      identityRegistry!.areIdentical(
+                            occurrence!.referencePOV, concretePOV) and
+                      identityRegistry!.areIdentical(
+                            concretePOV, occurrence!.referencePOV) and
+                      identityRegistry!.identities.size()==1 and
+                      sparsePOV!.repetitionSpan.startOrdinal==1 and
+                      sparsePOV!.sparseSpanCount()==1 and
+                      parent!.value!.items.size()==3
         }
 
         me string: result <- "false"
