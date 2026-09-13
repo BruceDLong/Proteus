@@ -143,6 +143,107 @@ do ManageCmdLine(cmd)
 #define LISTCOMPLETIONBARRIER (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestListCompletionBarrier(tname)}%>
 #define PARSEERR (NAME, MSG, INPUT, ERRTXT, ERRLINE, ERRCOL) <%void: DESLASH(NAME)(me string: tname)<-{testParseError(tname, INPUT, ERRTXT, ERRLINE, ERRCOL)}%>
 
+// World tests deliberately use a file-aware derived core.  ProteusCore itself
+// remains protocol-neutral, while the tests exercise the same shared stream
+// lifecycle and origin-relative %INSERT handling used by application cores.
+struct TestConnectionManager: inherits=InfonStreamLoader{}
+
+struct TestProteusCore: inherits=ProteusCore {
+    me TestConnectionManager: connectionMgr
+    our infonView: loadedWorldSource
+
+    our InfonConnector: makeInfonConnector(me string: specString,
+            me int: loadNumber) <- {
+        our InfonStreamSpec:: SP
+        SP.setSpec(specString)
+        if(SP.protocolTag!="file"){
+            errorMesg <- "Unsupported test stream protocol: "+SP.protocolTag
+            return(NULL)
+        }
+        our AssetFileConnector:: connector
+        connector.init(SP)
+        if(connector.statusCode!=0){
+            errorMesg <- connector.statusMesg
+            return(NULL)
+        }
+        return(connector)
+    }
+
+    me bool: normalizeFromStreamSpec(our POV: infToFill,
+            me string: streamSpec) <- {
+        return(normalizeFromStreamSpecAtOrigin(infToFill, streamSpec, 0))
+    }
+
+    me bool: normalizeFromStreamSpecAtOrigin(our POV: infToFill,
+            me string: streamSpec, me uint64: sourceOriginID) <- {
+        me uint64: parentOriginID <-
+                streamSourceOriginID(infToFill, sourceOriginID)
+        our InfonStream: stream <- connectionMgr.startNewConnection(
+                infToFill.pItem, streamSpec, parentOriginID)
+        return(stream!=NULL)
+    }
+
+    me string: getOriginIDString(me uint64: originID) <- {
+        return(connectionMgr.getOriginIDString(originID))
+    }
+
+    me bool: loadInto(our infonView: target, me string: specString) <- {
+        me string: canonicalSpec <- connectionMgr.canonicalFileSpec(specString)
+        our InfonStream: stream <-
+                connectionMgr.startNewConnection(target, canonicalSpec)
+        if(stream==NULL){return(false)}
+        connectionMgr.waitForAllStreams()
+        return(true)
+    }
+
+    me bool: initializeWorldFromKernel() <- {
+        our infonView: parsedWorld <-
+                parseAndExtractString("world", "internal:world")
+        if(parsedWorld==NULL){return(false)}
+        agent!.world <- parsedWorld
+        our POV:: worldPov{30}
+        worldPov!.pItem <- agent!.world
+        agent!.normalize(worldPov)
+        agent!.world <- worldPov!.pItem
+        if(agent!.world==NULL or
+                agent!.world!.value!.overlayType!=LST or
+                agent!.world!.value!.evalMode!=emLiteral or
+                !agent!.world!.wordDerefed){
+            errorMesg <-
+                    "The kernel definition 'world' did not normalize into a resolved list."
+            return(false)
+        }
+        return(true)
+    }
+
+    me bool: loadKernel() <- {
+        our infonView:: kernelSource
+        agent!.kernel <- kernelSource
+        if(!loadInto(agent!.kernel, "public/KernelKB.pr")){return(false)}
+        return(initializeWorldFromKernel())
+    }
+
+    me bool: initForWorldTest(me string: worldFileName) <- {
+        if(!init("", false)){return(false)}
+        connectionMgr.init(agent, this)
+        if(worldFileName==""){return(true)}
+
+        if(findString(worldFileName, "KernelKB.pr")!=-1){
+            return(loadKernel())
+        }
+        if(findString(worldFileName, "PublicKB.pr")!=-1){
+            if(!loadKernel()){return(false)}
+            our infonView:: publicSource
+            loadedWorldSource <- publicSource
+            return(loadInto(loadedWorldSource, worldFileName))
+        }
+
+        our infonView:: fixtureWorld
+        agent!.world <- fixtureWorld
+        return(loadInto(agent!.world, worldFileName))
+    }
+}
+
 
 struct GLOBAL {
 
@@ -3169,8 +3270,13 @@ struct GLOBAL {
     }
     me void: multiNorm(me string: testName, me string: in, me string: worldFileName) <- {
         infonViewPrinter.debugSublistPrint <- true
-        me ProteusCore: CORE
-        CORE.init(worldFileName, false)
+        me TestProteusCore: CORE
+        me bool: loaded <- CORE.initForWorldTest(worldFileName)
+        me string: loadedState <- "false"
+        if(loaded){loadedState <- "true"}
+        me string: expectedLoadState <- "true"
+        REQUIRE(loadedState==expectedLoadState)
+        if(!loaded){modelMngr.clear(); return()}
         me string: line <- ""
         withEach charPos in range 0 .. in.size(){
             if(in[charPos]=="\n"){
