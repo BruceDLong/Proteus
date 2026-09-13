@@ -85,6 +85,7 @@ struct EndRelativeWindowContentStatus: inherits=<mode[
 struct IdentityEvidenceKind: inherits=<mode[
     iekAssertion,
     iekTemporalBoundary,
+    iekEndRelativeResolution,
     iekRepetitionMaterialization
 ]> {}
 
@@ -96,6 +97,22 @@ model IdentityRelation{
     our POV: rightPOV
 }
 struct IdentityRelation{}
+
+// A negative end-relative selector names one logical occurrence before its
+// absolute position is necessarily known.  The registry owns the exact source
+// infon and symbolic POV; sourcePOV is the non-owning contextual witness used
+// while that source location is active.
+model EndRelativeReference{
+    me uint64: referenceID <- 0
+    their POV: sourcePOV
+    our infonView: sourceInfon
+    me int64: offset <- 0
+    our POV: referencePOV
+    our POV: resolvedPOV
+    our IdentityRelation: identityRelation
+    flag: retired
+}
+struct EndRelativeReference{}
 
 // One logical member of a repetition.  occurrenceToken is opaque and stable;
 // ordinal is optional knowledge about that occurrence, not its identity.
@@ -125,13 +142,96 @@ struct RepetitionFamily{}
 // use may bind an explicitly constructed registry with the same contract.
 model IdentityRegistry{
     me uint64: nextEvidenceID <- 1
+    me uint64: nextReferenceID <- 1
     me uint64: nextRepetitionID <- 1
     me uint64: nextOccurrenceToken <- 1
     me List<our IdentityRelation>: identities
+    me List<our EndRelativeReference>: endRelativeReferences
     me List<our RepetitionFamily>: repetitionFamilies
     me Mutex: registryMutex
 }
 struct IdentityRegistry{
+    our EndRelativeReference: findEndRelativeReference(
+            their POV: sourcePOV, their infonView: sourceInfon,
+            me int64: offset) <- {
+        if(sourcePOV==NULL or sourceInfon==NULL or offset>=0){return(NULL)}
+        protect(registryMutex){
+            withEach reference in endRelativeReferences{
+                if(!reference!.retired and
+                        reference!.sourcePOV===sourcePOV and
+                        reference!.sourceInfon===sourceInfon and
+                        reference!.offset==offset){return(reference)}
+            }
+        }
+        return(NULL)
+    }
+
+    our EndRelativeReference: getOrCreateEndRelativeReference(
+            their POV: sourcePOV, me int64: offset) <- {
+        if(sourcePOV==NULL or sourcePOV!.pItem==NULL or offset>=0){
+            return(NULL)
+        }
+        our EndRelativeReference: existing <- findEndRelativeReference(
+                sourcePOV, sourcePOV!.pItem, offset)
+        if(existing!=NULL){return(existing)}
+        protect(registryMutex){
+            // Recheck under the write lock in case another parser/normalizer
+            // registered the same logical reference concurrently.
+            withEach reference in endRelativeReferences{
+                if(!reference!.retired and
+                        reference!.sourcePOV===sourcePOV and
+                        reference!.sourceInfon===sourcePOV!.pItem and
+                        reference!.offset==offset){return(reference)}
+            }
+
+            our POV:: virtualItem{povSrcEndRelativeReference}
+            Allocate(virtualItem!.pItem)
+            virtualItem!.pItem!.itmMode <- mItem
+            virtualItem!.pItem!.viewMode <- vmAny
+            virtualItem!.pItem!.infSize!.evalMode <- emUnknown
+            virtualItem!.pItem!.value!.overlayType <- tUnknown
+            virtualItem!.pItem!.value!.evalMode <- emUnknown
+            virtualItem!.identityRegistry <- self
+            virtualItem!.endRelativeReference <- true
+            virtualItem!.endRelativeOffset <- offset
+
+            our EndRelativeReference:: reference
+            reference!.referenceID <- nextReferenceID
+            nextReferenceID <+- 1
+            reference!.sourcePOV <- sourcePOV
+            reference!.sourceInfon <- sourcePOV!.pItem
+            reference!.offset <- offset
+            reference!.referencePOV <- virtualItem
+            endRelativeReferences.append(reference)
+            sourcePOV!.pItem!.referenceRegistry <- self
+            return(reference)
+        }
+    }
+
+    void: collectEndRelativeReferences(their infonView: sourceInfon,
+            their List<our EndRelativeReference>: results) <- {
+        if(sourceInfon==NULL){return()}
+        protect(registryMutex){
+            withEach reference in endRelativeReferences{
+                if(!reference!.retired and
+                        reference!.sourceInfon===sourceInfon){
+                    results.append(reference)
+                }
+            }
+        }
+    }
+
+    void: retireEndRelativeReferences(their infonView: sourceInfon) <- {
+        if(sourceInfon==NULL){return()}
+        protect(registryMutex){
+            withEach reference in endRelativeReferences{
+                if(reference!.sourceInfon===sourceInfon){
+                    reference!.retired <- true
+                }
+            }
+        }
+    }
+
     our RepetitionFamily: getOrCreateRepetitionFamily(their POV: sourcePOV) <- {
         if(sourcePOV==NULL){return(NULL)}
         protect(registryMutex){
@@ -676,6 +776,11 @@ struct infonView{
     // Keep-alive references for temporary POVs.
     me List<our POV>: retainedPOVs
 
+    // Non-owning route to the Agent registry for source-based references.
+    // The registry owns the reference records and their POVs; this field lets
+    // a later list closure notify the same semantic universe.
+    their IdentityRegistry: referenceRegistry
+
     // Source graphs still referenced through non-owning POV context links in
     // this result. These are ownership dependencies, not pending constraints.
     me List<our POV>: sourceGraphDependencies
@@ -940,26 +1045,26 @@ struct infonView{
         result.exactExtent <- infSize!.num.convertToInt()
         return(result)
     }
-    our POV: findEndRelativeReference(me int64: offset) <- {
-        withEach retainedPOV in retainedPOVs{
-            if(retainedPOV!=NULL and retainedPOV!.endRelativeReference and retainedPOV!.endRelativeOffset==offset){
-                return(retainedPOV)
-            }
-        }
-        return(NULL)
-    }
-    our POV: resolveEndRelativeReference(our POV: referencePOV) <- {
-        if(referencePOV==NULL or !referencePOV!.endRelativeReference){return(referencePOV)}
+    our POV: resolveEndRelativeReference(
+            their EndRelativeReference: reference) <- {
+        if(reference==NULL or reference!.retired or
+                reference!.sourceInfon!==self or
+                reference!.referencePOV==NULL or
+                !reference!.referencePOV!.endRelativeReference){return(NULL)}
+        our POV: referencePOV <- reference!.referencePOV
         if(referencePOV!.endRelativeResolved){return(referencePOV)}
         me EndRelativeExtentResult: extent <- endRelativeExtent()
         if(extent.status!=eresExact){return(referencePOV)}
         me int64: ordinal <- extent.exactExtent +
-                referencePOV!.endRelativeOffset + 1
+                reference!.offset + 1
         if(ordinal<=0){return(referencePOV)}
         our POV: actualPOV
-        if(referencePOV!.endRelativeOffset==-1 and
-                !value!.tailUnfinished){
+        if(reference!.offset==-1 and !value!.tailUnfinished){
             actualPOV <- getLastItem()
+        }else if(reference!.sourcePOV!=NULL and
+                reference!.sourcePOV!.pItem===self){
+            actualPOV <- reference!.sourcePOV!.
+                    logicalItemAtIndex(ordinal - 1)
         }else{
             actualPOV <- getNthEndRelativeInfonView(ordinal)
         }
@@ -971,56 +1076,42 @@ struct infonView{
         referencePOV!.readyToResolve <- true
         referencePOV!.endRelativeResolved <- true
         referencePOV!.pParent <- actualPOV!.pParent
+        reference!.resolvedPOV <- actualPOV
+        if(referenceRegistry!=NULL){
+            actualPOV!.bindIdentityRegistry(referenceRegistry)
+            reference!.identityRelation <- referenceRegistry!.recordIdentity(
+                    referencePOV, actualPOV,
+                    iekEndRelativeResolution, 0)
+        }
         actualPOV!.pItem <- referencePOV!.pItem
         return(referencePOV)
     }
     void: resolveEndRelativeReferences() <- {
+        if(referenceRegistry==NULL){return()}
         me EndRelativeExtentResult: extent <- endRelativeExtent()
         if(extent.status!=eresExact){return()}
-        withEach retainedPOV in retainedPOVs{
-            if(retainedPOV!=NULL and retainedPOV!.endRelativeReference and !retainedPOV!.endRelativeResolved){
-                resolveEndRelativeReference(retainedPOV)
+        me List<our EndRelativeReference>: references
+        referenceRegistry!.collectEndRelativeReferences(self, references)
+        withEach reference in references{
+            if(reference!=NULL and reference!.referencePOV!=NULL and
+                    !reference!.referencePOV!.endRelativeResolved){
+                resolveEndRelativeReference(reference)
             }
         }
     }
-    our POV: getEndRelativePOV(me int64: offset) <- {
-        if(offset>=0){return(NULL)}
-        our POV: retainedReference <- findEndRelativeReference(offset)
-        if(retainedReference!=NULL){return(resolveEndRelativeReference(retainedReference))}
-        me EndRelativeExtentResult: extent <- endRelativeExtent()
-        if(extent.status==eresExact){
-            me int64: ordinal <- extent.exactExtent + offset + 1
-            if(ordinal>0){
-                if(offset==-1 and !value!.tailUnfinished){
-                    return(getLastItem())
-                }
-                return(getNthEndRelativeInfonView(ordinal))
-            }
-        }
-
-        our POV:: virtualItem{povSrcEndRelativeReference}
-        Allocate(virtualItem!.pItem)
-        virtualItem!.pItem!.itmMode <- mItem
-        virtualItem!.pItem!.viewMode <- vmAny
-        virtualItem!.pItem!.infSize!.evalMode <- emUnknown
-        virtualItem!.pItem!.value!.overlayType <- tUnknown
-        virtualItem!.pItem!.value!.evalMode <- emUnknown
-        virtualItem!.endRelativeReference <- true
-        virtualItem!.endRelativeOffset <- offset
-        retainPOV(virtualItem)
-        return(virtualItem)
-    }
-    our POV: getLastPOV() <- {
+    // This infon-only helper can return only an already materialized last
+    // location. Creating an unresolved reference requires a POV context and
+    // therefore lives on POV.getLastPOV().
+    our POV: getKnownLastPOV() <- {
         our POV: lastPOV
         if(!value!.tailUnfinished and value!.sizeMode==fromGiven and infSize!.evalMode==emLiteral){
             lastPOV <- getNthInfonView(infSize!.num)
         }else{lastPOV <- getLastItem()}
-        if(lastPOV!=NULL){return(lastPOV)}
-        return(getEndRelativePOV(-1))
+        return(lastPOV)
     }
 
-    our infonView: getLastInfonView() <- {
-        our POV: lastPOV <- getLastPOV()
+    our infonView: getKnownLastInfonView() <- {
+        our POV: lastPOV <- getKnownLastPOV()
         if(lastPOV==NULL){return(NULL)}
         return(lastPOV!.pItem)
     }
@@ -1327,6 +1418,10 @@ struct infonView{
         return(S)
     }
     void: clear() <- {
+        if(referenceRegistry!=NULL){
+            referenceRegistry!.retireEndRelativeReferences(self)
+            referenceRegistry <- NULL
+        }
         infSize!.clear()
         value!.clear()
         resetFlagsAndModes()

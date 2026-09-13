@@ -279,7 +279,7 @@ struct GLOBAL {
     STREAMLOADERSPEC(unit/streamLoader/relativeResolution, "resolve an inserted stream from its source directory", 2)
     TEMPORALBOUNDARYVIEWS(unit/temporal/boundaryViews, "preserve temporal cut identity behind begin and end")
     TEMPORALBOUNDARY(unit/temporal/boundaryIdentityBidirectional, "store one adjacent-span identity and traverse it in both directions")
-    ENDRELRESOLVE(unit/endRelative/resolveOnClose, "resolve a retained end-relative reference when its list closes")
+    ENDRELRESOLVE(unit/endRelative/resolveOnClose, "register end-relative references and identify them while large sparse sources stay compressed")
     ENDRELQUERY(unit/endRelative/exactClosedWindow, "separate an exact closed extent from its available window", 1)
     ENDRELQUERY(unit/endRelative/exactPendingWindow, "retain an exact coordinate while requested positions are pending", 2)
     ENDRELQUERY(unit/endRelative/unknownOpenExtent, "leave an open list without an exact end unresolved", 3)
@@ -985,7 +985,12 @@ struct GLOBAL {
     }
     me void: unitTestEndRelativeResolveOnClose(me string: testName) <- {
         our infonView: source <- parseAndExtract(testName, "{'Cat' 'Hat' ...}")
-        our POV: pendingLast <- source!.getEndRelativePOV(-1)
+        our IdentityRegistry:: identityRegistry
+        our POV:: sourcePOV{povSrcEndRelativeReference}
+        sourcePOV!.pItem <- source
+        sourcePOV!.bindIdentityRegistry(identityRegistry)
+        our POV: pendingLast <- sourcePOV!.getEndRelativePOV(-1)
+        our POV: samePendingLast <- sourcePOV!.getEndRelativePOV(-1)
         our infonView: pendingValue <- parseAndExtract(testName, "'Dog'")
         pendingLast!.pItem <- pendingValue
 
@@ -994,13 +999,52 @@ struct GLOBAL {
         source!.value!.tailUnfinished <- false
         source!.countSize(false)
 
-        me bool: referenceWasRetained <- source!.findEndRelativeReference(-1)===pendingLast
+        our EndRelativeReference: reference <-
+                sourcePOV!.findEndRelativeReferenceRecord(-1)
+        me bool: referenceWasRegistered <- reference!=NULL and
+                reference!.referencePOV===pendingLast and
+                samePendingLast===pendingLast and
+                identityRegistry!.endRelativeReferences.size()==1 and
+                source!.retainedPOVs.isEmpty()
         me bool: sourceUsesPendingSlot <- finalPOV!.pItem===pendingLast!.pItem
         me bool: finalItemIsAConstraint <- pendingLast!.pItem!.workListContainsInfonView(finalItem)
-        me bool: resolvedCorrectly <- pendingLast!.endRelativeResolved and referenceWasRetained and sourceUsesPendingSlot and finalItemIsAConstraint
+        me bool: resolvedCorrectly <- pendingLast!.endRelativeResolved and
+                referenceWasRegistered and sourceUsesPendingSlot and
+                finalItemIsAConstraint and reference!.resolvedPOV===finalPOV and
+                reference!.identityRelation!=NULL and
+                reference!.identityRelation!.evidenceKind==
+                        iekEndRelativeResolution and
+                identityRegistry!.areIdentical(pendingLast, finalPOV) and
+                identityRegistry!.areIdentical(finalPOV, pendingLast)
+
+        our infonView: hugeSource <- parseAndExtract(testName,
+                "*1000000000+{second| ...}")
+        our IdentityRegistry:: hugeRegistry
+        our POV:: hugeSourcePOV{povSrcEndRelativeReference}
+        hugeSourcePOV!.pItem <- hugeSource
+        hugeSourcePOV!.bindIdentityRegistry(hugeRegistry)
+        our POV: hugeLast <- hugeSourcePOV!.getEndRelativePOV(-1)
+        our EndRelativeReference: hugeReference <-
+                hugeSourcePOV!.findEndRelativeReferenceRecord(-1)
+        me bool: sparseReferenceStayedSparse <- hugeLast!=NULL and
+                hugeReference!=NULL and hugeLast!.endRelativeResolved and
+                hugeSource!.value!.items.isEmpty() and
+                hugeRegistry!.endRelativeReferences.size()==1 and
+                hugeRegistry!.repetitionFamilies.size()==1 and
+                hugeRegistry!.repetitionFamilies.first()!.
+                        occurrences.size()==1 and
+                hugeReference!.resolvedPOV!=NULL and
+                hugeReference!.resolvedPOV!.repetitionOccurrence!=NULL and
+                hugeReference!.resolvedPOV!.repetitionOccurrence!.
+                        ordinal==999999999 and
+                hugeReference!.identityRelation!=NULL and
+                hugeRegistry!.areIdentical(
+                        hugeLast, hugeReference!.resolvedPOV)
         me string: result <- "false"
         me string: expected <- "true"
-        if(resolvedCorrectly){result <- "true"}
+        if(resolvedCorrectly and sparseReferenceStayedSparse){
+            result <- "true"
+        }
         REQUIRE(result==expected)
         return()
     }
