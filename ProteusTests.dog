@@ -50,6 +50,10 @@ TestsToRun = `
     unit/endRelative/correspondenceSparseMap
     unit/referenceRegistry/partPathSelection
     unit/referenceRegistry/intersectionPartPathSelection
+    unit/referenceRegistry/pendingSymbolicSelection
+    unit/referenceRegistry/multipleEqualValuedOccurrences
+    unit/referenceRegistry/reverseSourceMultiplicity
+    unit/referenceRegistry/resolvedPartPathRequest
     unit/referenceRegistry/positiveIndexSelection
     unit/referenceRegistry/firstSelection
     unit/referenceRegistry/lastSelection
@@ -88,6 +92,7 @@ TestsToRun = `
     unit/implicitItem/billionItemRegistry
     unit/identityRegistry/symmetricTransitive
     unit/implicitItem/directExposureIdentity
+    unit/implicitItem/unknownOrdinalOccurrence
     unit/reasoner/strictListUnknownUnknown
     unit/reasoner/strictListUnknownFromLiteral
     unit/reasoner/strictListUnknownFromEmptyLiteral
@@ -139,6 +144,7 @@ do ManageCmdLine(cmd)
 #define ENDRELPLAN (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeTraversalPlan(tname, CASE_ID)}%>
 #define ENDRELCORRESPONDENCE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeCorrespondence(tname, CASE_ID)}%>
 #define SELECTIONREFERENCE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestSelectionReference(tname, CASE_ID)}%>
+#define SELECTIONRESOLUTION (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestSelectionResolution(tname, CASE_ID)}%>
 #define POSITIONALSELECTION (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestPositionalSelectionReference(tname, CASE_ID)}%>
 #define ORDEREDSPANVIEW (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestOrderedSpanView(tname, CASE_ID)}%>
 #define MAPPEDWRITE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestMappedWrite(tname, CASE_ID)}%>
@@ -320,6 +326,10 @@ struct GLOBAL {
     ENDRELCORRESPONDENCE(unit/endRelative/correspondenceSparseMap, "map an accepted sparse position without materializing its source", 5)
     SELECTIONREFERENCE(unit/referenceRegistry/partPathSelection, "record direct part selection without asserting identity", 1)
     SELECTIONREFERENCE(unit/referenceRegistry/intersectionPartPathSelection, "record intersection-lowered part selection without asserting identity", 2)
+    SELECTIONRESOLUTION(unit/referenceRegistry/pendingSymbolicSelection, "keep a lowered unresolved selector as a registry request while its work remains on wrkList", 1)
+    SELECTIONRESOLUTION(unit/referenceRegistry/multipleEqualValuedOccurrences, "preserve equal-valued source occurrences as distinct selection results", 2)
+    SELECTIONRESOLUTION(unit/referenceRegistry/reverseSourceMultiplicity, "report every query and result that selected one exact source occurrence", 3)
+    SELECTIONRESOLUTION(unit/referenceRegistry/resolvedPartPathRequest, "resolve the original part-path request through its accepted intersection match", 4)
     POSITIONALSELECTION(unit/referenceRegistry/positiveIndexSelection, "record a positive index result by exact source POV", 1)
     POSITIONALSELECTION(unit/referenceRegistry/firstSelection, "record first-item navigation by exact source POV", 2)
     POSITIONALSELECTION(unit/referenceRegistry/lastSelection, "record last-item navigation by exact source POV", 3)
@@ -358,6 +368,7 @@ struct GLOBAL {
     IMPLICITITEM(unit/implicitItem/billionItemRegistry, "retain only demanded occurrences from a billion-item repetition", 11)
     IMPLICITITEM(unit/identityRegistry/symmetricTransitive, "traverse registered identities in either direction and transitively", 12)
     IMPLICITITEM(unit/implicitItem/directExposureIdentity, "record identity when sparse exposure has no prior occurrence reference", 13)
+    IMPLICITITEM(unit/implicitItem/unknownOrdinalOccurrence, "keep demanded repetition occurrences distinct before their ordinals are known", 14)
     STRICTLISTUNKNOWN(unit/reasoner/strictListUnknownUnknown, "merge strict unknown list constraints", 1)
     STRICTLISTUNKNOWN(unit/reasoner/strictListUnknownFromLiteral, "prepare a strict unknown list for literal-list propagation", 2)
     STRICTLISTUNKNOWN(unit/reasoner/strictListUnknownFromEmptyLiteral, "materialize a strict empty literal list in an unknown list", 5)
@@ -1943,6 +1954,201 @@ struct GLOBAL {
         modelMngr.clear()
         return()
     }
+    me void: unitTestSelectionResolution(
+            me string: testName, me int: caseID) <- {
+        me bool: passed <- false
+        if(caseID==1){
+            me ProteusCore: CORE
+            CORE.init("", false)
+            our infonView: source <- parseAndExtract(
+                    testName, "{10 20 ...}@[2:*2+{ ... }]")
+            // Keep the parsed numeric selector type, but make its coordinate
+            // genuinely symbolic before lowering it against an open list.
+            source!.partRef!.path!.value!.evalMode <- emUnknown
+            our POV:: resultPOV{povSrcPartPathSelection}
+            resultPOV!.pItem <- source
+            resultPOV!.bindIdentityRegistry(
+                    CORE.agent!.identityRegistry)
+            our AItem:: aItem{srcNormInit}
+            aItem!.LHS_item <- resultPOV
+            our Agenda:: agenda
+            agenda!.normalizationID <- 17
+            me bool: nxtAction <- false
+            me List<our AItem>: requestedWork
+            me CursorPathResolver: resolver
+            me TemporalIdentityReasoner: temporalReasoner
+            me bool: changed <- resolver.resolveParts(
+                    CORE.agent!.worldMgr, agenda, aItem,
+                    nxtAction, requestedWork, temporalReasoner)
+            our infonView: selector <- resultPOV!.pItem
+            our SelectionResolution: resolution
+            our SelectionRequest: request
+            our POV: selectorSourceWork
+            if(selector!=NULL and selector!.selectionRequestID!=0){
+                resolution <- CORE.agent!.identityRegistry!.
+                        resolveSelectionRequest(
+                                selector!.selectionRequestID)
+            }
+            if(resolution!=NULL and !resolution!.requests.isEmpty()){
+                request <- resolution!.requests.first()
+            }
+            if(selector!=NULL and selector!.innr!=NULL and
+                    !selector!.innr!.wrkList.isEmpty()){
+                selectorSourceWork <- selector!.innr!.wrkList.first()
+            }
+            passed <- changed and nxtAction and selector!=NULL and
+                    selector!.selectionRequestID!=0 and
+                    selectorSourceWork!=NULL and
+                    selectorSourceWork!.selectorLocalWork and
+                    selectorSourceWork!.selectionRequestID==
+                            selector!.selectionRequestID and
+                    resolution!=NULL and
+                    resolution!.resolutionState==srsPending and
+                    resolution!.references.isEmpty() and
+                    request!=NULL and request!.queryPOV!=NULL and
+                    request!.queryPOV!.pItem!=NULL and
+                    request!.queryPOV!.pItem!.value!.overlayType==NUM and
+                    request!.queryPOV!.pItem!.value!.evalMode==emUnknown and
+                    request!.selectorSpec!=NULL and
+                    request!.selectorSpec!.value!.overlayType==LST and
+                    request!.selectorSpec!.infSize!.evalMode==emLiteral and
+                    request!.selectorSpec!.infSize!.num.convertToInt()==2 and
+                    request!.consumerResultPOV===resultPOV and
+                    request!.sourceContextPOV!=NULL and
+                    request!.sourceContextPOV!.pItem===source and
+                    request!.sourceContextPOV!.pItem!.value!.tailUnfinished and
+                    request!.sourceContextPOV!.pItem!.wrkList.isEmpty()
+            modelMngr.clear()
+        }else if(caseID==2){
+            our IdentityRegistry:: registry
+            our infonView: source <- parseAndExtract(
+                    testName, "{7 7}")
+            our POV:: sourcePOV{povSrcPartPathSelection}
+            sourcePOV!.pItem <- source
+            sourcePOV!.bindIdentityRegistry(registry)
+            our POV: firstSource <- source!.value!.items.head
+            our POV: secondSource <- source!.value!.items.tail
+            our infonView: query <- parseAndExtract(testName, "_")
+            our POV:: queryPOV{povSrcPartPathSelection}
+            queryPOV!.pItem <- query
+            queryPOV!.bindIdentityRegistry(registry)
+            our infonView: result <- parseAndExtract(testName, "7")
+            our POV:: resultPOV{povSrcPartPathSelection}
+            resultPOV!.pItem <- result
+            resultPOV!.bindIdentityRegistry(registry)
+            our SelectionRequest: request <- registry!.
+                    getOrCreateSelectionRequest(
+                            queryPOV, resultPOV, sourcePOV,
+                            srkIntersectionCorrespondence, 1)
+            our SelectionReference: firstReference <- registry!.
+                    recordSelectionReferenceForRequest(
+                            request, resultPOV, firstSource)
+            our SelectionReference: secondReference <- registry!.
+                    recordSelectionReferenceForRequest(
+                            request, resultPOV, secondSource)
+            our SelectionResolution: requestResolution <-
+                    registry!.resolveSelectionRequest(request!.requestID)
+            our SelectionResolution: queryResolution <-
+                    registry!.resolveSelectionForQuery(
+                            queryPOV, srkIntersectionCorrespondence)
+            our SelectionResolution: resultResolution <-
+                    registry!.resolveSelectionForResult(resultPOV)
+            our SelectionResolution: firstSourceResolution <-
+                    registry!.resolveSelectionForSource(
+                            sourcePOV, firstSource)
+            passed <- firstSource!=NULL and secondSource!=NULL and
+                    firstSource!.pItem!==secondSource!.pItem and
+                    toString(firstSource!.pItem)==
+                            toString(secondSource!.pItem) and
+                    firstReference!=NULL and secondReference!=NULL and
+                    firstReference!.occurrenceToken!=
+                            secondReference!.occurrenceToken and
+                    request!.resolutionState==srsMultiple and
+                    requestResolution!.resolutionState==srsMultiple and
+                    requestResolution!.references.size()==2 and
+                    queryResolution!.resolutionState==srsMultiple and
+                    resultResolution!.resolutionState==srsMultiple and
+                    firstSourceResolution!.resolutionState==srsUnique and
+                    firstSourceResolution!.references.size()==1
+            modelMngr.clear()
+        }else if(caseID==3){
+            our IdentityRegistry:: registry
+            our infonView: source <- parseAndExtract(testName, "{7}")
+            our POV:: sourcePOV{povSrcPartPathSelection}
+            sourcePOV!.pItem <- source
+            sourcePOV!.bindIdentityRegistry(registry)
+            our POV: sourceStart <- source!.value!.items.head
+            our infonView: firstQuery <- parseAndExtract(testName, "_")
+            our infonView: secondQuery <- parseAndExtract(testName, "_")
+            our infonView: firstResult <- parseAndExtract(testName, "7")
+            our infonView: secondResult <- parseAndExtract(testName, "7")
+            our POV:: firstQueryPOV{povSrcPartPathSelection}
+            our POV:: secondQueryPOV{povSrcPartPathSelection}
+            our POV:: firstResultPOV{povSrcPartPathSelection}
+            our POV:: secondResultPOV{povSrcPartPathSelection}
+            firstQueryPOV!.pItem <- firstQuery
+            secondQueryPOV!.pItem <- secondQuery
+            firstResultPOV!.pItem <- firstResult
+            secondResultPOV!.pItem <- secondResult
+            registry!.recordSelectionReference(
+                    firstQueryPOV, firstResultPOV,
+                    sourcePOV, sourceStart,
+                    srkIntersectionCorrespondence, 1)
+            registry!.recordSelectionReference(
+                    secondQueryPOV, secondResultPOV,
+                    sourcePOV, sourceStart,
+                    srkIntersectionCorrespondence, 1)
+            our SelectionResolution: inverse <-
+                    registry!.resolveSelectionForSource(
+                            sourcePOV, sourceStart)
+            passed <- inverse!.resolutionState==srsMultiple and
+                    inverse!.references.size()==2 and
+                    inverse!.references.first()!.queryPOV!==
+                            inverse!.references.last()!.queryPOV and
+                    inverse!.references.first()!.resultPOV!==
+                            inverse!.references.last()!.resultPOV
+            modelMngr.clear()
+        }else{
+            me ProteusCore: CORE
+            CORE.init("", false)
+            our infonView: result <- parseAndExtract(
+                    testName, "{a:1 b:2}.b")
+            our POV:: resultPOV{povSrcPartPathSelection}
+            resultPOV!.pItem <- result
+            CORE.agent!.normalize(resultPOV)
+            our SelectionRequest: partRequest
+            withEach request in
+                    CORE.agent!.identityRegistry!.selectionRequests{
+                if(request!.referenceKind==srkPartPathSelection and
+                        request!.consumerResultPOV===resultPOV){
+                    partRequest <- request
+                    break()
+                }
+            }
+            our SelectionResolution: resolution
+            if(partRequest!=NULL){
+                resolution <- CORE.agent!.identityRegistry!.
+                        resolveSelectionRequest(partRequest!.requestID)
+            }
+            passed <- partRequest!=NULL and resolution!=NULL and
+                    resolution!.resolutionState==srsUnique and
+                    resolution!.references.size()==1 and
+                    resolution!.references.first()!.queryPOV===
+                            partRequest!.queryPOV and
+                    resolution!.references.first()!.resultPOV===resultPOV and
+                    resolution!.references.first()!.sourceStartPOV!=NULL and
+                    resolution!.references.first()!.sourceStartPOV!.pItem!.
+                            type!.typeID()=="b" and
+                    resultPOV!.pItem!.value!.num.convertToInt()==2
+            modelMngr.clear()
+        }
+
+        me string: actual <- "false"
+        me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+        return()
+    }
     me void: unitTestPositionalSelectionReference(
             me string: testName, me int: caseID) <- {
         me ProteusCore: CORE
@@ -3084,7 +3290,7 @@ struct GLOBAL {
                       identityRegistry!.identities.size()==2 and
                       identityRegistry!.areIdentical(firstPOV, thirdPOV) and
                       identityRegistry!.areIdentical(thirdPOV, firstPOV)
-        }else{
+        }else if(caseID==13){
             our infonView: parent <- parseAndExtract(
                     testName, "{&*2+{item| ...} 99}")
             our POV:: parentPOV{povSrcImplicitItem}
@@ -3112,6 +3318,86 @@ struct GLOBAL {
                       sparsePOV!.repetitionSpan.startOrdinal==1 and
                       sparsePOV!.sparseSpanCount()==1 and
                       parent!.value!.items.size()==3
+        }else{
+            source!.infSize!.evalMode <- emUnknown
+            our RepetitionOccurrence: firstOccurrence <- identityRegistry!.
+                    createUnknownOrdinalRepetitionOccurrence(sourcePOV)
+            our RepetitionOccurrence: secondOccurrence <- identityRegistry!.
+                    createUnknownOrdinalRepetitionOccurrence(sourcePOV)
+            me uint64: firstToken <- 0
+            our POV: firstReferencePOV
+            if(firstOccurrence!=NULL){
+                firstToken <- firstOccurrence!.occurrenceToken
+                firstReferencePOV <- firstOccurrence!.referencePOV
+            }
+            our infonView: occurrenceQuery <- parseAndExtract(
+                    testName, "_")
+            our POV:: occurrenceQueryPOV{povSrcPartPathSelection}
+            occurrenceQueryPOV!.pItem <- occurrenceQuery
+            our infonView: occurrenceResult <- parseAndExtract(
+                    testName, "item")
+            our POV:: occurrenceResultPOV{povSrcPartPathSelection}
+            occurrenceResultPOV!.pItem <- occurrenceResult
+            our SelectionRequest: occurrenceRequest <- identityRegistry!.
+                    getOrCreateSelectionRequest(
+                            occurrenceQueryPOV, occurrenceResultPOV,
+                            sourcePOV, srkIntersectionCorrespondence, 1)
+            our SelectionReference: firstSelection
+            our SelectionReference: secondSelection
+            our SelectionResolution: occurrenceResolution
+            if(firstOccurrence!=NULL and secondOccurrence!=NULL and
+                    occurrenceRequest!=NULL){
+                firstSelection <- identityRegistry!.
+                        recordSelectionReferenceForRequest(
+                                occurrenceRequest, occurrenceResultPOV,
+                                firstOccurrence!.referencePOV)
+                secondSelection <- identityRegistry!.
+                        recordSelectionReferenceForRequest(
+                                occurrenceRequest, occurrenceResultPOV,
+                                secondOccurrence!.referencePOV)
+                occurrenceResolution <- identityRegistry!.
+                        resolveSelectionRequest(
+                                occurrenceRequest!.requestID)
+            }
+            me bool: firstBound <- identityRegistry!.
+                    bindRepetitionOccurrenceOrdinal(firstOccurrence, 2)
+            me bool: sameBinding <- identityRegistry!.
+                    bindRepetitionOccurrenceOrdinal(firstOccurrence, 2)
+            me bool: conflictingRebind <- identityRegistry!.
+                    bindRepetitionOccurrenceOrdinal(firstOccurrence, 1)
+            me bool: ordinalCollision <- identityRegistry!.
+                    bindRepetitionOccurrenceOrdinal(secondOccurrence, 2)
+            me bool: secondBound <- identityRegistry!.
+                    bindRepetitionOccurrenceOrdinal(secondOccurrence, 3)
+            our RepetitionOccurrence: foundFirst <- identityRegistry!.
+                    findOrdinalOccurrence(
+                            sourcePOV!.repetitionSpan.family, 2)
+            our RepetitionOccurrence: foundSecond <- identityRegistry!.
+                    findOrdinalOccurrence(
+                            sourcePOV!.repetitionSpan.family, 3)
+            passed <- firstOccurrence!=NULL and secondOccurrence!=NULL and
+                      firstOccurrence!==secondOccurrence and
+                      firstToken!=secondOccurrence!.occurrenceToken and
+                      firstReferencePOV===firstOccurrence!.referencePOV and
+                      firstReferencePOV!.repetitionOccurrence===
+                            firstOccurrence and
+                      firstSelection!=NULL and secondSelection!=NULL and
+                      firstSelection!.repetitionOccurrence===firstOccurrence and
+                      secondSelection!.repetitionOccurrence===secondOccurrence and
+                      occurrenceResolution!=NULL and
+                      occurrenceResolution!.resolutionState==srsMultiple and
+                      occurrenceResolution!.references.size()==2 and
+                      firstBound and sameBinding and !conflictingRebind and
+                      !ordinalCollision and secondBound and
+                      firstOccurrence!.ordinalKnown and
+                      firstOccurrence!.ordinal==2 and
+                      secondOccurrence!.ordinalKnown and
+                      secondOccurrence!.ordinal==3 and
+                      foundFirst===firstOccurrence and
+                      foundSecond===secondOccurrence and
+                      source!.infSize!.evalMode==emUnknown and
+                      source!.value!.items.isEmpty() and
+                      sourcePOV!.repetitionSpan.family!.occurrences.size()==2
         }
 
         me string: result <- "false"

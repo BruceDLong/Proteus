@@ -2498,6 +2498,21 @@ struct IntersectionReasoner{
                 aItem!.LHS_item!.pItem!.intersectPos==ipGetMarked){
             referenceKind <- srkIntersectionCorrespondence
         }
+        if(aItem!.LHS_item!.pItem!=NULL and
+                aItem!.LHS_item!.pItem!.selectionRequestID!=0){
+            our SelectionRequest: request <- registry!.findSelectionRequest(
+                    aItem!.LHS_item!.pItem!.selectionRequestID)
+            if(request!=NULL and
+                    request!.referenceKind==referenceKind){
+                our POV: requestResultPOV <- request!.consumerResultPOV
+                if(requestResultPOV==NULL){
+                    requestResultPOV <- aItem!.LHS_item
+                }
+                return(registry!.recordSelectionReferenceForRequest(
+                        request, requestResultPOV,
+                        sourceMap.startPov))
+            }
+        }
         return(registry!.recordSelectionReference(
                 selectedPOV, aItem!.LHS_item,
                 sourceMap.sourcePov, sourceMap.startPov,
@@ -2510,21 +2525,17 @@ struct IntersectionReasoner{
         their IdentityRegistry: registry <-
                 resultPOV!.effectiveIdentityRegistry()
         if(registry==NULL){return(sourceMap)}
-        me List<our SelectionReference>: references
-        registry!.collectSelectionReferencesForResult(
-                resultPOV, references)
-        withEach reference in references{
-            if(reference!.sourceContextPOV==NULL or
-                    reference!.sourceStartPOV==NULL){continue()}
-            if(sourceMap.sourcePov==NULL){
-                sourceMap.sourcePov <- reference!.sourceContextPOV
-                sourceMap.startPov <- reference!.sourceStartPOV
-            }else if(sourceMap.sourcePov!==reference!.sourceContextPOV or
-                    sourceMap.startPov!==reference!.sourceStartPOV){
-                me ViewMap: ambiguousMap
-                return(ambiguousMap)
-            }
+        our SelectionResolution: resolution <-
+                registry!.resolveSelectionForResult(resultPOV)
+        if(resolution==NULL or
+                resolution!.resolutionState!=srsUnique or
+                resolution!.references.isEmpty()){
+            return(sourceMap)
         }
+        our SelectionReference: reference <-
+                resolution!.references.first()
+        sourceMap.sourcePov <- reference!.sourceContextPOV
+        sourceMap.startPov <- reference!.sourceStartPOV
         return(sourceMap)
     }
 
@@ -2537,24 +2548,15 @@ struct IntersectionReasoner{
         their IdentityRegistry: registry <-
                 queryPOV!.effectiveIdentityRegistry()
         if(registry==NULL){return(NULL)}
-        me List<our SelectionReference>: references
-        registry!.collectSelectionReferencesForQuery(queryPOV, references)
-        our SelectionReference: acceptedReference <- NULL
-        withEach reference in references{
-            if(reference!.referenceKind!=srkMarkedSelection or
-                    reference!.resultPOV==NULL){continue()}
-            if(acceptedReference==NULL){
-                acceptedReference <- reference
-            }else if(acceptedReference!.resultPOV!==
-                            reference!.resultPOV or
-                    acceptedReference!.sourceContextPOV!==
-                            reference!.sourceContextPOV or
-                    acceptedReference!.sourceStartPOV!==
-                            reference!.sourceStartPOV){
-                return(NULL)
-            }
+        our SelectionResolution: resolution <-
+                registry!.resolveSelectionForQuery(
+                        queryPOV, srkMarkedSelection)
+        if(resolution==NULL or
+                resolution!.resolutionState!=srsUnique or
+                resolution!.references.isEmpty()){
+            return(NULL)
         }
-        return(acceptedReference)
+        return(resolution!.references.first())
     }
 
     me ViewMap: matchedSourceMap(our POV: localViewPOV,
@@ -3066,6 +3068,39 @@ struct IntersectionReasoner{
         if(newTop!=NULL){
             selectedReference <- recordSelectedFunctionReference(
                     aItem, selectedResultPOV, newTop)
+        }
+        if(CI!.selectionRequestID!=0){
+            their IdentityRegistry: registry <-
+                    aItem!.LHS_item!.effectiveIdentityRegistry()
+            if(registry!=NULL){
+                our SelectionRequest: request <-
+                        registry!.findSelectionRequest(
+                                CI!.selectionRequestID)
+                our POV: exactSourceStart
+                if(mappedSelectionSourceMap.sourcePov!=NULL and
+                        mappedSelectionSourceMap.startPov!=NULL){
+                    exactSourceStart <-
+                            mappedSelectionSourceMap.startPov
+                }else if(selectedReference!=NULL and
+                        selectedReference!.sourceStartPOV!=NULL){
+                    exactSourceStart <-
+                            selectedReference!.sourceStartPOV
+                }else if(aItem!.LHS_item!.viewMap.sourcePov!=NULL and
+                        aItem!.LHS_item!.viewMap.startPov!=NULL){
+                    exactSourceStart <-
+                            aItem!.LHS_item!.viewMap.startPov
+                }
+                if(request!=NULL and exactSourceStart!=NULL){
+                    our POV: requestResultPOV <-
+                            request!.consumerResultPOV
+                    if(requestResultPOV==NULL){
+                        requestResultPOV <- aItem!.LHS_item
+                    }
+                    registry!.recordSelectionReferenceForRequest(
+                            request, requestResultPOV,
+                            exactSourceStart)
+                }
+            }
         }
         if(CI!.intersectPos==ipGetMarked and
                 mappedSelectionPOV!=NULL and
@@ -3859,6 +3894,23 @@ struct CursorPathResolver{
                 }else{
                     part!.wasTransfered <- true
                 }
+                if(part!.pathMode==dotField or
+                        part!.pathMode==idxField){
+                    // Capture the operation before lowering it.  The source
+                    // and query remain stable even when the working POV's
+                    // pItem is replaced by an unresolved intersection.
+                    selectionSourceSnapshot <-
+                            aItem!.LHS_item!.snapshotView(
+                                    povSrcPartPathSelection)
+                    if(selectionSourceSnapshot!=NULL){
+                        our POV:: queryPOV{povSrcPartPathSelection}
+                        queryPOV!.pItem <- part!.path
+                        queryPOV!.bindIdentityRegistry(
+                                selectionSourceSnapshot!.
+                                effectiveIdentityRegistry())
+                        selectionQueryPOV <- queryPOV
+                    }
+                }
                 switch(part!.pathMode){
                     case dotField:{
                         if(CI!.value!.overlayType==LST and
@@ -3908,20 +3960,6 @@ struct CursorPathResolver{
                                         srkPositionalSelection
                             }
                         }
-                        if(selectedSourcePOV!=NULL){
-                            selectionSourceSnapshot <-
-                                    aItem!.LHS_item!.snapshotView(
-                                            povSrcPartPathSelection)
-                            if(selectionSourceSnapshot!=NULL){
-                                our POV:: queryPOV{
-                                        povSrcPartPathSelection}
-                                queryPOV!.pItem <- part!.path
-                                queryPOV!.bindIdentityRegistry(
-                                        selectionSourceSnapshot!.
-                                        effectiveIdentityRegistry())
-                                selectionQueryPOV <- queryPOV
-                            }
-                        }
                         if(newPath==NULL){
                             me bool: doReply <- CI!.doReply
                             if(doReply){CI!.doReply <- false}
@@ -3967,6 +4005,7 @@ struct CursorPathResolver{
                     }
                     case upField:{}
                     case idxField:{
+                        selectionReferenceKind <- srkPositionalSelection
                         newPath <- buildIndexIntersection(CI, part)
                     }
                     case colonField:{}
@@ -4026,19 +4065,45 @@ struct CursorPathResolver{
                     nxtAction! <- false
                     selectionResultPOV <- pathPov
                 }
-                if(selectionQueryPOV!=NULL and
+                if(selectedTemporalBoundary==NULL and
+                        selectionQueryPOV!=NULL and
                         selectionResultPOV!=NULL and
-                        selectionSourceSnapshot!=NULL and
-                        selectedSourcePOV!=NULL){
+                        selectionSourceSnapshot!=NULL){
                     their IdentityRegistry: registry <-
                             selectionSourceSnapshot!.
                             effectiveIdentityRegistry()
                     if(registry!=NULL){
-                        registry!.recordSelectionReference(
+                        our SelectionRequest: selectionRequest <-
+                                registry!.getOrCreateSelectionRequest(
                                 selectionQueryPOV, selectionResultPOV,
-                                selectionSourceSnapshot, selectedSourcePOV,
+                                selectionSourceSnapshot,
                                 selectionReferenceKind,
                                 agenda!.normalizationID)
+                        if(selectionRequest!=NULL){
+                            selectionRequest!.selectorSpec <- part!.spec
+                            if(selectedSourcePOV!=NULL){
+                                registry!.
+                                        recordSelectionReferenceForRequest(
+                                                selectionRequest,
+                                                selectionResultPOV,
+                                                selectedSourcePOV)
+                            }else{
+                                newPath!.selectionRequestID <-
+                                        selectionRequest!.requestID
+                                if(newPath!.innr!=NULL){
+                                    withEach selectionWork in
+                                            newPath!.innr!.wrkList{
+                                        if(selectionWork!.
+                                                selectorLocalWork){
+                                            selectionWork!.
+                                                    selectionRequestID <-
+                                                    selectionRequest!.
+                                                    requestID
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 changeMade <- true

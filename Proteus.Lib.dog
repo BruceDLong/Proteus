@@ -126,8 +126,43 @@ struct SelectionReferenceKind: inherits=<mode[
     srkPositionalSelection
 ]> {}
 
+// A selector is useful before it has found a source occurrence.  Keep that
+// symbolic request separate from the accepted occurrence records so an
+// unresolved index, range, or description can remain on wrkList while the
+// registry retains the reversible operation that the work is trying to
+// establish.
+struct SelectionResolutionState: inherits=<mode[
+    srsNone,
+    srsPending,
+    srsUnique,
+    srsMultiple
+]> {}
+
+model SelectionRequest{
+    me uint64: requestID <- 0
+    their IdentityRegistry: registry
+    me SelectionReferenceKind: referenceKind <-
+            srkIntersectionCorrespondence
+    me uint64: normalizationID <- 0
+    our POV: queryPOV
+    // The stable wrapper that consumes the selected value.  Low-level match
+    // requests leave this NULL because each accepted occurrence supplies its
+    // own result POV.
+    our POV: consumerResultPOV
+    our POV: sourceContextPOV
+    // Optional range/member specification paired with queryPOV.  Keeping it
+    // here prevents index lowering from erasing the requested span shape.
+    our infonView: selectorSpec
+    me SelectionResolutionState: resolutionState <- srsPending
+}
+struct SelectionRequest{}
+
 model SelectionReference{
     me uint64: referenceID <- 0
+    me uint64: requestID <- 0
+    // Each distinct accepted occurrence gets an opaque token.  Equal values
+    // at different source locations therefore remain distinct.
+    me uint64: occurrenceToken <- 0
     me SelectionReferenceKind: referenceKind <-
             srkIntersectionCorrespondence
     me uint64: normalizationID <- 0
@@ -135,8 +170,19 @@ model SelectionReference{
     our POV: resultPOV
     our POV: sourceContextPOV
     our POV: sourceStartPOV
+    their RepetitionOccurrence: repetitionOccurrence
 }
 struct SelectionReference{}
+
+// Runtime traversal never uses NULL to mean both "not found" and
+// "ambiguous".  Callers may act on a unique occurrence, keep a pending
+// request dormant, or preserve every member of a multiple result.
+model SelectionResolution{
+    me SelectionResolutionState: resolutionState <- srsNone
+    me List<our SelectionRequest>: requests
+    me List<our SelectionReference>: references
+}
+struct SelectionResolution{}
 
 // One logical member of a repetition.  occurrenceToken is opaque and stable;
 // ordinal is optional knowledge about that occurrence, not its identity.
@@ -144,6 +190,7 @@ model RepetitionOccurrence{
     me uint64: occurrenceToken <- 0
     flag: ordinalKnown
     me int64: ordinal <- -1
+    their RepetitionFamily: family
     our POV: referencePOV
     our POV: materializedPOV
 }
@@ -171,6 +218,7 @@ model IdentityRegistry{
     me uint64: nextOccurrenceToken <- 1
     me List<our IdentityRelation>: identities
     me List<our EndRelativeReference>: endRelativeReferences
+    me List<our SelectionRequest>: selectionRequests
     me List<our SelectionReference>: selectionReferences
     me List<our RepetitionFamily>: repetitionFamilies
     me Mutex: registryMutex
@@ -257,19 +305,58 @@ struct IdentityRegistry{
         }
     }
 
-    our SelectionReference: recordSelectionReference(
-            our POV: queryPOV, our POV: resultPOV,
-            our POV: sourceContextPOV, our POV: sourceStartPOV,
+    our SelectionRequest: findSelectionRequest(me uint64: requestID) <- {
+        if(requestID==0){return(NULL)}
+        protect(registryMutex){
+            withEach request in selectionRequests{
+                if(request!.requestID==requestID){return(request)}
+            }
+        }
+        return(NULL)
+    }
+
+    our SelectionRequest: getOrCreateSelectionRequest(
+            our POV: queryPOV, our POV: consumerResultPOV,
+            our POV: sourceContextPOV,
             me SelectionReferenceKind: referenceKind,
             me uint64: normalizationID) <- {
-        if(queryPOV==NULL or resultPOV==NULL or
-                sourceContextPOV==NULL or sourceStartPOV==NULL){return(NULL)}
+        if(queryPOV==NULL or sourceContextPOV==NULL){return(NULL)}
+        protect(registryMutex){
+            withEach request in selectionRequests{
+                if(request!.referenceKind==referenceKind and
+                        request!.normalizationID==normalizationID and
+                        request!.queryPOV===queryPOV and
+                        request!.consumerResultPOV===consumerResultPOV and
+                        request!.sourceContextPOV===sourceContextPOV){
+                    return(request)
+                }
+            }
+            our SelectionRequest:: request
+            request!.requestID <- nextReferenceID
+            nextReferenceID <+- 1
+            request!.registry <- self
+            request!.referenceKind <- referenceKind
+            request!.normalizationID <- normalizationID
+            request!.queryPOV <- queryPOV
+            request!.consumerResultPOV <- consumerResultPOV
+            request!.sourceContextPOV <- sourceContextPOV
+            request!.resolutionState <- srsPending
+            selectionRequests.append(request)
+            return(request)
+        }
+    }
+
+    our SelectionReference: recordSelectionReferenceForRequest(
+            our SelectionRequest: request, our POV: resultPOV,
+            our POV: sourceStartPOV) <- {
+        if(request==NULL or resultPOV==NULL or
+                request!.registry!==self or
+                request!.sourceContextPOV==NULL or
+                sourceStartPOV==NULL){return(NULL)}
         protect(registryMutex){
             withEach reference in selectionReferences{
-                if(reference!.referenceKind==referenceKind and
-                        reference!.queryPOV===queryPOV and
+                if(reference!.requestID==request!.requestID and
                         reference!.resultPOV===resultPOV and
-                        reference!.sourceContextPOV===sourceContextPOV and
                         reference!.sourceStartPOV===sourceStartPOV){
                     return(reference)
                 }
@@ -277,15 +364,156 @@ struct IdentityRegistry{
             our SelectionReference:: reference
             reference!.referenceID <- nextReferenceID
             nextReferenceID <+- 1
-            reference!.referenceKind <- referenceKind
-            reference!.normalizationID <- normalizationID
-            reference!.queryPOV <- queryPOV
+            reference!.requestID <- request!.requestID
+            reference!.occurrenceToken <- nextOccurrenceToken
+            nextOccurrenceToken <+- 1
+            reference!.referenceKind <- request!.referenceKind
+            reference!.normalizationID <- request!.normalizationID
+            reference!.queryPOV <- request!.queryPOV
             reference!.resultPOV <- resultPOV
-            reference!.sourceContextPOV <- sourceContextPOV
+            reference!.sourceContextPOV <- request!.sourceContextPOV
             reference!.sourceStartPOV <- sourceStartPOV
+            reference!.repetitionOccurrence <-
+                    sourceStartPOV!.repetitionOccurrence
             selectionReferences.append(reference)
+            if(request!.resolutionState==srsPending){
+                request!.resolutionState <- srsUnique
+            }else{
+                request!.resolutionState <- srsMultiple
+            }
             return(reference)
         }
+    }
+
+    our SelectionReference: recordSelectionReference(
+            our POV: queryPOV, our POV: resultPOV,
+            our POV: sourceContextPOV, our POV: sourceStartPOV,
+            me SelectionReferenceKind: referenceKind,
+            me uint64: normalizationID) <- {
+        if(queryPOV==NULL or resultPOV==NULL or
+                sourceContextPOV==NULL or sourceStartPOV==NULL){return(NULL)}
+        our SelectionRequest: request <- getOrCreateSelectionRequest(
+                queryPOV, NULL, sourceContextPOV,
+                referenceKind, normalizationID)
+        return(recordSelectionReferenceForRequest(
+                request, resultPOV, sourceStartPOV))
+    }
+
+    our SelectionResolution: resolveSelectionRequest(
+            me uint64: requestID) <- {
+        our SelectionResolution:: resolution
+        our SelectionRequest: request <- findSelectionRequest(requestID)
+        if(request==NULL){return(resolution)}
+        resolution!.requests.append(request)
+        protect(registryMutex){
+            withEach reference in selectionReferences{
+                if(reference!.requestID==requestID){
+                    resolution!.references.append(reference)
+                }
+            }
+        }
+        resolution!.resolutionState <- request!.resolutionState
+        return(resolution)
+    }
+
+    our SelectionResolution: resolveSelectionForQuery(
+            their POV: queryPOV,
+            me SelectionReferenceKind: referenceKind) <- {
+        our SelectionResolution:: resolution
+        if(queryPOV==NULL){return(resolution)}
+        protect(registryMutex){
+            withEach request in selectionRequests{
+                if(request!.queryPOV===queryPOV and
+                        request!.referenceKind==referenceKind){
+                    resolution!.requests.append(request)
+                }
+            }
+            withEach reference in selectionReferences{
+                if(reference!.queryPOV===queryPOV and
+                        reference!.referenceKind==referenceKind){
+                    resolution!.references.append(reference)
+                }
+            }
+        }
+        if(resolution!.references.isEmpty()){
+            if(!resolution!.requests.isEmpty()){
+                resolution!.resolutionState <- srsPending
+            }
+            return(resolution)
+        }
+        resolution!.resolutionState <- srsUnique
+        our SelectionReference: first <- resolution!.references.first()
+        withEach reference in resolution!.references{
+            if(reference!.resultPOV!==first!.resultPOV or
+                    reference!.sourceContextPOV!==first!.sourceContextPOV or
+                    reference!.sourceStartPOV!==first!.sourceStartPOV){
+                resolution!.resolutionState <- srsMultiple
+                break()
+            }
+        }
+        return(resolution)
+    }
+
+    our SelectionResolution: resolveSelectionForResult(
+            their POV: resultPOV) <- {
+        our SelectionResolution:: resolution
+        if(resultPOV==NULL){return(resolution)}
+        protect(registryMutex){
+            withEach request in selectionRequests{
+                if(request!.consumerResultPOV===resultPOV){
+                    resolution!.requests.append(request)
+                }
+            }
+            withEach reference in selectionReferences{
+                if(reference!.resultPOV===resultPOV){
+                    resolution!.references.append(reference)
+                }
+            }
+        }
+        if(resolution!.references.isEmpty()){
+            if(!resolution!.requests.isEmpty()){
+                resolution!.resolutionState <- srsPending
+            }
+            return(resolution)
+        }
+        resolution!.resolutionState <- srsUnique
+        our SelectionReference: first <- resolution!.references.first()
+        withEach reference in resolution!.references{
+            if(reference!.sourceContextPOV!==first!.sourceContextPOV or
+                    reference!.sourceStartPOV!==first!.sourceStartPOV){
+                resolution!.resolutionState <- srsMultiple
+                break()
+            }
+        }
+        return(resolution)
+    }
+
+    our SelectionResolution: resolveSelectionForSource(
+            their POV: sourceContextPOV,
+            their POV: sourceStartPOV) <- {
+        our SelectionResolution:: resolution
+        if(sourceContextPOV==NULL or sourceStartPOV==NULL){
+            return(resolution)
+        }
+        protect(registryMutex){
+            withEach reference in selectionReferences{
+                if(reference!.sourceContextPOV===sourceContextPOV and
+                        reference!.sourceStartPOV===sourceStartPOV){
+                    resolution!.references.append(reference)
+                }
+            }
+        }
+        if(resolution!.references.isEmpty()){return(resolution)}
+        resolution!.resolutionState <- srsUnique
+        our SelectionReference: first <- resolution!.references.first()
+        withEach reference in resolution!.references{
+            if(reference!.queryPOV!==first!.queryPOV or
+                    reference!.resultPOV!==first!.resultPOV){
+                resolution!.resolutionState <- srsMultiple
+                break()
+            }
+        }
+        return(resolution)
     }
 
     void: collectSelectionReferencesForQuery(their POV: queryPOV,
@@ -420,11 +648,70 @@ struct IdentityRegistry{
             nextOccurrenceToken <+- 1
             occurrence!.ordinalKnown <- true
             occurrence!.ordinal <- ordinal
+            occurrence!.family <- family
             occurrence!.referencePOV <- occurrencePOV
             occurrencePOV!.repetitionOccurrence <- occurrence
             family!.occurrences.append(occurrence)
             family!.ordinalOccurrences[ordinal] <- occurrence
             return(occurrencePOV)
+        }
+    }
+
+    // Unknown repetition cardinality does not justify inventing an ordinal.
+    // Allocate only the logical occurrences actually demanded by matching;
+    // each can acquire an ordinal later without changing its token or POV.
+    our RepetitionOccurrence: createUnknownOrdinalRepetitionOccurrence(
+            their POV: sourcePOV) <- {
+        if(sourcePOV==NULL or sourcePOV!.pItem==NULL or
+                sourcePOV!.pItem!.value!.overlayType!=LST or
+                sourcePOV!.pItem!.value!.listSpec==NULL){
+            return(NULL)
+        }
+        our RepetitionFamily: family <- getOrCreateRepetitionFamily(sourcePOV)
+        if(family==NULL){return(NULL)}
+        protect(registryMutex){
+            our POV:: occurrencePOV{povSrcImplicitItem}
+            occurrencePOV!.pItem <-
+                    sourcePOV!.makeSparseSpanMemberTypeOnlyInfonView()
+            occurrencePOV!.identityRegistry <- self
+
+            our RepetitionOccurrence:: occurrence
+            occurrence!.occurrenceToken <- nextOccurrenceToken
+            nextOccurrenceToken <+- 1
+            occurrence!.ordinalKnown <- false
+            occurrence!.ordinal <- -1
+            occurrence!.family <- family
+            occurrence!.referencePOV <- occurrencePOV
+            occurrencePOV!.repetitionOccurrence <- occurrence
+            family!.occurrences.append(occurrence)
+            return(occurrence)
+        }
+    }
+
+    me bool: bindRepetitionOccurrenceOrdinal(
+            our RepetitionOccurrence: occurrence, me int64: ordinal) <- {
+        if(occurrence==NULL or occurrence!.family==NULL or ordinal<0){
+            return(false)
+        }
+        protect(registryMutex){
+            if(occurrence!.ordinalKnown){return(occurrence!.ordinal==ordinal)}
+            if(occurrence!.family!.ordinalOccurrences.containsKey(ordinal)){
+                return(occurrence!.family!.ordinalOccurrences[ordinal]===
+                        occurrence)
+            }
+            occurrence!.ordinalKnown <- true
+            occurrence!.ordinal <- ordinal
+            occurrence!.family!.ordinalOccurrences[ordinal] <- occurrence
+            their POV: sourcePOV <- occurrence!.family!.originalSpanPOV
+            if(sourcePOV!=NULL and occurrence!.referencePOV!=NULL and
+                    ordinal>=sourcePOV!.repetitionSpan.startOrdinal and
+                    ordinal<sourcePOV!.repetitionSpan.startOrdinal +
+                            sourcePOV!.sparseSpanCount()){
+                occurrence!.referencePOV!.implicitItem.sourcePov <- sourcePOV
+                occurrence!.referencePOV!.implicitItem.sourceIndex <-
+                        ordinal - sourcePOV!.repetitionSpan.startOrdinal
+            }
+            return(true)
         }
     }
 
@@ -808,6 +1095,10 @@ model infonView {
     // the selection relation remains positional.  Preserve that semantic
     // origin so identity enumeration does not infer it from the lowered shape.
     flag: positionalSelection
+
+    // Stable link from a lowered selector back to its registry-owned symbolic
+    // request.  The unresolved work itself remains in wrkList.
+    me uint64: selectionRequestID <- 0
 
     // Current representation of <~.
     // Eventually replace this flag + funcArgs overload with:
