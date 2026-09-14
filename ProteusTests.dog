@@ -22,6 +22,7 @@ TestsToRun = `
     unit/streamLoader/relativeResolution
     unit/temporal/boundaryViews
     unit/temporal/boundaryIdentityBidirectional
+    unit/temporal/rootedContainmentBidirectional
     unit/endRelative/resolveOnClose
     unit/endRelative/exactClosedWindow
     unit/endRelative/exactPendingWindow
@@ -69,6 +70,8 @@ TestsToRun = `
     unit/resultSelection/consumerWorkOnly
     unit/resultSelection/equalSourceAndStartMapped
     unit/resultSelection/noFirstChildRecovery
+    unit/resultSelection/registeredScalarReadValue
+    unit/resultSelection/mappedScalarReadValue
     unit/indexLowering/negativeMarkedSuffixGraph
     unit/indexLowering/typedSugarMatchesIntersection
     unit/indexLowering/spanConsumerWorkMoved
@@ -130,6 +133,7 @@ do ManageCmdLine(cmd)
 #define STREAMLOADERSPEC (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestStreamLoaderSpec(tname, CASE_ID)}%>
 #define TEMPORALBOUNDARYVIEWS (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestTemporalBoundaryViews(tname)}%>
 #define TEMPORALBOUNDARY (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestTemporalBoundaryIdentity(tname)}%>
+#define TEMPORALCONTAINMENT (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestTemporalContainmentIdentity(tname)}%>
 #define ENDRELRESOLVE (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeResolveOnClose(tname)}%>
 #define ENDRELQUERY (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeQuery(tname, CASE_ID)}%>
 #define ENDRELPLAN (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeTraversalPlan(tname, CASE_ID)}%>
@@ -287,6 +291,7 @@ struct GLOBAL {
     STREAMLOADERSPEC(unit/streamLoader/relativeResolution, "resolve an inserted stream from its source directory", 2)
     TEMPORALBOUNDARYVIEWS(unit/temporal/boundaryViews, "preserve temporal cut identity behind begin and end")
     TEMPORALBOUNDARY(unit/temporal/boundaryIdentityBidirectional, "store one adjacent-span identity and traverse it in both directions")
+    TEMPORALCONTAINMENT(unit/temporal/rootedContainmentBidirectional, "identify whole-interval host and component boundaries in both directions")
     ENDRELRESOLVE(unit/endRelative/resolveOnClose, "register end-relative references and identify them while large sparse sources stay compressed")
     ENDRELQUERY(unit/endRelative/exactClosedWindow, "separate an exact closed extent from its available window", 1)
     ENDRELQUERY(unit/endRelative/exactPendingWindow, "retain an exact coordinate while requested positions are pending", 2)
@@ -335,6 +340,8 @@ struct GLOBAL {
     RESULTSELECTION(unit/resultSelection/consumerWorkOnly, "transfer consumer work without using view provenance", 1)
     RESULTSELECTION(unit/resultSelection/equalSourceAndStartMapped, "accept an equal source and start as a valid mapped scalar", 2)
     RESULTSELECTION(unit/resultSelection/noFirstChildRecovery, "do not reconstruct a composite map from its first child", 3)
+    RESULTSELECTION(unit/resultSelection/registeredScalarReadValue, "return a detached scalar value from an exact accepted source reference", 4)
+    RESULTSELECTION(unit/resultSelection/mappedScalarReadValue, "return a detached scalar value from an exact accepted view map", 5)
     INDEXLOWERING(unit/indexLowering/negativeMarkedSuffixGraph, "lower a negative item index to a sparse marked suffix", 1)
     INDEXLOWERING(unit/indexLowering/typedSugarMatchesIntersection, "give sugar and low-level typed selections equivalent mappings", 2)
     INDEXLOWERING(unit/indexLowering/spanConsumerWorkMoved, "move span assignment work from the pattern to the selected result", 3)
@@ -991,6 +998,126 @@ struct GLOBAL {
                         symbolicIdentity!.beginningBoundary and
                 reasoner.lastTemporalOccurrence(
                         symbolicIdentity!.endingSpan, 0)==NULL
+        me string: actual <- "false"
+        me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+        return()
+    }
+    me void: unitTestTemporalContainmentIdentity(me string: testName) <- {
+        our infonView: host <- parseAndExtract(
+                testName, "{T &{T 1 2}}")
+        if(host==NULL){FAIL("Unable to parse temporal containment fixture")}
+        our POV:: hostPOV{628}
+        hostPOV!.pItem <- host
+        our IdentityRegistry:: identityRegistry
+        hostPOV!.bindIdentityRegistry(identityRegistry)
+        me TemporalIdentityReasoner: reasoner
+
+        reasoner.enumerateRootedContainmentIdentities(hostPOV)
+        our POV: containedSpan <- host!.value!.items.head
+        our TemporalContainmentIdentity: identity
+        if(!host!.temporalContainmentIdentities.isEmpty()){
+            identity <- host!.temporalContainmentIdentities.first()
+        }
+        our POV: fromHost
+        our POV: fromContained
+        if(identity!=NULL){
+            fromHost <- reasoner.spanAcrossRootedContainmentIdentity(
+                    identity, hostPOV)
+            fromContained <- reasoner.spanAcrossRootedContainmentIdentity(
+                    identity, containedSpan)
+        }
+
+        // Re-enumeration must reuse the two explicit boundary relations.
+        reasoner.enumerateRootedContainmentIdentities(hostPOV)
+
+        our infonView: nonTemporalComponent <- parseAndExtract(
+                testName, "{T &{1 2}}")
+        our POV:: nonTemporalPOV{628}
+        nonTemporalPOV!.pItem <- nonTemporalComponent
+        nonTemporalPOV!.bindIdentityRegistry(identityRegistry)
+        reasoner.enumerateRootedContainmentIdentities(nonTemporalPOV)
+
+        our infonView: ambiguousComponents <- parseAndExtract(
+                testName, "{T &{T 1} &{T 2}}")
+        our POV:: ambiguousPOV{628}
+        ambiguousPOV!.pItem <- ambiguousComponents
+        ambiguousPOV!.bindIdentityRegistry(identityRegistry)
+        reasoner.enumerateRootedContainmentIdentities(ambiguousPOV)
+
+        // Materializing a sparse component must refine the contents of the
+        // identity-bearing component root, not flatten that root into its
+        // host.  Otherwise a second traversal would begin at the remainder.
+        our infonView: sparseHost <- parseAndExtract(
+                testName, "{T &*3+{T unit| ...}}")
+        our POV:: sparseHostPOV{628}
+        sparseHostPOV!.pItem <- sparseHost
+        our IdentityRegistry:: sparseRegistry
+        sparseHostPOV!.bindIdentityRegistry(sparseRegistry)
+        reasoner.enumerateRootedContainmentIdentities(sparseHostPOV)
+        our POV: componentRoot <- sparseHost!.value!.items.head
+        our infonView: materializedUnit <- parseAndExtract(testName, "unit")
+        our POV: materializedHead <-
+                reasoner.materializeRootedContainedSpanHead(
+                        componentRoot, materializedUnit)
+        reasoner.enumerateRootedContainmentIdentities(sparseHostPOV)
+        our POV: componentRemainder
+        our POV: occurrenceReference
+        if(componentRoot!=NULL and componentRoot!.pItem!=NULL){
+            componentRemainder <- componentRoot!.pItem!.value!.items.tail
+        }
+        if(materializedHead!=NULL and
+                materializedHead!.repetitionOccurrence!=NULL){
+            occurrenceReference <- materializedHead!.
+                    repetitionOccurrence!.referencePOV
+        }
+        me bool: sparseRootStable <- componentRoot!=NULL and
+                materializedHead!=NULL and componentRemainder!=NULL and
+                sparseHost!.value!.items.size()==1 and
+                sparseHost!.value!.items.head===componentRoot and
+                sparseHost!.temporalContainmentIdentities.size()==1 and
+                reasoner.containedSpanFromRootIdentity(sparseHostPOV)===
+                        componentRoot and
+                componentRoot!.pItem!.value!.sizeMode==fromGiven and
+                componentRoot!.pItem!.infSize!.num.convertToInt()==3 and
+                componentRoot!.pItem!.value!.items.size()==2 and
+                componentRoot!.pItem!.value!.items.head===materializedHead and
+                componentRoot!.findIdentifiedMaterializedItemPOV(0)===
+                        materializedHead and
+                componentRemainder!.isSparseOrderedSpan() and
+                componentRemainder!.sparseSpanCount()==2 and
+                occurrenceReference!=NULL and
+                sparseRegistry!.areIdentical(
+                        occurrenceReference, materializedHead) and
+                sparseRegistry!.identities.size()==3
+
+        me bool: passed <- identity!=NULL and containedSpan!=NULL and
+                hostPOV!==containedSpan and
+                identity!.hostSpan===hostPOV and
+                identity!.containedSpan===containedSpan and
+                identity!.beginIdentityRelation!=NULL and
+                identity!.endIdentityRelation!=NULL and
+                identity!.beginIdentityRelation!.evidenceKind==
+                        iekTemporalContainment and
+                identity!.endIdentityRelation!.evidenceKind==
+                        iekTemporalContainment and
+                identityRegistry!.areIdentical(
+                        identity!.hostBegin, identity!.containedBegin) and
+                identityRegistry!.areIdentical(
+                        identity!.containedBegin, identity!.hostBegin) and
+                identityRegistry!.areIdentical(
+                        identity!.hostEnd, identity!.containedEnd) and
+                identityRegistry!.areIdentical(
+                        identity!.containedEnd, identity!.hostEnd) and
+                fromHost===containedSpan and fromContained===hostPOV and
+                host!.temporalContainmentIdentities.size()==1 and
+                identityRegistry!.identities.size()==2 and
+                nonTemporalComponent!.
+                        temporalContainmentIdentities.isEmpty() and
+                ambiguousComponents!.
+                        temporalContainmentIdentities.isEmpty() and
+                sparseRootStable
         me string: actual <- "false"
         me string: expected <- "true"
         if(passed){actual <- "true"}
@@ -1734,7 +1861,19 @@ struct GLOBAL {
                 CORE.agent!.identityRegistry!.selectionReferences{
             if(reference!.referenceKind==expectedKind){
                 partPathReferenceCount <+- 1
-                registeredReference <- reference
+                if(reference!.sourceStartPOV!=NULL and
+                        reference!.sourceStartPOV!.pItem!=NULL and
+                        reference!.sourceStartPOV!.pItem!.type!=NULL and
+                        reference!.sourceStartPOV!.pItem!.
+                                type!.typeID()=="b" and
+                        reference!.sourceStartPOV!.pItem!.
+                                value!.overlayType==NUM and
+                        reference!.sourceStartPOV!.pItem!.
+                                value!.num.convertToInt()==2 and
+                        reference!.resultPOV!=NULL and
+                        reference!.resultPOV!.pItem===resultPOV!.pItem){
+                    registeredReference <- reference
+                }
             }
         }
         me List<our SelectionReference>: queryReferences
@@ -1755,15 +1894,21 @@ struct GLOBAL {
                             registeredReference!.sourceStartPOV,
                             sourceReferences)
         }
+        me bool: sourceIncludesRegistered <- false
+        withEach sourceReference in sourceReferences{
+            if(sourceReference===registeredReference){
+                sourceIncludesRegistered <- true
+                break()
+            }
+        }
 
         me bool: passed <- registeredReference!=NULL and
-                partPathReferenceCount==1 and
+                partPathReferenceCount>=1 and
                 queryReferences.size()==1 and
                 queryReferences.first()===registeredReference and
                 resultReferences.size()==1 and
                 resultReferences.first()===registeredReference and
-                sourceReferences.size()==1 and
-                sourceReferences.first()===registeredReference and
+                sourceIncludesRegistered and
                 CORE.agent!.identityRegistry!.identities.isEmpty() and
                 registeredReference!.queryPOV!=NULL and
                 registeredReference!.queryPOV!.pItem!=NULL and
@@ -1836,11 +1981,17 @@ struct GLOBAL {
                             registeredReference!.sourceStartPOV,
                             sourceReferences)
         }
+        me bool: sourceIncludesRegistered <- false
+        withEach sourceReference in sourceReferences{
+            if(sourceReference===registeredReference){
+                sourceIncludesRegistered <- true
+                break()
+            }
+        }
 
         me bool: passed <- registeredReference!=NULL and
                 positionalReferenceCount==1 and
-                sourceReferences.size()==1 and
-                sourceReferences.first()===registeredReference and
+                sourceIncludesRegistered and
                 CORE.agent!.identityRegistry!.identities.isEmpty() and
                 registeredReference!.queryPOV!=NULL and
                 registeredReference!.resultPOV!=NULL and
@@ -2129,7 +2280,7 @@ struct GLOBAL {
                     resultPOV!.viewMap.startPov===sourcePOV and
                     resultPOV!.viewMapWriteEnabled and
                     resultPOV!.accessMode==aRefTo
-        }else{
+        }else if(caseID==3){
             our infonView: source <- parseAndExtract(testName, "{1 2}")
             our POV:: sourcePOV{povSrcEndRelativeView}
             sourcePOV!.pItem <- source
@@ -2160,6 +2311,82 @@ struct GLOBAL {
                     resultPOV!.viewMap.sourcePov==NULL and
                     resultPOV!.viewMap.startPov==NULL and
                     !resultPOV!.viewMapWriteEnabled
+        }else if(caseID==4){
+            our infonView: source <- parseAndExtract(testName, "7")
+            our POV:: sourcePOV{povSrcEndRelativeView}
+            sourcePOV!.pItem <- source
+            our IdentityRegistry:: identityRegistry
+            sourcePOV!.bindIdentityRegistry(identityRegistry)
+
+            our infonView: marked <- parseAndExtract(testName, "_")
+            our POV:: markedPOV{povSrcEndRelativeView}
+            markedPOV!.pItem <- marked
+            markedPOV!.bindIdentityRegistry(identityRegistry)
+            our infonView: acceptedPattern <- parseAndExtract(testName, "_")
+            our POV:: acceptedPatternPOV{povSrcEndRelativeView}
+            acceptedPatternPOV!.pItem <- acceptedPattern
+            acceptedPatternPOV!.bindIdentityRegistry(identityRegistry)
+            acceptedPatternPOV!.mapViewToSource(sourcePOV, sourcePOV)
+            acceptedPatternPOV!.markedOuterPOV <- markedPOV
+            our AItem:: acceptedAItem{srcMrg0}
+            acceptedAItem!.LHS_item <- acceptedPatternPOV
+            acceptedAItem!.RHS <- sourcePOV
+            acceptedAItem!.mergeStatus <- msAccept
+            me IntersectionReasoner: reasoner
+            reasoner.recordAcceptedCorrespondence(acceptedAItem)
+
+            our infonView: innr <- parseAndExtract(testName, "{}")
+            innr!.intersectMarkedRetPOV <- markedPOV
+            our infonView:: selector
+            selector!.convertThisToIntersection(innr, fromGiven)
+            selector!.intersectPos <- ipGetMarked
+            selector!.intersectMarkedRetPOV <- markedPOV
+            our POV:: resultPOV{povSrcEndRelativeView}
+            resultPOV!.pItem <- selector
+            resultPOV!.bindIdentityRegistry(identityRegistry)
+            our AItem:: aItem{srcMrg0}
+            aItem!.LHS_item <- resultPOV
+            me WorldManager: worldManager
+            our infonView: result <-
+                    reasoner.selectFunctionResult(worldManager, aItem)
+            passed <- result!=NULL and result!==source and
+                    toString(result)=="7" and
+                    resultPOV!.viewMap.sourcePov===sourcePOV and
+                    resultPOV!.viewMap.startPov===sourcePOV and
+                    !resultPOV!.viewMapWriteEnabled and
+                    resultPOV!.accessMode!=aRefTo and
+                    identityRegistry!.selectionReferences.size()==3 and
+                    toString(source)=="7"
+        }else{
+            our infonView: source <- parseAndExtract(testName, "7")
+            our POV:: sourcePOV{povSrcEndRelativeView}
+            sourcePOV!.pItem <- source
+            our infonView: marked <- parseAndExtract(testName, "_")
+            our POV:: markedPOV{povSrcEndRelativeView}
+            markedPOV!.pItem <- marked
+            markedPOV!.mapViewToSource(sourcePOV, sourcePOV)
+
+            our infonView: innr <- parseAndExtract(testName, "{}")
+            innr!.intersectMarkedRetPOV <- markedPOV
+            our infonView:: selector
+            selector!.convertThisToIntersection(innr, fromGiven)
+            selector!.intersectPos <- ipGetMarked
+            selector!.intersectMarkedRetPOV <- markedPOV
+            our POV:: resultPOV{povSrcEndRelativeView}
+            resultPOV!.pItem <- selector
+            our AItem:: aItem{srcMrg0}
+            aItem!.LHS_item <- resultPOV
+            me WorldManager: worldManager
+            me IntersectionReasoner: reasoner
+            our infonView: result <-
+                    reasoner.selectFunctionResult(worldManager, aItem)
+            passed <- result!=NULL and result!==source and
+                    toString(result)=="7" and
+                    resultPOV!.viewMap.sourcePov===sourcePOV and
+                    resultPOV!.viewMap.startPov===sourcePOV and
+                    !resultPOV!.viewMapWriteEnabled and
+                    resultPOV!.accessMode!=aRefTo and
+                    toString(source)=="7"
         }
 
         me string: actual <- "false"

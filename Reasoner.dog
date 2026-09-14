@@ -1338,20 +1338,21 @@ struct ConcatReasoner{
 //      directions use the same stored relation, even when cursor evaluation
 //      materializes the selected value directly.  Temporal navigation never
 //      falls back to an S-list.
+//   9. a whole-interval nested T-list's entry and exit are identical to its
+//      host entry and exit.  The host exit can then reach the enclosing
+//      continuation through item 5's ordinary end=begin identity.
 //
 // Not yet implemented:
 //   7. a transition identity reads RHS references from its entry/previous
 //      S-context and constrains its exit/next S-context;
 //   8. each unchanged component of adjacent S-contexts is identical
 //      (component-wise persistence, never whole-state identity);
-//   9. a nested T-list's entry is identical to its host entry, and its exit is
-//      identical to the enclosing continuation's entry;
 //  10. each repeated T-description's exit is identical to the next
 //      repetition's entry;
 //  11. rooted containment identifies aligned parent/child temporal
 //      occurrences while preserving distinct occurrence identity.
 //
-// Items 7-11 deliberately have no fallback mutation here.  Each must become a
+// Items 7-8 and 10-11 deliberately have no fallback mutation here.  Each must become a
 // concrete identity-expansion plan with tests before it affects normalization.
 struct TemporalIdentityReasoner{
     me bool: isTemporalSpanPOV(their POV: pov) <- {
@@ -1451,6 +1452,172 @@ struct TemporalIdentityReasoner{
                     identity!.beginningSpan===beginningSpan){return(true)}
         }
         return(false)
+    }
+
+    me bool: rootedContainmentAlreadyRecorded(our infonView: host,
+            our POV: containedSpan) <- {
+        withEach identity in host!.temporalContainmentIdentities{
+            if(identity!.containedSpan===containedSpan){return(true)}
+        }
+        return(false)
+    }
+
+    our TemporalContainmentIdentity: rootedContainmentForContainedSpan(
+            our POV: containedSpan) <- {
+        if(containedSpan==NULL or containedSpan!.pParent==NULL or
+                containedSpan!.pParent!.pItem==NULL){return(NULL)}
+        withEach identity in containedSpan!.pParent!.pItem!.
+                temporalContainmentIdentities{
+            if(identity!.hostSpan===containedSpan!.pParent and
+                    identity!.containedSpan===containedSpan){
+                return(identity)
+            }
+        }
+        return(NULL)
+    }
+
+    // Enumerate only the unambiguous whole-interval form: one embedded T-span
+    // is the complete temporal component of one host T-span.  Multiple
+    // components need their own alignment facts and are intentionally not
+    // guessed from storage order.
+    me void: enumerateRootedContainmentIdentities(our POV: hostSpan) <- {
+        if(!isTemporalSpanPOV(hostSpan)){return()}
+        our infonView: host <- hostSpan!.pItem
+        if(host!.value!.items.size()!=1){return()}
+        our POV: containedSpan <- host!.value!.items.head
+        if(containedSpan==NULL or !containedSpan!.isSubItm or
+                !isTemporalSpanPOV(containedSpan) or
+                rootedContainmentAlreadyRecorded(host, containedSpan)){
+            return()
+        }
+        containedSpan!.pParent <- hostSpan
+        their IdentityRegistry: registry <-
+                hostSpan!.effectiveIdentityRegistry()
+        if(registry==NULL){return()}
+
+        our POV: hostBegin <- makeTemporalBoundaryPOV(hostSpan, false)
+        our POV: containedBegin <-
+                makeTemporalBoundaryPOV(containedSpan, false)
+        our POV: hostEnd <- makeTemporalBoundaryPOV(hostSpan, true)
+        our POV: containedEnd <-
+                makeTemporalBoundaryPOV(containedSpan, true)
+        if(hostBegin==NULL or containedBegin==NULL or hostEnd==NULL or
+                containedEnd==NULL){return()}
+
+        our TemporalContainmentIdentity:: identity
+        identity!.hostSpan <- hostSpan
+        identity!.containedSpan <- containedSpan
+        identity!.hostBegin <- hostBegin
+        identity!.containedBegin <- containedBegin
+        identity!.hostEnd <- hostEnd
+        identity!.containedEnd <- containedEnd
+        identity!.beginIdentityRelation <- registry!.recordIdentity(
+                hostBegin, containedBegin,
+                iekTemporalContainment, 0)
+        identity!.endIdentityRelation <- registry!.recordIdentity(
+                hostEnd, containedEnd,
+                iekTemporalContainment, 0)
+        if(identity!.beginIdentityRelation==NULL or
+                identity!.endIdentityRelation==NULL){return()}
+        host!.temporalContainmentIdentities.append(identity)
+    }
+
+    // A contained sparse T-list is itself the stable component timeline named
+    // by the host/component boundary identities.  Expose its first occurrence
+    // inside that root instead of flattening the occurrence beside the root;
+    // subsequent queries then traverse the same identity-bearing component.
+    our POV: materializeRootedContainedSpanHead(
+            our POV: containedSpan, our infonView: headItem) <- {
+        our TemporalContainmentIdentity: containment <-
+                rootedContainmentForContainedSpan(containedSpan)
+        if(containment==NULL or headItem==NULL or
+                containedSpan!.pItem==NULL or
+                !containedSpan!.isSparseOrderedSpan()){
+            return(NULL)
+        }
+        me int64: totalCount <- containedSpan!.sparseSpanCount()
+        if(totalCount<=0){return(NULL)}
+        me int64: oldStartOrdinal <-
+                containedSpan!.repetitionSpan.startOrdinal
+        me int64: oldEndOrdinal <- oldStartOrdinal + totalCount
+        our POV: occurrenceReference <-
+                containedSpan!.getOrCreateImplicitItemPOV(0)
+        our infonView: remainder
+        if(totalCount>1){
+            remainder <- containedSpan!.makeSparseSpanCopy(totalCount - 1)
+        }
+
+        // Preserve this infonView as the component root.  Its explicit size is
+        // semantic and therefore continues to override its compressed child
+        // count after the first occurrence is materialized.
+        containedSpan!.pItem!.value!.items.clear()
+        containedSpan!.pItem!.value!.sizeMode <- fromGiven
+        containedSpan!.pItem!.value!.tailUnfinished <- false
+        containedSpan!.pItem!.infSize!.overlayType <- NUM
+        containedSpan!.pItem!.infSize!.evalMode <- emLiteral
+        containedSpan!.pItem!.infSize!.num <- totalCount
+
+        our POV: headPOV <- containedSpan!.pItem!.value!.items.append(
+                headItem, false, povSrcSparseExposedHead)
+        headPOV!.pParent <- containedSpan
+        headPOV!.identityRegistry <- containedSpan!.effectiveIdentityRegistry()
+
+        our POV: remainderPOV
+        if(remainder!=NULL){
+            remainderPOV <- containedSpan!.pItem!.value!.items.append(
+                    remainder, true, povSrcSparseSpanRemainder)
+            remainderPOV!.pParent <- containedSpan
+            remainderPOV!.identityRegistry <-
+                    containedSpan!.effectiveIdentityRegistry()
+            remainderPOV!.repetitionSpan.family <-
+                    containedSpan!.repetitionSpan.family
+            remainderPOV!.repetitionSpan.startOrdinal <- oldStartOrdinal + 1
+        }
+
+        their IdentityRegistry: registry <-
+                containedSpan!.effectiveIdentityRegistry()
+        if(registry!=NULL and containedSpan!.repetitionSpan.family!=NULL){
+            if(remainderPOV!=NULL){
+                registry!.remapExposedHeadRemainder(
+                        remainderPOV, oldEndOrdinal)
+            }
+            if(occurrenceReference!=NULL){
+                registry!.recordRepetitionMaterialization(
+                        occurrenceReference, headPOV, 0)
+            }
+        }
+        return(headPOV)
+    }
+
+    our POV: spanAcrossRootedContainmentIdentity(
+            their TemporalContainmentIdentity: identity,
+            their POV: knownSpan) <- {
+        if(identity==NULL or knownSpan==NULL or
+                identity!.beginIdentityRelation==NULL or
+                identity!.endIdentityRelation==NULL){return(NULL)}
+        their IdentityRegistry: registry <-
+                identity!.hostSpan!.effectiveIdentityRegistry()
+        if(registry==NULL or !registry!.areIdentical(
+                identity!.hostBegin, identity!.containedBegin) or
+                !registry!.areIdentical(
+                        identity!.hostEnd, identity!.containedEnd)){
+            return(NULL)
+        }
+        if(knownSpan===identity!.hostSpan){return(identity!.containedSpan)}
+        if(knownSpan===identity!.containedSpan){return(identity!.hostSpan)}
+        return(NULL)
+    }
+
+    our POV: containedSpanFromRootIdentity(our POV: hostSpan) <- {
+        if(hostSpan==NULL or hostSpan!.pItem==NULL){return(NULL)}
+        enumerateRootedContainmentIdentities(hostSpan)
+        withEach identity in
+                hostSpan!.pItem!.temporalContainmentIdentities{
+            our POV: contained <- spanAcrossRootedContainmentIdentity(
+                    identity, hostSpan)
+            if(contained!=NULL){return(contained)}
+        }
+        return(NULL)
     }
 
     // Enumerate only identities implied by direct sequence adjacency.  Sharing
@@ -2311,34 +2478,83 @@ struct IntersectionReasoner{
                 srkIntersectionCorrespondence, 0)
     }
 
-    void: recordSelectedFunctionReference(
+    our SelectionReference: recordSelectedFunctionReference(
             our AItem: aItem, our POV: selectedPOV,
             our infonView: selectedResult) <- {
         if(aItem==NULL or aItem!.LHS_item==NULL or
-                selectedPOV==NULL or selectedResult==NULL){return()}
+                selectedPOV==NULL or selectedResult==NULL){return(NULL)}
         me ViewMap: sourceMap <-
                 matchedSourceMap(aItem!.LHS_item, NULL)
         if(sourceMap.sourcePov==NULL or sourceMap.startPov==NULL){
             sourceMap <- matchedSourceMap(selectedPOV, NULL)
         }
-        if((sourceMap.sourcePov==NULL or sourceMap.startPov==NULL) and
-                selectedResult!.value!.overlayType==LST and
-                !selectedResult!.value!.items.isEmpty()){
-            // A selected span may deliberately keep its root ViewMap empty so
-            // it cannot acquire write-through authority from one child. The
-            // first child's exact source still names the span's beginning for
-            // a read-only selection relation.
-            sourceMap <- matchedSourceMap(
-                    selectedResult!.value!.items.head, NULL)
-        }
-        if(sourceMap.sourcePov==NULL or sourceMap.startPov==NULL){return()}
+        if(sourceMap.sourcePov==NULL or sourceMap.startPov==NULL){return(NULL)}
         their IdentityRegistry: registry <-
                 sourceMap.sourcePov!.effectiveIdentityRegistry()
-        if(registry==NULL){return()}
-        registry!.recordSelectionReference(
+        if(registry==NULL){return(NULL)}
+        me SelectionReferenceKind: referenceKind <- srkPositionalSelection
+        if(aItem!.LHS_item!.pItem!=NULL and
+                !aItem!.LHS_item!.pItem!.positionalSelection and
+                aItem!.LHS_item!.pItem!.intersectPos==ipGetMarked){
+            referenceKind <- srkIntersectionCorrespondence
+        }
+        return(registry!.recordSelectionReference(
                 selectedPOV, aItem!.LHS_item,
                 sourceMap.sourcePov, sourceMap.startPov,
-                srkPositionalSelection, 0)
+                referenceKind, 0))
+    }
+
+    me ViewMap: registeredSelectionSourceMap(our POV: resultPOV) <- {
+        me ViewMap: sourceMap
+        if(resultPOV==NULL){return(sourceMap)}
+        their IdentityRegistry: registry <-
+                resultPOV!.effectiveIdentityRegistry()
+        if(registry==NULL){return(sourceMap)}
+        me List<our SelectionReference>: references
+        registry!.collectSelectionReferencesForResult(
+                resultPOV, references)
+        withEach reference in references{
+            if(reference!.sourceContextPOV==NULL or
+                    reference!.sourceStartPOV==NULL){continue()}
+            if(sourceMap.sourcePov==NULL){
+                sourceMap.sourcePov <- reference!.sourceContextPOV
+                sourceMap.startPov <- reference!.sourceStartPOV
+            }else if(sourceMap.sourcePov!==reference!.sourceContextPOV or
+                    sourceMap.startPov!==reference!.sourceStartPOV){
+                me ViewMap: ambiguousMap
+                return(ambiguousMap)
+            }
+        }
+        return(sourceMap)
+    }
+
+    // A mark is both a query occurrence and the value requested by <...>.
+    // Recover the complete accepted relation so callers use its stored source
+    // coordinate as well as its result POV.
+    our SelectionReference: registeredMarkedSelectionReference(
+            our POV: queryPOV) <- {
+        if(queryPOV==NULL){return(NULL)}
+        their IdentityRegistry: registry <-
+                queryPOV!.effectiveIdentityRegistry()
+        if(registry==NULL){return(NULL)}
+        me List<our SelectionReference>: references
+        registry!.collectSelectionReferencesForQuery(queryPOV, references)
+        our SelectionReference: acceptedReference <- NULL
+        withEach reference in references{
+            if(reference!.referenceKind!=srkMarkedSelection or
+                    reference!.resultPOV==NULL){continue()}
+            if(acceptedReference==NULL){
+                acceptedReference <- reference
+            }else if(acceptedReference!.resultPOV!==
+                            reference!.resultPOV or
+                    acceptedReference!.sourceContextPOV!==
+                            reference!.sourceContextPOV or
+                    acceptedReference!.sourceStartPOV!==
+                            reference!.sourceStartPOV){
+                return(NULL)
+            }
+        }
+        return(acceptedReference)
     }
 
     me ViewMap: matchedSourceMap(our POV: localViewPOV,
@@ -2351,18 +2567,13 @@ struct IntersectionReasoner{
             sourceMap.startPov <- localViewPOV!.viewMap.startPov
             return(sourceMap)
         }
+        sourceMap <- registeredSelectionSourceMap(localViewPOV)
+        if(sourceMap.sourcePov!=NULL and sourceMap.startPov!=NULL){
+            return(sourceMap)
+        }
         if(localViewPOV!.outerPOV!=NULL and
                 !(localViewPOV!.outerPOV===localViewPOV)){
             sourceMap <- matchedSourceMap(localViewPOV!.outerPOV, plan)
-            if(sourceMap.sourcePov!=NULL and sourceMap.startPov!=NULL){
-                return(sourceMap)
-            }
-        }
-        if(localViewPOV!.pItem!=NULL and
-                localViewPOV!.pItem!.value!.overlayType==LST and
-                !localViewPOV!.pItem!.value!.items.isEmpty()){
-            sourceMap <- matchedSourceMap(
-                    localViewPOV!.pItem!.value!.items.head, plan)
             if(sourceMap.sourcePov!=NULL and sourceMap.startPov!=NULL){
                 return(sourceMap)
             }
@@ -2432,12 +2643,96 @@ struct IntersectionReasoner{
         }
     }
 
+    me void: recordAcceptedPendingMarkedSelection(our AItem: aItem) <- {
+        if(aItem==NULL or aItem!.pendingMarkedSelection==NULL){return()}
+        our PendingSelectionCorrespondence: pending <-
+                aItem!.pendingMarkedSelection
+        enumerateAcceptedCompositeMarkedIdentity(pending)
+        if(pending!.queryPOV==NULL or pending!.resultPOV==NULL or
+                pending!.sourceContextPOV==NULL or
+                pending!.sourceStartPOV==NULL){return()}
+        their IdentityRegistry: registry <-
+                pending!.sourceContextPOV!.effectiveIdentityRegistry()
+        if(registry==NULL){return()}
+
+        // A lower-level accepted merge may already have published this exact
+        // marked occurrence before its enclosing list merge accepts.
+        me List<our SelectionReference>: existingReferences
+        registry!.collectSelectionReferencesForQuery(
+                pending!.queryPOV, existingReferences)
+        withEach existing in existingReferences{
+            if(existing!.referenceKind==srkMarkedSelection and
+                    existing!.resultPOV===pending!.resultPOV and
+                    existing!.sourceStartPOV===pending!.sourceStartPOV){
+                return()
+            }
+        }
+        registry!.recordSelectionReference(
+                pending!.queryPOV, pending!.resultPOV,
+                pending!.sourceContextPOV, pending!.sourceStartPOV,
+                srkMarkedSelection, 0)
+    }
+
+    // A transparent marked list is traversed as individual children. Once
+    // every child has accepted an exact, consecutive source occurrence, list
+    // identity implies the complete marked occurrence. Enumerate that
+    // implication here; the first child alone is deliberately insufficient.
+    me void: enumerateAcceptedCompositeMarkedIdentity(
+            our PendingSelectionCorrespondence: pending) <- {
+        if(pending==NULL or pending!.queryPOV==NULL or
+                pending!.queryPOV!.pItem==NULL or
+                pending!.queryPOV!.pItem!.value!.overlayType!=LST or
+                pending!.queryPOV!.pItem!.value!.items.isEmpty() or
+                (pending!.resultPOV!=NULL and
+                 pending!.resultPOV!.pItem!=NULL and
+                 pending!.resultPOV!.pItem!.value!.overlayType==LST)){
+            return()
+        }
+        our POV: childPOV <-
+                pending!.queryPOV!.pItem!.value!.items.head
+        our POV: sourceContextPOV <- childPOV!.viewMap.sourcePov
+        our POV: sourceStartPOV <- childPOV!.viewMap.startPov
+        if(sourceContextPOV==NULL or sourceStartPOV==NULL){return()}
+
+        me int64: childOffset <- 0
+        while(childPOV!=NULL){
+            if(!sameSourceContextView(
+                        childPOV!.viewMap.sourcePov,
+                        sourceContextPOV) or
+                    childPOV!.viewMap.startPov==NULL){return()}
+            our POV: expectedSourcePOV <-
+                    sourceStartPOV!.logicalSiblingAtOffset(childOffset)
+            if(expectedSourcePOV==NULL or
+                    childPOV!.viewMap.startPov!==expectedSourcePOV){return()}
+            childOffset <+- 1
+            childPOV <- childPOV!.next
+        }
+
+        pending!.queryPOV!.mapViewToSource(
+                sourceContextPOV, sourceStartPOV)
+        pending!.resultPOV <- pending!.queryPOV
+        pending!.sourceContextPOV <- sourceContextPOV
+        pending!.sourceStartPOV <- sourceStartPOV
+    }
+
+    // carryPassiveSelectionSource takes owning snapshots of a raw traversal
+    // parent. Distinct snapshots of the same pItem under the same parent name
+    // the same source collection; the exact child POV still distinguishes
+    // repeated occurrences within that collection.
+    me bool: sameSourceContextView(our POV: first, our POV: second) <- {
+        if(first===second){return(true)}
+        return(first!=NULL and second!=NULL and
+                first!.pItem===second!.pItem and
+                first!.pParent===second!.pParent)
+    }
+
     // Record source provenance only after this merge has accepted the POV
     // pair. Candidate propagation is not proof that the pair matched.
     void: recordAcceptedCorrespondence(our AItem: aItem) <- {
         if(aItem==NULL or aItem!.mergeStatus!=msAccept or
                 aItem!.LHS_item==NULL or aItem!.RHS==NULL or
                 aItem!.RHS!.pItem==NULL){return()}
+        recordAcceptedPendingMarkedSelection(aItem)
         our IntersectionTraversalPlan: plan <-
                 aItem!.activeIntersectionTraversalPlan()
         if(plan!=NULL and plan!.status==itpResolved){
@@ -2458,8 +2753,30 @@ struct IntersectionReasoner{
             return()
         }
 
-        // Ordinary scalar intersections use their established propagation-time
-        // correspondence; unified builders supply composite view mappings.
+        // For an ordinary intersection, carryPassiveSelectionSource has named
+        // the exact candidate source on the pattern POV. Record the accepted
+        // pair now; candidate propagation alone is not evidence.
+        me ViewMap: sourceMap <- matchedSourceMap(
+                aItem!.LHS_item, NULL)
+        if(sourceMap.sourcePov==NULL or sourceMap.startPov==NULL){return()}
+        their IdentityRegistry: registry <-
+                sourceMap.sourcePov!.effectiveIdentityRegistry()
+        if(registry==NULL){return()}
+        registry!.recordSelectionReference(
+                aItem!.LHS_item, aItem!.RHS,
+                sourceMap.sourcePov, sourceMap.startPov,
+                srkIntersectionCorrespondence, 0)
+        if(aItem!.LHS_item!.markedOuterPOV!=NULL){
+            // Tight traversal may accept a scalar inside a transparent marked
+            // span. The accepted inner POV and the outer mark are two views
+            // of the same selection result, so retain the explicit reverse
+            // route instead of reconstructing it from tree shape later.
+            registry!.recordSelectionReference(
+                    aItem!.LHS_item,
+                    aItem!.LHS_item!.markedOuterPOV,
+                    sourceMap.sourcePov, sourceMap.startPov,
+                    srkIntersectionCorrespondence, 0)
+        }
     }
 
     me InfonViewReasoningResult: planConsolidation(our AItem: aItem) <- {
@@ -2714,18 +3031,50 @@ struct IntersectionReasoner{
             }
         }
         our POV: mappedSelectionPOV <- NULL
+        me ViewMap: mappedSelectionSourceMap
         if(CI!.intersectPos==ipGetMarked and innr!=NULL){
             mappedSelectionPOV <- innr!.intersectMarkedRetPOV
+            our SelectionReference: registeredSelection <-
+                    registeredMarkedSelectionReference(
+                            mappedSelectionPOV)
+            if(registeredSelection!=NULL){
+                mappedSelectionPOV <- registeredSelection!.resultPOV
+                newTop <- mappedSelectionPOV!.pItem
+                mappedSelectionSourceMap.sourcePov <-
+                        registeredSelection!.sourceContextPOV
+                mappedSelectionSourceMap.startPov <-
+                        registeredSelection!.sourceStartPOV
+            }
             selectedResultPOV <- mappedSelectionPOV
+            if(mappedSelectionSourceMap.sourcePov==NULL or
+                    mappedSelectionSourceMap.startPov==NULL){
+                mappedSelectionSourceMap <-
+                        matchedSourceMap(mappedSelectionPOV, NULL)
+            }
+            if(mappedSelectionSourceMap.sourcePov!=NULL and
+                    mappedSelectionSourceMap.startPov!=NULL){
+                // Materialize this implication on the result wrapper so the
+                // ordinary reference recorder and mapped-write planner both
+                // consume the same accepted registry evidence.
+                aItem!.LHS_item!.viewMap.sourcePov <-
+                        mappedSelectionSourceMap.sourcePov
+                aItem!.LHS_item!.viewMap.startPov <-
+                        mappedSelectionSourceMap.startPov
+            }
+        }
+        our SelectionReference: selectedReference
+        if(newTop!=NULL){
+            selectedReference <- recordSelectedFunctionReference(
+                    aItem, selectedResultPOV, newTop)
         }
         if(CI!.intersectPos==ipGetMarked and
                 mappedSelectionPOV!=NULL and
-                mappedSelectionPOV!.viewMap.sourcePov!=NULL and
-                mappedSelectionPOV!.viewMap.startPov!=NULL){
+                mappedSelectionSourceMap.sourcePov!=NULL and
+                mappedSelectionSourceMap.startPov!=NULL){
             aItem!.LHS_item!.viewMap.sourcePov <-
-                    mappedSelectionPOV!.viewMap.sourcePov
+                    mappedSelectionSourceMap.sourcePov
             aItem!.LHS_item!.viewMap.startPov <-
-                    mappedSelectionPOV!.viewMap.startPov
+                    mappedSelectionSourceMap.startPov
             if(mappedSelectionPOV!.pItem!=NULL and
                     mappedSelectionPOV!.pItem!.value!.overlayType==LST){
                 newTop <- mappedSelectionPOV!.pItem
@@ -2740,13 +3089,45 @@ struct IntersectionReasoner{
                     CI!.intersectMarkedRetPOV!=NULL and
                     CI!.intersectMarkedRetPOV!.pItem!=NULL and
                     CI!.intersectMarkedRetPOV!.pItem!.value!.overlayType!=LST){
-                newTop <- mappedSelectionPOV!.
-                        viewMap.startPov!.pItem
+                    newTop <- mappedSelectionSourceMap.startPov!.pItem
+            }else if(mappedSelectionPOV!.pItem!=NULL and
+                    mappedSelectionPOV!.pItem!.value!.overlayType!=LST){
+                // The mapped scalar names an exact source for reads too. Keep
+                // the result detached unless consumer work explicitly grants
+                // write-through authority above.
+                our infonView:: detachedMappedValue
+                mappedSelectionSourceMap.startPov!.pItem!.copyAsTypeTo(
+                        detachedMappedValue, false, false)
+                newTop <- detachedMappedValue
+            }
+        }else if(CI!.intersectPos==ipGetMarked and
+                newTop!=NULL and
+                newTop!.value!.overlayType!=LST and
+                selectedReference!=NULL){
+            // A transparent/nested match can return the exact materialized
+            // source POV without putting a ViewMap on the marked wrapper.
+            // Use only the accepted registry relation; never infer a
+            // composite result from its first child.
+            aItem!.LHS_item!.viewMap.sourcePov <-
+                    selectedReference!.sourceContextPOV
+            aItem!.LHS_item!.viewMap.startPov <-
+                    selectedReference!.sourceStartPOV
+            if(CI!.partRef==NULL and CI!.parts.isEmpty() and
+                    CI!.hasConsumerWork()){
+                aItem!.LHS_item!.accessMode <- aRefTo
+                aItem!.LHS_item!.viewMapWriteEnabled <- true
+                newTop <- selectedReference!.sourceStartPOV!.pItem
+            }else{
+                // A read returns the value at the exact accepted source, but
+                // remains detached so installing reply metadata cannot mutate
+                // that source or accidentally grant write-through authority.
+                our infonView:: detachedSelectedValue
+                selectedReference!.sourceStartPOV!.pItem!.copyAsTypeTo(
+                        detachedSelectedValue, false, false)
+                newTop <- detachedSelectedValue
             }
         }
         if(newTop!=NULL){
-            recordSelectedFunctionReference(
-                    aItem, selectedResultPOV, newTop)
             // The selected value owns only work from its consumer. Matching
             // obligations remain local to the selector that created them.
             newTop!.discardSelectorLocalWork()
@@ -3406,6 +3787,7 @@ struct CursorPathResolver{
 
         our infonView:: result
         result!.convertThisToIntersection(newInnr, fromGiven)
+        result!.positionalSelection <- true
         if(!hasSpec or (literalIndex and signedIndex<0)){
             newInnr!.value!.sizeMode <- fromCount
         }
@@ -3869,9 +4251,9 @@ struct ParentMemberReasoner{
         // A sparse marked span may have to be exposed one logical item at a
         // time to match concrete source items. Capture the whole occurrence
         // before that destructive refinement changes the marked span's size.
-        // This is ordinary intersection correspondence; selection and writes
-        // consume the resulting ViewMap without knowing how the mark was
-        // spelled.
+        // Keep this as a candidate identity on the accepting merge: replacing
+        // intersectMarkedRetPOV with the mapped view would perform the forward
+        // selection while losing the query side needed for inverse inference.
         if(aParent!=NULL and LHSPovNext!=NULL and RHSPovNext!=NULL and
                 orderedSpanSourceContextPOV!=NULL and
                 aParent!.LHS_item!.pItem!.intersectMarkedRetPOV===
@@ -3883,8 +4265,18 @@ struct ParentMemberReasoner{
                             LHSPovNext, orderedSpanSourceContextPOV,
                             RHSPovNext)
             if(mappedMarkedView!=NULL){
-                aParent!.LHS_item!.pItem!.intersectMarkedRetPOV <-
-                        mappedMarkedView
+                our PendingSelectionCorrespondence:: pendingSelection
+                pendingSelection!.queryPOV <- LHSPovNext
+                pendingSelection!.resultPOV <- mappedMarkedView
+                pendingSelection!.sourceContextPOV <-
+                        mappedMarkedView!.viewMap.sourcePov
+                pendingSelection!.sourceStartPOV <-
+                        mappedMarkedView!.viewMap.startPov
+                if(pendingSelection!.sourceContextPOV!=NULL and
+                        pendingSelection!.sourceStartPOV!=NULL and
+                        aParent!.pendingMarkedSelection==NULL){
+                    aParent!.pendingMarkedSelection <- pendingSelection
+                }
             }
         }
 
@@ -3972,6 +4364,26 @@ struct ParentMemberReasoner{
                 if(markedMatch==NULL and LHSPovNext!=NULL and LHSPovNext!.markedOuterPOV!=NULL and RHSPovNext!=NULL){markedMatch <- RHSPovNext}
             }
             if(markedMatch!=NULL){
+                our PendingSelectionCorrespondence:: pendingSelection
+                pendingSelection!.queryPOV <- markedPOV
+                pendingSelection!.resultPOV <- markedMatch
+                if(markedMatch!.viewMap.sourcePov!=NULL and
+                        markedMatch!.viewMap.startPov!=NULL){
+                    pendingSelection!.sourceContextPOV <-
+                            markedMatch!.viewMap.sourcePov
+                    pendingSelection!.sourceStartPOV <-
+                            markedMatch!.viewMap.startPov
+                }else{
+                    pendingSelection!.sourceContextPOV <-
+                            orderedSpanSourceContextPOV
+                    pendingSelection!.sourceStartPOV <- markedMatch
+                }
+                // The first relation covers the complete marked occurrence.
+                // Later propagation visits its children and must not replace
+                // that result with a narrower descendant correspondence.
+                if(aParent!.pendingMarkedSelection==NULL){
+                    aParent!.pendingMarkedSelection <- pendingSelection
+                }
                 if(markedPOV!.hasSparseOrderedSpanValue() and
                         markedMatch!.hasSparseOrderedSpanValue() and
                         orderedSpanSourceContextPOV!=NULL){
@@ -3980,8 +4392,13 @@ struct ParentMemberReasoner{
                     aParent!.LHS_item!.pItem!.intersectMarkedRetPOV <-
                             markedPOV
                 }else{
+                    // Preserve the marked query POV.  The candidate source is
+                    // carried through propagation and becomes a reversible
+                    // SelectionReference only after its merge accepts;
+                    // replacing this pointer with markedMatch would perform
+                    // the forward selection without recording its inverse.
                     aParent!.LHS_item!.pItem!.intersectMarkedRetPOV <-
-                            markedMatch
+                            markedPOV
                 }
                 if(markedMatch!.pItem!.isTentative){
                     markedMatch!.addNewSubDots <- true
@@ -4071,7 +4488,7 @@ struct ParentMemberReasoner{
                             //logSeg(" EnqY")
                             if(aParent!.
                                     activeIntersectionTraversalPlan()==NULL){
-                                worldManager!.carryPassiveScalarSource(
+                                worldManager!.carryPassiveSelectionSource(
                                         LHSAlt, RHSAlt)
                             }
                             RHSAlt!.selectorLocalWork <- true

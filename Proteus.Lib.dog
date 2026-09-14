@@ -85,6 +85,7 @@ struct EndRelativeWindowContentStatus: inherits=<mode[
 struct IdentityEvidenceKind: inherits=<mode[
     iekAssertion,
     iekTemporalBoundary,
+    iekTemporalContainment,
     iekEndRelativeResolution,
     iekRepetitionMaterialization
 ]> {}
@@ -120,6 +121,7 @@ struct EndRelativeReference{}
 // to that source.
 struct SelectionReferenceKind: inherits=<mode[
     srkIntersectionCorrespondence,
+    srkMarkedSelection,
     srkPartPathSelection,
     srkPositionalSelection
 ]> {}
@@ -367,6 +369,24 @@ struct IdentityRegistry{
         return(occurrence!.referencePOV)
     }
 
+    // Return a concrete occurrence only through its recorded materialization
+    // identity.  The occurrence table locates the candidates efficiently; it
+    // does not replace the semantic evidence joining the two POVs.
+    our POV: findIdentifiedMaterializedRepetitionOccurrence(
+            their POV: sourcePOV, me int64: sourceIndex) <- {
+        if(sourcePOV==NULL or sourceIndex<0 or
+                sourcePOV!.repetitionSpan.family==NULL){return(NULL)}
+        me int64: ordinal <-
+                sourcePOV!.repetitionSpan.startOrdinal + sourceIndex
+        our RepetitionOccurrence: occurrence <- findOrdinalOccurrence(
+                sourcePOV!.repetitionSpan.family, ordinal)
+        if(occurrence==NULL or occurrence!.referencePOV==NULL or
+                occurrence!.materializedPOV==NULL){return(NULL)}
+        if(!areIdentical(occurrence!.referencePOV,
+                occurrence!.materializedPOV)){return(NULL)}
+        return(occurrence!.materializedPOV)
+    }
+
     our POV: getOrCreateIndexedRepetitionOccurrence(
             their POV: sourcePOV, me int64: sourceIndex) <- {
         if(sourcePOV==NULL or !sourcePOV!.hasSparseOrderedSpanValue() or
@@ -539,6 +559,26 @@ model TemporalBoundaryIdentity{
 }
 struct TemporalBoundaryIdentity{}
 
+// One whole-interval containment implication:
+//
+//     host.begin = contained.begin
+//     host.end   = contained.end
+//
+// The spans remain distinct occurrences.  Only their boundary views are
+// identical, so either direction can recover the same rooted relationship
+// without merging a coarse unit with its finer component timeline.
+model TemporalContainmentIdentity{
+    our POV: hostSpan
+    our POV: containedSpan
+    our POV: hostBegin
+    our POV: containedBegin
+    our POV: hostEnd
+    our POV: containedEnd
+    our IdentityRelation: beginIdentityRelation
+    our IdentityRelation: endIdentityRelation
+}
+struct TemporalContainmentIdentity{}
+
 struct EndRelativePatternMeasureStatus: inherits=<mode[
     erpmResolved,
     erpmPending,
@@ -640,6 +680,18 @@ struct IntersectionTraversalPlan{
         retainedDependencies.append(dependencyPOV)
     }
 }
+
+// Candidate provenance for a marked selection is transient until the merge
+// owning the whole intersection accepts. Keeping the complete tuple on that
+// AItem lets acceptance publish one reversible SelectionReference without
+// treating propagation alone as semantic evidence.
+model PendingSelectionCorrespondence{
+    our POV: queryPOV
+    our POV: resultPOV
+    our POV: sourceContextPOV
+    our POV: sourceStartPOV
+}
+struct PendingSelectionCorrespondence{}
 
 
 model infonState{
@@ -752,6 +804,11 @@ model infonView {
     // matters, and resolution may write through it.
     our POV: intersectMarkedRetPOV
 
+    // Bracketed index syntax lowers to ordinary intersection machinery, but
+    // the selection relation remains positional.  Preserve that semantic
+    // origin so identity enumeration does not infer it from the lowered shape.
+    flag: positionalSelection
+
     // Current representation of <~.
     // Eventually replace this flag + funcArgs overload with:
     //     our infonView: innrOutr
@@ -792,6 +849,10 @@ model infonView {
     // Local adjacency index for T-list boundary implications.  The semantic
     // identity itself is owned by identityRelation in IdentityRegistry.
     me List<our TemporalBoundaryIdentity>: temporalBoundaryIdentities
+    // Whole-interval T-list components retain the witnesses for their two
+    // boundary identities; IdentityRegistry owns the equalities themselves.
+    me List<our TemporalContainmentIdentity>:
+            temporalContainmentIdentities
 }
 
 struct infonView{
@@ -1524,6 +1585,7 @@ struct infonView{
         retainedPOVs.clear()
         sourceGraphDependencies.clear()
         temporalBoundaryIdentities.clear()
+        temporalContainmentIdentities.clear()
     }
     void: setToList() <- {
         clear()
@@ -1735,6 +1797,9 @@ model AItem{
     // the same record as matching context. The plan is not an infonView and
     // therefore cannot change the locally zero-based value model.
     our IntersectionTraversalPlan: intersectionTraversalPlan
+    // A marked candidate is published to the registry only if this owning
+    // merge accepts.
+    our PendingSelectionCorrespondence: pendingMarkedSelection
     our infItr: LHSItr
     our infItr: RHSItr
     me int64: priority

@@ -191,10 +191,14 @@ struct OrderedSpanReasoner{
 
     our WordUse: orderedSpanSourceUnitType(our POV: rhsPOV) <- {
         if(rhsPOV==NULL or rhsPOV!.pItem==NULL){return(NULL)}
-        // A counted sparse POV represents a run of its listSpec members. Its
-        // own type may be the plural/container type (seconds), which is not
-        // the unit traversed at each logical position (second).
-        if(rhsPOV!.hasSparseOrderedSpanValue() and
+        // A repetition container represents a run of its listSpec members
+        // whether it is still sparse or its registered repetition family has
+        // materialized children. Its own type may be plural (seconds), which
+        // is not the unit traversed at each logical position (second). A
+        // definition-expanded unit host (Julian-year) still uses its own type
+        // before traversal follows its rooted containment identity.
+        if((rhsPOV!.hasSparseOrderedSpanValue() or
+                rhsPOV!.repetitionSpan.family!=NULL) and
                 rhsPOV!.pItem!.value!.listSpec!=NULL and
                 rhsPOV!.pItem!.value!.listSpec!.type!=NULL){
             return(rhsPOV!.pItem!.value!.listSpec!.type)
@@ -358,7 +362,32 @@ struct OrderedSpanReasoner{
         if(sparsePOV!.isSparseOrderedSpan() and sparsePOV!.pItem!.value!.listSpec!=NULL and sparsePOV!.pItem!.value!.listSpec!.type!=NULL){
             compositeHead <- makeSparseOrderedSpanCompositeHead(sparsePOV!.pItem!.value!.listSpec!.type, vSpec)
         }
-        if(compositeHead!=NULL){return(sparsePOV!.exposeSparseHeadWithItem(compositeHead))}
+        me TemporalIdentityReasoner: temporalReasoner
+        if(temporalReasoner.rootedContainmentForContainedSpan(
+                sparsePOV)!=NULL){
+            our infonView: rootedHead <- compositeHead
+            if(rootedHead==NULL){
+                rootedHead <- sparsePOV!.makePotentialMemberInfonView()
+            }
+            our POV: rootedExposedPOV <- temporalReasoner.
+                    materializeRootedContainedSpanHead(
+                            sparsePOV, rootedHead)
+            if(rootedExposedPOV!=NULL and
+                    rootedExposedPOV!.pItem!.value!.timelike){
+                temporalReasoner.enumerateRootedContainmentIdentities(
+                        rootedExposedPOV)
+            }
+            if(rootedExposedPOV!=NULL){return(rootedExposedPOV)}
+        }
+        if(compositeHead!=NULL){
+            our POV: exposedPOV <-
+                    sparsePOV!.exposeSparseHeadWithItem(compositeHead)
+            if(exposedPOV!=NULL and exposedPOV!.pItem!.value!.timelike){
+                temporalReasoner.enumerateRootedContainmentIdentities(
+                        exposedPOV)
+            }
+            return(exposedPOV)
+        }
         return(sparsePOV!.exposeSparseHead(false))
     }
     our infonView: makeSparseOrderedSpanCompositeHead(our WordUse: unitType, their vocabularySpec: vSpec) <- {
@@ -375,6 +404,9 @@ struct OrderedSpanReasoner{
         span!.type <- unitType
         span!.value!.listSpec <- meaning!.value!.listSpec
         span!.orderMode <- meaning!.orderMode
+        me bool: temporalUnit <- modelMngr.orderedSpanUnitIsTemporal(
+                unitType, vSpec, 0)
+        span!.value!.timelike <- temporalUnit
         span!.value!.sizeMode <- fromCount
         span!.value!.tailUnfinished <- false
         span!.infSize!.overlayType <- NUM
@@ -389,6 +421,7 @@ struct OrderedSpanReasoner{
         childSparse!.setToList()
         childSparse!.value!.listSpec <- meaning!.value!.listSpec
         childSparse!.orderMode <- meaning!.orderMode
+        childSparse!.value!.timelike <- temporalUnit
         childSparse!.value!.sizeMode <- fromCount
         childSparse!.value!.tailUnfinished <- true
         childSparse!.infSize!.overlayType <- NUM
@@ -474,15 +507,7 @@ struct OrderedSpanReasoner{
         return(leftID==rightID)
     }
     our infonView: orderedSpanDefinitionMeaning(our WordUse: unitType, their vocabularySpec: vSpec) <- {
-        if(unitType==NULL){return(NULL)}
-        our WordDefn: defn <- modelMngr.lookupSingleDefinitionForType(unitType, vSpec)
-        if(defn==NULL or defn!.meaning==NULL){return(NULL)}
-        our infonView: meaning <- defn!.meaning
-        if(meaning!.value!.overlayType!=LST or meaning!.value!.evalMode!=emLiteral){return(NULL)}
-        if(!meaning!.value!.tailUnfinished or !meaning!.value!.items.isEmpty()){return(NULL)}
-        if(meaning!.value!.listSpec==NULL or meaning!.value!.listSpec!.type==NULL){return(NULL)}
-        if(meaning!.infSize!.overlayType!=NUM or meaning!.infSize!.evalMode!=emLiteral){return(NULL)}
-        return(meaning)
+        return(modelMngr.orderedSpanDefinitionMeaning(unitType, vSpec))
     }
     me int64: orderedSpanDefinitionChildCount(our WordUse: unitType, their vocabularySpec: vSpec) <- {
         our infonView: meaning <- orderedSpanDefinitionMeaning(unitType, vSpec)
@@ -809,6 +834,13 @@ struct OrderedSpanReasoner{
 
         if(childConverter!.fromBaseCount==childConverter!.toBaseCount){
             if(rhsPOV!.isSparseOrderedSpan()){return(exposeSparseOrderedSpanHeadForTraversal(rhsPOV, vSpec))}
+            // A previously exposed repetition remains a container with an
+            // explicit first occurrence.  Follow the stored materialization
+            // identity to that occurrence instead of comparing the request
+            // with the container or advancing into the following interval.
+            our POV: materializedFirst <-
+                    rhsPOV!.findIdentifiedMaterializedItemPOV(0)
+            if(materializedFirst!=NULL){return(materializedFirst)}
             return(rhsPOV)
         }
 
@@ -821,7 +853,18 @@ struct OrderedSpanReasoner{
             }
             if(rhsPOV!.pItem!.value!.overlayType!=LST or rhsPOV!.pItem!.value!.evalMode!=emLiteral){return(NULL)}
             if(rhsPOV!.pItem!.value!.items.isEmpty()){return(NULL)}
-            our POV: childPOV <- rhsPOV!.pItem!.value!.items.head
+            our POV: childPOV
+            if(rhsPOV!.pItem!.value!.timelike){
+                me TemporalIdentityReasoner: temporalReasoner
+                childPOV <- temporalReasoner.
+                        containedSpanFromRootIdentity(rhsPOV)
+            }
+            if(childPOV==NULL){
+                // A sequence member is selected, not declared identical to
+                // its containing list.  Accepted selection correspondence is
+                // recorded by the intersection registry for reverse use.
+                childPOV <- rhsPOV!.pItem!.value!.items.head
+            }
             if(childPOV==NULL){return(NULL)}
             childPOV!.pParent <- rhsPOV
             return(firstOrderedSpanChildForRequest(
@@ -1383,15 +1426,22 @@ struct WorldManager{
         }
     }
 
-    // Ordinary intersections record scalar correspondence during propagation.
-    // End-relative traversal plans record it only after an accepted merge.
-    me void: carryPassiveScalarSource(our POV: LHSPOV, our POV: RHSPOV) <- {
+    // Carry candidate provenance during propagation. This grants no write
+    // authority; recordAcceptedCorrespondence publishes it only after the
+    // owning merge accepts. A whole composite RHS is an exact candidate
+    // occurrence in its own right, so no child map is inferred here.
+    me void: carryPassiveSelectionSource(
+            our POV: LHSPOV, our POV: RHSPOV) <- {
         if(LHSPOV==NULL or RHSPOV==NULL or RHSPOV!.pItem==NULL){return()}
-        if(RHSPOV!.pItem!.value!.overlayType==LST){return()}
         if(RHSPOV!.viewMap.sourcePov!=NULL and
                 RHSPOV!.viewMap.startPov!=NULL){
-            LHSPOV!.viewMap.sourcePov <- RHSPOV!.viewMap.sourcePov
-            LHSPOV!.viewMap.startPov <- RHSPOV!.viewMap.startPov
+            if(!(RHSPOV!.viewMap.sourcePov===LHSPOV) and
+                    !(RHSPOV!.viewMap.startPov===LHSPOV)){
+                LHSPOV!.viewMap.sourcePov <-
+                        RHSPOV!.viewMap.sourcePov
+                LHSPOV!.viewMap.startPov <-
+                        RHSPOV!.viewMap.startPov
+            }
             return()
         }
         our POV: sourceStartPOV <- RHSPOV
@@ -1415,8 +1465,11 @@ struct WorldManager{
                 RHSPOV!.pParent!.viewMap.sourcePov!=NULL){
             sourceContextPOV <- RHSPOV!.pParent!.viewMap.sourcePov
         }
-        LHSPOV!.viewMap.sourcePov <- sourceContextPOV
-        LHSPOV!.viewMap.startPov <- sourceStartPOV
+        if(!(sourceContextPOV===LHSPOV) and
+                !(sourceStartPOV===LHSPOV)){
+            LHSPOV!.viewMap.sourcePov <- sourceContextPOV
+            LHSPOV!.viewMap.startPov <- sourceStartPOV
+        }
     }
     our infonView: selectReturnedInfonViewFromPOV(our AItem: aItem, our POV: selectedPOV) <- {
         if(selectedPOV==NULL){return(NULL)}
