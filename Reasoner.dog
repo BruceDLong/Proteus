@@ -1352,6 +1352,11 @@ struct ConcatReasoner{
 //  14. an accepted, positive equality between two temporal-boundary POVs
 //      records those exact cuts as identical.  Equal algebraic zero values
 //      without boundary provenance never imply this identity.
+//  15. L.cut creates one lazy split L = prefix + suffix.  It records
+//      L.begin = prefix.begin, prefix.end = suffix.begin, and
+//      suffix.end = L.end.  The middle boundary is the returned symbolic cut.
+//      Neither witness span is enumerated, and repeated `.cut` expressions
+//      remain distinct until another identity proves them equal.
 //
 // Not yet implemented:
 //   7. a transition identity reads RHS references from its entry/previous
@@ -1377,6 +1382,51 @@ struct TemporalIdentityReasoner{
         me EndRelativeExtentResult: extent <-
                 spanPOV!.pItem!.endRelativeExtent()
         return(extent.status==eresExact)
+    }
+
+    our POV: makeOpenTemporalSplitSpan(their POV: sourceSpan) <- {
+        if(!isTemporalSpanPOV(sourceSpan)){return(NULL)}
+        our POV:: splitSpan{povSrcTemporalSplit}
+        Allocate(splitSpan!.pItem)
+        splitSpan!.pItem!.setToList()
+        splitSpan!.pItem!.value!.timelike <- true
+        splitSpan!.pItem!.value!.tailUnfinished <- true
+        splitSpan!.pItem!.value!.sizeMode <- fromGiven
+        splitSpan!.pItem!.infSize!.overlayType <- NUM
+        splitSpan!.pItem!.infSize!.evalMode <- emUnknown
+        splitSpan!.pItem!.originID <- sourceSpan!.pItem!.originID
+        splitSpan!.pItem!.infCharPos <- sourceSpan!.pItem!.infCharPos
+        splitSpan!.pParent <- sourceSpan!.pParent
+        splitSpan!.accessMode <- aRefTo
+        splitSpan!.bindIdentityRegistry(
+                sourceSpan!.effectiveIdentityRegistry())
+        return(splitSpan)
+    }
+
+    // A symbolic cut is represented by the end of one lazy span identified
+    // with the beginning of the next.  The returned boundary therefore has a
+    // unique source even when its coordinate is not known, and all inverse
+    // inferences travel through ordinary IdentityRelation edges.
+    our TemporalSplitReference: makeTemporalSplit(
+            our POV: sourceSpan, me uint64: normalizationID) <- {
+        if(!isTemporalSpanPOV(sourceSpan)){return(NULL)}
+        their IdentityRegistry: registry <-
+                sourceSpan!.effectiveIdentityRegistry()
+        if(registry==NULL){return(NULL)}
+        our POV: prefixSpan <- makeOpenTemporalSplitSpan(sourceSpan)
+        our POV: suffixSpan <- makeOpenTemporalSplitSpan(sourceSpan)
+        if(prefixSpan==NULL or suffixSpan==NULL){return(NULL)}
+
+        our POV: sourceBegin <- makeTemporalBoundaryPOV(sourceSpan, false)
+        our POV: prefixBegin <- makeTemporalBoundaryPOV(prefixSpan, false)
+        our POV: symbolicCut <- makeTemporalBoundaryPOV(prefixSpan, true)
+        our POV: suffixBegin <- makeTemporalBoundaryPOV(suffixSpan, false)
+        our POV: suffixEnd <- makeTemporalBoundaryPOV(suffixSpan, true)
+        our POV: sourceEnd <- makeTemporalBoundaryPOV(sourceSpan, true)
+        return(registry!.recordTemporalSplit(
+                sourceSpan, prefixSpan, suffixSpan,
+                sourceBegin, prefixBegin, symbolicCut, suffixBegin,
+                suffixEnd, sourceEnd, normalizationID))
     }
 
     // Merge acceptance is the proof point for a written boundary equality.
@@ -4078,6 +4128,7 @@ struct CursorPathResolver{
                 our POV: newPov
                 our POV: selectedTemporalBoundary
                 our TemporalProjectionReference: selectedTemporalProjection
+                our TemporalSplitReference: selectedTemporalSplit
                 our POV: selectedSourcePOV
                 our POV: selectionSourceSnapshot
                 our POV: selectionQueryPOV
@@ -4111,17 +4162,30 @@ struct CursorPathResolver{
                         if(CI!.value!.overlayType==LST and
                                 CI!.value!.timelike and
                                 part!.path!.type!=NULL and
-                                (partTag=="begin" or partTag=="end")){
+                                (partTag=="begin" or partTag=="end" or
+                                 partTag=="cut")){
                             // The working POV is about to be replaced by the
                             // selected result.  Give the boundary a stable
                             // source view that survives that replacement.
                             our POV: sourceSnapshot <-
                                     aItem!.LHS_item!.snapshotView(
                                             povSrcTemporalBoundary)
-                            selectedTemporalBoundary <-
-                                    temporalIdentityReasoner!.
-                                    makeTemporalBoundaryPOV(sourceSnapshot,
-                                            partTag=="end")
+                            if(partTag=="cut"){
+                                selectedTemporalSplit <-
+                                        temporalIdentityReasoner!.
+                                        makeTemporalSplit(sourceSnapshot,
+                                                agenda!.normalizationID)
+                                if(selectedTemporalSplit!=NULL){
+                                    selectedTemporalBoundary <-
+                                            selectedTemporalSplit!.
+                                            symbolicCut
+                                }
+                            }else{
+                                selectedTemporalBoundary <-
+                                        temporalIdentityReasoner!.
+                                        makeTemporalBoundaryPOV(sourceSnapshot,
+                                                partTag=="end")
+                            }
                             if(selectedTemporalBoundary!=NULL){
                                 selectedTemporalBoundary!.pItem!.
                                         addSourceGraphDependency(
@@ -4236,6 +4300,7 @@ struct CursorPathResolver{
                     aItem!.LHS_item!.temporalBoundary.cutIndex <- -1
                     aItem!.LHS_item!.temporalProjection.reference <- NULL
                     aItem!.LHS_item!.temporalProjection.isProjection <- false
+                    aItem!.LHS_item!.temporalSplit.reference <- NULL
                     if(selectedTemporalBoundary!=NULL){
                         aItem!.LHS_item!.temporalBoundary.sourcePov <-
                                 selectedTemporalBoundary!.
@@ -4249,7 +4314,22 @@ struct CursorPathResolver{
                         aItem!.LHS_item!.temporalBoundary.cutIndex <-
                                 selectedTemporalBoundary!.
                                 temporalBoundary.cutIndex
+                        aItem!.LHS_item!.temporalSplit.reference <-
+                                selectedTemporalBoundary!.
+                                temporalSplit.reference
                         aItem!.LHS_item!.accessMode <- aRefTo
+                        their IdentityRegistry: boundaryRegistry <-
+                                selectedTemporalBoundary!.
+                                effectiveIdentityRegistry()
+                        if(boundaryRegistry!=NULL){
+                            aItem!.LHS_item!.bindIdentityRegistry(
+                                    boundaryRegistry)
+                            boundaryRegistry!.recordIdentity(
+                                    aItem!.LHS_item,
+                                    selectedTemporalBoundary,
+                                    iekTemporalBoundary,
+                                    agenda!.normalizationID)
+                        }
                     }
                     if(selectedTemporalProjection!=NULL){
                         aItem!.LHS_item!.temporalProjection.reference <-
@@ -4275,7 +4355,20 @@ struct CursorPathResolver{
                         pathPov!.temporalBoundary.cutIndex <-
                                 selectedTemporalBoundary!.
                                 temporalBoundary.cutIndex
+                        pathPov!.temporalSplit.reference <-
+                                selectedTemporalBoundary!.
+                                temporalSplit.reference
                         pathPov!.accessMode <- aRefTo
+                        their IdentityRegistry: boundaryRegistry <-
+                                selectedTemporalBoundary!.
+                                effectiveIdentityRegistry()
+                        if(boundaryRegistry!=NULL){
+                            pathPov!.bindIdentityRegistry(boundaryRegistry)
+                            boundaryRegistry!.recordIdentity(
+                                    pathPov, selectedTemporalBoundary,
+                                    iekTemporalBoundary,
+                                    agenda!.normalizationID)
+                        }
                     }
                     if(selectedTemporalProjection!=NULL){
                         pathPov!.temporalProjection.reference <-

@@ -87,6 +87,7 @@ struct IdentityEvidenceKind: inherits=<mode[
     iekTemporalBoundary,
     iekTemporalContainment,
     iekTemporalProjection,
+    iekTemporalSplit,
     iekEndRelativeResolution,
     iekRepetitionMaterialization
 ]> {}
@@ -200,6 +201,40 @@ model TemporalProjectionReference{
 }
 struct TemporalProjectionReference{}
 
+// `.cut` denotes one genuine, unresolved split of a temporal span.  It does
+// not enumerate candidate structural items or choose a clock granularity.
+// Instead, the split retains two lazy temporal witnesses and the three
+// identities implied by their concatenation:
+//
+//     source.begin = prefix.begin
+//     prefix.end   = suffix.begin
+//     suffix.end   = source.end
+//
+// symbolicCut is prefix.end.  The middle identity makes the same cut
+// reachable from either side, so a later theorem may resolve it by adding an
+// identity to a more specific boundary without bypassing this representation.
+model TemporalSplitReference{
+    me uint64: referenceID <- 0
+    me uint64: normalizationID <- 0
+    our POV: sourceSpan
+    our POV: prefixSpan
+    our POV: suffixSpan
+    our POV: sourceBegin
+    our POV: prefixBegin
+    our POV: symbolicCut
+    our POV: suffixBegin
+    our POV: suffixEnd
+    our POV: sourceEnd
+    our IdentityRelation: beginIdentityRelation
+    our IdentityRelation: cutIdentityRelation
+    our IdentityRelation: endIdentityRelation
+    // A plain `.cut` is inside the span rather than one of its endpoints.
+    // This condition is kept once per symbolic split; it does not materialize
+    // or count either witness span.
+    flag: strictInterior <- true
+}
+struct TemporalSplitReference{}
+
 // One logical member of a repetition.  occurrenceToken is opaque and stable;
 // ordinal is optional knowledge about that occurrence, not its identity.
 model RepetitionOccurrence{
@@ -237,6 +272,7 @@ model IdentityRegistry{
     me List<our SelectionRequest>: selectionRequests
     me List<our SelectionReference>: selectionReferences
     me List<our TemporalProjectionReference>: temporalProjectionReferences
+    me List<our TemporalSplitReference>: temporalSplitReferences
     me List<our RepetitionFamily>: repetitionFamilies
     me Mutex: registryMutex
 }
@@ -292,6 +328,58 @@ struct IdentityRegistry{
             projectionPOV!.temporalProjection.isProjection <- true
             return(reference)
         }
+    }
+
+    // Every invocation records a new existential cut, even when two cuts are
+    // requested from the same source span.  Equal-valued descriptions must
+    // not accidentally identify independent possible instants.
+    our TemporalSplitReference: recordTemporalSplit(
+            our POV: sourceSpan,
+            our POV: prefixSpan, our POV: suffixSpan,
+            our POV: sourceBegin, our POV: prefixBegin,
+            our POV: symbolicCut, our POV: suffixBegin,
+            our POV: suffixEnd, our POV: sourceEnd,
+            me uint64: normalizationID) <- {
+        if(sourceSpan==NULL or prefixSpan==NULL or suffixSpan==NULL or
+                sourceBegin==NULL or prefixBegin==NULL or
+                symbolicCut==NULL or suffixBegin==NULL or
+                suffixEnd==NULL or sourceEnd==NULL){return(NULL)}
+        our TemporalSplitReference:: reference
+        protect(registryMutex){
+            reference!.referenceID <- nextReferenceID
+            nextReferenceID <+- 1
+            reference!.normalizationID <- normalizationID
+            reference!.strictInterior <- true
+            reference!.sourceSpan <- sourceSpan
+            reference!.prefixSpan <- prefixSpan
+            reference!.suffixSpan <- suffixSpan
+            reference!.sourceBegin <- sourceBegin
+            reference!.prefixBegin <- prefixBegin
+            reference!.symbolicCut <- symbolicCut
+            reference!.suffixBegin <- suffixBegin
+            reference!.suffixEnd <- suffixEnd
+            reference!.sourceEnd <- sourceEnd
+        }
+        reference!.beginIdentityRelation <- recordIdentity(
+                sourceBegin, prefixBegin,
+                iekTemporalSplit, normalizationID)
+        reference!.cutIdentityRelation <- recordIdentity(
+                symbolicCut, suffixBegin,
+                iekTemporalSplit, normalizationID)
+        reference!.endIdentityRelation <- recordIdentity(
+                suffixEnd, sourceEnd,
+                iekTemporalSplit, normalizationID)
+        sourceSpan!.identityRegistry <- self
+        prefixSpan!.identityRegistry <- self
+        suffixSpan!.identityRegistry <- self
+        symbolicCut!.identityRegistry <- self
+        symbolicCut!.temporalSplit.reference <- reference
+        // Publish only after all implied identities and the cut backlink are
+        // complete; registry readers must never observe a half-built split.
+        protect(registryMutex){
+            temporalSplitReferences.append(reference)
+        }
+        return(reference)
     }
 
     our EndRelativeReference: findEndRelativeReference(

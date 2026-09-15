@@ -21,6 +21,7 @@ TestsToRun = `
     unit/streamLoader/specParsing
     unit/streamLoader/relativeResolution
     unit/temporal/asTListProjection
+    unit/temporal/symbolicSplit
     unit/temporal/worldBoundaryInsertion
     unit/temporal/boundaryViews
     unit/temporal/boundaryAssertionIdentity
@@ -143,6 +144,7 @@ do ManageCmdLine(cmd)
 #define GETNEXTTIGHT (NAME, MSG, IN, OUT, SKIP) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGETNEXTTIGHT(tname, IN, OUT, SKIP)}%>
 #define STREAMLOADERSPEC (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestStreamLoaderSpec(tname, CASE_ID)}%>
 #define TEMPORALPROJECTION (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestTemporalProjection(tname)}%>
+#define TEMPORALSPLIT (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestTemporalSplit(tname)}%>
 #define TEMPORALWORLDINSERT (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestTemporalWorldInsertion(tname)}%>
 #define TEMPORALBOUNDARYVIEWS (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestTemporalBoundaryViews(tname)}%>
 #define TEMPORALBOUNDARYASSERTION (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestTemporalBoundaryAssertionIdentity(tname)}%>
@@ -305,9 +307,10 @@ struct GLOBAL {
     STREAMLOADERSPEC(unit/streamLoader/specParsing, "parse shared protocol and connection fields", 1)
     STREAMLOADERSPEC(unit/streamLoader/relativeResolution, "resolve an inserted stream from its source directory", 2)
     TEMPORALPROJECTION(unit/temporal/asTListProjection, "store a lazy reversible temporal projection and preserve its canonical begin")
+    TEMPORALSPLIT(unit/temporal/symbolicSplit, "represent an unquantized temporal cut by explicit prefix and suffix boundary identities")
     TEMPORALWORLDINSERT(unit/temporal/worldBoundaryInsertion, "insert a galaxy begin into a selected World state without losing either reversible relation")
     TEMPORALBOUNDARYVIEWS(unit/temporal/boundaryViews, "preserve temporal cut identity behind begin and end")
-    TEMPORALBOUNDARYASSERTION(unit/temporal/boundaryAssertionIdentity, "record an accepted equality between exact temporal cuts")
+    TEMPORALBOUNDARYASSERTION(unit/temporal/boundaryAssertionIdentity, "connect a PublicKB galaxy begin to its symbolic temporal cut by identity")
     TEMPORALBOUNDARY(unit/temporal/boundaryIdentityBidirectional, "store one adjacent-span identity and traverse it in both directions")
     TEMPORALCONTAINMENT(unit/temporal/rootedContainmentBidirectional, "identify whole-interval host and component boundaries in both directions")
     ENDRELRESOLVE(unit/endRelative/resolveOnClose, "register end-relative references and identify them while large sparse sources stay compressed")
@@ -1026,6 +1029,107 @@ struct GLOBAL {
         REQUIRE(actual==expected)
         return()
     }
+    me void: unitTestTemporalSplit(me string: testName) <- {
+        me TemporalIdentityReasoner: reasoner
+        our infonView: source <- parseAndExtract(testName, "{T 1 2 3}")
+        our POV:: sourcePOV{povSrcTemporalSplit}
+        sourcePOV!.pItem <- source
+        our IdentityRegistry:: registry
+        sourcePOV!.bindIdentityRegistry(registry)
+
+        our TemporalSplitReference: first <-
+                reasoner.makeTemporalSplit(sourcePOV, 41)
+        our TemporalSplitReference: second <-
+                reasoner.makeTemporalSplit(sourcePOV, 42)
+        our POV: cutSnapshot
+        if(first!=NULL and first!.symbolicCut!=NULL){
+            cutSnapshot <- first!.symbolicCut!.snapshotView(
+                    povSrcTemporalSplit)
+        }
+
+        me bool: lazyShapeCorrect <- first!=NULL and
+                first!.sourceSpan===sourcePOV and
+                first!.prefixSpan!=NULL and first!.suffixSpan!=NULL and
+                first!.prefixSpan!.pItem!.value!.overlayType==LST and
+                first!.prefixSpan!.pItem!.value!.timelike and
+                first!.prefixSpan!.pItem!.value!.tailUnfinished and
+                first!.prefixSpan!.pItem!.value!.sizeMode==fromGiven and
+                first!.prefixSpan!.pItem!.infSize!.evalMode==emUnknown and
+                first!.prefixSpan!.pItem!.value!.items.isEmpty() and
+                first!.suffixSpan!.pItem!.value!.overlayType==LST and
+                first!.suffixSpan!.pItem!.value!.timelike and
+                first!.suffixSpan!.pItem!.value!.tailUnfinished and
+                first!.suffixSpan!.pItem!.value!.sizeMode==fromGiven and
+                first!.suffixSpan!.pItem!.infSize!.evalMode==emUnknown and
+                first!.suffixSpan!.pItem!.value!.items.isEmpty() and
+                sourcePOV!.pItem!.value!.items.size()==3
+        me bool: identitiesCorrect <- first!=NULL and
+                first!.beginIdentityRelation!=NULL and
+                first!.cutIdentityRelation!=NULL and
+                first!.endIdentityRelation!=NULL and
+                first!.beginIdentityRelation!.evidenceKind==
+                        iekTemporalSplit and
+                first!.cutIdentityRelation!.evidenceKind==
+                        iekTemporalSplit and
+                first!.endIdentityRelation!.evidenceKind==
+                        iekTemporalSplit and
+                registry!.areIdentical(
+                        first!.sourceBegin, first!.prefixBegin) and
+                registry!.areIdentical(
+                        first!.prefixBegin, first!.sourceBegin) and
+                registry!.areIdentical(
+                        first!.symbolicCut, first!.suffixBegin) and
+                registry!.areIdentical(
+                        first!.suffixBegin, first!.symbolicCut) and
+                registry!.areIdentical(
+                        first!.suffixEnd, first!.sourceEnd) and
+                registry!.areIdentical(
+                        first!.sourceEnd, first!.suffixEnd)
+        me bool: cutCorrect <- first!=NULL and second!=NULL and
+                first!==second and first!.referenceID!=second!.referenceID and
+                first!.strictInterior and second!.strictInterior and
+                first!.symbolicCut!.temporalBoundary.tracksEnd and
+                !first!.symbolicCut!.temporalBoundary.cutIndexKnown and
+                first!.symbolicCut!.temporalBoundary.cutIndex==-1 and
+                first!.symbolicCut!.temporalSplit.reference===first and
+                first!.symbolicCut!.temporalBoundary.sourcePov===
+                        first!.prefixSpan and
+                !registry!.areIdentical(
+                        first!.symbolicCut, second!.symbolicCut) and
+                registry!.temporalSplitReferences.size()==2 and
+                registry!.identities.size()==6 and
+                cutSnapshot!=NULL and
+                cutSnapshot!.temporalSplit.reference===first
+
+        me ProteusCore: CORE
+        CORE.init("", false)
+        our infonView: cutExpression <-
+                parseAndExtract(testName, "{T 1 2 3}.cut")
+        our POV:: cutPOV{povSrcTemporalSplit}
+        cutPOV!.pItem <- cutExpression
+        CORE.agent!.normalize(cutPOV)
+        their TemporalSplitReference: parsedReference <-
+                cutPOV!.temporalSplit.reference
+        me bool: selectorCorrect <- toString(cutPOV!.pItem)=="0" and
+                parsedReference!=NULL and
+                parsedReference!.symbolicCut!=NULL and
+                parsedReference!.symbolicCut!.temporalBoundary.tracksEnd and
+                !parsedReference!.symbolicCut!.
+                        temporalBoundary.cutIndexKnown and
+                cutPOV!.temporalBoundary.sourcePov===
+                        parsedReference!.prefixSpan and
+                cutPOV!.temporalSplit.reference===parsedReference and
+                parsedReference!.sourceSpan!.pItem!.value!.items.size()==3 and
+                CORE.agent!.identityRegistry!.
+                        temporalSplitReferences.size()==1
+
+        me string: actual <- toString(lazyShapeCorrect)+" "+
+                toString(identitiesCorrect)+" "+toString(cutCorrect)+" "+
+                toString(selectorCorrect)
+        me string: expected <- "true true true true"
+        REQUIRE(actual==expected)
+        return()
+    }
     me void: unitTestTemporalWorldInsertion(me string: testName) <- {
         me TestProteusCore: CORE
         me bool: loaded <- CORE.initForWorldTest(
@@ -1272,14 +1376,16 @@ struct GLOBAL {
     me void: unitTestTemporalBoundaryAssertionIdentity(
             me string: testName) <- {
         me TestProteusCore: CORE
-        me bool: loaded <- CORE.initForWorldTest("public/KernelKB.pr")
-        if(loaded){
-            CORE.query(
-                    "galaxy.asTList.begin = %W@[1:*3+{million-year| ...}].begin",
-                    false)
-        }
+        me bool: loaded <- CORE.initForWorldTest("public/PublicKB.pr")
 
         our IdentityRelation: boundaryAssertion
+        their TemporalSplitReference: splitReference
+        if(CORE.agent!=NULL and
+                CORE.agent!.identityRegistry!.
+                        temporalSplitReferences.size()==1){
+            splitReference <- CORE.agent!.identityRegistry!.
+                    temporalSplitReferences.first()
+        }
         withEach identity in CORE.agent!.identityRegistry!.identities{
             if(identity!.evidenceKind==iekAssertion and
                     identity!.leftPOV!=NULL and
@@ -1290,13 +1396,30 @@ struct GLOBAL {
                 break()
             }
         }
-        me bool: passed <- loaded and boundaryAssertion!=NULL and
+        me bool: passed <- loaded and splitReference!=NULL and
+                splitReference!.strictInterior and
+                splitReference!.symbolicCut!=NULL and
+                splitReference!.symbolicCut!.
+                        temporalBoundary.tracksEnd and
+                !splitReference!.symbolicCut!.
+                        temporalBoundary.cutIndexKnown and
+                splitReference!.prefixSpan!.pItem!.
+                        value!.items.isEmpty() and
+                splitReference!.suffixSpan!.pItem!.
+                        value!.items.isEmpty() and
+                boundaryAssertion!=NULL and
                 CORE.agent!.identityRegistry!.areIdentical(
                         boundaryAssertion!.leftPOV,
                         boundaryAssertion!.rightPOV) and
                 CORE.agent!.identityRegistry!.areIdentical(
                         boundaryAssertion!.rightPOV,
-                        boundaryAssertion!.leftPOV)
+                        boundaryAssertion!.leftPOV) and
+                (CORE.agent!.identityRegistry!.areIdentical(
+                        boundaryAssertion!.leftPOV,
+                        splitReference!.symbolicCut) or
+                 CORE.agent!.identityRegistry!.areIdentical(
+                        boundaryAssertion!.rightPOV,
+                        splitReference!.symbolicCut))
         me string: actual <- "false"
         if(passed){actual <- "true"}
         me string: expected <- "true"
