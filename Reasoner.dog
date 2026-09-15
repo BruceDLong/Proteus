@@ -1356,7 +1356,10 @@ struct ConcatReasoner{
 //      L.begin = prefix.begin, prefix.end = suffix.begin, and
 //      suffix.end = L.end.  The middle boundary is the returned symbolic cut.
 //      Neither witness span is enumerated, and repeated `.cut` expressions
-//      remain distinct until another identity proves them equal.
+//      remain distinct until another identity proves them equal.  Later
+//      boundary evidence is added only through resolveTemporalSplit(), which
+//      rejects L.begin/L.end for a strict-interior cut and conflicting known
+//      coordinates in the same source span.
 //
 // Not yet implemented:
 //   7. a transition identity reads RHS references from its entry/previous
@@ -1370,6 +1373,14 @@ struct ConcatReasoner{
 //
 // Items 7-8 and 10-11 deliberately have no fallback mutation here.  Each must become a
 // concrete identity-expansion plan with tests before it affects normalization.
+struct GLOBAL{
+    const int: tsrsInvalid          <- 0
+    const int: tsrsAccepted         <- 1
+    const int: tsrsAlreadyResolved  <- 2
+    const int: tsrsEndpointRejected <- 3
+    const int: tsrsConflictRejected <- 4
+}
+
 struct TemporalIdentityReasoner{
     me bool: isTemporalSpanPOV(their POV: pov) <- {
         return(pov!=NULL and pov!.pItem!=NULL and
@@ -1429,6 +1440,177 @@ struct TemporalIdentityReasoner{
                 suffixEnd, sourceEnd, normalizationID))
     }
 
+    // Make a concrete cut view without changing or materializing the source
+    // T-list.  Begin and end retain their canonical endpoint representation;
+    // an interior coordinate is a separate boundary POV in that same span.
+    our POV: makeKnownTemporalBoundaryPOV(
+            their POV: sourceSpan, me int64: cutIndex) <- {
+        if(!isTemporalSpanPOV(sourceSpan) or cutIndex<0){return(NULL)}
+        me EndRelativeExtentResult: extent <-
+                sourceSpan!.pItem!.endRelativeExtent()
+        if(extent.status==eresExact and cutIndex>extent.exactExtent){
+            return(NULL)
+        }
+        if(cutIndex==0){return(makeTemporalBoundaryPOV(sourceSpan, false))}
+        if(extent.status==eresExact and cutIndex==extent.exactExtent){
+            return(makeTemporalBoundaryPOV(sourceSpan, true))
+        }
+        our POV: boundaryPOV <- makeTemporalBoundaryValuePOV(sourceSpan)
+        if(boundaryPOV==NULL){return(NULL)}
+        boundaryPOV!.temporalBoundary.cutIndexKnown <- true
+        boundaryPOV!.temporalBoundary.cutIndex <- cutIndex
+        return(boundaryPOV)
+    }
+
+    me bool: boundarySourcesShareCoordinates(their POV: first,
+            their POV: second) <- {
+        if(first==NULL or second==NULL or
+                first!.temporalBoundary.sourcePov==NULL or
+                second!.temporalBoundary.sourcePov==NULL){return(false)}
+        if(first!.temporalBoundary.sourcePov===
+                second!.temporalBoundary.sourcePov){return(true)}
+        return(first!.temporalBoundary.sourcePov!.pItem!=NULL and
+                first!.temporalBoundary.sourcePov!.pItem===
+                        second!.temporalBoundary.sourcePov!.pItem)
+    }
+
+    me bool: boundariesHaveSameKnownCoordinate(their POV: first,
+            their POV: second) <- {
+        return(boundarySourcesShareCoordinates(first, second) and
+                first!.temporalBoundary.cutIndexKnown and
+                second!.temporalBoundary.cutIndexKnown and
+                first!.temporalBoundary.cutIndex==
+                        second!.temporalBoundary.cutIndex)
+    }
+
+    me bool: boundariesHaveConflictingKnownCoordinates(their POV: first,
+            their POV: second) <- {
+        return(boundarySourcesShareCoordinates(first, second) and
+                first!.temporalBoundary.cutIndexKnown and
+                second!.temporalBoundary.cutIndexKnown and
+                first!.temporalBoundary.cutIndex!=
+                        second!.temporalBoundary.cutIndex)
+    }
+
+    me int: temporalSplitResolutionStatus(
+            their TemporalSplitReference: reference,
+            our POV: candidateBoundary) <- {
+        if(reference==NULL or candidateBoundary==NULL or
+                reference!.symbolicCut==NULL or
+                candidateBoundary!.temporalBoundary.sourcePov==NULL){
+            return(tsrsInvalid)
+        }
+        their IdentityRegistry: registry <-
+                reference!.symbolicCut!.effectiveIdentityRegistry()
+        if(registry==NULL or candidateBoundary!.
+                effectiveIdentityRegistry()!==registry){return(tsrsInvalid)}
+        if(reference!.strictInterior and
+                (registry!.areIdentical(
+                        candidateBoundary, reference!.sourceBegin) or
+                 registry!.areIdentical(
+                        candidateBoundary, reference!.sourceEnd) or
+                 sameTemporalBoundary(
+                        candidateBoundary, reference!.sourceBegin) or
+                 sameTemporalBoundary(
+                        candidateBoundary, reference!.sourceEnd) or
+                 boundariesHaveSameKnownCoordinate(
+                        candidateBoundary, reference!.sourceBegin) or
+                 boundariesHaveSameKnownCoordinate(
+                        candidateBoundary, reference!.sourceEnd))){
+            return(tsrsEndpointRejected)
+        }
+        if(registry!.areIdentical(
+                reference!.symbolicCut, candidateBoundary)){
+            return(tsrsAlreadyResolved)
+        }
+        withEach existingBoundary in reference!.resolutionBoundaries{
+            if(registry!.areIdentical(existingBoundary, candidateBoundary) or
+                    sameTemporalBoundary(
+                            existingBoundary, candidateBoundary) or
+                    boundariesHaveSameKnownCoordinate(
+                            existingBoundary, candidateBoundary)){
+                return(tsrsAlreadyResolved)
+            }
+            if(boundariesHaveConflictingKnownCoordinates(
+                    existingBoundary, candidateBoundary)){
+                return(tsrsConflictRejected)
+            }
+        }
+        return(tsrsAccepted)
+    }
+
+    // This is the single mutation point for refining a symbolic split.  The
+    // caller supplies a boundary established by an assertion or theorem; the
+    // registry stores the equality used for forward and inverse inference.
+    me int: resolveTemporalSplit(
+            their TemporalSplitReference: reference,
+            our POV: candidateBoundary,
+            me IdentityEvidenceKind: evidenceKind,
+            me uint64: normalizationID) <- {
+        me int: status <-
+                temporalSplitResolutionStatus(reference, candidateBoundary)
+        if(status!=tsrsAccepted and status!=tsrsAlreadyResolved){
+            return(status)
+        }
+        their IdentityRegistry: registry <-
+                reference!.symbolicCut!.effectiveIdentityRegistry()
+        our IdentityRelation: identity <- registry!.recordIdentity(
+                reference!.symbolicCut, candidateBoundary,
+                evidenceKind, normalizationID)
+        me bool: boundaryAlreadyRetained <- false
+        withEach existingBoundary in reference!.resolutionBoundaries{
+            if(existingBoundary===candidateBoundary){
+                boundaryAlreadyRetained <- true
+                break()
+            }
+        }
+        if(!boundaryAlreadyRetained){
+            reference!.resolutionBoundaries.append(candidateBoundary)
+        }
+        if(identity!=NULL){
+            me bool: identityAlreadyRetained <- false
+            withEach existingIdentity in
+                    reference!.resolutionIdentityRelations{
+                if(existingIdentity===identity){
+                    identityAlreadyRetained <- true
+                    break()
+                }
+            }
+            if(!identityAlreadyRetained){
+                reference!.resolutionIdentityRelations.append(identity)
+            }
+        }
+        return(status)
+    }
+
+    me bool: temporalBoundaryAssertionCanBeAccepted(
+            our POV: leftBoundary, our POV: rightBoundary) <- {
+        if(leftBoundary==NULL or rightBoundary==NULL or
+                leftBoundary!.temporalBoundary.sourcePov==NULL or
+                rightBoundary!.temporalBoundary.sourcePov==NULL){return(true)}
+        their TemporalSplitReference: leftReference <-
+                leftBoundary!.temporalSplit.reference
+        their TemporalSplitReference: rightReference <-
+                rightBoundary!.temporalSplit.reference
+        if(leftReference!=NULL){
+            me int: leftStatus <-
+                    temporalSplitResolutionStatus(
+                            leftReference, rightBoundary)
+            if(leftStatus==tsrsEndpointRejected or
+                    leftStatus==tsrsConflictRejected or
+                    leftStatus==tsrsInvalid){return(false)}
+        }
+        if(rightReference!=NULL){
+            me int: rightStatus <-
+                    temporalSplitResolutionStatus(
+                            rightReference, leftBoundary)
+            if(rightStatus==tsrsEndpointRejected or
+                    rightStatus==tsrsConflictRejected or
+                    rightStatus==tsrsInvalid){return(false)}
+        }
+        return(true)
+    }
+
     // Merge acceptance is the proof point for a written boundary equality.
     // Store the POV identity here instead of relying on the merge's value
     // copying: both boundaries stringify as zero, but their cut provenance is
@@ -1445,8 +1627,22 @@ struct TemporalIdentityReasoner{
                 aItem!.RHS!.effectiveIdentityRegistry()
         if(lhsRegistry==NULL or rhsRegistry==NULL or
                 lhsRegistry!==rhsRegistry){return()}
-        lhsRegistry!.recordIdentity(
-                aItem!.LHS_item, aItem!.RHS, iekAssertion, 0)
+        their TemporalSplitReference: lhsSplit <-
+                aItem!.LHS_item!.temporalSplit.reference
+        their TemporalSplitReference: rhsSplit <-
+                aItem!.RHS!.temporalSplit.reference
+        if(lhsSplit!=NULL){
+            resolveTemporalSplit(
+                    lhsSplit, aItem!.RHS, iekAssertion, 0)
+        }
+        if(rhsSplit!=NULL){
+            resolveTemporalSplit(
+                    rhsSplit, aItem!.LHS_item, iekAssertion, 0)
+        }
+        if(lhsSplit==NULL and rhsSplit==NULL){
+            lhsRegistry!.recordIdentity(
+                    aItem!.LHS_item, aItem!.RHS, iekAssertion, 0)
+        }
     }
 
     // A boundary's value is the unique null state.  Its identity lives on the
@@ -1479,23 +1675,8 @@ struct TemporalIdentityReasoner{
                 return(existingBoundary)
             }
         }
-        our POV:: boundaryPOV{povSrcTemporalBoundary}
-        Allocate(boundaryPOV!.pItem)
-        boundaryPOV!.pItem!.itmMode <- mItem
-        boundaryPOV!.pItem!.viewMode <- vmOverlay
-        boundaryPOV!.pItem!.infSize!.overlayType <- NUM
-        boundaryPOV!.pItem!.infSize!.evalMode <- emUnknown
-        boundaryPOV!.pItem!.value!.overlayType <- NUM
-        boundaryPOV!.pItem!.value!.evalMode <- emLiteral
-        boundaryPOV!.pItem!.value!.sizeMode <- fromCount
-        boundaryPOV!.pItem!.value!.num <- 0
-        boundaryPOV!.pItem!.originID <- stableSource!.pItem!.originID
-        boundaryPOV!.pItem!.infCharPos <- stableSource!.pItem!.infCharPos
-        boundaryPOV!.pParent <- stableSource!.pParent
-        boundaryPOV!.accessMode <- aRefTo
-        boundaryPOV!.identityRegistry <-
-                stableSource!.effectiveIdentityRegistry()
-        boundaryPOV!.temporalBoundary.sourcePov <- stableSource
+        our POV: boundaryPOV <- makeTemporalBoundaryValuePOV(stableSource)
+        if(boundaryPOV==NULL){return(NULL)}
         boundaryPOV!.temporalBoundary.tracksEnd <- tracksEnd
         if(!tracksEnd){
             boundaryPOV!.temporalBoundary.cutIndexKnown <- true
@@ -1513,6 +1694,28 @@ struct TemporalIdentityReasoner{
             if(tracksEnd){projectionReference!.endBoundary <- boundaryPOV}
             else{projectionReference!.beginBoundary <- boundaryPOV}
         }
+        return(boundaryPOV)
+    }
+
+    our POV: makeTemporalBoundaryValuePOV(their POV: stableSource) <- {
+        if(!isTemporalSpanPOV(stableSource)){return(NULL)}
+        our POV:: boundaryPOV{povSrcTemporalBoundary}
+        Allocate(boundaryPOV!.pItem)
+        boundaryPOV!.pItem!.itmMode <- mItem
+        boundaryPOV!.pItem!.viewMode <- vmOverlay
+        boundaryPOV!.pItem!.infSize!.overlayType <- NUM
+        boundaryPOV!.pItem!.infSize!.evalMode <- emUnknown
+        boundaryPOV!.pItem!.value!.overlayType <- NUM
+        boundaryPOV!.pItem!.value!.evalMode <- emLiteral
+        boundaryPOV!.pItem!.value!.sizeMode <- fromCount
+        boundaryPOV!.pItem!.value!.num <- 0
+        boundaryPOV!.pItem!.originID <- stableSource!.pItem!.originID
+        boundaryPOV!.pItem!.infCharPos <- stableSource!.pItem!.infCharPos
+        boundaryPOV!.pParent <- stableSource!.pParent
+        boundaryPOV!.accessMode <- aRefTo
+        boundaryPOV!.identityRegistry <-
+                stableSource!.effectiveIdentityRegistry()
+        boundaryPOV!.temporalBoundary.sourcePov <- stableSource
         return(boundaryPOV)
     }
 
@@ -5430,6 +5633,14 @@ struct InfonViewReasoner{
         intersectionReasoner.recordAcceptedCorrespondence(aItem)
     }
 
+    me bool: temporalBoundaryAssertionCanBeAccepted(
+            their AItem: aItem) <- {
+        if(aItem==NULL){return(true)}
+        return(temporalIdentityReasoner.
+                temporalBoundaryAssertionCanBeAccepted(
+                        aItem!.LHS_item, aItem!.RHS))
+    }
+
     void: recordReasoningHandlers(our AItem: aItem,
             their InfonViewReasoningResult: result) <- {
         if(result.directCase!=dcNone){
@@ -5738,6 +5949,12 @@ struct MergeReasoner{
         }
         me bool: LHSWasTentative <- aItem!.LHS_item!.pItem!.isTentative
         me bool: invertAcceptance <- aItem!.LHS_item!.applyAsNot(aItem!.RHS)
+        if(!invertAcceptance and
+                !worldManager!.infonViewReasoner.
+                        temporalBoundaryAssertionCanBeAccepted(aItem)){
+            aItem!.mergeStatus <- msReject
+            aItem!.LHS_item!.rejected <- true
+        }
         our AItem: mrgParent <- aItem!.parentListsMrgAItem()
         me bool: parentListIsAsNot <- mrgParent!=NULL and
                 mrgParent!.LHS_item!.applyAsNot(mrgParent!.RHS)
