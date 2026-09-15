@@ -1539,24 +1539,26 @@ struct TemporalIdentityReasoner{
         return(tsrsAccepted)
     }
 
-    // This is the single mutation point for refining a symbolic split.  The
-    // caller supplies a boundary established by an assertion or theorem; the
-    // registry stores the equality used for forward and inverse inference.
-    me int: resolveTemporalSplit(
+    me bool: temporalSplitResolutionsConflict(
+            their TemporalSplitReference: first,
+            their TemporalSplitReference: second) <- {
+        if(first==NULL or second==NULL){return(false)}
+        withEach firstBoundary in first!.resolutionBoundaries{
+            withEach secondBoundary in second!.resolutionBoundaries{
+                if(boundariesHaveConflictingKnownCoordinates(
+                        firstBoundary, secondBoundary)){
+                    return(true)
+                }
+            }
+        }
+        return(false)
+    }
+
+    void: retainTemporalSplitResolution(
             their TemporalSplitReference: reference,
             our POV: candidateBoundary,
-            me IdentityEvidenceKind: evidenceKind,
-            me uint64: normalizationID) <- {
-        me int: status <-
-                temporalSplitResolutionStatus(reference, candidateBoundary)
-        if(status!=tsrsAccepted and status!=tsrsAlreadyResolved){
-            return(status)
-        }
-        their IdentityRegistry: registry <-
-                reference!.symbolicCut!.effectiveIdentityRegistry()
-        our IdentityRelation: identity <- registry!.recordIdentity(
-                reference!.symbolicCut, candidateBoundary,
-                evidenceKind, normalizationID)
+            our IdentityRelation: identity) <- {
+        if(reference==NULL or candidateBoundary==NULL){return()}
         me bool: boundaryAlreadyRetained <- false
         withEach existingBoundary in reference!.resolutionBoundaries{
             if(existingBoundary===candidateBoundary){
@@ -1567,18 +1569,56 @@ struct TemporalIdentityReasoner{
         if(!boundaryAlreadyRetained){
             reference!.resolutionBoundaries.append(candidateBoundary)
         }
-        if(identity!=NULL){
-            me bool: identityAlreadyRetained <- false
-            withEach existingIdentity in
-                    reference!.resolutionIdentityRelations{
-                if(existingIdentity===identity){
-                    identityAlreadyRetained <- true
-                    break()
-                }
+        if(identity==NULL){return()}
+        withEach existingIdentity in
+                reference!.resolutionIdentityRelations{
+            if(existingIdentity===identity){return()}
+        }
+        reference!.resolutionIdentityRelations.append(identity)
+    }
+
+    // This is the single mutation point for refining a symbolic split.  The
+    // caller supplies a boundary established by an assertion or theorem; the
+    // registry stores the equality used for forward and inverse inference. If
+    // the boundary is another symbolic cut, both splits are validated before
+    // either is changed and both retain the same symmetric identity evidence.
+    me int: resolveTemporalSplit(
+            their TemporalSplitReference: reference,
+            our POV: candidateBoundary,
+            me IdentityEvidenceKind: evidenceKind,
+            me uint64: normalizationID) <- {
+        me int: status <-
+                temporalSplitResolutionStatus(reference, candidateBoundary)
+        if(status!=tsrsAccepted and status!=tsrsAlreadyResolved){
+            return(status)
+        }
+        their TemporalSplitReference: candidateReference <-
+                candidateBoundary!.temporalSplit.reference
+        if(candidateReference===reference){
+            candidateReference <- NULL
+        }
+        if(candidateReference!=NULL){
+            me int: candidateStatus <- temporalSplitResolutionStatus(
+                    candidateReference, reference!.symbolicCut)
+            if(candidateStatus!=tsrsAccepted and
+                    candidateStatus!=tsrsAlreadyResolved){
+                return(candidateStatus)
             }
-            if(!identityAlreadyRetained){
-                reference!.resolutionIdentityRelations.append(identity)
+            if(temporalSplitResolutionsConflict(
+                    reference, candidateReference)){
+                return(tsrsConflictRejected)
             }
+        }
+        their IdentityRegistry: registry <-
+                reference!.symbolicCut!.effectiveIdentityRegistry()
+        our IdentityRelation: identity <- registry!.recordIdentity(
+                reference!.symbolicCut, candidateBoundary,
+                evidenceKind, normalizationID)
+        retainTemporalSplitResolution(
+                reference, candidateBoundary, identity)
+        if(candidateReference!=NULL){
+            retainTemporalSplitResolution(
+                    candidateReference, reference!.symbolicCut, identity)
         }
         return(status)
     }
@@ -1607,6 +1647,12 @@ struct TemporalIdentityReasoner{
             if(rightStatus==tsrsEndpointRejected or
                     rightStatus==tsrsConflictRejected or
                     rightStatus==tsrsInvalid){return(false)}
+        }
+        if(leftReference!=NULL and rightReference!=NULL and
+                leftReference!==rightReference and
+                temporalSplitResolutionsConflict(
+                        leftReference, rightReference)){
+            return(false)
         }
         return(true)
     }
