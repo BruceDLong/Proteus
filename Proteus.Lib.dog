@@ -86,6 +86,7 @@ struct IdentityEvidenceKind: inherits=<mode[
     iekAssertion,
     iekTemporalBoundary,
     iekTemporalContainment,
+    iekTemporalProjection,
     iekEndRelativeResolution,
     iekRepetitionMaterialization
 ]> {}
@@ -184,6 +185,21 @@ model SelectionResolution{
 }
 struct SelectionResolution{}
 
+// `item.asTList` is a reversible view operation, not necessarily a merge.
+// The source item and its temporal view remain distinct endpoints so inverse
+// reasoning can recover either one. When the source is already a T-list the
+// optional identityRelation records that the projection is the same span.
+model TemporalProjectionReference{
+    me uint64: referenceID <- 0
+    our POV: sourcePOV
+    our POV: projectionPOV
+    our IdentityRelation: identityRelation
+    // Boundaries derived from this stable projection are canonical views.
+    our POV: beginBoundary
+    our POV: endBoundary
+}
+struct TemporalProjectionReference{}
+
 // One logical member of a repetition.  occurrenceToken is opaque and stable;
 // ordinal is optional knowledge about that occurrence, not its identity.
 model RepetitionOccurrence{
@@ -220,10 +236,64 @@ model IdentityRegistry{
     me List<our EndRelativeReference>: endRelativeReferences
     me List<our SelectionRequest>: selectionRequests
     me List<our SelectionReference>: selectionReferences
+    me List<our TemporalProjectionReference>: temporalProjectionReferences
     me List<our RepetitionFamily>: repetitionFamilies
     me Mutex: registryMutex
 }
 struct IdentityRegistry{
+    our TemporalProjectionReference: findTemporalProjectionForSource(
+            their POV: sourcePOV) <- {
+        if(sourcePOV==NULL){return(NULL)}
+        protect(registryMutex){
+            withEach reference in temporalProjectionReferences{
+                if(reference!.sourcePOV===sourcePOV or
+                        (sourcePOV!.temporalProjection.reference===reference and
+                         !sourcePOV!.temporalProjection.isProjection)){
+                    return(reference)
+                }
+            }
+        }
+        return(NULL)
+    }
+
+    our TemporalProjectionReference: findTemporalProjectionForView(
+            their POV: projectionPOV) <- {
+        if(projectionPOV==NULL){return(NULL)}
+        protect(registryMutex){
+            withEach reference in temporalProjectionReferences{
+                if(reference!.projectionPOV===projectionPOV or
+                        (projectionPOV!.temporalProjection.reference===reference and
+                         projectionPOV!.temporalProjection.isProjection)){
+                    return(reference)
+                }
+            }
+        }
+        return(NULL)
+    }
+
+    our TemporalProjectionReference: recordTemporalProjection(
+            our POV: sourcePOV, our POV: projectionPOV) <- {
+        if(sourcePOV==NULL or projectionPOV==NULL){return(NULL)}
+        protect(registryMutex){
+            withEach existing in temporalProjectionReferences{
+                if(existing!.sourcePOV===sourcePOV){return(existing)}
+            }
+            our TemporalProjectionReference:: reference
+            reference!.referenceID <- nextReferenceID
+            nextReferenceID <+- 1
+            reference!.sourcePOV <- sourcePOV
+            reference!.projectionPOV <- projectionPOV
+            temporalProjectionReferences.append(reference)
+            sourcePOV!.identityRegistry <- self
+            sourcePOV!.temporalProjection.reference <- reference
+            sourcePOV!.temporalProjection.isProjection <- false
+            projectionPOV!.identityRegistry <- self
+            projectionPOV!.temporalProjection.reference <- reference
+            projectionPOV!.temporalProjection.isProjection <- true
+            return(reference)
+        }
+    }
+
     our EndRelativeReference: findEndRelativeReference(
             their POV: sourcePOV, their infonView: sourceInfon,
             me int64: offset) <- {
@@ -414,6 +484,23 @@ struct IdentityRegistry{
         }
         resolution!.resolutionState <- request!.resolutionState
         return(resolution)
+    }
+
+    // A one-item positional selector has a reversible source endpoint, not a
+    // copied span.  Return that occurrence only when the recorded request is
+    // unambiguously the single-item form.  Range selections remain mapped
+    // views because their sourceStartPOV names only the first member.
+    our POV: resolveSingleSelectedOccurrence(me uint64: requestID) <- {
+        our SelectionRequest: request <- findSelectionRequest(requestID)
+        if(request==NULL or
+                request!.referenceKind!=srkPositionalSelection or
+                request!.selectorSpec!=NULL){return(NULL)}
+        our SelectionResolution: resolution <-
+                resolveSelectionRequest(requestID)
+        if(resolution==NULL or
+                resolution!.resolutionState!=srsUnique or
+                resolution!.references.size()!=1){return(NULL)}
+        return(resolution!.references.first()!.sourceStartPOV)
     }
 
     our SelectionResolution: resolveSelectionForQuery(
@@ -1095,6 +1182,12 @@ model infonView {
     // the selection relation remains positional.  Preserve that semantic
     // origin so identity enumeration does not infer it from the lowered shape.
     flag: positionalSelection
+
+    // The counted wildcard prefix generated by a positive range selector.
+    // Its unit is the selected source's immediate item unit; it is not a
+    // user-written type constraint. OrderedSpanReasoner may therefore adopt
+    // the source listSpec solely to align this skip as one sparse run.
+    flag: positionalIndexSkip
 
     // Stable link from a lowered selector back to its registry-owned symbolic
     // request.  The unresolved work itself remains in wrkList.
@@ -2255,7 +2348,7 @@ model PartPath{
     // Postfix work and paths parsed after a bracketed index.  The old `#`
     // spelling folded these into `path` because it had no closing delimiter.
     our infonView: continuation
-    mode[dotField, upField, idxField, colonField]: pathMode
+    mode[dotField, upField, idxField, colonField, asTListField]: pathMode
     flag: wasTransfered
     flag: hasSemiColon
 }

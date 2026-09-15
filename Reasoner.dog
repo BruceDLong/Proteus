@@ -1327,7 +1327,7 @@ struct ConcatReasoner{
 //   2. current.%prev = previous structural item in an ordered list;
 //   3. current.%next = next structural item in an ordered list;
 //
-// Implemented as explicit identity implications:
+// Implemented as explicit identity or reversible-projection implications:
 //   4. L.begin and L.end are identity-bearing views of cuts in L.  Both have
 //      the algebraic null value, but boundaries at different cuts remain
 //      distinct; an unknown L.end remains a symbolic end-relative boundary;
@@ -1341,6 +1341,17 @@ struct ConcatReasoner{
 //   9. a whole-interval nested T-list's entry and exit are identical to its
 //      host entry and exit.  The host exit can then reach the enclosing
 //      continuation through item 5's ordinary end=begin identity.
+//  12. item.asTList is a reversible item <-> temporal-view projection.  If
+//      item is already a T-list the two POVs are strictly identical.  For any
+//      other item, the projection relation remains distinct from identity and
+//      initially has an open, given-unknown extent; component and rooting
+//      identities may refine it without enumerating an entire lifetime.
+//  13. every contiguous ordered-span view of a T-list is also a T-list.  Its
+//      ViewMap retains the source context and first source occurrence, so
+//      `.begin` and `.end` remain temporal cuts instead of ordinary fields.
+//  14. an accepted, positive equality between two temporal-boundary POVs
+//      records those exact cuts as identical.  Equal algebraic zero values
+//      without boundary provenance never imply this identity.
 //
 // Not yet implemented:
 //   7. a transition identity reads RHS references from its entry/previous
@@ -1368,12 +1379,56 @@ struct TemporalIdentityReasoner{
         return(extent.status==eresExact)
     }
 
+    // Merge acceptance is the proof point for a written boundary equality.
+    // Store the POV identity here instead of relying on the merge's value
+    // copying: both boundaries stringify as zero, but their cut provenance is
+    // the semantic information needed for inverse inference.
+    void: recordAcceptedBoundaryAssertionIdentity(our AItem: aItem) <- {
+        if(aItem==NULL or aItem!.mergeStatus!=msAccept or
+                aItem!.LHS_item==NULL or aItem!.RHS==NULL or
+                aItem!.LHS_item!.temporalBoundary.sourcePov==NULL or
+                aItem!.RHS!.temporalBoundary.sourcePov==NULL or
+                aItem!.LHS_item!.applyAsNot(aItem!.RHS)){return()}
+        their IdentityRegistry: lhsRegistry <-
+                aItem!.LHS_item!.effectiveIdentityRegistry()
+        their IdentityRegistry: rhsRegistry <-
+                aItem!.RHS!.effectiveIdentityRegistry()
+        if(lhsRegistry==NULL or rhsRegistry==NULL or
+                lhsRegistry!==rhsRegistry){return()}
+        lhsRegistry!.recordIdentity(
+                aItem!.LHS_item, aItem!.RHS, iekAssertion, 0)
+    }
+
     // A boundary's value is the unique null state.  Its identity lives on the
     // POV map below, so equal zero values at different cuts never collapse the
     // cuts themselves.
     our POV: makeTemporalBoundaryPOV(their POV: sourceSpan,
             me bool: tracksEnd) <- {
         if(!isTemporalSpanPOV(sourceSpan)){return(NULL)}
+        their POV: stableSource <- sourceSpan
+        their TemporalProjectionReference: projectionReference <-
+                sourceSpan!.temporalProjection.reference
+        if(projectionReference!=NULL and
+                sourceSpan!.temporalProjection.isProjection and
+                projectionReference!.projectionPOV!=NULL){
+            stableSource <- projectionReference!.projectionPOV
+            our POV: existingBoundary <- projectionReference!.beginBoundary
+            if(tracksEnd){existingBoundary <- projectionReference!.endBoundary}
+            if(existingBoundary!=NULL){
+                if(tracksEnd){
+                    me EndRelativeExtentResult: currentExtent <-
+                            stableSource!.pItem!.endRelativeExtent()
+                    existingBoundary!.temporalBoundary.cutIndexKnown <- false
+                    existingBoundary!.temporalBoundary.cutIndex <- -1
+                    if(currentExtent.status==eresExact){
+                        existingBoundary!.temporalBoundary.cutIndexKnown <- true
+                        existingBoundary!.temporalBoundary.cutIndex <-
+                                currentExtent.exactExtent
+                    }
+                }
+                return(existingBoundary)
+            }
+        }
         our POV:: boundaryPOV{povSrcTemporalBoundary}
         Allocate(boundaryPOV!.pItem)
         boundaryPOV!.pItem!.itmMode <- mItem
@@ -1384,24 +1439,29 @@ struct TemporalIdentityReasoner{
         boundaryPOV!.pItem!.value!.evalMode <- emLiteral
         boundaryPOV!.pItem!.value!.sizeMode <- fromCount
         boundaryPOV!.pItem!.value!.num <- 0
-        boundaryPOV!.pItem!.originID <- sourceSpan!.pItem!.originID
-        boundaryPOV!.pItem!.infCharPos <- sourceSpan!.pItem!.infCharPos
-        boundaryPOV!.pParent <- sourceSpan!.pParent
+        boundaryPOV!.pItem!.originID <- stableSource!.pItem!.originID
+        boundaryPOV!.pItem!.infCharPos <- stableSource!.pItem!.infCharPos
+        boundaryPOV!.pParent <- stableSource!.pParent
         boundaryPOV!.accessMode <- aRefTo
         boundaryPOV!.identityRegistry <-
-                sourceSpan!.effectiveIdentityRegistry()
-        boundaryPOV!.temporalBoundary.sourcePov <- sourceSpan
+                stableSource!.effectiveIdentityRegistry()
+        boundaryPOV!.temporalBoundary.sourcePov <- stableSource
         boundaryPOV!.temporalBoundary.tracksEnd <- tracksEnd
         if(!tracksEnd){
             boundaryPOV!.temporalBoundary.cutIndexKnown <- true
             boundaryPOV!.temporalBoundary.cutIndex <- 0
         }else{
             me EndRelativeExtentResult: extent <-
-                    sourceSpan!.pItem!.endRelativeExtent()
+                    stableSource!.pItem!.endRelativeExtent()
             if(extent.status==eresExact){
                 boundaryPOV!.temporalBoundary.cutIndexKnown <- true
                 boundaryPOV!.temporalBoundary.cutIndex <- extent.exactExtent
             }
+        }
+        if(projectionReference!=NULL and
+                stableSource===projectionReference!.projectionPOV){
+            if(tracksEnd){projectionReference!.endBoundary <- boundaryPOV}
+            else{projectionReference!.beginBoundary <- boundaryPOV}
         }
         return(boundaryPOV)
     }
@@ -1756,6 +1816,81 @@ struct TemporalIdentityReasoner{
         aItem!.LHS_item!.pItem!.value!.timelike <- true
         aItem!.phase1RecordHandler(
                 "temporalIdentity:listContextCopied", false)
+    }
+}
+
+// `asTList` is a lazy, reversible temporal projection. The reference itself
+// is semantic: callers can navigate item -> temporal view or temporal view ->
+// item without expanding every component timeline. An item already expressed
+// as a T-list produces a second POV over the same span and an explicit identity.
+// A non-T item receives an open T-list placeholder; later component/rooting
+// identities refine that view rather than this operation guessing an alignment.
+struct TemporalProjectionReasoner{
+    our TemporalProjectionReference: projectAsTList(
+            our POV: sourcePOV, me uint64: normalizationID) <- {
+        if(sourcePOV==NULL or sourcePOV!.pItem==NULL){return(NULL)}
+        their IdentityRegistry: registry <-
+                sourcePOV!.effectiveIdentityRegistry()
+        if(registry==NULL){return(NULL)}
+
+        our TemporalProjectionReference: existing <-
+                registry!.findTemporalProjectionForSource(sourcePOV)
+        if(existing!=NULL){return(existing)}
+
+        // Applying asTList to an asTList view is idempotent.
+        if(sourcePOV!.temporalProjection.reference!=NULL and
+                sourcePOV!.temporalProjection.isProjection){
+            return(registry!.findTemporalProjectionForView(sourcePOV))
+        }
+
+        our POV:: projectionPOV{povSrcTemporalProjection}
+        if(sourcePOV!.pItem!.value!.overlayType==LST and
+                sourcePOV!.pItem!.value!.timelike){
+            projectionPOV!.pItem <- sourcePOV!.pItem
+        }else{
+            Allocate(projectionPOV!.pItem)
+            projectionPOV!.pItem!.setToList()
+            projectionPOV!.pItem!.value!.timelike <- true
+            // The projection relation, rather than the number of materialized
+            // children, supplies this list's extent.  Until component/rooting
+            // identities determine that extent it must remain given-unknown;
+            // counting the empty physical representation would falsely close
+            // the lifetime as an empty T-list.
+            projectionPOV!.pItem!.value!.sizeMode <- fromGiven
+            projectionPOV!.pItem!.originID <- sourcePOV!.pItem!.originID
+            projectionPOV!.pItem!.infCharPos <- sourcePOV!.pItem!.infCharPos
+        }
+        projectionPOV!.pParent <- sourcePOV!.pParent
+        projectionPOV!.accessMode <- aRefTo
+        projectionPOV!.bindIdentityRegistry(registry)
+
+        our TemporalProjectionReference: reference <-
+                registry!.recordTemporalProjection(sourcePOV, projectionPOV)
+        if(reference!=NULL and reference!.identityRelation==NULL and
+                sourcePOV!.pItem!.value!.overlayType==LST and
+                sourcePOV!.pItem!.value!.timelike){
+            reference!.identityRelation <- registry!.recordIdentity(
+                    reference!.sourcePOV, reference!.projectionPOV,
+                    iekTemporalProjection, normalizationID)
+        }
+        return(reference)
+    }
+
+    our POV: oppositeProjectionEndpoint(
+            their TemporalProjectionReference: reference,
+            their POV: knownPOV) <- {
+        if(reference==NULL or knownPOV==NULL){return(NULL)}
+        if(knownPOV===reference!.sourcePOV or
+                (knownPOV!.temporalProjection.reference===reference and
+                 !knownPOV!.temporalProjection.isProjection)){
+            return(reference!.projectionPOV)
+        }
+        if(knownPOV===reference!.projectionPOV or
+                (knownPOV!.temporalProjection.reference===reference and
+                 knownPOV!.temporalProjection.isProjection)){
+            return(reference!.sourcePOV)
+        }
+        return(NULL)
     }
 }
 
@@ -2684,10 +2819,7 @@ struct IntersectionReasoner{
         if(pending==NULL or pending!.queryPOV==NULL or
                 pending!.queryPOV!.pItem==NULL or
                 pending!.queryPOV!.pItem!.value!.overlayType!=LST or
-                pending!.queryPOV!.pItem!.value!.items.isEmpty() or
-                (pending!.resultPOV!=NULL and
-                 pending!.resultPOV!.pItem!=NULL and
-                 pending!.resultPOV!.pItem!.value!.overlayType==LST)){
+                pending!.queryPOV!.pItem!.value!.items.isEmpty()){
             return()
         }
         our POV: childPOV <-
@@ -3033,6 +3165,18 @@ struct IntersectionReasoner{
             }
         }
         our POV: mappedSelectionPOV <- NULL
+        our POV: selectedSingleOccurrence
+        me bool: requiresRelationalListMerge <- false
+        withEach consumerWorkPOV in CI!.wrkList{
+            if(consumerWorkPOV!=NULL and
+                    !consumerWorkPOV!.selectorLocalWork and
+                    consumerWorkPOV!.pItem!=NULL and
+                    consumerWorkPOV!.pItem!.value!.overlayType==LST and
+                    consumerWorkPOV!.pItem!.value!.tailUnfinished){
+                requiresRelationalListMerge <- true
+                break()
+            }
+        }
         me ViewMap: mappedSelectionSourceMap
         if(CI!.intersectPos==ipGetMarked and innr!=NULL){
             mappedSelectionPOV <- innr!.intersectMarkedRetPOV
@@ -3099,6 +3243,9 @@ struct IntersectionReasoner{
                     registry!.recordSelectionReferenceForRequest(
                             request, requestResultPOV,
                             exactSourceStart)
+                    selectedSingleOccurrence <- registry!.
+                            resolveSingleSelectedOccurrence(
+                                    request!.requestID)
                 }
             }
         }
@@ -3116,9 +3263,19 @@ struct IntersectionReasoner{
             }
             if(CI!.partRef==NULL and CI!.parts.isEmpty() and
                     CI!.hasConsumerWork()){
-                mappedSelectionPOV!.viewMapWriteEnabled <- true
-                aItem!.LHS_item!.accessMode <- aRefTo
-                aItem!.LHS_item!.viewMapWriteEnabled <- true
+                if(requiresRelationalListMerge){
+                    // An open list is a relation to solve against the selected
+                    // span, not a fixed positional replacement. Its accepted
+                    // child correspondences retain the source routes used by
+                    // ordinary propagation.
+                    mappedSelectionPOV!.viewMapWriteEnabled <- false
+                    aItem!.LHS_item!.accessMode <- aCopyOf
+                    aItem!.LHS_item!.viewMapWriteEnabled <- false
+                }else{
+                    mappedSelectionPOV!.viewMapWriteEnabled <- true
+                    aItem!.LHS_item!.accessMode <- aRefTo
+                    aItem!.LHS_item!.viewMapWriteEnabled <- true
+                }
             }
             if(aItem!.LHS_item!.viewMapWriteEnabled and
                     CI!.intersectMarkedRetPOV!=NULL and
@@ -3161,6 +3318,19 @@ struct IntersectionReasoner{
                         detachedSelectedValue, false, false)
                 newTop <- detachedSelectedValue
             }
+        }
+        if(selectedSingleOccurrence!=NULL and
+                CI!.partRef==NULL and CI!.parts.isEmpty() and
+                CI!.hasConsumerWork()){
+            // Apply the consumer's identity to the source endpoint obtained
+            // by reversing the accepted single-item selection relation.  A
+            // range remains a mapped view because its first source POV is not
+            // the whole selected span.  The selection relation is not itself
+            // a full graph identity: install the resolved source infon and let
+            // its ordinary consumer work perform the requested merge.
+            aItem!.LHS_item!.accessMode <- aCopyOf
+            aItem!.LHS_item!.viewMapWriteEnabled <- false
+            newTop <- selectedSingleOccurrence!.pItem
         }
         if(newTop!=NULL){
             // The selected value owns only work from its consumer. Matching
@@ -3719,6 +3889,29 @@ struct CursorPathResolver{
         return(false)
     }
 
+    our infonView: makePositionalIndexSkip(
+            their infonState: skipSize) <- {
+        if(skipSize==NULL){return(NULL)}
+        our infonView:: skipPart
+        skipPart!.setToList()
+        skipPart!.infSize! <- skipSize!
+        skipPart!.value!.sizeMode <- fromGiven
+        skipPart!.positionalIndexSkip <- true
+
+        // A non-NULL unknown ListSpec makes this a sparse run without
+        // asserting a member type. Once paired with the selected source,
+        // OrderedSpanReasoner substitutes that source member shape and can
+        // align the entire skip arithmetically.
+        our infonView:: unknownMember
+        unknownMember!.itmMode <- mItem
+        unknownMember!.viewMode <- vmAny
+        unknownMember!.infSize!.evalMode <- emUnknown
+        unknownMember!.value!.overlayType <- tUnknown
+        unknownMember!.value!.evalMode <- emUnknown
+        skipPart!.value!.listSpec <- unknownMember
+        return(skipPart)
+    }
+
     // @[...] is only syntax sugar. Construct its item/span forms at one intersection
     // boundary, with the signed index deciding whether the unselected extent is
     // a forward prefix or an end-aligned suffix.
@@ -3792,22 +3985,22 @@ struct CursorPathResolver{
             // boundary counts.  A positive span becomes a forward prefix
             // followed by the same marked target term.
             me int64: prefixCount <- signedIndex
-            our infonView:: skipPart
-            skipPart!.setToList()
-            skipPart!.infSize!.overlayType <- NUM
-            skipPart!.infSize!.evalMode <- emLiteral
-            skipPart!.infSize!.num <- prefixCount
-            skipPart!.value!.sizeMode <- fromGiven
             newInnr!.value!.tailUnfinished <- false
-            newInnr!.value!.items.append(skipPart, true, 17)
+            if(prefixCount>0){
+                our infonState:: prefixSize
+                prefixSize!.overlayType <- NUM
+                prefixSize!.evalMode <- emLiteral
+                prefixSize!.num <- prefixCount
+                our infonView: skipPart <-
+                        makePositionalIndexSkip(prefixSize)
+                newInnr!.value!.items.append(skipPart, true, 17)
+            }
             targetPOV <- newInnr!.value!.items.append(target, true, 18)
         }else if(hasSpec){
             // Preserve general, unresolved forward-index behavior until the
             // index expression becomes literal.
-            our infonView:: skipPart
-            skipPart!.setToList()
-            skipPart!.infSize! <- part!.path!.value!
-            skipPart!.value!.sizeMode <- fromGiven
+            our infonView: skipPart <-
+                    makePositionalIndexSkip(part!.path!.value)
             newInnr!.value!.tailUnfinished <- false
             newInnr!.value!.items.append(skipPart, true, 17)
             targetPOV <- newInnr!.value!.items.append(target, true, 18)
@@ -3868,6 +4061,7 @@ struct CursorPathResolver{
             their List<our AItem>: requestedWork,
             their TemporalIdentityReasoner: temporalIdentityReasoner) <- {
         me bool: changeMade <- false
+        me TemporalProjectionReasoner: temporalProjectionReasoner
         nxtAction! <- true
         our infonView: CI <- aItem!.LHS_item!.pItem
         if(CI!.partRef!=NULL){
@@ -3883,6 +4077,7 @@ struct CursorPathResolver{
                 our infonView: newPath
                 our POV: newPov
                 our POV: selectedTemporalBoundary
+                our TemporalProjectionReference: selectedTemporalProjection
                 our POV: selectedSourcePOV
                 our POV: selectionSourceSnapshot
                 our POV: selectionQueryPOV
@@ -4009,6 +4204,27 @@ struct CursorPathResolver{
                         newPath <- buildIndexIntersection(CI, part)
                     }
                     case colonField:{}
+                    case asTListField:{
+                        our POV: projectionSource <-
+                                aItem!.LHS_item!.snapshotView(
+                                        povSrcTemporalProjection)
+                        selectedTemporalProjection <-
+                                temporalProjectionReasoner.projectAsTList(
+                                        projectionSource,
+                                        agenda!.normalizationID)
+                        if(selectedTemporalProjection!=NULL and
+                                selectedTemporalProjection!.projectionPOV!=NULL){
+                            newPath <- selectedTemporalProjection!.
+                                    projectionPOV!.pItem
+                            if(part!.path!.partRef!=NULL){
+                                newPath!.partRef <- part!.path!.partRef
+                                part!.path!.partRef <- NULL
+                            }else if(!part!.path!.parts.isEmpty() and
+                                    newPath!==CI){
+                                newPath!.parts <- part!.path!.parts
+                            }
+                        }
+                    }
                 }
                 if(newPath==NULL){logFatalError("Handle newPath is null")}
                 newPath!.takeWrkListFrom(part!.path, true)
@@ -4018,6 +4234,8 @@ struct CursorPathResolver{
                     aItem!.LHS_item!.temporalBoundary.tracksEnd <- false
                     aItem!.LHS_item!.temporalBoundary.cutIndexKnown <- false
                     aItem!.LHS_item!.temporalBoundary.cutIndex <- -1
+                    aItem!.LHS_item!.temporalProjection.reference <- NULL
+                    aItem!.LHS_item!.temporalProjection.isProjection <- false
                     if(selectedTemporalBoundary!=NULL){
                         aItem!.LHS_item!.temporalBoundary.sourcePov <-
                                 selectedTemporalBoundary!.
@@ -4031,6 +4249,12 @@ struct CursorPathResolver{
                         aItem!.LHS_item!.temporalBoundary.cutIndex <-
                                 selectedTemporalBoundary!.
                                 temporalBoundary.cutIndex
+                        aItem!.LHS_item!.accessMode <- aRefTo
+                    }
+                    if(selectedTemporalProjection!=NULL){
+                        aItem!.LHS_item!.temporalProjection.reference <-
+                                selectedTemporalProjection
+                        aItem!.LHS_item!.temporalProjection.isProjection <- true
                         aItem!.LHS_item!.accessMode <- aRefTo
                     }
                     nxtAction! <- true
@@ -4051,6 +4275,12 @@ struct CursorPathResolver{
                         pathPov!.temporalBoundary.cutIndex <-
                                 selectedTemporalBoundary!.
                                 temporalBoundary.cutIndex
+                        pathPov!.accessMode <- aRefTo
+                    }
+                    if(selectedTemporalProjection!=NULL){
+                        pathPov!.temporalProjection.reference <-
+                                selectedTemporalProjection
+                        pathPov!.temporalProjection.isProjection <- true
                         pathPov!.accessMode <- aRefTo
                     }
                     aItem!.LHS_item!.pItem!.retainPOV(pathPov)
@@ -5102,6 +5332,8 @@ struct InfonViewReasoner{
     }
 
     void: recordAcceptedIntersectionCorrespondence(our AItem: aItem) <- {
+        temporalIdentityReasoner.
+                recordAcceptedBoundaryAssertionIdentity(aItem)
         intersectionReasoner.recordAcceptedCorrespondence(aItem)
     }
 

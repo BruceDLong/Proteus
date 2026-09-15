@@ -11,6 +11,7 @@ struct GLOBAL{
     const int: povSrcEndRelativeView     <- 608
     const int: povSrcTemporalBoundary    <- 609
     const int: povSrcPartPathSelection   <- 610
+    const int: povSrcTemporalProjection  <- 611
 }
 
 struct POVPedigree{
@@ -45,6 +46,12 @@ struct TemporalBoundaryViewMap{
     flag: cutIndexKnown
     // Zero-based half-open boundary coordinate: 0 is begin, extent is end.
     me int64: cutIndex
+}
+struct TemporalProjectionViewMap{
+    // The registry owns the reversible item <-> temporal-view relation.
+    // This POV only identifies which endpoint of that relation it represents.
+    their TemporalProjectionReference: reference
+    flag: isProjection
 }
 model POV{ // Point-Of-View
     our infonView: pItem   // The POV item
@@ -97,6 +104,8 @@ model POV{ // Point-Of-View
     // A boundary is an identity-bearing view of a cut in one T-list.  Its
     // pItem is only the algebraic null value and must not define its identity.
     me TemporalBoundaryViewMap: temporalBoundary
+    // Provenance for the reserved `.asTList` temporal projection.
+    me TemporalProjectionViewMap: temporalProjection
     me List<our POV>: candidatesForLastItem
     flag: endRelativeReference
     flag: endRelativeResolved
@@ -138,6 +147,20 @@ model POV{ // Point-Of-View
         viewMap.sourcePov <- sourceContextPOV
         viewMap.startPov <- sourceStartPOV
         accessMode <- aRefTo
+    }
+    // A contiguous view of a T-list is itself a T-list.  This is an ordered-
+    // span implication, not a generic ViewMap property: recursively mapped
+    // component/state lists must not become temporal merely because their
+    // enclosing source context is temporal.
+    void: inheritOrderedSpanIdentitySemantics(
+            our POV: sourceContextPOV) <- {
+        if(pItem==NULL or sourceContextPOV==NULL or
+                sourceContextPOV!.pItem==NULL or
+                pItem!.value!.overlayType!=LST or
+                sourceContextPOV!.pItem!.value!.overlayType!=LST){return()}
+        if(sourceContextPOV!.pItem!.value!.timelike){
+            pItem!.value!.timelike <- true
+        }
     }
     // Traversal seeds inherited list-spec work on the source item before an
     // ordered-span replacement can be built. The replacement materializes
@@ -262,6 +285,18 @@ model POV{ // Point-Of-View
         snapshot!.repetitionSpan.startOrdinal <-
                 repetitionSpan.startOrdinal
         snapshot!.repetitionOccurrence <- repetitionOccurrence
+        snapshot!.temporalProjection.reference <-
+                temporalProjection.reference
+        snapshot!.temporalProjection.isProjection <-
+                temporalProjection.isProjection
+        snapshot!.temporalBoundary.sourcePov <-
+                temporalBoundary.sourcePov
+        snapshot!.temporalBoundary.tracksEnd <-
+                temporalBoundary.tracksEnd
+        snapshot!.temporalBoundary.cutIndexKnown <-
+                temporalBoundary.cutIndexKnown
+        snapshot!.temporalBoundary.cutIndex <-
+                temporalBoundary.cutIndex
         return(snapshot)
     }
     their IdentityRegistry: effectiveIdentityRegistry() <- {
@@ -498,6 +533,7 @@ model POV{ // Point-Of-View
         spanPOV!.isSubItm <- true
         spanPOV!.pParent <- pParent
         spanPOV!.mapViewToSource(sourceContextPOV, firstSourcePOV)
+        spanPOV!.inheritOrderedSpanIdentitySemantics(sourceContextPOV)
 
         me int64: itemIndex <- startIndex
         while(itemIndex<finalExtent){
@@ -688,6 +724,7 @@ model POV{ // Point-Of-View
         spanPOV!.isSubItm <- true
         spanPOV!.pParent <- spanParent
         spanPOV!.mapViewToSource(sourceContextPOV, firstSibling)
+        spanPOV!.inheritOrderedSpanIdentitySemantics(sourceContextPOV)
 
         me int64: copied <- 0
         our POV: itemPOV <- firstSibling
@@ -1190,6 +1227,8 @@ model POV{ // Point-Of-View
         repetitionSpan.family <- NULL
         repetitionSpan.startOrdinal <- 0
         repetitionOccurrence <- NULL
+        temporalProjection.reference <- NULL
+        temporalProjection.isProjection <- false
         temporalBoundary.sourcePov <- NULL
         temporalBoundary.cutIndex <- -1
     }
