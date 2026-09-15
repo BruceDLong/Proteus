@@ -241,6 +241,24 @@ model TemporalSplitReference{
 }
 struct TemporalSplitReference{}
 
+// One proved alignment between an exact child occurrence and a containing
+// parent T-span.  The reference adds no substitute placement value: the
+// boundary IdentityRelation is the semantic evidence, while these retained
+// endpoints make the occurrence and the inverse parent/child traversal
+// discoverable without re-evaluating the child's generic definition.
+model TemporalRootingReference{
+    me uint64: referenceID <- 0
+    me uint64: normalizationID <- 0
+    our POV: childOccurrencePOV
+    our TemporalProjectionReference: childProjection
+    our POV: childBoundary
+    our TemporalSplitReference: parentSplit
+    our POV: parentSpanPOV
+    our POV: parentBoundary
+    our IdentityRelation: boundaryIdentityRelation
+}
+struct TemporalRootingReference{}
+
 // One logical member of a repetition.  occurrenceToken is opaque and stable;
 // ordinal is optional knowledge about that occurrence, not its identity.
 model RepetitionOccurrence{
@@ -279,6 +297,7 @@ model IdentityRegistry{
     me List<our SelectionReference>: selectionReferences
     me List<our TemporalProjectionReference>: temporalProjectionReferences
     me List<our TemporalSplitReference>: temporalSplitReferences
+    me List<our TemporalRootingReference>: temporalRootingReferences
     me List<our RepetitionFamily>: repetitionFamilies
     me Mutex: registryMutex
 }
@@ -386,6 +405,100 @@ struct IdentityRegistry{
             temporalSplitReferences.append(reference)
         }
         return(reference)
+    }
+
+    our TemporalRootingReference: recordTemporalRooting(
+            their TemporalProjectionReference: childProjection,
+            our POV: childBoundary,
+            their TemporalSplitReference: parentSplit,
+            our POV: parentBoundary,
+            our IdentityRelation: boundaryIdentityRelation,
+            me uint64: normalizationID) <- {
+        if(childProjection==NULL or
+                childProjection!.sourcePOV==NULL or
+                childProjection!.projectionPOV==NULL or
+                childBoundary==NULL or parentSplit==NULL or
+                parentSplit!.sourceSpan==NULL or parentBoundary==NULL or
+                boundaryIdentityRelation==NULL){return(NULL)}
+        me bool: directBoundaryIdentity <-
+                (boundaryIdentityRelation!.leftPOV===childBoundary and
+                 boundaryIdentityRelation!.rightPOV===parentBoundary) or
+                (boundaryIdentityRelation!.leftPOV===parentBoundary and
+                 boundaryIdentityRelation!.rightPOV===childBoundary)
+        if(!directBoundaryIdentity){return(NULL)}
+        protect(registryMutex){
+            our TemporalProjectionReference: retainedChildProjection
+            withEach candidate in temporalProjectionReferences{
+                if(candidate===childProjection){
+                    retainedChildProjection <- candidate
+                    break()
+                }
+            }
+            our TemporalSplitReference: retainedParentSplit
+            withEach candidate in temporalSplitReferences{
+                if(candidate===parentSplit){
+                    retainedParentSplit <- candidate
+                    break()
+                }
+            }
+            if(retainedChildProjection==NULL or retainedParentSplit==NULL){
+                return(NULL)
+            }
+            withEach existing in temporalRootingReferences{
+                if(existing!.childOccurrencePOV===
+                            childProjection!.sourcePOV and
+                        existing!.childBoundary===childBoundary and
+                        existing!.parentSplit===parentSplit and
+                        existing!.parentBoundary===parentBoundary){
+                    return(existing)
+                }
+            }
+            our TemporalRootingReference:: reference
+            reference!.referenceID <- nextReferenceID
+            nextReferenceID <+- 1
+            reference!.normalizationID <- normalizationID
+            reference!.childOccurrencePOV <- childProjection!.sourcePOV
+            reference!.childProjection <- retainedChildProjection
+            reference!.childBoundary <- childBoundary
+            reference!.parentSplit <- retainedParentSplit
+            reference!.parentSpanPOV <- parentSplit!.sourceSpan
+            reference!.parentBoundary <- parentBoundary
+            reference!.boundaryIdentityRelation <- boundaryIdentityRelation
+            temporalRootingReferences.append(reference)
+            return(reference)
+        }
+    }
+
+    void: collectTemporalRootingsForChild(
+            their POV: childOccurrencePOV,
+            their List<our TemporalRootingReference>: results) <- {
+        if(childOccurrencePOV==NULL){return()}
+        protect(registryMutex){
+            withEach reference in temporalRootingReferences{
+                if(reference!.childOccurrencePOV===childOccurrencePOV){
+                    results.append(reference)
+                }
+            }
+        }
+    }
+
+    // Parent-boundary lookup follows identity edges so callers may start from
+    // either the canonical split cut or any asserted alias of that cut.
+    void: collectTemporalRootingsForParentBoundary(
+            our POV: parentBoundary,
+            their List<our TemporalRootingReference>: results) <- {
+        if(parentBoundary==NULL){return()}
+        me List<our TemporalRootingReference>: snapshot
+        protect(registryMutex){
+            withEach reference in temporalRootingReferences{
+                snapshot.append(reference)
+            }
+        }
+        withEach reference in snapshot{
+            if(areIdentical(reference!.parentBoundary, parentBoundary)){
+                results.append(reference)
+            }
+        }
     }
 
     our EndRelativeReference: findEndRelativeReference(

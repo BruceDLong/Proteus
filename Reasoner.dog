@@ -1360,6 +1360,11 @@ struct ConcatReasoner{
 //      boundary evidence is added only through resolveTemporalSplit(), which
 //      rejects L.begin/L.end for a strict-interior cut and conflicting known
 //      coordinates in the same source span.
+//  16. when an accepted boundary identity aligns an exact item's asTList view
+//      with a cut in a parent T-span, a TemporalRootingReference retains the
+//      child occurrence, parent span, and the ordinary identity evidence.
+//      Re-evaluating the generic item type never substitutes for that exact
+//      occurrence reference.
 //
 // Not yet implemented:
 //   7. a transition identity reads RHS references from its entry/previous
@@ -1665,6 +1670,36 @@ struct TemporalIdentityReasoner{
         return(true)
     }
 
+    void: recordTemporalRootingFromBoundaryIdentity(
+            their TemporalSplitReference: parentSplit,
+            our POV: childBoundary,
+            me IdentityEvidenceKind: evidenceKind,
+            me uint64: normalizationID) <- {
+        if(parentSplit==NULL or parentSplit!.symbolicCut==NULL or
+                childBoundary==NULL or
+                childBoundary!.temporalBoundary.sourcePov==NULL){return()}
+        their POV: childProjectionPOV <-
+                childBoundary!.temporalBoundary.sourcePov
+        their TemporalProjectionReference: childProjection <-
+                childProjectionPOV!.temporalProjection.reference
+        if(childProjection==NULL or
+                !childProjectionPOV!.temporalProjection.isProjection or
+                childProjection!.projectionPOV!==childProjectionPOV or
+                childProjection!.sourcePOV==NULL){return()}
+        their IdentityRegistry: registry <-
+                parentSplit!.symbolicCut!.effectiveIdentityRegistry()
+        if(registry==NULL or childBoundary!.
+                effectiveIdentityRegistry()!==registry){return()}
+        our IdentityRelation: boundaryIdentity <- registry!.recordIdentity(
+                parentSplit!.symbolicCut, childBoundary,
+                evidenceKind, normalizationID)
+        if(boundaryIdentity==NULL){return()}
+        registry!.recordTemporalRooting(
+                childProjection, childBoundary,
+                parentSplit, parentSplit!.symbolicCut,
+                boundaryIdentity, normalizationID)
+    }
+
     // Merge acceptance is the proof point for a written boundary equality.
     // Store the POV identity here instead of relying on the merge's value
     // copying: both boundaries stringify as zero, but their cut provenance is
@@ -1686,12 +1721,22 @@ struct TemporalIdentityReasoner{
         their TemporalSplitReference: rhsSplit <-
                 aItem!.RHS!.temporalSplit.reference
         if(lhsSplit!=NULL){
-            resolveTemporalSplit(
+            me int: lhsStatus <- resolveTemporalSplit(
                     lhsSplit, aItem!.RHS, iekAssertion, 0)
+            if(lhsStatus==tsrsAccepted or
+                    lhsStatus==tsrsAlreadyResolved){
+                recordTemporalRootingFromBoundaryIdentity(
+                        lhsSplit, aItem!.RHS, iekAssertion, 0)
+            }
         }
         if(rhsSplit!=NULL){
-            resolveTemporalSplit(
+            me int: rhsStatus <- resolveTemporalSplit(
                     rhsSplit, aItem!.LHS_item, iekAssertion, 0)
+            if(rhsStatus==tsrsAccepted or
+                    rhsStatus==tsrsAlreadyResolved){
+                recordTemporalRootingFromBoundaryIdentity(
+                        rhsSplit, aItem!.LHS_item, iekAssertion, 0)
+            }
         }
         if(lhsSplit==NULL and rhsSplit==NULL){
             lhsRegistry!.recordIdentity(
