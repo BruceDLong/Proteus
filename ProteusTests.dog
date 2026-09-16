@@ -54,6 +54,7 @@ TestsToRun = `
     unit/endRelative/correspondenceSparseMap
     unit/referenceRegistry/partPathSelection
     unit/referenceRegistry/intersectionPartPathSelection
+    unit/referenceRegistry/externalAssociation
     unit/referenceRegistry/pendingSymbolicSelection
     unit/referenceRegistry/multipleEqualValuedOccurrences
     unit/referenceRegistry/reverseSourceMultiplicity
@@ -155,6 +156,7 @@ do ManageCmdLine(cmd)
 #define ENDRELPLAN (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeTraversalPlan(tname, CASE_ID)}%>
 #define ENDRELCORRESPONDENCE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestEndRelativeCorrespondence(tname, CASE_ID)}%>
 #define SELECTIONREFERENCE (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestSelectionReference(tname, CASE_ID)}%>
+#define EXTERNALASSOCIATION (NAME, MSG) <%void: DESLASH(NAME)(me string: tname)<-{unitTestExternalAssociation(tname)}%>
 #define SELECTIONRESOLUTION (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestSelectionResolution(tname, CASE_ID)}%>
 #define POSITIONALSELECTION (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestPositionalSelectionReference(tname, CASE_ID)}%>
 #define ORDEREDSPANVIEW (NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestOrderedSpanView(tname, CASE_ID)}%>
@@ -341,6 +343,7 @@ struct GLOBAL {
     ENDRELCORRESPONDENCE(unit/endRelative/correspondenceSparseMap, "map an accepted sparse position without materializing its source", 5)
     SELECTIONREFERENCE(unit/referenceRegistry/partPathSelection, "record direct part selection without asserting identity", 1)
     SELECTIONREFERENCE(unit/referenceRegistry/intersectionPartPathSelection, "record intersection-lowered part selection without asserting identity", 2)
+    EXTERNALASSOCIATION(unit/referenceRegistry/externalAssociation, "record a reversible external association without identifying its endpoints")
     SELECTIONRESOLUTION(unit/referenceRegistry/pendingSymbolicSelection, "keep a lowered unresolved selector as a registry request while its work remains on wrkList", 1)
     SELECTIONRESOLUTION(unit/referenceRegistry/multipleEqualValuedOccurrences, "preserve equal-valued source occurrences as distinct selection results", 2)
     SELECTIONRESOLUTION(unit/referenceRegistry/reverseSourceMultiplicity, "report every query and result that selected one exact source occurrence", 3)
@@ -2596,6 +2599,90 @@ struct GLOBAL {
             }
         }
 
+        me string: actual <- "false"
+        me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+        modelMngr.clear()
+        return()
+    }
+    me void: unitTestExternalAssociation(me string: testName) <- {
+        our IdentityRegistry:: registry
+        our infonView: anchor <- parseAndExtract(
+                testName, "human:{marker:1}")
+        our infonView: predicate <- parseAndExtract(
+                testName, "name={spelling='Morgan'}")
+        our infonView: value <- parseAndExtract(
+                testName, "name:{spelling:'Morgan'}")
+        our POV:: anchorPOV{povSrcExternalAssociation}
+        our POV:: predicatePOV{povSrcExternalAssociation}
+        our POV:: valuePOV{povSrcExternalAssociation}
+        anchorPOV!.pItem <- anchor
+        predicatePOV!.pItem <- predicate
+        valuePOV!.pItem <- value
+        anchorPOV!.bindIdentityRegistry(registry)
+        predicatePOV!.bindIdentityRegistry(registry)
+        valuePOV!.bindIdentityRegistry(registry)
+
+        our ExternalAssociationReference: reference <-
+                registry!.recordExternalAssociation(
+                        anchorPOV, predicatePOV, valuePOV,
+                        NULL, "name", 71)
+        our ExternalAssociationReference: duplicate <-
+                registry!.recordExternalAssociation(
+                        anchorPOV, predicatePOV, valuePOV,
+                        NULL, "name", 71)
+        me List<our ExternalAssociationReference>: anchorMatches
+        me List<our ExternalAssociationReference>: relationMatches
+        registry!.collectExternalAssociationsForAnchor(
+                anchorPOV, "name", anchorMatches)
+        registry!.collectExternalAssociationsForRelation(
+                "name", relationMatches)
+
+        // An equal-looking occurrence is not the same occurrence.  An
+        // explicitly recorded alias is, and must support inverse lookup.
+        our infonView: separateAnchor <- parseAndExtract(
+                testName, "human:{marker:1}")
+        our POV:: separateAnchorPOV{povSrcExternalAssociation}
+        separateAnchorPOV!.pItem <- separateAnchor
+        separateAnchorPOV!.bindIdentityRegistry(registry)
+        me List<our ExternalAssociationReference>: separateMatches
+        registry!.collectExternalAssociationsForAnchor(
+                separateAnchorPOV, "name", separateMatches)
+        registry!.recordIdentity(anchorPOV, separateAnchorPOV,
+                iekContextReference, 72)
+        me List<our ExternalAssociationReference>: aliasMatches
+        registry!.collectExternalAssociationsForAnchor(
+                separateAnchorPOV, "name", aliasMatches)
+
+        me AgentContext: context
+        context.init(registry)
+        our POV: contextPOV <- context.addContextPOV(
+                anchorPOV, registry)
+        our POV: repeatedContextPOV <- context.addContextPOV(
+                separateAnchorPOV, registry)
+
+        me bool: passed <- reference!=NULL and
+                duplicate===reference and
+                reference!.anchorPOV===anchorPOV and
+                reference!.predicatePOV===predicatePOV and
+                reference!.valuePOV===valuePOV and
+                reference!.relationTypeID=="name" and
+                reference!.normalizationID==71 and
+                anchorMatches.size()==1 and
+                anchorMatches.first()===reference and
+                relationMatches.size()==1 and
+                relationMatches.first()===reference and
+                separateMatches.isEmpty() and
+                aliasMatches.size()==1 and
+                aliasMatches.first()===reference and
+                !registry!.areIdentical(anchorPOV, valuePOV) and
+                contextPOV!=NULL and
+                repeatedContextPOV===contextPOV and
+                context.containsOccurrence(anchorPOV, registry) and
+                context.containsOccurrence(
+                        separateAnchorPOV, registry) and
+                registry!.areIdentical(contextPOV, anchorPOV)
         me string: actual <- "false"
         me string: expected <- "true"
         if(passed){actual <- "true"}

@@ -116,6 +116,7 @@ struct GLOBAL{
 
 struct AgentContext {
     our infonView: topicHistory
+    our POV: topicHistoryPOV
 
     void: addContextItem(our infonView: itemToAdd) <- {
         if(itemToAdd!.invertMatch){return()}
@@ -134,6 +135,62 @@ struct AgentContext {
         if(itemToAdd!.proxy!=NULL){log("       PROXY:"+itemToAdd!.proxy!.mySymbol())}
         cull(10)
     }
+    our POV: addContextPOV(our POV: sourcePOV,
+            their IdentityRegistry: registry) <- {
+        if(sourcePOV==NULL or sourcePOV!.pItem==NULL or
+                sourcePOV!.pItem!.invertMatch){return(NULL)}
+        our infonView: itemToAdd <- sourcePOV!.dpItem()
+        our POV: pov <- topicHistory!.value!.items.head
+        while(pov!=NULL){
+            if(pov!.pItem===itemToAdd or pov===sourcePOV or
+                    (registry!=NULL and
+                     registry!.areIdentical(pov, sourcePOV))){
+                if(pov===topicHistory!.value!.items.head){return(pov)}
+                // A repeated mention refreshes recency. Preserve the old
+                // contextual occurrence as an explicit alias rather than
+                // silently replacing its semantic identity.
+                our POV: priorContextPOV <- pov
+                itemToAdd <- priorContextPOV!.pItem
+                topicHistory!.value!.items.erase(priorContextPOV)
+                our POV: refreshedPOV <- topicHistory!.value!.items.prepend(
+                        itemToAdd, povSrcContextReference)
+                if(registry!=NULL){
+                    refreshedPOV!.bindIdentityRegistry(registry)
+                    registry!.recordIdentity(refreshedPOV,
+                            priorContextPOV, iekContextReference, 0)
+                    registry!.recordIdentity(refreshedPOV,
+                            sourcePOV, iekContextReference, 0)
+                }
+                return(refreshedPOV)
+            }
+            pov <- pov!.next
+        }
+        our POV: contextPOV <- topicHistory!.value!.items.prepend(
+                itemToAdd, povSrcContextReference)
+        if(registry!=NULL){
+            contextPOV!.bindIdentityRegistry(registry)
+            registry!.recordIdentity(contextPOV, sourcePOV,
+                    iekContextReference, 0)
+        }
+        cull(10)
+        return(contextPOV)
+    }
+    me bool: containsOccurrence(our POV: occurrencePOV,
+            their IdentityRegistry: registry) <- {
+        if(occurrencePOV==NULL){return(false)}
+        our POV: pov <- topicHistory!.value!.items.head
+        while(pov!=NULL){
+            if(pov===occurrencePOV or
+                    (pov!.pItem!=NULL and
+                     pov!.pItem===occurrencePOV!.pItem) or
+                    (registry!=NULL and
+                     registry!.areIdentical(pov, occurrencePOV))){
+                return(true)
+            }
+            pov <- pov!.next
+        }
+        return(false)
+    }
     our infonView: searchFor() <- {
         return(NULL)
     }
@@ -143,10 +200,13 @@ struct AgentContext {
         }
     }
 
-    void: init() <- {
+    void: init(their IdentityRegistry: registry) <- {
         Allocate(topicHistory)
         topicHistory!.setToList()
         topicHistory!.value!.tailUnfinished <- false
+        Allocate(topicHistoryPOV, povSrcContextReference)
+        topicHistoryPOV!.pItem <- topicHistory
+        topicHistoryPOV!.bindIdentityRegistry(registry)
         //topicHistory!.dontProcess <- true
     }
 }

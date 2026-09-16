@@ -3856,7 +3856,12 @@ struct CorrespondenceReasoner{
                             // NOTE (search/adj1 investigation, 2026-04):
                             // If this optimization skips merge work for a same-type "type example",
                             // verify that no concrete constraints are being skipped with it.
-                            if(!(LHS_Pov!.pItem!.type!=NULL and RHS_item!.type!=NULL and RHS_item!.isTypeExample and LHS_Pov!.pItem!.infonViewHasType(RHS_item!.type!.typeID()))){
+                            if(!(LHS_Pov!.pItem!.type!=NULL and
+                                    RHS_item!.type!=NULL and
+                                    RHS_item!.isTypeExample and
+                                    RHS_item!.wrkList.isEmpty() and
+                                    LHS_Pov!.pItem!.infonViewHasType(
+                                            RHS_item!.type!.typeID()))){
                                 our POV: pov <- LHS_Pov!.pItem!.addInfonViewToWrkList(RHS_item, true, 417)
                                 RHS_item!.streamState <- notParsing
                                 if(pov!=NULL and LHS_Pov!.hasPropagated){
@@ -3917,9 +3922,327 @@ struct CorrespondenceReasoner{
     }
 }
 
+// A proper-name definition is a description to be solved against the current
+// context, not a template from which a new person or object is instantiated.
+// The first implementation recognizes the ordinary `^name` description and
+// performs a small, read-only structural match over already asserted name
+// associations.  The association and the selected occurrence remain
+// registry-backed so richer word rules can replace this matcher later without
+// changing the semantic representation.
+struct ContextualNameReasoner{
+    me string: wordKey(our WordUse: word) <- {
+        if(word==NULL){return("")}
+        me string: key <- word!.normalType()
+        if(key==""){key <- word!.asGiven}
+        return(key)
+    }
+
+    me string: relationKey(our PartPath: part) <- {
+        if(part==NULL or part!.path==NULL){return("")}
+        return(wordKey(part!.path!.type))
+    }
+
+    our PartPath: findNamePart(their infonView: meaning) <- {
+        if(meaning==NULL){return(NULL)}
+        if(meaning!.partRef!=NULL and
+                meaning!.partRef!.pathMode==upField and
+                relationKey(meaning!.partRef)=="name"){
+            return(meaning!.partRef)
+        }
+        withEach part in meaning!.parts{
+            if(part!=NULL and part!.pathMode==upField and
+                    relationKey(part)=="name"){
+                return(part)
+            }
+        }
+        return(NULL)
+    }
+
+    me bool: typeDescriptionMatches(their infonView: pattern,
+            their infonView: candidate) <- {
+        if(pattern==NULL or candidate==NULL){return(false)}
+        if(pattern!.type==NULL){return(true)}
+        me string: patternType <- wordKey(pattern!.type)
+        if(patternType==""){return(true)}
+        if(candidate!.type!=NULL and
+                wordKey(candidate!.type)==patternType){return(true)}
+        withEach candidateType in candidate!.addedTypes{
+            if(wordKey(candidateType)==patternType){return(true)}
+        }
+        return(false)
+    }
+
+    our POV: findDescriptionField(their infonView: candidate,
+            their infonView: patternField) <- {
+        if(candidate==NULL or patternField==NULL or
+                patternField!.type==NULL or
+                candidate!.value!.overlayType!=LST){return(NULL)}
+        me string: fieldType <- wordKey(patternField!.type)
+        our POV: fieldPOV <- candidate!.value!.items.head
+        while(fieldPOV!=NULL){
+            if(fieldPOV!.pItem!=NULL and
+                    fieldPOV!.pItem!.type!=NULL and
+                    wordKey(fieldPOV!.pItem!.type)==fieldType){
+                return(fieldPOV)
+            }
+            if(fieldPOV!.pItem!=NULL){
+                withEach addedType in fieldPOV!.pItem!.addedTypes{
+                    if(wordKey(addedType)==fieldType){return(fieldPOV)}
+                }
+            }
+            fieldPOV <- fieldPOV!.next
+        }
+        return(NULL)
+    }
+
+    me bool: descriptionMatches(their infonView: pattern,
+            their infonView: candidate) <- {
+        if(pattern==NULL or candidate==NULL){return(false)}
+        if(pattern!.invertMatch){return(false)}
+        if(!typeDescriptionMatches(pattern, candidate)){return(false)}
+
+        me bool: patternHasValue <- pattern!.viewMode!=vmAny and
+                pattern!.value!.overlayType!=tUnknown and
+                pattern!.value!.overlayType!=tUnset
+        if(patternHasValue){
+            if(pattern!.value!.overlayType==STR){
+                if(pattern!.value!.evalMode==emLiteral){
+                    me bool: matchedValue <-
+                            candidate!.value!.overlayType==STR and
+                            candidate!.value!.evalMode==emLiteral and
+                            candidate!.value!.str==pattern!.value!.str
+                    if(!matchedValue){
+                        withEach candidateConstraint in candidate!.wrkList{
+                            if(candidateConstraint!=NULL and
+                                    candidateConstraint!.pItem!=NULL and
+                                    descriptionMatches(pattern,
+                                            candidateConstraint!.pItem)){
+                                matchedValue <- true
+                                break()
+                            }
+                        }
+                    }
+                    if(!matchedValue){return(false)}
+                }
+            }else if(pattern!.value!.overlayType==NUM){
+                if(pattern!.value!.evalMode==emLiteral){
+                    me bool: matchedValue <-
+                            candidate!.value!.overlayType==NUM and
+                            candidate!.value!.evalMode==emLiteral and
+                            candidate!.value!.num==pattern!.value!.num
+                    if(!matchedValue){
+                        withEach candidateConstraint in candidate!.wrkList{
+                            if(candidateConstraint!=NULL and
+                                    candidateConstraint!.pItem!=NULL and
+                                    descriptionMatches(pattern,
+                                            candidateConstraint!.pItem)){
+                                matchedValue <- true
+                                break()
+                            }
+                        }
+                    }
+                    if(!matchedValue){return(false)}
+                }
+            }else if(pattern!.value!.overlayType==LST){
+                if(candidate!.value!.overlayType!=LST){return(false)}
+                our POV: patternField <- pattern!.value!.items.head
+                while(patternField!=NULL){
+                    our POV: candidateField <- findDescriptionField(
+                            candidate, patternField!.pItem)
+                    if(candidateField==NULL or
+                            !descriptionMatches(patternField!.pItem,
+                                    candidateField!.pItem)){
+                        return(false)
+                    }
+                    patternField <- patternField!.next
+                }
+            }
+        }
+
+        // `spelling = "Morgan"` is parsed as an ordinary identity
+        // constraint on the spelling field. Check it without scheduling or
+        // applying that identity to the contextual candidate.
+        withEach constraint in pattern!.wrkList{
+            if(constraint!=NULL and constraint!.pItem!=NULL and
+                    !descriptionMatches(constraint!.pItem, candidate)){
+                return(false)
+            }
+        }
+        return(true)
+    }
+
+    me bool: associationMatchesDefinition(
+            their ExternalAssociationReference: association,
+            their WordDefn: definition, their PartPath: namePart) <- {
+        if(association==NULL or definition==NULL or
+                definition!.meaning==NULL or namePart==NULL or
+                association!.anchorPOV==NULL or
+                association!.anchorPOV!.pItem==NULL or
+                association!.valuePOV==NULL or
+                association!.valuePOV!.pItem==NULL){return(false)}
+        // The anchor in `human:{}^name=...` is intentionally a typed
+        // contextual description. Its empty local state is not a demand that
+        // the selected human have no state of its own.
+        if(!typeDescriptionMatches(definition!.meaning,
+                association!.anchorPOV!.pItem)){return(false)}
+        their infonView: associatedDescription <-
+                association!.valuePOV!.pItem
+        // Preserve the exact asserted RHS as the authoritative description.
+        // The ordinary equality remains scheduled on valuePOV; this snapshot
+        // is what makes the association reversible even while lower-level
+        // unordered equality still has unresolved work.
+        if(association!.predicatePOV!=NULL and
+                association!.predicatePOV!.pItem!=NULL and
+                !association!.predicatePOV!.pItem!.wrkList.isEmpty() and
+                association!.predicatePOV!.pItem!.wrkList.first()!.pItem!=NULL){
+            associatedDescription <- association!.predicatePOV!.
+                    pItem!.wrkList.first()!.pItem
+        }
+        withEach constraint in namePart!.path!.wrkList{
+            if(constraint!=NULL and constraint!.pItem!=NULL and
+                    !descriptionMatches(constraint!.pItem,
+                            associatedDescription)){
+                return(false)
+            }
+        }
+        return(true)
+    }
+
+    me bool: sameOccurrence(their IdentityRegistry: registry,
+            our POV: first, our POV: second) <- {
+        if(first==NULL or second==NULL){return(false)}
+        if(first===second or (first!.pItem!=NULL and
+                first!.pItem===second!.pItem)){return(true)}
+        return(registry!=NULL and registry!.areIdentical(first, second))
+    }
+
+    me bool: resolve(their WorldManager: worldManager, our AItem: aItem) <- {
+        if(worldManager==NULL or aItem==NULL or
+                aItem!.LHS_item==NULL or
+                aItem!.LHS_item!.pItem==NULL){return(false)}
+        our POV: resultPOV <- aItem!.LHS_item
+        our infonView: nameUse <- resultPOV!.pItem
+        if(nameUse!.wordDerefed or nameUse!.type==NULL or
+                nameUse!.itmMode==mWordDefn){return(false)}
+
+        me vocabularySpec: vSpec
+        vSpec.init(worldManager!.agent!.getLocaleBaseName())
+        me List<our WordDefn>: definitions
+        modelMngr.lookupWord(wordKey(nameUse!.type), vSpec, definitions)
+        me List<our WordDefn>: nameDefinitions
+        me List<our PartPath>: nameParts
+        withEach definition in definitions{
+            our PartPath: namePart <- findNamePart(definition!.meaning)
+            if(namePart!=NULL){
+                nameDefinitions.append(definition)
+                nameParts.append(namePart)
+            }
+        }
+        if(nameDefinitions.isEmpty()){return(false)}
+
+        their IdentityRegistry: registry <-
+                resultPOV!.effectiveIdentityRegistry()
+        if(registry==NULL){registry <- worldManager!.agent!.identityRegistry}
+        me List<our ExternalAssociationReference>: associations
+        registry!.collectExternalAssociationsForRelation(
+                "name", associations)
+        me List<our ExternalAssociationReference>: matches
+        withEach definitionIndex in range 0 .. nameDefinitions.size(){
+            our WordDefn: definition <- nameDefinitions[definitionIndex]
+            our PartPath: namePart <- nameParts[definitionIndex]
+            withEach association in associations{
+                if(!worldManager!.agent!.context.containsOccurrence(
+                        association!.anchorPOV, registry)){continue()}
+                if(!associationMatchesDefinition(
+                        association, definition, namePart)){continue()}
+                me bool: duplicate <- false
+                withEach existing in matches{
+                    if(sameOccurrence(registry,
+                            existing!.anchorPOV,
+                            association!.anchorPOV)){
+                        duplicate <- true
+                        break()
+                    }
+                }
+                if(!duplicate){matches.append(association)}
+            }
+        }
+
+        our POV: queryPOV <- resultPOV!.snapshotView(
+                povSrcExternalAssociation)
+        me bool: doReply <- nameUse!.doReply
+        me uint64: originID <- nameUse!.originID
+        me uint64: infCharPos <- nameUse!.infCharPos
+        our PartPath: followOnPart <- nameUse!.partRef
+        me List<our PartPath>: followOnParts <- nameUse!.parts
+
+        if(matches.isEmpty()){
+            nameUse!.value!.undefined <- true
+            nameUse!.wordDerefed <- true
+            nameUse!.partRef <- NULL
+            nameUse!.parts.clear()
+            return(true)
+        }
+
+        if(matches.size()==1){
+            our POV: sourcePOV <- matches.first()!.anchorPOV
+            our infonView:: resolvedOccurrence
+            sourcePOV!.pItem!.copyAsTypeTo(
+                    resolvedOccurrence, true, false)
+            resultPOV!.pItem <- resolvedOccurrence
+            resultPOV!.accessMode <- aRefTo
+            resultPOV!.referenceAlias.sourcePov <- sourcePOV
+            resultPOV!.bindIdentityRegistry(registry)
+            if(followOnPart!=NULL){resultPOV!.pItem!.partRef <- followOnPart}
+            withEach followOn in followOnParts{
+                resultPOV!.pItem!.parts.append(followOn)
+            }
+            resultPOV!.pItem!.doReply <- doReply
+            resultPOV!.pItem!.originID <- originID
+            resultPOV!.pItem!.infCharPos <- infCharPos
+            registry!.recordIdentity(resultPOV, sourcePOV,
+                    iekContextualNameResolution, 0)
+            registry!.recordSelectionReference(queryPOV, resultPOV,
+                    worldManager!.agent!.context.topicHistoryPOV,
+                    sourcePOV, srkContextualName, 0)
+            return(true)
+        }
+
+        our infonView: alternatives <- makeInnrInfonView()
+        alternatives!.value!.tailUnfinished <- false
+        withEach match in matches{
+            our infonView:: localOccurrence
+            match!.anchorPOV!.pItem!.copyAsTypeTo(
+                    localOccurrence, true, false)
+            our POV: altPOV <- alternatives!.value!.items.append(
+                    localOccurrence, false,
+                    povSrcExternalAssociation)
+            altPOV!.referenceAlias.sourcePov <- match!.anchorPOV
+            altPOV!.bindIdentityRegistry(registry)
+            registry!.recordIdentity(altPOV, match!.anchorPOV,
+                    iekContextualNameResolution, 0)
+            registry!.recordSelectionReference(queryPOV, altPOV,
+                    worldManager!.agent!.context.topicHistoryPOV,
+                    match!.anchorPOV, srkContextualName, 0)
+        }
+        our infonView:: ambiguous
+        ambiguous!.convertThisToIntersection(alternatives, fromGiven)
+        ambiguous!.doReply <- doReply
+        ambiguous!.originID <- originID
+        ambiguous!.infCharPos <- infCharPos
+        ambiguous!.partRef <- followOnPart
+        ambiguous!.parts <- followOnParts
+        ambiguous!.wordDerefed <- true
+        resultPOV!.pItem <- ambiguous
+        resultPOV!.bindIdentityRegistry(registry)
+        return(true)
+    }
+}
+
 // Maps word references and function arguments to the definition-backed or
 // member-backed RHS candidates they imply.
 struct ReferenceMapper{
+    me ContextualNameReasoner: contextualNameReasoner
     me bool: derefInfonView(their WorldManager: worldManager, our infonView: CI) <- {
         if(CI!.wordDerefed){return(false)}
         me bool: changeMade  <- false
@@ -3975,10 +4298,18 @@ struct ReferenceMapper{
         our POV: CIPov    <- aItem!.LHS_item
         our infonView: CI     <- CIPov!.pItem
         me bool: derefLHS <- false
-        if(CIPov!=NULL){derefLHS <- derefInfonView(worldManager, CIPov!.pItem)}
+        if(CIPov!=NULL){
+            derefLHS <- contextualNameReasoner.resolve(
+                    worldManager, aItem)
+            if(!derefLHS){
+                derefLHS <- derefInfonView(
+                        worldManager, CIPov!.pItem)
+            }
+            CI <- CIPov!.pItem
+        }
         me bool: derefRHS <- false
         if(aItem!.RHS!=NULL){derefInfonView(worldManager, aItem!.RHS!.pItem)}
-        if(derefLHS){
+        if(derefLHS and CI!.type!=NULL){
             if(CIPov!.pParent!=NULL and CIPov!.pParent!.pItem!=NULL){
                 CIPov!.pParent!.pItem!.value!.index.insert(CI!.type!.typeID(), CI)
             }else{ // This section is to get items into World. In a fully streaming mode this isn't needed.
@@ -4435,6 +4766,9 @@ struct CursorPathResolver{
                 our POV: selectionSourceSnapshot
                 our POV: selectionQueryPOV
                 our POV: selectionResultPOV
+                me List<our ExternalAssociationReference>:
+                        externalAssociationMatches
+                me bool: createExternalAssociation <- false
                 me SelectionReferenceKind: selectionReferenceKind <-
                         srkPartPathSelection
                 if(part!.wasTransfered){
@@ -4443,7 +4777,8 @@ struct CursorPathResolver{
                     part!.wasTransfered <- true
                 }
                 if(part!.pathMode==dotField or
-                        part!.pathMode==idxField){
+                        part!.pathMode==idxField or
+                        part!.pathMode==upField){
                     // Capture the operation before lowering it.  The source
                     // and query remain stable even when the working POV's
                     // pItem is replaced by an unresolved intersection.
@@ -4452,7 +4787,16 @@ struct CursorPathResolver{
                                     povSrcPartPathSelection)
                     if(selectionSourceSnapshot!=NULL){
                         our POV:: queryPOV{povSrcPartPathSelection}
-                        queryPOV!.pItem <- part!.path
+                        if(part!.pathMode==upField){
+                            our infonView:: externalQuery
+                            part!.path!.copyAsTypeTo(
+                                    externalQuery, true, true)
+                            queryPOV!.pItem <- externalQuery
+                            selectionReferenceKind <-
+                                    srkExternalAssociation
+                        }else{
+                            queryPOV!.pItem <- part!.path
+                        }
                         queryPOV!.bindIdentityRegistry(
                                 selectionSourceSnapshot!.
                                 effectiveIdentityRegistry())
@@ -4564,7 +4908,54 @@ struct CursorPathResolver{
                             newPov!.looseTop <- true
                         }
                     }
-                    case upField:{}
+                    case upField:{
+                        their IdentityRegistry: registry
+                        if(selectionSourceSnapshot!=NULL){
+                            registry <- selectionSourceSnapshot!.
+                                    effectiveIdentityRegistry()
+                        }
+                        if(registry!=NULL and partTag!=""){
+                            registry!.collectExternalAssociationsForAnchor(
+                                    selectionSourceSnapshot, partTag,
+                                    externalAssociationMatches)
+                        }
+                        if(externalAssociationMatches.size()==1){
+                            selectedSourcePOV <-
+                                    externalAssociationMatches.first()!.
+                                    valuePOV
+                            if(selectedSourcePOV!=NULL){
+                                newPath <- selectedSourcePOV!.pItem
+                            }
+                        }else if(externalAssociationMatches.size()>1){
+                            our infonView: alternatives <-
+                                    makeInnrInfonView()
+                            alternatives!.value!.tailUnfinished <- false
+                            withEach association in
+                                    externalAssociationMatches{
+                                alternatives!.value!.items.append(
+                                        association!.valuePOV!.pItem,
+                                        false,
+                                        povSrcExternalAssociation)
+                            }
+                            Allocate(newPath)
+                            newPath!.convertThisToIntersection(
+                                    alternatives, fromGiven)
+                        }else if(!part!.path!.wrkList.isEmpty()){
+                            // An explicit write creates the associated value.
+                            // The fact is published only after the result POV
+                            // exists, below; name-definition matching never
+                            // reaches this path and therefore cannot create a
+                            // fact merely to satisfy a query.
+                            Allocate(newPath)
+                            part!.path!.copyAsTypeTo(
+                                    newPath, false, false)
+                            createExternalAssociation <- true
+                        }else{
+                            Allocate(newPath)
+                            newPath!.value!.undefined <- true
+                            newPath!.wordDerefed <- true
+                        }
+                    }
                     case idxField:{
                         selectionReferenceKind <- srkPositionalSelection
                         newPath <- buildIndexIntersection(CI, part)
@@ -4603,6 +4994,7 @@ struct CursorPathResolver{
                     aItem!.LHS_item!.temporalProjection.reference <- NULL
                     aItem!.LHS_item!.temporalProjection.isProjection <- false
                     aItem!.LHS_item!.temporalSplit.reference <- NULL
+                    aItem!.LHS_item!.referenceAlias.sourcePov <- NULL
                     if(selectedTemporalBoundary!=NULL){
                         aItem!.LHS_item!.temporalBoundary.sourcePov <-
                                 selectedTemporalBoundary!.
@@ -4690,6 +5082,28 @@ struct CursorPathResolver{
                     nxtAction! <- false
                     selectionResultPOV <- pathPov
                 }
+                if(createExternalAssociation and
+                        selectionSourceSnapshot!=NULL and
+                        selectionQueryPOV!=NULL and
+                        selectionResultPOV!=NULL){
+                    their IdentityRegistry: registry <-
+                            selectionSourceSnapshot!.
+                            effectiveIdentityRegistry()
+                    if(registry!=NULL){
+                        our ExternalAssociationReference: association <-
+                                registry!.recordExternalAssociation(
+                                        selectionSourceSnapshot,
+                                        selectionQueryPOV,
+                                        selectionResultPOV, NULL,
+                                        partTag,
+                                        agenda!.normalizationID)
+                        if(association!=NULL){
+                            externalAssociationMatches.append(association)
+                        }
+                        worldManager!.agent!.context.addContextPOV(
+                                selectionSourceSnapshot, registry)
+                    }
+                }
                 if(selectedTemporalBoundary==NULL and
                         selectionQueryPOV!=NULL and
                         selectionResultPOV!=NULL and
@@ -4706,7 +5120,17 @@ struct CursorPathResolver{
                                 agenda!.normalizationID)
                         if(selectionRequest!=NULL){
                             selectionRequest!.selectorSpec <- part!.spec
-                            if(selectedSourcePOV!=NULL){
+                            if(part!.pathMode==upField and
+                                    !externalAssociationMatches.isEmpty()){
+                                withEach association in
+                                        externalAssociationMatches{
+                                    registry!.
+                                            recordSelectionReferenceForRequest(
+                                                    selectionRequest,
+                                                    selectionResultPOV,
+                                                    association!.valuePOV)
+                                }
+                            }else if(selectedSourcePOV!=NULL){
                                 registry!.
                                         recordSelectionReferenceForRequest(
                                                 selectionRequest,

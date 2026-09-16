@@ -90,7 +90,9 @@ struct IdentityEvidenceKind: inherits=<mode[
     iekTemporalSplit,
     iekTemporalSplitResolution,
     iekEndRelativeResolution,
-    iekRepetitionMaterialization
+    iekRepetitionMaterialization,
+    iekContextReference,
+    iekContextualNameResolution
 ]> {}
 
 model IdentityRelation{
@@ -126,7 +128,9 @@ struct SelectionReferenceKind: inherits=<mode[
     srkIntersectionCorrespondence,
     srkMarkedSelection,
     srkPartPathSelection,
-    srkPositionalSelection
+    srkPositionalSelection,
+    srkExternalAssociation,
+    srkContextualName
 ]> {}
 
 // A selector is useful before it has found a source occurrence.  Keep that
@@ -259,6 +263,22 @@ model TemporalRootingReference{
 }
 struct TemporalRootingReference{}
 
+// One external association asserted with `^`.  The anchor and value remain
+// distinct occurrences; this record is the reversible relational fact that
+// lets either endpoint recover the association without pretending they are
+// identical.  witnessPOV is optional now and leaves room for a containing
+// super-system (for example a marriage) when general `^` inference grows.
+model ExternalAssociationReference{
+    me uint64: referenceID <- 0
+    me uint64: normalizationID <- 0
+    me string: relationTypeID
+    our POV: anchorPOV
+    our POV: predicatePOV
+    our POV: valuePOV
+    our POV: witnessPOV
+}
+struct ExternalAssociationReference{}
+
 // One logical member of a repetition.  occurrenceToken is opaque and stable;
 // ordinal is optional knowledge about that occurrence, not its identity.
 model RepetitionOccurrence{
@@ -298,10 +318,91 @@ model IdentityRegistry{
     me List<our TemporalProjectionReference>: temporalProjectionReferences
     me List<our TemporalSplitReference>: temporalSplitReferences
     me List<our TemporalRootingReference>: temporalRootingReferences
+    me List<our ExternalAssociationReference>: externalAssociationReferences
     me List<our RepetitionFamily>: repetitionFamilies
     me Mutex: registryMutex
 }
 struct IdentityRegistry{
+    our ExternalAssociationReference: recordExternalAssociation(
+            our POV: anchorPOV, our POV: predicatePOV,
+            our POV: valuePOV, our POV: witnessPOV,
+            me string: relationTypeID,
+            me uint64: normalizationID) <- {
+        if(anchorPOV==NULL or predicatePOV==NULL or valuePOV==NULL or
+                relationTypeID==""){return(NULL)}
+        protect(registryMutex){
+            withEach existing in externalAssociationReferences{
+                if(existing!.anchorPOV===anchorPOV and
+                        existing!.relationTypeID==relationTypeID and
+                        existing!.valuePOV===valuePOV and
+                        existing!.witnessPOV===witnessPOV){
+                    return(existing)
+                }
+            }
+            our ExternalAssociationReference:: reference
+            reference!.referenceID <- nextReferenceID
+            nextReferenceID <+- 1
+            reference!.normalizationID <- normalizationID
+            reference!.relationTypeID <- relationTypeID
+            reference!.anchorPOV <- anchorPOV
+            reference!.predicatePOV <- predicatePOV
+            reference!.valuePOV <- valuePOV
+            reference!.witnessPOV <- witnessPOV
+            externalAssociationReferences.append(reference)
+            anchorPOV!.bindIdentityRegistry(self)
+            predicatePOV!.bindIdentityRegistry(self)
+            valuePOV!.bindIdentityRegistry(self)
+            if(witnessPOV!=NULL){witnessPOV!.bindIdentityRegistry(self)}
+            return(reference)
+        }
+    }
+
+    // Lookups take a snapshot before following identity edges because
+    // areIdentical() owns the same registry lock. Equal descriptions are not
+    // enough: an association belongs to an exact occurrence or one of its
+    // explicitly established aliases.
+    void: collectExternalAssociationsForAnchor(our POV: anchorPOV,
+            me string: relationTypeID,
+            their List<our ExternalAssociationReference>: results) <- {
+        if(anchorPOV==NULL or relationTypeID==""){return()}
+        our POV: semanticAnchorPOV <- anchorPOV
+        if(anchorPOV!.referenceAlias.sourcePov!=NULL){
+            semanticAnchorPOV <- anchorPOV!.referenceAlias.sourcePov
+        }
+        me List<our ExternalAssociationReference>: snapshot
+        protect(registryMutex){
+            withEach reference in externalAssociationReferences{
+                if(reference!.relationTypeID==relationTypeID){
+                    snapshot.append(reference)
+                }
+            }
+        }
+        withEach reference in snapshot{
+            if(reference!.anchorPOV===anchorPOV or
+                    (reference!.anchorPOV!.pItem!=NULL and
+                     reference!.anchorPOV!.pItem===anchorPOV!.pItem) or
+                    areIdentical(reference!.anchorPOV, anchorPOV) or
+                    reference!.anchorPOV===semanticAnchorPOV or
+                    areIdentical(reference!.anchorPOV,
+                            semanticAnchorPOV)){
+                results.append(reference)
+            }
+        }
+    }
+
+    void: collectExternalAssociationsForRelation(
+            me string: relationTypeID,
+            their List<our ExternalAssociationReference>: results) <- {
+        if(relationTypeID==""){return()}
+        protect(registryMutex){
+            withEach reference in externalAssociationReferences{
+                if(reference!.relationTypeID==relationTypeID){
+                    results.append(reference)
+                }
+            }
+        }
+    }
+
     our TemporalProjectionReference: findTemporalProjectionForSource(
             their POV: sourcePOV) <- {
         if(sourcePOV==NULL){return(NULL)}
@@ -2760,7 +2861,7 @@ struct Agent{
         Allocate(device); device!.setToList()
         Allocate(user);   user!.setToList()
         Allocate(world); world!.setToList()
-        context.init()
+        context.init(identityRegistry)
         worldMgr.init(this)
         errorStatus <- 0
         errorMesg <- ""
