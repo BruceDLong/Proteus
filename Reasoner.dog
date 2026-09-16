@@ -3942,6 +3942,28 @@ struct ContextualNameReasoner{
         return(wordKey(part!.path!.type))
     }
 
+    // When a proper name is normalized as the RHS of a typed identity, the
+    // LHS type may request one of the definition's external facets.  For
+    // example, `name=Andromeda` asks for Andromeda's ^name value rather than
+    // asserting that a galaxy occurrence is itself a name.
+    me string: requestedAssociationFacet(our AItem: aItem,
+            our POV: resultPOV) <- {
+        if(aItem==NULL or resultPOV==NULL){return("")}
+        if(aItem!.ruleSet==rsMerge and aItem!.RHS===resultPOV and
+                aItem!.LHS_item!=NULL and
+                aItem!.LHS_item!.pItem!=NULL and
+                aItem!.LHS_item!.pItem!.type!=NULL){
+            return(wordKey(aItem!.LHS_item!.pItem!.type))
+        }
+        our AItem: consumer <- aItem!.prntOrSub()
+        if(consumer==NULL or consumer!.ruleSet!=rsMerge or
+                consumer!.RHS!==aItem!.LHS_item or
+                consumer!.LHS_item==NULL or
+                consumer!.LHS_item!.pItem==NULL or
+                consumer!.LHS_item!.pItem!.type==NULL){return("")}
+        return(wordKey(consumer!.LHS_item!.pItem!.type))
+    }
+
     our PartPath: findNamePart(their infonView: meaning) <- {
         if(meaning==NULL){return(NULL)}
         if(meaning!.partRef!=NULL and
@@ -4116,11 +4138,11 @@ struct ContextualNameReasoner{
         return(registry!=NULL and registry!.areIdentical(first, second))
     }
 
-    me bool: resolve(their WorldManager: worldManager, our AItem: aItem) <- {
-        if(worldManager==NULL or aItem==NULL or
-                aItem!.LHS_item==NULL or
-                aItem!.LHS_item!.pItem==NULL){return(false)}
-        our POV: resultPOV <- aItem!.LHS_item
+    me bool: resolve(their WorldManager: worldManager, our AItem: aItem,
+            our POV: resultPOV <- NULL) <- {
+        if(worldManager==NULL or aItem==NULL){return(false)}
+        if(resultPOV==NULL){resultPOV <- aItem!.LHS_item}
+        if(resultPOV==NULL or resultPOV!.pItem==NULL){return(false)}
         our infonView: nameUse <- resultPOV!.pItem
         if(nameUse!.wordDerefed or nameUse!.type==NULL or
                 nameUse!.itmMode==mWordDefn){return(false)}
@@ -4139,6 +4161,9 @@ struct ContextualNameReasoner{
             }
         }
         if(nameDefinitions.isEmpty()){return(false)}
+
+        me string: requestedFacet <-
+                requestedAssociationFacet(aItem, resultPOV)
 
         their IdentityRegistry: registry <-
                 resultPOV!.effectiveIdentityRegistry()
@@ -4177,15 +4202,31 @@ struct ContextualNameReasoner{
         me List<our PartPath>: followOnParts <- nameUse!.parts
 
         if(matches.isEmpty()){
-            nameUse!.value!.undefined <- true
-            nameUse!.wordDerefed <- true
-            nameUse!.partRef <- NULL
-            nameUse!.parts.clear()
-            return(true)
+            if(requestedFacet=="name"){
+                // The proper-name definition explicitly contains this facet.
+                // Expand that description without inventing an occurrence or
+                // publishing an external association that was never asserted.
+                our infonView:: nameFacet
+                nameParts.first()!.path!.copyAsTypeTo(
+                        nameFacet, true, true)
+                nameFacet!.doReply <- nameUse!.doReply
+                nameFacet!.originID <- nameUse!.originID
+                nameFacet!.infCharPos <- nameUse!.infCharPos
+                resultPOV!.pItem <- nameFacet
+                resultPOV!.bindIdentityRegistry(registry)
+                return(true)
+            }
+            // No contextual occurrence exists. Ordinary definition expansion
+            // constructs a new named instance; its retained ^name write then
+            // records the exact association and adds the anchor to context.
+            return(false)
         }
 
         if(matches.size()==1){
             our POV: sourcePOV <- matches.first()!.anchorPOV
+            if(requestedFacet=="name"){
+                sourcePOV <- matches.first()!.valuePOV
+            }
             our infonView:: resolvedOccurrence
             sourcePOV!.pItem!.copyAsTypeTo(
                     resolvedOccurrence, true, false)
@@ -4212,18 +4253,22 @@ struct ContextualNameReasoner{
         alternatives!.value!.tailUnfinished <- false
         withEach match in matches{
             our infonView:: localOccurrence
-            match!.anchorPOV!.pItem!.copyAsTypeTo(
+            our POV: matchedPOV <- match!.anchorPOV
+            if(requestedFacet=="name"){
+                matchedPOV <- match!.valuePOV
+            }
+            matchedPOV!.pItem!.copyAsTypeTo(
                     localOccurrence, true, false)
             our POV: altPOV <- alternatives!.value!.items.append(
                     localOccurrence, false,
                     povSrcExternalAssociation)
-            altPOV!.referenceAlias.sourcePov <- match!.anchorPOV
+            altPOV!.referenceAlias.sourcePov <- matchedPOV
             altPOV!.bindIdentityRegistry(registry)
-            registry!.recordIdentity(altPOV, match!.anchorPOV,
+            registry!.recordIdentity(altPOV, matchedPOV,
                     iekContextualNameResolution, 0)
             registry!.recordSelectionReference(queryPOV, altPOV,
                     worldManager!.agent!.context.topicHistoryPOV,
-                    match!.anchorPOV, srkContextualName, 0)
+                    matchedPOV, srkContextualName, 0)
         }
         our infonView:: ambiguous
         ambiguous!.convertThisToIntersection(alternatives, fromGiven)
@@ -4271,12 +4316,21 @@ struct ReferenceMapper{
                     me uint64: itmMode <- CI!.itmMode
                     me List<our PartPath>: parts <- CI!.parts
                     our PartPath: partRef <- CI!.partRef
-                    infModel!.copyAsTypeTo(CI, false, false)
+                    // Definition paths are part of constructing the value.
+                    // In particular, a retained `^` write publishes a
+                    // reversible association for each new occurrence.  Run
+                    // those paths before any path written on this use of the
+                    // word, such as `Milky-Way^name`.
+                    infModel!.copyAsTypeTo(CI, false, true)
                     CI!.copySource <- infModel
                     CI!.copySourceType <- cstDefinition
                     CI!.type    <- CIsType
                     CI!.invertMatch   <- invertMatch
-                    CI!.parts   <- parts
+                    if(CI!.partRef!=NULL){
+                        CI!.parts.append(CI!.partRef)
+                        CI!.partRef <- NULL
+                    }
+                    withEach part in parts{CI!.parts.append(part)}
                     CI!.partRef <- partRef
                     CI!.itmMode <- itmMode
                     CI!.isTypeExample <- true
@@ -4965,6 +5019,25 @@ struct CursorPathResolver{
                         our POV: projectionSource <-
                                 aItem!.LHS_item!.snapshotView(
                                         povSrcTemporalProjection)
+                        // The stable source snapshot and the working POV name
+                        // the same exact occurrence.  Keep that fact as an
+                        // explicit identity rather than relying on a copied
+                        // referenceAlias pointer: asTList replaces the working
+                        // POV below, and inverse reasoning must still be able
+                        // to reach the contextual/name-selected occurrence.
+                        their IdentityRegistry: projectionRegistry <-
+                                aItem!.LHS_item!.
+                                effectiveIdentityRegistry()
+                        if(projectionSource!=NULL and
+                                projectionRegistry!=NULL){
+                            projectionSource!.bindIdentityRegistry(
+                                    projectionRegistry)
+                            projectionRegistry!.recordIdentity(
+                                    projectionSource,
+                                    aItem!.LHS_item,
+                                    iekReferenceSnapshot,
+                                    agenda!.normalizationID)
+                        }
                         selectedTemporalProjection <-
                                 temporalProjectionReasoner.projectAsTList(
                                         projectionSource,
@@ -6156,6 +6229,26 @@ struct InfonViewReasoner{
         intersectionReasoner.recordAcceptedCorrespondence(aItem)
     }
 
+    // Once a strict merge has accepted a resolved exact reference, the
+    // written LHS and the resolved RHS are the same occurrence.  Enumerate
+    // that identity before materializing the RHS on the LHS so reverse
+    // inference does not depend on the value copy.
+    void: materializeAcceptedReferenceAssertion(
+            their WorldManager: worldManager, our AItem: aItem) <- {
+        if(aItem==NULL or aItem!.mergeStatus!=msAccept or
+                aItem!.LHS_item==NULL or aItem!.RHS==NULL or
+                aItem!.RHS!.referenceAlias.sourcePov==NULL or
+                aItem!.LHS_item!.applyAsNot(aItem!.RHS)){return()}
+        their IdentityRegistry: registry <-
+                aItem!.RHS!.effectiveIdentityRegistry()
+        if(registry!=NULL){
+            aItem!.LHS_item!.bindIdentityRegistry(registry)
+            registry!.recordIdentity(aItem!.LHS_item, aItem!.RHS,
+                    iekAssertion, 0)
+        }
+        referenceConsolidationStrategy.copyIdentity(worldManager, aItem)
+    }
+
     me bool: temporalBoundaryAssertionCanBeAccepted(
             their AItem: aItem) <- {
         if(aItem==NULL){return(true)}
@@ -6405,6 +6498,8 @@ struct InfonViewReasoner{
 // MergeProcessor retains only step transitions, work scheduling, propagation
 // invocation, and translation to the common dispatch result.
 struct MergeReasoner{
+    me ContextualNameReasoner: contextualNameReasoner
+
     me MergeStep0SemanticResult: processStep0(
             their WorldManager: worldManager, our AItem: aItem) <- {
         me MergeStep0SemanticResult: result
@@ -6423,7 +6518,10 @@ struct MergeReasoner{
 
         aItem!.phase1RecordHandler("merge:step0:inspectRHS", false)
         our infonView: RHS <- aItem!.RHS!.pItem
-        fleshOutWord(worldManager!.agent, RHS)
+        me bool: contextualRHS <- contextualNameReasoner.resolve(
+                worldManager, aItem, aItem!.RHS)
+        if(!contextualRHS){fleshOutWord(worldManager!.agent, RHS)}
+        RHS <- aItem!.RHS!.pItem
         if((RHS!.type==NULL or RHS!.itmMode==mWordDefn or RHS!.isFromDefn) and
                 RHS!.cursorMode==cmNone and RHS!.value!.evalMode!=emConcat and
                 !worldManager!.RHSNeedsNestedCursorNormalization(RHS)){
@@ -6737,6 +6835,9 @@ struct MergeReasoner{
             aItem!.LHS_item!.pItem!.countSize(true)
         }
         if(aItem!.mergeStatus==msAccept){
+            worldManager!.infonViewReasoner.
+                    materializeAcceptedReferenceAssertion(
+                            worldManager, aItem)
             worldManager!.infonViewReasoner.
                     recordAcceptedIntersectionCorrespondence(aItem)
         }
