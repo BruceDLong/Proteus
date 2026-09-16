@@ -3922,14 +3922,13 @@ struct CorrespondenceReasoner{
     }
 }
 
-// A proper-name definition is a description to be solved against the current
-// context, not a template from which a new person or object is instantiated.
-// The first implementation recognizes the ordinary `^name` description and
-// performs a small, read-only structural match over already asserted name
-// associations.  The association and the selected occurrence remain
-// registry-backed so richer word rules can replace this matcher later without
-// changing the semantic representation.
-struct ContextualNameReasoner{
+// External associations are reversible references.  A forward `anchor^field`
+// selects the associated value; a word definition containing `^name` can use
+// that same fact in reverse to select a contextual anchor.  A typed consumer
+// can also request any external field described by a word definition.  Keep
+// all three forms here so none of them depends on merge copying a value while
+// bypassing the identity registry.
+struct ExternalAssociationReasoner{
     me string: wordKey(our WordUse: word) <- {
         if(word==NULL){return("")}
         me string: key <- word!.normalType()
@@ -3942,11 +3941,24 @@ struct ContextualNameReasoner{
         return(wordKey(part!.path!.type))
     }
 
-    // When a proper name is normalized as the RHS of a typed identity, the
-    // LHS type may request one of the definition's external facets.  For
-    // example, `name=Andromeda` asks for Andromeda's ^name value rather than
-    // asserting that a galaxy occurrence is itself a name.
-    me string: requestedAssociationFacet(our AItem: aItem,
+    our PartPath: findAssociationPart(their infonView: meaning,
+            me string: relationTypeID) <- {
+        if(meaning==NULL){return(NULL)}
+        if(meaning!.partRef!=NULL and
+                meaning!.partRef!.pathMode==upField and
+                relationKey(meaning!.partRef)==relationTypeID){
+            return(meaning!.partRef)
+        }
+        withEach part in meaning!.parts{
+            if(part!=NULL and part!.pathMode==upField and
+                    relationKey(part)==relationTypeID){
+                return(part)
+            }
+        }
+        return(NULL)
+    }
+
+    me string: requestedAssociationRelation(our AItem: aItem,
             our POV: resultPOV) <- {
         if(aItem==NULL or resultPOV==NULL){return("")}
         if(aItem!.ruleSet==rsMerge and aItem!.RHS===resultPOV and
@@ -3957,27 +3969,35 @@ struct ContextualNameReasoner{
         }
         our AItem: consumer <- aItem!.prntOrSub()
         if(consumer==NULL or consumer!.ruleSet!=rsMerge or
-                consumer!.RHS!==aItem!.LHS_item or
+                consumer!.RHS!==resultPOV or
                 consumer!.LHS_item==NULL or
                 consumer!.LHS_item!.pItem==NULL or
                 consumer!.LHS_item!.pItem!.type==NULL){return("")}
         return(wordKey(consumer!.LHS_item!.pItem!.type))
     }
 
-    our PartPath: findNamePart(their infonView: meaning) <- {
-        if(meaning==NULL){return(NULL)}
-        if(meaning!.partRef!=NULL and
-                meaning!.partRef!.pathMode==upField and
-                relationKey(meaning!.partRef)=="name"){
-            return(meaning!.partRef)
+    // Merge only needs to know whether ordinary RHS normalization must run as
+    // its own lifecycle.  The semantic test belongs here: a definition must
+    // actually describe the LHS relation through `^`, rather than merely have
+    // a type unlike the LHS.
+    me bool: wordHasRequestedAssociation(
+            their WorldManager: worldManager,
+            our infonView: LHS, our infonView: RHS) <- {
+        if(worldManager==NULL or LHS==NULL or RHS==NULL or
+                LHS!.type==NULL or RHS!.type==NULL or
+                RHS!.wordDerefed or RHS!.itmMode==mWordDefn){return(false)}
+        me string: relationTypeID <- wordKey(LHS!.type)
+        if(relationTypeID==""){return(false)}
+        me vocabularySpec: vSpec
+        vSpec.init(worldManager!.agent!.getLocaleBaseName())
+        me List<our WordDefn>: definitions
+        modelMngr.lookupWord(wordKey(RHS!.type), vSpec, definitions)
+        withEach definition in definitions{
+            if(definition!=NULL and definition!.meaning!=NULL and
+                    findAssociationPart(definition!.meaning,
+                            relationTypeID)!=NULL){return(true)}
         }
-        withEach part in meaning!.parts{
-            if(part!=NULL and part!.pathMode==upField and
-                    relationKey(part)=="name"){
-                return(part)
-            }
-        }
-        return(NULL)
+        return(false)
     }
 
     me bool: typeDescriptionMatches(their infonView: pattern,
@@ -4095,9 +4115,10 @@ struct ContextualNameReasoner{
 
     me bool: associationMatchesDefinition(
             their ExternalAssociationReference: association,
-            their WordDefn: definition, their PartPath: namePart) <- {
+            their WordDefn: definition,
+            their PartPath: associationPart) <- {
         if(association==NULL or definition==NULL or
-                definition!.meaning==NULL or namePart==NULL or
+                definition!.meaning==NULL or associationPart==NULL or
                 association!.anchorPOV==NULL or
                 association!.anchorPOV!.pItem==NULL or
                 association!.valuePOV==NULL or
@@ -4120,7 +4141,7 @@ struct ContextualNameReasoner{
             associatedDescription <- association!.predicatePOV!.
                     pItem!.wrkList.first()!.pItem
         }
-        withEach constraint in namePart!.path!.wrkList{
+        withEach constraint in associationPart!.path!.wrkList{
             if(constraint!=NULL and constraint!.pItem!=NULL and
                     !descriptionMatches(constraint!.pItem,
                             associatedDescription)){
@@ -4128,6 +4149,46 @@ struct ContextualNameReasoner{
             }
         }
         return(true)
+    }
+
+    // The selected value POV is the stable external endpoint.  Until
+    // low-level unordered equality is fully symmetric, its type expansion can
+    // obscure a more specific RHS.  The predicate snapshot retains that
+    // asserted description, and the explicit identity recorded at creation
+    // keeps the two representations reversible.
+    our POV: assertedValuePOV(
+            their ExternalAssociationReference: association) <- {
+        if(association==NULL){return(NULL)}
+        if(association!.predicatePOV!=NULL and
+                association!.predicatePOV!.pItem!=NULL and
+                !association!.predicatePOV!.pItem!.wrkList.isEmpty() and
+                association!.predicatePOV!.pItem!.wrkList.first()!.pItem!=NULL){
+            return(association!.predicatePOV!.pItem!.wrkList.first())
+        }
+        return(association!.valuePOV)
+    }
+
+    void: copyAssociationValue(
+            their ExternalAssociationReference: association,
+            our infonView: destination) <- {
+        if(association==NULL or destination==NULL or
+                association!.valuePOV==NULL or
+                association!.valuePOV!.pItem==NULL){return()}
+        our POV: assertedPOV <- assertedValuePOV(association)
+        if(assertedPOV==NULL or assertedPOV!.pItem==NULL){return()}
+        our POV: sourcePOV <- assertedPOV
+        if(association!.valuePOV!=NULL and
+                association!.valuePOV!.pItem!=NULL and
+                descriptionMatches(assertedPOV!.pItem,
+                        association!.valuePOV!.pItem)){
+            sourcePOV <- association!.valuePOV
+        }
+        sourcePOV!.pItem!.copyAsTypeTo(destination, true, false)
+        if(destination!.type==NULL and
+                association!.valuePOV!.pItem!.type!=NULL){
+            destination!.type <- association!.valuePOV!.pItem!.type
+        }
+        destination!.wordDerefed <- true
     }
 
     me bool: sameOccurrence(their IdentityRegistry: registry,
@@ -4138,11 +4199,109 @@ struct ContextualNameReasoner{
         return(registry!=NULL and registry!.areIdentical(first, second))
     }
 
-    me bool: resolve(their WorldManager: worldManager, our AItem: aItem,
-            our POV: resultPOV <- NULL) <- {
-        if(worldManager==NULL or aItem==NULL){return(false)}
-        if(resultPOV==NULL){resultPOV <- aItem!.LHS_item}
-        if(resultPOV==NULL or resultPOV!.pItem==NULL){return(false)}
+    // Build the value of a forward `^` read.  Exact identities for ambiguous
+    // alternatives are recorded here; the single-result identity is recorded
+    // after the caller has installed the result POV.
+    our infonView: materializeForwardSelection(
+            their IdentityRegistry: registry,
+            their List<our ExternalAssociationReference>: matches,
+            me uint64: normalizationID) <- {
+        if(matches.isEmpty()){return(NULL)}
+        if(matches.size()==1){
+            our infonView:: selectedValue
+            copyAssociationValue(matches.first(), selectedValue)
+            return(selectedValue)
+        }
+        our infonView: alternatives <- makeInnrInfonView()
+        alternatives!.value!.tailUnfinished <- false
+        withEach association in matches{
+            our infonView:: selectedValue
+            copyAssociationValue(association, selectedValue)
+            our POV: alternativePOV <- alternatives!.value!.items.append(
+                    selectedValue, false, povSrcExternalAssociation)
+            alternativePOV!.accessMode <- aRefTo
+            alternativePOV!.referenceAlias.sourcePov <-
+                    association!.valuePOV
+            alternativePOV!.bindIdentityRegistry(registry)
+            registry!.recordIdentity(alternativePOV,
+                    association!.valuePOV,
+                    iekExternalAssociationSelection,
+                    normalizationID)
+        }
+        our infonView:: selectedAlternatives
+        selectedAlternatives!.convertThisToIntersection(
+                alternatives, fromGiven)
+        return(selectedAlternatives)
+    }
+
+    void: collectForwardAssociations(
+            their IdentityRegistry: registry, our POV: anchorPOV,
+            me string: relationTypeID,
+            their List<our ExternalAssociationReference>: matches) <- {
+        if(registry==NULL or anchorPOV==NULL or
+                relationTypeID==""){return()}
+        registry!.collectExternalAssociationsForAnchor(
+                anchorPOV, relationTypeID, matches)
+    }
+
+    // Finish either a forward read or write after CursorPathResolver has made
+    // the result POV.  This is the central point at which an implicit `^`
+    // identity becomes explicit and therefore available to inverse inference.
+    void: finalizeForwardSelection(their WorldManager: worldManager,
+            their IdentityRegistry: registry, our POV: anchorPOV,
+            our POV: queryPOV, our POV: resultPOV,
+            me string: relationTypeID,
+            their List<our ExternalAssociationReference>: matches,
+            me bool: createAssociation, me uint64: normalizationID) <- {
+        if(worldManager==NULL or registry==NULL or anchorPOV==NULL or
+                queryPOV==NULL or resultPOV==NULL){return()}
+        if(createAssociation){
+            our ExternalAssociationReference: association <-
+                    registry!.recordExternalAssociation(
+                            anchorPOV, queryPOV, resultPOV, NULL,
+                            relationTypeID, normalizationID)
+            if(association!=NULL){matches.append(association)}
+            if(association!=NULL){
+                our POV: assertedPOV <- assertedValuePOV(association)
+                if(assertedPOV!=NULL and
+                        assertedPOV!==association!.valuePOV){
+                    assertedPOV!.bindIdentityRegistry(registry)
+                    registry!.recordIdentity(
+                            association!.valuePOV, assertedPOV,
+                            iekAssertion, normalizationID)
+                }
+            }
+            worldManager!.agent!.context.addContextPOV(
+                    anchorPOV, registry)
+        }
+        if(matches.size()==1){
+            our POV: selectedValue <- matches.first()!.valuePOV
+            resultPOV!.accessMode <- aRefTo
+            resultPOV!.referenceAlias.sourcePov <- selectedValue
+            resultPOV!.bindIdentityRegistry(registry)
+            registry!.recordIdentity(resultPOV, selectedValue,
+                    iekExternalAssociationSelection,
+                    normalizationID)
+        }
+        our SelectionRequest: selectionRequest <-
+                registry!.getOrCreateSelectionRequest(
+                        queryPOV, resultPOV, anchorPOV,
+                        srkExternalAssociation, normalizationID)
+        if(selectionRequest!=NULL){
+            withEach association in matches{
+                registry!.recordSelectionReferenceForRequest(
+                        selectionRequest, resultPOV,
+                        association!.valuePOV)
+            }
+        }
+    }
+
+    me bool: resolveWordReference(their WorldManager: worldManager,
+            our AItem: aItem) <- {
+        if(worldManager==NULL or aItem==NULL or
+                aItem!.LHS_item==NULL or
+                aItem!.LHS_item!.pItem==NULL){return(false)}
+        our POV: resultPOV <- aItem!.LHS_item
         our infonView: nameUse <- resultPOV!.pItem
         if(nameUse!.wordDerefed or nameUse!.type==NULL or
                 nameUse!.itmMode==mWordDefn){return(false)}
@@ -4151,40 +4310,51 @@ struct ContextualNameReasoner{
         vSpec.init(worldManager!.agent!.getLocaleBaseName())
         me List<our WordDefn>: definitions
         modelMngr.lookupWord(wordKey(nameUse!.type), vSpec, definitions)
-        me List<our WordDefn>: nameDefinitions
-        me List<our PartPath>: nameParts
+        me string: requestedRelation <-
+                requestedAssociationRelation(aItem, resultPOV)
+        me string: relationTypeID <- requestedRelation
+        if(relationTypeID==""){relationTypeID <- "name"}
+        me List<our WordDefn>: associationDefinitions
+        me List<our PartPath>: associationParts
         withEach definition in definitions{
-            our PartPath: namePart <- findNamePart(definition!.meaning)
-            if(namePart!=NULL){
-                nameDefinitions.append(definition)
-                nameParts.append(namePart)
+            our PartPath: associationPart <- findAssociationPart(
+                    definition!.meaning, relationTypeID)
+            if(associationPart!=NULL){
+                associationDefinitions.append(definition)
+                associationParts.append(associationPart)
             }
         }
-        if(nameDefinitions.isEmpty()){return(false)}
-
-        me string: requestedFacet <-
-                requestedAssociationFacet(aItem, resultPOV)
+        if(associationDefinitions.isEmpty()){return(false)}
 
         their IdentityRegistry: registry <-
                 resultPOV!.effectiveIdentityRegistry()
         if(registry==NULL){registry <- worldManager!.agent!.identityRegistry}
         me List<our ExternalAssociationReference>: associations
         registry!.collectExternalAssociationsForRelation(
-                "name", associations)
+                relationTypeID, associations)
         me List<our ExternalAssociationReference>: matches
-        withEach definitionIndex in range 0 .. nameDefinitions.size(){
-            our WordDefn: definition <- nameDefinitions[definitionIndex]
-            our PartPath: namePart <- nameParts[definitionIndex]
+        withEach definitionIndex in range 0 ..
+                associationDefinitions.size(){
+            our WordDefn: definition <-
+                    associationDefinitions[definitionIndex]
+            our PartPath: associationPart <-
+                    associationParts[definitionIndex]
             withEach association in associations{
                 if(!worldManager!.agent!.context.containsOccurrence(
                         association!.anchorPOV, registry)){continue()}
                 if(!associationMatchesDefinition(
-                        association, definition, namePart)){continue()}
+                        association, definition,
+                        associationPart)){continue()}
                 me bool: duplicate <- false
                 withEach existing in matches{
+                    our POV: existingPOV <- existing!.anchorPOV
+                    our POV: associationPOV <- association!.anchorPOV
+                    if(requestedRelation!=""){
+                        existingPOV <- existing!.valuePOV
+                        associationPOV <- association!.valuePOV
+                    }
                     if(sameOccurrence(registry,
-                            existing!.anchorPOV,
-                            association!.anchorPOV)){
+                            existingPOV, associationPOV)){
                         duplicate <- true
                         break()
                     }
@@ -4202,17 +4372,18 @@ struct ContextualNameReasoner{
         me List<our PartPath>: followOnParts <- nameUse!.parts
 
         if(matches.isEmpty()){
-            if(requestedFacet=="name"){
-                // The proper-name definition explicitly contains this facet.
-                // Expand that description without inventing an occurrence or
-                // publishing an external association that was never asserted.
-                our infonView:: nameFacet
-                nameParts.first()!.path!.copyAsTypeTo(
-                        nameFacet, true, true)
-                nameFacet!.doReply <- nameUse!.doReply
-                nameFacet!.originID <- nameUse!.originID
-                nameFacet!.infCharPos <- nameUse!.infCharPos
-                resultPOV!.pItem <- nameFacet
+            if(requestedRelation!=""){
+                // The definition itself implies the requested external
+                // description.  It is not an exact contextual occurrence, so
+                // no registry identity is invented for it.
+                our infonView:: describedValue
+                associationParts.first()!.path!.copyAsTypeTo(
+                        describedValue, true, true)
+                describedValue!.doReply <- doReply
+                describedValue!.originID <- originID
+                describedValue!.infCharPos <- infCharPos
+                describedValue!.wordDerefed <- true
+                resultPOV!.pItem <- describedValue
                 resultPOV!.bindIdentityRegistry(registry)
                 return(true)
             }
@@ -4224,16 +4395,41 @@ struct ContextualNameReasoner{
 
         if(matches.size()==1){
             our POV: sourcePOV <- matches.first()!.anchorPOV
-            if(requestedFacet=="name"){
+            me SelectionReferenceKind: referenceKind <- srkContextualName
+            if(requestedRelation!=""){
                 sourcePOV <- matches.first()!.valuePOV
+                referenceKind <- srkExternalAssociation
             }
             our infonView:: resolvedOccurrence
-            sourcePOV!.pItem!.copyAsTypeTo(
-                    resolvedOccurrence, true, false)
+            if(requestedRelation!=""){
+                copyAssociationValue(
+                        matches.first(), resolvedOccurrence)
+            }else{
+                sourcePOV!.pItem!.copyAsTypeTo(
+                        resolvedOccurrence, true, false)
+            }
             resultPOV!.pItem <- resolvedOccurrence
             resultPOV!.accessMode <- aRefTo
             resultPOV!.referenceAlias.sourcePov <- sourcePOV
             resultPOV!.bindIdentityRegistry(registry)
+            me bool: hasFollowOn <- followOnPart!=NULL or
+                    !followOnParts.isEmpty()
+            our POV: selectedResultPOV <- resultPOV
+            if(hasFollowOn){
+                // The working POV will become the result of the following
+                // path.  Give this inverse selection its own stable endpoint
+                // so later forward selection cannot make the anchor and its
+                // external value transitively identical.
+                our infonView:: selectedOccurrence
+                sourcePOV!.pItem!.copyAsTypeTo(
+                        selectedOccurrence, true, false)
+                our POV:: stableSelection{povSrcExternalAssociation}
+                stableSelection!.pItem <- selectedOccurrence
+                stableSelection!.accessMode <- aRefTo
+                stableSelection!.referenceAlias.sourcePov <- sourcePOV
+                stableSelection!.bindIdentityRegistry(registry)
+                selectedResultPOV <- stableSelection
+            }
             if(followOnPart!=NULL){resultPOV!.pItem!.partRef <- followOnPart}
             withEach followOn in followOnParts{
                 resultPOV!.pItem!.parts.append(followOn)
@@ -4241,34 +4437,41 @@ struct ContextualNameReasoner{
             resultPOV!.pItem!.doReply <- doReply
             resultPOV!.pItem!.originID <- originID
             resultPOV!.pItem!.infCharPos <- infCharPos
-            registry!.recordIdentity(resultPOV, sourcePOV,
-                    iekContextualNameResolution, 0)
-            registry!.recordSelectionReference(queryPOV, resultPOV,
-                    worldManager!.agent!.context.topicHistoryPOV,
-                    sourcePOV, srkContextualName, 0)
+            registry!.recordIdentity(selectedResultPOV, sourcePOV,
+                    iekExternalAssociationSelection, 0)
+            registry!.recordSelectionReference(queryPOV, selectedResultPOV,
+                    matches.first()!.anchorPOV,
+                    sourcePOV, referenceKind, 0)
             return(true)
         }
 
         our infonView: alternatives <- makeInnrInfonView()
         alternatives!.value!.tailUnfinished <- false
         withEach match in matches{
-            our infonView:: localOccurrence
             our POV: matchedPOV <- match!.anchorPOV
-            if(requestedFacet=="name"){
+            me SelectionReferenceKind: referenceKind <- srkContextualName
+            if(requestedRelation!=""){
                 matchedPOV <- match!.valuePOV
+                referenceKind <- srkExternalAssociation
             }
-            matchedPOV!.pItem!.copyAsTypeTo(
-                    localOccurrence, true, false)
+            our infonView:: localOccurrence
+            if(requestedRelation!=""){
+                copyAssociationValue(match, localOccurrence)
+            }else{
+                matchedPOV!.pItem!.copyAsTypeTo(
+                        localOccurrence, true, false)
+            }
             our POV: altPOV <- alternatives!.value!.items.append(
                     localOccurrence, false,
                     povSrcExternalAssociation)
+            altPOV!.accessMode <- aRefTo
             altPOV!.referenceAlias.sourcePov <- matchedPOV
             altPOV!.bindIdentityRegistry(registry)
             registry!.recordIdentity(altPOV, matchedPOV,
-                    iekContextualNameResolution, 0)
+                    iekExternalAssociationSelection, 0)
             registry!.recordSelectionReference(queryPOV, altPOV,
-                    worldManager!.agent!.context.topicHistoryPOV,
-                    matchedPOV, srkContextualName, 0)
+                    match!.anchorPOV, matchedPOV,
+                    referenceKind, 0)
         }
         our infonView:: ambiguous
         ambiguous!.convertThisToIntersection(alternatives, fromGiven)
@@ -4287,7 +4490,15 @@ struct ContextualNameReasoner{
 // Maps word references and function arguments to the definition-backed or
 // member-backed RHS candidates they imply.
 struct ReferenceMapper{
-    me ContextualNameReasoner: contextualNameReasoner
+    me ExternalAssociationReasoner: externalAssociationReasoner
+
+    me bool: RHSWordNeedsExternalAssociationNormalization(
+            their WorldManager: worldManager,
+            our infonView: LHS, our infonView: RHS) <- {
+        return(externalAssociationReasoner.
+                wordHasRequestedAssociation(worldManager, LHS, RHS))
+    }
+
     me bool: derefInfonView(their WorldManager: worldManager, our infonView: CI) <- {
         if(CI!.wordDerefed){return(false)}
         me bool: changeMade  <- false
@@ -4353,7 +4564,7 @@ struct ReferenceMapper{
         our infonView: CI     <- CIPov!.pItem
         me bool: derefLHS <- false
         if(CIPov!=NULL){
-            derefLHS <- contextualNameReasoner.resolve(
+            derefLHS <- externalAssociationReasoner.resolveWordReference(
                     worldManager, aItem)
             if(!derefLHS){
                 derefLHS <- derefInfonView(
@@ -4401,6 +4612,8 @@ struct ReferenceMapper{
 // operation: it discovers the next view and then schedules ordinary infon
 // processing rather than performing local value consolidation itself.
 struct CursorPathResolver{
+    me ExternalAssociationReasoner: externalAssociationReasoner
+
     our infonView: getSelfInfonView(our POV: startAnchor,
             our POV: cursorAnchor) <- {
         their POV: anchor <- startAnchor
@@ -4840,6 +5053,22 @@ struct CursorPathResolver{
                             aItem!.LHS_item!.snapshotView(
                                     povSrcPartPathSelection)
                     if(selectionSourceSnapshot!=NULL){
+                        their IdentityRegistry: snapshotRegistry <-
+                                selectionSourceSnapshot!.
+                                effectiveIdentityRegistry()
+                        our POV: aliasedSource <-
+                                selectionSourceSnapshot!.
+                                referenceAlias.sourcePov
+                        if(snapshotRegistry!=NULL and
+                                aliasedSource!=NULL){
+                            selectionSourceSnapshot!.
+                                    bindIdentityRegistry(snapshotRegistry)
+                            snapshotRegistry!.recordIdentity(
+                                    selectionSourceSnapshot,
+                                    aliasedSource,
+                                    iekReferenceSnapshot,
+                                    agenda!.normalizationID)
+                        }
                         our POV:: queryPOV{povSrcPartPathSelection}
                         if(part!.pathMode==upField){
                             our infonView:: externalQuery
@@ -4968,33 +5197,25 @@ struct CursorPathResolver{
                             registry <- selectionSourceSnapshot!.
                                     effectiveIdentityRegistry()
                         }
-                        if(registry!=NULL and partTag!=""){
-                            registry!.collectExternalAssociationsForAnchor(
-                                    selectionSourceSnapshot, partTag,
-                                    externalAssociationMatches)
+                        externalAssociationReasoner.
+                                collectForwardAssociations(
+                                        registry,
+                                        selectionSourceSnapshot,
+                                        partTag,
+                                        externalAssociationMatches)
+                        if(!externalAssociationMatches.isEmpty()){
+                            newPath <- externalAssociationReasoner.
+                                    materializeForwardSelection(
+                                            registry,
+                                            externalAssociationMatches,
+                                            agenda!.normalizationID)
                         }
                         if(externalAssociationMatches.size()==1){
                             selectedSourcePOV <-
                                     externalAssociationMatches.first()!.
                                     valuePOV
-                            if(selectedSourcePOV!=NULL){
-                                newPath <- selectedSourcePOV!.pItem
-                            }
-                        }else if(externalAssociationMatches.size()>1){
-                            our infonView: alternatives <-
-                                    makeInnrInfonView()
-                            alternatives!.value!.tailUnfinished <- false
-                            withEach association in
-                                    externalAssociationMatches{
-                                alternatives!.value!.items.append(
-                                        association!.valuePOV!.pItem,
-                                        false,
-                                        povSrcExternalAssociation)
-                            }
-                            Allocate(newPath)
-                            newPath!.convertThisToIntersection(
-                                    alternatives, fromGiven)
-                        }else if(!part!.path!.wrkList.isEmpty()){
+                        }else if(externalAssociationMatches.isEmpty() and
+                                !part!.path!.wrkList.isEmpty()){
                             // An explicit write creates the associated value.
                             // The fact is published only after the result POV
                             // exists, below; name-definition matching never
@@ -5004,7 +5225,7 @@ struct CursorPathResolver{
                             part!.path!.copyAsTypeTo(
                                     newPath, false, false)
                             createExternalAssociation <- true
-                        }else{
+                        }else if(externalAssociationMatches.isEmpty()){
                             Allocate(newPath)
                             newPath!.value!.undefined <- true
                             newPath!.wordDerefed <- true
@@ -5019,12 +5240,11 @@ struct CursorPathResolver{
                         our POV: projectionSource <-
                                 aItem!.LHS_item!.snapshotView(
                                         povSrcTemporalProjection)
-                        // The stable source snapshot and the working POV name
-                        // the same exact occurrence.  Keep that fact as an
-                        // explicit identity rather than relying on a copied
-                        // referenceAlias pointer: asTList replaces the working
-                        // POV below, and inverse reasoning must still be able
-                        // to reach the contextual/name-selected occurrence.
+                        // The stable snapshot names the pre-projection source.
+                        // If that source is an exact reference, identify the
+                        // snapshot with the referenced occurrence rather than
+                        // with the mutable working POV that will shortly hold
+                        // the projection result.
                         their IdentityRegistry: projectionRegistry <-
                                 aItem!.LHS_item!.
                                 effectiveIdentityRegistry()
@@ -5032,9 +5252,17 @@ struct CursorPathResolver{
                                 projectionRegistry!=NULL){
                             projectionSource!.bindIdentityRegistry(
                                     projectionRegistry)
+                            our POV: projectionIdentitySource <-
+                                    aItem!.LHS_item
+                            if(aItem!.LHS_item!.
+                                    referenceAlias.sourcePov!=NULL){
+                                projectionIdentitySource <-
+                                        aItem!.LHS_item!.
+                                        referenceAlias.sourcePov
+                            }
                             projectionRegistry!.recordIdentity(
                                     projectionSource,
-                                    aItem!.LHS_item,
+                                    projectionIdentitySource,
                                     iekReferenceSnapshot,
                                     agenda!.normalizationID)
                         }
@@ -5155,29 +5383,23 @@ struct CursorPathResolver{
                     nxtAction! <- false
                     selectionResultPOV <- pathPov
                 }
-                if(createExternalAssociation and
+                if(part!.pathMode==upField and
                         selectionSourceSnapshot!=NULL and
                         selectionQueryPOV!=NULL and
                         selectionResultPOV!=NULL){
                     their IdentityRegistry: registry <-
                             selectionSourceSnapshot!.
                             effectiveIdentityRegistry()
-                    if(registry!=NULL){
-                        our ExternalAssociationReference: association <-
-                                registry!.recordExternalAssociation(
-                                        selectionSourceSnapshot,
-                                        selectionQueryPOV,
-                                        selectionResultPOV, NULL,
-                                        partTag,
-                                        agenda!.normalizationID)
-                        if(association!=NULL){
-                            externalAssociationMatches.append(association)
-                        }
-                        worldManager!.agent!.context.addContextPOV(
-                                selectionSourceSnapshot, registry)
-                    }
-                }
-                if(selectedTemporalBoundary==NULL and
+                    externalAssociationReasoner.
+                            finalizeForwardSelection(
+                                    worldManager, registry,
+                                    selectionSourceSnapshot,
+                                    selectionQueryPOV,
+                                    selectionResultPOV, partTag,
+                                    externalAssociationMatches,
+                                    createExternalAssociation,
+                                    agenda!.normalizationID)
+                }else if(selectedTemporalBoundary==NULL and
                         selectionQueryPOV!=NULL and
                         selectionResultPOV!=NULL and
                         selectionSourceSnapshot!=NULL){
@@ -5813,6 +6035,14 @@ struct POVLevelReasoner{
     me bool: derefInfonView(their WorldManager: worldManager,
             our infonView: CI) <- {
         return(referenceMapper.derefInfonView(worldManager, CI))
+    }
+
+    me bool: RHSWordNeedsExternalAssociationNormalization(
+            their WorldManager: worldManager,
+            our infonView: LHS, our infonView: RHS) <- {
+        return(referenceMapper.
+                RHSWordNeedsExternalAssociationNormalization(
+                        worldManager, LHS, RHS))
     }
 
     me bool: derefWordRules(their WorldManager: worldManager,
@@ -6498,8 +6728,6 @@ struct InfonViewReasoner{
 // MergeProcessor retains only step transitions, work scheduling, propagation
 // invocation, and translation to the common dispatch result.
 struct MergeReasoner{
-    me ContextualNameReasoner: contextualNameReasoner
-
     me MergeStep0SemanticResult: processStep0(
             their WorldManager: worldManager, our AItem: aItem) <- {
         me MergeStep0SemanticResult: result
@@ -6518,9 +6746,23 @@ struct MergeReasoner{
 
         aItem!.phase1RecordHandler("merge:step0:inspectRHS", false)
         our infonView: RHS <- aItem!.RHS!.pItem
-        me bool: contextualRHS <- contextualNameReasoner.resolve(
-                worldManager, aItem, aItem!.RHS)
-        if(!contextualRHS){fleshOutWord(worldManager!.agent, RHS)}
+        // A typed identity may use an unresolved word for an occurrence whose
+        // external relation is requested by the LHS.  Let that word complete
+        // an ordinary infon-normalization lifecycle before merge inspects its
+        // type or registered associations.  Other RHS values retain the
+        // established inline definition expansion used by low-level merges.
+        if(aItem!.LHS_item!=NULL and
+                aItem!.LHS_item!.pItem!=NULL and
+                aItem!.LHS_item!.pItem!.type!=NULL and
+                RHS!.viewMode==vmAny and
+                !RHS!.wordDerefed and
+                RHS!.itmMode!=mWordDefn and
+                worldManager!.
+                        RHSWordNeedsExternalAssociationNormalization(
+                                aItem!.LHS_item!.pItem, RHS)){
+            return(result)
+        }
+        fleshOutWord(worldManager!.agent, RHS)
         RHS <- aItem!.RHS!.pItem
         if((RHS!.type==NULL or RHS!.itmMode==mWordDefn or RHS!.isFromDefn) and
                 RHS!.cursorMode==cmNone and RHS!.value!.evalMode!=emConcat and
