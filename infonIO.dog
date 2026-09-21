@@ -535,7 +535,7 @@ struct ProteusParser{
         }
 
         // PART_PATHS
-        while(peek=="." or peek=="^" or peek=="@"){
+        while(peek=="." or peek=="^" or peek=="~" or peek=="@"){
             if(peek=="@"){
                 if(waitingForBuffer(cPos+1)){U_RETURN(valid_notDone)}
                 if(text!.at(cPos+1)!="["){break()}
@@ -622,7 +622,16 @@ struct ProteusParser{
         me char:  peek; WCHK_PEEK(cPos,valid_notDone)
         me bool:  fetchInnerInfon <- true
         if(chkPeek(cPos, peek, "!")){WCHK_PEEK(cPos,valid_notDone)}
-        if(statusOK(checkUniID(cPos), status)){
+        if(chkPeek(cPos, peek, "~")){
+            // Unary `~word` is `%ctx~word`.  Check the descriptor here and
+            // let the ordinary suffix checker handle anything following it.
+            if(statusNotDone(preCheckInfonView(cPos, true, pcPartPaths), status)){
+                U_RETURN(status)
+            }
+            fetchInnerInfon <- false
+            WCHK_PEEK(cPos,valid_done)
+        }
+        else if(statusOK(checkUniID(cPos), status)){
             WCHK_PEEK(cPos,valid_maybeDone)
             if(chkPeek(cPos, peek, ":")){WCHK_PEEK(cPos,valid_notDone)}
             else{fetchInnerInfon<-false}
@@ -855,7 +864,7 @@ struct ProteusParser{
                 if(parent!=NULL and pureInfn!.items.size()==1){notifyStreamState(parent, parseListReady)}
                 cPos <+- parseInfonView(infn, cPos, true, isFromDefn, prsCtxt, false)
             log("2 Finished parsing pure infon as list item at pos " + toString(cPos) + "\n")
-                if(chkStrWSC(cPos, "~")){
+                if(chkStrWSC(cPos, ">>")){
                     log("3 Marking infon item for reply in ParselistItem at pos " + toString(cPos) + "\n")
                     infn!.doReply<-true
                 log("4 Infon item marked for reply at pos " + toString(cPos) + "\n")
@@ -1064,7 +1073,7 @@ struct ProteusParser{
         }
 
         // PART_PATHS
-        while(peek=="." or peek=="^" or peek=="@"){
+        while(peek=="." or peek=="^" or peek=="~" or peek=="@"){
             me bool: isBracketedIndex <- false
             if(peek=="@"){
                 if(text!.at(cPos+1)!="["){break()}
@@ -1077,6 +1086,7 @@ struct ProteusParser{
             our PartPath:: part
             if(peek=="."){      part!.pathMode <- dotField}
             else if(peek=="^"){ part!.pathMode <- upField}
+            else if(peek=="~"){ part!.pathMode <- resolutionField}
             else if(isBracketedIndex){part!.pathMode <- idxField}
             our infonView:: pathSeg
             pathSeg!.originID <- infn!.originID
@@ -1229,9 +1239,33 @@ struct ProteusParser{
             cPos <+- text!.scrapeWSC(cPos)
         }
 
+        // Unary `~word` is syntax sugar for `%ctx~word`.  Keep a small piece
+        // of syntax provenance on the path so printing can preserve the
+        // shorthand without changing its semantic source.
+        if(chkStrWSC(cPos, "~")){
+            infn!.viewMode <- vmCursor
+            infn!.cursorMode <- cmContext
+            fetchInnerInfon <- false
+            our PartPath:: implicitPart
+            implicitPart!.pathMode <- resolutionField
+            implicitPart!.implicitSource <- true
+            our infonView:: pathSeg
+            pathSeg!.originID <- infn!.originID
+            me int64: pathLen <- parseInfonView(
+                    pathSeg, cPos, allowIDs, isFromDefn, pcPartPaths)
+            if(pathLen<=0){
+                if(!errorSet){setError("Expected a descriptor after '~'", cPos)}
+                return(-1)
+            }
+            cPos <+- pathLen
+            implicitPart!.path <- pathSeg
+            infn!.partRef <- implicitPart
+        }
+
         // WordUse:type
 //  change to scrapeWordType()
-        me bool: wordsFound <- chk(text!.scrapeUniID(cPos), cPos,len)
+        me bool: wordsFound <- false
+        if(fetchInnerInfon){wordsFound <- chk(text!.scrapeUniID(cPos), cPos,len)}
         if(wordsFound){
             our WordUse:: type
             type!.setAsGiven(makeStr(cPos-len, cPos)) // Set word type
@@ -1545,6 +1579,7 @@ struct InfonViewPrinter{
         if(part==NULL){return(S)}
         if(part!.pathMode==dotField or part!.pathMode==asTListField){S <+- "."}
         else if(part!.pathMode==upField){S <+- "^"}
+        else if(part!.pathMode==resolutionField){S <+- "~"}
         else if(part!.pathMode==idxField){S <+- "@["}
         else if(part!.pathMode==colonField){S <+- ":"}
         S <+- printInfonViewActual(part!.path, used, false,
@@ -1601,9 +1636,7 @@ struct InfonViewPrinter{
             me string: wordSysString <- i!.type!.asGiven
             if(wordSysString==""){wordSysString<-"ERROR: NULL-TAG"}
             S <+- wordSysString
-            if(i!.viewMode == vmAny){
-                if(i!.doReply){S <+- "~"}
-            }else{S <+- ":"}
+            if(i!.viewMode != vmAny){S <+- ":"}
         }
         me bool: isMDots
         if(isSubItm){
@@ -1636,7 +1669,7 @@ struct InfonViewPrinter{
             }
             if(! i!.definedWord!.UsageTags.isEmpty()){S<+-">"}
             S<+-"= "+printInfonViewActual(i!.funcArgs, used, false, isSpec, verbosity, special)
-            if(i!.doReply){S <+- "~"}
+            if(i!.doReply){S <+- ">>"}
             if(resetColor){S<+-tam.popColor();}
             return(S)
         }
@@ -1647,18 +1680,26 @@ struct InfonViewPrinter{
             if(i!.viewMode==vmAny){
                 if(i!.type==NULL){ S <+-"?"}
             } else if(i!.viewMode==vmCursor){
-                S <+- "%"
-                switch(i!.cursorMode){
-                    case cmSelf:   {} //{S <+- "self"}
-                    case cmWorld:  {S <+- "W"}
-                    case cmUser:   {S <+- "U"}
-                    case cmContext:{S <+- "ctx"}
-                    case cmArgs:   {S <+- "args"}
-                    case cmVars:   {S <+- "vars"}
-                    case cmPrev:   {S <+- "prev"}
-                    case cmNext:   {S <+- "next"}
-                    case cmTPrev:  {S <+- "tprev"}
-                    case cmTNext:  {S <+- "tnext"}
+                me bool: suppressImplicitContext <-
+                        i!.cursorMode==cmContext and
+                        i!.parts.isEmpty() and
+                        i!.partRef!=NULL and
+                        i!.partRef!.pathMode==resolutionField and
+                        i!.partRef!.implicitSource
+                if(!suppressImplicitContext){
+                    S <+- "%"
+                    switch(i!.cursorMode){
+                        case cmSelf:   {} //{S <+- "self"}
+                        case cmWorld:  {S <+- "W"}
+                        case cmUser:   {S <+- "U"}
+                        case cmContext:{S <+- "ctx"}
+                        case cmArgs:   {S <+- "args"}
+                        case cmVars:   {S <+- "vars"}
+                        case cmPrev:   {S <+- "prev"}
+                        case cmNext:   {S <+- "next"}
+                        case cmTPrev:  {S <+- "tprev"}
+                        case cmTNext:  {S <+- "tnext"}
+                    }
                 }
             } else if(i!.viewMode==vmOverlay){
                 if(i!.intersectPos == ipNoIntersect){
@@ -1680,7 +1721,7 @@ struct InfonViewPrinter{
         }
 
         S <+- printPathSuffix(i, used, isSpec, verbosity, special)
-if(i!.doReply){S <+- "~"}
+if(i!.doReply){S <+- ">>"}
 //S <- "("+S+")"
 if(resetColor){
     S<+-"<"+i!.mySymbol()+">"

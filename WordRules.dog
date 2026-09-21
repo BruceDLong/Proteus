@@ -1,0 +1,269 @@
+// WordRules.dog
+//
+// Word rules sit between lexical definition lookup and occurrence selection.
+// Ordinary syntax deterministically limits the definitions that may
+// participate.  A `source ~ descriptor` expression then retains the two
+// remaining alternative axes without distributing them into a Cartesian
+// `*_+[sourceDefinition~descriptorDefinition ...]` value up front.
+//
+// The reducer opens only the cheapest semantically permitted tier:
+//   1. direct members of the source;
+//   2. the exact external `source^descriptor` route;
+//   3. members with a typed dot property or typed `^` association;
+//   4. members with any immediate dot property or `^` association whose value
+//      matches the descriptor.
+// A deeper search requires another explicit `~`; property matching is one hop.
+//
+// Intended evaluation protocol
+// ----------------------------
+// 1. The parser records `~` as a resolutionField.  It does not expand either
+//    operand or choose a word definition.
+// 2. The resolver first applies the implemented tiers directly.  At present
+//    CursorPathResolver handles direct members and exact external `^` routes;
+//    this file is the shared representation and policy skeleton for extending
+//    that reducer to definition alternatives and the member-property tiers.
+// 3. When either operand has several permitted word definitions, construct one
+//    WordResolutionPlan with a source axis and a descriptor axis.  Do not make
+//    an infonView for every pair merely to discover that an earlier tier wins.
+// 4. Enumerate/filter definitions, estimate the work, and then open branches
+//    one tier at a time.  Cost policy may defer a tier, but may never reorder
+//    the semantic precedence above.
+// 5. Stop after the first tier with viable candidates.  One candidate becomes
+//    a reference to its occurrence; several become the ordinary unknown-size
+//    intersection (`oneOf`).  A deferred plan also remains representable as
+//    an unresolved intersection, so no WordRules-specific syntax is exposed.
+//
+// In particular, these structures are evaluator bookkeeping rather than a
+// second identity store.  Occurrence identity, `^` associations, and result
+// aliases continue to live in IdentityRegistry.  A future reducer should keep
+// only ordinals and POV references here and register its final selections by
+// the same route used by CursorPathResolver.
+
+struct WordResolutionTier: inherits=<mode[
+    wrtDirectMember,
+    wrtSourceExternal,
+    wrtTypedProperty,
+    wrtAnyProperty
+]> {}
+
+struct WordResolutionState: inherits=<mode[
+    wrsUnplanned,
+    wrsEstimated,
+    wrsSearching,
+    wrsUnique,
+    wrsMultiple,
+    wrsNotFound,
+    wrsDeferredByCost,
+    wrsCycle
+]> {}
+
+// These weights are policy inputs, not semantic ranks.  Their defaults count
+// primitive operations uniformly; profiling can calibrate them without
+// changing which resolution tier is preferred.
+model WordResolutionCostModel{
+    me uint64: definitionExpansionWeight <- 1
+    me uint64: directMemberWeight <- 1
+    me uint64: sourceExternalWeight <- 1
+    me uint64: typedPropertyWeight <- 1
+    me uint64: anyPropertyWeight <- 1
+}
+struct WordResolutionCostModel{}
+
+// Semantic precedence and calculation cost are deliberately independent.
+// A cheaper branch is not thereby a better referent.
+model WordResolutionCostEstimate{
+    me uint64: definitionExpansionCost <- 0
+    me uint64: interpretationPairCount <- 0
+    me uint64: directMemberCost <- 0
+    me uint64: sourceExternalCost <- 0
+    me uint64: typedPropertyCost <- 0
+    me uint64: anyPropertyCost <- 0
+    me uint64: lowerBound <- 0
+    me uint64: upperBound <- 0
+    flag: upperBoundKnown
+}
+struct WordResolutionCostEstimate{
+    me uint64: boundedAdd(me uint64: left, me uint64: right,
+            me uint64: saturation) <- {
+        if(left>=saturation or right>=saturation or
+                right>saturation-left){
+            return(saturation)
+        }
+        return(left+right)
+    }
+
+    me uint64: boundedMultiply(me uint64: left, me uint64: right,
+            me uint64: saturation) <- {
+        if(left==0 or right==0){return(0)}
+        if(left>=saturation or right>=saturation or
+                left>saturation/right){
+            return(saturation)
+        }
+        return(left*right)
+    }
+
+    // This estimate is computed before candidate-pair materialization.  When
+    // source cardinality is not yet known, lowerBound is still usable but an
+    // evaluator must not mistake it for a complete upper bound.
+    void: estimate(me uint64: sourceDefinitionCount,
+            me uint64: descriptorDefinitionCount,
+            me uint64: sourceMemberCount,
+            me uint64: dotPropertyCount,
+            me uint64: externalPropertyCount,
+            me bool: sourceShapeKnown,
+            their WordResolutionCostModel: costModel,
+            me uint64: saturation) <- {
+        me uint64: definitionCount <- boundedAdd(sourceDefinitionCount,
+                descriptorDefinitionCount, saturation)
+        definitionExpansionCost <- boundedMultiply(definitionCount,
+                costModel!.definitionExpansionWeight, saturation)
+        interpretationPairCount <- boundedMultiply(sourceDefinitionCount,
+                descriptorDefinitionCount, saturation)
+        me uint64: directComparisonCount <- boundedMultiply(
+                interpretationPairCount, sourceMemberCount, saturation)
+        directMemberCost <- boundedMultiply(directComparisonCount,
+                costModel!.directMemberWeight, saturation)
+        sourceExternalCost <- boundedMultiply(interpretationPairCount,
+                costModel!.sourceExternalWeight, saturation)
+        lowerBound <- boundedAdd(definitionExpansionCost,
+                boundedAdd(directMemberCost, sourceExternalCost,
+                        saturation), saturation)
+
+        me uint64: typedProbeCount <- boundedMultiply(sourceMemberCount,
+                2, saturation)
+        me uint64: typedComparisonCount <- boundedMultiply(
+                interpretationPairCount, typedProbeCount, saturation)
+        typedPropertyCost <- boundedMultiply(typedComparisonCount,
+                costModel!.typedPropertyWeight, saturation)
+        me uint64: propertyCount <- boundedAdd(dotPropertyCount,
+                externalPropertyCount, saturation)
+        me uint64: anyComparisonCount <- boundedMultiply(
+                interpretationPairCount, propertyCount, saturation)
+        anyPropertyCost <- boundedMultiply(anyComparisonCount,
+                costModel!.anyPropertyWeight, saturation)
+
+        upperBoundKnown <- sourceShapeKnown
+        if(upperBoundKnown){
+            upperBound <- boundedAdd(lowerBound,
+                    boundedAdd(typedPropertyCost, anyPropertyCost,
+                            saturation), saturation)
+        }else{
+            upperBound <- saturation
+        }
+    }
+}
+
+// One axis corresponds to one syntactic operand of `source~descriptor`.  It
+// may be an ordinary expression or another unresolved `~` plan.  Its word
+// definitions are enumerated lazily and retain WordDefn/modelID provenance
+// instead of being copied immediately into one intersection.  A nestedPlan
+// lets an evaluator suspend the outer search until the needed inner tier is
+// available without flattening both searches into one Cartesian product.
+model WordResolutionAxis{
+    our infonView: expression
+    our WordResolutionPlan: nestedPlan
+    me List<our WordDefn>: definitions
+    flag: definitionsEnumerated
+    me uint64: estimatedDefinitionCount <- 0
+}
+struct WordResolutionAxis{}
+
+// A branch is created only when evaluation reaches its tier.  The pair of
+// definition ordinals names an element of the conceptual Cartesian product
+// without requiring all pairs to exist as infonViews.  `attempted` belongs to
+// evaluation bookkeeping; it must not be interpreted as evidence that a
+// lower-precedence tier may run while an earlier tier is still indeterminate.
+model WordResolutionBranch{
+    me uint64: sourceDefinitionOrdinal <- 0
+    me uint64: descriptorDefinitionOrdinal <- 0
+    me WordResolutionTier: tier <- wrtDirectMember
+    me uint64: estimatedCost <- 0
+    flag: attempted
+}
+struct WordResolutionBranch{}
+
+model WordResolutionCandidate{
+    // occurrencePOV is the object that `~` may return.  propertyWitnessPOV is
+    // the direct or external property that justified the match; retaining both
+    // permits identity/provenance recording without copying the property value
+    // into the occurrence.
+    our POV: occurrencePOV
+    our POV: propertyWitnessPOV
+    our WordDefn: sourceDefinition
+    our WordDefn: descriptorDefinition
+    me WordResolutionTier: tier <- wrtDirectMember
+    me uint64: calculationCost <- 0
+    // Deterministic semantic precedence is a separate lexicographic rank.
+    me uint64: semanticRank <- 0
+}
+struct WordResolutionCandidate{}
+
+// This is the intermediate value represented conceptually by
+//
+//   *_+[sourceDefn_1 sourceDefn_2]
+//       ~ *_+[descriptorDefn_1 descriptorDefn_2]
+//
+// It remains factored until a reduction rule requests a particular branch.
+// When evaluation cannot yet choose a result, the external representation is
+// the ordinary unknown-size intersection (`oneOf`); no special unresolved
+// expression or printer is needed for this plan.
+model WordResolutionPlan{
+    our WordResolutionAxis: source
+    our WordResolutionAxis: descriptor
+    me WordResolutionTier: currentTier <- wrtDirectMember
+    me WordResolutionState: state <- wrsUnplanned
+    me WordResolutionCostModel: costModel
+    me WordResolutionCostEstimate: cost
+    me List<our WordResolutionBranch>: openedBranches
+    me List<our WordResolutionCandidate>: candidates
+    // Actual cost is diagnostic evidence after evaluation.  It is never used
+    // as semantic rank, and evaluation policy consults the estimate before it
+    // opens a branch rather than merely timing out afterward.
+    me uint64: actualCost <- 0
+    me uint64: costSaturation <- 1000000000000
+}
+struct WordResolutionPlan{
+    // Call estimate only after each known word axis has been enumerated and
+    // cheap source-shape counts have been collected.  The estimate deliberately
+    // does not allocate WordResolutionBranches or WordResolutionCandidates.
+    void: estimate(me uint64: sourceMemberCount,
+            me uint64: dotPropertyCount,
+            me uint64: externalPropertyCount,
+            me bool: sourceShapeKnown) <- {
+        cost.estimate(source.estimatedDefinitionCount,
+                descriptor.estimatedDefinitionCount,
+                sourceMemberCount, dotPropertyCount,
+                externalPropertyCount, sourceShapeKnown,
+                costModel,
+                costSaturation)
+        state <- wrsEstimated
+    }
+}
+
+struct WordRulePlanner{
+    // Definition collection is cheap compared with materializing all pairs.
+    // Syntax/POS filtering belongs immediately before this call; a later
+    // language-composition layer may supply a narrower permitted set.
+    void: enumerateWordAxis(their Agent: agent,
+            our WordResolutionAxis: axis,
+            our WordUse: word) <- {
+        if(axis==NULL or word==NULL or axis!.definitionsEnumerated){return()}
+        me vocabularySpec: vSpec
+        vSpec.init(agent!.getLocaleBaseName())
+        me string: key <- word!.normalType()
+        if(key==""){key <- word!.asGiven}
+        modelMngr.lookupWord(key, vSpec, axis!.definitions)
+        axis!.estimatedDefinitionCount <- axis!.definitions.size()
+        axis!.definitionsEnumerated <- true
+    }
+
+    // Future reducer entry points should live here (or in a dedicated
+    // WordRuleReasoner) and follow this order:
+    //
+    //   enumerate permitted axes -> estimate -> apply budget policy
+    //       -> open current tier lazily -> rank/deduplicate candidates
+    //       -> register reference result or advance to the next tier
+    //
+    // Keeping that orchestration out of generic merge logic prevents an
+    // expected result type from silently changing which word rule was used.
+}

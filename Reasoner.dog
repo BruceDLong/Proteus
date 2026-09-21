@@ -3923,11 +3923,9 @@ struct CorrespondenceReasoner{
 }
 
 // External associations are reversible references.  A forward `anchor^field`
-// selects the associated value; a word definition containing `^name` can use
-// that same fact in reverse to select a contextual anchor.  A typed consumer
-// can also request any external field described by a word definition.  Keep
-// all three forms here so none of them depends on merge copying a value while
-// bypassing the identity registry.
+// selects the associated value, and a typed consumer can request an external
+// field described by a word definition.  General word resolution belongs to
+// WordRules and must not be inferred from the expected merge type here.
 struct ExternalAssociationReasoner{
     me string: wordKey(our WordUse: word) <- {
         if(word==NULL){return("")}
@@ -3978,8 +3976,7 @@ struct ExternalAssociationReasoner{
 
     // Merge only needs to know whether ordinary RHS normalization must run as
     // its own lifecycle.  The semantic test belongs here: a definition must
-    // actually describe the LHS relation through `^`, rather than merely have
-    // a type unlike the LHS.
+    // actually describe the requested relation through `^`.
     me bool: wordHasRequestedAssociation(
             their WorldManager: worldManager,
             our infonView: LHS, our infonView: RHS) <- {
@@ -4252,7 +4249,9 @@ struct ExternalAssociationReasoner{
             our POV: queryPOV, our POV: resultPOV,
             me string: relationTypeID,
             their List<our ExternalAssociationReference>: matches,
-            me bool: createAssociation, me uint64: normalizationID) <- {
+            me bool: createAssociation, me uint64: normalizationID,
+            me SelectionReferenceKind: referenceKind <-
+                    srkExternalAssociation) <- {
         if(worldManager==NULL or registry==NULL or anchorPOV==NULL or
                 queryPOV==NULL or resultPOV==NULL){return()}
         if(createAssociation){
@@ -4286,7 +4285,7 @@ struct ExternalAssociationReasoner{
         our SelectionRequest: selectionRequest <-
                 registry!.getOrCreateSelectionRequest(
                         queryPOV, resultPOV, anchorPOV,
-                        srkExternalAssociation, normalizationID)
+                        referenceKind, normalizationID)
         if(selectionRequest!=NULL){
             withEach association in matches{
                 registry!.recordSelectionReferenceForRequest(
@@ -4312,8 +4311,8 @@ struct ExternalAssociationReasoner{
         modelMngr.lookupWord(wordKey(nameUse!.type), vSpec, definitions)
         me string: requestedRelation <-
                 requestedAssociationRelation(aItem, resultPOV)
+        if(requestedRelation==""){return(false)}
         me string: relationTypeID <- requestedRelation
-        if(relationTypeID==""){relationTypeID <- "name"}
         me List<our WordDefn>: associationDefinitions
         me List<our PartPath>: associationParts
         withEach definition in definitions{
@@ -4395,7 +4394,7 @@ struct ExternalAssociationReasoner{
 
         if(matches.size()==1){
             our POV: sourcePOV <- matches.first()!.anchorPOV
-            me SelectionReferenceKind: referenceKind <- srkContextualName
+            me SelectionReferenceKind: referenceKind <- srkExternalAssociation
             if(requestedRelation!=""){
                 sourcePOV <- matches.first()!.valuePOV
                 referenceKind <- srkExternalAssociation
@@ -4449,7 +4448,7 @@ struct ExternalAssociationReasoner{
         alternatives!.value!.tailUnfinished <- false
         withEach match in matches{
             our POV: matchedPOV <- match!.anchorPOV
-            me SelectionReferenceKind: referenceKind <- srkContextualName
+            me SelectionReferenceKind: referenceKind <- srkExternalAssociation
             if(requestedRelation!=""){
                 matchedPOV <- match!.valuePOV
                 referenceKind <- srkExternalAssociation
@@ -5036,8 +5035,14 @@ struct CursorPathResolver{
                 me List<our ExternalAssociationReference>:
                         externalAssociationMatches
                 me bool: createExternalAssociation <- false
+                me bool: usedWordSourceExternalTier <- false
                 me SelectionReferenceKind: selectionReferenceKind <-
                         srkPartPathSelection
+                me bool: isWordResolution <-
+                        part!.pathMode==resolutionField
+                if(isWordResolution){
+                    selectionReferenceKind <- srkWordResolution
+                }
                 if(part!.wasTransfered){
                     continue()
                 }else{
@@ -5045,7 +5050,8 @@ struct CursorPathResolver{
                 }
                 if(part!.pathMode==dotField or
                         part!.pathMode==idxField or
-                        part!.pathMode==upField){
+                        part!.pathMode==upField or
+                        part!.pathMode==resolutionField){
                     // Capture the operation before lowering it.  The source
                     // and query remain stable even when the working POV's
                     // pItem is replaced by an unresolved intersection.
@@ -5085,6 +5091,48 @@ struct CursorPathResolver{
                                 effectiveIdentityRegistry())
                         selectionQueryPOV <- queryPOV
                     }
+                }
+                if(isWordResolution){
+                    // Tier 1 has semantic precedence even when its selection
+                    // must be normalized later.  An exact typed member is
+                    // enough evidence that this source has a direct route,
+                    // so do not consult external properties in that case.
+                    our POV: directMember <- CI!.fetchField(partTag)
+                    me bool: directAbsenceKnown <-
+                            CI!.value!.overlayType==LST and
+                            CI!.value!.evalMode==emLiteral and
+                            !CI!.value!.tailUnfinished
+                    if(directMember==NULL and
+                            directAbsenceKnown and
+                            selectionSourceSnapshot!=NULL and
+                            partTag!=""){
+                        their IdentityRegistry: registry <-
+                                selectionSourceSnapshot!.
+                                effectiveIdentityRegistry()
+                        externalAssociationReasoner.
+                                collectForwardAssociations(
+                                        registry,
+                                        selectionSourceSnapshot,
+                                        partTag,
+                                        externalAssociationMatches)
+                        if(!externalAssociationMatches.isEmpty()){
+                            newPath <- externalAssociationReasoner.
+                                    materializeForwardSelection(
+                                            registry,
+                                            externalAssociationMatches,
+                                            agenda!.normalizationID)
+                            usedWordSourceExternalTier <- newPath!=NULL
+                            if(externalAssociationMatches.size()==1){
+                                selectedSourcePOV <-
+                                        externalAssociationMatches.first()!.
+                                        valuePOV
+                            }
+                        }
+                    }
+                    // Direct search continues to use the existing dot
+                    // reducer and therefore retains its ordinary unresolved
+                    // unknown-size intersection (`oneOf`).
+                    part!.pathMode <- dotField
                 }
                 switch(part!.pathMode){
                     case dotField:{
@@ -5383,7 +5431,8 @@ struct CursorPathResolver{
                     nxtAction! <- false
                     selectionResultPOV <- pathPov
                 }
-                if(part!.pathMode==upField and
+                if((part!.pathMode==upField or
+                        usedWordSourceExternalTier) and
                         selectionSourceSnapshot!=NULL and
                         selectionQueryPOV!=NULL and
                         selectionResultPOV!=NULL){
@@ -5398,7 +5447,8 @@ struct CursorPathResolver{
                                     selectionResultPOV, partTag,
                                     externalAssociationMatches,
                                     createExternalAssociation,
-                                    agenda!.normalizationID)
+                                    agenda!.normalizationID,
+                                    selectionReferenceKind)
                 }else if(selectedTemporalBoundary==NULL and
                         selectionQueryPOV!=NULL and
                         selectionResultPOV!=NULL and
