@@ -47,7 +47,6 @@ public:
     std::atomic<int> expanded{0}, expensive{0}, cheap{0};
     Node costRoot;
     Node costResult = node(42);
-    bool reverseCosts = false;
     std::shared_ptr<GoalSpec<Node>> goal(const Query<Node>& query) override {
         return std::make_shared<TestGoal>(query);
     }

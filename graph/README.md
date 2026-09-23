@@ -2,8 +2,9 @@
 
 This private experiment starts at Proteus commit
 `73752c4b85ba1af6e956336e7d14385a2c3d4445`. The local branch is `codex/proteus4`.
-It has no Git remote. Existing agenda normalization is retained for comparison;
-the new API never calls it as a fallback.
+It has no Git remote. Proteus4 is an independent redesign. Remove obsolete code
+as its responsibilities move to the graph reasoner. The remaining agenda entry
+points are migration work; the graph API does not call them.
 
 ## Start here
 
@@ -134,19 +135,20 @@ releases its session after any current bounded step, including its subscription.
 Supported normalization is strict, positive, untyped numeric/string scalar
 constraints, with independent size/value acquisition, unresolved RHS chains,
 and registry identities. Literal list size acquisition is supported for the
-indexed-access refinement example. Sets use `DirectConsolidationStrategy` for
-scalar compatibility and the existing `WorldManager.DO_COPY` primitive; they
-do not execute agenda actions. Each candidate is checked against its path
-before applying a batch. Size mismatches requiring richer semantics remain
-symbolic rather than being silently overwritten.
+indexed-access refinement example. The adapter checks literal scalar agreement
+directly, within its explicitly supported subset. Sets use
+`infonState.copyOverlayFrom`; the graph adapter has no dependency on
+`WorldManager`, `DirectConsolidationStrategy`, or `AItem`. Each candidate is
+checked against its path before applying a batch. Size mismatches requiring
+richer semantics remain symbolic rather than being silently overwritten.
 
 Indexed access supports flat ordered physical lists and existing compressed
 repetition spans. Nested span traversal, intersection result selection, word
 definitions, `%prev`/`%tPrev`, range algebra, tentative branch transactions,
 stream-parser integration, commutators and theorem discovery are not migrated.
 Unsupported work stays attached and visible as symbolic obligations. Existing
-language tests therefore still test the old engine; they guard against changes
-to the shared data model, not prove those features have been migrated.
+language tests are examples for future migration. Their pass count is not a
+requirement for each development step and does not prove feature migration.
 
 The extension points for those features are graph edges, demand translation,
 explicit refinement sub-goals, and GoalSpec/Set semantics. No module class is
@@ -175,18 +177,22 @@ resolve:
 ```sh
 cd LocalBuild
 ./TestProteus -t unit/graphFoundation/
-./TestProteus
 ```
 
-The untouched starting commit's baseline was **8 failures / 456 tests**:
+Use focused tests for the behavior being changed. The full legacy suite is
+available as `./TestProteus` when it is useful; it is not a gate for every step.
+Remove obsolete implementations and tests rather than adding compatibility code
+solely to preserve that suite.
+
+For historical reference, the untouched starting commit's baseline was **8 failures / 456 tests**:
 `concat/parseSrc`, `innr/oneOf`, `this/lvl1`, `search/adj1`,
 `unit/world/dayFromSeconds/writeNestedSecond`,
 `unit/world/dayFromSeconds/writeNestedLastSecondNegative`,
 `world/load/kernel`, and `world/load/publicKB`. The final two report missing
-`assets/public/KernelKB.pr`. Always compare failure names, not only counts.
+`assets/public/KernelKB.pr`. When comparing historical runs, compare failure names as well as counts.
 
 
-## Foundation validation (2026-09-23)
+## Initial foundation validation (commit 36bbae4, 2026-09-23)
 
 - CodeDog generation and C++ build succeeded.
 - POV integration: **18/18** scenarios passed.
@@ -201,3 +207,10 @@ The untouched starting commit's baseline was **8 failures / 456 tests**:
 
 The existing test harness can return exit status zero when assertions fail;
 check its `Total Failures/Tests` summary rather than only the process status.
+
+## Agenda dependency cleanup validation (2026-09-23)
+
+- CodeDog generation and C++ build succeeded.
+- POV integration: **20/20** scenarios passed, including conflicting string
+  constraints and prefix copying with retained state metadata.
+- The full legacy suite was not rerun; it is not a gate for this redesign.

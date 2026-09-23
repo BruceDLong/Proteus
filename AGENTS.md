@@ -1,3 +1,20 @@
+Proteus4 development
+--------------------
+
+This is an independent architecture experiment. Favor the new graph reasoner
+and remove code that is no longer used; compatibility with every legacy API or
+test is not a requirement at each step. Do not retain obsolete scaffolding only
+to preserve the old test baseline.
+
+Validate the behavior being changed with focused tests. Existing language tests
+remain useful semantic examples for later migration, and can be run selectively.
+A full legacy-suite run is optional, not a gate for every change. Clearly report
+which behavior was checked and which features remain unsupported.
+
+The graph entry point is GraphNormalizer in GraphFoundation.Lib.dog. See
+graph/README.md for its architecture and current limits. The agenda description
+below describes the legacy implementation that is still being migrated.
+
 Intro
 -----
 
@@ -59,16 +76,16 @@ Other files:
 
 
  =========================
-Build LinuxTestBuild/TestProteus with codeDog Proteus.Lib.dog
+Build the current C++ target with:
+    codeDog Proteus.Lib.dog
 
-Run default tests (which are in defaultTests.tst) with:
-     ./TestProteus
+Run the focused graph suite from LocalBuild:
+    ./TestProteus -t unit/graphFoundation/
 
-    or:  ./TestProteus -t ./defaultTests.tst:
+The old language suite is still available there as ./TestProteus. Run it when
+useful for the change, rather than preserving its pass count as a standing gate.
+Check the printed failure summary; the harness may exit zero on test failures.
 
-    Specific test: ./TestProteus -t ./defaultTests.tst:query/getNthSub
-
-    Add -T 3 to run with crash protection after 3 seconds. (Takes longer)
-
-
-The build from scratch can take a minute. If you are doing quick experiments you can just edit the intermediate c++ file. Rebuild it from the LinuxTestBuild folder with "codeDog -b TestProteus"
+For a quick generated-C++ experiment, rebuild from LocalBuild with:
+    codeDog -b TestProteus
+Regenerate from the CodeDog source before accepting the final change.

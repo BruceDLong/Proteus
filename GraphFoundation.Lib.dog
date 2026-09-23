@@ -31,7 +31,7 @@ struct NormalizationHandle: wraps=Proteus4Handle {
 struct GraphRuntime: wraps=Proteus4Runtime {}
 
 // A semantic context owns one graph manager and its registry. Legacy Agent
-// entry points remain available as the regression baseline, never as fallback.
+// entry points are separate migration work; graph queries never call them.
 struct GraphNormalizer {
     me GraphRuntime: runtime
     our ProteusGraphAccess: access
@@ -80,8 +80,6 @@ struct GraphNormalizer {
 // the graph interface, never by the generic traverser.
 struct ProteusGraphAccess {
     our IdentityRegistry: registry
-    me DirectConsolidationStrategy: scalarRules
-    me WorldManager: copyOperations
 
     void: initialize() <- {Allocate(registry)}
     void: bind(our POV: pov) <- <%{
@@ -156,20 +154,21 @@ struct ProteusGraphAccess {
         }
         return(result)
     }
-    // -1: contradiction proved by existing scalar rules; 0: unsupported;
+    // -1: conflicting literal scalar values; 0: unsupported;
     // 1: compatible in this foundation's supported subset.
     me int: compatible(our POV: target, our POV: source, me int: demand) <- {
         if(!relationSupported(target, source, demand)){return(0)}
         if(target!.pItem!.infSize!.evalMode==emLiteral and
                 source!.pItem!.infSize!.evalMode==emLiteral and
                 target!.pItem!.infSize!.num!=source!.pItem!.infSize!.num){return(0)}
-        if(scalar(target)){
-            our AItem:: evidence
-            evidence!.LHS_item <- target
-            evidence!.RHS <- source
-            me InfonViewReasoningResult: plan <- scalarRules.planConsolidation(evidence)
-            if(plan.status==rrRejected){return(-1)}
-            if(plan.status==rrNotApplicable){return(0)}
+        // supports() has excluded references, polarity, types, and expressions.
+        // Unknown fields impose no literal equality test in this subset.
+        if(scalar(target) and target!.pItem!.value!.evalMode==emLiteral and
+                source!.pItem!.value!.evalMode==emLiteral){
+            if(target!.pItem!.value!.overlayType==NUM and
+                    target!.pItem!.value!.num!=source!.pItem!.value!.num){return(-1)}
+            if(target!.pItem!.value!.overlayType==STR and
+                    target!.pItem!.value!.str!=source!.pItem!.value!.str){return(-1)}
         }
         return(1)
     }
@@ -183,10 +182,9 @@ struct ProteusGraphAccess {
         me bool: copyValue <- (demand==2 or demand==3) and
                 scalar(target) and target!.pItem!.value!.evalMode==emUnknown and
                 source!.pItem!.value!.evalMode==emLiteral
-        // Reuse the same state-copy primitive as execConsolidationPlan. No
-        // agenda is created and no worklist constraint is removed by a Set.
-        if(copySize){copyOperations.DO_COPY(source!.pItem!.infSize, target!.pItem!.infSize, 0)}
-        if(copyValue){copyOperations.DO_COPY(source!.pItem!.value, target!.pItem!.value, 0)}
+        // A Set uses the state primitive directly and retains work constraints.
+        if(copySize){target!.pItem!.infSize!.copyOverlayFrom(source!.pItem!.infSize, 0)}
+        if(copyValue){target!.pItem!.value!.copyOverlayFrom(source!.pItem!.value, 0)}
         if(copySize or copyValue){
             target!.pItem!.isNormed <- false
             target!.workRevision <+- 1
