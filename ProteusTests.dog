@@ -1,6 +1,24 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphFoundation/oneRHS
+    unit/graphFoundation/twoRHSs
+    unit/graphFoundation/throughRHS
+    unit/graphFoundation/noRoute
+    unit/graphFoundation/subscription
+    unit/graphFoundation/cancel
+    unit/graphFoundation/conflict
+    unit/graphFoundation/registry
+    unit/graphFoundation/sparse
+    unit/graphFoundation/refinement
+    unit/graphFoundation/cost
+    unit/graphFoundation/physical
+    unit/graphFoundation/unsupported
+    unit/graphFoundation/intermediateConflict
+    unit/graphFoundation/string
+    unit/graphFoundation/parsedNumeric
+    unit/graphFoundation/sizeMismatch
+    unit/graphFoundation/pendingPath
     unit/GFirst/t1
     unit/GFirst/t2
     unit/GFirst/t3
@@ -4901,5 +4919,238 @@ struct GLOBAL {
         }
         if(line!=""){processTestLine(testName, CORE.agent, line)}
         modelMngr.clear()
+    }
+}
+
+// These exercise the real POV adapter and asynchronous public CodeDog API.
+// The generic scheduler's independent concurrency/cost tests live in graph/.
+#define GRAPHFOUNDATION(NAME, MSG, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphFoundation(tname, CASE_ID)}%>
+
+struct GLOBAL {
+    GRAPHFOUNDATION(unit/graphFoundation/oneRHS, "one RHS supplies size and value", 1)
+    GRAPHFOUNDATION(unit/graphFoundation/twoRHSs, "separate constraints supply separate fields", 2)
+    GRAPHFOUNDATION(unit/graphFoundation/throughRHS, "traverse an unresolved RHS without normalizing it", 3)
+    GRAPHFOUNDATION(unit/graphFoundation/noRoute, "quiescent symbolic result retains a subscription", 4)
+    GRAPHFOUNDATION(unit/graphFoundation/subscription, "publish information after symbolic completion", 5)
+    GRAPHFOUNDATION(unit/graphFoundation/cancel, "cancel only one of two subscribers", 6)
+    GRAPHFOUNDATION(unit/graphFoundation/conflict, "do not treat conjunctive work as alternatives", 7)
+    GRAPHFOUNDATION(unit/graphFoundation/registry, "traverse registered identities bidirectionally", 8)
+    GRAPHFOUNDATION(unit/graphFoundation/sparse, "select a billionth occurrence without expanding its list", 9)
+    GRAPHFOUNDATION(unit/graphFoundation/refinement, "a size subgoal exposes a sparse edge", 10)
+    GRAPHFOUNDATION(unit/graphFoundation/cost, "route threshold leaves expensive work symbolic", 11)
+    GRAPHFOUNDATION(unit/graphFoundation/physical, "select a loaded physical item", 12)
+    GRAPHFOUNDATION(unit/graphFoundation/unsupported, "retain unsupported semantic constraints", 13)
+    GRAPHFOUNDATION(unit/graphFoundation/intermediateConflict, "validate every constraint on the path", 14)
+    GRAPHFOUNDATION(unit/graphFoundation/string, "reuse scalar Set for string values", 15)
+
+    GRAPHFOUNDATION(unit/graphFoundation/parsedNumeric, "use parser-created numeric work-list constraints", 16)
+    GRAPHFOUNDATION(unit/graphFoundation/sizeMismatch, "retain size mismatches requiring richer semantics", 17)
+
+    GRAPHFOUNDATION(unit/graphFoundation/pendingPath, "do not use an unresolved path result as scalar evidence", 18)
+
+    our POV: graphScalar(me int64: value, me int64: size) <- {
+        our POV:: result{900}
+        Allocate(result!.pItem)
+        result!.pItem!.viewMode <- vmOverlay
+        result!.pItem!.value!.overlayType <- NUM
+        result!.pItem!.value!.evalMode <- emUnknown
+        result!.pItem!.infSize!.overlayType <- NUM
+        result!.pItem!.infSize!.evalMode <- emUnknown
+        if(value>=0){
+            result!.pItem!.value!.evalMode <- emLiteral
+            result!.pItem!.value!.num <- value
+        }
+        if(size>=0){
+            result!.pItem!.infSize!.evalMode <- emLiteral
+            result!.pItem!.infSize!.num <- size
+        }
+        return(result)
+    }
+    our POV: graphParsed(me string: testName, me string: text) <- {
+        our POV:: result{901}
+        result!.pItem <- parseAndExtract(testName, text)
+        return(result)
+    }
+    me void: unitTestGraphFoundation(me string: testName, me int: caseID) <- {
+        me GraphNormalizer: normalizer
+        normalizer.init()
+        our POV: target <- graphScalar(-1, -1)
+        our POV: source <- graphScalar(7, 10)
+        me bool: passed <- false
+        me NormalizationHandle: handle
+        if(caseID==1){
+            normalizer.addRHS(target, source)
+            handle <- normalizer.normalize(target)
+            handle.waitForCompletion()
+            passed <- handle.fullyNormed() and !handle.failed() and
+                    !handle.symbolicValues() and !handle.withSubscribers() and
+                    target!.pItem!.value!.num==7 and target!.pItem!.infSize!.num==10 and
+                    target!.pItem!.wrkList.size()==1 and handle.stepCount()>0
+        }else if(caseID==2){
+            our POV: valueSource <- graphScalar(7, -1)
+            our POV: sizeSource <- graphScalar(-1, 10)
+            normalizer.addRHS(target, valueSource)
+            normalizer.addRHS(target, sizeSource)
+            handle <- normalizer.normalize(target)
+            handle.waitForCompletion()
+            passed <- handle.fullyNormed() and !handle.symbolicValues() and
+                    !handle.failed() and target!.pItem!.value!.num==7 and
+                    target!.pItem!.infSize!.num==10 and target!.pItem!.wrkList.size()==2
+        }else if(caseID==3){
+            our POV: middle <- graphScalar(-1, -1)
+            normalizer.addRHS(target, middle)
+            normalizer.addRHS(middle, source)
+            normalizer.addRHS(middle, target)
+            handle <- normalizer.normalize(target)
+            handle.waitForCompletion()
+            passed <- handle.fullyNormed() and !handle.failed() and
+                    target!.pItem!.value!.num==7 and
+                    middle!.pItem!.value!.evalMode==emUnknown and
+                    middle!.pItem!.wrkList.size()==2
+        }else if(caseID==4){
+            handle <- normalizer.normalize(target)
+            handle.waitForCompletion()
+            passed <- handle.fullyNormed() and handle.symbolicValues() and
+                    handle.withSubscribers() and !handle.failed() and
+                    target!.pItem!.value!.evalMode==emUnknown
+            handle.cancel()
+        }else if(caseID==5){
+            our POV: missing <- graphScalar(-1, -1)
+            normalizer.addRHS(target, missing)
+            handle <- normalizer.normalize(target)
+            handle.waitForCompletion()
+            passed <- handle.withSubscribers() and handle.symbolicValues()
+            normalizer.addRHS(missing, source)
+            handle.waitForCompletion()
+            passed <- passed and handle.fullyNormed() and !handle.withSubscribers() and
+                    !handle.failed() and target!.pItem!.value!.num==7
+        }else if(caseID==6){
+            our POV: other <- graphScalar(-1, -1)
+            our POV: missing <- graphScalar(-1, -1)
+            normalizer.addRHS(target, missing)
+            normalizer.addRHS(other, missing)
+            me NormalizationHandle: first <- normalizer.normalize(target)
+            me NormalizationHandle: second <- normalizer.normalize(other)
+            first.waitForCompletion(); second.waitForCompletion()
+            first.cancel()
+            normalizer.addRHS(missing, source)
+            first.waitForCompletion(); second.waitForCompletion()
+            passed <- first.cancelled() and !first.withSubscribers() and
+                    !first.fullyNormed() and target!.pItem!.value!.evalMode==emUnknown and
+                    other!.pItem!.value!.num==7 and second.fullyNormed() and !second.failed()
+        }else if(caseID==7){
+            our POV: conflict <- graphScalar(8, 10)
+            normalizer.addRHS(target, source)
+            normalizer.addRHS(target, conflict)
+            handle <- normalizer.normalize(target)
+            handle.waitForCompletion()
+            passed <- handle.failed() and !handle.fullyNormed() and
+                    target!.pItem!.wrkList.size()==2 and target!.pItem!.value!.num==7
+        }else if(caseID==8){
+            our POV: middle <- graphScalar(-1, -1)
+            normalizer.recordIdentity(middle, target)
+            normalizer.recordIdentity(source, middle)
+            handle <- normalizer.normalize(target)
+            handle.waitForCompletion()
+            passed <- handle.fullyNormed() and !handle.failed() and
+                    target!.pItem!.value!.num==7 and normalizer.access!.registry!.identities.size()==2
+        }else if(caseID==9){
+            target <- graphParsed(testName, "*1000000000+{item| ...}")
+            handle <- normalizer.findItem(target, 999999999)
+            handle.waitForCompletion()
+            our POV: selected <- handle.result()
+            passed <- selected!=NULL and handle.fullyNormed() and !handle.failed() and
+                    !handle.symbolicValues() and selected!.implicitItem.sourceIndex==999999999 and
+                    target!.pItem!.value!.items.isEmpty() and
+                    target!.repetitionSpan.family!.occurrences.size()==1
+        }else if(caseID==10){
+            target <- graphParsed(testName, "*_+{item| ...}")
+            source <- graphParsed(testName, "*1000000000+{item| ...}")
+            normalizer.addRHS(target, source)
+            handle <- normalizer.findItem(target, 999999999)
+            handle.waitForCompletion()
+            our POV: selected <- handle.result()
+            passed <- selected!=NULL and handle.fullyNormed() and !handle.failed() and
+                    target!.pItem!.infSize!.num==1000000000 and
+                    selected!.implicitItem.sourceIndex==999999999 and
+                    target!.pItem!.value!.items.isEmpty() and target!.pItem!.wrkList.size()==1
+        }else if(caseID==11){
+            normalizer.addRHS(target, source)
+            handle <- normalizer.normalizeWithCost(target, 0)
+            handle.waitForCompletion()
+            passed <- handle.fullyNormed() and handle.symbolicValues() and
+                    handle.withSubscribers() and !handle.failed() and
+                    target!.pItem!.value!.evalMode==emUnknown
+            handle.cancel()
+        }else if(caseID==12){
+            target <- graphParsed(testName, "{4 8 12}")
+            handle <- normalizer.findItem(target, 1)
+            handle.waitForCompletion()
+            our POV: selected <- handle.result()
+            passed <- selected!=NULL and handle.fullyNormed() and !handle.failed() and
+                    selected===target!.pItem!.value!.items.head!.next and
+                    selected!.pItem!.value!.num==8
+        }else if(caseID==13){
+            our POV: symbolic <- graphParsed(testName, "[1 2]")
+            normalizer.addRHS(target, source)
+            normalizer.addRHS(target, symbolic)
+            handle <- normalizer.normalize(target)
+            handle.waitForCompletion()
+            passed <- handle.fullyNormed() and handle.symbolicValues() and
+                    handle.withSubscribers() and !handle.failed() and
+                    target!.pItem!.value!.num==7 and target!.pItem!.wrkList.size()==2
+            handle.cancel()
+        }else if(caseID==14){
+            our POV: middle <- graphScalar(6, 10)
+            normalizer.addRHS(target, middle)
+            normalizer.addRHS(middle, source)
+            handle <- normalizer.normalize(target)
+            handle.waitForCompletion()
+            passed <- handle.failed() and !handle.fullyNormed() and target!.pItem!.value!.num==6
+        }else if(caseID==15){
+            target <- graphParsed(testName, "*_+$")
+            source <- graphParsed(testName, "'hello'")
+            normalizer.addRHS(target, source)
+            handle <- normalizer.normalize(target)
+            handle.waitForCompletion()
+            passed <- handle.fullyNormed() and !handle.failed() and !handle.symbolicValues() and
+                    target!.pItem!.value!.str=="hello" and target!.pItem!.infSize!.num==5
+        }else if(caseID==16){
+            target <- graphParsed(testName, "*_+_ = *10+7")
+            handle <- normalizer.normalize(target)
+            handle.waitForCompletion()
+            passed <- handle.fullyNormed() and !handle.failed() and !handle.symbolicValues() and
+                    target!.pItem!.value!.num==7 and target!.pItem!.infSize!.num==10 and
+                    target!.pItem!.wrkList.size()==1
+        }else if(caseID==17){
+            our POV: differentSize <- graphScalar(7, 12)
+            normalizer.addRHS(target, source)
+            normalizer.addRHS(target, differentSize)
+            handle <- normalizer.normalize(target)
+            handle.waitForCompletion()
+            passed <- handle.fullyNormed() and !handle.failed() and handle.symbolicValues() and
+                    target!.pItem!.value!.num==7 and target!.pItem!.infSize!.num==10 and
+                    target!.pItem!.wrkList.size()==2
+        }else if(caseID==18){
+            our PartPath:: pending
+            source!.pItem!.parts.append(pending)
+            normalizer.addRHS(target, source)
+            handle <- normalizer.normalize(target)
+            handle.waitForCompletion()
+            passed <- handle.fullyNormed() and !handle.failed() and handle.symbolicValues() and
+                    handle.withSubscribers() and target!.pItem!.value!.evalMode==emUnknown and
+                    target!.pItem!.wrkList.size()==1
+        }
+        if(!passed){
+            print("Graph scenario "+toString(caseID)+": "+handle.error()+"\n")
+            withEach step in range 0 .. handle.stepCount(){
+                print("  "+handle.stepDescription(step)+" cost="+toString(handle.stepCost(step))+"\n")
+            }
+        }
+        normalizer.close()
+        me string: actual <- "false"
+        me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
     }
 }

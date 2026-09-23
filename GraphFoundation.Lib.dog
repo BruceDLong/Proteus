@@ -1,0 +1,218 @@
+// Proteus4 opt-in graph foundation. Semantic knowledge remains in CodeDog;
+// the native runtime supplies generic queues, costs, locking and RAII shutdown.
+requirements = [[tagOneOf, Lang, [CPP]]]
+interface = { provides=[GraphFoundation] libFiles=[pthread] headers=[] }
+LibDescription = { useStatus=dynamic description='Proteus4 graph foundation' features=[GraphFoundation] Lang=[CPP] }
+
+embedVeryHigh = `
+# include "../graph/GraphSearch.h"
+using Proteus4Handle = proteus4::NormalizationHandle<std::shared_ptr<POV>>;
+using Proteus4Runtime = proteus4::GraphManager<std::shared_ptr<POV>>;
+`
+embedHigh = `
+# include "../graph/ProteusGraph.h"
+`
+
+struct NormalizationHandle: wraps=Proteus4Handle {
+    void: waitForCompletion() <- <%!waitForCompletion()%>
+    void: cancel() <- <%!cancel()%>
+    me bool: fullyNormed() <- <%!status().fullyNormed%>
+    me bool: withSubscribers() <- <%!status().withSubscribers%>
+    me bool: symbolicValues() <- <%!status().symbolicValues%>
+    me bool: cancelled() <- <%!status().cancelled%>
+    me bool: failed() <- <%!status().failed%>
+    me string: error() <- <%!status().error%>
+    me string: stepDescription(me int64: index) <- <%!steps().at(%1).action%>
+    me uint64: stepCost(me int64: index) <- <%!steps().at(%1).cost%>
+    our POV: stepNode(me int64: index) <- <%!steps().at(%1).query.node%>
+    me int64: stepCount() <- <%!steps().size()%>
+    our POV: result() <- <%!result()%>
+}
+struct GraphRuntime: wraps=Proteus4Runtime {}
+
+// A semantic context owns one graph manager and its registry. Legacy Agent
+// entry points remain available as the regression baseline, never as fallback.
+struct GraphNormalizer {
+    me GraphRuntime: runtime
+    our ProteusGraphAccess: access
+    void: init() <- <%{
+        if (access) throw std::logic_error("GraphNormalizer already initialized");
+        access = std::make_shared<ProteusGraphAccess>();
+        access->initialize();
+        runtime.init(std::make_shared<proteus4::ProteusAccess>(access));
+    }%>
+    void: initWithRegistry(our IdentityRegistry: existing) <- <%{
+        if (access || !existing) throw std::logic_error("new context and registry required");
+        access = std::make_shared<ProteusGraphAccess>();
+        access->registry = existing;
+        runtime.init(std::make_shared<proteus4::ProteusAccess>(access));
+    }%>
+    me NormalizationHandle: normalize(our POV: target) <- <%{
+        runtime.update([&] { access->bind(target); });
+        return runtime.normalize({target, proteus4::sizeAndValue, 0});
+    }%>
+    me NormalizationHandle: normalizeWithCost(our POV: target, me uint64: maximumRoute) <- <%{
+        runtime.update([&] { access->bind(target); });
+        proteus4::CostPolicy policy;
+        policy.maximumRoute = maximumRoute;
+        return runtime.normalize({target, proteus4::sizeAndValue, 0}, policy);
+    }%>
+    me NormalizationHandle: findItem(our POV: source, me int64: index) <- <%{
+        runtime.update([&] { access->bind(source); });
+        return runtime.normalize({source, proteus4::itemAt, index});
+    }%>
+    void: addRHS(our POV: target, our POV: rhs) <- <%{
+        runtime.update([&] {
+            access->bind(target); access->bind(rhs);
+            target->pItem->addPOVToWrkList(rhs);
+        });
+    }%>
+    void: recordIdentity(our POV: left, our POV: right) <- <%{
+        runtime.update([&] { access->recordIdentity(left, right); });
+    }%>
+    me string: stringifyResult(our POV: target) <- <%{
+        return runtime.read([&] { return target->stringify(); });
+    }%>
+    void: close() <- <%{ runtime.close(); }%>
+}
+
+// Bits in a demand: 1=size, 2=value. Relationship demands are interpreted by
+// the graph interface, never by the generic traverser.
+struct ProteusGraphAccess {
+    our IdentityRegistry: registry
+    me DirectConsolidationStrategy: scalarRules
+    me WorldManager: copyOperations
+
+    void: initialize() <- {Allocate(registry)}
+    void: bind(our POV: pov) <- <%{
+        if (!pov || !pov->pItem) throw std::invalid_argument("POV with infonView required");
+        auto existing = pov->effectiveIdentityRegistry();
+        if (existing && existing != registry.get())
+            throw std::logic_error("POV belongs to another registry; use initWithRegistry");
+        pov->bindIdentityRegistry(registry.get());
+    }%>
+    void: recordIdentity(our POV: left, our POV: right) <- {
+        bind(left); bind(right)
+        registry!.recordIdentity(left, right, iekAssertion, 0)
+    }
+    me bool: plain(our POV: pov) <- {
+        if(pov==NULL or pov!.pItem==NULL){return(false)}
+        our infonView: inf <- pov!.pItem
+        return(inf!.viewMode==vmOverlay and !inf!.invertMatch and
+               !inf!.isTentative and inf!.type==NULL and inf!.addedTypes.isEmpty() and
+               inf!.innr==NULL and inf!.proxy==NULL and inf!.partRef==NULL and
+               inf!.parts.isEmpty() and inf!.funcArgs==NULL and
+               (inf!.itmMode==mNone or inf!.itmMode==mItem) and
+               inf!.infSize!.overlayType==NUM and
+               (inf!.infSize!.evalMode==emUnknown or inf!.infSize!.evalMode==emLiteral) and
+               !inf!.hasInnrOutr and !inf!.asRHSInternalIdent and
+               !inf!.value!.inverted and !inf!.value!.undefined and
+               !inf!.infSize!.inverted and !inf!.infSize!.undefined and
+               !pov!.looseType() and pov!.accessMode==aCopyOf and
+               !pov!.selectorLocalWork and !pov!.viewMapWriteEnabled and
+               pov!.viewMap.sourcePov==NULL and pov!.referenceAlias.sourcePov==NULL)
+    }
+    me bool: scalar(our POV: pov) <- {
+        if(!plain(pov)){return(false)}
+        return((pov!.pItem!.value!.overlayType==NUM or
+                pov!.pItem!.value!.overlayType==STR) and
+               (pov!.pItem!.value!.evalMode==emLiteral or
+                pov!.pItem!.value!.evalMode==emUnknown))
+    }
+    me int: known(our POV: pov) <- {
+        if(pov==NULL or pov!.pItem==NULL){return(0)}
+        me int: mask <- 0
+        if(pov!.pItem!.infSize!.overlayType==NUM and
+                pov!.pItem!.infSize!.evalMode==emLiteral){mask <- 1}
+        if(scalar(pov) and pov!.pItem!.value!.evalMode==emLiteral){mask <+- 2}
+        return(mask)
+    }
+    // Unsupported semantics stay symbolic. This deliberately does not infer
+    // equality from arbitrary cursor, range, negation or selection work.
+    me bool: supports(our POV: pov, me int: demand) <- {
+        if(!plain(pov)){return(false)}
+        if(scalar(pov)){return(true)}
+        return(demand==1 and pov!.pItem!.value!.overlayType==LST and
+               pov!.pItem!.value!.evalMode==emLiteral)
+    }
+    me bool: relationSupported(our POV: lhs, our POV: rhs, me int: demand) <- {
+        return(supports(lhs, demand) and supports(rhs, demand) and
+               lhs!.pItem!.value!.overlayType==rhs!.pItem!.value!.overlayType)
+    }
+    me List<our POV>: workSources(our POV: pov) <- {
+        me List<our POV>: result
+        if(pov!=NULL and pov!.pItem!=NULL){
+            withEach rhs in pov!.pItem!.wrkList{result.append(rhs)}
+        }
+        return(result)
+    }
+    me List<our POV>: identitySources(our POV: pov) <- {
+        me List<our POV>: result
+        protect(registry!.registryMutex){
+            withEach identity in registry!.identities{
+                if(identity!.leftPOV===pov){result.append(identity!.rightPOV)}
+                else if(identity!.rightPOV===pov){result.append(identity!.leftPOV)}
+            }
+        }
+        return(result)
+    }
+    // -1: contradiction proved by existing scalar rules; 0: unsupported;
+    // 1: compatible in this foundation's supported subset.
+    me int: compatible(our POV: target, our POV: source, me int: demand) <- {
+        if(!relationSupported(target, source, demand)){return(0)}
+        if(target!.pItem!.infSize!.evalMode==emLiteral and
+                source!.pItem!.infSize!.evalMode==emLiteral and
+                target!.pItem!.infSize!.num!=source!.pItem!.infSize!.num){return(0)}
+        if(scalar(target)){
+            our AItem:: evidence
+            evidence!.LHS_item <- target
+            evidence!.RHS <- source
+            me InfonViewReasoningResult: plan <- scalarRules.planConsolidation(evidence)
+            if(plan.status==rrRejected){return(-1)}
+            if(plan.status==rrNotApplicable){return(0)}
+        }
+        return(1)
+    }
+    me bool: apply(our POV: target, our POV: source, me int: demand) <- {
+        // The goal validated the whole path before this batch. Recheck at the
+        // mutation boundary; nothing can interleave under the context lock.
+        if(compatible(target, source, demand)!=1){return(false)}
+        me bool: copySize <- (demand==1 or demand==3) and
+                target!.pItem!.infSize!.evalMode==emUnknown and
+                source!.pItem!.infSize!.evalMode==emLiteral
+        me bool: copyValue <- (demand==2 or demand==3) and
+                scalar(target) and target!.pItem!.value!.evalMode==emUnknown and
+                source!.pItem!.value!.evalMode==emLiteral
+        // Reuse the same state-copy primitive as execConsolidationPlan. No
+        // agenda is created and no worklist constraint is removed by a Set.
+        if(copySize){copyOperations.DO_COPY(source!.pItem!.infSize, target!.pItem!.infSize, 0)}
+        if(copyValue){copyOperations.DO_COPY(source!.pItem!.value, target!.pItem!.value, 0)}
+        if(copySize or copyValue){
+            target!.pItem!.isNormed <- false
+            target!.workRevision <+- 1
+            return(true)
+        }
+        return(false)
+    }
+    me bool: sparse(our POV: pov) <- {return(pov!.hasSparseOrderedSpanValue())}
+    me int64: extent(our POV: pov) <- {return(pov!.sparseSpanCount())}
+    our POV: existingSparseItem(our POV: pov, me int64: index) <- {
+        return(pov!.findImplicitItemPOV(index))
+    }
+    our POV: sparseItem(our POV: pov, me int64: index) <- {
+        bind(pov)
+        return(pov!.getOrCreateImplicitItemPOV(index))
+    }
+    // Parsed untyped ordered literals normally retain uUnknown. Explicit
+    // unordered lists and unresolved type-dependent order stay unsupported.
+    me bool: orderedList(our POV: pov) <- {
+        return(pov!=NULL and pov!.pItem!=NULL and
+               pov!.pItem!.value!.overlayType==LST and
+               pov!.pItem!.value!.evalMode==emLiteral and
+               (pov!.pItem!.orderMode==uOrdered or
+                (pov!.pItem!.orderMode==uUnknown and pov!.pItem!.type==NULL)))
+    }
+    our POV: first(our POV: pov) <- {return(pov!.pItem!.value!.items.head)}
+    our POV: next(our POV: pov) <- {return(pov!.next)}
+    me bool: subList(our POV: pov) <- {return(pov!.isSubItm)}
+}
