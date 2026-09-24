@@ -146,7 +146,38 @@ parent completion. A size-only count needs only embedded extents; it does not
 normalize every ordinary nested value just to determine the parent's length.
 Template and sparse regions remain symbolic in normalization, and no implicit
 occurrences are eagerly generated. Existing lazy sparse indexed access remains
-available. List-to-list member correspondence is the next implementation slice.
+available.
+
+## Closed list RHS correspondence
+
+A supported list relationship advertises a required relational goal containing
+both existing parent POVs. The optional `Query.related` endpoint participates
+in search identity, so multiple RHSs of the same list remain distinct goals.
+It does not introduce wrapper nodes, and the generic scheduler does not inspect
+either endpoint.
+
+`ProteusCorrespondenceGoal` walks closed, ordered, untyped physical lists in
+pairs. Ordinary nested lists occupy one position and receive the same recursive
+correspondence treatment through their own goals. Embedded spans, templates,
+open tails, and unordered matching are not yet supported by this paired walk.
+The whole walk must finish with equal physical lengths and with each declared
+size agreeing before any member identities are published. Excluded routes,
+unequal lengths, and unsupported later members cannot publish an earlier prefix.
+
+The resulting Set copies any available requested parent size and records member
+relationships in the existing registry with `iekListCorrespondence` evidence.
+It preserves both physical lists and their member links. Child goals use the
+same scalar Set and compatibility checks as before, including paired size/value
+acquisition, transitive RHSs, conflicts, subscriptions, and later invalidation.
+The derived relationships are bidirectional and deduplicated. Work lists remain
+attached, including constraints that require unsupported semantics.
+
+Matching edges account for member visits and potential identity creation; the
+validated finite batch is published under the context lock. Cancellation can
+interrupt traversal or enter after the atomic publication. This is the initial
+loaded-list implementation, with conservative revision restarts, not a large
+list performance optimization. The derived identities rely on stable positions
+in closed lists; structural rewrites and retraction are separate future work.
 
 ## Lifecycle and publication
 
@@ -188,8 +219,9 @@ Supported normalization is strict, positive, untyped numeric/string scalar
 constraints, with independent size/value acquisition, unresolved RHS chains,
 and registry identities. Untyped physical literal lists support member
 normalization, nested list values, embedded spans, and size counting/checking.
-Literal list size acquisition is also supported for the indexed-access
-refinement example. The adapter checks literal scalar agreement
+Closed ordered lists also propagate RHS information through corresponding
+member identities, including nested lists and multiple sources. Literal list
+size acquisition is also supported for the indexed-access refinement example. The adapter checks literal scalar agreement
 directly, within its explicitly supported subset. Sets use
 `infonState.copyOverlayFrom`; the graph adapter has no dependency on
 `WorldManager`, `DirectConsolidationStrategy`, or `AItem`. Each candidate is
@@ -197,8 +229,8 @@ checked against its path before applying a batch. Size mismatches requiring
 richer semantics remain symbolic rather than being silently overwritten.
 
 Indexed access supports flat ordered physical lists and existing compressed
-repetition spans. List-to-list value constraints, computed sizes, concatenation,
-template normalization, nested indexed traversal, intersection result selection, word
+repetition spans. Open-list and embedded-span correspondence, computed sizes,
+concatenation, template normalization, nested indexed traversal, intersection result selection, word
 definitions, `%prev`/`%tPrev`, range algebra, tentative branch transactions,
 stream-parser integration, commutators and theorem discovery are not migrated.
 Unsupported work stays attached and visible as symbolic obligations. Existing
@@ -275,11 +307,10 @@ check its `Total Failures/Tests` summary rather than only the process status.
 Run `python3 graph/run_language_baseline.py` from the fork to normalize the
 selected existing language fixtures exclusively through `GraphNormalizer`.
 The recorded first run is in [language-baseline-results.md](language-baseline-results.md).
-The completion-flag change improves that baseline to **24/38** output matches.
-Physical-member normalization keeps that count while resolving child values in
-four additional cases; see [list-normalization-results.md](list-normalization-results.md)
-for the latest validation and [isnormed-results.md](isnormed-results.md) for the
-previous checkpoint.
+See [list-correspondence-results.md](list-correspondence-results.md) for the
+latest validation. Earlier checkpoints are recorded in
+[list-normalization-results.md](list-normalization-results.md) and
+[isnormed-results.md](isnormed-results.md).
 The selection lives in `graph/language-baseline.txt`; input and expected output
 are read from `defaultTests.tst` each time, with no copied expectations.
 `--select merge/num/` restricts the selection. The runner exits nonzero on

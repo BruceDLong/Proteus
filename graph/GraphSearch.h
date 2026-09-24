@@ -45,9 +45,12 @@ template<class Node> struct Query {
     Node node{};
     int kind = 0;
     std::int64_t argument = 0;
+    // Optional second endpoint for a relational demand. Both endpoints remain
+    // opaque to the scheduler and participate in goal/visit identity.
+    Node related{};
     bool operator<(const Query& other) const {
-        return std::tie(node, kind, argument) <
-               std::tie(other.node, other.kind, other.argument);
+        return std::tie(node, kind, argument, related) <
+               std::tie(other.node, other.kind, other.argument, other.related);
     }
 };
 

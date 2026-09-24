@@ -95,6 +95,23 @@ struct GraphListMeasure {
     }
 }
 
+// Temporary evidence from a paired physical walk. No member identities are
+// published until both walks finish and their complete shapes have been checked.
+struct GraphListCorrespondence {
+    me List<our POV>: leftMembers
+    me List<our POV>: rightMembers
+    me GraphListMeasure: leftMeasure
+    me GraphListMeasure: rightMeasure
+    void: reset() <- {
+        leftMembers.clear(); rightMembers.clear()
+        leftMeasure.reset(); rightMeasure.reset()
+    }
+    void: add(our POV: left, our POV: right) <- {
+        leftMembers.append(left); rightMembers.append(right)
+        leftMeasure.add(left); rightMeasure.add(right)
+    }
+}
+
 // Bits in a demand: 1=size, 2=value. Relationship demands are interpreted by
 // the graph interface, never by the generic traverser.
 struct ProteusGraphAccess {
@@ -191,11 +208,58 @@ struct ProteusGraphAccess {
         return(physicalList(pov) or (demand==1 and literalList(pov)))
     }
     me bool: relationSupported(our POV: lhs, our POV: rhs, me int: demand) <- {
-        // List-to-list value constraints need member correspondence, which is
-        // separate from walking the physical contents of one list.
-        if(literalList(lhs) and demand!=1){return(false)}
+        if(literalList(lhs) and demand!=1){return(correspondingLists(lhs, rhs))}
         return(supports(lhs, demand) and supports(rhs, demand) and
                lhs!.pItem!.value!.overlayType==rhs!.pItem!.value!.overlayType)
+    }
+    me bool: correspondingLists(our POV: left, our POV: right) <- {
+        return(closedPhysicalList(left) and closedPhysicalList(right) and
+               orderedList(left) and orderedList(right))
+    }
+    me bool: correspondingMembers(our POV: left, our POV: right) <- {
+        return(left!=NULL and right!=NULL and left!.pItem!=NULL and right!.pItem!=NULL and
+               !left!.isSubItm and !right!.isSubItm and
+               left!.pItem!.itmMode==mItem and right!.pItem!.itmMode==mItem)
+    }
+    me bool: correspondenceShapeAgrees(our POV: left, our POV: right,
+            me GraphListCorrespondence: evidence) <- {
+        if(!correspondingLists(left, right) or
+                !evidence.leftMeasure.known or !evidence.rightMeasure.known or
+                evidence.leftMeasure.count!=evidence.rightMeasure.count){return(false)}
+        if(left!.pItem!.infSize!.evalMode==emLiteral and
+                left!.pItem!.infSize!.num!=evidence.leftMeasure.count){return(false)}
+        if(right!.pItem!.infSize!.evalMode==emLiteral and
+                right!.pItem!.infSize!.num!=evidence.rightMeasure.count){return(false)}
+        return(true)
+    }
+    me bool: hasDirectIdentity(our POV: left, our POV: right) <- {
+        if(left===right){return(true)}
+        protect(registry!.registryMutex){
+            withEach identity in registry!.identities{
+                if((identity!.leftPOV===left and identity!.rightPOV===right) or
+                   (identity!.leftPOV===right and identity!.rightPOV===left)){return(true)}
+            }
+        }
+        return(false)
+    }
+    me bool: applyCorrespondence(our POV: left, our POV: right,
+            me GraphListCorrespondence: evidence, me int: demand) <- {
+        if(!correspondenceShapeAgrees(left, right, evidence)){return(false)}
+        // Validate all registry affiliations before publishing the batch. The
+        // walk used real members; their next/prev links and list ownership stay
+        // intact. The registry owns the derived bidirectional relationships.
+        withEach member in evidence.leftMembers{bind(member)}
+        withEach member in evidence.rightMembers{bind(member)}
+        me bool: changed <- apply(left, right, demand)
+        withEach slot in range 0 .. evidence.leftMembers.size(){
+            our POV: lhs <- evidence.leftMembers[slot]
+            our POV: rhs <- evidence.rightMembers[slot]
+            if(!hasDirectIdentity(lhs, rhs)){
+                registry!.recordIdentity(lhs, rhs, iekListCorrespondence, 0)
+                changed <- true
+            }
+        }
+        return(changed)
     }
     me List<our POV>: workSources(our POV: pov) <- {
         me List<our POV>: result

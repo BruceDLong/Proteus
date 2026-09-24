@@ -7,7 +7,8 @@ namespace proteus4 {
 using POVNode = std::shared_ptr<POV>;
 enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               itemAt = 4, physicalItemAt = 5,
-              listContents = 6, listMember = 7, listEnd = 8 };
+              listContents = 6, listMember = 7, listEnd = 8,
+              listCorrespondence = 9, correspondingMember = 10, correspondenceEnd = 11 };
 
 // Completion flags are derived metadata. Keep weak witnesses independently
 // of handles so later information invalidates even a released search result.
@@ -76,6 +77,9 @@ public:
         auto target = request.node;
         int demand = request.kind;
         if (source == target || demand < sizeOnly || demand > sizeAndValue) return {};
+        // List values are related by member correspondence, not a shallow
+        // overlay copy. That goal also validates shape before copying size.
+        if (demand != sizeOnly && access_->literalList(target)) return {};
         // Work is conjunctive. A route is evidence only if each intermediate
         // constraint agrees with the finding. It is not an alternative branch.
         for (const auto& step : visit.path) {
@@ -100,6 +104,34 @@ public:
     }
 };
 
+// A relational goal checks the complete paired walk before a Set publishes
+// member identities. Child goals then use ordinary registry/scalar traversal.
+class ProteusCorrespondenceGoal : public GoalSpec<POVNode> {
+    std::shared_ptr<ProteusGraphAccess> access_;
+    GraphListCorrespondence evidence_;
+    bool verified_ = false;
+public:
+    ProteusCorrespondenceGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access)
+        : GoalSpec<POVNode>(query), access_(std::move(access)) {}
+    void beginPass() override { evidence_.reset(); verified_ = false; }
+    std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
+        if (visit.query.kind == correspondingMember)
+            evidence_.add(visit.query.node, visit.query.related);
+        if (visit.query.kind != correspondenceEnd) return {};
+        verified_ = access_->correspondenceShapeAgrees(request.node, request.related, evidence_);
+        if (!verified_) return {};
+        auto access = access_;
+        auto left = request.node, right = request.related;
+        auto evidence = evidence_;
+        int demand = static_cast<int>(request.argument);
+        return {{"Set list member identities", [access, left, right, evidence, demand] {
+            return access->applyCorrespondence(left, right, evidence, demand);
+        }}};
+    }
+    bool satisfied() const override { return verified_; }
+    bool symbolic() const override { return !verified_; }
+};
+
 class ProteusAccess : public GraphAccess<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusCompletion> completion_;
@@ -114,12 +146,36 @@ public:
           completion_(std::make_shared<ProteusCompletion>(access_)) {}
     void invalidateCompletion() override { completion_->invalidate(); }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
+        if (query.kind == listCorrespondence)
+            return std::make_shared<ProteusCorrespondenceGoal>(query, access_);
         return std::make_shared<ProteusGoal>(query, access_, completion_);
     }
     Expansion<POVNode> expand(const Query<POVNode>& query) override {
         Expansion<POVNode> result;
         auto node = query.node;
-        if (query.kind == itemFound || query.kind == listEnd) return result;
+        if (query.kind == itemFound || query.kind == listEnd || query.kind == correspondenceEnd)
+            return result;
+        if (query.kind == listCorrespondence || query.kind == correspondingMember) {
+            auto right = query.related;
+            if (query.kind == listCorrespondence) {
+                if (!access_->correspondingLists(node, right)) { result.deferred = true; return result; }
+            } else if (!access_->correspondingMembers(node, right)) {
+                result.deferred = true; return result;
+            }
+            auto leftNext = query.kind == listCorrespondence ? access_->first(node) : access_->next(node);
+            auto rightNext = query.kind == listCorrespondence ? access_->first(right) : access_->next(right);
+            if (bool(leftNext) != bool(rightNext)) { result.deferred = true; return result; }
+            if (!leftNext) {
+                result.edges.push_back(direct("end of corresponding members",
+                    {node, correspondenceEnd, query.argument, right}));
+            } else if (access_->correspondingMembers(leftNext, rightNext)) {
+                Query<POVNode> next{leftNext, correspondingMember, query.argument, rightNext};
+                Cost creations = access_->hasDirectIdentity(leftNext, rightNext) ? 0 : 1;
+                result.edges.push_back({"corresponding list members", {1, creations}, false,
+                                        [next] { return next; }});
+            } else result.deferred = true;
+            return result;
+        }
         if (query.kind == listContents) {
             if (!access_->physicalList(node)) { result.deferred = true; return result; }
             auto first = access_->first(node);
@@ -145,16 +201,17 @@ public:
                     result.refinements.push_back({{node, listContents, query.kind}, {0, 0},
                         "inspect list contents", query.kind == sizeOnly});
             }
-            for (auto source : access_->workSources(node)) {
-                if (access_->relationSupported(node, source, query.kind))
-                    result.edges.push_back(direct("work-list constraint", {source, query.kind, 0}));
-                else result.deferred = true;
-            }
-            for (auto source : access_->identitySources(node)) {
-                if (access_->relationSupported(node, source, query.kind))
-                    result.edges.push_back(direct("registry identity", {source, query.kind, 0}));
-                else result.deferred = true;
-            }
+            auto relationship = [&](const POVNode& source, const char* label) {
+                if (!access_->relationSupported(node, source, query.kind)) {
+                    result.deferred = true; return;
+                }
+                result.edges.push_back(direct(label, {source, query.kind, 0}));
+                if (query.kind != sizeOnly && access_->literalList(node))
+                    result.refinements.push_back({{node, listCorrespondence, query.kind, source},
+                        {1, 0}, "match list RHS members", false});
+            };
+            for (auto source : access_->workSources(node)) relationship(source, "work-list constraint");
+            for (auto source : access_->identitySources(node)) relationship(source, "registry identity");
             return result;
         }
         if (query.kind == itemAt) {
