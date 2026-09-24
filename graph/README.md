@@ -262,7 +262,9 @@ Type-only evidence is useful even while the payload remains unknown; it leaves
 the result symbolic and eligible for subscription. A compatible source supplies
 all available requested fields in one Set. The Set establishes the type before
 calling the matching-overlay copy primitive. It never overwrites a known type.
-Unknown-to-list adoption and other non-scalar interpretations remain deferred.
+A plain unknown can also adopt an ordered physical list: it first becomes an
+empty open list, then the existing correspondence goal supplies independent
+member views. Other unsupported interpretations remain deferred.
 
 Untyped physical literal lists support member
 normalization, nested list values, embedded spans, and size counting/checking.
@@ -404,3 +406,19 @@ scheduling and generic graph API did not change.
 - The unchanged 38-fixture baseline remains **25/38** output matches.
 - Full legacy suite and native scheduler sanitizers were not rerun for this
   adapter change. `git diff --check` passed.
+
+
+## Unknown-to-list adoption validation (2026-09-24)
+
+A scalar/value search preserves its original goal endpoint while traversing
+unknown RHSs. When it encounters a concrete list, it can expose correspondence
+to that original endpoint without normalizing every intermediate unknown.
+Adoption changes only the target's interpretation and available size. The next
+priced span Set handles member creation; source member links are never aliased.
+
+- Full CodeDog regeneration and C++ build passed.
+- Graph integration: **133/133 passed**, including 11 adoption scenarios.
+- Coverage includes empty/closed/open lists, nested values, registry identities,
+  transitive unresolved RHSs, subscription resumption, creation cost exclusion,
+  concatenation RHSs, and a billion-item extent with zero expanded members.
+- `git diff --check` passed. Full legacy suite not run.

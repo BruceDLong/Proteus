@@ -324,15 +324,18 @@ public:
                     result.refinements.push_back({{node, listContents, query.kind}, {0, 0},
                         "inspect list contents", query.kind == sizeOnly});
             }
+            // Keep the original demand endpoint across unresolved RHSs, so
+            // a discovered list supplies correspondence directly to that goal.
+            auto origin = query.related ? query.related : node;
             auto relationship = [&](const POVNode& source, const char* label) {
                 if (!access_->relationSupported(node, source, query.kind)) {
                     if (access_->hasConcat(source, 1) || access_->hasConcat(source, 2))
                         result.refinements.push_back({{source, query.kind, 0}, {1, 0}, "resolve expression RHS", false});
                     result.deferred = true; return;
                 }
-                result.edges.push_back(direct(label, {source, query.kind, 0}));
-                if (query.kind != sizeOnly && access_->literalList(node))
-                    result.refinements.push_back({{node, listCorrespondence, query.kind, source},
+                result.edges.push_back(direct(label, {source, query.kind, 0, origin}));
+                if (query.kind != sizeOnly && access_->correspondingLists(origin, source))
+                    result.refinements.push_back({{origin, listCorrespondence, query.kind, source},
                         {1, 0}, "match list RHS members", false});
             };
             for (auto source : access_->workSources(node)) relationship(source, "work-list constraint");
