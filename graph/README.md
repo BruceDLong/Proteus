@@ -214,3 +214,33 @@ check its `Total Failures/Tests` summary rather than only the process status.
 - POV integration: **20/20** scenarios passed, including conflicting string
   constraints and prefix copying with retained state metadata.
 - The full legacy suite was not rerun; it is not a gate for this redesign.
+
+## Existing language fixtures and next priority
+
+Run `python3 graph/run_language_baseline.py` from the fork to normalize the
+selected existing language fixtures exclusively through `GraphNormalizer`.
+The recorded first run is in [language-baseline-results.md](language-baseline-results.md).
+The selection lives in `graph/language-baseline.txt`; input and expected output
+are read from `defaultTests.tst` each time, with no copied expectations.
+`--select merge/num/` restricts the selection. The runner exits nonzero on
+mismatches, missing tests, timeout, or process failure; its exploratory baseline
+is not a requirement that every selected case pass immediately.
+
+The harness's `graph` test mode prints the resulting text, size state, and
+settlement/symbolic flags. Selected `parse` fixtures are deliberately normalized
+too. A matching printout alone does not prove list normalization: the parser
+can already supply literal contents and a counted size, while unsupported list
+work remains symbolic. The normal printer and expected strings are retained
+so presentation differences are visible as well.
+
+List normalization now precedes intersections. Cover ordinary and empty lists,
+nested list values, embedded spans, counted and explicitly given sizes
+(including inner `~size` syntax), child RHSs, list identities, open tails, and
+computed sizes. Keep size evidence and child normalization in Proteus graph
+access/GoalSpecs, with generic scheduling and subscriptions in the manager.
+Do not expand an entire sparse list merely to normalize its representation.
+
+The ordinary size/value goal already applies a single Set batch when a
+compatible RHS supplies both. The focused `oneRHS` case now explicitly checks
+that it takes one such Set; `twoRHSs` continues to cover partial information
+from separate sources. Known target constraints must still be validated.

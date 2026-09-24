@@ -601,7 +601,7 @@ struct GLOBAL {
         me string: testMode <- "norm"
         if(columns.size()>=5){testMode <- trimWS(columns[4])}
         if(testMode==""){testMode <- "norm"}
-        if(testMode!="norm" and testMode!="parse" and testMode!="multi" and testMode!="world"){
+        if(testMode!="norm" and testMode!="parse" and testMode!="multi" and testMode!="world" and testMode!="graph"){
             print("Dynamic test parse warning in ", fileName, ":", lineNum, " invalid mode '", testMode, "'. Using 'norm'.\n")
             testMode <- "norm"
         }
@@ -705,6 +705,10 @@ struct GLOBAL {
         me string: testExpected <- dynamicTestExpected[testName]
         if((testMode=="multi" or testMode=="world") and testExpected!="" and testExpected!="-" and findString(testInput, "//:")==-1){
             testInput <+- "//:"+testExpected
+        }
+        if(testMode=="graph"){
+            testGraphLanguage(testName, testInput, testExpected)
+            return()
         }
         if(testMode=="multi"){
             multiNorm(testName, testInput, "")
@@ -4976,6 +4980,32 @@ struct GLOBAL {
         result!.pItem <- parseAndExtract(testName, text)
         return(result)
     }
+    // Run unchanged language fixtures through the graph API only. Keep the
+    // normal printer and expected text: rendering gaps must remain visible.
+    me void: testGraphLanguage(me string: testName, me string: input, me string: expected) <- {
+        our POV: target <- graphParsed(testName, input)
+        if(target!.pItem==NULL){FAIL("Syntax Error in input: "+input)}
+        me GraphNormalizer: normalizer
+        normalizer.init()
+        me NormalizationHandle: handle <- normalizer.normalize(target)
+        handle.waitForCompletion()
+        me bool: failed <- handle.failed()
+        me bool: symbolic <- handle.symbolicValues()
+        me bool: settled <- handle.fullyNormed()
+        me string: error <- handle.error()
+        normalizer.close()
+        // Use exactly the ordinary language-test printer after stopping writes.
+        // POV.stringify() adds a diagnostic symbol prefix that those tests omit.
+        me string: actual <- toString(target!.pItem)
+        print("GRAPH_CASE ", testName, "\n")
+        print("  actual: ", actual, "\n  expected: ", expected, "\n")
+        print("  settled=", settled, " symbolic=", symbolic, " failed=", failed,
+              " size=", target!.pItem!.infSize!.num.stringify(),
+              " sizeState=", toString(target!.pItem!.infSize!.evalMode), "\n")
+        if(failed){print("  error: ", error, "\n")}
+        if(failed or !settled){FAIL("Graph normalization did not settle successfully")}
+        REQUIRE(actual==expected)
+    }
     me void: unitTestGraphFoundation(me string: testName, me int: caseID) <- {
         me GraphNormalizer: normalizer
         normalizer.init()
@@ -4991,6 +5021,11 @@ struct GLOBAL {
                     !handle.symbolicValues() and !handle.withSubscribers() and
                     target!.pItem!.value!.num==7 and target!.pItem!.infSize!.num==10 and
                     target!.pItem!.wrkList.size()==1 and handle.stepCount()>0
+            me int: pairSets <- 0
+            withEach step in range 0 .. handle.stepCount(){
+                if(handle.stepDescription(step)=="Set requested size/value"){pairSets <+- 1}
+            }
+            passed <- passed and pairSets==1
         }else if(caseID==2){
             our POV: valueSource <- graphScalar(7, -1)
             our POV: sizeSource <- graphScalar(-1, 10)
