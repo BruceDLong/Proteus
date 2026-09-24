@@ -90,7 +90,7 @@ public:
             if (!verdict) { deferred_ = true; return {}; }
         }
         auto access = access_;
-        return {{"Set requested size/value", [access, target, source, demand] {
+        return {{"Set requested size/value/type", [access, target, source, demand] {
             return access->apply(target, source, demand);
         }}};
     }

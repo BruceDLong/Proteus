@@ -91,6 +91,21 @@ TestsToRun = `
     unit/graphFoundation/spans/unsupportedLargeExtent
     unit/graphFoundation/spans/zeroTail
     unit/graphFoundation/spans/nestedOpenSpan
+    unit/graphFoundation/overlay/number
+    unit/graphFoundation/overlay/string
+    unit/graphFoundation/overlay/parsedAny
+    unit/graphFoundation/overlay/numericTypeOnly
+    unit/graphFoundation/overlay/stringTypeOnly
+    unit/graphFoundation/overlay/sizeWithoutType
+    unit/graphFoundation/overlay/throughUnknown
+    unit/graphFoundation/overlay/registry
+    unit/graphFoundation/overlay/knownTypeRetained
+    unit/graphFoundation/overlay/noRoute
+    unit/graphFoundation/overlay/cost
+    unit/graphFoundation/overlay/cancel
+    unit/graphFoundation/overlay/listMember
+    unit/graphFoundation/overlay/openTailMember
+    unit/graphFoundation/overlay/unsetOverlay
     unit/GFirst/t1
     unit/GFirst/t2
     unit/GFirst/t3
@@ -5134,7 +5149,7 @@ struct GLOBAL {
                     target!.pItem!.wrkList.size()==1 and handle.stepCount()>0
             me int: pairSets <- 0
             withEach step in range 0 .. handle.stepCount(){
-                if(handle.stepDescription(step)=="Set requested size/value"){pairSets <+- 1}
+                if(handle.stepDescription(step)=="Set requested size/value/type"){pairSets <+- 1}
             }
             passed <- passed and pairSets==1 and target!.pItem!.isNormed
         }else if(caseID==2){
@@ -5608,7 +5623,7 @@ struct GLOBAL {
             if(caseID==20){
                 me int: fieldSets <- 0
                 withEach step in range 0 .. handle.stepCount(){
-                    if(handle.stepDescription(step)=="Set requested size/value"){fieldSets <+- 1}
+                    if(handle.stepDescription(step)=="Set requested size/value/type"){fieldSets <+- 1}
                 }
                 passed <- passed and fieldSets>=2
             }
@@ -5868,6 +5883,134 @@ struct GLOBAL {
             withEach step in range 0 .. handle.stepCount(){
                 print("  "+handle.stepDescription(step)+" cost="+toString(handle.stepCost(step))+"\n")
             }
+        }
+        normalizer.close()
+        me string: actual <- "false"
+        me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+// Overlay interpretation is acquired by the same scalar Set as size/value.
+#define GRAPHOVERLAY(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphOverlay(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHOVERLAY(unit/graphFoundation/overlay/number, 1)
+    GRAPHOVERLAY(unit/graphFoundation/overlay/string, 2)
+    GRAPHOVERLAY(unit/graphFoundation/overlay/parsedAny, 3)
+    GRAPHOVERLAY(unit/graphFoundation/overlay/numericTypeOnly, 4)
+    GRAPHOVERLAY(unit/graphFoundation/overlay/stringTypeOnly, 5)
+    GRAPHOVERLAY(unit/graphFoundation/overlay/sizeWithoutType, 6)
+    GRAPHOVERLAY(unit/graphFoundation/overlay/throughUnknown, 7)
+    GRAPHOVERLAY(unit/graphFoundation/overlay/registry, 8)
+    GRAPHOVERLAY(unit/graphFoundation/overlay/knownTypeRetained, 9)
+    GRAPHOVERLAY(unit/graphFoundation/overlay/noRoute, 10)
+    GRAPHOVERLAY(unit/graphFoundation/overlay/cost, 11)
+    GRAPHOVERLAY(unit/graphFoundation/overlay/cancel, 12)
+    GRAPHOVERLAY(unit/graphFoundation/overlay/listMember, 13)
+    GRAPHOVERLAY(unit/graphFoundation/overlay/openTailMember, 14)
+    GRAPHOVERLAY(unit/graphFoundation/overlay/unsetOverlay, 15)
+
+    void: unitTestGraphOverlay(me string: testName, me int: caseID) <- {
+        our POV: target <- graphScalar(-1, -1)
+        target!.pItem!.value!.overlayType <- tUnknown
+        our POV: source <- graphScalar(7, 10)
+        if(caseID==2 or caseID==8){source <- graphParsed(testName, "'Hello'")}
+        else if(caseID==3){target <- graphParsed(testName, "? = 'Hello'")}
+        else if(caseID==4){
+            source <- graphScalar(-1, 10)
+            target!.pItem!.value!.sizeMode <- fromGiven
+            target!.pItem!.value!.numBase <- bHex
+        }else if(caseID==5){source <- graphParsed(testName, "*_+$")}
+        else if(caseID==6){
+            source <- graphScalar(-1, 10)
+            source!.pItem!.value!.overlayType <- tUnknown
+        }else if(caseID==7 or caseID==12){
+            source <- graphScalar(-1, -1)
+            source!.pItem!.value!.overlayType <- tUnset
+        }else if(caseID==9){
+            target <- graphScalar(7, 5)
+            source <- graphParsed(testName, "'Hello'")
+        }else if(caseID==13){target <- graphParsed(testName, "{?} = {*10+7}")}
+        else if(caseID==14){target <- graphParsed(testName, "{...} = {?}")}
+        else if(caseID==15){target!.pItem!.value!.overlayType <- tUnset}
+        me GraphNormalizer: normalizer
+        normalizer.init()
+        if(caseID==8){normalizer.recordIdentity(source, target)}
+        else if(caseID!=3 and caseID!=10 and caseID!=13 and caseID!=14){normalizer.addRHS(target, source)}
+        if(caseID==7){normalizer.addRHS(source, graphScalar(7, 10))}
+        me NormalizationHandle: handle
+        if(caseID==11){handle <- normalizer.normalizeWithCost(target, 0)}
+        else{handle <- normalizer.normalize(target)}
+        handle.waitForCompletion()
+        me bool: passed <- false
+        if(caseID==1 or caseID==2 or caseID==3 or caseID==8 or caseID==15){
+            passed <- !handle.failed() and !handle.symbolicValues() and target!.pItem!.isNormed and
+                    target!.pItem!.viewMode==vmOverlay and target!.pItem!.value!.evalMode==emLiteral
+            if(caseID==1 or caseID==15){
+                passed <- passed and target!.pItem!.value!.overlayType==NUM and
+                        target!.pItem!.value!.num==7 and target!.pItem!.infSize!.num==10
+            }else{
+                passed <- passed and target!.pItem!.value!.overlayType==STR and
+                        target!.pItem!.value!.str=="Hello" and target!.pItem!.infSize!.num==5
+            }
+            me int: sets <- 0
+            withEach step in range 0 .. handle.stepCount(){
+                if(handle.stepDescription(step)=="Set requested size/value/type"){sets <+- 1}
+            }
+            passed <- passed and sets==1
+        }else if(caseID==4){
+            passed <- !handle.failed() and handle.symbolicValues() and handle.withSubscribers() and
+                    !target!.pItem!.isNormed and target!.pItem!.value!.overlayType==NUM and
+                    target!.pItem!.value!.evalMode==emUnknown and target!.pItem!.infSize!.num==10 and
+                    target!.pItem!.value!.sizeMode==fromGiven and target!.pItem!.value!.numBase==bHex
+            normalizer.addRHS(source, graphScalar(7, 10))
+            handle.waitForCompletion()
+            passed <- passed and !handle.failed() and !handle.symbolicValues() and
+                    target!.pItem!.isNormed and target!.pItem!.value!.num==7
+        }else if(caseID==5){
+            passed <- !handle.failed() and handle.symbolicValues() and handle.withSubscribers() and
+                    !target!.pItem!.isNormed and target!.pItem!.value!.overlayType==STR and
+                    target!.pItem!.value!.evalMode==emUnknown and target!.pItem!.infSize!.evalMode==emUnknown
+        }else if(caseID==6){
+            passed <- !handle.failed() and handle.symbolicValues() and !target!.pItem!.isNormed and
+                    target!.pItem!.infSize!.evalMode==emLiteral and target!.pItem!.infSize!.num==10 and
+                    target!.pItem!.value!.overlayType==tUnknown and target!.pItem!.value!.evalMode==emUnknown
+        }else if(caseID==7){
+            passed <- !handle.failed() and !handle.symbolicValues() and target!.pItem!.isNormed and
+                    target!.pItem!.value!.overlayType==NUM and target!.pItem!.value!.num==7 and
+                    source!.pItem!.value!.overlayType==tUnset and source!.pItem!.value!.evalMode==emUnknown
+        }else if(caseID==9){
+            passed <- !handle.failed() and handle.symbolicValues() and !target!.pItem!.isNormed and
+                    target!.pItem!.value!.overlayType==NUM and target!.pItem!.value!.num==7 and
+                    target!.pItem!.wrkList.size()==1
+        }else if(caseID==10 or caseID==11 or caseID==12){
+            passed <- !handle.failed() and handle.symbolicValues() and handle.withSubscribers() and
+                    !target!.pItem!.isNormed and target!.pItem!.value!.overlayType==tUnknown and
+                    target!.pItem!.value!.evalMode==emUnknown
+            if(caseID==12){
+                handle.cancel()
+                normalizer.addRHS(source, graphScalar(7, 10))
+                handle.waitForCompletion()
+                passed <- passed and handle.cancelled() and target!.pItem!.value!.overlayType==tUnknown
+            }
+        }else if(caseID==13 or caseID==14){
+            our POV: member <- target!.pItem!.value!.items.head
+            passed <- member!=NULL
+            if(caseID==14){
+                our POV: origin <- target!.pItem!.wrkList[0]!.pItem!.value!.items.head
+                passed <- passed and handle.symbolicValues() and !target!.pItem!.isNormed and
+                        member!.pItem!==origin!.pItem and member!.pItem!.value!.overlayType==tUnset
+                normalizer.addRHS(origin, graphScalar(7, 10))
+                handle.waitForCompletion()
+            }
+            passed <- passed and !handle.failed() and !handle.symbolicValues() and target!.pItem!.isNormed and
+                    member!.pItem!.isNormed and member!.pItem!.value!.overlayType==NUM and
+                    member!.pItem!.value!.num==7 and member!.pItem!.infSize!.num==10
+        }
+        if(!passed){
+            print("Graph overlay "+toString(caseID)+": "+handle.error()+"\n")
+            print("  result: "+toString(target!.pItem)+"\n")
         }
         normalizer.close()
         me string: actual <- "false"

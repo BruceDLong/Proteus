@@ -114,8 +114,8 @@ that all information is concrete or that unsupported constraints are proved.
 the result to see exactly what remains unresolved.
 
 The infonView's `isNormed` flag is stricter than the handle's `fullyNormed`:
-a supported scalar is marked only when its value and size are known and its
-required search has settled without deferred constraints. A supported physical
+a supported scalar is marked only when its overlay type, value, and size are
+known and its required search has settled without deferred constraints. A supported physical
 list must also have a closed extent that agrees with its members, and every
 required member must finish normalization. Each GoalSpec receives its own
 completion callback under the context lock; the Proteus adapter sets the flag.
@@ -236,8 +236,17 @@ releases its session after any current bounded step, including its subscription.
 ## Deliberate initial limits
 
 Supported normalization is strict, positive, untyped numeric/string scalar
-constraints, with independent size/value acquisition, unresolved RHS chains,
-and registry identities. Untyped physical literal lists support member
+constraints, with independent size/value/overlay-type acquisition, unresolved RHS
+chains, and registry identities. An unknown overlay (`tUnknown` or `tUnset`),
+including a plain `?` view, can acquire `NUM` or `STR`. The value demand includes
+its interpretation: value evidence is complete only with a known overlay type.
+Type-only evidence is useful even while the payload remains unknown; it leaves
+the result symbolic and eligible for subscription. A compatible source supplies
+all available requested fields in one Set. The Set establishes the type before
+calling the matching-overlay copy primitive. It never overwrites a known type.
+Unknown-to-list adoption and other non-scalar interpretations remain deferred.
+
+Untyped physical literal lists support member
 normalization, nested list values, embedded spans, and size counting/checking.
 Ordered physical lists also propagate RHS information through corresponding
 member identities, including nested lists, embedded list spans, finite open-tail
@@ -355,7 +364,26 @@ computed sizes. Keep size evidence and child normalization in Proteus graph
 access/GoalSpecs, with generic scheduling and subscriptions in the manager.
 Do not expand an entire sparse list merely to normalize its representation.
 
-The ordinary size/value goal already applies a single Set batch when a
-compatible RHS supplies both. The focused `oneRHS` case now explicitly checks
-that it takes one such Set; `twoRHSs` continues to cover partial information
+The ordinary size/value goal applies a single Set batch when a compatible RHS
+supplies both, including overlay type when needed. The focused `oneRHS` case
+checks that it takes one such Set; `twoRHSs` continues to cover partial information
 from separate sources. Known target constraints must still be validated.
+
+## Scalar overlay acquisition validation (2026-09-24)
+
+Scalar normalization now acquires unknown overlay types as part of its existing
+Set batch. Both `tUnknown` and `tUnset` are covered, including parser-created
+`?` views and independent members created by span filling. The manager's
+scheduling and generic graph API did not change.
+
+- CodeDog regeneration and C++ build: passed.
+- Graph integration: **105/105 passed**, including 15 overlay scenarios covering
+  numeric/string evidence, type-only and size-only partial results, transitive
+  work, registry identities, cost exclusion, cancellation, subscription resumption,
+  known-type preservation, and list members.
+- The original `merge/directAny/scalar` and `merge/unknown/typed` fixtures changed
+  from **0/2** to **2/2** exact output matches through the graph API:
+  `? = 'Hello'` now prints `'Hello'`, with `symbolic=0`.
+- The unchanged 38-fixture baseline remains **25/38** output matches.
+- Full legacy suite and native scheduler sanitizers were not rerun for this
+  adapter change. `git diff --check` passed.
