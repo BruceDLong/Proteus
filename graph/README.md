@@ -199,6 +199,24 @@ are monotone tail extensions and closures, with conservative revision restarts
 and registry scans. Structural reordering and retraction need their own
 invalidation design; large-list performance optimization remains future work.
 
+## Field expressions
+
+A `concatField` goal works on either the size or value slot of the existing POV.
+It follows the expression's operand POVs and requests their values, with size
+subgoals where a numeric radix is needed. The Proteus adapter plans string,
+numeric, and physical-list concatenation; the priced Set publishes the result.
+A computed size can consequently expose sparse indexed access on the next pass.
+
+The original state remains in `sizeExpression` or `valueExpression` after the
+result is installed. These retain the original operand POVs as provenance, so
+later normalization still validates their constraints. No field-wrapper POVs
+are created and operands are not destructively combined. List results receive
+independent member views through registry identities. A final open list operand
+can propagate its loaded prefix and later resume; templates and multiple open
+chunks remain symbolic. Invalid or mixed interpretations are not guessed.
+
+See [expression-results.md](expression-results.md) for verified examples.
+
 ## Lifecycle and publication
 
 - `waitForCompletion()` waits for current quiescence, failure, or cancellation.
@@ -259,8 +277,7 @@ checked against its path before applying a batch. Size mismatches requiring
 richer semantics remain symbolic rather than being silently overwritten.
 
 Indexed access supports flat ordered physical lists and existing compressed
-repetition spans. Embedded-string correspondence, computed sizes, concatenation,
-template normalization, nested indexed traversal, intersection result selection, word
+repetition spans. Embedded-string correspondence, template normalization, nested indexed traversal, intersection result selection, word
 definitions, `%prev`/`%tPrev`, range algebra, tentative branch transactions,
 stream-parser integration, commutators and theorem discovery are not migrated.
 Unsupported work stays attached and visible as symbolic obligations. Existing

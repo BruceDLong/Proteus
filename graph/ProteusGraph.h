@@ -10,7 +10,8 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               itemAt = 4, physicalItemAt = 5,
               listContents = 6, listMember = 7, listEnd = 8,
               listCorrespondence = 9, correspondenceEnter = 10, correspondenceEnd = 11,
-              correspondenceMember = 12, correspondenceLeave = 13 };
+              correspondenceMember = 12, correspondenceLeave = 13,
+              concatField = 14, concatMember = 15, concatEnd = 16 };
 
 // Completion flags are derived metadata. Keep weak witnesses independently
 // of handles so later information invalidates even a released search result.
@@ -184,6 +185,32 @@ public:
     bool symbolic() const override { return !verified_; }
 };
 
+// A field expression walks its existing operands. The same goal handles the
+// value slot and the size slot, without creating a proxy POV for either field.
+class ProteusConcatGoal : public GoalSpec<POVNode> {
+    std::shared_ptr<ProteusGraphAccess> access_;
+    GraphConcatTerms terms_;
+    bool verified_ = false;
+public:
+    ProteusConcatGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access)
+        : GoalSpec<POVNode>(query), access_(std::move(access)) {}
+    void beginPass() override { terms_.items.clear(); verified_ = false; }
+    std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
+        if (visit.query.kind == concatMember) terms_.items.push_back(visit.query.node);
+        if (visit.query.kind != concatEnd) return {};
+        auto plan = access_->planConcat(request.node, request.argument, terms_);
+        if (!plan.valid) return {};
+        verified_ = true;
+        auto access = access_; auto owner = request.node; auto slot = request.argument;
+        auto terms = terms_;
+        return {{"Set concatenation result", [access, owner, slot, terms] {
+            return access->applyConcat(owner, slot, terms);
+        }, {plan.visits, plan.creations}}};
+    }
+    bool satisfied() const override { return verified_; }
+    bool symbolic() const override { return !verified_; }
+};
+
 class ProteusAccess : public GraphAccess<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusCompletion> completion_;
@@ -200,13 +227,31 @@ public:
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
         if (query.kind == listCorrespondence)
             return std::make_shared<ProteusCorrespondenceGoal>(query, access_);
+        if (query.kind == concatField)
+            return std::make_shared<ProteusConcatGoal>(query, access_);
         return std::make_shared<ProteusGoal>(query, access_, completion_);
     }
     Expansion<POVNode> expand(const Query<POVNode>& query) override {
         Expansion<POVNode> result;
         auto node = query.node;
-        if (query.kind == itemFound || query.kind == listEnd || query.kind == correspondenceEnd)
+        if (query.kind == itemFound || query.kind == listEnd || query.kind == correspondenceEnd || query.kind == concatEnd)
             return result;
+        if (query.kind == concatField) {
+            if (!access_->hasConcat(node, query.argument)) { result.deferred = true; return result; }
+            auto first = access_->concatFirst(node, query.argument);
+            result.edges.push_back(direct("first concatenation operand",
+                {first ? first : node, first ? concatMember : concatEnd, query.argument, node}));
+            return result;
+        }
+        if (query.kind == concatMember) {
+            result.refinements.push_back({{node, valueOnly, 0}, {0, 0}, "resolve operand value", false});
+            if (access_->concatNeedsRadix(node))
+                result.refinements.push_back({{node, sizeOnly, 0}, {0, 0}, "resolve numeric radix", false});
+            auto next = access_->next(node);
+            result.edges.push_back(direct("next concatenation operand",
+                {next ? next : query.related, next ? concatMember : concatEnd, query.argument, query.related}));
+            return result;
+        }
         if (query.kind == listCorrespondence) {
             if (!access_->correspondingLists(node, query.related)) { result.deferred = true; return result; }
             result.edges.push_back(direct("inspect left span layout", {node, correspondenceEnter, 0, query.related}));
@@ -260,7 +305,7 @@ public:
         if (query.kind == listMember) {
             // Normalization requires the member's complete result. A size-only
             // count needs just an embedded span's extent; nested values count 1.
-            if (query.argument == sizeAndValue || access_->subList(node))
+            if (query.argument != sizeOnly || access_->subList(node))
                 result.refinements.push_back({{node, static_cast<int>(query.argument), 0},
                     {0, 0}, "resolve list member", false});
             auto next = access_->next(node);
@@ -270,6 +315,10 @@ public:
         }
         if (query.kind >= sizeOnly && query.kind <= sizeAndValue) {
             result.deferred = !access_->supports(node, query.kind);
+            if (access_->hasConcat(node, 1))
+                result.refinements.push_back({{node, concatField, 1}, {0, 0}, "resolve size expression", false});
+            if (access_->hasConcat(node, 2))
+                result.refinements.push_back({{node, concatField, 2}, {0, 0}, "resolve value expression", false});
             if (access_->physicalList(node)) {
                 if (query.kind != sizeOnly || !(access_->known(node) & sizeOnly))
                     result.refinements.push_back({{node, listContents, query.kind}, {0, 0},
@@ -277,6 +326,8 @@ public:
             }
             auto relationship = [&](const POVNode& source, const char* label) {
                 if (!access_->relationSupported(node, source, query.kind)) {
+                    if (access_->hasConcat(source, 1) || access_->hasConcat(source, 2))
+                        result.refinements.push_back({{source, query.kind, 0}, {1, 0}, "resolve expression RHS", false});
                     result.deferred = true; return;
                 }
                 result.edges.push_back(direct(label, {source, query.kind, 0}));

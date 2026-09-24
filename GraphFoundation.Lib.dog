@@ -95,6 +95,26 @@ struct GraphListMeasure {
     }
 }
 
+// Retain the original expression as provenance after publishing its result.
+// Its operand POVs remain searchable; they are not copied into a second graph.
+struct infonView {
+    our infonState: sizeExpression
+    our infonState: valueExpression
+}
+struct GraphConcatTerms { me List<our POV>: items }
+struct GraphConcatPlan {
+    me bool: valid <- false
+    me int: type <- 0  // assigned from the first operand before the plan is valid
+    me FlexNum: number
+    me string: text
+    me bool: sizeKnown <- false
+    me FlexNum: size
+    me List<our POV>: members
+    me bool: open <- false
+    me uint64: creations <- 0
+    me uint64: visits <- 0
+}
+
 // Bits in a demand: 1=size, 2=value including its overlay type. A value is
 // known only when its interpretation is known. Relationship demands are interpreted by
 // the graph interface, never by the generic traverser.
@@ -126,8 +146,9 @@ struct ProteusGraphAccess {
                inf!.innr==NULL and inf!.proxy==NULL and inf!.partRef==NULL and
                inf!.parts.isEmpty() and inf!.funcArgs==NULL and
                (inf!.itmMode==mNone or inf!.itmMode==mItem) and
-               inf!.infSize!.overlayType==NUM and
-               (inf!.infSize!.evalMode==emUnknown or inf!.infSize!.evalMode==emLiteral) and
+               ((inf!.infSize!.overlayType==NUM and
+                 (inf!.infSize!.evalMode==emUnknown or inf!.infSize!.evalMode==emLiteral)) or
+                (inf!.infSize!.overlayType==LST and inf!.infSize!.evalMode==emConcat)) and
                !inf!.hasInnrOutr and !inf!.asRHSInternalIdent and
                !inf!.value!.inverted and !inf!.value!.undefined and
                !inf!.infSize!.inverted and !inf!.infSize!.undefined and
@@ -198,7 +219,7 @@ struct ProteusGraphAccess {
     // equality from arbitrary cursor, range, negation or selection work.
     me bool: supports(our POV: pov, me int: demand) <- {
         if(!plain(pov)){return(false)}
-        if(scalarCandidate(pov)){return(true)}
+        if(scalarCandidate(pov) or hasConcat(pov, 2)){return(true)}
         return(physicalList(pov) or (demand==1 and literalList(pov)))
     }
     me bool: relationSupported(our POV: lhs, our POV: rhs, me int: demand) <- {
@@ -225,6 +246,7 @@ struct ProteusGraphAccess {
     // arbitrary FlexNum to an index before checking the range and integrality.
     me int64: listExtent(our POV: pov) <- {
         if(pov!.pItem!.infSize!.evalMode==emUnknown){return(-1)}
+        if(pov!.pItem!.infSize!.evalMode!=emLiteral){return(-2)}
         if(pov!.pItem!.infSize!.num<0 or pov!.pItem!.infSize!.num.getDenominator()!=1 or
                 pov!.pItem!.infSize!.num>9223372036854775807){return(-2)}
         return(pov!.pItem!.infSize!.num.getNumerator().convertToIntVal())
@@ -340,6 +362,135 @@ struct ProteusGraphAccess {
             return(true)
         }
         return(false)
+    }
+    our infonState: concatSource(our POV: pov, me int: slot) <- {
+        if(pov==NULL or pov!.pItem==NULL){return(NULL)}
+        our infonState: source <- pov!.pItem!.valueExpression
+        our infonState: current <- pov!.pItem!.value
+        if(slot==1){source <- pov!.pItem!.sizeExpression; current <- pov!.pItem!.infSize}
+        if(source!=NULL){return(source)}
+        if(current!.evalMode==emConcat){return(current)}
+        return(NULL)
+    }
+    me bool: hasConcat(our POV: pov, me int: slot) <- {
+        our infonState: source <- concatSource(pov, slot)
+        return(source!=NULL and plain(pov) and source!.overlayType==LST and
+               source!.evalMode==emConcat and !source!.inverted and !source!.undefined and
+               !source!.tailUnfinished and source!.listSpec==NULL and !source!.timelike)
+    }
+    our POV: concatFirst(our POV: pov, me int: slot) <- {
+        return(concatSource(pov, slot)!.items.head)
+    }
+    me bool: concatNeedsRadix(our POV: member) <- {
+        return(scalar(member) and member!.pItem!.value!.overlayType==NUM and
+               member!.prev!=NULL and member!.pItem!.value!.sizeMode!=fromContext)
+    }
+    me GraphConcatPlan: planConcat(our POV: owner, me int: slot, me GraphConcatTerms: terms) <- {
+        me GraphConcatPlan: plan
+        if(!hasConcat(owner, slot) or terms.items.isEmpty()){return(plan)}
+        me bool: first <- true
+        withEach term in terms.items{
+            if(term!.isSubItm or !(scalar(term) or (physicalList(term) and orderedList(term))) or
+                    term!.pItem!.value!.evalMode!=emLiteral){return(plan)}
+            our infonView: item <- term!.pItem
+            if(first){
+                plan.type <- item!.value!.overlayType
+                plan.number <- item!.value!.num
+                plan.sizeKnown <- item!.infSize!.overlayType==NUM and item!.infSize!.evalMode==emLiteral
+                plan.size <- item!.infSize!.num
+                if(plan.type==LST){plan.size <- 0; plan.sizeKnown <- true}
+            }else if(plan.type!=item!.value!.overlayType){return(plan)}
+            if(plan.type==NUM and !first){
+                if(item!.value!.sizeMode==fromContext){plan.number <+- item!.value!.num}
+                else{
+                    if(item!.infSize!.evalMode!=emLiteral or item!.infSize!.overlayType!=NUM or
+                            item!.infSize!.num<0){return(plan)}
+                    plan.number <- plan.number*item!.infSize!.num + item!.value!.num
+                    plan.size <- plan.size*item!.infSize!.num
+                }
+            }else if(plan.type==STR){
+                plan.text.append(item!.value!.str)
+                plan.size <- plan.text.size(); plan.sizeKnown <- true
+            }else if(plan.type==LST){
+                if(plan.open){return(plan)}
+                our POV: member <- item!.value!.items.head
+                while(member!=NULL){
+                    if(!canMakeMember(member)){return(plan)}
+                    plan.members.append(member); plan.visits <+- 1
+                    member <- member!.next
+                }
+                plan.open <- item!.value!.tailUnfinished
+                if(item!.infSize!.evalMode==emLiteral){plan.size <+- item!.infSize!.num}
+                else{plan.sizeKnown <- false}
+            }
+            first <- false
+        }
+        if(slot==1){
+            if(plan.type!=NUM or plan.number<0 or plan.number.getDenominator()!=1){return(plan)}
+            if(owner!.pItem!.sizeExpression!=NULL and owner!.pItem!.infSize!.num!=plan.number){return(plan)}
+        }else{
+            if(plan.sizeKnown and owner!.pItem!.infSize!.evalMode==emLiteral and
+                    owner!.pItem!.infSize!.num!=plan.size){return(plan)}
+            if(owner!.pItem!.valueExpression!=NULL){
+                if(owner!.pItem!.value!.overlayType!=plan.type){return(plan)}
+                if(plan.type==NUM and owner!.pItem!.value!.num!=plan.number){return(plan)}
+                if(plan.type==STR and owner!.pItem!.value!.str!=plan.text){return(plan)}
+                if(plan.type==LST and (!owner!.pItem!.value!.tailUnfinished and
+                        (plan.open or owner!.pItem!.value!.items.size()!=plan.members.size()))){return(plan)}
+            }
+            if(plan.type==LST){
+                me int64: existing <- 0
+                if(owner!.pItem!.valueExpression!=NULL){existing <- owner!.pItem!.value!.items.size()}
+                if(existing>plan.members.size()){return(plan)}
+                plan.creations <- 2*(plan.members.size()-existing)
+            }
+        }
+        plan.valid <- true
+        return(plan)
+    }
+    me bool: applyConcat(our POV: owner, me int: slot, me GraphConcatTerms: terms) <- {
+        me GraphConcatPlan: plan <- planConcat(owner, slot, terms)
+        if(!plan.valid){return(false)}
+        withEach member in plan.members{bind(member)}
+        me bool: changed <- false
+        if(slot==1){
+            if(owner!.pItem!.sizeExpression!=NULL){return(false)}
+            owner!.pItem!.sizeExpression <- owner!.pItem!.infSize
+            our infonState:: result
+            result!.overlayType <- NUM; result!.evalMode <- emLiteral; result!.num <- plan.number
+            owner!.pItem!.infSize <- result
+            changed <- true
+        }else{
+            if(owner!.pItem!.valueExpression==NULL){
+                owner!.pItem!.valueExpression <- owner!.pItem!.value
+                our infonState:: result
+                result!.overlayType <- plan.type; result!.evalMode <- emLiteral
+                result!.sizeMode <- owner!.pItem!.value!.sizeMode
+                if(plan.type==NUM and plan.sizeKnown){result!.sizeMode <- fromGiven}
+                result!.num <- plan.number; result!.str <- plan.text
+                result!.tailUnfinished <- plan.type==LST
+                owner!.pItem!.value <- result
+                changed <- true
+            }
+            if(plan.type==LST){
+                me int64: existing <- owner!.pItem!.value!.items.size()
+                withEach itemIndex in range existing .. plan.members.size(){
+                    our POV: source <- plan.members[itemIndex]
+                    our POV: member <- appendTailMember(owner, source)
+                    member!.isSubItm <- source!.isSubItm
+                    changed <- true
+                }
+                if(!plan.open and owner!.pItem!.value!.tailUnfinished){
+                    owner!.pItem!.value!.tailUnfinished <- false; changed <- true
+                }
+            }
+            if(plan.sizeKnown and owner!.pItem!.infSize!.evalMode==emUnknown){
+                owner!.pItem!.infSize!.overlayType <- NUM; owner!.pItem!.infSize!.evalMode <- emLiteral
+                owner!.pItem!.infSize!.num <- plan.size; changed <- true
+            }
+        }
+        if(changed){owner!.workRevision <+- 1; owner!.pItem!.isNormed <- false}
+        return(changed)
     }
     me bool: sparse(our POV: pov) <- {return(pov!.hasSparseOrderedSpanValue())}
     me int64: extent(our POV: pov) <- {return(pov!.sparseSpanCount())}

@@ -106,6 +106,23 @@ TestsToRun = `
     unit/graphFoundation/overlay/listMember
     unit/graphFoundation/overlay/openTailMember
     unit/graphFoundation/overlay/unsetOverlay
+    unit/graphFoundation/expressions/computedSize
+    unit/graphFoundation/expressions/computedListSize
+    unit/graphFoundation/expressions/strings
+    unit/graphFoundation/expressions/numeric
+    unit/graphFoundation/expressions/nestedNumeric
+    unit/graphFoundation/expressions/lists
+    unit/graphFoundation/expressions/nestedLists
+    unit/graphFoundation/expressions/rhs
+    unit/graphFoundation/expressions/subscription
+    unit/graphFoundation/expressions/computedSubscription
+    unit/graphFoundation/expressions/openPrefix
+    unit/graphFoundation/expressions/cost
+    unit/graphFoundation/expressions/sizeConflict
+    unit/graphFoundation/expressions/negativeSize
+    unit/graphFoundation/expressions/mixed
+    unit/graphFoundation/expressions/laterConflict
+    unit/graphFoundation/expressions/sparseSize
     unit/GFirst/t1
     unit/GFirst/t2
     unit/GFirst/t3
@@ -6015,6 +6032,119 @@ struct GLOBAL {
         normalizer.close()
         me string: actual <- "false"
         me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHEXPR(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphExpression(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHEXPR(unit/graphFoundation/expressions/computedSize, 1)
+    GRAPHEXPR(unit/graphFoundation/expressions/computedListSize, 2)
+    GRAPHEXPR(unit/graphFoundation/expressions/strings, 3)
+    GRAPHEXPR(unit/graphFoundation/expressions/numeric, 4)
+    GRAPHEXPR(unit/graphFoundation/expressions/nestedNumeric, 5)
+    GRAPHEXPR(unit/graphFoundation/expressions/lists, 6)
+    GRAPHEXPR(unit/graphFoundation/expressions/nestedLists, 7)
+    GRAPHEXPR(unit/graphFoundation/expressions/rhs, 8)
+    GRAPHEXPR(unit/graphFoundation/expressions/subscription, 9)
+    GRAPHEXPR(unit/graphFoundation/expressions/computedSubscription, 10)
+    GRAPHEXPR(unit/graphFoundation/expressions/openPrefix, 11)
+    GRAPHEXPR(unit/graphFoundation/expressions/cost, 12)
+    GRAPHEXPR(unit/graphFoundation/expressions/sizeConflict, 13)
+    GRAPHEXPR(unit/graphFoundation/expressions/negativeSize, 14)
+    GRAPHEXPR(unit/graphFoundation/expressions/mixed, 15)
+    GRAPHEXPR(unit/graphFoundation/expressions/laterConflict, 16)
+    GRAPHEXPR(unit/graphFoundation/expressions/sparseSize, 17)
+
+    void: unitTestGraphExpression(me string: testName, me int: caseID) <- {
+        me string: input
+        if(caseID==1){input <- "*(10)+5"}
+        else if(caseID==2){input <- "*(3)+{...} = {*10+1 *10+2 *10+3}"}
+        else if(caseID==3){input <- "('Hello' ' world')"}
+        else if(caseID==4){input <- "(*8+4 *4+3)"}
+        else if(caseID==5){input <- "((*5+2 *6+3 (*7+4 *8+5 (*9+6 *10+7) *1+8)))"}
+        else if(caseID==6){input <- "({*10+1 *10+2} {} {*10+3})"}
+        else if(caseID==7){input <- "(({*10+1} ({} {*10+2})))"}
+        else if(caseID==8){input <- "*_+$ = ('Hello' ' world')"}
+        else if(caseID==9){input <- "(*10+_ *10+2)"}
+        else if(caseID==10){input <- "*(_)+5"}
+        else if(caseID==11){input <- "({*10+1} {*10+2 ...})"}
+        else if(caseID==12){input <- "({*10+1 *10+2 *10+3 *10+4})"}
+        else if(caseID==13){input <- "*4+(*8+4 *4+3)"}
+        else if(caseID==14){input <- "*(-1)+5"}
+        else if(caseID==15){input <- "('Hello' *10+7)"}
+        else if(caseID==16){input <- "(*10+1 *10+2)"}
+        else if(caseID==17){input <- "*(1000000000)+{item| ...}"}
+
+        our POV: target <- graphParsed(testName, input)
+        if(target!.pItem==NULL){FAIL("Expression fixture syntax: "+input)}
+        our POV: original
+        if(caseID==9 or caseID==16){original <- target!.pItem!.value!.items.head}
+        if(caseID==10){original <- target!.pItem!.infSize!.items.head}
+        me GraphNormalizer: normalizer
+        normalizer.init()
+        me NormalizationHandle: handle
+        if(caseID==12){handle <- normalizer.normalizeWithCost(target, 8)}
+        else if(caseID==17){handle <- normalizer.findItem(target, 999999999)}
+        else{handle <- normalizer.normalize(target)}
+        handle.waitForCompletion()
+        me bool: passed <- !handle.failed()
+        if(caseID==1){
+            passed <- passed and !handle.symbolicValues() and target!.pItem!.isNormed and
+                    target!.pItem!.infSize!.num==10 and target!.pItem!.infSize!.evalMode==emLiteral and
+                    target!.pItem!.sizeExpression!=NULL and toString(target!.pItem)=="*10+5"
+        }else if(caseID==2 or caseID==6 or caseID==7){
+            me int: expectedCount <- 3
+            if(caseID==7){expectedCount <- 2}
+            passed <- passed and !handle.symbolicValues() and target!.pItem!.isNormed and
+                    target!.pItem!.value!.items.size()==expectedCount and target!.pItem!.infSize!.num==expectedCount and
+                    target!.pItem!.value!.items.head!.pItem!.value!.num==1
+            if(caseID!=2){passed <- passed and target!.pItem!.valueExpression!=NULL}
+        }else if(caseID==3 or caseID==8){
+            passed <- passed and !handle.symbolicValues() and target!.pItem!.isNormed and
+                    target!.pItem!.value!.str=="Hello world" and target!.pItem!.infSize!.num==11
+        }else if(caseID==4 or caseID==5){
+            me int: number <- 19; me int: size <- 32
+            if(caseID==5){number <- 79005; size <- 151200}
+            passed <- passed and !handle.symbolicValues() and target!.pItem!.isNormed and
+                    target!.pItem!.value!.num==number and target!.pItem!.infSize!.num==size and
+                    target!.pItem!.value!.sizeMode==fromGiven
+        }else if(caseID==9 or caseID==10){
+            passed <- passed and handle.symbolicValues() and handle.withSubscribers() and !target!.pItem!.isNormed
+            if(caseID==9){normalizer.addRHS(original, graphScalar(1, 10))}
+            else{normalizer.addRHS(original, graphScalar(10, -1))}
+            handle.waitForCompletion()
+            passed <- passed and !handle.failed() and !handle.symbolicValues() and target!.pItem!.isNormed
+            if(caseID==9){passed <- passed and target!.pItem!.value!.num==12 and target!.pItem!.infSize!.num==100}
+            else{passed <- passed and target!.pItem!.infSize!.num==10}
+        }else if(caseID==11){
+            passed <- passed and handle.symbolicValues() and !target!.pItem!.isNormed and
+                    target!.pItem!.value!.evalMode==emLiteral and target!.pItem!.value!.tailUnfinished and
+                    target!.pItem!.value!.items.size()==2 and target!.pItem!.value!.items.head!.pItem!.value!.num==1
+            our POV: tail <- target!.pItem!.valueExpression!.items.tail
+            normalizer.addRHS(tail, graphParsed(testName, "{*10+2 *10+3}"))
+            handle.waitForCompletion()
+            passed <- passed and !handle.failed() and !handle.symbolicValues() and target!.pItem!.isNormed and
+                    target!.pItem!.value!.items.size()==3 and target!.pItem!.value!.items.tail!.pItem!.value!.num==3
+        }else if(caseID==12 or caseID==13 or caseID==14 or caseID==15){
+            passed <- passed and handle.symbolicValues() and !target!.pItem!.isNormed
+            if(caseID==14){passed <- passed and target!.pItem!.infSize!.evalMode==emConcat}
+            else{passed <- passed and target!.pItem!.value!.evalMode==emConcat and target!.pItem!.valueExpression==NULL}
+        }else if(caseID==16){
+            passed <- passed and !handle.symbolicValues() and target!.pItem!.isNormed and
+                    original!.pItem!.value!.num==1 and target!.pItem!.value!.num==12
+            normalizer.addRHS(original, graphScalar(8, 10))
+            handle <- normalizer.normalize(target); handle.waitForCompletion()
+            passed <- passed and handle.failed() and !target!.pItem!.isNormed and target!.pItem!.valueExpression!=NULL
+        }else if(caseID==17){
+            passed <- passed and !handle.symbolicValues() and handle.result()!=NULL and
+                    handle.result()!.implicitItem.sourceIndex==999999999 and target!.pItem!.value!.items.isEmpty() and
+                    target!.repetitionSpan.family!.occurrences.size()==1 and target!.pItem!.infSize!.num==1000000000
+        }
+        if(!passed){print("Expression "+toString(caseID)+": "+handle.error()+"\n  "+toString(target!.pItem)+"\n")}
+        normalizer.close()
+        me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)
     }

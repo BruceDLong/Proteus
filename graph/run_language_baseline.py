@@ -18,8 +18,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--select", default="", help="only names beginning with this prefix")
     parser.add_argument("--timeout", type=float, default=60, help="whole-run timeout in seconds")
+    parser.add_argument("--fixtures", type=Path, default=root / "graph/language-baseline.txt",
+                        help="file containing original fixture names")
     args = parser.parse_args()
-    names = [line.strip() for line in (root / "graph/language-baseline.txt").read_text().splitlines()
+    names = [line.strip() for line in args.fixtures.read_text().splitlines()
              if line.strip() and not line.lstrip().startswith("#")]
     names = [name for name in names if name.startswith(args.select)]
     if not names:
