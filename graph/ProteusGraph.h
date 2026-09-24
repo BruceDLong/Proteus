@@ -8,14 +8,44 @@ using POVNode = std::shared_ptr<POV>;
 enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               itemAt = 4, physicalItemAt = 5 };
 
+// Completion flags are derived metadata. Keep weak witnesses independently
+// of handles so later information invalidates even a released search result.
+// Context-wide invalidation matches the foundation's existing revision policy.
+class ProteusCompletion {
+    std::shared_ptr<ProteusGraphAccess> access_;
+    std::vector<std::weak_ptr<POV>> marked_;
+public:
+    explicit ProteusCompletion(std::shared_ptr<ProteusGraphAccess> access)
+        : access_(std::move(access)) {}
+    void mark(const POVNode& node) {
+        marked_.push_back(node);
+        access_->setNormed(node, true);
+    }
+    void invalidate() {
+        for (auto& weak : marked_)
+            if (auto node = weak.lock()) access_->setNormed(node, false);
+        marked_.clear();
+    }
+};
+
 class ProteusGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
+    std::shared_ptr<ProteusCompletion> completion_;
     POVNode selected_;
     bool deferred_ = false;
 public:
-    ProteusGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access)
-        : GoalSpec<POVNode>(query), access_(std::move(access)) {}
-    void beginPass() override { deferred_ = false; }
+    ProteusGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access,
+                std::shared_ptr<ProteusCompletion> completion)
+        : GoalSpec<POVNode>(query), access_(std::move(access)),
+          completion_(std::move(completion)) {}
+    void beginPass() override {
+        deferred_ = false;
+        if (request.kind == sizeAndValue) access_->setNormed(request.node, false);
+    }
+    void settled(bool fullyResolved) override {
+        if (request.kind == sizeAndValue && fullyResolved && satisfied())
+            completion_->mark(request.node);
+    }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
         access_->bind(visit.query.node);
         if (request.kind == itemAt) {
@@ -55,6 +85,7 @@ public:
 
 class ProteusAccess : public GraphAccess<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
+    std::shared_ptr<ProteusCompletion> completion_;
     static Edge<POVNode> direct(std::string label, Query<POVNode> query,
                                 bool alternative = false, Cost remainingVisits = 0) {
         return {std::move(label), {1, 0}, alternative, [query] { return query; },
@@ -62,9 +93,11 @@ class ProteusAccess : public GraphAccess<POVNode> {
     }
 public:
     explicit ProteusAccess(std::shared_ptr<ProteusGraphAccess> access)
-        : access_(std::move(access)) {}
+        : access_(std::move(access)),
+          completion_(std::make_shared<ProteusCompletion>(access_)) {}
+    void invalidateCompletion() override { completion_->invalidate(); }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
-        return std::make_shared<ProteusGoal>(query, access_);
+        return std::make_shared<ProteusGoal>(query, access_, completion_);
     }
     Expansion<POVNode> expand(const Query<POVNode>& query) override {
         Expansion<POVNode> result;

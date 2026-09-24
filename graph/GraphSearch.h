@@ -69,6 +69,9 @@ public:
     explicit GoalSpec(Query<Node> q) : request(std::move(q)) {}
     virtual ~GoalSpec() = default;
     virtual void beginPass() {}
+    // Publish completion metadata only, after all session work is examined.
+    // This callback must not change semantic information or graph adjacency.
+    virtual void settled(bool fullyResolved) { (void)fullyResolved; }
     virtual std::vector<SetCommand> found(const Visit<Node>&) = 0;
     // Only alternative routes may be pruned after satisfaction. Constraints
     // remain searchable even when every requested field is already concrete.
@@ -112,6 +115,9 @@ template<class Node> struct Expansion {
 template<class Node> class GraphAccess {
 public:
     virtual ~GraphAccess() = default;
+    // Called under the context lock for every semantic publication, including
+    // Sets and lazy materialization. Retired sessions may have left metadata.
+    virtual void invalidateCompletion() {}
     virtual Expansion<Node> expand(const Query<Node>&) = 0;
     virtual std::shared_ptr<GoalSpec<Node>> goal(const Query<Node>&) = 0;
 };
@@ -174,6 +180,7 @@ template<class Node> struct Context {
     std::vector<std::weak_ptr<SearchSession<Node>>> sessions;
 
     void graphChanged() {
+        access->invalidateCompletion();
         ++revision;
         // Conservative context-wide invalidation first. A dependency index can
         // narrow this later without changing the subscribe/publish contract.
@@ -278,6 +285,7 @@ template<class Node> class GraphManager {
             s.status.symbolicValues = s.deferred;
             for (const auto& task : s.tasks)
                 s.status.symbolicValues |= task.goal->symbolic();
+            s.root->settled(!s.status.symbolicValues);
             s.status.fullyNormed = true;
             s.status.withSubscribers = s.watch && s.status.symbolicValues;
             s.quiescent = true;

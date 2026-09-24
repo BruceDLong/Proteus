@@ -96,6 +96,23 @@ that all information is concrete or that unsupported constraints are proved.
 `symbolicValues` also records residual symbolic obligations. The caller inspects
 the result to see exactly what remains unresolved.
 
+The infonView's `isNormed` flag is stricter than the handle's `fullyNormed`:
+a supported scalar is marked only when its value and size are known and the
+whole search has settled without deferred constraints. The root GoalSpec
+receives a completion callback under the context lock and the Proteus adapter
+sets the flag. The existing printer then hides the retained work list. Failed,
+cancelled, cost-limited, or otherwise symbolic work is not marked. List extent
+or literal container structure alone is insufficient; member completion is
+still future work, so list goals are not marked yet.
+
+A new normalization pass clears the target flag. Each semantic publication
+also invalidates completion flags conservatively across the context, including
+flags whose process handles have been released. The adapter tracks weak POV
+references for this metadata; it does not retain another graph or keep nodes
+alive. Completion metadata does not itself publish a semantic revision.
+Completed handles remain records of their finished run; call `normalize()`
+again to revalidate a result invalidated by later information.
+
 ## Lifecycle and publication
 
 - `waitForCompletion()` waits for current quiescence, failure, or cancellation.
@@ -220,6 +237,8 @@ check its `Total Failures/Tests` summary rather than only the process status.
 Run `python3 graph/run_language_baseline.py` from the fork to normalize the
 selected existing language fixtures exclusively through `GraphNormalizer`.
 The recorded first run is in [language-baseline-results.md](language-baseline-results.md).
+The completion-flag change improves that baseline to **24/38** output matches;
+see [isnormed-results.md](isnormed-results.md) for the latest validation.
 The selection lives in `graph/language-baseline.txt`; input and expected output
 are read from `defaultTests.tst` each time, with no copied expectations.
 `--select merge/num/` restricts the selection. The runner exits nonzero on

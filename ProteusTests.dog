@@ -21,6 +21,10 @@ TestsToRun = `
     unit/graphFoundation/pendingPath
     unit/graphFoundation/stringConflict
     unit/graphFoundation/copyPrefix
+    unit/graphFoundation/completionInvalidation
+    unit/graphFoundation/knownButDeferred
+    unit/graphFoundation/listNotComplete
+    unit/graphFoundation/knownConflict
     unit/GFirst/t1
     unit/GFirst/t2
     unit/GFirst/t3
@@ -4957,6 +4961,11 @@ struct GLOBAL {
     GRAPHFOUNDATION(unit/graphFoundation/stringConflict, "detect conflicting scalar strings without an agenda", 19)
     GRAPHFOUNDATION(unit/graphFoundation/copyPrefix, "state-copy primitive preserves prefix and metadata behavior", 20)
 
+    GRAPHFOUNDATION(unit/graphFoundation/completionInvalidation, "invalidate completed targets after later transitive information", 21)
+    GRAPHFOUNDATION(unit/graphFoundation/knownButDeferred, "known fields do not hide cost-excluded constraints", 22)
+    GRAPHFOUNDATION(unit/graphFoundation/listNotComplete, "known list extent does not imply normalized members", 23)
+    GRAPHFOUNDATION(unit/graphFoundation/knownConflict, "known conflicting scalar is not marked normalized", 24)
+
     our POV: graphScalar(me int64: value, me int64: size) <- {
         our POV:: result{900}
         Allocate(result!.pItem)
@@ -5025,7 +5034,7 @@ struct GLOBAL {
             withEach step in range 0 .. handle.stepCount(){
                 if(handle.stepDescription(step)=="Set requested size/value"){pairSets <+- 1}
             }
-            passed <- passed and pairSets==1
+            passed <- passed and pairSets==1 and target!.pItem!.isNormed
         }else if(caseID==2){
             our POV: valueSource <- graphScalar(7, -1)
             our POV: sizeSource <- graphScalar(-1, 10)
@@ -5085,7 +5094,8 @@ struct GLOBAL {
             handle <- normalizer.normalize(target)
             handle.waitForCompletion()
             passed <- handle.failed() and !handle.fullyNormed() and
-                    target!.pItem!.wrkList.size()==2 and target!.pItem!.value!.num==7
+                    target!.pItem!.wrkList.size()==2 and target!.pItem!.value!.num==7 and
+                    !target!.pItem!.isNormed
         }else if(caseID==8){
             our POV: middle <- graphScalar(-1, -1)
             normalizer.recordIdentity(middle, target)
@@ -5113,7 +5123,8 @@ struct GLOBAL {
             passed <- selected!=NULL and handle.fullyNormed() and !handle.failed() and
                     target!.pItem!.infSize!.num==1000000000 and
                     selected!.implicitItem.sourceIndex==999999999 and
-                    target!.pItem!.value!.items.isEmpty() and target!.pItem!.wrkList.size()==1
+                    target!.pItem!.value!.items.isEmpty() and target!.pItem!.wrkList.size()==1 and
+                    !target!.pItem!.isNormed
         }else if(caseID==11){
             normalizer.addRHS(target, source)
             handle <- normalizer.normalizeWithCost(target, 0)
@@ -5138,7 +5149,8 @@ struct GLOBAL {
             handle.waitForCompletion()
             passed <- handle.fullyNormed() and handle.symbolicValues() and
                     handle.withSubscribers() and !handle.failed() and
-                    target!.pItem!.value!.num==7 and target!.pItem!.wrkList.size()==2
+                    target!.pItem!.value!.num==7 and target!.pItem!.wrkList.size()==2 and
+                    !target!.pItem!.isNormed
             handle.cancel()
         }else if(caseID==14){
             our POV: middle <- graphScalar(6, 10)
@@ -5202,6 +5214,47 @@ struct GLOBAL {
                     target!.pItem!.value!.evalMode==emLiteral and
                     target!.pItem!.value!.sizeMode==fromGiven and
                     target!.pItem!.value!.inverted and source!.pItem!.value!.str=="hello"
+        }else if(caseID==21){
+            normalizer.addRHS(target, source)
+            handle <- normalizer.normalize(target)
+            handle.waitForCompletion()
+            passed <- target!.pItem!.isNormed
+            // Completion metadata must survive releasing the process handle.
+            me NormalizationHandle: emptyHandle
+            handle <- emptyHandle
+            our POV: conflict <- graphScalar(8, 10)
+            normalizer.addRHS(source, conflict)
+            passed <- passed and !target!.pItem!.isNormed
+            handle <- normalizer.normalize(target)
+            handle.waitForCompletion()
+            passed <- passed and handle.failed() and !target!.pItem!.isNormed and
+                    target!.pItem!.wrkList.size()==1
+        }else if(caseID==22){
+            target <- graphScalar(7, 10)
+            normalizer.addRHS(target, source)
+            target!.pItem!.isNormed <- true
+            handle <- normalizer.normalizeWithCost(target, 0)
+            handle.waitForCompletion()
+            passed <- handle.fullyNormed() and handle.symbolicValues() and
+                    !handle.failed() and !target!.pItem!.isNormed and
+                    target!.pItem!.wrkList.size()==1
+        }else if(caseID==23){
+            target <- graphParsed(testName, "{*10+7 _=2}")
+            target!.pItem!.isNormed <- true
+            handle <- normalizer.normalize(target)
+            handle.waitForCompletion()
+            passed <- handle.fullyNormed() and handle.symbolicValues() and
+                    !handle.failed() and !target!.pItem!.isNormed and
+                    target!.pItem!.infSize!.num==2 and
+                    target!.pItem!.value!.items.head!.next!.pItem!.value!.evalMode==emUnknown
+        }else if(caseID==24){
+            target <- graphScalar(8, 10)
+            normalizer.addRHS(target, source)
+            target!.pItem!.isNormed <- true
+            handle <- normalizer.normalize(target)
+            handle.waitForCompletion()
+            passed <- handle.failed() and !target!.pItem!.isNormed and
+                    target!.pItem!.value!.num==8 and target!.pItem!.wrkList.size()==1
         }
         if(!passed){
             print("Graph scenario "+toString(caseID)+": "+handle.error()+"\n")
