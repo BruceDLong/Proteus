@@ -6,7 +6,8 @@
 namespace proteus4 {
 using POVNode = std::shared_ptr<POV>;
 enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
-              itemAt = 4, physicalItemAt = 5 };
+              itemAt = 4, physicalItemAt = 5,
+              listContents = 6, listMember = 7, listEnd = 8 };
 
 // Completion flags are derived metadata. Keep weak witnesses independently
 // of handles so later information invalidates even a released search result.
@@ -32,7 +33,8 @@ class ProteusGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusCompletion> completion_;
     POVNode selected_;
-    bool deferred_ = false;
+    bool deferred_ = false, reachedEnd_ = false;
+    GraphListMeasure measure_;
 public:
     ProteusGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access,
                 std::shared_ptr<ProteusCompletion> completion)
@@ -40,6 +42,8 @@ public:
           completion_(std::move(completion)) {}
     void beginPass() override {
         deferred_ = false;
+        reachedEnd_ = false;
+        measure_.reset();
         if (request.kind == sizeAndValue) access_->setNormed(request.node, false);
     }
     void settled(bool fullyResolved) override {
@@ -48,6 +52,17 @@ public:
     }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
         access_->bind(visit.query.node);
+        if (request.kind == listContents) {
+            if (visit.query.kind == listMember) measure_.add(visit.query.node);
+            if (visit.query.kind != listEnd) return {};
+            reachedEnd_ = true;
+            auto access = access_;
+            auto target = request.node;
+            auto measure = measure_;
+            return {{"Set counted list size", [access, target, measure] {
+                return access->applyCountedSize(target, measure);
+            }}};
+        }
         if (request.kind == itemAt) {
             if (visit.query.kind == itemFound && !selected_) {
                 auto selected = visit.query.node;
@@ -74,6 +89,8 @@ public:
         }}};
     }
     bool satisfied() const override {
+        if (request.kind == listContents)
+            return reachedEnd_ && access_->listExtentAgrees(request.node, measure_);
         if (request.kind == itemAt) return bool(selected_);
         return (access_->known(request.node) & request.kind) == request.kind;
     }
@@ -102,9 +119,32 @@ public:
     Expansion<POVNode> expand(const Query<POVNode>& query) override {
         Expansion<POVNode> result;
         auto node = query.node;
-        if (query.kind == itemFound) return result;
+        if (query.kind == itemFound || query.kind == listEnd) return result;
+        if (query.kind == listContents) {
+            if (!access_->physicalList(node)) { result.deferred = true; return result; }
+            auto first = access_->first(node);
+            result.edges.push_back(direct(first ? "first list member" : "empty list end",
+                {first ? first : node, first ? listMember : listEnd, query.argument}));
+            return result;
+        }
+        if (query.kind == listMember) {
+            // Normalization requires the member's complete result. A size-only
+            // count needs just an embedded span's extent; nested values count 1.
+            if (query.argument == sizeAndValue || access_->subList(node))
+                result.refinements.push_back({{node, static_cast<int>(query.argument), 0},
+                    {0, 0}, "resolve list member", false});
+            auto next = access_->next(node);
+            result.edges.push_back(direct(next ? "next list member" : "end of list members",
+                {next ? next : node, next ? listMember : listEnd, query.argument}));
+            return result;
+        }
         if (query.kind >= sizeOnly && query.kind <= sizeAndValue) {
             result.deferred = !access_->supports(node, query.kind);
+            if (access_->physicalList(node)) {
+                if (query.kind != sizeOnly || !(access_->known(node) & sizeOnly))
+                    result.refinements.push_back({{node, listContents, query.kind}, {0, 0},
+                        "inspect list contents", query.kind == sizeOnly});
+            }
             for (auto source : access_->workSources(node)) {
                 if (access_->relationSupported(node, source, query.kind))
                     result.edges.push_back(direct("work-list constraint", {source, query.kind, 0}));

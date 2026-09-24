@@ -76,6 +76,25 @@ struct GraphNormalizer {
     void: close() <- <%{ runtime.close(); }%>
 }
 
+// Evidence collected by a physical-member walk, not a second list or graph.
+struct GraphListMeasure {
+    me FlexNum: count <- 0
+    me bool: known <- true
+    void: reset() <- {count <- 0; known <- true}
+    void: add(our POV: member) <- {
+        if(member!.isSubItm){
+            if(member!.pItem!.infSize!.overlayType==NUM and
+                    member!.pItem!.infSize!.evalMode==emLiteral and
+                    !member!.pItem!.infSize!.inverted and !member!.pItem!.infSize!.undefined and
+                    member!.pItem!.infSize!.num>=0 and
+                    member!.pItem!.infSize!.num.getDenominator()==1){
+                count <+- member!.pItem!.infSize!.num
+            }else{known <- false}
+        }else if(member!.pItem!.itmMode==mItem){count <+- 1}
+        else{known <- false}
+    }
+}
+
 // Bits in a demand: 1=size, 2=value. Relationship demands are interpreted by
 // the graph interface, never by the generic traverser.
 struct ProteusGraphAccess {
@@ -117,20 +136,51 @@ struct ProteusGraphAccess {
                (pov!.pItem!.value!.evalMode==emLiteral or
                 pov!.pItem!.value!.evalMode==emUnknown))
     }
+    me bool: literalList(our POV: pov) <- {
+        return(plain(pov) and pov!.pItem!.value!.overlayType==LST and
+               pov!.pItem!.value!.evalMode==emLiteral)
+    }
+    // Physical contents are safe to walk without expanding templates. More
+    // list representations will advertise their own edges in later slices.
+    me bool: physicalList(our POV: pov) <- {
+        return(literalList(pov) and pov!.pItem!.value!.listSpec==NULL and
+               !pov!.pItem!.value!.timelike and
+               (pov!.pItem!.streamState==parseDone or pov!.pItem!.streamState==notParsing))
+    }
+    me bool: closedPhysicalList(our POV: pov) <- {
+        return(physicalList(pov) and !pov!.pItem!.value!.tailUnfinished)
+    }
+    me bool: listExtentAgrees(our POV: pov, me GraphListMeasure: measure) <- {
+        return(measure.known and closedPhysicalList(pov) and
+               pov!.pItem!.infSize!.evalMode==emLiteral and
+               pov!.pItem!.infSize!.num==measure.count)
+    }
+    me bool: applyCountedSize(our POV: pov, me GraphListMeasure: measure) <- {
+        if(!measure.known or !closedPhysicalList(pov) or
+                pov!.pItem!.value!.sizeMode==fromGiven or
+                pov!.pItem!.infSize!.evalMode!=emUnknown){return(false)}
+        // This is count evidence, not a request to close a tail or resolve a
+        // contextual reference. Preserve the representation's size mode.
+        pov!.pItem!.infSize!.evalMode <- emLiteral
+        pov!.pItem!.infSize!.num <- measure.count
+        pov!.pItem!.isNormed <- false
+        pov!.workRevision <+- 1
+        return(true)
+    }
     me int: known(our POV: pov) <- {
         if(pov==NULL or pov!.pItem==NULL){return(0)}
         me int: mask <- 0
         if(pov!.pItem!.infSize!.overlayType==NUM and
                 pov!.pItem!.infSize!.evalMode==emLiteral){mask <- 1}
-        if(scalar(pov) and pov!.pItem!.value!.evalMode==emLiteral){mask <+- 2}
+        if((scalar(pov) or physicalList(pov)) and
+                pov!.pItem!.value!.evalMode==emLiteral){mask <+- 2}
         return(mask)
     }
     // The GoalSpec calls this only at validated completion or invalidation.
-    // Literal list structure is not sufficient: list/member completion is not
-    // implemented yet, so only fully known supported scalars can be marked.
+    // The list goal has also checked extent and all required member goals.
     void: setNormed(our POV: pov, me bool: complete) <- {
         if(pov!=NULL and pov!.pItem!=NULL){
-            pov!.pItem!.isNormed <- complete and scalar(pov) and known(pov)==3
+            pov!.pItem!.isNormed <- complete and (scalar(pov) or closedPhysicalList(pov)) and known(pov)==3
         }
     }
     // Unsupported semantics stay symbolic. This deliberately does not infer
@@ -138,10 +188,12 @@ struct ProteusGraphAccess {
     me bool: supports(our POV: pov, me int: demand) <- {
         if(!plain(pov)){return(false)}
         if(scalar(pov)){return(true)}
-        return(demand==1 and pov!.pItem!.value!.overlayType==LST and
-               pov!.pItem!.value!.evalMode==emLiteral)
+        return(physicalList(pov) or (demand==1 and literalList(pov)))
     }
     me bool: relationSupported(our POV: lhs, our POV: rhs, me int: demand) <- {
+        // List-to-list value constraints need member correspondence, which is
+        // separate from walking the physical contents of one list.
+        if(literalList(lhs) and demand!=1){return(false)}
         return(supports(lhs, demand) and supports(rhs, demand) and
                lhs!.pItem!.value!.overlayType==rhs!.pItem!.value!.overlayType)
     }

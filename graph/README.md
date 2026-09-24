@@ -90,6 +90,15 @@ are also unnecessary once another route supplies the result. A conflicting
 scalar constraint fails the handle; previously applied Sets and every original
 constraint remain available for inspection.
 
+A refinement with `alternative=false` is a required child goal. Completion is
+computed per goal from its own evidence and these dependencies. A resolved
+child can complete while a sibling stays symbolic; the parent cannot complete
+until all required children do. Shared goals are searched once at their cheapest
+discovered base cost. An initially excluded goal can be reconsidered if a
+cheaper route reaches it. Completion is published from children to parents;
+cycles remain symbolic rather than serving as their own proof. These are
+session-local goal dependencies, not a second persistent graph of infons.
+
 `fullyNormed` means the current reasonable search has settled under its policy.
 It can coexist with `symbolicValues` and `withSubscribers`. It does not assert
 that all information is concrete or that unsupported constraints are proved.
@@ -97,13 +106,14 @@ that all information is concrete or that unsupported constraints are proved.
 the result to see exactly what remains unresolved.
 
 The infonView's `isNormed` flag is stricter than the handle's `fullyNormed`:
-a supported scalar is marked only when its value and size are known and the
-whole search has settled without deferred constraints. The root GoalSpec
-receives a completion callback under the context lock and the Proteus adapter
-sets the flag. The existing printer then hides the retained work list. Failed,
-cancelled, cost-limited, or otherwise symbolic work is not marked. List extent
-or literal container structure alone is insufficient; member completion is
-still future work, so list goals are not marked yet.
+a supported scalar is marked only when its value and size are known and its
+required search has settled without deferred constraints. A supported physical
+list must also have a closed extent that agrees with its members, and every
+required member must finish normalization. Each GoalSpec receives its own
+completion callback under the context lock; the Proteus adapter sets the flag.
+The existing printer then hides the retained work list. Failed, cancelled,
+cost-limited, or otherwise symbolic goals are not marked. Successful children
+may be marked independently of a symbolic parent.
 
 A new normalization pass clears the target flag. Each semantic publication
 also invalidates completion flags conservatively across the context, including
@@ -112,6 +122,31 @@ references for this metadata; it does not retain another graph or keep nodes
 alive. Completion metadata does not itself publish a semantic revision.
 Completed handles remain records of their finished run; call `normalize()`
 again to revalidate a result invalidated by later information.
+
+## Physical list normalization
+
+A size/value query advertises a required `listContents` subgoal. Its graph walk
+visits existing physical POVs one edge at a time. Each visit advertises a
+required member-normalization goal and contributes size evidence:
+
+- An ordinary member contributes one parent item, including a nested list.
+- An embedded member (`&...`) contributes its known nonnegative integer extent.
+- A missing or unsupported extent leaves the count symbolic. Child Sets can
+  expose that extent and trigger a new pass through the original graph.
+
+`GraphListMeasure` holds the temporary count evidence in CodeDog. At the end of
+the walk, its GoalSpec proposes a counted-size Set for a closed list whose size
+is unknown and whose size mode permits counting. Explicit `fromGiven` unknown
+sizes stay unknown; an explicit size disagreement stays symbolic. Inner `~size`
+and outer `*size+` syntax use the existing shared size slot and retain their
+presentation metadata. No legacy recursive `countSize()` or agenda call runs.
+
+Members of an open list still receive goals, but its unfinished tail prevents
+parent completion. A size-only count needs only embedded extents; it does not
+normalize every ordinary nested value just to determine the parent's length.
+Template and sparse regions remain symbolic in normalization, and no implicit
+occurrences are eagerly generated. Existing lazy sparse indexed access remains
+available. List-to-list member correspondence is the next implementation slice.
 
 ## Lifecycle and publication
 
@@ -151,8 +186,10 @@ releases its session after any current bounded step, including its subscription.
 
 Supported normalization is strict, positive, untyped numeric/string scalar
 constraints, with independent size/value acquisition, unresolved RHS chains,
-and registry identities. Literal list size acquisition is supported for the
-indexed-access refinement example. The adapter checks literal scalar agreement
+and registry identities. Untyped physical literal lists support member
+normalization, nested list values, embedded spans, and size counting/checking.
+Literal list size acquisition is also supported for the indexed-access
+refinement example. The adapter checks literal scalar agreement
 directly, within its explicitly supported subset. Sets use
 `infonState.copyOverlayFrom`; the graph adapter has no dependency on
 `WorldManager`, `DirectConsolidationStrategy`, or `AItem`. Each candidate is
@@ -160,7 +197,8 @@ checked against its path before applying a batch. Size mismatches requiring
 richer semantics remain symbolic rather than being silently overwritten.
 
 Indexed access supports flat ordered physical lists and existing compressed
-repetition spans. Nested span traversal, intersection result selection, word
+repetition spans. List-to-list value constraints, computed sizes, concatenation,
+template normalization, nested indexed traversal, intersection result selection, word
 definitions, `%prev`/`%tPrev`, range algebra, tentative branch transactions,
 stream-parser integration, commutators and theorem discovery are not migrated.
 Unsupported work stays attached and visible as symbolic obligations. Existing
@@ -237,8 +275,11 @@ check its `Total Failures/Tests` summary rather than only the process status.
 Run `python3 graph/run_language_baseline.py` from the fork to normalize the
 selected existing language fixtures exclusively through `GraphNormalizer`.
 The recorded first run is in [language-baseline-results.md](language-baseline-results.md).
-The completion-flag change improves that baseline to **24/38** output matches;
-see [isnormed-results.md](isnormed-results.md) for the latest validation.
+The completion-flag change improves that baseline to **24/38** output matches.
+Physical-member normalization keeps that count while resolving child values in
+four additional cases; see [list-normalization-results.md](list-normalization-results.md)
+for the latest validation and [isnormed-results.md](isnormed-results.md) for the
+previous checkpoint.
 The selection lives in `graph/language-baseline.txt`; input and expected output
 are read from `defaultTests.tst` each time, with no copied expectations.
 `--select merge/num/` restricts the selection. The runner exits nonzero on

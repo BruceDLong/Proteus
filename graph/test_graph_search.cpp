@@ -11,7 +11,8 @@ struct TestNode {
     std::vector<Node> rhs;
     Node prerequisite, afterRefinement;
     Node reveals;
-    bool endless = false;
+    bool endless = false, complete = false;
+    std::vector<std::pair<Node, Cost>> required;
 };
 static Node node(int value = -1, int size = -1) {
     auto n = std::make_shared<TestNode>(); n->value = value; n->size = size; return n;
@@ -20,6 +21,12 @@ static Node node(int value = -1, int size = -1) {
 class TestGoal : public GoalSpec<Node> {
 public:
     explicit TestGoal(Query<Node> q) : GoalSpec<Node>(q) {}
+    void beginPass() override { request.node->complete = false; }
+    void settled(bool complete) override {
+        if (complete)
+            for (const auto& child : request.node->required) assert(child.first->complete);
+        request.node->complete = complete;
+    }
     bool satisfied() const override {
         return request.kind == 2 ? request.node->size >= 0 : request.node->value >= 0;
     }
@@ -79,6 +86,9 @@ public:
                     [source] { return Query<Node>{source, 1, 0}; }});
             }
         }
+        for (const auto& child : n->required)
+            result.refinements.push_back({{child.first, 1, 0}, {child.second, 0},
+                                          "required member", false});
         if (n->endless) {
             // A large virtual space, created one bounded step at a time.
             result.edges.push_back({"virtual continuation", {1, 0}, false, [query] {
@@ -247,6 +257,69 @@ int main() {
         assert(policy.estimate({std::numeric_limits<Cost>::max(), 1}) ==
                std::numeric_limits<Cost>::max());
         assert(addCost(std::numeric_limits<Cost>::max(), 1) == std::numeric_limits<Cost>::max());
+        ++cases;
+    }
+    {
+        // One missing child cannot prevent an independent child completing.
+        auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
+        auto root = node(1), ready = node(2), missing = node();
+        root->required = {{ready, 1}, {missing, 1}};
+        auto h = manager.normalize({root, 1, 0}); h.waitForCompletion();
+        assert(!root->complete && ready->complete && !missing->complete);
+        assert(h.status().symbolicValues && h.status().withSubscribers);
+        manager.update([&] { missing->value = 3; }); h.waitForCompletion();
+        assert(root->complete && missing->complete && !h.status().symbolicValues);
+        ++cases;
+    }
+    {
+        // Shared dependencies need dependency order, not reverse creation order.
+        auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
+        auto root = node(1), left = node(2), right = node(3), leaf = node(4);
+        root->required = {{left, 1}, {right, 1}};
+        left->required = {{leaf, 1}};
+        right->required = {{left, 1}, {leaf, 1}};
+        auto h = manager.normalize({root, 1, 0}); h.waitForCompletion();
+        assert(root->complete && left->complete && right->complete && leaf->complete);
+        assert(!h.status().symbolicValues); ++cases;
+    }
+    {
+        // A cycle is not its own proof. An independent leaf still completes.
+        auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
+        auto root = node(1), cyclic = node(2), leaf = node(3);
+        root->required = {{cyclic, 1}, {leaf, 1}}; cyclic->required = {{root, 1}};
+        auto h = manager.normalize({root, 1, 0}); h.waitForCompletion();
+        assert(!root->complete && !cyclic->complete && leaf->complete);
+        assert(h.status().symbolicValues && !h.status().failed);
+        h.cancel(); manager.update([&] { cyclic->required.clear(); }); ++cases;
+    }
+    {
+        auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
+        auto root = node(1), child = node(2); root->required = {{child, 1}};
+        CostPolicy policy; policy.maximumRoute = 0;
+        auto h = manager.normalize({root, 1, 0}, policy); h.waitForCompletion();
+        assert(!root->complete && !child->complete && h.status().symbolicValues);
+        ++cases;
+    }
+    {
+        // An initially excluded shared task must be retried through its cheaper
+        // route; reaching it twice is still one completion obligation.
+        auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
+        auto root = node(1), child = node(2), bridge = node(3);
+        root->required = {{child, 10}, {bridge, 1}}; bridge->required = {{child, 1}};
+        CostPolicy policy; policy.maximumRoute = 3;
+        auto h = manager.normalize({root, 1, 0}, policy); h.waitForCompletion();
+        assert(root->complete && child->complete && bridge->complete);
+        assert(!h.status().symbolicValues); ++cases;
+    }
+    {
+        // Cancellation covers child goals and prevents a later publication
+        // from writing through the cancelled parent's search.
+        auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
+        auto root = node(1), child = node(), source = node();
+        root->required = {{child, 1}}; child->rhs = {source};
+        auto h = manager.normalize({root, 1, 0}); h.waitForCompletion(); h.cancel();
+        manager.update([&] { source->value = 4; }); h.waitForCompletion();
+        assert(h.status().cancelled && child->value == -1 && !root->complete);
         ++cases;
     }
     std::cout << "Graph search: " << cases << "/" << cases << " scenarios passed\n";

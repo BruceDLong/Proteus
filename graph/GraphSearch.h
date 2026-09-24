@@ -69,7 +69,8 @@ public:
     explicit GoalSpec(Query<Node> q) : request(std::move(q)) {}
     virtual ~GoalSpec() = default;
     virtual void beginPass() {}
-    // Publish completion metadata only, after all session work is examined.
+    // Publish completion metadata only, after this goal and its required
+    // subgoals have been examined. Independent children can complete separately.
     // This callback must not change semantic information or graph adjacency.
     virtual void settled(bool fullyResolved) { (void)fullyResolved; }
     virtual std::vector<SetCommand> found(const Visit<Node>&) = 0;
@@ -103,6 +104,7 @@ template<class Node> struct Refinement {
     Query<Node> query;
     Work work;
     std::string description;
+    // false makes completion of this subgoal a requirement of its parent.
     bool alternative = true;
 };
 
@@ -144,6 +146,9 @@ template<class Node> struct SearchSession {
         std::shared_ptr<GoalSpec<Node>> goal;
         Cost baseCost = 0;
         std::map<Query<Node>, Cost> visited;
+        std::vector<std::size_t> required;
+        bool deferred = false;
+        std::uint64_t generation = 0;
     };
     struct Pending {
         std::size_t task = 0;
@@ -152,6 +157,7 @@ template<class Node> struct SearchSession {
         std::uint64_t sequence = 0;
         Edge<Node> edge;
         std::vector<Query<Node>> path;
+        std::uint64_t generation = 0;
     };
     struct Later {
         bool operator()(const Pending& a, const Pending& b) const {
@@ -165,7 +171,7 @@ template<class Node> struct SearchSession {
     Status status;
     std::vector<Step<Node>> steps;
     bool quiescent = false, terminal = false, restart = true;
-    bool deferred = false, watch = true;
+    bool watch = true;
     std::uint64_t sequence = 0;
 };
 
@@ -252,40 +258,77 @@ template<class Node> class GraphManager {
         Cost cost = addCost(base, s.policy.estimate(edge.work));
         Cost estimate = addCost(cost, s.policy.estimate(edge.remaining));
         if (estimate > s.policy.maximumRoute) {
-            s.deferred = true;
+            s.tasks[task].deferred = true;
             s.steps.push_back({"exclude: " + edge.description,
                               s.tasks[task].goal->request, estimate, s.status.revision});
             return;
         }
-        s.frontier.push({task, cost, estimate, s.sequence++, std::move(edge), std::move(path)});
+        s.frontier.push({task, cost, estimate, s.sequence++, std::move(edge),
+                         std::move(path), s.tasks[task].generation});
     }
-    static void startTask(Session& s, std::shared_ptr<GoalSpec<Node>> goal, Cost cost) {
+    static std::size_t startTask(Session& s, std::shared_ptr<GoalSpec<Node>> goal, Cost cost) {
         auto query = goal->request;
-        for (const auto& task : s.tasks) {
-            const auto& existing = task.goal->request;
-            if (!(query < existing) && !(existing < query)) return;
-        }
         auto index = s.tasks.size();
+        for (std::size_t i = 0; i < s.tasks.size(); ++i) {
+            auto& task = s.tasks[i];
+            const auto& existing = task.goal->request;
+            if (!(query < existing) && !(existing < query)) {
+                if (task.baseCost <= cost) return i;
+                // A shared subgoal may first be advertised by a costly route.
+                // Retry at the cheaper price and discard its old queued steps.
+                index = i;
+                task.baseCost = cost;
+                task.visited.clear();
+                task.required.clear();
+                task.deferred = false;
+                ++task.generation;
+                goal = task.goal;
+                break;
+            }
+        }
         goal->beginPass();
-        s.tasks.push_back({std::move(goal), cost, {}});
+        if (index == s.tasks.size()) s.tasks.push_back({std::move(goal), cost, {}, {}, false, 0});
         enqueue(s, index, cost, {"visit", {0, 0}, false,
                                  [query] { return query; }}, {});
+        return index;
+    }
+    static void settle(Session& s) {
+        // Resolve the dependency DAG from its leaves. Cycles cannot establish
+        // their own completion; they stay symbolic until other evidence breaks
+        // the dependency. No recursive calls or domain-specific fields here.
+        std::vector<std::vector<std::size_t>> parents(s.tasks.size());
+        std::vector<std::size_t> remaining(s.tasks.size());
+        std::vector<bool> resolved(s.tasks.size(), false), local(s.tasks.size());
+        std::queue<std::size_t> ready;
+        for (std::size_t i = 0; i < s.tasks.size(); ++i) {
+            const auto& task = s.tasks[i];
+            local[i] = !task.deferred && !task.goal->symbolic();
+            remaining[i] = task.required.size();
+            for (auto child : task.required) parents[child].push_back(i);
+            if (local[i] && !remaining[i]) ready.push(i);
+        }
+        while (!ready.empty()) {
+            auto i = ready.front(); ready.pop();
+            resolved[i] = true;
+            s.tasks[i].goal->settled(true);
+            for (auto parent : parents[i])
+                if (!--remaining[parent] && local[parent]) ready.push(parent);
+        }
+        for (std::size_t i = 0; i < s.tasks.size(); ++i)
+            if (!resolved[i]) s.tasks[i].goal->settled(false);
+        s.status.symbolicValues = !resolved[0];
     }
     static void advance(Context<Node>& c, Session& s) {
         if (s.restart) {
             s.restart = false;
             s.frontier = {};
             s.tasks.clear();
-            s.deferred = false;
             s.status.revision = c.revision;
             startTask(s, s.root, 0);
             s.steps.push_back({"search", s.root->request, 0, c.revision});
         }
         if (s.frontier.empty()) {
-            s.status.symbolicValues = s.deferred;
-            for (const auto& task : s.tasks)
-                s.status.symbolicValues |= task.goal->symbolic();
-            s.root->settled(!s.status.symbolicValues);
+            settle(s);
             s.status.fullyNormed = true;
             s.status.withSubscribers = s.watch && s.status.symbolicValues;
             s.quiescent = true;
@@ -297,6 +340,7 @@ template<class Node> class GraphManager {
         }
         auto pending = s.frontier.top();
         s.frontier.pop();
+        if (pending.generation != s.tasks[pending.task].generation) return;
         auto goal = s.tasks[pending.task].goal;
         if (pending.edge.alternative && goal->satisfied()) return;
         auto arrival = pending.edge.follow();
@@ -307,7 +351,7 @@ template<class Node> class GraphManager {
             c.graphChanged();
             return;
         }
-        if (!query.node) { s.deferred = true; return; }
+        if (!query.node) { s.tasks[pending.task].deferred = true; return; }
         auto& visited = s.tasks[pending.task].visited;
         auto previous = visited.find(query);
         if (previous != visited.end() && previous->second <= pending.cost) return;
@@ -324,16 +368,27 @@ template<class Node> class GraphManager {
         }
         if (changed) { c.graphChanged(); return; }
         auto expansion = c.access->expand(query);
-        s.deferred |= expansion.deferred;
+        s.tasks[pending.task].deferred |= expansion.deferred;
         for (auto& edge : expansion.edges)
             enqueue(s, pending.task, pending.cost, std::move(edge), pending.path);
         for (const auto& refinement : expansion.refinements) {
             if (refinement.alternative && goal->satisfied()) continue;
             Cost cost = addCost(pending.cost, s.policy.estimate(refinement.work));
-            if (cost > s.policy.maximumRoute) { s.deferred = true; continue; }
+            if (cost > s.policy.maximumRoute && refinement.alternative) {
+                s.steps.push_back({"exclude: " + refinement.description,
+                                   refinement.query, cost, c.revision});
+                continue;
+            }
+            // Keep even an excluded required query as an obligation. Another
+            // route may reach that same subgoal cheaply enough to satisfy it.
             s.steps.push_back({"subgoal: " + refinement.description,
                                refinement.query, cost, c.revision});
-            startTask(s, c.access->goal(refinement.query), cost);
+            auto child = startTask(s, c.access->goal(refinement.query), cost);
+            if (!refinement.alternative) {
+                auto& required = s.tasks[pending.task].required;
+                if (std::find(required.begin(), required.end(), child) == required.end())
+                    required.push_back(child);
+            }
         }
     }
     static void run(Context<Node>* c) {
