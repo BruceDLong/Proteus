@@ -1,4 +1,5 @@
 #pragma once
+#include "SpanAlignment.h"
 
 // Included after the CodeDog declarations. Domain knowledge is implemented in
 // ProteusGraphAccess (GraphFoundation.Lib.dog); this layer adapts its results to
@@ -8,7 +9,8 @@ using POVNode = std::shared_ptr<POV>;
 enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               itemAt = 4, physicalItemAt = 5,
               listContents = 6, listMember = 7, listEnd = 8,
-              listCorrespondence = 9, correspondingMember = 10, correspondenceEnd = 11 };
+              listCorrespondence = 9, correspondenceEnter = 10, correspondenceEnd = 11,
+              correspondenceMember = 12, correspondenceLeave = 13 };
 
 // Completion flags are derived metadata. Keep weak witnesses independently
 // of handles so later information invalidates even a released search result.
@@ -104,29 +106,79 @@ public:
     }
 };
 
-// A relational goal checks the complete paired walk before a Set publishes
-// member identities. Child goals then use ordinary registry/scalar traversal.
+// The graph walk collects only loaded positions and symbolic gaps. The pure
+// layout planner derives anchored matches and finite tail fills; a priced Set
+// publishes that plan before the search can settle.
 class ProteusCorrespondenceGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
-    GraphListCorrespondence evidence_;
+    SpanLayout<POVNode> layouts_[2];
+    std::vector<std::size_t> starts_[2];
     bool verified_ = false;
 public:
     ProteusCorrespondenceGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access)
         : GoalSpec<POVNode>(query), access_(std::move(access)) {}
-    void beginPass() override { evidence_.reset(); verified_ = false; }
+    void beginPass() override {
+        layouts_[0] = {}; layouts_[1] = {};
+        starts_[0].clear(); starts_[1].clear(); verified_ = false;
+    }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
-        if (visit.query.kind == correspondingMember)
-            evidence_.add(visit.query.node, visit.query.related);
-        if (visit.query.kind != correspondenceEnd) return {};
-        verified_ = access_->correspondenceShapeAgrees(request.node, request.related, evidence_);
-        if (!verified_) return {};
+        const auto& q = visit.query;
+        if (q.kind == listCorrespondence) return {};
+        auto side = static_cast<std::size_t>(q.argument);
+        if (side > 1) return {};
+        auto& layout = layouts_[side];
+        if (q.kind == correspondenceEnter) starts_[side].push_back(layout.segments.size());
+        if (q.kind == correspondenceMember && !access_->subList(q.node))
+            layout.segments.push_back({q.node, false, 1});
+        if (q.kind == correspondenceLeave) {
+            if (access_->openTail(q.node)) layout.segments.push_back({q.node, true, -1});
+            auto extent = access_->listExtent(q.node);
+            if (extent == -2) layout.valid = false;
+            layout.equations.push_back({starts_[side].back(), layout.segments.size(), extent, q.node});
+            starts_[side].pop_back();
+        }
+        if (q.kind != correspondenceEnd) return {};
+        auto plan = alignSpans(layouts_[0], layouts_[1]);
+        if (!plan.valid) return {};
+        // All mutation preconditions are checked before the batch is offered.
+        // Unsupported new member semantics keep the entire plan symbolic.
+        for (std::size_t i = 0; i < plan.fills.size(); ++i) {
+            const auto& fill = plan.fills[i];
+            for (const auto& source : fill.sources)
+                if (!access_->canMakeMember(source)) return {};
+            for (std::size_t j = 0; j < i; ++j)
+                if (access_->sameInfon(fill.owner, plan.fills[j].owner)) return {};
+        }
+        verified_ = plan.complete;
+        Work work{0, 0};
+        for (const auto& pair : plan.identities)
+            if (!access_->hasDirectIdentity(pair.first, pair.second)) ++work.creations;
+        for (const auto& fill : plan.fills) work.creations += 2 * fill.sources.size();
         auto access = access_;
         auto left = request.node, right = request.related;
-        auto evidence = evidence_;
         int demand = static_cast<int>(request.argument);
-        return {{"Set list member identities", [access, left, right, evidence, demand] {
-            return access->applyCorrespondence(left, right, evidence, demand);
-        }}};
+        return {{"Set span alignment", [access, left, right, plan, demand] {
+            access->bind(left); access->bind(right);
+            for (const auto& pair : plan.identities) { access->bind(pair.first); access->bind(pair.second); }
+            for (const auto& fill : plan.fills) {
+                access->bind(fill.owner);
+                for (const auto& source : fill.sources) access->bind(source);
+            }
+            bool changed = access->apply(left, right, demand);
+            for (const auto& pair : plan.identities) {
+                if (!access->hasDirectIdentity(pair.first, pair.second)) {
+                    access->registry->recordIdentity(pair.first, pair.second, iekListCorrespondence, 0);
+                    changed = true;
+                }
+            }
+            for (const auto& fill : plan.fills) {
+                for (const auto& source : fill.sources) {
+                    access->appendTailMember(fill.owner, source); changed = true;
+                }
+                changed |= access->finishTail(fill.owner, fill.close, fill.extent);
+            }
+            return changed;
+        }, work}};
     }
     bool satisfied() const override { return verified_; }
     bool symbolic() const override { return !verified_; }
@@ -155,25 +207,47 @@ public:
         auto node = query.node;
         if (query.kind == itemFound || query.kind == listEnd || query.kind == correspondenceEnd)
             return result;
-        if (query.kind == listCorrespondence || query.kind == correspondingMember) {
-            auto right = query.related;
-            if (query.kind == listCorrespondence) {
-                if (!access_->correspondingLists(node, right)) { result.deferred = true; return result; }
-            } else if (!access_->correspondingMembers(node, right)) {
-                result.deferred = true; return result;
-            }
-            auto leftNext = query.kind == listCorrespondence ? access_->first(node) : access_->next(node);
-            auto rightNext = query.kind == listCorrespondence ? access_->first(right) : access_->next(right);
-            if (bool(leftNext) != bool(rightNext)) { result.deferred = true; return result; }
-            if (!leftNext) {
-                result.edges.push_back(direct("end of corresponding members",
-                    {node, correspondenceEnd, query.argument, right}));
-            } else if (access_->correspondingMembers(leftNext, rightNext)) {
-                Query<POVNode> next{leftNext, correspondingMember, query.argument, rightNext};
-                Cost creations = access_->hasDirectIdentity(leftNext, rightNext) ? 0 : 1;
-                result.edges.push_back({"corresponding list members", {1, creations}, false,
-                                        [next] { return next; }});
-            } else result.deferred = true;
+        if (query.kind == listCorrespondence) {
+            if (!access_->correspondingLists(node, query.related)) { result.deferred = true; return result; }
+            result.edges.push_back(direct("inspect left span layout", {node, correspondenceEnter, 0, query.related}));
+            return result;
+        }
+        if (query.kind == correspondenceEnter || query.kind == correspondenceMember ||
+            query.kind == correspondenceLeave) {
+            auto context = query.context;
+            auto continuation = [&](const POVNode& current) {
+                if (auto next = access_->next(current))
+                    return Query<POVNode>{next, correspondenceMember, query.argument, query.related, context};
+                auto owner = context.back(); context.pop_back();
+                return Query<POVNode>{owner, correspondenceLeave, query.argument, query.related, context};
+            };
+            if (query.kind == correspondenceEnter) {
+                if (!access_->physicalList(node) || !access_->orderedList(node)) {
+                    result.deferred = true; return result;
+                }
+                for (const auto& ancestor : context) if (access_->sameInfon(node, ancestor)) {
+                    result.deferred = true; return result;
+                }
+                if (auto first = access_->first(node)) {
+                    context.push_back(node);
+                    result.edges.push_back(direct("first span member",
+                        {first, correspondenceMember, query.argument, query.related, context}));
+                } else result.edges.push_back(direct("empty span boundary",
+                    {node, correspondenceLeave, query.argument, query.related, context}));
+            } else if (query.kind == correspondenceMember) {
+                if (access_->subList(node))
+                    result.edges.push_back(direct("enter embedded span",
+                        {node, correspondenceEnter, query.argument, query.related, context}));
+                else if (access_->correspondingMembers(node, node))
+                    result.edges.push_back(direct("next span position", continuation(node)));
+                else result.deferred = true;
+            } else if (!context.empty()) {
+                result.edges.push_back(direct("leave embedded span", continuation(node)));
+            } else if (!query.argument) {
+                result.edges.push_back(direct("inspect right span layout",
+                    {query.related, correspondenceEnter, 1, node}));
+            } else result.edges.push_back(direct("span layouts available",
+                {node, correspondenceEnd, 1, query.related}));
             return result;
         }
         if (query.kind == listContents) {

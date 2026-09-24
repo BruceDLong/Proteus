@@ -37,6 +37,7 @@ the parser's ordinary `Agent.normalize()` entry point has not been redirected.
 | `GraphSearch.h` | Opaque-node search, lazy edges, route costs, sub-goals, revisions, subscriptions, cancellation, worker lifetime |
 | `GraphFoundation.Lib.dog` | Public CodeDog API; Proteus graph access, compatibility checks and atomic Set batches |
 | `ProteusGraph.h` | Translate semantic access into graph edges and refinement opportunities; GoalSpec turns findings into Sets |
+| `SpanAlignment.h` | Plan finite ordered correspondence from opaque member/gap evidence; no POV access or mutation |
 | `IdentityRegistry` | Existing domain records, owned through the manager's Proteus adapter |
 
 The generic runtime is a C++17 template, instantiated with `shared_ptr<POV>`.
@@ -49,6 +50,9 @@ The adapter reads existing work lists and registry identities. A query carries
 an opaque kind and argument. This lets the same POV participate in different
 demands without storing a single global "visited" bit on it. Search bookkeeping
 is local to each goal/session, and the work list is never consumed by traversal.
+Relational queries also carry a second endpoint and, for embedded traversal, a
+stack of existing owner POVs. Both participate in query identity, preserving
+different contexts even when an embedded list shares its physical members.
 
 ## One example, step by step
 
@@ -75,7 +79,11 @@ parser-created list and existing repetition registry.
 Edges describe immediate work and an optional lower bound on remaining work.
 The manager's `CostPolicy` prices visits and creations. The frontier compares
 accumulated cost plus the remaining estimate; an estimate is not charged twice.
-An edge is materialized only when selected. Estimates must be nonnegative and
+An edge is materialized only when selected. Proposed Sets enter the same
+frontier with their own work estimate. A finite fill is therefore priced before
+it creates members; a cheaper route can win or a policy can exclude the fill
+without mutating the list. A semantic revision discards stale queued plans.
+Estimates must be nonnegative and
 must not overestimate remaining work if optimal route ordering is required.
 
 `maximumRoute` excludes routes whose estimate exceeds the threshold. It does
@@ -148,36 +156,48 @@ Template and sparse regions remain symbolic in normalization, and no implicit
 occurrences are eagerly generated. Existing lazy sparse indexed access remains
 available.
 
-## Closed list RHS correspondence
+## Embedded spans and open list RHS correspondence
 
 A supported list relationship advertises a required relational goal containing
-both existing parent POVs. The optional `Query.related` endpoint participates
-in search identity, so multiple RHSs of the same list remain distinct goals.
-It does not introduce wrapper nodes, and the generic scheduler does not inspect
-either endpoint.
+both existing parent POVs. `ProteusCorrespondenceGoal` walks the loaded positions
+of each ordered physical list. Ordinary nested lists occupy one position;
+embedded list spans contribute their positions. The query's opaque context
+carries return points through embedded spans, with containment cycles deferred.
 
-`ProteusCorrespondenceGoal` walks closed, ordered, untyped physical lists in
-pairs. Ordinary nested lists occupy one position and receive the same recursive
-correspondence treatment through their own goals. Embedded spans, templates,
-open tails, and unordered matching are not yet supported by this paired walk.
-The whole walk must finish with equal physical lengths and with each declared
-size agreeing before any member identities are published. Excluded routes,
-unequal lengths, and unsupported later members cannot publish an earlier prefix.
+The walk collects temporary layout evidence: loaded member POVs, a symbolic gap
+for each open tail, and interval constraints from declared list sizes. A gap
+refers to its existing owner POV; it does not allocate unknown occurrences.
+`SpanAlignment.h` uses this evidence to plan correspondence:
 
-The resulting Set copies any available requested parent size and records member
-relationships in the existing registry with `iekListCorrespondence` evidence.
-It preserves both physical lists and their member links. Child goals use the
-same scalar Set and compatibility checks as before, including paired size/value
-acquisition, transitive RHSs, conflicts, subscriptions, and later invalidation.
-The derived relationships are bidirectional and deduplicated. Work lists remain
-attached, including constraints that require unsupported semantics.
+- Match closed layouts across embedded-list boundaries.
+- Infer a single missing gap from the other side's extent and known positions.
+- Fill a gap from finite loaded members on the other side, closing it only when
+  its end is proved. New members have independent views and identities to their
+  sources, including for ordinary nested lists.
+- Extend an open tail with an already-loaded prefix while preserving its
+  symbolic remainder. A billion-item gap never creates a billion members.
+- Match anchored prefixes/suffixes when multiple gaps remain ambiguous. Do not
+  enumerate possible partitions; zero remaining width can close multiple gaps.
 
-Matching edges account for member visits and potential identity creation; the
-validated finite batch is published under the context lock. Cancellation can
-interrupt traversal or enter after the atomic publication. This is the initial
-loaded-list implementation, with conservative revision restarts, not a large
-list performance optimization. The derived identities rely on stable positions
-in closed lists; structural rewrites and retraction are separate future work.
+The complete supported layout must be inspected before publishing a plan.
+Declared-size conflicts and unsupported later spans cannot publish an earlier
+prefix. A supported but ambiguous layout may publish its proved relationships
+and remain symbolic. Embedded strings, repetition templates, and unordered
+matching remain deferred. Extents use exact checked integer conversion;
+unsupported extents remain symbolic.
+
+The GoalSpec offers one Set containing parent-size acquisition, member identities
+and any finite tail fills. Its creation work is priced by the manager before
+execution. Registry affiliations and new-member support are checked before the
+batch publishes under the context lock. Identities use the existing registry's
+`iekListCorrespondence` evidence and are bidirectional and deduplicated. Original
+work lists remain attached. Child goals populate the new views through ordinary
+size/value Sets; each revision exposes their new edges before settlement.
+
+Cancellation takes effect between traversal steps or atomic Set batches. These
+are monotone tail extensions and closures, with conservative revision restarts
+and registry scans. Structural reordering and retraction need their own
+invalidation design; large-list performance optimization remains future work.
 
 ## Lifecycle and publication
 
@@ -219,8 +239,9 @@ Supported normalization is strict, positive, untyped numeric/string scalar
 constraints, with independent size/value acquisition, unresolved RHS chains,
 and registry identities. Untyped physical literal lists support member
 normalization, nested list values, embedded spans, and size counting/checking.
-Closed ordered lists also propagate RHS information through corresponding
-member identities, including nested lists and multiple sources. Literal list
+Ordered physical lists also propagate RHS information through corresponding
+member identities, including nested lists, embedded list spans, finite open-tail
+fills, and multiple sources. Literal list
 size acquisition is also supported for the indexed-access refinement example. The adapter checks literal scalar agreement
 directly, within its explicitly supported subset. Sets use
 `infonState.copyOverlayFrom`; the graph adapter has no dependency on
@@ -229,8 +250,8 @@ checked against its path before applying a batch. Size mismatches requiring
 richer semantics remain symbolic rather than being silently overwritten.
 
 Indexed access supports flat ordered physical lists and existing compressed
-repetition spans. Open-list and embedded-span correspondence, computed sizes,
-concatenation, template normalization, nested indexed traversal, intersection result selection, word
+repetition spans. Embedded-string correspondence, computed sizes, concatenation,
+template normalization, nested indexed traversal, intersection result selection, word
 definitions, `%prev`/`%tPrev`, range algebra, tentative branch transactions,
 stream-parser integration, commutators and theorem discovery are not migrated.
 Unsupported work stays attached and visible as symbolic obligations. Existing
@@ -256,6 +277,8 @@ From the Proteus4 directory:
 codeDog Proteus.Lib.dog
 g++ -std=c++17 -Wall -Wextra -Werror -pthread graph/test_graph_search.cpp -o /tmp/proteus4-graph-search-tests
 /tmp/proteus4-graph-search-tests
+g++ -std=c++17 -Wall -Wextra -Werror graph/test_span_alignment.cpp -o /tmp/proteus4-span-tests
+/tmp/proteus4-span-tests
 ```
 
 Run the CodeDog tests **from `LocalBuild`**, where the generated resource paths
@@ -307,8 +330,9 @@ check its `Total Failures/Tests` summary rather than only the process status.
 Run `python3 graph/run_language_baseline.py` from the fork to normalize the
 selected existing language fixtures exclusively through `GraphNormalizer`.
 The recorded first run is in [language-baseline-results.md](language-baseline-results.md).
-See [list-correspondence-results.md](list-correspondence-results.md) for the
-latest validation. Earlier checkpoints are recorded in
+See [span-alignment-results.md](span-alignment-results.md) for the latest
+validation. Earlier checkpoints are recorded in
+[list-correspondence-results.md](list-correspondence-results.md),
 [list-normalization-results.md](list-normalization-results.md) and
 [isnormed-results.md](isnormed-results.md).
 The selection lives in `graph/language-baseline.txt`; input and expected output

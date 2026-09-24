@@ -8,6 +8,7 @@ struct TestNode;
 using Node = std::shared_ptr<TestNode>;
 struct TestNode {
     int value = -1, size = -1;
+    Cost setCreations = 0;
     std::vector<Node> rhs;
     Node prerequisite, afterRefinement;
     Node reveals;
@@ -41,11 +42,12 @@ public:
         for (const auto& step : visit.path)
             if (field(step.node) >= 0 && field(step.node) != value)
                 throw std::runtime_error("constraint conflict");
+        if (field(target) == value) return {};
         return {{kind == 2 ? "Set size" : "Set value", [target, value, kind] {
             int& destination = kind == 2 ? target->size : target->value;
             if (destination == value) return false;
             destination = value; return true;
-        }}};
+        }, {0, source->setCreations}}};
     }
 };
 
@@ -321,6 +323,25 @@ int main() {
         manager.update([&] { source->value = 4; }); h.waitForCompletion();
         assert(h.status().cancelled && child->value == -1 && !root->complete);
         ++cases;
+    }
+    {
+        auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
+        auto root = node(), source = node(9); source->setCreations = 2; root->rhs = {source};
+        CostPolicy policy; policy.maximumRoute = 2;
+        auto h = manager.normalize({root, 1, 0}, policy); h.waitForCompletion();
+        assert(root->value == -1 && h.status().symbolicValues && saw(h, "exclude: Set value")); ++cases;
+    }
+    {
+        auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
+        auto root = node(), costly = node(9), cheap = node(9);
+        costly->setCreations = 100; root->rhs = {costly, cheap};
+        auto h = manager.normalize({root, 1, 0}); h.waitForCompletion();
+        assert(root->value == 9 && !h.status().symbolicValues);
+        int writes = 0;
+        for (const auto& step : h.steps()) if (step.action == "Set value") {
+            assert(step.cost == 1); ++writes;
+        }
+        assert(writes == 1); ++cases;
     }
     std::cout << "Graph search: " << cases << "/" << cases << " scenarios passed\n";
 }

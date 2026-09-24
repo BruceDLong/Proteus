@@ -48,9 +48,12 @@ template<class Node> struct Query {
     // Optional second endpoint for a relational demand. Both endpoints remain
     // opaque to the scheduler and participate in goal/visit identity.
     Node related{};
+    // Domain traversal context (for example, return points through embedded
+    // spans). These are existing nodes, not replacement graph vertices.
+    std::vector<Node> context{};
     bool operator<(const Query& other) const {
-        return std::tie(node, kind, argument, related) <
-               std::tie(other.node, other.kind, other.argument, other.related);
+        return std::tie(node, kind, argument, related, context) <
+               std::tie(other.node, other.kind, other.argument, other.related, other.context);
     }
 };
 
@@ -64,6 +67,7 @@ struct SetCommand {
     std::string description;
     // Validate the entire batch before its first write. true means graph change.
     std::function<bool()> apply;
+    Work work{0, 0};
 };
 
 template<class Node> class GoalSpec {
@@ -101,6 +105,7 @@ template<class Node> struct Edge {
     // Lower bound on work after this step (e.g. a remaining list walk). This
     // ranks routes before expansion, without charging the estimate twice.
     Work remaining{0, 0};
+    bool command = false;
 };
 
 template<class Node> struct Refinement {
@@ -349,11 +354,12 @@ template<class Node> class GraphManager {
         auto arrival = pending.edge.follow();
         auto query = arrival.query;
         if (arrival.graphChanged) {
-            s.steps.push_back({"materialize: " + pending.edge.description,
+            s.steps.push_back({pending.edge.command ? pending.edge.description : "materialize: " + pending.edge.description,
                                query, pending.cost, c.revision});
             c.graphChanged();
             return;
         }
+        if (pending.edge.command) return; // an unchanged Set has no new finding
         if (!query.node) { s.tasks[pending.task].deferred = true; return; }
         auto& visited = s.tasks[pending.task].visited;
         auto previous = visited.find(query);
@@ -362,14 +368,12 @@ template<class Node> class GraphManager {
         pending.path.push_back(query);
         s.steps.push_back({pending.edge.description, query, pending.cost, c.revision});
         Visit<Node> visit{query, pending.path, pending.cost};
-        bool changed = false;
         for (auto& command : goal->found(visit)) {
-            if (command.apply()) {
-                changed = true;
-                s.steps.push_back({command.description, query, pending.cost, c.revision});
-            }
+            Edge<Node> operation{command.description, command.work, false,
+                [query, apply = std::move(command.apply)] { return Arrival<Node>{query, apply()}; }};
+            operation.command = true;
+            enqueue(s, pending.task, pending.cost, std::move(operation), pending.path);
         }
-        if (changed) { c.graphChanged(); return; }
         auto expansion = c.access->expand(query);
         s.tasks[pending.task].deferred |= expansion.deferred;
         for (auto& edge : expansion.edges)

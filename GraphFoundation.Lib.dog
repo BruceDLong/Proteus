@@ -95,23 +95,6 @@ struct GraphListMeasure {
     }
 }
 
-// Temporary evidence from a paired physical walk. No member identities are
-// published until both walks finish and their complete shapes have been checked.
-struct GraphListCorrespondence {
-    me List<our POV>: leftMembers
-    me List<our POV>: rightMembers
-    me GraphListMeasure: leftMeasure
-    me GraphListMeasure: rightMeasure
-    void: reset() <- {
-        leftMembers.clear(); rightMembers.clear()
-        leftMeasure.reset(); rightMeasure.reset()
-    }
-    void: add(our POV: left, our POV: right) <- {
-        leftMembers.append(left); rightMembers.append(right)
-        leftMeasure.add(left); rightMeasure.add(right)
-    }
-}
-
 // Bits in a demand: 1=size, 2=value. Relationship demands are interpreted by
 // the graph interface, never by the generic traverser.
 struct ProteusGraphAccess {
@@ -213,7 +196,7 @@ struct ProteusGraphAccess {
                lhs!.pItem!.value!.overlayType==rhs!.pItem!.value!.overlayType)
     }
     me bool: correspondingLists(our POV: left, our POV: right) <- {
-        return(closedPhysicalList(left) and closedPhysicalList(right) and
+        return(physicalList(left) and physicalList(right) and
                orderedList(left) and orderedList(right))
     }
     me bool: correspondingMembers(our POV: left, our POV: right) <- {
@@ -221,16 +204,54 @@ struct ProteusGraphAccess {
                !left!.isSubItm and !right!.isSubItm and
                left!.pItem!.itmMode==mItem and right!.pItem!.itmMode==mItem)
     }
-    me bool: correspondenceShapeAgrees(our POV: left, our POV: right,
-            me GraphListCorrespondence: evidence) <- {
-        if(!correspondingLists(left, right) or
-                !evidence.leftMeasure.known or !evidence.rightMeasure.known or
-                evidence.leftMeasure.count!=evidence.rightMeasure.count){return(false)}
-        if(left!.pItem!.infSize!.evalMode==emLiteral and
-                left!.pItem!.infSize!.num!=evidence.leftMeasure.count){return(false)}
-        if(right!.pItem!.infSize!.evalMode==emLiteral and
-                right!.pItem!.infSize!.num!=evidence.rightMeasure.count){return(false)}
-        return(true)
+    me bool: openTail(our POV: pov) <- {return(pov!.pItem!.value!.tailUnfinished)}
+    me bool: sameInfon(our POV: left, our POV: right) <- {return(left!.pItem===right!.pItem)}
+    // -1 means unknown; -2 means an unsupported extent. Do not narrow an
+    // arbitrary FlexNum to an index before checking the range and integrality.
+    me int64: listExtent(our POV: pov) <- {
+        if(pov!.pItem!.infSize!.evalMode==emUnknown){return(-1)}
+        if(pov!.pItem!.infSize!.num<0 or pov!.pItem!.infSize!.num.getDenominator()!=1 or
+                pov!.pItem!.infSize!.num>9223372036854775807){return(-2)}
+        return(pov!.pItem!.infSize!.num.getNumerator().convertToIntVal())
+    }
+    me bool: canMakeMember(our POV: source) <- {
+        return(scalar(source) or (physicalList(source) and orderedList(source)))
+    }
+    our POV: appendTailMember(our POV: owner, our POV: source) <- {
+        // New physical position, independent view, and a persistent identity
+        // to the source. Never shallow-copy the source list's member links.
+        our infonView:: item
+        item!.viewMode <- vmOverlay
+        item!.itmMode <- mItem
+        item!.infSize!.overlayType <- NUM
+        item!.infSize!.evalMode <- emUnknown
+        item!.value!.overlayType <- source!.pItem!.value!.overlayType
+        item!.value!.evalMode <- emUnknown
+        item!.value!.sizeMode <- fromCount
+        if(item!.value!.overlayType==LST){
+            item!.value!.evalMode <- emLiteral
+            item!.value!.tailUnfinished <- true
+        }
+        our POV: member <- owner!.pItem!.value!.items.append(item, false, 904)
+        member!.pParent <- owner
+        bind(member)
+        registry!.recordIdentity(member, source, iekListCorrespondence, 0)
+        owner!.workRevision <+- 1
+        return(member)
+    }
+    me bool: finishTail(our POV: owner, me bool: close, me int64: extent) <- {
+        me bool: changed <- false
+        if(close and owner!.pItem!.value!.tailUnfinished){
+            owner!.pItem!.value!.tailUnfinished <- false
+            changed <- true
+        }
+        if(extent>=0 and owner!.pItem!.infSize!.evalMode==emUnknown){
+            owner!.pItem!.infSize!.num <- extent
+            owner!.pItem!.infSize!.evalMode <- emLiteral
+            changed <- true
+        }
+        if(changed){owner!.workRevision <+- 1}
+        return(changed)
     }
     me bool: hasDirectIdentity(our POV: left, our POV: right) <- {
         if(left===right){return(true)}
@@ -241,25 +262,6 @@ struct ProteusGraphAccess {
             }
         }
         return(false)
-    }
-    me bool: applyCorrespondence(our POV: left, our POV: right,
-            me GraphListCorrespondence: evidence, me int: demand) <- {
-        if(!correspondenceShapeAgrees(left, right, evidence)){return(false)}
-        // Validate all registry affiliations before publishing the batch. The
-        // walk used real members; their next/prev links and list ownership stay
-        // intact. The registry owns the derived bidirectional relationships.
-        withEach member in evidence.leftMembers{bind(member)}
-        withEach member in evidence.rightMembers{bind(member)}
-        me bool: changed <- apply(left, right, demand)
-        withEach slot in range 0 .. evidence.leftMembers.size(){
-            our POV: lhs <- evidence.leftMembers[slot]
-            our POV: rhs <- evidence.rightMembers[slot]
-            if(!hasDirectIdentity(lhs, rhs)){
-                registry!.recordIdentity(lhs, rhs, iekListCorrespondence, 0)
-                changed <- true
-            }
-        }
-        return(changed)
     }
     me List<our POV>: workSources(our POV: pov) <- {
         me List<our POV>: result
