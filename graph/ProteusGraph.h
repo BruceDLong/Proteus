@@ -11,7 +11,9 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               listContents = 6, listMember = 7, listEnd = 8,
               listCorrespondence = 9, correspondenceEnter = 10, correspondenceEnd = 11,
               correspondenceMember = 12, correspondenceLeave = 13,
-              concatField = 14, concatMember = 15, concatEnd = 16 };
+              concatField = 14, concatMember = 15, concatEnd = 16,
+              selectIntersection = 17, selectionMember = 18, selectionFound = 19,
+              selectionExtentMember = 20, selectionExtentEnd = 21 };
 
 // Completion flags are derived metadata. Keep weak witnesses independently
 // of handles so later information invalidates even a released search result.
@@ -211,6 +213,31 @@ public:
     bool symbolic() const override { return !verified_; }
 };
 
+class ProteusSelectionGoal : public GoalSpec<POVNode> {
+    std::shared_ptr<ProteusGraphAccess> access_;
+    bool verified_ = false;
+    GraphListMeasure measure_;
+public:
+    ProteusSelectionGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access)
+        : GoalSpec<POVNode>(query), access_(std::move(access)) {}
+    void beginPass() override { verified_ = false; measure_.reset(); }
+    std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
+        if (visit.query.kind == selectionExtentMember) measure_.add(visit.query.node);
+        if (visit.query.kind != selectionFound) return {};
+        if (!access_->selectionExtentAgrees(request.node, measure_)) return {};
+        auto selected = visit.query.node;
+        if (!access_->selectionAgrees(request.node, selected)) return {};
+        verified_ = true;
+        auto access = access_; auto owner = request.node;
+        auto creation = access->hasDirectIdentity(owner, selected) ? 0u : 1u;
+        return {{"Set selected result identity", [access, owner, selected] {
+            return access->applySelection(owner, selected);
+        }, {0, creation}}};
+    }
+    bool satisfied() const override { return verified_; }
+    bool symbolic() const override { return !verified_; }
+};
+
 class ProteusAccess : public GraphAccess<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusCompletion> completion_;
@@ -229,13 +256,71 @@ public:
             return std::make_shared<ProteusCorrespondenceGoal>(query, access_);
         if (query.kind == concatField)
             return std::make_shared<ProteusConcatGoal>(query, access_);
+        if (query.kind == selectIntersection)
+            return std::make_shared<ProteusSelectionGoal>(query, access_);
         return std::make_shared<ProteusGoal>(query, access_, completion_);
     }
     Expansion<POVNode> expand(const Query<POVNode>& query) override {
         Expansion<POVNode> result;
         auto node = query.node;
-        if (query.kind == itemFound || query.kind == listEnd || query.kind == correspondenceEnd || query.kind == concatEnd)
+        if (query.kind == itemFound || query.kind == listEnd || query.kind == correspondenceEnd || query.kind == concatEnd || query.kind == selectionFound)
             return result;
+        if (query.kind == selectIntersection) {
+            if (!access_->canSelect(node)) { result.deferred = true; return result; }
+            auto first = access_->selectionShapeFirst(node);
+            result.edges.push_back(direct("inspect intersection extent",
+                {first ? first : node, first ? selectionExtentMember : selectionExtentEnd, 0, node}));
+            return result;
+        }
+        if (query.kind == selectionExtentMember) {
+            auto next = access_->next(node);
+            result.edges.push_back(direct("next intersection extent position",
+                {next ? next : query.related, next ? selectionExtentMember : selectionExtentEnd, 0, query.related}));
+            return result;
+        }
+        if (query.kind == selectionExtentEnd) {
+            auto owner = query.related;
+            auto selected = access_->selectionStart(owner);
+            if (!selected) { result.deferred = true; return result; }
+            result.edges.push_back(direct("intersection result position",
+                {selected, access_->selectionIsMarked(owner) ? selectionFound : selectionMember,
+                 access_->selectionIsLast(owner) ? 1 : 0, owner}));
+            return result;
+        }
+        if (query.kind == selectionMember) {
+            if (!access_->subList(node)) {
+                result.edges.push_back(direct("selected intersection member",
+                    {node, selectionFound, 0, query.related}));
+                return result;
+            }
+            if (access_->selectionCycle(query.related, node)) { result.deferred = true; return result; }
+            for (const auto& ancestor : query.context)
+                if (access_->sameInfon(node, ancestor)) { result.deferred = true; return result; }
+            if (!access_->selectionSpan(node, query.argument)) {
+                result.refinements.push_back({{node, valueOnly, 0}, {0, 0}, "resolve selection span", false});
+                result.deferred = true; return result;
+            }
+            auto context = query.context;
+            if (auto child = access_->selectionChild(node, query.argument)) {
+                context.push_back(node);
+                result.edges.push_back(direct("enter result span",
+                    {child, selectionMember, query.argument, query.related, context}));
+            } else {
+                if (access_->openTail(node)) {
+                    result.refinements.push_back({{node, valueOnly, 0}, {0, 0}, "resolve empty open span", false});
+                    result.deferred = true; return result;
+                }
+                auto cursor = node;
+                POVNode next;
+                while (!(next = access_->selectionNeighbour(cursor, query.argument)) && !context.empty()) {
+                    cursor = context.back(); context.pop_back();
+                }
+                if (next) result.edges.push_back(direct("skip empty result span",
+                    {next, selectionMember, query.argument, query.related, context}));
+                else result.deferred = true;
+            }
+            return result;
+        }
         if (query.kind == concatField) {
             if (!access_->hasConcat(node, query.argument)) { result.deferred = true; return result; }
             auto first = access_->concatFirst(node, query.argument);
@@ -315,6 +400,8 @@ public:
         }
         if (query.kind >= sizeOnly && query.kind <= sizeAndValue) {
             result.deferred = !access_->supports(node, query.kind);
+            if (access_->canSelect(node))
+                result.refinements.push_back({{node, selectIntersection, 0}, {0, 0}, "find intersection result", false});
             if (access_->hasConcat(node, 1))
                 result.refinements.push_back({{node, concatField, 1}, {0, 0}, "resolve size expression", false});
             if (access_->hasConcat(node, 2))
@@ -329,6 +416,8 @@ public:
             auto origin = query.related ? query.related : node;
             auto relationship = [&](const POVNode& source, const char* label) {
                 if (!access_->relationSupported(node, source, query.kind)) {
+                    if (access_->canSelect(source))
+                        result.refinements.push_back({{source, selectIntersection, 0}, {1, 0}, "find RHS intersection result", false});
                     if (access_->hasConcat(source, 1) || access_->hasConcat(source, 2))
                         result.refinements.push_back({{source, query.kind, 0}, {1, 0}, "resolve expression RHS", false});
                     result.deferred = true; return;

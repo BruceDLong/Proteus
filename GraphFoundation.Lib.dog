@@ -100,6 +100,9 @@ struct GraphListMeasure {
 struct infonView {
     our infonState: sizeExpression
     our infonState: valueExpression
+    our infonView: selectionExpression
+    our POV: selectedResult
+    me int: selectionKind <- 0
 }
 struct GraphConcatTerms { me List<our POV>: items }
 struct GraphConcatPlan {
@@ -138,12 +141,12 @@ struct ProteusGraphAccess {
                (pov!.pItem!.value!.overlayType==tUnknown or pov!.pItem!.value!.overlayType==tUnset) and
                pov!.pItem!.value!.evalMode==emUnknown)
     }
-    me bool: plain(our POV: pov) <- {
+    me bool: plain(our POV: pov, me bool: selection <- false) <- {
         if(pov==NULL or pov!.pItem==NULL){return(false)}
         our infonView: inf <- pov!.pItem
         return((inf!.viewMode==vmOverlay or (inf!.viewMode==vmAny and unknownOverlay(pov))) and !inf!.invertMatch and
                !inf!.isTentative and inf!.type==NULL and inf!.addedTypes.isEmpty() and
-               inf!.innr==NULL and inf!.proxy==NULL and inf!.partRef==NULL and
+               (inf!.innr==NULL or selection) and inf!.proxy==NULL and inf!.partRef==NULL and
                inf!.parts.isEmpty() and inf!.funcArgs==NULL and
                (inf!.itmMode==mNone or inf!.itmMode==mItem) and
                ((inf!.infSize!.overlayType==NUM and
@@ -201,6 +204,7 @@ struct ProteusGraphAccess {
     }
     me int: known(our POV: pov) <- {
         if(pov==NULL or pov!.pItem==NULL){return(0)}
+        if(pov!.pItem!.value!.evalMode==emIntersection){return(0)}
         me int: mask <- 0
         if(pov!.pItem!.infSize!.overlayType==NUM and
                 pov!.pItem!.infSize!.evalMode==emLiteral){mask <- 1}
@@ -218,6 +222,7 @@ struct ProteusGraphAccess {
     // Unsupported semantics stay symbolic. This deliberately does not infer
     // equality from arbitrary cursor, range, negation or selection work.
     me bool: supports(our POV: pov, me int: demand) <- {
+        if(canSelect(pov)){return(true)}
         if(!plain(pov)){return(false)}
         if(scalarCandidate(pov) or hasConcat(pov, 2)){return(true)}
         return(physicalList(pov) or (demand==1 and literalList(pov)))
@@ -374,6 +379,91 @@ struct ProteusGraphAccess {
             return(true)
         }
         return(false)
+    }
+    our infonView: selectionSource(our POV: pov) <- {
+        if(pov==NULL or pov!.pItem==NULL){return(NULL)}
+        if(pov!.pItem!.selectionExpression!=NULL){return(pov!.pItem!.selectionExpression)}
+        if(pov!.pItem!.value!.evalMode==emIntersection){return(pov!.pItem!.innr)}
+        return(NULL)
+    }
+    me int: selectionMode(our POV: pov) <- {
+        if(pov!.pItem!.selectionExpression!=NULL){return(pov!.pItem!.selectionKind)}
+        return(pov!.pItem!.intersectPos)
+    }
+    me bool: canSelect(our POV: pov) <- {
+        our infonView: source <- selectionSource(pov)
+        if(source==NULL or !plain(pov, true) or pov!.pItem!.positionalSelection or
+                pov!.pItem!.selectionRequestID!=0 or pov!.pItem!.isOrLike()){return(false)}
+        me int: resultMode <- selectionMode(pov)
+        return((resultMode==ipGetFirst or resultMode==ipGetLast or resultMode==ipGetMarked) and
+               source!.viewMode==vmOverlay and source!.type==NULL and source!.addedTypes.isEmpty() and
+               source!.funcArgs==NULL and source!.parts.isEmpty() and source!.wrkList.isEmpty() and
+               source!.value!.overlayType==LST and source!.value!.evalMode==emLiteral and
+               source!.value!.listSpec==NULL and !source!.value!.timelike and
+               !source!.value!.inverted and !source!.value!.undefined and !source!.invertMatch and
+               (source!.orderMode==uUnknown or source!.orderMode==uOrdered))
+    }
+    our POV: selectionShapeFirst(our POV: owner) <- {return(selectionSource(owner)!.value!.items.head)}
+    me bool: selectionExtentAgrees(our POV: owner, me GraphListMeasure: measure) <- {
+        our infonView: source <- selectionSource(owner)
+        me bool: given <- source!.infSize!.overlayType==NUM and source!.infSize!.evalMode==emLiteral
+        if(given){
+            if(source!.infSize!.num<measure.count){return(false)}
+            if(!source!.value!.tailUnfinished and measure.known and source!.infSize!.num!=measure.count){return(false)}
+        }
+        // An explicit extent can prove a zero-width open tail. Otherwise the
+        // last position remains unknown until a future publication closes it.
+        if(selectionIsLast(owner) and source!.value!.tailUnfinished){
+            return(given and measure.known and source!.infSize!.num==measure.count)
+        }
+        return(true)
+    }
+    me bool: selectionIsMarked(our POV: owner) <- {return(selectionMode(owner)==ipGetMarked)}
+    me bool: selectionIsLast(our POV: owner) <- {return(selectionMode(owner)==ipGetLast)}
+    our POV: selectionStart(our POV: owner) <- {
+        our infonView: source <- selectionSource(owner)
+        if(selectionIsMarked(owner)){return(source!.intersectMarkedRetPOV)}
+        if(selectionIsLast(owner)){
+            return(source!.value!.items.tail)
+        }
+        return(source!.value!.items.head)
+    }
+    our POV: selectionNeighbour(our POV: member, me bool: last) <- {
+        if(last){return(member!.prev)}
+        return(member!.next)
+    }
+    our POV: selectionChild(our POV: member, me bool: last) <- {
+        if(last){return(member!.pItem!.value!.items.tail)}
+        return(member!.pItem!.value!.items.head)
+    }
+    me bool: selectionSpan(our POV: member, me bool: last) <- {
+        return(physicalList(member) and orderedList(member) and (!last or !openTail(member)))
+    }
+    me bool: selectionCycle(our POV: owner, our POV: member) <- {
+        return(member!.pItem===owner!.pItem or member!.pItem===selectionSource(owner))
+    }
+    me bool: selectionAgrees(our POV: owner, our POV: selected) <- {
+        return(canSelect(owner) and selected!=NULL and
+               (owner!.pItem!.selectedResult==NULL or owner!.pItem!.selectedResult===selected))
+    }
+    me bool: applySelection(our POV: owner, our POV: selected) <- {
+        if(!selectionAgrees(owner, selected) or owner!.pItem!.selectedResult!=NULL){return(false)}
+        bind(owner); bind(selected)
+        owner!.pItem!.selectionKind <- selectionMode(owner)
+        owner!.pItem!.selectionExpression <- owner!.pItem!.innr
+        owner!.pItem!.innr <- NULL
+        owner!.pItem!.intersectPos <- ipNoIntersect
+        owner!.pItem!.selectedResult <- selected
+        // Keep any actual outer size constraint. The parser initializes this
+        // slot as unknown when it moves the expression's extent into innr.
+        our infonState:: value
+        value!.overlayType <- tUnknown; value!.evalMode <- emUnknown
+        owner!.pItem!.value <- value
+        if(!hasDirectIdentity(owner, selected)){
+            registry!.recordIdentity(owner, selected, iekListCorrespondence, 0)
+        }
+        owner!.workRevision <+- 1; owner!.pItem!.isNormed <- false
+        return(true)
     }
     our infonState: concatSource(our POV: pov, me int: slot) <- {
         if(pov==NULL or pov!.pItem==NULL){return(NULL)}

@@ -217,6 +217,29 @@ chunks remain symbolic. Invalid or mixed interpretations are not guessed.
 
 See [expression-results.md](expression-results.md) for verified examples.
 
+## Intersection result selection
+
+`selectIntersection` is a required goal for an ordinary first/last/marked
+intersection. Its graph walk gathers extent evidence from the existing inner
+POVs without normalizing their values. It rejects proved extent conflicts and
+then follows the selected position. Last selection requires a known end; an
+explicit extent can prove that an open tail contributes zero positions. Marked
+selection does not require an unrelated tail to close. Embedded list spans are
+traversed and empty spans skipped; an empty open span cannot be skipped when
+searching for the first position.
+
+The GoalSpec publishes an identity from the result POV to the selected POV.
+Scalar Sets or list adoption then acquire the requested fields through ordinary
+graph traversal. The original `innr` is retained as `selectionExpression`, along
+with the selection kind and selected POV, so later constraints can be checked.
+Other inner values are not forced to normalize. Alternative filtering, function
+arguments, templates, positional selectors, and embedded-string traversal remain
+deferred rather than being treated as ordinary result selection.
+
+The parser now initializes the outer size as unknown when it moves the inner
+extent into `innr`; clearing only the payload previously left a stale literal
+flag. Selecting a result preserves actual outer size constraints.
+
 ## Lifecycle and publication
 
 - `waitForCompletion()` waits for current quiescence, failure, or cancellation.
@@ -279,7 +302,7 @@ checked against its path before applying a batch. Size mismatches requiring
 richer semantics remain symbolic rather than being silently overwritten.
 
 Indexed access supports flat ordered physical lists and existing compressed
-repetition spans. Embedded-string correspondence, template normalization, nested indexed traversal, intersection result selection, word
+repetition spans. Embedded-string correspondence, template normalization, nested indexed traversal, general intersection solving, word
 definitions, `%prev`/`%tPrev`, range algebra, tentative branch transactions,
 stream-parser integration, commutators and theorem discovery are not migrated.
 Unsupported work stays attached and visible as symbolic obligations. Existing
@@ -358,8 +381,11 @@ check its `Total Failures/Tests` summary rather than only the process status.
 Run `python3 graph/run_language_baseline.py` from the fork to normalize the
 selected existing language fixtures exclusively through `GraphNormalizer`.
 The recorded first run is in [language-baseline-results.md](language-baseline-results.md).
-See [span-alignment-results.md](span-alignment-results.md) for the latest
-validation. Earlier checkpoints are recorded in
+See [selection-results.md](selection-results.md) for the latest validation,
+including computed sizes, concatenation, list adoption, and result selection.
+Earlier checkpoints are recorded in
+[expression-results.md](expression-results.md),
+[span-alignment-results.md](span-alignment-results.md),
 [list-correspondence-results.md](list-correspondence-results.md),
 [list-normalization-results.md](list-normalization-results.md) and
 [isnormed-results.md](isnormed-results.md).
@@ -376,7 +402,7 @@ can already supply literal contents and a counted size, while unsupported list
 work remains symbolic. The normal printer and expected strings are retained
 so presentation differences are visible as well.
 
-List normalization now precedes intersections. Cover ordinary and empty lists,
+The list foundation covers ordinary and empty lists,
 nested list values, embedded spans, counted and explicitly given sizes
 (including inner `~size` syntax), child RHSs, list identities, open tails, and
 computed sizes. Keep size evidence and child normalization in Proteus graph
