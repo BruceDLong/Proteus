@@ -248,43 +248,65 @@ The parser now initializes the outer size as unknown when it moves the inner
 extent into `innr`; clearing only the payload previously left a stale literal
 flag. Selecting a result preserves actual outer size constraints.
 
-## Definitions and scalar type applications
+## Definitions and type applications
 
-`DefinitionApplications.h` owns a definition catalogue and reusable type evidence
-inside each graph context. Normalizing a declaration registers its existing
-`funcArgs` body through a single POV; registration does not normalize or copy
-that body. A declaration counts as one list item, and its completion means
-registration succeeded, not that its meaning has a concrete value.
+`DefinitionApplications.h` owns a catalogue and reusable type evidence inside
+each graph context. Normalizing a declaration registers its existing `funcArgs`
+body through one POV; registration does not normalize or copy that body. A
+declaration counts as one list item, and its completion means registration
+succeeded, not that its meaning has a concrete value.
 
-A named scalar contributes a required `typeRequirements` goal. Read-only graph
-edges traverse its unique definition, aliases, additional type names, and the
-body's existing RHS constraints. The complete supported walk compiles the
-available size, value, and overlay requirements. Its GoalSpec offers one Set
-that checks compatibility and fills only missing fields on the use. Definitions
-create no RHS entries on an occurrence. Existing target constraints and type
-names are preserved. Bare parser-created names begin with unknown size; an
-explicit zero size remains a real constraint.
+A named scalar or finite list contributes a required `typeRequirements` goal.
+Read-only graph edges walk its unique definition, aliases, added type names,
+body RHS constraints, and physical list members. Leave edges compile those
+findings into requirements. This data is a validation certificate and Set plan;
+it does not replace the POV graph. Scalar requirements include size, value, and
+overlay. Finite list requirements additionally describe ordered positions.
+Embedded spans flatten into positions; an ordinary nested list occupies one
+position and has its own member requirements. Alias and containment cycles
+remain symbolic before any instance members are allocated.
 
-The catalogue admits exact, Unicode-normalized, untagged names in this first
-slice. Multiple declarations for one name stay ambiguous; they are neither
-merged as conjunctions nor resolved by choosing the cheaper meaning. Missing
-names retain subscriptions and can resume when another normalization registers
-the definition. Cycles, context-dependent meanings, and structured bodies stay
-symbolic. Catalogue publication uses the existing graph revision/locking path.
-It does not populate the legacy global `ModelManager`.
+`DefinitionPlan.h` checks the instance against these requirements without
+writing it. It reuses `SpanAlignment.h` to match existing members and uniquely
+fill open instance tails. It rejects incompatible known facts or lengths and
+defers unsupported/ambiguous layouts. A priced Set then fills missing fields,
+establishes the proven order, and allocates only absent instance members. A
+later incompatible member cannot cause a partial write from that batch. Other
+goals remain independent; this is not rollback of earlier normalization Sets.
 
-A successful scalar application records its bindings, definition witnesses,
-and required facts separately from `isNormed`. Re-normalization and unrelated
-graph revisions reuse that certificate while its witnesses remain valid. These
-constraints are context-free, so another POV of the same infon can reuse it.
-Copies can inherit it only when the destination actually has all its supporting
-facts. A partial size copy cannot inherit a certificate requiring a missing
-value. Added requirements, changed bodies, or changed name bindings force fresh
-validation. Future contextual types must include binding context in this reuse
-rule. Witness checks still cost work; this is not constant-time validation.
+No application adds definition RHSs or bidirectional identities to shared
+bodies. New members have independent infonViews and retain named member types.
+Existing instance labels and work constraints are preserved. Member unknowns
+can remain symbolic with subscriptions; `isNormed` still requires their complete
+normalization. Bare parser-created names begin with unknown size, while an
+explicit zero size remains a constraint.
 
-See [definition-results.md](definition-results.md) for validation and the next
-boundary: finite list definitions, then lazy member templates and records.
+Certificates record bindings, facts, RHSs, and the physical member POVs they
+came from. Instance and member certificates share this evidence. Repeated
+normalization and unrelated graph revisions do not rebuild an application.
+Copies can inherit certificates only when their destination has all supporting
+contents; a size-only copy cannot inherit proof of a missing list value. The
+copy can also establish orderedness from checked evidence. Changed definitions,
+replaced members, new ambiguity, and new type requirements force validation
+again. These constraints are context-free; future contextual types need binding
+context in the cache key. Witness and destination checks still cost work.
+
+The catalogue currently admits exact, Unicode-normalized, untagged names.
+Distinct definitions of one name stay ambiguous. Missing names retain
+subscriptions and can resume after another normalization registers the meaning.
+Publication uses graph locking and revisions, without populating the legacy
+global `ModelManager`.
+
+Supported bodies are closed physical ordered lists with scalar, nested-list,
+embedded-list, alias, and supported RHS constraints. Open/sparse templates,
+unordered records, contextual paths, computed definition expressions, and
+registry relationships inside shared bodies remain deferred. A billion-item
+template is not expanded. Multiple writable positions sharing the same list
+storage need a joint application plan and also remain deferred.
+
+See [definition-results.md](definition-results.md) for the scalar checkpoint and
+[finite-definition-results.md](finite-definition-results.md) for this extension.
+Lazy member templates and record/field matching remain the next boundary.
 
 ## Lifecycle and publication
 
@@ -365,7 +387,7 @@ not yet roll them back or replan the changed interpretation. Producer revisions
 resume subscribed searches, and cancellation preserves the last partial result.
 See [growing-rhs-results.md](growing-rhs-results.md) for validation.
 
-Loose correspondence, path streaming queries, structured types, and intersection/template
+Loose correspondence, path streaming queries, record/template types, and intersection/template
 input traversal need further semantic work. Completed physical open lists
 continue to use the existing graph span/subscription behavior.
 
@@ -397,7 +419,7 @@ checked against its path before applying a batch. Size mismatches requiring
 richer semantics remain symbolic rather than being silently overwritten.
 
 Indexed access supports flat ordered physical lists and existing compressed
-repetition spans. Embedded-string correspondence, template normalization, nested indexed traversal, general intersection solving, structured/contextual
+repetition spans. Embedded-string correspondence, template normalization, nested indexed traversal, general intersection solving, record/template/contextual
 definitions, `%prev`/`%tPrev`, range algebra, tentative branch transactions,
 commutators and theorem discovery are not migrated.
 Unsupported work stays attached and visible as symbolic obligations. Existing
@@ -434,6 +456,7 @@ resolve:
 cd LocalBuild
 ./TestProteus -t unit/graphFoundation/
 ./TestProteus -t unit/graphDefinitions/
+./TestProteus -t unit/graphListDefinitions/
 ```
 
 Use focused tests for the behavior being changed. The full legacy suite is

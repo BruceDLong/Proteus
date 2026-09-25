@@ -182,7 +182,13 @@ public:
         if (source == target || demand < sizeOnly || demand > sizeAndValue) return {};
         // List values are related by member correspondence, not a shallow
         // overlay copy. That goal also validates shape before copying size.
-        if (demand != sizeOnly && access_->literalList(target)) return {};
+        if (demand != sizeOnly && access_->literalList(target)) {
+            if (!definitions_->canInherit(target, source)) return {};
+            auto definitions = definitions_;
+            return {{"Reuse checked type requirements", [definitions, target, source] {
+                return definitions->inherit(target, source);
+            }}};
+        }
         // Work is conjunctive. A route is evidence only if each intermediate
         // constraint agrees with the finding. It is not an alternative branch.
         for (const auto& step : visit.path) {
@@ -218,13 +224,14 @@ public:
 class ProteusCorrespondenceGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusStreamEvidence> evidence_;
+    std::shared_ptr<ProteusDefinitions> definitions_;
     SpanLayout<POVNode> layouts_[2];
     std::vector<std::size_t> starts_[2];
     bool verified_ = false;
 public:
     ProteusCorrespondenceGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access,
-                             std::shared_ptr<ProteusStreamEvidence> evidence)
-        : GoalSpec<POVNode>(query), access_(std::move(access)), evidence_(std::move(evidence)) {}
+                             std::shared_ptr<ProteusStreamEvidence> evidence, std::shared_ptr<ProteusDefinitions> definitions)
+        : GoalSpec<POVNode>(query), access_(std::move(access)), evidence_(std::move(evidence)), definitions_(std::move(definitions)) {}
     void beginPass() override {
         layouts_[0] = {}; layouts_[1] = {};
         starts_[0].clear(); starts_[1].clear(); verified_ = false;
@@ -271,8 +278,8 @@ public:
         auto access = access_;
         auto left = request.node, right = request.related;
         int demand = static_cast<int>(request.argument);
-        auto evidence = evidence_;
-        return {{"Set span alignment", [access, evidence, left, right, plan, demand] {
+        auto evidence = evidence_; auto definitions = definitions_;
+        return {{"Set span alignment", [access, evidence, definitions, left, right, plan, demand] {
             access->bind(left); access->bind(right);
             for (const auto& pair : plan.identities) { access->bind(pair.first); access->bind(pair.second); }
             for (const auto& fill : plan.fills) {
@@ -299,7 +306,7 @@ public:
                 }
                 changed |= access->finishTail(fill.owner, fill.close, fill.extent);
             }
-            return changed;
+            return definitions->inherit(left, right) || changed;
         }, work}};
     }
     bool satisfied() const override { return verified_; }
@@ -379,7 +386,7 @@ public:
         if (query.kind == typeRequirements)
             return std::make_shared<ProteusTypeGoal>(query, definitions_);
         if (query.kind == listCorrespondence)
-            return std::make_shared<ProteusCorrespondenceGoal>(query, access_, evidence_);
+            return std::make_shared<ProteusCorrespondenceGoal>(query, access_, evidence_, definitions_);
         if (query.kind == concatField)
             return std::make_shared<ProteusConcatGoal>(query, access_);
         if (query.kind == selectIntersection)
@@ -603,6 +610,8 @@ private:
                     if (!access_->prefixList(source)) return;
                 }
                 if (!access_->relationSupported(node, source, query.kind)) {
+                    if (definitions_->canInherit(origin, source))
+                        result.edges.push_back(direct("checked type evidence", {source, query.kind, 0, origin}));
                     if (access_->canSelect(source))
                         result.refinements.push_back({{source, selectIntersection, 0}, {1, 0}, "find RHS intersection result", false});
                     if (access_->hasConcat(source, 1) || access_->hasConcat(source, 2))

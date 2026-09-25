@@ -11,10 +11,11 @@ remain useful semantic examples for later migration, and can be run selectively.
 A full legacy-suite run is optional, not a gate for every change. Clearly report
 which behavior was checked and which features remain unsupported.
 
-Current priority: establish an existing-language-test baseline and normalize
-list forms and their sizes before implementing intersections. Size and value
-should be acquired together from a compatible source when both are available;
-partial acquisition is for the cases where only one is available.
+Current checkpoint: scalar and finite ordered list definitions use graph
+requirements and reusable evidence. Next come lazy member templates and record
+matching. Preserve read-only definition bodies and avoid redundant application
+RHSs. Size and value should be acquired together when both are available;
+partial acquisition is for cases where only one is available.
 
 Agent.normalize() is the public graph entry point and returns a handle.
 Agent.normalizeAndWait() is the synchronous convenience. Each Agent owns a

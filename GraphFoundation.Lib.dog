@@ -214,7 +214,7 @@ struct ProteusGraphAccess {
         our infonView: inf <- pov!.pItem
         return((inf!.viewMode==vmOverlay or (inf!.viewMode==vmAny and unknownOverlay(pov))) and !inf!.invertMatch and
                !inf!.isTentative and
-               ((inf!.type==NULL and inf!.addedTypes.isEmpty()) or scalarTypeShape(pov)) and
+               ((inf!.type==NULL and inf!.addedTypes.isEmpty()) or definitionTypeShape(pov)) and
                (inf!.innr==NULL or selection) and inf!.proxy==NULL and inf!.partRef==NULL and
                inf!.parts.isEmpty() and inf!.funcArgs==NULL and
                (inf!.itmMode==mNone or inf!.itmMode==mItem) and
@@ -233,6 +233,58 @@ struct ProteusGraphAccess {
     me bool: scalarTypeShape(our POV: pov) <- {
         return((pov!.pItem!.value!.overlayType==NUM or pov!.pItem!.value!.overlayType==STR or unknownOverlay(pov)) and
                (pov!.pItem!.value!.evalMode==emUnknown or pov!.pItem!.value!.evalMode==emLiteral))
+    }
+    me bool: definitionTypeShape(our POV: pov) <- {
+        return(scalarTypeShape(pov) or (pov!.pItem!.value!.overlayType==LST and
+               (pov!.pItem!.value!.evalMode==emLiteral or pov!.pItem!.value!.evalMode==emUnknown)))
+    }
+    // Only loaded, closed ordered bodies are finite definition requirements.
+    // Unknown scalar fields are allowed; open/template/contextual shapes wait.
+    me bool: finiteDefinitionList(our POV: pov) <- {
+        return(closedPhysicalList(pov) and definitionOrderedCandidate(pov) and
+               pov!.pItem!.value!.sizeMode!=fromContext)
+    }
+    me bool: definitionOrderedCandidate(our POV: pov) <- {
+        return(pov!.pItem!.orderMode==uUnknown or pov!.pItem!.orderMode==uOrdered)
+    }
+    me bool: definitionOrderKnown(our POV: pov) <- {return(pov!.pItem!.orderMode==uOrdered)}
+    me bool: setDefinitionOrder(our POV: pov) <- {
+        if(pov!.pItem!.orderMode!=uUnknown){return(false)}
+        pov!.pItem!.orderMode <- uOrdered; pov!.workRevision <+- 1
+        return(true)
+    }
+    me List<our POV>: definitionMembers(our POV: pov) <- {
+        me List<our POV>: result
+        if(finiteDefinitionList(pov)){
+            our POV: member <- first(pov)
+            while(member!=NULL){result.append(member); member <- next(member)}
+        }
+        return(result)
+    }
+    me bool: definitionEmbedded(our POV: pov) <- {return(pov!.isSubItm)}
+    me bool: adoptDefinitionList(our POV: pov) <- {
+        if(!adoptableList(pov)){return(false)}
+        pov!.pItem!.viewMode <- vmOverlay
+        pov!.pItem!.value!.overlayType <- LST
+        pov!.pItem!.value!.evalMode <- emLiteral
+        pov!.pItem!.value!.tailUnfinished <- true
+        pov!.pItem!.isNormed <- false; pov!.workRevision <+- 1
+        return(true)
+    }
+    our POV: appendDefinitionMember(our POV: owner, me string: typeName) <- {
+        // Instance-owned storage. No identity or work edge points back into a
+        // shared definition, so local values cannot specialize that definition.
+        our infonView:: item
+        item!.viewMode <- vmOverlay; item!.itmMode <- mItem
+        item!.infSize!.evalMode <- emUnknown
+        item!.value!.overlayType <- tUnknown; item!.value!.evalMode <- emUnknown
+        if(typeName!=""){
+            Allocate(item!.type); item!.type!.setAsGiven(typeName)
+        }
+        our POV: member <- owner!.pItem!.value!.items.append(item, false, 913)
+        member!.pParent <- owner; bind(member)
+        owner!.pItem!.isNormed <- false; owner!.workRevision <+- 1
+        return(member)
     }
     me bool: hasTypeRequirements(our POV: pov) <- {
         return(pov!.pItem!.type!=NULL or !pov!.pItem!.addedTypes.isEmpty())
@@ -261,7 +313,7 @@ struct ProteusGraphAccess {
     }
     me GraphTypeFacts: typeFacts(our POV: pov) <- {
         me GraphTypeFacts: facts
-        if(!plain(pov) or !scalarTypeShape(pov) or
+        if(!plain(pov) or !definitionTypeShape(pov) or
                 pov!.pItem!.value!.sizeMode==fromContext or
                 pov!.pItem!.infSize!.overlayType!=NUM){return(facts)}
         facts.valid <- true
@@ -269,7 +321,7 @@ struct ProteusGraphAccess {
         if(!unknownOverlay(pov)){facts.overlay <- pov!.pItem!.value!.overlayType}
         facts.hasSize <- pov!.pItem!.infSize!.evalMode==emLiteral
         if(facts.hasSize){facts.size <- pov!.pItem!.infSize!.num}
-        facts.hasValue <- pov!.pItem!.value!.evalMode==emLiteral
+        facts.hasValue <- facts.overlay!=LST and pov!.pItem!.value!.evalMode==emLiteral
         if(facts.hasValue){
             if(facts.overlay==NUM){facts.number <- pov!.pItem!.value!.num}
             else{facts.text <- pov!.pItem!.value!.str}
@@ -535,6 +587,9 @@ struct ProteusGraphAccess {
         // Adopt only the list interpretation. Correspondence fills independent
         // member views on subsequent graph passes, preserving compressed tails.
         if(copyList){
+            // The admitted source is ordered, including an untyped literal
+            // whose order flag was implicit. Carry that established order.
+            target!.pItem!.orderMode <- uOrdered
             target!.pItem!.value!.overlayType <- LST
             target!.pItem!.value!.evalMode <- emLiteral
             target!.pItem!.value!.tailUnfinished <- true
