@@ -15,9 +15,10 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               concatField = 14, concatMember = 15, concatEnd = 16,
               selectIntersection = 17, selectionMember = 18, selectionFound = 19,
               selectionExtentMember = 20, selectionExtentEnd = 21,
-              typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25 };
+              typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26 };
 
 #include "DefinitionApplications.h"
+#include "RHSRepresentation.h"
 
 // Early correspondence is conditional on the parser retaining the ordered
 // list body. Weak provenance witnesses neither copy nodes nor own a second
@@ -81,6 +82,7 @@ public:
 class ProteusCompletion {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::vector<std::weak_ptr<POV>> marked_;
+    std::vector<std::weak_ptr<GraphRHSProof>> represented_;
     struct Reply { std::uint64_t origin, order, position; POVNode node; };
     std::vector<Reply> effects_;
 public:
@@ -89,6 +91,14 @@ public:
     void mark(const POVNode& node) {
         marked_.push_back(node);
         access_->setNormed(node, true);
+    }
+    void represented(const POVNode& node, const POVNode& rhs) {
+        if (node->pItem->workIsRepresented(rhs)) return;
+        auto& records = node->pItem->representedWork;
+        records.erase(std::remove_if(records.begin(), records.end(),
+            [](const auto& record) { return !record->valid; }), records.end());
+        auto proof = std::make_shared<GraphRHSProof>(); proof->rhs = rhs;
+        records.push_back(proof); represented_.push_back(proof);
     }
     void reply(const POVNode& node) {
         if (!access_->replyReady(node)) return;
@@ -117,6 +127,34 @@ public:
         for (auto& weak : marked_)
             if (auto node = weak.lock()) access_->setNormed(node, false);
         marked_.clear();
+        for (const auto& weak : represented_)
+            if (auto proof = weak.lock()) proof->valid = false;
+        represented_.clear();
+    }
+};
+
+// A representation proof is narrower than normalization: unspecified fields
+// need not become known. It changes only revision-scoped printer metadata.
+class ProteusRepresentationGoal : public GoalSpec<POVNode> {
+    std::shared_ptr<ProteusGraphAccess> access_;
+    std::shared_ptr<ProteusCompletion> completion_;
+    bool checked_ = false, represented_ = false;
+public:
+    ProteusRepresentationGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access,
+                              std::shared_ptr<ProteusCompletion> completion)
+        : GoalSpec<POVNode>(query), access_(std::move(access)), completion_(std::move(completion)) {}
+    void beginPass() override { checked_ = false; represented_ = false; }
+    std::vector<SetCommand> found(const Visit<POVNode>&) override {
+        RHSRepresentation plan(access_, request.node, request.related);
+        return {{"Check RHS representation", [this, represented = plan.represented] {
+            checked_ = true; represented_ = represented;
+            return false; // proof metadata only: no semantic revision
+        }, plan.work}};
+    }
+    bool satisfied() const override { return checked_; }
+    bool symbolic() const override { return !checked_; }
+    void settled(bool fullyResolved) override {
+        if (fullyResolved && represented_) completion_->represented(request.node, request.related);
     }
 };
 
@@ -388,6 +426,8 @@ public:
     void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); definitions_->prune(); }
     std::vector<std::function<void()>> takeEffects() override { return completion_->takeEffects(); }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
+        if (query.kind == assessRepresentation)
+            return std::make_shared<ProteusRepresentationGoal>(query, access_, completion_);
         if (query.kind == typeRequirements)
             return std::make_shared<ProteusTypeGoal>(query, definitions_);
         if (query.kind == listCorrespondence)
@@ -408,6 +448,7 @@ private:
     Expansion<POVNode> expandSemantic(const Query<POVNode>& query) {
         Expansion<POVNode> result;
         auto node = query.node;
+        if (query.kind == assessRepresentation) return result;
         if (query.kind == typeRequirements) {
             if (!definitions_->saved(node))
                 result.edges.push_back(direct("inspect type definitions", {node, definitionEnter, 0, node}));
@@ -631,7 +672,12 @@ private:
                     result.refinements.push_back({{origin, listCorrespondence, query.kind, source},
                         {1, 0}, "match list RHS members", false});
             };
-            for (auto source : access_->workSources(node)) relationship(source, "work-list constraint");
+            for (auto source : access_->workSources(node)) {
+                relationship(source, "work-list constraint");
+                if (query.kind == sizeAndValue)
+                    result.refinements.push_back({{node, assessRepresentation, 0, source}, {0, 0},
+                        "assess represented RHS", false});
+            }
             for (auto source : access_->identitySources(node)) relationship(source, "registry identity");
             return result;
         }

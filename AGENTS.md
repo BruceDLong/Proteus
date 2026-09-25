@@ -14,7 +14,9 @@ which behavior was checked and which features remain unsupported.
 Current checkpoint: scalar and finite ordered list definitions, plus homogeneous
 lazy member templates, use graph requirements and reusable evidence. Open
 template-prefix mapping and record matching remain later boundaries. Preserve read-only definition bodies and avoid redundant application
-RHSs. Size and value should be acquired together when both are available;
+RHSs. Redundant RHS rendering now has its own revision-scoped proof; keep work
+edges searchable and do not relax isNormed to hide unknown scalar sizes.
+Size and value should be acquired together when both are available;
 partial acquisition is for cases where only one is available.
 
 Agent.normalize() is the public graph entry point and returns a handle.

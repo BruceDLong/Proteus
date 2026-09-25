@@ -46,6 +46,7 @@ test normalization now enter through Agent's graph context.
 | `GraphFoundation.Lib.dog` | Public CodeDog API; Proteus graph access, compatibility checks and atomic Set batches |
 | `ProteusGraph.h` | Translate semantic access into graph edges and refinement opportunities; GoalSpec turns findings into Sets |
 | `SpanAlignment.h` | Plan finite ordered correspondence from opaque member/gap evidence; no POV access or mutation |
+| `RHSRepresentation.h` | Prove which RHS facts are already represented, independently of complete normalization |
 | `IdentityRegistry` | Existing domain records, owned through the manager's Proteus adapter |
 
 The generic runtime is a C++17 template, instantiated with `shared_ptr<POV>`.
@@ -138,6 +139,31 @@ references for this metadata; it does not retain another graph or keep nodes
 alive. Completion metadata does not itself publish a semantic revision.
 Completed handles remain records of their finished run; call `normalize()`
 again to revalidate a result invalidated by later information.
+
+## Represented RHS information
+
+A symbolic result may already contain every fact supplied by a particular RHS.
+For example, `_ = 2` has acquired the value and overlay but still lacks a numeric
+size. Marking it `isNormed` would be wrong; printing `2 = 2` is unnecessary.
+
+The adapter advertises a separate `assessRepresentation` goal for work edges.
+`RHSRepresentation.h` builds a read-only proof for scalar facts and closed,
+ordered physical layouts, reusing the span equations for embedded members.
+Every known RHS field must occur in the target. Unknown RHS fields impose no
+additional fact. Layouts must agree without fills, and every mapped member must
+pass the same check. Named RHS requirements, contextual meanings, open or
+repeated spans, and cyclic proofs conservatively remain unproved.
+
+The manager prices the proof's visits before accepting it. At settlement the
+completion adapter publishes only derived rendering metadata; the printer can
+then omit that RHS text. Work edges, member identities, and subscriptions are
+unchanged. No numeric size is invented and `isNormed` retains its stricter rule.
+Graph publications invalidate the shared proof tokens, including after a
+handle is cancelled or the original POV is released. Copies sharing a token
+cannot retain stale evidence after its invalidation.
+
+See [rhs-representation-results.md](rhs-representation-results.md) for the
+original-test recovery milestone and remaining language blockers.
 
 ## Physical list normalization
 
