@@ -66,6 +66,9 @@ Its supported cases (`./streamReplyTest -f 1`, `2`, `4`, `5`, `6`, and `8`, from
 
 ## Remaining boundaries
 
+The size-defined grouping prerequisite below is now handled by the subsequent
+[virtual-shape checkpoint](virtual-shape-results.md).
+
 `parse/grouping2` specifies pair width using `*2+{...}` rather than explicit
 member positions. Its next prerequisite is deriving a finite member layout from
 that size without blindly materializing large symbolic extents. It is not

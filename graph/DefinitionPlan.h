@@ -4,13 +4,33 @@
 // graph is walked through existing POVs before any instance Set is offered.
 struct DefinitionRequirement {
     GraphTypeFacts facts;
-    bool list = false;
+    // Open requirements currently have no explicit prefix. The compiler keeps
+    // prefixed/embedded virtual definition bodies deferred until they can be
+    // composed without discarding positional constraints.
+    bool list = false, open = false;
     std::vector<std::shared_ptr<DefinitionRequirement>> members;
     // A homogeneous constraint on each occurrence, not N copied positions.
     std::shared_ptr<DefinitionRequirement> repeated;
     POVNode templateSource;
     std::vector<std::string> types;
     std::string label;
+    // Explicit positions and an unmaterialized tail share the runtime's span
+    // equations. Cardinality does not allocate one requirement per position.
+    SpanLayout<std::shared_ptr<DefinitionRequirement>> memberLayout() const {
+        SpanLayout<std::shared_ptr<DefinitionRequirement>> result;
+        for (const auto& member : members) result.segments.push_back({member, false, 1});
+        if (open) result.segments.push_back({{}, true, -1});
+        std::int64_t extent = -1;
+        if (facts.hasSize) {
+            auto size = facts.size;
+            if (size < 0 || size.getDenominator() != 1 ||
+                size > std::numeric_limits<std::int64_t>::max()) { result.valid = false; return result; }
+            extent = size.getNumerator().get_si();
+        }
+        result.equations.push_back({0, result.segments.size(), extent, {}});
+        result.solve();
+        return result;
+    }
 };
 using DefinitionSpec = std::shared_ptr<DefinitionRequirement>;
 
@@ -24,14 +44,18 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
     std::sort(result->types.begin(), result->types.end());
     if (result->label.empty()) result->label = right->label;
     if (result->list && right->list) {
-        if (result->repeated && right->repeated) {
-            result->repeated = combineDefinitions(result->repeated, right->repeated);
-        } else if (result->repeated || right->repeated) {
-            auto repeated = result->repeated ? result->repeated : right->repeated;
-            auto finite = result->repeated ? right : result;
+        if (result->open && right->open) {
+            if (result->repeated && right->repeated)
+                result->repeated = combineDefinitions(result->repeated, right->repeated);
+            else if (right->repeated) {
+                result->repeated = right->repeated; result->templateSource = right->templateSource;
+            }
+        } else if (result->open || right->open) {
+            auto repeated = result->open ? result->repeated : right->repeated;
+            auto finite = result->open ? right : result;
             result->members = finite->members;
-            for (auto& member : result->members) member = combineDefinitions(member, repeated);
-            result->repeated.reset(); result->templateSource.reset();
+            if (repeated) for (auto& member : result->members) member = combineDefinitions(member, repeated);
+            result->open = false; result->repeated.reset(); result->templateSource.reset();
         } else {
             if (result->members.size() != right->members.size())
                 throw std::runtime_error("incompatible finite definition lengths");
@@ -39,15 +63,17 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
                 result->members[i] = combineDefinitions(result->members[i], right->members[i]);
         }
     } else if (right->list) {
-        result->list = true; result->members = right->members;
+        result->list = true; result->open = right->open; result->members = right->members;
         result->repeated = right->repeated; result->templateSource = right->templateSource;
     }
+    if (result->list && !result->memberLayout().valid)
+        throw std::runtime_error("incompatible definition extent");
     return result;
 }
 
 inline bool sameDefinition(const DefinitionSpec& a, const DefinitionSpec& b) {
     if (a == b) return true;
-    if (!a || !b || a->list != b->list || !a->facts.same(b->facts) ||
+    if (!a || !b || a->list != b->list || a->open != b->open || !a->facts.same(b->facts) ||
         a->types != b->types || a->members.size() != b->members.size() ||
         !sameDefinition(a->repeated, b->repeated)) return false;
     for (std::size_t i = 0; i < a->members.size(); ++i)
@@ -176,11 +202,20 @@ private:
             left.equations.push_back({0, 1, -1, {target, {}}});
         } else layout(target->node, left);
         if (!supported) return;
-        for (const auto& member : requirement->members) right.segments.push_back({{{}, member}, false, 1});
-        right.equations.push_back({0, right.segments.size(), static_cast<std::int64_t>(right.segments.size()), {{}, requirement}});
+        auto shape = requirement->memberLayout();
+        if (!shape.valid) throw std::runtime_error("incompatible definition extent");
+        for (const auto& segment : shape.segments)
+            right.segments.push_back({{{}, segment.node}, segment.gap, segment.width});
+        right.equations.push_back({0, right.segments.size(), shape.extent(), {{}, requirement}});
         auto plan = alignSpans(left, right);
         if (!plan.valid) throw std::runtime_error("incompatible finite definition extent");
-        if (!plan.complete) { supported = false; return; }
+        // An unconstrained virtual tail need not be filled to prove the type.
+        // Every explicit required position must still be mapped unambiguously.
+        std::size_t mapped = plan.identities.size();
+        for (const auto& fill : plan.fills) if (fill.owner.place) mapped += fill.sources.size();
+        if ((!requirement->open && !plan.complete) || mapped != requirement->members.size()) {
+            supported = false; return;
+        }
         if (!requirement->facts.accepts(actual)) writes.push_back([access, target, requirement] {
             return access->applyTypeFacts(target->node, requirement->facts);
         });
@@ -191,6 +226,7 @@ private:
         for (const auto& pair : plan.identities) prepare(pair.first.place, pair.second.requirement);
         for (const auto& fill : plan.fills) {
             auto owner = fill.owner.place;
+            if (!owner) continue; // Actual members already satisfy an unconstrained source gap.
             for (const auto& source : fill.sources) {
                 auto member = std::make_shared<Slot>();
                 auto spec = source.requirement;

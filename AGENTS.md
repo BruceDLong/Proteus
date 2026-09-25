@@ -23,6 +23,8 @@ relationships, and sparse inspection must not materialize occurrences.
 
 Current checkpoint: scalar/finite definitions, lazy member templates, and
 fixed-width whole-list grouping use graph requirements and priced plans.
+Empty open definition bodies retain virtual positions; their known extent
+feeds the shared span layout without allocating members.
 Loaded instance prefixes can be checked without expanding their virtual tails.
 Prefixed definition bodies, variable-width/text correspondence, and record
 matching remain later boundaries. Preserve read-only definition bodies,

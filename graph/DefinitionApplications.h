@@ -13,7 +13,7 @@ public:
         GraphTypeFacts facts;
         std::vector<std::string> names;
         std::vector<POVNode> work, members;
-        bool list = false, embedded = false;
+        bool list = false, embedded = false, open = false;
         POVNode memberTemplate;
     };
     struct Evidence {
@@ -45,7 +45,7 @@ private:
     POVNode memberTemplate(const POVNode& node) const { return view(access_->memberTemplate(node)); }
     POVNode occurrenceOwner(const POVNode& node) const { return view(access_->occurrenceOwner(node)); }
     bool listRequirement(const POVNode& node) const {
-        return access_->finiteDefinitionList(node) || access_->repeatedDefinitionList(node);
+        return access_->positionalDefinitionList(node) || access_->repeatedDefinitionList(node);
     }
     // Admitted requirements are context-free. Contextual meanings will need a
     // binding-context key; an additional POV alone must not repeat application.
@@ -123,7 +123,7 @@ public:
         }
         if (node == root || proof->evidence->witnesses.count(node)) return;
         proof->evidence->witnesses.emplace(node, Witness{node, node->pItem, access_->typeFacts(node),
-            names(node), work(node), members(node), listRequirement(node), access_->definitionEmbedded(node), memberTemplate(node)});
+            names(node), work(node), members(node), listRequirement(node), access_->definitionEmbedded(node), access_->openTail(node), memberTemplate(node)});
     }
     // The graph's leave edge supplies postorder: every required child has
     // already been walked. Compile requirements, never execute child normalize.
@@ -137,18 +137,18 @@ public:
         if (node != root) {
             auto& witness = proof->evidence->witnesses.at(node);
             requirement->facts = witness.facts;
-            requirement->list = witness.list;
+            requirement->list = witness.list; requirement->open = witness.list && witness.open;
             for (const auto& member : witness.members) {
                 auto child = compiled.at(member);
                 if (access_->definitionEmbedded(member)) {
                     if (!child->list) throw std::runtime_error("non-list embedded definition span");
                     // A named alias may reveal repetition only after its walk.
                     // Never mistake its empty physical prefix for zero items.
-                    if (child->repeated) { proof->compilable = false; return; }
+                    if (child->open) { proof->compilable = false; return; }
                     requirement->members.insert(requirement->members.end(), child->members.begin(), child->members.end());
                 } else requirement->members.push_back(child);
             }
-            if (access_->finiteDefinitionList(node)) {
+            if (access_->positionalDefinitionList(node) && !requirement->open) {
                 GraphTypeFacts extent;
                 extent.valid = true; extent.hasSize = true;
                 extent.size = static_cast<std::int64_t>(requirement->members.size());
@@ -158,7 +158,7 @@ public:
         if (auto source = memberTemplate(node)) {
             auto repeated = std::make_shared<DefinitionRequirement>();
             repeated->facts.valid = true; repeated->facts.overlay = infonState::LST;
-            repeated->list = true; repeated->repeated = compiled.at(source); repeated->templateSource = source;
+            repeated->list = true; repeated->open = true; repeated->repeated = compiled.at(source); repeated->templateSource = source;
             // An open body denotes repeated positions, not an empty finite list.
             if (node != root && access_->repeatedDefinitionList(node)) {
                 requirement->repeated = repeated->repeated; requirement->templateSource = source;
@@ -189,7 +189,7 @@ public:
             if (witness.node->pItem != witness.infon || !witness.facts.same(access_->typeFacts(witness.node)) ||
                 witness.names != names(witness.node) || witness.work != work(witness.node) ||
                 witness.list != listRequirement(witness.node) || witness.members != members(witness.node) ||
-                witness.embedded != access_->definitionEmbedded(witness.node) ||
+                witness.embedded != access_->definitionEmbedded(witness.node) || witness.open != access_->openTail(witness.node) ||
                 witness.memberTemplate != memberTemplate(witness.node) || !POVDescription(witness.node, access_->registry.get()).relationships(false).empty()) return false;
         }
         return true;

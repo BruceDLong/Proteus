@@ -15,6 +15,7 @@ class GroupedListPlan {
     std::vector<POVNode> sources_;
     std::vector<Group> groups_;
     bool satisfied_ = false;
+    std::size_t width_ = 0;
     bool sourceLayout(const POVNode& node) {
         SpanLayout<POVNode> layout;
         if (!readListLayout(*access_, node, layout, work.visits, [&](const auto& at) {
@@ -48,10 +49,13 @@ public:
         member_ = requirement->repeated;
         // Fixed arity is established by the definition walk. Variable-width,
         // nested grouping and contextual grammar need different mapping goals.
-        if (!member_->list || member_->repeated || member_->members.empty()) return;
+        if (!member_->list || (member_->repeated && member_->repeated->list)) return;
         for (const auto& child : member_->members) if (child->list) return;
+        const auto shape = member_->memberLayout();
+        if (!shape.valid) throw std::runtime_error("incompatible group extent");
+        if (shape.extent() <= 0) return;
+        const auto width = width_ = static_cast<std::size_t>(shape.extent());
         if (!sourceLayout(source)) return;
-        const auto width = member_->members.size();
         if (sources_.size() % width) throw std::runtime_error("incomplete final group in whole loose correspondence");
         const auto count = sources_.size() / width;
         if (count > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) return;
@@ -82,11 +86,16 @@ public:
         std::set<std::shared_ptr<infonView>> writable;
         for (std::size_t i = 0; i < count; ++i) {
             auto spec = std::make_shared<DefinitionRequirement>(*member_);
+            // Only this loaded source span supplies concrete positions. The
+            // shared definition and unmatched virtual extents stay compressed.
+            spec->open = false; spec->members.clear(); spec->repeated.reset(); spec->templateSource.reset();
             for (std::size_t j = 0; j < width; ++j) {
                 auto facts = access_->typeFacts(sources_[i * width + j]);
-                auto child = std::make_shared<DefinitionRequirement>(*member_->members[j]);
+                auto child = j < member_->members.size() ?
+                    std::make_shared<DefinitionRequirement>(*member_->members[j]) : member_->repeated ?
+                    std::make_shared<DefinitionRequirement>(*member_->repeated) : std::make_shared<DefinitionRequirement>();
                 if (!child->facts.combine(facts)) throw std::runtime_error("source conflicts with group member requirement");
-                spec->members[j] = child;
+                spec->members.push_back(child);
             }
             auto plan = std::make_shared<ProteusDefinitionPlan>(access_, existing[i], spec);
             if (!plan->supported) return;
@@ -141,7 +150,7 @@ public:
             changed |= group.plan->apply();
             std::vector<POVNode> destinations; members(group.node, destinations);
             for (std::size_t j = 0; j < destinations.size(); ++j) {
-                auto source = sources_[i * member_->members.size() + j];
+                auto source = sources_[i * width_ + j];
                 auto dest = destinations[j];
                 access_->bind(dest); access_->bind(source);
                 if (!access_->hasDirectIdentity(dest, source)) {

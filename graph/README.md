@@ -387,8 +387,10 @@ subscriptions and can resume after another normalization registers the meaning.
 Publication uses graph locking and revisions, without populating the legacy
 global `ModelManager`.
 
-Supported bodies include closed physical ordered lists and homogeneous open
-member templates, with scalar, nested-list, alias, and supported RHS constraints.
+Supported bodies include closed physical ordered lists, empty open list bodies,
+and homogeneous open member templates, with scalar, nested-list, alias, and
+supported RHS constraints. Empty open bodies retain a virtual span whose extent
+can come from their size slot or another compatible definition constraint.
 An empty instance can acquire a compressed `listSpec` reference. Positional
 lookup creates only the requested registry occurrence; normalization then reads
 its source-list requirements. Existing closed finite instances receive the
@@ -407,6 +409,34 @@ Loaded instance prefixes now receive template requirements in place. Their
 unrequested tail stays compressed. General sparse-tail indexing after a prefix
 and record/field matching remain later boundaries.
 
+## Finite extents over virtual positions
+
+`DefinitionRequirement::memberLayout()` describes explicit positions and a
+virtual tail using the same `SpanLayout` equations as ordinary correspondence.
+An extent of a billion requires one gap descriptor. An unknown extent remains
+unknown; it is never inferred as zero from an empty physical member list.
+
+Applying `#row=*2+{...}` to an empty instance establishes a list and its size
+without allocating members. Existing concrete contents must agree with that
+size. A closed-list constraint can supply the missing positions; a homogeneous
+constraint can supply their member type. Shared definition bodies remain
+read-only, including when another RHS supplies the extent. The existing type
+sub-goal follows those constraints and subscriptions reconsider new information.
+
+Grouping uses the same extent to partition its loaded source. It prepares only
+the positions supplied by those source spans, retaining existing group POVs and
+canonical occurrences. A zero or unknown group width stays symbolic. Failed
+extent or member checks publish no partial group batch. A closed list still
+requires all members to normalize before `isNormed` can be set.
+
+Definition evidence records whether the source tail is open, as well as its
+facts and members, so a later closure cannot reuse proof of a virtual body.
+Prefixed and embedded virtual definition bodies remain deferred. General indexed
+access to an untemplated virtual tail is not introduced here; the existing
+sparse lookup route still uses member templates.
+
+See [virtual-shape-results.md](virtual-shape-results.md) for examples and checks.
+
 ## Fixed-width whole-list grouping
 
 `{{_ _}|...} == {1 2 3 4}` maps two result members (pairs) to four input
@@ -416,7 +446,9 @@ The source endpoint's value is inspected separately from its relationship flags.
 Other loose relationships remain unsupported.
 
 The definition walk supplies the read-only repeated member requirement.
-`GroupedListPlan.h` derives its nonzero fixed width, checks the source's loaded
+Its shared span layout derives width from explicit positions or a known size,
+including an empty virtual body such as `*2+{...}` or a sized member template.
+`GroupedListPlan.h` uses that nonzero fixed width, checks the source's loaded
 ordered layout and the target's group count, and prepares per-group definition
 plans. It validates every group's known facts before offering a Set. The graph
 manager prices visits, new member storage, and member identities before execution.
@@ -431,7 +463,7 @@ suppress a represented template and RHS; the work edge and template remain
 searchable. New information invalidates that metadata and can still wake a
 subscription or expose a conflict through member identities.
 
-The first route accepts a repeated finite scalar group and an already-closed,
+The route accepts a repeated finite scalar group and an already-closed,
 ordered scalar source list (including finite embedded source spans). It also
 accepts existing target prefixes and prior sparse lookups. It defers text,
 variable-width/nested groups, `==:` prefix matching, unordered or root-constrained
