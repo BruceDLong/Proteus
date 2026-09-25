@@ -82,24 +82,12 @@ private:
         if (!result) result = std::make_shared<Slot>(Slot{node});
         return result;
     }
-    void layout(const POVNode& node, SpanLayout<Position>& result, std::vector<POVNode> ancestors = {}) {
-        ++work.visits;
-        if (!access_->physicalList(node) || !access_->definitionOrderedCandidate(node) ||
-            std::any_of(ancestors.begin(), ancestors.end(), [&](const POVNode& p) { return access_->sameInfon(p, node); })) {
-            supported = false; return;
-        }
-        ancestors.push_back(node);
-        auto begin = result.segments.size();
-        for (auto member = access_->first(node); member; member = access_->next(member)) {
-            ++work.visits;
-            if (access_->definitionEmbedded(member)) layout(member, result, ancestors);
-            else if (access_->correspondingMembers(member, member)) result.segments.push_back({{place(member), {}}, false, 1});
-            else { supported = false; return; }
-        }
-        if (access_->openTail(node)) result.segments.push_back({{place(node), {}}, true, -1});
-        auto extent = access_->listExtent(node);
-        if (extent == -2) { supported = false; return; }
-        result.equations.push_back({begin, result.segments.size(), extent, {place(node), {}}});
+    void layout(const POVNode& node, SpanLayout<Position>& result) {
+        supported = readListLayout(*access_, node, result, work.visits,
+            [&](const auto& at) {
+                return at.phase != ListPhase::enter ||
+                    (access_->physicalList(at.node) && access_->definitionOrderedCandidate(at.node));
+            }, [&](const POVNode& member) { return Position{place(member), {}}; });
     }
     void prepareRepeated(const Place& target, const DefinitionSpec& requirement, GraphTypeFacts actual) {
         auto access = access_;

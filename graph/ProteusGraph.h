@@ -1,5 +1,5 @@
 #pragma once
-#include "SpanAlignment.h"
+#include "ListStructure.h"
 #include <set>
 
 // Included after the CodeDog declarations. Domain knowledge is implemented in
@@ -16,6 +16,12 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectIntersection = 17, selectionMember = 18, selectionFound = 19,
               selectionExtentMember = 20, selectionExtentEnd = 21,
               typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27 };
+
+inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
+    auto phase = query.kind == correspondenceEnter ? ListPhase::enter :
+                 query.kind == correspondenceMember ? ListPhase::member : ListPhase::leave;
+    return {query.node, phase, query.context};
+}
 
 #include "DefinitionApplications.h"
 #include "RHSRepresentation.h"
@@ -299,8 +305,7 @@ class ProteusCorrespondenceGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusStreamEvidence> evidence_;
     std::shared_ptr<ProteusDefinitions> definitions_;
-    SpanLayout<POVNode> layouts_[2];
-    std::vector<std::size_t> starts_[2];
+    ListLayoutBuilder<POVNode> layouts_[2];
     bool verified_ = false;
 public:
     ProteusCorrespondenceGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access,
@@ -308,26 +313,17 @@ public:
         : GoalSpec<POVNode>(query), access_(std::move(access)), evidence_(std::move(evidence)), definitions_(std::move(definitions)) {}
     void beginPass() override {
         layouts_[0] = {}; layouts_[1] = {};
-        starts_[0].clear(); starts_[1].clear(); verified_ = false;
+        verified_ = false;
     }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
         const auto& q = visit.query;
         if (q.kind == listCorrespondence) return {};
         auto side = static_cast<std::size_t>(q.argument);
         if (side > 1) return {};
-        auto& layout = layouts_[side];
-        if (q.kind == correspondenceEnter) starts_[side].push_back(layout.segments.size());
-        if (q.kind == correspondenceMember && !access_->subList(q.node))
-            layout.segments.push_back({q.node, false, 1});
-        if (q.kind == correspondenceLeave) {
-            if (access_->openTail(q.node)) layout.segments.push_back({q.node, true, -1});
-            auto extent = access_->listExtent(q.node);
-            if (extent == -2) layout.valid = false;
-            layout.equations.push_back({starts_[side].back(), layout.segments.size(), extent, q.node});
-            starts_[side].pop_back();
-        }
+        if (q.kind != correspondenceEnd)
+            layouts_[side].record(listPosition(q), *access_, [](const POVNode& member) { return member; });
         if (q.kind != correspondenceEnd) return {};
-        auto plan = alignSpans(layouts_[0], layouts_[1]);
+        auto plan = alignSpans(layouts_[0].layout, layouts_[1].layout);
         if (!plan.valid) return {};
         // Alignment is symmetric, but input ownership is not. Keep useful
         // matches while withholding every fill/closure of a parser-owned tail.
@@ -604,35 +600,18 @@ private:
         }
         if (query.kind == correspondenceEnter || query.kind == correspondenceMember ||
             query.kind == correspondenceLeave) {
-            auto context = query.context;
-            auto continuation = [&](const POVNode& current) {
-                if (auto next = access_->spanNext(current))
-                    return Query<POVNode>{next, correspondenceMember, query.argument, query.related, context};
-                auto owner = context.back(); context.pop_back();
-                return Query<POVNode>{owner, correspondenceLeave, query.argument, query.related, context};
-            };
-            if (query.kind == correspondenceEnter) {
-                if (!access_->spanList(node) || !access_->orderedList(node)) {
-                    result.deferred = true; return result;
-                }
-                for (const auto& ancestor : context) if (access_->sameInfon(node, ancestor)) {
-                    result.deferred = true; return result;
-                }
-                if (auto first = access_->spanFirst(node)) {
-                    context.push_back(node);
-                    result.edges.push_back(direct("first span member",
-                        {first, correspondenceMember, query.argument, query.related, context}));
-                } else result.edges.push_back(direct("empty span boundary",
-                    {node, correspondenceLeave, query.argument, query.related, context}));
-            } else if (query.kind == correspondenceMember) {
-                if (access_->subList(node))
-                    result.edges.push_back(direct("enter embedded span",
-                        {node, correspondenceEnter, query.argument, query.related, context}));
-                else if (access_->correspondingMembers(node, node))
-                    result.edges.push_back(direct("next span position", continuation(node)));
-                else result.deferred = true;
-            } else if (!context.empty()) {
-                result.edges.push_back(direct("leave embedded span", continuation(node)));
+            auto at = listPosition(query);
+            if (!listPositionSupported(*access_, at) || (at.phase == ListPhase::enter &&
+                (!access_->spanList(node) || !access_->orderedList(node)))) {
+                result.deferred = true; return result;
+            }
+            auto next = nextListPosition(*access_, std::move(at), true);
+            if (next.phase == ListPhase::cycle) result.deferred = true;
+            else if (next.phase != ListPhase::done) {
+                auto kind = next.phase == ListPhase::enter ? correspondenceEnter :
+                            next.phase == ListPhase::member ? correspondenceMember : correspondenceLeave;
+                result.edges.push_back(direct("next span position",
+                    {next.node, kind, query.argument, query.related, std::move(next.owners)}));
             } else if (!query.argument) {
                 result.edges.push_back(direct("inspect right span layout",
                     {query.related, correspondenceEnter, 1, node}));

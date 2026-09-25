@@ -15,36 +15,26 @@ class GroupedListPlan {
     std::vector<POVNode> sources_;
     std::vector<Group> groups_;
     bool satisfied_ = false;
-    bool sourceLayout(const POVNode& node, bool root, std::set<std::shared_ptr<infonView>>& ancestors) {
-        ++work.visits;
-        if ((root ? !access_->groupingSource(node) :
-             (!access_->closedPhysicalList(node) || !access_->orderedList(node) ||
-              access_->memberTemplate(node) || access_->hasTypeRequirements(node) ||
-              !access_->workSources(node).empty())) || !access_->inputError(node).empty() ||
-            !ancestors.insert(node->pItem).second) return false;
-        auto start = sources_.size();
-        for (auto item = access_->first(node); item; item = access_->next(item)) {
-            ++work.visits;
-            if (access_->subList(item)) {
-                if (!sourceLayout(item, false, ancestors)) return false;
-            } else {
-                if (!access_->correspondingMembers(item, item) || !access_->scalarCandidate(item) ||
-                    access_->hasTypeRequirements(item) || !access_->typeFacts(item).valid ||
-                    !access_->inputError(item).empty()) return false;
-                sources_.push_back(item);
-            }
-        }
-        auto extent = access_->listExtent(node);
-        if (extent == -2) return false;
-        if (extent >= 0 && static_cast<std::uint64_t>(extent) != sources_.size() - start)
-            throw std::runtime_error("source extent disagrees with grouped correspondence");
-        ancestors.erase(node->pItem);
+    bool sourceLayout(const POVNode& node) {
+        SpanLayout<POVNode> layout;
+        if (!readListLayout(*access_, node, layout, work.visits, [&](const auto& at) {
+            if (at.phase == ListPhase::enter)
+                return (at.owners.empty() ? access_->groupingSource(at.node) :
+                    (access_->closedPhysicalList(at.node) && access_->orderedList(at.node) &&
+                     !access_->memberTemplate(at.node) && !access_->hasTypeRequirements(at.node) &&
+                     access_->workSources(at.node).empty())) && access_->inputError(at.node).empty();
+            return at.phase != ListPhase::member || access_->subList(at.node) ||
+                (access_->scalarCandidate(at.node) && !access_->hasTypeRequirements(at.node) &&
+                 access_->typeFacts(at.node).valid && access_->inputError(at.node).empty());
+        }, [](const POVNode& member) { return member; })) return false;
+        if (!layout.solve()) throw std::runtime_error("source extent disagrees with grouped correspondence");
+        for (const auto& segment : layout.segments) sources_.push_back(segment.node);
         return true;
     }
     void members(const POVNode& group, std::vector<POVNode>& result) const {
-        for (auto item = access_->first(group); item; item = access_->next(item)) {
-            if (access_->subList(item)) members(item, result);
-            else result.push_back(item);
+        for (ListPosition<POVNode> at{group}; at.phase != ListPhase::done; at = nextListPosition(*access_, std::move(at))) {
+            if (!listPositionSupported(*access_, at)) throw std::logic_error("invalid prepared group layout");
+            if (at.phase == ListPhase::member && !access_->subList(at.node)) result.push_back(at.node);
         }
     }
 public:
@@ -60,8 +50,7 @@ public:
         // nested grouping and contextual grammar need different mapping goals.
         if (!member_->list || member_->repeated || member_->members.empty()) return;
         for (const auto& child : member_->members) if (child->list) return;
-        std::set<std::shared_ptr<infonView>> ancestors;
-        if (!sourceLayout(source, true, ancestors)) return;
+        if (!sourceLayout(source)) return;
         const auto width = member_->members.size();
         if (sources_.size() % width) throw std::runtime_error("incomplete final group in whole loose correspondence");
         const auto count = sources_.size() / width;

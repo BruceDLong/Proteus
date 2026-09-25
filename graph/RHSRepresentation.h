@@ -7,27 +7,14 @@
 // this first proof supports only closed physical layouts, without filling gaps.
 class RHSRepresentation {
     std::shared_ptr<ProteusGraphAccess> access_;
-    bool layout(const POVNode& node, SpanLayout<POVNode>& result, bool source,
-                std::set<std::shared_ptr<infonView>>& ancestors) {
-        ++work.visits;
-        if (!access_->closedPhysicalList(node) || !access_->orderedList(node) ||
-            access_->memberTemplate(node) || !access_->inputError(node).empty() ||
-            (source && (access_->hasTypeRequirements(node) || !access_->workSources(node).empty())) ||
-            !ancestors.insert(node->pItem).second) return false;
-        const auto begin = result.segments.size();
-        for (auto member = access_->first(node); member; member = access_->next(member)) {
-            ++work.visits;
-            if (access_->subList(member)) {
-                if (!layout(member, result, source, ancestors)) return false;
-            } else if (access_->correspondingMembers(member, member)) {
-                result.segments.push_back({member, false, 1});
-            } else return false;
-        }
-        const auto extent = access_->listExtent(node);
-        if (extent == -2) return false;
-        result.equations.push_back({begin, result.segments.size(), extent, node});
-        ancestors.erase(node->pItem);
-        return true;
+    bool layout(const POVNode& node, SpanLayout<POVNode>& result, bool source) {
+        return readListLayout(*access_, node, result, work.visits,
+            [&](const auto& at) {
+                return at.phase != ListPhase::enter ||
+                    (access_->closedPhysicalList(at.node) && access_->orderedList(at.node) &&
+                     !access_->memberTemplate(at.node) && access_->inputError(at.node).empty() &&
+                     (!source || (!access_->hasTypeRequirements(at.node) && access_->workSources(at.node).empty())));
+            }, [](const POVNode& member) { return member; });
     }
 public:
     Work work{0, 0};
@@ -50,8 +37,7 @@ public:
             if (!required.valid || !required.accepts(actual)) return;
             if (access_->literalList(right)) {
                 SpanLayout<POVNode> a, b;
-                std::set<std::shared_ptr<infonView>> ancestors;
-                if (!layout(left, a, false, ancestors) || !layout(right, b, true, ancestors)) return;
+                if (!layout(left, a, false) || !layout(right, b, true)) return;
                 auto plan = alignSpans(a, b);
                 if (!plan.valid || !plan.complete || !plan.fills.empty()) return;
                 pending.insert(pending.end(), plan.identities.begin(), plan.identities.end());

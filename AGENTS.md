@@ -11,6 +11,12 @@ remain useful semantic examples for later migration, and can be run selectively.
 A full legacy-suite run is optional, not a gate for every change. Clearly report
 which behavior was checked and which features remain unsupported.
 
+Organize reasoning by the semantics of language constructs. Combinations of
+constructs should compose their contributions; avoid adding an algorithm for
+each fixture or representational combination. List boundary/embedding/span
+traversal is shared in graph/ListStructure.h. Consumers retain their semantic
+obligations and must not silently ignore unsupported constraints.
+
 Current checkpoint: scalar/finite definitions, lazy member templates, and
 fixed-width whole-list grouping use graph requirements and priced plans.
 Loaded instance prefixes can be checked without expanding their virtual tails.

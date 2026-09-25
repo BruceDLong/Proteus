@@ -45,6 +45,7 @@ test normalization now enter through Agent's graph context.
 | `GraphSearch.h` | Opaque-node search, lazy edges, route costs, sub-goals, revisions, subscriptions, cancellation, worker lifetime |
 | `GraphFoundation.Lib.dog` | Public CodeDog API; Proteus graph access, compatibility checks and atomic Set batches |
 | `ProteusGraph.h` | Translate semantic access into graph edges and refinement opportunities; GoalSpec turns findings into Sets |
+| `ListStructure.h` | Shared incremental list walk and layout evidence for embedded positions, gaps, and owner extents |
 | `SpanAlignment.h` | Plan finite ordered correspondence from opaque member/gap evidence; no POV access or mutation |
 | `GroupedListPlan.h` | Plan fixed-width repeated groups against whole ordered source spans; preserve occurrence identity |
 | `RHSRepresentation.h` | Prove which RHS facts are already represented, independently of complete normalization |
@@ -190,6 +191,35 @@ normalize every ordinary nested value just to determine the parent's length.
 Template and sparse regions remain symbolic in normalization, and no implicit
 occurrences are eagerly generated. Existing lazy sparse indexed access remains
 available.
+
+## Shared list structure
+
+`ListStructure.h` defines the structural walk used by correspondence, finite
+definition applications, RHS representation proofs, and grouping. It enters a
+list, visits its positions, descends only into embedded members, and leaves
+with the owning list's extent and open-tail evidence. Ordinary nested lists
+remain one position. Each embedded boundary retains its owner in the layout's
+extent equations, and cycles are checked against ancestor infon identity.
+
+The walk is incremental: correspondence advertises one step per graph edge.
+Existing finite planners drain the same walk through `readListLayout`; they
+still perform that finite inspection inside their planning callbacks. This
+change does not make those callbacks independently resumable or eliminate
+their up-front planning cost.
+
+`ListLayoutBuilder` translates events into the common `SpanLayout`, projecting
+POVs to instance slots when needed by a definition application. Virtual tails
+stay single gap segments. Owners remain existing nodes, so stored member
+specifications and occurrence relations remain accessible through graph access.
+There is no second persistent infon graph or eagerly generated member list.
+
+Published stream traversal stops before unfinished members. Stored inspection
+retains them so its consumer must account for their unresolved semantics.
+Consumer checks still govern orderedness, definition constraints, and supported
+relationships. Recognizing structure alone never establishes those facts.
+
+See [list-structure-results.md](list-structure-results.md) for the consolidation
+and verification boundaries.
 
 ## Embedded spans and open list RHS correspondence
 
@@ -515,6 +545,8 @@ From the Proteus4 directory:
 codeDog Proteus.Lib.dog
 g++ -std=c++17 -Wall -Wextra -Werror -pthread graph/test_graph_search.cpp -o /tmp/proteus4-graph-search-tests
 /tmp/proteus4-graph-search-tests
+g++ -std=c++17 -Wall -Wextra -Werror graph/test_list_structure.cpp -o /tmp/proteus4-list-structure-tests
+/tmp/proteus4-list-structure-tests
 g++ -std=c++17 -Wall -Wextra -Werror graph/test_span_alignment.cpp -o /tmp/proteus4-span-tests
 /tmp/proteus4-span-tests
 ```
