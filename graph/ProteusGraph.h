@@ -1,5 +1,6 @@
 #pragma once
 #include "SpanAlignment.h"
+#include <set>
 
 // Included after the CodeDog declarations. Domain knowledge is implemented in
 // ProteusGraphAccess (GraphFoundation.Lib.dog); this layer adapts its results to
@@ -265,6 +266,10 @@ public:
         // Unsupported new member semantics keep the entire plan symbolic.
         for (std::size_t i = 0; i < plan.fills.size(); ++i) {
             const auto& fill = plan.fills[i];
+            // A finite RHS can close a pristine compressed span. Partial prefix
+            // fills and remapping existing implicit occurrences need a richer
+            // correspondence plan; neither may silently lose virtual edges.
+            if (access_->memberTemplate(fill.owner) && !fill.close) return {};
             for (const auto& source : fill.sources)
                 if (!access_->canMakeMember(source)) return {};
             for (std::size_t j = 0; j < i; ++j)
@@ -587,8 +592,8 @@ private:
                 result.deferred = !definitions_->registered(node); return result;
             }
             result.deferred = !access_->supports(node, query.kind);
-            if (access_->hasTypeRequirements(node))
-                result.refinements.push_back({{node, typeRequirements, 0}, {1, 0}, "validate named types", false});
+            if (definitions_->required(node))
+                result.refinements.push_back({{node, typeRequirements, 0}, {1, 0}, "validate type and member requirements", false});
             if (access_->canSelect(node))
                 result.refinements.push_back({{node, selectIntersection, 0}, {0, 0}, "find intersection result", false});
             if (access_->hasConcat(node, 1))
@@ -600,6 +605,9 @@ private:
                     result.refinements.push_back({{node, listContents, query.kind}, {0, 0},
                         "inspect list contents", query.kind == sizeOnly});
             }
+            if (query.kind != sizeOnly && access_->repeatedDefinitionList(node))
+                for (auto member : access_->demandedOccurrences(node))
+                    result.refinements.push_back({{member, sizeAndValue, 0}, {1, 0}, "normalize demanded occurrence", false});
             // Keep the original demand endpoint across unresolved RHSs, so
             // a discovered list supplies correspondence directly to that goal.
             auto origin = query.related ? query.related : node;
@@ -628,18 +636,23 @@ private:
             return result;
         }
         if (query.kind == itemAt) {
+            // Type information may expose order, extent and a virtual sparse
+            // route. Advertise that refinement before rejecting unknown shape.
+            if (definitions_->required(node))
+                result.refinements.push_back({{node, typeRequirements, 0}, {1, 0}, "expose indexed list shape", true});
             if (query.argument < 0 || !access_->orderedList(node)) {
                 return result;
             }
-            if (access_->sparse(node)) {
+            if (access_->sparse(node) && access_->listExtent(node) >= 0) {
                 if (query.argument >= access_->extent(node)) {
                     return result;
                 }
-                auto access = access_;
+                auto access = access_; auto definitions = definitions_;
                 // The virtual edge is visible before even a single implicit
                 // occurrence is created. Its cost is independent of the index.
                 result.edges.push_back({"sparse occurrence", {1, 1}, true,
-                    [access, node, query] {
+                    [access, definitions, node, query] {
+                        definitions->retainOccurrenceOwner(node);
                         auto existing = access->existingSparseItem(node, query.argument);
                         auto item = access->sparseItem(node, query.argument);
                         return Arrival<POVNode>{{item, itemFound, 0}, !existing && bool(item)};

@@ -256,12 +256,14 @@ body through one POV; registration does not normalize or copy that body. A
 declaration counts as one list item, and its completion means registration
 succeeded, not that its meaning has a concrete value.
 
-A named scalar or finite list contributes a required `typeRequirements` goal.
+A named scalar/list, a list with a member template, or an implicit occurrence
+contributes a required `typeRequirements` goal.
 Read-only graph edges walk its unique definition, aliases, added type names,
 body RHS constraints, and physical list members. Leave edges compile those
 findings into requirements. This data is a validation certificate and Set plan;
 it does not replace the POV graph. Scalar requirements include size, value, and
 overlay. Finite list requirements additionally describe ordered positions.
+Homogeneous templates describe one repeated member constraint.
 Embedded spans flatten into positions; an ordinary nested list occupies one
 position and has its own member requirements. Alias and containment cycles
 remain symbolic before any instance members are allocated.
@@ -297,16 +299,23 @@ subscriptions and can resume after another normalization registers the meaning.
 Publication uses graph locking and revisions, without populating the legacy
 global `ModelManager`.
 
-Supported bodies are closed physical ordered lists with scalar, nested-list,
-embedded-list, alias, and supported RHS constraints. Open/sparse templates,
-unordered records, contextual paths, computed definition expressions, and
-registry relationships inside shared bodies remain deferred. A billion-item
-template is not expanded. Multiple writable positions sharing the same list
-storage need a joint application plan and also remain deferred.
+Supported bodies include closed physical ordered lists and homogeneous open
+member templates, with scalar, nested-list, alias, and supported RHS constraints.
+An empty instance can acquire a compressed `listSpec` reference. Positional
+lookup creates only the requested registry occurrence; normalization then reads
+its source-list requirements. Existing closed finite instances receive the
+member constraint in place, and parent normalization revisits already-demanded
+occurrences. Untouched positions stay virtual even in a billion-item list.
 
-See [definition-results.md](definition-results.md) for the scalar checkpoint and
-[finite-definition-results.md](finite-definition-results.md) for this extension.
-Lazy member templates and record/field matching remain the next boundary.
+Open prefixes with templates, embedded repeated spans, unordered records,
+contextual paths, computed definition expressions, and registry relationships
+inside shared bodies remain deferred. Multiple writable positions sharing the
+same list storage need a joint application plan and also remain deferred.
+
+See [definition-results.md](definition-results.md) for the scalar checkpoint,
+[finite-definition-results.md](finite-definition-results.md) for finite lists,
+and [lazy-template-results.md](lazy-template-results.md) for the template slice.
+Prefix/span mapping and record/field matching remain later boundaries.
 
 ## Lifecycle and publication
 
@@ -419,7 +428,7 @@ checked against its path before applying a batch. Size mismatches requiring
 richer semantics remain symbolic rather than being silently overwritten.
 
 Indexed access supports flat ordered physical lists and existing compressed
-repetition spans. Embedded-string correspondence, template normalization, nested indexed traversal, general intersection solving, record/template/contextual
+repetition spans. Embedded-string correspondence, general template/prefix mapping, nested indexed traversal, general intersection solving, record/contextual
 definitions, `%prev`/`%tPrev`, range algebra, tentative branch transactions,
 commutators and theorem discovery are not migrated.
 Unsupported work stays attached and visible as symbolic obligations. Existing

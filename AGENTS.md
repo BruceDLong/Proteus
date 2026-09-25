@@ -11,9 +11,9 @@ remain useful semantic examples for later migration, and can be run selectively.
 A full legacy-suite run is optional, not a gate for every change. Clearly report
 which behavior was checked and which features remain unsupported.
 
-Current checkpoint: scalar and finite ordered list definitions use graph
-requirements and reusable evidence. Next come lazy member templates and record
-matching. Preserve read-only definition bodies and avoid redundant application
+Current checkpoint: scalar and finite ordered list definitions, plus homogeneous
+lazy member templates, use graph requirements and reusable evidence. Open
+template-prefix mapping and record matching remain later boundaries. Preserve read-only definition bodies and avoid redundant application
 RHSs. Size and value should be acquired together when both are available;
 partial acquisition is for cases where only one is available.
 

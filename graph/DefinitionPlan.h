@@ -6,6 +6,9 @@ struct DefinitionRequirement {
     GraphTypeFacts facts;
     bool list = false;
     std::vector<std::shared_ptr<DefinitionRequirement>> members;
+    // A homogeneous constraint on each occurrence, not N copied positions.
+    std::shared_ptr<DefinitionRequirement> repeated;
+    POVNode templateSource;
     std::vector<std::string> types;
     std::string label;
 };
@@ -21,12 +24,23 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
     std::sort(result->types.begin(), result->types.end());
     if (result->label.empty()) result->label = right->label;
     if (result->list && right->list) {
-        if (result->members.size() != right->members.size())
-            throw std::runtime_error("incompatible finite definition lengths");
-        for (std::size_t i = 0; i < result->members.size(); ++i)
-            result->members[i] = combineDefinitions(result->members[i], right->members[i]);
+        if (result->repeated && right->repeated) {
+            result->repeated = combineDefinitions(result->repeated, right->repeated);
+        } else if (result->repeated || right->repeated) {
+            auto repeated = result->repeated ? result->repeated : right->repeated;
+            auto finite = result->repeated ? right : result;
+            result->members = finite->members;
+            for (auto& member : result->members) member = combineDefinitions(member, repeated);
+            result->repeated.reset(); result->templateSource.reset();
+        } else {
+            if (result->members.size() != right->members.size())
+                throw std::runtime_error("incompatible finite definition lengths");
+            for (std::size_t i = 0; i < result->members.size(); ++i)
+                result->members[i] = combineDefinitions(result->members[i], right->members[i]);
+        }
     } else if (right->list) {
         result->list = true; result->members = right->members;
+        result->repeated = right->repeated; result->templateSource = right->templateSource;
     }
     return result;
 }
@@ -34,7 +48,8 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
 inline bool sameDefinition(const DefinitionSpec& a, const DefinitionSpec& b) {
     if (a == b) return true;
     if (!a || !b || a->list != b->list || !a->facts.same(b->facts) ||
-        a->types != b->types || a->members.size() != b->members.size()) return false;
+        a->types != b->types || a->members.size() != b->members.size() ||
+        !sameDefinition(a->repeated, b->repeated)) return false;
     for (std::size_t i = 0; i < a->members.size(); ++i)
         if (!sameDefinition(a->members[i], b->members[i])) return false;
     return true;
@@ -86,6 +101,51 @@ private:
         if (extent == -2) { supported = false; return; }
         result.equations.push_back({begin, result.segments.size(), extent, {place(node), {}}});
     }
+    void prepareRepeated(const Place& target, const DefinitionSpec& requirement, GraphTypeFacts actual) {
+        auto access = access_;
+        bool adopt = !target->node || access->adoptableList(target->node);
+        bool open = adopt || access->openTail(target->node);
+        std::vector<POVNode> members;
+        if (!adopt) {
+            if (!access->definitionOrderedCandidate(target->node) ||
+                (!access->physicalList(target->node) && !access->repeatedDefinitionList(target->node))) {
+                supported = false; return;
+            }
+            for (auto item = access->first(target->node); item; item = access->next(item)) {
+                if (!access->correspondingMembers(item, item)) { supported = false; return; }
+                members.push_back(item);
+            }
+            if (open && !members.empty()) { supported = false; return; }
+            if (!open) {
+                GraphTypeFacts count; count.valid = true; count.hasSize = true;
+                count.size = static_cast<std::int64_t>(members.size());
+                if (!count.combine(actual) || !count.combine(requirement->facts))
+                    throw std::runtime_error("incompatible repeated definition extent");
+            }
+            auto demanded = access->demandedOccurrences(target->node);
+            members.insert(members.end(), demanded.begin(), demanded.end());
+        }
+        if (adopt) writes.push_back([access, target] { return access->adoptDefinitionList(target->node); });
+        if (!requirement->facts.accepts(actual)) writes.push_back([access, target, requirement] {
+            return access->applyTypeFacts(target->node, requirement->facts);
+        });
+        if (!target->node || !access->definitionOrderKnown(target->node)) {
+            ++orderWrites;
+            writes.push_back([access, target] { return access->setDefinitionOrder(target->node); });
+        }
+        if (open && (!target->node || !access->memberTemplate(target->node))) {
+            ++work.creations;
+            writes.push_back([access, target, requirement] {
+                return access->installMemberTemplate(target->node, requirement->templateSource);
+            });
+        }
+        auto finalFacts = actual;
+        finalFacts.combine(requirement->facts);
+        if (open && finalFacts.hasSize && finalFacts.size == 0) writes.push_back([access, target] {
+            return access->finishTail(target->node, true, 0);
+        });
+        for (const auto& member : members) prepare(place(member), requirement->repeated);
+    }
     void prepare(const Place& target, const DefinitionSpec& requirement) {
         if (!supported) return;
         ++work.visits;
@@ -118,6 +178,7 @@ private:
             }
             plannedLists_.push_back(infon);
         }
+        if (requirement->repeated) { prepareRepeated(target, requirement, actual); return; }
         SpanLayout<Position> left, right;
         if (!target->node || access_->adoptableList(target->node)) {
             writes.push_back([access, target] { return access->adoptDefinitionList(target->node); });

@@ -239,10 +239,49 @@ struct ProteusGraphAccess {
                (pov!.pItem!.value!.evalMode==emLiteral or pov!.pItem!.value!.evalMode==emUnknown)))
     }
     // Only loaded, closed ordered bodies are finite definition requirements.
-    // Unknown scalar fields are allowed; open/template/contextual shapes wait.
+    // Unknown scalar fields are allowed; contextual shapes still wait.
     me bool: finiteDefinitionList(our POV: pov) <- {
         return(closedPhysicalList(pov) and definitionOrderedCandidate(pov) and
                pov!.pItem!.value!.sizeMode!=fromContext)
+    }
+    // Homogeneous templates stay compressed. A body with a concrete prefix
+    // needs a positional span mapping and is deliberately not admitted here.
+    me bool: repeatedDefinitionList(our POV: pov) <- {
+        return(literalList(pov) and definitionOrderedCandidate(pov) and
+               !pov!.pItem!.value!.timelike and pov!.pItem!.value!.tailUnfinished and
+               pov!.pItem!.value!.listSpec!=NULL and pov!.pItem!.value!.items.isEmpty() and
+               pov!.pItem!.value!.sizeMode!=fromContext and listExtent(pov)!=-2)
+    }
+    our infonView: memberTemplate(our POV: pov) <- {
+        if(!literalList(pov)){return(NULL)}
+        return(pov!.pItem!.value!.listSpec)
+    }
+    our infonView: occurrenceOwner(our POV: pov) <- {
+        if(pov!.implicitItem.sourcePov==NULL){return(NULL)}
+        return(pov!.implicitItem.sourcePov!.pItem)
+    }
+    our POV: requirementView(our infonView: inf) <- {
+        our POV:: view{915}; view!.pItem <- inf; bind(view); return(view)
+    }
+    me List<our POV>: demandedOccurrences(our POV: pov) <- {
+        me List<our POV>: result
+        // A second POV may share the same list storage. Its own span-family
+        // field is not enough to discover all already-demanded positions.
+        protect(registry!.registryMutex){
+            withEach family in registry!.repetitionFamilies{
+                withEach occurrence in family!.occurrences{
+                    their POV: source <- occurrence!.referencePOV!.implicitItem.sourcePov
+                    if(source!=NULL and source!.pItem===pov!.pItem){result.append(occurrence!.referencePOV)}
+                }
+            }
+        }
+        return(result)
+    }
+    me bool: installMemberTemplate(our POV: pov, our POV: source) <- {
+        if(pov!.pItem!.value!.listSpec!=NULL){return(false)}
+        pov!.pItem!.value!.listSpec <- source!.pItem
+        pov!.pItem!.isNormed <- false; pov!.workRevision <+- 1
+        return(true)
     }
     me bool: definitionOrderedCandidate(our POV: pov) <- {
         return(pov!.pItem!.orderMode==uUnknown or pov!.pItem!.orderMode==uOrdered)
@@ -375,7 +414,7 @@ struct ProteusGraphAccess {
     // Physical contents are safe to walk without expanding templates. More
     // list representations will advertise their own edges in later slices.
     me bool: physicalList(our POV: pov) <- {
-        return(literalList(pov) and pov!.pItem!.value!.listSpec==NULL and
+        return(literalList(pov) and (pov!.pItem!.value!.listSpec==NULL or !pov!.pItem!.value!.tailUnfinished) and
                !pov!.pItem!.value!.timelike and
                (pov!.pItem!.streamState==parseDone or pov!.pItem!.streamState==notParsing))
     }
@@ -385,7 +424,14 @@ struct ProteusGraphAccess {
         return(growingList(pov) and plain(pov, false, true) and
                !pov!.pItem!.value!.timelike and orderedList(pov))
     }
-    me bool: spanList(our POV: pov) <- {return(physicalList(pov) or prefixList(pov))}
+    me bool: unreferencedTemplateSpan(our POV: pov) <- {
+        if(!repeatedDefinitionList(pov)){return(false)}
+        me List<our POV>: demanded <- demandedOccurrences(pov)
+        return(demanded.isEmpty())
+    }
+    me bool: spanList(our POV: pov) <- {
+        return(physicalList(pov) or prefixList(pov) or unreferencedTemplateSpan(pov))
+    }
     our POV: spanFirst(our POV: owner) <- {
         our POV: member <- first(owner)
         if(member!=NULL and inputPending(member)){return(NULL)}
