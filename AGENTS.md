@@ -16,9 +16,11 @@ list forms and their sizes before implementing intersections. Size and value
 should be acquired together from a compatible source when both are available;
 partial acquisition is for the cases where only one is available.
 
-The graph entry point is GraphNormalizer in GraphFoundation.Lib.dog. See
-graph/README.md for its architecture and current limits. The agenda description
-below describes the legacy implementation that is still being migrated.
+Agent.normalize() is the public graph entry point and returns a handle.
+Agent.normalizeAndWait() is the synchronous convenience. Each Agent owns a
+persistent GraphNormalizer context; no agenda fallback is used. See
+graph/README.md for architecture, stream lifetime, and current semantic limits.
+The agenda description below describes the legacy implementation.
 
 Intro
 -----

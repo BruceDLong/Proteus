@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run selected original language fixtures exclusively through GraphNormalizer.
+"""Run selected original language fixtures through the public Agent graph entry point.
 
 Inputs and expected strings come from defaultTests.tst on each run. The only
 changed column is the execution mode, including for selected parser fixtures.

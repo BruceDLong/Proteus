@@ -3,32 +3,40 @@
 This private experiment starts at Proteus commit
 `73752c4b85ba1af6e956336e7d14385a2c3d4445`. The local branch is `codex/proteus4`.
 It has no Git remote. Proteus4 is an independent redesign. Remove obsolete code
-as its responsibilities move to the graph reasoner. The remaining agenda entry
-points are migration work; the graph API does not call them.
+as its responsibilities move to the graph reasoner. Ordinary Agent normalization
+now uses the graph reasoner. Legacy AItem rules remain compiled for unmigrated facilities and reference tests; normalization
+has no agenda fallback.
 
 ## Start here
 
 ```text
-me GraphNormalizer: reasoner
-reasoner.init()
-me NormalizationHandle: handle <- reasoner.normalize(pov)
+// core.init(...) initializes its Agent and persistent graph context.
+me NormalizationHandle: handle <- core.agent!.normalize(pov)
 handle.waitForCompletion()
 // Inspect handle flags and the resulting POV.
 // handle.cancel() stops this search and its subscriptions.
-reasoner.close()
+core.deInit()  // after closing and joining any input streams
 ```
 
-`normalize()` starts asynchronous work and returns a handle. One normalizer owns
-one semantic context, registry, and worker. Each call creates a separate search
-session. `initWithRegistry(existing)` explicitly adopts a pre-existing registry;
+`Agent.normalize()` starts asynchronous work and returns a handle. Each Agent
+owns one semantic context, registry, and worker for its lifetime. Each call
+creates a separate search session. `Agent.normalizeAndWait()` is the explicit
+synchronous convenience used by query/load APIs and ordinary language tests;
+it retains unresolved sessions so their subscriptions survive the call.
+Finished sessions are pruned on later calls, and `Agent.close()` cancels the
+remaining sessions. `ProteusCore.deInit()` calls that shutdown.
+
+Standalone `GraphNormalizer` contexts remain available for focused experiments.
+One normalizer owns one semantic context, registry, and worker.
+`initWithRegistry(existing)` explicitly adopts a pre-existing registry;
 a POV already bound to another registry cannot silently be rebound. Do not run
 the legacy normalizer concurrently against this context: it does not use this
 runtime's synchronization boundary. Keep one manager per shared semantic context.
 
-`findItem(source, index)` starts a zero-based positional goal. Its handle's
+`GraphNormalizer.findItem(source, index)` starts a zero-based positional goal. Its handle's
 `result()` is the selected POV (possibly an implicit sparse occurrence). A
-normalization handle's result is the original target. This is a foundation API;
-the parser's ordinary `Agent.normalize()` entry point has not been redirected.
+normalization handle's result is the original target. Ordinary query, load, and
+test normalization now enter through Agent's graph context.
 
 ## Responsibilities
 
@@ -242,8 +250,10 @@ flag. Selecting a result preserves actual outer size constraints.
 
 ## Lifecycle and publication
 
-- `waitForCompletion()` waits for current quiescence, failure, or cancellation.
-  A symbolic quiescent result may retain a subscription and resume later.
+- `waitForCompletion()` waits for current quiescence, failure, or cancellation,
+  including delivery of captured completion effects. A symbolic quiescent
+  result may retain a subscription and resume later. `active()` distinguishes
+  a live search/subscription from a terminal handle.
 - `addRHS()` and `recordIdentity()` publish under the same context lock used to
   install subscriptions. There is no gap in which a wakeup can be lost.
 - A Set publishes a revision before settlement. Lazy edge materialization also
@@ -256,8 +266,10 @@ flag. Selecting a result preserves actual outer size constraints.
   remain active. `cancelled` is distinct from `fullyNormed`.
 - All access callbacks must be bounded and nonblocking. External I/O must
   publish later through the context, not block an edge callback. Callbacks must
-  not recursively call the manager APIs while holding the context lock. General parser
-  stream integration and I/O adapters are future work.
+  not recursively call the manager APIs while holding the context lock.
+  Completion effects are captured under the lock and delivered outside it;
+  they may publish new information, but must not wait for this worker or close
+  its manager from the callback.
 - `close()` stops live sessions and joins the worker. C++ destruction does this
   too. Surviving handles can still report cancellation and return from waits.
 - `stepCount()`, `stepDescription(index)`, `stepCost(index)` and `stepNode(index)`
@@ -273,6 +285,38 @@ context or a handle retaining it alive while using registry-bound POVs. Calling
 
 The manager holds weak session references. Dropping every copy of a handle
 releases its session after any current bounded step, including its subscription.
+
+## Parser and reply lifecycle
+
+Streaming parsers share their Agent's graph publication lock. They release it
+around potentially blocking input-buffer operations and publish parse milestones
+before yielding. The graph can visit finished children of a growing literal
+list. It defers value writes, indexed materialization, and shape assumptions on
+unfinished parser-owned infons. This avoids the old independent parser/agenda
+wake-up mechanism and its initial timing delay.
+
+`ThreadedNormalizer` retains its handle and uses an input-lifetime wait: ordinary
+quiescence while subscribed does not mean that parsing has finished. Parser
+completion publishes another revision; cancellation and failure also release
+that wait. Both streaming and parse-first `InfonStream` paths use this mechanism.
+`requestFinish()` cancels normalization and closes input; callers then join the
+stream before closing the Agent. A cancelled normalization does not stop a
+separately owned parser by itself.
+
+Reply-marked goals queue a result when they settle, including symbolic results.
+All settled reply markers are claimed before text is captured, so a containing
+list does not echo already-consumed markers. Replies follow marker positions in
+the input, regardless of goal completion order. Captured text is delivered via
+`ProteusCore.submitProteusResult()` outside the graph lock, with the original
+origin ID and item position. A second normalization does not resend a consumed
+marker. Parser errors wake the handle as failures.
+
+This migrates publication, reply delivery, and stream lifetime. It does not add
+unported semantic rules: in particular, a relationship to a still-parsing RHS
+remains subscribed until that RHS is complete. Incremental correspondence from
+such an RHS, typed/path streaming queries, and intersection/template input
+traversal need further semantic work. Completed physical open lists continue to
+use the existing graph span/subscription behavior.
 
 ## Deliberate initial limits
 
@@ -304,7 +348,7 @@ richer semantics remain symbolic rather than being silently overwritten.
 Indexed access supports flat ordered physical lists and existing compressed
 repetition spans. Embedded-string correspondence, template normalization, nested indexed traversal, general intersection solving, word
 definitions, `%prev`/`%tPrev`, range algebra, tentative branch transactions,
-stream-parser integration, commutators and theorem discovery are not migrated.
+commutators and theorem discovery are not migrated.
 Unsupported work stays attached and visible as symbolic obligations. Existing
 language tests are examples for future migration. Their pass count is not a
 requirement for each development step and does not prove feature migration.
@@ -379,9 +423,11 @@ check its `Total Failures/Tests` summary rather than only the process status.
 ## Existing language fixtures and next priority
 
 Run `python3 graph/run_language_baseline.py` from the fork to normalize the
-selected existing language fixtures exclusively through `GraphNormalizer`.
+selected existing language fixtures through the public `Agent.normalize()`
+graph entry point.
 The recorded first run is in [language-baseline-results.md](language-baseline-results.md).
-See [selection-results.md](selection-results.md) for the latest validation,
+See [entry-lifecycle-results.md](entry-lifecycle-results.md) for the entry-point
+and streaming lifecycle migration. See [selection-results.md](selection-results.md) for preceding validation,
 including computed sizes, concatenation, list adoption, and result selection.
 Earlier checkpoints are recorded in
 [expression-results.md](expression-results.md),

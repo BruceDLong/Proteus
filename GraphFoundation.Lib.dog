@@ -1,4 +1,4 @@
-// Proteus4 opt-in graph foundation. Semantic knowledge remains in CodeDog;
+// Proteus4 graph normalization foundation. Semantic knowledge remains in CodeDog;
 // the native runtime supplies generic queues, costs, locking and RAII shutdown.
 requirements = [[tagOneOf, Lang, [CPP]]]
 interface = { provides=[GraphFoundation] libFiles=[pthread] headers=[] }
@@ -8,6 +8,7 @@ embedVeryHigh = `
 # include "../graph/GraphSearch.h"
 using Proteus4Handle = proteus4::NormalizationHandle<std::shared_ptr<POV>>;
 using Proteus4Runtime = proteus4::GraphManager<std::shared_ptr<POV>>;
+using Proteus4Publication = std::shared_ptr<proteus4::Publication<std::shared_ptr<POV>>>;
 `
 embedHigh = `
 # include "../graph/ProteusGraph.h"
@@ -21,6 +22,7 @@ struct NormalizationHandle: wraps=Proteus4Handle {
     me bool: symbolicValues() <- <%!status().symbolicValues%>
     me bool: cancelled() <- <%!status().cancelled%>
     me bool: failed() <- <%!status().failed%>
+    me bool: active() <- <%!active()%>
     me string: error() <- <%!status().error%>
     me string: stepDescription(me int64: index) <- <%!steps().at(%1).action%>
     me uint64: stepCost(me int64: index) <- <%!steps().at(%1).cost%>
@@ -29,9 +31,10 @@ struct NormalizationHandle: wraps=Proteus4Handle {
     our POV: result() <- <%!result()%>
 }
 struct GraphRuntime: wraps=Proteus4Runtime {}
+struct GraphPublication: wraps=Proteus4Publication {}
 
-// A semantic context owns one graph manager and its registry. Legacy Agent
-// entry points are separate migration work; graph queries never call them.
+// A semantic context owns one graph manager and its registry. Agent uses one
+// for its whole lifetime; standalone contexts remain available for experiments.
 struct GraphNormalizer {
     me GraphRuntime: runtime
     our ProteusGraphAccess: access
@@ -73,6 +76,13 @@ struct GraphNormalizer {
     me string: stringifyResult(our POV: target) <- <%{
         return runtime.read([&] { return target->stringify(); });
     }%>
+    me GraphPublication: beginPublication() <- <%{ return runtime.beginPublication(); }%>
+    void: prepareInput(our infonView: inf) <- <%{
+        runtime.update([&] { access->prepareInput(inf); });
+    }%>
+    void: waitForInput(me NormalizationHandle: handle, our POV: target) <- <%{
+        handle.waitUntil([this, target] { return !access->inputPending(target); });
+    }%>
     void: close() <- <%{ runtime.close(); }%>
 }
 
@@ -103,6 +113,7 @@ struct infonView {
     our infonView: selectionExpression
     our POV: selectedResult
     me int: selectionKind <- 0
+    me string: graphParseError
 }
 struct GraphConcatTerms { me List<our POV>: items }
 struct GraphConcatPlan {
@@ -123,6 +134,27 @@ struct GraphConcatPlan {
 // the graph interface, never by the generic traverser.
 struct ProteusGraphAccess {
     our IdentityRegistry: registry
+    their ProteusCore: replyCore
+
+    void: prepareInput(our infonView: inf) <- {
+        inf!.streamState <- parseStarted; inf!.graphParseError <- ""
+    }
+    me bool: inputPending(our POV: pov) <- {
+        return(pov!.pItem!.streamState==parseStarted or pov!.pItem!.streamState==parseListReady)
+    }
+    me bool: growingList(our POV: pov) <- {
+        return(pov!.pItem!.streamState==parseListReady and pov!.pItem!.value!.overlayType==LST and
+               pov!.pItem!.value!.evalMode==emLiteral and pov!.pItem!.value!.listSpec==NULL)
+    }
+    me string: inputError(our POV: pov) <- {return(pov!.pItem!.graphParseError)}
+    me bool: replyReady(our POV: pov) <- {
+        return(replyCore!=NULL and !inputPending(pov) and pov!.pItem!.graphParseError=="" and pov!.pItem!.doReply)
+    }
+    me uint64: replyOrigin(our POV: pov) <- {return(pov!.pItem!.originID)}
+    me uint64: replyPosition(our POV: pov) <- {return(pov!.pItem!.infCharPos)}
+    me uint64: replyOrder(our POV: pov) <- {return(pov!.pItem!.replyCharPos)}
+    void: claimReply(our POV: pov) <- {pov!.pItem!.doReply <- false}
+    me string: replyText(our POV: pov) <- {return(toString(pov!.pItem))}
 
     void: initialize() <- {Allocate(registry)}
     void: bind(our POV: pov) <- <%{
@@ -142,7 +174,7 @@ struct ProteusGraphAccess {
                pov!.pItem!.value!.evalMode==emUnknown)
     }
     me bool: plain(our POV: pov, me bool: selection <- false) <- {
-        if(pov==NULL or pov!.pItem==NULL){return(false)}
+        if(pov==NULL or pov!.pItem==NULL or inputPending(pov)){return(false)}
         our infonView: inf <- pov!.pItem
         return((inf!.viewMode==vmOverlay or (inf!.viewMode==vmAny and unknownOverlay(pov))) and !inf!.invertMatch and
                !inf!.isTentative and inf!.type==NULL and inf!.addedTypes.isEmpty() and
@@ -203,7 +235,7 @@ struct ProteusGraphAccess {
         return(true)
     }
     me int: known(our POV: pov) <- {
-        if(pov==NULL or pov!.pItem==NULL){return(0)}
+        if(pov==NULL or pov!.pItem==NULL or inputPending(pov)){return(0)}
         if(pov!.pItem!.value!.evalMode==emIntersection){return(0)}
         me int: mask <- 0
         if(pov!.pItem!.infSize!.overlayType==NUM and

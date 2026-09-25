@@ -2,6 +2,8 @@
 #include <atomic>
 #include <cassert>
 #include <iostream>
+#include <future>
+#include <chrono>
 
 using namespace proteus4;
 struct TestNode;
@@ -342,6 +344,66 @@ int main() {
             assert(step.cost == 1); ++writes;
         }
         assert(writes == 1); ++cases;
+    }
+    {
+        // Parser ownership blocks mutation/search, but an input pause publishes
+        // completed information and lets subscribed work run without lost wakes.
+        auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
+        auto root = node(); auto h = manager.normalize({root, 1, 0}); h.waitForCompletion();
+        auto publication = manager.beginPublication();
+        root->rhs.push_back(node(51)); publication->changed();
+        {
+            InputPause<Node> pause(publication);
+            h.waitForCompletion();
+            assert(root->value == 51 && !h.status().symbolicValues);
+        }
+        publication.reset(); ++cases;
+    }
+    {
+        // Quiescence can precede producer EOF; cancellation releases the wait.
+        auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
+        auto h = manager.normalize({node(), 1, 0}); h.waitForCompletion();
+        std::atomic<bool> entered{false};
+        auto waiter = std::async(std::launch::async, [&] {
+            entered = true; h.waitUntil([] { return false; });
+        });
+        while (!entered) std::this_thread::yield();
+        assert(waiter.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout);
+        h.cancel();
+        assert(waiter.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+        waiter.get(); ++cases;
+    }
+    {
+        // EOF publication wakes an input-lifetime wait even if the result stays symbolic.
+        auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
+        auto h = manager.normalize({node(), 1, 0}); h.waitForCompletion();
+        bool eof = false;
+        auto waiter = std::async(std::launch::async, [&] { h.waitUntil([&] { return eof; }); });
+        assert(waiter.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout);
+        manager.update([&] { eof = true; });
+        assert(waiter.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+        waiter.get(); assert(h.status().withSubscribers); ++cases;
+    }
+    {
+        // Effects run after settlement, outside the context lock, and finish
+        // before waitForCompletion returns. They may publish other information.
+        struct Effects : TestAccess {
+            Node watched;
+            bool sent = false;
+            std::function<void()> effect;
+            std::vector<std::function<void()>> takeEffects() override {
+                if (!sent && watched && watched->complete) { sent = true; return {effect}; }
+                return {};
+            }
+        };
+        auto a = std::make_shared<Effects>(); GraphManager<Node> manager(a);
+        auto target = node(); auto waiting = manager.normalize({target, 1, 0}); waiting.waitForCompletion();
+        a->watched = node(61);
+        int deliveries = 0;
+        a->effect = [&] { manager.update([&] { target->value = 62; ++deliveries; }); };
+        auto h = manager.normalize({a->watched, 1, 0}); h.waitForCompletion(); waiting.waitForCompletion();
+        assert(deliveries == 1 && target->value == 62 && !waiting.status().symbolicValues);
+        ++cases;
     }
     std::cout << "Graph search: " << cases << "/" << cases << " scenarios passed\n";
 }

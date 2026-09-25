@@ -128,6 +128,9 @@ public:
     // Called under the context lock for every semantic publication, including
     // Sets and lazy materialization. Retired sessions may have left metadata.
     virtual void invalidateCompletion() {}
+    // Captured under the context lock; delivered outside it. Effects must not
+    // wait for this worker, but may publish new information.
+    virtual std::vector<std::function<void()>> takeEffects() { return {}; }
     virtual Expansion<Node> expand(const Query<Node>&) = 0;
     virtual std::shared_ptr<GoalSpec<Node>> goal(const Query<Node>&) = 0;
 };
@@ -187,7 +190,7 @@ template<class Node> struct Context {
     std::mutex mutex, joinMutex;
     std::condition_variable changed;
     std::thread worker;
-    bool stopping = false;
+    bool stopping = false, dispatching = false;
     std::uint64_t revision = 0;
     std::size_t cursor = 0;
     std::shared_ptr<GraphAccess<Node>> access;
@@ -211,6 +214,36 @@ template<class Node> struct Context {
     }
 };
 
+// A producer owns the same lock as search while editing shared nodes. It
+// releases the lock around input waits and publishes only explicit milestones.
+template<class Node> class Publication {
+    std::shared_ptr<Context<Node>> context_;
+    std::unique_lock<std::mutex> lock_;
+    bool dirty_ = false;
+public:
+    explicit Publication(std::shared_ptr<Context<Node>> context)
+        : context_(std::move(context)), lock_(context_->mutex) {
+        if (context_->stopping) throw std::logic_error("graph context is closed");
+    }
+    void changed() { dirty_ = true; }
+    void flush() {
+        if (dirty_) { dirty_ = false; context_->graphChanged(); }
+    }
+    void suspend() { flush(); lock_.unlock(); }
+    void resume() { lock_.lock(); }
+    ~Publication() { if (lock_.owns_lock()) flush(); }
+};
+
+template<class Node> class InputPause {
+    std::shared_ptr<Publication<Node>> publication_;
+public:
+    explicit InputPause(std::shared_ptr<Publication<Node>> publication)
+        : publication_(std::move(publication)) {
+        if (publication_) publication_->suspend();
+    }
+    ~InputPause() { if (publication_) publication_->resume(); }
+};
+
 template<class Node> class NormalizationHandle {
     std::shared_ptr<Context<Node>> context_;
     std::shared_ptr<SearchSession<Node>> session_;
@@ -219,13 +252,15 @@ public:
     NormalizationHandle(std::shared_ptr<Context<Node>> c,
                         std::shared_ptr<SearchSession<Node>> s)
         : context_(std::move(c)), session_(std::move(s)) {}
-    void waitForCompletion() const {
+    template<class Predicate> void waitUntil(Predicate ready) const {
         if (!session_) return;
         std::unique_lock<std::mutex> lock(context_->mutex);
         context_->changed.wait(lock, [&] {
-            return session_->quiescent || session_->terminal;
+            return !context_->dispatching &&
+                (session_->terminal || (session_->quiescent && ready()));
         });
     }
+    void waitForCompletion() const { waitUntil([] { return true; }); }
     void cancel() const {
         if (!session_) return;
         std::lock_guard<std::mutex> lock(context_->mutex);
@@ -238,6 +273,11 @@ public:
         session_->steps.push_back({"cancel", session_->root->request, 0,
                                   context_->revision});
         context_->changed.notify_all();
+    }
+    bool active() const {
+        if (!session_) return false;
+        std::lock_guard<std::mutex> lock(context_->mutex);
+        return !session_->terminal;
     }
     Status status() const {
         if (!session_) return {};
@@ -422,12 +462,27 @@ template<class Node> class GraphManager {
                                        next->root->request, 0, c->revision});
                 c->changed.notify_all();
             }
-            // Cancellation and external publication can enter between bounded
-            // steps, never during a Set batch or a graph callback.
-            next.reset();
+            auto effects = c->access->takeEffects();
+            c->dispatching = !effects.empty();
             lock.unlock();
+            std::string effectError;
+            for (auto& effect : effects) {
+                try { effect(); }
+                catch (const std::exception& error) { effectError = error.what(); }
+                catch (...) { effectError = "completion effect failed"; }
+            }
             std::this_thread::yield();
             lock.lock();
+            c->dispatching = false;
+            if (!effectError.empty()) {
+                next->terminal = true; next->status.failed = true;
+                next->status.fullyNormed = false; next->status.withSubscribers = false;
+                next->status.error = effectError;
+            }
+            c->changed.notify_all();
+            // Cancellation/publication enter between bounded steps and during
+            // effects, never during a Set batch or semantic graph access.
+            next.reset();
         }
     }
 public:
@@ -459,6 +514,10 @@ public:
         sessions.push_back(session);
         context_->changed.notify_all();
         return {context_, std::move(session)};
+    }
+    std::shared_ptr<Publication<Node>> beginPublication() {
+        if (!context_) throw std::logic_error("initialize graph context first");
+        return std::make_shared<Publication<Node>>(context_);
     }
     // Writers use this boundary so publication and subscription installation
     // cannot miss each other. Readers of a live result use read() as well.

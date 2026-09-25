@@ -2870,35 +2870,35 @@ struct Agent{
         //log("INFON ERROR: " + errorMesg)
        // print("INFON ERROR: " + errorMesg+"\n")
     }
-    void: normalize(our POV: normPov) <- {
-        if(identityRegistry!=NULL){normPov!.bindIdentityRegistry(identityRegistry)}
-        our Agenda:: agenda{normPov}
-        our AItem: normPIVA <- worldMgr.prepareInfonWork(
-                agenda, normPov, NULL, NULL, aprNoParent, 1, srcNormInit)
-        worldMgr.enqueueInitialWork(agenda, normPIVA)
-        //log("Norm_PIVA:"+toString(normPIVA))
-        worldMgr.processAgenda(agenda)
-        if(agenda!.AItems.size()>0){log("// Proteus ERROR: "+toString(agenda!.AItems.size())+" items still on agenda.")}
-        log("NORMED:" + toString(normPov!.pItem))
+    // One context per Agent; callers own asynchronous search handles.
+    // Synchronous legacy callers retain unresolved sessions here until close.
+    me Mutex: normalizationMutex
+    me List<NormalizationHandle>: retainedNormalizations
+    me GraphNormalizer: graphNormalizer
+
+    me NormalizationHandle: normalize(our POV: normPov) <- {
+        return(graphNormalizer.normalize(normPov))
     }
-    void: normalizeOneLevel(our POV: normPov) <- {
-        me string: logStr <- logMgr.logger.logStr + " SUB_NORM"
-        logMgr.logger.logStr <- ""
-        log("NORM:________")
-        normPov!.doNotEnter <- true
-        normalize(normPov)
-        normPov!.doNotEnter    <- false
-        normPov!.hasPropagated <- false
-    // TODO: this won't work if streaming. Need to set hasPropagated to false in a streaming manner
-    if(!normPov!.pItem!.value!.items.isEmpty()){
-        our POV: pov <- normPov!.pItem!.value!.items.head
-        while(pov != NULL){
-            pov!.hasPropagated <- false
-            pov <- pov!.next
+    void: normalizeAndWait(our POV: normPov) <- {
+        me NormalizationHandle: handle <- normalize(normPov)
+        handle.waitForCompletion()
+        protect(normalizationMutex){
+            if(handle.failed()){
+                errorStatus <- 1; errorMesg <- handle.error()
+            }else{errorStatus <- 0; errorMesg <- ""}
+            // A publication may already have woken a previous subscription.
+            // Keep running sessions as well as currently subscribed ones.
+            me List<NormalizationHandle>: pending
+            withEach previous in retainedNormalizations{
+                if(previous.active()){pending.append(previous)}
+            }
+            if(handle.active()){pending.append(handle)}
+            retainedNormalizations <- pending
         }
     }
-        log("NORM:________")
-        //:l/PAI::logSeg(logStr)
+    void: close() <- {
+        graphNormalizer.close()
+        protect(normalizationMutex){retainedNormalizations.clear()}
     }
     void: appendToWorld(our infonView: newInfon) <- {
         our infonView: dotsAtTheEnd <- world!.value!.items.last()  //TODO: What is this line for?
@@ -2926,40 +2926,40 @@ struct Agent{
         Allocate(world); world!.setToList()
         context.init(identityRegistry)
         worldMgr.init(this)
+        graphNormalizer.initWithRegistry(identityRegistry)
+        graphNormalizer.access!.replyCore <- CORE
         errorStatus <- 0
         errorMesg <- ""
     }
 }
+// A stream owns its normalization handle for the stream's whole lifetime.
+// Current quiescence does not finish an input stream that is still open.
 struct ThreadedNormalizer: inherits=Threads {
-    // Also available: start() and waitForExit()
     our infonView: item
     our POV: pov
     their Agent: agent
+    me NormalizationHandle: handle
+    me Mutex: lifecycleMutex
+    me bool: cancellationRequested
+
     void: init(their Agent: _agent, our infonView: inf) <- {
-        item <- inf
-        item!.streamState <- parseStarted
-        agent <- _agent
-        Allocate(pov, 700)
-        pov!.pItem <- inf
+        item <- inf; agent <- _agent
+        agent!.graphNormalizer.prepareInput(item)
+        Allocate(pov, 700); pov!.pItem <- inf
+        cancellationRequested <- false
+    }
+    void: cancel() <- {
+        protect(lifecycleMutex){cancellationRequested <- true; handle.cancel()}
     }
     void: run() <- {
-        me string: infonSourceStr <- agent!.CORE!.getOriginIDString(item!.originID)
-        log("OPENING NORM_THREAD: "+infonSourceStr)
-        if(streamingNormMode){
-       sleep(100) // TODO:  remove this after fixing normalize races parseer
-            me MutexMngr: MtxMgr{streamingNormMutex}
-            while(item!.streamState==parseStarted){  //BDL == to <=
-                //log("streamingNormLock.wait::ThreadedNormalizer: "+infonSourceStr)
-                streamingNormLock.wait(MtxMgr)
-                //log("streamingNormLock.DONE::ThreadedNormalizer: "+infonSourceStr)
-            }
-            //print("TOP's FirstItem:"+item!.value!.items.first().mySymbol()+"\n")
+        protect(lifecycleMutex){
+            handle <- agent!.normalize(pov)
+            if(cancellationRequested){handle.cancel()}
         }
-        log("OPENED NORM_THREAD: "+infonSourceStr)
-        agent!.normalize(pov)
-        log("CLOSING NORM_THREAD: "+infonSourceStr)
-        print("CLOSING NORM_THREAD: "+infonSourceStr+"\n")
-        log("RESULT:"+pov!.stringify())
+        agent!.graphNormalizer.waitForInput(handle, pov)
+        if(handle.failed()){
+            agent!.CORE!.handleProteusError(item!.originID, handle.error())
+        }
     }
 }
 struct ProteusCore{
@@ -2998,7 +2998,7 @@ struct ProteusCore{
         our infonView: topParsedNode <- parse(parser, streamToParse)
         if(topParsedNode!=NULL){
             toFill!.pItem <- topParsedNode
-            agent!.normalize(toFill)
+            agent!.normalizeAndWait(toFill)
         }
     }
 
@@ -3016,7 +3016,7 @@ struct ProteusCore{
         }
         agent!.kernel <- kernelNode
         our POV:: kernelPov{29}; kernelPov!.pItem <- agent!.kernel
-        agent!.normalize(kernelPov)
+        agent!.normalizeAndWait(kernelPov)
         return(true)
     }
 
@@ -3037,7 +3037,7 @@ struct ProteusCore{
         }
         agent!.world <- WORLD
         our POV:: normPov{27}; normPov!.pItem <- agent!.world
-        agent!.normalize(normPov)
+        agent!.normalizeAndWait(normPov)
         return(true)
     }
 
@@ -3103,7 +3103,7 @@ struct ProteusCore{
         our infonView: result <- parseAndExtractString(qry, "query")
         if(result == NULL){log("Syntax Error in input: " + qry)}
         our POV:: normPov{28}; normPov!.pItem <- result
-        agent!.normalize(normPov)
+        agent!.normalizeAndWait(normPov)
         if(writeToSession){addStatementToSession(remNewLines(qry))}
         return(normPov!.pItem)
     }
@@ -3155,6 +3155,7 @@ struct ProteusCore{
     }
 
     me void: deInit() <- {
+        if(agent!=NULL){agent!.close()}
         DB_session.closeSession()
     }
 }

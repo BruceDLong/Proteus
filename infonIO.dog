@@ -3,6 +3,7 @@
 struct parseContext:inherits=<mode[pcMainInfn, pcRHS, pcFuncLike, pcPartPaths, pcListSpec, pcDefn]>{}
 
 struct infonView{
+    me uint64: replyCharPos
     flag: isFunc
     flag: isFuncArg
     flag: invertFunc
@@ -36,8 +37,8 @@ struct infonView{
     }
 }
 
-#define WCHK_PEEK(POS,RET) <%if(posIsAtEOB_butNotClosed(POS)){return(RET)}else{peek<-text!.at(POS)}%>
-#define CHK_PEEK(POS,RET)  <%if(waitingForBuffer(POS)){return(RET)}else{peek<-text!.at(POS)}%>
+#define WCHK_PEEK(POS,RET) <%if(posIsAtEOB_butNotClosed(POS)){return(RET)}else{peek<-input_at(POS)}%>
+#define CHK_PEEK(POS,RET)  <%if(waitingForBuffer(POS)){return(RET)}else{peek<-input_at(POS)}%>
 #define U_RETURN(RET)      <%pos! <- cPos; return(RET)%>
 
 struct ppStatus:inherits=<mode[valid_EOB, valid_notDone, valid_maybeDone, valid_done, syntax_error, other_error]>{}
@@ -53,15 +54,87 @@ struct ProteusParser{
     me int64: errCharPos
     me int64: errorSuppressDepth
 
+    me GraphPublication: publication
+
+    // Parser state is protected while parsing; input may block outside that
+    // lock so completed siblings can normalize and deliver replies.
+    me char: input_at(me int64: pos) <- <%{
+        proteus4::InputPause<std::shared_ptr<POV>> pause(publication);
+        return text->at(pos);
+    }%>
+    our strBufItr: input_getItrAt(me int64: pos) <- <%{
+        proteus4::InputPause<std::shared_ptr<POV>> pause(publication);
+        return text->getItrAt(pos);
+    }%>
+    their strInnerBuf: input_findInrBufWithPos(me int64: pos) <- <%{
+        proteus4::InputPause<std::shared_ptr<POV>> pause(publication);
+        return text->findInrBufWithPos(pos);
+    }%>
+    me int64: input_chkStr(me int64: pos, me string: token) <- <%{
+        proteus4::InputPause<std::shared_ptr<POV>> pause(publication);
+        return text->chkStr(pos, token);
+    }%>
+    me int64: input_scrapeUTF8Char(me int64: pos, their int32: output) <- <%{
+        proteus4::InputPause<std::shared_ptr<POV>> pause(publication);
+        return text->scrapeUTF8Char(pos, output);
+    }%>
+    me int64: input_scrapeBinNum(me int64: pos) <- <%{
+        proteus4::InputPause<std::shared_ptr<POV>> pause(publication);
+        return text->scrapeBinNum(pos);
+    }%>
+    me int64: input_scrapeCID(me int64: pos) <- <%{
+        proteus4::InputPause<std::shared_ptr<POV>> pause(publication);
+        return text->scrapeCID(pos);
+    }%>
+    me int64: input_scrapeFlexNum(me int64: pos) <- <%{
+        proteus4::InputPause<std::shared_ptr<POV>> pause(publication);
+        return text->scrapeFlexNum(pos);
+    }%>
+    me int64: input_scrapeHexNum(me int64: pos) <- <%{
+        proteus4::InputPause<std::shared_ptr<POV>> pause(publication);
+        return text->scrapeHexNum(pos);
+    }%>
+    me int64: input_scrapeQuotedStr1(me int64: pos) <- <%{
+        proteus4::InputPause<std::shared_ptr<POV>> pause(publication);
+        return text->scrapeQuotedStr1(pos);
+    }%>
+    me int64: input_scrapeQuotedStr2(me int64: pos) <- <%{
+        proteus4::InputPause<std::shared_ptr<POV>> pause(publication);
+        return text->scrapeQuotedStr2(pos);
+    }%>
+    me int64: input_scrapeToEOL(me int64: pos) <- <%{
+        proteus4::InputPause<std::shared_ptr<POV>> pause(publication);
+        return text->scrapeToEOL(pos);
+    }%>
+    me int64: input_scrapeUniID(me int64: pos) <- <%{
+        proteus4::InputPause<std::shared_ptr<POV>> pause(publication);
+        return text->scrapeUniID(pos);
+    }%>
+    me int64: input_scrapeWSC(me int64: pos) <- <%{
+        proteus4::InputPause<std::shared_ptr<POV>> pause(publication);
+        return text->scrapeWSC(pos);
+    }%>
+    void: inputAdvance(our strBufItr: cursor) <- <%{
+        proteus4::InputPause<std::shared_ptr<POV>> pause(publication);
+        cursor->goNext();
+    }%>
+    void: reportSyntaxError(me string: message) <- <%{
+        proteus4::InputPause<std::shared_ptr<POV>> pause(publication);
+        CORE->handleSyntaxError(originID, message);
+    }%>
+    void: markPublication() <- <%{ if (publication) publication->changed(); }%>
     void: notifyStreamState(our infonView: infn, me int: stateMrk) <- {
-        //log("   NOTIFY:"+infn!.mySymbol()+" = "+shortedStr(toString(infn),120)+"  STATE:"+toString(stateMrk))
-        {
-            me MutexMngr: MtxMgr{streamingNormMutex}
-            infn!.streamState <- stateMrk
-            if(stateMrk==parseDone){infn!.resolveEndRelativeReferences()}
-            streamingStateRevision <+- 1
-        }
-        streamingNormLock.notifyAll()
+        infn!.streamState <- stateMrk
+        if(stateMrk==parseDone){infn!.resolveEndRelativeReferences()}
+        markPublication()
+    }
+    void: beginDocument(our infonView: infn) <- {
+        infn!.streamState <- parseStarted; infn!.graphParseError <- ""
+        markPublication()
+    }
+    void: failDocument(our infonView: infn) <- {
+        infn!.graphParseError <- "parser terminated unexpectedly"
+        notifyStreamState(infn, parseDone)
     }
 
     void: setErrorPos(me int64: errPos) <- {
@@ -69,7 +142,7 @@ struct ProteusParser{
         errLineNum <- 1
         errCharPos <- 1
         if(errPos < 0){return()}
-        their strInnerBuf: bufWithChar <- text!.findInrBufWithPos(errPos)
+        their strInnerBuf: bufWithChar <- input_findInrBufWithPos(errPos)
         if(bufWithChar == NULL){return()}
         me int64: lastLinePos <- -1
         if(bufWithChar!.prev!=NULL){
@@ -108,7 +181,7 @@ struct ProteusParser{
         errorMesg <- errMsg
         setErrorPos(errPos)
         if(CORE!=NULL){
-            CORE!.handleSyntaxError(originID, formattedError(true))
+            reportSyntaxError(formattedError(true))
         } else {
             print(formattedError(true)+"\n")
         }
@@ -122,14 +195,14 @@ struct ProteusParser{
     }
     me string: makeStr(me int64: startPos, me int64: endPos) <- {
         me string: S <- ""
-        our strBufItr: txtItr <- text!.getItrAt(startPos)
+        our strBufItr: txtItr <- input_getItrAt(startPos)
         me int64: posCount <- startPos
         while(txtItr != NULL and txtItr!.status==bfOK and txtItr!.crntAbsPos()<endPos){
             me char: ch <- txtItr!.ch()
             S <- S+ch
             posCount <+- 1
             if(posCount==endPos){break()}
-            txtItr!.goNext()
+            inputAdvance(txtItr)
         }
         return(S)
     }
@@ -158,9 +231,11 @@ struct ProteusParser{
 
 ///////////////////////////////////  Pre-parse checking
 
-    me bool: waitingForBuffer(me int64: pos) <- {
-        return(pos>=text!.crntStreamSize and !text!.bufferClosed)
-    }
+    me bool: waitingForBuffer(me int64: pos) <- <%{
+        proteus4::InputPause<std::shared_ptr<POV>> pause(publication);
+        std::lock_guard<std::mutex> lock(text->bufMutex);
+        return pos >= text->crntStreamSize && !text->bufferClosed;
+    }%>
     me bool: posIsAtEOB_butNotClosed(their int64: pos) <- {
         me int64: cPos <- pos
         me ppStatus: status <- checkWSC(cPos)
@@ -180,7 +255,7 @@ struct ProteusParser{
         me int64: cPos <- pos
         me int64: len <- str.size()
         if(waitingForBuffer(cPos)){return(valid_notDone)}
-        our strBufItr: txtItr <- text!.getItrAt(cPos)
+        our strBufItr: txtItr <- input_getItrAt(cPos)
         withEach i in range 0 .. len{
             if(txtItr == NULL or txtItr!.status!=bfOK){return(other_error)}
             if(txtItr!.ch() != str[i]){return(syntax_error)}
@@ -190,7 +265,7 @@ struct ProteusParser{
                 pos! <- cPos-1
                 return(valid_notDone)
             }
-            txtItr!.goNext()
+            inputAdvance(txtItr)
         }
         pos! <- cPos
         return(valid_done)
@@ -199,7 +274,7 @@ struct ProteusParser{
         me int64: cPos <- pos
         me char: ender <- endStr[0]
         if(waitingForBuffer(cPos)){return(valid_EOB)}
-        our strBufItr: txtItr <- text!.getItrAt(cPos)
+        our strBufItr: txtItr <- input_getItrAt(cPos)
         while(txtItr != NULL and txtItr!.status==bfOK){
             me char: ch <- txtItr!.ch()
             if(ch==ender){
@@ -209,16 +284,16 @@ struct ProteusParser{
             }
             cPos <+- 1
             if(waitingForBuffer(cPos)){pos! <- cPos; return(valid_notDone)}
-            txtItr!.goNext()
+            inputAdvance(txtItr)
         }
         return(other_error)
     }
     me ppStatus: checkCComment(their int64: pos) <- {
         if(waitingForBuffer(pos!)){return(valid_EOB)}
-        me char: ch <- text!.at(pos!)
+        me char: ch <- input_at(pos!)
         if(ch=="/"){
             if(waitingForBuffer(pos!+1)){return(valid_EOB)}
-            me char: nextCh <- text!.at(pos!+1)
+            me char: nextCh <- input_at(pos!+1)
             if(nextCh=="/"){
                 return(checkToEOL(pos))
             } else if(nextCh=="*"){
@@ -231,7 +306,7 @@ struct ProteusParser{
     me ppStatus: checkWSC(their int64: pos) <- {
         me int64: cPos <- pos
         if(waitingForBuffer(cPos)){return(valid_EOB)}
-        our strBufItr: txtItr <- text!.getItrAt(cPos)
+        our strBufItr: txtItr <- input_getItrAt(cPos)
         while(txtItr != NULL and txtItr!.status==bfOK){
             me int64: prevP <- cPos
             me char: ch <- txtItr!.ch()
@@ -243,21 +318,21 @@ struct ProteusParser{
             }
             if(prevP == cPos){pos! <- cPos; return(valid_done)}
             if(waitingForBuffer(cPos)){pos! <- cPos; return(valid_notDone)}
-            txtItr!.goNext()
+            inputAdvance(txtItr)
         }
         return(other_error)
     }
     me ppStatus: checkWS(their int64: pos) <- {
         me int64: cPos <- pos
         if(waitingForBuffer(cPos)){return(valid_EOB)}
-        our strBufItr: txtItr <- text!.getItrAt(cPos)
+        our strBufItr: txtItr <- input_getItrAt(cPos)
         while(txtItr != NULL and txtItr!.status==bfOK){
             me int64: prevP <- cPos
             me char: ch <- txtItr!.ch()
             if(isspace(ch)){cPos <+- 1}
             if(prevP == cPos){pos! <- cPos; return(valid_done)}
             if(waitingForBuffer(cPos)){pos! <- cPos; return(valid_notDone)}
-            txtItr!.goNext()
+            inputAdvance(txtItr)
         }
         return(other_error)
     }
@@ -268,7 +343,7 @@ struct ProteusParser{
         me char: escChar <- escCharStr[0]
         me char: prevCh
         if(waitingForBuffer(cPos)){return(valid_notDone)}
-        our strBufItr: txtItr <- text!.getItrAt(cPos)
+        our strBufItr: txtItr <- input_getItrAt(cPos)
         while(txtItr != NULL and txtItr!.status==bfOK){
             me char: ch <- txtItr!.ch()
             if(ch==ender and prevCh!=escChar){
@@ -279,13 +354,13 @@ struct ProteusParser{
             prevCh <- ch
             cPos <+- 1
             if(waitingForBuffer(cPos)){pos! <- cPos; return(valid_notDone)}
-            txtItr!.goNext()
+            inputAdvance(txtItr)
         }
         return(other_error)
     }
     me ppStatus: checkUTF8Char(their int64: pos, their int32: out) <- {
         if(waitingForBuffer(pos!)){return(valid_notDone)}
-        our strBufItr: txtItr <- text!.getItrAt(pos!)
+        our strBufItr: txtItr <- input_getItrAt(pos!)
         me int: count <- 0
         me int: expectedBytes <- -1
         me string: bufr <- ""
@@ -298,7 +373,7 @@ struct ProteusParser{
             count <+- 1
             if(count==expectedBytes){ break()}
             if(waitingForBuffer(pos!+count)){return(valid_notDone)}
-            txtItr!.goNext()
+            inputAdvance(txtItr)
         }
         if(count!=expectedBytes){return(other_error)}
         me int64: p<-0
@@ -309,7 +384,7 @@ struct ProteusParser{
     me ppStatus: checkUintSeq(their int64: pos) <- {
         me int64: charsUsed <- 0
         if(waitingForBuffer(pos!)){return(valid_EOB)}
-        our strBufItr: txtItr <- text!.getItrAt(pos!)
+        our strBufItr: txtItr <- input_getItrAt(pos!)
         while(txtItr != NULL and txtItr!.status==bfOK){
             me char: ch <- txtItr!.ch()
             if(!isdigit(ch)){
@@ -318,14 +393,14 @@ struct ProteusParser{
             }
             charsUsed <+- 1
             if(waitingForBuffer(pos!+charsUsed)){return(valid_maybeDone)}
-            txtItr!.goNext()
+            inputAdvance(txtItr)
         }
         return(other_error)
     }
     me ppStatus: checkHexNum(their int64: pos) <- {
         me int64: charsUsed <- 0
         if(waitingForBuffer(pos!)){return(valid_notDone)}
-        our strBufItr: txtItr <- text!.getItrAt(pos!)
+        our strBufItr: txtItr <- input_getItrAt(pos!)
         while(txtItr != NULL and txtItr!.status==bfOK){
             me char: ch <- txtItr!.ch()
             if(!isxdigit(ch)){
@@ -334,14 +409,14 @@ struct ProteusParser{
             }
             charsUsed <+- 1
             if(waitingForBuffer(pos!+charsUsed)){return(valid_maybeDone)}
-            txtItr!.goNext()
+            inputAdvance(txtItr)
         }
         return(other_error)
     }
     me ppStatus: checkBinNum(their int64: pos) <- {
         me int64: charsUsed <- 0
         if(waitingForBuffer(pos!)){return(valid_notDone)}
-        our strBufItr: txtItr <- text!.getItrAt(pos!)
+        our strBufItr: txtItr <- input_getItrAt(pos!)
         while(txtItr != NULL and txtItr!.status==bfOK){
             me char: ch <- txtItr!.ch()
             if(ch!="0" and ch!="1"){
@@ -350,7 +425,7 @@ struct ProteusParser{
             }
             charsUsed <+- 1
             if(waitingForBuffer(pos!+charsUsed)){return(valid_maybeDone)}
-            txtItr!.goNext()
+            inputAdvance(txtItr)
         }
         return(other_error)
     }
@@ -358,7 +433,7 @@ struct ProteusParser{
         me int64: cPos <- pos
         me int64: charsUsed <- 0
         if(waitingForBuffer(cPos)){return(valid_notDone)}
-        our strBufItr: txtItr <- text!.getItrAt(cPos)
+        our strBufItr: txtItr <- input_getItrAt(cPos)
         while(txtItr != NULL and txtItr!.status==bfOK){
             me int32: ch
             me ppStatus: status
@@ -370,7 +445,7 @@ struct ProteusParser{
             }
             charsUsed <+- 1
             if(waitingForBuffer(cPos)){pos! <- cPos; return(valid_maybeDone)}
-            txtItr!.goNext()
+            inputAdvance(txtItr)
         }
         return(other_error)
     }
@@ -389,14 +464,14 @@ struct ProteusParser{
     }
     me ppStatus: checkQuotedStr1(their int64: pos) <- {
         if(waitingForBuffer(pos!)){return(valid_notDone)}
-        me char: peek <- text!.at(pos!)
+        me char: peek <- input_at(pos!)
         if(peek != "'"){return(syntax_error)}
         pos! <+- 1
         return(escapedCheckUntil(pos, "'"))
     }
     me ppStatus: checkQuotedStr2(their int64: pos) <- {
         if(waitingForBuffer(pos!)){return(valid_notDone)}
-        me char: peek <- text!.at(pos!)
+        me char: peek <- input_at(pos!)
         if(peek != "\""){return(syntax_error)}
         pos! <+- 1
         return(escapedCheckUntil(pos, "\""))
@@ -443,7 +518,7 @@ struct ProteusParser{
                     len <- cPos
                     return(valid_maybeDone)
                 }
-                me char: peek2 <- toUpper(text!.at(cPos+1))
+                me char: peek2 <- toUpper(input_at(cPos+1))
                 if(peek2=="X"){
                     cPos <+- 2
                     len  <+- 2
@@ -540,7 +615,7 @@ struct ProteusParser{
         while(peek=="." or peek=="^" or peek=="~" or peek=="@"){
             if(peek=="@"){
                 if(waitingForBuffer(cPos+1)){U_RETURN(valid_notDone)}
-                if(text!.at(cPos+1)!="["){break()}
+                if(input_at(cPos+1)!="["){break()}
                 cPos <+- 2
                 if(statusNotDone(preCheckInfonView(cPos, true, pcPartPaths), status)){U_RETURN(status)}
                 WCHK_PEEK(cPos,valid_maybeDone)
@@ -652,15 +727,15 @@ struct ProteusParser{
 /////////////////////////////////// Parsers
 
     me char: peekWSC(their int64: cPos)<-{
-        cPos! <+- text!.scrapeWSC(cPos!)
-        return(text!.at(cPos!))
+        cPos! <+- input_scrapeWSC(cPos!)
+        return(input_at(cPos!))
     }
     me bool: chk(me int64: rLen, their int64: pos, their int64: outLen) <- {
         if(rLen>0){pos! <+- rLen; outLen! <- rLen; return(true)}
         return(false)
     }
     me bool: chkStr(their int64: cPos, me string: str) <- {
-        me int64: len <- text!.chkStr(cPos!, str)
+        me int64: len <- input_chkStr(cPos!, str)
         if(len>=0){
             cPos! <+- len
             return(true)
@@ -668,19 +743,19 @@ struct ProteusParser{
         return(false)
     }
     me bool: chkStrWSC(their int64: cPos, me string: str)<-{
-        cPos! <+- text!.scrapeWSC(cPos!)
+        cPos! <+- input_scrapeWSC(cPos!)
         return(chkStr(cPos!, str))
     }
 
     me int64: scrapeWordChain(me int64: pos) <- {  // AlphaNum, underscore, hyphen, TODO: whitespace
         me int64: cPos <- pos
         me int32: ch
-        cPos <+- text!.scrapeUTF8Char(cPos, ch)
+        cPos <+- input_scrapeUTF8Char(cPos, ch)
         if(cPos==pos){return(-1)}
         if(unicodeMgr.isUnicodeWordStart(ch)){
-            our strBufItr: txtItr <- text!.getItrAt(pos)
+            our strBufItr: txtItr <- input_getItrAt(pos)
             while(txtItr != NULL and txtItr!.status==bfOK){
-                me int64: len <- text!.scrapeUTF8Char(cPos, ch)
+                me int64: len <- input_scrapeUTF8Char(cPos, ch)
                 if(len > 0){
                     if(unicodeMgr.isUnicodeWordContinue(ch)){cPos <+- len}
                     else{
@@ -691,7 +766,7 @@ struct ProteusParser{
                 }else{
                     return(cPos-pos)
                 }
-                txtItr!.goNext()
+                inputAdvance(txtItr)
             }
             return(cPos-pos)
         }
@@ -700,14 +775,14 @@ struct ProteusParser{
     me int64: parseWordDefn(our infonView: infn, me int64: pos) <- {
         me int64: cPos <- pos
         me int64: len
-        cPos <+- text!.scrapeWSC(cPos)
-        if(chk(text!.scrapeUniID(cPos), cPos,len)){
+        cPos <+- input_scrapeWSC(cPos)
+        if(chk(input_scrapeUniID(cPos), cPos,len)){
             Allocate(infn!.definedWord)
             infn!.definedWord!.defWord <- makeStr(cPos-len, cPos)
             if(peekWSC(cPos)=="<"){
                 cPos <+- 1
                 while(peekWSC(cPos) != ">"){
-                    if(chk(text!.scrapeUniID(cPos), cPos,len)){
+                    if(chk(input_scrapeUniID(cPos), cPos,len)){
                         me string: usageTag <- makeStr(cPos-len, cPos)
                         trimWS(usageTag)
                         infn!.definedWord!.UsageTags.append(usageTag)
@@ -716,8 +791,8 @@ struct ProteusParser{
                 chkStr(cPos,">")
             }
             me int64: eqPos <- cPos
-            eqPos <+- text!.scrapeWSC(eqPos)
-            if(text!.at(eqPos)!="="){setError("Expected '=' in the definition of "+infn!.definedWord!.defWord, eqPos)}
+            eqPos <+- input_scrapeWSC(eqPos)
+            if(input_at(eqPos)!="="){setError("Expected '=' in the definition of "+infn!.definedWord!.defWord, eqPos)}
             else{
                 cPos <- eqPos + 1
                 our infonView:: defMeaning
@@ -827,7 +902,7 @@ struct ProteusParser{
             notifyStreamState(infn, parseDone)
         } else if(chkStr(cPos, "%INSERT")){
             infn!.itmMode <- mIncludeStream
-            if(chk(text!.scrapeToEOL(cPos), cPos,len)){
+            if(chk(input_scrapeToEOL(cPos), cPos,len)){
                 infn!.includeSpec <- makeStr(cPos-len, cPos)
                 trimWS(infn!.includeSpec)
                 notifyStreamState(infn, parseDone)
@@ -869,6 +944,7 @@ struct ProteusParser{
                 if(chkStrWSC(cPos, ">>")){
                     log("3 Marking infon item for reply in ParselistItem at pos " + toString(cPos) + "\n")
                     infn!.doReply<-true
+                    infn!.replyCharPos <- cPos
                 log("4 Infon item marked for reply at pos " + toString(cPos) + "\n")
                 }
                     notifyStreamState(infn, parseDone)
@@ -903,10 +979,10 @@ struct ProteusParser{
             else{ // isDigit
                 me bool: numNotLoaded <- true
                 if(peek=="0"){
-                    me char: peek2 <- toUpper(text!.at(cPos+1))
+                    me char: peek2 <- toUpper(input_at(cPos+1))
                     if(peek2=="X"){
                         cPos <+- 2
-                        if(chk(text!.scrapeHexNum(cPos), cPos,len)){
+                        if(chk(input_scrapeHexNum(cPos), cPos,len)){
                             pureInfn!.num <- makeHexInt(cPos-len, cPos)
                             pureInfn!.evalMode <- emLiteral
                             pureInfn!.numBase <- bHex
@@ -915,7 +991,7 @@ struct ProteusParser{
                     }
                     if(peek2=="B"){
                         cPos <+- 2
-                        if(chk(text!.scrapeBinNum(cPos), cPos,len)){
+                        if(chk(input_scrapeBinNum(cPos), cPos,len)){
                             pureInfn!.num <- makeBinInt(cPos-len, cPos)
                             pureInfn!.evalMode <- emLiteral
                             pureInfn!.numBase <- bBin
@@ -924,7 +1000,7 @@ struct ProteusParser{
                     }
                 }
                 if(numNotLoaded){
-                    if(chk(text!.scrapeFlexNum(cPos), cPos,len)){
+                    if(chk(input_scrapeFlexNum(cPos), cPos,len)){
                         pureInfn!.num <- makeStr(cPos-len, cPos)
                         pureInfn!.evalMode <- emLiteral
                         pureInfn!.numBase <- bDec
@@ -935,14 +1011,14 @@ struct ProteusParser{
             pureInfn!.overlayType <- STR
             if(chkPeek(cPos, peek, "$")){pureInfn!.evalMode <- emUnknown; pureInfn!.str<-""}
             else if(peek=="\'"){
-                if(chk(text!.scrapeQuotedStr1(cPos), cPos,len)){
+                if(chk(input_scrapeQuotedStr1(cPos), cPos,len)){
                     pureInfn!.str <- makeStr((cPos-len)+1, cPos-1)
                     pureInfn!.evalMode <- emLiteral
                     //pureInfn.quoteType <- qSingle
                 }
             }
             else if(peek=="\""){
-                if(chk(text!.scrapeQuotedStr2(cPos), cPos,len)){
+                if(chk(input_scrapeQuotedStr2(cPos), cPos,len)){
                     pureInfn!.str <- makeStr((cPos-len)+1, cPos-1)
                     pureInfn!.evalMode <- emLiteral
                     //pureInfn.quoteType <- qDouble
@@ -1032,7 +1108,7 @@ struct ProteusParser{
         me bool: isAFunc <- true
         me char: peek <- peekWSC(cPos)
         if(!postfixOnly and (peek=="<" or peek==":" or peek=="!")){ // TODO: The '<' here slightly conflicts with the [ <...> ...] syntax.
-            me char: peek2 <- text!.at(cPos+1)
+            me char: peek2 <- input_at(cPos+1)
             me string: opStr <- ""; opStr <+- peek; opStr <+- peek2
             if     (opStr=="<:"){infn!.isFunc <- true;  infn!.isFuncArg <- false; infn!.invertFunc <- false; cPos<+-2}
             else if(opStr==":>"){infn!.isFunc <- false; infn!.isFuncArg <- true;  infn!.invertFunc <- false; cPos<+-2}
@@ -1062,7 +1138,7 @@ struct ProteusParser{
                 pov!.forceID <- forceID
                 if(chkStr(cPos, "==")){pov!.looseMode <- true}
                 else if(chkStr(cPos, "=")){pov!.looseMode <- false}
-                if(chkPeek(cPos, text!.at(cPos), ":")){pov!.looseTop <- true}
+                if(chkPeek(cPos, input_at(cPos), ":")){pov!.looseTop <- true}
                 our infonView:: RHS
                 RHS!.originID <- infn!.originID
                 cPos <+- parseInfonView(RHS, cPos, false, isFromDefn, pcRHS)
@@ -1078,11 +1154,11 @@ struct ProteusParser{
         while(peek=="." or peek=="^" or peek=="~" or peek=="@"){
             me bool: isBracketedIndex <- false
             if(peek=="@"){
-                if(text!.at(cPos+1)!="["){break()}
+                if(input_at(cPos+1)!="["){break()}
                 isBracketedIndex <- true
                 cPos <+- 2
             }else{
-                if(text!.at(cPos+1)=="."){break()}
+                if(input_at(cPos+1)=="."){break()}
                 cPos<+-1
             }
             our PartPath:: part
@@ -1149,14 +1225,14 @@ struct ProteusParser{
         me int64: cPos <- pos
         me int64: len
 
-        me char: peek <- text!.at(cPos)
+        me char: peek <- input_at(cPos)
         if(chkPeek(cPos, peek, "?")){
             infn!.viewMode        <- vmAny
             infn!.value!.evalMode   <- emUnknown
             infn!.infSize!.evalMode <- emUnknown
         } else if(chkPeek(cPos, peek, "%")){
             infn!.viewMode <- vmCursor
-            if(chk(text!.scrapeCID(cPos), cPos,len)){
+            if(chk(input_scrapeCID(cPos), cPos,len)){
                 me string: tag <- makeStr(cPos-len, cPos)
                 switch(tag){
                     case "self":{infn!.cursorMode <- cmSelf}
@@ -1238,7 +1314,7 @@ struct ProteusParser{
         // Check for '!' invertMatch
         if(chkStrWSC(cPos, "!")){
             infn!.invertMatch <- true
-            cPos <+- text!.scrapeWSC(cPos)
+            cPos <+- input_scrapeWSC(cPos)
         }
 
         // Unary `~word` is syntax sugar for `%ctx~word`.  Keep a small piece
@@ -1267,13 +1343,13 @@ struct ProteusParser{
         // WordUse:type
 //  change to scrapeWordType()
         me bool: wordsFound <- false
-        if(fetchInnerInfon){wordsFound <- chk(text!.scrapeUniID(cPos), cPos,len)}
+        if(fetchInnerInfon){wordsFound <- chk(input_scrapeUniID(cPos), cPos,len)}
         if(wordsFound){
             our WordUse:: type
             type!.setAsGiven(makeStr(cPos-len, cPos)) // Set word type
             infn!.type <- type
             if(chkStrWSC(cPos, ":")){
-                wordsFound <- chk(text!.scrapeUniID(cPos), cPos,len)
+                wordsFound <- chk(input_scrapeUniID(cPos), cPos,len)
                 if(!wordsFound){
                    // cPos <+- parseInfonView(infn, cPos, allowIDs, isFromDefn, prsCtxt)
                    // infn!.hasTypeAndValue <- true
@@ -1344,7 +1420,23 @@ struct ProteusParser{
         return(cPos-pos)
     }
 
-    void: doParse(our infonView: infn) <- {
+    void: doParse(our infonView: infn) <- <%{
+        if (streamingMode && CORE && CORE->agent) {
+            publication = CORE->agent->graphNormalizer.beginPublication();
+            beginDocument(infn);
+        }
+        try {
+            parseDocument(infn);
+            if (errorSet) infn->graphParseError = formattedError(true);
+            if (publication) publication->changed();
+            publication.reset();
+        } catch (...) {
+            failDocument(infn);
+            publication.reset();
+            throw;
+        }
+    }%>
+    void: parseDocument(our infonView: infn) <- {
         clearError()
         me int64: parsedLen <- parseInfonView(infn, 0, true, false)
         if(!errorSet and !streamingMode and parsedLen>0){

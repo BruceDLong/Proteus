@@ -21,12 +21,37 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
 class ProteusCompletion {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::vector<std::weak_ptr<POV>> marked_;
+    struct Reply { std::uint64_t origin, order, position; POVNode node; };
+    std::vector<Reply> effects_;
 public:
     explicit ProteusCompletion(std::shared_ptr<ProteusGraphAccess> access)
         : access_(std::move(access)) {}
     void mark(const POVNode& node) {
         marked_.push_back(node);
         access_->setNormed(node, true);
+    }
+    void reply(const POVNode& node) {
+        if (!access_->replyReady(node)) return;
+        auto origin = access_->replyOrigin(node);
+        access_->claimReply(node);
+        if (origin) effects_.push_back({origin, access_->replyOrder(node), access_->replyPosition(node), node});
+    }
+    std::vector<std::function<void()>> takeEffects() {
+        // Claim all settled markers before rendering any containing list. Then
+        // deliver in marker order, independently of goal completion order.
+        std::stable_sort(effects_.begin(), effects_.end(), [](const Reply& a, const Reply& b) {
+            return std::tie(a.origin, a.order) < std::tie(b.origin, b.order);
+        });
+        std::vector<std::function<void()>> result;
+        auto core = access_->replyCore;
+        for (const auto& reply : effects_) {
+            auto origin = reply.origin, position = reply.position;
+            auto message = access_->replyText(reply.node);
+            result.push_back([core, origin, position, message] {
+                core->submitProteusResult(origin, position, message);
+            });
+        }
+        effects_.clear(); return result;
     }
     void invalidate() {
         for (auto& weak : marked_)
@@ -55,9 +80,13 @@ public:
     void settled(bool fullyResolved) override {
         if (request.kind == sizeAndValue && fullyResolved && satisfied())
             completion_->mark(request.node);
+        if (request.kind == sizeAndValue) completion_->reply(request.node);
     }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
         access_->bind(visit.query.node);
+        auto error = access_->inputError(visit.query.node);
+        if (!error.empty()) throw std::runtime_error(error);
+        if (access_->inputPending(visit.query.node) && request.kind != listContents) return {};
         if (request.kind == listContents) {
             if (visit.query.kind == listMember) measure_.add(visit.query.node);
             if (visit.query.kind != listEnd) return {};
@@ -251,6 +280,7 @@ public:
         : access_(std::move(access)),
           completion_(std::make_shared<ProteusCompletion>(access_)) {}
     void invalidateCompletion() override { completion_->invalidate(); }
+    std::vector<std::function<void()>> takeEffects() override { return completion_->takeEffects(); }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
         if (query.kind == listCorrespondence)
             return std::make_shared<ProteusCorrespondenceGoal>(query, access_);
@@ -263,6 +293,9 @@ public:
     Expansion<POVNode> expand(const Query<POVNode>& query) override {
         Expansion<POVNode> result;
         auto node = query.node;
+        if ((query.kind == itemAt || query.kind == physicalItemAt) && access_->inputPending(node)) {
+            result.deferred = true; return result;
+        }
         if (query.kind == itemFound || query.kind == listEnd || query.kind == correspondenceEnd || query.kind == concatEnd || query.kind == selectionFound)
             return result;
         if (query.kind == selectIntersection) {
@@ -381,7 +414,7 @@ public:
             return result;
         }
         if (query.kind == listContents) {
-            if (!access_->physicalList(node)) { result.deferred = true; return result; }
+            if (!access_->physicalList(node) && !access_->growingList(node)) { result.deferred = true; return result; }
             auto first = access_->first(node);
             result.edges.push_back(direct(first ? "first list member" : "empty list end",
                 {first ? first : node, first ? listMember : listEnd, query.argument}));
@@ -399,6 +432,13 @@ public:
             return result;
         }
         if (query.kind >= sizeOnly && query.kind <= sizeAndValue) {
+            if (access_->inputPending(node)) {
+                result.deferred = true;
+                if (access_->growingList(node))
+                    result.refinements.push_back({{node, listContents, query.kind}, {0, 0},
+                        "visit published stream members", false});
+                return result;
+            }
             result.deferred = !access_->supports(node, query.kind);
             if (access_->canSelect(node))
                 result.refinements.push_back({{node, selectIntersection, 0}, {0, 0}, "find intersection result", false});
@@ -415,6 +455,10 @@ public:
             // a discovered list supplies correspondence directly to that goal.
             auto origin = query.related ? query.related : node;
             auto relationship = [&](const POVNode& source, const char* label) {
+                if (access_->inputPending(source)) {
+                    result.refinements.push_back({{source, query.kind, 0}, {1, 0}, "await RHS input", false});
+                    result.deferred = true; return;
+                }
                 if (!access_->relationSupported(node, source, query.kind)) {
                     if (access_->canSelect(source))
                         result.refinements.push_back({{source, selectIntersection, 0}, {1, 0}, "find RHS intersection result", false});
