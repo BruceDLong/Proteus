@@ -173,8 +173,8 @@ struct ProteusGraphAccess {
                (pov!.pItem!.value!.overlayType==tUnknown or pov!.pItem!.value!.overlayType==tUnset) and
                pov!.pItem!.value!.evalMode==emUnknown)
     }
-    me bool: plain(our POV: pov, me bool: selection <- false) <- {
-        if(pov==NULL or pov!.pItem==NULL or inputPending(pov)){return(false)}
+    me bool: plain(our POV: pov, me bool: selection <- false, me bool: readingPrefix <- false) <- {
+        if(pov==NULL or pov!.pItem==NULL or (inputPending(pov) and !readingPrefix)){return(false)}
         our infonView: inf <- pov!.pItem
         return((inf!.viewMode==vmOverlay or (inf!.viewMode==vmAny and unknownOverlay(pov))) and !inf!.invertMatch and
                !inf!.isTentative and inf!.type==NULL and inf!.addedTypes.isEmpty() and
@@ -213,6 +213,30 @@ struct ProteusGraphAccess {
         return(literalList(pov) and pov!.pItem!.value!.listSpec==NULL and
                !pov!.pItem!.value!.timelike and
                (pov!.pItem!.streamState==parseDone or pov!.pItem!.streamState==notParsing))
+    }
+    // Read-only evidence from a parser-owned list. Its unfinished member and
+    // eventual extent are deliberately absent from the correspondence layout.
+    me bool: prefixList(our POV: pov) <- {
+        return(growingList(pov) and plain(pov, false, true) and
+               !pov!.pItem!.value!.timelike and orderedList(pov))
+    }
+    me bool: spanList(our POV: pov) <- {return(physicalList(pov) or prefixList(pov))}
+    our POV: spanFirst(our POV: owner) <- {
+        our POV: member <- first(owner)
+        if(member!=NULL and inputPending(member)){return(NULL)}
+        return(member)
+    }
+    our POV: spanNext(our POV: member) <- {
+        our POV: result <- next(member)
+        if(result!=NULL and inputPending(result)){return(NULL)}
+        return(result)
+    }
+    me bool: unknownList(our POV: pov) <- {
+        return(plain(pov) and pov!.pItem!.value!.overlayType==LST and
+               pov!.pItem!.value!.evalMode==emUnknown)
+    }
+    me bool: adoptableList(our POV: pov) <- {
+        return((scalarCandidate(pov) and unknownOverlay(pov)) or unknownList(pov))
     }
     me bool: closedPhysicalList(our POV: pov) <- {
         return(physicalList(pov) and !pov!.pItem!.value!.tailUnfinished)
@@ -256,13 +280,13 @@ struct ProteusGraphAccess {
     me bool: supports(our POV: pov, me int: demand) <- {
         if(canSelect(pov)){return(true)}
         if(!plain(pov)){return(false)}
-        if(scalarCandidate(pov) or hasConcat(pov, 2)){return(true)}
+        if(scalarCandidate(pov) or unknownList(pov) or hasConcat(pov, 2)){return(true)}
         return(physicalList(pov) or (demand==1 and literalList(pov)))
     }
     me bool: relationSupported(our POV: lhs, our POV: rhs, me int: demand) <- {
-        if((scalarCandidate(lhs) and unknownOverlay(lhs) and physicalList(rhs) and orderedList(rhs)) or
-           (scalarCandidate(rhs) and unknownOverlay(rhs) and physicalList(lhs) and orderedList(lhs))){return(true)}
-        if(literalList(lhs) and demand!=1){return(correspondingLists(lhs, rhs))}
+        if((adoptableList(lhs) and spanList(rhs) and orderedList(rhs)) or
+           (adoptableList(rhs) and spanList(lhs) and orderedList(lhs))){return(true)}
+        if(spanList(lhs) and (demand!=1 or inputPending(lhs) or inputPending(rhs))){return(correspondingLists(lhs, rhs))}
         if(scalarCandidate(lhs) and scalarCandidate(rhs)){
             return(unknownOverlay(lhs) or unknownOverlay(rhs) or
                    lhs!.pItem!.value!.overlayType==rhs!.pItem!.value!.overlayType)
@@ -271,7 +295,7 @@ struct ProteusGraphAccess {
                lhs!.pItem!.value!.overlayType==rhs!.pItem!.value!.overlayType)
     }
     me bool: correspondingLists(our POV: left, our POV: right) <- {
-        return(physicalList(left) and physicalList(right) and
+        return(spanList(left) and spanList(right) and
                orderedList(left) and orderedList(right))
     }
     me bool: correspondingMembers(our POV: left, our POV: right) <- {
@@ -279,11 +303,12 @@ struct ProteusGraphAccess {
                !left!.isSubItm and !right!.isSubItm and
                left!.pItem!.itmMode==mItem and right!.pItem!.itmMode==mItem)
     }
-    me bool: openTail(our POV: pov) <- {return(pov!.pItem!.value!.tailUnfinished)}
+    me bool: openTail(our POV: pov) <- {return(inputPending(pov) or pov!.pItem!.value!.tailUnfinished)}
     me bool: sameInfon(our POV: left, our POV: right) <- {return(left!.pItem===right!.pItem)}
     // -1 means unknown; -2 means an unsupported extent. Do not narrow an
     // arbitrary FlexNum to an index before checking the range and integrality.
     me int64: listExtent(our POV: pov) <- {
+        if(inputPending(pov)){return(-1)}
         if(pov!.pItem!.infSize!.evalMode==emUnknown){return(-1)}
         if(pov!.pItem!.infSize!.evalMode!=emLiteral){return(-2)}
         if(pov!.pItem!.infSize!.num<0 or pov!.pItem!.infSize!.num.getDenominator()!=1 or
@@ -360,7 +385,7 @@ struct ProteusGraphAccess {
     // 1: compatible in this foundation's supported subset.
     me int: compatible(our POV: target, our POV: source, me int: demand) <- {
         if(!relationSupported(target, source, demand)){return(0)}
-        if(target!.pItem!.infSize!.evalMode==emLiteral and
+        if(!inputPending(target) and !inputPending(source) and target!.pItem!.infSize!.evalMode==emLiteral and
                 source!.pItem!.infSize!.evalMode==emLiteral and
                 target!.pItem!.infSize!.num!=source!.pItem!.infSize!.num){return(0)}
         // supports() has excluded references, polarity, types, and expressions.
@@ -377,12 +402,12 @@ struct ProteusGraphAccess {
     me bool: apply(our POV: target, our POV: source, me int: demand) <- {
         // The goal validated the whole path before this batch. Recheck at the
         // mutation boundary; nothing can interleave under the context lock.
-        if(compatible(target, source, demand)!=1){return(false)}
-        me bool: copySize <- (demand==1 or demand==3) and
+        if(inputPending(target) or compatible(target, source, demand)!=1){return(false)}
+        me bool: copySize <- !inputPending(source) and (demand==1 or demand==3) and
                 target!.pItem!.infSize!.evalMode==emUnknown and
                 source!.pItem!.infSize!.evalMode==emLiteral
-        me bool: copyList <- (demand==2 or demand==3) and unknownOverlay(target) and
-                physicalList(source) and orderedList(source)
+        me bool: copyList <- (demand==2 or demand==3) and adoptableList(target) and
+                spanList(source) and orderedList(source)
         me bool: copyType <- (demand==2 or demand==3) and
                 unknownOverlay(target) and scalar(source)
         me bool: copyValue <- (demand==2 or demand==3) and

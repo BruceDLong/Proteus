@@ -1,6 +1,25 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphStream/transitive
+    unit/graphStream/registry
+    unit/graphStream/memberSubscription
+    unit/graphStream/freshHandle
+    unit/graphStream/typedUnknown
+    unit/graphStream/unknownOverlay
+    unit/graphStream/existingPrefix
+    unit/graphStream/readOnlySource
+    unit/graphStream/cancel
+    unit/graphStream/cost
+    unit/graphStream/embedded
+    unit/graphStream/nested
+    unit/graphStream/billionTail
+    unit/graphStream/reinterpretation
+    unit/graphStream/postfix
+    unit/graphStream/conflict
+    unit/graphStream/looseDeferred
+    unit/graphStream/parseFailure
+    unit/graphStream/lateConstraint
     unit/graphEntry/handle
     unit/graphEntry/query
     unit/graphEntry/registry
@@ -6584,6 +6603,140 @@ struct GLOBAL {
         }
         handle.cancel()
         if(caseID!=5){core.deInit()}
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+// Deterministic producer milestones exercise the same publication boundary as
+// the parser. The streaming harness separately drives real character input.
+struct GraphPrefixFixture {
+    our POV: source
+    our POV: target
+    our POV: unfinished
+    me int: caseID
+    void: finishInput() <- {
+            source!.pItem!.streamState <- parseDone
+            unfinished!.pItem!.streamState <- parseDone
+            if(caseID==10){source!.pItem!.orderMode <- uUnordered}
+            if(caseID==11){Allocate(source!.pItem!.funcArgs)}
+            if(caseID==14){source!.pItem!.graphParseError <- "incomplete stream fixture"}
+            if(caseID==15){
+                our POV: extra <- graphParsed("late stream constraint", "{*10+9 *10+2 *10+3}")
+                source!.pItem!.addPOVToWrkList(extra)
+            }
+    }
+    void: publish(their GraphNormalizer: normalizer) <- <%{
+        normalizer->runtime.update([&] { finishInput(); });
+    }%>
+}
+#define GRAPHSTREAM(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphStream(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHSTREAM(unit/graphStream/transitive, 16)
+    GRAPHSTREAM(unit/graphStream/registry, 17)
+    GRAPHSTREAM(unit/graphStream/memberSubscription, 18)
+    GRAPHSTREAM(unit/graphStream/freshHandle, 19)
+    GRAPHSTREAM(unit/graphStream/typedUnknown, 1)
+    GRAPHSTREAM(unit/graphStream/unknownOverlay, 2)
+    GRAPHSTREAM(unit/graphStream/existingPrefix, 3)
+    GRAPHSTREAM(unit/graphStream/readOnlySource, 4)
+    GRAPHSTREAM(unit/graphStream/cancel, 5)
+    GRAPHSTREAM(unit/graphStream/cost, 6)
+    GRAPHSTREAM(unit/graphStream/embedded, 7)
+    GRAPHSTREAM(unit/graphStream/nested, 8)
+    GRAPHSTREAM(unit/graphStream/billionTail, 9)
+    GRAPHSTREAM(unit/graphStream/reinterpretation, 10)
+    GRAPHSTREAM(unit/graphStream/postfix, 11)
+    GRAPHSTREAM(unit/graphStream/conflict, 12)
+    GRAPHSTREAM(unit/graphStream/looseDeferred, 13)
+    GRAPHSTREAM(unit/graphStream/parseFailure, 14)
+    GRAPHSTREAM(unit/graphStream/lateConstraint, 15)
+
+    void: unitTestGraphStream(me string: testName, me int: caseID) <- {
+        me GraphPrefixFixture: fixture
+        fixture.caseID <- caseID
+        me string: sourceText <- "{*10+1 *10+2 *10+3}"
+        me string: targetText <- "?"
+        if(caseID==3){targetText <- "{*_+_ ...}"}
+        if(caseID==4){targetText <- "{*10+1 *10+2 *10+3 *10+4}"}
+        if(caseID==7){sourceText <- "{&{*10+1 *10+2} *10+3}"}
+        if(caseID==8){sourceText <- "{{*10+1 *10+2} *10+3}"}
+        if(caseID==9){sourceText <- "*1000000000+{*10+1 *10+2 ...}"}
+        if(caseID==18){sourceText <- "{*_+_ *10+2 *10+3}"}
+        if(caseID==12){targetText <- "{*10+9 ...}"}
+        fixture.source <- graphParsed(testName, sourceText)
+        fixture.target <- graphParsed(testName, targetText)
+        if(caseID==1){fixture.target!.pItem!.value!.overlayType <- LST; fixture.target!.pItem!.viewMode <- vmOverlay}
+        fixture.source!.pItem!.streamState <- parseListReady
+        fixture.unfinished <- fixture.source!.pItem!.value!.items.head!.next
+        fixture.unfinished!.pItem!.streamState <- parseStarted
+        if(caseID==13){fixture.source!.looseMode <- true}
+        me int: originalCount <- fixture.source!.pItem!.value!.items.size()
+        me GraphNormalizer: normalizer
+        normalizer.init()
+        if(caseID==16){
+            our POV: middle <- graphParsed(testName, "?")
+            normalizer.addRHS(fixture.target, middle)
+            normalizer.addRHS(middle, fixture.source)
+        }else if(caseID==17){normalizer.recordIdentity(fixture.target, fixture.source)}
+        else{normalizer.addRHS(fixture.target, fixture.source)}
+        me NormalizationHandle: handle
+        if(caseID==6){handle <- normalizer.normalizeWithCost(fixture.target, 1)}
+        else{handle <- normalizer.normalize(fixture.target)}
+        handle.waitForCompletion()
+        me bool: passed <- !handle.failed() and handle.symbolicValues() and handle.withSubscribers() and
+                !fixture.target!.pItem!.isNormed and fixture.source!.pItem!.value!.items.size()==originalCount and
+                fixture.unfinished!.pItem!.streamState==parseStarted and
+                !fixture.source!.pItem!.value!.tailUnfinished
+        if(caseID==9){passed <- !handle.failed() and handle.symbolicValues() and handle.withSubscribers()}
+        if(caseID==12){passed <- handle.failed() and !fixture.target!.pItem!.isNormed}
+        else if(caseID==6 or caseID==13){
+            passed <- passed and fixture.target!.pItem!.value!.items.size()==0
+        }else{
+            me int: expectedCount <- 1
+            if(caseID==4){expectedCount <- 4}
+            if(caseID==7){expectedCount <- 2}
+            passed <- passed and fixture.target!.pItem!.value!.evalMode==emLiteral and
+                    fixture.target!.pItem!.value!.items.size()==expectedCount
+            if(caseID!=4){passed <- passed and fixture.target!.pItem!.value!.tailUnfinished and
+                    fixture.target!.pItem!.infSize!.evalMode==emUnknown}
+            our POV: first <- fixture.target!.pItem!.value!.items.head
+            passed <- passed and first!=NULL and first!.pItem!==fixture.source!.pItem!.value!.items.head!.pItem
+            if(first!=NULL and caseID!=8 and caseID!=18){passed <- passed and first!.pItem!.value!.num==1}
+            if(first!=NULL and caseID==18){passed <- passed and first!.pItem!.value!.evalMode==emUnknown}
+            if(first!=NULL and caseID==8){passed <- passed and first!.pItem!.value!.items.size()==2 and
+                    first!.pItem!.value!.items.head!.pItem!.value!.num==1}
+        }
+        if(caseID==18){
+            normalizer.addRHS(fixture.source!.pItem!.value!.items.head, graphScalar(1, 10))
+            handle.waitForCompletion()
+            passed <- passed and !handle.failed() and handle.symbolicValues() and
+                    fixture.target!.pItem!.value!.items.head!.pItem!.value!.num==1
+        }
+        if(caseID==5 or caseID==19){handle.cancel()}
+        fixture.publish(normalizer)
+        if(caseID==19){handle <- normalizer.normalize(fixture.target)}
+        handle.waitForCompletion()
+        if(caseID==5){passed <- passed and handle.cancelled() and fixture.target!.pItem!.value!.items.size()==1}
+        else if(caseID==10 or caseID==11 or caseID==12 or caseID==14 or caseID==15){
+            passed <- passed and handle.failed() and !fixture.target!.pItem!.isNormed
+        }else if(caseID==4 or caseID==6 or caseID==9 or caseID==13){
+            passed <- passed and !handle.failed() and handle.symbolicValues() and !fixture.target!.pItem!.isNormed
+            if(caseID==9){passed <- passed and fixture.target!.pItem!.value!.items.size()==2 and
+                    fixture.target!.pItem!.value!.tailUnfinished and fixture.target!.pItem!.infSize!.num==1000000000}
+        }else{
+            me int: finalCount <- 3
+            if(caseID==8){finalCount <- 2}
+            passed <- passed and !handle.failed() and !handle.symbolicValues() and fixture.target!.pItem!.isNormed and
+                    !fixture.target!.pItem!.value!.tailUnfinished and fixture.target!.pItem!.value!.items.size()==finalCount and
+                    fixture.target!.pItem!.infSize!.num==finalCount
+        }
+        if(!passed){
+            print("Graph stream "+toString(caseID)+": "+handle.error()+"\n"+normalizer.stringifyResult(fixture.target)+"\n")
+            withEach step in range 0 .. handle.stepCount(){print(handle.stepDescription(step)+"\n")}
+        }
+        handle.cancel(); normalizer.close()
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

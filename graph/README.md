@@ -291,8 +291,8 @@ releases its session after any current bounded step, including its subscription.
 Streaming parsers share their Agent's graph publication lock. They release it
 around potentially blocking input-buffer operations and publish parse milestones
 before yielding. The graph can visit finished children of a growing literal
-list. It defers value writes, indexed materialization, and shape assumptions on
-unfinished parser-owned infons. This avoids the old independent parser/agenda
+list. It defers value writes and indexed materialization on unfinished
+parser-owned infons. This avoids the old independent parser/agenda
 wake-up mechanism and its initial timing delay.
 
 `ThreadedNormalizer` retains its handle and uses an input-lifetime wait: ordinary
@@ -311,12 +311,25 @@ the input, regardless of goal completion order. Captured text is delivered via
 origin ID and item position. A second normalization does not resend a consumed
 marker. Parser errors wake the handle as failures.
 
-This migrates publication, reply delivery, and stream lifetime. It does not add
-unported semantic rules: in particular, a relationship to a still-parsing RHS
-remains subscribed until that RHS is complete. Incremental correspondence from
-such an RHS, typed/path streaming queries, and intersection/template input
-traversal need further semantic work. Completed physical open lists continue to
-use the existing graph span/subscription behavior.
+Strict ordered relationships may consume a growing RHS's completed prefix.
+The existing correspondence goal walks only finished members and represents the
+unreceived remainder as a gap. Its Set withholds writes to parser-owned tails;
+it can fill independent LHS members without waiting for EOF or expanding sparse
+remainders. Explicitly list-typed unknown targets can also adopt this evidence.
+Final RHS extent and closure remain unavailable until that RHS finishes parsing.
+
+Early prefix results carry weak semantic witnesses of the ordered source body.
+These conditions propagate through result copying and correspondence and keep
+completion symbolic while input is pending. If later input reinterprets the
+body (for example with a comma or postfix function), dependent searches fail
+explicitly; this implementation preserves partial Sets for inspection and does
+not yet roll them back or replan the changed interpretation. Producer revisions
+resume subscribed searches, and cancellation preserves the last partial result.
+See [growing-rhs-results.md](growing-rhs-results.md) for validation.
+
+Loose correspondence, typed/path streaming queries, and intersection/template
+input traversal need further semantic work. Completed physical open lists
+continue to use the existing graph span/subscription behavior.
 
 ## Deliberate initial limits
 

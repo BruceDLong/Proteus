@@ -15,6 +15,62 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectIntersection = 17, selectionMember = 18, selectionFound = 19,
               selectionExtentMember = 20, selectionExtentEnd = 21 };
 
+// Early correspondence is conditional on the parser retaining the ordered
+// list body. Weak provenance witnesses neither copy nodes nor own a second
+// graph. A later comma/postfix reinterpretation fails dependent searches;
+// partial Sets remain inspectable, as with other failed constraints.
+class ProteusStreamEvidence {
+    struct Guard {
+        std::weak_ptr<POV> source;
+        std::weak_ptr<infonState> body;
+    };
+    using Key = std::weak_ptr<infonView>;
+    std::map<Key, std::vector<Guard>, std::owner_less<Key>> guards_;
+    std::shared_ptr<ProteusGraphAccess> access_;
+    bool add(const POVNode& target, const Guard& guard) {
+        auto& list = guards_[target->pItem];
+        for (const auto& existing : list)
+            if (!existing.source.owner_before(guard.source) && !guard.source.owner_before(existing.source))
+                return false;
+        list.push_back(guard); return true;
+    }
+public:
+    explicit ProteusStreamEvidence(std::shared_ptr<ProteusGraphAccess> access) : access_(std::move(access)) {}
+    bool inherit(const POVNode& target, const POVNode& source) {
+        bool changed = false;
+        if (access_->prefixList(source)) changed |= add(target, {source, source->pItem->value});
+        auto found = guards_.find(source->pItem);
+        if (found != guards_.end()) {
+            auto guards = found->second;
+            for (const auto& guard : guards) changed |= add(target, guard);
+        }
+        return changed;
+    }
+    void prune() {
+        for (auto it = guards_.begin(); it != guards_.end();)
+            if (it->first.expired()) it = guards_.erase(it);
+            else ++it;
+    }
+    bool pending(const POVNode& node) {
+        auto found = guards_.find(node->pItem);
+        if (found == guards_.end()) return false;
+        auto& guards = found->second;
+        for (auto it = guards.begin(); it != guards.end();) {
+            auto source = it->source.lock(); auto body = it->body.lock();
+            if (!source || !body || source->pItem->value != body ||
+                !access_->spanList(source) || !access_->orderedList(source))
+                throw std::runtime_error("stream prefix assumption changed: ordered list body required");
+            auto error = access_->inputError(source);
+            if (!error.empty()) throw std::runtime_error(error);
+            if (!access_->inputPending(source)) it = guards.erase(it);
+            else ++it;
+        }
+        bool pending = !guards.empty();
+        if (!pending) guards_.erase(found);
+        return pending;
+    }
+};
+
 // Completion flags are derived metadata. Keep weak witnesses independently
 // of handles so later information invalidates even a released search result.
 // Context-wide invalidation matches the foundation's existing revision policy.
@@ -63,14 +119,15 @@ public:
 class ProteusGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusCompletion> completion_;
+    std::shared_ptr<ProteusStreamEvidence> evidence_;
     POVNode selected_;
     bool deferred_ = false, reachedEnd_ = false;
     GraphListMeasure measure_;
 public:
     ProteusGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access,
-                std::shared_ptr<ProteusCompletion> completion)
+                std::shared_ptr<ProteusCompletion> completion, std::shared_ptr<ProteusStreamEvidence> evidence)
         : GoalSpec<POVNode>(query), access_(std::move(access)),
-          completion_(std::move(completion)) {}
+          completion_(std::move(completion)), evidence_(std::move(evidence)) {}
     void beginPass() override {
         deferred_ = false;
         reachedEnd_ = false;
@@ -86,7 +143,8 @@ public:
         access_->bind(visit.query.node);
         auto error = access_->inputError(visit.query.node);
         if (!error.empty()) throw std::runtime_error(error);
-        if (access_->inputPending(visit.query.node) && request.kind != listContents) return {};
+        if (access_->inputPending(visit.query.node) && request.kind != listContents &&
+            !access_->prefixList(visit.query.node)) return {};
         if (request.kind == listContents) {
             if (visit.query.kind == listMember) measure_.add(visit.query.node);
             if (visit.query.kind != listEnd) return {};
@@ -122,8 +180,11 @@ public:
             if (!verdict) { deferred_ = true; return {}; }
         }
         auto access = access_;
-        return {{"Set requested size/value/type", [access, target, source, demand] {
-            return access->apply(target, source, demand);
+        auto evidence = evidence_;
+        return {{"Set requested size/value/type", [access, evidence, target, source, demand] {
+            bool changed = access->apply(target, source, demand);
+            if (changed) evidence->inherit(target, source);
+            return changed;
         }}};
     }
     bool satisfied() const override {
@@ -143,12 +204,14 @@ public:
 // publishes that plan before the search can settle.
 class ProteusCorrespondenceGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
+    std::shared_ptr<ProteusStreamEvidence> evidence_;
     SpanLayout<POVNode> layouts_[2];
     std::vector<std::size_t> starts_[2];
     bool verified_ = false;
 public:
-    ProteusCorrespondenceGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access)
-        : GoalSpec<POVNode>(query), access_(std::move(access)) {}
+    ProteusCorrespondenceGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access,
+                             std::shared_ptr<ProteusStreamEvidence> evidence)
+        : GoalSpec<POVNode>(query), access_(std::move(access)), evidence_(std::move(evidence)) {}
     void beginPass() override {
         layouts_[0] = {}; layouts_[1] = {};
         starts_[0].clear(); starts_[1].clear(); verified_ = false;
@@ -172,6 +235,12 @@ public:
         if (q.kind != correspondenceEnd) return {};
         auto plan = alignSpans(layouts_[0], layouts_[1]);
         if (!plan.valid) return {};
+        // Alignment is symmetric, but input ownership is not. Keep useful
+        // matches while withholding every fill/closure of a parser-owned tail.
+        plan.fills.erase(std::remove_if(plan.fills.begin(), plan.fills.end(), [&](const auto& fill) {
+            if (!access_->inputPending(fill.owner)) return false;
+            plan.complete = false; return true;
+        }), plan.fills.end());
         // All mutation preconditions are checked before the batch is offered.
         // Unsupported new member semantics keep the entire plan symbolic.
         for (std::size_t i = 0; i < plan.fills.size(); ++i) {
@@ -181,7 +250,7 @@ public:
             for (std::size_t j = 0; j < i; ++j)
                 if (access_->sameInfon(fill.owner, plan.fills[j].owner)) return {};
         }
-        verified_ = plan.complete;
+        verified_ = plan.complete && !access_->inputPending(request.node) && !access_->inputPending(request.related);
         Work work{0, 0};
         for (const auto& pair : plan.identities)
             if (!access_->hasDirectIdentity(pair.first, pair.second)) ++work.creations;
@@ -189,7 +258,8 @@ public:
         auto access = access_;
         auto left = request.node, right = request.related;
         int demand = static_cast<int>(request.argument);
-        return {{"Set span alignment", [access, left, right, plan, demand] {
+        auto evidence = evidence_;
+        return {{"Set span alignment", [access, evidence, left, right, plan, demand] {
             access->bind(left); access->bind(right);
             for (const auto& pair : plan.identities) { access->bind(pair.first); access->bind(pair.second); }
             for (const auto& fill : plan.fills) {
@@ -197,7 +267,13 @@ public:
                 for (const auto& source : fill.sources) access->bind(source);
             }
             bool changed = access->apply(left, right, demand);
+            if (changed) evidence->inherit(left, right);
+            auto inherit = [&](const POVNode& member) {
+                bool added = evidence->inherit(member, left);
+                return evidence->inherit(member, right) || added;
+            };
             for (const auto& pair : plan.identities) {
+                changed |= inherit(pair.first); changed |= inherit(pair.second);
                 if (!access->hasDirectIdentity(pair.first, pair.second)) {
                     access->registry->recordIdentity(pair.first, pair.second, iekListCorrespondence, 0);
                     changed = true;
@@ -205,7 +281,8 @@ public:
             }
             for (const auto& fill : plan.fills) {
                 for (const auto& source : fill.sources) {
-                    access->appendTailMember(fill.owner, source); changed = true;
+                    auto member = access->appendTailMember(fill.owner, source);
+                    inherit(member); evidence->inherit(member, source); changed = true;
                 }
                 changed |= access->finishTail(fill.owner, fill.close, fill.extent);
             }
@@ -270,6 +347,7 @@ public:
 class ProteusAccess : public GraphAccess<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusCompletion> completion_;
+    std::shared_ptr<ProteusStreamEvidence> evidence_;
     static Edge<POVNode> direct(std::string label, Query<POVNode> query,
                                 bool alternative = false, Cost remainingVisits = 0) {
         return {std::move(label), {1, 0}, alternative, [query] { return query; },
@@ -278,19 +356,27 @@ class ProteusAccess : public GraphAccess<POVNode> {
 public:
     explicit ProteusAccess(std::shared_ptr<ProteusGraphAccess> access)
         : access_(std::move(access)),
-          completion_(std::make_shared<ProteusCompletion>(access_)) {}
-    void invalidateCompletion() override { completion_->invalidate(); }
+          completion_(std::make_shared<ProteusCompletion>(access_)),
+          evidence_(std::make_shared<ProteusStreamEvidence>(access_)) {}
+    void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); }
     std::vector<std::function<void()>> takeEffects() override { return completion_->takeEffects(); }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
         if (query.kind == listCorrespondence)
-            return std::make_shared<ProteusCorrespondenceGoal>(query, access_);
+            return std::make_shared<ProteusCorrespondenceGoal>(query, access_, evidence_);
         if (query.kind == concatField)
             return std::make_shared<ProteusConcatGoal>(query, access_);
         if (query.kind == selectIntersection)
             return std::make_shared<ProteusSelectionGoal>(query, access_);
-        return std::make_shared<ProteusGoal>(query, access_, completion_);
+        return std::make_shared<ProteusGoal>(query, access_, completion_, evidence_);
     }
     Expansion<POVNode> expand(const Query<POVNode>& query) override {
+        bool pending = evidence_->pending(query.node);
+        auto result = expandSemantic(query);
+        result.deferred = result.deferred || pending;
+        return result;
+    }
+private:
+    Expansion<POVNode> expandSemantic(const Query<POVNode>& query) {
         Expansion<POVNode> result;
         auto node = query.node;
         if ((query.kind == itemAt || query.kind == physicalItemAt) && access_->inputPending(node)) {
@@ -379,19 +465,19 @@ public:
             query.kind == correspondenceLeave) {
             auto context = query.context;
             auto continuation = [&](const POVNode& current) {
-                if (auto next = access_->next(current))
+                if (auto next = access_->spanNext(current))
                     return Query<POVNode>{next, correspondenceMember, query.argument, query.related, context};
                 auto owner = context.back(); context.pop_back();
                 return Query<POVNode>{owner, correspondenceLeave, query.argument, query.related, context};
             };
             if (query.kind == correspondenceEnter) {
-                if (!access_->physicalList(node) || !access_->orderedList(node)) {
+                if (!access_->spanList(node) || !access_->orderedList(node)) {
                     result.deferred = true; return result;
                 }
                 for (const auto& ancestor : context) if (access_->sameInfon(node, ancestor)) {
                     result.deferred = true; return result;
                 }
-                if (auto first = access_->first(node)) {
+                if (auto first = access_->spanFirst(node)) {
                     context.push_back(node);
                     result.edges.push_back(direct("first span member",
                         {first, correspondenceMember, query.argument, query.related, context}));
@@ -457,7 +543,8 @@ public:
             auto relationship = [&](const POVNode& source, const char* label) {
                 if (access_->inputPending(source)) {
                     result.refinements.push_back({{source, query.kind, 0}, {1, 0}, "await RHS input", false});
-                    result.deferred = true; return;
+                    result.deferred = true;
+                    if (!access_->prefixList(source)) return;
                 }
                 if (!access_->relationSupported(node, source, query.kind)) {
                     if (access_->canSelect(source))
