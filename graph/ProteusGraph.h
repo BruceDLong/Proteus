@@ -16,7 +16,8 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               concatField = 14, concatMember = 15, concatEnd = 16,
               selectIntersection = 17, selectionMember = 18, selectionFound = 19,
               selectionExtentMember = 20, selectionExtentEnd = 21,
-              typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27 };
+              typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27,
+              selectRelative = 28, relativeItem = 29 };
 
 inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
     auto phase = query.kind == correspondenceEnter ? ListPhase::enter :
@@ -439,7 +440,57 @@ public:
     bool symbolic() const override { return !verified_; }
 };
 
+// Contextual reference evidence, not additional adjacency. Keep the syntax's
+// consuming occurrence after lowering the cursor, including inverse identity
+// visits. One shared cursor expression cannot silently acquire two contexts.
+class ProteusRelativePositions {
+    struct Binding { POVNode anchor, selected; std::weak_ptr<POV> expression; };
+    using Key = std::weak_ptr<infonView>;
+    std::map<Key, Binding, std::owner_less<Key>> bindings_;
+public:
+    POVNode anchor(const POVNode& node, const POVNode& proposed) const {
+        auto found = bindings_.find(node->pItem);
+        if (found == bindings_.end()) return proposed ? proposed : node;
+        if (node != found->second.expression.lock() || (proposed && proposed != found->second.anchor))
+            throw std::runtime_error("relative cursor used in different occurrence contexts");
+        return found->second.anchor;
+    }
+    bool bind(const POVNode& node, const POVNode& anchor, const POVNode& selected) {
+        auto found = bindings_.find(node->pItem);
+        if (found != bindings_.end()) {
+            if (found->second.anchor != anchor || found->second.selected != selected)
+                throw std::runtime_error("relative position changed after binding");
+            return false;
+        }
+        bindings_.emplace(node->pItem, Binding{anchor, selected, node}); return true;
+    }
+};
+
+class ProteusRelativeGoal : public GoalSpec<POVNode> {
+    std::shared_ptr<ProteusGraphAccess> access_;
+    std::shared_ptr<ProteusRelativePositions> positions_;
+    bool verified_ = false;
+public:
+    ProteusRelativeGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access,
+                        std::shared_ptr<ProteusRelativePositions> positions)
+        : GoalSpec<POVNode>(query), access_(std::move(access)), positions_(std::move(positions)) {}
+    void beginPass() override { verified_ = false; }
+    std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
+        if (visit.query.kind != itemFound) return {};
+        verified_ = true;
+        auto access = access_; auto positions = positions_;
+        auto owner = request.node, anchor = request.related, selected = visit.query.node;
+        return {{"Set relative position identity", [access, positions, owner, anchor, selected] {
+            bool changed = positions->bind(owner, anchor, selected);
+            return access->applyRelative(owner, selected) || changed;
+        }, {0, access->hasDirectIdentity(owner, selected) ? 0u : 1u}}};
+    }
+    bool satisfied() const override { return verified_; }
+    bool symbolic() const override { return !verified_; }
+};
+
 class ProteusAccess : public GraphAccess<POVNode> {
+    std::shared_ptr<ProteusRelativePositions> positions_ = std::make_shared<ProteusRelativePositions>();
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusCompletion> completion_;
     std::shared_ptr<ProteusStreamEvidence> evidence_;
@@ -463,6 +514,8 @@ public:
     void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); definitions_->prune(); }
     std::vector<std::function<void()>> takeEffects() override { return completion_->takeEffects(); }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
+        if (query.kind == selectRelative)
+            return std::make_shared<ProteusRelativeGoal>(query, access_, positions_);
         if (query.kind == groupedList)
             return std::make_shared<ProteusGroupedListGoal>(query, access_, definitions_, completion_);
         if (query.kind == assessRepresentation)
@@ -528,6 +581,27 @@ private:
         }
         if (query.kind == itemFound || query.kind == listEnd || query.kind == correspondenceEnd || query.kind == concatEnd || query.kind == selectionFound)
             return result;
+        if (query.kind == selectRelative) {
+            result.edges.push_back(direct("relative occurrence", {query.related, relativeItem, query.argument}));
+            return result;
+        }
+        if (query.kind == relativeItem) {
+            // Physical links and virtual coordinates describe the same relation.
+            // Embedded spans need a logical boundary walk, so remain visible as
+            // deferred demands until that route is supported.
+            if (auto owner = definitions_->retainedOccurrenceOwner(node)) {
+                auto index = description.occurrenceIndex();
+                auto extent = access_->listExtent(owner);
+                if (index >= 0 && index < extent &&
+                    (query.argument < 0 ? index > 0 : index < extent - 1))
+                    result.edges.push_back(direct("relative sparse coordinate", {owner, itemAt, index + query.argument}));
+            } else if (auto neighbor = description.adjacent(query.argument < 0)) {
+                if (!access_->subList(node) && !access_->subList(neighbor))
+                    result.edges.push_back(direct("adjacent occurrence", {neighbor, itemFound, 0}));
+                else result.deferred = true;
+            } else result.deferred = true;
+            return result;
+        }
         if (query.kind == selectIntersection) {
             if (!access_->canSelect(node)) { result.deferred = true; return result; }
             result.edges.push_back(sequence(POVDescription::boundary(access_->selectionSource(node)->value),
@@ -585,13 +659,14 @@ private:
         if (query.kind == concatField) {
             if (!access_->hasConcat(node, query.argument)) { result.deferred = true; return result; }
             result.edges.push_back(sequence(POVDescription::boundary(access_->concatSource(node, query.argument)),
-                {node, concatMember, query.argument, node}, {node, concatEnd, query.argument, node}));
+                {node, concatMember, query.argument, node, query.context}, {node, concatEnd, query.argument, node}));
             return result;
         }
         if (query.kind == concatMember) {
-            result.refinements.push_back({{node, valueOnly, 0}, {0, 0}, "resolve operand value", false});
+            auto context = query.context.empty() ? std::vector<POVNode>{query.related} : query.context;
+            result.refinements.push_back({{node, valueOnly, 0, {}, context}, {0, 0}, "resolve operand value", false});
             if (access_->concatNeedsRadix(node))
-                result.refinements.push_back({{node, sizeOnly, 0}, {0, 0}, "resolve numeric radix", false});
+                result.refinements.push_back({{node, sizeOnly, 0, {}, context}, {0, 0}, "resolve numeric radix", false});
             result.edges.push_back(sequence(description.adjacent(), query,
                 {query.related, concatEnd, query.argument, query.related}));
             return result;
@@ -649,14 +724,19 @@ private:
                 result.deferred = !definitions_->registered(node); return result;
             }
             result.deferred = !access_->supports(node, query.kind);
+            if (auto direction = access_->relativeDirection(node)) {
+                auto anchor = positions_->anchor(node, query.context.empty() ? POVNode{} : query.context.front());
+                result.refinements.push_back({{node, selectRelative, direction, anchor}, {0, 0},
+                    "resolve relative position", false});
+            }
             if (definitions_->required(node))
                 result.refinements.push_back({{node, typeRequirements, 0}, {1, 0}, "validate type and member requirements", false});
             if (access_->canSelect(node))
                 result.refinements.push_back({{node, selectIntersection, 0}, {0, 0}, "find intersection result", false});
             if (access_->hasConcat(node, 1))
-                result.refinements.push_back({{node, concatField, 1}, {0, 0}, "resolve size expression", false});
+                result.refinements.push_back({{node, concatField, 1, {}, query.context}, {0, 0}, "resolve size expression", false});
             if (access_->hasConcat(node, 2))
-                result.refinements.push_back({{node, concatField, 2}, {0, 0}, "resolve value expression", false});
+                result.refinements.push_back({{node, concatField, 2, {}, query.context}, {0, 0}, "resolve value expression", false});
             if (access_->physicalList(node)) {
                 if (query.kind != sizeOnly || !(access_->known(node) & sizeOnly))
                     result.refinements.push_back({{node, listContents, query.kind}, {0, 0},
@@ -671,9 +751,11 @@ private:
             // Keep the original demand endpoint across unresolved RHSs, so
             // a discovered list supplies correspondence directly to that goal.
             auto origin = query.related ? query.related : node;
-            auto relationship = [&](const POVNode& source, const char* label) {
+            auto relationship = [&](const POVNode& source, const char* label, bool isWork) {
+                auto context = isWork ? (query.context.empty() ? std::vector<POVNode>{node} : query.context)
+                                      : std::vector<POVNode>{};
                 if (access_->inputPending(source)) {
-                    result.refinements.push_back({{source, query.kind, 0}, {1, 0}, "await RHS input", false});
+                    result.refinements.push_back({{source, query.kind, 0, {}, context}, {1, 0}, "await RHS input", false});
                     result.deferred = true;
                     if (!access_->prefixList(source)) return;
                 }
@@ -682,11 +764,11 @@ private:
                         result.edges.push_back(direct("checked type evidence", {source, query.kind, 0, origin}));
                     if (access_->canSelect(source))
                         result.refinements.push_back({{source, selectIntersection, 0}, {1, 0}, "find RHS intersection result", false});
-                    if (access_->hasConcat(source, 1) || access_->hasConcat(source, 2))
-                        result.refinements.push_back({{source, query.kind, 0}, {1, 0}, "resolve expression RHS", false});
+                    if (access_->relativeDirection(source) || access_->hasConcat(source, 1) || access_->hasConcat(source, 2))
+                        result.refinements.push_back({{source, query.kind, 0, {}, context}, {1, 0}, "resolve expression RHS", false});
                     result.deferred = true; return;
                 }
-                result.edges.push_back(direct(label, {source, query.kind, 0, origin}));
+                result.edges.push_back(direct(label, {source, query.kind, 0, origin, context}));
                 if (query.kind != sizeOnly && access_->correspondingLists(origin, source))
                     result.refinements.push_back({{origin, listCorrespondence, query.kind, source},
                         {1, 0}, "match list RHS members", false});
@@ -698,7 +780,7 @@ private:
                         "map repeated groups to source spans", false});
                     continue;
                 }
-                relationship(source, relation.isWork() ? "work-list constraint" : "registry identity");
+                relationship(source, relation.isWork() ? "work-list constraint" : "registry identity", relation.isWork());
                 if (relation.isWork() && query.kind == sizeAndValue)
                     result.refinements.push_back({{node, assessRepresentation, 0, source}, {0, 0},
                         "assess represented RHS", false});

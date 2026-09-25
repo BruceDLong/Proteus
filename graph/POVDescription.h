@@ -36,6 +36,8 @@ public:
     bool hasVirtualMembers() const { return node_->hasSparseOrderedSpanValue(); }
     std::int64_t virtualExtent() const { return node_->sparseSpanCount(); }
     POVNode existingOccurrence(std::int64_t index) const { return node_->findImplicitItemPOV(index); }
+    POV* occurrenceSource() const { return node_->implicitItem.sourcePov; }
+    std::int64_t occurrenceIndex() const { return node_->implicitItem.sourceIndex; }
     const std::vector<POVNode>& work() const { return node_->pItem->wrkList; }
     std::vector<Relationship> relationships(bool includeWork = true) const {
         std::vector<Relationship> result;

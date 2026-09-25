@@ -90,6 +90,11 @@ public:
         return entry.body;
     }
     void retainOccurrenceOwner(const POVNode& owner) { occurrenceOwners_.insert(owner); }
+    POVNode retainedOccurrenceOwner(const POVNode& node) const {
+        auto source = POVDescription(node).occurrenceSource();
+        for (const auto& owner : occurrenceOwners_) if (owner.get() == source) return owner;
+        return {};
+    }
     bool required(const POVNode& node) const {
         return access_->hasTypeRequirements(node) || access_->memberTemplate(node) || access_->occurrenceOwner(node);
     }

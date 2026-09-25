@@ -38,6 +38,10 @@ runtime's synchronization boundary. Keep one manager per shared semantic context
 normalization handle's result is the original target. Ordinary query, load, and
 test normalization now enter through Agent's graph context.
 
+Structural `%prev` and `%next` now use graph position goals, followed by ordinary
+identity traversal. See [relative-position-results.md](relative-position-results.md)
+for supported contexts, sparse lookup, partial results and deferred boundaries.
+
 ## Responsibilities
 
 | Component | Responsibility |
