@@ -100,7 +100,7 @@ struct GraphListMeasure {
                     member!.pItem!.infSize!.num.getDenominator()==1){
                 count <+- member!.pItem!.infSize!.num
             }else{known <- false}
-        }else if(member!.pItem!.itmMode==mItem){count <+- 1}
+        }else if(member!.pItem!.itmMode==mItem or member!.pItem!.itmMode==mWordDefn){count <+- 1}
         else{known <- false}
     }
 }
@@ -127,6 +127,42 @@ struct GraphConcatPlan {
     me bool: open <- false
     me uint64: creations <- 0
     me uint64: visits <- 0
+}
+
+// Scalar requirements compiled from read-only definition bodies. Unknown
+// fields are unconstrained; named types are separate graph obligations.
+struct GraphTypeFacts {
+    me bool: valid <- false
+    me int: overlay <- -1
+    me bool: hasSize <- false
+    me bool: explicitSize <- false
+    me FlexNum: size
+    me bool: hasValue <- false
+    me FlexNum: number
+    me string: text
+    me bool: same(me GraphTypeFacts: other) <- {
+        return(valid==other.valid and overlay==other.overlay and hasSize==other.hasSize and
+               explicitSize==other.explicitSize and
+               (!hasSize or size==other.size) and hasValue==other.hasValue and
+               (!hasValue or (number==other.number and text==other.text)))
+    }
+    me bool: combine(me GraphTypeFacts: other) <- {
+        if(!other.valid){return(false)}
+        if(overlay>=0 and other.overlay>=0 and overlay!=other.overlay){return(false)}
+        if(hasSize and other.hasSize and size!=other.size){return(false)}
+        if(hasValue and other.hasValue and (number!=other.number or text!=other.text)){return(false)}
+        explicitSize <- explicitSize or other.explicitSize
+        if(other.overlay>=0){overlay <- other.overlay}
+        if(other.hasSize){hasSize <- true; size <- other.size}
+        if(other.hasValue){hasValue <- true; number <- other.number; text <- other.text}
+        valid <- true
+        return(true)
+    }
+    me bool: accepts(me GraphTypeFacts: actual) <- {
+        return(actual.valid and (overlay<0 or overlay==actual.overlay) and
+               (!hasSize or (actual.hasSize and actual.size==size)) and
+               (!hasValue or (actual.hasValue and actual.number==number and actual.text==text)))
+    }
 }
 
 // Bits in a demand: 1=size, 2=value including its overlay type. A value is
@@ -177,7 +213,8 @@ struct ProteusGraphAccess {
         if(pov==NULL or pov!.pItem==NULL or (inputPending(pov) and !readingPrefix)){return(false)}
         our infonView: inf <- pov!.pItem
         return((inf!.viewMode==vmOverlay or (inf!.viewMode==vmAny and unknownOverlay(pov))) and !inf!.invertMatch and
-               !inf!.isTentative and inf!.type==NULL and inf!.addedTypes.isEmpty() and
+               !inf!.isTentative and
+               ((inf!.type==NULL and inf!.addedTypes.isEmpty()) or scalarTypeShape(pov)) and
                (inf!.innr==NULL or selection) and inf!.proxy==NULL and inf!.partRef==NULL and
                inf!.parts.isEmpty() and inf!.funcArgs==NULL and
                (inf!.itmMode==mNone or inf!.itmMode==mItem) and
@@ -190,6 +227,82 @@ struct ProteusGraphAccess {
                !pov!.looseType() and pov!.accessMode==aCopyOf and
                !pov!.selectorLocalWork and !pov!.viewMapWriteEnabled and
                pov!.viewMap.sourcePov==NULL and pov!.referenceAlias.sourcePov==NULL)
+    }
+    // This permits reading scalar fields, not skipping their named-type
+    // obligations. Graph access always exposes a required type goal as well.
+    me bool: scalarTypeShape(our POV: pov) <- {
+        return((pov!.pItem!.value!.overlayType==NUM or pov!.pItem!.value!.overlayType==STR or unknownOverlay(pov)) and
+               (pov!.pItem!.value!.evalMode==emUnknown or pov!.pItem!.value!.evalMode==emLiteral))
+    }
+    me bool: hasTypeRequirements(our POV: pov) <- {
+        return(pov!.pItem!.type!=NULL or !pov!.pItem!.addedTypes.isEmpty())
+    }
+    me List<string>: typeNames(our POV: pov) <- {
+        me List<string>: names
+        if(pov!.pItem!.type!=NULL){names.append(pov!.pItem!.type!.typeID())}
+        withEach extra in pov!.pItem!.addedTypes{names.append(extra!.typeID())}
+        return(names)
+    }
+    me bool: isDefinition(our POV: pov) <- {return(pov!.pItem!.itmMode==mWordDefn)}
+    me bool: definitionReady(our POV: pov) <- {
+        return(isDefinition(pov) and !inputPending(pov) and pov!.pItem!.graphParseError=="" and
+               pov!.pItem!.definedWord!=NULL and pov!.pItem!.definedWord!.UsageTags.isEmpty() and
+               pov!.pItem!.funcArgs!=NULL)
+    }
+    me string: definitionName(our POV: pov) <- {
+        return(unicodeMgr.normalizeStr(pov!.pItem!.definedWord!.defWord))
+    }
+    our POV: definitionBody(our POV: declaration) <- {
+        our POV:: body{910}
+        body!.pItem <- declaration!.pItem!.funcArgs
+        body!.pParent <- declaration
+        bind(body)
+        return(body)
+    }
+    me GraphTypeFacts: typeFacts(our POV: pov) <- {
+        me GraphTypeFacts: facts
+        if(!plain(pov) or !scalarTypeShape(pov) or
+                pov!.pItem!.value!.sizeMode==fromContext or
+                pov!.pItem!.infSize!.overlayType!=NUM){return(facts)}
+        facts.valid <- true
+        facts.explicitSize <- pov!.pItem!.value!.sizeMode==fromGiven
+        if(!unknownOverlay(pov)){facts.overlay <- pov!.pItem!.value!.overlayType}
+        facts.hasSize <- pov!.pItem!.infSize!.evalMode==emLiteral
+        if(facts.hasSize){facts.size <- pov!.pItem!.infSize!.num}
+        facts.hasValue <- pov!.pItem!.value!.evalMode==emLiteral
+        if(facts.hasValue){
+            if(facts.overlay==NUM){facts.number <- pov!.pItem!.value!.num}
+            else{facts.text <- pov!.pItem!.value!.str}
+        }
+        return(facts)
+    }
+    me bool: applyTypeFacts(our POV: target, me GraphTypeFacts: required) <- {
+        me GraphTypeFacts: actual <- typeFacts(target)
+        if(!actual.valid){return(false)}
+        me GraphTypeFacts: combined <- actual
+        if(!combined.combine(required)){return(false)}
+        me bool: changed <- false
+        if(actual.overlay<0 and required.overlay>=0){
+            target!.pItem!.value!.overlayType <- required.overlay
+            target!.pItem!.viewMode <- vmOverlay
+            changed <- true
+        }
+        if(!actual.hasSize and required.hasSize){
+            target!.pItem!.infSize!.evalMode <- emLiteral
+            target!.pItem!.infSize!.num <- required.size
+            changed <- true
+        }
+        if(!actual.hasValue and required.hasValue){
+            target!.pItem!.value!.evalMode <- emLiteral
+            if(required.overlay==NUM){target!.pItem!.value!.num <- required.number}
+            else{target!.pItem!.value!.str <- required.text}
+            changed <- true
+        }
+        // Preserve a learned explicit size in normal output. Otherwise, e.g.
+        // *16+10 would print as 10 and reparse with a different numeric size.
+        if(changed and required.explicitSize){target!.pItem!.value!.sizeMode <- fromGiven}
+        if(changed){target!.workRevision <+- 1; target!.pItem!.isNormed <- false}
+        return(changed)
     }
     me bool: scalar(our POV: pov) <- {
         if(!plain(pov)){return(false)}
@@ -272,7 +385,8 @@ struct ProteusGraphAccess {
     // The list goal has also checked extent and all required member goals.
     void: setNormed(our POV: pov, me bool: complete) <- {
         if(pov!=NULL and pov!.pItem!=NULL){
-            pov!.pItem!.isNormed <- complete and (scalar(pov) or closedPhysicalList(pov)) and known(pov)==3
+            pov!.pItem!.isNormed <- complete and (definitionReady(pov) or
+                    ((scalar(pov) or closedPhysicalList(pov)) and known(pov)==3))
         }
     }
     // Unsupported semantics stay symbolic. This deliberately does not infer
@@ -388,7 +502,8 @@ struct ProteusGraphAccess {
         if(!inputPending(target) and !inputPending(source) and target!.pItem!.infSize!.evalMode==emLiteral and
                 source!.pItem!.infSize!.evalMode==emLiteral and
                 target!.pItem!.infSize!.num!=source!.pItem!.infSize!.num){return(0)}
-        // supports() has excluded references, polarity, types, and expressions.
+        // supports() excludes references, polarity, and unsupported expressions.
+        // Named scalar types have independent required validation goals.
         // Unknown fields impose no literal equality test in this subset.
         if(scalar(target) and target!.pItem!.value!.evalMode==emLiteral and
                 source!.pItem!.value!.evalMode==emLiteral){

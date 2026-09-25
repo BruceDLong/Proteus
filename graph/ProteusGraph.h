@@ -13,7 +13,10 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               correspondenceMember = 12, correspondenceLeave = 13,
               concatField = 14, concatMember = 15, concatEnd = 16,
               selectIntersection = 17, selectionMember = 18, selectionFound = 19,
-              selectionExtentMember = 20, selectionExtentEnd = 21 };
+              selectionExtentMember = 20, selectionExtentEnd = 21,
+              typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25 };
+
+#include "DefinitionApplications.h"
 
 // Early correspondence is conditional on the parser retaining the ordered
 // list body. Weak provenance witnesses neither copy nodes nor own a second
@@ -120,14 +123,16 @@ class ProteusGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusCompletion> completion_;
     std::shared_ptr<ProteusStreamEvidence> evidence_;
+    std::shared_ptr<ProteusDefinitions> definitions_;
     POVNode selected_;
     bool deferred_ = false, reachedEnd_ = false;
     GraphListMeasure measure_;
 public:
     ProteusGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access,
-                std::shared_ptr<ProteusCompletion> completion, std::shared_ptr<ProteusStreamEvidence> evidence)
+                std::shared_ptr<ProteusCompletion> completion, std::shared_ptr<ProteusStreamEvidence> evidence,
+                std::shared_ptr<ProteusDefinitions> definitions)
         : GoalSpec<POVNode>(query), access_(std::move(access)),
-          completion_(std::move(completion)), evidence_(std::move(evidence)) {}
+          completion_(std::move(completion)), evidence_(std::move(evidence)), definitions_(std::move(definitions)) {}
     void beginPass() override {
         deferred_ = false;
         reachedEnd_ = false;
@@ -145,6 +150,12 @@ public:
         if (!error.empty()) throw std::runtime_error(error);
         if (access_->inputPending(visit.query.node) && request.kind != listContents &&
             !access_->prefixList(visit.query.node)) return {};
+        if (request.kind != listContents && access_->isDefinition(visit.query.node)) {
+            if (visit.query.node != request.node || request.kind != sizeAndValue ||
+                !access_->definitionReady(request.node) || definitions_->registered(request.node)) return {};
+            auto definitions = definitions_; auto node = request.node;
+            return {{"Register definition", [definitions, node] { return definitions->publish(node); }, {0, 1}}};
+        }
         if (request.kind == listContents) {
             if (visit.query.kind == listMember) measure_.add(visit.query.node);
             if (visit.query.kind != listEnd) return {};
@@ -180,14 +191,16 @@ public:
             if (!verdict) { deferred_ = true; return {}; }
         }
         auto access = access_;
-        auto evidence = evidence_;
-        return {{"Set requested size/value/type", [access, evidence, target, source, demand] {
+        auto evidence = evidence_; auto definitions = definitions_;
+        return {{"Set requested size/value/type", [access, evidence, definitions, target, source, demand] {
             bool changed = access->apply(target, source, demand);
             if (changed) evidence->inherit(target, source);
-            return changed;
+            return definitions->inherit(target, source) || changed;
         }}};
     }
     bool satisfied() const override {
+        if (request.kind == sizeAndValue && access_->isDefinition(request.node))
+            return definitions_->registered(request.node);
         if (request.kind == listContents)
             return reachedEnd_ && access_->listExtentAgrees(request.node, measure_);
         if (request.kind == itemAt) return bool(selected_);
@@ -348,6 +361,7 @@ class ProteusAccess : public GraphAccess<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusCompletion> completion_;
     std::shared_ptr<ProteusStreamEvidence> evidence_;
+    std::shared_ptr<ProteusDefinitions> definitions_;
     static Edge<POVNode> direct(std::string label, Query<POVNode> query,
                                 bool alternative = false, Cost remainingVisits = 0) {
         return {std::move(label), {1, 0}, alternative, [query] { return query; },
@@ -357,17 +371,20 @@ public:
     explicit ProteusAccess(std::shared_ptr<ProteusGraphAccess> access)
         : access_(std::move(access)),
           completion_(std::make_shared<ProteusCompletion>(access_)),
-          evidence_(std::make_shared<ProteusStreamEvidence>(access_)) {}
-    void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); }
+          evidence_(std::make_shared<ProteusStreamEvidence>(access_)),
+          definitions_(std::make_shared<ProteusDefinitions>(access_)) {}
+    void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); definitions_->prune(); }
     std::vector<std::function<void()>> takeEffects() override { return completion_->takeEffects(); }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
+        if (query.kind == typeRequirements)
+            return std::make_shared<ProteusTypeGoal>(query, definitions_);
         if (query.kind == listCorrespondence)
             return std::make_shared<ProteusCorrespondenceGoal>(query, access_, evidence_);
         if (query.kind == concatField)
             return std::make_shared<ProteusConcatGoal>(query, access_);
         if (query.kind == selectIntersection)
             return std::make_shared<ProteusSelectionGoal>(query, access_);
-        return std::make_shared<ProteusGoal>(query, access_, completion_, evidence_);
+        return std::make_shared<ProteusGoal>(query, access_, completion_, evidence_, definitions_);
     }
     Expansion<POVNode> expand(const Query<POVNode>& query) override {
         bool pending = evidence_->pending(query.node);
@@ -379,6 +396,40 @@ private:
     Expansion<POVNode> expandSemantic(const Query<POVNode>& query) {
         Expansion<POVNode> result;
         auto node = query.node;
+        if (query.kind == typeRequirements) {
+            if (!definitions_->saved(node))
+                result.edges.push_back(direct("inspect type definitions", {node, definitionEnter, 0, node}));
+            return result;
+        }
+        if (query.kind == definitionEnd) return result;
+        if (query.kind == definitionEnter || query.kind == definitionLeave) {
+            auto context = query.context;
+            if (query.kind == definitionEnter) {
+                for (const auto& ancestor : context) if (access_->sameInfon(ancestor, node)) {
+                    result.deferred = true; return result;
+                }
+                std::vector<POVNode> children;
+                if (!definitions_->children(node, query.related, children)) {
+                    result.deferred = true; return result;
+                }
+                if (!children.empty()) {
+                    context.push_back(node);
+                    result.edges.push_back(direct("definition constraint", {children.front(), definitionEnter, 0, query.related, context}));
+                } else result.edges.push_back(direct("definition boundary", {node, definitionLeave, 0, query.related, context}));
+            } else if (context.empty()) {
+                result.edges.push_back(direct("type requirements available", {query.related, definitionEnd, 0}));
+            } else {
+                auto parent = context.back(); context.pop_back();
+                std::vector<POVNode> children;
+                if (!definitions_->children(parent, query.related, children)) { result.deferred = true; return result; }
+                auto current = std::find(children.begin(), children.end(), node);
+                if (current != children.end() && ++current != children.end()) {
+                    context.push_back(parent);
+                    result.edges.push_back(direct("next definition constraint", {*current, definitionEnter, 0, query.related, context}));
+                } else result.edges.push_back(direct("leave definition", {parent, definitionLeave, 0, query.related, context}));
+            }
+            return result;
+        }
         if ((query.kind == itemAt || query.kind == physicalItemAt) && access_->inputPending(node)) {
             result.deferred = true; return result;
         }
@@ -525,7 +576,12 @@ private:
                         "visit published stream members", false});
                 return result;
             }
+            if (access_->isDefinition(node)) {
+                result.deferred = !definitions_->registered(node); return result;
+            }
             result.deferred = !access_->supports(node, query.kind);
+            if (access_->hasTypeRequirements(node))
+                result.refinements.push_back({{node, typeRequirements, 0}, {1, 0}, "validate named types", false});
             if (access_->canSelect(node))
                 result.refinements.push_back({{node, selectIntersection, 0}, {0, 0}, "find intersection result", false});
             if (access_->hasConcat(node, 1))

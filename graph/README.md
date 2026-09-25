@@ -248,6 +248,44 @@ The parser now initializes the outer size as unknown when it moves the inner
 extent into `innr`; clearing only the payload previously left a stale literal
 flag. Selecting a result preserves actual outer size constraints.
 
+## Definitions and scalar type applications
+
+`DefinitionApplications.h` owns a definition catalogue and reusable type evidence
+inside each graph context. Normalizing a declaration registers its existing
+`funcArgs` body through a single POV; registration does not normalize or copy
+that body. A declaration counts as one list item, and its completion means
+registration succeeded, not that its meaning has a concrete value.
+
+A named scalar contributes a required `typeRequirements` goal. Read-only graph
+edges traverse its unique definition, aliases, additional type names, and the
+body's existing RHS constraints. The complete supported walk compiles the
+available size, value, and overlay requirements. Its GoalSpec offers one Set
+that checks compatibility and fills only missing fields on the use. Definitions
+create no RHS entries on an occurrence. Existing target constraints and type
+names are preserved. Bare parser-created names begin with unknown size; an
+explicit zero size remains a real constraint.
+
+The catalogue admits exact, Unicode-normalized, untagged names in this first
+slice. Multiple declarations for one name stay ambiguous; they are neither
+merged as conjunctions nor resolved by choosing the cheaper meaning. Missing
+names retain subscriptions and can resume when another normalization registers
+the definition. Cycles, context-dependent meanings, and structured bodies stay
+symbolic. Catalogue publication uses the existing graph revision/locking path.
+It does not populate the legacy global `ModelManager`.
+
+A successful scalar application records its bindings, definition witnesses,
+and required facts separately from `isNormed`. Re-normalization and unrelated
+graph revisions reuse that certificate while its witnesses remain valid. These
+constraints are context-free, so another POV of the same infon can reuse it.
+Copies can inherit it only when the destination actually has all its supporting
+facts. A partial size copy cannot inherit a certificate requiring a missing
+value. Added requirements, changed bodies, or changed name bindings force fresh
+validation. Future contextual types must include binding context in this reuse
+rule. Witness checks still cost work; this is not constant-time validation.
+
+See [definition-results.md](definition-results.md) for validation and the next
+boundary: finite list definitions, then lazy member templates and records.
+
 ## Lifecycle and publication
 
 - `waitForCompletion()` waits for current quiescence, failure, or cancellation,
@@ -327,13 +365,13 @@ not yet roll them back or replan the changed interpretation. Producer revisions
 resume subscribed searches, and cancellation preserves the last partial result.
 See [growing-rhs-results.md](growing-rhs-results.md) for validation.
 
-Loose correspondence, typed/path streaming queries, and intersection/template
+Loose correspondence, path streaming queries, structured types, and intersection/template
 input traversal need further semantic work. Completed physical open lists
 continue to use the existing graph span/subscription behavior.
 
 ## Deliberate initial limits
 
-Supported normalization is strict, positive, untyped numeric/string scalar
+Supported normalization includes strict, positive numeric/string scalar
 constraints, with independent size/value/overlay-type acquisition, unresolved RHS
 chains, and registry identities. An unknown overlay (`tUnknown` or `tUnset`),
 including a plain `?` view, can acquire `NUM` or `STR`. The value demand includes
@@ -359,7 +397,7 @@ checked against its path before applying a batch. Size mismatches requiring
 richer semantics remain symbolic rather than being silently overwritten.
 
 Indexed access supports flat ordered physical lists and existing compressed
-repetition spans. Embedded-string correspondence, template normalization, nested indexed traversal, general intersection solving, word
+repetition spans. Embedded-string correspondence, template normalization, nested indexed traversal, general intersection solving, structured/contextual
 definitions, `%prev`/`%tPrev`, range algebra, tentative branch transactions,
 commutators and theorem discovery are not migrated.
 Unsupported work stays attached and visible as symbolic obligations. Existing
@@ -395,6 +433,7 @@ resolve:
 ```sh
 cd LocalBuild
 ./TestProteus -t unit/graphFoundation/
+./TestProteus -t unit/graphDefinitions/
 ```
 
 Use focused tests for the behavior being changed. The full legacy suite is
