@@ -108,14 +108,16 @@ private:
         std::vector<POVNode> members;
         if (!adopt) {
             if (!access->definitionOrderedCandidate(target->node) ||
-                (!access->physicalList(target->node) && !access->repeatedDefinitionList(target->node))) {
+                (!access->physicalList(target->node) && !access->templatePrefixList(target->node))) {
                 supported = false; return;
             }
             for (auto item = access->first(target->node); item; item = access->next(item)) {
                 if (!access->correspondingMembers(item, item)) { supported = false; return; }
                 members.push_back(item);
             }
-            if (open && !members.empty()) { supported = false; return; }
+            auto extent = actual; extent.combine(requirement->facts);
+            if (open && extent.hasSize && extent.size < static_cast<std::int64_t>(members.size()))
+                throw std::runtime_error("repeated definition prefix exceeds extent");
             if (!open) {
                 GraphTypeFacts count; count.valid = true; count.hasSize = true;
                 count.size = static_cast<std::int64_t>(members.size());
@@ -220,6 +222,9 @@ private:
 public:
     ProteusDefinitionPlan(std::shared_ptr<ProteusGraphAccess> access, const POVNode& target, const DefinitionSpec& requirement)
         : access_(std::move(access)) { prepare(place(target), requirement); }
+    // Deferred allocation clients can prepare a member before the priced Set
+    // creates its POV. All other slots and writes remain instance-local.
+    void bindTarget(const POVNode& node) { place({})->node = node; }
     bool satisfied() const { return supported && writes.empty(); }
     bool dataSatisfied() const { return supported && writes.size() == orderWrites; }
     bool apply() {

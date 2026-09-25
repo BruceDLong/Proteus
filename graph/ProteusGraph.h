@@ -15,10 +15,11 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               concatField = 14, concatMember = 15, concatEnd = 16,
               selectIntersection = 17, selectionMember = 18, selectionFound = 19,
               selectionExtentMember = 20, selectionExtentEnd = 21,
-              typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26 };
+              typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27 };
 
 #include "DefinitionApplications.h"
 #include "RHSRepresentation.h"
+#include "GroupedListPlan.h"
 
 // Early correspondence is conditional on the parser retaining the ordered
 // list body. Weak provenance witnesses neither copy nodes nor own a second
@@ -100,6 +101,10 @@ public:
         auto proof = std::make_shared<GraphRHSProof>(); proof->rhs = rhs;
         records.push_back(proof); represented_.push_back(proof);
     }
+    void representedTemplate(const POVNode& node, const POVNode& source) {
+        auto proof = std::make_shared<GraphRHSProof>(); proof->rhs = source;
+        node->pItem->representedTemplate = proof; represented_.push_back(proof);
+    }
     void reply(const POVNode& node) {
         if (!access_->replyReady(node)) return;
         auto origin = access_->replyOrigin(node);
@@ -154,6 +159,36 @@ public:
     bool satisfied() const override { return checked_; }
     bool symbolic() const override { return !checked_; }
     void settled(bool fullyResolved) override {
+        if (fullyResolved && represented_) completion_->represented(request.node, request.related);
+    }
+};
+
+class ProteusGroupedListGoal : public GoalSpec<POVNode> {
+    std::shared_ptr<ProteusGraphAccess> access_;
+    std::shared_ptr<ProteusDefinitions> definitions_;
+    std::shared_ptr<ProteusCompletion> completion_;
+    bool verified_ = false, represented_ = false;
+    POVNode template_;
+public:
+    ProteusGroupedListGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access,
+                          std::shared_ptr<ProteusDefinitions> definitions,
+                          std::shared_ptr<ProteusCompletion> completion)
+        : GoalSpec<POVNode>(query), access_(std::move(access)), definitions_(std::move(definitions)),
+          completion_(std::move(completion)) {}
+    void beginPass() override { verified_ = represented_ = false; template_.reset(); }
+    std::vector<SetCommand> found(const Visit<POVNode>&) override {
+        auto proof = definitions_->saved(request.node);
+        if (!proof) return {};
+        auto plan = std::make_shared<GroupedListPlan>(access_, request.node, request.related, proof->requirement);
+        if (!plan->supported) return {};
+        verified_ = plan->satisfied(); represented_ = plan->represented;
+        template_ = proof->requirement->templateSource;
+        return {{"Set grouped list correspondence", [plan] { return plan->apply(); }, plan->work}};
+    }
+    bool satisfied() const override { return verified_; }
+    bool symbolic() const override { return !verified_; }
+    void settled(bool fullyResolved) override {
+        if (fullyResolved && template_) completion_->representedTemplate(request.node, template_);
         if (fullyResolved && represented_) completion_->represented(request.node, request.related);
     }
 };
@@ -426,6 +461,8 @@ public:
     void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); definitions_->prune(); }
     std::vector<std::function<void()>> takeEffects() override { return completion_->takeEffects(); }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
+        if (query.kind == groupedList)
+            return std::make_shared<ProteusGroupedListGoal>(query, access_, definitions_, completion_);
         if (query.kind == assessRepresentation)
             return std::make_shared<ProteusRepresentationGoal>(query, access_, completion_);
         if (query.kind == typeRequirements)
@@ -448,7 +485,7 @@ private:
     Expansion<POVNode> expandSemantic(const Query<POVNode>& query) {
         Expansion<POVNode> result;
         auto node = query.node;
-        if (query.kind == assessRepresentation) return result;
+        if (query.kind == assessRepresentation || query.kind == groupedList) return result;
         if (query.kind == typeRequirements) {
             if (!definitions_->saved(node))
                 result.edges.push_back(direct("inspect type definitions", {node, definitionEnter, 0, node}));
@@ -646,9 +683,12 @@ private:
                     result.refinements.push_back({{node, listContents, query.kind}, {0, 0},
                         "inspect list contents", query.kind == sizeOnly});
             }
-            if (query.kind != sizeOnly && access_->repeatedDefinitionList(node))
+            if (query.kind != sizeOnly && access_->templatePrefixList(node)) {
+                for (auto member = access_->first(node); member; member = access_->next(member))
+                    result.refinements.push_back({{member, sizeAndValue, 0}, {1, 0}, "normalize template prefix member", false});
                 for (auto member : access_->demandedOccurrences(node))
                     result.refinements.push_back({{member, sizeAndValue, 0}, {1, 0}, "normalize demanded occurrence", false});
+            }
             // Keep the original demand endpoint across unresolved RHSs, so
             // a discovered list supplies correspondence directly to that goal.
             auto origin = query.related ? query.related : node;
@@ -673,6 +713,11 @@ private:
                         {1, 0}, "match list RHS members", false});
             };
             for (auto source : access_->workSources(node)) {
+                if (query.kind != sizeOnly && access_->wholeLooseRHS(source)) {
+                    result.refinements.push_back({{node, groupedList, 0, source}, {1, 0},
+                        "map repeated groups to source spans", false});
+                    continue;
+                }
                 relationship(source, "work-list constraint");
                 if (query.kind == sizeAndValue)
                     result.refinements.push_back({{node, assessRepresentation, 0, source}, {0, 0},

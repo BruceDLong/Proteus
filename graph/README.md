@@ -46,6 +46,7 @@ test normalization now enter through Agent's graph context.
 | `GraphFoundation.Lib.dog` | Public CodeDog API; Proteus graph access, compatibility checks and atomic Set batches |
 | `ProteusGraph.h` | Translate semantic access into graph edges and refinement opportunities; GoalSpec turns findings into Sets |
 | `SpanAlignment.h` | Plan finite ordered correspondence from opaque member/gap evidence; no POV access or mutation |
+| `GroupedListPlan.h` | Plan fixed-width repeated groups against whole ordered source spans; preserve occurrence identity |
 | `RHSRepresentation.h` | Prove which RHS facts are already represented, independently of complete normalization |
 | `IdentityRegistry` | Existing domain records, owned through the manager's Proteus adapter |
 
@@ -333,7 +334,7 @@ its source-list requirements. Existing closed finite instances receive the
 member constraint in place, and parent normalization revisits already-demanded
 occurrences. Untouched positions stay virtual even in a billion-item list.
 
-Open prefixes with templates, embedded repeated spans, unordered records,
+Prefixed definition bodies, embedded repeated spans, unordered records,
 contextual paths, computed definition expressions, and registry relationships
 inside shared bodies remain deferred. Multiple writable positions sharing the
 same list storage need a joint application plan and also remain deferred.
@@ -341,7 +342,41 @@ same list storage need a joint application plan and also remain deferred.
 See [definition-results.md](definition-results.md) for the scalar checkpoint,
 [finite-definition-results.md](finite-definition-results.md) for finite lists,
 and [lazy-template-results.md](lazy-template-results.md) for the template slice.
-Prefix/span mapping and record/field matching remain later boundaries.
+Loaded instance prefixes now receive template requirements in place. Their
+unrequested tail stays compressed. General sparse-tail indexing after a prefix
+and record/field matching remain later boundaries.
+
+## Fixed-width whole-list grouping
+
+`{{_ _}|...} == {1 2 3 4}` maps two result members (pairs) to four input
+members. The adapter advertises a `groupedList` goal for the whole loose RHS;
+it does not turn that RHS into a strict identity between the two containers.
+The source endpoint's value is inspected separately from its relationship flags.
+Other loose relationships remain unsupported.
+
+The definition walk supplies the read-only repeated member requirement.
+`GroupedListPlan.h` derives its nonzero fixed width, checks the source's loaded
+ordered layout and the target's group count, and prepares per-group definition
+plans. It validates every group's known facts before offering a Set. The graph
+manager prices visits, new member storage, and member identities before execution.
+The Set appends missing groups, reuses existing prefix POVs and already-demanded
+canonical occurrence POVs, applies the prepared fields, and records identities
+between matching scalar positions. It closes the finite target at its own
+member count. Neither shared templates nor source data are specialized.
+
+A complete group mapping is distinct from fully concrete normalization. Bare
+numbers can retain unknown sizes. At settlement, separate revision-scoped proofs
+suppress a represented template and RHS; the work edge and template remain
+searchable. New information invalidates that metadata and can still wake a
+subscription or expose a conflict through member identities.
+
+The first route accepts a repeated finite scalar group and an already-closed,
+ordered scalar source list (including finite embedded source spans). It also
+accepts existing target prefixes and prior sparse lookups. It defers text,
+variable-width/nested groups, `==:` prefix matching, unordered or root-constrained
+sources, and distinct occurrence views of the same logical index that require a
+joint alias plan. Size-only grouping and general virtual-tail navigation remain
+later routes. See [grouping-results.md](grouping-results.md).
 
 ## Lifecycle and publication
 

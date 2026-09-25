@@ -11,13 +11,16 @@ remain useful semantic examples for later migration, and can be run selectively.
 A full legacy-suite run is optional, not a gate for every change. Clearly report
 which behavior was checked and which features remain unsupported.
 
-Current checkpoint: scalar and finite ordered list definitions, plus homogeneous
-lazy member templates, use graph requirements and reusable evidence. Open
-template-prefix mapping and record matching remain later boundaries. Preserve read-only definition bodies and avoid redundant application
-RHSs. Redundant RHS rendering now has its own revision-scoped proof; keep work
-edges searchable and do not relax isNormed to hide unknown scalar sizes.
-Size and value should be acquired together when both are available;
-partial acquisition is for cases where only one is available.
+Current checkpoint: scalar/finite definitions, lazy member templates, and
+fixed-width whole-list grouping use graph requirements and priced plans.
+Loaded instance prefixes can be checked without expanding their virtual tails.
+Prefixed definition bodies, variable-width/text correspondence, and record
+matching remain later boundaries. Preserve read-only definition bodies,
+already-demanded occurrence POVs, and reusable type evidence; avoid redundant
+application RHSs. Redundant RHS/template rendering uses revision-scoped proofs;
+keep work edges searchable and do not relax isNormed to hide unknown sizes.
+Size and value should be acquired together when both are available; partial
+acquisition is for cases where only one is available.
 
 Agent.normalize() is the public graph entry point and returns a handle.
 Agent.normalizeAndWait() is the synchronous convenience. Each Agent owns a
