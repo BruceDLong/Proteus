@@ -22,7 +22,7 @@ class GroupedListPlan {
                 return (at.owners.empty() ? access_->groupingSource(at.node) :
                     (access_->closedPhysicalList(at.node) && access_->orderedList(at.node) &&
                      !access_->memberTemplate(at.node) && !access_->hasTypeRequirements(at.node) &&
-                     access_->workSources(at.node).empty())) && access_->inputError(at.node).empty();
+                     POVDescription(at.node).work().empty())) && access_->inputError(at.node).empty();
             return at.phase != ListPhase::member || access_->subList(at.node) ||
                 (access_->scalarCandidate(at.node) && !access_->hasTypeRequirements(at.node) &&
                  access_->typeFacts(at.node).valid && access_->inputError(at.node).empty());

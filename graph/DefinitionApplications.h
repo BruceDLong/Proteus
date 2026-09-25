@@ -55,7 +55,7 @@ private:
         auto raw = access_->definitionMembers(node); return {raw.begin(), raw.end()};
     }
     std::vector<POVNode> work(const POVNode& node) const {
-        auto raw = access_->workSources(node); return {raw.begin(), raw.end()};
+        return POVDescription(node).work();
     }
 public:
     explicit ProteusDefinitions(std::shared_ptr<ProteusGraphAccess> access) : access_(std::move(access)) {}
@@ -98,7 +98,7 @@ public:
         if (node != root && !access_->scalarTypeShape(node) && !listRequirement(node)) return false;
         // Registry constraints within a shared body need a read-only relation
         // protocol. Keep them visible as deferred work rather than ignoring them.
-        if (node != root && !access_->identitySources(node).empty()) return false;
+        if (node != root && !POVDescription(node, access_->registry.get()).relationships(false).empty()) return false;
         if (node != root && access_->definitionEmbedded(node) && access_->repeatedDefinitionList(node)) return false;
         auto add = [&](const POVNode& child) {
             if (std::find(result.begin(), result.end(), child) == result.end()) result.push_back(child);
@@ -190,7 +190,7 @@ public:
                 witness.names != names(witness.node) || witness.work != work(witness.node) ||
                 witness.list != listRequirement(witness.node) || witness.members != members(witness.node) ||
                 witness.embedded != access_->definitionEmbedded(witness.node) ||
-                witness.memberTemplate != memberTemplate(witness.node) || !access_->identitySources(witness.node).empty()) return false;
+                witness.memberTemplate != memberTemplate(witness.node) || !POVDescription(witness.node, access_->registry.get()).relationships(false).empty()) return false;
         }
         return true;
     }

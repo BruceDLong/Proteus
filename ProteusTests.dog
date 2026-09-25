@@ -1,6 +1,16 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphAdapter/structure
+    unit/graphAdapter/unresolvedWork
+    unit/graphAdapter/registryDirections
+    unit/graphAdapter/distinctRelationships
+    unit/graphAdapter/liveWorkAndStorage
+    unit/graphAdapter/viewContext
+    unit/graphAdapter/lateIdentity
+    unit/graphAdapter/sharedGoals
+    unit/graphAdapter/virtualMembers
+    unit/graphAdapter/newVirtualRoute
     unit/graphGrouping/pairs
     unit/graphGrouping/prefix
     unit/graphGrouping/embeddedSource
@@ -7875,6 +7885,122 @@ struct GLOBAL {
             withEach step in range 0 .. handle.stepCount(){print(handle.stepDescription(step)+"\n")}
         }
         handle.cancel(); normalizer.close()
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+// The adapter describes stored relationships independently of search goals.
+#define GRAPHVIEW(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphPOVDescription(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHVIEW(unit/graphAdapter/structure, 1)
+    GRAPHVIEW(unit/graphAdapter/unresolvedWork, 2)
+    GRAPHVIEW(unit/graphAdapter/registryDirections, 3)
+    GRAPHVIEW(unit/graphAdapter/distinctRelationships, 4)
+    GRAPHVIEW(unit/graphAdapter/liveWorkAndStorage, 5)
+    GRAPHVIEW(unit/graphAdapter/viewContext, 6)
+    GRAPHVIEW(unit/graphAdapter/lateIdentity, 7)
+    GRAPHVIEW(unit/graphAdapter/sharedGoals, 8)
+    GRAPHVIEW(unit/graphAdapter/virtualMembers, 9)
+    GRAPHVIEW(unit/graphAdapter/newVirtualRoute, 10)
+    me bool: graphPOVDescriptionCase(me string: testName, me int: caseID) <- <%{
+        GraphNormalizer normalizer; normalizer.init();
+        auto access = normalizer.access;
+        auto target = graphParsed(testName, caseID == 1 ? "{1 2}" : "_");
+        auto source = graphParsed(testName, "*10+7");
+        auto other = graphParsed(testName, "*10+8");
+        using proteus4::POVDescription;
+        POVDescription view(target, access->registry.get());
+        bool passed = false;
+        if (caseID == 1) {
+            auto first = view.member(), last = view.member(true);
+            normalizer.runtime.update([&] { first->pParent = target.get(); first->altPOV = source; first->outerPOV = other; });
+            POVDescription item(first);
+            passed = first != last && item.adjacent() == last && POVDescription(last).adjacent(true) == first &&
+                item.parent() == target.get() && item.alternative() == source && item.outer() == other &&
+                view.size() == target->pItem->infSize && view.value() == target->pItem->value;
+        } else if (caseID == 2) {
+            target = graphParsed(testName, "_ == {1 2}");
+            POVDescription described(target, access->registry.get());
+            auto rhs = described.work()[0];
+            normalizer.prepareInput(rhs->pItem);
+            auto relations = described.relationships();
+            passed = relations.size() == 1 && relations[0].isWork() && relations[0].target == rhs &&
+                access->wholeLooseRHS(relations[0].target) && access->inputPending(relations[0].target);
+        } else if (caseID == 3) {
+            normalizer.recordIdentity(target, source); normalizer.recordIdentity(source, target);
+            auto forward = view.relationships(false);
+            auto inverse = POVDescription(source, access->registry.get()).relationships(false);
+            passed = forward.size() == 1 && inverse.size() == 1 && forward[0].target == source &&
+                inverse[0].target == target && forward[0].identity == inverse[0].identity &&
+                forward[0].identity == access->registry->identities[0] &&
+                forward[0].identity->evidenceKind == iekAssertion;
+        } else if (caseID == 4) {
+            normalizer.addRHS(target, source); normalizer.recordIdentity(target, source);
+            passed = true;
+            for (int i=0; i<5; ++i) {
+                auto relations = view.relationships();
+                passed &= relations.size() == 2 && relations[0].isWork() && !relations[1].isWork() &&
+                    relations[0].target == source && relations[1].target == source;
+            }
+            passed &= access->registry->identities.size() == 1 && target->pItem->wrkList.size() == 1;
+        } else if (caseID == 5) {
+            passed = view.work().empty();
+            normalizer.addRHS(target, source);
+            passed &= view.work().size() == 1 && view.work()[0] == source;
+            normalizer.addRHS(other, source);
+            normalizer.runtime.update([&] { target->pItem = other->pItem; });
+            passed &= view.value() == other->pItem->value && &view.work() == &other->pItem->wrkList &&
+                view.relationships()[0].owner == target;
+        } else if (caseID == 6) {
+            auto alias = std::make_shared<POV>(); alias->pItem = target->pItem;
+            normalizer.runtime.update([&] { target->next = source; alias->next = other; });
+            normalizer.addRHS(target, source); normalizer.recordIdentity(target, other);
+            POVDescription aliasView(alias, access->registry.get());
+            passed = view.adjacent() == source && aliasView.adjacent() == other &&
+                view.relationships().size() == 2 && aliasView.relationships().size() == 1 &&
+                aliasView.relationships()[0].owner == alias && aliasView.work()[0] == source;
+        } else if (caseID == 7) {
+            auto handle = normalizer.normalize(target); handle.waitForCompletion();
+            passed = handle.status().symbolicValues && view.relationships().empty();
+            normalizer.recordIdentity(target, source); handle.waitForCompletion();
+            passed &= !handle.status().failed && !handle.status().symbolicValues && target->pItem->value->num == 7 &&
+                view.relationships(false).size() == 1;
+            handle.cancel();
+        } else if (caseID == 8) {
+            normalizer.recordIdentity(target, source);
+            auto size = normalizer.runtime.normalize({target, proteus4::sizeOnly, 0});
+            auto value = normalizer.runtime.normalize({target, proteus4::valueOnly, 0});
+            size.waitForCompletion(); value.waitForCompletion();
+            passed = !size.status().failed && !value.status().failed && access->known(target) == 3 &&
+                view.relationships(false).size() == 1 && access->registry->identities.size() == 1;
+            size.cancel(); value.cancel();
+        } else if (caseID == 9) {
+            target = graphParsed(testName, "*1000000000+{*10+_|...}");
+            POVDescription sparse(target, access->registry.get());
+            passed = sparse.hasVirtualMembers() && sparse.virtualExtent() == 1000000000 &&
+                sparse.memberSpecification() && !sparse.member() && !sparse.existingOccurrence(999999999) &&
+                access->registry->repetitionFamilies.empty();
+            auto selected = normalizer.findItem(target, 999999999); selected.waitForCompletion();
+            passed &= !selected.status().failed && selected.result() &&
+                sparse.existingOccurrence(999999999) == selected.result() && !sparse.member() &&
+                target->repetitionSpan.family->occurrences.size() == 1;
+            selected.cancel();
+        } else if (caseID == 10) {
+            target = graphParsed(testName, "{*10+_|...}");
+            other = graphParsed(testName, "*1000000000+_");
+            POVDescription sparse(target, access->registry.get());
+            passed = sparse.memberSpecification() && !sparse.hasVirtualMembers();
+            normalizer.runtime.update([&] { target->pItem->infSize = other->pItem->infSize; });
+            passed &= sparse.hasVirtualMembers() && sparse.virtualExtent() == 1000000000 &&
+                !sparse.member() && access->registry->repetitionFamilies.empty();
+        }
+        normalizer.close();
+        return passed;
+    }%>
+    void: unitTestGraphPOVDescription(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphPOVDescriptionCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

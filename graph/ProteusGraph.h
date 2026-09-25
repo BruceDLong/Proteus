@@ -7,6 +7,7 @@
 // generic edges and GoalSpec-generated commands.
 namespace proteus4 {
 using POVNode = std::shared_ptr<POV>;
+#include "POVDescription.h"
 enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               itemAt = 4, physicalItemAt = 5,
               listContents = 6, listMember = 7, listEnd = 8,
@@ -448,6 +449,11 @@ class ProteusAccess : public GraphAccess<POVNode> {
         return {std::move(label), {1, 0}, alternative, [query] { return query; },
                 {remainingVisits, 0}};
     }
+    static Edge<POVNode> sequence(const POVNode& endpoint, Query<POVNode> member, Query<POVNode> end) {
+        if (!endpoint) return direct("list boundary", std::move(end));
+        member.node = endpoint;
+        return direct("list position", std::move(member));
+    }
 public:
     explicit ProteusAccess(std::shared_ptr<ProteusGraphAccess> access)
         : access_(std::move(access)),
@@ -481,6 +487,7 @@ private:
     Expansion<POVNode> expandSemantic(const Query<POVNode>& query) {
         Expansion<POVNode> result;
         auto node = query.node;
+        POVDescription description(node, access_->registry.get());
         if (query.kind == assessRepresentation || query.kind == groupedList) return result;
         if (query.kind == typeRequirements) {
             if (!definitions_->saved(node))
@@ -523,15 +530,13 @@ private:
             return result;
         if (query.kind == selectIntersection) {
             if (!access_->canSelect(node)) { result.deferred = true; return result; }
-            auto first = access_->selectionShapeFirst(node);
-            result.edges.push_back(direct("inspect intersection extent",
-                {first ? first : node, first ? selectionExtentMember : selectionExtentEnd, 0, node}));
+            result.edges.push_back(sequence(POVDescription::boundary(access_->selectionSource(node)->value),
+                {node, selectionExtentMember, 0, node}, {node, selectionExtentEnd, 0, node}));
             return result;
         }
         if (query.kind == selectionExtentMember) {
-            auto next = access_->next(node);
-            result.edges.push_back(direct("next intersection extent position",
-                {next ? next : query.related, next ? selectionExtentMember : selectionExtentEnd, 0, query.related}));
+            result.edges.push_back(sequence(description.adjacent(), query,
+                {query.related, selectionExtentEnd, 0, query.related}));
             return result;
         }
         if (query.kind == selectionExtentEnd) {
@@ -557,7 +562,7 @@ private:
                 result.deferred = true; return result;
             }
             auto context = query.context;
-            if (auto child = access_->selectionChild(node, query.argument)) {
+            if (auto child = description.member(query.argument != 0)) {
                 context.push_back(node);
                 result.edges.push_back(direct("enter result span",
                     {child, selectionMember, query.argument, query.related, context}));
@@ -568,7 +573,7 @@ private:
                 }
                 auto cursor = node;
                 POVNode next;
-                while (!(next = access_->selectionNeighbour(cursor, query.argument)) && !context.empty()) {
+                while (!(next = POVDescription(cursor).adjacent(query.argument != 0)) && !context.empty()) {
                     cursor = context.back(); context.pop_back();
                 }
                 if (next) result.edges.push_back(direct("skip empty result span",
@@ -579,18 +584,16 @@ private:
         }
         if (query.kind == concatField) {
             if (!access_->hasConcat(node, query.argument)) { result.deferred = true; return result; }
-            auto first = access_->concatFirst(node, query.argument);
-            result.edges.push_back(direct("first concatenation operand",
-                {first ? first : node, first ? concatMember : concatEnd, query.argument, node}));
+            result.edges.push_back(sequence(POVDescription::boundary(access_->concatSource(node, query.argument)),
+                {node, concatMember, query.argument, node}, {node, concatEnd, query.argument, node}));
             return result;
         }
         if (query.kind == concatMember) {
             result.refinements.push_back({{node, valueOnly, 0}, {0, 0}, "resolve operand value", false});
             if (access_->concatNeedsRadix(node))
                 result.refinements.push_back({{node, sizeOnly, 0}, {0, 0}, "resolve numeric radix", false});
-            auto next = access_->next(node);
-            result.edges.push_back(direct("next concatenation operand",
-                {next ? next : query.related, next ? concatMember : concatEnd, query.argument, query.related}));
+            result.edges.push_back(sequence(description.adjacent(), query,
+                {query.related, concatEnd, query.argument, query.related}));
             return result;
         }
         if (query.kind == listCorrespondence) {
@@ -621,9 +624,8 @@ private:
         }
         if (query.kind == listContents) {
             if (!access_->physicalList(node) && !access_->growingList(node)) { result.deferred = true; return result; }
-            auto first = access_->first(node);
-            result.edges.push_back(direct(first ? "first list member" : "empty list end",
-                {first ? first : node, first ? listMember : listEnd, query.argument}));
+            result.edges.push_back(sequence(description.member(),
+                {node, listMember, query.argument}, {node, listEnd, query.argument}));
             return result;
         }
         if (query.kind == listMember) {
@@ -632,9 +634,7 @@ private:
             if (query.argument != sizeOnly || access_->subList(node))
                 result.refinements.push_back({{node, static_cast<int>(query.argument), 0},
                     {0, 0}, "resolve list member", false});
-            auto next = access_->next(node);
-            result.edges.push_back(direct(next ? "next list member" : "end of list members",
-                {next ? next : node, next ? listMember : listEnd, query.argument}));
+            result.edges.push_back(sequence(description.adjacent(), query, {node, listEnd, query.argument}));
             return result;
         }
         if (query.kind >= sizeOnly && query.kind <= sizeAndValue) {
@@ -663,7 +663,7 @@ private:
                         "inspect list contents", query.kind == sizeOnly});
             }
             if (query.kind != sizeOnly && access_->templatePrefixList(node)) {
-                for (auto member = access_->first(node); member; member = access_->next(member))
+                for (auto member = description.member(); member; member = POVDescription(member).adjacent())
                     result.refinements.push_back({{member, sizeAndValue, 0}, {1, 0}, "normalize template prefix member", false});
                 for (auto member : access_->demandedOccurrences(node))
                     result.refinements.push_back({{member, sizeAndValue, 0}, {1, 0}, "normalize demanded occurrence", false});
@@ -691,18 +691,18 @@ private:
                     result.refinements.push_back({{origin, listCorrespondence, query.kind, source},
                         {1, 0}, "match list RHS members", false});
             };
-            for (auto source : access_->workSources(node)) {
-                if (query.kind != sizeOnly && access_->wholeLooseRHS(source)) {
+            for (const auto& relation : description.relationships()) {
+                auto source = relation.target;
+                if (relation.isWork() && query.kind != sizeOnly && access_->wholeLooseRHS(source)) {
                     result.refinements.push_back({{node, groupedList, 0, source}, {1, 0},
                         "map repeated groups to source spans", false});
                     continue;
                 }
-                relationship(source, "work-list constraint");
-                if (query.kind == sizeAndValue)
+                relationship(source, relation.isWork() ? "work-list constraint" : "registry identity");
+                if (relation.isWork() && query.kind == sizeAndValue)
                     result.refinements.push_back({{node, assessRepresentation, 0, source}, {0, 0},
                         "assess represented RHS", false});
             }
-            for (auto source : access_->identitySources(node)) relationship(source, "registry identity");
             return result;
         }
         if (query.kind == itemAt) {
@@ -728,7 +728,7 @@ private:
                         return Arrival<POVNode>{{item, itemFound, 0}, !existing && bool(item)};
                     }});
             } else {
-                auto first = access_->first(node);
+                auto first = description.member();
                 if (first)
                     result.edges.push_back(direct("first physical item",
                         {first, physicalItemAt, query.argument}, true,
@@ -742,9 +742,9 @@ private:
                 }
             }
             // Registered equal lists may supply another route to this item.
-            for (auto source : access_->identitySources(node))
+            for (const auto& relation : description.relationships(false))
                 result.edges.push_back(direct("identity indexed access",
-                    {source, itemAt, query.argument}, true));
+                    {relation.target, itemAt, query.argument}, true));
             return result;
         }
         if (query.kind == physicalItemAt) {
@@ -752,7 +752,7 @@ private:
             if (access_->subList(node)) return result;
             if (query.argument == 0)
                 result.edges.push_back(direct("selected physical item", {node, itemFound, 0}, true));
-            else if (auto next = access_->next(node))
+            else if (auto next = description.adjacent())
                 result.edges.push_back(direct("next physical item",
                     {next, physicalItemAt, query.argument - 1}, true,
                     static_cast<Cost>(query.argument)));

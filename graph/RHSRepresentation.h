@@ -13,7 +13,7 @@ class RHSRepresentation {
                 return at.phase != ListPhase::enter ||
                     (access_->closedPhysicalList(at.node) && access_->orderedList(at.node) &&
                      !access_->memberTemplate(at.node) && access_->inputError(at.node).empty() &&
-                     (!source || (!access_->hasTypeRequirements(at.node) && access_->workSources(at.node).empty())));
+                     (!source || (!access_->hasTypeRequirements(at.node) && POVDescription(at.node).work().empty())));
             }, [](const POVNode& member) { return member; });
     }
 public:
@@ -42,7 +42,7 @@ public:
                 if (!plan.valid || !plan.complete || !plan.fills.empty()) return;
                 pending.insert(pending.end(), plan.identities.begin(), plan.identities.end());
             }
-            for (auto rhs : access_->workSources(right)) pending.emplace_back(left, rhs);
+            for (auto rhs : POVDescription(right).work()) pending.emplace_back(left, rhs);
         }
         represented = true;
     }

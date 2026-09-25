@@ -44,6 +44,7 @@ test normalization now enter through Agent's graph context.
 |---|---|
 | `GraphSearch.h` | Opaque-node search, lazy edges, route costs, sub-goals, revisions, subscriptions, cancellation, worker lifetime |
 | `GraphFoundation.Lib.dog` | Public CodeDog API; Proteus graph access, compatibility checks and atomic Set batches |
+| `POVDescription.h` | Live, goal-independent access to existing POV links, state slots, work entries and registry identities |
 | `ProteusGraph.h` | Translate semantic access into graph edges and refinement opportunities; GoalSpec turns findings into Sets |
 | `ListStructure.h` | Shared incremental list walk and layout evidence for embedded positions, gaps, and owner extents |
 | `SpanAlignment.h` | Plan finite ordered correspondence from opaque member/gap evidence; no POV access or mutation |
@@ -53,7 +54,8 @@ test normalization now enter through Agent's graph context.
 
 The generic runtime is a C++17 template, instantiated with `shared_ptr<POV>`.
 It never dereferences a POV, reads a field, or manufactures a replacement graph
-node. The semantic methods remain CodeDog. The thin native library binding
+node. Semantic checks and Sets remain primarily CodeDog; structural descriptions
+and planners also use native helpers. The thin native library binding
 provides RAII thread shutdown and interoperates with the existing C++ backend.
 Other CodeDog backends are not implemented in this experiment.
 
@@ -191,6 +193,35 @@ normalize every ordinary nested value just to determine the parent's length.
 Template and sparse regions remain symbolic in normalization, and no implicit
 occurrences are eagerly generated. Existing lazy sparse indexed access remains
 available.
+
+## Shared POV description
+
+`POVDescription.h` provides one goal-independent description of the stored
+relationships: physical next/previous and first/last members, parent and view
+links, size/value slots, member specifications, work entries, and registry
+identities. It returns the existing objects. A work entry retains its original
+POV and flags; a registry relation retains its actual evidence record and can
+be read from either endpoint. They remain distinct even when their endpoints
+match. Different POVs over shared infon storage retain their own structural
+context and registry relationships.
+
+This is a live view, not a second adjacency graph or a once-ever expansion
+cache. Each read uses the current POV storage under the graph context lock;
+registry enumeration additionally takes the registry lock. Relationship reads
+produce temporary descriptors without adding nodes or records. New publications
+can therefore expose new work, identities, or sparse routes through the same
+view. Sparse inspection and existing-occurrence lookup never materialize items;
+the selected graph edge still owns that operation and its cost.
+
+Goals retain their semantic eligibility checks and required sub-goals. They
+share this structural description and the simple member-or-boundary edge
+construction used for normalization, concatenation, and intersection extent
+walks. Unsupported or unfinished stored work is still described; recognizing a
+link is separate from proving that it satisfies a goal. The generic graph
+manager remains unaware of POV storage.
+
+See [pov-description-results.md](pov-description-results.md) for validation and
+remaining boundaries.
 
 ## Shared list structure
 

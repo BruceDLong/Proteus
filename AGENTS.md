@@ -16,6 +16,10 @@ constructs should compose their contributions; avoid adding an algorithm for
 each fixture or representational combination. List boundary/embedding/span
 traversal is shared in graph/ListStructure.h. Consumers retain their semantic
 obligations and must not silently ignore unsupported constraints.
+POV structure and stored relationships are described in graph/POVDescription.h,
+independently of goals. Reuse that live view; do not create parallel adjacency
+storage or cache a POV as permanently expanded. Publications may expose new
+relationships, and sparse inspection must not materialize occurrences.
 
 Current checkpoint: scalar/finite definitions, lazy member templates, and
 fixed-width whole-list grouping use graph requirements and priced plans.
