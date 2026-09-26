@@ -26,8 +26,10 @@ fixed-width whole-list grouping use graph requirements and priced plans.
 Empty open definition bodies retain virtual positions; their known extent
 feeds the shared span layout without allocating members.
 Loaded instance prefixes can be checked without expanding their virtual tails.
-List-to-text matching uses successful continuation edges and accepts the first
-complete correspondence; future oneOf results are deferred. Unsized open root
+Sequence matching uses successful continuation edges and accepts the first
+complete correspondence; future oneOf results are deferred. Direct and repeated
+<~ injection share that walk without mutating the listSpec. Existing constraints
+on ambiguous selected outputs still require a richer match-state demand. Unsized open root
 lists with prefix relationships remain symbolic until partial-prefix Sets exist.
 Prefixed definition bodies, recursive grammar, and record matching remain later boundaries. Preserve read-only definition bodies,
 already-demanded occurrence POVs, and reusable type evidence; avoid redundant

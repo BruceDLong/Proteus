@@ -18,7 +18,7 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectionExtentMember = 20, selectionExtentEnd = 21,
               typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27,
               selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31,
-              textCorrespondence = 32, textEnter = 33, textBoundary = 34, textMatched = 35, textComplete = 36 };
+              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38 };
 
 inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
     auto phase = query.kind == correspondenceEnter ? ListPhase::enter :
@@ -202,7 +202,7 @@ public:
     }
 };
 
-#include "TextCorrespondence.h"
+#include "SequenceCorrespondence.h"
 
 class ProteusGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
@@ -235,6 +235,11 @@ public:
         if (!error.empty()) throw std::runtime_error(error);
         if (access_->inputPending(visit.query.node) && request.kind != listContents &&
             !access_->prefixList(visit.query.node)) return {};
+        if (request.kind >= sizeOnly && request.kind <= sizeAndValue &&
+            visit.query.node == request.node && access_->hasInnerSource(request.node)) {
+            auto access = access_; auto owner = request.node;
+            return {{"Set inner source constraint", [access, owner] { return access->applyInnerSource(owner); }, {1, 1}}};
+        }
         if (request.kind != listContents && access_->isDefinition(visit.query.node)) {
             if (visit.query.node != request.node || request.kind != sizeAndValue ||
                 !access_->definitionReady(request.node) || definitions_->registered(request.node)) return {};
@@ -300,6 +305,7 @@ public:
         }}};
     }
     bool satisfied() const override {
+        if (request.kind == relationshipConstraints) return true;
         if (request.kind == sizeAndValue && access_->isDefinition(request.node))
             return definitions_->registered(request.node);
         if (request.kind == listContents)
@@ -535,8 +541,8 @@ public:
     void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); definitions_->prune(); }
     std::vector<std::function<void()>> takeEffects() override { return completion_->takeEffects(); }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
-        if (query.kind == textCorrespondence)
-            return std::make_shared<ProteusTextGoal>(query, access_, definitions_, completion_);
+        if (query.kind == sequenceCorrespondence)
+            return std::make_shared<ProteusSequenceGoal>(query, access_, definitions_, completion_);
         if (query.kind == selectRelative)
             return std::make_shared<ProteusRelativeGoal>(query, access_, positions_, evidence_);
         if (query.kind == groupedList)
@@ -554,8 +560,8 @@ public:
         return std::make_shared<ProteusGoal>(query, access_, completion_, evidence_, definitions_);
     }
     Expansion<POVNode> expand(const Query<POVNode>& query) override {
-        if (query.kind >= textCorrespondence && query.kind <= textComplete)
-            return TextCorrespondence(access_, definitions_).expand(query);
+        if ((query.kind >= sequenceCorrespondence && query.kind <= sequenceComplete) || query.kind == correspondenceInput)
+            return SequenceCorrespondence(access_, definitions_).expand(query);
         bool pending = evidence_->pending(query.node);
         auto result = expandSemantic(query);
         result.deferred = result.deferred || pending;
@@ -790,7 +796,9 @@ private:
             result.edges.push_back(sequence(description.adjacent(), query, {node, listEnd, query.argument}));
             return result;
         }
-        if (query.kind >= sizeOnly && query.kind <= sizeAndValue) {
+        if ((query.kind >= sizeOnly && query.kind <= sizeAndValue) || query.kind == relationshipConstraints) {
+            const bool constraintsOnly = query.kind == relationshipConstraints;
+            const int demand = constraintsOnly ? sizeAndValue : query.kind;
             // Do not compare noncanonical scalar evidence while its local Set
             // is pending; that publication will expose the same edges again.
             if (access_->planNumericLiteral(node).changed) { result.deferred = true; return result; }
@@ -799,14 +807,14 @@ private:
             if (access_->inputPending(node)) {
                 result.deferred = true;
                 if (access_->growingList(node))
-                    result.refinements.push_back({{node, listContents, query.kind, {}, owners}, {0, 0},
+                    result.refinements.push_back({{node, listContents, demand, {}, owners}, {0, 0},
                         "visit published stream members", false});
                 return result;
             }
             if (access_->isDefinition(node)) {
                 result.deferred = !definitions_->registered(node); return result;
             }
-            result.deferred = !access_->supports(node, query.kind);
+            result.deferred = !access_->supports(node, demand);
             if (auto direction = access_->relativeDirection(node)) {
                 auto context = positions_->context(node, query.context);
                 auto anchor = context.front(); context.erase(context.begin());
@@ -815,18 +823,25 @@ private:
             }
             if (definitions_->required(node))
                 result.refinements.push_back({{node, typeRequirements, 0}, {1, 0}, "validate type and member requirements", false});
-            if (access_->canSelect(node))
+            if (access_->hasInnerSource(node)) { result.deferred = true; return result; }
+            if (access_->canSelect(node)) {
+                auto body = definitions_->selectionBody(node);
+                if (!POVDescription(body).work().empty()) {
+                    result.refinements.push_back({{body, relationshipConstraints, 0}, {1, 0}, "prove inner source constraints", false});
+                    result.refinements.push_back({{body, sizeAndValue, 0}, {1, 0}, "refine inner members", true});
+                }
                 result.refinements.push_back({{node, selectIntersection, 0}, {0, 0}, "find intersection result", false});
+            }
             if (access_->hasConcat(node, 1))
                 result.refinements.push_back({{node, concatField, 1, {}, query.context}, {0, 0}, "resolve size expression", false});
             if (access_->hasConcat(node, 2))
                 result.refinements.push_back({{node, concatField, 2, {}, query.context}, {0, 0}, "resolve value expression", false});
-            if (access_->physicalList(node)) {
-                if (query.kind != sizeOnly || !(access_->known(node) & sizeOnly))
-                    result.refinements.push_back({{node, listContents, query.kind, {}, owners}, {0, 0},
-                        "inspect list contents", query.kind == sizeOnly});
+            if (!constraintsOnly && access_->physicalList(node)) {
+                if (demand != sizeOnly || !(access_->known(node) & sizeOnly))
+                    result.refinements.push_back({{node, listContents, demand, {}, owners}, {0, 0},
+                        "inspect list contents", demand == sizeOnly});
             }
-            if (query.kind != sizeOnly && access_->templatePrefixList(node)) {
+            if (!constraintsOnly && demand != sizeOnly && access_->templatePrefixList(node)) {
                 for (auto member = description.member(); member; member = POVDescription(member).adjacent())
                     result.refinements.push_back({{member, sizeAndValue, 0}, {1, 0}, "normalize template prefix member", false});
                 for (auto member : access_->demandedOccurrences(node))
@@ -839,22 +854,22 @@ private:
                 auto context = isWork ? (query.context.empty() ? std::vector<POVNode>{node} : query.context)
                                       : std::vector<POVNode>{};
                 if (access_->inputPending(source)) {
-                    result.refinements.push_back({{source, query.kind, 0, {}, context}, {1, 0}, "await RHS input", false});
+                    result.refinements.push_back({{source, demand, 0, {}, context}, {1, 0}, "await RHS input", false});
                     result.deferred = true;
                     if (!access_->prefixList(source)) return;
                 }
-                if (!access_->relationSupported(node, source, query.kind)) {
+                if (!access_->relationSupported(node, source, demand)) {
                     if (definitions_->canInherit(origin, source))
-                        result.edges.push_back(direct("checked type evidence", {source, query.kind, 0, origin}));
+                        result.edges.push_back(direct("checked type evidence", {source, demand, 0, origin}));
                     if (access_->canSelect(source))
                         result.refinements.push_back({{source, selectIntersection, 0}, {1, 0}, "find RHS intersection result", false});
-                    if (access_->relativeDirection(source) || access_->hasConcat(source, 1) || access_->hasConcat(source, 2))
-                        result.refinements.push_back({{source, query.kind, 0, {}, context}, {1, 0}, "resolve expression RHS", false});
+                    if (access_->hasInnerSource(source) || access_->relativeDirection(source) || access_->hasConcat(source, 1) || access_->hasConcat(source, 2))
+                        result.refinements.push_back({{source, demand, 0, {}, context}, {1, 0}, "resolve expression RHS", false});
                     result.deferred = true; return;
                 }
-                result.edges.push_back(direct(label, {source, query.kind, 0, origin, context}));
-                if (query.kind != sizeOnly && access_->correspondingLists(origin, source))
-                    result.refinements.push_back({{origin, listCorrespondence, query.kind, source},
+                result.edges.push_back(direct(label, {source, demand, 0, origin, context}));
+                if (demand != sizeOnly && access_->correspondingLists(origin, source))
+                    result.refinements.push_back({{origin, listCorrespondence, demand, source},
                         {1, 0}, "match list RHS members", false});
             };
             for (const auto& relation : description.relationships()) {
@@ -865,19 +880,19 @@ private:
                     for (int slot : {1, 2}) if (access_->hasConcat(source, slot))
                         result.refinements.push_back({{source, concatField, slot}, {1, 0},
                             "resolve qualified RHS expression", false});
-                if (relation.isWork() && query.kind != sizeOnly &&
-                    TextCorrespondence::relationship(*access_, node, source)) {
-                    result.refinements.push_back({{node, textCorrespondence, 0, source}, {1, 0},
-                        "match text correspondence", false});
+                if (relation.isWork() && demand != sizeOnly &&
+                    SequenceCorrespondence::relationship(*access_, node, source)) {
+                    result.refinements.push_back({{node, sequenceCorrespondence, 0, source}, {1, 0},
+                        "match sequence correspondence", false});
                     continue;
                 }
-                if (relation.isWork() && query.kind != sizeOnly && access_->wholeLooseRHS(source)) {
+                if (relation.isWork() && demand != sizeOnly && access_->wholeLooseRHS(source)) {
                     result.refinements.push_back({{node, groupedList, 0, source}, {1, 0},
                         "map repeated groups to source spans", false});
                     continue;
                 }
                 relationship(source, relation.isWork() ? "work-list constraint" : "registry identity", relation.isWork());
-                if (relation.isWork() && query.kind == sizeAndValue)
+                if (relation.isWork() && demand == sizeAndValue)
                     result.refinements.push_back({{node, assessRepresentation, 0, source}, {0, 0},
                         "assess represented RHS", false});
             }

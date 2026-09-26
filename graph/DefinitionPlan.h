@@ -1,5 +1,12 @@
 #pragma once
 
+// A proved data contradiction differs from an implementation/ownership error.
+// Assertion goals report it; speculative correspondence can reject that route.
+class DefinitionConflict : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 // Compiled requirements are certificate data, not graph nodes. Their source
 // graph is walked through existing POVs before any instance Set is offered.
 struct DefinitionRequirement {
@@ -37,7 +44,7 @@ using DefinitionSpec = std::shared_ptr<DefinitionRequirement>;
 inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const DefinitionSpec& right) {
     auto result = std::make_shared<DefinitionRequirement>(*left);
     if (!result->facts.combine(right->facts))
-        throw std::runtime_error("incompatible definition requirements");
+        throw DefinitionConflict("incompatible definition requirements");
     for (const auto& name : right->types)
         if (std::find(result->types.begin(), result->types.end(), name) == result->types.end()) result->types.push_back(name);
     // Equivalent conjunctions share evidence regardless of application order.
@@ -58,7 +65,7 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
             result->open = false; result->repeated.reset(); result->templateSource.reset();
         } else {
             if (result->members.size() != right->members.size())
-                throw std::runtime_error("incompatible finite definition lengths");
+                throw DefinitionConflict("incompatible finite definition lengths");
             for (std::size_t i = 0; i < result->members.size(); ++i)
                 result->members[i] = combineDefinitions(result->members[i], right->members[i]);
         }
@@ -67,7 +74,7 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
         result->repeated = right->repeated; result->templateSource = right->templateSource;
     }
     if (result->list && !result->memberLayout().valid)
-        throw std::runtime_error("incompatible definition extent");
+        throw DefinitionConflict("incompatible definition extent");
     return result;
 }
 
@@ -143,12 +150,12 @@ private:
             }
             auto extent = actual; extent.combine(requirement->facts);
             if (open && extent.hasSize && extent.size < static_cast<std::int64_t>(members.size()))
-                throw std::runtime_error("repeated definition prefix exceeds extent");
+                throw DefinitionConflict("repeated definition prefix exceeds extent");
             if (!open) {
                 GraphTypeFacts count; count.valid = true; count.hasSize = true;
                 count.size = static_cast<std::int64_t>(members.size());
                 if (!count.combine(actual) || !count.combine(requirement->facts))
-                    throw std::runtime_error("incompatible repeated definition extent");
+                    throw DefinitionConflict("incompatible repeated definition extent");
             }
             auto demanded = access->demandedOccurrences(target->node);
             members.insert(members.end(), demanded.begin(), demanded.end());
@@ -188,7 +195,7 @@ private:
         }
         auto combined = actual;
         if (!combined.combine(requirement->facts))
-            throw std::runtime_error("incompatible definition requirements");
+            throw DefinitionConflict("incompatible definition requirements");
         if (target->node) proposed_[target->node->pItem] = combined;
         bindings.push_back({target, requirement});
         if (!requirement->list) {
@@ -215,12 +222,12 @@ private:
         } else layout(target->node, left);
         if (!supported) return;
         auto shape = requirement->memberLayout();
-        if (!shape.valid) throw std::runtime_error("incompatible definition extent");
+        if (!shape.valid) throw DefinitionConflict("incompatible definition extent");
         for (const auto& segment : shape.segments)
             right.segments.push_back({{{}, segment.node}, segment.gap, segment.width});
         right.equations.push_back({0, right.segments.size(), shape.extent(), {{}, requirement}});
         auto plan = alignSpans(left, right);
-        if (!plan.valid) throw std::runtime_error("incompatible finite definition extent");
+        if (!plan.valid) throw DefinitionConflict("incompatible finite definition extent");
         // An unconstrained virtual tail need not be filled to prove the type.
         // Every explicit required position must still be mapped unambiguously.
         std::size_t mapped = plan.identities.size();

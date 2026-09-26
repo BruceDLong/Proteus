@@ -1,11 +1,15 @@
 # Text correspondence through successful continuations
 
+The subsequent [source-injection slice](source-injection-results.md) extends this
+walk to list input and repeated selected results. The evidence below records the
+text-only checkpoint.
+
 This slice supports finite list-to-text and whole-string scalar results using the graph frontier. It
 restores fixed-width and repeated parsing without an AItem fallback.
 
 ## Mechanism
 
-`TextCorrespondence.h` exposes enter/member/boundary/accepted edges over existing
+`SequenceCorrespondence.h` exposes enter/member/boundary/accepted edges over existing
 POVs. Query coordinates hold input progress and enclosing list counts. The
 generic graph manager still owns the frontier, cost selection, cancellation,
 subscriptions and visited-state sharing; it has no text-matching algorithm.
@@ -46,7 +50,7 @@ It must eventually gain partial-prefix Sets; selecting an empty match and closin
 the list would discard that unresolved extent. Finite outer lists can still use
 prefix correspondence, including a repeated inner list followed by a delimiter.
 
-Other deferred boundaries include named/recursive grammar, intersections inside
+Other deferred boundaries include named/recursive grammar, arbitrary constrained intersections inside
 matches, unspecified string widths, partial publication within a string,
 demanded sparse aliases, and joint conflicting writes to aliased destinations.
 The source currently supports subscriptions to later publication of a complete

@@ -7,10 +7,12 @@ as its responsibilities move to the graph reasoner. Ordinary Agent normalization
 now uses the graph reasoner. Legacy AItem rules remain compiled for unmigrated facilities and reference tests; normalization
 has no agenda fallback.
 
-List-to-text correspondence now propagates successful matches through the graph
+Sequence correspondence propagates successful matches through the graph
 frontier and applies the first complete result. See
 [text-correspondence-notes.md](text-correspondence-notes.md) for fixed-width,
 repetition, embedded-span, subscription and ambiguity behavior.
+Direct and repeated `<~` source injection reuse that same walk; see
+[source-injection-results.md](source-injection-results.md) for selection and remaining boundaries.
 
 ## Start here
 
@@ -67,6 +69,7 @@ to preserve every original fixture and record failures, crashes and timeouts.
 | `ProteusGraph.h` | Translate semantic access into graph edges and refinement opportunities; GoalSpec turns findings into Sets |
 | `ListStructure.h` | Shared incremental list walk and layout evidence for embedded positions, gaps, and owner extents |
 | `SpanAlignment.h` | Plan finite ordered correspondence from opaque member/gap evidence; no POV access or mutation |
+| `SequenceCorrespondence.h` | Successful continuation edges over string/list input, repeated matching, selected results, and accepted-path Sets |
 | `GroupedListPlan.h` | Plan fixed-width repeated groups against whole ordered source spans; preserve occurrence identity |
 | `RHSRepresentation.h` | Prove which RHS facts are already represented, independently of complete normalization |
 | `IdentityRegistry` | Existing domain records, owned through the manager's Proteus adapter |

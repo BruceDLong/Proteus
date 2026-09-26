@@ -8,7 +8,7 @@ unit tests compiled into `TestProteus`.
 
 | Suite | Passing | Failing | Total |
 |---|---:|---:|---:|
-| `defaultTests.tst` | 150 | 120 | 270 |
+| `defaultTests.tst` | 157 | 113 | 270 |
 | `demoTests.tst` | 1 | 21 | 22 |
 | `sparseTests.tst` | 1 | 22 | 23 |
 | `timeTests.tst` | 0 | 36 | 36 |
@@ -18,11 +18,11 @@ unit tests compiled into `TestProteus`.
 The R1 file records an experimental contract and explicitly excludes itself from
 the default tests; its failures are not evidence of regressions from a previously
 passing implementation. Other suites also overlap in coverage, so the combined
-152/363 pass count is a fixture inventory, not a measure of language completeness.
+159/363 pass count is a fixture inventory, not a measure of language completeness.
 
-The default row was refreshed after text correspondence; the other
+The default row was refreshed after source injection; the other
 five rows retain the logical-navigation checkpoint. See
-[text-correspondence-notes.md](text-correspondence-notes.md) for the latest change.
+[source-injection-results.md](source-injection-results.md) for the latest change.
 
 The default suite was audited before and after logical navigation. It improved
 from 135/270 to 138/270, with no formerly passing case lost. The recovered cases
@@ -33,6 +33,13 @@ regression comparisons. Numeric normalization subsequently recovered `parse/frac
 `neg/simple`, and `fracs/simple`, bringing the default suite to 141/270 without
 losing any previous pass. Text correspondence subsequently recovered five parsing
 fixtures and four whole-string scalar cases, reaching 150/270 with no previous pass lost.
+Source injection raises the assertion count to 157/270, again losing no prior pass.
+Five newly supported examples are `concat/parseSrc`, `query/firstStrB`,
+`outr/everyOther1`, `outr/everyOther2`, and `marked/lookahead`.
+`notTemplate/compoundNum` and `notTemplate/resolvedUnknown` also pass their
+rendered-result assertions, but their negated matching predicates remain
+unresolved. Their selected literals were already known; these two rows are not
+claimed as completed predicate implementations.
 
 The complete per-fixture status and input-file hashes are in
 [language-compatibility-status.json](language-compatibility-status.json).
@@ -42,6 +49,10 @@ still requires inspecting the actual result. Test-name grouping alone is not a
 root-cause analysis.
 
 ## Compatibility work next
+
+The constrained ambiguous output example in
+[source-injection-results.md](source-injection-results.md) needs a design pass:
+carry the selected-output demand through matching before widening grammar support.
 
 Use the failing original examples to choose the next semantic unit, starting
 with named part/path selection and its relationship to definition requirements.

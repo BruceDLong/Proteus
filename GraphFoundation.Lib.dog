@@ -247,7 +247,7 @@ struct ProteusGraphAccess {
                !inf!.value!.inverted and !inf!.value!.undefined and
                !inf!.infSize!.inverted and !inf!.infSize!.undefined and
                (!pov!.looseType() or relationship) and pov!.accessMode==aCopyOf and
-               !pov!.selectorLocalWork and !pov!.viewMapWriteEnabled and
+               (!pov!.selectorLocalWork or relationship) and !pov!.viewMapWriteEnabled and
                pov!.viewMap.sourcePov==NULL and pov!.referenceAlias.sourcePov==NULL)
     }
     // This permits reading scalar fields, not skipping their named-type
@@ -708,6 +708,41 @@ struct ProteusGraphAccess {
         if(pov!.pItem!.selectionExpression!=NULL){return(pov!.pItem!.selectionKind)}
         return(pov!.pItem!.intersectPos)
     }
+    // Direct <~ constrains one inner prefix. On a repeated intersection it
+    // constrains successive occurrences, carrying the same source cursor.
+    our infonView: innerSourceOwner(our POV: pov) <- {
+        if(pov==NULL or pov!.pItem==NULL or inputPending(pov)){return(NULL)}
+        our infonView: item <- pov!.pItem
+        if(!item!.hasInnrOutr or item!.viewMode!=vmOverlay){return(NULL)}
+        if(item!.value!.evalMode==emIntersection and !item!.isOrLike()){return(item!.innr)}
+        our infonView: spec <- item!.value!.listSpec
+        if(item!.value!.overlayType==LST and item!.value!.evalMode==emLiteral and
+                spec!=NULL and spec!.value!.evalMode==emIntersection and !spec!.isOrLike()) {return(item)}
+        return(NULL)
+    }
+    me bool: hasInnerSource(our POV: pov) <- {
+        our infonView: owner <- innerSourceOwner(pov)
+        return(owner!=NULL and owner!.funcArgs!=NULL and !owner!.workListContainsInfonView(owner!.funcArgs))
+    }
+    me bool: fedTemplate(our POV: pov) <- {
+        if(pov==NULL or pov!.pItem==NULL or pov!.pItem!.value!.listSpec==NULL){return(false)}
+        withEach source in pov!.pItem!.wrkList{if(source!.isOutrFeed){return(true)}}
+        return(false)
+    }
+    me bool: applyInnerSource(our POV: pov) <- {
+        if(!hasInnerSource(pov)){return(false)}
+        our infonView: body <- innerSourceOwner(pov)
+        me bool: repeated <- body===pov!.pItem
+        our POV:: source{24}; source!.pItem <- body!.funcArgs
+        bind(pov); bind(source)
+        source!.selectorLocalWork <- true
+        source!.looseTop <- !repeated; source!.looseMode <- repeated; source!.isOutrFeed <- repeated
+        body!.addPOVToWrkList(source)
+        body!.funcArgs <- NULL
+        pov!.pItem!.hasInnrOutr <- false
+        pov!.pItem!.isNormed <- false; pov!.workRevision <+- 1
+        return(true)
+    }
     me bool: canSelect(our POV: pov) <- {
         our infonView: source <- selectionSource(pov)
         if(source==NULL or !plain(pov, true) or pov!.pItem!.positionalSelection or
@@ -715,7 +750,7 @@ struct ProteusGraphAccess {
         me int: resultMode <- selectionMode(pov)
         return((resultMode==ipGetFirst or resultMode==ipGetLast or resultMode==ipGetMarked) and
                source!.viewMode==vmOverlay and source!.type==NULL and source!.addedTypes.isEmpty() and
-               source!.funcArgs==NULL and source!.parts.isEmpty() and source!.wrkList.isEmpty() and
+               source!.funcArgs==NULL and source!.parts.isEmpty() and
                source!.value!.overlayType==LST and source!.value!.evalMode==emLiteral and
                source!.value!.listSpec==NULL and !source!.value!.timelike and
                !source!.value!.inverted and !source!.value!.undefined and !source!.invertMatch and

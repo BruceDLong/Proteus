@@ -33,6 +33,7 @@ private:
     // Stable read-only POVs for existing template/owner infons. This exposes
     // stored relations to the walk; it does not clone or normalize their data.
     mutable std::map<std::shared_ptr<infonView>, POVNode> views_;
+    mutable POVNode unspecifiedMember_;
     // Registry occurrence backlinks are non-owning. Retain each demanded
     // source for this context so a selected item can outlive its lookup handle.
     std::set<POVNode> occurrenceOwners_;
@@ -90,6 +91,22 @@ public:
         return entry.body;
     }
     POVNode repeatedBody(const POVNode& node) const { return memberTemplate(node); }
+    // An untyped virtual position has no stored POV. One read-only unknown
+    // describes that position; occurrence data remains in the search cursor.
+    POVNode matchingBody(const POVNode& node) const {
+        if (auto spec = memberTemplate(node)) return spec;
+        if (!access_->openTail(node)) return {};
+        if (!unspecifiedMember_) {
+            auto item = std::make_shared<infonView>();
+            SetModeBits(item->flags, infonView::viewMode, infonView::vmOverlay);
+            SetModeBits(item->flags, infonView::itmMode, infonView::mItem);
+            SetModeBits(item->infSize->flags, infonState::evalMode, infonState::emUnknown);
+            SetModeBits(item->value->flags, infonState::overlayType, infonState::tUnknown);
+            SetModeBits(item->value->flags, infonState::evalMode, infonState::emUnknown);
+            unspecifiedMember_ = access_->requirementView(item);
+        }
+        return unspecifiedMember_;
+    }
     POVNode selectionBody(const POVNode& node) const { return view(access_->selectionSource(node)); }
     void retainOccurrenceOwner(const POVNode& owner) { occurrenceOwners_.insert(owner); }
     POVNode retainedOccurrenceOwner(const POVNode& node) const {
@@ -98,7 +115,7 @@ public:
         return {};
     }
     bool required(const POVNode& node) const {
-        return access_->hasTypeRequirements(node) || access_->memberTemplate(node) || access_->occurrenceOwner(node);
+        return access_->hasTypeRequirements(node) || (access_->memberTemplate(node) && !access_->fedTemplate(node)) || access_->occurrenceOwner(node);
     }
     bool children(const POVNode& node, const POVNode& root, std::vector<POVNode>& result) const {
         if (!access_->typeFacts(node).valid) return false;
