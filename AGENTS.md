@@ -28,9 +28,10 @@ feeds the shared span layout without allocating members.
 Loaded instance prefixes can be checked without expanding their virtual tails.
 Sequence matching uses successful continuation edges and accepts the first
 complete correspondence; future oneOf results are deferred. Direct and repeated
-<~ injection share that walk without mutating the listSpec. Existing constraints
-on ambiguous selected outputs still require a richer match-state demand. Unsized open root
-lists with prefix relationships remain symbolic until partial-prefix Sets exist.
+<~ injection share that walk without mutating the listSpec. The constrained
+repeated-output example in graph/source-injection-results.md intentionally waits
+symbolically with a subscription until more information arrives. Unsized open
+root lists with prefix relationships remain symbolic until partial-prefix Sets exist.
 Prefixed definition bodies, recursive grammar, and record matching remain later boundaries. Preserve read-only definition bodies,
 already-demanded occurrence POVs, and reusable type evidence; avoid redundant
 application RHSs. Redundant RHS/template rendering uses revision-scoped proofs;

@@ -43,23 +43,28 @@ would create a completion cycle through the selected-result identity. The
 `relationshipConstraints` demand exposes the same relationship edges without
 requiring all container members to be fully normalized.
 
-## Boundary needing design work
+## Waiting for more information
 
-An existing output constraint must participate in an ambiguous match:
+The user clarified that this example should remain unresolved until more
+information arrives:
 
 ```proteus
 {[<{'A'|...}> {'A'|...}]|...} <~ 'AAA' = {{'A'}}
 ```
 
-This has a possible split where the marked inner list takes one `A` and the
-following list takes two. The current implementation leaves it symbolic. A `DefinitionConflict` rejects
-only the speculative candidate and produces no Set; strict assertion goals still
-report conflicts, and ownership/implementation errors are not caught here. It does
-not yet carry the demanded selected output through the match state. Captures are
-compiled from an accepted predecessor path, while visited-state sharing is keyed
-by cursor and enclosing counts. Before claiming arbitrary constrained ambiguous
-parsing, output demands must distinguish relevant continuations. Adding a final
-result filter alone is insufficient if sharing already discarded another route.
+Keep the available facts and constraints, leave `isNormed` false, and retain an
+active subscription. A rejected speculative candidate supplies no Set and does
+not fail the overall search. A publication that adds no information must leave
+this waiting state intact.
+
+This is the intended outcome for this example. The earlier permission to take
+the first complete match remains in effect for the other supported ambiguous
+parses. Future information can trigger reconsideration; this test establishes
+the waiting contract, not which additional fact will resolve the expression.
+
+A `DefinitionConflict` distinguishes rejected candidate data from errors:
+strict assertion goals still report conflicts, and ownership/implementation
+errors are not caught by the speculative matcher.
 
 Named/recursive grammar, negated patterns, source elements whose values are
 lists, incomplete streaming-prefix publication, and demanded sparse aliases
@@ -72,7 +77,7 @@ The focused `unit/graphInner/` tests cover direct and repeated injection, explic
 and virtual inner positions, marked results, variable-length groups, empty input,
 embedded source spans, incomplete and rejected groups, finite output extents,
 late values, cancellation, template preservation, identity reuse, and the
-constrained-output boundary. Existing `unit/graphText/` cases remain unchanged.
+constrained-output waiting contract. Existing `unit/graphText/` cases remain unchanged.
 
 See the compatibility inventory for exact older fixture counts. Those fixtures
 assert rendered results; passing an assertion does not by itself prove every
@@ -89,3 +94,9 @@ Logs: `/tmp/p4-inner-final-build.log`, `/tmp/p4-inner-candidate-build.log`,
 `/tmp/p4-inner-checked24.log`, `/tmp/p4-inner-checked36.log`,
 `/tmp/p4-inner-checked-regression.log`, and
 `/tmp/p4-inner-checked-default/results.json`.
+
+After the waiting-state clarification, CodeDog regeneration succeeded and the
+strengthened `unit/graphInner/constrainedRepeatDeferred` check passed (1/1). It
+verifies an active subscription and an unchanged symbolic result after a wake-up
+that adds no facts. Logs: `/tmp/p4-wait-contract-build.log` and
+`/tmp/p4-wait-contract-test.log`.

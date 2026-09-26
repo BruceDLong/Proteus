@@ -51,8 +51,9 @@ root-cause analysis.
 ## Compatibility work next
 
 The constrained ambiguous output example in
-[source-injection-results.md](source-injection-results.md) needs a design pass:
-carry the selected-output demand through matching before widening grammar support.
+[source-injection-results.md](source-injection-results.md) intentionally remains
+symbolic and subscribed until more information arrives, per the user's
+clarification. Its waiting state is an expected result.
 
 Use the failing original examples to choose the next semantic unit, starting
 with named part/path selection and its relationship to definition requirements.
