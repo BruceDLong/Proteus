@@ -17,7 +17,7 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectIntersection = 17, selectionMember = 18, selectionFound = 19,
               selectionExtentMember = 20, selectionExtentEnd = 21,
               typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27,
-              selectRelative = 28, relativeItem = 29 };
+              selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31 };
 
 inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
     auto phase = query.kind == correspondenceEnter ? ListPhase::enter :
@@ -425,8 +425,9 @@ public:
     void beginPass() override { verified_ = false; measure_.reset(); }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
         if (visit.query.kind == selectionExtentMember) measure_.add(visit.query.node);
-        if (visit.query.kind != selectionFound) return {};
-        if (!access_->selectionExtentAgrees(request.node, measure_)) return {};
+        const bool indexed = access_->selectionIndex(request.node) >= 0;
+        if (visit.query.kind != (indexed ? itemFound : selectionFound)) return {};
+        if (!indexed && !access_->selectionExtentAgrees(request.node, measure_)) return {};
         auto selected = visit.query.node;
         if (!access_->selectionAgrees(request.node, selected)) return {};
         verified_ = true;
@@ -444,44 +445,51 @@ public:
 // consuming occurrence after lowering the cursor, including inverse identity
 // visits. One shared cursor expression cannot silently acquire two contexts.
 class ProteusRelativePositions {
-    struct Binding { POVNode anchor, selected; std::weak_ptr<POV> expression; };
+    struct Binding { std::vector<POVNode> context; POVNode selected; std::weak_ptr<POV> expression; };
     using Key = std::weak_ptr<infonView>;
     std::map<Key, Binding, std::owner_less<Key>> bindings_;
 public:
-    POVNode anchor(const POVNode& node, const POVNode& proposed) const {
+    std::vector<POVNode> context(const POVNode& node, const std::vector<POVNode>& proposed) const {
         auto found = bindings_.find(node->pItem);
-        if (found == bindings_.end()) return proposed ? proposed : node;
-        if (node != found->second.expression.lock() || (proposed && proposed != found->second.anchor))
+        if (found == bindings_.end()) return proposed.empty() ? std::vector<POVNode>{node} : proposed;
+        const auto& saved = found->second.context;
+        if (node != found->second.expression.lock() || (!proposed.empty() && proposed.front() != saved.front()) ||
+            (proposed.size() > 1 && saved.size() > 1 && proposed != saved))
             throw std::runtime_error("relative cursor used in different occurrence contexts");
-        return found->second.anchor;
+        return proposed.size() > saved.size() ? proposed : saved;
     }
-    bool bind(const POVNode& node, const POVNode& anchor, const POVNode& selected) {
+    bool bind(const POVNode& node, const std::vector<POVNode>& context, const POVNode& selected) {
         auto found = bindings_.find(node->pItem);
         if (found != bindings_.end()) {
-            if (found->second.anchor != anchor || found->second.selected != selected)
+            if (found->second.context.front() != context.front() || found->second.selected != selected)
                 throw std::runtime_error("relative position changed after binding");
+            if (context.size() > found->second.context.size()) { found->second.context = context; return true; }
             return false;
         }
-        bindings_.emplace(node->pItem, Binding{anchor, selected, node}); return true;
+        bindings_.emplace(node->pItem, Binding{context, selected, node}); return true;
     }
 };
 
 class ProteusRelativeGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusRelativePositions> positions_;
+    std::shared_ptr<ProteusStreamEvidence> evidence_;
     bool verified_ = false;
 public:
     ProteusRelativeGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access,
-                        std::shared_ptr<ProteusRelativePositions> positions)
-        : GoalSpec<POVNode>(query), access_(std::move(access)), positions_(std::move(positions)) {}
+                        std::shared_ptr<ProteusRelativePositions> positions,
+                        std::shared_ptr<ProteusStreamEvidence> evidence)
+        : GoalSpec<POVNode>(query), access_(std::move(access)), positions_(std::move(positions)), evidence_(std::move(evidence)) {}
     void beginPass() override { verified_ = false; }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
         if (visit.query.kind != itemFound) return {};
         verified_ = true;
-        auto access = access_; auto positions = positions_;
-        auto owner = request.node, anchor = request.related, selected = visit.query.node;
-        return {{"Set relative position identity", [access, positions, owner, anchor, selected] {
-            bool changed = positions->bind(owner, anchor, selected);
+        auto access = access_; auto positions = positions_; auto evidence = evidence_;
+        auto owner = request.node, selected = visit.query.node;
+        auto context = request.context; context.insert(context.begin(), request.related);
+        return {{"Set relative position identity", [access, positions, evidence, owner, context, selected] {
+            bool changed = positions->bind(owner, context, selected);
+            for (std::size_t i=1; i<context.size(); ++i) changed |= evidence->inherit(owner, context[i]);
             return access->applyRelative(owner, selected) || changed;
         }, {0, access->hasDirectIdentity(owner, selected) ? 0u : 1u}}};
     }
@@ -515,7 +523,7 @@ public:
     std::vector<std::function<void()>> takeEffects() override { return completion_->takeEffects(); }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
         if (query.kind == selectRelative)
-            return std::make_shared<ProteusRelativeGoal>(query, access_, positions_);
+            return std::make_shared<ProteusRelativeGoal>(query, access_, positions_, evidence_);
         if (query.kind == groupedList)
             return std::make_shared<ProteusGroupedListGoal>(query, access_, definitions_, completion_);
         if (query.kind == assessRepresentation)
@@ -537,6 +545,23 @@ public:
         return result;
     }
 private:
+    void relativeStep(Expansion<POVNode>& result, const Query<POVNode>& query, ListPhase phase,
+                      Cost inspection = 0) {
+        if (phase == ListPhase::leave && query.node == query.related) { result.deferred = true; return; }
+        auto at = ListPosition<POVNode>{query.node, phase, query.context};
+        auto next = phase == ListPhase::enter ? nextListPosition(*access_, std::move(at), true, query.argument < 0) :
+                                               adjacentListPosition(*access_, std::move(at), true, query.argument < 0);
+        if (next.phase == ListPhase::done || next.phase == ListPhase::cycle) { result.deferred = true; return; }
+        auto kind = next.phase == ListPhase::member ? relativeMember : relativeBoundary;
+        auto edge = direct("logical neighbor step", {next.node, kind, query.argument, query.related, next.owners});
+        edge.work.visits += inspection; result.edges.push_back(std::move(edge));
+    }
+    void boundaryNeeds(Expansion<POVNode>& result, const POVNode& node, const ListBoundary<POVNode>& boundary) {
+        for (const auto& missing : boundary.missingExtents)
+            result.refinements.push_back({{missing, sizeOnly, 0}, {boundary.visits, 0}, "find embedded extent", true});
+        if (boundary.extent < 0)
+            result.refinements.push_back({{node, sizeOnly, 0}, {boundary.visits, 0}, "find span extent", true});
+    }
     Expansion<POVNode> expandSemantic(const Query<POVNode>& query) {
         Expansion<POVNode> result;
         auto node = query.node;
@@ -582,28 +607,59 @@ private:
         if (query.kind == itemFound || query.kind == listEnd || query.kind == correspondenceEnd || query.kind == concatEnd || query.kind == selectionFound)
             return result;
         if (query.kind == selectRelative) {
-            result.edges.push_back(direct("relative occurrence", {query.related, relativeItem, query.argument}));
+            if (!query.context.empty() && !access_->definitionOrderedCandidate(query.context.back())) {
+                result.deferred = true; return result;
+            }
+            result.edges.push_back(direct("relative occurrence", {query.related, relativeItem, query.argument, query.context.empty() ? POVNode{} : query.context.front(), query.context}));
             return result;
         }
         if (query.kind == relativeItem) {
-            // Physical links and virtual coordinates describe the same relation.
-            // Embedded spans need a logical boundary walk, so remain visible as
-            // deferred demands until that route is supported.
             if (auto owner = definitions_->retainedOccurrenceOwner(node)) {
                 auto index = description.occurrenceIndex();
                 auto extent = access_->listExtent(owner);
                 if (index >= 0 && index < extent &&
                     (query.argument < 0 ? index > 0 : index < extent - 1))
                     result.edges.push_back(direct("relative sparse coordinate", {owner, itemAt, index + query.argument}));
-            } else if (auto neighbor = description.adjacent(query.argument < 0)) {
-                if (!access_->subList(node) && !access_->subList(neighbor))
-                    result.edges.push_back(direct("adjacent occurrence", {neighbor, itemFound, 0}));
-                else result.deferred = true;
-            } else result.deferred = true;
+            } else relativeStep(result, query, ListPhase::leave);
+            return result;
+        }
+        if (query.kind == relativeMember || query.kind == relativeBoundary) {
+            if (query.kind == relativeMember && !access_->subList(node)) {
+                result.edges.push_back(direct("adjacent occurrence", {node, itemFound, 0})); return result;
+            }
+            if (!access_->navigationList(node)) {
+                result.refinements.push_back({{node, valueOnly, 0}, {1, 0}, "resolve navigation span", true});
+                result.deferred = true; return result;
+            }
+            // The known beginning of a span and a closed end need no extent
+            // scan. Open ends require evidence about the remaining positions.
+            if (!access_->openTail(node) || (query.kind == relativeMember && query.argument > 0 && description.member()) ||
+                (query.kind == relativeBoundary && query.argument < 0)) {
+                relativeStep(result, query, query.kind == relativeMember ? ListPhase::enter : ListPhase::leave);
+                return result;
+            }
+            auto boundary = listBoundary(*access_, node);
+            if (!boundary.valid) { result.deferred = true; return result; }
+            boundaryNeeds(result, node, boundary);
+            if (boundary.tail == 0) {
+                relativeStep(result, query, query.kind == relativeMember ? ListPhase::enter : ListPhase::leave, boundary.visits);
+            } else {
+                auto index = query.kind == relativeBoundary ? boundary.prefix :
+                             query.argument < 0 ? boundary.extent - 1 : 0;
+                if (index >= 0 && (boundary.extent < 0 || index < boundary.extent)) {
+                    auto edge = direct("open span position", {node, itemAt, index}, true);
+                    edge.work.visits += boundary.visits; result.edges.push_back(std::move(edge));
+                }
+                result.refinements.push_back({{node, valueOnly, 0}, {boundary.visits, 0}, "resolve open span boundary", true});
+            }
             return result;
         }
         if (query.kind == selectIntersection) {
             if (!access_->canSelect(node)) { result.deferred = true; return result; }
+            if (auto index = access_->selectionIndex(node); index >= 0) {
+                result.edges.push_back(direct("intersection prefix endpoint", {definitions_->selectionBody(node), itemAt, index}));
+                return result;
+            }
             result.edges.push_back(sequence(POVDescription::boundary(access_->selectionSource(node)->value),
                 {node, selectionExtentMember, 0, node}, {node, selectionExtentEnd, 0, node}));
             return result;
@@ -698,25 +754,32 @@ private:
             return result;
         }
         if (query.kind == listContents) {
+            for (const auto& ancestor : query.context)
+                if (access_->sameInfon(ancestor, node)) { result.deferred = true; return result; }
             if (!access_->physicalList(node) && !access_->growingList(node)) { result.deferred = true; return result; }
+            auto owners = query.context; owners.push_back(node);
             result.edges.push_back(sequence(description.member(),
-                {node, listMember, query.argument}, {node, listEnd, query.argument}));
+                {node, listMember, query.argument, {}, owners}, {node, listEnd, query.argument}));
             return result;
         }
         if (query.kind == listMember) {
             // Normalization requires the member's complete result. A size-only
             // count needs just an embedded span's extent; nested values count 1.
-            if (query.argument != sizeOnly || access_->subList(node))
-                result.refinements.push_back({{node, static_cast<int>(query.argument), 0},
+            if (query.argument != sizeOnly || access_->subList(node)) {
+                auto context = query.context; context.insert(context.begin(), node);
+                result.refinements.push_back({{node, static_cast<int>(query.argument), 0, {}, context},
                     {0, 0}, "resolve list member", false});
+            }
             result.edges.push_back(sequence(description.adjacent(), query, {node, listEnd, query.argument}));
             return result;
         }
         if (query.kind >= sizeOnly && query.kind <= sizeAndValue) {
+            auto owners = access_->subList(node) ? query.context : std::vector<POVNode>{};
+            if (!owners.empty()) owners.erase(owners.begin());
             if (access_->inputPending(node)) {
                 result.deferred = true;
                 if (access_->growingList(node))
-                    result.refinements.push_back({{node, listContents, query.kind}, {0, 0},
+                    result.refinements.push_back({{node, listContents, query.kind, {}, owners}, {0, 0},
                         "visit published stream members", false});
                 return result;
             }
@@ -725,8 +788,9 @@ private:
             }
             result.deferred = !access_->supports(node, query.kind);
             if (auto direction = access_->relativeDirection(node)) {
-                auto anchor = positions_->anchor(node, query.context.empty() ? POVNode{} : query.context.front());
-                result.refinements.push_back({{node, selectRelative, direction, anchor}, {0, 0},
+                auto context = positions_->context(node, query.context);
+                auto anchor = context.front(); context.erase(context.begin());
+                result.refinements.push_back({{node, selectRelative, direction, anchor, context}, {0, 0},
                     "resolve relative position", false});
             }
             if (definitions_->required(node))
@@ -739,7 +803,7 @@ private:
                 result.refinements.push_back({{node, concatField, 2, {}, query.context}, {0, 0}, "resolve value expression", false});
             if (access_->physicalList(node)) {
                 if (query.kind != sizeOnly || !(access_->known(node) & sizeOnly))
-                    result.refinements.push_back({{node, listContents, query.kind}, {0, 0},
+                    result.refinements.push_back({{node, listContents, query.kind, {}, owners}, {0, 0},
                         "inspect list contents", query.kind == sizeOnly});
             }
             if (query.kind != sizeOnly && access_->templatePrefixList(node)) {
@@ -792,7 +856,13 @@ private:
             // route. Advertise that refinement before rejecting unknown shape.
             if (definitions_->required(node))
                 result.refinements.push_back({{node, typeRequirements, 0}, {1, 0}, "expose indexed list shape", true});
-            if (query.argument < 0 || !access_->orderedList(node)) {
+            if (query.argument < 0) return result;
+            // Shape may itself be an expression or an unresolved RHS. Expose
+            // these routes before testing whether direct navigation is ready.
+            if (!(access_->known(node) & sizeOnly))
+                result.refinements.push_back({{node, sizeOnly, 0}, {1, 0}, "find size to expose indexed access", true});
+            if (!access_->navigationList(node)) {
+                result.refinements.push_back({{node, valueOnly, 0}, {1, 0}, "find value to expose indexed access", true});
                 return result;
             }
             if (access_->sparse(node) && access_->listExtent(node) >= 0) {
@@ -813,15 +883,7 @@ private:
                 auto first = description.member();
                 if (first)
                     result.edges.push_back(direct("first physical item",
-                        {first, physicalItemAt, query.argument}, true,
-                        static_cast<Cost>(query.argument) + 1));
-                if (!(access_->known(node) & sizeOnly)) {
-                    // An advertised refinement opportunity: size may expose a
-                    // sparse edge. The manager starts a child goal and retries
-                    // this query when its Set changes the graph.
-                    result.refinements.push_back({{node, sizeOnly, 0}, {1, 0},
-                                                   "find size to expose indexed access"});
-                }
+                        {first, physicalItemAt, query.argument, {}, {node}}, true));
             }
             // Registered equal lists may supply another route to this item.
             for (const auto& relation : description.relationships(false))
@@ -830,14 +892,30 @@ private:
             return result;
         }
         if (query.kind == physicalItemAt) {
-            // Nested/list-span traversal is deliberately not guessed here.
-            if (access_->subList(node)) return result;
-            if (query.argument == 0)
-                result.edges.push_back(direct("selected physical item", {node, itemFound, 0}, true));
-            else if (auto next = description.adjacent())
-                result.edges.push_back(direct("next physical item",
-                    {next, physicalItemAt, query.argument - 1}, true,
-                    static_cast<Cost>(query.argument)));
+            std::int64_t remaining = query.argument;
+            Cost inspection = 0;
+            if (access_->subList(node)) {
+                if (!access_->navigationList(node)) {
+                    result.refinements.push_back({{node, valueOnly, 0}, {1, 0}, "resolve indexed span", true});
+                    result.deferred = true; return result;
+                }
+                auto boundary = listBoundary(*access_, node); inspection = boundary.visits;
+                if (!boundary.valid) { result.deferred = true; return result; }
+                boundaryNeeds(result, node, boundary);
+                if (boundary.extent < 0 || remaining < boundary.extent) {
+                    auto edge = direct("indexed embedded position", {node, itemAt, remaining}, true);
+                    edge.work.visits += inspection; result.edges.push_back(std::move(edge));
+                    return result;
+                }
+                remaining -= boundary.extent;
+            } else if (remaining == 0) {
+                result.edges.push_back(direct("selected physical item", {node, itemFound, 0}, true)); return result;
+            } else --remaining;
+            auto next = nextListPosition(*access_, ListPosition<POVNode>{node, ListPhase::leave, query.context}, true);
+            if (next.phase == ListPhase::member) {
+                auto edge = direct("next logical item", {next.node, physicalItemAt, remaining, {}, next.owners}, true);
+                edge.work.visits += inspection; result.edges.push_back(std::move(edge));
+            }
             return result;
         }
         result.deferred = true;

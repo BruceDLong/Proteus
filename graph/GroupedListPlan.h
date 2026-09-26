@@ -64,7 +64,7 @@ public:
         if (extent >= 0 && static_cast<std::uint64_t>(extent) != count)
             throw std::runtime_error("group count disagrees with target extent");
         std::vector<POVNode> existing;
-        for (auto item = access_->first(target_); item; item = access_->next(item)) {
+        for (auto item = access_->first(target_, false); item; item = access_->next(item, false)) {
             ++work.visits;
             if (!access_->correspondingMembers(item, item)) return;
             existing.push_back(item);

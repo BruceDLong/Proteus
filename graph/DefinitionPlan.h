@@ -125,7 +125,7 @@ private:
                 (!access->physicalList(target->node) && !access->templatePrefixList(target->node))) {
                 supported = false; return;
             }
-            for (auto item = access->first(target->node); item; item = access->next(item)) {
+            for (auto item = access->first(target->node, false); item; item = access->next(item, false)) {
                 if (!access->correspondingMembers(item, item)) { supported = false; return; }
                 members.push_back(item);
             }

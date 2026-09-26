@@ -41,6 +41,14 @@ test normalization now enter through Agent's graph context.
 Structural `%prev` and `%next` now use graph position goals, followed by ordinary
 identity traversal. See [relative-position-results.md](relative-position-results.md)
 for supported contexts, sparse lookup, partial results and deferred boundaries.
+Logical navigation now crosses embedded spans and supports positive intersection
+prefix selection; see [logical-navigation-results.md](logical-navigation-results.md).
+
+The older language files are tracked separately from the focused graph tests.
+See [language-compatibility-results.md](language-compatibility-results.md) for the
+complete fixture inventory and the next compatibility priorities.
+Run `python3 graph/audit_language_suite.py --output /tmp/proteus4-language-audit`
+to preserve every original fixture and record failures, crashes and timeouts.
 
 ## Responsibilities
 

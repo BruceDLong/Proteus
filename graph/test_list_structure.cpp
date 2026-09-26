@@ -10,8 +10,16 @@ struct Access {
     struct Node { int first = 0, next = 0, storage = 0; bool embedded = false, open = false, pending = false;
                   std::int64_t extent = -1; bool ordinary = true; };
     std::map<int, Node> nodes;
-    int first(int n) { return nodes.at(n).first; }
-    int next(int n) { return nodes.at(n).next; }
+    int first(int n, bool reverse = false) {
+        int item=nodes.at(n).first;
+        if (reverse && item) while (nodes.at(item).next) item=nodes.at(item).next;
+        return item;
+    }
+    int next(int n, bool reverse = false) {
+        if (!reverse) return nodes.at(n).next;
+        for (const auto& entry : nodes) if (entry.second.next == n) return entry.first;
+        return 0;
+    }
     bool subList(int n) { return nodes.at(n).embedded; }
     bool openTail(int n) { return nodes.at(n).open || inputPending(n); }
     bool inputPending(int n) { return nodes.at(n).pending; }
@@ -93,6 +101,19 @@ int main() {
         Layout stored; std::uint64_t visits=0; assert(read(a,1,stored,visits));
         assert(stored.segments.size()==3 && stored.segments[1].node==3); ++cases;
         visits=0; assert(!readListLayout(a,1,stored,visits,[&](const auto& at){return !a.inputPending(at.node);},[](int n){return n;})); ++cases;
+    }
+    {
+        Access a; a.nodes={{1,{2,0,0,false,false,false,3}}, {2,{3,5,0,true,false,false,2}},
+                          {3,{0,4}}, {4,{}}, {5,{}}};
+        std::vector<int> members;
+        for (ListPosition<int> at{1}; at.phase!=ListPhase::done; at=nextListPosition(a,std::move(at),false,true))
+            if (at.phase==ListPhase::member && !a.subList(at.node)) members.push_back(at.node);
+        assert((members==std::vector<int>{5,4,3})); ++cases;
+        auto boundary=listBoundary(a,1); assert(boundary.valid && boundary.extent==3 && boundary.tail==0); ++cases;
+        a.nodes[2].open=true; a.nodes[2].extent=1000000000;
+        boundary=listBoundary(a,2); assert(boundary.valid && boundary.tail==999999998 && boundary.visits==3); ++cases;
+        a.nodes[2].extent=-1; boundary=listBoundary(a,1);
+        assert(boundary.valid && boundary.prefix==-1 && boundary.missingExtents==std::vector<int>{2}); ++cases;
     }
     std::cout << "List structure: " << cases << "/" << cases << " cases passed\n";
 }
