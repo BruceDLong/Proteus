@@ -27,7 +27,9 @@ Empty open definition bodies retain virtual positions; their known extent
 feeds the shared span layout without allocating members.
 Loaded instance prefixes can be checked without expanding their virtual tails.
 Sequence matching uses successful continuation edges and accepts the first
-complete correspondence; future oneOf results are deferred. Direct and repeated
+complete grammar correspondence; alternatives for ambiguous grammar parses remain
+deferred. This does not apply to unordered field selection, which must retain
+its matching alternatives as oneOf. Direct and repeated
 <~ injection share that walk without mutating the listSpec. The constrained
 repeated-output example in graph/source-injection-results.md intentionally waits
 symbolically with a subscription until more information arrives. Unsized open
@@ -61,8 +63,11 @@ only a candidate-location optimization, not the semantic matching rule. Do not
 assume a type match establishes uniqueness when several members can fit. Context
 is part of meaning resolution; eventual contextual evidence must include its
 binding context. The current definition catalogue admits only unique, context-free
-meanings and defers ambiguity. See graph/typed-predicate-results.md for the open
-question about explicit type evidence versus merely compatible structure.
+meanings and defers ambiguity. Field selection has a separate result policy:
+an ordered list selects the first compatible member in logical list order; an
+unordered list preserves matching alternatives as `*_+[wheel1 wheel2]`. Exact
+written type spelling does not give a later member priority. Search cost chooses
+routes, not a different semantic winner. See graph/field-selection-contract.md.
 
 Agent.normalize() is the public graph entry point and returns a handle.
 Agent.normalizeAndWait() is the synchronous convenience. Each Agent owns a

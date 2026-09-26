@@ -35,7 +35,7 @@ represented scalar identity can reuse that checked evidence on replay. Finite
 list and context-dependent meanings retain their existing conservative guards.
 The generic graph scheduler and existing data layout are unchanged.
 
-## Boundaries and semantic question
+## Boundaries and selection semantics
 
 This implements scalar predicates only. Dot/path lowering, matching a structured
 predicate against a list-valued input member, unordered omission semantics, and
@@ -50,9 +50,12 @@ structural compatibility alone must not silently establish unique field selectio
 
 The old `query/byType1` fixture gives `pedals` and `wheel` identical definitions
 `{position:_ torque:_}` and expects `.wheel` to choose the second member. The user
-has been asked whether explicit `wheel` type evidence gives it priority or whether
-this now requires a distinguishing property/context. No dot selection policy or
-original fixture was changed while that question is pending.
+subsequently clarified that an ordered list selects the first compatible member,
+so this example selects the first member, currently labeled `pedals`. An unordered
+list retains both alternatives as `*_+[wheel1 wheel2]`. Explicit type spelling
+does not give the second member priority. See
+[field-selection-contract.md](field-selection-contract.md). The historical fixture
+remains unchanged; its old expectation is not the intended semantic target.
 
 ## Validation
 

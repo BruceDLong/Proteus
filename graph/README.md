@@ -18,6 +18,10 @@ Scalar exclusion predicates and atomic list input reuse that walk; see
 Context-free scalar type meanings now participate in that comparison without
 applying definitions to speculative candidates; see
 [typed-predicate-results.md](typed-predicate-results.md).
+The field-selection contract is first compatible member for ordered lists and
+oneOf alternatives for unordered lists; see
+[field-selection-contract.md](field-selection-contract.md). This policy is recorded
+for implementation; dot selection is not yet supported by the graph adapter.
 
 ## Start here
 

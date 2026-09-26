@@ -86,6 +86,15 @@ has exactly one occurrence in a container.
 Follow existing POV/definition relationships and reuse checked type evidence;
 do not add repeated type RHSs just to make each query pass.
 
+The user has clarified the selection policy: ordered lists select the first
+compatible logical member; unordered lists return matching alternatives as a
+oneOf, `*_+[wheel1 wheel2]`. The old `query/byType1` and `query/chain` examples give
+`pedals` and `wheel` identical structure but expect selection of the second member
+by its label. Those expectations conflict with the clarified ordered semantics.
+Keep the historical audit visible and distinguish semantic corrections from
+missing implementation; do not add label priority to recover those old assertions.
+See [field-selection-contract.md](field-selection-contract.md).
+
 Then examine contextual repeated templates and temporal recurrence: the original
 `prev/plus1` remains symbolic despite structural `%prev` working. Other clusters
 include symbolic span alignment, alternatives/ranges, ordered slicing, and world
