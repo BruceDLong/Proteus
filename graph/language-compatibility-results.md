@@ -68,12 +68,19 @@ missing-field subscriptions or force insertion of every definition member.
 The finite ordered-list requirement planner cannot be reused unchanged for that
 case. List size still counts the items the instance holds.
 
-There is also a syntax distinction to settle for the older fixtures: the parser
-marks comma-separated `{color:$, length:_}` unordered, while `query/chain*` uses
-space-separated definitions. Those fixtures currently return a known field in
-Proteus3, but that printed result alone does not establish full type validation.
-Do not infer unorderedness from field names or silently rewrite those fixtures
-without resolving this distinction.
+The user clarified that ordered lists can have typed fields, as in a C struct.
+Keep the space-separated `query/chain*` fixtures: selection by type does not
+imply unorderedness or require punctuation changes. Selecting an existing member
+and validating the entire container against a positional definition are separate
+goals; a printed selected value alone does not establish full container validation.
+
+These are typed members, not string-keyed fields. Selection must use type and
+property constraints, allowing definitions and identity relationships to establish
+structural compatibility across different written labels. Different type IDs are
+not sufficient negative evidence. A type index can locate candidates, but cannot
+replace matching. The modeler can supply distinguishing properties where needed;
+a literal field name is represented as `field^{name=X}`. Do not assume one type
+has exactly one occurrence in a container.
 Follow existing POV/definition relationships and reuse checked type evidence;
 do not add repeated type RHSs just to make each query pass.
 

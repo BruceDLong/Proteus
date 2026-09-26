@@ -44,9 +44,17 @@ acquisition is for cases where only one is available.
 
 For unordered lists, the user clarified that omitted items are non-relevant to
 that instance. Do not create missing-field subscriptions or eagerly insert all
-definition members. Instance size counts the items it holds. Commas currently
-mark unordered lists in the parser; the old query/chain fixtures omit them, so
-do not silently infer unorderedness from field names to recover those tests.
+definition members. Instance size counts the items it holds. Ordered lists can
+also contain typed fields (as in a C struct); field selection does not imply
+unorderedness. Preserve the space-separated query/chain fixtures.
+
+What has sometimes been called a named field is a typed member selected by its
+type and other distinguishing properties. An explicit name is modeled as
+field^{name=X}. Two modelers may use different labels for structurally compatible
+members. Follow definitions, identities, and structural/property constraints;
+different written type IDs alone do not prove incompatibility. A type index is
+only a candidate-location optimization, not the semantic matching rule. Do not
+assume a type match establishes uniqueness when several members can fit.
 
 Agent.normalize() is the public graph entry point and returns a handle.
 Agent.normalizeAndWait() is the synchronous convenience. Each Agent owns a
