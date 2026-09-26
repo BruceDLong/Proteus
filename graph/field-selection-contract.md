@@ -48,7 +48,8 @@ separate from this unordered field-selection requirement.
 
 ## Current implementation boundary
 
-Scalar sequence predicates already compare context-free type meanings read-only.
-Dot/path lowering, structured-member predicates, contextual meanings, and
-unordered oneOf publication are not yet implemented in the graph adapter. This
-checkpoint records the resolved contract; it makes no runtime behavior change.
+Single-step scalar dot queries and `GraphNormalizer.findField` implement this
+policy through the existing list walk and read-only scalar type meanings.
+See [field-selection-results.md](field-selection-results.md). Structured-member
+predicates, chained paths, writes/retained parents, contextual meanings, and
+partial publication of an unordered result remain pending.

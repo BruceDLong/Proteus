@@ -37,9 +37,11 @@ The generic graph scheduler and existing data layout are unchanged.
 
 ## Boundaries and selection semantics
 
-This implements scalar predicates only. Dot/path lowering, matching a structured
-predicate against a list-valued input member, unordered omission semantics, and
-contextual overload resolution remain pending. The current catalogue requires a
+This checkpoint implements scalar sequence predicates. The subsequent
+[field-selection-results.md](field-selection-results.md) adds single-step scalar
+dot queries and unordered result construction. Matching a structured predicate
+against a list-valued input member, unordered omission semantics, and contextual
+overload resolution remain pending. The current catalogue requires a
 unique declaration for a word; it does not choose one overloaded meaning by
 spelling, declaration order, or an arbitrary first result.
 

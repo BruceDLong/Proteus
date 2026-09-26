@@ -63,16 +63,8 @@ class SequenceCorrespondence {
         next.coordinates[2]=next.kind; next.kind=correspondenceInput; return next;
     }
     static bool inverted(const POVNode& node) { return getFlagBit(node->pItem->flags, infonView::invertMatch); }
-    // A known disagreement proves exclusion even if another field is unknown.
-    // Otherwise absence of a required fact is unknown, never a negative match.
-    enum class Match { yes, no, unknown };
-    static Match compare(GraphTypeFacts required, const GraphTypeFacts& actual) {
-        if (!required.valid || !actual.valid) return Match::unknown;
-        if (required.accepts(actual)) return Match::yes;
-        return required.combine(actual) ? Match::unknown : Match::no;
-    }
     bool readable(const POVNode& node, bool root, bool predicate = false) const {
-        if (!access_->plainStructure(node, access_->canSelect(node), false, false, false) ||
+        if (!access_->plainStructure(node, access_->canSelect(node), false, false, false, false) ||
             (!predicate && inverted(node)) ||
             (access_->hasTypeRequirements(node) && !definitions_->scalarFacts(node,predicate).valid)) return false;
         if (!root) for (const auto& relation : POVDescription(node, access_->registry.get()).relationships())
@@ -160,7 +152,7 @@ public:
                     auto supplied=definitions_->scalarFacts(item);
                     if (!supplied.valid) return out;
                     if (inverted(q.node)) {
-                        if (compare(facts, supplied) != Match::no) return out;
+                        if (compareScalar(facts, supplied) != ScalarMatch::no) return out;
                     } else if ((!supplied.hasValue && !access_->literalList(item)) || !facts.combine(supplied)) return out;
                     auto next=q; next.kind=sequenceAtomMatched; ++next.argument; next.related.reset(); next.coordinates.push_back(q.argument);
                     out.edges.push_back(edge("matched input member",nextInput(std::move(next)))); return out;
@@ -184,8 +176,8 @@ public:
                 GraphTypeFacts supplied; supplied.valid=true; supplied.overlay=infonState::STR;
                 supplied.hasValue=true; supplied.text=text.substr(q.argument,width);
                 supplied.hasSize=true; supplied.size=width;
-                auto match=compare(facts,supplied);
-                if (inverted(q.node) ? match!=Match::no : match==Match::no) return out;
+                auto match=compareScalar(facts,supplied);
+                if (inverted(q.node) ? match!=ScalarMatch::no : match==ScalarMatch::no) return out;
                 auto next = q; next.kind = sequenceAtomMatched; next.argument += width;
                 // Keep the beginning of this scalar occurrence in the cursor;
                 // zero-width repeated matches cannot produce an infinite walk.

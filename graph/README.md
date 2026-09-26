@@ -20,8 +20,10 @@ applying definitions to speculative candidates; see
 [typed-predicate-results.md](typed-predicate-results.md).
 The field-selection contract is first compatible member for ordered lists and
 oneOf alternatives for unordered lists; see
-[field-selection-contract.md](field-selection-contract.md). This policy is recorded
-for implementation; dot selection is not yet supported by the graph adapter.
+[field-selection-contract.md](field-selection-contract.md). Single-step scalar
+dot queries and `GraphNormalizer.findField(source, predicate)` now implement that
+policy. See [field-selection-results.md](field-selection-results.md) for scope,
+symbolic alternatives, subscriptions, and validation.
 
 ## Start here
 
@@ -78,6 +80,8 @@ to preserve every original fixture and record failures, crashes and timeouts.
 | `ProteusGraph.h` | Translate semantic access into graph edges and refinement opportunities; GoalSpec turns findings into Sets |
 | `ListStructure.h` | Shared incremental list walk and layout evidence for embedded positions, gaps, and owner extents |
 | `SpanAlignment.h` | Plan finite ordered correspondence from opaque member/gap evidence; no POV access or mutation |
+| `FieldSelection.h` | Shared ordered/unordered member walk, field-result Sets, and single-step dot lowering |
+| `ScalarPredicate.h` | Three-state scalar comparison shared by sequence matching and field selection |
 | `SequenceCorrespondence.h` | Successful continuation edges over string/list input, repeated matching, selected results, and accepted-path Sets |
 | `GroupedListPlan.h` | Plan fixed-width repeated groups against whole ordered source spans; preserve occurrence identity |
 | `RHSRepresentation.h` | Prove which RHS facts are already represented, independently of complete normalization |

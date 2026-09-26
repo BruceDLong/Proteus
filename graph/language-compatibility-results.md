@@ -8,7 +8,7 @@ unit tests compiled into `TestProteus`.
 
 | Suite | Passing | Failing | Total |
 |---|---:|---:|---:|
-| `defaultTests.tst` | 159 | 111 | 270 |
+| `defaultTests.tst` | 161 | 109 | 270 |
 | `demoTests.tst` | 1 | 21 | 22 |
 | `sparseTests.tst` | 1 | 22 | 23 |
 | `timeTests.tst` | 0 | 36 | 36 |
@@ -18,12 +18,12 @@ unit tests compiled into `TestProteus`.
 The R1 file records an experimental contract and explicitly excludes itself from
 the default tests; its failures are not evidence of regressions from a previously
 passing implementation. Other suites also overlap in coverage, so the combined
-161/363 pass count is a fixture inventory, not a measure of language completeness.
+163/363 pass count is a fixture inventory, not a measure of language completeness.
 
-The default row was refreshed after read-only scalar type matching; every
-fixture status is unchanged from scalar exclusion. The other five rows retain
-the logical-navigation checkpoint. See
-[typed-predicate-results.md](typed-predicate-results.md) for the latest change.
+The default row was refreshed after scalar field selection, recovering two
+assertions with no prior pass lost. The other five rows retain the
+logical-navigation checkpoint. See
+[field-selection-results.md](field-selection-results.md) for the latest change.
 
 The default suite was audited before and after logical navigation. It improved
 from 135/270 to 138/270, with no formerly passing case lost. The recovered cases
@@ -42,7 +42,11 @@ passed only their rendered-result assertions while retaining unresolved predicat
 Scalar exclusion now proves those predicates, with focused tests checking the
 relationship proof as well as output. It also restores `query/firstStrC` and
 `notTemplate/notNum`, bringing the default count to 159/270 with no previous pass
-lost and no crashes or timeouts.
+lost and no crashes or timeouts. Scalar field selection then recovered
+`read/readStrA` and `temporal/sBeginField`, reaching 161/270 without losing any
+previous pass. The latter is an ordinary `.begin` field query, not temporal
+boundary support. Its rendered-result assertion passes while the bare numeric
+size remains unknown; this does not establish `isNormed`.
 
 The complete per-fixture status and input-file hashes are in
 [language-compatibility-status.json](language-compatibility-status.json).
@@ -59,11 +63,11 @@ symbolic and subscribed until more information arrives, per the user's
 clarification. Its waiting state is an expected result.
 
 Use the failing original examples to choose the next semantic unit, starting
-with named part/path selection and its relationship to definition requirements.
+with structured typed-member selection and its relationship to definition requirements.
 For example, `query/chain2` currently leaves `.wheel.spoke.length` unresolved.
 Dot paths lower to negated skip plus positive selection in Proteus3, so the scalar
 predicate prerequisite was implemented first, followed by read-only scalar type
-meaning compilation. Compound and contextual predicates still require careful
+meaning compilation and single-step scalar dot selection. Compound and contextual predicates still require careful
 composition with type evidence. The user clarified that omitted items
 in an unordered list are non-relevant to that instance; they must not become
 missing-field subscriptions or force insertion of every definition member.

@@ -18,7 +18,7 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectionExtentMember = 20, selectionExtentEnd = 21,
               typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27,
               selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31,
-              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40 };
+              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, fieldMatched = 43, fieldUnknown = 44, fieldEnd = 45 };
 
 inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
     auto phase = query.kind == correspondenceEnter ? ListPhase::enter :
@@ -28,6 +28,8 @@ inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
 
 #include "DefinitionApplications.h"
 #include "RHSRepresentation.h"
+#include "ScalarPredicate.h"
+#include "FieldSelection.h"
 #include "GroupedListPlan.h"
 
 // Early correspondence is conditional on the parser retaining the ordered
@@ -235,6 +237,11 @@ public:
         if (!error.empty()) throw std::runtime_error(error);
         if (access_->inputPending(visit.query.node) && request.kind != listContents &&
             !access_->prefixList(visit.query.node)) return {};
+        if (request.kind >= sizeOnly && request.kind <= sizeAndValue &&
+            visit.query.node == request.node && FieldPath::ready(*access_,request.node)) {
+            auto access=access_;auto node=request.node;
+            return {{"Prepare field selection",[access,node] {return FieldPath::prepare(*access,node);},{1,6}}};
+        }
         if (request.kind >= sizeOnly && request.kind <= sizeAndValue &&
             visit.query.node == request.node && access_->hasInnerSource(request.node)) {
             auto access = access_; auto owner = request.node;
@@ -541,6 +548,8 @@ public:
     void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); definitions_->prune(); }
     std::vector<std::function<void()>> takeEffects() override { return completion_->takeEffects(); }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
+        if (query.kind == selectField)
+            return std::make_shared<ProteusFieldGoal>(query, access_, definitions_);
         if (query.kind == sequenceCorrespondence)
             return std::make_shared<ProteusSequenceGoal>(query, access_, definitions_, completion_);
         if (query.kind == selectRelative)
@@ -560,6 +569,8 @@ public:
         return std::make_shared<ProteusGoal>(query, access_, completion_, evidence_, definitions_);
     }
     Expansion<POVNode> expand(const Query<POVNode>& query) override {
+        if (query.kind >= selectField && query.kind <= fieldEnd)
+            return FieldSelection(access_, definitions_).expand(query);
         if ((query.kind >= sequenceCorrespondence && query.kind <= sequenceComplete) || query.kind == correspondenceInput || query.kind == sequenceAtomMatched)
             return SequenceCorrespondence(access_, definitions_).expand(query);
         bool pending = evidence_->pending(query.node);
@@ -814,6 +825,11 @@ private:
             if (access_->isDefinition(node)) {
                 result.deferred = !definitions_->registered(node); return result;
             }
+            if(auto field=node->pItem->fieldSelection) {
+                result.refinements.push_back({{field->source,selectField,0,field->predicate,{node}},
+                    {0,0},"select compatible field",false});
+                if(!field->result) return result;
+            }
             result.deferred = !access_->supports(node, demand);
             if (auto direction = access_->relativeDirection(node)) {
                 auto context = positions_->context(node, query.context);
@@ -863,7 +879,7 @@ private:
                         result.edges.push_back(direct("checked type evidence", {source, demand, 0, origin}));
                     if (access_->canSelect(source))
                         result.refinements.push_back({{source, selectIntersection, 0}, {1, 0}, "find RHS intersection result", false});
-                    if (access_->hasInnerSource(source) || access_->relativeDirection(source) || access_->hasConcat(source, 1) || access_->hasConcat(source, 2))
+                    if (FieldPath::ready(*access_,source) || source->pItem->fieldSelection || access_->hasInnerSource(source) || access_->relativeDirection(source) || access_->hasConcat(source, 1) || access_->hasConcat(source, 2))
                         result.refinements.push_back({{source, demand, 0, {}, context}, {1, 0}, "resolve expression RHS", false});
                     result.deferred = true; return;
                 }

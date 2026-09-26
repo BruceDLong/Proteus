@@ -40,9 +40,14 @@ reinterpret their copied values as more grammar. Composite/standalone exclusion,
 compound/contextual typed predicates, prefixed definition bodies, recursive
 grammar, and record matching remain later boundaries. Context-free scalar type
 meanings can be compiled read-only for speculative matching and reused on accepted
-outputs. Compilation is not proof that a candidate satisfies its type. Preserve
-read-only definition bodies,
-already-demanded occurrence POVs, and reusable type evidence; avoid redundant
+outputs. Compilation is not proof that a candidate satisfies its type.
+Single-step scalar dot queries and GraphNormalizer.findField share the field walk:
+ordered lookup selects the first proved compatible logical member; unordered
+lookup publishes a oneOf after every relevant candidate and the end are known.
+Unresolved earlier candidates cannot be skipped to choose a later ordered result.
+See graph/field-selection-results.md for supported boundaries and validation.
+Preserve read-only definition bodies, already-demanded occurrence POVs, and
+reusable type evidence; avoid redundant
 application RHSs. Redundant RHS/template rendering uses revision-scoped proofs;
 keep work edges searchable and do not relax isNormed to hide unknown sizes.
 Size and value should be acquired together when both are available; partial

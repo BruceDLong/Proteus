@@ -64,6 +64,10 @@ struct GraphNormalizer {
         runtime.update([&] { access->bind(source); });
         return runtime.normalize({source, proteus4::itemAt, index});
     }%>
+    me NormalizationHandle: findField(our POV: source, our POV: predicate) <- <%{
+        runtime.update([&] { access->bind(source); access->bind(predicate); });
+        return runtime.normalize({source, proteus4::selectField, 0, predicate});
+    }%>
     void: addRHS(our POV: target, our POV: rhs) <- <%{
         runtime.update([&] {
             access->bind(target); access->bind(rhs);
@@ -111,6 +115,16 @@ struct GraphRHSProof {
     me bool: valid <- true
 }
 
+// Source/predicate provenance and the published match proof for a field query.
+// Candidate POVs are existing nodes; this is evidence, not another list graph.
+struct GraphFieldSelection {
+    our infonView: expression
+    our POV: source
+    our POV: predicate
+    our POV: result
+    me List<our POV>: matches
+}
+
 // Retain the original expression as provenance after publishing its result.
 // Its operand POVs remain searchable; they are not copied into a second graph.
 struct infonView {
@@ -118,6 +132,7 @@ struct infonView {
     our infonState: valueExpression
     our infonView: selectionExpression
     our POV: selectedResult
+    our GraphFieldSelection: fieldSelection
     me int: selectionKind <- 0
     me string: graphParseError
     // Derived rendering evidence, independent of complete normalization. The
@@ -235,14 +250,14 @@ struct ProteusGraphAccess {
     me bool: plain(our POV: pov, me bool: selection <- false, me bool: readingPrefix <- false, me bool: relationship <- false, me bool: cursor <- false) <- {
         return(plainStructure(pov, selection, readingPrefix, relationship, cursor) and !pov!.pItem!.invertMatch)
     }
-    me bool: plainStructure(our POV: pov, me bool: selection, me bool: readingPrefix, me bool: relationship, me bool: cursor) <- {
+    me bool: plainStructure(our POV: pov, me bool: selection, me bool: readingPrefix, me bool: relationship, me bool: cursor, me bool: path <- false) <- {
         if(pov==NULL or pov!.pItem==NULL or (inputPending(pov) and !readingPrefix)){return(false)}
         our infonView: inf <- pov!.pItem
         return((inf!.viewMode==vmOverlay or (inf!.viewMode==vmAny and unknownOverlay(pov)) or
                 (cursor and inf!.viewMode==vmCursor)) and
                !inf!.isTentative and
                ((inf!.type==NULL and inf!.addedTypes.isEmpty()) or definitionTypeShape(pov)) and
-               (inf!.innr==NULL or selection) and inf!.proxy==NULL and inf!.partRef==NULL and
+               (inf!.innr==NULL or selection) and inf!.proxy==NULL and (inf!.partRef==NULL or path) and
                inf!.parts.isEmpty() and inf!.funcArgs==NULL and
                (inf!.itmMode==mNone or inf!.itmMode==mItem) and
                ((inf!.infSize!.overlayType==NUM and
