@@ -102,9 +102,10 @@ See [field-selection-contract.md](field-selection-contract.md).
 
 The latest unordered-list clarification gives partial descriptions an implied
 open tail. End of stored members is not proof that other parts do not exist.
-The current complete-candidate collection does not yet implement that implicit
-tail or partial continuation through a oneOf. The role of explicit size in
-closing membership is pending clarification.
+Implicit tails and partial oneOf continuation are now implemented; an explicit
+total size bounds membership. A completed search with no matches returns a closed
+empty oneOf for now. See [unordered-field-results.md](unordered-field-results.md)
+and the remaining design questions in [open-questions.md](open-questions.md).
 
 For each semantic change, run its original fixtures alongside focused graph
 checks, then compare the default inventory so recovered behavior stays recovered.

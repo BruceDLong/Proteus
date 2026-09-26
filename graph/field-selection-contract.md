@@ -91,3 +91,9 @@ about changes to other parts. A membership bound does not freeze member states.
 A partial query can publish known alternatives and retain a subscription for
 unresolved candidates, branches, or membership. Later dot segments traverse the
 published alternatives without requiring complete parent normalization.
+
+A completed field search with no matches returns a closed empty oneOf (`*_+[]`),
+not a normalization failure. An incomplete search with no known matches remains
+an open choice. The user's motivation includes temporal models of disassembly;
+absence at a particular time and omission from a partial description must remain
+distinct. See [open-questions.md](open-questions.md) for unresolved temporal rules.

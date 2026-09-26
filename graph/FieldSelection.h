@@ -227,7 +227,7 @@ public:
         if(q.kind==fieldAlternativesEnd && getFlagBit(q.node->pItem->innr->value->flags,infonState::tailUnfinished)) waiting_=true;
         bool finished=q.kind==fieldAlternativesEnd || (!aggregating_ && (q.kind==fieldEnd ||
             (q.kind==fieldMatched && q.context.front()->pItem->orderMode!=uUnordered)));
-        if(!finished || (matches_.empty() && !waiting_)) return {};
+        if(!finished) return {};
         const bool alternatives=waiting_ || matches_.size()!=1;
         if(result_ && published_==matches_ && publishedPending_==waiting_) {
             bool current=true;

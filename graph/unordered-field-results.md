@@ -53,28 +53,31 @@ Printing preserves explicit unordered sizes and the explicit `*_+` marker for
 an open oneOf, so reparsing does not silently change those meanings.
 
 Unordered structural correspondence, writes/retained-parent paths, and
-contextual descriptions remain later work. A closed selection with no match
-still uses the existing unresolved behavior pending the user's choice between
-normalization failure and a closed empty oneOf. Invalid size/member combinations
-are not accepted as completed field results.
+contextual descriptions remain later work. The user chose a closed empty oneOf
+for a completed field search with no matches. An incomplete search retains an
+open choice. This is not yet a temporal assertion that a part was removed;
+absence, omission, and disassembly are tracked in [open-questions.md](open-questions.md).
+Invalid size/member combinations are not accepted as completed field results.
 
 ## Validation
 
-CodeDog regeneration and the native build succeeded. All **720 focused checks
-pass**, including 26 new unordered-membership and continuation cases plus the
+CodeDog regeneration and the native build succeeded. All **724 focused checks
+pass**, including 30 unordered-membership and continuation cases plus the
 previous 694-check regression set. Tests cover implied and explicit bounds,
 partial results, late members and values, subscriptions/cancellation, stable
 identities on replay, shared source occurrences, guarded choices, two/three
 path segments, and printer round trips. A billion-member bound is inspected
-without materializing its missing members.
+without materializing its missing members. Four added cases distinguish closed
+no-match results, propagation through an empty path result, and an incomplete
+bound. The former `compoundDeferred` check now expects an empty oneOf because
+its trace reaches a closed boundary after excluding every candidate.
 
 The unchanged older default suite remains **164/270 passing, 106 failing**. Every
 fixture retains its preceding outcome; no crash, timeout, or incomplete summary
 occurred. Other language-suite inventory rows retain their earlier checkpoints.
 No full legacy compiled-unit, sanitizer, or GUI run is claimed.
 
-Logs: `/tmp/p4-unordered-final-build.log`,
-`/tmp/p4-unordered-final-native.log`,
-`/tmp/p4-unordered-verified-summary.log`,
-`/tmp/p4-unordered-verified-focused.json`, and
-`/tmp/p4-unordered-verified-default/results.json`.
+Logs: `/tmp/p4-empty-field-final-build.log`,
+`/tmp/p4-empty-field-verified-summary.log`,
+`/tmp/p4-empty-field-verified-focused.json`, and
+`/tmp/p4-empty-field-default/results.json`.

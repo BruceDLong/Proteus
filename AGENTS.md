@@ -68,7 +68,10 @@ members are known, the remainder is empty. Lookup does not require a size when
 known parts already supply useful results. Size constrains membership, not the
 members' states: describing a change to one part says nothing about changes to
 omitted parts. See graph/unordered-field-results.md for partial publication and
-continuation semantics.
+continuation semantics. A completed field search with no matches returns a
+closed empty oneOf; incomplete membership or matching still leaves an open
+choice. Track unresolved design decisions in graph/open-questions.md, keeping
+implementation gaps separate from unanswered semantic questions.
 
 Fields are typed members, not string-keyed fields. An explicit name is modeled
 as field^{name=X}. The user retracted structural type equivalence: .wheel must

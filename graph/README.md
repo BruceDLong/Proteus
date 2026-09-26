@@ -2,7 +2,8 @@
 
 This private experiment starts at Proteus commit
 `73752c4b85ba1af6e956336e7d14385a2c3d4445`. The local branch is `codex/proteus4`.
-It has no Git remote. Proteus4 is an independent redesign. Remove obsolete code
+It has no Git remote. Open design decisions are tracked in
+[open-questions.md](open-questions.md). Proteus4 is an independent redesign. Remove obsolete code
 as its responsibilities move to the graph reasoner. Ordinary Agent normalization
 now uses the graph reasoner. Legacy AItem rules remain compiled for unmigrated facilities and reference tests; normalization
 has no agenda fallback.
