@@ -4,7 +4,8 @@
 // by the target. This does not prove either endpoint fully normalized and never
 // removes a relationship. Unknown source fields impose no new requirements.
 // Layout planning uses the same compressed-span equations as correspondence;
-// this first proof supports only closed physical layouts, without filling gaps.
+// member comparisons require closed physical layouts, without filling gaps.
+// Empty open ordered bodies add only header requirements.
 class RHSRepresentation {
     std::shared_ptr<ProteusGraphAccess> access_;
     bool layout(const POVNode& node, SpanLayout<POVNode>& result, bool source) {
@@ -40,7 +41,7 @@ public:
                 (!access_->scalarCandidate(right) && !access_->literalList(right))) return;
             auto actual = access_->typeFacts(left), required = access_->typeFacts(right);
             if (!required.valid || !required.accepts(actual)) return;
-            if (access_->literalList(right)) {
+            if (access_->literalList(right) && !listHeaderOnly(*access_,right)) {
                 SpanLayout<POVNode> a, b;
                 if (!layout(left, a, false) || !layout(right, b, true)) return;
                 auto plan = alignSpans(a, b);

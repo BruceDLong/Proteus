@@ -48,7 +48,13 @@ copy its sparse or embedded-list algorithms into path handling. Negative
 indexes demand extent evidence. Competing routes to one position are not separate
 oneOf alternatives. Collected positional results use the generic finishPass Set
 hook so a partial publication cannot starve a slower successful route.
-See graph/positional-path-results.md.
+See graph/positional-path-results.md and graph/slice-results.md.
+Fixed-extent slices use shared logical layouts and span windows. Concrete result
+members use identity-backed views so contextual expressions resolve at their
+source occurrences; compressed runs share repetition families and ordinals.
+Reuse window pieces and source-revision proofs across refinement and replay.
+Empty open ordered bodies constrain only list headers, not individual members;
+predicate and RHS-representation checks share that interpretation.
 Dot queries (including read-only chains) and GraphNormalizer.findField share the field walk:
 ordered lookup selects the first proved compatible logical member; unordered
 lookup publishes known alternatives with an open oneOf tail while candidates or

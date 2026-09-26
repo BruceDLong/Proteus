@@ -1,4 +1,5 @@
 #pragma once
+#include "SliceSelection.h"
 
 // A path needs the complete candidate set, even when that set is a oneOf.
 // A caller asking for the resulting value still sees that value as symbolic.
@@ -54,7 +55,9 @@ class PathSelection {
     // waiting for a size against which to take its complement.
     Expansion<POVNode> position(const Query<POVNode>& q) const {
         Expansion<POVNode> out;
-        auto selector=q.related;auto item=selector->pItem;auto value=item->value;
+        auto state=q.related->pItem->pathSelection;
+        auto selector=state->predicate;auto spec=state->spec;
+        auto item=selector->pItem;auto value=item->value;
         bool constrained=!POVDescription(selector,access_->registry.get()).relationships().empty() || definitions_->required(selector);
         bool literal=access_->plainStructure(selector,false,false,false,false,false,true) &&
             !getFlagBit(item->flags,infonView::invertMatch) &&
@@ -70,7 +73,7 @@ class PathSelection {
         if(getFlagBit(value->flags,infonState::inverted)) number.val=-number.val;
         if(number.getDenominator()==0) {access_->numericLiteralError();return out;}
         number.val.canonicalize();
-        if(number.getDenominator()!=1 || number==0 || number>INT64_MAX || number < -INT64_MAX) {
+        if(number.getDenominator()!=1 || (!spec && number==0) || number>INT64_MAX || number < -INT64_MAX) {
             unresolved(out,q,"unsupported path index");return out;
         }
         auto magnitude=number;
@@ -95,12 +98,20 @@ class PathSelection {
             }
             index=boundary.extent-index;
         } else {
-            --index;
-            if(access_->navigationList(q.node) && access_->listExtent(q.node)>=0 && index>=access_->listExtent(q.node)) {
+            if(!spec) --index;
+            if(access_->navigationList(q.node) && access_->listExtent(q.node)>=0 && (index>access_->listExtent(q.node) || ((!spec || access_->scalarCandidate(spec)) && index==access_->listExtent(q.node)))) {
                 auto boundary=listBoundary(*access_,q.node);
                 if(!boundary.valid) {unresolved(out,q,"invalid indexed extent",boundary.visits);return out;}
                 auto end=q;end.kind=pathEnd;out.edges.push_back(edge("position outside list",end,boundary.visits));return out;
             }
+        }
+        if(spec && access_->literalList(spec)) {
+            auto slice=q;slice.kind=pathSliceStart;slice.argument=index;
+            out.edges.push_back(edge("select span window",slice,visits));return out;
+        }
+        if(spec && !access_->scalarCandidate(spec)) {
+            out.refinements.push_back({{spec,valueOnly,0},{1,0},"resolve slice specification",true});
+            unresolved(out,q,"unknown slice specification");return out;
         }
         auto next=wrapIndex({q.node,itemAt,index},q);
         out.edges.push_back(edge("navigate path index",std::move(next),visits));
@@ -111,7 +122,7 @@ class PathSelection {
     static Query<POVNode> wrapIndex(Query<POVNode> navigation,const Query<POVNode>& frame) {
         auto prefix=frame.context;
         if(navigation.kind==itemFound)
-            return {navigation.node,pathMatched,static_cast<int>(ListPhase::member),frame.related,prefix,frame.coordinates};
+            return {navigation.node,frame.related->pItem->pathSelection->spec ? pathSliceCandidate : pathMatched,static_cast<int>(ListPhase::member),frame.related,prefix,frame.coordinates};
         auto kind=navigation.kind;
         prefix.insert(prefix.end(),navigation.context.begin(),navigation.context.end());
         return {navigation.node,pathIndexStep,navigation.argument,frame.related,prefix,{kind,static_cast<std::int64_t>(frame.context.size())}};
@@ -141,6 +152,12 @@ public:
     Expansion<POVNode> expand(const Query<POVNode>& q) const {
         Expansion<POVNode> out;
         if(q.kind==positionStart) return position(q);
+        if(q.kind==pathSliceStart || q.kind==pathSliceCandidate) {
+            auto result=SliceSelection(access_,definitions_).expand(q);
+            if(result.deferred) unresolved(result,q,"unresolved slice alternative");
+            result.deferred=false;
+            return result;
+        }
         if(q.kind==pathIndexStep) return indexStep(q);
         if(q.kind==pathAlternativesEnd) {
             out.deferred=getFlagBit(q.node->pItem->innr->value->flags,infonState::tailUnfinished);
@@ -159,7 +176,7 @@ public:
             // A path continuation demands its predecessor's selection, not
             // complete normalization of that intermediate object.
             if (auto field=q.node->pItem->pathSelection) {
-                out.refinements.push_back({{field->source,field->positional ? selectPosition : selectField,pathCandidates,field->predicate,{q.node}},
+                out.refinements.push_back({{field->source,field->positional ? selectPosition : selectField,pathCandidates,field->positional ? q.node : field->predicate,{q.node}},
                     {0,0},"select preceding path segment",false});
                 if (field->result) {
                     auto next=q;next.node=field->result;
@@ -244,7 +261,7 @@ class PathExpression {
         for (auto part=item->partRef;part;) {
             auto kind=getModeBits(part->flags,PartPath::pathMode);
             if (!seen.insert(part).second || (kind!=PartPath::dotField && kind!=PartPath::idxField) ||
-                getFlagBit(part->flags,PartPath::hasSemiColon) || part->spec || !part->path ||
+                getFlagBit(part->flags,PartPath::hasSemiColon) || (kind==PartPath::dotField && part->spec) || !part->path ||
                 !part->path->parts.empty() || (kind==PartPath::dotField && !part->path->wrkList.empty())) return {};
             if(kind==PartPath::dotField && part->continuation) return {};
             // The expression inside @[ ] owns its paths. Only the separate
@@ -258,7 +275,9 @@ class PathExpression {
 public:
     static bool ready(ProteusGraphAccess& access,const POVNode& node) {return !segments(access,node).empty();}
     static Work work(ProteusGraphAccess& access,const POVNode& node) {
-        auto count=segments(access,node).size();return {count,6*count+1};
+        auto path=segments(access,node);Cost count=path.size(),specs=0;
+        for(const auto& part:path) if(part->spec) ++specs;
+        return {count,6*count+specs+1};
     }
     static bool prepare(ProteusGraphAccess& access,const POVNode& node) {
         auto path=segments(access,node);if(path.empty()) return false;
@@ -279,6 +298,10 @@ public:
             if(!positional) predicate->pItem->partRef.reset();
             auto state=std::make_shared<GraphPathSelection>();
             state->positional=positional;state->expression=expression;state->source=source;state->predicate=predicate;
+            if(path[i]->spec) {
+                state->spec=std::make_shared<POV>(916);state->spec->pItem=path[i]->spec;
+                access.bind(state->spec);
+            }
             auto result=std::make_shared<infonView>();
             SetModeBits(result->flags,infonView::itmMode,infonView::mItem);
             SetModeBits(result->flags,infonView::viewMode,infonView::vmOverlay);
@@ -305,6 +328,7 @@ class ProteusPathGoal : public GoalSpec<POVNode> {
     bool branchMatched_=false;
     std::vector<POVNode> positionBranches_;
     std::map<POVNode,POVNode> positionWinners_;
+    std::set<POVNode> positionEnds_;
     bool positionsEnded_=false,positionTailPending_=false,positionReady_=false;
     Visit<POVNode> positionFinding_;
     bool collectPosition(const Query<POVNode>& q) {
@@ -315,6 +339,7 @@ class ProteusPathGoal : public GoalSpec<POVNode> {
             positionWinners_.emplace(q.context.front(),q.node);
             if(!aggregating_ && matches_.empty()) matches_.push_back(q.node);
         }
+        if(q.kind==pathEnd) positionEnds_.insert(q.context.front());
         if(q.kind==pathAlternativesEnd) {
             positionsEnded_=true;
             positionTailPending_=getFlagBit(q.node->pItem->innr->value->flags,infonState::tailUnfinished);
@@ -323,7 +348,7 @@ class ProteusPathGoal : public GoalSpec<POVNode> {
             matches_.clear();waiting_=positionTailPending_;
             for(const auto& branch:positionBranches_) {
                 auto winner=positionWinners_.find(branch);
-                if(winner==positionWinners_.end()) waiting_=true;
+                if(winner==positionWinners_.end()) {if(!positionEnds_.count(branch)) waiting_=true;}
                 else if(std::find(matches_.begin(),matches_.end(),winner->second)==matches_.end()) matches_.push_back(winner->second);
             }
             return positionsEnded_;
@@ -342,7 +367,7 @@ public:
     }
     void beginPass() override {
         matches_.clear();verified_=waiting_=aggregating_=false;branchMatched_=false;
-        positionBranches_.clear();positionWinners_.clear();positionsEnded_=positionTailPending_=positionReady_=false;
+        positionBranches_.clear();positionWinners_.clear();positionEnds_.clear();positionsEnded_=positionTailPending_=positionReady_=false;
         positionFinding_={request,{},0};
     }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {

@@ -76,6 +76,8 @@ The numeric literal migration is recorded in
 Run `python3 graph/audit_language_suite.py --output /tmp/proteus4-language-audit`
 to preserve every original fixture and record failures, crashes and timeouts.
 
+See [slice-results.md](slice-results.md) for fixed-extent list slices and their
+source occurrence semantics.
 See [positional-path-results.md](positional-path-results.md) for bracketed item
 selection, end-relative indexes, and mixed field/index paths.
 
@@ -89,6 +91,7 @@ selection, end-relative indexes, and mixed field/index paths.
 | `ProteusGraph.h` | Translate semantic access into graph edges and refinement opportunities; GoalSpec turns findings into Sets |
 | `ListStructure.h` | Shared incremental list walk and layout evidence for embedded positions, gaps, and owner extents |
 | `SpanAlignment.h` | Plan finite ordered correspondence from opaque member/gap evidence; no POV access or mutation |
+| `SliceSelection.h` | Fixed span windows, identity-backed members, and compressed source views |
 | `PathSelection.h` | Field predicates and positional navigation, shared result Sets, and composed read-only paths |
 | `FieldPredicate.h` | Read-only nominal and finite ordered structural comparison, with refinement demands |
 | `ScalarPredicate.h` | Three-state scalar and nominal comparison shared by sequence matching and field selection |

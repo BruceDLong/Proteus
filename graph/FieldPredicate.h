@@ -60,10 +60,11 @@ class FieldPredicate {
         if (!specification->types.empty()) specification->label=specification->types.front();
         specification->facts=predicate ? access_->predicateFacts(node) : access_->typeFacts(node);
         auto refinementContext=context;refinementContext.insert(refinementContext.begin(),node);
+        const bool canRead=readable(node,predicate);
         if (!predicate && !access_->literalList(node) &&
-            (!access_->hasTypeRequirements(node) || !POVDescription(node).work().empty()))
+            (!access_->hasTypeRequirements(node) || !POVDescription(node).work().empty() || !canRead))
             out_.refinements.push_back({{node,sizeAndValue,0,{},refinementContext},{1,0},"refine field candidate",true});
-        if (!readable(node,predicate) || !specification->facts.valid) return {};
+        if (!canRead || !specification->facts.valid) return {};
         ProteusDefinitions::Certificate meaning;
         if (useMeaning && access_->hasTypeRequirements(node) && !definitions_->optional(node)) {
             meaning=definitions_->saved(node);
@@ -77,6 +78,9 @@ class FieldPredicate {
         if (specification->facts.overlay==infonState::LST &&
             getModeBits(node->pItem->value->flags,infonState::evalMode)==infonState::emLiteral &&
             !access_->literalList(node)) return {};
+        // An empty open ordered body constrains the list header/extent only.
+        // It adds no member predicates and need not expand a sparse candidate.
+        if (predicate && listHeaderOnly(*access_,node)) scalarOnly=true;
         if (!scalarOnly && access_->literalList(node)) {
             active_.insert(node->pItem);
             SpanLayout<POVNode> layout;

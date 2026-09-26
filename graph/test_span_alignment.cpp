@@ -71,5 +71,28 @@ int main() {
         auto plan = alignSpans(left, right);
         assert(plan.valid && plan.complete && plan.fills.size() == 2); ++cases;
     }
+    // Window boundaries are independent of the compressed representation.
+    for (int width : {0,1,7,1000000000}) {
+        Layout layout;layout.segments={{1,false,1},{2,true,width},{3,false,1}};
+        layout.equations.push_back({0,3,width+2,900});
+        auto run=selectSpanWindow(layout,1,width);
+        assert(run.complete && !run.outside && run.pieces.size()==(width ? 1u : 0u));++cases;
+        if(width) assert(run.pieces[0].node==2 && run.pieces[0].offset==0 && run.pieces[0].count==width);
+        auto boundary=selectSpanWindow(layout,width,2);
+        assert(boundary.complete && boundary.pieces.size()==2 && boundary.pieces.back().node==3);++cases;
+        assert(selectSpanWindow(layout,width+2,0).complete);++cases;
+        assert(selectSpanWindow(layout,width+1,2).outside);++cases;
+    }
+    {
+        Layout layout;layout.segments={{1,false,1},{2,true,-1},{3,false,1}};
+        assert(selectSpanWindow(layout,0,1).complete);++cases;
+        auto unknown=selectSpanWindow(layout,1,1);
+        assert(!unknown.complete && !unknown.outside);++cases;
+        layout.equations.push_back({0,3,5,900});
+        auto solved=selectSpanWindow(layout,2,3);
+        assert(solved.complete && solved.pieces.size()==2 && solved.pieces[0].offset==1);++cases;
+        auto huge=selectSpanWindow(layout,INT64_MAX,INT64_MAX);
+        assert(huge.outside);++cases;
+    }
     std::cout << "Span alignment: " << cases << "/" << cases << " cases passed\n";
 }

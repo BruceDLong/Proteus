@@ -18,7 +18,7 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectionExtentMember = 20, selectionExtentEnd = 21,
               typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27,
               selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31,
-              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51 };
+              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53 };
 
 inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
     auto phase = query.kind == correspondenceEnter ? ListPhase::enter :
@@ -570,7 +570,7 @@ public:
         return std::make_shared<ProteusGoal>(query, access_, completion_, evidence_, definitions_);
     }
     Expansion<POVNode> expand(const Query<POVNode>& query) override {
-        if (query.kind >= selectField && query.kind <= positionStart)
+        if (query.kind >= selectField && query.kind <= pathSliceCandidate)
             return PathSelection(access_, definitions_, [this](const Query<POVNode>& q) {return expandSemantic(q);}).expand(query);
         if ((query.kind >= sequenceCorrespondence && query.kind <= sequenceComplete) || query.kind == correspondenceInput || query.kind == sequenceAtomMatched)
             return SequenceCorrespondence(access_, definitions_).expand(query);
@@ -827,9 +827,14 @@ private:
                 result.deferred = !definitions_->registered(node); return result;
             }
             if(auto field=node->pItem->pathSelection) {
-                result.refinements.push_back({{field->source,field->positional ? selectPosition : selectField,0,field->predicate,{node}},
+                result.refinements.push_back({{field->source,field->positional ? selectPosition : selectField,0,field->positional ? node : field->predicate,{node}},
                     {0,0},"select path result",false});
                 if(!field->result) return result;
+                // Normalizing a choice also demands its available candidates.
+                // They are alternatives, not identities of the choice root.
+                if(field->pending || field->matches.size()!=1)
+                    for(const auto& match:field->matches)
+                        result.refinements.push_back({{match,demand,0},{1,0},"normalize path alternative",false});
             }
             result.deferred = !access_->supports(node, demand);
             if (auto direction = access_->relativeDirection(node)) {

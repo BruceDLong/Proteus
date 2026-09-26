@@ -86,6 +86,14 @@ ListBoundary<Node> listBoundary(Access& access, const Node& owner) {
     return result;
 }
 
+// An empty open ordered body describes only interpretation and extent. It
+// asserts no particular member values, unlike a repetition template.
+template<class Node, class Access>
+bool listHeaderOnly(Access& access, const Node& node) {
+    return access.physicalList(node) && access.orderedList(node) &&
+        access.openTail(node) && !access.first(node, false) && !access.memberTemplate(node);
+}
+
 template<class Node, class Access>
 bool listPositionSupported(Access& access, const ListPosition<Node>& at) {
     return at.phase != ListPhase::cycle &&

@@ -69,6 +69,33 @@ template<class Node> struct SpanLayout {
     }
 };
 
+// Select a fixed window from a finite structural description. Unknown gaps
+// remain obligations; arithmetic skips even very large known runs.
+template<class Node> struct SpanWindow {
+    struct Piece { Node node; bool gap; std::int64_t offset, count; };
+    std::vector<Piece> pieces;
+    bool complete = false, outside = false;
+};
+template<class Node>
+SpanWindow<Node> selectSpanWindow(SpanLayout<Node> layout, std::int64_t start, std::int64_t count) {
+    SpanWindow<Node> result;
+    if (start < 0 || count < 0 || !layout.solve()) return result;
+    auto extent = layout.extent();
+    if (extent >= 0 && (start > extent || count > extent - start)) {
+        result.outside = true; return result;
+    }
+    for (const auto& segment : layout.segments) {
+        if (start == 0 && count == 0) break;
+        if (segment.width < 0) return result;
+        if (start >= segment.width) { start -= segment.width; continue; }
+        auto take = std::min(count, segment.width - start);
+        if (take) result.pieces.push_back({segment.node, segment.gap, start, take});
+        count -= take; start = 0;
+    }
+    result.complete = start == 0 && count == 0;
+    return result;
+}
+
 template<class Node> struct SpanPlan {
     struct Fill { Node owner; std::vector<Node> sources; bool close; std::int64_t extent; };
     std::vector<std::pair<Node, Node>> identities;
