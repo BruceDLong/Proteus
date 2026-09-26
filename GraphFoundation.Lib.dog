@@ -129,6 +129,13 @@ struct infonView {
         return(false)
     }
 }
+// The local numeric rule from Proteus3 WorldManager.rangeRules, planned
+// without changing the source so the normal graph Set/revision path owns it.
+struct GraphNumericLiteral {
+    me FlexNum: number
+    me bool: inverted <- false
+    me bool: changed <- false
+}
 struct GraphConcatTerms { me List<our POV>: items }
 struct GraphConcatPlan {
     me bool: valid <- false
@@ -402,8 +409,12 @@ struct ProteusGraphAccess {
         if(facts.hasSize){facts.size <- pov!.pItem!.infSize!.num}
         facts.hasValue <- facts.overlay!=LST and pov!.pItem!.value!.evalMode==emLiteral
         if(facts.hasValue){
-            if(facts.overlay==NUM){facts.number <- pov!.pItem!.value!.num}
-            else{facts.text <- pov!.pItem!.value!.str}
+            if(facts.overlay==NUM){
+                // Definitions are read-only. Compare their canonical numeric
+                // facts without rewriting the shared definition body.
+                me GraphNumericLiteral: literal <- planNumericLiteral(pov)
+                facts.number <- literal.number
+            }else{facts.text <- pov!.pItem!.value!.str}
         }
         return(facts)
     }
@@ -434,6 +445,34 @@ struct ProteusGraphAccess {
         if(changed and required.explicitSize){target!.pItem!.value!.sizeMode <- fromGiven}
         if(changed){target!.workRevision <+- 1; target!.pItem!.isNormed <- false}
         return(changed)
+    }
+    void: numericLiteralError() <- <%{ throw std::runtime_error("numeric literal has zero denominator"); }%>
+    me GraphNumericLiteral: planNumericLiteral(our POV: pov) <- {
+        me GraphNumericLiteral: plan
+        if(inputPending(pov) or pov!.pItem!.value!.overlayType!=NUM or
+                pov!.pItem!.value!.evalMode!=emLiteral or pov!.pItem!.value!.undefined){return(plan)}
+        our infonState: value <- pov!.pItem!.value
+        plan.number <- value!.num
+        plan.inverted <- value!.inverted
+        if(plan.number.getDenominator()==0){numericLiteralError()}
+        plan.number.normalize()
+        if(plan.inverted and pov!.pItem!.infSize!.overlayType==NUM and
+                pov!.pItem!.infSize!.evalMode==emLiteral and
+                !pov!.pItem!.infSize!.inverted and !pov!.pItem!.infSize!.undefined){
+            plan.number <- pov!.pItem!.infSize!.num - plan.number
+            plan.inverted <- false
+        }
+        plan.changed <- plan.number.getNumerator()!=value!.num.getNumerator() or
+                        plan.number.getDenominator()!=value!.num.getDenominator() or
+                        plan.inverted!=value!.inverted
+        return(plan)
+    }
+    me bool: applyNumericLiteral(our POV: pov, me GraphNumericLiteral: plan) <- {
+        if(!plan.changed){return(false)}
+        pov!.pItem!.value!.num <- plan.number
+        pov!.pItem!.value!.inverted <- plan.inverted
+        pov!.pItem!.isNormed <- false; pov!.workRevision <+- 1
+        return(true)
     }
     me bool: scalar(our POV: pov) <- {
         if(!plain(pov)){return(false)}

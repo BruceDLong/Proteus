@@ -258,6 +258,16 @@ public:
             }
             return {};
         }
+        // Local scalar normalization precedes comparison, just as Proteus3's
+        // rangeRules does. Canonicalization must publish a revision even when
+        // only the rational representation changes.
+        auto numeric = access_->planNumericLiteral(visit.query.node);
+        if (numeric.changed) {
+            auto access = access_; auto node = visit.query.node;
+            return {{"Set normalized numeric literal", [access, node, numeric] {
+                return access->applyNumericLiteral(node, numeric);
+            }}};
+        }
         auto source = visit.query.node;
         auto target = request.node;
         int demand = request.kind;
@@ -774,6 +784,9 @@ private:
             return result;
         }
         if (query.kind >= sizeOnly && query.kind <= sizeAndValue) {
+            // Do not compare noncanonical scalar evidence while its local Set
+            // is pending; that publication will expose the same edges again.
+            if (access_->planNumericLiteral(node).changed) { result.deferred = true; return result; }
             auto owners = access_->subList(node) ? query.context : std::vector<POVNode>{};
             if (!owners.empty()) owners.erase(owners.begin());
             if (access_->inputPending(node)) {

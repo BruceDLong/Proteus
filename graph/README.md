@@ -47,6 +47,8 @@ prefix selection; see [logical-navigation-results.md](logical-navigation-results
 The older language files are tracked separately from the focused graph tests.
 See [language-compatibility-results.md](language-compatibility-results.md) for the
 complete fixture inventory and the next compatibility priorities.
+The latest numeric rule migration and pending rejected-RHS decision are in
+[numeric-literal-results.md](numeric-literal-results.md).
 Run `python3 graph/audit_language_suite.py --output /tmp/proteus4-language-audit`
 to preserve every original fixture and record failures, crashes and timeouts.
 
