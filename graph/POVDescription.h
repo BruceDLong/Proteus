@@ -50,7 +50,7 @@ public:
         // current source link here instead of asserting a permanent identity
         // between the working query POV and every result it has ever selected.
         if (auto field=node_->pItem->fieldSelection)
-            if (field->result && field->matches.size()==1 && field->result!=node_)
+            if (field->result && !field->pending && field->matches.size()==1 && field->result!=node_)
                 result.push_back({node_,field->result,{},true});
         if (registry_) {
             std::lock_guard<std::mutex> lock(registry_->registryMutex);

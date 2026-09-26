@@ -29,15 +29,14 @@ calls reconsider earlier segment choices after a new type alias is declared.
 
 ## Unordered boundary
 
-The user clarified that unordered descriptions have an implied open tail. A
-missing field is not proof that it does not exist; instances can also have parts
-beyond those enumerated in a type definition. The existing collector does not yet
-model that implicit tail. Whether an explicit size closes membership is pending
-clarification. A path through an unordered oneOf remains symbolic/subscribed;
-this checkpoint does not choose one wheel or drop an unresolved branch.
+This checkpoint originally deferred chained oneOf traversal. The subsequent
+[unordered-field-results.md](unordered-field-results.md) checkpoint implements
+implicit membership tails, explicit size bounds, partial result publication,
+and continuation through alternatives. Omission does not prove absence, and
+an unresolved branch must not be discarded to obtain a definite answer.
 
-Writes, retained-parent semicolons, contextual descriptions, and implicit-tail
-publication/continuation remain later semantic work.
+Writes, retained-parent semicolons, contextual descriptions, and unordered
+structural correspondence remain later semantic work.
 
 ## Validation
 

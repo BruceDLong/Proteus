@@ -24,7 +24,8 @@ oneOf alternatives for unordered lists; see
 read-only chains, and `GraphNormalizer.findField(source, predicate)` use that
 selection policy. Nominal type compatibility is required; shared structure alone does not
 equate types. Finite ordered structural constraints are also supported. See
-[chained-field-results.md](chained-field-results.md) for the latest scope,
+[unordered-field-results.md](unordered-field-results.md) for partial unordered results and
+[chained-field-results.md](chained-field-results.md) for path composition,
 [structured-field-results.md](structured-field-results.md) for nominal/structural matching, and
 [field-selection-results.md](field-selection-results.md) for the initial scalar step,
 symbolic alternatives, subscriptions, and validation.

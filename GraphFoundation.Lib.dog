@@ -126,6 +126,7 @@ struct GraphFieldSelection {
     // header changes independently (for example vmAny becoming vmOverlay).
     our infonView: resultView
     me uint64: resultRevision <- 0
+    me bool: pending <- false
     me List<our POV>: matches
 }
 
@@ -548,9 +549,12 @@ struct ProteusGraphAccess {
     me bool: adoptableList(our POV: pov) <- {
         return((scalarCandidate(pov) and unknownOverlay(pov)) or unknownList(pov))
     }
-    me bool: closedPhysicalList(our POV: pov) <- {
-        return(physicalList(pov) and !pov!.pItem!.value!.tailUnfinished)
-    }
+    me bool: closedPhysicalList(our POV: pov) <- <%{
+        if (!physicalList(pov)) return false;
+        if (pov->pItem->orderMode!=uUnordered) return !getFlagBit(pov->pItem->value->flags,infonState::tailUnfinished);
+        auto boundary=proteus4::listBoundary(*this,pov);
+        return boundary.valid && boundary.tail==0 && boundary.missingExtents.empty();
+    }%>
     me bool: listExtentAgrees(our POV: pov, me GraphListMeasure: measure) <- {
         return(measure.known and closedPhysicalList(pov) and
                pov!.pItem!.infSize!.evalMode==emLiteral and
@@ -614,7 +618,11 @@ struct ProteusGraphAccess {
                !left!.isSubItm and !right!.isSubItm and
                left!.pItem!.itmMode==mItem and right!.pItem!.itmMode==mItem)
     }
-    me bool: openTail(our POV: pov) <- {return(inputPending(pov) or pov!.pItem!.value!.tailUnfinished)}
+    me bool: openTail(our POV: pov) <- {
+        // Unordered members leave a virtual remainder. A known total extent
+        // can reduce that remainder to zero without enumerating other parts.
+        return(inputPending(pov) or pov!.pItem!.value!.tailUnfinished or pov!.pItem!.orderMode==uUnordered)
+    }
     me bool: sameInfon(our POV: left, our POV: right) <- {return(left!.pItem===right!.pItem)}
     // -1 means unknown; -2 means an unsupported extent. Do not narrow an
     // arbitrary FlexNum to an index before checking the range and integrality.
@@ -773,18 +781,20 @@ struct ProteusGraphAccess {
         pov!.pItem!.isNormed <- false; pov!.workRevision <+- 1
         return(true)
     }
-    me bool: canSelect(our POV: pov) <- {
-        our infonView: source <- selectionSource(pov)
-        if(source==NULL or !plain(pov, true) or pov!.pItem!.positionalSelection or
-                pov!.pItem!.selectionRequestID!=0 or pov!.pItem!.isOrLike()){return(false)}
-        me int: resultMode <- selectionMode(pov)
-        return((resultMode==ipGetFirst or resultMode==ipGetLast or resultMode==ipGetMarked) and
-               source!.viewMode==vmOverlay and source!.type==NULL and source!.addedTypes.isEmpty() and
+    me bool: literalSelectionBody(our infonView: source) <- {
+        return(source!=NULL and source!.viewMode==vmOverlay and source!.type==NULL and source!.addedTypes.isEmpty() and
                source!.funcArgs==NULL and source!.parts.isEmpty() and
                source!.value!.overlayType==LST and source!.value!.evalMode==emLiteral and
                source!.value!.listSpec==NULL and !source!.value!.timelike and
                !source!.value!.inverted and !source!.value!.undefined and !source!.invertMatch and
                (source!.orderMode==uUnknown or source!.orderMode==uOrdered))
+    }
+    me bool: canSelect(our POV: pov) <- {
+        our infonView: source <- selectionSource(pov)
+        if(source==NULL or !plain(pov, true) or pov!.pItem!.positionalSelection or
+                pov!.pItem!.selectionRequestID!=0 or pov!.pItem!.isOrLike()){return(false)}
+        me int: resultMode <- selectionMode(pov)
+        return((resultMode==ipGetFirst or resultMode==ipGetLast or resultMode==ipGetMarked) and literalSelectionBody(source))
     }
     // A positive given intersection extent selects the last position of
     // that prefix. It is not an assertion that the stored body ends there.

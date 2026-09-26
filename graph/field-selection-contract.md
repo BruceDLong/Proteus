@@ -55,8 +55,8 @@ which result to publish, rather than changing what counts as a match:
    winner in an ordered list or discard an unordered alternative while reporting
    a complete result.
 
-These are consequences of the selection rule. Detailed handling of partial oneOf
-publication remains implementation work. Reuse source POVs and their checked
+These are consequences of the selection rule. Partial oneOf publication keeps an
+explicit unresolved tail. Reuse source POVs and their checked
 meaning evidence; avoid copying/reapplying definitions for every candidate.
 The earlier permission to choose the first complete ambiguous grammar parse is
 separate from this unordered field-selection requirement.
@@ -68,8 +68,9 @@ nominal compatibility, scalar constraints, and finite ordered structural
 constraints. Each path segment is another selection goal over the preceding
 result. See [chained-field-results.md](chained-field-results.md) and
 [structured-field-results.md](structured-field-results.md). Writes/retained
-parents, contextual meanings, unordered structure correspondence, and partial
-publication/continuation of an unordered result remain pending.
+parents, contextual meanings, and unordered structure correspondence remain
+pending. Partial publication and continuation are described in
+[unordered-field-results.md](unordered-field-results.md).
 
 ## Unordered descriptions are partial
 
@@ -79,7 +80,14 @@ water bottle holder beyond the parts in its definition. Therefore omission is
 not evidence of absence. A missing `position` cannot by itself exclude an
 already-selected wheel from `.wheel.position`.
 
-The existing field collector uses stored-list closure and does not yet model
-this implicit tail. Do not infer exhaustive membership from physical end alone.
-Whether an explicit size establishes exhaustive membership is still awaiting
-clarification. Chained oneOf traversal remains deferred at this checkpoint.
+The graph adapter exposes that virtual remainder through the same list boundary
+interface used for explicit tails. Do not infer exhaustive membership from
+physical end alone. An explicitly supplied size limits the total membership;
+when all that many members are known, the remainder is empty. A large bound is
+not a request to materialize its missing members for a field query.
+
+This also permits describing a change to one part while making no assertion
+about changes to other parts. A membership bound does not freeze member states.
+A partial query can publish known alternatives and retain a subscription for
+unresolved candidates, branches, or membership. Later dot segments traverse the
+published alternatives without requiring complete parent normalization.
