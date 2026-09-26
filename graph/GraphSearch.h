@@ -51,9 +51,12 @@ template<class Node> struct Query {
     // Domain traversal context (for example, return points through embedded
     // spans). These are existing nodes, not replacement graph vertices.
     std::vector<Node> context{};
+    // Coordinates of a domain cursor (for example counts at nested list
+    // boundaries). These distinguish search states, not semantic graph nodes.
+    std::vector<std::int64_t> coordinates{};
     bool operator<(const Query& other) const {
-        return std::tie(node, kind, argument, related, context) <
-               std::tie(other.node, other.kind, other.argument, other.related, other.context);
+        return std::tie(node, kind, argument, related, context, coordinates) <
+               std::tie(other.node, other.kind, other.argument, other.related, other.context, other.coordinates);
     }
 };
 

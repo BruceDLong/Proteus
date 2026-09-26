@@ -89,6 +89,7 @@ public:
         if (access_->definitionName(entry.declaration) != name || !registered(entry.declaration)) return {};
         return entry.body;
     }
+    POVNode repeatedBody(const POVNode& node) const { return memberTemplate(node); }
     POVNode selectionBody(const POVNode& node) const { return view(access_->selectionSource(node)); }
     void retainOccurrenceOwner(const POVNode& owner) { occurrenceOwners_.insert(owner); }
     POVNode retainedOccurrenceOwner(const POVNode& node) const {

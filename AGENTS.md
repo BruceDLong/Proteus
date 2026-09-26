@@ -26,8 +26,10 @@ fixed-width whole-list grouping use graph requirements and priced plans.
 Empty open definition bodies retain virtual positions; their known extent
 feeds the shared span layout without allocating members.
 Loaded instance prefixes can be checked without expanding their virtual tails.
-Prefixed definition bodies, variable-width/text correspondence, and record
-matching remain later boundaries. Preserve read-only definition bodies,
+List-to-text matching uses successful continuation edges and accepts the first
+complete correspondence; future oneOf results are deferred. Unsized open root
+lists with prefix relationships remain symbolic until partial-prefix Sets exist.
+Prefixed definition bodies, recursive grammar, and record matching remain later boundaries. Preserve read-only definition bodies,
 already-demanded occurrence POVs, and reusable type evidence; avoid redundant
 application RHSs. Redundant RHS/template rendering uses revision-scoped proofs;
 keep work edges searchable and do not relax isNormed to hide unknown sizes.

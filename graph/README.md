@@ -7,6 +7,11 @@ as its responsibilities move to the graph reasoner. Ordinary Agent normalization
 now uses the graph reasoner. Legacy AItem rules remain compiled for unmigrated facilities and reference tests; normalization
 has no agenda fallback.
 
+List-to-text correspondence now propagates successful matches through the graph
+frontier and applies the first complete result. See
+[text-correspondence-notes.md](text-correspondence-notes.md) for fixed-width,
+repetition, embedded-span, subscription and ambiguity behavior.
+
 ## Start here
 
 ```text
@@ -47,7 +52,7 @@ prefix selection; see [logical-navigation-results.md](logical-navigation-results
 The older language files are tracked separately from the focused graph tests.
 See [language-compatibility-results.md](language-compatibility-results.md) for the
 complete fixture inventory and the next compatibility priorities.
-The latest numeric rule migration and pending rejected-RHS decision are in
+The numeric literal migration is recorded in
 [numeric-literal-results.md](numeric-literal-results.md).
 Run `python3 graph/audit_language_suite.py --output /tmp/proteus4-language-audit`
 to preserve every original fixture and record failures, crashes and timeouts.

@@ -8,7 +8,7 @@ unit tests compiled into `TestProteus`.
 
 | Suite | Passing | Failing | Total |
 |---|---:|---:|---:|
-| `defaultTests.tst` | 141 | 129 | 270 |
+| `defaultTests.tst` | 146 | 124 | 270 |
 | `demoTests.tst` | 1 | 21 | 22 |
 | `sparseTests.tst` | 1 | 22 | 23 |
 | `timeTests.tst` | 0 | 36 | 36 |
@@ -18,11 +18,11 @@ unit tests compiled into `TestProteus`.
 The R1 file records an experimental contract and explicitly excludes itself from
 the default tests; its failures are not evidence of regressions from a previously
 passing implementation. Other suites also overlap in coverage, so the combined
-143/363 pass count is a fixture inventory, not a measure of language completeness.
+148/363 pass count is a fixture inventory, not a measure of language completeness.
 
-The default row was refreshed after numeric literal normalization; the other
+The default row was refreshed after text correspondence; the other
 five rows retain the logical-navigation checkpoint. See
-[numeric-literal-results.md](numeric-literal-results.md) for the latest change.
+[text-correspondence-notes.md](text-correspondence-notes.md) for the latest change.
 
 The default suite was audited before and after logical navigation. It improved
 from 135/270 to 138/270, with no formerly passing case lost. The recovered cases
@@ -31,7 +31,8 @@ positive intersection prefix endpoint rule. No original fixture or expected
 output was edited. The other suite counts are current snapshots, not before/after
 regression comparisons. Numeric normalization subsequently recovered `parse/frac`,
 `neg/simple`, and `fracs/simple`, bringing the default suite to 141/270 without
-losing any previous pass.
+losing any previous pass. Text correspondence subsequently recovered five parsing
+fixtures, reaching 146/270 with no previous pass lost.
 
 The complete per-fixture status and input-file hashes are in
 [language-compatibility-status.json](language-compatibility-status.json).

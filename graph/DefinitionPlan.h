@@ -100,6 +100,9 @@ public:
     std::size_t orderWrites = 0;
 private:
     std::shared_ptr<ProteusGraphAccess> access_;
+    // Accepted correspondence may prove embedded extents without publishing
+    // them first. Keep that evidence in the atomic plan, not in live nodes.
+    std::map<POVNode, std::int64_t> extents_;
     std::map<POVNode, Place> places_;
     std::map<std::shared_ptr<infonView>, GraphTypeFacts> proposed_;
     std::vector<std::shared_ptr<infonView>> plannedLists_;
@@ -112,8 +115,17 @@ private:
         supported = readListLayout(*access_, node, result, work.visits,
             [&](const auto& at) {
                 return at.phase != ListPhase::enter ||
-                    (access_->physicalList(at.node) && access_->definitionOrderedCandidate(at.node));
+                    ((access_->physicalList(at.node) ||
+                      (extents_.count(at.node) && access_->unreferencedTemplateSpan(at.node))) &&
+                     access_->definitionOrderedCandidate(at.node));
             }, [&](const POVNode& member) { return Position{place(member), {}}; });
+        for (auto& equation : result.equations) {
+            auto found = extents_.find(equation.owner.place->node);
+            if (found == extents_.end()) continue;
+            if (equation.expected >= 0 && equation.expected != found->second)
+                throw std::logic_error("accepted extent conflicts with list size");
+            equation.expected = found->second;
+        }
     }
     void prepareRepeated(const Place& target, const DefinitionSpec& requirement, GraphTypeFacts actual) {
         auto access = access_;
@@ -244,8 +256,9 @@ private:
         }
     }
 public:
-    ProteusDefinitionPlan(std::shared_ptr<ProteusGraphAccess> access, const POVNode& target, const DefinitionSpec& requirement)
-        : access_(std::move(access)) { prepare(place(target), requirement); }
+    ProteusDefinitionPlan(std::shared_ptr<ProteusGraphAccess> access, const POVNode& target, const DefinitionSpec& requirement,
+                          std::map<POVNode, std::int64_t> extents = {})
+        : access_(std::move(access)), extents_(std::move(extents)) { prepare(place(target), requirement); }
     // Deferred allocation clients can prepare a member before the priced Set
     // creates its POV. All other slots and writes remain instance-local.
     void bindTarget(const POVNode& node) { place({})->node = node; }

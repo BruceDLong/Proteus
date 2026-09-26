@@ -17,7 +17,8 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectIntersection = 17, selectionMember = 18, selectionFound = 19,
               selectionExtentMember = 20, selectionExtentEnd = 21,
               typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27,
-              selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31 };
+              selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31,
+              textCorrespondence = 32, textEnter = 33, textBoundary = 34, textMatched = 35, textComplete = 36 };
 
 inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
     auto phase = query.kind == correspondenceEnter ? ListPhase::enter :
@@ -200,6 +201,8 @@ public:
         if (fullyResolved && represented_) completion_->represented(request.node, request.related);
     }
 };
+
+#include "TextCorrespondence.h"
 
 class ProteusGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
@@ -532,6 +535,8 @@ public:
     void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); definitions_->prune(); }
     std::vector<std::function<void()>> takeEffects() override { return completion_->takeEffects(); }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
+        if (query.kind == textCorrespondence)
+            return std::make_shared<ProteusTextGoal>(query, access_, definitions_, completion_);
         if (query.kind == selectRelative)
             return std::make_shared<ProteusRelativeGoal>(query, access_, positions_, evidence_);
         if (query.kind == groupedList)
@@ -549,6 +554,8 @@ public:
         return std::make_shared<ProteusGoal>(query, access_, completion_, evidence_, definitions_);
     }
     Expansion<POVNode> expand(const Query<POVNode>& query) override {
+        if (query.kind >= textCorrespondence && query.kind <= textComplete)
+            return TextCorrespondence(access_, definitions_).expand(query);
         bool pending = evidence_->pending(query.node);
         auto result = expandSemantic(query);
         result.deferred = result.deferred || pending;
@@ -852,6 +859,12 @@ private:
             };
             for (const auto& relation : description.relationships()) {
                 auto source = relation.target;
+                if (relation.isWork() && query.kind != sizeOnly &&
+                    TextCorrespondence::relationship(*access_, node, source)) {
+                    result.refinements.push_back({{node, textCorrespondence, 0, source}, {1, 0},
+                        "match list to text", false});
+                    continue;
+                }
                 if (relation.isWork() && query.kind != sizeOnly && access_->wholeLooseRHS(source)) {
                     result.refinements.push_back({{node, groupedList, 0, source}, {1, 0},
                         "map repeated groups to source spans", false});
