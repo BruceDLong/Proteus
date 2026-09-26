@@ -862,7 +862,7 @@ private:
                 if (relation.isWork() && query.kind != sizeOnly &&
                     TextCorrespondence::relationship(*access_, node, source)) {
                     result.refinements.push_back({{node, textCorrespondence, 0, source}, {1, 0},
-                        "match list to text", false});
+                        "match text correspondence", false});
                     continue;
                 }
                 if (relation.isWork() && query.kind != sizeOnly && access_->wholeLooseRHS(source)) {

@@ -1,6 +1,6 @@
 # Text correspondence through successful continuations
 
-This slice supports finite list-to-text results using the graph frontier. It
+This slice supports finite list-to-text and whole-string scalar results using the graph frontier. It
 restores fixed-width and repeated parsing without an AItem fallback.
 
 ## Mechanism
@@ -50,16 +50,18 @@ string or a member's size; it does not yet stream committed parse prefixes.
 ## Evidence
 
 - Full CodeDog regeneration and C++ build succeeded.
-- Focused correspondence: 24/24 pass after the first-match/open-prefix policy update.
+- Focused correspondence: 30/30 pass after the first-match/open-prefix policy update.
 - All 519 pre-existing focused graph/parser/numeric checks pass.
 - Standalone graph search: 28/28; list traversal: 18/18; span alignment: 200/200.
-- Unchanged older default fixtures: 146/270 pass, 124 fail, versus 141/270 at
+- Unchanged older default fixtures: 150/270 pass, 120 fail, versus 141/270 at
   `ae03ed3`; no previously passing row regressed.
 - Recovered: `parse/parse3n4`, `parse/catHatDogPig`, `parse/simple2`,
-  `parse/reps1`, `parse/reps2`.
+  `parse/reps1`, `parse/reps2`, `merge/str/loose`,
+  `merge/directLooseStr/exactWidthCopy`, `merge/directLooseStr/exactLiteralAccept`,
+  and `merge/unknown/loose`.
 - The historical Proteus3 executable does not pass every newly proposed nullable
   or embedded example; those are not claimed as historical regressions restored.
 - Original fixture inputs and expectations were not edited.
 
-Logs: `/tmp/p4-text-policy-default/results.json`, `/tmp/p4-text-policy-regression.log`,
-`/tmp/p4-text-build-policy.log`. Focused tests are in `unit/graphText/`; log: `/tmp/p4-text-policy-tests.log`.
+Logs: `/tmp/p4-scalar-text-default/results.json`, `/tmp/p4-scalar-text-regression.log`,
+`/tmp/p4-scalar-text-build.log`. Focused tests are in `unit/graphText/`; log: `/tmp/p4-scalar-text-tests.log`.

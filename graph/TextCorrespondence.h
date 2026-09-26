@@ -22,7 +22,9 @@ public:
                        std::shared_ptr<ProteusDefinitions> definitions)
         : access_(std::move(access)), definitions_(std::move(definitions)) {}
     static bool relationship(ProteusGraphAccess& access, const POVNode& target, const POVNode& source) {
-        return access.literalList(target) && source->looseType() &&
+        bool scalar = access.wholeLooseRHS(source) && access.scalarCandidate(target) &&
+            (access.unknownOverlay(target) || access.typeFacts(target).overlay == infonState::STR);
+        return (access.literalList(target) || scalar) && source->looseType() &&
             getModeBits(POVDescription(source).value()->flags, infonState::overlayType) == infonState::STR;
     }
     bool sourceReady(const POVNode& source) const {
@@ -64,9 +66,13 @@ public:
                 out.edges.push_back(edge("enter matching list", std::move(next)));
             } else {
                 auto facts = access_->typeFacts(q.node);
-                if (!facts.valid || facts.overlay != infonState::STR ||
-                    (!facts.hasValue && !facts.hasSize)) return out;
-                std::int64_t width = facts.hasValue ? static_cast<std::int64_t>(facts.text.size()) : 0;
+                if (!facts.valid || (facts.overlay >= 0 && facts.overlay != infonState::STR) ||
+                    (!facts.hasValue && !facts.hasSize && q.context.size() != 1)) return out;
+                // At the relation root, whole correspondence supplies an
+                // unknown string's width. Inside a list it still needs a width
+                // demand; consuming an arbitrary remainder would hide suffixes.
+                std::int64_t width = facts.hasValue ? static_cast<std::int64_t>(facts.text.size()) :
+                    static_cast<std::int64_t>(text.size()) - q.argument;
                 if (facts.hasSize) {
                     if (facts.size < 0 || facts.size.getDenominator() != 1 ||
                         facts.size > std::numeric_limits<std::int64_t>::max()) return out;
