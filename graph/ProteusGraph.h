@@ -241,7 +241,7 @@ public:
         if (request.kind >= sizeOnly && request.kind <= sizeAndValue &&
             visit.query.node == request.node && FieldPath::ready(*access_,request.node)) {
             auto access=access_;auto node=request.node;
-            return {{"Prepare field selection",[access,node] {return FieldPath::prepare(*access,node);},{1,6}}};
+            return {{"Prepare field selection",[access,node] {return FieldPath::prepare(*access,node);},FieldPath::work(*access,node)}};
         }
         if (request.kind >= sizeOnly && request.kind <= sizeAndValue &&
             visit.query.node == request.node && access_->hasInnerSource(request.node)) {

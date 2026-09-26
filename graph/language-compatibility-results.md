@@ -10,7 +10,7 @@ tests compiled into `TestProteus`.
 
 | Suite | Passing | Failing | Total |
 |---|---:|---:|---:|
-| `defaultTests.tst` | 162 | 108 | 270 |
+| `defaultTests.tst` | 164 | 106 | 270 |
 | `demoTests.tst` | 1 | 21 | 22 |
 | `sparseTests.tst` | 1 | 22 | 23 |
 | `timeTests.tst` | 0 | 36 | 36 |
@@ -20,11 +20,11 @@ tests compiled into `TestProteus`.
 The R1 file records an experimental contract and explicitly excludes itself from
 the default tests; its failures are not evidence of regressions from a previously
 passing implementation. Other suites also overlap in coverage, so the combined
-164/363 pass count is a fixture inventory, not a measure of language completeness.
+166/363 pass count is a fixture inventory, not a measure of language completeness.
 
-The default row was refreshed after nominal and finite structured field selection,
-recovering `query/byType1` with no prior pass lost. See
-[structured-field-results.md](structured-field-results.md) for the latest change.
+The default row was refreshed after chained field selection, recovering
+`query/chain` and `query/chain2` with no prior pass lost. See
+[chained-field-results.md](chained-field-results.md) for the latest change.
 
 The default suite was audited before and after logical navigation. It improved
 from 135/270 to 138/270, with no formerly passing case lost. The recovered cases
@@ -49,7 +49,9 @@ previous pass. The latter is an ordinary `.begin` field query, not temporal
 boundary support. Its rendered-result assertion passes while the bare numeric
 size remains unknown; this does not establish `isNormed`. Nominal and finite
 structured field selection then recovered `query/byType1`, reaching 162/270
-without losing any previous pass or changing an original fixture.
+without losing any previous pass or changing an original fixture. Chained field
+selection subsequently recovered `query/chain` and `query/chain2`, reaching
+164/270 without losing a prior pass.
 
 The complete per-fixture status and input-file hashes are in
 [language-compatibility-status.json](language-compatibility-status.json).
@@ -66,8 +68,9 @@ symbolic and subscribed until more information arrives, per the user's
 clarification. Its waiting state is an expected result.
 
 Use the failing original examples to choose the next semantic unit, starting
-with chained typed-member selection and its relationship to definition requirements.
-For example, `query/chain2` currently leaves `.wheel.spoke.length` unresolved.
+with field updates and retained-parent paths, such as `query/chain3` and
+`query/chain4`. Read-only `.wheel.spoke.length` now resolves without validating
+every field of each intermediate object's definition.
 Dot paths lower to negated skip plus positive selection in Proteus3, so the scalar
 predicate prerequisite was implemented first, followed by read-only scalar type
 meaning compilation, single-step dot selection, and finite ordered structural
@@ -96,6 +99,12 @@ the assumption that equal structure establishes type compatibility. A `.wheel`
 query must not select a `pedals` member based only on equal structure. The old
 `query/byType1` and `query/chain` expectations remain valid under this correction.
 See [field-selection-contract.md](field-selection-contract.md).
+
+The latest unordered-list clarification gives partial descriptions an implied
+open tail. End of stored members is not proof that other parts do not exist.
+The current complete-candidate collection does not yet implement that implicit
+tail or partial continuation through a oneOf. The role of explicit size in
+closing membership is pending clarification.
 
 For each semantic change, run its original fixtures alongside focused graph
 checks, then compare the default inventory so recovered behavior stays recovered.

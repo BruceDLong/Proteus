@@ -23,7 +23,7 @@ class FieldSelection {
         out.edges.push_back(edge("next field position",std::move(follow),visits));
     }
     bool sourceReady(const POVNode& node) const {
-        return (access_->physicalList(node) || access_->unreferencedTemplateSpan(node)) && !access_->hasTypeRequirements(node) &&
+        return (access_->physicalList(node) || access_->unreferencedTemplateSpan(node)) &&
             POVDescription(node,access_->registry.get()).relationships().empty();
     }
 public:
@@ -33,6 +33,17 @@ public:
         Expansion<POVNode> out;
         if(q.kind==fieldEnd) return out;
         if(q.kind==selectField) {
+            // A path continuation demands its predecessor's selection, not
+            // complete normalization of that intermediate object.
+            if (auto field=q.node->pItem->fieldSelection) {
+                out.refinements.push_back({{field->source,selectField,0,field->predicate,{q.node}},
+                    {0,0},"select preceding field",false});
+                if (field->result) {
+                    auto next=q;next.node=field->result;
+                    out.edges.push_back(edge("continue from selected field",std::move(next)));
+                }
+                return out;
+            }
             if(!sourceReady(q.node)) {out.deferred=true;return out;}
             out.edges.push_back(edge("scan field candidates",{q.node,fieldPosition,static_cast<int>(ListPhase::enter),q.related,{q.node}}));
             return out;
@@ -72,43 +83,61 @@ public:
     }
 };
 
-// Dot syntax supplies an existing source and a predicate to the same goal.
-// Keep the source's state/work and the parsed predicate intact while the working
-// POV becomes the result. Chained paths, writes and retained-parent paths need
-// their own continuation handling; do not silently consume them here.
+// Each dot segment is the same field-selection goal. Intermediate query POVs
+// retain the parsed path's provenance, while candidate/source POVs remain shared.
+// Writes and retained-parent paths need their own continuation semantics.
 class FieldPath {
+    static std::vector<std::shared_ptr<PartPath>> segments(ProteusGraphAccess& access,const POVNode& node) {
+        auto item=node->pItem;
+        if (!item->partRef || !item->parts.empty() || !item->wrkList.empty() || item->fieldSelection ||
+            !access.plainStructure(node,false,false,false,false,true) ||
+            !POVDescription(node,access.registry.get()).relationships(false).empty()) return {};
+        std::vector<std::shared_ptr<PartPath>> result;
+        std::set<std::shared_ptr<PartPath>> seen;
+        for (auto part=item->partRef;part;part=part->path->partRef) {
+            if (!seen.insert(part).second || getModeBits(part->flags,PartPath::pathMode)!=PartPath::dotField ||
+                getFlagBit(part->flags,PartPath::hasSemiColon) || part->spec || part->continuation || !part->path ||
+                !part->path->parts.empty() || !part->path->wrkList.empty()) return {};
+            result.push_back(part);
+        }
+        return result;
+    }
 public:
-    static bool ready(ProteusGraphAccess& access,const POVNode& node) {
-        auto item=node->pItem;auto part=item->partRef;
-        return part && getModeBits(part->flags,PartPath::pathMode)==PartPath::dotField &&
-            !getFlagBit(part->flags,PartPath::hasSemiColon) && !part->spec && !part->continuation && part->path &&
-            item->parts.empty() && item->wrkList.empty() && !item->fieldSelection &&
-            part->path->parts.empty() && !part->path->partRef && part->path->wrkList.empty() &&
-            access.plainStructure(node,false,false,false,false,true) &&
-            POVDescription(node,access.registry.get()).relationships(false).empty();
+    static bool ready(ProteusGraphAccess& access,const POVNode& node) {return !segments(access,node).empty();}
+    static Work work(ProteusGraphAccess& access,const POVNode& node) {
+        auto count=segments(access,node).size();return {count,6*count+1};
     }
     static bool prepare(ProteusGraphAccess& access,const POVNode& node) {
-        if(!ready(access,node)) return false;
+        auto path=segments(access,node);if(path.empty()) return false;
         auto original=node->pItem;
         auto source=node->snapshotView(915);
         source->pItem=std::make_shared<infonView>(*original);
         source->pItem->partRef.reset();SetFlagBit(source->pItem->flags,infonView::doReply,false);
-        auto predicate=std::make_shared<POV>(915);predicate->pItem=original->partRef->path;
-        auto state=std::make_shared<GraphFieldSelection>();
-        state->expression=std::make_shared<infonView>(*original);
-        SetFlagBit(state->expression->flags,infonView::doReply,false);
-        state->source=source;state->predicate=predicate;
-        auto result=std::make_shared<infonView>();
-        SetModeBits(result->flags,infonView::itmMode,infonView::mItem);
-        SetModeBits(result->flags,infonView::viewMode,infonView::vmOverlay);
-        SetFlagBit(result->flags,infonView::doReply,getFlagBit(original->flags,infonView::doReply));
-        SetModeBits(result->infSize->flags,infonState::overlayType,infonState::NUM);
-        SetModeBits(result->infSize->flags,infonState::evalMode,infonState::emUnknown);
-        SetModeBits(result->value->flags,infonState::overlayType,infonState::tUnknown);
-        SetModeBits(result->value->flags,infonState::evalMode,infonState::emUnknown);
-        result->originID=original->originID;result->infCharPos=original->infCharPos;result->replyCharPos=original->replyCharPos;
-        result->fieldSelection=state;node->pItem=result;
-        access.bind(source);access.bind(predicate);access.bind(node);++node->workRevision;
+        auto expression=std::make_shared<infonView>(*original);
+        SetFlagBit(expression->flags,infonView::doReply,false);
+        access.bind(source);
+        for (std::size_t i=0;i<path.size();++i) {
+            auto owner=i+1==path.size() ? node : std::make_shared<POV>(915);
+            auto predicate=std::make_shared<POV>(915);
+            // A following path is a continuation, not a condition on this
+            // segment's candidate. Preserve the original parsed predicates.
+            predicate->pItem=std::make_shared<infonView>(*path[i]->path);
+            predicate->pItem->partRef.reset();
+            auto state=std::make_shared<GraphFieldSelection>();
+            state->expression=expression;state->source=source;state->predicate=predicate;
+            auto result=std::make_shared<infonView>();
+            SetModeBits(result->flags,infonView::itmMode,infonView::mItem);
+            SetModeBits(result->flags,infonView::viewMode,infonView::vmOverlay);
+            SetFlagBit(result->flags,infonView::doReply,owner==node && getFlagBit(original->flags,infonView::doReply));
+            SetModeBits(result->infSize->flags,infonState::overlayType,infonState::NUM);
+            SetModeBits(result->infSize->flags,infonState::evalMode,infonState::emUnknown);
+            SetModeBits(result->value->flags,infonState::overlayType,infonState::tUnknown);
+            SetModeBits(result->value->flags,infonState::evalMode,infonState::emUnknown);
+            result->originID=original->originID;result->infCharPos=original->infCharPos;result->replyCharPos=original->replyCharPos;
+            result->fieldSelection=state;owner->pItem=result;
+            access.bind(predicate);access.bind(owner);++owner->workRevision;
+            source=owner;
+        }
         return true;
     }
 };
@@ -135,7 +164,14 @@ public:
         if(q.kind==fieldUnknown) waiting_=true;
         if(q.kind==fieldMatched) matches_.push_back(q.node);
         if((q.kind!=fieldEnd && (q.kind!=fieldMatched || unordered)) || waiting_ || matches_.empty()) return {};
-        if(result_ && published_==matches_) {verified_=true;return {};}
+        if(result_ && published_==matches_) {
+            bool current=true;
+            if(matches_.size()==1 && !request.context.empty()) {
+                auto state=request.context.front()->pItem->fieldSelection;
+                current=state->resultView==result_->pItem && state->resultRevision==result_->workRevision;
+            }
+            if(current) {verified_=true;return {};}
+        }
         auto matches=matches_;auto access=access_;
         Work work{matches.size(),matches.size()==1 ? 0 : 2*matches.size()+3};
         if (!request.context.empty()) ++work.creations;
@@ -165,6 +201,7 @@ public:
                 SetFlagBit(result->flags,infonView::doReply,getFlagBit(previous->flags,infonView::doReply));
                 SetFlagBit(result->flags,infonView::isNormed,false);
                 state->result=result_;state->matches=matches;
+                state->resultView=result_->pItem;state->resultRevision=result_->workRevision;
                 owner->pItem=result;access->bind(owner);++owner->workRevision;
                 if(matches.size()==1) {
                     definitions_->inherit(owner,result_);

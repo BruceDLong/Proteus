@@ -74,15 +74,17 @@ members of that published symbolic value.
 
 Only finite ordered structural comparison is admitted. Unordered structural
 omission/mapping, nonempty virtual spans, contextual/overloaded meanings,
-chained paths, writes, and nested/complemented literal structure predicates remain
-pending. The outer container may be unordered and return multiple matching
+writes and nested/complemented literal structure predicates remain pending.
+Read-only chains were added in the subsequent
+[chained-field-results.md](chained-field-results.md) checkpoint. The outer container may be unordered and return multiple matching
 structured members as a oneOf.
 
-The next field-selection boundary is composing these results through chained
-paths. Description-based recognition without the type word remains deferred;
+The subsequent [chain checkpoint](chained-field-results.md) composes these
+results through read-only paths. Description-based recognition without the type
+word remains deferred;
 it must not be enabled merely because two unfinished definitions share a shape.
 
-## Validation
+## Validation at this checkpoint
 
 CodeDog regeneration and the native build succeeded. All **683 focused checks
 pass**, including 37 finite-structure checks, the existing field/sequence/type

@@ -38,15 +38,15 @@ Scalar exclusion predicates distinguish a known mismatch from missing informatio
 Accepted list-valued input members retain their atomic identity on replay; do not
 reinterpret their copied values as more grammar. Composite/standalone exclusion,
 contextual typed predicates, prefixed definition bodies, recursive grammar,
-unordered record matching, and chained paths remain later boundaries.
+unordered record matching, and field updates remain later boundaries.
 Single-step field predicates support finite ordered structures. Context-free scalar type
 meanings can be compiled read-only for speculative matching and reused on accepted
 outputs. Compilation is not proof that a candidate satisfies its type.
-Single-step dot queries and GraphNormalizer.findField share the field walk:
+Dot queries (including read-only chains) and GraphNormalizer.findField share the field walk:
 ordered lookup selects the first proved compatible logical member; unordered
 lookup publishes a oneOf after every relevant candidate and the end are known.
 Unresolved earlier candidates cannot be skipped to choose a later ordered result.
-See graph/structured-field-results.md for supported boundaries and validation.
+See graph/chained-field-results.md for supported boundaries and validation.
 Preserve read-only definition bodies, already-demanded occurrence POVs, and
 reusable type evidence; avoid redundant
 application RHSs. Redundant RHS/template rendering uses revision-scoped proofs;
@@ -58,7 +58,11 @@ For unordered lists, the user clarified that omitted items are non-relevant to
 that instance. Do not create missing-field subscriptions or eagerly insert all
 definition members. Instance size counts the items it holds. Ordered lists can
 also contain typed fields (as in a C struct); field selection does not imply
-unorderedness. Preserve the space-separated query/chain fixtures.
+unorderedness. Preserve the space-separated query/chain fixtures. The latest
+clarification says unordered descriptions have an implied open tail: unlisted
+parts may exist, including parts beyond a type definition. Physical end alone
+must not prove absence. Implicit-tail handling and partial oneOf continuation
+are not implemented yet; whether explicit size closes membership is pending.
 
 Fields are typed members, not string-keyed fields. An explicit name is modeled
 as field^{name=X}. The user retracted structural type equivalence: .wheel must

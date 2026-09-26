@@ -63,8 +63,23 @@ separate from this unordered field-selection requirement.
 
 ## Current implementation boundary
 
-Single-step dot queries and `GraphNormalizer.findField` use nominal compatibility,
-scalar constraints, and finite ordered structural constraints. See
-[structured-field-results.md](structured-field-results.md). Chained paths,
-writes/retained parents, contextual meanings, unordered structure correspondence,
-and partial publication of an unordered result remain pending.
+Dot queries, including read-only chains, and `GraphNormalizer.findField` use
+nominal compatibility, scalar constraints, and finite ordered structural
+constraints. Each path segment is another selection goal over the preceding
+result. See [chained-field-results.md](chained-field-results.md) and
+[structured-field-results.md](structured-field-results.md). Writes/retained
+parents, contextual meanings, unordered structure correspondence, and partial
+publication/continuation of an unordered result remain pending.
+
+## Unordered descriptions are partial
+
+The user clarified that an unordered list has an implied open tail: a model need
+not enumerate every part of an aircraft carrier, and a particular bike may have a
+water bottle holder beyond the parts in its definition. Therefore omission is
+not evidence of absence. A missing `position` cannot by itself exclude an
+already-selected wheel from `.wheel.position`.
+
+The existing field collector uses stored-list closure and does not yet model
+this implicit tail. Do not infer exhaustive membership from physical end alone.
+Whether an explicit size establishes exhaustive membership is still awaiting
+clarification. Chained oneOf traversal remains deferred at this checkpoint.

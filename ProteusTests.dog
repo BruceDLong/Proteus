@@ -1,6 +1,18 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphChain/twoSegments
+    unit/graphChain/threeSegments
+    unit/graphChain/partialIntermediate
+    unit/graphChain/typedSource
+    unit/graphChain/embedded
+    unit/graphChain/lateValue
+    unit/graphChain/cancel
+    unit/graphChain/unorderedIntermediateDeferred
+    unit/graphChain/explicitConstraint
+    unit/graphChain/renormalize
+    unit/graphChain/singleFieldLateValue
+
     unit/graphStructure/distinctTypes
     unit/graphStructure/siblingTypes
     unit/graphStructure/declaredAlias
@@ -9419,7 +9431,8 @@ struct GLOBAL {
             passed &= handle.status().symbolicValues;
             if(caseID==5) passed &= handle.status().cancelled && !root->pItem->fieldSelection->result;
             else passed &= toString(root->pItem.get())==original;
-            if(caseID==6 || caseID==7) passed &= !root->pItem->fieldSelection;
+            if(caseID==7) passed &= !root->pItem->fieldSelection;
+            if(caseID==6) passed &= root->pItem->fieldSelection && !root->pItem->fieldSelection->result;
         } else {
             passed &= !handle.status().failed && toString(root->pItem.get())==expected;
             if(caseID==2) passed &= handle.status().symbolicValues && root->pItem->isOrLike();
@@ -9593,6 +9606,88 @@ struct GLOBAL {
     }%>
     void: unitTestGraphStructure(me string: testName, me int: caseID) <- {
         me bool: passed <- graphStructureCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHCHAIN(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphChain(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHCHAIN(unit/graphChain/twoSegments, 1)
+    GRAPHCHAIN(unit/graphChain/threeSegments, 2)
+    GRAPHCHAIN(unit/graphChain/partialIntermediate, 3)
+    GRAPHCHAIN(unit/graphChain/typedSource, 4)
+    GRAPHCHAIN(unit/graphChain/embedded, 5)
+    GRAPHCHAIN(unit/graphChain/lateValue, 6)
+    GRAPHCHAIN(unit/graphChain/cancel, 7)
+    GRAPHCHAIN(unit/graphChain/unorderedIntermediateDeferred, 8)
+    GRAPHCHAIN(unit/graphChain/explicitConstraint, 9)
+    GRAPHCHAIN(unit/graphChain/renormalize, 10)
+    GRAPHCHAIN(unit/graphChain/singleFieldLateValue, 11)
+
+    me bool: graphChainCase(me string: testName, me int: caseID) <- <%{
+        GraphNormalizer normalizer;normalizer.init();
+        std::string declarations="{#pedals={position:_ torque:_} #wheel={position:_ torque:_}}";
+        std::string expression="{pedals:{position:321 torque:4} wheel:{position:210 torque:5}}.wheel.position";
+        std::string expected="position:210";
+        if(caseID==2 || caseID==3) {
+            declarations="{#color=$ #length=_ #spoke={color:$ length:_} #wheel={position:_ torque:_ spoke}}";
+            expression=caseID==2 ? "{wheel:{position:210 torque:5 spoke:{length:234}}}.wheel.spoke.length" :
+                "{wheel:{spoke:{length:*1000+234}}}.wheel.spoke.length";
+            expected=caseID==2 ? "length:234" : "length:*1000+234";
+        }
+        if(caseID==4) {declarations="{#bike={pedals wheel} #wheel={position:_ torque:_}}";expression="bike:{wheel:{position:*10+7}}.wheel.position";expected="position:*10+7";}
+        if(caseID==5) {expression="{&{wheel:{&{position:*10+7}}}}.wheel.position";expected="position:*10+7";}
+        if(caseID==6 || caseID==7) {expression="{wheel:{position:?} wheel:{position:*10+2}}.wheel.position";expected="position:*10+7";}
+        if(caseID==8) expression="{wheel:{position:*10+1}, wheel:{position:*10+2}}.wheel.position";
+        if(caseID==9) {expression="{wheel:{position:*10+1 position:*10+2}}.wheel.position:*10+2";expected="position:*10+2";}
+        if(caseID==10) {declarations="{}";expression="{pedals:{position:*10+1} wheel:{position:*10+2}}.wheel.position";expected="position:*10+1";}
+        if(caseID==11) {declarations="{}";expression="{position:?}.position";expected="position:*10+7";}
+        auto defs=graphParsed(testName,declarations);
+        auto declared=normalizer.normalize(defs);declared.waitForCompletion();
+        auto root=graphParsed(testName,expression);
+        auto original=root->pItem;auto first=original->value->items.head;
+        auto sourceBefore=toString(original.get()),defsBefore=toString(defs->pItem.get());
+        auto handle=normalizer.normalize(root);handle.waitForCompletion();
+        bool passed=!declared.status().failed && !handle.status().failed;
+        if(caseID==6 || caseID==7 || caseID==11) {
+            auto position=caseID==11 ? first : first->pItem->value->items.head;
+            passed &= root->pItem->selectedResult==position && handle.status().symbolicValues && handle.status().withSubscribers;
+            if(caseID==7) handle.cancel();
+            auto steps=handle.steps().size();
+            normalizer.addRHS(position,graphParsed(testName,"*10+7"));handle.waitForCompletion();
+            if(caseID==7) passed &= handle.status().cancelled && handle.steps().size()==steps;
+        }
+        if(caseID==10) {
+            passed &= !handle.status().symbolicValues && toString(root->pItem.get())=="position:*10+2";
+            auto added=normalizer.normalize(graphParsed(testName,"{#wheel=pedals}"));added.waitForCompletion();
+            passed &= toString(root->pItem.get())=="position:*10+2";
+            handle=normalizer.normalize(root);handle.waitForCompletion();
+        }
+        if(caseID==8) {
+            passed &= handle.status().symbolicValues && handle.status().withSubscribers && root->pItem->fieldSelection &&
+                !root->pItem->fieldSelection->result && toString(root->pItem.get())==sourceBefore;
+        } else if(caseID!=7) {
+            passed &= !handle.status().failed && toString(root->pItem.get())==expected;
+            if(caseID>=3) passed &= !handle.status().symbolicValues && getFlagBit(root->pItem->flags,infonView::isNormed);
+            else passed &= handle.status().symbolicValues && !getFlagBit(root->pItem->flags,infonView::isNormed);
+            auto selected=root->pItem->selectedResult;
+            auto identities=normalizer.access->registry->identities.size();
+            auto again=normalizer.normalize(root);again.waitForCompletion();
+            passed &= !again.status().failed && selected==root->pItem->selectedResult && identities==normalizer.access->registry->identities.size();
+        }
+        if(caseID!=6 && caseID!=7 && caseID!=11) passed &= sourceBefore==toString(original.get());
+        passed &= defsBefore==toString(defs->pItem.get());
+        if(!passed) {
+            std::cout << "Chain " << caseID << ": " << handle.status().error << " symbolic=" << handle.status().symbolicValues << "\n"
+                      << toString(root->pItem.get()) << "\n";
+            for(const auto& step:handle.steps()) std::cout << step.action << "\n";
+        }
+        handle.cancel();normalizer.close();return passed;
+    }%>
+    void: unitTestGraphChain(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphChainCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

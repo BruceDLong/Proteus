@@ -20,11 +20,12 @@ applying definitions to speculative candidates; see
 [typed-predicate-results.md](typed-predicate-results.md).
 The field-selection contract is first compatible member for ordered lists and
 oneOf alternatives for unordered lists; see
-[field-selection-contract.md](field-selection-contract.md). Single-step
-dot queries and `GraphNormalizer.findField(source, predicate)` now implement that
-policy. Nominal type compatibility is required; shared structure alone does not
+[field-selection-contract.md](field-selection-contract.md). Dot queries, including
+read-only chains, and `GraphNormalizer.findField(source, predicate)` use that
+selection policy. Nominal type compatibility is required; shared structure alone does not
 equate types. Finite ordered structural constraints are also supported. See
-[structured-field-results.md](structured-field-results.md) for the current scope and
+[chained-field-results.md](chained-field-results.md) for the latest scope,
+[structured-field-results.md](structured-field-results.md) for nominal/structural matching, and
 [field-selection-results.md](field-selection-results.md) for the initial scalar step,
 symbolic alternatives, subscriptions, and validation.
 
@@ -83,7 +84,7 @@ to preserve every original fixture and record failures, crashes and timeouts.
 | `ProteusGraph.h` | Translate semantic access into graph edges and refinement opportunities; GoalSpec turns findings into Sets |
 | `ListStructure.h` | Shared incremental list walk and layout evidence for embedded positions, gaps, and owner extents |
 | `SpanAlignment.h` | Plan finite ordered correspondence from opaque member/gap evidence; no POV access or mutation |
-| `FieldSelection.h` | Shared ordered/unordered member walk, field-result Sets, and single-step dot lowering |
+| `FieldSelection.h` | Shared ordered/unordered member walk, field-result Sets, and composed dot-path lowering |
 | `FieldPredicate.h` | Read-only nominal and finite ordered structural comparison, with refinement demands |
 | `ScalarPredicate.h` | Three-state scalar and nominal comparison shared by sequence matching and field selection |
 | `SequenceCorrespondence.h` | Successful continuation edges over string/list input, repeated matching, selected results, and accepted-path Sets |
