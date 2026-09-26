@@ -10,7 +10,7 @@ class FieldPredicate {
     std::set<std::shared_ptr<infonView>> active_;
     bool conflict_=false;
     bool readable(const POVNode& node, bool predicate) {
-        if (!access_->plainStructure(node,false,false,false,false,false) ||
+        if (!access_->plainStructure(node,false,false,false,false,false,false) ||
             (!predicate && getFlagBit(node->pItem->flags,infonView::invertMatch))) return false;
         for (const auto& relation:POVDescription(node,access_->registry.get()).relationships()) {
             if (access_->sameInfon(node,relation.target)) continue;

@@ -76,17 +76,20 @@ The numeric literal migration is recorded in
 Run `python3 graph/audit_language_suite.py --output /tmp/proteus4-language-audit`
 to preserve every original fixture and record failures, crashes and timeouts.
 
+See [positional-path-results.md](positional-path-results.md) for bracketed item
+selection, end-relative indexes, and mixed field/index paths.
+
 ## Responsibilities
 
 | Component | Responsibility |
 |---|---|
-| `GraphSearch.h` | Opaque-node search, lazy edges, route costs, sub-goals, revisions, subscriptions, cancellation, worker lifetime |
+| `GraphSearch.h` | Opaque-node search, lazy edges, route costs, sub-goals, revisions, subscriptions, cancellation, collected Set batches, worker lifetime |
 | `GraphFoundation.Lib.dog` | Public CodeDog API; Proteus graph access, compatibility checks and atomic Set batches |
 | `POVDescription.h` | Live, goal-independent access to existing POV links, state slots, work entries and registry identities |
 | `ProteusGraph.h` | Translate semantic access into graph edges and refinement opportunities; GoalSpec turns findings into Sets |
 | `ListStructure.h` | Shared incremental list walk and layout evidence for embedded positions, gaps, and owner extents |
 | `SpanAlignment.h` | Plan finite ordered correspondence from opaque member/gap evidence; no POV access or mutation |
-| `FieldSelection.h` | Shared ordered/unordered member walk, field-result Sets, and composed dot-path lowering |
+| `PathSelection.h` | Field predicates and positional navigation, shared result Sets, and composed read-only paths |
 | `FieldPredicate.h` | Read-only nominal and finite ordered structural comparison, with refinement demands |
 | `ScalarPredicate.h` | Three-state scalar and nominal comparison shared by sequence matching and field selection |
 | `SequenceCorrespondence.h` | Successful continuation edges over string/list input, repeated matching, selected results, and accepted-path Sets |

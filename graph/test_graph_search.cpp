@@ -104,6 +104,40 @@ public:
     }
 };
 
+// A result assembled across cheap and slow routes must publish one complete
+// batch, rather than repeatedly restarting at a cheaper partial result.
+class CollectedGoal : public GoalSpec<Node> {
+    int sum_=0;
+    Visit<Node> last_;
+    std::shared_ptr<int> publications_;
+public:
+    CollectedGoal(Query<Node> q,std::shared_ptr<int> publications)
+        :GoalSpec<Node>(q),publications_(std::move(publications)) {}
+    void beginPass() override {sum_=0;last_={request,{},0};}
+    bool satisfied() const override {return false;}
+    bool symbolic() const override {return request.node->value!=sum_;}
+    std::vector<SetCommand> found(const Visit<Node>& visit) override {
+        if(visit.query.node!=request.node && visit.query.node->value>=0) {
+            sum_+=visit.query.node->value;last_=visit;
+        }
+        return {};
+    }
+    CommandBatch<Node> finishPass() override {
+        if(request.node->value==sum_) return {};
+        auto target=request.node;auto publications=publications_;int total=sum_;
+        return {last_,{{"Set collected result",[target,publications,total] {
+            target->value=total;++*publications;return true;
+        },{1,1}}}};
+    }
+};
+class CollectedAccess : public TestAccess {
+public:
+    std::shared_ptr<int> publications=std::make_shared<int>(0);
+    std::shared_ptr<GoalSpec<Node>> goal(const Query<Node>& query) override {
+        return std::make_shared<CollectedGoal>(query,publications);
+    }
+};
+
 static bool saw(const NormalizationHandle<Node>& h, const std::string& label) {
     for (const auto& step : h.steps()) if (step.action == label) return true;
     return false;
@@ -404,6 +438,27 @@ int main() {
         auto h = manager.normalize({a->watched, 1, 0}); h.waitForCompletion(); waiting.waitForCompletion();
         assert(deliveries == 1 && target->value == 62 && !waiting.status().symbolicValues);
         ++cases;
+    }
+    {
+        auto access=std::make_shared<CollectedAccess>();GraphManager<Node> manager(access);
+        auto root=node(99),slow=node();root->rhs={node(2),slow};
+        for(int i=0;i<30;++i) {auto next=node();slow->rhs={next};slow=next;}
+        slow->rhs={node(3)};
+        auto result=manager.normalize({root,1,0});result.waitForCompletion();
+        assert(root->value==5 && *access->publications==1 && !result.status().symbolicValues);
+        auto replay=manager.normalize({root,1,0});replay.waitForCompletion();
+        assert(root->value==5 && *access->publications==1 && !replay.status().failed);
+        ++cases;
+    }
+    {
+        // Deferred publication keeps the winning route's cost. Exclusion
+        // must not requeue the same end-of-pass command forever.
+        auto access=std::make_shared<CollectedAccess>();GraphManager<Node> manager(access);
+        auto root=node();root->rhs={node(7)};
+        CostPolicy cost;cost.maximumRoute=5; // route 1 + Set (1 visit, 1 creation) = 6
+        auto result=manager.normalize({root,1,0},cost);result.waitForCompletion();
+        assert(root->value==-1 && *access->publications==0 && result.status().withSubscribers);
+        assert(saw(result,"exclude: Set collected result"));result.cancel();++cases;
     }
     std::cout << "Graph search: " << cases << "/" << cases << " scenarios passed\n";
 }

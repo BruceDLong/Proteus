@@ -64,7 +64,7 @@ class SequenceCorrespondence {
     }
     static bool inverted(const POVNode& node) { return getFlagBit(node->pItem->flags, infonView::invertMatch); }
     bool readable(const POVNode& node, bool root, bool predicate = false) const {
-        if (!access_->plainStructure(node, access_->canSelect(node), false, false, false, false) ||
+        if (!access_->plainStructure(node, access_->canSelect(node), false, false, false, false, false) ||
             (!predicate && inverted(node)) ||
             (access_->hasTypeRequirements(node) && !definitions_->scalarFacts(node,predicate).valid)) return false;
         if (!root) for (const auto& relation : POVDescription(node, access_->registry.get()).relationships())

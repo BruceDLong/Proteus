@@ -42,6 +42,13 @@ unordered record matching, and field updates remain later boundaries.
 Single-step field predicates support finite ordered structures. Context-free scalar type
 meanings can be compiled read-only for speculative matching and reused on accepted
 outputs. Compilation is not proof that a candidate satisfies its type.
+Read-only dot and bracketed item paths share `graph/PathSelection.h` and its
+result publisher. Positional steps wrap existing indexed navigation; do not
+copy its sparse or embedded-list algorithms into path handling. Negative
+indexes demand extent evidence. Competing routes to one position are not separate
+oneOf alternatives. Collected positional results use the generic finishPass Set
+hook so a partial publication cannot starve a slower successful route.
+See graph/positional-path-results.md.
 Dot queries (including read-only chains) and GraphNormalizer.findField share the field walk:
 ordered lookup selects the first proved compatible logical member; unordered
 lookup publishes known alternatives with an open oneOf tail while candidates or

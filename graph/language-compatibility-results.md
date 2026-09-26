@@ -10,7 +10,7 @@ tests compiled into `TestProteus`.
 
 | Suite | Passing | Failing | Total |
 |---|---:|---:|---:|
-| `defaultTests.tst` | 164 | 106 | 270 |
+| `defaultTests.tst` | 170 | 100 | 270 |
 | `demoTests.tst` | 1 | 21 | 22 |
 | `sparseTests.tst` | 1 | 22 | 23 |
 | `timeTests.tst` | 0 | 36 | 36 |
@@ -20,11 +20,11 @@ tests compiled into `TestProteus`.
 The R1 file records an experimental contract and explicitly excludes itself from
 the default tests; its failures are not evidence of regressions from a previously
 passing implementation. Other suites also overlap in coverage, so the combined
-166/363 pass count is a fixture inventory, not a measure of language completeness.
+172/363 pass count is a fixture inventory, not a measure of language completeness.
 
-The default row was refreshed after chained field selection, recovering
-`query/chain` and `query/chain2` with no prior pass lost. See
-[chained-field-results.md](chained-field-results.md) for the latest change.
+The default row was refreshed after positional path selection, recovering six
+read-only index fixtures with no prior pass lost. See
+[positional-path-results.md](positional-path-results.md) for the latest change.
 
 The default suite was audited before and after logical navigation. It improved
 from 135/270 to 138/270, with no formerly passing case lost. The recovered cases
@@ -51,7 +51,10 @@ size remains unknown; this does not establish `isNormed`. Nominal and finite
 structured field selection then recovered `query/byType1`, reaching 162/270
 without losing any previous pass or changing an original fixture. Chained field
 selection subsequently recovered `query/chain` and `query/chain2`, reaching
-164/270 without losing a prior pass.
+164/270 without losing a prior pass. Positional selection now recovers
+`read/readByIdx`, `read/negativeLast`, `read/negativeSecondLast`,
+`read/negativeAcrossSubitem`, `read/nestedIndex`, and `read/indexThenField`,
+reaching 170/270. The same original fixture file remains unchanged.
 
 The complete per-fixture status and input-file hashes are in
 [language-compatibility-status.json](language-compatibility-status.json).

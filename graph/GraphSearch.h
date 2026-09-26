@@ -73,6 +73,13 @@ struct SetCommand {
     Work work{0, 0};
 };
 
+// A collected result retains the finding's route cost and trace when its Set
+// must wait until the current frontier has been examined.
+template<class Node> struct CommandBatch {
+    Visit<Node> finding;
+    std::vector<SetCommand> commands;
+};
+
 template<class Node> class GoalSpec {
 public:
     Query<Node> request;
@@ -84,6 +91,9 @@ public:
     // This callback must not change semantic information or graph adjacency.
     virtual void settled(bool fullyResolved) { (void)fullyResolved; }
     virtual std::vector<SetCommand> found(const Visit<Node>&) = 0;
+    // Called once after this pass's queued work, before completion metadata.
+    // Return priced Sets; do not mutate graph state from this callback.
+    virtual CommandBatch<Node> finishPass() { return {}; }
     // Only alternative routes may be pruned after satisfaction. Constraints
     // remain searchable even when every requested field is already concrete.
     virtual bool satisfied() const = 0;
@@ -163,6 +173,7 @@ template<class Node> struct SearchSession {
         std::vector<std::size_t> required;
         bool deferred = false;
         std::uint64_t generation = 0;
+        bool finishedPass = false;
     };
     struct Pending {
         std::size_t task = 0;
@@ -317,6 +328,15 @@ template<class Node> class GraphManager {
         s.frontier.push({task, cost, estimate, s.sequence++, std::move(edge),
                          std::move(path), s.tasks[task].generation});
     }
+    static void enqueueCommands(Session& s, std::size_t task, const Visit<Node>& finding,
+                                std::vector<SetCommand> commands) {
+        for (auto& command : commands) {
+            Edge<Node> operation{command.description, command.work, false,
+                [query=finding.query, apply=std::move(command.apply)] { return Arrival<Node>{query, apply()}; }};
+            operation.command = true;
+            enqueue(s, task, finding.cost, std::move(operation), finding.path);
+        }
+    }
     static std::size_t startTask(Session& s, std::shared_ptr<GoalSpec<Node>> goal, Cost cost) {
         auto query = goal->request;
         auto index = s.tasks.size();
@@ -332,6 +352,7 @@ template<class Node> class GraphManager {
                 task.visited.clear();
                 task.required.clear();
                 task.deferred = false;
+                task.finishedPass = false;
                 ++task.generation;
                 goal = task.goal;
                 break;
@@ -379,6 +400,14 @@ template<class Node> class GraphManager {
             s.steps.push_back({"search", s.root->request, 0, c.revision});
         }
         if (s.frontier.empty()) {
+            for (std::size_t i=0;i<s.tasks.size();++i) {
+                auto& task=s.tasks[i];
+                if (task.finishedPass) continue;
+                task.finishedPass=true;
+                auto batch=task.goal->finishPass();
+                enqueueCommands(s,i,batch.finding,std::move(batch.commands));
+            }
+            if (!s.frontier.empty()) return;
             settle(s);
             s.status.fullyNormed = true;
             s.status.withSubscribers = s.watch && s.status.symbolicValues;
@@ -411,12 +440,7 @@ template<class Node> class GraphManager {
         pending.path.push_back(query);
         s.steps.push_back({pending.edge.description, query, pending.cost, c.revision});
         Visit<Node> visit{query, pending.path, pending.cost};
-        for (auto& command : goal->found(visit)) {
-            Edge<Node> operation{command.description, command.work, false,
-                [query, apply = std::move(command.apply)] { return Arrival<Node>{query, apply()}; }};
-            operation.command = true;
-            enqueue(s, pending.task, pending.cost, std::move(operation), pending.path);
-        }
+        enqueueCommands(s,pending.task,visit,goal->found(visit));
         auto expansion = c.access->expand(query);
         s.tasks[pending.task].deferred |= expansion.deferred;
         for (auto& edge : expansion.edges)
