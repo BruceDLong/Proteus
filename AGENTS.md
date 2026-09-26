@@ -42,6 +42,12 @@ keep work edges searchable and do not relax isNormed to hide unknown sizes.
 Size and value should be acquired together when both are available; partial
 acquisition is for cases where only one is available.
 
+For unordered lists, the user clarified that omitted items are non-relevant to
+that instance. Do not create missing-field subscriptions or eagerly insert all
+definition members. Instance size counts the items it holds. Commas currently
+mark unordered lists in the parser; the old query/chain fixtures omit them, so
+do not silently infer unorderedness from field names to recover those tests.
+
 Agent.normalize() is the public graph entry point and returns a handle.
 Agent.normalizeAndWait() is the synchronous convenience. Each Agent owns a
 persistent GraphNormalizer context; no agenda fallback is used. See

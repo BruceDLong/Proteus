@@ -62,12 +62,18 @@ with named part/path selection and its relationship to definition requirements.
 For example, `query/chain2` currently leaves `.wheel.spoke.length` unresolved.
 Dot paths lower to negated skip plus positive selection in Proteus3, so the scalar
 predicate prerequisite was implemented first. Named predicates still require
-careful composition with type evidence. There is a semantic question about a
-partially populated typed object: Proteus3 returns the known `length` from
-`spoke:{length:234}` even when `spoke` is defined as `{color:$ length:_}`. The
-current finite-list requirement planner would demand two positions. Resolve
-that distinction before migrating the named path, rather than introducing a
-field-name shortcut or weakening all finite list checks.
+careful composition with type evidence. The user clarified that omitted items
+in an unordered list are non-relevant to that instance; they must not become
+missing-field subscriptions or force insertion of every definition member.
+The finite ordered-list requirement planner cannot be reused unchanged for that
+case. List size still counts the items the instance holds.
+
+There is also a syntax distinction to settle for the older fixtures: the parser
+marks comma-separated `{color:$, length:_}` unordered, while `query/chain*` uses
+space-separated definitions. Those fixtures currently return a known field in
+Proteus3, but that printed result alone does not establish full type validation.
+Do not infer unorderedness from field names or silently rewrite those fixtures
+without resolving this distinction.
 Follow existing POV/definition relationships and reuse checked type evidence;
 do not add repeated type RHSs just to make each query pass.
 
