@@ -18,7 +18,7 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectionExtentMember = 20, selectionExtentEnd = 21,
               typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27,
               selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31,
-              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39 };
+              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40 };
 
 inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
     auto phase = query.kind == correspondenceEnter ? ListPhase::enter :
@@ -549,7 +549,7 @@ public:
             return std::make_shared<ProteusGroupedListGoal>(query, access_, definitions_, completion_);
         if (query.kind == assessRepresentation)
             return std::make_shared<ProteusRepresentationGoal>(query, access_, completion_);
-        if (query.kind == typeRequirements)
+        if (query.kind == typeRequirements || query.kind == compileTypeRequirements)
             return std::make_shared<ProteusTypeGoal>(query, definitions_);
         if (query.kind == listCorrespondence)
             return std::make_shared<ProteusCorrespondenceGoal>(query, access_, evidence_, definitions_);
@@ -590,7 +590,7 @@ private:
         auto node = query.node;
         POVDescription description(node, access_->registry.get());
         if (query.kind == assessRepresentation || query.kind == groupedList) return result;
-        if (query.kind == typeRequirements) {
+        if (query.kind == typeRequirements || query.kind == compileTypeRequirements) {
             if (!definitions_->saved(node))
                 result.edges.push_back(direct("inspect type definitions", {node, definitionEnter, 0, node}));
             return result;

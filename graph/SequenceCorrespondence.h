@@ -37,7 +37,10 @@ class SequenceCorrespondence {
         auto at = inputPosition(q);
         if (at.phase == ListPhase::cycle) return out;
         if (at.phase == ListPhase::member && !access_->subList(at.node)) {
-            out.refinements.push_back({{at.node,sizeAndValue,0},{1,0},"refine input member",true});
+            // Type meanings are read as constraints while a route is tentative.
+            // Applying them here would mutate even a rejected typed candidate.
+            auto demand=access_->hasTypeRequirements(at.node) ? compileTypeRequirements : sizeAndValue;
+            out.refinements.push_back({{at.node,demand,0},{1,0},"refine input member",true});
             auto next=q; next.kind=q.coordinates[2];
             out.edges.push_back(edge("input member available", std::move(next))); return out;
         }
@@ -70,9 +73,10 @@ class SequenceCorrespondence {
     }
     bool readable(const POVNode& node, bool root, bool predicate = false) const {
         if (!access_->plainStructure(node, access_->canSelect(node), false, false, false) ||
-            (!predicate && inverted(node)) || access_->hasTypeRequirements(node)) return false;
+            (!predicate && inverted(node)) ||
+            (access_->hasTypeRequirements(node) && !definitions_->scalarFacts(node,predicate).valid)) return false;
         if (!root) for (const auto& relation : POVDescription(node, access_->registry.get()).relationships())
-            if (!RHSRepresentation(access_, node, relation.target).represented) return false;
+            if (!RHSRepresentation(access_, node, relation.target, definitions_).represented) return false;
         return true;
     }
 public:
@@ -127,6 +131,8 @@ public:
         auto body=pattern(q.node);
         bool fedRoot=getFlagBit(source->flags, POV::isOutrFeed) && q.context.size()==stackStart(q) && access_->fedTemplate(q.node);
         if (q.kind == sequenceEnter) {
+            if (access_->hasTypeRequirements(q.node))
+                out.refinements.push_back({{q.node,compileTypeRequirements,0},{1,0},"read pattern type meaning",true});
             if (!readable(q.node, q.context.size() == stackStart(q), true)) return out;
             // Composite exclusion needs a proof for the entire subpattern.
             // The scalar predicate rule must not negate individual children.
@@ -146,12 +152,12 @@ public:
                 next.coordinates.insert(next.coordinates.end(), {0, q.argument, 1});
                 out.edges.push_back(edge("enter matching list", std::move(next)));
             } else {
-                auto facts = access_->predicateFacts(q.node);
+                auto facts = definitions_->scalarFacts(q.node,true);
                 if (!facts.valid) return out;
                 if (!textInput) {
                     auto item=q.context[1];
                     if (!item || !readable(item,false)) return out;
-                    auto supplied=access_->typeFacts(item);
+                    auto supplied=definitions_->scalarFacts(item);
                     if (!supplied.valid) return out;
                     if (inverted(q.node)) {
                         if (compare(facts, supplied) != Match::no) return out;
@@ -255,13 +261,16 @@ public:
         DefinitionSpec result;
         std::map<POVNode, std::int64_t> extents;
         std::map<DefinitionSpec,POVNode> sources;
+        std::map<DefinitionSpec,ProteusDefinitions::Certificate> meanings;
         // The accepted path is the proof. Compile just that path into existing
         // finite-list Sets; rejected candidates never reach this mutation plan.
         for (const auto& q : visit.path) {
             if (q.kind == sequenceEnter) {
                 auto spec = std::make_shared<DefinitionRequirement>();
                 auto body=access_->canSelect(q.node) ? definitions_->selectionBody(q.node) : q.node;
-                spec->facts=access_->typeFacts(body); spec->list=access_->literalList(body) && !SequenceCorrespondence::inputIdentity(*access_,q);
+                spec->facts=definitions_->scalarFacts(body); spec->list=access_->literalList(body) && !SequenceCorrespondence::inputIdentity(*access_,q);
+                auto types=definitions_->names(q.node);
+                if (!types.empty() && !getFlagBit(q.node->pItem->flags,infonView::invertMatch)) spec->label=types.front();
                 bool instance=stack.empty() || (stack.back().instance && definitions_->matchingBody(stack.back().body)!=q.node);
                 // A feed's stored members are results, not its consumed pattern.
                 if (!stack.empty() && access_->fedTemplate(stack.back().node)) instance=false;
@@ -285,9 +294,13 @@ public:
                     if (frame.instance)
                         if (auto body = definitions_->repeatedBody(frame.node)) templates_.push_back({frame.node, body});
                 } else if (getModeBits(request.related->pItem->value->flags,infonState::overlayType)==infonState::LST) {
-                    auto supplied=access_->typeFacts(frame.source);
+                    auto supplied=definitions_->scalarFacts(frame.source);
                     if (getFlagBit(frame.node->pItem->flags,infonView::invertMatch)) spec->facts=supplied;
                     else spec->facts.combine(supplied);
+                    if (spec->label.empty()) {
+                        auto types=definitions_->names(frame.source);
+                        if (!types.empty()) spec->label=types.front();
+                    }
                     // An atomic list-valued source stays an existing graph
                     // node. Its identity supplies members through ordinary
                     // correspondence; matching does not clone its subtree.
@@ -297,6 +310,13 @@ public:
                     spec->facts.overlay = infonState::STR; spec->facts.hasValue = true;
                     spec->facts.text = POVDescription(request.related).value()->str.substr(frame.begin, q.argument-frame.begin);
                     spec->facts.hasSize=true; spec->facts.size = q.argument-frame.begin;
+                }
+                // A selection passes through its chosen child's proof. Its
+                // input cursor does not describe the selected result's type.
+                if (frame.body==frame.node && !spec->list) {
+                    auto typed=access_->hasTypeRequirements(frame.node) && !getFlagBit(frame.node->pItem->flags,infonView::invertMatch) ? frame.node : frame.source;
+                    auto meaning=typed ? definitions_->saved(typed) : nullptr;
+                    if (meaning && !meaning->requirement->list && meaning->requirement->facts.accepts(spec->facts)) meanings[spec]=meaning;
                 }
                 if (!stack.empty() && stack.back().body->pItem->intersectMarkedRetPOV==frame.node) stack.back().selected=spec;
                 if (stack.empty()) result = spec;
@@ -314,7 +334,10 @@ public:
         verified_ = plan->satisfied();
         std::vector<ProteusDefinitionPlan::Place> counted;
         std::vector<std::pair<ProteusDefinitionPlan::Place,POVNode>> identities;
+        std::vector<std::pair<ProteusDefinitionPlan::Place,ProteusDefinitions::Certificate>> typeEvidence;
         for (const auto& binding : plan->bindings) {
+            auto meaning=meanings.find(binding.second);
+            if (meaning!=meanings.end()) { typeEvidence.push_back({binding.first,meaning->second}); ++plan->work.visits; }
             auto found=sources.find(binding.second);
             if (found!=sources.end() && (!binding.first->node || !access_->hasDirectIdentity(binding.first->node,found->second))) {
                 verified_=false; ++plan->work.creations; identities.push_back({binding.first,found->second});
@@ -323,14 +346,21 @@ public:
                 (!binding.first->node || !access_->typeFacts(binding.first->node).hasValue))
                 counted.push_back(binding.first);
         }
-        auto access=access_;
-        return {{"Set accepted sequence correspondence", [plan, counted, identities, access] {
+        auto access=access_; auto definitions=definitions_;
+        return {{"Set accepted sequence correspondence", [plan, counted, identities, typeEvidence, access, definitions] {
             for (const auto& binding:plan->bindings) if(binding.first->node) access->bind(binding.first->node);
             for (const auto& identity:identities) access->bind(identity.second);
             bool changed = plan->apply();
             for (const auto& identity:identities) {
                 access->bind(identity.first->node);
                 access->registry->recordIdentity(identity.first->node,identity.second,iekListCorrespondence,0); changed=true;
+            }
+            // The accepted data already satisfies these scalar meanings.
+            // Reuse their witnesses instead of expanding the same type again
+            // for every output occurrence. This adds no definition RHS.
+            for (const auto& typed:typeEvidence) {
+                auto checked=definitions->plan(typed.first->node,typed.second);
+                if (checked && checked->dataSatisfied()) changed |= definitions->apply(typed.first->node,typed.second,checked);
             }
             // Proteus3 mergeLooseStrings changes a copied fixed-width string
             // from a given size to its now-observed character count.

@@ -3,7 +3,9 @@
 The sequence matcher can now use scalar `!pattern` templates without mutating
 those templates or enumerating failed parses. This is a prerequisite of generic
 dot selection, whose Proteus3 expansion skips `!path` and then selects `path`.
-Named path lowering itself is not implemented by this change.
+Typed scalar matching is added in the subsequent
+[typed-predicate-results.md](typed-predicate-results.md) checkpoint. Path lowering
+itself is not implemented by either change.
 
 Examples from the unchanged older suite:
 
@@ -75,3 +77,9 @@ list identity, replay, completion flags, and deferred composite exclusion.
 Logs: `/tmp/p4-predicate-final-build.log`, `/tmp/p4-predicate-final-tests.log`,
 `/tmp/p4-predicate-inner.log`, `/tmp/p4-predicate-text.log`,
 `/tmp/p4-predicate-regression.log`, and `/tmp/p4-predicate-default/results.json`.
+
+Validation correction: the subsequent full source regeneration exposed an
+accidentally copied predicate-completion assertion in `graphNavigation/repeat`.
+It contradicted the same test's non-symbolic result assertion. That assertion is
+corrected in the typed-predicate checkpoint; see its regenerated test results.
+The earlier executable's passing result did not cover that final source edit.

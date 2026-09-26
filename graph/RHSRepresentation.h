@@ -19,7 +19,8 @@ class RHSRepresentation {
 public:
     Work work{0, 0};
     bool represented = false;
-    RHSRepresentation(std::shared_ptr<ProteusGraphAccess> access, POVNode target, POVNode source)
+    RHSRepresentation(std::shared_ptr<ProteusGraphAccess> access, POVNode target, POVNode source,
+                      std::shared_ptr<ProteusDefinitions> definitions = {})
         : access_(std::move(access)) {
         std::vector<std::pair<POVNode, POVNode>> pending{{std::move(target), std::move(source)}};
         std::set<std::pair<POVNode, POVNode>> visited;
@@ -29,8 +30,12 @@ public:
             ++work.visits;
             // A cyclic proof cannot establish itself. Decline conservatively;
             // actual graph traversal still follows every retained constraint.
+            // A checked scalar meaning is already expressed by its fields;
+            // consumers with that evidence need not reject it for its label.
             if (!visited.insert(pair).second || !access_->inputError(left).empty() ||
-                !access_->inputError(right).empty() || access_->hasTypeRequirements(right) ||
+                !access_->inputError(right).empty() ||
+                (access_->hasTypeRequirements(right) &&
+                 !(definitions && access_->scalarTypeShape(right) && definitions->satisfied(right))) ||
                 access_->occurrenceOwner(right) || access_->memberTemplate(right) ||
                 (!access_->scalarCandidate(right) && !access_->literalList(right))) return;
             auto actual = access_->typeFacts(left), required = access_->typeFacts(right);

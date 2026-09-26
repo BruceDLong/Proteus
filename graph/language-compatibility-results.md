@@ -20,9 +20,10 @@ the default tests; its failures are not evidence of regressions from a previousl
 passing implementation. Other suites also overlap in coverage, so the combined
 161/363 pass count is a fixture inventory, not a measure of language completeness.
 
-The default row was refreshed after scalar exclusion predicates; the other
-five rows retain the logical-navigation checkpoint. See
-[scalar-predicate-results.md](scalar-predicate-results.md) for the latest change.
+The default row was refreshed after read-only scalar type matching; every
+fixture status is unchanged from scalar exclusion. The other five rows retain
+the logical-navigation checkpoint. See
+[typed-predicate-results.md](typed-predicate-results.md) for the latest change.
 
 The default suite was audited before and after logical navigation. It improved
 from 135/270 to 138/270, with no formerly passing case lost. The recovered cases
@@ -61,8 +62,9 @@ Use the failing original examples to choose the next semantic unit, starting
 with named part/path selection and its relationship to definition requirements.
 For example, `query/chain2` currently leaves `.wheel.spoke.length` unresolved.
 Dot paths lower to negated skip plus positive selection in Proteus3, so the scalar
-predicate prerequisite was implemented first. Named predicates still require
-careful composition with type evidence. The user clarified that omitted items
+predicate prerequisite was implemented first, followed by read-only scalar type
+meaning compilation. Compound and contextual predicates still require careful
+composition with type evidence. The user clarified that omitted items
 in an unordered list are non-relevant to that instance; they must not become
 missing-field subscriptions or force insertion of every definition member.
 The finite ordered-list requirement planner cannot be reused unchanged for that

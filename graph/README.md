@@ -15,6 +15,9 @@ Direct and repeated `<~` source injection reuse that same walk; see
 [source-injection-results.md](source-injection-results.md) for selection and remaining boundaries.
 Scalar exclusion predicates and atomic list input reuse that walk; see
 [scalar-predicate-results.md](scalar-predicate-results.md).
+Context-free scalar type meanings now participate in that comparison without
+applying definitions to speculative candidates; see
+[typed-predicate-results.md](typed-predicate-results.md).
 
 ## Start here
 

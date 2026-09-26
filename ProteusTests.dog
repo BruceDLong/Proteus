@@ -1,6 +1,21 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphTypedMatch/differentLabels
+    unit/graphTypedMatch/meaningMismatch
+    unit/graphTypedMatch/negativeMeaning
+    unit/graphTypedMatch/latePatternMeaning
+    unit/graphTypedMatch/lateCandidateMeaning
+    unit/graphTypedMatch/cancel
+    unit/graphTypedMatch/aliasMeaning
+    unit/graphTypedMatch/ambiguousMeaning
+    unit/graphTypedMatch/candidateConflict
+    unit/graphTypedMatch/patternConflict
+    unit/graphTypedMatch/textWidthMeaning
+    unit/graphTypedMatch/literalMeaning
+    unit/graphTypedMatch/contextualDeferred
+    unit/graphTypedMatch/readOnlyCompilation
+
     unit/graphPredicate/atomicListWildcard
     unit/graphPredicate/compositeDeferred
     unit/graphPredicate/equalTextRejected
@@ -8668,8 +8683,7 @@ struct GLOBAL {
         }
         if (caseID==24) passed &= !span->repetitionSpan.family && span->pItem->value->items.size()==0;
         if (caseID==26) {
-            bool complete=caseID==2 || caseID==6 || caseID==9 || caseID==11 || caseID==12 || caseID==14 || caseID==16;
-            passed &= handle.status().symbolicValues!=complete && getFlagBit(root->pItem->flags,infonView::isNormed)==complete;
+            passed &= getFlagBit(root->pItem->flags,infonView::isNormed);
             auto identities=normalizer.access->registry->identities.size();
             auto again=normalizer.normalize(root); again.waitForCompletion();
             passed &= !again.status().failed && !again.status().symbolicValues &&
@@ -9036,6 +9050,108 @@ struct GLOBAL {
     }%>
     void: unitTestGraphPredicate(me string: testName, me int: caseID) <- {
         me bool: passed <- graphPredicateCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+// Matching reads type meanings. Type spelling is neither a key into a record
+// nor evidence that differently named members are structurally incompatible.
+#define GRAPHTYPEDMATCH(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphTypedMatch(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHTYPEDMATCH(unit/graphTypedMatch/differentLabels, 1)
+    GRAPHTYPEDMATCH(unit/graphTypedMatch/meaningMismatch, 2)
+    GRAPHTYPEDMATCH(unit/graphTypedMatch/negativeMeaning, 3)
+    GRAPHTYPEDMATCH(unit/graphTypedMatch/latePatternMeaning, 4)
+    GRAPHTYPEDMATCH(unit/graphTypedMatch/lateCandidateMeaning, 5)
+    GRAPHTYPEDMATCH(unit/graphTypedMatch/cancel, 6)
+    GRAPHTYPEDMATCH(unit/graphTypedMatch/aliasMeaning, 7)
+    GRAPHTYPEDMATCH(unit/graphTypedMatch/ambiguousMeaning, 8)
+    GRAPHTYPEDMATCH(unit/graphTypedMatch/candidateConflict, 9)
+    GRAPHTYPEDMATCH(unit/graphTypedMatch/patternConflict, 10)
+    GRAPHTYPEDMATCH(unit/graphTypedMatch/textWidthMeaning, 11)
+    GRAPHTYPEDMATCH(unit/graphTypedMatch/literalMeaning, 12)
+    GRAPHTYPEDMATCH(unit/graphTypedMatch/contextualDeferred, 13)
+    GRAPHTYPEDMATCH(unit/graphTypedMatch/readOnlyCompilation, 14)
+
+    me bool: graphTypedMatchCase(me string: testName, me int: caseID) <- <%{
+        GraphNormalizer normalizer; normalizer.init();
+        std::string declarations="{#left=*10+_ #right=*10+_}";
+        std::string expression="{[left]|...}<~{right:7}", expected="{left:*10+7}";
+        if(caseID==2 || caseID==3) {
+            declarations="{#left=*10+5 #right=*10+7}";
+            expression=caseID==2 ? "{[left]|...}<~{right}" : "{[!left]|...}<~{right}";
+            expected="{right:*10+7}";
+        }
+        if(caseID==4 || caseID==6) declarations="{#right=*10+_}";
+        if(caseID==5) declarations="{#left=*10+_}";
+        if(caseID==7) declarations="{#left=metre #metre=*10+_ #right=*10+_}";
+        if(caseID==8) declarations="{#left=*10+_ #left=*12+_ #right=*10+_}";
+        if(caseID==9) declarations="{#left=*10+_ #right=*10+5}";
+        if(caseID==10) { declarations="{#left=*10+5 #right=*10+_}"; expression="{[left:7]|...}<~{right:7}"; }
+        if(caseID==11) { declarations="{#left=*2+$}"; expression="{[left]|...}<~'ABCD'"; expected="{left:'AB' left:'CD'}"; }
+        if(caseID==12) { declarations="{#left='AB' #right='AB'}"; expression="{[left]|...}<~{right}"; expected="{left:'AB'}"; }
+        if(caseID==13) declarations="{#left=%prev #right=*10+_}";
+        auto defs=graphParsed(testName,declarations);
+        auto declaration=normalizer.normalize(defs); declaration.waitForCompletion();
+        auto definitionBefore=normalizer.stringifyResult(defs);
+        if(caseID==14) {
+            auto value=graphParsed(testName,"left:7");
+            auto before=normalizer.stringifyResult(value);
+            auto compiled=normalizer.runtime.normalize({value,proteus4::compileTypeRequirements,0}); compiled.waitForCompletion();
+            bool passed=!compiled.status().failed && !compiled.status().symbolicValues && before==normalizer.stringifyResult(value) &&
+                !getFlagBit(value->pItem->flags,infonView::isNormed) && value->pItem->wrkList.empty();
+            auto applied=normalizer.normalize(value); applied.waitForCompletion();
+            passed &= !applied.status().failed && !applied.status().symbolicValues && value->pItem->infSize->num==10;
+            for(const auto& step:applied.steps()) if(step.action=="inspect type definitions") passed=false;
+            passed &= definitionBefore==normalizer.stringifyResult(defs) && value->pItem->wrkList.empty();
+            normalizer.close(); return passed;
+        }
+        auto root=graphParsed(testName,expression);
+        auto spec=root->pItem->value->listSpec;
+        auto source=root->pItem->funcArgs;
+        auto patternBefore=toString(spec.get()), sourceBefore=toString(source.get());
+        auto handle=normalizer.normalize(root); handle.waitForCompletion();
+        bool passed=!declaration.status().failed && !handle.status().failed;
+        if(caseID==4 || caseID==5 || caseID==6) {
+            passed &= handle.status().symbolicValues && handle.status().withSubscribers && root->pItem->value->items.isEmpty();
+            if(caseID==6) handle.cancel();
+            auto more=graphParsed(testName,caseID==5 ? "{#right=*10+_}" : "{#left=*10+_}");
+            auto published=normalizer.normalize(more); published.waitForCompletion(); handle.waitForCompletion();
+            passed &= !published.status().failed;
+        }
+        bool deferred=caseID==2 || caseID==6 || caseID==8 || caseID==9 || caseID==10 || caseID==13;
+        if(deferred) {
+            passed &= !handle.status().failed && handle.status().symbolicValues && root->pItem->value->items.isEmpty() &&
+                sourceBefore==toString(source.get()) && !getFlagBit(root->pItem->flags,infonView::isNormed);
+            if(caseID==6) passed &= handle.status().cancelled;
+            else passed &= handle.status().withSubscribers;
+        } else {
+            passed &= !handle.status().failed && !handle.status().symbolicValues && getFlagBit(root->pItem->flags,infonView::isNormed) &&
+                toString(root->pItem.get())==expected && root->pItem->workIsRepresented(root->pItem->wrkList[0]);
+            auto first=root->pItem->value->items.head;
+            auto identities=normalizer.access->registry->identities.size();
+            auto again=normalizer.normalize(root); again.waitForCompletion();
+            passed &= !again.status().failed && !again.status().symbolicValues && first==root->pItem->value->items.head &&
+                identities==normalizer.access->registry->identities.size();
+            if(first) passed &= first->pItem->wrkList.empty();
+            for(const auto& step:handle.steps()) if(step.action=="Apply scalar type requirements") {
+                for(auto member=first; member; member=member->next) if(step.query.node==member) {
+                    std::cout << "Repeated output type application: " << normalizer.stringifyResult(member) << "\n";
+                    passed=false;
+                }
+            }
+        }
+        passed &= definitionBefore==normalizer.stringifyResult(defs) && patternBefore==toString(spec.get());
+        if(!passed) {
+            std::cout << "Typed match " << caseID << ": " << handle.status().error << " symbolic=" << handle.status().symbolicValues << "\n" << normalizer.stringifyResult(root) << "\n";
+            for(const auto& step:handle.steps()) std::cout << step.action << "\n";
+        }
+        handle.cancel(); normalizer.close(); return passed;
+    }%>
+    void: unitTestGraphTypedMatch(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphTypedMatchCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

@@ -118,7 +118,7 @@ public:
         return access_->hasTypeRequirements(node) || (access_->memberTemplate(node) && !access_->fedTemplate(node)) || access_->occurrenceOwner(node);
     }
     bool children(const POVNode& node, const POVNode& root, std::vector<POVNode>& result) const {
-        if (!access_->typeFacts(node).valid) return false;
+        if (!(node == root ? access_->predicateFacts(node) : access_->typeFacts(node)).valid) return false;
         if (node != root && !access_->scalarTypeShape(node) && !listRequirement(node)) return false;
         // Registry constraints within a shared body need a read-only relation
         // protocol. Keep them visible as deferred work rather than ignoring them.
@@ -235,6 +235,15 @@ public:
         for (const auto& proof : found->second) if (current(proof) && covers(proof, node)) return proof;
         return {};
     }
+    // Meaning evidence can be compiled without applying it to a candidate or
+    // a shared grammar template. Written type labels are not mismatch evidence.
+    GraphTypeFacts scalarFacts(const POVNode& node, bool predicate = false) const {
+        auto facts = predicate ? access_->predicateFacts(node) : access_->typeFacts(node);
+        if (!facts.valid || !access_->hasTypeRequirements(node)) return facts;
+        auto proof = saved(node);
+        if (!proof || proof->requirement->list || !facts.combine(proof->requirement->facts)) facts.valid = false;
+        return facts;
+    }
     bool accepts(const Certificate& proof, const POVNode& node) const {
         try { return ProteusDefinitionPlan(access_, node, proof->requirement).satisfied(); }
         catch (const std::runtime_error&) { return false; }
@@ -322,8 +331,16 @@ public:
         auto q = visit.query;
         if (q.kind == definitionEnter) definitions_->collect(q.node, request.node, proof_);
         if (q.kind == definitionLeave) definitions_->finish(q.node, request.node, proof_);
-        auto certificate = q.kind == typeRequirements ? definitions_->saved(request.node) : proof_;
-        if (q.kind != definitionEnd && (q.kind != typeRequirements || !certificate || satisfied())) return {};
+        bool entry = q.kind == typeRequirements || q.kind == compileTypeRequirements;
+        auto certificate = entry ? definitions_->saved(request.node) : proof_;
+        if (q.kind != definitionEnd && (!entry || !certificate || satisfied())) return {};
+        if (request.kind == compileTypeRequirements) {
+            if (!certificate || !certificate->compilable || !certificate->requirement) return {};
+            auto definitions = definitions_; auto target = request.node;
+            return {{"Record read-only type meaning", [definitions, target, certificate] {
+                return definitions->remember(target, certificate);
+            }, {1, 0}}};
+        }
         auto plan = definitions_->plan(request.node, certificate);
         if (!plan || !plan->supported) return {};
         auto definitions = definitions_; auto target = request.node;
@@ -331,6 +348,8 @@ public:
             certificate->requirement->list ? "Apply finite list type requirements" : "Apply scalar type requirements",
             [definitions, target, certificate, plan] { return definitions->apply(target, certificate, plan); }, plan->work}};
     }
-    bool satisfied() const override { return definitions_->satisfied(request.node); }
+    bool satisfied() const override {
+        return request.kind == compileTypeRequirements ? bool(definitions_->saved(request.node)) : definitions_->satisfied(request.node);
+    }
     bool symbolic() const override { return !satisfied(); }
 };

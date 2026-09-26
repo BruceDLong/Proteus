@@ -35,7 +35,11 @@ root lists with prefix relationships remain symbolic until partial-prefix Sets e
 Scalar exclusion predicates distinguish a known mismatch from missing information.
 Accepted list-valued input members retain their atomic identity on replay; do not
 reinterpret their copied values as more grammar. Composite/standalone exclusion,
-named predicates, prefixed definition bodies, recursive grammar, and record matching remain later boundaries. Preserve read-only definition bodies,
+compound/contextual typed predicates, prefixed definition bodies, recursive
+grammar, and record matching remain later boundaries. Context-free scalar type
+meanings can be compiled read-only for speculative matching and reused on accepted
+outputs. Compilation is not proof that a candidate satisfies its type. Preserve
+read-only definition bodies,
 already-demanded occurrence POVs, and reusable type evidence; avoid redundant
 application RHSs. Redundant RHS/template rendering uses revision-scoped proofs;
 keep work edges searchable and do not relax isNormed to hide unknown sizes.
@@ -54,7 +58,11 @@ field^{name=X}. Two modelers may use different labels for structurally compatibl
 members. Follow definitions, identities, and structural/property constraints;
 different written type IDs alone do not prove incompatibility. A type index is
 only a candidate-location optimization, not the semantic matching rule. Do not
-assume a type match establishes uniqueness when several members can fit.
+assume a type match establishes uniqueness when several members can fit. Context
+is part of meaning resolution; eventual contextual evidence must include its
+binding context. The current definition catalogue admits only unique, context-free
+meanings and defers ambiguity. See graph/typed-predicate-results.md for the open
+question about explicit type evidence versus merely compatible structure.
 
 Agent.normalize() is the public graph entry point and returns a handle.
 Agent.normalizeAndWait() is the synchronous convenience. Each Agent owns a
