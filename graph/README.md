@@ -13,6 +13,8 @@ frontier and applies the first complete result. See
 repetition, embedded-span, subscription and ambiguity behavior.
 Direct and repeated `<~` source injection reuse that same walk; see
 [source-injection-results.md](source-injection-results.md) for selection and remaining boundaries.
+Scalar exclusion predicates and atomic list input reuse that walk; see
+[scalar-predicate-results.md](scalar-predicate-results.md).
 
 ## Start here
 

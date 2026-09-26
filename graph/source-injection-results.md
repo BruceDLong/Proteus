@@ -66,9 +66,10 @@ A `DefinitionConflict` distinguishes rejected candidate data from errors:
 strict assertion goals still report conflicts, and ownership/implementation
 errors are not caught by the speculative matcher.
 
-Named/recursive grammar, negated patterns, source elements whose values are
-lists, incomplete streaming-prefix publication, and demanded sparse aliases
-remain outside this slice. In particular, no claim is made that all old parsing
+At this checkpoint, named/recursive grammar, negated patterns, source elements
+whose values are lists, incomplete streaming-prefix publication, and demanded
+sparse aliases remained outside this slice. Scalar negation and atomic list-valued
+input were subsequently added in [scalar-predicate-results.md](scalar-predicate-results.md). In particular, no claim is made that all old parsing
 tests pass or that this is a complete Earley chart.
 
 ## Validation

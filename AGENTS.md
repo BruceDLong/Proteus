@@ -32,7 +32,10 @@ complete correspondence; future oneOf results are deferred. Direct and repeated
 repeated-output example in graph/source-injection-results.md intentionally waits
 symbolically with a subscription until more information arrives. Unsized open
 root lists with prefix relationships remain symbolic until partial-prefix Sets exist.
-Prefixed definition bodies, recursive grammar, and record matching remain later boundaries. Preserve read-only definition bodies,
+Scalar exclusion predicates distinguish a known mismatch from missing information.
+Accepted list-valued input members retain their atomic identity on replay; do not
+reinterpret their copied values as more grammar. Composite/standalone exclusion,
+named predicates, prefixed definition bodies, recursive grammar, and record matching remain later boundaries. Preserve read-only definition bodies,
 already-demanded occurrence POVs, and reusable type evidence; avoid redundant
 application RHSs. Redundant RHS/template rendering uses revision-scoped proofs;
 keep work edges searchable and do not relax isNormed to hide unknown sizes.

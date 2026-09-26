@@ -59,8 +59,18 @@ class SequenceCorrespondence {
         next = storeInput(next, nextListPosition(*access_, inputPosition(next)));
         next.coordinates[2]=next.kind; next.kind=correspondenceInput; return next;
     }
-    bool readable(const POVNode& node, bool root) const {
-        if (!access_->plain(node, access_->canSelect(node), false, false, false) || access_->hasTypeRequirements(node)) return false;
+    static bool inverted(const POVNode& node) { return getFlagBit(node->pItem->flags, infonView::invertMatch); }
+    // A known disagreement proves exclusion even if another field is unknown.
+    // Otherwise absence of a required fact is unknown, never a negative match.
+    enum class Match { yes, no, unknown };
+    static Match compare(GraphTypeFacts required, const GraphTypeFacts& actual) {
+        if (!required.valid || !actual.valid) return Match::unknown;
+        if (required.accepts(actual)) return Match::yes;
+        return required.combine(actual) ? Match::unknown : Match::no;
+    }
+    bool readable(const POVNode& node, bool root, bool predicate = false) const {
+        if (!access_->plainStructure(node, access_->canSelect(node), false, false, false) ||
+            (!predicate && inverted(node)) || access_->hasTypeRequirements(node)) return false;
         if (!root) for (const auto& relation : POVDescription(node, access_->registry.get()).relationships())
             if (!RHSRepresentation(access_, node, relation.target).represented) return false;
         return true;
@@ -75,6 +85,14 @@ public:
         auto overlay=getModeBits(POVDescription(source).value()->flags,infonState::overlayType);
         return source->looseType() && ((overlay==infonState::STR && (access.literalList(target) || scalar)) ||
             (overlay==infonState::LST && access.literalList(target) && (source->looseSize() || getFlagBit(source->flags, POV::isOutrFeed))));
+    }
+    // An identity obtained while matching names an atomic input member even
+    // when that member's value is a list. Replaying its accepted proof must not
+    // reinterpret the copied value as a grammar that consumes more input.
+    static bool inputIdentity(ProteusGraphAccess& access, const Query<POVNode>& q) {
+        return q.context.size()>stackStart(q) && q.context[1] && !access.subList(q.node) &&
+            getModeBits(q.context[0]->pItem->value->flags,infonState::overlayType)==infonState::LST &&
+            access.hasDirectIdentity(q.node,q.context[1]);
     }
     bool sourceReady(const POVNode& source) const {
         auto value=POVDescription(source).value();
@@ -109,8 +127,11 @@ public:
         auto body=pattern(q.node);
         bool fedRoot=getFlagBit(source->flags, POV::isOutrFeed) && q.context.size()==stackStart(q) && access_->fedTemplate(q.node);
         if (q.kind == sequenceEnter) {
-            if (!readable(q.node, q.context.size() == stackStart(q))) return out;
-            if (sequence(q.node)) {
+            if (!readable(q.node, q.context.size() == stackStart(q), true)) return out;
+            // Composite exclusion needs a proof for the entire subpattern.
+            // The scalar predicate rule must not negate individual children.
+            if (inverted(q.node) && !access_->scalarTypeShape(q.node)) return out;
+            if (sequence(q.node) && !inputIdentity(*access_,q)) {
                 if ((!access_->physicalList(body) && !access_->unreferencedTemplateSpan(body)) ||
                     !access_->orderedList(body) || access_->listExtent(body) == -2) return out;
                 if (body!=q.node && !POVDescription(body).work().empty()) return out;
@@ -125,14 +146,17 @@ public:
                 next.coordinates.insert(next.coordinates.end(), {0, q.argument, 1});
                 out.edges.push_back(edge("enter matching list", std::move(next)));
             } else {
-                auto facts = access_->typeFacts(q.node);
+                auto facts = access_->predicateFacts(q.node);
                 if (!facts.valid) return out;
                 if (!textInput) {
                     auto item=q.context[1];
                     if (!item || !readable(item,false)) return out;
                     auto supplied=access_->typeFacts(item);
-                    if (!supplied.valid || !supplied.hasValue || !facts.combine(supplied)) return out;
-                    auto next=q; next.kind=sequenceMatched; ++next.argument; next.related.reset(); next.coordinates.push_back(q.argument);
+                    if (!supplied.valid) return out;
+                    if (inverted(q.node)) {
+                        if (compare(facts, supplied) != Match::no) return out;
+                    } else if ((!supplied.hasValue && !access_->literalList(item)) || !facts.combine(supplied)) return out;
+                    auto next=q; next.kind=sequenceAtomMatched; ++next.argument; next.related.reset(); next.coordinates.push_back(q.argument);
                     out.edges.push_back(edge("matched input member",nextInput(std::move(next)))); return out;
                 }
                 if ((facts.overlay>=0 && facts.overlay!=infonState::STR) ||
@@ -151,8 +175,12 @@ public:
                 }
                 if (q.argument > static_cast<std::int64_t>(text.size()) ||
                     width > static_cast<std::int64_t>(text.size()) - q.argument) return out;
-                if (facts.hasValue && text.compare(q.argument, width, facts.text) != 0) return out;
-                auto next = q; next.kind = sequenceMatched; next.argument += width;
+                GraphTypeFacts supplied; supplied.valid=true; supplied.overlay=infonState::STR;
+                supplied.hasValue=true; supplied.text=text.substr(q.argument,width);
+                supplied.hasSize=true; supplied.size=width;
+                auto match=compare(facts,supplied);
+                if (inverted(q.node) ? match!=Match::no : match==Match::no) return out;
+                auto next = q; next.kind = sequenceAtomMatched; next.argument += width;
                 // Keep the beginning of this scalar occurrence in the cursor;
                 // zero-width repeated matches cannot produce an infinite walk.
                 next.related.reset(); next.coordinates.push_back(q.argument);
@@ -174,10 +202,10 @@ public:
                 auto next = q; next.node = child; next.related.reset(); next.kind = sequenceEnter;
                 out.edges.push_back(edge("match next list member", std::move(next)));
             }
-        } else if (q.kind == sequenceMatched) {
+        } else if (q.kind == sequenceMatched || q.kind == sequenceAtomMatched) {
             auto next = q;
             std::int64_t width = 1, begin = 0;
-            if (sequence(q.node)) {
+            if (q.kind == sequenceMatched) {
                 auto n = next.coordinates.size();
                 if (access_->subList(q.node)) width = next.coordinates[n-3];
                 begin = next.coordinates[n-2];
@@ -233,12 +261,12 @@ public:
             if (q.kind == sequenceEnter) {
                 auto spec = std::make_shared<DefinitionRequirement>();
                 auto body=access_->canSelect(q.node) ? definitions_->selectionBody(q.node) : q.node;
-                spec->facts=access_->typeFacts(body); spec->list=access_->literalList(body);
+                spec->facts=access_->typeFacts(body); spec->list=access_->literalList(body) && !SequenceCorrespondence::inputIdentity(*access_,q);
                 bool instance=stack.empty() || (stack.back().instance && definitions_->matchingBody(stack.back().body)!=q.node);
                 // A feed's stored members are results, not its consumed pattern.
                 if (!stack.empty() && access_->fedTemplate(stack.back().node)) instance=false;
                 stack.push_back({q.node,body,q.context[1],q.argument,spec,{},instance});
-            } else if (q.kind == sequenceMatched) {
+            } else if (q.kind == sequenceMatched || q.kind == sequenceAtomMatched) {
                 auto frame = stack.back(); stack.pop_back();
                 auto& spec = frame.spec;
                 spec->facts.valid = true;
@@ -257,7 +285,12 @@ public:
                     if (frame.instance)
                         if (auto body = definitions_->repeatedBody(frame.node)) templates_.push_back({frame.node, body});
                 } else if (getModeBits(request.related->pItem->value->flags,infonState::overlayType)==infonState::LST) {
-                    spec->facts.combine(access_->typeFacts(frame.source));
+                    auto supplied=access_->typeFacts(frame.source);
+                    if (getFlagBit(frame.node->pItem->flags,infonView::invertMatch)) spec->facts=supplied;
+                    else spec->facts.combine(supplied);
+                    // An atomic list-valued source stays an existing graph
+                    // node. Its identity supplies members through ordinary
+                    // correspondence; matching does not clone its subtree.
                     sources[spec]=frame.source;
                 } else {
                     if (!spec->facts.hasValue) spec->facts.explicitSize = false;

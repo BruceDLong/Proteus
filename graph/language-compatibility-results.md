@@ -8,7 +8,7 @@ unit tests compiled into `TestProteus`.
 
 | Suite | Passing | Failing | Total |
 |---|---:|---:|---:|
-| `defaultTests.tst` | 157 | 113 | 270 |
+| `defaultTests.tst` | 159 | 111 | 270 |
 | `demoTests.tst` | 1 | 21 | 22 |
 | `sparseTests.tst` | 1 | 22 | 23 |
 | `timeTests.tst` | 0 | 36 | 36 |
@@ -18,11 +18,11 @@ unit tests compiled into `TestProteus`.
 The R1 file records an experimental contract and explicitly excludes itself from
 the default tests; its failures are not evidence of regressions from a previously
 passing implementation. Other suites also overlap in coverage, so the combined
-159/363 pass count is a fixture inventory, not a measure of language completeness.
+161/363 pass count is a fixture inventory, not a measure of language completeness.
 
-The default row was refreshed after source injection; the other
+The default row was refreshed after scalar exclusion predicates; the other
 five rows retain the logical-navigation checkpoint. See
-[source-injection-results.md](source-injection-results.md) for the latest change.
+[scalar-predicate-results.md](scalar-predicate-results.md) for the latest change.
 
 The default suite was audited before and after logical navigation. It improved
 from 135/270 to 138/270, with no formerly passing case lost. The recovered cases
@@ -36,10 +36,12 @@ fixtures and four whole-string scalar cases, reaching 150/270 with no previous p
 Source injection raises the assertion count to 157/270, again losing no prior pass.
 Five newly supported examples are `concat/parseSrc`, `query/firstStrB`,
 `outr/everyOther1`, `outr/everyOther2`, and `marked/lookahead`.
-`notTemplate/compoundNum` and `notTemplate/resolvedUnknown` also pass their
-rendered-result assertions, but their negated matching predicates remain
-unresolved. Their selected literals were already known; these two rows are not
-claimed as completed predicate implementations.
+At that checkpoint, `notTemplate/compoundNum` and `notTemplate/resolvedUnknown`
+passed only their rendered-result assertions while retaining unresolved predicates.
+Scalar exclusion now proves those predicates, with focused tests checking the
+relationship proof as well as output. It also restores `query/firstStrC` and
+`notTemplate/notNum`, bringing the default count to 159/270 with no previous pass
+lost and no crashes or timeouts.
 
 The complete per-fixture status and input-file hashes are in
 [language-compatibility-status.json](language-compatibility-status.json).
@@ -58,6 +60,14 @@ clarification. Its waiting state is an expected result.
 Use the failing original examples to choose the next semantic unit, starting
 with named part/path selection and its relationship to definition requirements.
 For example, `query/chain2` currently leaves `.wheel.spoke.length` unresolved.
+Dot paths lower to negated skip plus positive selection in Proteus3, so the scalar
+predicate prerequisite was implemented first. Named predicates still require
+careful composition with type evidence. There is a semantic question about a
+partially populated typed object: Proteus3 returns the known `length` from
+`spoke:{length:234}` even when `spoke` is defined as `{color:$ length:_}`. The
+current finite-list requirement planner would demand two positions. Resolve
+that distinction before migrating the named path, rather than introducing a
+field-name shortcut or weakening all finite list checks.
 Follow existing POV/definition relationships and reuse checked type evidence;
 do not add repeated type RHSs just to make each query pass.
 
