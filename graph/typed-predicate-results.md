@@ -1,18 +1,19 @@
 # Read-only scalar type meanings in sequence matching
 
-Sequence predicates can follow unique, context-free scalar type definitions and
-compare their constraints rather than reject a candidate because its label differs.
-For example:
+The original checkpoint read scalar meanings across differently labeled types.
+The user subsequently retracted structural type equivalence. The current rule
+requires nominal compatibility for already-typed input, including explicit aliases:
 
 ```proteus
-{#left=*10+_ #right=*10+_}
+{#left=*10+_ #right=left}
 {[left]|...}<~{right:7}
 // {left:*10+7}
 ```
 
-This is compatibility evidence for a scalar pattern. It does not establish that
-similarly shaped domain concepts are interchangeable in every context, or that a
-matching member is the unique answer to a field query.
+Equal scalar constraints without that explicit relationship do not equate the
+types. Untyped parser input can still acquire a type from its accepted grammar
+pattern. See [structured-field-results.md](structured-field-results.md) for the
+corrected implementation and validation.
 
 ## Shared definition walk, separate demand
 
@@ -23,10 +24,11 @@ unchanged. Ordinary type application can later reuse the same certificate.
 
 `SequenceCorrespondence` combines this meaning with each scalar's stated facts.
 Positive matches retain the pattern's type; a proved negative match retains the
-source type. Missing definitions, ambiguous declarations, conflicting candidate
-facts, and unsupported contextual meanings yield no successful continuation.
-Unresolved searches retain subscriptions; later definition publication can resume
-them, and cancellation prevents that resumption.
+source type. Ambiguous declarations, conflicting candidate facts, and unsupported
+contextual meanings yield no successful continuation. Missing definitions are
+now optional: use explicit data and nominal identity without adding an empty
+type requirement. Unresolved searches retain subscriptions; later definition
+publication can resume them, and cancellation prevents that resumption.
 
 An accepted correspondence uses the existing atomic definition plan and remembers
 its scalar meaning evidence on the output occurrences. This introduces no
@@ -47,19 +49,14 @@ spelling, declaration order, or an arbitrary first result.
 
 Context is part of a type's meaning. Future contextual certificates need to carry
 that binding context rather than reuse context-free proof across unrelated uses.
-Written type IDs alone cannot prove structural incompatibility. Conversely,
-structural compatibility alone must not silently establish unique field selection.
+Primary and additional types constrain matching. A common structural shape or
+ancestor alone does not equate sibling types. `.wheel` therefore chooses the
+wheel member in the older `query/byType1` example, preserving its original
+expectation. Missing definitions are optional; ambiguous known declarations
+remain deferred. Completed searches reconsider new definitions when explicitly
+normalized again.
 
-The old `query/byType1` fixture gives `pedals` and `wheel` identical definitions
-`{position:_ torque:_}` and expects `.wheel` to choose the second member. The user
-subsequently clarified that an ordered list selects the first compatible member,
-so this example selects the first member, currently labeled `pedals`. An unordered
-list retains both alternatives as `*_+[wheel1 wheel2]`. Explicit type spelling
-does not give the second member priority. See
-[field-selection-contract.md](field-selection-contract.md). The historical fixture
-remains unchanged; its old expectation is not the intended semantic target.
-
-## Validation
+## Original checkpoint validation
 
 CodeDog source regeneration and the native build succeeded. All **611 focused
 checks pass**: 14 typed-matching, 18 scalar-predicate, 24 source-injection, 36

@@ -29,6 +29,7 @@ inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
 #include "DefinitionApplications.h"
 #include "RHSRepresentation.h"
 #include "ScalarPredicate.h"
+#include "FieldPredicate.h"
 #include "FieldSelection.h"
 #include "GroupedListPlan.h"
 
@@ -602,7 +603,7 @@ private:
         POVDescription description(node, access_->registry.get());
         if (query.kind == assessRepresentation || query.kind == groupedList) return result;
         if (query.kind == typeRequirements || query.kind == compileTypeRequirements) {
-            if (!definitions_->saved(node))
+            if (definitions_->required(node) && !definitions_->saved(node))
                 result.edges.push_back(direct("inspect type definitions", {node, definitionEnter, 0, node}));
             return result;
         }
@@ -890,6 +891,14 @@ private:
             };
             for (const auto& relation : description.relationships()) {
                 auto source = relation.target;
+                // A selected view already shares these exact state slots.
+                // Validate its source directly; positional correspondence would
+                // invent work merely because the view headers are distinct.
+                if (relation.derived && node->pItem->value==source->pItem->value &&
+                    node->pItem->infSize==source->pItem->infSize) {
+                    result.refinements.push_back({{source,demand,0},{0,0},"normalize selected source",false});
+                    continue;
+                }
                 // Expose endpoint expressions before deciding which kind of
                 // correspondence their resulting payload can participate in.
                 if (relation.isWork() && source->looseType())
@@ -907,7 +916,7 @@ private:
                         "map repeated groups to source spans", false});
                     continue;
                 }
-                relationship(source, relation.isWork() ? "work-list constraint" : "registry identity", relation.isWork());
+                relationship(source, relation.description(), relation.isWork());
                 if (relation.isWork() && demand == sizeAndValue)
                     result.refinements.push_back({{node, assessRepresentation, 0, source}, {0, 0},
                         "assess represented RHS", false});

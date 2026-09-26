@@ -37,15 +37,16 @@ root lists with prefix relationships remain symbolic until partial-prefix Sets e
 Scalar exclusion predicates distinguish a known mismatch from missing information.
 Accepted list-valued input members retain their atomic identity on replay; do not
 reinterpret their copied values as more grammar. Composite/standalone exclusion,
-compound/contextual typed predicates, prefixed definition bodies, recursive
-grammar, and record matching remain later boundaries. Context-free scalar type
+contextual typed predicates, prefixed definition bodies, recursive grammar,
+unordered record matching, and chained paths remain later boundaries.
+Single-step field predicates support finite ordered structures. Context-free scalar type
 meanings can be compiled read-only for speculative matching and reused on accepted
 outputs. Compilation is not proof that a candidate satisfies its type.
-Single-step scalar dot queries and GraphNormalizer.findField share the field walk:
+Single-step dot queries and GraphNormalizer.findField share the field walk:
 ordered lookup selects the first proved compatible logical member; unordered
 lookup publishes a oneOf after every relevant candidate and the end are known.
 Unresolved earlier candidates cannot be skipped to choose a later ordered result.
-See graph/field-selection-results.md for supported boundaries and validation.
+See graph/structured-field-results.md for supported boundaries and validation.
 Preserve read-only definition bodies, already-demanded occurrence POVs, and
 reusable type evidence; avoid redundant
 application RHSs. Redundant RHS/template rendering uses revision-scoped proofs;
@@ -59,20 +60,26 @@ definition members. Instance size counts the items it holds. Ordered lists can
 also contain typed fields (as in a C struct); field selection does not imply
 unorderedness. Preserve the space-separated query/chain fixtures.
 
-What has sometimes been called a named field is a typed member selected by its
-type and other distinguishing properties. An explicit name is modeled as
-field^{name=X}. Two modelers may use different labels for structurally compatible
-members. Follow definitions, identities, and structural/property constraints;
-different written type IDs alone do not prove incompatibility. A type index is
-only a candidate-location optimization, not the semantic matching rule. Do not
-assume a type match establishes uniqueness when several members can fit. Context
-is part of meaning resolution; eventual contextual evidence must include its
-binding context. The current definition catalogue admits only unique, context-free
-meanings and defers ambiguity. Field selection has a separate result policy:
-an ordered list selects the first compatible member in logical list order; an
-unordered list preserves matching alternatives as `*_+[wheel1 wheel2]`. Exact
-written type spelling does not give a later member priority. Search cost chooses
-routes, not a different semantic winner. See graph/field-selection-contract.md.
+Fields are typed members, not string-keyed fields. An explicit name is modeled
+as field^{name=X}. The user retracted structural type equivalence: .wheel must
+not select a pedal merely because their definitions have the same fields.
+Require nominal compatibility, including explicit aliases/additional types;
+a shared ancestor alone does not equate sibling types. Untyped structural
+predicates still test explicit constraints. Ordered selection chooses the first
+compatible member; unordered selection retains matching alternatives as oneOf.
+Cost chooses routes, not a different semantic winner. For now typed lookup
+requires the correct type word; recognizing it solely from a sufficiently rich
+description is future work. Check the explicit query before expanding meaning:
+selection is not full validation of the selected object's definition. Definitions
+can supply missing queried facts or prove exclusions; they cannot establish
+nominal identity solely from matching structure.
+
+Separate definitions are optional. Use supplied constraints and type identities;
+an absent declaration adds no validation requirement, while existing declarations
+still supply meaning. Track absent bindings in reusable definition evidence so a
+later declaration cannot leave a stale proof. Completed queries reconsider later
+definitions when explicitly normalized again, not automatically. See
+graph/field-selection-contract.md for the current contract.
 
 Agent.normalize() is the public graph entry point and returns a handle.
 Agent.normalizeAndWait() is the synchronous convenience. Each Agent owns a

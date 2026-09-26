@@ -9,10 +9,14 @@ class POVDescription {
 public:
     struct Relationship {
         POVNode owner, target;
-        // A null record denotes the retained work POV, including all its flags.
-        // Otherwise this is the actual registry record, with its provenance.
+        // Work and replaceable result links live in POV structure. Permanent
+        // identities retain the actual registry record and its provenance.
         std::shared_ptr<IdentityRelation> identity;
-        bool isWork() const { return !identity; }
+        bool derived = false;
+        bool isWork() const { return !identity && !derived; }
+        const char* description() const {
+            return identity ? "registry identity" : derived ? "selected result" : "work-list constraint";
+        }
     };
 private:
     POVNode node_;
@@ -42,6 +46,12 @@ public:
     std::vector<Relationship> relationships(bool includeWork = true) const {
         std::vector<Relationship> result;
         if (includeWork) for (const auto& rhs : work()) result.push_back({node_, rhs, {}});
+        // A query result may change when explicitly normalized again. Read its
+        // current source link here instead of asserting a permanent identity
+        // between the working query POV and every result it has ever selected.
+        if (auto field=node_->pItem->fieldSelection)
+            if (field->result && field->matches.size()==1 && field->result!=node_)
+                result.push_back({node_,field->result,{},true});
         if (registry_) {
             std::lock_guard<std::mutex> lock(registry_->registryMutex);
             for (const auto& record : registry_->identities) {

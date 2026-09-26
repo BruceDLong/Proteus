@@ -8,3 +8,22 @@ inline ScalarMatch compareScalar(GraphTypeFacts required, const GraphTypeFacts& 
     if (required.accepts(actual)) return ScalarMatch::yes;
     return required.combine(actual) ? ScalarMatch::unknown : ScalarMatch::no;
 }
+
+// Nominal compatibility follows Proteus3's primary/added-type rule. Explicit
+// definition aliases extend those type sets; a shared structural shape or a
+// shared ancestor alone does not make two sibling types interchangeable.
+inline ScalarMatch compareNominal(const std::string& required,const std::vector<std::string>& requiredTypes,
+                                  const std::string& actual,const std::vector<std::string>& actualTypes) {
+    if (required.empty()) return ScalarMatch::yes;
+    if (actual.empty()) return ScalarMatch::unknown;
+    if (required==actual || std::find(actualTypes.begin(),actualTypes.end(),required)!=actualTypes.end() ||
+        std::find(requiredTypes.begin(),requiredTypes.end(),actual)!=requiredTypes.end()) return ScalarMatch::yes;
+    return ScalarMatch::no;
+}
+inline ScalarMatch compareNominal(const ProteusDefinitions& definitions,const POVNode& required,const POVNode& actual) {
+    auto left=definitions.names(required),right=definitions.names(actual);
+    auto leftName=left.empty() ? std::string{} : left.front(),rightName=right.empty() ? std::string{} : right.front();
+    if(auto proof=definitions.saved(required)) left.insert(left.end(),proof->requirement->types.begin(),proof->requirement->types.end());
+    if(auto proof=definitions.saved(actual)) right.insert(right.end(),proof->requirement->types.begin(),proof->requirement->types.end());
+    return compareNominal(leftName,left,rightName,right);
+}

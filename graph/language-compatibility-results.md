@@ -1,14 +1,16 @@
 # Older language compatibility, 2026-09-26
 
-Every active row in the six pre-existing top-level `.tst` files was run separately through the
-current public test entry point, preserving its original mode, input and expected
-text. Each process had a five-second limit. All 363 fixtures completed without a
-crash, timeout or incomplete test summary. This audit does not include all legacy
-unit tests compiled into `TestProteus`.
+Every active row in the six pre-existing top-level `.tst` files was run separately
+through the public test entry point, preserving its original mode, input and
+expected text. Each process had a five-second limit. All 363 fixtures completed
+without a crash, timeout or incomplete test summary at their recorded checkpoints.
+The default suite has been refreshed for this change; the other five rows retain
+the logical-navigation checkpoint. This audit does not include all legacy unit
+tests compiled into `TestProteus`.
 
 | Suite | Passing | Failing | Total |
 |---|---:|---:|---:|
-| `defaultTests.tst` | 161 | 109 | 270 |
+| `defaultTests.tst` | 162 | 108 | 270 |
 | `demoTests.tst` | 1 | 21 | 22 |
 | `sparseTests.tst` | 1 | 22 | 23 |
 | `timeTests.tst` | 0 | 36 | 36 |
@@ -18,12 +20,11 @@ unit tests compiled into `TestProteus`.
 The R1 file records an experimental contract and explicitly excludes itself from
 the default tests; its failures are not evidence of regressions from a previously
 passing implementation. Other suites also overlap in coverage, so the combined
-163/363 pass count is a fixture inventory, not a measure of language completeness.
+164/363 pass count is a fixture inventory, not a measure of language completeness.
 
-The default row was refreshed after scalar field selection, recovering two
-assertions with no prior pass lost. The other five rows retain the
-logical-navigation checkpoint. See
-[field-selection-results.md](field-selection-results.md) for the latest change.
+The default row was refreshed after nominal and finite structured field selection,
+recovering `query/byType1` with no prior pass lost. See
+[structured-field-results.md](structured-field-results.md) for the latest change.
 
 The default suite was audited before and after logical navigation. It improved
 from 135/270 to 138/270, with no formerly passing case lost. The recovered cases
@@ -46,7 +47,9 @@ lost and no crashes or timeouts. Scalar field selection then recovered
 `read/readStrA` and `temporal/sBeginField`, reaching 161/270 without losing any
 previous pass. The latter is an ordinary `.begin` field query, not temporal
 boundary support. Its rendered-result assertion passes while the bare numeric
-size remains unknown; this does not establish `isNormed`.
+size remains unknown; this does not establish `isNormed`. Nominal and finite
+structured field selection then recovered `query/byType1`, reaching 162/270
+without losing any previous pass or changing an original fixture.
 
 The complete per-fixture status and input-file hashes are in
 [language-compatibility-status.json](language-compatibility-status.json).
@@ -63,12 +66,14 @@ symbolic and subscribed until more information arrives, per the user's
 clarification. Its waiting state is an expected result.
 
 Use the failing original examples to choose the next semantic unit, starting
-with structured typed-member selection and its relationship to definition requirements.
+with chained typed-member selection and its relationship to definition requirements.
 For example, `query/chain2` currently leaves `.wheel.spoke.length` unresolved.
 Dot paths lower to negated skip plus positive selection in Proteus3, so the scalar
 predicate prerequisite was implemented first, followed by read-only scalar type
-meaning compilation and single-step scalar dot selection. Compound and contextual predicates still require careful
-composition with type evidence. The user clarified that omitted items
+meaning compilation, single-step dot selection, and finite ordered structural
+predicates. Nominal selection now checks the type word and explicit query
+constraints without demanding full definition validation first. Contextual
+predicates still require careful composition with type evidence. The user clarified that omitted items
 in an unordered list are non-relevant to that instance; they must not become
 missing-field subscriptions or force insertion of every definition member.
 The finite ordered-list requirement planner cannot be reused unchanged for that
@@ -80,31 +85,17 @@ imply unorderedness or require punctuation changes. Selecting an existing member
 and validating the entire container against a positional definition are separate
 goals; a printed selected value alone does not establish full container validation.
 
-These are typed members, not string-keyed fields. Selection must use type and
-property constraints, allowing definitions and identity relationships to establish
-structural compatibility across different written labels. Different type IDs are
-not sufficient negative evidence. A type index can locate candidates, but cannot
-replace matching. The modeler can supply distinguishing properties where needed;
-a literal field name is represented as `field^{name=X}`. Do not assume one type
-has exactly one occurrence in a container.
-Follow existing POV/definition relationships and reuse checked type evidence;
-do not add repeated type RHSs just to make each query pass.
+These are typed members, not string-keyed fields. Nominal identity, additional
+types, and explicit alias relationships establish compatibility; equal field
+layout alone does not. Structural/property constraints further restrict a query.
+A literal name is represented as `field^{name=X}`. Follow existing POV relations
+and reusable type evidence without inserting repeated type RHSs.
 
-The user has clarified the selection policy: ordered lists select the first
-compatible logical member; unordered lists return matching alternatives as a
-oneOf, `*_+[wheel1 wheel2]`. The old `query/byType1` and `query/chain` examples give
-`pedals` and `wheel` identical structure but expect selection of the second member
-by its label. Those expectations conflict with the clarified ordered semantics.
-Keep the historical audit visible and distinguish semantic corrections from
-missing implementation; do not add label priority to recover those old assertions.
+The user clarified ordered-first and unordered-oneOf selection, then retracted
+the assumption that equal structure establishes type compatibility. A `.wheel`
+query must not select a `pedals` member based only on equal structure. The old
+`query/byType1` and `query/chain` expectations remain valid under this correction.
 See [field-selection-contract.md](field-selection-contract.md).
-
-Then examine contextual repeated templates and temporal recurrence: the original
-`prev/plus1` remains symbolic despite structural `%prev` working. Other clusters
-include symbolic span alignment, alternatives/ranges, ordered slicing, and world
-loading. For example, `merge/dots/align2a` already gains some member information
-but retains a different symbolic layout from the expected output; diagnose that
-before deciding it needs an entirely new operation.
 
 For each semantic change, run its original fixtures alongside focused graph
 checks, then compare the default inventory so recovered behavior stays recovered.

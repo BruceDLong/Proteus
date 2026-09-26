@@ -83,6 +83,13 @@ public:
         }
         entries.push_back({node, access_->definitionBody(node)}); return true;
     }
+    bool declared(const std::string& name) const { return catalogue_.count(name)!=0; }
+    // Missing declarations impose no constraints. Type identity still exists;
+    // an unavailable definition never equates distinct written types.
+    bool optional(const POVNode& node) const {
+        for (const auto& name:names(node)) if (declared(name)) return false;
+        return true;
+    }
     POVNode lookup(const std::string& name) const {
         auto found = catalogue_.find(name);
         if (found == catalogue_.end() || found->second.size() != 1) return {};
@@ -115,7 +122,7 @@ public:
         return {};
     }
     bool required(const POVNode& node) const {
-        return access_->hasTypeRequirements(node) || (access_->memberTemplate(node) && !access_->fedTemplate(node)) || access_->occurrenceOwner(node);
+        return (access_->hasTypeRequirements(node) && !optional(node)) || (access_->memberTemplate(node) && !access_->fedTemplate(node)) || access_->occurrenceOwner(node);
     }
     bool children(const POVNode& node, const POVNode& root, std::vector<POVNode>& result) const {
         if (!(node == root ? access_->predicateFacts(node) : access_->typeFacts(node)).valid) return false;
@@ -128,7 +135,9 @@ public:
             if (std::find(result.begin(), result.end(), child) == result.end()) result.push_back(child);
         };
         for (const auto& name : names(node)) {
-            auto body = lookup(name); if (!body) return false; add(body);
+            auto body = lookup(name);
+            if (body) add(body);
+            else if (declared(name)) return false;
         }
         if (auto spec = memberTemplate(node)) add(spec);
         if (node == root) if (auto owner = occurrenceOwner(node)) add(owner);
@@ -140,7 +149,7 @@ public:
     }
     void collect(const POVNode& node, const POVNode& root, const Certificate& proof) {
         for (const auto& name : names(node)) {
-            auto body = lookup(name); if (!body) continue;
+            auto body = lookup(name);
             auto& bindings = proof->evidence->bindings;
             if (std::none_of(bindings.begin(), bindings.end(), [&](const Binding& b) { return b.name == name; }))
                 bindings.push_back({name, body});
@@ -155,6 +164,7 @@ public:
         if (!proof->compilable) return;
         auto& compiled = proof->evidence->compiled;
         auto requirement = std::make_shared<DefinitionRequirement>();
+        requirement->facts.valid = true;
         requirement->types = names(node);
         if (!requirement->types.empty()) requirement->label = requirement->types.front();
         std::sort(requirement->types.begin(), requirement->types.end());
@@ -193,7 +203,8 @@ public:
             if (!repeated) { proof->compilable = false; return; }
             requirement = combineDefinitions(requirement, repeated);
         }
-        for (const auto& name : names(node)) requirement = combineDefinitions(requirement, compiled.at(lookup(name)));
+        for (const auto& name : names(node))
+            if (auto body=lookup(name)) requirement = combineDefinitions(requirement, compiled.at(body));
         if (node != root)
             for (auto rhs : work(node)) requirement = combineDefinitions(requirement, compiled.at(rhs));
         compiled[node] = requirement;
@@ -207,7 +218,7 @@ public:
     bool current(const Certificate& proof) const {
         if (!proof->requirement) return false;
         for (const auto& binding : proof->evidence->bindings)
-            if (lookup(binding.name) != binding.body) return false;
+            if (lookup(binding.name) != binding.body || (!binding.body && declared(binding.name))) return false;
         for (auto& entry : proof->evidence->witnesses) {
             auto& witness = entry.second;
             if (witness.node->pItem != witness.infon || !witness.facts.same(access_->typeFacts(witness.node)) ||
@@ -236,10 +247,10 @@ public:
         return {};
     }
     // Meaning evidence can be compiled without applying it to a candidate or
-    // a shared grammar template. Written type labels are not mismatch evidence.
+    // a shared grammar template. Nominal compatibility is checked separately.
     GraphTypeFacts scalarFacts(const POVNode& node, bool predicate = false) const {
         auto facts = predicate ? access_->predicateFacts(node) : access_->typeFacts(node);
-        if (!facts.valid || !access_->hasTypeRequirements(node)) return facts;
+        if (!facts.valid || !access_->hasTypeRequirements(node) || optional(node)) return facts;
         auto proof = saved(node);
         if (!proof || proof->requirement->list || !facts.combine(proof->requirement->facts)) facts.valid = false;
         return facts;
@@ -349,7 +360,8 @@ public:
             [definitions, target, certificate, plan] { return definitions->apply(target, certificate, plan); }, plan->work}};
     }
     bool satisfied() const override {
-        return request.kind == compileTypeRequirements ? bool(definitions_->saved(request.node)) : definitions_->satisfied(request.node);
+        return request.kind == compileTypeRequirements ?
+            (!definitions_->required(request.node) || bool(definitions_->saved(request.node))) : definitions_->satisfied(request.node);
     }
     bool symbolic() const override { return !satisfied(); }
 };

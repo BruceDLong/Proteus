@@ -151,9 +151,10 @@ public:
                     if (!item || !readable(item,false)) return out;
                     auto supplied=definitions_->scalarFacts(item);
                     if (!supplied.valid) return out;
+                    auto nominal=compareNominal(*definitions_,q.node,item);
                     if (inverted(q.node)) {
-                        if (compareScalar(facts, supplied) != ScalarMatch::no) return out;
-                    } else if ((!supplied.hasValue && !access_->literalList(item)) || !facts.combine(supplied)) return out;
+                        if (nominal!=ScalarMatch::no && compareScalar(facts, supplied)!=ScalarMatch::no) return out;
+                    } else if (nominal==ScalarMatch::no || (!supplied.hasValue && !access_->literalList(item)) || !facts.combine(supplied)) return out;
                     auto next=q; next.kind=sequenceAtomMatched; ++next.argument; next.related.reset(); next.coordinates.push_back(q.argument);
                     out.edges.push_back(edge("matched input member",nextInput(std::move(next)))); return out;
                 }

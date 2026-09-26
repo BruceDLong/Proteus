@@ -1,5 +1,10 @@
 # Scalar field selection through the graph
 
+This records the initial scalar checkpoint. The examples below use explicit
+aliases to follow the subsequently corrected nominal contract. See
+[structured-field-results.md](structured-field-results.md) for optional
+definitions, finite structures, and replaceable field-result links.
+
 Single-step dot queries now share a goal with
 `GraphNormalizer.findField(sourcePOV, predicatePOV)`. Both use existing logical
 members and read-only type meanings. The direct API returns a handle whose
@@ -7,7 +12,7 @@ members and read-only type meanings. The direct API returns a handle whose
 the result on its working POV and then uses ordinary normalization.
 
 ```proteus
-{#want=*10+_ #left=*10+_ #right=*10+_}
+{#want=*10+_ #left=want #right=want}
 {left:*10+1 right:*10+2}.want
 // left:*10+1
 
@@ -69,10 +74,10 @@ Missing or ambiguous definitions and no proved result leave a subscribed search.
 Selection does not fabricate a missing scalar size or mark a symbolic choice
 `isNormed`.
 
-The next semantic question is whether explicit constraints in
-`#wheel={position:_ torque:_}` may be used to match structure while the member
-types have no separate definitions. That question has been sent to the user;
-this implementation keeps that case unresolved.
+The user resolved this question: separate member-type definitions are optional.
+They then retracted structural type equivalence. `.wheel` must not select a pedal
+based only on matching structure. The linked structured-field checkpoint records
+both corrections and the current limitations.
 
 ## Validation
 

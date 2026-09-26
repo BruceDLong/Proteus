@@ -2,36 +2,25 @@
 
 // Field selection classifies existing logical members. The only difference
 // between ordered and unordered lookup is the result policy; both consume the
-// same scalar predicate evidence. A cheap later route cannot skip an unknown
+// same predicate evidence. A cheap later route cannot skip an unknown
 // earlier candidate and claim to have found the first match.
 class FieldSelection {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusDefinitions> definitions_;
-    static Edge<POVNode> edge(const char* label, Query<POVNode> query) {
-        return {label, {1,0}, true, [query] { return query; }};
+    static Edge<POVNode> edge(const char* label, Query<POVNode> query, Cost visits=1) {
+        return {label, {visits,0}, true, [query] { return query; }};
     }
     static bool unordered(const POVNode& node) {
         return node->pItem->orderMode==uUnordered;
     }
-    void advance(Expansion<POVNode>& out, const Query<POVNode>& q, ListPosition<POVNode> at) const {
+    void advance(Expansion<POVNode>& out, const Query<POVNode>& q, ListPosition<POVNode> at, Cost visits=1) const {
         auto next=nextListPosition(*access_,std::move(at));
         if (next.phase==ListPhase::cycle) { out.deferred=true; return; }
         Query<POVNode> follow{next.phase==ListPhase::done ? q.context.front() : next.node,
             next.phase==ListPhase::done ? fieldEnd : fieldPosition,
             static_cast<int>(next.phase),q.related,{q.context.front()}};
         follow.context.insert(follow.context.end(),next.owners.begin(),next.owners.end());
-        out.edges.push_back(edge("next field position",std::move(follow)));
-    }
-    bool readable(const POVNode& node, bool predicate=false) const {
-        if (!access_->plainStructure(node,false,false,false,false,false) ||
-            (!predicate && getFlagBit(node->pItem->flags,infonView::invertMatch))) return false;
-        for (const auto& relation:POVDescription(node,access_->registry.get()).relationships()) {
-            // Publishing alternatives adds aliases of this exact view. They
-            // carry no additional requirements for speculative classification.
-            if (access_->sameInfon(node,relation.target)) continue;
-            if (!RHSRepresentation(access_,node,relation.target,definitions_).represented) return false;
-        }
-        return true;
+        out.edges.push_back(edge("next field position",std::move(follow),visits));
     }
     bool sourceReady(const POVNode& node) const {
         return (access_->physicalList(node) || access_->unreferencedTemplateSpan(node)) && !access_->hasTypeRequirements(node) &&
@@ -44,8 +33,6 @@ public:
         Expansion<POVNode> out;
         if(q.kind==fieldEnd) return out;
         if(q.kind==selectField) {
-            if(access_->hasTypeRequirements(q.related))
-                out.refinements.push_back({{q.related,compileTypeRequirements,0},{1,0},"read field predicate meaning",true});
             if(!sourceReady(q.node)) {out.deferred=true;return out;}
             out.edges.push_back(edge("scan field candidates",{q.node,fieldPosition,static_cast<int>(ListPhase::enter),q.related,{q.node}}));
             return out;
@@ -55,41 +42,33 @@ public:
             if(q.kind==fieldMatched && !unordered(q.context.front())) return out;
             advance(out,q,std::move(at));return out;
         }
+        Cost visits=1;
         if(at.phase==ListPhase::enter) {
             if(!sourceReady(at.node) || (!unordered(q.context.front()) && unordered(at.node))) {out.deferred=true;return out;}
         } else if(at.phase==ListPhase::leave) {
             auto boundary=listBoundary(*access_,at.node);
+            visits=addCost(visits,boundary.visits);
             if(!boundary.valid || boundary.tail!=0 || !boundary.missingExtents.empty()) {
                 out.deferred=true;return out;
             }
         } else if(at.phase==ListPhase::member && !access_->subList(at.node)) {
-            if(access_->hasTypeRequirements(at.node))
-                out.refinements.push_back({{at.node,compileTypeRequirements,0},{1,0},"read field candidate meaning",true});
-            else {
-                auto context=at.owners;context.insert(context.begin(),at.node);
-                out.refinements.push_back({{at.node,sizeAndValue,0,{},context},{1,0},"refine field candidate",true});
-            }
-            auto match=ScalarMatch::unknown;
-            if(readable(q.related,true) && readable(at.node) && access_->scalarTypeShape(q.related)) {
-                auto required=definitions_->scalarFacts(q.related,true), actual=definitions_->scalarFacts(at.node);
-                match=compareScalar(required,actual);
-                if(getFlagBit(q.related->pItem->flags,infonView::invertMatch) && match!=ScalarMatch::unknown)
-                    match=match==ScalarMatch::yes ? ScalarMatch::no : ScalarMatch::yes;
-            }
+            FieldPredicate predicate(access_,definitions_,out);
+            auto match=predicate.match(q.related,at.node,at.owners);
+            visits=addCost(visits,predicate.work.visits);
             if(match==ScalarMatch::yes) {
                 auto found=q;found.kind=fieldMatched;
-                out.edges.push_back(edge("compatible field member",std::move(found)));return out;
+                out.edges.push_back(edge("compatible field member",std::move(found),visits));return out;
             }
             if(match==ScalarMatch::unknown) {
                 out.deferred=true;
                 if(unordered(q.context.front())) {
                     auto waiting=q;waiting.kind=fieldUnknown;
-                    out.edges.push_back(edge("unresolved field candidate",std::move(waiting)));
+                    out.edges.push_back(edge("unresolved field candidate",std::move(waiting),visits));
                 }
                 return out;
             }
         }
-        advance(out,q,std::move(at));return out;
+        advance(out,q,std::move(at),visits);return out;
     }
 };
 
@@ -159,7 +138,7 @@ public:
         if(result_ && published_==matches_) {verified_=true;return {};}
         auto matches=matches_;auto access=access_;
         Work work{matches.size(),matches.size()==1 ? 0 : 2*matches.size()+3};
-        if (!request.context.empty()) work.creations += matches.size()==1 ? 2 : 1;
+        if (!request.context.empty()) ++work.creations;
         return {{"Set field selection result",[this,matches,access] {
             if(matches.size()==1) result_=matches.front();
             else {
@@ -188,7 +167,6 @@ public:
                 state->result=result_;state->matches=matches;
                 owner->pItem=result;access->bind(owner);++owner->workRevision;
                 if(matches.size()==1) {
-                    access->registry->recordIdentity(owner,result_,iekListCorrespondence,0);
                     definitions_->inherit(owner,result_);
                 }
             }
