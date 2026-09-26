@@ -16,6 +16,11 @@ publication can restart it. Matching never installs tentative occurrences.
 An accepted path builds a finite `DefinitionRequirement`; existing
 `ProteusDefinitionPlan` Sets populate instances. Accepted embedded extents are
 plan-local evidence, so they need not be published before the whole Set.
+Qualified RHSs expose their stored size/value expressions before choosing a
+correspondence route. Existing concatenation goals traverse operand identities,
+subscribe to unknown operands, and publish the resulting payload. No recursive
+normalizer or extra expression evaluator is introduced.
+
 String copies reuse Proteus3's `mergeLooseStrings` size-mode rule.
 
 Source reference: `Reasoner.dog` `mergeLooseStrings`,
@@ -50,7 +55,7 @@ string or a member's size; it does not yet stream committed parse prefixes.
 ## Evidence
 
 - Full CodeDog regeneration and C++ build succeeded.
-- Focused correspondence: 30/30 pass after the first-match/open-prefix policy update.
+- Focused correspondence: 36/36 pass after the first-match/open-prefix policy update.
 - All 519 pre-existing focused graph/parser/numeric checks pass.
 - Standalone graph search: 28/28; list traversal: 18/18; span alignment: 200/200.
 - Unchanged older default fixtures: 150/270 pass, 120 fail, versus 141/270 at
@@ -63,5 +68,5 @@ string or a member's size; it does not yet stream committed parse prefixes.
   or embedded example; those are not claimed as historical regressions restored.
 - Original fixture inputs and expectations were not edited.
 
-Logs: `/tmp/p4-scalar-text-default/results.json`, `/tmp/p4-scalar-text-regression.log`,
-`/tmp/p4-scalar-text-build.log`. Focused tests are in `unit/graphText/`; log: `/tmp/p4-scalar-text-tests.log`.
+Logs: `/tmp/p4-text-expression-default/results.json`, `/tmp/p4-text-expression-regression.log`,
+`/tmp/p4-text-expression-build.log`. Focused tests are in `unit/graphText/`; log: `/tmp/p4-text-expression-tests.log`.

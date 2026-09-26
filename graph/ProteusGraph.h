@@ -859,6 +859,12 @@ private:
             };
             for (const auto& relation : description.relationships()) {
                 auto source = relation.target;
+                // Expose endpoint expressions before deciding which kind of
+                // correspondence their resulting payload can participate in.
+                if (relation.isWork() && source->looseType())
+                    for (int slot : {1, 2}) if (access_->hasConcat(source, slot))
+                        result.refinements.push_back({{source, concatField, slot}, {1, 0},
+                            "resolve qualified RHS expression", false});
                 if (relation.isWork() && query.kind != sizeOnly &&
                     TextCorrespondence::relationship(*access_, node, source)) {
                     result.refinements.push_back({{node, textCorrespondence, 0, source}, {1, 0},
