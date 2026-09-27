@@ -1,5 +1,6 @@
 #pragma once
 #include "SliceSelection.h"
+#include "SignedCoordinate.h"
 
 // A path needs the complete candidate set, even when that set is a oneOf.
 // A caller asking for the resulting value still sees that value as symbolic.
@@ -59,18 +60,16 @@ class PathSelection {
         auto selector=state->predicate;auto spec=state->spec;
         auto item=selector->pItem;auto value=item->value;
         bool constrained=!POVDescription(selector,access_->registry.get()).relationships().empty() || definitions_->required(selector);
+        FlexNum number;Cost coordinateVisits=0;
         bool literal=access_->plainStructure(selector,false,false,false,false,false,true) &&
             !getFlagBit(item->flags,infonView::invertMatch) &&
-            getModeBits(value->flags,infonState::overlayType)==infonState::NUM &&
-            getModeBits(value->flags,infonState::evalMode)==infonState::emLiteral &&
+            signedCoordinate(*access_,value,number,coordinateVisits) &&
             (!getFlagBit(value->flags,infonState::inverted) || !constrained);
         if(!literal || constrained)
             out.refinements.push_back({{selector,valueOnly,0},{1,0},"resolve path index",false});
         if(!literal) {
             unresolved(out,q,"unresolved path index");return out;
         }
-        auto number=value->num;
-        if(getFlagBit(value->flags,infonState::inverted)) number.val=-number.val;
         if(number.getDenominator()==0) {access_->numericLiteralError();return out;}
         number.val.canonicalize();
         if(number.getDenominator()!=1 || (!spec && number==0) || number>INT64_MAX || number < -INT64_MAX) {
@@ -79,7 +78,7 @@ class PathSelection {
         auto magnitude=number;
         if(number<0) magnitude.val=-magnitude.val;
         std::int64_t index=magnitude.getNumerator().get_ui();
-        Cost visits=1;
+        Cost visits=coordinateVisits;
         if(number<0) {
             if(!access_->navigationList(q.node)) {
                 out.refinements.push_back({{q.node,valueOnly,0},{1,0},"resolve indexed list",true});
@@ -273,6 +272,22 @@ class PathExpression {
         return result;
     }
 public:
+    // A semantic relationship can use the same positional query as syntax.
+    static POVNode positionQuery(ProteusGraphAccess& access,const POVNode& source,
+                                 const POVNode& predicate,const POVNode& spec) {
+        auto owner=std::make_shared<POV>(915);
+        auto result=owner->pItem=std::make_shared<infonView>();
+        SetModeBits(result->flags,infonView::itmMode,infonView::mItem);
+        SetModeBits(result->flags,infonView::viewMode,infonView::vmOverlay);
+        SetModeBits(result->infSize->flags,infonState::overlayType,infonState::NUM);
+        SetModeBits(result->infSize->flags,infonState::evalMode,infonState::emUnknown);
+        SetModeBits(result->value->flags,infonState::overlayType,infonState::tUnknown);
+        SetModeBits(result->value->flags,infonState::evalMode,infonState::emUnknown);
+        auto state=result->pathSelection=std::make_shared<GraphPathSelection>();
+        state->positional=true;state->source=source;state->predicate=predicate;state->spec=spec;
+        access.bind(source);access.bind(predicate);access.bind(spec);access.bind(owner);
+        return owner;
+    }
     static bool ready(ProteusGraphAccess& access,const POVNode& node) {return !segments(access,node).empty();}
     static Work work(ProteusGraphAccess& access,const POVNode& node) {
         auto path=segments(access,node);Cost count=path.size(),specs=0;

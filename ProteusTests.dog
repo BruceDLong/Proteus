@@ -1,6 +1,19 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphEndOrigin/last
+    unit/graphEndOrigin/marked
+    unit/graphEndOrigin/string
+    unit/graphEndOrigin/embedded
+    unit/graphEndOrigin/span
+    unit/graphEndOrigin/unknownEnd
+    unit/graphEndOrigin/lateEnd
+    unit/graphEndOrigin/cancel
+    unit/graphEndOrigin/sparse
+    unit/graphEndOrigin/suffixConstraint
+    unit/graphEndOrigin/suffixConflict
+    unit/graphEndOrigin/tooShort
+
     unit/graphSlice/lateLayout
     unit/graphSlice/scalarAtEnd
     unit/graphSlice/choiceExclusion
@@ -10261,6 +10274,71 @@ struct GLOBAL {
     }%>
     void: unitTestGraphSlice(me string: testName, me int: caseID) <- {
         me bool: passed <- graphSliceCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHENDORIGIN(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphEndOrigin(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHENDORIGIN(unit/graphEndOrigin/last, 0)
+    GRAPHENDORIGIN(unit/graphEndOrigin/marked, 1)
+    GRAPHENDORIGIN(unit/graphEndOrigin/string, 2)
+    GRAPHENDORIGIN(unit/graphEndOrigin/embedded, 3)
+    GRAPHENDORIGIN(unit/graphEndOrigin/span, 4)
+    GRAPHENDORIGIN(unit/graphEndOrigin/unknownEnd, 5)
+    GRAPHENDORIGIN(unit/graphEndOrigin/lateEnd, 6)
+    GRAPHENDORIGIN(unit/graphEndOrigin/cancel, 7)
+    GRAPHENDORIGIN(unit/graphEndOrigin/sparse, 8)
+    GRAPHENDORIGIN(unit/graphEndOrigin/suffixConstraint, 9)
+    GRAPHENDORIGIN(unit/graphEndOrigin/suffixConflict, 10)
+    GRAPHENDORIGIN(unit/graphEndOrigin/tooShort, 11)
+    me bool: graphEndOriginCase(me string: testName, me int: caseID) <- <%{
+        GraphNormalizer normalizer;normalizer.init();
+        std::string expression="*(-1)+[<_>] <~ {*10+1 *10+2 *10+3 *10+4}",expected="*10+4";
+        switch(caseID) {
+        case 1: expression="*(-2)+[<_> _] <~ {*10+1 *10+2 *10+3 *10+4}";expected="*10+3";break;
+        case 2: expression="*(-1)+[<$>] <~ {'Cat' 'Dog'}";expected="'Dog'";break;
+        case 3: expression="*(-2)+[<_> _] <~ {*10+1 &{*10+2 *10+3} *10+4}";expected="*10+3";break;
+        case 4: expression="*(-2)+[<&{_ _}>] <~ {*10+1 *10+2 *10+3 *10+4}";expected="{*10+3 *10+4}";break;
+        case 5:case 6:case 7: expression="*(-1)+[<_>] <~ {*10+1 *10+2 ...}";expected="*10+2";break;
+        case 8: expression="*(-1)+[<_>] <~ *1000000000+{*10+7|...}";expected="*10+7";break;
+        case 9: expression="*(-2)+[<_> *10+4] <~ {*10+1 *10+2 *10+3 *10+4}";expected="*10+3";break;
+        case 10: expression="*(-2)+[<_> *10+5] <~ {*10+1 *10+2 *10+3 *10+4}";break;
+        case 11: expression="*(-3)+[<_> _ _] <~ {*10+1 *10+2}";break;
+        }
+        auto root=graphParsed(testName,expression);auto source=root->pItem->innr->funcArgs;
+        auto original=toString(source.get());
+        auto handle=normalizer.normalize(root);handle.waitForCompletion();
+        bool passed=!handle.status().failed;
+        if(caseID>=5 && caseID<=7) {
+            passed &= handle.status().symbolicValues && handle.status().withSubscribers;
+            if(caseID==7) handle.cancel();
+            if(caseID!=5) normalizer.runtime.update([&] {SetFlagBit(source->value->flags,infonState::tailUnfinished,false);});
+            handle.waitForCompletion();
+        }
+        bool pending=caseID==5 || caseID==7 || caseID==11;
+        if(caseID==10) passed=handle.status().failed || handle.status().symbolicValues;
+        else if(pending) passed &= handle.status().symbolicValues;
+        else passed &= !handle.status().symbolicValues && toString(root->pItem.get())==expected;
+        if(caseID!=6 && caseID!=7) passed &= toString(source.get())==original;
+        if(caseID==8) passed &= source->value->items.size()==0 && handle.steps().size()<5000;
+        if(!pending && caseID!=10) {
+            auto count=normalizer.access->registry->identities.size();
+            auto again=normalizer.normalize(root);again.waitForCompletion();
+            passed &= !again.status().failed && toString(root->pItem.get())==expected &&
+                normalizer.access->registry->identities.size()==count;
+            again.cancel();
+        }
+        if(!passed) {
+            std::cout << "End origin " << caseID << ": " << handle.status().error << " symbolic=" << handle.status().symbolicValues << "\n" << toString(root->pItem.get()) << "\n";
+            for(const auto& step:handle.steps()) std::cout << step.action << "\n";
+        }
+        handle.cancel();normalizer.close();return passed;
+    }%>
+    void: unitTestGraphEndOrigin(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphEndOriginCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

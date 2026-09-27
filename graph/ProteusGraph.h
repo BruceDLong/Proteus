@@ -31,6 +31,7 @@ inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
 #include "ScalarPredicate.h"
 #include "FieldPredicate.h"
 #include "PathSelection.h"
+#include "IntersectionInput.h"
 #include "GroupedListPlan.h"
 
 // Early correspondence is conditional on the parser retaining the ordered
@@ -245,8 +246,18 @@ public:
         }
         if (request.kind >= sizeOnly && request.kind <= sizeAndValue &&
             visit.query.node == request.node && access_->hasInnerSource(request.node)) {
-            auto access = access_; auto owner = request.node;
-            return {{"Set inner source constraint", [access, owner] { return access->applyInnerSource(owner); }, {1, 1}}};
+            auto access = access_; auto owner = request.node;auto definitions=definitions_;
+            return {{"Set inner source constraint", [access, owner, definitions] {
+                bool changed=access->applyInnerSource(owner);
+                if(auto body=definitions->selectionBody(owner)) changed=IntersectionInput::prepare(*access,body) || changed;
+                return changed;
+            }, {1, 14}}};
+        }
+        if (request.kind >= sizeOnly && request.kind <= sizeAndValue &&
+            visit.query.node==request.node && IntersectionInput::ready(*access_,request.node)) {
+            auto access=access_;auto owner=request.node;
+            return {{"Prepare end-relative input window",[access,owner] {return IntersectionInput::prepare(*access,owner);},
+                {owner->pItem->wrkList.size(),12*owner->pItem->wrkList.size()}}};
         }
         if (request.kind != listContents && access_->isDefinition(visit.query.node)) {
             if (visit.query.node != request.node || request.kind != sizeAndValue ||
@@ -802,7 +813,9 @@ private:
             // count needs just an embedded span's extent; nested values count 1.
             if (query.argument != sizeOnly || access_->subList(node)) {
                 auto context = query.context; context.insert(context.begin(), node);
-                result.refinements.push_back({{node, static_cast<int>(query.argument), 0, {}, context},
+                if(query.argument==relationshipConstraints)
+                    result.edges.push_back(direct("check member constraints",{node,relationshipConstraints,0,{},context}));
+                else result.refinements.push_back({{node, static_cast<int>(query.argument), 0, {}, context},
                     {0, 0}, "resolve list member", false});
             }
             result.edges.push_back(sequence(description.adjacent(), query, {node, listEnd, query.argument}));
@@ -849,7 +862,8 @@ private:
             if (access_->canSelect(node)) {
                 auto body = definitions_->selectionBody(node);
                 if (!POVDescription(body).work().empty()) {
-                    result.refinements.push_back({{body, relationshipConstraints, 0}, {1, 0}, "prove inner source constraints", false});
+                    if(constraintsOnly) result.edges.push_back(direct("inner source constraints",{body,relationshipConstraints,0}));
+                    else result.refinements.push_back({{body, relationshipConstraints, 0}, {1, 0}, "prove inner source constraints", false});
                     result.refinements.push_back({{body, sizeAndValue, 0}, {1, 0}, "refine inner members", true});
                 }
                 result.refinements.push_back({{node, selectIntersection, 0}, {0, 0}, "find intersection result", false});
@@ -889,10 +903,21 @@ private:
                         result.refinements.push_back({{source, demand, 0, {}, context}, {1, 0}, "resolve expression RHS", false});
                     result.deferred = true; return;
                 }
-                result.edges.push_back(direct(label, {source, demand, 0, origin, context}));
-                if (demand != sizeOnly && access_->correspondingLists(origin, source))
+                if(constraintsOnly) {
+                    auto verdict=access_->compatible(node,source,sizeAndValue);
+                    if(verdict<0) throw std::runtime_error("incompatible scalar constraints");
+                    if(!verdict) result.deferred=true;
+                }
+                result.edges.push_back(direct(label, {source, query.kind, 0, origin, context}));
+                if (demand != sizeOnly && access_->correspondingLists(origin, source)) {
                     result.refinements.push_back({{origin, listCorrespondence, demand, source},
                         {1, 0}, "match list RHS members", false});
+                    // Equality aligns members whose constraints must also
+                    // agree. Grammar correspondence proves its own predicates
+                    // and must not reinterpret them as asserted member values.
+                    if(constraintsOnly)
+                        result.edges.push_back(direct("check aligned member constraints",{origin,listContents,relationshipConstraints}));
+                }
             };
             for (const auto& relation : description.relationships()) {
                 auto source = relation.target;
@@ -901,7 +926,8 @@ private:
                 // invent work merely because the view headers are distinct.
                 if (relation.derived && node->pItem->value==source->pItem->value &&
                     node->pItem->infSize==source->pItem->infSize) {
-                    result.refinements.push_back({{source,demand,0},{0,0},"normalize selected source",false});
+                    if(constraintsOnly) result.edges.push_back(direct("selected source constraints",{source,relationshipConstraints,0}));
+                    else result.refinements.push_back({{source,query.kind,0},{0,0},"normalize selected source",false});
                     continue;
                 }
                 // Expose endpoint expressions before deciding which kind of
