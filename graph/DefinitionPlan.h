@@ -228,7 +228,7 @@ private:
         right.equations.push_back({0, right.segments.size(), shape.extent(), {{}, requirement}});
         auto plan = alignSpans(left, right);
         if (!plan.valid) throw DefinitionConflict("incompatible finite definition extent");
-        if (!plan.splices.empty()) { supported = false; return; }
+        if (!plan.splices.empty() || !plan.crossings.empty()) { supported = false; return; }
         // An unconstrained virtual tail need not be filled to prove the type.
         // Every explicit required position must still be mapped unambiguously.
         std::size_t mapped = plan.identities.size();

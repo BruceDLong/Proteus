@@ -140,6 +140,17 @@ public:
     FieldPredicate(std::shared_ptr<ProteusGraphAccess> access,std::shared_ptr<ProteusDefinitions> definitions,
                    Expansion<POVNode>& expansion)
         :access_(std::move(access)),definitions_(std::move(definitions)),out_(expansion) {}
+    // Field correspondence uses nominal identity without asking an unrelated
+    // definition member to normalize or testing the destination's unknown value.
+    ScalarMatch matchType(const POVNode& predicate,const POVNode& candidate) {
+        auto spec=[&](const POVNode& node) {
+            auto result=std::make_shared<DefinitionRequirement>();
+            result->types=definitions_->names(node);
+            if(!result->types.empty()) result->label=result->types.front();
+            return result;
+        };
+        return nominal(spec(predicate),spec(candidate));
+    }
     ScalarMatch match(const POVNode& predicate,const POVNode& candidate,const std::vector<POVNode>& owners) {
         auto required=read(predicate,true,{});
         auto actual=read(candidate,false,owners,required && !required->list);

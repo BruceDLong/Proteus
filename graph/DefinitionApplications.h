@@ -234,6 +234,26 @@ public:
             compiled.clear();
         }
     }
+    // Compile one selected declaration subtree, including its written facts.
+    // A null instance root lets the existing compiler treat every visited POV
+    // as read-only source data. Unselected siblings are never compiled.
+    Certificate describe(const POVNode& source, Work& work) {
+        auto proof=std::make_shared<Proof>();
+        std::vector<std::pair<POVNode,bool>> pending{{source,false}};
+        std::set<POVNode> active;
+        while(!pending.empty()) {
+            auto [node,leave]=pending.back();pending.pop_back();++work.visits;
+            if(leave) {finish(node,{},proof);active.erase(node);if(!proof->compilable) return {};continue;}
+            if(proof->evidence->compiled.count(node)) continue;
+            if(!active.insert(node).second) return {};
+            std::vector<POVNode> next;
+            if(!children(node,{},next)) return {};
+            collect(node,{},proof);pending.push_back({node,true});
+            for(auto i=next.rbegin();i!=next.rend();++i) pending.push_back({*i,false});
+        }
+        proof->requirement=proof->evidence->compiled.at(source);
+        proof->evidence->compiled.clear();return proof;
+    }
     bool current(const Certificate& proof) const {
         if (!proof->requirement) return false;
         for (const auto& binding : proof->evidence->bindings)

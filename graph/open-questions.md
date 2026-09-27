@@ -87,9 +87,11 @@ been reopened.
 
 ## Implementation gaps are tracked separately
 
-Unordered structural correspondence, contextual resolution, parent-definition
-projection onto selected fields, crossing open spans, recursive grammars, fuller
+Unordered structural correspondence, contextual resolution, general nested
+parent-definition projection, ambiguous crossing spans, recursive grammars, fuller
 streaming publication, and remaining temporal navigation need implementation.
+Scalar parent-field projection and crossings with proven relative placement
+are implemented.
 Unambiguous field updates and retained-parent paths are implemented; ambiguous
 updates still need the decision above. Some require the decisions
 above; others should follow existing Proteus semantics and tests. A failing old

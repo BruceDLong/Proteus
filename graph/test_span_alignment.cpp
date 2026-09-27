@@ -106,6 +106,38 @@ int main() {
         assert(plan.valid && plan.splices.size()==1 && plan.splices.front().sources.size()==3);++cases;
         assert(plan.splices.front().sources[1].width==1000000000);++cases;
     }
+    // Crossing ends share a middle only when finite overlaps are excluded.
+    for(int prefix=1;prefix<=3;++prefix) for(int suffix=1;suffix<=3;++suffix) {
+        Layout a,b;
+        for(int i=0;i<prefix;++i) a.segments.push_back({10+i,false,1});
+        a.segments.push_back({500,true,-1});b.segments.push_back({600,true,-1});
+        for(int i=0;i<suffix;++i) b.segments.push_back({20+i,false,1});
+        for(bool reverse:{false,true}) {
+            auto plan=reverse ? alignSpans(b,a) : alignSpans(a,b);
+            assert(plan.valid && !plan.complete && plan.crossings.size()==1);
+            const auto& part=plan.crossings.front();
+            assert(part.left==500 && part.right==600 && part.prefix.size()==prefix && part.suffix.size()==suffix);
+            assert(crossingHasMiddle(part,[](int a,int b){return a!=b;}));++cases;
+            assert(!crossingHasMiddle(part,[](int,int){return false;}));++cases;
+            auto ambiguous=part;ambiguous.prefix.back()=ambiguous.suffix.front();
+            assert(!crossingHasMiddle(ambiguous,[](int a,int b){return a!=b;}));++cases;
+            assert(!representsSpanShape(a,b,plan));++cases;
+        }
+        for(int width:{0,7,1000000000}) {
+            a.segments.back().width=width+suffix;
+            auto plan=alignSpans(a,b);
+            assert(plan.valid && plan.crossings.size()==1 && plan.crossings.front().middle==width);
+            assert(crossingHasMiddle(plan.crossings.front(),[](int,int){return false;}));++cases;
+        }
+    }
+    {
+        Layout a,b;a.segments={{1,false,1},{500,true,1}};b.segments={{600,true,1},{2,false,1},{3,false,1}};
+        assert(!alignSpans(a,b).valid);++cases;
+        a.segments.back().width=-1;b.segments.front().node=500;
+        assert(alignSpans(a,b).crossings.empty());++cases;
+        b.segments.front().node=600;a.segments.insert(a.segments.begin()+1,{501,true,-1});
+        assert(alignSpans(a,b).crossings.empty());++cases;
+    }
     // Window boundaries are independent of the compressed representation.
     for (int width : {0,1,7,1000000000}) {
         Layout layout;layout.segments={{1,false,1},{2,true,width},{3,false,1}};

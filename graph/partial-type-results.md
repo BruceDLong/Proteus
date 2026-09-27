@@ -27,12 +27,11 @@ explicit numeric-size rendering metadata; otherwise a printed result could lose 
 
 ## Boundaries
 
-This does not yet project container-specific definition constraints onto selected
-fields. For example, a default stated only inside `#spoke` is not newly inferred
-for a supplied `length:_` by this change; the member's own `#length` declaration
-can supply its scalar facts. Read-only type meaning and bare-type expansion
-remain available. A goal-directed projection of parent meaning is separate from
-forcing the full parent layout during normalization.
+A later increment supplies missing scalar facts from the corresponding parent
+field through a separate graph goal; see
+[definition-projection-results.md](definition-projection-results.md). It does not
+force the full parent layout or manufacture absent parts. Contextual and general
+nested container requirements remain deferred.
 
 Supplied bodies with untyped positions, empty bodies, templates, and unresolved
 structure keep their existing rules. This change does not infer order from a

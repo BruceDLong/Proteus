@@ -36,6 +36,10 @@ see [choice-constraint-results.md](choice-constraint-results.md).
 Partial typed descriptions and retained parents are covered in
 [partial-type-results.md](partial-type-results.md); contained open spans use the
 shared planner described in [open-span-correspondence-results.md](open-span-correspondence-results.md).
+Missing scalar fields can use their parent definition without expanding omitted
+parts; see [definition-projection-results.md](definition-projection-results.md).
+Proven crossing spans share an unresolved middle; see
+[crossing-span-results.md](crossing-span-results.md).
 
 ## Start here
 
@@ -102,6 +106,7 @@ selection, end-relative indexes, and mixed field/index paths.
 | `SpanAlignment.h` | Plan finite ordered correspondence from opaque member/gap evidence; no POV access or mutation |
 | `SliceSelection.h` | Fixed span windows, identity-backed members, and compressed source views |
 | `PathSelection.h` | Field predicates and positional navigation, shared result Sets, path constraints, and retained returns |
+| `DefinitionProjection.h` | Locate a supplied field in its parent meaning and compile only the selected scalar requirements |
 | `FieldPredicate.h` | Read-only nominal and finite ordered structural comparison, with refinement demands |
 | `ScalarPredicate.h` | Three-state scalar and nominal comparison shared by sequence matching and field selection |
 | `SequenceCorrespondence.h` | Successful continuation edges over string/list input, repeated matching, selected results, and accepted-path Sets |

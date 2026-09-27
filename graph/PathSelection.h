@@ -429,6 +429,10 @@ public:
         }
         ++predicate->workRevision;++node->workRevision;return true;
     }
+    static std::vector<POVNode> location(const std::shared_ptr<GraphPathSelection>& state,const POVNode& source) {
+        for(const auto& at:state->locations) if(at.source==source) return at.context;
+        return {};
+    }
     static bool updatesReady(const std::shared_ptr<GraphPathSelection>& state) {
         return state->updates.empty() || (state->result && !state->pending && state->matches.size()==1);
     }
@@ -548,9 +552,14 @@ private:
             bool current=true;
             if(!alternatives && !request.context.empty()) {
                 auto state=request.context.front()->pItem->pathSelection;
-                current=state->resultView==result_->pItem && state->resultRevision==result_->workRevision && state->resultContext==locations_.at(result_);
+                current=state->resultView==result_->pItem && state->resultRevision==result_->workRevision && PathExpression::location(state,result_)==locations_.at(result_);
             }
             if(alternatives) {
+                if(!request.context.empty()) {
+                    auto state=request.context.front()->pItem->pathSelection;
+                    for(const auto& source:matches_)
+                        if(PathExpression::location(state,source)!=locations_.at(source)) current=false;
+                }
                 auto member=result_->pItem->innr->value->items.head;
                 for(const auto& source:matches_) {
                     if(!member || member->pItem!=source->pItem) {current=false;break;}
@@ -620,7 +629,11 @@ private:
                 SetFlagBit(result->flags,infonView::isNormed,false);
                 state->result=result_;state->matches=matches;state->pending=pending;
                 state->resultView=result_->pItem;state->resultRevision=result_->workRevision;
-                state->resultContext=alternatives ? std::vector<POVNode>{} : locations_.at(result_);
+                state->locations.clear();
+                for(const auto& source:matches) {
+                    GraphPathLocation at;at.source=source;at.context=locations_.at(source);
+                    state->locations.push_back(std::move(at));
+                }
                 owner->pItem=result;access->bind(owner);++owner->workRevision;
                 if(!alternatives) definitions_->inherit(owner,result_);
             }

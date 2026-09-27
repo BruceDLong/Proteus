@@ -34,9 +34,11 @@ not remove its graph relationship or claim the value is fully normalized.
 ## Boundaries
 
 A referenced gap must denote its complete owner. Taking only an owner's trailing
-remainder needs an offset view and is still deferred. Crossing unresolved spans,
-repetition-template splicing, parser-owned tails, and general ambiguous overlap
-are not assigned guessed layouts. Definition planning explicitly defers splices
+remainder needs an offset view and is still deferred. A later increment handles
+crossings with provably non-overlapping ends; see
+[crossing-span-results.md](crossing-span-results.md). Repetition-template splicing,
+parser-owned tails, and ambiguous overlap are not assigned guessed layouts.
+Definition planning explicitly defers splices and crossings
 rather than treating them as finite positional fills.
 
 The original `merge/dots/align2a` and `align2b` assertions retain their legacy

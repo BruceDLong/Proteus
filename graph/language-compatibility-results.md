@@ -1,8 +1,9 @@
 # Older language compatibility, 2026-09-26
 
-The unchanged original default suite now passes **192/270** fixtures. The latest
-three increments recover six fixtures from the prior 186/270 checkpoint, with
-no previous pass lost and no crashes, timeouts, or incomplete summaries.
+The unchanged original default suite passes **192/270** fixtures after parent-field
+projection and proven crossing-span correspondence. Every fixture retains its
+prior pass/fail status, with no crashes, timeouts, or incomplete summaries.
+The previous three increments recovered six fixtures from the 186/270 checkpoint.
 
 | Suite | Passing | Failing | Total |
 |---|---:|---:|---:|
@@ -19,7 +20,19 @@ records an experimental contract and excludes itself from the default tests.
 This table is a fixture inventory, not a measure of language completeness, and
 it does not include all compiled legacy unit tests.
 
-## Latest recovered behavior
+## Latest behavior
+
+- Missing scalar fields can acquire facts from the corresponding parent-definition
+  field without expanding omitted parts. See
+  [definition-projection-results.md](definition-projection-results.md).
+- Crossing spans with proven relative placement now share one unresolved middle.
+  See [crossing-span-results.md](crossing-span-results.md).
+- The original `merge/dots/align3` and `align4` now have the expected symbolic
+  meaning, but their exact assertions still fail on legacy span spelling.
+  Canonical normalization and parsing are checked separately. Ambiguous
+  `align4b` remains unresolved.
+
+## Earlier recovered behavior
 
 - Strict oneOf filtering recovers `merge/num/literalSelect`,
   `merge/str/literalSelect`, and `altSelect/simple`.
@@ -42,14 +55,13 @@ resolved: unknown numeric sizes and subscribed open tails remain symbolic.
 
 The complete fixture status and input hashes are recorded in
 [language-compatibility-status.json](language-compatibility-status.json).
-Detailed logs for this checkpoint are in `/tmp/p4-composition-final-default/`.
+Detailed logs for this checkpoint are in `/tmp/p4-field-cross-final-default/`.
 
 ## Remaining work
 
-Crossing open spans need correspondence beyond containment, without enumerating
-possible gap partitions. Parent definitions need a way to supply relevant field
-facts without requiring or materializing their entire layout. Contextual type
-meaning, unordered structural correspondence, recursive grammars, fuller stream
+Ambiguous crossing spans need additional placement evidence. General nested or
+contextual parent requirements remain beyond scalar field projection. Contextual
+type meaning, unordered structural correspondence, recursive grammars, fuller stream
 publication, and temporal operations retain their documented boundaries.
 Ambiguous writes also need the semantic decision tracked in
 [open-questions.md](open-questions.md).

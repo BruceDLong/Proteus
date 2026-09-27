@@ -99,6 +99,10 @@ SpanWindow<Node> selectSpanWindow(SpanLayout<Node> layout, std::int64_t start, s
 template<class Node> struct SpanPlan {
     struct Fill { Node owner; std::vector<Node> sources; bool close; std::int64_t extent; };
     struct Splice { Node owner; std::vector<typename SpanLayout<Node>::Segment> sources; };
+    // P + leftGap = rightGap + S. A common middle is valid only when
+    // shorter overlaps of the written P/S regions have been excluded.
+    struct Crossing { Node left, right; std::vector<Node> prefix, suffix; std::int64_t middle = -1; };
+    std::vector<Crossing> crossings;
     std::vector<Splice> splices;
     std::vector<std::pair<Node, Node>> identities;
     std::vector<Fill> fills;
@@ -235,14 +239,50 @@ template<class Node> SpanPlan<Node> alignSpans(SpanLayout<Node> left, SpanLayout
     };
     splice(left,l,li,le,right,r,ri,re);
     splice(right,r,ri,re,left,l,li,le);
+    auto crossing=[&](const SpanLayout<Node>& a,const std::vector<std::size_t>& ai,std::size_t ab,std::size_t ae,
+                      const SpanLayout<Node>& b,const std::vector<std::size_t>& bi,std::size_t bb,std::size_t be) {
+        if(ae<=ab+1 || be<=bb+1 || !plan.splices.empty()) return;
+        const auto& leftGap=a.segments[ai[ae-1]];const auto& rightGap=b.segments[bi[bb]];
+        if(!leftGap.gap || !rightGap.gap || leftGap.node==rightGap.node) return;
+        typename SpanPlan<Node>::Crossing part{leftGap.node,rightGap.node,{},{},-1};
+        for(auto i=ab;i<ae-1;++i) {const auto& at=a.segments[ai[i]];if(at.gap) return;part.prefix.push_back(at.node);}
+        for(auto i=bb+1;i<be;++i) {const auto& at=b.segments[bi[i]];if(at.gap) return;part.suffix.push_back(at.node);}
+        if(leftGap.width>=0) {
+            if(static_cast<std::uint64_t>(leftGap.width)<part.suffix.size()) return;
+            part.middle=leftGap.width-static_cast<std::int64_t>(part.suffix.size());
+        }
+        if(rightGap.width>=0) {
+            if(static_cast<std::uint64_t>(rightGap.width)<part.prefix.size()) return;
+            auto width=rightGap.width-static_cast<std::int64_t>(part.prefix.size());
+            if(part.middle>=0 && part.middle!=width) return;
+            part.middle=width;
+        }
+        plan.crossings.push_back(std::move(part));
+    };
+    crossing(left,l,li,le,right,r,ri,re);
+    crossing(right,r,ri,re,left,l,li,le);
     return plan;
+}
+// There are only finitely many shorter overlaps of the written ends. A
+// definite mismatch excludes one; unknown compatibility cannot exclude it.
+// A known nonnegative middle width already fixes their relative positions.
+template<class Crossing,class Incompatible>
+bool crossingHasMiddle(const Crossing& part,Incompatible incompatible) {
+    if(part.middle>=0) return true;
+    for(std::size_t width=1;width<=std::min(part.prefix.size(),part.suffix.size());++width) {
+        bool excluded=false;
+        for(std::size_t i=0;i<width;++i)
+            if(incompatible(part.prefix[part.prefix.size()-width+i],part.suffix[i])) {excluded=true;break;}
+        if(!excluded) return false;
+    }
+    return true;
 }
 // Shape coverage is weaker than a concrete correspondence. Unconstrained
 // source gaps add no facts, but every written source position and every bounded
 // subspan must already be represented. No fill into the actual layout is proof.
 template<class Node>
 bool representsSpanShape(const SpanLayout<Node>& actual,const SpanLayout<Node>& required,const SpanPlan<Node>& plan) {
-    if(!plan.valid) return false;
+    if(!plan.valid || !plan.crossings.empty()) return false;
     auto actualGap=[&](const Node& owner) {
         return std::any_of(actual.segments.begin(),actual.segments.end(),[&](const auto& segment) {return segment.gap && segment.node==owner;});
     };
