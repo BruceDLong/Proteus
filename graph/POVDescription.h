@@ -12,10 +12,10 @@ public:
         // Work and replaceable result links live in POV structure. Permanent
         // identities retain the actual registry record and its provenance.
         std::shared_ptr<IdentityRelation> identity;
-        bool derived = false;
-        bool isWork() const { return !identity && !derived; }
+        bool derived = false, consolidated = false;
+        bool isWork() const { return consolidated || (!identity && !derived); }
         const char* description() const {
-            return identity ? "registry identity" : derived ? "selected result" : "work-list constraint";
+            return consolidated ? "consolidated equality" : identity ? "registry identity" : derived ? "selected result" : "work-list constraint";
         }
     };
 private:
@@ -63,8 +63,12 @@ public:
         if (registry_) {
             std::lock_guard<std::mutex> lock(registry_->registryMutex);
             for (const auto& record : registry_->identities) {
-                if (record->leftPOV == node_) result.push_back({node_, record->rightPOV, record});
-                else if (record->rightPOV == node_) result.push_back({node_, record->leftPOV, record});
+                bool leftWork=record->leftWorkOwner==node_->pItem;
+                bool rightWork=record->rightWorkOwner==node_->pItem;
+                if (leftWork || record->leftPOV == node_)
+                    result.push_back({node_, record->rightPOV, record, false, leftWork});
+                else if (rightWork || record->rightPOV == node_)
+                    result.push_back({node_, record->leftPOV, record, false, rightWork});
             }
         }
         return result;

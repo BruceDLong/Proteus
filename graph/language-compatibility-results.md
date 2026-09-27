@@ -1,11 +1,14 @@
-# Older language compatibility, 2026-09-26
+# Older language compatibility, 2026-09-27
 
-The default suite passes **203/270** fixtures after completed repetition
-publication. `range/select1` now exposes its completed `2 3 4 5` prefix while
-retaining the unfinished tail, following the user's clarification. Its input is
-unchanged; its old closed-result expectation was updated. All previous 202
-passes remain. Source/native builds and **984/984** focused graph/parser checks
-passed. See [repetition-prefix-results.md](repetition-prefix-results.md).
+Consolidated-RHS cleanup preserves all previous language results: **203/270**
+default fixtures and **218/363** across all six suites. The source build and
+**1,002/1,002** focused graph/parser checks pass, including 18 new RHS lifecycle
+checks. No language input or expected output changed in this increment. See
+[rhs-consolidation-results.md](rhs-consolidation-results.md).
+
+The preceding repetition change made `range/select1` expose its completed
+`2 3 4 5` prefix with an unresolved tail, following the user's clarification.
+Its old closed-result expectation was updated in that earlier increment.
 
 | Suite | Passing | Failing | Total |
 |---|---:|---:|---:|
@@ -16,13 +19,13 @@ passed. See [repetition-prefix-results.md](repetition-prefix-results.md).
 | `worldLoadTests.tst` | 0 | 2 | 2 |
 | `endRelativeR1Tests.tst` | 2 | 8 | 10 |
 
-All six rows were rerun for completed repetition publication: **218/363**
+All six rows were rerun for consolidated-RHS cleanup: **218/363**
 language fixtures pass, with **145** failures and no crashes, timeouts, or
 incomplete summaries. The R1 file records an experimental contract and excludes
 itself from the default tests. Fixture counts describe tested examples, not
 unrestricted support for a language feature.
 
-The **984/984 focused graph/parser checks** are a separate baseline. They
+The **1,002/1,002 focused graph/parser checks** are a separate baseline. They
 include some of the language fixtures above, so these counts must not be added.
 The 125 additional registered legacy helper and parser-error checks were also
 rerun: **102 pass, 23 fail**, without process errors or timeouts. Their exact
@@ -43,10 +46,10 @@ The priority is dependable existing behavior before new natural-language work.
 1. Completed repetition results are implemented for loaded sources and later
    revisions. Unknown result tails remain subscribed. Parser-owned open input
    needs a separate pending-cursor extension; it remains deferred.
-2. RHS lifecycle: distinguish full consolidation from a proof that only current
-   facts are represented. A work item may be cleared once its information and
-   any continuing graph relationship are preserved. Rejected candidates and
-   contradictory assertions require separate handling.
+2. Closed, context-free strict equalities now move out of pending work into
+   the registry, retaining their owner and identity. Partial/qualified/typed
+   relationships remain pending. Top-level rejection lifetime needs the
+   separate decision recorded in [open-questions.md](open-questions.md).
 3. Work through remaining failures by the semantic constructs they exercise:
    scalar/sequence relationships, contextual and external-property resolution,
    definition composition, and temporal/sparse navigation. Validate the first
@@ -98,7 +101,7 @@ resolved: unknown numeric sizes and subscribed open tails remain symbolic.
 
 The complete fixture status and input hashes are recorded in
 [language-compatibility-status.json](language-compatibility-status.json).
-Detailed language and helper audit logs are in `/tmp/p4-prefix-audit-*`.
+Detailed language and helper audit logs are in `/tmp/p4-rhs-audit-*`.
 
 ## Remaining work
 

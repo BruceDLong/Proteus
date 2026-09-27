@@ -811,3 +811,13 @@ access keeps the prefix visible to other RHS constraints. No result size is
 inferred from this partial proof. Parser-owned open input remains deferred.
 See [repetition-prefix-results.md](repetition-prefix-results.md) for lifecycle,
 ambiguity boundaries, and verification.
+
+## Consolidated RHSs
+
+A represented RHS can leave the pending work list when its source facts are
+complete, closed, and context-free. The existing identity registry retains the
+strict equality and its original infonView owner. Graph traversal still sees
+later facts and conflicts, including through another POV sharing that view.
+`hasRHS()` recognizes pending and consolidated relations, so producers do not
+reinsert completed work. Partial, qualified, typed, and contextual obligations
+keep their work entries. See [rhs-consolidation-results.md](rhs-consolidation-results.md).

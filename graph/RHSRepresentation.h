@@ -19,12 +19,13 @@ class RHSRepresentation {
     }
 public:
     Work work{0, 0};
-    bool represented = false;
+    bool represented = false, complete = false;
     RHSRepresentation(std::shared_ptr<ProteusGraphAccess> access, POVNode target, POVNode source,
                       std::shared_ptr<ProteusDefinitions> definitions = {})
         : access_(std::move(access)) {
         std::vector<std::pair<POVNode, POVNode>> pending{{std::move(target), std::move(source)}};
         std::set<std::pair<POVNode, POVNode>> visited;
+        bool fullyExpressed=true;
         while (!pending.empty()) {
             auto pair = pending.back(); pending.pop_back();
             auto left = pair.first, right = pair.second;
@@ -41,6 +42,14 @@ public:
                 (!access_->scalarCandidate(right) && !access_->literalList(right))) return;
             auto actual = access_->typeFacts(left), required = access_->typeFacts(right);
             if (!required.valid || !required.accepts(actual)) return;
+            // Rendering can suppress partial facts. Removing pending work
+            // needs a closed, context-free equality whose remaining relation
+            // can be carried by the identity registry.
+            fullyExpressed &= !access_->hasTypeRequirements(left) && !access_->hasTypeRequirements(right) &&
+                POVDescription(right).work().empty() && required.hasSize;
+            if(access_->literalList(right))
+                fullyExpressed &= access_->closedPhysicalList(left) && access_->closedPhysicalList(right);
+            else fullyExpressed &= required.hasValue;
             if (access_->literalList(right) && !listHeaderOnly(*access_,right)) {
                 SpanLayout<POVNode> a, b;
                 if (!layout(left, a, false) || !layout(right, b, true)) return;
@@ -50,6 +59,6 @@ public:
             }
             for (auto rhs : POVDescription(right).work()) pending.emplace_back(left, rhs);
         }
-        represented = true;
+        represented = true; complete=fullyExpressed;
     }
 };

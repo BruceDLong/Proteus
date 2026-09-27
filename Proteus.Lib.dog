@@ -104,6 +104,11 @@ model IdentityRelation{
     me uint64: normalizationID <- 0
     our POV: leftPOV
     our POV: rightPOV
+    // A consolidated strict work edge retains its owner/context even when a
+    // different POV shares that owner's infonView. Other identities remain
+    // occurrence-specific. Retain the original owner even if a POV changes views.
+    our infonView: leftWorkOwner
+    our infonView: rightWorkOwner
 }
 struct IdentityRelation{}
 
@@ -2147,6 +2152,18 @@ struct infonView{
         }
         return(false)
     }
+    // A supplied equality may already have left the pending work list. All
+    // producers use this semantic check so replay cannot reinsert that work.
+    me bool: hasRHS(our infonView: inf) <- <%{
+        if(workListContainsInfonView(inf)) return true;
+        if(!referenceRegistry) return false;
+        std::lock_guard<std::mutex> lock(referenceRegistry->registryMutex);
+        for(const auto& relation:referenceRegistry->identities) {
+            if(relation->leftWorkOwner.get()==this && relation->rightPOV->pItem==inf) return true;
+            if(relation->rightWorkOwner.get()==this && relation->leftPOV->pItem==inf) return true;
+        }
+        return false;
+    }%>
     bool: workListContainsPOV(our POV: target) <- {
         withEach wrkListItem in wrkList{
             if(wrkListItem===target){return(true)}
@@ -2236,13 +2253,13 @@ struct infonView{
         return(false)
     }
     void: addPOVToWrkList(our POV: pov) <- {
-        if(workListContainsInfonView(pov!.pItem)){return()}
+        if(hasRHS(pov!.pItem)){return()}
         isNormed <- false
         //:l/PAI::logSeg(" WLA.b:"+pov!.mySymbol())
         wrkList.append(pov)
     }
     our POV: addInfonViewToWrkList(our infonView: i, me bool: internalIdent, me int: source) <- {
-        if(workListContainsInfonView(i)){return(NULL)}
+        if(hasRHS(i)){return(NULL)}
         our POV:: newPov{source}
         //i!.asRHSInternalIdent <- internalIdent     // Maybe needed for pronouns
         newPov!.pItem <- i
@@ -2252,7 +2269,7 @@ struct infonView{
         return(newPov)
     }
     our POV: addInfonViewToWorkListWithPriority(our infonView: i, me bool: internalIdent) <- {
-        if(workListContainsInfonView(i)){return(NULL)}
+        if(hasRHS(i)){return(NULL)}
         our POV:: newPov{402}
         i!.asRHSInternalIdent <- internalIdent
         newPov!.pItem <- i

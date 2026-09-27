@@ -438,7 +438,7 @@ public:
     }
     static bool needsUpdates(const std::shared_ptr<GraphPathSelection>& state) {
         if(!updatesReady(state) || state->updates.empty()) return false;
-        for(const auto& rhs:state->updates) if(!state->result->pItem->workListContainsInfonView(rhs->pItem)) return true;
+        for(const auto& rhs:state->updates) if(!state->result->pItem->hasRHS(rhs->pItem)) return true;
         return false;
     }
     static bool applyUpdates(ProteusGraphAccess& access,const std::shared_ptr<GraphPathSelection>& state) {

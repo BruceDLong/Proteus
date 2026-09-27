@@ -74,7 +74,11 @@ See graph/chained-field-results.md for supported boundaries and validation.
 Preserve read-only definition bodies, already-demanded occurrence POVs, and
 reusable type evidence; avoid redundant
 application RHSs. Redundant RHS/template rendering uses revision-scoped proofs;
-keep work edges searchable and do not relax isNormed to hide unknown sizes.
+keep semantic relationships searchable and do not relax isNormed to hide unknown
+sizes. Closed, context-free strict equalities may leave wrkList after their
+identity and original infonView owner are retained in the registry. Producers
+use hasRHS() so replay does not recreate consolidated work. Partial, qualified,
+typed, and contextual work stays pending. See graph/rhs-consolidation-results.md.
 Size and value should be acquired together when both are available; partial
 acquisition is for cases where only one is available.
 

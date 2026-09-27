@@ -154,8 +154,8 @@ public:
     }
 };
 
-// A representation proof is narrower than normalization: unspecified fields
-// need not become known. It changes only revision-scoped printer metadata.
+// Partial representation supplies printer metadata. A closed strict equality
+// can instead leave pending work through a priced Set that retains its identity.
 class ProteusRepresentationGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusCompletion> completion_;
@@ -167,6 +167,27 @@ public:
     void beginPass() override { checked_ = false; represented_ = false; }
     std::vector<SetCommand> found(const Visit<POVNode>&) override {
         RHSRepresentation plan(access_, request.node, request.related);
+        if(plan.complete && request.node->pItem->workListContainsPOV(request.related)) {
+            auto access=access_;auto owner=request.node,source=request.related;
+            ++plan.work.creations;
+            return {{"Consolidate RHS equality",[this,access,owner,source] {
+                access->bind(owner);access->bind(source);
+                auto relation=access->registry->recordIdentity(owner,source,iekAssertion,0);
+                if(relation) {
+                    std::lock_guard<std::mutex> lock(access->registry->registryMutex);
+                    auto& storedOwner=relation->leftPOV==owner ? relation->leftWorkOwner : relation->rightWorkOwner;
+                    // Reusing a POV after replacing its view must not overwrite
+                    // a constraint still owned by the earlier shared view.
+                    if(storedOwner && storedOwner!=owner->pItem) {
+                        checked_=represented_=true;return false;
+                    }
+                    storedOwner=owner->pItem;
+                }
+                owner->pItem->discardWrkListPOV(source);
+                ++owner->workRevision;SetFlagBit(owner->pItem->flags,infonView::isNormed,false);
+                return true;
+            },plan.work}};
+        }
         return {{"Check RHS representation", [this, represented = plan.represented] {
             checked_ = true; represented_ = represented;
             return false; // proof metadata only: no semantic revision
@@ -1066,7 +1087,7 @@ private:
                     continue;
                 }
                 relationship(source, relation.description(), relation.isWork());
-                if (relation.isWork() && demand == sizeAndValue)
+                if (relation.isWork() && !relation.consolidated && demand == sizeAndValue)
                     result.refinements.push_back({{node, assessRepresentation, 0, source}, {0, 0},
                         "assess represented RHS", false});
             }

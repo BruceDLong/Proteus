@@ -70,3 +70,10 @@ POVs must retain their identity; the unrequested tail must stay compressed.
 
 The full legacy suite and sanitizers were not run for this change. All work is
 local to the private Proteus4 fork; the original Proteus checkout is untouched.
+
+## Later lifecycle update
+
+Closed strict equalities can now leave `wrkList` while remaining searchable
+through the identity registry. Partial representation still only suppresses
+redundant text. See [rhs-consolidation-results.md](rhs-consolidation-results.md)
+for the proof boundary and later-update/cancellation checks.

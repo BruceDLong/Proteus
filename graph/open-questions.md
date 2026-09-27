@@ -62,6 +62,13 @@ been reopened.
    graph? Future fees or external-data costs can extend route costing later;
    graph-owned cost calculation and cheaper-route selection are already decided.
 
+10. **Lifetime of a rejected assertion.** For a direct contradiction such as
+    `8 = 9`, should the graph retain the failed RHS for reconsideration on later
+    normalization, or remove it as the legacy terminal-work lifecycle does?
+    Current graph tests retain it; some old printed assertions expect removal.
+    Equal-endpoint rules and abandonment of mismatched speculative parse paths
+    remain as already decided. This is separate from successful consolidation.
+
 ## Decisions already made
 
 - Completed repeated `<~` selections are published while an unfinished
