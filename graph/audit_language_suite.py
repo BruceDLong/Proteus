@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run original language fixtures, unchanged, in isolated bounded processes.
+"""Run original language fixtures or registered compiled tests in bounded processes.
 
 Preserves parse/norm/multi/world modes and expected outputs. Normalization uses
 Agent's graph entry point. JSON records and individual logs distinguish semantic
@@ -17,32 +17,45 @@ def main():
     root = Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--suite', type=Path, default=root/'defaultTests.tst')
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument('--suite', type=Path, default=root/'defaultTests.tst')
+    source.add_argument('--compiled', action='store_true', help='Read registered tests from ProteusTests.dog')
     parser.add_argument('--timeout', type=float, default=5)
     parser.add_argument('--select', default='')
+    parser.add_argument('--exclude', action='append', default=[], help='Exclude a test-name prefix')
     args = parser.parse_args()
     if args.timeout <= 0:
         parser.error('--timeout must be positive')
-    suite = args.suite.resolve()
     fixtures = []
-    for line in suite.read_text().splitlines():
-        if not line.strip() or line.lstrip().startswith('#'):
-            continue
-        columns = re.split(r'(?<!\\),', line)
-        if len(columns) >= 5 and columns[0].strip().startswith(args.select):
-            fixtures.append((columns[0].strip(), columns[4].strip(), line))
+    if args.compiled:
+        block = (root/'ProteusTests.dog').read_text().split('TestsToRun = `', 1)[1].split('`', 1)[0]
+        fixtures = [(name, 'compiled', None) for line in block.splitlines()
+                    if (name := line.split('//', 1)[0].strip())]
+    else:
+        for line in args.suite.resolve().read_text().splitlines():
+            if not line.strip() or line.lstrip().startswith('#'):
+                continue
+            columns = re.split(r'(?<!\\),', line)
+            if len(columns) >= 5:
+                fixtures.append((columns[0].strip(), columns[4].strip(), line))
+    fixtures = [f for f in fixtures if f[0].startswith(args.select) and
+                not any(f[0].startswith(prefix) for prefix in args.exclude)]
     if not fixtures:
-        parser.error('no matching language fixtures')
+        parser.error('no matching tests')
     args.output.mkdir(parents=True, exist_ok=True)
     records = []
     for index, (name, mode, row) in enumerate(fixtures, 1):
         log = args.output / f'{index:03d}.log'
-        # One-row files avoid the harness treating a name as a prefix selector.
+        # A compiled name is exact; file-based selectors can be prefixes, so
+        # isolate each language fixture in a one-row file.
         fixture = args.output / 'current.tst'
-        fixture.write_text(row + '\n')
+        selector = name
+        if row is not None:
+            fixture.write_text(row + '\n')
+            selector = str(fixture.resolve()) + ':'
         with log.open('w') as output:
             try:
-                run = subprocess.run([str(root/'LocalBuild/TestProteus'), '-t', str(fixture.resolve())+':'],
+                run = subprocess.run([str(root/'LocalBuild/TestProteus'), '-t', selector],
                                      cwd=root/'LocalBuild', stdout=output, stderr=subprocess.STDOUT,
                                      timeout=args.timeout)
                 code = run.returncode

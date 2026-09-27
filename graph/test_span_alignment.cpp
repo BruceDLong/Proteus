@@ -116,7 +116,8 @@ int main() {
             auto plan=reverse ? alignSpans(b,a) : alignSpans(a,b);
             assert(plan.valid && !plan.complete && plan.crossings.size()==1);
             const auto& part=plan.crossings.front();
-            assert(part.left==500 && part.right==600 && part.prefix.size()==prefix && part.suffix.size()==suffix);
+            assert(part.left==500 && part.right==600 && part.prefix.size()==static_cast<std::size_t>(prefix) &&
+                part.suffix.size()==static_cast<std::size_t>(suffix));
             assert(crossingHasMiddle(part,[](int a,int b){return a!=b;}));++cases;
             assert(!crossingHasMiddle(part,[](int,int){return false;}));++cases;
             auto ambiguous=part;ambiguous.prefix.back()=ambiguous.suffix.front();
