@@ -71,6 +71,41 @@ int main() {
         auto plan = alignSpans(left, right);
         assert(plan.valid && plan.complete && plan.fills.size() == 2); ++cases;
     }
+    for(int prefix=0;prefix<4;++prefix) for(int suffix=0;suffix<4;++suffix) {
+        if(!prefix && !suffix) continue;
+        Layout a;a.segments={{500,true,-1}};a.equations={{0,1,-1,500}};
+        Layout b;
+        for(int i=0;i<prefix;++i) b.segments.push_back({100+i,false,1});
+        b.segments.push_back({600,true,-1});b.equations.push_back({static_cast<std::size_t>(prefix),static_cast<std::size_t>(prefix+1),-1,600});
+        for(int i=0;i<suffix;++i) b.segments.push_back({200+i,false,1});
+        for(bool reverse:{false,true}) {
+            auto plan=reverse ? alignSpans(b,a) : alignSpans(a,b);
+            assert(plan.valid && !plan.complete && plan.splices.size()==1 && plan.fills.empty());
+            assert(plan.splices.front().owner==500 && plan.splices.front().sources.size()==b.segments.size());++cases;
+        }
+        b.equations.clear();auto plan=alignSpans(a,b);
+        assert(plan.splices.empty());++cases;
+    }
+    {
+        Layout a;a.segments={{1,false,1},{500,true,-1},{2,false,1}};a.equations={{0,3,-1,900},{1,2,-1,500}};
+        Layout b;b.segments={{101,false,1},{600,true,-1},{102,false,1}};b.equations={{0,3,-1,901},{1,2,-1,600}};
+        assert(representsSpanShape(a,b,alignSpans(a,b)));++cases;
+        b.segments.insert(b.segments.begin()+1,{103,false,1});b.equations={{0,4,-1,901},{2,3,-1,600}};
+        assert(!representsSpanShape(a,b,alignSpans(a,b)));++cases;
+        b.segments={{101,false,1},{600,true,-1},{102,false,1}};b.equations={{0,3,-1,901},{1,2,2,600}};
+        assert(!representsSpanShape(a,b,alignSpans(a,b)));++cases;
+        a=concrete(3);b.segments={{101,false,1},{600,true,-1}};b.equations={{0,2,-1,901}};
+        assert(representsSpanShape(a,b,alignSpans(a,b)));++cases;
+        assert(!representsSpanShape(b,a,alignSpans(b,a)));++cases;
+    }
+    {
+        Layout a;a.segments={{1,false,1},{500,true,-1},{2,false,1}};a.equations={{0,3,-1,900},{1,2,-1,500}};
+        Layout b;b.segments={{101,false,1},{102,false,1},{600,true,1000000000},{103,false,1},{104,false,1}};
+        b.equations={{0,5,1000000004,901},{2,3,1000000000,600}};
+        auto plan=alignSpans(a,b);
+        assert(plan.valid && plan.splices.size()==1 && plan.splices.front().sources.size()==3);++cases;
+        assert(plan.splices.front().sources[1].width==1000000000);++cases;
+    }
     // Window boundaries are independent of the compressed representation.
     for (int width : {0,1,7,1000000000}) {
         Layout layout;layout.segments={{1,false,1},{2,true,width},{3,false,1}};

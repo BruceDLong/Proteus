@@ -33,7 +33,7 @@ its matching alternatives as oneOf. Direct and repeated
 <~ injection share that walk without mutating the listSpec. The constrained
 repeated-output example in graph/source-injection-results.md intentionally waits
 symbolically with a subscription until more information arrives. Unsized open
-root lists with prefix relationships remain symbolic until partial-prefix Sets exist.
+root lists can acquire a known prefix while their unresolved tail stays symbolic.
 Scalar exclusion predicates distinguish a known mismatch from missing information.
 Accepted list-valued input members retain their atomic identity on replay; do not
 reinterpret their copied values as more grammar. Composite/standalone exclusion,
@@ -73,6 +73,15 @@ application RHSs. Redundant RHS/template rendering uses revision-scoped proofs;
 keep work edges searchable and do not relax isNormed to hide unknown sizes.
 Size and value should be acquired together when both are available; partial
 acquisition is for cases where only one is available.
+
+Supplied typed-field descriptions may be partial even when ordered. Normalizing
+such a description (including a parent returned by `;` or `;;`) normalizes the
+present members without forcing the complete parent definition onto it. Bare type
+references and positional value sequences still expand; member type constraints,
+explicit RHSs, and repetition requirements retain their own goals. See
+graph/partial-type-results.md for the boundary on projecting parent-specific
+meaning. Do not add missing-field subscriptions merely because a definition
+mentions omitted parts.
 
 For unordered lists, the user clarified that omitted items are non-relevant to
 that instance. Do not create missing-field subscriptions or eagerly insert all

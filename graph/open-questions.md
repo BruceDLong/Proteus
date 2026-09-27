@@ -75,6 +75,8 @@ been reopened.
   Literal names can be expressed using `field^{name=X}`.
 - Separate definitions are optional; selection does not first validate every
   member of a type definition.
+- Supplied typed-field descriptions may be partial even when ordered; returning
+  a parent normalizes its present fields without enforcing the full parent layout.
 - Completed queries reconsider new definitions when explicitly normalized again.
 - The graph interface exposes existing POV/infon structure and relationships.
   Goals translate discovered information into Sets; normalization returns a
@@ -85,9 +87,11 @@ been reopened.
 
 ## Implementation gaps are tracked separately
 
-Unordered structural correspondence, contextual resolution, field updates,
-retained-parent paths, recursive grammars, fuller streaming publication, and
-remaining temporal navigation need implementation. Some require the decisions
+Unordered structural correspondence, contextual resolution, parent-definition
+projection onto selected fields, crossing open spans, recursive grammars, fuller
+streaming publication, and remaining temporal navigation need implementation.
+Unambiguous field updates and retained-parent paths are implemented; ambiguous
+updates still need the decision above. Some require the decisions
 above; others should follow existing Proteus semantics and tests. A failing old
 test is evidence to investigate, not automatically a new language-design question.
 

@@ -30,6 +30,10 @@ On unordered sources those words retain nominal field-selection semantics.
 Sparse writes use the registry's canonical occurrence; targeting item 100 in a
 billion-item repetition does not expand its physical list or affect item 101.
 
+For the subsequent partial-definition composition fix and the original
+`query/chain3` / `query/chain4` results, see
+[partial-type-results.md](partial-type-results.md).
+
 ## Boundaries
 
 - Ambiguous writes, absent targets, and targets behind unresolved earlier

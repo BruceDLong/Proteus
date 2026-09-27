@@ -4,7 +4,7 @@
 // by the target. This does not prove either endpoint fully normalized and never
 // removes a relationship. Unknown source fields impose no new requirements.
 // Layout planning uses the same compressed-span equations as correspondence;
-// member comparisons require closed physical layouts, without filling gaps.
+// member comparisons inspect explicit positions without filling unknown gaps.
 // Empty open ordered bodies add only header requirements.
 class RHSRepresentation {
     std::shared_ptr<ProteusGraphAccess> access_;
@@ -12,7 +12,7 @@ class RHSRepresentation {
         return readListLayout(*access_, node, result, work.visits,
             [&](const auto& at) {
                 return at.phase != ListPhase::enter ||
-                    (access_->closedPhysicalList(at.node) && access_->orderedList(at.node) &&
+                    (access_->physicalList(at.node) && access_->orderedList(at.node) &&
                      !access_->memberTemplate(at.node) && access_->inputError(at.node).empty() &&
                      (!source || (!access_->hasTypeRequirements(at.node) && POVDescription(at.node).work().empty())));
             }, [](const POVNode& member) { return member; });
@@ -45,7 +45,7 @@ public:
                 SpanLayout<POVNode> a, b;
                 if (!layout(left, a, false) || !layout(right, b, true)) return;
                 auto plan = alignSpans(a, b);
-                if (!plan.valid || !plan.complete || !plan.fills.empty()) return;
+                if (!representsSpanShape(a,b,plan)) return;
                 pending.insert(pending.end(), plan.identities.begin(), plan.identities.end());
             }
             for (auto rhs : POVDescription(right).work()) pending.emplace_back(left, rhs);

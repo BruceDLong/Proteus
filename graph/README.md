@@ -33,6 +33,9 @@ symbolic alternatives, subscriptions, and validation.
 
 Strict oneOf equalities now reuse the candidate matcher and result publisher;
 see [choice-constraint-results.md](choice-constraint-results.md).
+Partial typed descriptions and retained parents are covered in
+[partial-type-results.md](partial-type-results.md); contained open spans use the
+shared planner described in [open-span-correspondence-results.md](open-span-correspondence-results.md).
 
 ## Start here
 

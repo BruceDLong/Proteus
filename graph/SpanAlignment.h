@@ -98,6 +98,8 @@ SpanWindow<Node> selectSpanWindow(SpanLayout<Node> layout, std::int64_t start, s
 
 template<class Node> struct SpanPlan {
     struct Fill { Node owner; std::vector<Node> sources; bool close; std::int64_t extent; };
+    struct Splice { Node owner; std::vector<typename SpanLayout<Node>::Segment> sources; };
+    std::vector<Splice> splices;
     std::vector<std::pair<Node, Node>> identities;
     std::vector<Fill> fills;
     bool valid = true, complete = false;
@@ -209,6 +211,50 @@ template<class Node> SpanPlan<Node> alignSpans(SpanLayout<Node> left, SpanLayout
         if (a.gap || b.gap) break;
         plan.identities.emplace_back(a.node, b.node); --le; --re;
     }
+    // A single remaining hole can contain the other description's entire
+    // middle, including holes of its own. Each referenced hole must denote
+    // its complete owner; a tail within a loaded owner needs an offset view.
+    auto splice = [&](const SpanLayout<Node>& target,const std::vector<std::size_t>& ts,
+                      std::size_t begin,std::size_t end,const SpanLayout<Node>& source,
+                      const std::vector<std::size_t>& ss,std::size_t from,std::size_t to) {
+        if(end!=begin+1 || to<=from+1) return;
+        const auto& gap=target.segments[ts[begin]];
+        if(!gap.gap) return;
+        typename SpanPlan<Node>::Splice part{gap.node,{}};
+        for(auto i=from;i<to;++i) {
+            auto index=ss[i];const auto& segment=source.segments[index];
+            if(segment.node==gap.node) return;
+            if(segment.gap && std::none_of(source.equations.begin(),source.equations.end(),[&](const auto& equation) {
+                return equation.owner==segment.node && equation.begin==index && equation.end==index+1;
+            })) return;
+            part.sources.push_back(segment);
+        }
+        // A splice subsumes any prefix extension of this same hole.
+        plan.fills.erase(std::remove_if(plan.fills.begin(),plan.fills.end(),[&](const auto& fill) {return fill.owner==gap.node;}),plan.fills.end());
+        plan.splices.push_back(std::move(part));
+    };
+    splice(left,l,li,le,right,r,ri,re);
+    splice(right,r,ri,re,left,l,li,le);
     return plan;
+}
+// Shape coverage is weaker than a concrete correspondence. Unconstrained
+// source gaps add no facts, but every written source position and every bounded
+// subspan must already be represented. No fill into the actual layout is proof.
+template<class Node>
+bool representsSpanShape(const SpanLayout<Node>& actual,const SpanLayout<Node>& required,const SpanPlan<Node>& plan) {
+    if(!plan.valid) return false;
+    auto actualGap=[&](const Node& owner) {
+        return std::any_of(actual.segments.begin(),actual.segments.end(),[&](const auto& segment) {return segment.gap && segment.node==owner;});
+    };
+    for(const auto& fill:plan.fills) if(actualGap(fill.owner)) return false;
+    for(const auto& splice:plan.splices) if(actualGap(splice.owner)) return false;
+    for(const auto& segment:required.segments) if(!segment.gap &&
+        std::none_of(plan.identities.begin(),plan.identities.end(),[&](const auto& pair) {return pair.second==segment.node;})) return false;
+    for(const auto& equation:required.equations) if(equation.expected>=0) {
+        if(equation.begin==0 && equation.end==required.segments.size() && actual.extent()==equation.expected) continue;
+        for(auto i=equation.begin;i<equation.end;++i)
+            if(required.segments[i].gap && required.segments[i].width!=0) return false;
+    }
+    return true;
 }
 } // namespace proteus4

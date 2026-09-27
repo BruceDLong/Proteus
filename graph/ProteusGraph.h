@@ -395,11 +395,23 @@ public:
             for (std::size_t j = 0; j < i; ++j)
                 if (access_->sameInfon(fill.owner, plan.fills[j].owner)) return {};
         }
+        // Splices preserve unknown inner spans as embedded identity views.
+        // Their source nodes denote complete spans, not tails of loaded owners.
+        for(const auto& splice:plan.splices) {
+            for(const auto& fill:plan.fills)
+                if(access_->sameInfon(splice.owner,fill.owner)) return {};
+            if(access_->inputPending(splice.owner) || access_->memberTemplate(splice.owner)) return {};
+            for(const auto& source:splice.sources)
+                if(!access_->canMakeMember(source.node) || access_->inputPending(source.node) ||
+                   access_->sameInfon(splice.owner,source.node) ||
+                   (source.gap && access_->memberTemplate(source.node))) return {};
+        }
         verified_ = plan.complete && !access_->inputPending(request.node) && !access_->inputPending(request.related);
         Work work{0, 0};
         for (const auto& pair : plan.identities)
             if (!access_->hasDirectIdentity(pair.first, pair.second)) ++work.creations;
         for (const auto& fill : plan.fills) work.creations += 2 * fill.sources.size();
+        for(const auto& splice:plan.splices) work.creations+=2*splice.sources.size();
         auto access = access_;
         auto left = request.node, right = request.related;
         int demand = static_cast<int>(request.argument);
@@ -410,6 +422,10 @@ public:
             for (const auto& fill : plan.fills) {
                 access->bind(fill.owner);
                 for (const auto& source : fill.sources) access->bind(source);
+            }
+            for(const auto& splice:plan.splices) {
+                access->bind(splice.owner);
+                for(const auto& source:splice.sources) access->bind(source.node);
             }
             bool changed = access->apply(left, right, demand);
             if (changed) evidence->inherit(left, right);
@@ -430,6 +446,14 @@ public:
                     inherit(member); evidence->inherit(member, source); changed = true;
                 }
                 changed |= access->finishTail(fill.owner, fill.close, fill.extent);
+            }
+            for(const auto& splice:plan.splices) {
+                for(const auto& source:splice.sources) {
+                    auto member=access->appendTailMember(splice.owner,source.node);
+                    SetFlagBit(member->flags,POV::isSubItm,source.gap);
+                    inherit(member);evidence->inherit(member,source.node);changed=true;
+                }
+                changed=access->finishTail(splice.owner,true,-1) || changed;
             }
             return definitions->inherit(left, right) || changed;
         }, work}};
@@ -879,7 +903,7 @@ private:
                 result.refinements.push_back({{node, selectRelative, direction, anchor, context}, {0, 0},
                     "resolve relative position", false});
             }
-            if (definitions_->required(node))
+            if (definitions_->required(node) && !definitions_->describesParts(node))
                 result.refinements.push_back({{node, typeRequirements, 0}, {1, 0}, "validate type and member requirements", false});
             if (access_->hasInnerSource(node)) { result.deferred = true; return result; }
             if (access_->canSelect(node)) {

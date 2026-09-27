@@ -121,8 +121,27 @@ public:
         for (const auto& owner : occurrenceOwners_) if (owner.get() == source) return owner;
         return {};
     }
+    // A supplied description of typed parts is useful on its own. Normalizing
+    // it demands its present members, not every part of the container's type.
+    // Bare type references and positional value sequences still expand through
+    // their definitions; explicit RHSs remain ordinary graph constraints.
+    bool describesParts(const POVNode& node) const {
+        if (!access_->physicalList(node) || access_->memberTemplate(node) || access_->occurrenceOwner(node)) return false;
+        SpanLayout<POVNode> layout;
+        std::uint64_t visits = 0;
+        if (!readListLayout(*access_, node, layout, visits,
+                [&](const auto& at) { return at.phase != ListPhase::enter || access_->physicalList(at.node); },
+                [](const POVNode& member) { return member; })) return false;
+        bool supplied = false;
+        for (const auto& segment : layout.segments) if (!segment.gap) {
+            if (!access_->hasTypeRequirements(segment.node)) return false;
+            supplied = true;
+        }
+        return supplied;
+    }
     bool required(const POVNode& node) const {
-        return (access_->hasTypeRequirements(node) && !optional(node)) || (access_->memberTemplate(node) && !access_->fedTemplate(node)) || access_->occurrenceOwner(node);
+        return (access_->hasTypeRequirements(node) && !optional(node)) ||
+            (access_->memberTemplate(node) && !access_->fedTemplate(node)) || access_->occurrenceOwner(node);
     }
     bool children(const POVNode& node, const POVNode& root, std::vector<POVNode>& result) const {
         if (!(node == root ? access_->predicateFacts(node) : access_->typeFacts(node)).valid) return false;

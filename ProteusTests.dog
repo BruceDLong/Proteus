@@ -1,6 +1,29 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphPartialType/parent
+    unit/graphPartialType/grandparent
+    unit/graphPartialType/supplied
+    unit/graphPartialType/lateMember
+    unit/graphPartialType/writeConflict
+    unit/graphPartialType/bareExpansion
+    unit/graphPartialType/memberTypeConflict
+    unit/graphPartialType/unordered
+    unit/graphPartialType/unrelatedDefinition
+    unit/graphOpenSpan/typedMember
+    unit/graphOpenSpan/contained
+    unit/graphOpenSpan/nested
+    unit/graphOpenSpan/prefix
+    unit/graphOpenSpan/reverse
+    unit/graphOpenSpan/lateFill
+    unit/graphOpenSpan/lateConflict
+    unit/graphOpenSpan/cancel
+    unit/graphOpenSpan/twoGaps
+    unit/graphOpenSpan/crossing
+    unit/graphOpenSpan/billion
+    unit/graphOpenSpan/cost
+    unit/graphOpenSpan/conflictingEndpoint
+
     unit/graphChoice/number
     unit/graphChoice/string
     unit/graphChoice/reverse
@@ -8132,7 +8155,7 @@ struct GLOBAL {
         if(caseID==5){input <- "_=_"; expectedText <- "_"}
         if(caseID==6){input <- "2=3"}
         if(caseID==7){input <- "2==2"}
-        if(caseID==8){input <- "{_ ...}={2 ...}"}
+        if(caseID==8){input <- "{_ ...}={2 ...}"; expectedText <- "{2 ... }"}
         if(caseID==9){input <- "2=2"}
         if(caseID==14){input <- "2=missing:2"}
         if(caseID==15){input <- "*2+{1}=*2+{1}"}
@@ -8144,7 +8167,7 @@ struct GLOBAL {
         else{handle <- normalizer.normalize(target)}
         handle.waitForCompletion()
         me bool: passed <- target!.pItem!.wrkList.size()==1 and !target!.pItem!.isNormed
-        if((caseID>=6 and caseID<=9) or (caseID>=14 and caseID<=16)){
+        if((caseID>=6 and caseID<=7) or caseID==9 or (caseID>=14 and caseID<=16)){
             passed <- passed and !target!.pItem!.workIsRepresented(source)
             if(caseID==6){passed <- passed and handle.failed()}
             else{passed <- passed and !handle.failed() and handle.symbolicValues()}
@@ -10596,6 +10619,135 @@ struct GLOBAL {
     }%>
     void: unitTestGraphChoice(me string: testName, me int: caseID) <- {
         me bool: passed <- graphChoiceCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHOPENSPAN(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphOpenSpan(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHOPENSPAN(unit/graphOpenSpan/typedMember, 12)
+    GRAPHOPENSPAN(unit/graphOpenSpan/contained, 0)
+    GRAPHOPENSPAN(unit/graphOpenSpan/nested, 1)
+    GRAPHOPENSPAN(unit/graphOpenSpan/prefix, 2)
+    GRAPHOPENSPAN(unit/graphOpenSpan/reverse, 3)
+    GRAPHOPENSPAN(unit/graphOpenSpan/lateFill, 4)
+    GRAPHOPENSPAN(unit/graphOpenSpan/lateConflict, 5)
+    GRAPHOPENSPAN(unit/graphOpenSpan/cancel, 6)
+    GRAPHOPENSPAN(unit/graphOpenSpan/twoGaps, 7)
+    GRAPHOPENSPAN(unit/graphOpenSpan/crossing, 8)
+    GRAPHOPENSPAN(unit/graphOpenSpan/billion, 9)
+    GRAPHOPENSPAN(unit/graphOpenSpan/cost, 10)
+    GRAPHOPENSPAN(unit/graphOpenSpan/conflictingEndpoint, 11)
+    me bool: graphOpenSpanCase(me string: testName, me int: caseID) <- <%{
+        GraphNormalizer normalizer;normalizer.init();
+        std::string expression="{1 ... 5} = {_ 2 ... 4 _}",expected="*_+{1 &{2 ... 4} 5}";
+        if(caseID==1) {expression="{{1 ... 5} 6} = {{_ 2 ... 4 _} 6}";expected="{*_+{1 &{2 ... 4} 5} 6}";}
+        if(caseID==2) {expression="{...} = {2 3 4 ...}";expected="{2 3 4 ... }";}
+        if(caseID==3) expression="{_ 2 ... 4 _} = {1 ... 5}";
+        if(caseID==7) expression="{1 ... 7} = {_ 2 ... 4 ... 6 _}";
+        if(caseID==8) expression="{1 ... 6} = {... &{4 5 6}}";
+        if(caseID==9) expression="{1 ... 5} = {_ 2 &*1000000000+{...} 4 _}";
+        if(caseID==11) expression="{1 ... 5} = {_ 2 ... 4 6}";
+        if(caseID==12) expression="{1 ... 5} = {_ piece:*10+2 ... 4 _}";
+        auto root=graphParsed(testName,expression);auto rhs=root->pItem->wrkList.front();
+        auto left=caseID==1 ? root->pItem->value->items.head : root;
+        auto right=caseID==1 ? rhs->pItem->value->items.head : rhs;
+        auto gap=caseID==2 ? left : caseID==3 ? right->pItem->value->items.head->next : left->pItem->value->items.head->next;
+        auto sourceGap=caseID==2 || caseID==8 ? std::shared_ptr<POV>{} : caseID==3 ? left->pItem->value->items.head->next->next : right->pItem->value->items.head->next->next;
+        auto handle=caseID==10 ? normalizer.normalizeWithCost(root,1) : normalizer.normalize(root);handle.waitForCompletion();
+        bool passed=!handle.status().failed && handle.status().symbolicValues && !getFlagBit(root->pItem->flags,infonView::isNormed);
+        if(caseID==11) passed=handle.status().failed && left->pItem->value->items.tail->pItem->value->num==5;
+        else if(caseID==8 || caseID==10) passed &= gap->pItem->value->items.isEmpty() && getFlagBit(gap->pItem->value->flags,infonState::tailUnfinished);
+        else if(caseID==2) passed &= toString(root->pItem.get())==expected && root->pItem->workIsRepresented(rhs);
+        else {
+            auto first=gap->pItem->value->items.head;
+            auto alias=first ? first->next : nullptr;
+            passed &= alias && getFlagBit(alias->flags,POV::isSubItm) && normalizer.access->hasDirectIdentity(alias,sourceGap) &&
+                !getFlagBit(gap->pItem->value->flags,infonState::tailUnfinished);
+            if(caseID==0 || caseID==1) passed &= toString(root->pItem.get())==expected && root->pItem->workIsRepresented(rhs);
+            if(caseID==12) passed &= first && first->pItem->type && first->pItem->type->typeID()=="piece" &&
+                first->pItem->value->num==2 && first->pItem->infSize->num==10;
+            if(caseID==7) passed &= gap->pItem->value->items.size()==5 && getFlagBit(alias->next->next->flags,POV::isSubItm);
+            if(caseID==9) passed &= alias && alias->pItem->infSize->num==1000000000 && alias->pItem->value->items.isEmpty() && gap->pItem->value->items.size()==3;
+            if(caseID==4 || caseID==5 || caseID==6) {
+                if(caseID==6) handle.cancel();
+                normalizer.addRHS(sourceGap,graphParsed(testName,"{3}"));handle.waitForCompletion();
+                if(caseID==6) passed &= handle.status().cancelled && !handle.status().withSubscribers && alias->pItem->value->items.isEmpty();
+                else {
+                    passed &= !handle.status().failed && normalizer.access->listExtent(root)==5 && alias->pItem->value->items.head && alias->pItem->value->items.head->pItem->value->num==3;
+                    if(caseID==5) {normalizer.addRHS(sourceGap,graphParsed(testName,"{9}"));handle.waitForCompletion();passed &= handle.status().failed;}
+                }
+            }
+        }
+        if(caseID!=5 && caseID!=6 && caseID!=10 && caseID!=11) {
+            auto text=toString(root->pItem.get());auto identities=normalizer.access->registry->identities.size();auto members=gap->pItem->value->items.size();
+            auto again=normalizer.normalize(root);again.waitForCompletion();
+            passed &= !again.status().failed && toString(root->pItem.get())==text && normalizer.access->registry->identities.size()==identities && gap->pItem->value->items.size()==members;
+            again.cancel();
+        }
+        if(!passed) std::cout << "Open span " << caseID << ": " << handle.status().error << " symbolic=" << handle.status().symbolicValues << "\n" << toString(root->pItem.get()) << "\n";
+        handle.cancel();normalizer.close();return passed;
+    }%>
+    void: unitTestGraphOpenSpan(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphOpenSpanCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHPARTIALTYPE(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphPartialType(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHPARTIALTYPE(unit/graphPartialType/parent, 0)
+    GRAPHPARTIALTYPE(unit/graphPartialType/grandparent, 1)
+    GRAPHPARTIALTYPE(unit/graphPartialType/supplied, 2)
+    GRAPHPARTIALTYPE(unit/graphPartialType/lateMember, 3)
+    GRAPHPARTIALTYPE(unit/graphPartialType/writeConflict, 4)
+    GRAPHPARTIALTYPE(unit/graphPartialType/bareExpansion, 5)
+    GRAPHPARTIALTYPE(unit/graphPartialType/memberTypeConflict, 6)
+    GRAPHPARTIALTYPE(unit/graphPartialType/unordered, 7)
+    GRAPHPARTIALTYPE(unit/graphPartialType/unrelatedDefinition, 8)
+    me bool: graphPartialTypeCase(me string: testName, me int: caseID) <- <%{
+        GraphNormalizer normalizer;normalizer.init();
+        std::string definitions="{#length=*10+_ #spoke={color:$ length:_} #wheel={position:_ spoke}}";
+        std::string expression="spoke:{length:_}.length=7;",expected="spoke:{length:*10+7}";
+        if(caseID==1) {expression="wheel:{spoke:{length:_}}.spoke.length=7;;";expected="wheel:{spoke:{length:*10+7}}";}
+        if(caseID==2 || caseID==8) expression="spoke:{length:*10+7}";
+        if(caseID==3) expression="spoke:{length:_}";
+        if(caseID==4) expression="spoke:{length:*10+7}.length=8;";
+        if(caseID==5) expression="spoke";
+        if(caseID==6) {definitions="{#length=*10+7 #spoke={color:$ length:_}}";expression="spoke:{length:*10+8}";}
+        if(caseID==7) expression="spoke:{length:*10+7, extra:*10+8}";
+        if(caseID==8) definitions="{#length=*10+_ #spoke={color:%prev length:_}}";
+        auto defs=graphParsed(testName,definitions);auto declared=normalizer.normalize(defs);declared.waitForCompletion();
+        auto original=toString(defs->pItem.get());
+        auto root=graphParsed(testName,expression);auto handle=normalizer.normalize(root);handle.waitForCompletion();
+        bool passed=!declared.status().failed;
+        if(caseID==3) {
+            passed &= !handle.status().failed && handle.status().symbolicValues && handle.status().withSubscribers &&
+                root->pItem->value->items.size()==1;
+            normalizer.addRHS(root->pItem->value->items.head,graphParsed(testName,"7"));handle.waitForCompletion();
+        }
+        if(caseID==4 || caseID==6) passed &= handle.status().failed;
+        else if(caseID==5) passed &= !handle.status().failed && handle.status().symbolicValues && root->pItem->value->items.size()==2;
+        else if(caseID==7) passed &= !handle.status().failed && handle.status().symbolicValues && root->pItem->value->items.size()==2;
+        else {
+            passed &= !handle.status().failed && !handle.status().symbolicValues && getFlagBit(root->pItem->flags,infonView::isNormed) &&
+                toString(root->pItem.get())==expected && root->pItem->infSize->num==1;
+            auto count=normalizer.access->registry->identities.size();
+            auto again=normalizer.normalize(root);again.waitForCompletion();
+            passed &= !again.status().failed && !again.status().symbolicValues && toString(root->pItem.get())==expected &&
+                normalizer.access->registry->identities.size()==count;
+            again.cancel();
+        }
+        passed &= toString(defs->pItem.get())==original;
+        if(!passed) std::cout << "Partial type " << caseID << ": " << handle.status().error << " symbolic=" << handle.status().symbolicValues << "\n" << toString(root->pItem.get()) << "\n";
+        handle.cancel();normalizer.close();return passed;
+    }%>
+    void: unitTestGraphPartialType(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphPartialTypeCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

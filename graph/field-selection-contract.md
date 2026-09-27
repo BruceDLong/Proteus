@@ -67,9 +67,10 @@ Dot queries, including read-only chains, and `GraphNormalizer.findField` use
 nominal compatibility, scalar constraints, and finite ordered structural
 constraints. Each path segment is another selection goal over the preceding
 result. See [chained-field-results.md](chained-field-results.md) and
-[structured-field-results.md](structured-field-results.md). Writes/retained
-parents, contextual meanings, and unordered structure correspondence remain
-pending. Partial publication and continuation are described in
+[structured-field-results.md](structured-field-results.md). Unambiguous writes
+and retained parents are covered in [path-write-results.md](path-write-results.md)
+and [partial-type-results.md](partial-type-results.md). Contextual meanings and
+unordered structure correspondence remain pending. Partial publication and continuation are described in
 [unordered-field-results.md](unordered-field-results.md).
 
 ## Unordered descriptions are partial
