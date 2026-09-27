@@ -31,6 +31,9 @@ equate types. Finite ordered structural constraints are also supported. See
 [field-selection-results.md](field-selection-results.md) for the initial scalar step,
 symbolic alternatives, subscriptions, and validation.
 
+Strict oneOf equalities now reuse the candidate matcher and result publisher;
+see [choice-constraint-results.md](choice-constraint-results.md).
+
 ## Start here
 
 ```text

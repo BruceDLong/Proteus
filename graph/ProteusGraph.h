@@ -18,7 +18,7 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectionExtentMember = 20, selectionExtentEnd = 21,
               typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27,
               selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31,
-              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55 };
+              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61 };
 
 inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
     auto phase = query.kind == correspondenceEnter ? ListPhase::enter :
@@ -260,6 +260,11 @@ public:
                 {owner->pItem->wrkList.size(),12*owner->pItem->wrkList.size()}}};
         }
         if ((request.kind==relationshipConstraints || (request.kind>=sizeOnly && request.kind<=sizeAndValue)) && visit.query.node==request.node) {
+            auto constraints=PathExpression::choiceConstraints(request.node);
+            if(!constraints.empty()) {
+                auto access=access_;auto node=request.node;
+                return {{"Set choice constraints",[access,node,constraints] {return PathExpression::constrainChoice(*access,node,constraints);},{constraints.size(),0}}};
+            }
             if(auto state=request.node->pItem->pathSelection;state && PathExpression::needsUpdates(state)) {
                 auto access=access_;
                 return {{"Set selected source constraints",[access,state] {return PathExpression::applyUpdates(*access,state);},{state->updates.size(),0}}};
@@ -493,10 +498,17 @@ class ProteusRelativePositions {
     using Key = std::weak_ptr<infonView>;
     std::map<Key, Binding, std::owner_less<Key>> bindings_;
 public:
-    std::vector<POVNode> context(const POVNode& node, const std::vector<POVNode>& proposed) const {
+    std::vector<POVNode> context(const POVNode& node, const std::vector<POVNode>& proposed, IdentityRegistry* registry) const {
         auto found = bindings_.find(node->pItem);
         if (found == bindings_.end()) return proposed.empty() ? std::vector<POVNode>{node} : proposed;
         const auto& saved = found->second.context;
+        // Result aliases carry the same view and an explicit correspondence
+        // to its syntax occurrence. An identity visit supplies no new cursor
+        // context; reuse that occurrence's binding, never the display list.
+        if(proposed.empty() && node!=found->second.expression.lock())
+            for(const auto& relation:POVDescription(node,registry).relationships(false))
+                if(relation.identity && relation.identity->evidenceKind==iekListCorrespondence &&
+                   relation.target==found->second.expression.lock() && relation.target->pItem==node->pItem) return saved;
         if (node != found->second.expression.lock() || (!proposed.empty() && proposed.front() != saved.front()) ||
             (proposed.size() > 1 && saved.size() > 1 && proposed != saved))
             throw std::runtime_error("relative cursor used in different occurrence contexts");
@@ -566,7 +578,7 @@ public:
     void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); definitions_->prune(); }
     std::vector<std::function<void()>> takeEffects() override { return completion_->takeEffects(); }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
-        if (query.kind == selectField || query.kind == selectPosition || query.kind == selectSelf)
+        if (query.kind == selectField || query.kind == selectPosition || query.kind == selectSelf || query.kind == filterChoice)
             return std::make_shared<ProteusPathGoal>(query, access_, definitions_);
         if (query.kind == sequenceCorrespondence)
             return std::make_shared<ProteusSequenceGoal>(query, access_, definitions_, completion_);
@@ -587,7 +599,7 @@ public:
         return std::make_shared<ProteusGoal>(query, access_, completion_, evidence_, definitions_);
     }
     Expansion<POVNode> expand(const Query<POVNode>& query) override {
-        if (query.kind >= selectField && query.kind <= pathSelfFound)
+        if (query.kind >= selectField && query.kind <= choicePending)
             return PathSelection(access_, definitions_, [this](const Query<POVNode>& q) {return expandSemantic(q);}).expand(query);
         if ((query.kind >= sequenceCorrespondence && query.kind <= sequenceComplete) || query.kind == correspondenceInput || query.kind == sequenceAtomMatched)
             return SequenceCorrespondence(access_, definitions_).expand(query);
@@ -862,7 +874,7 @@ private:
             }
             result.deferred = pendingUpdate || !access_->supports(node, demand);
             if (auto direction = access_->relativeDirection(node); direction && !selectedView) {
-                auto context = positions_->context(node, query.context);
+                auto context = positions_->context(node, query.context, access_->registry.get());
                 auto anchor = context.front(); context.erase(context.begin());
                 result.refinements.push_back({{node, selectRelative, direction, anchor, context}, {0, 0},
                     "resolve relative position", false});

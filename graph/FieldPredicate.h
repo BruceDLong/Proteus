@@ -61,7 +61,7 @@ class FieldPredicate {
         specification->facts=predicate ? access_->predicateFacts(node) : access_->typeFacts(node);
         auto refinementContext=context;refinementContext.insert(refinementContext.begin(),node);
         const bool canRead=readable(node,predicate);
-        if (!predicate && !access_->literalList(node) &&
+        if ((!predicate || !getFlagBit(node->pItem->flags,infonView::invertMatch)) && !access_->literalList(node) &&
             (!access_->hasTypeRequirements(node) || !POVDescription(node).work().empty() || !canRead))
             out_.refinements.push_back({{node,sizeAndValue,0,{},refinementContext},{1,0},"refine field candidate",true});
         if (!canRead || !specification->facts.valid) return {};

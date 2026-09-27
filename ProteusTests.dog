@@ -1,6 +1,23 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphChoice/number
+    unit/graphChoice/string
+    unit/graphChoice/reverse
+    unit/graphChoice/multiple
+    unit/graphChoice/none
+    unit/graphChoice/pending
+    unit/graphChoice/lateMatch
+    unit/graphChoice/lateMismatch
+    unit/graphChoice/cancel
+    unit/graphChoice/open
+    unit/graphChoice/lateEnd
+    unit/graphChoice/structured
+    unit/graphChoice/embedded
+    unit/graphChoice/nominal
+    unit/graphChoice/lateConstraint
+    unit/graphChoice/relativeCandidate
+
     unit/graphPathWrite/retainedLifetime
     unit/graphPathWrite/sourcePrev
     unit/graphPathWrite/sourceNext
@@ -10503,6 +10520,82 @@ struct GLOBAL {
     }%>
     void: unitTestGraphPathWrite(me string: testName, me int: caseID) <- {
         me bool: passed <- graphPathWriteCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHCHOICE(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphChoice(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHCHOICE(unit/graphChoice/number, 0)
+    GRAPHCHOICE(unit/graphChoice/string, 1)
+    GRAPHCHOICE(unit/graphChoice/reverse, 2)
+    GRAPHCHOICE(unit/graphChoice/multiple, 3)
+    GRAPHCHOICE(unit/graphChoice/none, 4)
+    GRAPHCHOICE(unit/graphChoice/pending, 5)
+    GRAPHCHOICE(unit/graphChoice/lateMatch, 6)
+    GRAPHCHOICE(unit/graphChoice/lateMismatch, 7)
+    GRAPHCHOICE(unit/graphChoice/cancel, 8)
+    GRAPHCHOICE(unit/graphChoice/open, 9)
+    GRAPHCHOICE(unit/graphChoice/lateEnd, 10)
+    GRAPHCHOICE(unit/graphChoice/structured, 11)
+    GRAPHCHOICE(unit/graphChoice/embedded, 12)
+    GRAPHCHOICE(unit/graphChoice/nominal, 13)
+    GRAPHCHOICE(unit/graphChoice/lateConstraint, 14)
+    GRAPHCHOICE(unit/graphChoice/relativeCandidate, 15)
+    me bool: graphChoiceCase(me string: testName, me int: caseID) <- <%{
+        GraphNormalizer normalizer;normalizer.init();
+        std::string expression="2 = *_+[1 2 3]",expected="2";
+        switch(caseID) {
+        case 1:expression="'Beta' = *_+['Alpha' 'Beta']";expected="'Beta'";break;
+        case 2:expression="*_+[1 2 3] = 2";break;
+        case 3:expression="_ = *_+[1 2 3]";expected="*_+[1 2 3]";break;
+        case 4:expression="2 = *_+[1 3]";expected="*_+[]";break;
+        case 5:case 6:case 7:case 8:expression="*10+2 = *_+[*10+1 _ *10+3]";expected="*_+[_ ... ]";break;
+        case 9:case 10:expression="2 = *_+[1 2 ...]";expected="*_+[2 ... ]";break;
+        case 11:expression="{*10+2} = *_+[{*10+1} {*10+2}]";expected="{*10+2}";break;
+        case 12:expression="2 = *_+[&{1 2} 3]";break;
+        case 13:expression="wheel:_ = *_+[pedal:*10+1 wheel:*10+2]";expected="wheel:*10+2";break;
+        case 14:expression="_ = *_+[1 2 3]";break;
+        case 15:expression="*10+2 = *_+[*10+2 %prev]";expected="*_+[*10+2 *10+2]";break;
+        }
+        auto root=graphParsed(testName,expression);
+        auto choice=root->pItem->isOrLike() ? root : root->pItem->wrkList.front();
+        auto body=choice->pItem->innr->value;
+        auto first=body->items.head;auto second=first ? first->next : nullptr;
+        auto handle=normalizer.normalize(root);handle.waitForCompletion();
+        bool passed=!handle.status().failed;
+        if(caseID>=5 && caseID<=8) {
+            passed &= handle.status().symbolicValues && handle.status().withSubscribers && second->pItem->wrkList.empty();
+            if(caseID==8) handle.cancel();
+            if(caseID!=5) {
+                normalizer.addRHS(second,graphParsed(testName,caseID==7 ? "*10+3" : "*10+2"));handle.waitForCompletion();
+                expected=caseID==7 ? "*_+[]" : caseID==8 ? "*_+[_ = *10+2 ... ]" : "*10+2";
+            }
+        }
+        if(caseID==10) {normalizer.runtime.update([&] {SetFlagBit(body->flags,infonState::tailUnfinished,false);});handle.waitForCompletion();expected="2";}
+        if(caseID==14) {
+            normalizer.addRHS(root,graphParsed(testName,"2"));handle.waitForCompletion();
+        }
+        passed &= !handle.status().failed && toString(root->pItem.get())==expected;
+        if(caseID==5 || caseID==9) passed &= handle.status().withSubscribers && handle.status().symbolicValues;
+        if(caseID==8) passed &= handle.status().cancelled && !handle.status().withSubscribers;
+        if(caseID==0) passed &= root->pItem->selectedResult==second && !getFlagBit(root->pItem->flags,infonView::isNormed);
+        if(caseID!=8) {
+            auto result=root->pItem->selectedResult;auto identities=normalizer.access->registry->identities.size();
+            auto again=normalizer.normalize(root);again.waitForCompletion();
+            passed &= !again.status().failed && root->pItem->selectedResult==result && identities==normalizer.access->registry->identities.size() && toString(root->pItem.get())==expected;
+            again.cancel();
+        }
+        if(!passed) {
+            std::cout << "Choice " << caseID << ": " << handle.status().error << " symbolic=" << handle.status().symbolicValues << "\n" << toString(root->pItem.get()) << "\n";
+            for(const auto& step:handle.steps()) if(step.action.find("Set")!=std::string::npos || step.action.find("Prepare")!=std::string::npos) std::cout << step.action << "\n";
+        }
+        handle.cancel();normalizer.close();return passed;
+    }%>
+    void: unitTestGraphChoice(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphChoiceCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)
