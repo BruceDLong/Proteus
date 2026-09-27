@@ -38,10 +38,10 @@ prove a mismatch also defer. Parser-owned tails and repetition-template gaps
 retain their existing deferred behavior. Definition application explicitly
 defers these structural plans instead of treating them as finite fills.
 
-The original `align3` and `align4` examples now normalize to the same symbolic
-structures as their expected results. Their exact assertions still fail because
-of the legacy `&{ ... }` spelling. Five focused language checks verify the
-canonical results and equivalent parsing; original fixture text is unchanged.
+The `align3` and `align4` expectations now use the canonical `...` spelling,
+as approved by the user, and both assertions pass. Their inputs are unchanged.
+Five focused language checks also preserve coverage of the equivalent legacy
+`&{ ... }` spelling.
 `align4b` remains a semantic deferral, not a spelling-only difference.
 
 ## Validation
@@ -50,10 +50,12 @@ canonical results and equivalent parsing; original fixture text is unchanged.
 - 934/934 focused checks, including 26 parent-projection cases, 13 crossing-span
   cases, five canonical language checks, and all 890 previous focused checks.
 - Shared span planner: 374/374 cases passed.
-- Unchanged original defaults: 192/270 passing, 78 exact assertion failures.
-  Every fixture retained its prior pass/fail status; no crashes or timeouts.
+- Implementation checkpoint: unchanged defaults passed 192/270.
+- After the two approved expectation updates: 194/270 passing, 76 failures.
+  No other fixture changed status; no crashes or timeouts.
 
 Logs: `/tmp/p4-field-cross-final-build.log`,
 `/tmp/p4-field-cross-final-focused.log`, and
-`/tmp/p4-field-cross-final-default/results.json`.
+`/tmp/p4-field-cross-final-default/results.json`. The expectation update was
+verified in `/tmp/p4-canonical-expectations-final/results.json`.
 No sanitizer, GUI integration, or full compiled legacy-unit pass is claimed.

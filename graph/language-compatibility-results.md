@@ -1,13 +1,13 @@
 # Older language compatibility, 2026-09-26
 
-The unchanged original default suite passes **192/270** fixtures after parent-field
-projection and proven crossing-span correspondence. Every fixture retains its
-prior pass/fail status, with no crashes, timeouts, or incomplete summaries.
-The previous three increments recovered six fixtures from the 186/270 checkpoint.
+The default suite passes **194/270** fixtures after the user-approved canonical
+expectations for `merge/dots/align3` and `align4`. Those two assertions now pass;
+all other fixtures retain their prior status. There were no crashes, timeouts,
+or incomplete summaries. This update changes expected printing only.
 
 | Suite | Passing | Failing | Total |
 |---|---:|---:|---:|
-| `defaultTests.tst` | 192 | 78 | 270 |
+| `defaultTests.tst` | 194 | 76 | 270 |
 | `demoTests.tst` | 1 | 21 | 22 |
 | `sparseTests.tst` | 1 | 22 | 23 |
 | `timeTests.tst` | 0 | 36 | 36 |
@@ -27,10 +27,9 @@ it does not include all compiled legacy unit tests.
   [definition-projection-results.md](definition-projection-results.md).
 - Crossing spans with proven relative placement now share one unresolved middle.
   See [crossing-span-results.md](crossing-span-results.md).
-- The original `merge/dots/align3` and `align4` now have the expected symbolic
-  meaning, but their exact assertions still fail on legacy span spelling.
-  Canonical normalization and parsing are checked separately. Ambiguous
-  `align4b` remains unresolved.
+- `merge/dots/align3` and `align4` now expect the shorter `...` spelling in place
+  of `&{ ... }` and pass. Focused checks retain coverage of equivalent legacy
+  parsing. Ambiguous `align4b` remains unresolved.
 
 ## Earlier recovered behavior
 
@@ -49,13 +48,13 @@ in the per-feature reports linked from [README.md](README.md).
 The exact original assertions for `merge/dots/align2a` and `align2b` still fail
 because they expect the older nested `&{ ... }` spelling. Both spellings parse
 to the current canonical form in focused round-trip checks. They are still
-counted as failures; no original input or expected result was changed. Likewise,
+counted as failures; those two fixtures remain unchanged. Likewise,
 a passing printed assertion alone does not prove all normalization obligations
 resolved: unknown numeric sizes and subscribed open tails remain symbolic.
 
 The complete fixture status and input hashes are recorded in
 [language-compatibility-status.json](language-compatibility-status.json).
-Detailed logs for this checkpoint are in `/tmp/p4-field-cross-final-default/`.
+Detailed logs for this checkpoint are in `/tmp/p4-canonical-expectations-final/`.
 
 ## Remaining work
 
