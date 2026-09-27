@@ -237,13 +237,14 @@ struct GraphTypeFacts {
     me int: overlay <- -1
     me bool: hasSize <- false
     me bool: explicitSize <- false
+    me bool: timelike <- false  // Positive list meaning; false makes no temporal assertion.
     me FlexNum: size
     me bool: hasValue <- false
     me FlexNum: number
     me string: text
     me bool: same(me GraphTypeFacts: other) <- {
         return(valid==other.valid and overlay==other.overlay and hasSize==other.hasSize and
-               explicitSize==other.explicitSize and
+               explicitSize==other.explicitSize and timelike==other.timelike and
                (!hasSize or size==other.size) and hasValue==other.hasValue and
                (!hasValue or (number==other.number and text==other.text)))
     }
@@ -252,6 +253,7 @@ struct GraphTypeFacts {
         if(overlay>=0 and other.overlay>=0 and overlay!=other.overlay){return(false)}
         if(hasSize and other.hasSize and size!=other.size){return(false)}
         if(hasValue and other.hasValue and (number!=other.number or text!=other.text)){return(false)}
+        timelike <- timelike or other.timelike
         explicitSize <- explicitSize or other.explicitSize
         if(other.overlay>=0){overlay <- other.overlay}
         if(other.hasSize){hasSize <- true; size <- other.size}
@@ -260,7 +262,7 @@ struct GraphTypeFacts {
         return(true)
     }
     me bool: accepts(me GraphTypeFacts: actual) <- {
-        return(actual.valid and (overlay<0 or overlay==actual.overlay) and
+        return(actual.valid and (!timelike or actual.timelike) and (overlay<0 or overlay==actual.overlay) and
                (!hasSize or (actual.hasSize and actual.size==size)) and
                (!hasValue or (actual.hasValue and actual.number==number and actual.text==text)))
     }
@@ -363,7 +365,7 @@ struct ProteusGraphAccess {
     // This does not admit prefixed definition bodies to the compiler.
     me bool: templatePrefixList(our POV: pov) <- {
         return(literalList(pov) and definitionOrderedCandidate(pov) and
-               !pov!.pItem!.value!.timelike and pov!.pItem!.value!.tailUnfinished and
+               pov!.pItem!.value!.tailUnfinished and
                pov!.pItem!.value!.listSpec!=NULL and
                pov!.pItem!.value!.sizeMode!=fromContext and listExtent(pov)!=-2)
     }
@@ -496,6 +498,7 @@ struct ProteusGraphAccess {
                 pov!.pItem!.value!.sizeMode==fromContext or
                 pov!.pItem!.infSize!.overlayType!=NUM or hasArgument(pov)){return(facts)}
         facts.valid <- true
+        facts.timelike <- pov!.pItem!.value!.overlayType==LST and pov!.pItem!.value!.timelike
         facts.explicitSize <- pov!.pItem!.value!.sizeMode==fromGiven
         if(!unknownOverlay(pov)){facts.overlay <- pov!.pItem!.value!.overlayType}
         facts.hasSize <- pov!.pItem!.infSize!.evalMode==emLiteral
@@ -520,6 +523,10 @@ struct ProteusGraphAccess {
         if(actual.overlay<0 and required.overlay>=0){
             target!.pItem!.value!.overlayType <- required.overlay
             target!.pItem!.viewMode <- vmOverlay
+            changed <- true
+        }
+        if(required.timelike and !actual.timelike){
+            target!.pItem!.value!.timelike <- true
             changed <- true
         }
         if(!actual.hasSize and required.hasSize){
@@ -587,7 +594,6 @@ struct ProteusGraphAccess {
     // list representations will advertise their own edges in later slices.
     me bool: physicalList(our POV: pov) <- {
         return(literalList(pov) and (pov!.pItem!.value!.listSpec==NULL or !pov!.pItem!.value!.tailUnfinished) and
-               !pov!.pItem!.value!.timelike and
                (pov!.pItem!.streamState==parseDone or pov!.pItem!.streamState==notParsing))
     }
     // Read-only evidence from a parser-owned list. Its unfinished member and
@@ -774,6 +780,9 @@ struct ProteusGraphAccess {
                 source!.pItem!.infSize!.evalMode==emLiteral
         me bool: copyList <- (demand==2 or demand==3) and adoptableList(target) and
                 spanList(source) and orderedList(source)
+        me bool: copyTemporal <- (demand==2 or demand==3) and
+                source!.pItem!.value!.overlayType==LST and source!.pItem!.value!.timelike and
+                !target!.pItem!.value!.timelike
         me bool: copyNominal <- (demand==2 or demand==3) and unknownOverlay(target) and
                 target!.pItem!.type==NULL and source!.pItem!.type!=NULL
         me bool: copyType <- (demand==2 or demand==3) and
@@ -809,7 +818,8 @@ struct ProteusGraphAccess {
             target!.pItem!.viewMode <- vmOverlay
         }
         if(copyValue){target!.pItem!.value!.copyOverlayFrom(source!.pItem!.value, 0)}
-        if(copySize or copyType or copyValue or copyList or copyNominal){
+        if(copyTemporal){target!.pItem!.value!.timelike <- true}
+        if(copySize or copyType or copyValue or copyList or copyNominal or copyTemporal){
             if(explicitSize and target!.pItem!.value!.overlayType==NUM){target!.pItem!.value!.sizeMode <- fromGiven}
             target!.pItem!.isNormed <- false
             target!.workRevision <+- 1

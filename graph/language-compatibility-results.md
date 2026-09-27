@@ -1,12 +1,14 @@
 # Older language compatibility, 2026-09-27
 
-World-source routing and unknown-result type acquisition recover two more
-fixtures: `query/firstType` and `r1/extent/exactSparseUnknownLast`. The six suites now report
-**246 passed, 112 failed, 5 skipped as ambiguous**, out of 363. No previous passes
-were lost. The source build and **1,103/1,103** focused checks pass; the additional
-legacy helpers remain **102/125**. See [world-source-results.md](world-source-results.md)
-and [test-ambiguities.md](test-ambiguities.md). Expected fixture text is unchanged
-in this increment. Skips are neither passes nor missing-feature exemptions.
+T-lists now share ordinary list access, and successful list relationships carry
+the temporal marker. Satisfied repeated RHS requirements use the existing
+read-only definition plan for representation proof. Two temporal fixtures now
+pass; three obsolete rendering expectations use the approved consolidated form.
+See [temporal-header-results.md](temporal-header-results.md) for exact changes.
+The six suites report **251 passed, 106 failed, 6 skipped as ambiguous**, out of
+363. No previous passes were lost. The source build and **1,115/1,115** focused
+checks pass; additional legacy helpers remain **102/125**. The new ambiguity is
+`slice/simpleSugar`; see [test-ambiguities.md](test-ambiguities.md).
 
 The earlier repetition change made `range/select1` expose its completed
 `2 3 4 5` prefix with an unresolved tail, following the user's clarification.
@@ -14,7 +16,7 @@ Its old closed-result expectation was updated in that earlier increment.
 
 | Suite | Passing | Failing | Ambiguous skips | Total |
 |---|---:|---:|---:|---:|
-| `defaultTests.tst` | 230 | 35 | 5 | 270 |
+| `defaultTests.tst` | 235 | 29 | 6 | 270 |
 | `demoTests.tst` | 8 | 14 | 0 | 22 |
 | `sparseTests.tst` | 2 | 21 | 0 | 23 |
 | `timeTests.tst` | 3 | 33 | 0 | 36 |

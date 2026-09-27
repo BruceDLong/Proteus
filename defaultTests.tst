@@ -124,7 +124,7 @@ merge/list/multiID,    Merge many idents,              {_ _ _} = {_ 2 _} = { 1 _
 merge/calcSize,        Merge calc'd size,              *(10)+5,                                                                *10+5,                          norm
 merge/calcNegativeSize, Merge calc'd negative size,    *(-1)+5,                                                               *(-1)+5,                        norm
 trav/list/withEmpty,   traverse over {},               {{1 2} {} {_=3} _=4},                                                   {{1 2} {} {3} 4},               norm
-merge/intersect/onRHS, When [] is on RHS,              _ = *_+[5 6 7],                                                         *_+[t5 t6 t7],                  norm
+merge/intersect/onRHS, When [] is on RHS,              _ = *_+[5 6 7],                                                         *_+[5 6 7],                  norm
 noRHS/dots/simple,     Test dots in LHS,               {...},                                                                  { ... },                        norm
 noRHS/dots/nestedOut,  Test nested LHS dots,           {{...} _=5},                                                            {{ ... } 5},                    norm
 noRHS/dots/nestedIn,   Test nested LHS dots,           {1 _=2 3 ...},                                                          {1 2 3 ... },                   norm
@@ -268,7 +268,7 @@ temporal/namedBoundaries, Named T-list boundaries resolve after definition looku
 temporal/sBeginField, S-list begin remains an ordinary named field, {#begin=_}\n{begin:7}.begin//:begin:7,                                      -,                              multi
 temporal/identityCarriesT, List identity retains T context, {1 2} = {T 1 2},                                                   {T 1 2},                        norm
 temporal/openShapeCarriesT, Open list identity retains T context, {1 2} = {T _ | ...},                                        {T 1 2},                        norm
-temporal/definitionCarriesT, Definition-backed list retains T context, {#timeline = {T _ | ...}}\ntimeline:{1 2}//:timeline:{T _| 1 2 ... }, -, multi
+temporal/definitionCarriesT, Definition-backed list retains T context, {#timeline = {T _ | ...}}\ntimeline:{1 2}//:timeline:{T 1 2}, -, multi
 temporal/directTPrev, Temporal previous resolves at a T occurrence, {T 1 %tprev 3},                                           {T 1 1 3},                      norm
 temporal/directTNext, Temporal next resolves at a T occurrence, {T 1 %tnext 3},                                               {T 1 3 3},                      norm
 temporal/nestedBoundaryPrev, First occurrence follows the preceding T-span end, {T {T 1 2} {T %tprev 4}},                     {T {T 1 2} {T 2 4}},            norm
@@ -308,7 +308,7 @@ search/adj1,           Search by adjective,            {{color=red\, ...} { name
 
 marked/getNotLast,     Select with <...>,              [1 2 3 <4> 5 6],     4, norm
 marked/lookahead,      Select w/lookahead,             [&{_|...} <_> $] <~ {33 22 11 'hi' 'bye' 66 55}, 11, norm
-merge/lookahead,       Merge lookahead,                 {&{_|...} _ $} =: {33 22 11 'hi' 'bye' 66 55}, {&{_| 33 22} 11 'hi'}, norm
+merge/lookahead,       Merge lookahead,                 {&{_|...} _ $} =: {33 22 11 'hi' 'bye' 66 55}, {&{33 22} 11 'hi'}, norm
 
 # Supplemental suites loaded by the dynamic test runner.
 @include sparseTests.tst

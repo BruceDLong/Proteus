@@ -13,7 +13,7 @@ class RHSRepresentation {
             [&](const auto& at) {
                 return at.phase != ListPhase::enter ||
                     (access_->physicalList(at.node) && access_->orderedList(at.node) &&
-                     !access_->memberTemplate(at.node) && access_->inputError(at.node).empty() &&
+                     (at.node==node || !access_->memberTemplate(at.node)) && access_->inputError(at.node).empty() &&
                      (!source || (!access_->hasTypeRequirements(at.node) && POVDescription(at.node).work().empty())));
             }, [](const POVNode& member) { return member; });
     }
@@ -39,8 +39,18 @@ public:
                 (access_->hasTypeRequirements(right) &&
                  !(definitions && access_->scalarTypeShape(right) && definitions->satisfied(right) &&
                    compareNominal(*definitions,right,left)==ScalarMatch::yes)) ||
-                access_->occurrenceOwner(right) || access_->memberTemplate(right) ||
+                access_->occurrenceOwner(right) ||
                 (!access_->scalarCandidate(right) && !access_->literalList(right))) return;
+            // A repeated requirement is redundant only when the target itself
+            // satisfies its compiled meaning. The source having checked its own
+            // members is not evidence about the target's members.
+            if (access_->memberTemplate(right)) {
+                auto proof=definitions ? definitions->saved(right) : ProteusDefinitions::Certificate{};
+                if(!proof || !proof->requirement->repeated) return;
+                ProteusDefinitionPlan meaning(access_,left,proof->requirement);
+                work.visits=addCost(work.visits,meaning.work.visits);
+                if(!meaning.supported || !meaning.satisfied()) return;
+            }
             auto actual = access_->typeFacts(left), required = access_->typeFacts(right);
             if (!required.valid || !required.accepts(actual)) return;
             // Rendering can suppress partial facts. Removing pending work

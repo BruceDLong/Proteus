@@ -41,3 +41,19 @@ settled rule that matching structure alone does not establish type identity.
 The skips cover this first ambiguous lookup; they do not claim the later nested
 selection or forced-write operations already work. A focused test retains the
 current pending behavior for `{76543 b:*10+2}.b` through a world source.
+
+## `defaultTests.tst:slice/simpleSugar`
+
+Input: `{1 2 3 4 5 6 7}@[3:5]`. Expected: `5`.
+
+The original lowerer describes a zero-based prefix count followed by the spec.
+That puts the spec against `4`, not `5`. Proteus3 returns `5`, but also returns
+`99` for `@[3:99]` and `@[0:99]`, and `5` for the out-of-range `@[99:5]`.
+Those probes all passed on the current Proteus3 binary; the original fixture
+therefore does not establish that a source position was selected. The graph
+currently checks the selected occurrence and yields an empty oneOf on mismatch.
+
+Question: should a scalar spec constrain the item after the boundary, search
+onward, or denote a different operation? What should a proved nonmatch return?
+Keep the original fixture unchanged and skip it while the contract is clarified.
+Reference probes: `/tmp/p4-scalar-slice-reference.tst` and `.log`.

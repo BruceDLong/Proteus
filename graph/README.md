@@ -49,6 +49,11 @@ Definition applications must retain their original context binding; implementing
 that retention remains separate from ordinary live-source lookup. See
 [world-source-results.md](world-source-results.md).
 
+T-list headers now share ordinary list access and preserve their temporal
+meaning through list identities and definition requirements. See
+[temporal-header-results.md](temporal-header-results.md). Temporal navigation
+and context-state modeling are separate, still unfinished capabilities.
+
 ## Start here
 
 ```text

@@ -79,6 +79,11 @@ been reopened.
    graph? Future fees or external-data costs can extend route costing later;
    graph-owned cost calculation and cheaper-route selection are already decided.
 
+10. **Selecting definitions themselves.** Declarations currently publish meaning
+    when encountered during a field walk and are not ordinary value candidates.
+    Later, searches must be able to refer to definitions themselves. Which goal
+    expresses that request while keeping ordinary value selection distinct?
+
 ## Decisions already made
 
 - Preserve a rejected RHS and its context: it may match something else later.
@@ -123,11 +128,6 @@ been reopened.
 - Cost chooses routes and limits unreasonable exploration. It is not an
   unconditional reason to abort a normalization that can still return a useful
   symbolic or subscribed result.
-
-10. **Selecting definitions themselves.** Declarations currently publish meaning
-    when encountered during a field walk and are not ordinary value candidates.
-    Later, searches must be able to refer to definitions themselves. Which goal
-    expresses that request while keeping ordinary value selection distinct?
 
 ## Implementation gaps are tracked separately
 

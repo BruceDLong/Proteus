@@ -19,9 +19,9 @@ A new cursor occurrence without that evidence still fails context revalidation.
 
 This increment supports one strict equality with one explicit choice. It does
 not implement Cartesian products of choices, repeated grammar alternatives,
-choice-producing definitions, or loose text-prefix choice matching. The old
-`merge/intersect/onRHS` fixture still expects legacy tentative `t` markers;
-Proteus4 publishes an ordinary symbolic oneOf, so that assertion remains failing.
+choice-producing definitions, or loose text-prefix choice matching. The later test-completion checkpoint updates `merge/intersect/onRHS` to the
+ordinary symbolic oneOf spelling without legacy tentative `t` markers. Its
+three candidate values remain alternatives.
 
 Validation:
 

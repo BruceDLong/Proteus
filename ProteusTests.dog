@@ -7,6 +7,18 @@ TestsToRun = `
     unit/graphTypeCopy/namedTarget
     unit/graphTypeCopy/intersection
     unit/graphTypeCopy/definitionEvidence
+    unit/graphTemporalHeader/literal
+    unit/graphTemporalHeader/memberConstraint
+    unit/graphTemporalHeader/identityMarker
+    unit/graphTemporalHeader/openHeader
+    unit/graphTemporalHeader/unknownValue
+    unit/graphTemporalHeader/definitionMarker
+    unit/graphTemporalHeader/nestedCounts
+    unit/graphTemporalHeader/positional
+    unit/graphTemporalHeader/mismatch
+    unit/graphTemporalHeader/lateMember
+    unit/graphTemporalHeader/sparseOccurrence
+    unit/graphTemporalHeader/sizeOnlyNoMarker
     unit/graphWorld/field
     unit/graphWorld/whole
     unit/graphWorld/lateSource
@@ -12073,6 +12085,76 @@ struct GLOBAL {
     }%>
     void: unitTestGraphTypeCopy(me string: testName, me int: caseID) <- {
         me bool: passed <- graphTypeCopyCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHTEMPORALHEADER(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphTemporalHeader(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHTEMPORALHEADER(unit/graphTemporalHeader/literal, 0)
+    GRAPHTEMPORALHEADER(unit/graphTemporalHeader/memberConstraint, 1)
+    GRAPHTEMPORALHEADER(unit/graphTemporalHeader/identityMarker, 2)
+    GRAPHTEMPORALHEADER(unit/graphTemporalHeader/openHeader, 3)
+    GRAPHTEMPORALHEADER(unit/graphTemporalHeader/unknownValue, 4)
+    GRAPHTEMPORALHEADER(unit/graphTemporalHeader/definitionMarker, 5)
+    GRAPHTEMPORALHEADER(unit/graphTemporalHeader/nestedCounts, 6)
+    GRAPHTEMPORALHEADER(unit/graphTemporalHeader/positional, 7)
+    GRAPHTEMPORALHEADER(unit/graphTemporalHeader/mismatch, 8)
+    GRAPHTEMPORALHEADER(unit/graphTemporalHeader/lateMember, 9)
+    GRAPHTEMPORALHEADER(unit/graphTemporalHeader/sparseOccurrence, 10)
+    GRAPHTEMPORALHEADER(unit/graphTemporalHeader/sizeOnlyNoMarker, 11)
+
+    me bool: graphTemporalHeaderCase(me string: testName, me int: caseID) <- <%{
+        GraphNormalizer normalizer;normalizer.init();
+        auto declarations=graphParsed(testName,"{#timeline={T _|...}}");
+        auto declared=normalizer.normalize(declarations);declared.waitForCompletion();
+        const char* inputs[]={"{T *10+1 *10+2}","{T *10+_=*10+1 *10+2}",
+            "{*10+1 *10+2}={T *10+1 *10+2}","{*10+1 *10+2}={T ...}",
+            "?={T *10+1 *10+2}","timeline:{*10+1 *10+2}",
+            "{T {T *10+1} *10+2}","{T *10+1 *10+2}@[2]",
+            "{*10+1 *10+2}={T *10+1 *10+3}","{T *10+_ *10+2}",
+            "*1000000000+{T *10+2|...}","{*10+1 *10+2}={T *10+1 *10+2}"};
+        auto root=graphParsed(testName,inputs[caseID]);
+        auto source=root->pItem->wrkList.empty() ? nullptr : root->pItem->wrkList.front();
+        auto before=source ? toString(source->pItem.get()) : "";
+        normalizer.runtime.update([&] {normalizer.access->bind(root);});
+        auto handle=normalizer.runtime.normalize({root,caseID==11 ? 1 : 3,0});handle.waitForCompletion();
+        bool passed=!handle.status().failed;
+        if(caseID==8) passed=handle.status().failed && source &&
+            !normalizer.access->registry->areIdentical(root,source) && toString(source->pItem.get())==before;
+        else if(caseID==7) passed &= toString(root->pItem.get())=="*10+2";
+        else if(caseID==11) passed &= !getFlagBit(root->pItem->value->flags,infonState::timelike);
+        else {
+            passed &= getFlagBit(root->pItem->value->flags,infonState::timelike);
+            if(caseID==10) {
+                passed &= root->pItem->value->items.isEmpty();
+                auto lookup=normalizer.findItem(root,999999999);lookup.waitForCompletion();
+                auto selected=lookup.result();
+                passed &= !lookup.status().failed && selected && toString(selected->pItem.get())=="*10+2" && root->pItem->value->items.isEmpty();
+                lookup.cancel();
+            } else {
+                passed &= root->pItem->infSize->num==2;
+                if(caseID==9) {
+                    passed &= handle.status().withSubscribers;
+                    normalizer.addRHS(root->pItem->value->items.head,graphParsed(testName,"*10+1"));
+                    handle.waitForCompletion();
+                }
+                passed &= getFlagBit(root->pItem->flags,infonView::isNormed);
+            }
+        }
+        if(caseID!=8 && caseID!=11) {
+            auto text=toString(root->pItem.get());auto work=root->pItem->wrkList.size();
+            auto again=normalizer.normalize(root);again.waitForCompletion();
+            passed &= !again.status().failed && toString(root->pItem.get())==text && root->pItem->wrkList.size()<=work;
+            again.cancel();
+        }
+        if(!passed) std::cout << "Temporal header " << caseID << ": " << toString(root->pItem.get()) << " " << handle.status().error << "\n";
+        handle.cancel();declared.cancel();normalizer.close();return passed;
+    }%>
+    void: unitTestGraphTemporalHeader(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphTemporalHeaderCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)
