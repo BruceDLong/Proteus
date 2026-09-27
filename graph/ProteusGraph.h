@@ -1,5 +1,6 @@
 #pragma once
 #include "ListStructure.h"
+#include "NumericRange.h"
 #include <set>
 
 // Included after the CodeDog declarations. Domain knowledge is implemented in
@@ -8,6 +9,7 @@
 namespace proteus4 {
 using POVNode = std::shared_ptr<POV>;
 #include "POVDescription.h"
+#include "NumericRangeAccess.h"
 enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               itemAt = 4, physicalItemAt = 5,
               listContents = 6, listMember = 7, listEnd = 8,
@@ -18,7 +20,7 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectionExtentMember = 20, selectionExtentEnd = 21,
               typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27,
               selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31,
-              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62 };
+              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62, numericCorrespondence = 63 };
 
 inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
     auto phase = query.kind == correspondenceEnter ? ListPhase::enter :
@@ -207,6 +209,7 @@ public:
     }
 };
 
+#include "NumericRelation.h"
 #include "SequenceCorrespondence.h"
 
 class ProteusGoal : public GoalSpec<POVNode> {
@@ -644,6 +647,8 @@ public:
     void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); definitions_->prune(); }
     std::vector<std::function<void()>> takeEffects() override { return completion_->takeEffects(); }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
+        if (query.kind == numericCorrespondence)
+            return std::make_shared<ProteusNumericGoal>(query,access_,completion_);
         if (query.kind == projectField)
             return std::make_shared<ProteusProjectionGoal>(query, access_, definitions_);
         if (query.kind == selectField || query.kind == selectPosition || query.kind == selectSelf || query.kind == filterChoice)
@@ -698,7 +703,7 @@ private:
         Expansion<POVNode> result;
         auto node = query.node;
         POVDescription description(node, access_->registry.get());
-        if (query.kind == assessRepresentation || query.kind == groupedList || query.kind == projectField) return result;
+        if (query.kind == assessRepresentation || query.kind == groupedList || query.kind == projectField || query.kind == numericCorrespondence) return result;
         if (query.kind == typeRequirements || query.kind == compileTypeRequirements) {
             if (definitions_->required(node) && !definitions_->saved(node))
                 result.edges.push_back(direct("inspect type definitions", {node, definitionEnter, 0, node}));
@@ -1043,6 +1048,12 @@ private:
                     for (int slot : {1, 2}) if (access_->hasConcat(source, slot))
                         result.refinements.push_back({{source, concatField, slot}, {1, 0},
                             "resolve qualified RHS expression", false});
+                if (demand != sizeOnly && NumericRelation(*access_,node,source).supported) {
+                    result.refinements.push_back({{node,numericCorrespondence,0,source},{1,0},"match numeric range",false});
+                    // Source facts may themselves arrive through ordinary work.
+                    if(!source->looseType()) result.refinements.push_back({{source,sizeAndValue,0},{1,0},"refine numeric RHS",true});
+                    continue;
+                }
                 if (relation.isWork() && demand != sizeOnly &&
                     SequenceCorrespondence::relationship(*access_, node, source)) {
                     result.refinements.push_back({{node, sequenceCorrespondence, 0, source}, {1, 0},

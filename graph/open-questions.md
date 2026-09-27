@@ -62,6 +62,12 @@ been reopened.
    graph? Future fees or external-data costs can extend route costing later;
    graph-owned cost calculation and cheaper-route selection are already decided.
 
+10. **Range-valued matching results.** When an input `*3+_` matches a wider
+   range predicate `*4+_`, should the result retain the input's narrower domain?
+   The old `range/select3` assertion expects the wider `*4+_`. The original
+   assertion is retained pending this decision; literal containment and strict
+   interval intersection are implemented independently.
+
 ## Decisions already made
 
 - A completed field search with no matches returns a closed empty oneOf

@@ -128,7 +128,9 @@ public:
             if (!readable(q.node, q.context.size() == stackStart(q), true)) return out;
             // Composite exclusion needs a proof for the entire subpattern.
             // The scalar predicate rule must not negate individual children.
-            if (inverted(q.node) && !access_->scalarTypeShape(q.node)) return out;
+            NumericRangeAccess numeric(*access_);auto range=numeric.read(q.node,true);
+            if(access_->hasTypeRequirements(q.node)) range.constraint=false;
+            if (inverted(q.node) && !access_->scalarTypeShape(q.node) && !range.bounds.valid) return out;
             if (sequence(q.node) && !inputIdentity(*access_,q)) {
                 if ((!access_->physicalList(body) && !access_->unreferencedTemplateSpan(body)) ||
                     !access_->orderedList(body) || access_->listExtent(body) == -2) return out;
@@ -145,18 +147,28 @@ public:
                 out.edges.push_back(edge("enter matching list", std::move(next)));
             } else {
                 auto facts = definitions_->scalarFacts(q.node,true);
-                if (!facts.valid) return out;
+                if (!facts.valid && !range.bounds.valid) return out;
                 if (!textInput) {
                     auto item=q.context[1];
                     if (!item || !readable(item,false)) return out;
                     auto supplied=definitions_->scalarFacts(item);
-                    if (!supplied.valid) return out;
+                    auto actualRange=numeric.read(item);
+                    if (!supplied.valid && !actualRange.bounds.valid) return out;
                     auto nominal=compareNominal(*definitions_,q.node,item);
-                    if (inverted(q.node)) {
+                    if(range.bounds.valid && range.constraint) {
+                        // Symbolic input publication has a separate open design
+                        // question. Do not widen it to the pattern on acceptance.
+                        if(actualRange.bounds.valid && !actualRange.bounds.point) return out;
+                        auto match=compareNumeric(range,actualRange,supplied);
+                        if(inverted(q.node) ? (nominal!=ScalarMatch::no && match!=ScalarMatch::no) :
+                            (nominal==ScalarMatch::no || match!=ScalarMatch::yes)) return out;
+                    } else if (inverted(q.node)) {
                         if (nominal!=ScalarMatch::no && compareScalar(facts, supplied)!=ScalarMatch::no) return out;
                     } else if (nominal==ScalarMatch::no || (!supplied.hasValue && !access_->literalList(item)) || !facts.combine(supplied)) return out;
                     auto next=q; next.kind=sequenceAtomMatched; ++next.argument; next.related.reset(); next.coordinates.push_back(q.argument);
-                    out.edges.push_back(edge("matched input member",nextInput(std::move(next)))); return out;
+                    auto matched=edge("matched input member",nextInput(std::move(next)));
+                    if(range.bounds.valid && range.constraint) matched.work.visits=addCost(matched.work.visits,numeric.work.visits);
+                    out.edges.push_back(std::move(matched)); return out;
                 }
                 if ((facts.overlay>=0 && facts.overlay!=infonState::STR) ||
                     (!facts.hasValue && !facts.hasSize && q.context.size()!=stackStart(q))) return out;
@@ -255,6 +267,7 @@ public:
         std::map<POVNode, std::int64_t> extents;
         std::map<DefinitionSpec,POVNode> sources;
         std::map<DefinitionSpec,ProteusDefinitions::Certificate> meanings;
+        Cost numericVisits=0;
         // The accepted path is the proof. Compile just that path into existing
         // finite-list Sets; rejected candidates never reach this mutation plan.
         for (const auto& q : visit.path) {
@@ -288,7 +301,10 @@ public:
                         if (auto body = definitions_->repeatedBody(frame.node)) templates_.push_back({frame.node, body});
                 } else if (getModeBits(request.related->pItem->value->flags,infonState::overlayType)==infonState::LST) {
                     auto supplied=definitions_->scalarFacts(frame.source);
-                    if (getFlagBit(frame.node->pItem->flags,infonView::invertMatch)) spec->facts=supplied;
+                    NumericRangeAccess numeric(*access_);auto range=numeric.read(frame.node,true);
+                    numericVisits=addCost(numericVisits,numeric.work.visits);
+                    if(access_->hasTypeRequirements(frame.node)) range.constraint=false;
+                    if (getFlagBit(frame.node->pItem->flags,infonView::invertMatch) || (range.bounds.valid && range.constraint)) spec->facts=supplied;
                     else spec->facts.combine(supplied);
                     if (spec->label.empty()) {
                         auto types=definitions_->names(frame.source);
@@ -324,6 +340,7 @@ public:
         catch (const DefinitionConflict&) { return {}; } // this candidate supplies no Set
 
         if (!plan->supported) return {};
+        plan->work.visits=addCost(plan->work.visits,numericVisits);
         verified_ = plan->satisfied();
         std::vector<ProteusDefinitionPlan::Place> counted;
         std::vector<std::pair<ProteusDefinitionPlan::Place,POVNode>> identities;

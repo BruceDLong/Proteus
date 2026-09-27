@@ -9,6 +9,16 @@ inline ScalarMatch compareScalar(GraphTypeFacts required, const GraphTypeFacts& 
     return required.combine(actual) ? ScalarMatch::unknown : ScalarMatch::no;
 }
 
+// A predicate asks whether all available numeric possibilities satisfy it.
+// A partial overlap is unknown, not proof of exclusion.
+inline ScalarMatch compareNumeric(const NumericView& required,const NumericView& actual,GraphTypeFacts actualFacts={}) {
+    if(!actual.bounds.valid && actualFacts.valid && actualFacts.overlay>=0 && actualFacts.overlay!=infonState::NUM) return ScalarMatch::no;
+    if(!required.bounds.valid || !actual.bounds.valid) return ScalarMatch::unknown;
+    if(required.bounds.empty || actual.bounds.empty) return ScalarMatch::no;
+    if(required.bounds.contains(actual.bounds)) return ScalarMatch::yes;
+    return required.bounds.intersect(actual.bounds).empty ? ScalarMatch::no : ScalarMatch::unknown;
+}
+
 // Nominal compatibility follows Proteus3's primary/added-type rule. Explicit
 // definition aliases extend those type sets; a shared structural shape or a
 // shared ancestor alone does not make two sibling types interchangeable.

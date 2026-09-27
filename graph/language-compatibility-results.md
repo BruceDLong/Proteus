@@ -1,13 +1,15 @@
 # Older language compatibility, 2026-09-26
 
-The default suite passes **194/270** fixtures after the user-approved canonical
-expectations for `merge/dots/align3` and `align4`. Those two assertions now pass;
-all other fixtures retain their prior status. There were no crashes, timeouts,
-or incomplete summaries. This update changes expected printing only.
+The default suite passes **201/270** fixtures after canonical alignment
+expectations and shared numeric range semantics. Seven former failures now pass:
+`align2a`, `align2b`, direct numeric unknown/contained-value matching,
+`range/select2`, `range/concat1`, and `range/dot`. No previous pass was lost.
+There were no crashes, timeouts, or incomplete summaries. The source build and
+968/968 focused graph/parser checks also passed.
 
 | Suite | Passing | Failing | Total |
 |---|---:|---:|---:|
-| `defaultTests.tst` | 194 | 76 | 270 |
+| `defaultTests.tst` | 201 | 69 | 270 |
 | `demoTests.tst` | 1 | 21 | 22 |
 | `sparseTests.tst` | 1 | 22 | 23 |
 | `timeTests.tst` | 0 | 36 | 36 |
@@ -21,6 +23,11 @@ This table is a fixture inventory, not a measure of language completeness, and
 it does not include all compiled legacy unit tests.
 
 ## Latest behavior
+
+- Direct numeric matching, interval intersection, and range predicates share
+  exact half-open bounds. See [numeric-range-results.md](numeric-range-results.md).
+- `align2a` and `align2b` now use the same shorter canonical spelling already
+  approved for `align3` and `align4`. Only their expected text changed.
 
 - Missing scalar fields can acquire facts from the corresponding parent-definition
   field without expanding omitted parts. See
@@ -45,16 +52,18 @@ See [choice-constraint-results.md](choice-constraint-results.md),
 [partial-type-results.md](partial-type-results.md). Earlier checkpoints remain
 in the per-feature reports linked from [README.md](README.md).
 
-The exact original assertions for `merge/dots/align2a` and `align2b` still fail
-because they expect the older nested `&{ ... }` spelling. Both spellings parse
-to the current canonical form in focused round-trip checks. They are still
-counted as failures; those two fixtures remain unchanged. Likewise,
-a passing printed assertion alone does not prove all normalization obligations
+Three older range cases remain failing. `range/select1` needs general
+publication of completed repetitions when a later attempted repetition is
+incomplete. `range/select3` awaits the narrower-input decision in
+[open-questions.md](open-questions.md). `merge/directRange/endReject` rejects the
+endpoint but retains the RHS, whereas the old assertion expects it removed.
+
+A passing printed assertion alone does not prove all normalization obligations
 resolved: unknown numeric sizes and subscribed open tails remain symbolic.
 
 The complete fixture status and input hashes are recorded in
 [language-compatibility-status.json](language-compatibility-status.json).
-Detailed logs for this checkpoint are in `/tmp/p4-canonical-expectations-final/`.
+Detailed logs for this checkpoint are in `/tmp/p4-range-final-audit/`.
 
 ## Remaining work
 

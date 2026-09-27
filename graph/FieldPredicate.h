@@ -9,6 +9,7 @@ class FieldPredicate {
     Expansion<POVNode>& out_;
     std::set<std::shared_ptr<infonView>> active_;
     bool conflict_=false;
+    std::map<DefinitionSpec,NumericView> numbers_;
     bool readable(const POVNode& node, bool predicate) {
         if (!access_->plainStructure(node,false,false,false,false,false,false) ||
             (!predicate && getFlagBit(node->pItem->flags,infonView::invertMatch))) return false;
@@ -64,7 +65,12 @@ class FieldPredicate {
         if ((!predicate || !getFlagBit(node->pItem->flags,infonView::invertMatch)) && !access_->literalList(node) &&
             (!access_->hasTypeRequirements(node) || !POVDescription(node).work().empty() || !canRead))
             out_.refinements.push_back({{node,sizeAndValue,0,{},refinementContext},{1,0},"refine field candidate",true});
-        if (!canRead || !specification->facts.valid) return {};
+        if (!canRead) return {};
+        NumericRangeAccess numeric(*access_);auto number=numeric.read(node,predicate);
+        work.visits=addCost(work.visits,numeric.work.visits);
+        if(access_->hasTypeRequirements(node)) number.constraint=false;
+        if(number.bounds.valid) {numbers_[specification]=number;specification->facts=number.facts;}
+        if (!specification->facts.valid) return {};
         ProteusDefinitions::Certificate meaning;
         if (useMeaning && access_->hasTypeRequirements(node) && !definitions_->optional(node)) {
             meaning=definitions_->saved(node);
@@ -122,7 +128,10 @@ class FieldPredicate {
             auto pair=pending.back();pending.pop_back();++work.visits;
             if (!pair.first || !pair.second) {unknown=true;continue;}
             auto typeMatch=nominal(pair.first,pair.second);
-            auto match=compareScalar(pair.first->facts,pair.second->facts);
+            auto requiredNumber=numbers_.find(pair.first),actualNumber=numbers_.find(pair.second);
+            bool range=requiredNumber!=numbers_.end() && requiredNumber->second.constraint;
+            auto match=range ? compareNumeric(requiredNumber->second,actualNumber==numbers_.end() ? NumericView{} : actualNumber->second,pair.second->facts) :
+                              compareScalar(pair.first->facts,pair.second->facts);
             if (typeMatch==ScalarMatch::no || match==ScalarMatch::no) return ScalarMatch::no;
             unknown |= typeMatch==ScalarMatch::unknown || match==ScalarMatch::unknown;
             if (!pair.first->list) continue;
