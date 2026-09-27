@@ -64,6 +64,11 @@ been reopened.
 
 ## Decisions already made
 
+- Completed repeated `<~` selections are published while an unfinished
+  repetition remains open and subscribed. A loaded source end alone does not
+  supply its missing selection or final result size. The broader provisional
+  parse/consumer/retraction questions above remain open.
+
 - `=` and `==` require matching ends at the current pair; `=:` and `==:`
   permit unequal ends. The colon applies at that pair, while `==` propagates
   loose matching into members. A partial numeric match keeps the target size;

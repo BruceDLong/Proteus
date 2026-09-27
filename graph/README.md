@@ -800,3 +800,14 @@ priced span Set handles member creation; source member links are never aliased.
   transitive unresolved RHSs, subscription resumption, creation cost exclusion,
   concatenation RHSs, and a billion-item extent with zero expanded members.
 - `git diff --check` passed. Full legacy suite not run.
+
+## Completed repeated selections
+
+Repeated `<~` injection can publish completed occurrences while retaining an
+unfinished final repetition. `{[_ _]|...}<~{1 2 3}` exposes `2` with an open
+result tail; later input can extend the same result POVs. The sequence goal uses
+existing boundary findings and the generic end-of-pass Set hook. Shared span
+access keeps the prefix visible to other RHS constraints. No result size is
+inferred from this partial proof. Parser-owned open input remains deferred.
+See [repetition-prefix-results.md](repetition-prefix-results.md) for lifecycle,
+ambiguity boundaries, and verification.

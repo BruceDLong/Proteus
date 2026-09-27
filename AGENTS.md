@@ -34,6 +34,10 @@ its matching alternatives as oneOf. Direct and repeated
 repeated-output example in graph/source-injection-results.md intentionally waits
 symbolically with a subscription until more information arrives. Unsized open
 root lists can acquire a known prefix while their unresolved tail stays symbolic.
+Completed repeated <~ results may publish while the unfinished repetition stays
+open and subscribed. Shared span access keeps those result members available to
+other RHS constraints. A prefix does not prove final size or whole correspondence.
+See graph/repetition-prefix-results.md; parser-owned open input remains deferred.
 Scalar exclusion predicates distinguish a known mismatch from missing information.
 Accepted list-valued input members retain their atomic identity on replay; do not
 reinterpret their copied values as more grammar. Composite/standalone exclusion,

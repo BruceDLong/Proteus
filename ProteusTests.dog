@@ -1,6 +1,17 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphRepeatPrefix/appendList
+    unit/graphRepeatPrefix/cancel
+    unit/graphRepeatPrefix/lateValue
+    unit/graphRepeatPrefix/appendText
+    unit/graphRepeatPrefix/appendRange
+    unit/graphRepeatPrefix/cost
+    unit/graphRepeatPrefix/openInputDeferred
+    unit/graphRepeatPrefix/enclosingConflict
+    unit/graphRepeatPrefix/competingPrefixes
+    unit/graphRepeatPrefix/commonPrefix
+    unit/graphRepeatPrefix/enclosingCompatible
     unit/graphNumericRange/direct
     unit/graphNumericRange/upperEndpoint
     unit/graphNumericRange/intersection
@@ -9279,7 +9290,16 @@ struct GLOBAL {
             passed &= handle.status().symbolicValues && !getFlagBit(root->pItem->flags,infonView::isNormed);
             if(caseID==3) passed &= getModeBits(body->value->items.head->pItem->value->flags,infonState::evalMode)==infonState::emUnknown;
             if(caseID==5 || caseID==21) passed &= handle.status().cancelled;
-            if(caseID>=12 && caseID!=22) passed &= root->pItem->value->items.isEmpty();
+            if(caseID==21) passed &= root->pItem->value->items.isEmpty();
+            if(caseID==12 || caseID==13 || caseID==19) {
+                auto first=root->pItem->value->items.head;
+                passed &= first && first->pItem->value->num==2 && handle.status().withSubscribers &&
+                    !root->pItem->wrkList.empty() && !root->pItem->workIsRepresented(root->pItem->wrkList.front());
+                if(caseID==19) passed &= first && first->next && first->next->pItem->value->num==4 &&
+                    !first->next->next && root->pItem->infSize->num==2;
+                else passed &= first && !first->next && normalizer.access->openTail(root) &&
+                    getModeBits(root->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown;
+            }
             if(caseID==22) {
                 // This case intentionally waits for further information. A
                 // wake-up without new facts must not choose a partition.
@@ -9373,7 +9393,12 @@ struct GLOBAL {
             handle.waitForCompletion();
         }
         if(caseID==3 || caseID==7 || caseID==8 || caseID==10 || caseID==13 || caseID==15 || caseID==17 || caseID==18) {
-            passed &= !handle.status().failed && handle.status().symbolicValues && root->pItem->value->items.isEmpty();
+            passed &= !handle.status().failed && handle.status().symbolicValues;
+            if(caseID==13) {
+                auto first=root->pItem->value->items.head;
+                passed &= first && !first->next && first->pItem->infSize->num==10 && first->pItem->value->num==4 &&
+                    normalizer.access->openTail(root) && !getFlagBit(root->pItem->flags,infonView::isNormed);
+            } else passed &= root->pItem->value->items.isEmpty();
             if(caseID==7) passed &= handle.status().cancelled;
             else passed &= handle.active() && handle.status().withSubscribers;
         } else {
@@ -11074,6 +11099,16 @@ struct GLOBAL {
         } else if(caseID==1 || caseID==13 || caseID==14 || caseID==18) {
             passed &= handle.status().symbolicValues && handle.status().withSubscribers && !getFlagBit(root->pItem->flags,infonView::isNormed);
             if(caseID==1 || caseID==13 || caseID==18) passed &= root->pItem->value==original && root->pItem->wrkList.size()==1;
+            if(caseID==13) {
+                auto member=root->pItem->value->items.head;
+                for(int value:{2,3,4,5}) {
+                    passed &= member && member->pItem->value->num==value;
+                    if(member) member=member->next;
+                }
+                passed &= !member && normalizer.access->openTail(root) &&
+                    getModeBits(root->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown &&
+                    !root->pItem->workIsRepresented(root->pItem->wrkList.front());
+            }
             if(pattern) passed &= toString(pattern.get())==patternText;
         } else if(caseID==11) {
             passed &= handle.status().symbolicValues && toString(root->pItem.get())==before;
@@ -11128,6 +11163,104 @@ struct GLOBAL {
     }%>
     void: unitTestGraphNumericRange(me string: testName, me int: caseID) <- {
         me bool: passed <- graphNumericRangeCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+// Completed <~ repetitions are useful before the source correspondence ends.
+#define GRAPHREPEATPREFIX(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphRepeatPrefix(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHREPEATPREFIX(unit/graphRepeatPrefix/appendList, 1)
+    GRAPHREPEATPREFIX(unit/graphRepeatPrefix/cancel, 2)
+    GRAPHREPEATPREFIX(unit/graphRepeatPrefix/lateValue, 3)
+    GRAPHREPEATPREFIX(unit/graphRepeatPrefix/appendText, 4)
+    GRAPHREPEATPREFIX(unit/graphRepeatPrefix/appendRange, 5)
+    GRAPHREPEATPREFIX(unit/graphRepeatPrefix/cost, 6)
+    GRAPHREPEATPREFIX(unit/graphRepeatPrefix/openInputDeferred, 7)
+    GRAPHREPEATPREFIX(unit/graphRepeatPrefix/enclosingConflict, 8)
+    GRAPHREPEATPREFIX(unit/graphRepeatPrefix/competingPrefixes, 9)
+    GRAPHREPEATPREFIX(unit/graphRepeatPrefix/commonPrefix, 10)
+    GRAPHREPEATPREFIX(unit/graphRepeatPrefix/enclosingCompatible, 11)
+
+    me bool: graphRepeatPrefixCase(me string: testName, me int: caseID) <- <%{
+        GraphNormalizer normalizer;normalizer.init();
+        std::string expression="{[_ _]|...}<~{1 2 3}", completed="{2 4}";
+        if(caseID==3) expression="{[_ _]|...}<~{1 2 3 _}";
+        if(caseID==4) {expression="{[*1+$ *1+$]|...}<~'ABC'";completed="{'B' 'D'}";}
+        if(caseID==5) {expression="{[&{!(*4+_ +2)|...} (*4+_ +2)]|...}<~{1 2 0 3 4 5 6 7}";completed="{2 3 4 5 2}";}
+        if(caseID==7) expression="{[_ _]|...}<~{1 2 3 ...}";
+        if(caseID==8) expression="{[_ _]|...}<~{1 2 3} = {9 ...}";
+        if(caseID==11) expression="{[_ _]|...}<~{1 2 3} = {2 ...}";
+        if(caseID==9) expression="{[{'A'|...} *2+$ 'Z']|...}<~'AAZZQ'";
+        if(caseID==10) expression="{[{'A'|...} *2+$ 'Z']|...}<~'XXZAAZZQ'";
+        auto root=graphParsed(testName,expression);
+        auto source=root->pItem->funcArgs;
+        auto spec=root->pItem->value->listSpec;
+        auto specText=toString(spec.get()),sourceText=toString(source.get());
+        auto handle=caseID==6 ? normalizer.normalizeWithCost(root,4) : normalizer.normalize(root);
+        handle.waitForCompletion();
+        bool passed=caseID==8 ? handle.status().failed : !handle.status().failed;
+        bool empty=caseID==6 || caseID==7 || caseID==9;
+        auto first=root->pItem->value->items.head;
+        if(caseID!=8) {
+            passed &= handle.status().symbolicValues && handle.status().withSubscribers && handle.active() &&
+                !getFlagBit(root->pItem->flags,infonView::isNormed) && normalizer.access->openTail(root) &&
+                getModeBits(root->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown;
+            if(empty) passed &= !first;
+            else if(caseID==10) passed &= first && !first->next && first->pItem->value->str=="Z";
+            else passed &= first && (caseID==4 ? first->pItem->value->str=="B" : first->pItem->value->num==2);
+        }
+        passed &= sourceText==toString(source.get()) && specText==toString(spec.get());
+        if(caseID==8) passed &= root->pItem->wrkList.size()==2 && !getFlagBit(root->pItem->flags,infonView::isNormed);
+        auto before=toString(root->pItem.get());
+        auto identities=normalizer.access->registry->identities.size();
+        normalizer.runtime.update([]{});handle.waitForCompletion();
+        passed &= before==toString(root->pItem.get()) && first==root->pItem->value->items.head &&
+            identities==normalizer.access->registry->identities.size();
+        if(caseID<=5) {
+            passed &= !root->pItem->wrkList.empty() && !root->pItem->workIsRepresented(root->pItem->wrkList.front());
+            if(caseID==2) handle.cancel();
+            if(caseID==3) normalizer.addRHS(source->value->items.tail,graphParsed(testName,"4"));
+            else if(caseID==4) normalizer.runtime.update([&]{
+                source->value->str="ABCD";source->infSize->num.val=4;
+            });
+            else {
+                auto added=graphParsed(testName,caseID==5 ? "2" : "4");
+                normalizer.runtime.update([&]{
+                    auto owner=root->pItem->wrkList.front();
+                    source->value->items.appendPov(added);added->pParent=owner.get();
+                    source->infSize->num.val=caseID==5 ? 9 : 4;
+                    SetModeBits(source->infSize->flags,infonState::evalMode,infonState::emLiteral);
+                    normalizer.access->bind(added);++owner->workRevision;
+                });
+            }
+            handle.waitForCompletion();
+            passed &= !handle.status().failed && first==root->pItem->value->items.head && specText==toString(spec.get());
+            if(caseID==2) passed &= handle.status().cancelled && !handle.status().withSubscribers &&
+                toString(root->pItem.get()).find("2 ...")!=std::string::npos && !first->next;
+            else {
+                passed &= toString(root->pItem.get())==completed && !normalizer.access->openTail(root) &&
+                    root->pItem->infSize->num==(caseID==5 ? 5 : 2) &&
+                    root->pItem->workIsRepresented(root->pItem->wrkList.front());
+                if(caseID==4) passed &= getFlagBit(root->pItem->flags,infonView::isNormed) && !handle.status().symbolicValues;
+                auto count=normalizer.access->registry->identities.size();
+                auto replay=normalizer.normalize(root);replay.waitForCompletion();
+                passed &= !replay.status().failed && toString(root->pItem.get())==completed &&
+                    first==root->pItem->value->items.head && count==normalizer.access->registry->identities.size();
+                replay.cancel();
+            }
+        }
+        if(!passed) {
+            std::cout << "Repeat prefix " << caseID << ": " << toString(root->pItem.get()) << " error=" << handle.status().error
+                      << " symbolic=" << handle.status().symbolicValues << "\n";
+            if(!passed) for(const auto& step:handle.steps()) std::cout << step.action << "\n";
+        }
+        handle.cancel();normalizer.close();return passed;
+    }%>
+    void: unitTestGraphRepeatPrefix(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphRepeatPrefixCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

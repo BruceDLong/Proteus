@@ -1,37 +1,36 @@
 # Older language compatibility, 2026-09-26
 
-The default suite passes **202/270** fixtures after separating exact endpoints
-from partial numeric matching. `range/select3` now passes with its original
-expected output; all previous 201 passes remain. There were no crashes, timeouts,
-or incomplete summaries. The source build and **973/973** focused graph/parser
-checks passed. See [numeric-range-results.md](numeric-range-results.md) for
-operator semantics and symbolic range refinement.
+The default suite passes **203/270** fixtures after completed repetition
+publication. `range/select1` now exposes its completed `2 3 4 5` prefix while
+retaining the unfinished tail, following the user's clarification. Its input is
+unchanged; its old closed-result expectation was updated. All previous 202
+passes remain. Source/native builds and **984/984** focused graph/parser checks
+passed. See [repetition-prefix-results.md](repetition-prefix-results.md).
 
 | Suite | Passing | Failing | Total |
 |---|---:|---:|---:|
-| `defaultTests.tst` | 202 | 68 | 270 |
+| `defaultTests.tst` | 203 | 67 | 270 |
 | `demoTests.tst` | 8 | 14 | 22 |
 | `sparseTests.tst` | 2 | 21 | 23 |
 | `timeTests.tst` | 3 | 33 | 36 |
 | `worldLoadTests.tst` | 0 | 2 | 2 |
 | `endRelativeR1Tests.tst` | 2 | 8 | 10 |
 
-All six rows now describe engine commit `c90a680`: **217/363** language
-fixtures pass, with **146** failures and no crashes, timeouts, or incomplete
-summaries. The default audit is unchanged from the endpoint verification; the
-other five suites were rerun. The R1 file records an experimental contract and
-excludes itself from the default tests. Fixture counts describe tested examples,
-not unrestricted support for a language feature.
+All six rows were rerun for completed repetition publication: **218/363**
+language fixtures pass, with **145** failures and no crashes, timeouts, or
+incomplete summaries. The R1 file records an experimental contract and excludes
+itself from the default tests. Fixture counts describe tested examples, not
+unrestricted support for a language feature.
 
-The **973/973 focused graph/parser checks** remain a separate baseline. They
+The **984/984 focused graph/parser checks** are a separate baseline. They
 include some of the language fixtures above, so these counts must not be added.
 The 125 additional registered legacy helper and parser-error checks were also
-run: **102 pass, 23 fail**, without process errors or timeouts. Their exact
+rerun: **102 pass, 23 fail**, without process errors or timeouts. Their exact
 inventory is [legacy-helper-status.json](legacy-helper-status.json). Some call
 legacy reasoners or assert old registry bookkeeping; inspect those contracts
 before treating a failure as missing graph behavior or a pass as graph coverage.
 
-Standalone checks pass: graph search **30/30**, list structure **18/18**, span
+At the preceding checkpoint, unchanged standalone checks passed: graph search **30/30**, list structure **18/18**, span
 alignment **374/374**, and numeric ranges **1,225 interval pairs** plus boundary
 checks. The documented span-test command exposed a signed-comparison warning in
 its test assertion; explicit size casts fixed that build without changing the
@@ -41,10 +40,9 @@ span algorithm or its expectations.
 
 The priority is dependable existing behavior before new natural-language work.
 
-1. Completed repetition results: decide whether a known source end closes a
-   partially completed final repetition or leaves an unresolved result tail,
-   then use the shared sequence machinery for the chosen rule. Whole-match and
-   fixed-size obligations must remain visible.
+1. Completed repetition results are implemented for loaded sources and later
+   revisions. Unknown result tails remain subscribed. Parser-owned open input
+   needs a separate pending-cursor extension; it remains deferred.
 2. RHS lifecycle: distinguish full consolidation from a proof that only current
    facts are represented. A work item may be cleared once its information and
    any continuing graph relationship are preserved. Rejected candidates and
@@ -90,18 +88,17 @@ See [choice-constraint-results.md](choice-constraint-results.md),
 [partial-type-results.md](partial-type-results.md). Earlier checkpoints remain
 in the per-feature reports linked from [README.md](README.md).
 
-Two older range cases remain failing. `range/select1` needs general
-publication of completed repetitions when a later attempted repetition is
-incomplete. `merge/directRange/endReject` rejects the
-endpoint but retains the RHS, whereas the old assertion expects it removed.
+`merge/directRange/endReject` still rejects the endpoint but retains the RHS,
+whereas the old assertion expects it removed. This is separate from consolidation
+of accepted information. `range/select1` now passes with the approved open-tail
+expectation; it does not claim the unfinished repetition is complete.
 
 A passing printed assertion alone does not prove all normalization obligations
 resolved: unknown numeric sizes and subscribed open tails remain symbolic.
 
 The complete fixture status and input hashes are recorded in
 [language-compatibility-status.json](language-compatibility-status.json).
-Detailed default logs are in `/tmp/p4-end-modes-verified-audit/`. The refreshed
-other-suite and helper audits are in `/tmp/p4-coverage-20260926-*`.
+Detailed language and helper audit logs are in `/tmp/p4-prefix-audit-*`.
 
 ## Remaining work
 

@@ -12,9 +12,9 @@ public:
 struct DefinitionRequirement {
     GraphTypeFacts facts;
     NumericBounds numeric; // optional symbolic value constraint, not infSize
-    // Open requirements currently have no explicit prefix. The compiler keeps
-    // prefixed/embedded virtual definition bodies deferred until they can be
-    // composed without discarding positional constraints.
+    // An open requirement may carry a proved prefix with an unresolved tail.
+    // Compiling prefixed/embedded virtual definitions remains a separate
+    // obligation from publishing a sequence proof's explicit members.
     bool list = false, open = false;
     std::vector<std::shared_ptr<DefinitionRequirement>> members;
     // A homogeneous constraint on each occurrence, not N copied positions.
@@ -129,6 +129,7 @@ private:
             [&](const auto& at) {
                 return at.phase != ListPhase::enter ||
                     ((access_->physicalList(at.node) ||
+                      (access_->fedTemplate(at.node) && access_->templatePrefixList(at.node)) ||
                       (extents_.count(at.node) && access_->unreferencedTemplateSpan(at.node))) &&
                      access_->definitionOrderedCandidate(at.node));
             }, [&](const POVNode& member) { return Position{place(member), {}}; });

@@ -31,8 +31,10 @@ Both inputs share the same enter/member/end/repeat continuations. A scalar
 mismatch contributes no successor. A successful intersection occurrence
 contributes its last or marked result. The graph manager is unchanged.
 
-Only an accepted complete path is compiled into existing `ProteusDefinitionPlan`
-Sets. Scalar list input contributes persistent identities to selected output
+Accepted paths are compiled into existing `ProteusDefinitionPlan` Sets.
+Completed repeated-selection prefixes can now publish before the whole feed
+matches; see [repetition-prefix-results.md](repetition-prefix-results.md).
+Ordinary whole-sequence matching keeps its complete-path requirement. Scalar list input contributes persistent identities to selected output
 members. Repeated normalization reuses those members and identities. Unknown
 numeric sizes do not prevent matching known values; they keep the result
 symbolic and prevent `isNormed`, as in existing grouping semantics.

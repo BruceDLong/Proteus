@@ -75,6 +75,9 @@ public:
     SequenceCorrespondence(std::shared_ptr<ProteusGraphAccess> access,
                        std::shared_ptr<ProteusDefinitions> definitions)
         : access_(std::move(access)), definitions_(std::move(definitions)) {}
+    static bool rootBoundary(const Query<POVNode>& q) {
+        return q.kind==sequenceBoundary && q.context.size()==stackStart(q)+1 && !q.related;
+    }
     // ':' loosens the current pair only. '==' propagates loose matching
     // into members; do not mutate shared source POV flags while exploring.
     static bool looseSize(const Query<POVNode>& q) {
@@ -142,7 +145,8 @@ public:
             if(access_->hasTypeRequirements(q.node)) range.constraint=false;
             if (inverted(q.node) && !access_->scalarTypeShape(q.node) && !range.bounds.valid) return out;
             if (sequence(q.node) && !inputIdentity(*access_,q)) {
-                if ((!access_->physicalList(body) && !access_->unreferencedTemplateSpan(body)) ||
+                if ((!access_->physicalList(body) && !access_->unreferencedTemplateSpan(body) &&
+                     !(fedRoot && access_->templatePrefixList(body))) ||
                     !access_->orderedList(body) || access_->listExtent(body) == -2) return out;
                 if (body!=q.node && !POVDescription(body).work().empty()) return out;
                 // Context-free finite/repeated structure only for now. A cycle
@@ -258,6 +262,7 @@ class ProteusSequenceGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusDefinitions> definitions_;
     std::shared_ptr<ProteusCompletion> completion_;
     bool verified_ = false;
+    std::vector<Visit<POVNode>> prefixes_;
     std::vector<std::pair<POVNode, POVNode>> templates_;
 public:
     ProteusSequenceGoal(Query<POVNode> q, std::shared_ptr<ProteusGraphAccess> access,
@@ -265,10 +270,44 @@ public:
                     std::shared_ptr<ProteusCompletion> completion)
         : GoalSpec<POVNode>(q), access_(std::move(access)), definitions_(std::move(definitions)),
           completion_(std::move(completion)) {}
-    void beginPass() override { verified_ = false; templates_.clear(); }
+    void beginPass() override { verified_ = false; templates_.clear(); prefixes_.clear(); }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
-        if (visit.query.kind != sequenceComplete) return {};
+        const auto& q=visit.query;
+        if(SequenceCorrespondence::rootBoundary(q) && q.node==request.node &&
+           getFlagBit(request.related->flags,POV::isOutrFeed) && access_->fedTemplate(q.node) &&
+           q.coordinates[q.coordinates.size()-3]>0)
+            prefixes_.push_back(visit);
+        return q.kind==sequenceComplete ? publish(visit,false) : std::vector<SetCommand>{};
+    }
+    CommandBatch<POVNode> finishPass() override {
+        if(verified_) return {};
+        // Publish only after complete routes have had their chance. Competing
+        // derivations must agree through the chosen repetition boundary; a
+        // longer prefix of the same route supplies additional proved members.
+        if(prefixes_.empty()) return {};
+        auto longest=std::max_element(prefixes_.begin(),prefixes_.end(),
+            [](const auto& a,const auto& b){return a.path.size()<b.path.size();});
+        auto limit=longest->path.size();
+        for(const auto& other:prefixes_) {
+            std::size_t i=0;
+            while(i<limit && i<other.path.size() &&
+                  !(longest->path[i]<other.path[i]) && !(other.path[i]<longest->path[i])) ++i;
+            if(i<other.path.size()) limit=i;
+        }
+        const Visit<POVNode>* best=nullptr;
+        for(const auto& candidate:prefixes_)
+            if(candidate.path.size()<=limit &&
+               (!best || candidate.path.size()>best->path.size())) best=&candidate;
+        return best ? CommandBatch<POVNode>{*best,publish(*best,true)} : CommandBatch<POVNode>{};
+    }
+private:
+    std::vector<SetCommand> publish(const Visit<POVNode>& visit,bool partial) {
         templates_.clear();
+        auto path=visit.path;
+        // At this boundary every member is proved, but the root has not ended.
+        // Reuse the result compiler with an open root requirement, not a new
+        // sequenceComplete edge or a guessed result extent.
+        if(partial) path.back().kind=sequenceMatched;
         struct Frame { POVNode node, body, source; std::int64_t begin; DefinitionSpec spec, selected; bool instance, looseSize, looseType; };
         std::vector<Frame> stack;
         DefinitionSpec result;
@@ -278,7 +317,7 @@ public:
         Cost numericVisits=0;
         // The accepted path is the proof. Compile just that path into existing
         // finite-list Sets; rejected candidates never reach this mutation plan.
-        for (const auto& q : visit.path) {
+        for (const auto& q : path) {
             if (q.kind == sequenceEnter) {
                 auto spec = std::make_shared<DefinitionRequirement>();
                 auto body=access_->canSelect(q.node) ? definitions_->selectionBody(q.node) : q.node;
@@ -295,9 +334,10 @@ public:
                 auto& spec = frame.spec;
                 spec->facts.valid = true;
                 if (spec->list) {
-                    spec->facts.hasSize=true;
                     auto count = static_cast<std::int64_t>(spec->members.size());
-                    spec->facts.size = count;
+                    bool openRoot=partial && stack.empty();
+                    spec->open=openRoot;
+                    if(!openRoot) {spec->facts.hasSize=true;spec->facts.size=count;}
                     if (frame.body!=frame.node) {
                         auto mode=access_->selectionMode(frame.node);
                         if (mode==infonView::ipGetMarked) spec=frame.selected;
@@ -305,7 +345,7 @@ public:
                         else return {};
                         if (!spec) return {};
                     }
-                    if (frame.instance && frame.body==frame.node) extents[frame.node] = count;
+                    if (frame.instance && frame.body==frame.node && !openRoot) extents[frame.node] = count;
                     if (frame.instance)
                         if (auto body = definitions_->repeatedBody(frame.node)) templates_.push_back({frame.node, body});
                 } else if (getModeBits(request.related->pItem->value->flags,infonState::overlayType)==infonState::LST) {
@@ -358,7 +398,7 @@ public:
 
         if (!plan->supported) return {};
         plan->work.visits=addCost(plan->work.visits,numericVisits);
-        verified_ = plan->satisfied();
+        verified_ = !partial && plan->satisfied();
         std::vector<ProteusDefinitionPlan::Place> counted;
         std::vector<std::pair<ProteusDefinitionPlan::Place,POVNode>> identities;
         std::vector<std::pair<ProteusDefinitionPlan::Place,ProteusDefinitions::Certificate>> typeEvidence;
@@ -374,7 +414,7 @@ public:
                 counted.push_back(binding.first);
         }
         auto access=access_; auto definitions=definitions_;
-        return {{"Set accepted sequence correspondence", [plan, counted, identities, typeEvidence, access, definitions] {
+        return {{partial ? "Set completed repetition prefix" : "Set accepted sequence correspondence", [plan, counted, identities, typeEvidence, access, definitions] {
             for (const auto& binding:plan->bindings) if(binding.first->node) access->bind(binding.first->node);
             for (const auto& identity:identities) access->bind(identity.second);
             bool changed = plan->apply();
@@ -397,6 +437,7 @@ public:
             return changed;
         }, plan->work}};
     }
+public:
     bool satisfied() const override { return verified_; }
     bool symbolic() const override { return !verified_; }
     void settled(bool resolved) override {

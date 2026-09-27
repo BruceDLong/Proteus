@@ -63,12 +63,11 @@ existing Proteus executable and Proteus4 leave `*4+4` as `*4+4`.
 
 ## Remaining boundaries
 
-- `range/select1` ends with excluded values 6 and 7. The last attempted repeated
-  intersection consumes that prefix but lacks its selected final member.
-  Proteus3 retains earlier completed repetitions; current graph correspondence
-  requires a complete route. General partial-parse publication needs to address
-  this, rather than adding a special case to range matching. Offset filtering
-  with a complete final repetition is tested and works.
+- `range/select1` now publishes its completed `2 3 4 5` results through the
+  shared repetition mechanism. The trailing excluded `6 7` leaves an unresolved
+  selection and an open result tail; its old closed expectation was updated
+  following the user's clarification. See
+  [repetition-prefix-results.md](repetition-prefix-results.md).
 - `merge/directRange/endReject` rejects correctly but keeps the RHS visible.
   The old expected text assumes rejected work is removed. The existing graph
   conflict/diagnostic policy is unchanged; see `numeric-literal-results.md`.
@@ -76,7 +75,7 @@ existing Proteus executable and Proteus4 leave `*4+4` as `*4+4`.
   symbolic union/difference output remain deferred. Missing evidence never
   counts as a proved mismatch.
 
-## Verification
+## Endpoint checkpoint verification
 
 - Full CodeDog source regeneration and C++ build passed.
 - Focused graph/parser checks: **973/973**, including the existing 934,

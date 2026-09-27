@@ -243,7 +243,7 @@ range/join,            Range joins,                    *10+(2+3),               
 #
 # So the best current statement is: `range/select1` is caused by an interaction between the step-0 concat fastpath change and the newer non-streaming propagation/subscription timing in `propagateProxy()`. The visible bug is stale last-item candidates; the root bug is earlier scheduling/order. The workspace is back on the clean baseline.
 
-range/select1,         Select in range,                {[&{!(*4+_ +2)|  ... } (*4+_ +2)] | ...} <~ {1 2 0 3 4 5 6 7},          {2 3 4 5},                      norm
+range/select1,         Select in range,                {[&{!(*4+_ +2)|  ... } (*4+_ +2)] | ...} <~ {1 2 0 3 4 5 6 7},          {[&{!(*4+_ +2)|  ... } (*4+_ +2)]| 2 3 4 5 ... } == {1 2 0 3 4 5 6 7},                      norm
 range/select2,         Select in range,                {[&{!*4+_|  ... } *4+_] | ...} <~ {1 2 0 3 444 555 666 777 2},          {1 2 0 3 2},                    norm
 range/select3,         Select in range,                {[&{!*4+_|  ... } *4+_] | ...} <~ {1 *3+_  5 *4+(*2+_ +1)  *4+_  },     {1 *4+_ *4+(*2+_ +1) *4+_},     norm
 range/concat1,         Overlapping range,              *10+(*5+_+2) = *10+(*4+_+5),                                            *10+(*2+_ +5),                  norm
