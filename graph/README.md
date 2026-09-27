@@ -63,6 +63,12 @@ Unknown unordered values can acquire supplied parts using existing member
 identities, retaining open membership and later source publications. See
 [record-value-results.md](record-value-results.md) for the supported boundary.
 
+Named grammar choices and the restored plural/text rules use the same graph
+and Set protocol. See [word-grammar-results.md](word-grammar-results.md) for the
+supported boundary and the deliberately removed arithmetic-relative behavior.
+The next design discussion is outlined in
+[time-word-design-plan.md](time-word-design-plan.md).
+
 ## Start here
 
 ```text

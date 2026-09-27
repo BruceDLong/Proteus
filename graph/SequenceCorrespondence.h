@@ -15,6 +15,16 @@ class SequenceCorrespondence {
     POVNode pattern(const POVNode& node) const {
         return access_->canSelect(node) && !node->pItem->selectedResult ? definitions_->selectionBody(node) : node;
     }
+    POVNode choice(const POVNode& node) const {
+        if(auto body=definitions_->choiceBody(node)) return body;
+        auto meaning=definitions_->saved(node);
+        if(!meaning || meaning->requirement->list || meaning->requirement->choices.size()!=1) return {};
+        const auto& spec=meaning->requirement;
+        // Additional conjunctions remain explicit obligations; do not discard
+        // them by treating an arbitrary constrained value as a bare choice.
+        if(spec->facts.overlay>=0 || spec->facts.hasSize || spec->facts.hasValue || spec->numeric.valid) return {};
+        return definitions_->choiceBody(spec->choices.front().source);
+    }
     bool sequence(const POVNode& node) const { return access_->literalList(pattern(node)); }
     // Context: source, current input node, input owners, grammar owners.
     // Coordinates: input-owner count, ListPhase, resume demand, then grammar
@@ -64,9 +74,10 @@ class SequenceCorrespondence {
     }
     static bool inverted(const POVNode& node) { return getFlagBit(node->pItem->flags, infonView::invertMatch); }
     bool readable(const POVNode& node, bool root, bool predicate = false) const {
-        if (!access_->plainStructure(node, access_->canSelect(node), false, false, false, false, false) ||
+        if (!access_->plainStructure(node, access_->canSelect(node) || bool(choice(node)), false, false, false, false, false) ||
             (!predicate && inverted(node)) ||
-            (access_->hasTypeRequirements(node) && !definitions_->scalarFacts(node,predicate).valid)) return false;
+            (access_->hasTypeRequirements(node) && !choice(node) &&
+             !(sequence(node) && definitions_->satisfied(node)) && !definitions_->scalarFacts(node,predicate).valid)) return false;
         if (!root) for (const auto& relation : POVDescription(node, access_->registry.get()).relationships())
             if (!RHSRepresentation(access_, node, relation.target, definitions_).represented) return false;
         return true;
@@ -75,6 +86,7 @@ public:
     SequenceCorrespondence(std::shared_ptr<ProteusGraphAccess> access,
                        std::shared_ptr<ProteusDefinitions> definitions)
         : access_(std::move(access)), definitions_(std::move(definitions)) {}
+    POVNode alternatives(const POVNode& node) const {return choice(node);}
     static bool rootBoundary(const Query<POVNode>& q) {
         return q.kind==sequenceBoundary && q.context.size()==stackStart(q)+1 && !q.related;
     }
@@ -148,7 +160,16 @@ public:
             NumericRangeAccess numeric(*access_);auto range=numeric.read(q.node,true);
             if(access_->hasTypeRequirements(q.node)) range.constraint=false;
             if (inverted(q.node) && !access_->scalarTypeShape(q.node) && !range.bounds.valid) return out;
-            if (sequence(q.node) && !inputIdentity(*access_,q)) {
+            if(auto alternatives=choice(q.node)) {
+                if(inverted(q.node)) return out;
+                for(std::size_t i=stackStart(q);i<q.context.size();++i)
+                    if(access_->sameInfon(q.context[i],q.node)) return out;
+                for(auto child=POVDescription(alternatives).member();child;child=POVDescription(child).adjacent()) {
+                    auto next=q;next.node=child;next.related.reset();next.context.push_back(q.node);
+                    next.coordinates.insert(next.coordinates.end(),{0,q.argument,-1});
+                    out.edges.push_back(edge("try grammar alternative",std::move(next)));
+                }
+            } else if (sequence(q.node) && !inputIdentity(*access_,q)) {
                 if ((!access_->physicalList(body) && !access_->unreferencedTemplateSpan(body) &&
                      !(fedRoot && access_->templatePrefixList(body))) ||
                     !access_->orderedList(body) || access_->listExtent(body) == -2) return out;
@@ -229,10 +250,10 @@ public:
                 auto next = q; next.node = child; next.related.reset(); next.kind = sequenceEnter;
                 out.edges.push_back(edge("match next list member", std::move(next)));
             }
-        } else if (q.kind == sequenceMatched || q.kind == sequenceAtomMatched) {
+        } else if (q.kind == sequenceMatched || q.kind == sequenceAtomMatched || q.kind == sequenceChoiceMatched) {
             auto next = q;
             std::int64_t width = 1, begin = 0;
-            if (q.kind == sequenceMatched) {
+            if (q.kind == sequenceMatched || q.kind == sequenceChoiceMatched) {
                 auto n = next.coordinates.size();
                 if (access_->subList(q.node)) width = next.coordinates[n-3];
                 begin = next.coordinates[n-2];
@@ -247,6 +268,10 @@ public:
                 }
             } else {
                 auto n = next.coordinates.size();
+                if(next.coordinates[n-1]==-1) {
+                    next.node=next.context.back();next.kind=sequenceChoiceMatched;next.related.reset();
+                    out.edges.push_back(edge("propagate accepted alternative",std::move(next)));return out;
+                }
                 if (width > std::numeric_limits<std::int64_t>::max() - next.coordinates[n-3]) return out;
                 next.node = next.context.back(); next.kind = sequenceBoundary;
                 next.coordinates[n-3] += width;
@@ -312,7 +337,7 @@ private:
         // Reuse the result compiler with an open root requirement, not a new
         // sequenceComplete edge or a guessed result extent.
         if(partial) path.back().kind=sequenceMatched;
-        struct Frame { POVNode node, body, source; std::int64_t begin; DefinitionSpec spec, selected; bool instance, looseSize, looseType; };
+        struct Frame { POVNode node, body, source; std::int64_t begin; DefinitionSpec spec, selected; bool instance, looseSize, looseType, choice; };
         std::vector<Frame> stack;
         DefinitionSpec result;
         std::map<POVNode, std::int64_t> extents;
@@ -331,12 +356,16 @@ private:
                 // A feed's stored members are results, not its consumed pattern.
                 if (!stack.empty() && access_->fedTemplate(stack.back().node)) instance=false;
                 stack.push_back({q.node,body,q.context[1],q.argument,spec,{},instance,
-                    SequenceCorrespondence::looseSize(q),SequenceCorrespondence::looseType(q)});
-            } else if (q.kind == sequenceMatched || q.kind == sequenceAtomMatched) {
+                    SequenceCorrespondence::looseSize(q),SequenceCorrespondence::looseType(q),
+                    bool(SequenceCorrespondence(access_,definitions_).alternatives(q.node))});
+            } else if (q.kind == sequenceMatched || q.kind == sequenceAtomMatched || q.kind == sequenceChoiceMatched) {
                 auto frame = stack.back(); stack.pop_back();
                 auto& spec = frame.spec;
                 spec->facts.valid = true;
-                if (spec->list) {
+                if(frame.choice) {
+                    if(!frame.selected) return {};
+                    spec=frame.selected;
+                } else if (spec->list) {
                     auto count = static_cast<std::int64_t>(spec->members.size());
                     bool openRoot=partial && stack.empty();
                     spec->open=openRoot;
@@ -381,12 +410,12 @@ private:
                 }
                 // A selection passes through its chosen child's proof. Its
                 // input cursor does not describe the selected result's type.
-                if (frame.body==frame.node && !spec->list) {
+                if (!frame.choice && frame.body==frame.node && !spec->list) {
                     auto typed=access_->hasTypeRequirements(frame.node) && !getFlagBit(frame.node->pItem->flags,infonView::invertMatch) ? frame.node : frame.source;
                     auto meaning=typed ? definitions_->saved(typed) : nullptr;
                     if (meaning && !meaning->requirement->list && meaning->requirement->facts.accepts(spec->facts)) meanings[spec]=meaning;
                 }
-                if (!stack.empty() && stack.back().body->pItem->intersectMarkedRetPOV==frame.node) stack.back().selected=spec;
+                if (!stack.empty() && (stack.back().choice || stack.back().body->pItem->intersectMarkedRetPOV==frame.node)) stack.back().selected=spec;
                 if (stack.empty()) result = spec;
                 else if (access_->subList(frame.node))
                     stack.back().spec->members.insert(stack.back().spec->members.end(), spec->members.begin(), spec->members.end());

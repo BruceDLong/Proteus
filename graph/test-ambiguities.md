@@ -74,3 +74,22 @@ Could a later T identity reopen that result, or should it remain subscribed unti
 there is explicit negative/boundary evidence? Skip the old output assertion while
 retaining the no-structural-fallback rule. This is not a skip of temporal neighbor
 or boundary operations generally; their unambiguous fixtures still count as failures.
+
+## `defaultTests.tst:word/findPlural`
+
+Input: `{123, foot, {foot|foot1,foot2}}.feet`.
+Old expected value: `feet:{foot1, foot2}`.
+
+Plural inference and lookup now find the inner collection. Under the established
+open-unordered membership rule, the unbounded outer description can contain more
+matching collections. The actual result is therefore
+`*_+[feet:{foot| foot1, foot2} ... ]`. The inner `foot|` remains meaningful: its
+local template also constrains unlisted members. It is not a fully consolidated
+closed collection.
+
+The pending fixture choice is whether to add an explicit outer size of three
+for a definite lookup, or to retain the original input and expect an open oneOf.
+Preserve the original fixture while that choice is pending. The separate
+`unit/graphWordForms/lookup` case uses the bounded input and expects
+`feet:{foot| foot1, foot2}`. This skip is about the old result contract, not a
+missing plural-lookup implementation.

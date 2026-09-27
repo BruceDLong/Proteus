@@ -11,7 +11,6 @@ Examples:
 {*10+1 %prev}           // {*10+1 *10+1}
 {%next %next *10+3}     // {*10+3 *10+3 *10+3}
 {*10+1 _ = %prev}       // {*10+1 *10+1}
-{3 (%prev+1)}           // {3 4}; numeric sizes remain unknown
 ```
 
 ## Relationships and context
@@ -20,8 +19,9 @@ Examples:
   `POVDescription`. Virtual occurrences use their existing source and index;
   the resulting indexed goal reuses the registry's canonical sparse edge.
   A billion-item list does not require a prefix walk or expansion.
-- Syntactic RHS and arithmetic operand traversal carry the consuming occurrence
-  in the query's existing domain-context field. Ordinary nested list members
+- Syntactic RHS traversal carries the consuming occurrence in the query's
+  existing domain-context field. Arithmetic operands now retain their expression
+  context: `%prev`/`%next` arithmetic was removed on 2026-09-27. Nested list members
   start their own context. Registry identities do not substitute a new context.
 - A context-owned binding witness retains the selected occurrence and the
   consuming occurrence after the cursor's value is published. The original
@@ -51,7 +51,7 @@ walk across embedded spans. Those demands remain deferred. Sparse lookup uses
 occurrences already owned by this graph context, so borrowed registry backlinks
 are never promoted into invented owning pointers.
 
-## Validation
+## Earlier validation (before arithmetic removal)
 
 - Full CodeDog regeneration and C++ test build pass.
 - Relative-position checks: 33/33, including forward chains, RHS/operand context,
@@ -77,3 +77,7 @@ Run the focused tests from `LocalBuild` with:
 ```
 
 No full legacy-suite or sanitizer pass is claimed for this checkpoint.
+
+The arithmetic-relative tests, including both `prev/plus1` and `tprev/plus1`,
+were removed in the word/grammar checkpoint at the user's request. Direct
+structural navigation remains supported. See `word-grammar-results.md`.

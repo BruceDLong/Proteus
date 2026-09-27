@@ -1,13 +1,18 @@
 # Older language compatibility, 2026-09-27
 
-Unknown values now acquire supplied unordered parts through existing member
-identities, including nested descriptions. Explicit identity assertions retain
-a written target name; nominal field selection still distinguishes sibling types.
-See [record-value-results.md](record-value-results.md). No old expectations or
-ambiguity exceptions changed in this checkpoint.
-The six suites report **253 passed, 103 failed, 7 skipped as ambiguous**, out of
-363. No previous passes were lost. The source build and **1,147/1,147** focused
-checks pass; additional legacy helpers are **102/125**.
+Named grammar choices now use sequence traversal, and the basic plural/text
+rules publish normal graph Sets. The source build and **1,169/1,169** focused
+checks pass. The six old language suites report **258 passed, 95 failed, and
+8 explicit ambiguity skips**, out of 361. No previous passing fixture was lost.
+See [word-grammar-results.md](word-grammar-results.md).
+
+Recovered default fixtures: `parse/lang`, `word/pluralize`, and `lang/splitText`.
+The bounded plural-lookup regression passes; the old `word/findPlural` fixture
+remains unchanged and is skipped pending its open-unordered result contract.
+The user-requested removal deletes `prev/plus1`, `tprev/plus1`, and two compiled
+arithmetic-relative tests. Direct `%prev`/`%next` navigation remains supported.
+Two additional unchanged fixtures now pass: `unit/day/fromHours/readFirstMinute`
+and `r1/correspondence/contentConstrainedSuffix`.
 
 The earlier repetition change made `range/select1` expose its completed
 `2 3 4 5` prefix with an unresolved tail, following the user's clarification.
@@ -15,15 +20,16 @@ Its old closed-result expectation was updated in that earlier increment.
 
 | Suite | Passing | Failing | Ambiguous skips | Total |
 |---|---:|---:|---:|---:|
-| `defaultTests.tst` | 237 | 26 | 7 | 270 |
+| `defaultTests.tst` | 240 | 20 | 8 | 268 |
 | `demoTests.tst` | 8 | 14 | 0 | 22 |
 | `sparseTests.tst` | 2 | 21 | 0 | 23 |
-| `timeTests.tst` | 3 | 33 | 0 | 36 |
+| `timeTests.tst` | 4 | 32 | 0 | 36 |
 | `worldLoadTests.tst` | 0 | 2 | 0 | 2 |
-| `endRelativeR1Tests.tst` | 3 | 7 | 0 | 10 |
+| `endRelativeR1Tests.tst` | 4 | 6 | 0 | 10 |
 
-All six rows and the 125 legacy helper checks were rerun for this checkpoint,
-without crashes, timeouts, or incomplete summaries. The R1 file records an
+All six language suites were rerun without crashes, timeouts, or incomplete
+summaries. The 125 legacy helper checks were not rerun; their preceding result
+remains 102/125. The R1 file records an
 experimental contract and excludes itself from the default tests. Some legacy
 helpers call old reasoners or assert old registry bookkeeping; their passing
 counts do not establish graph coverage. Focused checks include some language
@@ -117,7 +123,8 @@ resolved: unknown numeric sizes and subscribed open tails remain symbolic.
 
 The complete fixture status and input hashes are recorded in
 [language-compatibility-status.json](language-compatibility-status.json).
-Detailed language and helper audit logs are in `/tmp/p4-compat-audit-*`.
+Current language logs are in `/tmp/p4-word-grammar-audit-*`; earlier helper
+logs remain in `/tmp/p4-compat-audit-*`.
 
 ## Remaining work
 

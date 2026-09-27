@@ -6,6 +6,7 @@
 // Included after the CodeDog declarations. Domain knowledge is implemented in
 // ProteusGraphAccess (GraphFoundation.Lib.dog); this layer adapts its results to
 // generic edges and GoalSpec-generated commands.
+extern Inflect inflect;
 namespace proteus4 {
 using POVNode = std::shared_ptr<POV>;
 #include "POVDescription.h"
@@ -20,7 +21,7 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectionExtentMember = 20, selectionExtentEnd = 21,
               typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27,
               selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31,
-              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62, scalarCorrespondence = 63, placeArgument = 64, resolveEndpoint = 65, endpointPosition = 66, endpointFound = 67, resolveWord = 68, resolutionStep = 69, externalField = 70, externalPosition = 71, externalMatched = 72, externalUnknown = 73, externalEnd = 74, acquireListValue = 75, selectEnvironment = 76, recordCorrespondence = 77 };
+              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62, scalarCorrespondence = 63, placeArgument = 64, resolveEndpoint = 65, endpointPosition = 66, endpointFound = 67, resolveWord = 68, resolutionStep = 69, externalField = 70, externalPosition = 71, externalMatched = 72, externalUnknown = 73, externalEnd = 74, acquireListValue = 75, selectEnvironment = 76, recordCorrespondence = 77, sequenceChoiceMatched = 78 };
 
 inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
     auto phase = query.kind == correspondenceEnter ? ListPhase::enter :
@@ -32,6 +33,7 @@ inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
 #include "ScalarPredicate.h"
 #include "RecordStructure.h"
 #include "RHSRepresentation.h"
+#include "WordForms.h"
 #include "FieldPredicate.h"
 #include "PathSelection.h"
 #include "Resolution.h"
@@ -306,6 +308,10 @@ public:
                 !access_->definitionReady(request.node) || definitions_->registered(request.node)) return {};
             auto definitions = definitions_; auto node = request.node;
             return {{"Register definition", [definitions, node] { return definitions->publish(node); }, {0, 1}}};
+        }
+        if(request.kind>=sizeOnly && request.kind<=sizeAndValue && visit.query.node==request.node) {
+            auto commands=WordForms::commands(access_,request.node);
+            if(!commands.empty()) return commands;
         }
         if (request.kind == listContents) {
             if (visit.query.kind == listMember) measure_.add(visit.query.node);
@@ -704,7 +710,10 @@ public:
         if (query.kind == assessRepresentation)
             return std::make_shared<ProteusRepresentationGoal>(query, access_, completion_,definitions_);
         if (query.kind == typeRequirements || query.kind == compileTypeRequirements)
-            return std::make_shared<ProteusTypeGoal>(query, definitions_);
+            return std::make_shared<ProteusTypeGoal>(query, definitions_,
+                [access=access_,completion=completion_](const POVNode& node,const POVNode& source) {
+                    if(!access->openTail(node)) completion->representedTemplate(node,source);
+                });
         if (query.kind == listCorrespondence)
             return std::make_shared<ProteusCorrespondenceGoal>(query, access_, evidence_, definitions_);
         if (query.kind == concatField)
@@ -730,7 +739,7 @@ public:
             return EndpointDemand(access_,definitions_,[this](const Query<POVNode>& q){return expandSemantic(q);}).expand(query);
         if (query.kind >= selectField && query.kind <= choicePending)
             return PathSelection(access_, definitions_, [this](const Query<POVNode>& q) {return expandSemantic(q);}).expand(query);
-        if ((query.kind >= sequenceCorrespondence && query.kind <= sequenceComplete) || query.kind == correspondenceInput || query.kind == sequenceAtomMatched)
+        if ((query.kind >= sequenceCorrespondence && query.kind <= sequenceComplete) || query.kind == correspondenceInput || query.kind == sequenceAtomMatched || query.kind == sequenceChoiceMatched)
             return SequenceCorrespondence(access_, definitions_).expand(query);
         bool pending = evidence_->pending(query.node);
         auto result = expandSemantic(query);
@@ -806,7 +815,8 @@ private:
         if (query.kind == itemFound || query.kind == listEnd || query.kind == correspondenceEnd || query.kind == concatEnd || query.kind == selectionFound)
             return result;
         if (query.kind == selectRelative) {
-            if (!query.context.empty() && !access_->definitionOrderedCandidate(query.context.back())) {
+            if (!query.context.empty() && (!access_->definitionOrderedCandidate(query.context.back()) ||
+                access_->hasConcat(query.context.back(),1) || access_->hasConcat(query.context.back(),2))) {
                 result.deferred = true; return result;
             }
             result.edges.push_back(direct("relative occurrence", {query.related, relativeItem, query.argument, query.context.empty() ? POVNode{} : query.context.front(), query.context}));
@@ -928,7 +938,9 @@ private:
             return result;
         }
         if (query.kind == concatMember) {
-            auto context = query.context.empty() ? std::vector<POVNode>{query.related} : query.context;
+            // Operands belong to this expression; they do not borrow its enclosing
+            // list position for relative navigation.
+            std::vector<POVNode> context{node,query.related};
             result.refinements.push_back({{node, valueOnly, 0, {}, context}, {0, 0}, "resolve operand value", false});
             if (access_->concatNeedsRadix(node))
                 result.refinements.push_back({{node, sizeOnly, 0, {}, context}, {0, 0}, "resolve numeric radix", false});

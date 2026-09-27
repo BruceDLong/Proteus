@@ -6,6 +6,13 @@ and remove code that is no longer used; compatibility with every legacy API or
 test is not a requirement at each step. Do not retain obsolete scaffolding only
 to preserve the old test baseline.
 
+The word/grammar checkpoint supports finite oneOf alternatives in sequence
+correspondence, preserving shared definitions and accepting the first complete
+parse. WordForms.h owns collection-type inference and the small English-text
+splitter; these are not general word/context interpretation. Arithmetic operands
+must not borrow a list occurrence for %prev/%next. See graph/word-grammar-results.md
+and the discussion-only graph/time-word-design-plan.md.
+
 Current priority: make the existing test suites work before further context,
 T-list, or word-model redesign. If a test's intended semantics are ambiguous,
 record the exact fixture and question in graph/test-ambiguities.md and skip it

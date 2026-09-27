@@ -38,6 +38,12 @@ class FieldPredicate {
         specification->captureLabel(node);
         specification->facts=predicate ? access_->predicateFacts(node,false) : access_->typeFacts(node);
         auto refinementContext=context;refinementContext.insert(refinementContext.begin(),node);
+        if(!predicate && WordForms::collectionType(*access_,node)) {
+            out_.refinements.push_back({{node,valueOnly,0,{},refinementContext},{1,0},"derive collection type",true});
+            return {};
+        }
+        if(predicate && specification->facts.valid && specification->facts.overlay<0 &&
+           WordForms::collectionPredicate(node,*definitions_)) specification->facts.overlay=infonState::LST;
         const bool canRead=readable(node,predicate);
         if ((!predicate || !getFlagBit(node->pItem->flags,infonView::invertMatch)) && !access_->literalList(node) &&
             (!access_->hasTypeRequirements(node) || !POVDescription(node).work().empty() || !canRead))
@@ -90,6 +96,7 @@ class FieldPredicate {
             if (!available) return {};
         }
         if (meaning) {
+            if(!meaning->requirement->choices.empty()) return {};
             if (meaning->requirement->list && std::any_of(specification->members.begin(),specification->members.end(),
                     [](const auto& member){return !member;})) return {};
             try {specification=combineDefinitions(specification,meaning->requirement);}

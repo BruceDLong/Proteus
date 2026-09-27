@@ -15,11 +15,13 @@ struct DefinitionRequirement {
     // An open requirement may carry a proved prefix with an unresolved tail.
     // Compiling prefixed/embedded virtual definitions remains a separate
     // obligation from publishing a sequence proof's explicit members.
-    bool list = false, open = false;
+    bool list = false, open = false, ordered = true;
     std::vector<std::shared_ptr<DefinitionRequirement>> members;
     // A homogeneous constraint on each occurrence, not N copied positions.
     std::shared_ptr<DefinitionRequirement> repeated;
     POVNode templateSource;
+    struct Choice { POVNode source; std::vector<std::shared_ptr<DefinitionRequirement>> alternatives; };
+    std::vector<Choice> choices;
     std::vector<std::string> types;
     std::string label; // normalized nominal identity, used by comparisons
     std::shared_ptr<WordUse> writtenType;
@@ -63,12 +65,16 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
         result->numeric=result->numeric.valid ? result->numeric.intersect(right->numeric) : right->numeric;
         if(result->numeric.empty) throw DefinitionConflict("incompatible numeric value requirements");
     }
+    for(const auto& choice:right->choices)
+        if(std::none_of(result->choices.begin(),result->choices.end(),[&](const auto& old){return old.source==choice.source;}))
+            result->choices.push_back(choice);
     for (const auto& name : right->types)
         if (std::find(result->types.begin(), result->types.end(), name) == result->types.end()) result->types.push_back(name);
     // Equivalent conjunctions share evidence regardless of application order.
     std::sort(result->types.begin(), result->types.end());
     if (result->label.empty()) {result->label = right->label;result->writtenType=right->writtenType;}
     if (result->list && right->list) {
+        result->ordered=result->ordered || right->ordered;
         if (result->open && right->open) {
             if (result->repeated && right->repeated)
                 result->repeated = combineDefinitions(result->repeated, right->repeated);
@@ -88,7 +94,7 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
                 result->members[i] = combineDefinitions(result->members[i], right->members[i]);
         }
     } else if (right->list) {
-        result->list = true; result->open = right->open; result->members = right->members;
+        result->list = true; result->ordered=right->ordered; result->open = right->open; result->members = right->members;
         result->repeated = right->repeated; result->templateSource = right->templateSource;
     }
     if (result->list && !result->memberLayout().valid)
@@ -98,9 +104,15 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
 
 inline bool sameDefinition(const DefinitionSpec& a, const DefinitionSpec& b) {
     if (a == b) return true;
-    if (!a || !b || a->list != b->list || a->open != b->open || !a->facts.same(b->facts) || !a->numeric.same(b->numeric) ||
-        a->types != b->types || a->members.size() != b->members.size() ||
+    if (!a || !b || a->list != b->list || a->open != b->open || a->ordered!=b->ordered || !a->facts.same(b->facts) || !a->numeric.same(b->numeric) ||
+        a->types != b->types || a->members.size() != b->members.size() || a->choices.size()!=b->choices.size() ||
         !sameDefinition(a->repeated, b->repeated)) return false;
+    for(std::size_t i=0;i<a->choices.size();++i) {
+        const auto& left=a->choices[i];const auto& right=b->choices[i];
+        if(left.source!=right.source || left.alternatives.size()!=right.alternatives.size()) return false;
+        for(std::size_t j=0;j<left.alternatives.size();++j)
+            if(!sameDefinition(left.alternatives[j],right.alternatives[j])) return false;
+    }
     for (std::size_t i = 0; i < a->members.size(); ++i)
         if (!sameDefinition(a->members[i], b->members[i])) return false;
     return true;
@@ -161,7 +173,7 @@ private:
         bool open = adopt || access->openTail(target->node);
         std::vector<POVNode> members;
         if (!adopt) {
-            if (!access->definitionOrderedCandidate(target->node) ||
+            if ((requirement->ordered && !access->definitionOrderedCandidate(target->node)) ||
                 (!access->physicalList(target->node) && !access->templatePrefixList(target->node))) {
                 supported = false; return;
             }
@@ -185,7 +197,8 @@ private:
         if (!requirement->facts.accepts(actual)) writes.push_back([access, target, requirement] {
             return access->applyTypeFacts(target->node, requirement->facts);
         });
-        if (!target->node || !access->definitionOrderKnown(target->node)) {
+        if ((!target->node || access->definitionOrderedCandidate(target->node)) &&
+            (!target->node || !access->definitionOrderKnown(target->node))) {
             ++orderWrites;
             writes.push_back([access, target] { return access->setDefinitionOrder(target->node); });
         }
@@ -221,6 +234,22 @@ private:
             if (!actual.valid) { supported = false; return; }
             auto found = proposed_.find(target->node->pItem);
             if (found != proposed_.end()) actual = found->second;
+        }
+        // A choice constrains the result, but does not authorize choosing an
+        // arbitrary value. An accepted correspondence can already satisfy one
+        // branch; otherwise leave the alternatives available to graph search.
+        for(const auto& choice:requirement->choices) {
+            bool accepted=false,pending=!target->node;
+            if(target->node) for(const auto& alternative:choice.alternatives) {
+                try {
+                    ProteusDefinitionPlan check(access_,target->node,alternative);
+                    work.visits=addCost(work.visits,check.work.visits);
+                    if(check.dataSatisfied()) {accepted=true;break;}
+                    pending=true;
+                } catch(const DefinitionConflict&) {}
+            }
+            if(!accepted && !pending) throw DefinitionConflict("no compatible definition alternative");
+            if(!accepted) {supported=false;return;}
         }
         auto combined = actual;
         if (!combined.combine(requirement->facts))

@@ -260,8 +260,6 @@ slice/sugar,           Select sugar,                   {1 2 3 4 5 6 7 8 9 0}@[3:
 lang/splitText,        Split English text,             {english-text:"Whoever says they can't is right"},                      {english-phrase:{Whoever says they can't is right}}, norm
 temp/t1,               Merge many idents,              _=_=321,                                                                321,                            norm
 time/t2,               Simple T-infon,                 *5+{T *256+_ = (*256+3) | 1 ...},                                       {T 1 *256+3 *256+3 *256+3 *256+3}, norm
-prev/plus1,            Simple T-infon,                 *5+{T *256+_ = (%prev+1) | 3 ...},                                      {T 3 4 5 6 7},                  norm
-tprev/plus1,           Temporal previous state,        *5+{T *256+_ = (%tprev+1) | 3 ...},                                     {T 3 4 5 6 7},                  norm
 temporal/beginBoundary, Temporal begin is the null value at cut zero, {T 1 2}.begin,                                           0,                              norm
 temporal/endBoundary, Temporal end is the null value at the exact extent, {T 1 2}.end,                                        0,                              norm
 temporal/namedBoundaries, Named T-list boundaries resolve after definition lookup, {#timeline={T 1 2}}\ntimeline.begin//:0\ntimeline.end//:0,                   -,                              multi

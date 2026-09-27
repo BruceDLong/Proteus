@@ -68,7 +68,7 @@ public:
             auto source=candidates[ordered ? ordinal : 0];
             auto& proof=descriptions_[source];
             if(!proof || !definitions_->current(proof)) proof=definitions_->describe(source,work);
-            if(!proof || proof->requirement->list) {pending_=true;continue;}
+            if(!proof || proof->requirement->list || !proof->requirement->choices.empty()) {pending_=true;continue;}
             if(!facts.combine(proof->requirement->facts)) throw DefinitionConflict("incompatible projected field requirements");
         }
         work.visits=addCost(work.visits,matcher.work.visits);

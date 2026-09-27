@@ -14,7 +14,7 @@ public:
         std::vector<std::string> names;
         std::vector<POVNode> work, members;
         bool list = false, embedded = false, open = false;
-        POVNode memberTemplate;
+        POVNode memberTemplate, choiceBody;
     };
     struct Evidence {
         std::vector<Binding> bindings;
@@ -53,6 +53,14 @@ private:
     using Key = std::weak_ptr<infonView>;
     std::map<Key, std::vector<Certificate>, std::owner_less<Key>> evidence_;
     std::vector<POVNode> members(const POVNode& node) const {
+        if(auto body=choiceBody(node)) {
+            std::vector<POVNode> result;
+            for(auto child=POVDescription(body).member();child;child=POVDescription(child).adjacent()) {
+                if(access_->subList(child)) return {}; // embedded alternatives need a logical choice walk
+                result.push_back(child);
+            }
+            return result;
+        }
         auto raw = access_->definitionMembers(node); return {raw.begin(), raw.end()};
     }
     std::vector<POVNode> work(const POVNode& node) const {
@@ -60,6 +68,20 @@ private:
     }
 public:
     explicit ProteusDefinitions(std::shared_ptr<ProteusGraphAccess> access) : access_(std::move(access)) {}
+    POVNode choiceBody(const POVNode& node) const {
+        auto item=node->pItem;
+        if(!item->isOrLike() || !access_->plain(node,true,false,false,false) || !access_->literalSelectionBody(item->innr) ||
+           item->innr->partRef || item->innr->funcArgs || !item->innr->wrkList.empty() ||
+           getFlagBit(item->innr->value->flags,infonState::tailUnfinished)) return {};
+        auto body=view(item->innr);
+        for(auto child=POVDescription(body).member();child;child=POVDescription(child).adjacent())
+            if(access_->subList(child)) return {};
+        return body;
+    }
+    GraphTypeFacts facts(const POVNode& node,bool predicate=false) const {
+        if(choiceBody(node)) {GraphTypeFacts result;result.valid=true;return result;}
+        return predicate ? access_->predicateFacts(node,false) : access_->typeFacts(node);
+    }
     std::vector<std::string> names(const POVNode& node) const {
         auto raw = access_->typeNames(node);
         std::vector<std::string> result;
@@ -170,8 +192,8 @@ public:
             (access_->memberTemplate(node) && !access_->fedTemplate(node)) || access_->occurrenceOwner(node);
     }
     bool children(const POVNode& node, const POVNode& root, std::vector<POVNode>& result) const {
-        if (!(node == root ? access_->predicateFacts(node,false) : access_->typeFacts(node)).valid) return false;
-        if (node != root && !access_->scalarTypeShape(node) && !listRequirement(node)) return false;
+        if (!facts(node,node==root).valid) return false;
+        if (node != root && !access_->scalarTypeShape(node) && !listRequirement(node) && !choiceBody(node)) return false;
         // Registry constraints within a shared body need a read-only relation
         // protocol. Keep them visible as deferred work rather than ignoring them.
         if (node != root && !POVDescription(node, access_->registry.get()).relationships(false).empty()) return false;
@@ -200,8 +222,8 @@ public:
                 bindings.push_back({name, body});
         }
         if (node == root || proof->evidence->witnesses.count(node)) return;
-        proof->evidence->witnesses.emplace(node, Witness{node, node->pItem, access_->typeFacts(node),
-            names(node), work(node), members(node), listRequirement(node), access_->definitionEmbedded(node), access_->openTail(node), memberTemplate(node)});
+        proof->evidence->witnesses.emplace(node, Witness{node, node->pItem, facts(node),
+            names(node), work(node), members(node), listRequirement(node), access_->definitionEmbedded(node), access_->openTail(node), memberTemplate(node), choiceBody(node)});
     }
     // The graph's leave edge supplies postorder: every required child has
     // already been walked. Compile requirements, never execute child normalize.
@@ -217,7 +239,13 @@ public:
             auto& witness = proof->evidence->witnesses.at(node);
             requirement->facts = witness.facts;
             requirement->list = witness.list; requirement->open = witness.list && witness.open;
+            if(witness.choiceBody) {
+                DefinitionRequirement::Choice choice;choice.source=node;
+                for(const auto& member:witness.members) choice.alternatives.push_back(compiled.at(member));
+                requirement->choices.push_back(std::move(choice));
+            }
             for (const auto& member : witness.members) {
+                if(witness.choiceBody) break;
                 auto child = compiled.at(member);
                 if (access_->definitionEmbedded(member)) {
                     if (!child->list) throw DefinitionConflict("non-list embedded definition span");
@@ -238,6 +266,9 @@ public:
             auto repeated = std::make_shared<DefinitionRequirement>();
             repeated->facts.valid = true; repeated->facts.overlay = infonState::LST;
             repeated->list = true; repeated->open = true; repeated->repeated = compiled.at(source); repeated->templateSource = source;
+            // A local member template constrains each present part without
+            // turning an explicitly unordered collection into an ordered one.
+            repeated->ordered=node!=root;
             // An open body denotes repeated positions, not an empty finite list.
             if (node != root && access_->repeatedDefinitionList(node)) {
                 requirement->repeated = repeated->repeated; requirement->templateSource = source;
@@ -286,11 +317,11 @@ public:
             if (lookup(binding.name) != binding.body || (!binding.body && declared(binding.name))) return false;
         for (auto& entry : proof->evidence->witnesses) {
             auto& witness = entry.second;
-            if (witness.node->pItem != witness.infon || !witness.facts.same(access_->typeFacts(witness.node)) ||
+            if (witness.node->pItem != witness.infon || !witness.facts.same(facts(witness.node)) ||
                 witness.names != names(witness.node) || witness.work != work(witness.node) ||
                 witness.list != listRequirement(witness.node) || witness.members != members(witness.node) ||
                 witness.embedded != access_->definitionEmbedded(witness.node) || witness.open != access_->openTail(witness.node) ||
-                witness.memberTemplate != memberTemplate(witness.node) || !POVDescription(witness.node, access_->registry.get()).relationships(false).empty()) return false;
+                witness.memberTemplate != memberTemplate(witness.node) || witness.choiceBody!=choiceBody(witness.node) || !POVDescription(witness.node, access_->registry.get()).relationships(false).empty()) return false;
         }
         return true;
     }
@@ -317,7 +348,7 @@ public:
         auto facts = predicate ? access_->predicateFacts(node,false) : access_->typeFacts(node);
         if (!facts.valid || !access_->hasTypeRequirements(node) || optional(node)) return facts;
         auto proof = saved(node);
-        if (!proof || proof->requirement->list || !facts.combine(proof->requirement->facts)) facts.valid = false;
+        if (!proof || proof->requirement->list || !proof->requirement->choices.empty() || !facts.combine(proof->requirement->facts)) facts.valid = false;
         return facts;
     }
     bool accepts(const Certificate& proof, const POVNode& node) const {
@@ -399,9 +430,17 @@ public:
 class ProteusTypeGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusDefinitions> definitions_;
     ProteusDefinitions::Certificate proof_;
+    std::function<void(const POVNode&,const POVNode&)> representedTemplate_;
 public:
-    ProteusTypeGoal(Query<POVNode> query, std::shared_ptr<ProteusDefinitions> definitions)
-        : GoalSpec<POVNode>(query), definitions_(std::move(definitions)) {}
+    ProteusTypeGoal(Query<POVNode> query, std::shared_ptr<ProteusDefinitions> definitions,
+                   std::function<void(const POVNode&,const POVNode&)> representedTemplate)
+        : GoalSpec<POVNode>(query), definitions_(std::move(definitions)), representedTemplate_(std::move(representedTemplate)) {}
+    void settled(bool resolved) override {
+        // A proved template may be represented while member values remain
+        // unknown. Reuse this goal's proof, without an unpriced second scan.
+        if(resolved && request.kind==typeRequirements)
+            if(auto source=definitions_->repeatedBody(request.node)) representedTemplate_(request.node,source);
+    }
     void beginPass() override { proof_ = std::make_shared<ProteusDefinitions::Proof>(); }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
         auto q = visit.query;
