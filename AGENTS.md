@@ -26,6 +26,12 @@ fixed-width whole-list grouping use graph requirements and priced plans.
 Empty open definition bodies retain virtual positions; their known extent
 feeds the shared span layout without allocating members.
 Loaded instance prefixes can be checked without expanding their virtual tails.
+A proved contradiction uses GoalRejected (or its DefinitionConflict subtype),
+so rejection propagates only through required goal dependencies. Exploratory
+rejection must not abort unrelated routes, mutate the RHS into a global failure,
+or establish an identity. Keep source nodes and contexts available for reuse.
+Missing information is still deferred. Engine/input/ownership errors remain
+session failures; do not classify them as ordinary match rejection.
 Sequence matching uses successful continuation edges and accepts the first
 complete grammar correspondence; alternatives for ambiguous grammar parses remain
 deferred. This does not apply to unordered field selection, which must retain

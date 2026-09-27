@@ -2,9 +2,9 @@
 
 // A proved data contradiction differs from an implementation/ownership error.
 // Assertion goals report it; speculative correspondence can reject that route.
-class DefinitionConflict : public std::runtime_error {
+class DefinitionConflict : public GoalRejected {
 public:
-    using std::runtime_error::runtime_error;
+    using GoalRejected::GoalRejected;
 };
 
 // Compiled requirements are certificate data, not graph nodes. Their source

@@ -194,7 +194,7 @@ public:
             for (const auto& member : witness.members) {
                 auto child = compiled.at(member);
                 if (access_->definitionEmbedded(member)) {
-                    if (!child->list) throw std::runtime_error("non-list embedded definition span");
+                    if (!child->list) throw DefinitionConflict("non-list embedded definition span");
                     // A named alias may reveal repetition only after its walk.
                     // Never mistake its empty physical prefix for zero items.
                     if (child->open) { proof->compilable = false; return; }
@@ -205,7 +205,7 @@ public:
                 GraphTypeFacts extent;
                 extent.valid = true; extent.hasSize = true;
                 extent.size = static_cast<std::int64_t>(requirement->members.size());
-                if (!requirement->facts.combine(extent)) throw std::runtime_error("incompatible finite definition extent");
+                if (!requirement->facts.combine(extent)) throw DefinitionConflict("incompatible finite definition extent");
             }
         }
         if (auto source = memberTemplate(node)) {

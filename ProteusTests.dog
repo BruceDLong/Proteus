@@ -1,6 +1,13 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphRejection/scalarReuse
+    unit/graphRejection/textReuse
+    unit/graphRejection/sizeReuse
+    unit/graphRejection/rangeReuse
+    unit/graphRejection/retryAfterChange
+    unit/graphRejection/projectionAlternative
+    unit/graphRejection/grammarReuse
     unit/graphConsolidation/scalar
     unit/graphConsolidation/text
     unit/graphConsolidation/finiteList
@@ -10935,7 +10942,11 @@ struct GLOBAL {
             handle.waitForCompletion();
         }
         bool pending=caseID==8 || caseID==11 || caseID==12 || caseID==14 || caseID==15 || caseID==20 || caseID==25;
-        if(caseID==22) passed &= handle.status().failed && getModeBits(root->pItem->value->flags,infonState::evalMode)==infonState::emUnknown;
+        if(caseID==22) {
+            bool rejected=false;for(const auto& step:handle.steps()) if(step.action.find("reject: ")==0) rejected=true;
+            passed &= rejected && !handle.status().failed && handle.status().symbolicValues && handle.status().withSubscribers &&
+                getModeBits(root->pItem->value->flags,infonState::evalMode)==infonState::emUnknown;
+        }
         else if(pending) passed &= !handle.status().failed && handle.status().symbolicValues;
         else {
             passed &= !handle.status().failed && toString(root->pItem.get())==expected;
@@ -11395,6 +11406,83 @@ struct GLOBAL {
     }%>
     void: unitTestGraphConsolidation(me string: testName, me int: caseID) <- {
         me bool: passed <- graphConsolidationCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHREJECTION(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphRejection(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHREJECTION(unit/graphRejection/scalarReuse, 0)
+    GRAPHREJECTION(unit/graphRejection/textReuse, 1)
+    GRAPHREJECTION(unit/graphRejection/sizeReuse, 2)
+    GRAPHREJECTION(unit/graphRejection/rangeReuse, 3)
+    GRAPHREJECTION(unit/graphRejection/retryAfterChange, 4)
+    GRAPHREJECTION(unit/graphRejection/projectionAlternative, 5)
+    GRAPHREJECTION(unit/graphRejection/grammarReuse, 6)
+
+    me bool: graphRejectionCase(me string: testName, me int: caseID) <- <%{
+        GraphNormalizer normalizer;normalizer.init();
+        bool passed=true;
+        if(caseID==5) {
+            auto defs=graphParsed(testName,"{#spoke={length:*1000+123=*1000+456}}");
+            auto declared=normalizer.normalize(defs);declared.waitForCompletion();
+            auto original=toString(defs->pItem.get());
+            auto root=graphParsed(testName,"spoke:{length:_}"),cursor=root->pItem->value->items.head;
+            for(int i=0;i<12;++i) {
+                auto next=graphParsed(testName,"_");normalizer.addRHS(cursor,next);cursor=next;
+            }
+            normalizer.addRHS(cursor,graphParsed(testName,"*1000+123"));
+            auto result=normalizer.normalize(root);result.waitForCompletion();
+            bool rejected=false;for(const auto& step:result.steps()) if(step.action.find("reject: ")==0) rejected=true;
+            passed &= !declared.status().failed && rejected && !result.status().failed && !result.status().symbolicValues &&
+                toString(root->pItem.get())=="spoke:{length:*1000+123}" && toString(defs->pItem.get())==original;
+            if(!passed) std::cout << "Projection rejection: " << result.status().error << "\n" << toString(root->pItem.get()) << "\n";
+            result.cancel();
+        } else {
+            std::string left="*10+8",right="*10+9",unknown="_";
+            if(caseID==1) {left="'A'";right="'B'";unknown="$";}
+            if(caseID==2) {left="*3+_";right="*4+_";}
+            if(caseID==3) {left="(*3+_ +2)";right="7";}
+            if(caseID==6) {left="{'A'} == 'B'";unknown="{'B'}";}
+            auto rejected=graphParsed(testName,left);
+            auto source=caseID==6 ? rejected->pItem->wrkList.front() : graphParsed(testName,right);
+            if(caseID!=6) normalizer.addRHS(rejected,source);
+            auto original=toString(source->pItem.get());
+            auto failure=normalizer.normalize(rejected);failure.waitForCompletion();
+            passed &= (caseID==6 ? !failure.status().failed && failure.status().symbolicValues : failure.status().failed) &&
+                rejected->pItem->workListContainsPOV(source) && !normalizer.access->hasDirectIdentity(rejected,source) &&
+                !getFlagBit(rejected->pItem->flags,infonView::isNormed) && toString(source->pItem.get())==original;
+            failure.cancel();
+            auto next=graphParsed(testName,unknown);normalizer.addRHS(next,source);
+            auto success=normalizer.normalize(next);success.waitForCompletion();
+            passed &= !success.status().failed && toString(source->pItem.get())==original;
+            if(caseID==6) passed &= toString(next->pItem.get())=="{'B'}" && !success.status().symbolicValues;
+            else passed &= normalizer.access->typeFacts(source).accepts(normalizer.access->typeFacts(next));
+            success.cancel();
+            if(caseID==4) {
+                normalizer.runtime.update([&]{rejected->pItem->value->num.val=9;});
+                auto retry=normalizer.normalize(rejected);retry.waitForCompletion();
+                passed &= !retry.status().failed && !retry.status().symbolicValues && rejected->pItem->wrkList.empty();
+                if(!passed) {
+                    std::cout << "Retry: " << retry.status().error << " symbolic=" << retry.status().symbolicValues
+                              << " work=" << rejected->pItem->wrkList.size() << " value=" << toString(rejected->pItem.get()) << "\n";
+                    for(const auto& step:retry.steps()) std::cout << step.action << "\n";
+                }
+                retry.cancel();
+            } else {
+                auto retry=normalizer.normalize(rejected);retry.waitForCompletion();
+                passed &= (caseID==6 ? !retry.status().failed && retry.status().symbolicValues : retry.status().failed) &&
+                    toString(source->pItem.get())==original;
+                retry.cancel();
+            }
+            if(!passed) std::cout << "Rejection " << caseID << ": " << failure.status().error << "\n" << toString(next->pItem.get()) << "\n";
+        }
+        normalizer.close();return passed;
+    }%>
+    void: unitTestGraphRejection(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphRejectionCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

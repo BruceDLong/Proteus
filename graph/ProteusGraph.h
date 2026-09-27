@@ -348,7 +348,7 @@ public:
         // constraint agrees with the finding. It is not an alternative branch.
         for (const auto& step : visit.path) {
             int verdict = access_->compatible(step.node, source, demand);
-            if (verdict < 0) throw std::runtime_error("incompatible scalar constraints");
+            if (verdict < 0) throw GoalRejected("incompatible scalar constraints");
             if (!verdict) { deferred_ = true; return {}; }
         }
         auto access = access_;
@@ -1038,7 +1038,7 @@ private:
                 }
                 if(constraintsOnly) {
                     auto verdict=access_->compatible(node,source,sizeAndValue);
-                    if(verdict<0) throw std::runtime_error("incompatible scalar constraints");
+                    if(verdict<0) throw GoalRejected("incompatible scalar constraints");
                     if(!verdict) result.deferred=true;
                 }
                 result.edges.push_back(direct(label, {source, query.kind, 0, origin, context}));

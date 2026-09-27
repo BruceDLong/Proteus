@@ -28,7 +28,7 @@ class GroupedListPlan {
                 (access_->scalarCandidate(at.node) && !access_->hasTypeRequirements(at.node) &&
                  access_->typeFacts(at.node).valid && access_->inputError(at.node).empty());
         }, [](const POVNode& member) { return member; })) return false;
-        if (!layout.solve()) throw std::runtime_error("source extent disagrees with grouped correspondence");
+        if (!layout.solve()) throw GoalRejected("source extent disagrees with grouped correspondence");
         for (const auto& segment : layout.segments) sources_.push_back(segment.node);
         return true;
     }
@@ -52,17 +52,17 @@ public:
         if (!member_->list || (member_->repeated && member_->repeated->list)) return;
         for (const auto& child : member_->members) if (child->list) return;
         const auto shape = member_->memberLayout();
-        if (!shape.valid) throw std::runtime_error("incompatible group extent");
+        if (!shape.valid) throw GoalRejected("incompatible group extent");
         if (shape.extent() <= 0) return;
         const auto width = width_ = static_cast<std::size_t>(shape.extent());
         if (!sourceLayout(source)) return;
-        if (sources_.size() % width) throw std::runtime_error("incomplete final group in whole loose correspondence");
+        if (sources_.size() % width) throw GoalRejected("incomplete final group in whole loose correspondence");
         const auto count = sources_.size() / width;
         if (count > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) return;
         const auto extent = access_->listExtent(target_);
         if (extent == -2) return;
         if (extent >= 0 && static_cast<std::uint64_t>(extent) != count)
-            throw std::runtime_error("group count disagrees with target extent");
+            throw GoalRejected("group count disagrees with target extent");
         std::vector<POVNode> existing;
         for (auto item = access_->first(target_, false); item; item = access_->next(item, false)) {
             ++work.visits;
@@ -70,7 +70,7 @@ public:
             existing.push_back(item);
         }
         if (existing.size() > count || (!access_->openTail(target_) && existing.size() != count))
-            throw std::runtime_error("group count disagrees with target members");
+            throw GoalRejected("group count disagrees with target members");
         const auto prefix = existing.size();
         existing.resize(count);
         // Reuse each already-demanded canonical POV. Distinct reference views
@@ -78,7 +78,7 @@ public:
         for (auto occurrence : access_->demandedOccurrences(target_)) {
             auto index = occurrence->implicitItem.sourceIndex;
             if (index < 0 || static_cast<std::uint64_t>(index) >= count)
-                throw std::runtime_error("demanded occurrence exceeds grouped extent");
+                throw GoalRejected("demanded occurrence exceeds grouped extent");
             if (existing[index] && existing[index] != occurrence) return;
             existing[index] = occurrence;
         }
@@ -94,7 +94,7 @@ public:
                 auto child = j < member_->members.size() ?
                     std::make_shared<DefinitionRequirement>(*member_->members[j]) : member_->repeated ?
                     std::make_shared<DefinitionRequirement>(*member_->repeated) : std::make_shared<DefinitionRequirement>();
-                if (!child->facts.combine(facts)) throw std::runtime_error("source conflicts with group member requirement");
+                if (!child->facts.combine(facts)) throw GoalRejected("source conflicts with group member requirement");
                 spec->members.push_back(child);
             }
             auto plan = std::make_shared<ProteusDefinitionPlan>(access_, existing[i], spec);

@@ -73,6 +73,14 @@ struct SetCommand {
     Work work{0, 0};
 };
 
+// A proved contradiction belongs to one goal, not to the source node or the
+// entire search. Required parents inherit rejection; exploratory parents do
+// not. Other exceptions still report engine/input failures for the session.
+class GoalRejected : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 // A collected result retains the finding's route cost and trace when its Set
 // must wait until the current frontier has been examined.
 template<class Node> struct CommandBatch {
@@ -174,6 +182,7 @@ template<class Node> struct SearchSession {
         bool deferred = false;
         std::uint64_t generation = 0;
         bool finishedPass = false;
+        std::string rejection;
     };
     struct Pending {
         std::size_t task = 0;
@@ -316,7 +325,8 @@ template<class Node> class GraphManager {
 
     static void enqueue(Session& s, std::size_t task, Cost base,
                         Edge<Node> edge, std::vector<Query<Node>> path) {
-        if (edge.alternative && s.tasks[task].goal->satisfied()) return;
+        if (!s.tasks[task].rejection.empty() ||
+            (edge.alternative && s.tasks[task].goal->satisfied())) return;
         Cost cost = addCost(base, s.policy.estimate(edge.work));
         Cost estimate = addCost(cost, s.policy.estimate(edge.remaining));
         if (estimate > s.policy.maximumRoute) {
@@ -344,7 +354,7 @@ template<class Node> class GraphManager {
             auto& task = s.tasks[i];
             const auto& existing = task.goal->request;
             if (!(query < existing) && !(existing < query)) {
-                if (task.baseCost <= cost) return i;
+                if (!task.rejection.empty() || task.baseCost <= cost) return i;
                 // A shared subgoal may first be advertised by a costly route.
                 // Retry at the cheaper price and discard its old queued steps.
                 index = i;
@@ -359,10 +369,29 @@ template<class Node> class GraphManager {
             }
         }
         goal->beginPass();
-        if (index == s.tasks.size()) s.tasks.push_back({std::move(goal), cost, {}, {}, false, 0});
+        if (index == s.tasks.size()) s.tasks.push_back({std::move(goal), cost, {}, {}, false, 0, false, {}});
         enqueue(s, index, cost, {"visit", {0, 0}, false,
                                  [query] { return query; }}, {});
         return index;
+    }
+    static void reject(Session& s, std::size_t task, const std::string& reason, Cost cost) {
+        std::vector<std::size_t> pending{task};
+        for (std::size_t next=0;next<pending.size();++next) {
+            auto index=pending[next];auto& rejected=s.tasks[index];
+            if (!rejected.rejection.empty()) continue;
+            rejected.rejection=reason.empty() ? "goal rejected" : reason;
+            rejected.finishedPass=true;
+            ++rejected.generation; // discard this goal's queued visits and Sets
+            s.steps.push_back({"reject: " + rejected.rejection,rejected.goal->request,cost,s.status.revision});
+            for (std::size_t parent=0;parent<s.tasks.size();++parent) {
+                const auto& required=s.tasks[parent].required;
+                if (std::find(required.begin(),required.end(),index)!=required.end()) pending.push_back(parent);
+            }
+        }
+        if (!s.tasks[0].rejection.empty()) {
+            s.status.failed=true;s.status.fullyNormed=false;s.status.withSubscribers=false;
+            s.status.error=s.tasks[0].rejection;s.terminal=true;s.frontier={};
+        }
     }
     static void settle(Session& s) {
         // Resolve the dependency DAG from its leaves. Cycles cannot establish
@@ -374,7 +403,7 @@ template<class Node> class GraphManager {
         std::queue<std::size_t> ready;
         for (std::size_t i = 0; i < s.tasks.size(); ++i) {
             const auto& task = s.tasks[i];
-            local[i] = !task.deferred && !task.goal->symbolic();
+            local[i] = task.rejection.empty() && !task.deferred && !task.goal->symbolic();
             remaining[i] = task.required.size();
             for (auto child : task.required) parents[child].push_back(i);
             if (local[i] && !remaining[i]) ready.push(i);
@@ -387,7 +416,7 @@ template<class Node> class GraphManager {
                 if (!--remaining[parent] && local[parent]) ready.push(parent);
         }
         for (std::size_t i = 0; i < s.tasks.size(); ++i)
-            if (!resolved[i]) s.tasks[i].goal->settled(false);
+            if (!resolved[i] && s.tasks[i].rejection.empty()) s.tasks[i].goal->settled(false);
         s.status.symbolicValues = !resolved[0];
     }
     static void advance(Context<Node>& c, Session& s) {
@@ -404,8 +433,13 @@ template<class Node> class GraphManager {
                 auto& task=s.tasks[i];
                 if (task.finishedPass) continue;
                 task.finishedPass=true;
-                auto batch=task.goal->finishPass();
-                enqueueCommands(s,i,batch.finding,std::move(batch.commands));
+                try {
+                    auto batch=task.goal->finishPass();
+                    enqueueCommands(s,i,batch.finding,std::move(batch.commands));
+                } catch (const GoalRejected& error) {
+                    reject(s,i,error.what(),task.baseCost);
+                    if (s.terminal) { c.changed.notify_all();return; }
+                }
             }
             if (!s.frontier.empty()) return;
             settle(s);
@@ -421,6 +455,13 @@ template<class Node> class GraphManager {
         auto pending = s.frontier.top();
         s.frontier.pop();
         if (pending.generation != s.tasks[pending.task].generation) return;
+        try { follow(c,s,pending); }
+        catch (const GoalRejected& error) {
+            reject(s,pending.task,error.what(),pending.cost);
+            if (s.terminal) c.changed.notify_all();
+        }
+    }
+    static void follow(Context<Node>& c, Session& s, typename Session::Pending& pending) {
         auto goal = s.tasks[pending.task].goal;
         if (pending.edge.alternative && goal->satisfied()) return;
         auto arrival = pending.edge.follow();
@@ -462,9 +503,14 @@ template<class Node> class GraphManager {
                 auto& required = s.tasks[pending.task].required;
                 if (std::find(required.begin(), required.end(), child) == required.end())
                     required.push_back(child);
+                if (!s.tasks[child].rejection.empty()) {
+                    reject(s,pending.task,s.tasks[child].rejection,pending.cost);
+                    return;
+                }
             }
         }
     }
+
     static void run(Context<Node>* c) {
         std::unique_lock<std::mutex> lock(c->mutex);
         while (!c->stopping) {

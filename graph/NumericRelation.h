@@ -26,7 +26,7 @@ public:
            !POVDescription(source,access.registry.get()).relationships().empty()) return;
         auto match=matchNumeric(left,right,source->looseSize(),source->looseType());
         if(match.verdict==ScalarMatch::no && !source->looseType())
-            throw std::runtime_error("incompatible numeric range constraints");
+            throw GoalRejected("incompatible numeric range constraints");
         result=match.result;accepted=match.verdict==ScalarMatch::yes;
         if(accepted && !left.bounds.same(result.bounds)) work.creations=result.bounds.point ? 1 : 5;
     }

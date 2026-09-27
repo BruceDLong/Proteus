@@ -100,7 +100,7 @@ selection, end-relative indexes, and mixed field/index paths.
 
 | Component | Responsibility |
 |---|---|
-| `GraphSearch.h` | Opaque-node search, lazy edges, route costs, sub-goals, revisions, subscriptions, cancellation, collected Set batches, worker lifetime |
+| `GraphSearch.h` | Opaque-node search, lazy edges, route costs, sub-goals, revisions, subscriptions, cancellation, collected Set batches, local rejection, worker lifetime |
 | `GraphFoundation.Lib.dog` | Public CodeDog API; Proteus graph access, compatibility checks and atomic Set batches |
 | `POVDescription.h` | Live, goal-independent access to existing POV links, state slots, work entries and registry identities |
 | `ProteusGraph.h` | Translate semantic access into graph edges and refinement opportunities; GoalSpec turns findings into Sets |
@@ -172,9 +172,20 @@ cheap routes whose combined work exceeds the threshold.
 A finding does not end conjunction checking. A work-list edge is a constraint,
 whereas alternate ways of reaching a selected occurrence are marked as routes
 that may be skipped after satisfaction. Sub-goals advertised as alternatives
-are also unnecessary once another route supplies the result. A conflicting
-scalar constraint fails the handle; previously applied Sets and every original
-constraint remain available for inspection.
+are also unnecessary once another route supplies the result. `GoalRejected`
+records a proved contradiction on that goal and stops its queued visits and
+Sets. Required parents inherit rejection; exploratory parents can keep looking.
+A contradiction in the root or a required descendant fails the handle. Other
+exceptions still fail the session as engine/input errors. Previously applied
+Sets and source constraints remain available; no failed match establishes an
+identity or globally marks its RHS invalid. Missing information is deferred.
+
+Rejected queries are not retried at a cheaper cost in the same revision; lower
+cost cannot repair a contradiction. The next published revision clears search
+proofs, including rejected exploratory queries. A failed root is terminal until
+explicitly normalized again. Sequence predicates still reject individual
+comparisons by offering no continuation. See
+[goal-rejection-results.md](goal-rejection-results.md) for validation.
 
 A refinement with `alternative=false` is a required child goal. Completion is
 computed per goal from its own evidence and these dependencies. A resolved

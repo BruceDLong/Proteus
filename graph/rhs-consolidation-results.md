@@ -73,7 +73,7 @@ Internal assertions that previously required a resolved RHS to remain in
 The old `AItemLifecycle.completeSourceWorkConstraint` removes terminal rejected
 work, while current graph assertions report a conflict and preserve its
 constraint. This explains some remaining direct-scalar output differences.
-Whether a top-level failed RHS should remain available for later reconsideration
-is a separate lifecycle decision, not evidence that the equality was
-consolidated. The user has been asked to resolve that distinction before changing
-rejection behavior. Mismatched tentative grammar paths still stop propagation.
+The later decision preserves rejected RHSs for other matches and reconsideration.
+Goal-local rejection now distinguishes an exploratory contradiction from a
+required failure; see [goal-rejection-results.md](goal-rejection-results.md).
+Mismatched tentative grammar paths still stop propagation without consuming input.

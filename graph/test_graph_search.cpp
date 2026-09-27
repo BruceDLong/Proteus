@@ -15,7 +15,7 @@ struct TestNode {
     Node prerequisite, afterRefinement;
     Node reveals;
     bool endless = false, complete = false;
-    std::vector<std::pair<Node, Cost>> required;
+    std::vector<std::pair<Node, Cost>> required, exploratory;
 };
 static Node node(int value = -1, int size = -1) {
     auto n = std::make_shared<TestNode>(); n->value = value; n->size = size; return n;
@@ -43,7 +43,7 @@ public:
         if (value < 0) return {};
         for (const auto& step : visit.path)
             if (field(step.node) >= 0 && field(step.node) != value)
-                throw std::runtime_error("constraint conflict");
+                throw GoalRejected("constraint conflict");
         if (field(target) == value) return {};
         return {{kind == 2 ? "Set size" : "Set value", [target, value, kind] {
             int& destination = kind == 2 ? target->size : target->value;
@@ -93,6 +93,9 @@ public:
         for (const auto& child : n->required)
             result.refinements.push_back({{child.first, 1, 0}, {child.second, 0},
                                           "required member", false});
+        for (const auto& child : n->exploratory)
+            result.refinements.push_back({{child.first, 1, 0}, {child.second, 0},
+                                          "exploratory member", true});
         if (n->endless) {
             // A large virtual space, created one bounded step at a time.
             result.edges.push_back({"virtual continuation", {1, 0}, false, [query] {
@@ -459,6 +462,109 @@ int main() {
         auto result=manager.normalize({root,1,0},cost);result.waitForCompletion();
         assert(root->value==-1 && *access->publications==0 && result.status().withSubscribers);
         assert(saw(result,"exclude: Set collected result"));result.cancel();++cases;
+    }
+    {
+        // Rejecting one exploratory comparison must leave the same source
+        // available to a slower successful route in this search.
+        auto access=std::make_shared<TestAccess>();GraphManager<Node> manager(access);
+        auto root=node(),bad=node(8),source=node(9),cursor=root;
+        bad->rhs={source};root->exploratory={{bad,0}};
+        for(int i=0;i<8;++i) {auto next=node();cursor->rhs={next};cursor=next;}
+        cursor->rhs={source};
+        auto result=manager.normalize({root,1,0});result.waitForCompletion();
+        assert(!result.status().failed && !result.status().symbolicValues && root->value==9);
+        assert(bad->value==8 && bad->rhs.front()==source && source->value==9);
+        ++cases;
+    }
+    {
+        // A failed required descendant rejects its exploratory parent only.
+        auto access=std::make_shared<TestAccess>();GraphManager<Node> manager(access);
+        auto root=node(),attempt=node(1),bad=node(8),source=node(9);
+        root->exploratory={{attempt,0}};attempt->required={{bad,0}};bad->rhs={source};
+        auto result=manager.normalize({root,1,0});result.waitForCompletion();
+        assert(!result.status().failed && result.status().withSubscribers);
+        assert(!bad->complete && !attempt->complete && saw(result,"reject: constraint conflict"));
+        manager.update([&]{root->rhs={source};});result.waitForCompletion();
+        assert(!result.status().failed && root->value==9 && bad->value==8);
+        ++cases;
+    }
+    {
+        // Once the same rejected goal becomes required, failure reaches the
+        // root even if that dependency was discovered after the rejection.
+        auto access=std::make_shared<TestAccess>();GraphManager<Node> manager(access);
+        auto root=node(),later=node(1),bad=node(8),source=node(9);
+        root->exploratory={{bad,0}};root->required={{later,10}};
+        later->required={{bad,0}};bad->rhs={source};
+        auto result=manager.normalize({root,1,0});result.waitForCompletion();
+        assert(result.status().failed && !result.status().withSubscribers && !root->complete);
+        assert(bad->rhs.front()==source && source->value==9);++cases;
+    }
+    {
+        // Rejection is revision-scoped. A subscribed search retries after new
+        // evidence, but it never spins on an unchanged failed comparison.
+        auto access=std::make_shared<TestAccess>();GraphManager<Node> manager(access);
+        auto root=node(),bad=node(8),source=node(9);root->exploratory={{bad,0}};bad->rhs={source};
+        auto result=manager.normalize({root,1,0});result.waitForCompletion();
+        int rejections=0;for(const auto& step:result.steps()) if(step.action=="reject: constraint conflict") ++rejections;
+        assert(rejections==1 && result.status().withSubscribers);
+        manager.update([&]{bad->value=9;});result.waitForCompletion();
+        assert(!result.status().failed && bad->complete && result.status().withSubscribers);
+        result.cancel();manager.update([&]{root->rhs={source};});result.waitForCompletion();
+        assert(result.status().cancelled && root->value==-1);++cases;
+    }
+    {
+        // Real engine faults are not silently treated as a losing candidate.
+        struct BrokenAccess : TestAccess {
+            Node broken;
+            Expansion<Node> expand(const Query<Node>& q) override {
+                if(q.node==broken) throw std::logic_error("broken invariant");
+                return TestAccess::expand(q);
+            }
+        };
+        auto access=std::make_shared<BrokenAccess>();GraphManager<Node> manager(access);
+        auto root=node();access->broken=node();root->exploratory={{access->broken,0}};
+        auto result=manager.normalize({root,1,0});result.waitForCompletion();
+        assert(result.status().failed && result.status().error=="broken invariant");++cases;
+    }
+    {
+        // Rejection during expansion invalidates Sets already queued by found.
+        struct RejectingAccess : TestAccess {
+            Node source;
+            Expansion<Node> expand(const Query<Node>& q) override {
+                if(q.node==source) throw GoalRejected("rejected after finding");
+                return TestAccess::expand(q);
+            }
+        };
+        auto access=std::make_shared<RejectingAccess>();GraphManager<Node> manager(access);
+        auto root=node(),candidate=node();access->source=node(9);candidate->rhs={access->source};
+        root->exploratory={{candidate,0}};
+        auto result=manager.normalize({root,1,0});result.waitForCompletion();
+        assert(!result.status().failed && result.status().withSubscribers && candidate->value==-1);
+        assert(!saw(result,"Set value"));result.cancel();++cases;
+    }
+    for(bool inSet:{false,true}) {
+        // Both delayed validation and an end-of-pass proof reject locally.
+        struct RejectingGoal : TestGoal {
+            bool inSet;
+            RejectingGoal(Query<Node> q,bool where):TestGoal(q),inSet(where) {}
+            std::vector<SetCommand> found(const Visit<Node>&) override {
+                if(!inSet) return {};
+                return {{"rejecting Set",[]{throw GoalRejected("rejected Set");return false;}}};
+            }
+            CommandBatch<Node> finishPass() override {throw GoalRejected("rejected finish");}
+        };
+        struct RejectingAccess : TestAccess {
+            Node rejected;bool inSet=false;
+            std::shared_ptr<GoalSpec<Node>> goal(const Query<Node>& q) override {
+                if(q.node==rejected) return std::make_shared<RejectingGoal>(q,inSet);
+                return TestAccess::goal(q);
+            }
+        };
+        auto access=std::make_shared<RejectingAccess>();GraphManager<Node> manager(access);
+        auto root=node();access->rejected=node();access->inSet=inSet;root->exploratory={{access->rejected,0}};
+        auto result=manager.normalize({root,1,0});result.waitForCompletion();
+        assert(!result.status().failed && result.status().withSubscribers && !access->rejected->complete);
+        assert(saw(result,inSet ? "reject: rejected Set" : "reject: rejected finish"));result.cancel();++cases;
     }
     std::cout << "Graph search: " << cases << "/" << cases << " scenarios passed\n";
 }
