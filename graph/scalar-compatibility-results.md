@@ -86,7 +86,8 @@ Composite exclusions, general negative-conjunction simplification, and direct
 qualified scalar exclusions beyond the existing sequence predicates remain
 symbolic. Declared type meaning inside standalone negative constraints still
 needs read-only definition evidence; this change does not apply a positive
-meaning to a negative object. Contextual definition expansion is awaiting the
-binding decision recorded in `open-questions.md`: whether an instance keeps its
-original application context or rebinds on explicit normalization. Overloaded
+meaning to a negative object. Contextual definition expansion remains to be
+implemented. The binding decision in `open-questions.md` is now settled: an
+instance keeps its original application context, including on explicit
+normalization; future rebinding will need caller authorization. Overloaded
 meanings and the remaining older-suite failures are unchanged.

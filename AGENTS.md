@@ -109,7 +109,9 @@ and check explicit member contradictions before publishing list identities.
 %ctx binds the live Agent topic-history POV through ordinary path publication;
 unary ~word uses the same lookup. Publish context edits under runtime.update().
 AgentContext invalidates counted size on membership edits; explicit sizes remain
-constraints. Contextual definition application bindings are still undecided.
+constraints. Definition applications must retain their original context binding,
+even on explicit re-normalization. Future caller-authorized rebinding is tracked
+in graph/open-questions.md; do not infer permission to rebind from normalization.
 See graph/scalar-compatibility-results.md for tests and remaining boundaries.
 
 Supplied typed-field descriptions may be partial even when ordered. Normalizing

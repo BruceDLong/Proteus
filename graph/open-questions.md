@@ -35,11 +35,23 @@ been reopened.
    meaning when the same word has multiple definitions? Which POV/context
    relationships bind that meaning, and what context must travel with a cached
    proof so that it cannot be reused incorrectly elsewhere?
-   In particular, for `#chosen = %ctx~color`, does an existing instance keep its
-   original application context when the Agent context changes, or rebind when
-   explicitly normalized again? This binding decision is pending. Ordinary
-   `%ctx`/`~word` queries now use live topic-history source edges; completed
-   queries reconsider those edges on explicit normalization.
+   Definition applications keep their original context binding for now, including
+   on explicit re-normalization. When the engine can interact with the caller
+   better, how can it request and record authorization to rebind an application?
+   What scope should that authorization cover, and how should dependent evidence
+   and results be reconsidered? Rebinding must not happen implicitly. Ordinary
+   `%ctx`/`~word` queries use live topic-history source edges; completed queries
+   reconsider those edges on explicit normalization.
+   The user suggested representing context as a T-list. This could make the
+   original binding an ordinary POV into a particular context occurrence;
+   subsequent context occurrences would not move that binding. The remaining
+   representation question is whether entries describe successive context
+   states (which may be partial) or record mentions/updates from which context
+   must be reconstructed. The current topic history refreshes recency and culls
+   entries, so a T flag alone does not preserve historical context. Retention
+   must keep bound occurrences meaningful; learning more about an existing
+   occurrence must remain distinct from creating a later context state. This
+   proposal does not decide component persistence or require full snapshots.
 
 6. **Related alternatives.** How do oneOf results preserve which facts belong to
    the same alternative? For example, position from wheel A must not be combined
@@ -101,6 +113,10 @@ been reopened.
 - Supplied typed-field descriptions may be partial even when ordered; returning
   a parent normalizes its present fields without enforcing the full parent layout.
 - Completed queries reconsider new definitions when explicitly normalized again.
+- Existing definition applications retain their original context binding, even
+  when explicitly normalized again after the Agent context changes. Future
+  rebinding may be authorized through interaction with the caller; it is not
+  currently automatic.
 - The graph interface exposes existing POV/infon structure and relationships.
   Goals translate discovered information into Sets; normalization returns a
   controllable handle with completion waiting and cancellation.
