@@ -6,7 +6,7 @@
 class ScalarRelation {
 public:
     NumericView result;
-    bool text=false, copiedText=false;
+    bool text=false, copiedText=false, proofOnly=false;
     Work work{0,0};
     bool supported=false,accepted=false;
     ScalarRelation(std::shared_ptr<ProteusGraphAccess> readerAccess,const POVNode& target,const POVNode& source,
@@ -15,6 +15,20 @@ public:
         PayloadReadiness payload(readerAccess,definitions->payload(source),definitions);
         bool ready=payload.ready && (!access.hasTypeRequirements(target) || definitions->satisfied(target));
         work=payload.work;
+        auto positive=access.predicateFacts(target,false),supplied=access.predicateFacts(source,true);
+        bool negativeLeft=getFlagBit(target->pItem->flags,infonView::invertMatch);
+        bool negativeRight=getFlagBit(source->pItem->flags,infonView::invertMatch);
+        bool scalar=positive.overlay!=infonState::LST && supplied.overlay!=infonState::LST;
+        bool different=positive.overlay>=0 && supplied.overlay>=0 && positive.overlay!=supplied.overlay;
+        if(!source->looseType() && positive.valid && supplied.valid &&
+           ((scalar && (negativeLeft || negativeRight)) || (different && !negativeLeft && !negativeRight))) {
+            supported=proofOnly=true;work.visits=addCost(work.visits,2);
+            if(!ready) return;
+            auto match=scalarConstraint(positive,supplied,negativeLeft,negativeRight,source->looseSize(),
+                compareNominal(*definitions,target,source),compareNominal(*definitions,source,target));
+            if(match==ScalarMatch::no) throw GoalRejected("incompatible scalar constraint");
+            accepted=match==ScalarMatch::yes;return;
+        }
         auto actual=access.typeFacts(target);
         if(source->looseType() && actual.valid && (actual.overlay<0 || actual.overlay==infonState::STR) &&
            access.plain(source,false,false,true,false) && source->pItem->value->sizeMode!=fromContext &&
@@ -62,6 +76,9 @@ public:
     std::vector<SetCommand> found(const Visit<POVNode>&) override {
         ScalarRelation plan(access_,request.node,request.related,definitions_);
         if(!plan.accepted) return {};
+        if(plan.proofOnly) return {{"Prove scalar exclusion",[this] {
+            verified_=true;return false; // decision only; preserve both operands and their relationship
+        },plan.work}};
         auto access=access_;auto target=request.node;auto result=plan.result;bool text=plan.text,copiedText=plan.copiedText;
         return {{text ? "Set string relationship evidence" : "Set numeric range evidence",[this,access,target,result,text,copiedText] {
             bool changed=!text && (result.expression || result.bounds.point) ? NumericRangeAccess::write(*access,target,result) :

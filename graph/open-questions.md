@@ -35,6 +35,11 @@ been reopened.
    meaning when the same word has multiple definitions? Which POV/context
    relationships bind that meaning, and what context must travel with a cached
    proof so that it cannot be reused incorrectly elsewhere?
+   In particular, for `#chosen = %ctx~color`, does an existing instance keep its
+   original application context when the Agent context changes, or rebind when
+   explicitly normalized again? This binding decision is pending. Ordinary
+   `%ctx`/`~word` queries now use live topic-history source edges; completed
+   queries reconsider those edges on explicit normalization.
 
 6. **Related alternatives.** How do oneOf results preserve which facts belong to
    the same alternative? For example, position from wheel A must not be combined

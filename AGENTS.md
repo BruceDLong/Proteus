@@ -46,7 +46,7 @@ other RHS constraints. A prefix does not prove final size or whole correspondenc
 See graph/repetition-prefix-results.md; parser-owned open input remains deferred.
 Scalar exclusion predicates distinguish a known mismatch from missing information.
 Accepted list-valued input members retain their atomic identity on replay; do not
-reinterpret their copied values as more grammar. Composite/standalone exclusion,
+reinterpret their copied values as more grammar. Composite exclusion,
 contextual typed predicates, prefixed definition bodies, recursive grammar,
 and unordered record matching remain later boundaries.
 Single-step field predicates support finite ordered structures. Context-free scalar type
@@ -101,6 +101,16 @@ hidden inside a matcher. Explicit-source ~ lookup uses the field walk and only
 falls back to external associations after proved direct absence. Unknown direct
 candidates retain precedence. External values own their mutable state; predicates
 remain separate. See graph/input-resolution-results.md for supported boundaries.
+
+Strict scalar exclusions and positive scalar acquisition share the compatibility
+helpers in ScalarPredicate.h. Unknown comparisons stay unknown under complement;
+never copy positive facts into a negative template. Preserve rejected endpoints
+and check explicit member contradictions before publishing list identities.
+%ctx binds the live Agent topic-history POV through ordinary path publication;
+unary ~word uses the same lookup. Publish context edits under runtime.update().
+AgentContext invalidates counted size on membership edits; explicit sizes remain
+constraints. Contextual definition application bindings are still undecided.
+See graph/scalar-compatibility-results.md for tests and remaining boundaries.
 
 Supplied typed-field descriptions may be partial even when ordered. Normalizing
 such a description (including a parent returned by `;` or `;;`) normalizes the

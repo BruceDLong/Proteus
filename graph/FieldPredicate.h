@@ -178,8 +178,7 @@ public:
             auto exclusion=read(predicate,true,{},false,true);
             if (!conflict_ && compare(exclusion,actual)==ScalarMatch::no) result=ScalarMatch::no;
         }
-        if(getFlagBit(predicate->pItem->flags,infonView::invertMatch) && result!=ScalarMatch::unknown)
-            result=result==ScalarMatch::yes ? ScalarMatch::no : ScalarMatch::yes;
+        if(getFlagBit(predicate->pItem->flags,infonView::invertMatch)) result=complement(result);
         return result;
     }
 };

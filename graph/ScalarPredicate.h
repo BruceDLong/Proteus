@@ -9,6 +9,33 @@ inline ScalarMatch compareScalar(GraphTypeFacts required, const GraphTypeFacts& 
     return required.combine(actual) ? ScalarMatch::unknown : ScalarMatch::no;
 }
 
+// Complement only a proved decision. An unresolved comparison cannot become
+// acceptance simply because the predicate is negative.
+inline ScalarMatch complement(ScalarMatch match) {
+    return match==ScalarMatch::unknown ? match : match==ScalarMatch::yes ? ScalarMatch::no : ScalarMatch::yes;
+}
+inline ScalarMatch conjunction(ScalarMatch a,ScalarMatch b) {
+    if(a==ScalarMatch::no || b==ScalarMatch::no) return ScalarMatch::no;
+    return a==ScalarMatch::yes && b==ScalarMatch::yes ? ScalarMatch::yes : ScalarMatch::unknown;
+}
+inline ScalarMatch scalarConstraint(GraphTypeFacts left,GraphTypeFacts right,
+                                   bool negativeLeft,bool negativeRight,bool looseSize=false,
+                                   ScalarMatch nominal=ScalarMatch::yes,ScalarMatch reverseNominal=ScalarMatch::yes) {
+    if(!left.valid || !right.valid) return ScalarMatch::unknown;
+    if(looseSize) left.hasSize=right.hasSize=false;
+    if(!negativeLeft && !negativeRight)
+        return left.combine(right) ? ScalarMatch::yes : ScalarMatch::no;
+    if(negativeLeft && negativeRight) {
+        // Equivalent exclusions are redundant. Other conjunctions remain
+        // explicit; neither negative operand supplies positive value evidence.
+        return nominal==ScalarMatch::yes && reverseNominal==ScalarMatch::yes &&
+            compareScalar(left,right)==ScalarMatch::yes && compareScalar(right,left)==ScalarMatch::yes ?
+            ScalarMatch::yes : ScalarMatch::unknown;
+    }
+    return complement(conjunction(negativeLeft ? compareScalar(left,right) : compareScalar(right,left),
+                                  negativeLeft ? nominal : reverseNominal));
+}
+
 // Qualified scalar text matching shares the endpoint rule with numeric
 // matching. A colon does not supply a missing target size, even when the
 // available text is concrete. Existing literal prefixes are compared without

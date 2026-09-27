@@ -7,7 +7,7 @@
 enum PathResultUse { pathValue = 0, pathCandidates = 1 };
 inline Query<POVNode> pathRequest(const POVNode& owner,int use=pathValue) {
     auto state=owner->pItem->pathSelection;
-    return {state->source,state->alternatives ? filterChoice : state->identity ? selectSelf : state->external ? externalField : state->resolution ? resolveWord : state->positional ? selectPosition : selectField,use,
+    return {state->source,state->contextual ? selectContext : state->alternatives ? filterChoice : state->identity ? selectSelf : state->external ? externalField : state->resolution ? resolveWord : state->positional ? selectPosition : selectField,use,
             state->identity || state->positional ? owner : state->predicate,{owner}};
 }
 
@@ -336,12 +336,17 @@ class PathExpression {
         if(!access.plain(rhs,rhs->pItem->isOrLike(),false,false,false) || !POVDescription(rhs,access.registry.get()).relationships().empty()) return false;
         return item->isOrLike()!=rhs->pItem->isOrLike();
     }
+    static bool contextCursor(const Infon& item) {
+        return getModeBits(item->flags,infonView::viewMode)==infonView::vmCursor &&
+               getModeBits(item->flags,infonView::cursorMode)==infonView::cmContext;
+    }
     static Cost count(ProteusGraphAccess& access,const POVNode& node) {
         auto item=node->pItem;
-        if((!item->partRef && item->parts.empty()) || !item->wrkList.empty() || item->pathSelection ||
-           !access.plainStructure(node,item->isOrLike(),false,false,false,true,false) ||
+        bool contextual=contextCursor(item);
+        if((!contextual && !item->partRef && item->parts.empty()) || !item->wrkList.empty() || item->pathSelection ||
+           !access.plainStructure(node,item->isOrLike(),false,false,contextual,true,false) ||
            !POVDescription(node,access.registry.get()).relationships(false).empty()) return 0;
-        Cost result=0;std::set<Part> seen;
+        Cost result=contextual ? 1 : 0;std::set<Part> seen;
         return inspect(item,seen,result) ? result : 0;
     }
     static void initialize(ProteusGraphAccess& access,const POVNode& owner,const POVNode& source,
@@ -399,6 +404,16 @@ public:
         auto expression=std::make_shared<infonView>(*original);SetFlagBit(expression->flags,infonView::doReply,false);
         auto source=node->snapshotView(915);source->pItem=std::make_shared<infonView>(*original);
         source->pItem->partRef.reset();source->pItem->parts.clear();SetFlagBit(source->pItem->flags,infonView::doReply,false);access.bind(source);
+        if(contextCursor(original)) {
+            auto cursor=original->partRef || !original->parts.empty() ? std::make_shared<POV>(915) : node;
+            initialize(access,cursor,source,{},{},false,true,expression);
+            cursor->pItem->pathSelection->contextual=true;
+            if(cursor==node) {
+                SetFlagBit(node->pItem->flags,infonView::doReply,getFlagBit(original->flags,infonView::doReply));
+                return true;
+            }
+            source=cursor;
+        }
         std::vector<POVNode> effects;
         auto returnedSyntax=expression;
         while(returnedSyntax && returnedSyntax->partRef) returnedSyntax=tail(returnedSyntax->partRef);
@@ -563,7 +578,7 @@ public:
             locations_.emplace(q.node,std::move(location));
         }
         bool finished=false;
-        if(request.kind==selectPosition || request.kind==selectSelf) {
+        if(request.kind==selectPosition || request.kind==selectSelf || request.kind==selectContext) {
             auto winners=positionWinners_.size();
             positionReady_=collectPosition(q) || positionReady_;
             if((positionWinners_.size()!=winners || q.kind==pathAlternativesEnd || q.kind==pathEnd) && visit.cost>=positionFinding_.cost)

@@ -41,6 +41,12 @@ parts; see [definition-projection-results.md](definition-projection-results.md).
 Proven crossing spans share an unresolved middle; see
 [crossing-span-results.md](crossing-span-results.md).
 
+Strict scalar compatibility, nonmutating exclusions, and implicit context lookup
+are covered in [scalar-compatibility-results.md](scalar-compatibility-results.md).
+`%ctx` uses the Agent topic-history POV; standalone GraphNormalizer clients can
+supply it with `setContext()`. Contextual-definition bindings remain an open
+question, separate from this ordinary source lookup.
+
 ## Start here
 
 ```text

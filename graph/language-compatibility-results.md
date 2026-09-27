@@ -1,13 +1,13 @@
 # Older language compatibility, 2026-09-27
 
-Graph input composition and explicit-source lookup recover fourteen default
-fixtures: function result constraints, all four argument spellings, and direct
-or external-property `~` lookup. Three rejection fixtures now expect the RHS to
-remain visible, following the agreed retention contract. Defaults are
-**222/270**, up from 205/270; all six suites total **237/363**, up from 220/363.
-No previous passes were lost. The source build and **1,057/1,057** focused checks
-pass. See [input-resolution-results.md](input-resolution-results.md) for the
-semantic changes, evidence, and remaining boundaries.
+Shared scalar compatibility and strict exclusion now decide seven more default
+constraints. Six rejection expectations also retain their RHS, following the
+existing retention contract. Defaults are **229/270**, up from **222/270**; all
+six suites total **244/363**, up from **237/363**. No previous passes were lost.
+The source build and **1,087/1,087** focused checks pass. `%ctx` and unary `~word`
+now use the Agent topic-history POV and the existing path traversal. See
+[scalar-compatibility-results.md](scalar-compatibility-results.md) for the exact
+test updates, source/count lifecycle checks, and remaining boundaries.
 
 The earlier repetition change made `range/select1` expose its completed
 `2 3 4 5` prefix with an unresolved tail, following the user's clarification.
@@ -15,20 +15,20 @@ Its old closed-result expectation was updated in that earlier increment.
 
 | Suite | Passing | Failing | Total |
 |---|---:|---:|---:|
-| `defaultTests.tst` | 222 | 48 | 270 |
+| `defaultTests.tst` | 229 | 41 | 270 |
 | `demoTests.tst` | 8 | 14 | 22 |
 | `sparseTests.tst` | 2 | 21 | 23 |
 | `timeTests.tst` | 3 | 33 | 36 |
 | `worldLoadTests.tst` | 0 | 2 | 2 |
 | `endRelativeR1Tests.tst` | 2 | 8 | 10 |
 
-All six rows were rerun for this checkpoint: **237/363**
-language fixtures pass, with **126** failures and no crashes, timeouts, or
+All six rows were rerun for this checkpoint: **244/363**
+language fixtures pass, with **119** failures and no crashes, timeouts, or
 incomplete summaries. The R1 file records an experimental contract and excludes
 itself from the default tests. Fixture counts describe tested examples, not
 unrestricted support for a language feature.
 
-The **1,057/1,057 focused graph/parser checks** are a separate baseline. They
+The **1,087/1,087 focused graph/parser checks** are a separate baseline. They
 include some of the language fixtures above, so these counts must not be added.
 The 125 additional registered legacy helper and parser-error checks were also
 rerun: **102 pass, 23 fail**, without process errors or timeouts. Their exact
@@ -56,7 +56,7 @@ The priority is dependable existing behavior before new natural-language work.
    contradictions stop their owning goals and required parents, while
    exploratory parents keep other routes. See [goal-rejection-results.md](goal-rejection-results.md).
 3. Work through remaining failures by the semantic constructs they exercise:
-   scalar/sequence relationships, implicit context and contextual definitions,
+   remaining scalar/sequence relationships and contextual definitions,
    definition composition, and temporal/sparse navigation. Validate the first
    actual failure against Proteus3 before selecting a fix.
 
@@ -67,6 +67,13 @@ Natural-language expansion is deferred. A failing fixture remains documented
 until its behavior works or its contract is explicitly revised.
 
 ## Latest behavior
+
+- Strict scalar exclusions share a three-way compatibility decision; definite
+  overlay mismatches reject without changing either operand. Correspondence
+  checks explicit member contradictions before publishing identities.
+- `%ctx` and unary `~word` reuse path selection over the Agent's topic history.
+  Counted context sizes are invalidated on membership edits. Context-dependent
+  definitions still need an application binding decision.
 
 - Arguments use shared first/last navigation. Open intersection results can use
   symbolic registry endpoints; qualified RHS dependencies are explicit graph
@@ -106,9 +113,9 @@ See [choice-constraint-results.md](choice-constraint-results.md),
 [partial-type-results.md](partial-type-results.md). Earlier checkpoints remain
 in the per-feature reports linked from [README.md](README.md).
 
-`merge/directRange/endReject` still rejects the endpoint but retains the RHS,
-whereas the old assertion expects it removed. This is separate from consolidation
-of accepted information. `range/select1` now passes with the approved open-tail
+`merge/directRange/endReject` rejects the endpoint and retains the RHS; its
+expectation was updated at the previous checkpoint. This is separate from
+consolidation of accepted information. `range/select1` now passes with the approved open-tail
 expectation; it does not claim the unfinished repetition is complete.
 
 A passing printed assertion alone does not prove all normalization obligations
@@ -116,7 +123,7 @@ resolved: unknown numeric sizes and subscribed open tails remain symbolic.
 
 The complete fixture status and input hashes are recorded in
 [language-compatibility-status.json](language-compatibility-status.json).
-Detailed language and helper audit logs are in `/tmp/p4-qualified-audit-*`.
+Detailed language and helper audit logs are in `/tmp/p4-compat-audit-*`.
 
 ## Remaining work
 

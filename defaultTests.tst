@@ -92,15 +92,15 @@ merge/directAny/list, Strict any takes list identity, ? = {1 2},                
 # matches are evaluated without committing their positive-match update.
 # merge/directAny/inverted, Inverted any does not copy rejected candidate, !? = 'Hello',                                       !?,                              norm
 merge/directAtomic/numReject, Numeric mismatch does not copy size, *_+8 = *16+9,                                                *_+8 = *16+9,                           norm
-merge/directAtomic/numInvertEqualReject, Inverted equal numeric template rejects without copying size, !*_+8 = *16+8,          !*_+8,                          norm
+merge/directAtomic/numInvertEqualReject, Inverted equal numeric template rejects without copying size, !*_+8 = *16+8,      !*_+8 = *16+8, norm
 merge/directAtomic/numInvertUnequalAccept, Inverted unequal numeric template accepts without copying size, !*_+8 = *16+9,      !*_+8,                          norm
-merge/directAtomic/numInvertWildcardReject, Inverted numeric wildcard rejects numeric without copying, !*_+_ = *16+9,          !*_+_,                          norm
-merge/directAtomic/strInvertWildcardReject, Inverted string wildcard rejects string without copying, !*_+$ = *5+'Hello',       !*_+$,                          norm
+merge/directAtomic/numInvertWildcardReject, Inverted numeric wildcard rejects numeric without copying, !*_+_ = *16+9,      !*_+_ = *16+9, norm
+merge/directAtomic/strInvertWildcardReject, Inverted string wildcard rejects string without copying, !*_+$ = *5+'Hello',   !*_+$ = *5+'Hello', norm
 merge/directAtomic/numInvertPendingUnknown, Negative value constraint remains pending against unknown value, !*_+5 = *_+_,     !*_+5 = *_+_,                   norm
 merge/directAtomic/numBothInvertPending, Non-equivalent negative constraints remain conjoined, !*_+5 = !*_+6,                  !*_+5 = !*_+6,                  norm
-merge/directType/numRejectStr, Strict numeric rejects string, _ = 'Hello',                                                     _,                               norm
-merge/directType/strRejectNum, Strict string rejects numeric, $ = 10,                                                          $,                               norm
-merge/directType/listRejectNum, Strict list rejects numeric, {1} = 1,                                                          {1},                             norm
+merge/directType/numRejectStr, Strict numeric rejects string, _ = 'Hello',                                                 _ = 'Hello', norm
+merge/directType/strRejectNum, Strict string rejects numeric, $ = 10,                                                      $ = 10, norm
+merge/directType/listRejectNum, Strict list rejects numeric, {1} = 1,                                                      {1} = 1, norm
 merge/directUnknown/numNoConstraints, Numeric unknowns need no local update, _ = _,                                            _,                               norm
 merge/directUnknown/strNoConstraints, String unknowns need no local update, $ = $,                                             $,                               norm
 merge/directRange/unknownAccept, Loose numeric unknown accepts literal, _ == 7,                                                7,                               norm
