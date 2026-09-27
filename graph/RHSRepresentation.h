@@ -37,8 +37,9 @@ public:
             if (!visited.insert(pair).second || !access_->inputError(left).empty() ||
                 !access_->inputError(right).empty() ||
                 (access_->hasTypeRequirements(right) &&
-                 !(definitions && access_->scalarTypeShape(right) && definitions->satisfied(right) &&
-                   compareNominal(*definitions,right,left)==ScalarMatch::yes)) ||
+                 !(definitions && (access_->scalarTypeShape(right) || definitions->describesParts(right)) &&
+                   (definitions->describesParts(right) || definitions->satisfied(right)) &&
+                   compareNominal(*definitions,right,left,work)==ScalarMatch::yes)) ||
                 access_->occurrenceOwner(right) ||
                 (!access_->scalarCandidate(right) && !access_->literalList(right))) return;
             // A repeated requirement is redundant only when the target itself
@@ -62,11 +63,19 @@ public:
                 fullyExpressed &= access_->closedPhysicalList(left) && access_->closedPhysicalList(right);
             else fullyExpressed &= required.hasValue;
             if (access_->literalList(right) && !listHeaderOnly(*access_,right)) {
-                SpanLayout<POVNode> a, b;
-                if (!layout(left, a, false) || !layout(right, b, true)) return;
-                auto plan = alignSpans(a, b);
-                if (!representsSpanShape(a,b,plan)) return;
-                pending.insert(pending.end(), plan.identities.begin(), plan.identities.end());
+                if(RecordStructure::record(*access_,right)) {
+                    std::vector<POVNode> a,b,missing;
+                    std::vector<std::pair<POVNode,POVNode>> paired;
+                    if(!RecordStructure::members(*access_,left,a,work) || !RecordStructure::members(*access_,right,b,work) ||
+                       !RecordStructure::pairs(*access_,a,b,paired,missing,work) || !missing.empty()) return;
+                    pending.insert(pending.end(),paired.begin(),paired.end());
+                } else {
+                    SpanLayout<POVNode> a, b;
+                    if (!layout(left, a, false) || !layout(right, b, true)) return;
+                    auto plan = alignSpans(a, b);
+                    if (!representsSpanShape(a,b,plan)) return;
+                    pending.insert(pending.end(), plan.identities.begin(), plan.identities.end());
+                }
             }
             for (auto rhs : POVDescription(right).work()) pending.emplace_back(left, rhs);
         }
@@ -83,7 +92,7 @@ struct PayloadReadiness {
     PayloadReadiness(const std::shared_ptr<ProteusGraphAccess>& access,const POVNode& payload,
                      const std::shared_ptr<ProteusDefinitions>& definitions) {
         ready=!access->hasArgument(payload) &&
-            (!access->hasTypeRequirements(payload) || definitions->satisfied(payload));
+            (!access->hasTypeRequirements(payload) || definitions->describesParts(payload) || definitions->satisfied(payload));
         for(const auto& relation:POVDescription(payload,access->registry.get()).relationships()) {
             RHSRepresentation proof(access,payload,relation.target,definitions);
             work.visits=addCost(work.visits,proof.work.visits);

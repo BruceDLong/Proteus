@@ -20,7 +20,7 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectionExtentMember = 20, selectionExtentEnd = 21,
               typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27,
               selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31,
-              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62, scalarCorrespondence = 63, placeArgument = 64, resolveEndpoint = 65, endpointPosition = 66, endpointFound = 67, resolveWord = 68, resolutionStep = 69, externalField = 70, externalPosition = 71, externalMatched = 72, externalUnknown = 73, externalEnd = 74, acquireListValue = 75, selectEnvironment = 76 };
+              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62, scalarCorrespondence = 63, placeArgument = 64, resolveEndpoint = 65, endpointPosition = 66, endpointFound = 67, resolveWord = 68, resolutionStep = 69, externalField = 70, externalPosition = 71, externalMatched = 72, externalUnknown = 73, externalEnd = 74, acquireListValue = 75, selectEnvironment = 76, recordCorrespondence = 77 };
 
 inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
     auto phase = query.kind == correspondenceEnter ? ListPhase::enter :
@@ -30,6 +30,7 @@ inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
 
 #include "DefinitionApplications.h"
 #include "ScalarPredicate.h"
+#include "RecordStructure.h"
 #include "RHSRepresentation.h"
 #include "FieldPredicate.h"
 #include "PathSelection.h"
@@ -39,6 +40,7 @@ inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
 #include "EndpointDemand.h"
 #include "GroupedListPlan.h"
 #include "ListValueShape.h"
+#include "RecordValue.h"
 
 // Early correspondence is conditional on the parser retaining the ordered
 // list body. Weak provenance witnesses neither copy nodes nor own a second
@@ -681,6 +683,7 @@ public:
     void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); definitions_->prune(); }
     std::vector<std::function<void()>> takeEffects() override { return completion_->takeEffects(); }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
+        if(query.kind==recordCorrespondence) return std::make_shared<ProteusRecordGoal>(query,access_,definitions_);
         if(query.kind==acquireListValue) return std::make_shared<ProteusListValueGoal>(query,access_,definitions_);
         if (query.kind==resolveWord || query.kind==externalField || query.kind==selectEnvironment)
             return std::make_shared<ProteusPathGoal>(query,access_,definitions_);
@@ -757,6 +760,12 @@ private:
         auto node = query.node;
         POVDescription description(node, access_->registry.get());
         if (query.kind == assessRepresentation || query.kind == groupedList || query.kind == projectField || query.kind == scalarCorrespondence) return result;
+        if(query.kind==recordCorrespondence) {
+            auto payload=definitions_->payload(query.related);
+            result.refinements.push_back({{payload,relationshipConstraints,0},{1,0},"prove record source constraints",false});
+            result.refinements.push_back({{query.related,sizeAndValue,0},{1,0},"refine supplied record parts",true});
+            return result;
+        }
         if (query.kind == typeRequirements || query.kind == compileTypeRequirements) {
             if (definitions_->required(node) && !definitions_->saved(node))
                 result.edges.push_back(direct("inspect type definitions", {node, definitionEnter, 0, node}));
@@ -1126,6 +1135,13 @@ private:
                    getModeBits(source->pItem->value->flags,infonState::overlayType)==infonState::LST &&
                    getModeBits(source->pItem->value->flags,infonState::evalMode)==infonState::emLiteral) {
                     result.refinements.push_back({{node,acquireListValue,0,source},{1,0},"acquire list value shape",false});
+                    continue;
+                }
+                if(demand!=sizeOnly && !source->looseType() && RecordStructure::record(*access_,source) &&
+                   (access_->adoptableList(node) || RecordStructure::record(*access_,node))) {
+                    result.refinements.push_back({{node,recordCorrespondence,0,source},{1,0},"acquire supplied record parts",false});
+                    if(relation.isWork() && !relation.consolidated && demand==sizeAndValue)
+                        result.refinements.push_back({{node,assessRepresentation,0,source},{0,0},"assess represented record RHS",false});
                     continue;
                 }
                 if (demand != sizeOnly && ScalarRelation(access_,node,source,definitions_).supported) {

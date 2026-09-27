@@ -1,13 +1,13 @@
 # Older language compatibility, 2026-09-27
 
-Field lookup now exposes source size/value prerequisites and accepts already
-represented source relationships. Instantiated definition members retain their
-original written type metadata. `query/getNthSub2` passes with its unchanged
-expectation. See [field-source-results.md](field-source-results.md).
-The six suites report **252 passed, 104 failed, 7 skipped as ambiguous**, out of
-363. No previous passes were lost. The source build and **1,128/1,128** focused
-checks pass; additional legacy helpers remain **102/125**. The new ambiguity is
-`temporal/noSListFallback`; see [test-ambiguities.md](test-ambiguities.md).
+Unknown values now acquire supplied unordered parts through existing member
+identities, including nested descriptions. Explicit identity assertions retain
+a written target name; nominal field selection still distinguishes sibling types.
+See [record-value-results.md](record-value-results.md). No old expectations or
+ambiguity exceptions changed in this checkpoint.
+The six suites report **253 passed, 103 failed, 7 skipped as ambiguous**, out of
+363. No previous passes were lost. The source build and **1,147/1,147** focused
+checks pass; additional legacy helpers are **102/125**.
 
 The earlier repetition change made `range/select1` expose its completed
 `2 3 4 5` prefix with an unresolved tail, following the user's clarification.
@@ -15,7 +15,7 @@ Its old closed-result expectation was updated in that earlier increment.
 
 | Suite | Passing | Failing | Ambiguous skips | Total |
 |---|---:|---:|---:|---:|
-| `defaultTests.tst` | 236 | 27 | 7 | 270 |
+| `defaultTests.tst` | 237 | 26 | 7 | 270 |
 | `demoTests.tst` | 8 | 14 | 0 | 22 |
 | `sparseTests.tst` | 2 | 21 | 0 | 23 |
 | `timeTests.tst` | 3 | 33 | 0 | 36 |

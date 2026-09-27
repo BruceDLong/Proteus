@@ -148,3 +148,18 @@ inline ScalarMatch compareNominal(const ProteusDefinitions& definitions,const PO
     if(auto proof=definitions.saved(actual)) right.insert(right.end(),proof->requirement->types.begin(),proof->requirement->types.end());
     return compareNominal(leftName,left,rightName,right);
 }
+
+// Read only explicit alias links when the direct nominal names differ. A
+// partially understood declaration leaves the comparison unknown, not false.
+inline ScalarMatch compareNominal(const ProteusDefinitions& definitions,const POVNode& required,
+                                  const POVNode& actual,Work& work) {
+    auto result=compareNominal(definitions,required,actual);
+    if(result!=ScalarMatch::no) return result;
+    auto left=definitions.names(required),right=definitions.names(actual);
+    auto leftName=left.empty() ? std::string{} : left.front(),rightName=right.empty() ? std::string{} : right.front();
+    bool complete=true;
+    left=definitions.nominalNames(std::move(left),complete,work);
+    right=definitions.nominalNames(std::move(right),complete,work);
+    result=compareNominal(leftName,left,rightName,right);
+    return result==ScalarMatch::no && !complete ? ScalarMatch::unknown : result;
+}

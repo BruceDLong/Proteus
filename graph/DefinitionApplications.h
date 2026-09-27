@@ -67,6 +67,29 @@ public:
             if (std::find(result.begin(), result.end(), name) == result.end()) result.push_back(name);
         return result;
     }
+    // Type words and explicit alias links are sufficient for nominal selection.
+    // Reading them must not force unrelated members of a definition to resolve.
+    std::vector<std::string> nominalNames(std::vector<std::string> names, bool& complete, Work& work) const {
+        std::set<POVNode> seen;
+        std::vector<POVNode> pending;
+        std::size_t next=0;
+        while (next<names.size() || !pending.empty()) {
+            if (pending.empty()) {
+                const auto name=names[next++];++work.visits;
+                if (auto body=lookup(name)) pending.push_back(body);
+                else if (declared(name)) complete=false;
+                continue;
+            }
+            auto node=pending.back();pending.pop_back();
+            if (!seen.insert(node).second) continue;
+            ++work.visits;
+            if (!access_->plain(node,false,false,false,false)) {complete=false;continue;}
+            for (const auto& name:this->names(node))
+                if (std::find(names.begin(),names.end(),name)==names.end()) names.push_back(name);
+            for (const auto& rhs:POVDescription(node).work()) pending.push_back(rhs);
+        }
+        return names;
+    }
     bool registered(const POVNode& node) const {
         if (!access_->definitionReady(node)) return false;
         auto found = catalogue_.find(access_->definitionName(node));

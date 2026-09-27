@@ -59,6 +59,10 @@ Already represented source relationships remain searchable, and instantiated
 definition fields preserve written type metadata. See
 [field-source-results.md](field-source-results.md).
 
+Unknown unordered values can acquire supplied parts using existing member
+identities, retaining open membership and later source publications. See
+[record-value-results.md](record-value-results.md) for the supported boundary.
+
 ## Start here
 
 ```text

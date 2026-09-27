@@ -21,34 +21,11 @@ class FieldPredicate {
         }
         return true;
     }
-    // Type words and explicit alias links are sufficient for nominal selection.
-    // Reading them must not force unrelated members of a definition to resolve.
-    std::vector<std::string> nominalNames(std::vector<std::string> names, bool& complete) {
-        std::set<POVNode> seen;
-        std::vector<POVNode> pending;
-        std::size_t next=0;
-        while (next<names.size() || !pending.empty()) {
-            if (pending.empty()) {
-                const auto name=names[next++];++work.visits;
-                if (auto body=definitions_->lookup(name)) pending.push_back(body);
-                else if (definitions_->declared(name)) complete=false;
-                continue;
-            }
-            auto node=pending.back();pending.pop_back();
-            if (!seen.insert(node).second) continue;
-            ++work.visits;
-            if (!access_->plain(node,false,false,false,false)) {complete=false;continue;}
-            for (const auto& name:definitions_->names(node))
-                if (std::find(names.begin(),names.end(),name)==names.end()) names.push_back(name);
-            for (const auto& rhs:POVDescription(node).work()) pending.push_back(rhs);
-        }
-        return names;
-    }
     ScalarMatch nominal(const DefinitionSpec& required,const DefinitionSpec& actual) {
         auto result=compareNominal(required->label,required->types,actual->label,actual->types);
         if (result!=ScalarMatch::no) return result;
         bool complete=true;
-        auto left=nominalNames(required->types,complete),right=nominalNames(actual->types,complete);
+        auto left=definitions_->nominalNames(required->types,complete,work),right=definitions_->nominalNames(actual->types,complete,work);
         result=compareNominal(required->label,left,actual->label,right);
         return result==ScalarMatch::no && !complete ? ScalarMatch::unknown : result;
     }
