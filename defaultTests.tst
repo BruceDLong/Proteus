@@ -129,8 +129,8 @@ noRHS/dots/simple,     Test dots in LHS,               {...},                   
 noRHS/dots/nestedOut,  Test nested LHS dots,           {{...} _=5},                                                            {{ ... } 5},                    norm
 noRHS/dots/nestedIn,   Test nested LHS dots,           {1 _=2 3 ...},                                                          {1 2 3 ... },                   norm
 merge/dots/align1,     Test 1 of alignment,            {1 ... 4}  = {_ 2 3 _},                                                 {1 &{2 3} 4},                   norm
-merge/dots/align2a,    R dots inside L dots,           {{1 ... 5} 6}  = {{_ 2 ... 4 _} 6},                                     {*_+{1 &{2 &{ ... } 4} 5} 6},   norm
-merge/dots/align2b,    R dots inside L dots,           {1 ... 5}  = {_ 2 ... 4 _},                                             *_+{1 &{2 &{ ... } 4} 5},       norm
+merge/dots/align2a,    R dots inside L dots,           {{1 ... 5} 6}  = {{_ 2 ... 4 _} 6},                                     {*_+{1 &{2 ... 4} 5} 6},   norm
+merge/dots/align2b,    R dots inside L dots,           {1 ... 5}  = {_ 2 ... 4 _},                                             *_+{1 &{2 ... 4} 5},       norm
 merge/dots/align3,     R dots on left of L,            {1 ... 6}  = {... &{4 5 6}},                                            *_+{1 &{... 4 5} 6},       norm
 merge/dots/align4,     Harder to detect end,           {1 ... 5 _} = {... 4 5 6},                                              *_+{1 &{... 4} 5 6},       norm
 merge/dots/align4b,    Ambiguous situation,            {1  4 ... 5 _} = {... 4 5 6},                                           {1 4 &{4 5 6 ... } 5 6},        norm
