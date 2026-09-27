@@ -1,14 +1,13 @@
 # Older language compatibility, 2026-09-27
 
-T-lists now share ordinary list access, and successful list relationships carry
-the temporal marker. Satisfied repeated RHS requirements use the existing
-read-only definition plan for representation proof. Two temporal fixtures now
-pass; three obsolete rendering expectations use the approved consolidated form.
-See [temporal-header-results.md](temporal-header-results.md) for exact changes.
-The six suites report **251 passed, 106 failed, 6 skipped as ambiguous**, out of
-363. No previous passes were lost. The source build and **1,115/1,115** focused
+Field lookup now exposes source size/value prerequisites and accepts already
+represented source relationships. Instantiated definition members retain their
+original written type metadata. `query/getNthSub2` passes with its unchanged
+expectation. See [field-source-results.md](field-source-results.md).
+The six suites report **252 passed, 104 failed, 7 skipped as ambiguous**, out of
+363. No previous passes were lost. The source build and **1,128/1,128** focused
 checks pass; additional legacy helpers remain **102/125**. The new ambiguity is
-`slice/simpleSugar`; see [test-ambiguities.md](test-ambiguities.md).
+`temporal/noSListFallback`; see [test-ambiguities.md](test-ambiguities.md).
 
 The earlier repetition change made `range/select1` expose its completed
 `2 3 4 5` prefix with an unresolved tail, following the user's clarification.
@@ -16,7 +15,7 @@ Its old closed-result expectation was updated in that earlier increment.
 
 | Suite | Passing | Failing | Ambiguous skips | Total |
 |---|---:|---:|---:|---:|
-| `defaultTests.tst` | 235 | 29 | 6 | 270 |
+| `defaultTests.tst` | 236 | 27 | 7 | 270 |
 | `demoTests.tst` | 8 | 14 | 0 | 22 |
 | `sparseTests.tst` | 2 | 21 | 0 | 23 |
 | `timeTests.tst` | 3 | 33 | 0 | 36 |

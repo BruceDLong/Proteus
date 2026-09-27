@@ -326,8 +326,7 @@ private:
                 auto spec = std::make_shared<DefinitionRequirement>();
                 auto body=access_->canSelect(q.node) && !q.node->pItem->selectedResult ? definitions_->selectionBody(q.node) : q.node;
                 spec->facts=definitions_->scalarFacts(body); spec->list=access_->literalList(body) && !SequenceCorrespondence::inputIdentity(*access_,q);
-                auto types=definitions_->names(q.node);
-                if (!types.empty() && !getFlagBit(q.node->pItem->flags,infonView::invertMatch)) spec->label=types.front();
+                if (!getFlagBit(q.node->pItem->flags,infonView::invertMatch)) spec->captureLabel(q.node);
                 bool instance=stack.empty() || (stack.back().instance && definitions_->matchingBody(stack.back().body)!=q.node);
                 // A feed's stored members are results, not its consumed pattern.
                 if (!stack.empty() && access_->fedTemplate(stack.back().node)) instance=false;
@@ -369,10 +368,7 @@ private:
                         identity=match.identity;
                     } else spec->facts.combine(supplied);
                     numericVisits=addCost(numericVisits,numeric.work.visits);
-                    if (identity && spec->label.empty()) {
-                        auto types=definitions_->names(frame.source);
-                        if (!types.empty()) spec->label=types.front();
-                    }
+                    if (identity && spec->label.empty()) spec->captureLabel(frame.source);
                     // An atomic list-valued source stays an existing graph
                     // node. Its identity supplies members through ordinary
                     // correspondence; matching does not clone its subtree.

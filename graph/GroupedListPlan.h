@@ -142,7 +142,7 @@ public:
             if (group.append) {
                 if (group.node) access_->appendOccurrence(target_, group.node);
                 else {
-                    group.node = access_->appendDefinitionMember(target_, member_->label);
+                    group.node = member_->appendMember(*access_,target_);
                     group.plan->bindTarget(group.node);
                 }
                 changed = true;

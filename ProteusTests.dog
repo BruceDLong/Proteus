@@ -19,6 +19,19 @@ TestsToRun = `
     unit/graphTemporalHeader/lateMember
     unit/graphTemporalHeader/sparseOccurrence
     unit/graphTemporalHeader/sizeOnlyNoMarker
+    unit/graphFieldSource/rhsSource
+    unit/graphFieldSource/constrainedSource
+    unit/graphFieldSource/definedSource
+    unit/graphFieldSource/chainedSource
+    unit/graphFieldSource/intersectionSpan
+    unit/graphFieldSource/directGoal
+    unit/graphFieldSource/unrelatedUnknown
+    unit/graphFieldSource/lateDefinition
+    unit/graphFieldSource/cancel
+    unit/graphFieldSource/cost
+    unit/graphFieldSource/independentWords
+    unit/graphFieldSource/groupSpelling
+    unit/graphFieldSource/grammarSpelling
     unit/graphWorld/field
     unit/graphWorld/whole
     unit/graphWorld/lateSource
@@ -12155,6 +12168,81 @@ struct GLOBAL {
     }%>
     void: unitTestGraphTemporalHeader(me string: testName, me int: caseID) <- {
         me bool: passed <- graphTemporalHeaderCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHFIELDSOURCE(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphFieldSource(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHFIELDSOURCE(unit/graphFieldSource/rhsSource, 11)
+    GRAPHFIELDSOURCE(unit/graphFieldSource/constrainedSource, 12)
+    GRAPHFIELDSOURCE(unit/graphFieldSource/definedSource, 0)
+    GRAPHFIELDSOURCE(unit/graphFieldSource/chainedSource, 1)
+    GRAPHFIELDSOURCE(unit/graphFieldSource/intersectionSpan, 2)
+    GRAPHFIELDSOURCE(unit/graphFieldSource/directGoal, 3)
+    GRAPHFIELDSOURCE(unit/graphFieldSource/unrelatedUnknown, 4)
+    GRAPHFIELDSOURCE(unit/graphFieldSource/lateDefinition, 5)
+    GRAPHFIELDSOURCE(unit/graphFieldSource/cancel, 6)
+    GRAPHFIELDSOURCE(unit/graphFieldSource/cost, 7)
+    GRAPHFIELDSOURCE(unit/graphFieldSource/independentWords, 8)
+    GRAPHFIELDSOURCE(unit/graphFieldSource/groupSpelling, 9)
+    GRAPHFIELDSOURCE(unit/graphFieldSource/grammarSpelling, 10)
+
+    me bool: graphFieldSourceCase(me string: testName, me int: caseID) <- <%{
+        GraphNormalizer normalizer;normalizer.init();
+        std::string declaration=caseID==4 ? "{#Whole={X:*10+_ Y:*10+2} #Envelope={Whole}}" :
+            caseID==9 ? "{#Pair={First:_ Second:_} #Pairs={Pair|...}}" :
+            caseID==10 ? "{#A='a'}" : "{#Whole={X:*10+1 Y:*10+2} #Envelope={Whole}}";
+        auto defs=graphParsed(testName,declaration);auto original=toString(defs->pItem.get());
+        Proteus4Handle declared;
+        if(caseID!=5 && caseID!=6) {declared=normalizer.normalize(defs);declared.waitForCompletion();}
+        std::string expression=caseID==1 ? "Envelope.Whole.y" : caseID==2 ? "*2+[&Envelope.Whole]" :
+            caseID==3 || caseID==8 ? "Whole" : caseID==9 ? "Pairs == {1 2 3 4}" :
+            caseID==10 ? "{A|...} == 'aa'" : caseID==11 ? "?={X:*10+1 Y:*10+2}" :
+            caseID==12 ? "{X:*10+_ Y:*10+_}={X:*10+1 Y:*10+2}" : "whole.y";
+        auto root=graphParsed(testName,expression);
+        auto handle=(caseID==3 || caseID>=11) ? normalizer.findField(root,graphParsed(testName,"y")) :
+            caseID==7 ? normalizer.normalizeWithCost(root,0) : normalizer.normalize(root);
+        handle.waitForCompletion();bool passed=!handle.status().failed;
+        if(caseID==5 || caseID==6) {
+            passed &= handle.status().withSubscribers && !root->pItem->pathSelection->result;
+            if(caseID==6) handle.cancel();
+            declared=normalizer.normalize(defs);declared.waitForCompletion();
+            handle.waitForCompletion();
+        }
+        if(caseID==6) passed &= handle.status().cancelled && !root->pItem->pathSelection->result;
+        else if(caseID==7) passed &= handle.status().symbolicValues && !root->pItem->pathSelection && root->pItem->partRef;
+        else if(caseID==8) {
+            auto member=root->pItem->value->items.head;
+            auto source=defs->pItem->value->items.head->pItem->funcArgs->value->items.head;
+            passed &= member && member->pItem->type && source->pItem->type &&
+                member->pItem->type!=source->pItem->type && member->pItem->type->asGiven=="X" &&
+                member->pItem->type->typeID()=="x";
+        } else {
+            auto result=(caseID==3 || caseID>=11) ? handle.result() : root;
+            std::string expected=caseID==9 ? "Pairs:{Pair:{First:1 Second:2} Pair:{First:3 Second:4}}" :
+                caseID==10 ? "{A:'a' A:'a'}" : "Y:*10+2";
+            passed &= result && toString(result->pItem.get())==expected;
+            if(caseID<=5) passed &= !handle.status().symbolicValues;
+            if(!passed && result) std::cout << "Field source " << caseID << ": " << toString(result->pItem.get()) << " " << handle.status().error << "\n";
+        }
+        if(!passed) {
+            std::cout << "Field source root " << caseID << ": " << toString(root->pItem.get()) << " symbolic=" << handle.status().symbolicValues << " " << handle.status().error << "\n";
+            for(const auto& step:handle.steps()) std::cout << step.action << "\n";
+        }
+        passed &= toString(defs->pItem.get())==original;
+        if(caseID!=3 && caseID!=6 && caseID!=7 && caseID<11) {
+            auto text=toString(root->pItem.get());auto work=root->pItem->wrkList.size();
+            auto again=normalizer.normalize(root);again.waitForCompletion();
+            passed &= !again.status().failed && toString(root->pItem.get())==text && root->pItem->wrkList.size()<=work;
+            again.cancel();
+        }
+        handle.cancel();declared.cancel();normalizer.close();return passed;
+    }%>
+    void: unitTestGraphFieldSource(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphFieldSourceCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

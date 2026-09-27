@@ -58,7 +58,7 @@ class FieldPredicate {
         if (active_.count(node->pItem)) return {};
         auto specification=std::make_shared<DefinitionRequirement>();
         specification->types=definitions_->names(node);
-        if (!specification->types.empty()) specification->label=specification->types.front();
+        specification->captureLabel(node);
         specification->facts=predicate ? access_->predicateFacts(node,false) : access_->typeFacts(node);
         auto refinementContext=context;refinementContext.insert(refinementContext.begin(),node);
         const bool canRead=readable(node,predicate);
@@ -155,7 +155,7 @@ public:
         auto spec=[&](const POVNode& node) {
             auto result=std::make_shared<DefinitionRequirement>();
             result->types=definitions_->names(node);
-            if(!result->types.empty()) result->label=result->types.front();
+            result->captureLabel(node);
             return result;
         };
         return nominal(spec(predicate),spec(candidate));

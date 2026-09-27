@@ -54,6 +54,11 @@ meaning through list identities and definition requirements. See
 [temporal-header-results.md](temporal-header-results.md). Temporal navigation
 and context-state modeling are separate, still unfinished capabilities.
 
+Field lookup exposes missing source structure as an exploratory size/value goal.
+Already represented source relationships remain searchable, and instantiated
+definition fields preserve written type metadata. See
+[field-source-results.md](field-source-results.md).
+
 ## Start here
 
 ```text

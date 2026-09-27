@@ -188,7 +188,7 @@ public:
         auto requirement = std::make_shared<DefinitionRequirement>();
         requirement->facts.valid = true;
         requirement->types = names(node);
-        if (!requirement->types.empty()) requirement->label = requirement->types.front();
+        requirement->captureLabel(node);
         std::sort(requirement->types.begin(), requirement->types.end());
         if (node != root) {
             auto& witness = proof->evidence->witnesses.at(node);

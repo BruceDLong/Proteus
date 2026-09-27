@@ -43,11 +43,20 @@ class PathSelection {
         follow.context.insert(follow.context.end(),next.owners.begin(),next.owners.end());
         out.edges.push_back(edge("next field position",std::move(follow),visits));
     }
-    bool sourceReady(const POVNode& node) const {
-        if (!access_->physicalList(node) && !access_->unreferencedTemplateSpan(node)) return false;
-        for (const auto& relation:POVDescription(node,access_->registry.get()).relationships())
-            if (!access_->sameInfon(node,relation.target)) return false;
-        return true;
+    bool sourceReady(const POVNode& node,Expansion<POVNode>& out,Cost& visits) const {
+        bool ready=access_->physicalList(node) || access_->unreferencedTemplateSpan(node);
+        if(ready) for (const auto& relation:POVDescription(node,access_->registry.get()).relationships()) {
+            if(access_->sameInfon(node,relation.target)) continue;
+            RHSRepresentation proof(access_,node,relation.target,definitions_);
+            visits=addCost(visits,proof.work.visits);
+            ready=ready && proof.represented;
+        }
+        // A source may acquire its list structure through a definition or RHS.
+        // Keep that opportunity visible without requiring unrelated fields to
+        // finish before a usable member can be selected. Existing relationships
+        // remain valid evidence once their facts are represented in the source.
+        if(!ready) out.refinements.push_back({{node,sizeAndValue,0},{visits,0},"expose field source structure",true});
+        return ready;
     }
     void unresolved(Expansion<POVNode>& out,const Query<POVNode>& q,const char* label,Cost visits=1) const {
         out.deferred=true;
@@ -174,7 +183,7 @@ class PathSelection {
         ListPosition<POVNode> at{q.node,static_cast<ListPhase>(q.argument),{q.context.begin()+1,q.context.end()}};
         Cost visits=1;
         auto pending=[&] {out.edges.push_back(edge("unresolved choice information",{q.node,choicePending}));};
-        if(at.phase==ListPhase::enter && !sourceReady(at.node)) {pending();out.deferred=true;return out;}
+        if(at.phase==ListPhase::enter && !sourceReady(at.node,out,visits)) {pending();out.deferred=true;return out;}
         if(at.phase==ListPhase::leave) {
             auto boundary=listBoundary(*access_,at.node);visits=addCost(visits,boundary.visits);
             if(!boundary.valid || boundary.tail!=0 || !boundary.missingExtents.empty()) pending();
@@ -255,7 +264,6 @@ public:
             if(auto endpoint=orderedEndpoint(q.node,q.related)) {
                 auto start=q;start.context={q.node};return position(start,endpoint);
             }
-            if(!sourceReady(q.node)) {out.deferred=true;return out;}
             out.edges.push_back(edge("scan field candidates",{q.node,fieldPosition,static_cast<int>(ListPhase::enter),q.related,{q.node}}));
             return out;
         }
@@ -271,7 +279,7 @@ public:
         if(at.phase==ListPhase::enter) {
             if(q.node==q.context.front())
                 if(auto endpoint=orderedEndpoint(q.node,q.related)) return position(q,endpoint);
-            if(!sourceReady(at.node) || (!unordered(q.context.front()) && unordered(at.node))) {
+            if(!sourceReady(at.node,out,visits) || (!unordered(q.context.front()) && unordered(at.node))) {
                 unresolved(out,q,"unresolved alternative structure");return out;
             }
         } else if(at.phase==ListPhase::leave) {

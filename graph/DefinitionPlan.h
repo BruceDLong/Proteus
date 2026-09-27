@@ -21,7 +21,20 @@ struct DefinitionRequirement {
     std::shared_ptr<DefinitionRequirement> repeated;
     POVNode templateSource;
     std::vector<std::string> types;
-    std::string label;
+    std::string label; // normalized nominal identity, used by comparisons
+    std::shared_ptr<WordUse> writtenType;
+    void captureLabel(const POVNode& node) {
+        writtenType=node->pItem->type;
+        if(!writtenType && !node->pItem->addedTypes.empty()) writtenType=node->pItem->addedTypes.front();
+        if(writtenType) label=writtenType->typeID();
+    }
+    POVNode appendMember(ProteusGraphAccess& access,const POVNode& owner) const {
+        auto member=access.appendDefinitionMember(owner,writtenType ? "" : label);
+        // Keep spelling/model metadata separate from the normalized comparison
+        // key, and never share mutable WordUse state with the declaration.
+        if(writtenType) member->pItem->type=std::make_shared<WordUse>(*writtenType);
+        return member;
+    }
     // Explicit positions and an unmaterialized tail share the runtime's span
     // equations. Cardinality does not allocate one requirement per position.
     SpanLayout<std::shared_ptr<DefinitionRequirement>> memberLayout() const {
@@ -54,7 +67,7 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
         if (std::find(result->types.begin(), result->types.end(), name) == result->types.end()) result->types.push_back(name);
     // Equivalent conjunctions share evidence regardless of application order.
     std::sort(result->types.begin(), result->types.end());
-    if (result->label.empty()) result->label = right->label;
+    if (result->label.empty()) {result->label = right->label;result->writtenType=right->writtenType;}
     if (result->list && right->list) {
         if (result->open && right->open) {
             if (result->repeated && right->repeated)
@@ -279,7 +292,7 @@ private:
                 auto spec = source.requirement;
                 work.creations = addCost(work.creations, 2);
                 writes.push_back([access, owner, member, spec] {
-                    member->node = access->appendDefinitionMember(owner->node, spec->label); return true;
+                    member->node = spec->appendMember(*access,owner->node); return true;
                 });
                 prepare(member, spec);
             }

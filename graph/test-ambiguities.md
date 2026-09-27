@@ -57,3 +57,20 @@ Question: should a scalar spec constrain the item after the boundary, search
 onward, or denote a different operation? What should a proved nonmatch return?
 Keep the original fixture unchanged and skip it while the contract is clarified.
 Reference probes: `/tmp/p4-scalar-slice-reference.tst` and `.log`.
+
+## `defaultTests.tst:temporal/noSListFallback`
+
+Input: `{1 %tprev 3}`. Expected: `{1 UNDEFINED 3}`.
+
+The prohibition on treating an S-list predecessor as a temporal predecessor is
+clear and remains required. The unresolved issue is finality: other existing
+fixtures explicitly allow an ordinary list to acquire `T` meaning through a later
+identity. Absence of that marker today is therefore not necessarily proof that
+no temporal context can become available. The graph currently leaves the cursor
+symbolic and subscribed instead of borrowing the S-list predecessor.
+
+Question: what evidence makes missing temporal context permanently `UNDEFINED`?
+Could a later T identity reopen that result, or should it remain subscribed until
+there is explicit negative/boundary evidence? Skip the old output assertion while
+retaining the no-structural-fallback rule. This is not a skip of temporal neighbor
+or boundary operations generally; their unambiguous fixtures still count as failures.
