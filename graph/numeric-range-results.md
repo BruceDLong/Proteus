@@ -9,7 +9,7 @@ approved shorter printing; their inputs are unchanged.
 GMP rationals at the Proteus boundary. Unknown evidence, an unbounded domain, and
 an empty intersection are distinct. `NumericRangeAccess.h` reads existing scalar
 and additive-concat structure; it does not create a second semantic graph.
-`NumericRelation.h` turns accepted evidence into priced Sets.
+`ScalarRelation.h` (originally `NumericRelation.h`) turns accepted evidence into priced Sets.
 `ScalarPredicate.h` separates three-way predicate containment from relationship
 matching. Relationships also check the endpoint mode before supplying a value.
 

@@ -86,7 +86,12 @@ identity and original infonView owner are retained in the registry. Producers
 use hasRHS() so replay does not recreate consolidated work. Partial, qualified,
 typed, and contextual work stays pending. See graph/rhs-consolidation-results.md.
 Size and value should be acquired together when both are available; partial
-acquisition is for cases where only one is available.
+acquisition is for cases where only one is available. Qualified scalar string
+relationships use ScalarRelation: a colon can supply prefix value evidence but
+must not infer a missing target size from the available bytes. A known target
+width selects that prefix; whole matching still requires matching ends. Keep
+qualified work searchable and preserve RHS payloads on mismatch. See
+graph/qualified-text-results.md.
 
 Supplied typed-field descriptions may be partial even when ordered. Normalizing
 such a description (including a parent returned by `;` or `;;`) normalizes the

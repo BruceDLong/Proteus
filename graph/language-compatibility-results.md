@@ -1,11 +1,11 @@
 # Older language compatibility, 2026-09-27
 
-Goal-local rejection preserves all previous language results: **203/270**
-default fixtures and **218/363** across all six suites. The source build and
-**1,009/1,009** focused graph/parser checks pass, including seven new rejection
-checks. The standalone scheduler passes **38/38**, also under address,
-undefined-behavior, and leak sanitizers. No language input or expected output
-changed in this increment. See [goal-rejection-results.md](goal-rejection-results.md).
+Qualified scalar string matching recovers `merge/str/looseSize` and
+`merge/unknown/looseSize`: **205/270** default fixtures and **220/363** across
+all six suites now pass. No previous passes were lost. The source build and
+**1,025/1,025** focused graph/parser checks pass, including nine new lifecycle
+checks and seven new language examples. No existing language input or expected
+output changed. See [qualified-text-results.md](qualified-text-results.md).
 
 The earlier repetition change made `range/select1` expose its completed
 `2 3 4 5` prefix with an unresolved tail, following the user's clarification.
@@ -13,20 +13,20 @@ Its old closed-result expectation was updated in that earlier increment.
 
 | Suite | Passing | Failing | Total |
 |---|---:|---:|---:|
-| `defaultTests.tst` | 203 | 67 | 270 |
+| `defaultTests.tst` | 205 | 65 | 270 |
 | `demoTests.tst` | 8 | 14 | 22 |
 | `sparseTests.tst` | 2 | 21 | 23 |
 | `timeTests.tst` | 3 | 33 | 36 |
 | `worldLoadTests.tst` | 0 | 2 | 2 |
 | `endRelativeR1Tests.tst` | 2 | 8 | 10 |
 
-All six rows were rerun for goal-local rejection: **218/363**
-language fixtures pass, with **145** failures and no crashes, timeouts, or
+All six rows were rerun for scalar string matching: **220/363**
+language fixtures pass, with **143** failures and no crashes, timeouts, or
 incomplete summaries. The R1 file records an experimental contract and excludes
 itself from the default tests. Fixture counts describe tested examples, not
 unrestricted support for a language feature.
 
-The **1,009/1,009 focused graph/parser checks** are a separate baseline. They
+The **1,025/1,025 focused graph/parser checks** are a separate baseline. They
 include some of the language fixtures above, so these counts must not be added.
 The 125 additional registered legacy helper and parser-error checks were also
 rerun: **102 pass, 23 fail**, without process errors or timeouts. Their exact
@@ -34,8 +34,9 @@ inventory is [legacy-helper-status.json](legacy-helper-status.json). Some call
 legacy reasoners or assert old registry bookkeeping; inspect those contracts
 before treating a failure as missing graph behavior or a pass as graph coverage.
 
-The scheduler's current **38/38** is reported above. At the preceding checkpoint,
-unchanged standalone checks passed: list structure **18/18**, span alignment
+The unchanged standalone scheduler passed **38/38** at the preceding checkpoint,
+also under address, undefined-behavior, and leak sanitizers. Earlier unchanged
+standalone checks passed: list structure **18/18**, span alignment
 **374/374**, and numeric ranges **1,225 interval pairs** plus boundary checks. The documented span-test command exposed a signed-comparison warning in
 its test assertion; explicit size casts fixed that build without changing the
 span algorithm or its expectations.
@@ -64,6 +65,11 @@ Natural-language expansion is deferred. A failing fixture remains documented
 until its behavior works or its contract is explicitly revised.
 
 ## Latest behavior
+
+- Qualified scalar strings share the scalar-relation goal with numeric ranges.
+  A colon supplies prefix value evidence without inferring a missing target size;
+  a known target width selects that prefix. See
+  [qualified-text-results.md](qualified-text-results.md).
 
 - Direct numeric matching, interval intersection, and range predicates share
   exact half-open bounds. See [numeric-range-results.md](numeric-range-results.md).
@@ -103,7 +109,7 @@ resolved: unknown numeric sizes and subscribed open tails remain symbolic.
 
 The complete fixture status and input hashes are recorded in
 [language-compatibility-status.json](language-compatibility-status.json).
-Detailed language and helper audit logs are in `/tmp/p4-rejection-audit-*`.
+Detailed language and helper audit logs are in `/tmp/p4-qualified-audit-*`.
 
 ## Remaining work
 

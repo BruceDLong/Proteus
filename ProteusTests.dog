@@ -1,6 +1,15 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphQualifiedText/endModes
+    unit/graphQualifiedText/unknownSize
+    unit/graphQualifiedText/lateText
+    unit/graphQualifiedText/cancel
+    unit/graphQualifiedText/lateSize
+    unit/graphQualifiedText/cost
+    unit/graphQualifiedText/mismatchReuse
+    unit/graphQualifiedText/shortInput
+    unit/graphQualifiedText/invalidWidth
     unit/graphRejection/scalarReuse
     unit/graphRejection/textReuse
     unit/graphRejection/sizeReuse
@@ -11483,6 +11492,103 @@ struct GLOBAL {
     }%>
     void: unitTestGraphRejection(me string: testName, me int: caseID) <- {
         me bool: passed <- graphRejectionCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+// Scalar prefix evidence must preserve size uncertainty and source ownership.
+#define GRAPHQUALIFIEDTEXT(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphQualifiedText(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHQUALIFIEDTEXT(unit/graphQualifiedText/endModes, 0)
+    GRAPHQUALIFIEDTEXT(unit/graphQualifiedText/unknownSize, 1)
+    GRAPHQUALIFIEDTEXT(unit/graphQualifiedText/lateText, 2)
+    GRAPHQUALIFIEDTEXT(unit/graphQualifiedText/cancel, 3)
+    GRAPHQUALIFIEDTEXT(unit/graphQualifiedText/lateSize, 4)
+    GRAPHQUALIFIEDTEXT(unit/graphQualifiedText/cost, 5)
+    GRAPHQUALIFIEDTEXT(unit/graphQualifiedText/mismatchReuse, 6)
+    GRAPHQUALIFIEDTEXT(unit/graphQualifiedText/shortInput, 7)
+    GRAPHQUALIFIEDTEXT(unit/graphQualifiedText/invalidWidth, 8)
+
+    me bool: graphQualifiedTextCase(me string: testName, me int: caseID) <- <%{
+        bool passed=true;
+        if(caseID==0) {
+            for(const std::string right:{"'Hello'","*_+'Hello'"})
+            for(const std::string op:{"=:","==:","=="}) for(const std::string left:{"$","?","*3+$","*5+$","'Hel'","'Hello'","'HelloWorld'","''"}) {
+                GraphNormalizer normalizer;normalizer.init();
+                auto root=graphParsed(testName,left+" "+op+" "+right);auto source=root->pItem->wrkList.front();
+                auto sourceText=toString(source->pItem.get()),before=toString(root->pItem.get());
+                bool partial=op.back()==':',unknown=(partial || right.front()=='*') && (left=="$" || left=="?");
+                bool accepted=partial || left=="$" || left=="?" || left=="*5+$" || left=="'Hello'";
+                std::string expected=left=="*3+$" ? "'Hel'" : left=="*5+$" || left=="$" || left=="?" ? "'Hello'" : left;
+                if(unknown) expected="*_+'Hello'";
+                auto handle=normalizer.normalize(root);handle.waitForCompletion();
+                bool ok=!handle.status().failed && toString(source->pItem.get())==sourceText &&
+                    !normalizer.access->hasDirectIdentity(root,source) && root->pItem->workListContainsPOV(source);
+                ok &= toString(root->pItem.get())==(accepted ? expected : before);
+                ok &= handle.status().symbolicValues==(!accepted || unknown) &&
+                    getFlagBit(root->pItem->flags,infonView::isNormed)==(accepted && !unknown);
+                auto body=root->pItem->value;auto count=normalizer.access->registry->identities.size();
+                auto repeat=normalizer.normalize(root);repeat.waitForCompletion();
+                ok &= !repeat.status().failed && root->pItem->value==body && normalizer.access->registry->identities.size()==count;
+                if(!ok) std::cout << "Text endpoints: " << before << " -> " << toString(root->pItem.get()) << " error=" << handle.status().error << "\n";
+                passed &= ok;repeat.cancel();handle.cancel();normalizer.close();
+            }
+            return passed;
+        }
+        GraphNormalizer normalizer;normalizer.init();
+        std::string expression="$ =: 'Hello'";
+        if(caseID==2 || caseID==3) expression="*3+$ =: $";
+        if(caseID==5) expression="*3+$ =: 'Hello'";
+        if(caseID==6) expression="'Bye' =: 'Hello'";
+        if(caseID==7) expression="*8+$ =: 'Hello'";
+        if(caseID==8) expression="*1.5+$ =: 'Hello'";
+        auto root=graphParsed(testName,expression),source=root->pItem->wrkList.front();
+        auto sourceText=toString(source->pItem.get()),before=toString(root->pItem.get());
+        auto handle=caseID==5 ? normalizer.normalizeWithCost(root,1) : normalizer.normalize(root);
+        handle.waitForCompletion();
+        passed &= !handle.status().failed && handle.status().symbolicValues && handle.status().withSubscribers &&
+            !getFlagBit(root->pItem->flags,infonView::isNormed) && toString(source->pItem.get())==sourceText;
+        if(caseID==1 || caseID==4) {
+            passed &= root->pItem->value->str=="Hello" && toString(root->pItem.get())=="*_+'Hello'" &&
+                getModeBits(root->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown;
+            if(caseID==4) {
+                normalizer.addRHS(root,graphParsed(testName,"*5+$"));handle.waitForCompletion();
+                passed &= !handle.status().failed && !handle.status().symbolicValues &&
+                    getFlagBit(root->pItem->flags,infonView::isNormed) && root->pItem->infSize->num==5;
+            }
+        } else {
+            passed &= toString(root->pItem.get())==before;
+            if(caseID==2 || caseID==3) {
+                if(caseID==3) handle.cancel();
+                normalizer.runtime.update([&] {
+                    source->pItem->value->str="Hello";
+                    SetModeBits(source->pItem->value->flags,infonState::evalMode,infonState::emLiteral);
+                    source->pItem->infSize->num.val=5;
+                    SetModeBits(source->pItem->infSize->flags,infonState::evalMode,infonState::emLiteral);
+                });
+                handle.waitForCompletion();
+                if(caseID==3) passed &= handle.status().cancelled && !handle.status().withSubscribers &&
+                    getModeBits(root->pItem->value->flags,infonState::evalMode)==infonState::emUnknown && root->pItem->infSize->num==3;
+                else passed &= !handle.status().failed && !handle.status().symbolicValues && toString(root->pItem.get())=="'Hel'";
+            }
+            if(caseID==6) {
+                auto alternate=graphParsed(testName,"*3+$");normalizer.addRHS(alternate,source);
+                auto success=normalizer.normalize(alternate);success.waitForCompletion();
+                passed &= !success.status().failed && !success.status().symbolicValues && toString(alternate->pItem.get())=="'Hel'" &&
+                    toString(source->pItem.get())==sourceText && !normalizer.access->hasDirectIdentity(root,source);
+                success.cancel();
+            }
+        }
+        if(!passed) {
+            std::cout << "Qualified text " << caseID << ": " << toString(root->pItem.get()) << " error=" << handle.status().error << " symbolic=" << handle.status().symbolicValues << "\n";
+            for(const auto& step:handle.steps()) std::cout << step.action << "\n";
+        }
+        handle.cancel();normalizer.close();return passed;
+    }%>
+    void: unitTestGraphQualifiedText(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphQualifiedTextCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

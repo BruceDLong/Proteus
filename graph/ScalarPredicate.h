@@ -9,6 +9,44 @@ inline ScalarMatch compareScalar(GraphTypeFacts required, const GraphTypeFacts& 
     return required.combine(actual) ? ScalarMatch::unknown : ScalarMatch::no;
 }
 
+// Qualified scalar text matching shares the endpoint rule with numeric
+// matching. A colon does not supply a missing target size, even when the
+// available text is concrete. Existing literal prefixes are compared without
+// overwriting either operand.
+struct TextMatch {
+    ScalarMatch verdict=ScalarMatch::unknown;
+    GraphTypeFacts result;
+};
+inline TextMatch matchText(GraphTypeFacts left,const GraphTypeFacts& right,bool looseSize) {
+    TextMatch match;match.result=left;
+    if(!left.valid || !right.valid || right.overlay!=infonState::STR || !right.hasValue) return match;
+    if(!looseSize && left.hasSize && right.hasSize && left.size!=right.size) {
+        match.verdict=ScalarMatch::no;return match;
+    }
+    auto& result=match.result;result.overlay=infonState::STR;
+    if(left.hasValue) {
+        auto width=std::min(left.text.size(),right.text.size());
+        if(left.text.compare(0,width,right.text,0,width)!=0 || (!looseSize && left.text.size()!=right.text.size())) {
+            match.verdict=ScalarMatch::no;return match;
+        }
+    } else {
+        std::size_t width=right.text.size();
+        if(left.hasSize) {
+            if(left.size<0 || left.size.getDenominator()!=1 || left.size>std::numeric_limits<std::int64_t>::max()) return match;
+            auto requested=left.size.getNumerator().get_si();
+            if(static_cast<std::uint64_t>(requested)>width) return match;
+            // Whole correspondence cannot publish a truncated value and then
+            // discover the remaining text on the next pass. With an unknown
+            // source endpoint, wait for enough evidence to establish its end.
+            if(!looseSize && static_cast<std::uint64_t>(requested)!=width) return match;
+            width=static_cast<std::size_t>(requested);
+        }
+        result.hasValue=true;result.text=right.text.substr(0,width);
+    }
+    if(!looseSize && !result.hasSize && right.hasSize) {result.hasSize=true;result.size=right.size;}
+    match.verdict=ScalarMatch::yes;return match;
+}
+
 // A predicate asks whether all available numeric possibilities satisfy it.
 // A partial overlap is unknown, not proof of exclusion.
 inline ScalarMatch compareNumeric(const NumericView& required,const NumericView& actual,GraphTypeFacts actualFacts={}) {

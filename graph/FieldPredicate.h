@@ -59,7 +59,7 @@ class FieldPredicate {
         auto specification=std::make_shared<DefinitionRequirement>();
         specification->types=definitions_->names(node);
         if (!specification->types.empty()) specification->label=specification->types.front();
-        specification->facts=predicate ? access_->predicateFacts(node) : access_->typeFacts(node);
+        specification->facts=predicate ? access_->predicateFacts(node,false) : access_->typeFacts(node);
         auto refinementContext=context;refinementContext.insert(refinementContext.begin(),node);
         const bool canRead=readable(node,predicate);
         if ((!predicate || !getFlagBit(node->pItem->flags,infonView::invertMatch)) && !access_->literalList(node) &&

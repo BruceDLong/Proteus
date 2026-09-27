@@ -144,7 +144,7 @@ public:
             (access_->memberTemplate(node) && !access_->fedTemplate(node)) || access_->occurrenceOwner(node);
     }
     bool children(const POVNode& node, const POVNode& root, std::vector<POVNode>& result) const {
-        if (!(node == root ? access_->predicateFacts(node) : access_->typeFacts(node)).valid) return false;
+        if (!(node == root ? access_->predicateFacts(node,false) : access_->typeFacts(node)).valid) return false;
         if (node != root && !access_->scalarTypeShape(node) && !listRequirement(node)) return false;
         // Registry constraints within a shared body need a read-only relation
         // protocol. Keep them visible as deferred work rather than ignoring them.
@@ -288,7 +288,7 @@ public:
     // Meaning evidence can be compiled without applying it to a candidate or
     // a shared grammar template. Nominal compatibility is checked separately.
     GraphTypeFacts scalarFacts(const POVNode& node, bool predicate = false) const {
-        auto facts = predicate ? access_->predicateFacts(node) : access_->typeFacts(node);
+        auto facts = predicate ? access_->predicateFacts(node,false) : access_->typeFacts(node);
         if (!facts.valid || !access_->hasTypeRequirements(node) || optional(node)) return facts;
         auto proof = saved(node);
         if (!proof || proof->requirement->list || !facts.combine(proof->requirement->facts)) facts.valid = false;
