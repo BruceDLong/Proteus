@@ -87,6 +87,9 @@ Shared numeric containment, interval intersection, and range predicates are
 covered in [numeric-range-results.md](numeric-range-results.md).
 Qualified scalar string prefixes use the same relation goal; see
 [qualified-text-results.md](qualified-text-results.md).
+Function arguments, symbolic result endpoints, RHS dependency composition, and
+explicit-source `~`/`^` lookup are covered in
+[input-resolution-results.md](input-resolution-results.md).
 Run `python3 graph/audit_language_suite.py --output /tmp/proteus4-language-audit`
 to preserve every original fixture and record failures, crashes and timeouts.
 
@@ -396,8 +399,10 @@ See [expression-results.md](expression-results.md) for verified examples.
 `selectIntersection` is a required goal for an ordinary first/last/marked
 intersection. Its graph walk gathers extent evidence from the existing inner
 POVs without normalizing their values. It rejects proved extent conflicts and
-then follows the selected position. Last selection requires a known end; an
-explicit extent can prove that an open tail contributes zero positions. Marked
+then follows the selected position. A concrete last item requires a known end;
+an explicit extent can prove that an open tail contributes zero positions.
+Until then, a registry end-relative node can carry outer result constraints
+without materializing the open body. Marked
 selection does not require an unrelated tail to close. Embedded list spans are
 traversed and empty spans skipped; an empty open span cannot be skipped when
 searching for the first position.
@@ -406,9 +411,9 @@ The GoalSpec publishes an identity from the result POV to the selected POV.
 Scalar Sets or list adoption then acquire the requested fields through ordinary
 graph traversal. The original `innr` is retained as `selectionExpression`, along
 with the selection kind and selected POV, so later constraints can be checked.
-Other inner values are not forced to normalize. Alternative filtering, function
-arguments, templates, positional selectors, and embedded-string traversal remain
-deferred rather than being treated as ordinary result selection.
+Other inner values are not forced to normalize. Function argument placement,
+source injection, alternative filtering, and positional paths have their own
+goals over shared navigation. General embedded-string traversal remains deferred.
 
 The parser now initializes the outer size as unknown when it moves the inner
 extent into `innr`; clearing only the payload previously left a stale literal
@@ -521,7 +526,9 @@ See [virtual-shape-results.md](virtual-shape-results.md) for examples and checks
 members. The adapter advertises a `groupedList` goal for the whole loose RHS;
 it does not turn that RHS into a strict identity between the two containers.
 The source endpoint's value is inspected separately from its relationship flags.
-Other loose relationships remain unsupported.
+Other supported loose relationships use the scalar and sequence goals; see
+[input-resolution-results.md](input-resolution-results.md) for finite list-value
+acquisition and the remaining boundaries.
 
 The definition walk supplies the read-only repeated member requirement.
 Its shared span layout derives width from explicit positions or a known size,

@@ -9,15 +9,19 @@ public:
     bool text=false, copiedText=false;
     Work work{0,0};
     bool supported=false,accepted=false;
-    ScalarRelation(ProteusGraphAccess& access,const POVNode& target,const POVNode& source) {
+    ScalarRelation(std::shared_ptr<ProteusGraphAccess> readerAccess,const POVNode& target,const POVNode& source,
+                   const std::shared_ptr<ProteusDefinitions>& definitions) {
+        auto& access=*readerAccess;
+        PayloadReadiness payload(readerAccess,definitions->payload(source),definitions);
+        bool ready=payload.ready && (!access.hasTypeRequirements(target) || definitions->satisfied(target));
+        work=payload.work;
         auto actual=access.typeFacts(target);
         if(source->looseType() && actual.valid && (actual.overlay<0 || actual.overlay==infonState::STR) &&
            access.plain(source,false,false,true,false) && source->pItem->value->sizeMode!=fromContext &&
-           !access.hasTypeRequirements(target) && !access.hasTypeRequirements(source) &&
-           POVDescription(source,access.registry.get()).relationships().empty()) {
+           ready) {
             auto supplied=access.predicateFacts(source,true);
             if(supplied.valid && supplied.overlay==infonState::STR) {
-                supported=text=true;work.visits=2;
+                supported=text=true;work.visits=addCost(work.visits,2);
                 auto match=matchText(actual,supplied,source->looseSize());
                 result.facts=match.result;accepted=match.verdict==ScalarMatch::yes;
                 copiedText=accepted && !actual.hasValue;return;
@@ -25,7 +29,7 @@ public:
         }
         NumericRangeAccess reader(access);
         auto left=reader.read(target),right=reader.read(source,false,true);
-        work=reader.work;
+        work.visits=addCost(work.visits,reader.work.visits);
         if(access.unknownOverlay(target) && access.plain(target,false,false,false,false) && right.bounds.valid) {
             left.bounds=NumericBounds::any();left.constraint=true;
             left.facts=access.typeFacts(target);left.facts.overlay=infonState::NUM;
@@ -36,8 +40,7 @@ public:
         if(!supported) return;
         // Type/application obligations and RHS work must first be proved by
         // the normal graph, not ignored by this scalar projection.
-        if(access.hasTypeRequirements(target) || access.hasTypeRequirements(source) ||
-           !POVDescription(source,access.registry.get()).relationships().empty()) return;
+        if(!ready) return;
         auto match=matchNumeric(left,right,source->looseSize(),source->looseType());
         if(match.verdict==ScalarMatch::no && !source->looseType())
             throw GoalRejected("incompatible numeric range constraints");
@@ -49,14 +52,15 @@ public:
 class ProteusScalarRelationGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusCompletion> completion_;
+    std::shared_ptr<ProteusDefinitions> definitions_;
     bool verified_=false;
 public:
     ProteusScalarRelationGoal(Query<POVNode> query,std::shared_ptr<ProteusGraphAccess> access,
-                       std::shared_ptr<ProteusCompletion> completion)
-        :GoalSpec<POVNode>(query),access_(std::move(access)),completion_(std::move(completion)) {}
+                       std::shared_ptr<ProteusCompletion> completion,std::shared_ptr<ProteusDefinitions> definitions)
+        :GoalSpec<POVNode>(query),access_(std::move(access)),completion_(std::move(completion)),definitions_(std::move(definitions)) {}
     void beginPass() override {verified_=false;}
     std::vector<SetCommand> found(const Visit<POVNode>&) override {
-        ScalarRelation plan(*access_,request.node,request.related);
+        ScalarRelation plan(access_,request.node,request.related,definitions_);
         if(!plan.accepted) return {};
         auto access=access_;auto target=request.node;auto result=plan.result;bool text=plan.text,copiedText=plan.copiedText;
         return {{text ? "Set string relationship evidence" : "Set numeric range evidence",[this,access,target,result,text,copiedText] {

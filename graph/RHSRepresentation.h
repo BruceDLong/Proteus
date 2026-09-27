@@ -37,7 +37,8 @@ public:
             if (!visited.insert(pair).second || !access_->inputError(left).empty() ||
                 !access_->inputError(right).empty() ||
                 (access_->hasTypeRequirements(right) &&
-                 !(definitions && access_->scalarTypeShape(right) && definitions->satisfied(right))) ||
+                 !(definitions && access_->scalarTypeShape(right) && definitions->satisfied(right) &&
+                   compareNominal(*definitions,right,left)==ScalarMatch::yes)) ||
                 access_->occurrenceOwner(right) || access_->memberTemplate(right) ||
                 (!access_->scalarCandidate(right) && !access_->literalList(right))) return;
             auto actual = access_->typeFacts(left), required = access_->typeFacts(right);
@@ -60,5 +61,23 @@ public:
             for (auto rhs : POVDescription(right).work()) pending.emplace_back(left, rhs);
         }
         represented = true; complete=fullyExpressed;
+    }
+};
+
+// A qualified relationship reads payload facts without inheriting the incoming
+// qualifier. Its own constraints still need ordinary graph proofs. This reader
+// checks those proofs; it never normalizes or discards pending work.
+struct PayloadReadiness {
+    bool ready;
+    Work work{0,0};
+    PayloadReadiness(const std::shared_ptr<ProteusGraphAccess>& access,const POVNode& payload,
+                     const std::shared_ptr<ProteusDefinitions>& definitions) {
+        ready=!access->hasArgument(payload) &&
+            (!access->hasTypeRequirements(payload) || definitions->satisfied(payload));
+        for(const auto& relation:POVDescription(payload,access->registry.get()).relationships()) {
+            RHSRepresentation proof(access,payload,relation.target,definitions);
+            work.visits=addCost(work.visits,proof.work.visits);
+            ready=ready && proof.represented;
+        }
     }
 };

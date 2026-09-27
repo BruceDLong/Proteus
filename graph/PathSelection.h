@@ -7,7 +7,7 @@
 enum PathResultUse { pathValue = 0, pathCandidates = 1 };
 inline Query<POVNode> pathRequest(const POVNode& owner,int use=pathValue) {
     auto state=owner->pItem->pathSelection;
-    return {state->source,state->alternatives ? filterChoice : state->identity ? selectSelf : state->positional ? selectPosition : selectField,use,
+    return {state->source,state->alternatives ? filterChoice : state->identity ? selectSelf : state->external ? externalField : state->resolution ? resolveWord : state->positional ? selectPosition : selectField,use,
             state->identity || state->positional ? owner : state->predicate,{owner}};
 }
 
@@ -320,8 +320,8 @@ class PathExpression {
         auto parts=syntax->parts;if(syntax->partRef) parts.push_back(syntax->partRef);
         for(const auto& part:parts) {
             auto kind=getModeBits(part->flags,PartPath::pathMode);
-            if(!seen.insert(part).second || !part->path || (kind!=PartPath::dotField && kind!=PartPath::idxField) ||
-               (kind==PartPath::dotField && (part->spec || part->continuation))) return false;
+            if(!seen.insert(part).second || !part->path || (kind!=PartPath::dotField && kind!=PartPath::idxField && kind!=PartPath::resolutionField && kind!=PartPath::upField) ||
+               (kind!=PartPath::idxField && (part->spec || part->continuation))) return false;
             auto continuation=tail(part);
             if(continuation && continuation->funcArgs) return false;
             ++count;if(!inspect(continuation,seen,count)) return false;
@@ -370,6 +370,8 @@ class PathExpression {
             POVNode spec;
             if(part->spec) {spec=std::make_shared<POV>(916);spec->pItem=part->spec;}
             initialize(access,owner,source,predicate,spec,positional,false,expression);
+            owner->pItem->pathSelection->external=getModeBits(part->flags,PartPath::pathMode)==PartPath::upField;
+            owner->pItem->pathSelection->resolution=getModeBits(part->flags,PartPath::pathMode)==PartPath::resolutionField;
             if(continuation) owner->pItem->pathSelection->updates=continuation->wrkList;
             if(continuation && !continuation->wrkList.empty()) effects.push_back(owner);
             return lower(access,owner,continuation,output,expression,effects);
@@ -503,6 +505,45 @@ public:
     }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
         auto q=visit.query;
+        if(q.kind==externalField && request.kind==externalField && !q.node->pItem->pathSelection && !q.node->pItem->isOrLike()) {
+            auto state=request.context.front()->pItem->pathSelection;
+            auto type=q.related->pItem->type;
+            if(type && !state->updates.empty() && POVDescription(q.node,access_->registry.get()).associations(type->typeID()).empty()) {
+                auto access=access_;auto anchor=q.node,predicate=q.related;
+                return {{"Set external property",[access,anchor,predicate] {
+                    auto value=std::make_shared<POV>(919);value->pItem=std::make_shared<infonView>();
+                    value->pItem->type=predicate->pItem->type;value->pItem->addedTypes=predicate->pItem->addedTypes;
+                    SetModeBits(value->pItem->flags,infonView::itmMode,infonView::mItem);
+                    SetModeBits(value->pItem->flags,infonView::viewMode,infonView::vmOverlay);
+                    SetModeBits(value->pItem->infSize->flags,infonState::evalMode,infonState::emUnknown);
+                    SetModeBits(value->pItem->value->flags,infonState::evalMode,infonState::emUnknown);
+                    SetModeBits(value->pItem->value->flags,infonState::overlayType,infonState::tUnknown);
+                    access->bind(value);access->bind(anchor);
+                    // Predicate storage stays read-only. Its explicit facts
+                    // constrain independent property storage through ordinary work.
+                    value->pItem->addPOVToWrkList(predicate);
+                    access->registry->recordExternalAssociation(anchor,predicate,value,{},predicate->pItem->type->typeID(),0);
+                    return true;
+                },{1,2}}};
+            }
+        }
+        if(q.kind==resolutionStep) {
+            auto kind=static_cast<int>(q.coordinates[0]);bool matched=q.coordinates[1];
+            q.coordinates.erase(q.coordinates.begin(),q.coordinates.begin()+2);q.kind=kind;
+            // A proved direct absence continues to the external tier. Do not
+            // publish an empty direct result while that continuation is pending.
+            if(q.kind==pathEnd && !matched) return {};
+        }
+        if(q.kind==externalMatched || q.kind==externalUnknown || q.kind==externalEnd) {
+            if(q.kind==externalMatched || q.kind==externalUnknown) {
+                if(std::find(matches_.begin(),matches_.end(),q.node)==matches_.end()) matches_.push_back(q.node);
+                locations_.emplace(q.node,std::vector<POVNode>{q.node});
+            }
+            if(q.kind==externalUnknown) waiting_=true;
+            if(q.kind==externalEnd) positionReady_=true;
+            if(visit.cost>=positionFinding_.cost) positionFinding_=visit;
+            return {};
+        }
         if(request.kind==filterChoice) {
             if(q.kind==choiceMatched || q.kind==choiceUnknown) {
                 if(std::find(matches_.begin(),matches_.end(),q.node)==matches_.end()) matches_.push_back(q.node);
@@ -542,7 +583,7 @@ public:
         return finished ? publish() : std::vector<SetCommand>{};
     }
     CommandBatch<POVNode> finishPass() override {
-        if((request.kind!=selectPosition && request.kind!=selectSelf && request.kind!=filterChoice) || !positionReady_) return {};
+        if(!positionReady_) return {};
         return {positionFinding_,publish()};
     }
 private:

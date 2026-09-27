@@ -93,6 +93,15 @@ width selects that prefix; whole matching still requires matching ends. Keep
 qualified work searchable and preserve RHS payloads on mismatch. See
 graph/qualified-text-results.md.
 
+Function arguments and symbolic last-result positions reuse indexed navigation
+and the existing end-relative registry. A constraint on an intersection result
+must not be reinterpreted as input to its body after selection. Qualified RHS
+payloads expose their own graph prerequisites; no recursive normalize call is
+hidden inside a matcher. Explicit-source ~ lookup uses the field walk and only
+falls back to external associations after proved direct absence. Unknown direct
+candidates retain precedence. External values own their mutable state; predicates
+remain separate. See graph/input-resolution-results.md for supported boundaries.
+
 Supplied typed-field descriptions may be partial even when ordered. Normalizing
 such a description (including a parent returned by `;` or `;;`) normalizes the
 present members without forcing the complete parent definition onto it. Bare type

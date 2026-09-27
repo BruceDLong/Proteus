@@ -73,6 +73,18 @@ public:
         }
         return result;
     }
+    std::vector<std::shared_ptr<ExternalAssociationReference>> associations(const std::string& type) const {
+        std::vector<std::shared_ptr<ExternalAssociationReference>> result;
+        if(registry_) registry_->collectExternalAssociationsForAnchor(node_,type,&result);
+        return result;
+    }
+    std::shared_ptr<EndRelativeReference> endReference() const {
+        if(!registry_) return {};
+        std::lock_guard<std::mutex> lock(registry_->registryMutex);
+        for(const auto& reference:registry_->endRelativeReferences)
+            if(!getFlagBit(reference->flags,EndRelativeReference::retired) && reference->referencePOV==node_) return reference;
+        return {};
+    }
     bool hasIdentity(const POVNode& target) const {
         if (node_ == target) return true;
         for (const auto& relation : relationships(false)) if (relation.target == target) return true;

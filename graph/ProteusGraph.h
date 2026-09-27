@@ -20,7 +20,7 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectionExtentMember = 20, selectionExtentEnd = 21,
               typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27,
               selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31,
-              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62, scalarCorrespondence = 63 };
+              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62, scalarCorrespondence = 63, placeArgument = 64, resolveEndpoint = 65, endpointPosition = 66, endpointFound = 67, resolveWord = 68, resolutionStep = 69, externalField = 70, externalPosition = 71, externalMatched = 72, externalUnknown = 73, externalEnd = 74, acquireListValue = 75 };
 
 inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
     auto phase = query.kind == correspondenceEnter ? ListPhase::enter :
@@ -29,13 +29,16 @@ inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
 }
 
 #include "DefinitionApplications.h"
-#include "RHSRepresentation.h"
 #include "ScalarPredicate.h"
+#include "RHSRepresentation.h"
 #include "FieldPredicate.h"
 #include "PathSelection.h"
+#include "Resolution.h"
 #include "DefinitionProjection.h"
 #include "IntersectionInput.h"
+#include "EndpointDemand.h"
 #include "GroupedListPlan.h"
+#include "ListValueShape.h"
 
 // Early correspondence is conditional on the parser retaining the ordered
 // list body. Weak provenance witnesses neither copy nodes nor own a second
@@ -159,14 +162,15 @@ public:
 class ProteusRepresentationGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusCompletion> completion_;
+    std::shared_ptr<ProteusDefinitions> definitions_;
     bool checked_ = false, represented_ = false;
 public:
     ProteusRepresentationGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access,
-                              std::shared_ptr<ProteusCompletion> completion)
-        : GoalSpec<POVNode>(query), access_(std::move(access)), completion_(std::move(completion)) {}
+                              std::shared_ptr<ProteusCompletion> completion,std::shared_ptr<ProteusDefinitions> definitions)
+        : GoalSpec<POVNode>(query), access_(std::move(access)), completion_(std::move(completion)),definitions_(std::move(definitions)) {}
     void beginPass() override { checked_ = false; represented_ = false; }
     std::vector<SetCommand> found(const Visit<POVNode>&) override {
-        RHSRepresentation plan(access_, request.node, request.related);
+        RHSRepresentation plan(access_, request.node, request.related,definitions_);
         if(plan.complete && request.node->pItem->workListContainsPOV(request.related)) {
             auto access=access_;auto owner=request.node,source=request.related;
             ++plan.work.creations;
@@ -566,7 +570,9 @@ public:
         if (visit.query.kind == selectionExtentMember) measure_.add(visit.query.node);
         const bool indexed = access_->selectionIndex(request.node) >= 0;
         if (visit.query.kind != (indexed ? itemFound : selectionFound)) return {};
-        if (!indexed && !access_->selectionExtentAgrees(request.node, measure_)) return {};
+        bool symbolic=getFlagBit(visit.query.node->flags,POV::endRelativeReference);
+        if(symbolic && POVDescription(request.node,access_->registry.get()).relationships().empty() && !access_->known(visit.query.node)) return {};
+        if (!symbolic && !indexed && !access_->selectionExtentAgrees(request.node, measure_)) return {};
         auto selected = visit.query.node;
         if (!access_->selectionAgrees(request.node, selected)) return {};
         verified_ = true;
@@ -668,8 +674,13 @@ public:
     void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); definitions_->prune(); }
     std::vector<std::function<void()>> takeEffects() override { return completion_->takeEffects(); }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
+        if(query.kind==acquireListValue) return std::make_shared<ProteusListValueGoal>(query,access_,definitions_);
+        if (query.kind==resolveWord || query.kind==externalField)
+            return std::make_shared<ProteusPathGoal>(query,access_,definitions_);
+        if (query.kind==placeArgument || query.kind==resolveEndpoint)
+            return std::make_shared<ProteusEndpointGoal>(query,access_);
         if (query.kind == scalarCorrespondence)
-            return std::make_shared<ProteusScalarRelationGoal>(query,access_,completion_);
+            return std::make_shared<ProteusScalarRelationGoal>(query,access_,completion_,definitions_);
         if (query.kind == projectField)
             return std::make_shared<ProteusProjectionGoal>(query, access_, definitions_);
         if (query.kind == selectField || query.kind == selectPosition || query.kind == selectSelf || query.kind == filterChoice)
@@ -681,7 +692,7 @@ public:
         if (query.kind == groupedList)
             return std::make_shared<ProteusGroupedListGoal>(query, access_, definitions_, completion_);
         if (query.kind == assessRepresentation)
-            return std::make_shared<ProteusRepresentationGoal>(query, access_, completion_);
+            return std::make_shared<ProteusRepresentationGoal>(query, access_, completion_,definitions_);
         if (query.kind == typeRequirements || query.kind == compileTypeRequirements)
             return std::make_shared<ProteusTypeGoal>(query, definitions_);
         if (query.kind == listCorrespondence)
@@ -693,6 +704,11 @@ public:
         return std::make_shared<ProteusGoal>(query, access_, completion_, evidence_, definitions_);
     }
     Expansion<POVNode> expand(const Query<POVNode>& query) override {
+        if(query.kind==acquireListValue) return {};
+        if(query.kind>=resolveWord && query.kind<=externalEnd)
+            return Resolution(access_,definitions_,[this](const Query<POVNode>& q){return expandSemantic(q);}).expand(query);
+        if(query.kind>=placeArgument && query.kind<=endpointFound)
+            return EndpointDemand(access_,definitions_,[this](const Query<POVNode>& q){return expandSemantic(q);}).expand(query);
         if (query.kind >= selectField && query.kind <= choicePending)
             return PathSelection(access_, definitions_, [this](const Query<POVNode>& q) {return expandSemantic(q);}).expand(query);
         if ((query.kind >= sequenceCorrespondence && query.kind <= sequenceComplete) || query.kind == correspondenceInput || query.kind == sequenceAtomMatched)
@@ -817,6 +833,16 @@ private:
             if (auto index = access_->selectionIndex(node); index >= 0) {
                 result.edges.push_back(direct("intersection prefix endpoint", {definitions_->selectionBody(node), itemAt, index}));
                 return result;
+            }
+            auto body=definitions_->selectionBody(node);
+            if(access_->selectionIsLast(node) && access_->openTail(body) && access_->listExtent(body)<0) {
+                auto access=access_;auto definitions=definitions_;
+                result.edges.push_back({"symbolic last position",{1,1},true,[access,definitions,node,body] {
+                    auto old=access->registry->findEndRelativeReference(body.get(),body->pItem.get(),-1);
+                    definitions->retainOccurrenceOwner(body);access->bind(body);
+                    auto reference=access->registry->getOrCreateEndRelativeReference(body.get(),-1);
+                    return Arrival<POVNode>{{reference->referencePOV,selectionFound,0,node},!old};
+                }});
             }
             result.edges.push_back(sequence(POVDescription::boundary(access_->selectionSource(node)->value),
                 {node, selectionExtentMember, 0, node}, {node, selectionExtentEnd, 0, node}));
@@ -967,6 +993,10 @@ private:
                         result.refinements.push_back({{match,demand,0,{},PathExpression::location(field,match)},{1,0},"normalize path alternative",false});
             }
             result.deferred = pendingUpdate || !access_->supports(node, demand);
+            if(access_->hasArgument(node))
+                result.refinements.push_back({{node,placeArgument,0},{1,0},"place function argument",false});
+            if(auto reference=description.endReference())
+                result.refinements.push_back({{node,resolveEndpoint,0},{1,0},"resolve symbolic endpoint",false});
             if (auto direction = access_->relativeDirection(node); direction && !selectedView) {
                 auto context = positions_->context(node, query.context, access_->registry.get());
                 auto anchor = context.front(); context.erase(context.begin());
@@ -992,7 +1022,9 @@ private:
             if (access_->hasInnerSource(node)) { result.deferred = true; return result; }
             if (access_->canSelect(node)) {
                 auto body = definitions_->selectionBody(node);
-                if (!POVDescription(body).work().empty()) {
+                if(access_->hasArgument(body))
+                    result.refinements.push_back({{body,placeArgument,0},{1,0},"place inner argument",false});
+                if (!POVDescription(body).work().empty() || access_->hasArgument(body)) {
                     if(constraintsOnly) result.edges.push_back(direct("inner source constraints",{body,relationshipConstraints,0}));
                     else result.refinements.push_back({{body, relationshipConstraints, 0}, {1, 0}, "prove inner source constraints", false});
                     result.refinements.push_back({{body, sizeAndValue, 0}, {1, 0}, "refine inner members", true});
@@ -1008,7 +1040,7 @@ private:
                     result.refinements.push_back({{node, listContents, demand, {}, owners}, {0, 0},
                         "inspect list contents", demand == sizeOnly});
             }
-            if (!constraintsOnly && !selectedView && demand != sizeOnly && access_->templatePrefixList(node)) {
+            if (!constraintsOnly && !selectedView && demand != sizeOnly && (access_->templatePrefixList(node) || access_->sparse(node))) {
                 for (auto member = description.member(); member; member = POVDescription(member).adjacent())
                     result.refinements.push_back({{member, sizeAndValue, 0}, {1, 0}, "normalize template prefix member", false});
                 for (auto member : access_->demandedOccurrences(node))
@@ -1063,13 +1095,24 @@ private:
                     else result.refinements.push_back({{source,query.kind,0,{},PathExpression::location(node->pItem->pathSelection,source)},{0,0},"normalize selected source",false});
                     continue;
                 }
+                if(source->looseType() && (!source->pItem->wrkList.empty() || access_->hasTypeRequirements(source) || access_->hasArgument(source))) {
+                    auto payload=definitions_->payload(source);
+                    result.refinements.push_back({{payload,relationshipConstraints,0},{1,0},"prove RHS payload constraints",false});
+                    result.refinements.push_back({{payload,sizeAndValue,0},{1,0},"refine RHS payload",true});
+                }
                 // Expose endpoint expressions before deciding which kind of
                 // correspondence their resulting payload can participate in.
                 if (relation.isWork() && source->looseType())
                     for (int slot : {1, 2}) if (access_->hasConcat(source, slot))
                         result.refinements.push_back({{source, concatField, slot}, {1, 0},
                             "resolve qualified RHS expression", false});
-                if (demand != sizeOnly && ScalarRelation(*access_,node,source).supported) {
+                if(demand!=sizeOnly && source->looseType() && access_->adoptableList(node) &&
+                   getModeBits(source->pItem->value->flags,infonState::overlayType)==infonState::LST &&
+                   getModeBits(source->pItem->value->flags,infonState::evalMode)==infonState::emLiteral) {
+                    result.refinements.push_back({{node,acquireListValue,0,source},{1,0},"acquire list value shape",false});
+                    continue;
+                }
+                if (demand != sizeOnly && ScalarRelation(access_,node,source,definitions_).supported) {
                     result.refinements.push_back({{node,scalarCorrespondence,0,source},{1,0},"match scalar relationship",false});
                     // Source facts may themselves arrive through ordinary work.
                     if(!source->looseType()) result.refinements.push_back({{source,sizeAndValue,0},{1,0},"refine scalar RHS",true});

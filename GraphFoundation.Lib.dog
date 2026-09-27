@@ -140,6 +140,8 @@ struct GraphPathLocation {
 // Candidate POVs are existing nodes; this is evidence, not another list graph.
 struct GraphPathSelection {
     me bool: positional <- false
+    me bool: external <- false
+    me bool: resolution <- false
     me bool: alternatives <- false  // Filter oneOf members against the predicate.
     me bool: identity <- false  // Return this source after retained children finish.
     me List<our POV>: updates   // Constraints owned by the selected occurrence.
@@ -173,10 +175,22 @@ struct infonView {
     // pending work or consolidated registry identities remain searchable.
     our GraphRHSProof: representedTemplate
     me List<our GraphRHSProof>: representedWork
-    me bool: workIsRepresented(our POV: rhs) <- {
-        withEach represented in representedWork{if(represented!.valid and represented!.rhs===rhs){return(true)}}
-        return(false)
-    }
+    me bool: workIsRepresented(our POV: rhs) <- <%{
+        // A selected view borrows its source's state. Representation proofs
+        // may finish after that view was published; read those live witnesses
+        // instead of caching their earlier absence in the printed alias.
+        const infonView* current=this;std::set<const infonView*> seen;
+        while(current && seen.insert(current).second) {
+            for(const auto& proof:current->representedWork)
+                if(proof->valid && proof->rhs==rhs) return true;
+            auto field=current->pathSelection;
+            if(!field || field->pending || field->matches.size()!=1 || !field->result ||
+               field->resultView!=field->result->pItem || current->value!=field->resultView->value ||
+               current->infSize!=field->resultView->infSize || !field->resultView->workListContainsPOV(rhs)) break;
+            current=field->resultView.get();
+        }
+        return false;
+    }%>
 }
 // The local numeric rule from Proteus3 WorldManager.rangeRules, planned
 // without changing the source so the normal graph Set/revision path owns it.
@@ -292,7 +306,7 @@ struct ProteusGraphAccess {
                !inf!.isTentative and
                ((inf!.type==NULL and inf!.addedTypes.isEmpty()) or definitionTypeShape(pov)) and
                (inf!.innr==NULL or selection) and inf!.proxy==NULL and (inf!.partRef==NULL or path) and
-               (inf!.parts.isEmpty() or path) and inf!.funcArgs==NULL and
+               (inf!.parts.isEmpty() or path) and (inf!.funcArgs==NULL or inf!.argPos!=apNoArgs) and
                (inf!.itmMode==mNone or inf!.itmMode==mItem) and
                ((inf!.infSize!.overlayType==NUM and
                  (inf!.infSize!.evalMode==emUnknown or inf!.infSize!.evalMode==emLiteral)) or
@@ -461,7 +475,7 @@ struct ProteusGraphAccess {
         me GraphTypeFacts: facts
         if(!plainStructure(pov, false, false, relationship, false) or !definitionTypeShape(pov) or
                 pov!.pItem!.value!.sizeMode==fromContext or
-                pov!.pItem!.infSize!.overlayType!=NUM){return(facts)}
+                pov!.pItem!.infSize!.overlayType!=NUM or hasArgument(pov)){return(facts)}
         facts.valid <- true
         facts.explicitSize <- pov!.pItem!.value!.sizeMode==fromGiven
         if(!unknownOverlay(pov)){facts.overlay <- pov!.pItem!.value!.overlayType}
@@ -826,9 +840,13 @@ struct ProteusGraphAccess {
         pov!.pItem!.isNormed <- false; pov!.workRevision <+- 1
         return(true)
     }
+    me bool: hasArgument(our POV: pov) <- {
+        return(pov!=NULL and pov!.pItem!=NULL and pov!.pItem!.funcArgs!=NULL and
+               pov!.pItem!.argPos!=apNoArgs and !inputPending(pov))
+    }
     me bool: literalSelectionBody(our infonView: source) <- {
         return(source!=NULL and source!.viewMode==vmOverlay and source!.type==NULL and source!.addedTypes.isEmpty() and
-               source!.funcArgs==NULL and source!.parts.isEmpty() and
+               (source!.funcArgs==NULL or source!.argPos!=apNoArgs) and source!.parts.isEmpty() and
                source!.value!.overlayType==LST and source!.value!.evalMode==emLiteral and
                source!.value!.listSpec==NULL and !source!.value!.timelike and
                !source!.value!.inverted and !source!.value!.undefined and !source!.invertMatch and

@@ -84,14 +84,14 @@ merge/str/loose,       loose str merge,                $ == 'Hello',            
 merge/str/looseSize,   loose str merge,                $ =: 'Hello',                                                           *_+'Hello',                     norm
 merge/directLooseStr/exactWidthCopy, Loose string consumes an exact-width literal, *5+$ == 'Hello',                            'Hello',                        norm
 merge/directLooseStr/exactLiteralAccept, Equal-width loose literals accept when equal, 'Hello' == 'Hello',                     'Hello',                        norm
-merge/directLooseStr/exactLiteralReject, Equal-width loose literals reject when unequal, 'Hello' == 'World',                   'Hello',                        norm
+merge/directLooseStr/exactLiteralReject, Equal-width loose literals reject when unequal, 'Hello' == 'World',                   'Hello' == 'World',                        norm
 merge/directAny/scalar, Strict any takes scalar identity, ? = 'Hello',                                                        'Hello',                        norm
 merge/directAny/list, Strict any takes list identity, ? = {1 2},                                                             {1 2},                          norm
 # Engine gap: an inverted any rejects its candidate but generated copyIdentity
 # still replaces the template with that rejected candidate. Enable when inverted
 # matches are evaluated without committing their positive-match update.
 # merge/directAny/inverted, Inverted any does not copy rejected candidate, !? = 'Hello',                                       !?,                              norm
-merge/directAtomic/numReject, Numeric mismatch does not copy size, *_+8 = *16+9,                                                *_+8,                           norm
+merge/directAtomic/numReject, Numeric mismatch does not copy size, *_+8 = *16+9,                                                *_+8 = *16+9,                           norm
 merge/directAtomic/numInvertEqualReject, Inverted equal numeric template rejects without copying size, !*_+8 = *16+8,          !*_+8,                          norm
 merge/directAtomic/numInvertUnequalAccept, Inverted unequal numeric template accepts without copying size, !*_+8 = *16+9,      !*_+8,                          norm
 merge/directAtomic/numInvertWildcardReject, Inverted numeric wildcard rejects numeric without copying, !*_+_ = *16+9,          !*_+_,                          norm
@@ -105,7 +105,7 @@ merge/directUnknown/numNoConstraints, Numeric unknowns need no local update, _ =
 merge/directUnknown/strNoConstraints, String unknowns need no local update, $ = $,                                             $,                               norm
 merge/directRange/unknownAccept, Loose numeric unknown accepts literal, _ == 7,                                                7,                               norm
 merge/directRange/insideAccept, Loose numeric range accepts contained literal, *4+_ == 3,                                      3,                               norm
-merge/directRange/endReject, Loose numeric range excludes its end, *4+_ == 4,                                                  *4+_,                            norm
+merge/directRange/endReject, Loose numeric range excludes its end, *4+_ == 4,                                                  *4+_ == 4,                            norm
 merge/unknown/loose,   unknown merge,                  ? == 'Hello',                                                           'Hello',                        norm
 merge/unknown/looseSize, unknown merge,                ? ==: 'Hello',                                                          *_+'Hello',                     norm
 merge/unknown/typed,   typed merge,                    ? = 'Hello',                                                            'Hello',                        norm

@@ -114,10 +114,13 @@ public:
         }
         return unspecifiedMember_;
     }
+    POVNode payload(const POVNode& node) const { return view(node->pItem); }
     POVNode selectionBody(const POVNode& node) const { return view(access_->selectionSource(node)); }
     void retainOccurrenceOwner(const POVNode& owner) { occurrenceOwners_.insert(owner); }
     POVNode retainedOccurrenceOwner(const POVNode& node) const {
-        auto source = POVDescription(node).occurrenceSource();
+        return retainedOwner(POVDescription(node).occurrenceSource());
+    }
+    POVNode retainedOwner(POV* source) const {
         for (const auto& owner : occurrenceOwners_) if (owner.get() == source) return owner;
         return {};
     }

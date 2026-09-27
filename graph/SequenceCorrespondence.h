@@ -13,7 +13,7 @@ class SequenceCorrespondence {
     }
     static std::size_t stackStart(const Query<POVNode>& q) { return 2 + q.coordinates[0]; }
     POVNode pattern(const POVNode& node) const {
-        return access_->canSelect(node) ? definitions_->selectionBody(node) : node;
+        return access_->canSelect(node) && !node->pItem->selectedResult ? definitions_->selectionBody(node) : node;
     }
     bool sequence(const POVNode& node) const { return access_->literalList(pattern(node)); }
     // Context: source, current input node, input owners, grammar owners.
@@ -48,8 +48,8 @@ class SequenceCorrespondence {
             auto next=q; next.kind=q.coordinates[2]; next.context[1].reset();
             out.edges.push_back(edge("input sequence ended", std::move(next))); return out;
         }
-        if (at.phase == ListPhase::enter && !sourceReady(at.node)) return out;
         std::uint64_t visits=1;
+        if (at.phase == ListPhase::enter && !sourceReady(at.node,visits)) return out;
         if (at.phase == ListPhase::leave) {
             auto boundary=listBoundary(*access_, at.node); visits+=boundary.visits;
             if (!boundary.valid || !boundary.missingExtents.empty()) return out;
@@ -93,7 +93,7 @@ public:
             (access.unknownOverlay(target) || access.typeFacts(target).overlay == infonState::STR);
         auto overlay=getModeBits(POVDescription(source).value()->flags,infonState::overlayType);
         return source->looseType() && ((overlay==infonState::STR && (access.literalList(target) || scalar)) ||
-            (overlay==infonState::LST && access.literalList(target) && (source->looseSize() || getFlagBit(source->flags, POV::isOutrFeed))));
+            (overlay==infonState::LST && access.literalList(target) && (source->looseSize() || !access.memberTemplate(target) || getFlagBit(source->flags, POV::isOutrFeed))));
     }
     // An identity obtained while matching names an atomic input member even
     // when that member's value is a list. Replaying its accepted proof must not
@@ -103,13 +103,15 @@ public:
             getModeBits(q.context[0]->pItem->value->flags,infonState::overlayType)==infonState::LST &&
             access.hasDirectIdentity(q.node,q.context[1]);
     }
-    bool sourceReady(const POVNode& source) const {
+    bool sourceReady(const POVNode& source,Cost& visits) const {
+        PayloadReadiness payload(access_,definitions_->payload(source),definitions_);
+        visits=addCost(visits,payload.work.visits);
+        if(!payload.ready) return false;
         auto value=POVDescription(source).value();
         auto overlay=getModeBits(value->flags,infonState::overlayType);
         return access_->plain(source,false,false,true,false) &&
             getModeBits(value->flags,infonState::evalMode)==infonState::emLiteral &&
-            !access_->hasTypeRequirements(source) &&
-            POVDescription(source,access_->registry.get()).relationships().empty() &&
+            !access_->hasArgument(source) &&
             ((overlay==infonState::STR && value->str.size()<=static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) ||
              (overlay==infonState::LST && access_->orderedList(source) && !access_->openTail(source) && !value->listSpec));
     }
@@ -122,11 +124,13 @@ public:
             // target. This finite Set planner must not close that stream from
             // an arbitrary nullable match; prefix publications come later.
             if (q.related->looseSize() && access_->openTail(q.node) && access_->listExtent(q.node) < 0) return out;
-            if (sourceReady(q.related)) {
+            Cost visits=0;
+            if (sourceReady(q.related,visits)) {
                 bool list=getModeBits(q.related->pItem->value->flags,infonState::overlayType)==infonState::LST;
                 Query<POVNode> next{q.node,list ? correspondenceInput : sequenceEnter,0,{}, {q.related,q.related},
                                     {0,static_cast<int>(ListPhase::enter),sequenceEnter}};
-                out.edges.push_back(edge("enter sequence correspondence",std::move(next)));
+                auto start=edge("enter sequence correspondence",std::move(next));
+                start.work.visits=addCost(start.work.visits,visits);out.edges.push_back(std::move(start));
             }
             return out;
         }
@@ -320,7 +324,7 @@ private:
         for (const auto& q : path) {
             if (q.kind == sequenceEnter) {
                 auto spec = std::make_shared<DefinitionRequirement>();
-                auto body=access_->canSelect(q.node) ? definitions_->selectionBody(q.node) : q.node;
+                auto body=access_->canSelect(q.node) && !q.node->pItem->selectedResult ? definitions_->selectionBody(q.node) : q.node;
                 spec->facts=definitions_->scalarFacts(body); spec->list=access_->literalList(body) && !SequenceCorrespondence::inputIdentity(*access_,q);
                 auto types=definitions_->names(q.node);
                 if (!types.empty() && !getFlagBit(q.node->pItem->flags,infonView::invertMatch)) spec->label=types.front();
@@ -337,7 +341,9 @@ private:
                     auto count = static_cast<std::int64_t>(spec->members.size());
                     bool openRoot=partial && stack.empty();
                     spec->open=openRoot;
-                    if(!openRoot) {spec->facts.hasSize=true;spec->facts.size=count;}
+                    bool preserveSize=stack.empty() && request.related->looseSize() &&
+                        !access_->typeFacts(request.node).hasSize && request.node->pItem->value->sizeMode==fromGiven;
+                    if(!openRoot && !preserveSize) {spec->facts.hasSize=true;spec->facts.size=count;}
                     if (frame.body!=frame.node) {
                         auto mode=access_->selectionMode(frame.node);
                         if (mode==infonView::ipGetMarked) spec=frame.selected;
@@ -345,7 +351,7 @@ private:
                         else return {};
                         if (!spec) return {};
                     }
-                    if (frame.instance && frame.body==frame.node && !openRoot) extents[frame.node] = count;
+                    if (frame.instance && frame.body==frame.node && !openRoot && !preserveSize) extents[frame.node] = count;
                     if (frame.instance)
                         if (auto body = definitions_->repeatedBody(frame.node)) templates_.push_back({frame.node, body});
                 } else if (getModeBits(request.related->pItem->value->flags,infonState::overlayType)==infonState::LST) {

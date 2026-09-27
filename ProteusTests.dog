@@ -1,6 +1,35 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphResolution/direct
+    unit/graphResolution/external
+    unit/graphResolution/precedence
+    unit/graphResolution/replay
+    unit/graphResolution/multiple
+    unit/graphResolution/pendingDirect
+    unit/graphResolution/lateDirect
+    unit/graphResolution/cost
+    unit/graphResolution/orderedFirst
+    unit/graphInputs/argumentFirst
+    unit/graphInputs/argumentLast
+    unit/graphInputs/argumentLeft
+    unit/graphInputs/argumentInverse
+    unit/graphInputs/argumentResult
+    unit/graphInputs/resultText
+    unit/graphInputs/resultList
+    unit/graphInputs/prefixRHSWork
+    unit/graphInputs/wholeRHSWork
+    unit/graphInputs/lastArgumentWait
+    unit/graphInputs/symbolicLastWait
+    unit/graphInputs/cancel
+    unit/graphInputs/cost
+    unit/graphInputs/replay
+    unit/graphInputs/lateRHS
+    unit/graphInputs/rejectedRHS
+    unit/graphInputs/sparseArgument
+    unit/graphInputs/embeddedArgument
+    unit/graphInputs/wholeListResult
+    unit/graphInputs/prefixListResult
     unit/graphQualifiedText/endModes
     unit/graphQualifiedText/unknownSize
     unit/graphQualifiedText/lateText
@@ -17,6 +46,9 @@ TestsToRun = `
     unit/graphRejection/retryAfterChange
     unit/graphRejection/projectionAlternative
     unit/graphRejection/grammarReuse
+    unit/graphRejection/retainedTextFixture
+    unit/graphRejection/retainedNumberFixture
+    unit/graphRejection/retainedRangeFixture
     unit/graphConsolidation/scalar
     unit/graphConsolidation/text
     unit/graphConsolidation/finiteList
@@ -778,7 +810,7 @@ TestsToRun = `
     unit/graphStream/reinterpretation
     unit/graphStream/postfix
     unit/graphStream/conflict
-    unit/graphStream/looseDeferred
+    unit/graphStream/looseUntilClosed
     unit/graphStream/parseFailure
     unit/graphStream/lateConstraint
     unit/graphEntry/handle
@@ -7417,7 +7449,7 @@ struct GLOBAL {
     GRAPHSTREAM(unit/graphStream/reinterpretation, 10)
     GRAPHSTREAM(unit/graphStream/postfix, 11)
     GRAPHSTREAM(unit/graphStream/conflict, 12)
-    GRAPHSTREAM(unit/graphStream/looseDeferred, 13)
+    GRAPHSTREAM(unit/graphStream/looseUntilClosed, 13)
     GRAPHSTREAM(unit/graphStream/parseFailure, 14)
     GRAPHSTREAM(unit/graphStream/lateConstraint, 15)
 
@@ -7489,7 +7521,7 @@ struct GLOBAL {
         if(caseID==5){passed <- passed and handle.cancelled() and fixture.target!.pItem!.value!.items.size()==1}
         else if(caseID==10 or caseID==11 or caseID==12 or caseID==14 or caseID==15){
             passed <- passed and handle.failed() and !fixture.target!.pItem!.isNormed
-        }else if(caseID==4 or caseID==6 or caseID==9 or caseID==13){
+        }else if(caseID==4 or caseID==6 or caseID==9){
             passed <- passed and !handle.failed() and handle.symbolicValues() and !fixture.target!.pItem!.isNormed
             if(caseID==9){passed <- passed and fixture.target!.pItem!.value!.items.size()==2 and
                     fixture.target!.pItem!.value!.tailUnfinished and fixture.target!.pItem!.infSize!.num==1000000000}
@@ -7500,6 +7532,9 @@ struct GLOBAL {
                     !fixture.target!.pItem!.value!.tailUnfinished and fixture.target!.pItem!.value!.items.size()==finalCount and
                     fixture.target!.pItem!.infSize!.num==finalCount
         }
+        if(caseID==13){passed <- passed and fixture.source!.looseMode and
+                fixture.target!.pItem!.workListContainsPOV(fixture.source) and
+                !normalizer.access!.hasDirectIdentity(fixture.target, fixture.source)}
         if(!passed){
             print("Graph stream "+toString(caseID)+": "+handle.error()+"\n"+normalizer.stringifyResult(fixture.target)+"\n")
             withEach step in range 0 .. handle.stepCount(){print(handle.stepDescription(step)+"\n")}
@@ -11431,9 +11466,23 @@ struct GLOBAL {
     GRAPHREJECTION(unit/graphRejection/projectionAlternative, 5)
     GRAPHREJECTION(unit/graphRejection/grammarReuse, 6)
 
+    GRAPHREJECTION(unit/graphRejection/retainedTextFixture, 7)
+    GRAPHREJECTION(unit/graphRejection/retainedNumberFixture, 8)
+    GRAPHREJECTION(unit/graphRejection/retainedRangeFixture, 9)
     me bool: graphRejectionCase(me string: testName, me int: caseID) <- <%{
         GraphNormalizer normalizer;normalizer.init();
         bool passed=true;
+        if(caseID>=7) {
+            std::vector<std::string> expressions{"'Hello' == 'World'","*_+8 = *16+9","*4+_ == 4"};
+            auto root=graphParsed(testName,expressions.at(caseID-7)),source=root->pItem->wrkList.front();
+            auto before=toString(root->pItem.get()),original=toString(source->pItem.get());
+            auto handle=normalizer.normalize(root);handle.waitForCompletion();
+            passed &= handle.status().failed==(caseID==8) && !getFlagBit(root->pItem->flags,infonView::isNormed) &&
+                root->pItem->workListContainsPOV(source) && !normalizer.access->hasDirectIdentity(root,source) &&
+                toString(root->pItem.get())==before && toString(source->pItem.get())==original;
+            if(!passed) std::cout << "Retained rejection " << caseID << ": " << toString(root->pItem.get()) << " error=" << handle.status().error << "\n";
+            handle.cancel();normalizer.close();return passed;
+        }
         if(caseID==5) {
             auto defs=graphParsed(testName,"{#spoke={length:*1000+123=*1000+456}}");
             auto declared=normalizer.normalize(defs);declared.waitForCompletion();
@@ -11589,6 +11638,155 @@ struct GLOBAL {
     }%>
     void: unitTestGraphQualifiedText(me string: testName, me int: caseID) <- {
         me bool: passed <- graphQualifiedTextCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHINPUTS(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphInputs(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHINPUTS(unit/graphInputs/argumentFirst, 0)
+    GRAPHINPUTS(unit/graphInputs/argumentLast, 1)
+    GRAPHINPUTS(unit/graphInputs/argumentLeft, 2)
+    GRAPHINPUTS(unit/graphInputs/argumentInverse, 3)
+    GRAPHINPUTS(unit/graphInputs/argumentResult, 4)
+    GRAPHINPUTS(unit/graphInputs/resultText, 5)
+    GRAPHINPUTS(unit/graphInputs/resultList, 6)
+    GRAPHINPUTS(unit/graphInputs/prefixRHSWork, 7)
+    GRAPHINPUTS(unit/graphInputs/wholeRHSWork, 8)
+    GRAPHINPUTS(unit/graphInputs/lastArgumentWait, 9)
+    GRAPHINPUTS(unit/graphInputs/symbolicLastWait, 10)
+    GRAPHINPUTS(unit/graphInputs/cancel, 11)
+    GRAPHINPUTS(unit/graphInputs/cost, 12)
+    GRAPHINPUTS(unit/graphInputs/replay, 13)
+    GRAPHINPUTS(unit/graphInputs/lateRHS, 14)
+    GRAPHINPUTS(unit/graphInputs/rejectedRHS, 15)
+    GRAPHINPUTS(unit/graphInputs/sparseArgument, 16)
+    GRAPHINPUTS(unit/graphInputs/embeddedArgument, 17)
+    GRAPHINPUTS(unit/graphInputs/wholeListResult, 18)
+    GRAPHINPUTS(unit/graphInputs/prefixListResult, 19)
+    me bool: graphInputsCase(me string: testName, me int: caseID) <- <%{
+        std::vector<std::string> inputs{"{_ 6 _}<:5","{_ 6 _}<!7","5:>{_ 6 _}","7!>{_ 6 _}","[_ 456 789]<:+123","[...] = 'Hello'","[...] = {1 2 3}","$ =: ($ = 'Hello')","$ == ($ = 'Hello')","{1 ...}<!7","[...] = 'Hello'"};
+        std::vector<std::string> expected{"{5 6 _}","{_ 6 7}","{5 6 _}","{_ 6 7}","789","'Hello'","{1 2 3}","*_+'Hello'","'Hello'","{1 ...}<!7","'Hello'"};
+
+        inputs.insert(inputs.end(),{"{1 ...}<!7","{_ 6 _}<:5","5:>{_ 6 _}","$ =: ($ = $)","$ =: ('A' = 'B')","*100000+{_| ...}<!7","{&{_ 6} 8}<:5"});
+        expected.insert(expected.end(),{"","","{5 6 _}","","","",""});
+        inputs.insert(inputs.end(),{"[...] == {1 2 3}","[...] ==: {1 2 3}"});
+        expected.insert(expected.end(),{"{1 2 3}","*_+{1 2 3}"});
+        GraphNormalizer normalizer;normalizer.init();auto root=graphParsed(testName,inputs.at(caseID));
+        auto before=toString(root->pItem.get());
+        if(caseID==9 || caseID==11 || caseID==12 || caseID==14 || caseID==15 || (caseID>=16 && caseID<18)) expected[caseID]=before;
+        auto inner=root->pItem->innr;auto body=root->pItem->value;
+        auto handle=caseID==12 ? normalizer.normalizeWithCost(root,1) : normalizer.normalize(root);handle.waitForCompletion();
+        bool passed=caseID>=15 && caseID<18 ? true : !handle.status().failed && toString(root->pItem.get())==expected.at(caseID);
+        if(caseID==9 || caseID==11) {
+            passed &= handle.status().symbolicValues && handle.status().withSubscribers && root->pItem->funcArgs;
+            if(caseID==11) handle.cancel();
+            normalizer.runtime.update([&] {
+                auto last=graphParsed(testName,"_");SetModeBits(last->pItem->flags,infonView::itmMode,infonView::mItem);
+                body->items.append(last->pItem,false,918);
+                SetFlagBit(body->flags,infonState::tailUnfinished,false);
+                body->sizeMode=fromCount;
+            });handle.waitForCompletion();
+            if(caseID==11) passed &= handle.status().cancelled && root->pItem->funcArgs && body->items.tail->pItem->wrkList.empty();
+            else passed &= !handle.status().failed && toString(root->pItem.get())=="{1 7}";
+        }
+        if(caseID==10) {
+            passed &= inner && inner->value->items.isEmpty() && root->pItem->selectedResult &&
+                getFlagBit(root->pItem->selectedResult->flags,POV::endRelativeReference) && handle.status().withSubscribers;
+            normalizer.runtime.update([&] {
+                auto last=graphParsed(testName,"$");SetModeBits(last->pItem->flags,infonView::itmMode,infonView::mItem);
+                inner->value->items.append(last->pItem,false,918);
+                SetFlagBit(inner->value->flags,infonState::tailUnfinished,false);
+            });handle.waitForCompletion();
+            passed &= !handle.status().failed && inner->value->items.tail->pItem->value->str=="Hello" &&
+                getFlagBit(root->pItem->selectedResult->flags,POV::endRelativeResolved);
+        }
+        if(caseID==12) passed &= root->pItem->funcArgs && handle.status().withSubscribers;
+        if(caseID==13) {
+            auto count=normalizer.access->registry->identities.size();auto work=body->items.head->pItem->wrkList.size();
+            auto again=normalizer.normalize(root);again.waitForCompletion();
+            passed &= !again.status().failed && toString(root->pItem.get())==expected[caseID] &&
+                normalizer.access->registry->identities.size()==count && body->items.head->pItem->wrkList.size()==work;
+            again.cancel();
+        }
+        if(caseID==14) {
+            auto source=root->pItem->wrkList.front()->pItem->value->items.head;
+            normalizer.addRHS(source,graphParsed(testName,"'Hello'"));handle.waitForCompletion();
+            passed &= !handle.status().failed && toString(root->pItem.get())=="*_+'Hello'" && handle.status().withSubscribers;
+        }
+        if(caseID==15) passed &= handle.status().failed && root->pItem->value->str.empty() && root->pItem->wrkList.size()==1;
+        if(caseID==16) {
+            auto selected=root->findImplicitItemPOV(99999);
+            passed &= !handle.status().failed && body->items.isEmpty() && selected && selected->pItem->value->num==7 &&
+                normalizer.access->demandedOccurrences(root).size()==1;
+        }
+        if(caseID==17) passed &= !handle.status().failed && body->items.head->pItem->value->items.head->pItem->value->num==5;
+        if(!passed) {
+            std::cout << "Input " << caseID << ": " << toString(root->pItem.get()) << " error=" << handle.status().error << "\n";
+            for(const auto& step:handle.steps()) std::cout << step.action << "\n";
+        }
+        handle.cancel();normalizer.close();return passed;
+    }%>
+    void: unitTestGraphInputs(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphInputsCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHRESOLUTION(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphResolution(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHRESOLUTION(unit/graphResolution/direct, 0)
+    GRAPHRESOLUTION(unit/graphResolution/external, 1)
+    GRAPHRESOLUTION(unit/graphResolution/precedence, 2)
+    GRAPHRESOLUTION(unit/graphResolution/replay, 3)
+    GRAPHRESOLUTION(unit/graphResolution/multiple, 4)
+    GRAPHRESOLUTION(unit/graphResolution/pendingDirect, 5)
+    GRAPHRESOLUTION(unit/graphResolution/lateDirect, 6)
+    GRAPHRESOLUTION(unit/graphResolution/cost, 7)
+    GRAPHRESOLUTION(unit/graphResolution/orderedFirst, 8)
+
+    me bool: graphResolutionCase(me string: testName, me int: caseID) <- <%{
+        std::vector<std::string> expressions{"{a:1 b:2}~b","{a:1}^badge=7;~badge","{name:'local'}^name='external';~name","{a:1}^badge=7;~badge","{a:1}^badge","{_ b:2}^b=9;~b","{_ b:2}^b=9;~b","{a:1}^badge=7;~badge","{b:1 b:2}~b"};
+        std::vector<std::string> expected{"b:2","badge:7","name:'local'","badge:7","","","","","b:1"};
+        GraphNormalizer normalizer;normalizer.init();auto root=graphParsed(testName,expressions.at(caseID));
+        auto original=root->pItem;auto before=toString(original.get());
+        auto handle=caseID==7 ? normalizer.normalizeWithCost(root,1) : normalizer.normalize(root);handle.waitForCompletion();
+        bool passed=!handle.status().failed;
+        if(caseID==4) {
+            auto state=root->pItem->pathSelection;
+            normalizer.runtime.update([&] {
+                for(const auto& value:{"badge:7","badge:8"}) {
+                    auto member=graphParsed(testName,value);
+                    normalizer.access->registry->recordExternalAssociation(state->source,state->predicate,member,{},"badge",0);
+                }
+            });handle.waitForCompletion();
+            passed &= !handle.status().failed && root->pItem->isOrLike() && root->pItem->innr->value->items.size()==2;
+        } else if(caseID==5 || caseID==6) {
+            passed &= handle.status().withSubscribers && root->pItem->pathSelection && !root->pItem->pathSelection->result;
+            if(caseID==6) {
+                normalizer.runtime.update([&] {original->value->items.head->pItem=graphParsed(testName,"b:1")->pItem;});
+                handle.waitForCompletion();passed &= !handle.status().failed && toString(root->pItem.get())=="b:1";
+            }
+        } else if(caseID==7) passed &= before==toString(root->pItem.get()) && normalizer.access->registry->externalAssociationReferences.empty();
+        else passed &= toString(root->pItem.get())==expected[caseID];
+        if(caseID==3) {
+            auto count=normalizer.access->registry->externalAssociationReferences.size();
+            auto again=normalizer.normalize(root);again.waitForCompletion();
+            passed &= count==1 && normalizer.access->registry->externalAssociationReferences.size()==count && !again.status().failed;
+            again.cancel();
+        }
+        if(!passed) {
+            std::cout << "Resolution " << caseID << ": " << toString(root->pItem.get()) << " error=" << handle.status().error << "\n";
+            for(const auto& step:handle.steps()) std::cout << step.action << "\n";
+        }
+        handle.cancel();normalizer.close();return passed;
+    }%>
+    void: unitTestGraphResolution(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphResolutionCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

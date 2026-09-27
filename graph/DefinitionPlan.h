@@ -141,6 +141,7 @@ private:
             equation.expected = found->second;
         }
     }
+    Place unmeasuredRoot_;
     void prepareRepeated(const Place& target, const DefinitionSpec& requirement, GraphTypeFacts actual) {
         auto access = access_;
         bool adopt = !target->node || access->adoptableList(target->node);
@@ -284,15 +285,19 @@ private:
             }
             // Closing a zero-width gap is a real write; an already closed
             // physical list does not produce a fill in the alignment plan.
-            writes.push_back([access, owner, fill] {
-                return access->finishTail(owner->node, fill.close, fill.extent);
+            auto extent=owner==unmeasuredRoot_ ? -1 : fill.extent;
+            writes.push_back([access, owner, fill, extent] {
+                return access->finishTail(owner->node, fill.close, extent);
             });
         }
     }
 public:
     ProteusDefinitionPlan(std::shared_ptr<ProteusGraphAccess> access, const POVNode& target, const DefinitionSpec& requirement,
-                          std::map<POVNode, std::int64_t> extents = {})
-        : access_(std::move(access)), extents_(std::move(extents)) { prepare(place(target), requirement); }
+                          std::map<POVNode, std::int64_t> extents = {}, bool measureRoot=true)
+        : access_(std::move(access)), extents_(std::move(extents)) {
+        if(!measureRoot) unmeasuredRoot_=place(target);
+        prepare(place(target), requirement);
+    }
     // Deferred allocation clients can prepare a member before the priced Set
     // creates its POV. All other slots and writes remain instance-local.
     void bindTarget(const POVNode& node) { place({})->node = node; }

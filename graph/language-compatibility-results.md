@@ -1,11 +1,13 @@
 # Older language compatibility, 2026-09-27
 
-Qualified scalar string matching recovers `merge/str/looseSize` and
-`merge/unknown/looseSize`: **205/270** default fixtures and **220/363** across
-all six suites now pass. No previous passes were lost. The source build and
-**1,025/1,025** focused graph/parser checks pass, including nine new lifecycle
-checks and seven new language examples. No existing language input or expected
-output changed. See [qualified-text-results.md](qualified-text-results.md).
+Graph input composition and explicit-source lookup recover fourteen default
+fixtures: function result constraints, all four argument spellings, and direct
+or external-property `~` lookup. Three rejection fixtures now expect the RHS to
+remain visible, following the agreed retention contract. Defaults are
+**222/270**, up from 205/270; all six suites total **237/363**, up from 220/363.
+No previous passes were lost. The source build and **1,057/1,057** focused checks
+pass. See [input-resolution-results.md](input-resolution-results.md) for the
+semantic changes, evidence, and remaining boundaries.
 
 The earlier repetition change made `range/select1` expose its completed
 `2 3 4 5` prefix with an unresolved tail, following the user's clarification.
@@ -13,20 +15,20 @@ Its old closed-result expectation was updated in that earlier increment.
 
 | Suite | Passing | Failing | Total |
 |---|---:|---:|---:|
-| `defaultTests.tst` | 205 | 65 | 270 |
+| `defaultTests.tst` | 222 | 48 | 270 |
 | `demoTests.tst` | 8 | 14 | 22 |
 | `sparseTests.tst` | 2 | 21 | 23 |
 | `timeTests.tst` | 3 | 33 | 36 |
 | `worldLoadTests.tst` | 0 | 2 | 2 |
 | `endRelativeR1Tests.tst` | 2 | 8 | 10 |
 
-All six rows were rerun for scalar string matching: **220/363**
-language fixtures pass, with **143** failures and no crashes, timeouts, or
+All six rows were rerun for this checkpoint: **237/363**
+language fixtures pass, with **126** failures and no crashes, timeouts, or
 incomplete summaries. The R1 file records an experimental contract and excludes
 itself from the default tests. Fixture counts describe tested examples, not
 unrestricted support for a language feature.
 
-The **1,025/1,025 focused graph/parser checks** are a separate baseline. They
+The **1,057/1,057 focused graph/parser checks** are a separate baseline. They
 include some of the language fixtures above, so these counts must not be added.
 The 125 additional registered legacy helper and parser-error checks were also
 rerun: **102 pass, 23 fail**, without process errors or timeouts. Their exact
@@ -54,7 +56,7 @@ The priority is dependable existing behavior before new natural-language work.
    contradictions stop their owning goals and required parents, while
    exploratory parents keep other routes. See [goal-rejection-results.md](goal-rejection-results.md).
 3. Work through remaining failures by the semantic constructs they exercise:
-   scalar/sequence relationships, contextual and external-property resolution,
+   scalar/sequence relationships, implicit context and contextual definitions,
    definition composition, and temporal/sparse navigation. Validate the first
    actual failure against Proteus3 before selecting a fix.
 
@@ -65,6 +67,11 @@ Natural-language expansion is deferred. A failing fixture remains documented
 until its behavior works or its contract is explicitly revised.
 
 ## Latest behavior
+
+- Arguments use shared first/last navigation. Open intersection results can use
+  symbolic registry endpoints; qualified RHS dependencies are explicit graph
+  prerequisites. Explicit-source `~` lookup gives direct fields precedence over
+  external `^` associations. See [input-resolution-results.md](input-resolution-results.md).
 
 - Qualified scalar strings share the scalar-relation goal with numeric ranges.
   A colon supplies prefix value evidence without inferring a missing target size;
