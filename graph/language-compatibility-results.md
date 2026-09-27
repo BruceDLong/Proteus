@@ -1,40 +1,33 @@
 # Older language compatibility, 2026-09-27
 
-Shared scalar compatibility and strict exclusion now decide seven more default
-constraints. Six rejection expectations also retain their RHS, following the
-existing retention contract. Defaults are **229/270**, up from **222/270**; all
-six suites total **244/363**, up from **237/363**. No previous passes were lost.
-The source build and **1,087/1,087** focused checks pass. `%ctx` and unary `~word`
-now use the Agent topic-history POV and the existing path traversal. See
-[scalar-compatibility-results.md](scalar-compatibility-results.md) for the exact
-test updates, source/count lifecycle checks, and remaining boundaries.
+World-source routing and unknown-result type acquisition recover two more
+fixtures: `query/firstType` and `r1/extent/exactSparseUnknownLast`. The six suites now report
+**246 passed, 112 failed, 5 skipped as ambiguous**, out of 363. No previous passes
+were lost. The source build and **1,103/1,103** focused checks pass; the additional
+legacy helpers remain **102/125**. See [world-source-results.md](world-source-results.md)
+and [test-ambiguities.md](test-ambiguities.md). Expected fixture text is unchanged
+in this increment. Skips are neither passes nor missing-feature exemptions.
 
 The earlier repetition change made `range/select1` expose its completed
 `2 3 4 5` prefix with an unresolved tail, following the user's clarification.
 Its old closed-result expectation was updated in that earlier increment.
 
-| Suite | Passing | Failing | Total |
-|---|---:|---:|---:|
-| `defaultTests.tst` | 229 | 41 | 270 |
-| `demoTests.tst` | 8 | 14 | 22 |
-| `sparseTests.tst` | 2 | 21 | 23 |
-| `timeTests.tst` | 3 | 33 | 36 |
-| `worldLoadTests.tst` | 0 | 2 | 2 |
-| `endRelativeR1Tests.tst` | 2 | 8 | 10 |
+| Suite | Passing | Failing | Ambiguous skips | Total |
+|---|---:|---:|---:|---:|
+| `defaultTests.tst` | 230 | 35 | 5 | 270 |
+| `demoTests.tst` | 8 | 14 | 0 | 22 |
+| `sparseTests.tst` | 2 | 21 | 0 | 23 |
+| `timeTests.tst` | 3 | 33 | 0 | 36 |
+| `worldLoadTests.tst` | 0 | 2 | 0 | 2 |
+| `endRelativeR1Tests.tst` | 3 | 7 | 0 | 10 |
 
-All six rows were rerun for this checkpoint: **244/363**
-language fixtures pass, with **119** failures and no crashes, timeouts, or
-incomplete summaries. The R1 file records an experimental contract and excludes
-itself from the default tests. Fixture counts describe tested examples, not
-unrestricted support for a language feature.
-
-The **1,087/1,087 focused graph/parser checks** are a separate baseline. They
-include some of the language fixtures above, so these counts must not be added.
-The 125 additional registered legacy helper and parser-error checks were also
-rerun: **102 pass, 23 fail**, without process errors or timeouts. Their exact
-inventory is [legacy-helper-status.json](legacy-helper-status.json). Some call
-legacy reasoners or assert old registry bookkeeping; inspect those contracts
-before treating a failure as missing graph behavior or a pass as graph coverage.
+All six rows and the 125 legacy helper checks were rerun for this checkpoint,
+without crashes, timeouts, or incomplete summaries. The R1 file records an
+experimental contract and excludes itself from the default tests. Some legacy
+helpers call old reasoners or assert old registry bookkeeping; their passing
+counts do not establish graph coverage. Focused checks include some language
+fixtures, so the counts must not be added. Exact helper results are in
+[legacy-helper-status.json](legacy-helper-status.json).
 
 The unchanged standalone scheduler passed **38/38** at the preceding checkpoint,
 also under address, undefined-behavior, and leak sanitizers. Earlier unchanged
@@ -73,7 +66,7 @@ until its behavior works or its contract is explicitly revised.
   checks explicit member contradictions before publishing identities.
 - `%ctx` and unary `~word` reuse path selection over the Agent's topic history.
   Counted context sizes are invalidated on membership edits. Context-dependent
-  definitions still need an application binding decision.
+  definitions must preserve their original binding; implementation is deferred.
 
 - Arguments use shared first/last navigation. Open intersection results can use
   symbolic registry endpoints; qualified RHS dependencies are explicit graph
@@ -156,6 +149,10 @@ preserving its mode, input, and expected text, with a five-second limit per
 process. It records incremental JSON and one log per fixture and returns nonzero
 for failures, errors, timeouts, or missing summaries. The underlying test harness
 can exit zero even when assertions fail.
+
+The auditor reports exact, hash-checked ambiguity skips separately. Use
+`--include-ambiguous` to run those fixtures as well. The skip manifest is
+[test-ambiguities.json](test-ambiguities.json).
 
 The auditor now also accepts `--compiled` to read registered names from
 `ProteusTests.dog`; `--exclude` can omit a name prefix. Compiled checks use exact

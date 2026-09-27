@@ -124,6 +124,11 @@ been reopened.
   unconditional reason to abort a normalization that can still return a useful
   symbolic or subscribed result.
 
+10. **Selecting definitions themselves.** Declarations currently publish meaning
+    when encountered during a field walk and are not ordinary value candidates.
+    Later, searches must be able to refer to definitions themselves. Which goal
+    expresses that request while keeping ordinary value selection distinct?
+
 ## Implementation gaps are tracked separately
 
 Unordered structural correspondence, contextual resolution, general nested

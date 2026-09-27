@@ -1,6 +1,22 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphTypeCopy/unknown
+    unit/graphTypeCopy/numericKeepsInterpretation
+    unit/graphTypeCopy/listMemberKeepsInterpretation
+    unit/graphTypeCopy/namedTarget
+    unit/graphTypeCopy/intersection
+    unit/graphTypeCopy/definitionEvidence
+    unit/graphWorld/field
+    unit/graphWorld/whole
+    unit/graphWorld/lateSource
+    unit/graphWorld/cancel
+    unit/graphWorld/replaceSource
+    unit/graphWorld/agent
+    unit/graphWorld/write
+    unit/graphWorld/cost
+    unit/graphWorld/anonymousPrefixPending
+    unit/graphWorld/definitionPrefix
     unit/graphContext/explicit
     unit/graphContext/implicit
     unit/graphContext/whole
@@ -11960,6 +11976,103 @@ struct GLOBAL {
     }%>
     void: unitTestGraphContext(me string: testName, me int: caseID) <- {
         me bool: passed <- graphContextCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHWORLD(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphWorld(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHWORLD(unit/graphWorld/field, 0)
+    GRAPHWORLD(unit/graphWorld/whole, 1)
+    GRAPHWORLD(unit/graphWorld/lateSource, 2)
+    GRAPHWORLD(unit/graphWorld/cancel, 3)
+    GRAPHWORLD(unit/graphWorld/replaceSource, 4)
+    GRAPHWORLD(unit/graphWorld/agent, 5)
+    GRAPHWORLD(unit/graphWorld/write, 6)
+    GRAPHWORLD(unit/graphWorld/cost, 7)
+    GRAPHWORLD(unit/graphWorld/anonymousPrefixPending, 8)
+    GRAPHWORLD(unit/graphWorld/definitionPrefix, 9)
+
+    me bool: graphWorldCase(me string: testName, me int: caseID) <- <%{
+        auto source=graphParsed(testName,caseID==8 ? "{76543 b:*10+2}" : caseID==9 ? "{#b=*10+_ b:2}" : caseID==6 ? "{b:*10+_}" : "{b:*10+2}");
+        auto root=graphParsed(testName,caseID==1 ? "%W" : caseID==6 ? "%W.b = *10+2" : "%W.b");
+        if(caseID==5) {
+            Agent agent;agent.init(nullptr);agent.world=source->pItem;
+            auto handle=agent.normalize(root);handle.waitForCompletion();
+            bool passed=!handle.status().failed && root->pItem->value->num==2;
+            agent.world=graphParsed(testName,"{b:*10+3}")->pItem;
+            auto again=agent.normalize(root);again.waitForCompletion();
+            passed &= !again.status().failed && root->pItem->value->num==3;
+            again.cancel();handle.cancel();agent.close();return passed;
+        }
+        GraphNormalizer normalizer;normalizer.init();
+        if(caseID!=2 && caseID!=3) normalizer.setWorld(source->pItem);
+        auto handle=caseID==7 ? normalizer.normalizeWithCost(root,1) : normalizer.normalize(root);
+        handle.waitForCompletion();bool passed=!handle.status().failed;
+        if(caseID==2 || caseID==3) {
+            passed &= handle.status().withSubscribers;
+            if(caseID==3) handle.cancel();
+            normalizer.setWorld(source->pItem);handle.waitForCompletion();
+        }
+        if(caseID==4) {
+            passed &= handle.status().fullyNormed && !handle.active();
+            auto previous=root->pItem->pathSelection->result;
+            normalizer.setWorld(graphParsed(testName,"{b:*10+3}")->pItem);
+            passed &= root->pItem->value->num==2;
+            auto again=normalizer.normalize(root);again.waitForCompletion();
+            passed &= !again.status().failed && root->pItem->value->num==3 &&
+                root->pItem->pathSelection->result!=previous && previous->pItem->value->num==2;
+            again.cancel();
+        } else if(caseID==3) passed &= handle.status().cancelled && !root->pItem->pathSelection->result;
+        else if(caseID==7) passed &= !root->pItem->pathSelection;
+        else if(caseID==8) passed &= handle.status().withSubscribers && !root->pItem->pathSelection->result;
+        else passed &= toString(root->pItem.get())==(caseID==1 ? "{b:*10+2}" : "b:*10+2");
+        if(caseID==6) passed &= source->pItem->value->items.head->pItem->value->num==2;
+        if(!passed) {
+            std::cout << "World " << caseID << ": " << toString(root->pItem.get()) << " " << handle.status().error << "\n";
+            for(const auto& step:handle.steps()) std::cout << step.action << "\n";
+        }
+        handle.cancel();normalizer.close();return passed;
+    }%>
+    void: unitTestGraphWorld(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphWorldCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHTYPECOPY(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphTypeCopy(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHTYPECOPY(unit/graphTypeCopy/unknown, 0)
+    GRAPHTYPECOPY(unit/graphTypeCopy/numericKeepsInterpretation, 1)
+    GRAPHTYPECOPY(unit/graphTypeCopy/listMemberKeepsInterpretation, 2)
+    GRAPHTYPECOPY(unit/graphTypeCopy/namedTarget, 3)
+    GRAPHTYPECOPY(unit/graphTypeCopy/intersection, 4)
+    GRAPHTYPECOPY(unit/graphTypeCopy/definitionEvidence, 5)
+
+    me bool: graphTypeCopyCase(me string: testName, me int: caseID) <- <%{
+        GraphNormalizer normalizer;normalizer.init();
+        std::string input=caseID==0 ? "?=a:*10+7" : caseID==1 ? "_=a:*10+7" :
+            caseID==2 ? "{_}={a:*10+7}" : caseID==3 ? "b:*10+7=a:*10+7" : caseID==4 ? "[a:*10+7]" : "?=a";
+        auto declarations=graphParsed(testName,"{#a=*10+7}");
+        auto declared=normalizer.normalize(declarations);declared.waitForCompletion();
+        auto root=graphParsed(testName,input);
+        auto source=root->pItem->wrkList.empty() ? nullptr : root->pItem->wrkList.front();
+        auto sourceBefore=source ? toString(source->pItem.get()) : "";
+        auto handle=normalizer.normalize(root);handle.waitForCompletion();
+        std::string expected=caseID==1 ? "*10+7" : caseID==2 ? "{*10+7}" : caseID==3 ? "b:*10+7" : "a:*10+7";
+        bool passed=!handle.status().failed && toString(root->pItem.get())==expected;
+        if(source && caseID!=5) passed &= toString(source->pItem.get())==sourceBefore;
+        auto work=root->pItem->wrkList.size();auto repeated=normalizer.normalize(root);repeated.waitForCompletion();
+        passed &= !repeated.status().failed && root->pItem->wrkList.size()<=work && toString(root->pItem.get())==expected;
+        if(!passed) std::cout << "Type copy " << caseID << ": " << toString(root->pItem.get()) << " " << handle.status().error << "\n";
+        repeated.cancel();handle.cancel();declared.cancel();normalizer.close();return passed;
+    }%>
+    void: unitTestGraphTypeCopy(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphTypeCopyCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

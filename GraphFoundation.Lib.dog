@@ -56,6 +56,16 @@ struct GraphNormalizer {
             access->contextSource=source;
         });
     }%>
+    // Keep a canonical view of the current Agent world. Replacing the world
+    // creates a new source; existing query provenance retains its old source.
+    void: setWorld(our infonView: source) <- <%{
+        runtime.update([&] {
+            if(access->worldSource && access->worldSource->pItem==source) return;
+            if(!source) {access->worldSource.reset();return;}
+            auto node=std::make_shared<POV>(920);node->pItem=source;
+            access->bind(node);access->worldSource=node;
+        });
+    }%>
     me NormalizationHandle: normalize(our POV: target) <- <%{
         runtime.update([&] { access->bind(target); });
         return runtime.normalize({target, proteus4::sizeAndValue, 0});
@@ -148,7 +158,7 @@ struct GraphPathSelection {
     me bool: positional <- false
     me bool: external <- false
     me bool: resolution <- false
-    me bool: contextual <- false  // Resolve the live Agent topic-history source.
+    me int: environmentCursor <- 0  // cmContext or cmWorld; both use ordinary path publication.
     me bool: alternatives <- false  // Filter oneOf members against the predicate.
     me bool: identity <- false  // Return this source after retained children finish.
     me List<our POV>: updates   // Constraints owned by the selected occurrence.
@@ -263,6 +273,7 @@ struct ProteusGraphAccess {
     our IdentityRegistry: registry
     their ProteusCore: replyCore
     our POV: contextSource  // The Agent topic-history POV; no copied context graph.
+    our POV: worldSource    // Current world view, shared by world queries.
 
     void: prepareInput(our infonView: inf) <- {
         inf!.streamState <- parseStarted; inf!.graphParseError <- ""
@@ -763,6 +774,8 @@ struct ProteusGraphAccess {
                 source!.pItem!.infSize!.evalMode==emLiteral
         me bool: copyList <- (demand==2 or demand==3) and adoptableList(target) and
                 spanList(source) and orderedList(source)
+        me bool: copyNominal <- (demand==2 or demand==3) and unknownOverlay(target) and
+                target!.pItem!.type==NULL and source!.pItem!.type!=NULL
         me bool: copyType <- (demand==2 or demand==3) and
                 unknownOverlay(target) and scalar(source)
         me bool: copyValue <- (demand==2 or demand==3) and
@@ -787,12 +800,16 @@ struct ProteusGraphAccess {
             target!.pItem!.value!.tailUnfinished <- true
             target!.pItem!.viewMode <- vmOverlay
         }
+        if(copyNominal){
+            target!.pItem!.type <- source!.pItem!.type
+            target!.pItem!.addedTypes <- source!.pItem!.addedTypes
+        }
         if(copyType){
             target!.pItem!.value!.overlayType <- source!.pItem!.value!.overlayType
             target!.pItem!.viewMode <- vmOverlay
         }
         if(copyValue){target!.pItem!.value!.copyOverlayFrom(source!.pItem!.value, 0)}
-        if(copySize or copyType or copyValue or copyList){
+        if(copySize or copyType or copyValue or copyList or copyNominal){
             if(explicitSize and target!.pItem!.value!.overlayType==NUM){target!.pItem!.value!.sizeMode <- fromGiven}
             target!.pItem!.isNormed <- false
             target!.workRevision <+- 1

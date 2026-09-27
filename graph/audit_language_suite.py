@@ -6,6 +6,7 @@ Agent's graph entry point. JSON records and individual logs distinguish semantic
 failures from crashes/timeouts; test-family grouping is not causal diagnosis.
 """
 import argparse
+import hashlib
 from collections import Counter
 import json
 from pathlib import Path
@@ -23,6 +24,7 @@ def main():
     parser.add_argument('--timeout', type=float, default=5)
     parser.add_argument('--select', default='')
     parser.add_argument('--exclude', action='append', default=[], help='Exclude a test-name prefix')
+    parser.add_argument('--include-ambiguous', action='store_true', help='Run documented ambiguous fixtures instead of reporting skips')
     args = parser.parse_args()
     if args.timeout <= 0:
         parser.error('--timeout must be positive')
@@ -43,8 +45,22 @@ def main():
     if not fixtures:
         parser.error('no matching tests')
     args.output.mkdir(parents=True, exist_ok=True)
+    exceptions = {} if args.include_ambiguous else {
+        (entry['suite'], entry['name']): entry
+        for entry in json.loads((root/'graph/test-ambiguities.json').read_text())
+    }
     records = []
     for index, (name, mode, row) in enumerate(fixtures, 1):
+        exception = exceptions.get(('compiled' if args.compiled else args.suite.name, name))
+        if exception:
+            digest = hashlib.sha256((row or name).encode()).hexdigest()
+            if digest != exception['fixture_sha256']:
+                parser.error(f'ambiguity entry is stale for {name}; review it before skipping')
+            records.append(dict(name=name, mode=mode, status='skipped_ambiguous',
+                                returncode=None, log=None, reason=exception['reason']))
+            (args.output/'results.json').write_text(json.dumps(records, indent=2)+'\n')
+            print(f'{index}/{len(fixtures)} {name}: skipped_ambiguous', flush=True)
+            continue
         log = args.output / f'{index:03d}.log'
         # A compiled name is exact; file-based selectors can be prefixes, so
         # isolate each language fixture in a one-row file.
@@ -75,9 +91,9 @@ def main():
         (args.output/'results.json').write_text(json.dumps(records, indent=2)+'\n')
         if status in ('timeout', 'process_error', 'incomplete') or index % 25 == 0:
             print(f'{index}/{len(fixtures)} {name}: {status}', flush=True)
-    fixture.unlink(missing_ok=True)
+    (args.output/'current.tst').unlink(missing_ok=True)
     print(json.dumps(dict(Counter(r['status'] for r in records)), sort_keys=True), flush=True)
-    return int(any(r['status'] != 'pass' for r in records))
+    return int(any(r['status'] not in ('pass', 'skipped_ambiguous') for r in records))
 
 
 if __name__ == '__main__':

@@ -6,6 +6,13 @@ and remove code that is no longer used; compatibility with every legacy API or
 test is not a requirement at each step. Do not retain obsolete scaffolding only
 to preserve the old test baseline.
 
+Current priority: make the existing test suites work before further context,
+T-list, or word-model redesign. If a test's intended semantics are ambiguous,
+record the exact fixture and question in graph/test-ambiguities.md and skip it
+explicitly in the compatibility audit. An unimplemented feature with clear
+semantics is still a failure, not an ambiguity. Do not change expectations merely
+to match incomplete behavior.
+
 Validate the behavior being changed with focused tests. Existing language tests
 remain useful semantic examples for later migration, and can be run selectively.
 A full legacy-suite run is optional, not a gate for every change. Clearly report

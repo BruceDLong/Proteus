@@ -44,8 +44,10 @@ Proven crossing spans share an unresolved middle; see
 Strict scalar compatibility, nonmutating exclusions, and implicit context lookup
 are covered in [scalar-compatibility-results.md](scalar-compatibility-results.md).
 `%ctx` uses the Agent topic-history POV; standalone GraphNormalizer clients can
-supply it with `setContext()`. Contextual-definition bindings remain an open
-question, separate from this ordinary source lookup.
+supply it with `setContext()`. `%W` shares this source routing through `setWorld()`.
+Definition applications must retain their original context binding; implementing
+that retention remains separate from ordinary live-source lookup. See
+[world-source-results.md](world-source-results.md).
 
 ## Start here
 
