@@ -14,6 +14,7 @@ range/fieldUpper, upper endpoint excluded, {5 6 4}.*10+(*3+_ +2), 4, graph
 range/negatedField, complement of an offset range, {2 4 5}.!(*3+_ +2), 5, graph
 range/additiveOffsets, compose additive offsets, (*3+_ +1 +1) ==3, 3, graph
 range/containedIntersection, narrower interval already supplied, *10+(*2+_ +5) = *10+(*5+_ +2), *10+(*2+_ +5), graph
-range/explicitRHS, explicit matched value, *4+_ ==*10+3, *4+3, graph
+range/explicitRHS, explicit partially matched value, *4+_ ==:*10+3, *4+3, graph
 range/unknownSizeRHS, inferred explicit size, *_+_ ==*10+3, *10+3, graph
 range/unknownOverlayRHS, acquire explicit number, _ ==*10+3, *10+3, graph
+range/symbolicFilter, partial numeric members retain their endpoints, {[&{!*4+_|...} *4+_]|...}<~{1 0 *4+_ 444 555 666 777 *4+(*2+_ +1) *3+_}, {1 0 *4+_ *4+(*2+_ +1) *4+_}, graph

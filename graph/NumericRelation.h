@@ -24,21 +24,10 @@ public:
         // the normal graph, not ignored by this scalar projection.
         if(access.hasTypeRequirements(target) || access.hasTypeRequirements(source) ||
            !POVDescription(source,access.registry.get()).relationships().empty()) return;
-        result=left;
-        if(source->looseType()) {
-            // Range-valued matching is deliberately pending until its output
-            // information contract is agreed. Literal containment is definite.
-            if(!right.bounds.point || !left.bounds.contains(right.bounds.low)) return;
-            result.bounds=right.bounds;
-            if(!result.facts.hasSize) {result.facts.hasSize=right.facts.hasSize;result.facts.size=right.facts.size;}
-            result.facts.explicitSize=right.facts.explicitSize;
-        } else {
-            auto a=left.facts,b=right.facts;a.hasValue=b.hasValue=false;
-            if(!a.combine(b)) throw std::runtime_error("incompatible numeric range sizes");
-            result.facts=a;result.bounds=left.bounds.intersect(right.bounds);
-            if(result.bounds.empty) throw std::runtime_error("disjoint numeric range constraints");
-        }
-        accepted=result.bounds.valid && !result.bounds.empty;
+        auto match=matchNumeric(left,right,source->looseSize(),source->looseType());
+        if(match.verdict==ScalarMatch::no && !source->looseType())
+            throw std::runtime_error("incompatible numeric range constraints");
+        result=match.result;accepted=match.verdict==ScalarMatch::yes;
         if(accepted && !left.bounds.same(result.bounds)) work.creations=result.bounds.point ? 1 : 5;
     }
 };
@@ -57,7 +46,8 @@ public:
         if(!plan.accepted) return {};
         auto access=access_;auto target=request.node;auto result=plan.result;
         return {{"Set numeric range evidence",[this,access,target,result] {
-            bool changed=NumericRangeAccess::write(*access,target,result);
+            bool changed=result.expression || result.bounds.point ? NumericRangeAccess::write(*access,target,result) :
+                access->applyTypeFacts(target,result.facts);
             verified_=true;return changed;
         },plan.work}};
     }

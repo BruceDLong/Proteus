@@ -62,13 +62,13 @@ been reopened.
    graph? Future fees or external-data costs can extend route costing later;
    graph-owned cost calculation and cheaper-route selection are already decided.
 
-10. **Range-valued matching results.** When an input `*3+_` matches a wider
-   range predicate `*4+_`, should the result retain the input's narrower domain?
-   The old `range/select3` assertion expects the wider `*4+_`. The original
-   assertion is retained pending this decision; literal containment and strict
-   interval intersection are implemented independently.
-
 ## Decisions already made
+
+- `=` and `==` require matching ends at the current pair; `=:` and `==:`
+  permit unequal ends. The colon applies at that pair, while `==` propagates
+  loose matching into members. A partial numeric match keeps the target size;
+  a bare unknown RHS contributes no new value. It does not establish a whole
+  identity between differently sized infons.
 
 - A completed field search with no matches returns a closed empty oneOf
   (`*_+[]`) for now. An incomplete search retains an open choice.

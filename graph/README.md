@@ -643,8 +643,9 @@ size acquisition is also supported for the indexed-access refinement example. Th
 directly, within its explicitly supported subset. Sets use
 `infonState.copyOverlayFrom`; the graph adapter has no dependency on
 `WorldManager`, `DirectConsolidationStrategy`, or `AItem`. Each candidate is
-checked against its path before applying a batch. Size mismatches requiring
-richer semantics remain symbolic rather than being silently overwritten.
+checked against its path before applying a batch. Known unequal scalar sizes
+conflict under exact correspondence. Qualified partial relationships preserve
+the target size; unsupported structural size comparisons remain symbolic.
 
 Indexed access supports flat ordered physical lists and existing compressed
 repetition spans. Embedded-string correspondence, general template/prefix mapping, nested indexed traversal, general intersection solving, record/contextual

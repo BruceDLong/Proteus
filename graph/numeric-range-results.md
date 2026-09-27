@@ -9,8 +9,9 @@ approved shorter printing; their inputs are unchanged.
 GMP rationals at the Proteus boundary. Unknown evidence, an unbounded domain, and
 an empty intersection are distinct. `NumericRangeAccess.h` reads existing scalar
 and additive-concat structure; it does not create a second semantic graph.
-`NumericRelation.h` turns accepted evidence into priced Sets. Field and sequence
-selection share the three-way containment comparison in `ScalarPredicate.h`.
+`NumericRelation.h` turns accepted evidence into priced Sets.
+`ScalarPredicate.h` separates three-way predicate containment from relationship
+matching. Relationships also check the endpoint mode before supplying a value.
 
 Examples:
 
@@ -21,17 +22,30 @@ Examples:
 - Positive and negated field/sequence predicates use those same bounds.
   Partial overlap is unknown rather than proof of exclusion.
 
-Accepted point matches preserve the target's size while using the source's
-size-printing mode, as in Proteus3. An absent target size is acquired from the
-source. For example, `*4+_ ==*10+3` prints `*4+3`, while `_ ==*10+3` prints
-`*10+3`. General wildcards remain general;
-ordinary exact scalar size checks and compiled type meanings are unchanged.
+`=` and `==` require equal known endpoints at the current pair; `=:` and
+`==:` permit unequal endpoints. `:` affects that pair, while `==` propagates
+loose matching into members. Thus `*3+_ = *4+_` conflicts and `*3+_ == *4+_`
+cannot match; either colon form permits the partial correspondence.
+
+Accepted partial numeric matches preserve the target size. A bare unknown RHS
+adds no value; an explicit additive range supplies its symbolic value bounds.
+This explains the original `range/select3` output: the partial input `*3+_`
+does not replace the template's size 4. Symbolic output uses the same requirement
+planner as ordinary accepted sequence output. Partial correspondence does not
+record a whole identity between differently sized infons.
+
+Accepted point matches use the source's size-printing mode, as in Proteus3.
+`*4+_ ==:*10+3` prints `*4+3`, while `_ ==*10+3` acquires size 10 and prints
+`*10+3`. Without the colon, known unequal ends prevent that match. General
+wildcards remain general, and compiled type meanings are unchanged.
 Numeric range type-definition expansion is not included in this increment.
 
 The original expression remains in `valueExpression`, and all RHS work remains
 searchable. Representation proofs suppress redundant printing without deleting
 constraints. A later intersection can narrow the result again. Shared patterns
-and source expressions are read-only. Unknown operands and symbolic ranges keep
+and source expressions are read-only. Sized symbolic sequence inputs can publish
+results; a wholly unknown input still waits. Later source values refine existing
+output members without merging unequal sizes. Unknown operands and symbolic ranges keep
 subscriptions; cancellation leaves their last published result in place.
 
 ## Source rules and number modes
@@ -49,10 +63,6 @@ existing Proteus executable and Proteus4 leave `*4+4` as `*4+4`.
 
 ## Remaining boundaries
 
-- `range/select3` combines range-valued inputs with range predicates. Its old
-  expected output widens an input `*3+_` to `*4+_`. Whether to retain the narrower
-  input instead is an open question. Loose range-valued output remains pending;
-  the original expectation has not been changed.
 - `range/select1` ends with excluded values 6 and 7. The last attempted repeated
   intersection consumes that prefix but lacks its selected final member.
   Proteus3 retains earlier completed repetitions; current graph correspondence
@@ -69,16 +79,19 @@ existing Proteus executable and Proteus4 leave `*4+4` as `*4+4`.
 ## Verification
 
 - Full CodeDog source regeneration and C++ build passed.
-- Focused graph/parser checks: **968/968**, including the existing 934,
-  19 numeric-range language cases, and 15 range lifecycle checks.
-- Exact arithmetic: **1,225 interval pairs**, plus boundary/singleton checks.
-- Older defaults: **201/270**, up from 194; no previous pass lost, crashes,
-  timeouts, or incomplete summaries. Only the approved alignment expectations
-  changed; older range expectations remain intact.
+- Focused graph/parser checks: **973/973**, including the existing 934,
+  20 numeric-range language cases, and 19 range lifecycle checks. The endpoint
+  check exercises all four operators in both size directions, with known and
+  unknown values (16 combinations).
+- The preceding numeric-range checkpoint verified **1,225 interval pairs**, plus
+  boundary/singleton checks; that unchanged arithmetic was not rerun here.
+- Older defaults: **202/270**, up from 201; no previous pass lost, crashes,
+  timeouts, or incomplete summaries. `range/select3` now passes with its original expectation. Older default
+  inputs and expectations were unchanged in this follow-up.
 - Other legacy suites, GUI integration, and sanitizers were not rerun.
 
-Logs: `/tmp/p4-range-complete-build.log`, `/tmp/p4-range-final-focused.log`,
-and `/tmp/p4-range-final-audit/`. Run:
+Logs: `/tmp/p4-end-modes-verified-build.log`,
+`/tmp/p4-end-modes-verified-focused.log`, and `/tmp/p4-end-modes-verified-audit/`. Run:
 
 ```sh
 codeDog Proteus.Lib.dog

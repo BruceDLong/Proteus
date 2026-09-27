@@ -1,15 +1,15 @@
 # Older language compatibility, 2026-09-26
 
-The default suite passes **201/270** fixtures after canonical alignment
-expectations and shared numeric range semantics. Seven former failures now pass:
-`align2a`, `align2b`, direct numeric unknown/contained-value matching,
-`range/select2`, `range/concat1`, and `range/dot`. No previous pass was lost.
-There were no crashes, timeouts, or incomplete summaries. The source build and
-968/968 focused graph/parser checks also passed.
+The default suite passes **202/270** fixtures after separating exact endpoints
+from partial numeric matching. `range/select3` now passes with its original
+expected output; all previous 201 passes remain. There were no crashes, timeouts,
+or incomplete summaries. The source build and **973/973** focused graph/parser
+checks passed. See [numeric-range-results.md](numeric-range-results.md) for
+operator semantics and symbolic range refinement.
 
 | Suite | Passing | Failing | Total |
 |---|---:|---:|---:|
-| `defaultTests.tst` | 201 | 69 | 270 |
+| `defaultTests.tst` | 202 | 68 | 270 |
 | `demoTests.tst` | 1 | 21 | 22 |
 | `sparseTests.tst` | 1 | 22 | 23 |
 | `timeTests.tst` | 0 | 36 | 36 |
@@ -52,10 +52,9 @@ See [choice-constraint-results.md](choice-constraint-results.md),
 [partial-type-results.md](partial-type-results.md). Earlier checkpoints remain
 in the per-feature reports linked from [README.md](README.md).
 
-Three older range cases remain failing. `range/select1` needs general
+Two older range cases remain failing. `range/select1` needs general
 publication of completed repetitions when a later attempted repetition is
-incomplete. `range/select3` awaits the narrower-input decision in
-[open-questions.md](open-questions.md). `merge/directRange/endReject` rejects the
+incomplete. `merge/directRange/endReject` rejects the
 endpoint but retains the RHS, whereas the old assertion expects it removed.
 
 A passing printed assertion alone does not prove all normalization obligations
@@ -63,7 +62,7 @@ resolved: unknown numeric sizes and subscribed open tails remain symbolic.
 
 The complete fixture status and input hashes are recorded in
 [language-compatibility-status.json](language-compatibility-status.json).
-Detailed logs for this checkpoint are in `/tmp/p4-range-final-audit/`.
+Detailed logs for this checkpoint are in `/tmp/p4-end-modes-verified-audit/`.
 
 ## Remaining work
 

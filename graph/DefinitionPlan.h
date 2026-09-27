@@ -11,6 +11,7 @@ public:
 // graph is walked through existing POVs before any instance Set is offered.
 struct DefinitionRequirement {
     GraphTypeFacts facts;
+    NumericBounds numeric; // optional symbolic value constraint, not infSize
     // Open requirements currently have no explicit prefix. The compiler keeps
     // prefixed/embedded virtual definition bodies deferred until they can be
     // composed without discarding positional constraints.
@@ -45,6 +46,10 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
     auto result = std::make_shared<DefinitionRequirement>(*left);
     if (!result->facts.combine(right->facts))
         throw DefinitionConflict("incompatible definition requirements");
+    if(right->numeric.valid) {
+        result->numeric=result->numeric.valid ? result->numeric.intersect(right->numeric) : right->numeric;
+        if(result->numeric.empty) throw DefinitionConflict("incompatible numeric value requirements");
+    }
     for (const auto& name : right->types)
         if (std::find(result->types.begin(), result->types.end(), name) == result->types.end()) result->types.push_back(name);
     // Equivalent conjunctions share evidence regardless of application order.
@@ -80,7 +85,7 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
 
 inline bool sameDefinition(const DefinitionSpec& a, const DefinitionSpec& b) {
     if (a == b) return true;
-    if (!a || !b || a->list != b->list || a->open != b->open || !a->facts.same(b->facts) ||
+    if (!a || !b || a->list != b->list || a->open != b->open || !a->facts.same(b->facts) || !a->numeric.same(b->numeric) ||
         a->types != b->types || a->members.size() != b->members.size() ||
         !sameDefinition(a->repeated, b->repeated)) return false;
     for (std::size_t i = 0; i < a->members.size(); ++i)
@@ -112,6 +117,7 @@ private:
     std::map<POVNode, std::int64_t> extents_;
     std::map<POVNode, Place> places_;
     std::map<std::shared_ptr<infonView>, GraphTypeFacts> proposed_;
+    std::map<std::shared_ptr<infonView>,NumericBounds> proposedNumbers_;
     std::vector<std::shared_ptr<infonView>> plannedLists_;
     Place place(const POVNode& node) {
         auto& result = places_[node];
@@ -187,8 +193,16 @@ private:
         auto access = access_;
         GraphTypeFacts actual;
         actual.valid = true;
+        NumericView number;
         if (target->node) {
             actual = access_->typeFacts(target->node);
+            if(requirement->numeric.valid) {
+                NumericRangeAccess reader(*access_);number=reader.read(target->node);
+                work.visits=addCost(work.visits,reader.work.visits);
+                if(number.bounds.valid) actual=number.facts;
+                auto previous=proposedNumbers_.find(target->node->pItem);
+                if(previous!=proposedNumbers_.end()) number.bounds=previous->second;
+            }
             if (!actual.valid) { supported = false; return; }
             auto found = proposed_.find(target->node->pItem);
             if (found != proposed_.end()) actual = found->second;
@@ -199,6 +213,17 @@ private:
         if (target->node) proposed_[target->node->pItem] = combined;
         bindings.push_back({target, requirement});
         if (!requirement->list) {
+            if(requirement->numeric.valid) {
+                NumericView result;result.facts=combined;result.expression=true;
+                result.bounds=number.bounds.valid ? number.bounds.intersect(requirement->numeric) : requirement->numeric;
+                if(result.bounds.empty) throw DefinitionConflict("incompatible numeric value requirements");
+                if(target->node) proposedNumbers_[target->node->pItem]=result.bounds;
+                if(!number.bounds.same(result.bounds) || !requirement->facts.accepts(actual)) {
+                    work.creations=addCost(work.creations,result.bounds.point ? 1 : 5);
+                    writes.push_back([access,target,result] {return NumericRangeAccess::write(*access,target->node,result);});
+                }
+                return;
+            }
             if (!requirement->facts.accepts(actual)) writes.push_back([access, target, requirement] {
                 return access->applyTypeFacts(target->node, requirement->facts);
             });

@@ -75,6 +75,16 @@ public:
     SequenceCorrespondence(std::shared_ptr<ProteusGraphAccess> access,
                        std::shared_ptr<ProteusDefinitions> definitions)
         : access_(std::move(access)), definitions_(std::move(definitions)) {}
+    // ':' loosens the current pair only. '==' propagates loose matching
+    // into members; do not mutate shared source POV flags while exploring.
+    static bool looseSize(const Query<POVNode>& q) {
+        auto source=q.context.front();
+        return q.context.size()==stackStart(q) ? source->looseSize() :
+            getFlagBit(source->flags,POV::looseMode) || getFlagBit(source->flags,POV::looseInhtd);
+    }
+    static bool looseType(const Query<POVNode>& q) {
+        return q.context.size()==stackStart(q) ? q.context.front()->looseType() : looseSize(q);
+    }
     static bool relationship(ProteusGraphAccess& access, const POVNode& target, const POVNode& source) {
         bool scalar = access.wholeLooseRHS(source) && access.scalarCandidate(target) &&
             (access.unknownOverlay(target) || access.typeFacts(target).overlay == infonState::STR);
@@ -156,10 +166,8 @@ public:
                     if (!supplied.valid && !actualRange.bounds.valid) return out;
                     auto nominal=compareNominal(*definitions_,q.node,item);
                     if(range.bounds.valid && range.constraint) {
-                        // Symbolic input publication has a separate open design
-                        // question. Do not widen it to the pattern on acceptance.
-                        if(actualRange.bounds.valid && !actualRange.bounds.point) return out;
-                        auto match=compareNumeric(range,actualRange,supplied);
+                        auto match=actualRange.bounds.valid ? matchNumeric(range,actualRange,looseSize(q),looseType(q)).verdict :
+                            compareNumeric(range,actualRange,supplied);
                         if(inverted(q.node) ? (nominal!=ScalarMatch::no && match!=ScalarMatch::no) :
                             (nominal==ScalarMatch::no || match!=ScalarMatch::yes)) return out;
                     } else if (inverted(q.node)) {
@@ -261,7 +269,7 @@ public:
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
         if (visit.query.kind != sequenceComplete) return {};
         templates_.clear();
-        struct Frame { POVNode node, body, source; std::int64_t begin; DefinitionSpec spec, selected; bool instance; };
+        struct Frame { POVNode node, body, source; std::int64_t begin; DefinitionSpec spec, selected; bool instance, looseSize, looseType; };
         std::vector<Frame> stack;
         DefinitionSpec result;
         std::map<POVNode, std::int64_t> extents;
@@ -280,7 +288,8 @@ public:
                 bool instance=stack.empty() || (stack.back().instance && definitions_->matchingBody(stack.back().body)!=q.node);
                 // A feed's stored members are results, not its consumed pattern.
                 if (!stack.empty() && access_->fedTemplate(stack.back().node)) instance=false;
-                stack.push_back({q.node,body,q.context[1],q.argument,spec,{},instance});
+                stack.push_back({q.node,body,q.context[1],q.argument,spec,{},instance,
+                    SequenceCorrespondence::looseSize(q),SequenceCorrespondence::looseType(q)});
             } else if (q.kind == sequenceMatched || q.kind == sequenceAtomMatched) {
                 auto frame = stack.back(); stack.pop_back();
                 auto& spec = frame.spec;
@@ -302,18 +311,26 @@ public:
                 } else if (getModeBits(request.related->pItem->value->flags,infonState::overlayType)==infonState::LST) {
                     auto supplied=definitions_->scalarFacts(frame.source);
                     NumericRangeAccess numeric(*access_);auto range=numeric.read(frame.node,true);
-                    numericVisits=addCost(numericVisits,numeric.work.visits);
                     if(access_->hasTypeRequirements(frame.node)) range.constraint=false;
-                    if (getFlagBit(frame.node->pItem->flags,infonView::invertMatch) || (range.bounds.valid && range.constraint)) spec->facts=supplied;
-                    else spec->facts.combine(supplied);
-                    if (spec->label.empty()) {
+                    bool identity=true;
+                    if (getFlagBit(frame.node->pItem->flags,infonView::invertMatch)) spec->facts=supplied;
+                    else if(range.bounds.valid && range.constraint) {
+                        auto actual=numeric.read(frame.source);
+                        auto match=matchNumeric(range,actual,frame.looseSize,frame.looseType);
+                        if(match.verdict!=ScalarMatch::yes) return {};
+                        spec->facts=match.result.facts;
+                        if(match.result.expression && !match.result.bounds.point) spec->numeric=match.result.bounds;
+                        identity=match.identity;
+                    } else spec->facts.combine(supplied);
+                    numericVisits=addCost(numericVisits,numeric.work.visits);
+                    if (identity && spec->label.empty()) {
                         auto types=definitions_->names(frame.source);
                         if (!types.empty()) spec->label=types.front();
                     }
                     // An atomic list-valued source stays an existing graph
                     // node. Its identity supplies members through ordinary
                     // correspondence; matching does not clone its subtree.
-                    sources[spec]=frame.source;
+                    if(identity) sources[spec]=frame.source;
                 } else {
                     if (!spec->facts.hasValue) spec->facts.explicitSize = false;
                     spec->facts.overlay = infonState::STR; spec->facts.hasValue = true;
