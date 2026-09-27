@@ -76,6 +76,9 @@ The numeric literal migration is recorded in
 Run `python3 graph/audit_language_suite.py --output /tmp/proteus4-language-audit`
 to preserve every original fixture and record failures, crashes and timeouts.
 
+See [path-write-results.md](path-write-results.md) for selected-source constraints,
+retained-parent returns, and relative RHS context.
+See [end-origin-results.md](end-origin-results.md) for end-relative intersection inputs.
 See [slice-results.md](slice-results.md) for fixed-extent list slices and their
 source occurrence semantics.
 See [positional-path-results.md](positional-path-results.md) for bracketed item
@@ -92,7 +95,7 @@ selection, end-relative indexes, and mixed field/index paths.
 | `ListStructure.h` | Shared incremental list walk and layout evidence for embedded positions, gaps, and owner extents |
 | `SpanAlignment.h` | Plan finite ordered correspondence from opaque member/gap evidence; no POV access or mutation |
 | `SliceSelection.h` | Fixed span windows, identity-backed members, and compressed source views |
-| `PathSelection.h` | Field predicates and positional navigation, shared result Sets, and composed read-only paths |
+| `PathSelection.h` | Field predicates and positional navigation, shared result Sets, path constraints, and retained returns |
 | `FieldPredicate.h` | Read-only nominal and finite ordered structural comparison, with refinement demands |
 | `ScalarPredicate.h` | Three-state scalar and nominal comparison shared by sequence matching and field selection |
 | `SequenceCorrespondence.h` | Successful continuation edges over string/list input, repeated matching, selected results, and accepted-path Sets |

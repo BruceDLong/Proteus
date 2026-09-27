@@ -18,7 +18,7 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectionExtentMember = 20, selectionExtentEnd = 21,
               typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27,
               selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31,
-              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53 };
+              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55 };
 
 inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
     auto phase = query.kind == correspondenceEnter ? ListPhase::enter :
@@ -258,6 +258,12 @@ public:
             auto access=access_;auto owner=request.node;
             return {{"Prepare end-relative input window",[access,owner] {return IntersectionInput::prepare(*access,owner);},
                 {owner->pItem->wrkList.size(),12*owner->pItem->wrkList.size()}}};
+        }
+        if ((request.kind==relationshipConstraints || (request.kind>=sizeOnly && request.kind<=sizeAndValue)) && visit.query.node==request.node) {
+            if(auto state=request.node->pItem->pathSelection;state && PathExpression::needsUpdates(state)) {
+                auto access=access_;
+                return {{"Set selected source constraints",[access,state] {return PathExpression::applyUpdates(*access,state);},{state->updates.size(),0}}};
+            }
         }
         if (request.kind != listContents && access_->isDefinition(visit.query.node)) {
             if (visit.query.node != request.node || request.kind != sizeAndValue ||
@@ -560,7 +566,7 @@ public:
     void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); definitions_->prune(); }
     std::vector<std::function<void()>> takeEffects() override { return completion_->takeEffects(); }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
-        if (query.kind == selectField || query.kind == selectPosition)
+        if (query.kind == selectField || query.kind == selectPosition || query.kind == selectSelf)
             return std::make_shared<ProteusPathGoal>(query, access_, definitions_);
         if (query.kind == sequenceCorrespondence)
             return std::make_shared<ProteusSequenceGoal>(query, access_, definitions_, completion_);
@@ -581,7 +587,7 @@ public:
         return std::make_shared<ProteusGoal>(query, access_, completion_, evidence_, definitions_);
     }
     Expansion<POVNode> expand(const Query<POVNode>& query) override {
-        if (query.kind >= selectField && query.kind <= pathSliceCandidate)
+        if (query.kind >= selectField && query.kind <= pathSelfFound)
             return PathSelection(access_, definitions_, [this](const Query<POVNode>& q) {return expandSemantic(q);}).expand(query);
         if ((query.kind >= sequenceCorrespondence && query.kind <= sequenceComplete) || query.kind == correspondenceInput || query.kind == sequenceAtomMatched)
             return SequenceCorrespondence(access_, definitions_).expand(query);
@@ -839,18 +845,23 @@ private:
             if (access_->isDefinition(node)) {
                 result.deferred = !definitions_->registered(node); return result;
             }
+            bool pendingUpdate=false,selectedView=false;
             if(auto field=node->pItem->pathSelection) {
-                result.refinements.push_back({{field->source,field->positional ? selectPosition : selectField,0,field->positional ? node : field->predicate,{node}},
-                    {0,0},"select path result",false});
+                result.refinements.push_back({pathRequest(node),{0,0},"select path result",false});
+                pendingUpdate=!PathExpression::updatesReady(field);
+                if(!constraintsOnly) for(const auto& effect:field->effects)
+                    result.refinements.push_back({{effect,sizeAndValue,0},{1,0},"complete retained path",false});
                 if(!field->result) return result;
+                selectedView=!field->pending && field->matches.size()==1 &&
+                    node->pItem->value==field->result->pItem->value && node->pItem->infSize==field->result->pItem->infSize;
                 // Normalizing a choice also demands its available candidates.
                 // They are alternatives, not identities of the choice root.
                 if(field->pending || field->matches.size()!=1)
                     for(const auto& match:field->matches)
                         result.refinements.push_back({{match,demand,0},{1,0},"normalize path alternative",false});
             }
-            result.deferred = !access_->supports(node, demand);
-            if (auto direction = access_->relativeDirection(node)) {
+            result.deferred = pendingUpdate || !access_->supports(node, demand);
+            if (auto direction = access_->relativeDirection(node); direction && !selectedView) {
                 auto context = positions_->context(node, query.context);
                 auto anchor = context.front(); context.erase(context.begin());
                 result.refinements.push_back({{node, selectRelative, direction, anchor, context}, {0, 0},
@@ -872,12 +883,12 @@ private:
                 result.refinements.push_back({{node, concatField, 1, {}, query.context}, {0, 0}, "resolve size expression", false});
             if (access_->hasConcat(node, 2))
                 result.refinements.push_back({{node, concatField, 2, {}, query.context}, {0, 0}, "resolve value expression", false});
-            if (!constraintsOnly && access_->physicalList(node)) {
+            if (!constraintsOnly && !selectedView && access_->physicalList(node)) {
                 if (demand != sizeOnly || !(access_->known(node) & sizeOnly))
                     result.refinements.push_back({{node, listContents, demand, {}, owners}, {0, 0},
                         "inspect list contents", demand == sizeOnly});
             }
-            if (!constraintsOnly && demand != sizeOnly && access_->templatePrefixList(node)) {
+            if (!constraintsOnly && !selectedView && demand != sizeOnly && access_->templatePrefixList(node)) {
                 for (auto member = description.member(); member; member = POVDescription(member).adjacent())
                     result.refinements.push_back({{member, sizeAndValue, 0}, {1, 0}, "normalize template prefix member", false});
                 for (auto member : access_->demandedOccurrences(node))
@@ -927,7 +938,7 @@ private:
                 if (relation.derived && node->pItem->value==source->pItem->value &&
                     node->pItem->infSize==source->pItem->infSize) {
                     if(constraintsOnly) result.edges.push_back(direct("selected source constraints",{source,relationshipConstraints,0}));
-                    else result.refinements.push_back({{source,query.kind,0},{0,0},"normalize selected source",false});
+                    else result.refinements.push_back({{source,query.kind,0,{},node->pItem->pathSelection->resultContext},{0,0},"normalize selected source",false});
                     continue;
                 }
                 // Expose endpoint expressions before deciding which kind of
@@ -955,6 +966,8 @@ private:
             return result;
         }
         if (query.kind == itemAt) {
+            for(const auto& owner:query.context)
+                if(access_->sameInfon(owner,node)) {result.deferred=true;return result;}
             // Type information may expose order, extent and a virtual sparse
             // route. Advertise that refinement before rejecting unknown shape.
             if (definitions_->required(node))
@@ -980,18 +993,21 @@ private:
                         definitions->retainOccurrenceOwner(node);
                         auto existing = access->existingSparseItem(node, query.argument);
                         auto item = access->sparseItem(node, query.argument);
-                        return Arrival<POVNode>{{item, itemFound, 0}, !existing && bool(item)};
+                        auto owners=query.context;owners.push_back(node);
+                        return Arrival<POVNode>{{item, itemFound, 0, {}, owners}, !existing && bool(item)};
                     }});
             } else {
                 auto first = description.member();
-                if (first)
+                if (first) {
+                    auto owners=query.context;owners.push_back(node);
                     result.edges.push_back(direct("first physical item",
-                        {first, physicalItemAt, query.argument, {}, {node}}, true));
+                        {first, physicalItemAt, query.argument, {}, owners}, true));
+                }
             }
             // Registered equal lists may supply another route to this item.
             for (const auto& relation : description.relationships(false))
                 result.edges.push_back(direct("identity indexed access",
-                    {relation.target, itemAt, query.argument}, true));
+                    {relation.target, itemAt, query.argument, {}, query.context}, true));
             return result;
         }
         if (query.kind == physicalItemAt) {
@@ -1006,13 +1022,13 @@ private:
                 if (!boundary.valid) { result.deferred = true; return result; }
                 boundaryNeeds(result, node, boundary);
                 if (boundary.extent < 0 || remaining < boundary.extent) {
-                    auto edge = direct("indexed embedded position", {node, itemAt, remaining}, true);
+                    auto edge = direct("indexed embedded position", {node, itemAt, remaining, {}, query.context}, true);
                     edge.work.visits += inspection; result.edges.push_back(std::move(edge));
                     return result;
                 }
                 remaining -= boundary.extent;
             } else if (remaining == 0) {
-                result.edges.push_back(direct("selected physical item", {node, itemFound, 0}, true)); return result;
+                result.edges.push_back(direct("selected physical item", {node, itemFound, 0, {}, query.context}, true)); return result;
             } else --remaining;
             auto next = nextListPosition(*access_, ListPosition<POVNode>{node, ListPhase::leave, query.context}, true);
             if (next.phase == ListPhase::member) {

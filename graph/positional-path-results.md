@@ -54,8 +54,8 @@ does not add redundant identities.
   This change supports explicitly open, parsed prefixes; it does not introduce
   speculative indexing while the parser can still reinterpret a list.
 - Fixed-extent slices are now implemented; see [slice-results.md](slice-results.md).
-  Writes, retained-parent semicolons, and constraints after a closing bracket
-  remain deferred. Their syntax is preserved, not silently discarded.
+  Selected-source writes, retained-parent semicolons, and constraints after a
+  closing bracket are now implemented; see [path-write-results.md](path-write-results.md).
 - General signed expressions that require unresolved scalar-complement reasoning
   remain dependent on that reasoning. Literal end-relative indexes are supported.
 

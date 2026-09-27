@@ -69,9 +69,10 @@ root. Path continuation itself still asks only for the predecessor's selection.
 - A window entering the virtual tail of a repetition that already has a physical
   prefix awaits a tail occurrence mapping. Loaded prefix-only windows can use
   the ordinary stored layout.
-- Writes, retained-parent semicolons, and constraints after the closing bracket
-  remain deferred. Typed ordering and parser-owned unfinished lists retain the
-  existing positional-navigation rules.
+- Selected-source writes, retained-parent semicolons, and constraints after the
+  closing bracket are now implemented; see [path-write-results.md](path-write-results.md).
+  Typed ordering and parser-owned unfinished lists retain the existing
+  positional-navigation rules.
 - The legacy `slice/simpleSugar` fixture expects `@[3:5]` over `{1 2 3 4 ...}`
   to return `5`. The source implementation treats `3` as a skipped-item count
   and `5` as the specification, which contradicts the fourth item (`4`). The

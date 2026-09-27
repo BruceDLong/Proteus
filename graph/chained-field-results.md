@@ -35,8 +35,9 @@ implicit membership tails, explicit size bounds, partial result publication,
 and continuation through alternatives. Omission does not prove absence, and
 an unresolved branch must not be discarded to obtain a definite answer.
 
-Writes, retained-parent semicolons, contextual descriptions, and unordered
-structural correspondence remain later semantic work.
+Writes and retained-parent semicolons are now implemented; see
+[path-write-results.md](path-write-results.md). Contextual descriptions and
+unordered structural correspondence remain later semantic work.
 
 ## Validation
 

@@ -5,6 +5,11 @@
 // A path needs the complete candidate set, even when that set is a oneOf.
 // A caller asking for the resulting value still sees that value as symbolic.
 enum PathResultUse { pathValue = 0, pathCandidates = 1 };
+inline Query<POVNode> pathRequest(const POVNode& owner,int use=pathValue) {
+    auto state=owner->pItem->pathSelection;
+    return {state->source,state->identity ? selectSelf : state->positional ? selectPosition : selectField,use,
+            state->identity || state->positional ? owner : state->predicate,{owner}};
+}
 
 // Field predicates and positional coordinates supply different routes to
 // existing members. Both use the same path continuation and result policy.
@@ -54,17 +59,27 @@ class PathSelection {
     // Index syntax translates to the existing zero-based navigation demand.
     // An inverted literal is a signed coordinate here, rather than a scalar
     // waiting for a size against which to take its complement.
-    Expansion<POVNode> position(const Query<POVNode>& q) const {
+    int orderedEndpoint(const POVNode& source,const POVNode& predicate) const {
+        if(!access_->navigationList(source) || !access_->plain(predicate,false,false,false,false) || !predicate->pItem->type ||
+           !predicate->pItem->addedTypes.empty() || !POVDescription(predicate,access_->registry.get()).relationships().empty()) return 0;
+        auto facts=access_->typeFacts(predicate);
+        if(!facts.valid || facts.hasSize || facts.hasValue || facts.overlay>=0) return 0;
+        auto word=predicate->pItem->type->typeID();
+        return word=="first" ? 1 : word=="last" ? -1 : 0;
+    }
+    Expansion<POVNode> position(const Query<POVNode>& q,int endpoint=0) const {
         Expansion<POVNode> out;
         auto state=q.related->pItem->pathSelection;
-        auto selector=state->predicate;auto spec=state->spec;
+        auto selector=endpoint ? q.related : state->predicate;
+        auto spec=endpoint ? POVNode{} : state->spec;
         auto item=selector->pItem;auto value=item->value;
-        bool constrained=!POVDescription(selector,access_->registry.get()).relationships().empty() || definitions_->required(selector);
+        bool constrained=!endpoint && (!POVDescription(selector,access_->registry.get()).relationships().empty() || definitions_->required(selector));
         FlexNum number;Cost coordinateVisits=0;
         bool literal=access_->plainStructure(selector,false,false,false,false,false,true) &&
             !getFlagBit(item->flags,infonView::invertMatch) &&
             signedCoordinate(*access_,value,number,coordinateVisits) &&
             (!getFlagBit(value->flags,infonState::inverted) || !constrained);
+        if(endpoint) {literal=true;number.val=endpoint;coordinateVisits=1;}
         if(!literal || constrained)
             out.refinements.push_back({{selector,valueOnly,0},{1,0},"resolve path index",false});
         if(!literal) {
@@ -120,15 +135,15 @@ class PathSelection {
     // navigation cursor or teaching the generic graph search about paths.
     static Query<POVNode> wrapIndex(Query<POVNode> navigation,const Query<POVNode>& frame) {
         auto prefix=frame.context;
-        if(navigation.kind==itemFound)
-            return {navigation.node,frame.related->pItem->pathSelection->spec ? pathSliceCandidate : pathMatched,static_cast<int>(ListPhase::member),frame.related,prefix,frame.coordinates};
-        auto kind=navigation.kind;
         prefix.insert(prefix.end(),navigation.context.begin(),navigation.context.end());
-        return {navigation.node,pathIndexStep,navigation.argument,frame.related,prefix,{kind,static_cast<std::int64_t>(frame.context.size())}};
+        if(navigation.kind==itemFound)
+            return {navigation.node,frame.related->pItem->pathSelection && frame.related->pItem->pathSelection->spec ? pathSliceCandidate : pathMatched,static_cast<int>(ListPhase::member),frame.related,prefix,frame.coordinates};
+        auto kind=navigation.kind;
+        return {navigation.node,pathIndexStep,navigation.argument,frame.related,prefix,{kind,static_cast<std::int64_t>(frame.context.size()),frame.coordinates.empty() ? 0 : frame.coordinates.front()}};
     }
     Expansion<POVNode> indexStep(const Query<POVNode>& q) const {
         auto count=q.coordinates[1];
-        Query<POVNode> frame{q.context.front(),positionStart,0,q.related,{q.context.begin(),q.context.begin()+count},count==3 ? std::vector<std::int64_t>{selectPosition} : std::vector<std::int64_t>{}};
+        Query<POVNode> frame{q.context.front(),positionStart,0,q.related,{q.context.begin(),q.context.begin()+count},count==3 ? std::vector<std::int64_t>{q.coordinates[2]} : std::vector<std::int64_t>{}};
         Query<POVNode> navigation{q.node,static_cast<int>(q.coordinates[0]),q.argument,{}, {q.context.begin()+count,q.context.end()}};
         auto out=navigate_(navigation);
         for(auto& route:out.edges) {
@@ -150,6 +165,10 @@ public:
         :access_(std::move(access)),definitions_(std::move(definitions)),navigate_(std::move(navigate)) {}
     Expansion<POVNode> expand(const Query<POVNode>& q) const {
         Expansion<POVNode> out;
+        if(q.kind==selectSelf) {
+            out.edges.push_back(edge("retain path source",{q.node,pathSelfFound,0,q.related,{q.node}}));return out;
+        }
+        if(q.kind==pathSelfFound) return out;
         if(q.kind==positionStart) return position(q);
         if(q.kind==pathSliceStart || q.kind==pathSliceCandidate) {
             auto result=SliceSelection(access_,definitions_).expand(q);
@@ -175,8 +194,9 @@ public:
             // A path continuation demands its predecessor's selection, not
             // complete normalization of that intermediate object.
             if (auto field=q.node->pItem->pathSelection) {
-                out.refinements.push_back({{field->source,field->positional ? selectPosition : selectField,pathCandidates,field->positional ? q.node : field->predicate,{q.node}},
-                    {0,0},"select preceding path segment",false});
+                out.refinements.push_back({pathRequest(q.node,pathCandidates),{0,0},"select preceding path segment",false});
+                if(!field->updates.empty())
+                    out.refinements.push_back({{q.node,relationshipConstraints,0},{1,0},"apply preceding path constraints",false});
                 if (field->result) {
                     auto next=q;next.node=field->result;
                     out.edges.push_back(edge("continue from selected path",std::move(next)));
@@ -196,6 +216,9 @@ public:
                 auto start=q;start.kind=positionStart;start.context={q.node};
                 return position(start);
             }
+            if(auto endpoint=orderedEndpoint(q.node,q.related)) {
+                auto start=q;start.context={q.node};return position(start,endpoint);
+            }
             if(!sourceReady(q.node)) {out.deferred=true;return out;}
             out.edges.push_back(edge("scan field candidates",{q.node,fieldPosition,static_cast<int>(ListPhase::enter),q.related,{q.node}}));
             return out;
@@ -210,6 +233,8 @@ public:
         }
         Cost visits=1;
         if(at.phase==ListPhase::enter) {
+            if(q.node==q.context.front())
+                if(auto endpoint=orderedEndpoint(q.node,q.related)) return position(q,endpoint);
             if(!sourceReady(at.node) || (!unordered(q.context.front()) && unordered(at.node))) {
                 unresolved(out,q,"unresolved alternative structure");return out;
             }
@@ -246,36 +271,37 @@ public:
     }
 };
 
-// Field and index segments share continuation and publication. Intermediate
-// query POVs retain provenance, while candidate/source POVs remain shared.
-// Writes and retained-parent paths need their own continuation semantics.
+// Parse structure owns continuation: retained parts are obligations on the
+// parent, while partRef returns a descendant. All selections use one walk.
 class PathExpression {
-    static std::vector<std::shared_ptr<PartPath>> segments(ProteusGraphAccess& access,const POVNode& node) {
-        auto item=node->pItem;
-        if (!item->partRef || !item->parts.empty() || !item->wrkList.empty() || item->pathSelection ||
-            !access.plainStructure(node,item->isOrLike(),false,false,false,true,false) ||
-            !POVDescription(node,access.registry.get()).relationships(false).empty()) return {};
-        std::vector<std::shared_ptr<PartPath>> result;
-        std::set<std::shared_ptr<PartPath>> seen;
-        for (auto part=item->partRef;part;) {
-            auto kind=getModeBits(part->flags,PartPath::pathMode);
-            if (!seen.insert(part).second || (kind!=PartPath::dotField && kind!=PartPath::idxField) ||
-                getFlagBit(part->flags,PartPath::hasSemiColon) || (kind==PartPath::dotField && part->spec) || !part->path ||
-                !part->path->parts.empty() || (kind==PartPath::dotField && !part->path->wrkList.empty())) return {};
-            if(kind==PartPath::dotField && part->continuation) return {};
-            // The expression inside @[ ] owns its paths. Only the separate
-            // continuation after ] belongs to this outer path.
-            auto tail=kind==PartPath::dotField ? part->path : part->continuation;
-            if(kind==PartPath::idxField && tail && (!tail->parts.empty() || !tail->wrkList.empty() || tail->funcArgs)) return {};
-            result.push_back(part);part=tail ? tail->partRef : nullptr;
-        }
-        return result;
+    using Infon=std::shared_ptr<infonView>;
+    using Part=std::shared_ptr<PartPath>;
+    static Infon tail(const Part& part) {
+        return getModeBits(part->flags,PartPath::pathMode)==PartPath::idxField ? part->continuation : part->path;
     }
-public:
-    // A semantic relationship can use the same positional query as syntax.
-    static POVNode positionQuery(ProteusGraphAccess& access,const POVNode& source,
-                                 const POVNode& predicate,const POVNode& spec) {
-        auto owner=std::make_shared<POV>(915);
+    static bool inspect(const Infon& syntax,std::set<Part>& seen,Cost& count) {
+        if(!syntax) return true;
+        auto parts=syntax->parts;if(syntax->partRef) parts.push_back(syntax->partRef);
+        for(const auto& part:parts) {
+            auto kind=getModeBits(part->flags,PartPath::pathMode);
+            if(!seen.insert(part).second || !part->path || (kind!=PartPath::dotField && kind!=PartPath::idxField) ||
+               (kind==PartPath::dotField && (part->spec || part->continuation))) return false;
+            auto continuation=tail(part);
+            if(continuation && continuation->funcArgs) return false;
+            ++count;if(!inspect(continuation,seen,count)) return false;
+        }
+        return true;
+    }
+    static Cost count(ProteusGraphAccess& access,const POVNode& node) {
+        auto item=node->pItem;
+        if((!item->partRef && item->parts.empty()) || !item->wrkList.empty() || item->pathSelection ||
+           !access.plainStructure(node,item->isOrLike(),false,false,false,true,false) ||
+           !POVDescription(node,access.registry.get()).relationships(false).empty()) return 0;
+        Cost result=0;std::set<Part> seen;
+        return inspect(item,seen,result) ? result : 0;
+    }
+    static void initialize(ProteusGraphAccess& access,const POVNode& owner,const POVNode& source,
+                           const POVNode& predicate,const POVNode& spec,bool positional,bool identity,const Infon& expression={}) {
         auto result=owner->pItem=std::make_shared<infonView>();
         SetModeBits(result->flags,infonView::itmMode,infonView::mItem);
         SetModeBits(result->flags,infonView::viewMode,infonView::vmOverlay);
@@ -284,53 +310,70 @@ public:
         SetModeBits(result->value->flags,infonState::overlayType,infonState::tUnknown);
         SetModeBits(result->value->flags,infonState::evalMode,infonState::emUnknown);
         auto state=result->pathSelection=std::make_shared<GraphPathSelection>();
-        state->positional=true;state->source=source;state->predicate=predicate;state->spec=spec;
-        access.bind(source);access.bind(predicate);access.bind(spec);access.bind(owner);
-        return owner;
+        state->positional=positional;state->identity=identity;state->source=source;state->predicate=predicate;state->spec=spec;state->expression=expression;
+        if(expression) {result->originID=expression->originID;result->infCharPos=expression->infCharPos;result->replyCharPos=expression->replyCharPos;}
+        access.bind(source);if(predicate) access.bind(predicate);if(spec) access.bind(spec);access.bind(owner);++owner->workRevision;
     }
-    static bool ready(ProteusGraphAccess& access,const POVNode& node) {return !segments(access,node).empty();}
-    static Work work(ProteusGraphAccess& access,const POVNode& node) {
-        auto path=segments(access,node);Cost count=path.size(),specs=0;
-        for(const auto& part:path) if(part->spec) ++specs;
-        return {count,6*count+specs+1};
+    static POVNode lower(ProteusGraphAccess& access,const POVNode& source,const Infon& syntax,
+                         const POVNode& destination,const Infon& expression,std::vector<POVNode>& effects) {
+        if(!syntax) return source;
+        auto step=[&](const Part& part,const POVNode& output) {
+            auto continuation=tail(part);
+            auto owner=continuation && continuation->partRef ? std::make_shared<POV>(915) : output;
+            bool positional=getModeBits(part->flags,PartPath::pathMode)==PartPath::idxField;
+            auto predicate=std::make_shared<POV>(915);predicate->pItem=std::make_shared<infonView>(*part->path);
+            if(!positional) {predicate->pItem->partRef.reset();predicate->pItem->parts.clear();predicate->pItem->wrkList.clear();}
+            POVNode spec;
+            if(part->spec) {spec=std::make_shared<POV>(916);spec->pItem=part->spec;}
+            initialize(access,owner,source,predicate,spec,positional,false,expression);
+            if(continuation) owner->pItem->pathSelection->updates=continuation->wrkList;
+            if(continuation && !continuation->wrkList.empty()) effects.push_back(owner);
+            return lower(access,owner,continuation,output,expression,effects);
+        };
+        for(const auto& part:syntax->parts) effects.push_back(step(part,std::make_shared<POV>(915)));
+        return syntax->partRef ? step(syntax->partRef,destination) : source;
     }
+public:
+    static POVNode positionQuery(ProteusGraphAccess& access,const POVNode& source,const POVNode& predicate,const POVNode& spec) {
+        auto owner=std::make_shared<POV>(915);initialize(access,owner,source,predicate,spec,true,false);return owner;
+    }
+    static bool ready(ProteusGraphAccess& access,const POVNode& node) {return count(access,node)!=0;}
+    static Work work(ProteusGraphAccess& access,const POVNode& node) {auto n=count(access,node);return {n,8*n+6};}
     static bool prepare(ProteusGraphAccess& access,const POVNode& node) {
-        auto path=segments(access,node);if(path.empty()) return false;
+        if(!ready(access,node)) return false;
         auto original=node->pItem;
-        auto source=node->snapshotView(915);
-        source->pItem=std::make_shared<infonView>(*original);
-        source->pItem->partRef.reset();SetFlagBit(source->pItem->flags,infonView::doReply,false);
-        auto expression=std::make_shared<infonView>(*original);
-        SetFlagBit(expression->flags,infonView::doReply,false);
-        access.bind(source);
-        for (std::size_t i=0;i<path.size();++i) {
-            auto owner=i+1==path.size() ? node : std::make_shared<POV>(915);
-            auto predicate=std::make_shared<POV>(915);
-            // A following path is a continuation, not a condition on this
-            // segment's candidate. Preserve the original parsed predicates.
-            predicate->pItem=std::make_shared<infonView>(*path[i]->path);
-            bool positional=getModeBits(path[i]->flags,PartPath::pathMode)==PartPath::idxField;
-            if(!positional) predicate->pItem->partRef.reset();
-            auto state=std::make_shared<GraphPathSelection>();
-            state->positional=positional;state->expression=expression;state->source=source;state->predicate=predicate;
-            if(path[i]->spec) {
-                state->spec=std::make_shared<POV>(916);state->spec->pItem=path[i]->spec;
-                access.bind(state->spec);
-            }
-            auto result=std::make_shared<infonView>();
-            SetModeBits(result->flags,infonView::itmMode,infonView::mItem);
-            SetModeBits(result->flags,infonView::viewMode,infonView::vmOverlay);
-            SetFlagBit(result->flags,infonView::doReply,owner==node && getFlagBit(original->flags,infonView::doReply));
-            SetModeBits(result->infSize->flags,infonState::overlayType,infonState::NUM);
-            SetModeBits(result->infSize->flags,infonState::evalMode,infonState::emUnknown);
-            SetModeBits(result->value->flags,infonState::overlayType,infonState::tUnknown);
-            SetModeBits(result->value->flags,infonState::evalMode,infonState::emUnknown);
-            result->originID=original->originID;result->infCharPos=original->infCharPos;result->replyCharPos=original->replyCharPos;
-            result->pathSelection=state;owner->pItem=result;
-            access.bind(predicate);access.bind(owner);++owner->workRevision;
-            source=owner;
-        }
+        auto expression=std::make_shared<infonView>(*original);SetFlagBit(expression->flags,infonView::doReply,false);
+        auto source=node->snapshotView(915);source->pItem=std::make_shared<infonView>(*original);
+        source->pItem->partRef.reset();source->pItem->parts.clear();SetFlagBit(source->pItem->flags,infonView::doReply,false);access.bind(source);
+        std::vector<POVNode> effects;
+        auto returnedSyntax=expression;
+        while(returnedSyntax && returnedSyntax->partRef) returnedSyntax=tail(returnedSyntax->partRef);
+        // A returned parent owns its retained children, whose source is that
+        // parent's selection query. Keep the outer view separate so these
+        // references form a DAG instead of parent -> child -> parent.
+        bool retainedParent=expression->partRef && returnedSyntax && !returnedSyntax->parts.empty();
+        auto destination=retainedParent ? std::make_shared<POV>(915) : node;
+        auto returned=lower(access,source,expression,destination,expression,effects);
+        if(returned!=node) initialize(access,node,returned,{},{},false,true,expression);
+        auto state=node->pItem->pathSelection;
+        std::set<POVNode> seen;
+        for(const auto& effect:effects) if(effect!=node && seen.insert(effect).second) state->effects.push_back(effect);
+        SetFlagBit(node->pItem->flags,infonView::doReply,getFlagBit(original->flags,infonView::doReply));
         return true;
+    }
+    static bool updatesReady(const std::shared_ptr<GraphPathSelection>& state) {
+        return state->updates.empty() || (state->result && !state->pending && state->matches.size()==1);
+    }
+    static bool needsUpdates(const std::shared_ptr<GraphPathSelection>& state) {
+        if(!updatesReady(state) || state->updates.empty()) return false;
+        for(const auto& rhs:state->updates) if(!state->result->pItem->workListContainsInfonView(rhs->pItem)) return true;
+        return false;
+    }
+    static bool applyUpdates(ProteusGraphAccess& access,const std::shared_ptr<GraphPathSelection>& state) {
+        if(!needsUpdates(state)) return false;
+        auto target=state->result;access.bind(target);
+        for(const auto& rhs:state->updates) {access.bind(rhs);target->pItem->addPOVToWrkList(rhs);}
+        ++target->workRevision;return true;
     }
 };
 
@@ -339,6 +382,7 @@ class ProteusPathGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusDefinitions> definitions_;
     std::vector<POVNode> matches_,published_;
     POVNode result_;
+    std::map<POVNode,std::vector<POVNode>> locations_;
     bool verified_=false,waiting_=false,publishedPending_=false,aggregating_=false;
     bool branchMatched_=false;
     std::vector<POVNode> positionBranches_;
@@ -381,14 +425,21 @@ public:
         }
     }
     void beginPass() override {
-        matches_.clear();verified_=waiting_=aggregating_=false;branchMatched_=false;
+        matches_.clear();locations_.clear();verified_=waiting_=aggregating_=false;branchMatched_=false;
         positionBranches_.clear();positionWinners_.clear();positionEnds_.clear();positionsEnded_=positionTailPending_=positionReady_=false;
         positionFinding_={request,{},0};
     }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
         auto q=visit.query;
+        if(q.kind==pathSelfFound) q.kind=pathMatched;
+        if(q.kind==pathMatched) {
+            std::vector<POVNode> location{q.node};
+            auto offset=q.coordinates.empty() ? 1 : 3;
+            location.insert(location.end(),q.context.begin()+offset,q.context.end());
+            locations_.emplace(q.node,std::move(location));
+        }
         bool finished=false;
-        if(request.kind==selectPosition) {
+        if(request.kind==selectPosition || request.kind==selectSelf) {
             auto winners=positionWinners_.size();
             positionReady_=collectPosition(q) || positionReady_;
             if((positionWinners_.size()!=winners || q.kind==pathAlternativesEnd || q.kind==pathEnd) && visit.cost>=positionFinding_.cost)
@@ -408,7 +459,7 @@ public:
         return finished ? publish() : std::vector<SetCommand>{};
     }
     CommandBatch<POVNode> finishPass() override {
-        if(request.kind!=selectPosition || !positionReady_) return {};
+        if((request.kind!=selectPosition && request.kind!=selectSelf) || !positionReady_) return {};
         return {positionFinding_,publish()};
     }
 private:
@@ -418,7 +469,7 @@ private:
             bool current=true;
             if(!alternatives && !request.context.empty()) {
                 auto state=request.context.front()->pItem->pathSelection;
-                current=state->resultView==result_->pItem && state->resultRevision==result_->workRevision;
+                current=state->resultView==result_->pItem && state->resultRevision==result_->workRevision && state->resultContext==locations_.at(result_);
             }
             if(alternatives) {
                 auto member=result_->pItem->innr->value->items.head;
@@ -490,6 +541,7 @@ private:
                 SetFlagBit(result->flags,infonView::isNormed,false);
                 state->result=result_;state->matches=matches;state->pending=pending;
                 state->resultView=result_->pItem;state->resultRevision=result_->workRevision;
+                state->resultContext=alternatives ? std::vector<POVNode>{} : locations_.at(result_);
                 owner->pItem=result;access->bind(owner);++owner->workRevision;
                 if(!alternatives) definitions_->inherit(owner,result_);
             }
@@ -497,7 +549,7 @@ private:
         },work}};
     }
 public:
-    bool satisfied() const override {return verified_ || (request.kind==selectPosition && positionReady_ && !waiting_);}
+    bool satisfied() const override {return verified_ || ((request.kind==selectPosition || request.kind==selectSelf) && positionReady_ && !waiting_);}
     bool symbolic() const override {return !verified_ || (request.argument==pathValue && result_ && result_->pItem->isOrLike());}
     POVNode result() const override {return result_;}
 };

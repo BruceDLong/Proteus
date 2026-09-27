@@ -45,7 +45,15 @@ public:
     const std::vector<POVNode>& work() const { return node_->pItem->wrkList; }
     std::vector<Relationship> relationships(bool includeWork = true) const {
         std::vector<Relationship> result;
-        if (includeWork) for (const auto& rhs : work()) result.push_back({node_, rhs, {}});
+        if (includeWork) for (const auto& rhs : work()) {
+            // A published view borrows its source's header. Those RHSs still
+            // belong to the source occurrence; the derived link exposes them
+            // there. Reinterpreting them here would change cursor context.
+            auto field=node_->pItem->pathSelection;
+            if(field && field->resultView && field->result && !field->pending && field->matches.size()==1 &&
+               field->resultView->workListContainsPOV(rhs)) continue;
+            result.push_back({node_, rhs, {}});
+        }
         // A query result may change when explicitly normalized again. Read its
         // current source link here instead of asserting a permanent identity
         // between the working query POV and every result it has ever selected.
