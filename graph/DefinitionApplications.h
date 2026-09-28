@@ -430,6 +430,62 @@ public:
         }
         return changed;
     }
+    // Publish a sparse header independently of its still-symbolic members.
+    // Only top-level conjuncts are read; full member validation stays pending.
+    // All allocation and mutation still belongs to the priced Set.
+    std::vector<SetCommand> exposeShape(const POVNode& target) const {
+        std::vector<POVNode> pending;
+        auto meanings=[&](const POVNode& node) {
+            for(const auto& name:names(node)) {
+                if(auto body=lookup(name)) pending.push_back(body);
+                else if(declared(name)) return false;
+            }
+            return true;
+        };
+        if(!meanings(target)) return {};
+        if(auto owner=occurrenceOwner(target)) {
+            auto member=memberTemplate(owner);
+            if(!member) return {};
+            pending.push_back(member);
+        }
+        Work cost;std::set<POVNode> seen;
+        GraphTypeFacts required;required.valid=true;
+        POVNode specification;
+        for(std::size_t i=0;i<pending.size();++i) {
+            auto source=pending[i];if(!seen.insert(source).second) continue;
+            ++cost.visits;
+            auto header=facts(source);
+            if(!header.valid || !POVDescription(source,access_->registry.get()).relationships(false).empty()) return {};
+            if(!required.combine(header)) throw DefinitionConflict("incompatible definition headers");
+            if(auto member=memberTemplate(source)) {
+                if(!access_->templatePrefixList(source) || (specification && specification->pItem!=member->pItem)) return {};
+                specification=member;
+            }
+            if(!meanings(source)) return {};
+            for(const auto& rhs:POVDescription(source).work()) pending.push_back(rhs);
+        }
+        if(!specification) return {};
+        auto actual=access_->typeFacts(target),combined=actual;
+        if(!actual.valid) return {};
+        if(!combined.combine(required)) throw DefinitionConflict("incompatible definition headers");
+        bool adopt=access_->adoptableList(target);
+        if(!adopt && ((!access_->physicalList(target) && !access_->templatePrefixList(target)) ||
+                      !access_->definitionOrderedCandidate(target))) return {};
+        auto existing=memberTemplate(target);
+        if(existing && existing->pItem!=specification->pItem) return {};
+        bool install=(adopt || access_->openTail(target)) && !existing;
+        bool order=!access_->definitionOrderKnown(target);
+        if(!adopt && !install && !order && required.accepts(actual)) return {};
+        cost.creations=static_cast<unsigned>(adopt)+static_cast<unsigned>(install);
+        auto access=access_;
+        return {{"Expose definition list shape",[access,target,required,specification,adopt,install] {
+            bool changed=adopt && access->adoptDefinitionList(target);
+            changed=access->applyTypeFacts(target,required) || changed;
+            changed=access->setDefinitionOrder(target) || changed;
+            if(install) changed=access->installMemberTemplate(target,specification) || changed;
+            return changed;
+        },cost}};
+    }
     void prune() {
         for (auto it = evidence_.begin(); it != evidence_.end();)
             if (it->first.expired()) it = evidence_.erase(it); else ++it;
@@ -439,6 +495,8 @@ public:
 class ProteusTypeGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusDefinitions> definitions_;
     ProteusDefinitions::Certificate proof_;
+    Visit<POVNode> entry_;
+    bool entered_=false;
     std::function<void(const POVNode&,const POVNode&)> representedTemplate_;
 public:
     ProteusTypeGoal(Query<POVNode> query, std::shared_ptr<ProteusDefinitions> definitions,
@@ -450,9 +508,14 @@ public:
         if(resolved && request.kind==typeRequirements)
             if(auto source=definitions_->repeatedBody(request.node)) representedTemplate_(request.node,source);
     }
-    void beginPass() override { proof_ = std::make_shared<ProteusDefinitions::Proof>(); }
+    void beginPass() override { proof_ = std::make_shared<ProteusDefinitions::Proof>(); entered_=false; }
+    CommandBatch<POVNode> finishPass() override {
+        if(request.kind!=typeRequirements || !entered_ || satisfied()) return {};
+        return {entry_,definitions_->exposeShape(request.node)};
+    }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
         auto q = visit.query;
+        if(q.kind==typeRequirements) {entry_=visit;entered_=true;}
         if (q.kind == definitionEnter) definitions_->collect(q.node, request.node, proof_);
         if (q.kind == definitionLeave) definitions_->finish(q.node, request.node, proof_);
         bool entry = q.kind == typeRequirements || q.kind == compileTypeRequirements;

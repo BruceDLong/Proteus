@@ -29,5 +29,8 @@ fixture, expectation, or ambiguity skip changed. Logs are in
 
 The historical implementation was checked in ModelManager.wordValidForLang and
 indexDefinition. The available Proteus3 executable predates the current `#`
-definition syntax, so it did not provide a valid runtime comparison for these
-probes. No historical runtime success is claimed.
+definition syntax. With its older `@` spelling, both the tagged scalar probe and
+bare unordered-definition probe pass. Ordered and unordered partial `red`
+descriptions return only their supplied hue, confirming that bare type expansion
+must remain distinct from enforcing omitted parts. Logs are in
+`/tmp/p4-definition-probes-p3-syntax.log`.

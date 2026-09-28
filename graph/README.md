@@ -477,6 +477,11 @@ Embedded spans flatten into positions; an ordinary nested list occupies one
 position and has its own member requirements. Alias and containment cycles
 remain symbolic before any instance members are allocated.
 
+When member meaning blocks compilation, the type goal can publish a compatible
+sparse header and shared member template through a priced `finishPass` Set.
+It does not certify the type, normalize the template, or materialize virtual
+members. See [definition-shape-results.md](definition-shape-results.md).
+
 `DefinitionPlan.h` checks the instance against these requirements without
 writing it. It reuses `SpanAlignment.h` to match existing members and uniquely
 fill open instance tails. It rejects incompatible known facts or lengths and

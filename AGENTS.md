@@ -58,6 +58,11 @@ independently of goals. Reuse that live view; do not create parallel adjacency
 storage or cache a POV as permanently expanded. Publications may expose new
 relationships, and sparse inspection must not materialize occurrences.
 
+A sparse type can expose its known header/template while member meaning stays
+pending. This is a partial priced Set, not a type certificate: do not mark it
+isNormed, expand virtual members, or mutate the shared template to make printing
+match. See graph/definition-shape-results.md.
+
 Current checkpoint: scalar/finite definitions, lazy member templates, and
 fixed-width whole-list grouping use graph requirements and priced plans.
 Empty open definition bodies retain virtual positions; their known extent

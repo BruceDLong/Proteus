@@ -1,6 +1,21 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphDefinitionShape/sparseHeader
+    unit/graphDefinitionShape/unboundedHeader
+    unit/graphDefinitionShape/alias
+    unit/graphDefinitionShape/existingPrefix
+    unit/graphDefinitionShape/sizeConflict
+    unit/graphDefinitionShape/overlayConflict
+    unit/graphDefinitionShape/jointHeaderConflict
+    unit/graphDefinitionShape/distinctTemplatesPending
+    unit/graphDefinitionShape/cost
+    unit/graphDefinitionShape/replay
+    unit/graphDefinitionShape/indexedAccess
+    unit/graphDefinitionShape/lateDefinition
+    unit/graphDefinitionShape/cancel
+    unit/graphDefinitionShape/lateMemberMeaning
+
     unit/graphDefinitionLanguage/baseLanguage
     unit/graphDefinitionLanguage/regionalLanguage
     unit/graphDefinitionLanguage/foreignLanguage
@@ -10051,6 +10066,105 @@ struct GLOBAL {
     }%>
     void: unitTestGraphDefinitionLanguage(me string: testName, me int: caseID) <- {
         me bool: passed <- graphDefinitionLanguageCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHDEFINITIONSHAPE(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphDefinitionShape(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHDEFINITIONSHAPE(unit/graphDefinitionShape/sparseHeader, 0)
+    GRAPHDEFINITIONSHAPE(unit/graphDefinitionShape/unboundedHeader, 1)
+    GRAPHDEFINITIONSHAPE(unit/graphDefinitionShape/alias, 2)
+    GRAPHDEFINITIONSHAPE(unit/graphDefinitionShape/existingPrefix, 3)
+    GRAPHDEFINITIONSHAPE(unit/graphDefinitionShape/sizeConflict, 4)
+    GRAPHDEFINITIONSHAPE(unit/graphDefinitionShape/overlayConflict, 5)
+    GRAPHDEFINITIONSHAPE(unit/graphDefinitionShape/jointHeaderConflict, 6)
+    GRAPHDEFINITIONSHAPE(unit/graphDefinitionShape/distinctTemplatesPending, 7)
+    GRAPHDEFINITIONSHAPE(unit/graphDefinitionShape/cost, 8)
+    GRAPHDEFINITIONSHAPE(unit/graphDefinitionShape/replay, 9)
+    GRAPHDEFINITIONSHAPE(unit/graphDefinitionShape/indexedAccess, 10)
+    GRAPHDEFINITIONSHAPE(unit/graphDefinitionShape/lateDefinition, 11)
+    GRAPHDEFINITIONSHAPE(unit/graphDefinitionShape/cancel, 12)
+    GRAPHDEFINITIONSHAPE(unit/graphDefinitionShape/lateMemberMeaning, 13)
+
+    me bool: graphDefinitionShapeCase(me string: testName, me int: caseID) <- <%{
+        GraphNormalizer normalizer;normalizer.init();
+        std::string declarations="{#part={...} #history=*1000000000+{T {&part}|...}}";
+        if(caseID==1) declarations="{#part={...} #history={T {&part}|...}}";
+        if(caseID==2) declarations="{#part={...} #history=alias #alias=*1000000000+{T {&part}|...}}";
+        if(caseID==6 || caseID==7) declarations="{#part={...} #history=*1000000000+{T {&part}|...} #other=*"+
+            std::string(caseID==6 ? "4" : "1000000000")+"+{T {&part}|...}}";
+        if(caseID==11 || caseID==12) declarations="{}";
+        auto defs=graphParsed(testName,declarations);
+        auto original=toString(defs->pItem.get());
+        auto registered=normalizer.normalize(defs);registered.waitForCompletion();
+        auto target=graphParsed(testName,caseID==3 ? "history:{{*10+1} ...}" : caseID==4 ? "history:*2+{...}" : caseID==5 ? "history:7" : "history");
+        auto originalTarget=toString(target->pItem.get());
+        auto first=target->pItem->value->items.head;
+        if(caseID==6 || caseID==7) target->pItem->addedTypes.push_back(graphParsed(testName,"other")->pItem->type);
+        auto handle=caseID==8 ? normalizer.normalizeWithCost(target,0) : normalizer.normalize(target);
+        handle.waitForCompletion();
+        bool conflict=caseID>=4 && caseID<=6;
+        bool deferred=caseID==7 || caseID==8 || caseID==11 || caseID==12;
+        bool passed=!registered.status().failed && handle.status().failed==conflict;
+        auto shaped=[&] {
+            return getModeBits(target->pItem->value->flags,infonState::overlayType)==infonState::LST &&
+                getFlagBit(target->pItem->value->flags,infonState::timelike) && target->pItem->value->listSpec &&
+                target->pItem->value->items.head==first && !getFlagBit(target->pItem->flags,infonView::isNormed);
+        };
+        if(conflict) passed &= originalTarget==toString(target->pItem.get());
+        else if(deferred) passed &= !target->pItem->value->listSpec && target->pItem->value->items.isEmpty() && handle.status().symbolicValues;
+        else {
+            passed &= shaped() && handle.status().symbolicValues && handle.status().withSubscribers;
+            if(caseID==1) passed &= getModeBits(target->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown;
+            else passed &= target->pItem->infSize->num==1000000000;
+        }
+        if(caseID==9) {
+            auto spec=target->pItem->value->listSpec;auto count=target->pItem->wrkList.size();
+            auto again=normalizer.normalize(target);again.waitForCompletion();
+            passed &= !again.status().failed && shaped() && target->pItem->value->listSpec==spec && target->pItem->wrkList.size()==count;
+            for(const auto& step:again.steps()) passed &= step.action!="Expose definition list shape";
+            again.cancel();
+        }
+        if(caseID==10) {
+            auto lookup=normalizer.findItem(target,999999999);lookup.waitForCompletion();
+            auto item=lookup.result();
+            passed &= !lookup.status().failed && item && item!=target && target->pItem->value->items.isEmpty() &&
+                item->implicitItem.sourcePov && item->implicitItem.sourceIndex==999999999 && lookup.steps().size()<100;
+            lookup.cancel();
+        }
+        if(caseID==11 || caseID==12) {
+            if(caseID==12) handle.cancel();
+            auto later=normalizer.normalize(graphParsed(testName,"{#part={...} #history=*1000000000+{T {&part}|...}}"));
+            later.waitForCompletion();handle.waitForCompletion();
+            if(caseID==11) passed &= !handle.status().failed && shaped();
+            else passed &= handle.status().cancelled && !target->pItem->value->listSpec;
+            later.cancel();
+        }
+        if(caseID==13) {
+            auto replacement=graphParsed(testName,"{*10+1}");
+            normalizer.runtime.update([&] {defs->pItem->value->items.head->pItem->funcArgs=replacement->pItem;});
+            registered=normalizer.normalize(defs);registered.waitForCompletion();handle.waitForCompletion();
+            auto lookup=normalizer.findItem(target,7);lookup.waitForCompletion();
+            auto item=lookup.result();
+            if(item && item!=target) {
+                auto member=normalizer.normalize(item);member.waitForCompletion();
+                passed &= !member.status().failed && item->pItem->value->items.head &&
+                    item->pItem->value->items.head->pItem->value->num==1 && target->pItem->value->items.isEmpty();
+                member.cancel();
+            } else passed=false;
+            lookup.cancel();
+        } else passed &= original==toString(defs->pItem.get());
+        if(!passed) {
+            std::cout << "Definition shape " << caseID << ": " << toString(target->pItem.get()) << " " << handle.status().error << "\n";
+            for(const auto& step:handle.steps()) std::cout << step.action << "\n";
+        }
+        handle.cancel();registered.cancel();normalizer.close();return passed;
+    }%>
+    void: unitTestGraphDefinitionShape(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphDefinitionShapeCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

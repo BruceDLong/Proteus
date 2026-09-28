@@ -1,12 +1,20 @@
 # Older language compatibility, 2026-09-28
 
-Temporal context reads and symbolic support/cut goals are implemented. The
-source build and **1,127/1,127 registered graph tests** pass, including 36 new
-temporal checks. The older suites report **265 passed, 88 failed, and 8 explicit
-ambiguity skips**, out of 361. Four unchanged default fixtures now pass:
+Language-tagged definitions and partial sparse type headers are implemented.
+Full source builds and **1,156/1,156 registered graph tests** pass, including 29
+new definition checks. The compiled audit reports **1,206 pass / 8 existing fail**.
+The six older language suites remain **265 pass / 88 fail / 8 ambiguity skips**;
+every pre-existing status and fixture is unchanged. See
+[definition-language-results.md](definition-language-results.md) and
+[definition-shape-results.md](definition-shape-results.md).
+
+`cube/getLstSpec` now exposes its T-list and symbolic member template, but still
+fails its exact string expectation because the printer preserves the unknown
+embedded extent as `*_+{&thing}`. It remains a failure in the inventory.
+
+The preceding temporal increment recovered four unchanged default fixtures:
 `temporal/directTPrev`, `temporal/directTNext`, `temporal/nestedBoundaryPrev`, and
-`temporal/nestedBoundaryNext`. Every other individual status is unchanged.
-See [temporal-context-results.md](temporal-context-results.md).
+`temporal/nestedBoundaryNext`. See [temporal-context-results.md](temporal-context-results.md).
 
 The preceding boundary increment introduced `NULL:<ID>` and universal
 `.begin`/`.end` access; the subsequent cleanup removed the obsolete AItem
@@ -139,8 +147,9 @@ resolved: unknown numeric sizes and subscribed open tails remain symbolic.
 
 The complete fixture status and input hashes are recorded in
 [language-compatibility-status.json](language-compatibility-status.json).
-Current language logs are in `/tmp/p4-temporal-language-final`; compiled logs
-are in `/tmp/p4-temporal-compiled-final`. The pre-change compiled baseline is
+Current language and compiled logs are in `/tmp/p4-definition-final`.
+The preceding results are in `/tmp/p4-temporal-language-final` and
+`/tmp/p4-temporal-compiled-final`. The pre-change compiled baseline is
 preserved in `/tmp/p4-aitem-compiled-final`.
 
 ## Remaining work
