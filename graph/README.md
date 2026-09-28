@@ -879,3 +879,6 @@ later facts and conflicts, including through another POV sharing that view.
 `hasRHS()` recognizes pending and consolidated relations, so producers do not
 reinsert completed work. Partial, qualified, typed, and contextual obligations
 keep their work entries. See [rhs-consolidation-results.md](rhs-consolidation-results.md).
+
+Language-only declaration tags now use the context vocabulary; additional usage
+qualifiers remain pending. See [definition-language-results.md](definition-language-results.md).

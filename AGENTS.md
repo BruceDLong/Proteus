@@ -30,6 +30,12 @@ stays unresolved until its location is known. Do not infer time duration from
 member count, expand sparse histories, or copy missing fields by persistence.
 See graph/temporal-context-results.md for the current implementation boundary.
 
+Definition catalogues select language-only tags using the existing base/full
+locale rule. Each graph context captures its vocabulary at initialization;
+additional usage qualifiers and multiple applicable meanings stay unresolved.
+Do not drop qualifiers or silently rebind an existing context to another locale.
+See graph/definition-language-results.md.
+
 Current priority: make the existing test suites work before further context,
 T-list, or word-model redesign. If a test's intended semantics are ambiguous,
 record the exact fixture and question in graph/test-ambiguities.md and skip it

@@ -1,6 +1,22 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphDefinitionLanguage/baseLanguage
+    unit/graphDefinitionLanguage/regionalLanguage
+    unit/graphDefinitionLanguage/foreignLanguage
+    unit/graphDefinitionLanguage/regionalMismatch
+    unit/graphDefinitionLanguage/separateLanguages
+    unit/graphDefinitionLanguage/sameLanguageAmbiguous
+    unit/graphDefinitionLanguage/qualifiedPending
+    unit/graphDefinitionLanguage/qualifiedAlternativePending
+    unit/graphDefinitionLanguage/untaggedAmbiguous
+    unit/graphDefinitionLanguage/replay
+    unit/graphDefinitionLanguage/lateDefinition
+    unit/graphDefinitionLanguage/cancel
+    unit/graphDefinitionLanguage/cost
+    unit/graphDefinitionLanguage/isolatedLanguages
+    unit/graphDefinitionLanguage/publicEntry
+
     unit/graphTemporal/structuralBoundary
     unit/graphTemporal/embeddedContext
 
@@ -9957,6 +9973,84 @@ struct GLOBAL {
     }%>
     void: unitTestGraphTemporal(me string: testName, me int: caseID) <- {
         me bool: passed <- graphTemporalCase(testName,caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHDEFINITIONLANGUAGE(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphDefinitionLanguage(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHDEFINITIONLANGUAGE(unit/graphDefinitionLanguage/baseLanguage, 0)
+    GRAPHDEFINITIONLANGUAGE(unit/graphDefinitionLanguage/regionalLanguage, 1)
+    GRAPHDEFINITIONLANGUAGE(unit/graphDefinitionLanguage/foreignLanguage, 2)
+    GRAPHDEFINITIONLANGUAGE(unit/graphDefinitionLanguage/regionalMismatch, 3)
+    GRAPHDEFINITIONLANGUAGE(unit/graphDefinitionLanguage/separateLanguages, 4)
+    GRAPHDEFINITIONLANGUAGE(unit/graphDefinitionLanguage/sameLanguageAmbiguous, 5)
+    GRAPHDEFINITIONLANGUAGE(unit/graphDefinitionLanguage/qualifiedPending, 6)
+    GRAPHDEFINITIONLANGUAGE(unit/graphDefinitionLanguage/qualifiedAlternativePending, 7)
+    GRAPHDEFINITIONLANGUAGE(unit/graphDefinitionLanguage/untaggedAmbiguous, 8)
+    GRAPHDEFINITIONLANGUAGE(unit/graphDefinitionLanguage/replay, 9)
+    GRAPHDEFINITIONLANGUAGE(unit/graphDefinitionLanguage/lateDefinition, 10)
+    GRAPHDEFINITIONLANGUAGE(unit/graphDefinitionLanguage/cancel, 11)
+    GRAPHDEFINITIONLANGUAGE(unit/graphDefinitionLanguage/cost, 12)
+    GRAPHDEFINITIONLANGUAGE(unit/graphDefinitionLanguage/isolatedLanguages, 13)
+    GRAPHDEFINITIONLANGUAGE(unit/graphDefinitionLanguage/publicEntry, 14)
+
+    me bool: graphDefinitionLanguageCase(me string: testName, me int: caseID) <- <%{
+        GraphNormalizer normalizer;normalizer.initForLanguage("en_US");
+        std::string declaration="{#digit <en>=*10+7}";
+        if(caseID==1) declaration="{#digit <en_US>=*10+7}";
+        if(caseID==2) declaration="{#digit <fr>=*10+9}";
+        if(caseID==3) declaration="{#digit <en_GB>=*10+9}";
+        if(caseID==4 || caseID==13) declaration="{#digit <fr>=*10+9 #digit <en>=*10+7}";
+        if(caseID==5) declaration="{#digit <en>=*10+7 #digit <en>=*10+8}";
+        if(caseID==6) declaration="{#digit <en name>=*10+7}";
+        if(caseID==7) declaration="{#digit <en>=*10+7 #digit <en name>=*10+8}";
+        if(caseID==8) declaration="{#digit=*10+8 #digit <en>=*10+7}";
+        if(caseID==10 || caseID==11) declaration="{}";
+        auto defs=graphParsed(testName,declaration);
+        auto original=toString(defs->pItem.get());
+        auto registered=normalizer.normalize(defs);registered.waitForCompletion();
+        auto target=graphParsed(testName,"digit");
+        auto handle=caseID==12 ? normalizer.normalizeWithCost(target,0) : normalizer.normalize(target);
+        handle.waitForCompletion();
+        bool known=caseID==0 || caseID==1 || caseID==4 || caseID==9 || caseID==13 || caseID==14;
+        bool passed=!registered.status().failed && !registered.status().symbolicValues && !handle.status().failed;
+        if(known) passed &= target->pItem->value->num==7 && target->pItem->infSize->num==10 && !handle.status().symbolicValues;
+        else passed &= getModeBits(target->pItem->value->flags,infonState::evalMode)==infonState::emUnknown &&
+            handle.status().symbolicValues && handle.status().withSubscribers;
+        if(caseID==9) {
+            auto repeated=normalizer.normalize(target);repeated.waitForCompletion();
+            passed &= !repeated.status().failed && !repeated.status().symbolicValues && graphTypeSetCount(repeated)==0 && target->pItem->wrkList.empty();
+        }
+        if(caseID==10 || caseID==11) {
+            if(caseID==11) handle.cancel();
+            auto later=normalizer.normalize(graphParsed(testName,"{#digit <en>=*10+7}"));later.waitForCompletion();handle.waitForCompletion();
+            if(caseID==10) passed &= !handle.status().symbolicValues && target->pItem->value->num==7;
+            else passed &= handle.status().cancelled && getModeBits(target->pItem->value->flags,infonState::evalMode)==infonState::emUnknown;
+        }
+        if(caseID==13) {
+            GraphNormalizer french;french.initForLanguage("fr_FR");
+            auto otherDefs=french.normalize(graphParsed(testName,declaration));otherDefs.waitForCompletion();
+            auto other=graphParsed(testName,"digit");auto otherHandle=french.normalize(other);otherHandle.waitForCompletion();
+            passed &= !otherHandle.status().failed && !otherHandle.status().symbolicValues && other->pItem->value->num==9 && target->pItem->value->num==7;
+            french.close();
+        }
+        if(caseID==14) {
+            GraphLifecycleCore core;core.init("",false);
+            auto language=core.agent->getLocaleBaseName();
+            core.query("{#digit <"+language+">=*10+7}",false);
+            auto answer=core.query("digit",false);
+            passed &= answer && answer->value->num==7 && getFlagBit(answer->flags,infonView::isNormed);
+            core.deInit();
+        }
+        passed &= original==toString(defs->pItem.get());
+        if(!passed) std::cout << "Definition language " << caseID << ": " << toString(target->pItem.get()) << " " << handle.status().error << "\n";
+        handle.cancel();registered.cancel();normalizer.close();return passed;
+    }%>
+    void: unitTestGraphDefinitionLanguage(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphDefinitionLanguageCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

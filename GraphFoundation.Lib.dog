@@ -38,16 +38,19 @@ struct GraphPublication: wraps=Proteus4Publication {}
 struct GraphNormalizer {
     me GraphRuntime: runtime
     our ProteusGraphAccess: access
-    void: init() <- <%{
+    void: init() <- {initForLanguage("")}
+    void: initForLanguage(me string: languageSpec) <- <%{
         if (access) throw std::logic_error("GraphNormalizer already initialized");
         access = std::make_shared<ProteusGraphAccess>();
         access->initialize();
+        access->initializeVocabulary(languageSpec);
         runtime.init(std::make_shared<proteus4::ProteusAccess>(access));
     }%>
     void: initWithRegistry(our IdentityRegistry: existing) <- <%{
         if (access || !existing) throw std::logic_error("new context and registry required");
         access = std::make_shared<ProteusGraphAccess>();
         access->registry = existing;
+        access->initializeVocabulary("");
         runtime.init(std::make_shared<proteus4::ProteusAccess>(access));
     }%>
     void: setContext(our POV: source) <- <%{
@@ -292,6 +295,14 @@ struct ProteusGraphAccess {
     their ProteusCore: replyCore
     our POV: contextSource  // The Agent topic-history POV; no copied context graph.
     our POV: worldSource    // Current world view, shared by world queries.
+    me vocabularySpec: vocabulary  // Fixed for this normalization context.
+    void: initializeVocabulary(me string: languageSpec) <- {
+        if(languageSpec==""){
+            me Locale: locale <- unicodeMgr.getSystemLocale()
+            languageSpec <- unicodeMgr.getLocaleBaseName(locale)
+        }
+        vocabulary.init(languageSpec)
+    }
 
     void: prepareInput(our infonView: inf) <- {
         inf!.streamState <- parseStarted; inf!.graphParseError <- ""
@@ -490,8 +501,18 @@ struct ProteusGraphAccess {
     me bool: isDefinition(our POV: pov) <- {return(pov!.pItem!.itmMode==mWordDefn)}
     me bool: definitionReady(our POV: pov) <- {
         return(isDefinition(pov) and !inputPending(pov) and pov!.pItem!.graphParseError=="" and
-               pov!.pItem!.definedWord!=NULL and pov!.pItem!.definedWord!.UsageTags.isEmpty() and
+               pov!.pItem!.definedWord!=NULL and
                pov!.pItem!.funcArgs!=NULL)
+    }
+    // The first usage tag is the language, using the same rule as ModelManager.
+    // Additional qualifiers need contextual meaning selection, not silent erasure.
+    me bool: definitionApplies(our POV: pov) <- {
+        if(!definitionReady(pov)){return(false)}
+        if(pov!.pItem!.definedWord!.UsageTags.isEmpty()){return(true)}
+        return(modelMngr.wordValidForLang(unicodeMgr.normalizeStr(pov!.pItem!.definedWord!.UsageTags[0]), vocabulary))
+    }
+    me bool: definitionSelectable(our POV: pov) <- {
+        return(definitionApplies(pov) and pov!.pItem!.definedWord!.UsageTags.size()<=1)
     }
     me string: definitionName(our POV: pov) <- {
         return(unicodeMgr.normalizeStr(pov!.pItem!.definedWord!.defWord))

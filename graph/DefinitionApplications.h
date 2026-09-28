@@ -128,7 +128,11 @@ public:
         }
         entries.push_back({node, access_->definitionBody(node)}); return true;
     }
-    bool declared(const std::string& name) const { return catalogue_.count(name)!=0; }
+    bool declared(const std::string& name) const {
+        auto found=catalogue_.find(name);
+        return found!=catalogue_.end() && std::any_of(found->second.begin(),found->second.end(),
+            [&](const Definition& entry) {return access_->definitionApplies(entry.declaration);});
+    }
     // Missing declarations impose no constraints. Type identity still exists;
     // an unavailable definition never equates distinct written types.
     bool optional(const POVNode& node) const {
@@ -137,10 +141,15 @@ public:
     }
     POVNode lookup(const std::string& name) const {
         auto found = catalogue_.find(name);
-        if (found == catalogue_.end() || found->second.size() != 1) return {};
-        const auto& entry = found->second.front();
-        if (access_->definitionName(entry.declaration) != name || !registered(entry.declaration)) return {};
-        return entry.body;
+        if (found == catalogue_.end()) return {};
+        POVNode selected;
+        for(const auto& entry:found->second) {
+            if(!access_->definitionApplies(entry.declaration)) continue;
+            if(selected || !access_->definitionSelectable(entry.declaration) ||
+               access_->definitionName(entry.declaration)!=name || !registered(entry.declaration)) return {};
+            selected=entry.body;
+        }
+        return selected;
     }
     POVNode repeatedBody(const POVNode& node) const { return memberTemplate(node); }
     // An untyped virtual position has no stored POV. One read-only unknown
