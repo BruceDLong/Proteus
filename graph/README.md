@@ -8,6 +8,11 @@ as its responsibilities move to the graph reasoner. Ordinary Agent normalization
 uses the graph reasoner. The AItem engine and its direct internal tests have
 been removed; see [aitem-cleanup-results.md](aitem-cleanup-results.md).
 
+Temporal `%tprev`/`%tnext` reads share structural neighbor traversal, with
+T-list context and nested T-span continuation. Lazy `.asTList` and `.cut`
+references expose support and cuts without choosing a clock or state count.
+See [temporal-context-results.md](temporal-context-results.md).
+
 Sequence correspondence propagates successful matches through the graph
 frontier and applies the first complete result. See
 [text-correspondence-notes.md](text-correspondence-notes.md) for fixed-width,

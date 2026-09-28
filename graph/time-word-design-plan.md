@@ -125,6 +125,28 @@ For a closed empty T-list `L = {T}`, `L.begin = L.end` identifies one boundary.
 An open T-list having no received members does not by itself establish that
 identity. If it closes empty, establish the shared begin/end boundary then.
 
+## Agreed state contexts and interior cuts
+
+In a T-context, `LHS[n+1] = RHS[n]` is the normal assignment reading:
+`LHS.current = RHS.prev`, equivalently `LHS.next = RHS.current`. These are
+relative evaluation contexts, not whole-occurrence or lifetime identities.
+An unchanged S-value can be reached from both sides of an interior cut. Those
+are two routes to the same value; the cut does not require copied states or a
+new transition. Equal values at different temporal occurrences still have
+distinct supports.
+
+The September 28 design note also distinguishes an instance lifetime from a
+state occurrence's support and a part-role interval. A part's lifetime may
+extend outside its role. Projections preserve their source, schema and support;
+a parent cut need not be a child state transition. These relationships extend
+the existing POV graph rather than requiring separate classes of graph nodes.
+General supported role/schema mapping remains a later implementation step.
+
+The initial graph implementation is described in
+[temporal-context-results.md](temporal-context-results.md). It implements
+explicit temporal value reads, symbolic support references, and interior cuts.
+It does not change word/context binding or infer persistence from omitted parts.
+
 ## 1. Agree on examples before adding time rules
 
 Use a one-page matrix of inputs, requested relations, expected identities and
@@ -208,9 +230,11 @@ not enumerate all combinations merely to estimate their cost.
 
 ## 6. Choose one narrow implementation slice together
 
-Recommended first discussion: the time example matrix, starting with boundary
-identity and nested tprev/tnext. After those contracts are agreed, implement
-boundaries, then temporal adjacency, with cost/cancellation/sparse/replay checks.
+Boundary identity, explicit nested temporal reads, symbolic support, and interior
+S-state cuts are now implemented with cost/cancellation/sparse/replay checks.
+The next temporal slice is a supported parent/part projection: one parent
+interval mapped to a child history containing several states, without creating
+child transitions at parent cuts. Reuse the source span and selection machinery.
 The word matrix can establish the name/value/reference distinction before
-implementing further name rules. Continue reporting old-suite failures and semantic ambiguities
-separately throughout.
+implementing further name rules. Continue reporting old-suite failures and
+semantic ambiguities separately throughout.

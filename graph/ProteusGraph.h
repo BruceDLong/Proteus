@@ -21,7 +21,7 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectionExtentMember = 20, selectionExtentEnd = 21,
               typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27,
               selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31,
-              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62, scalarCorrespondence = 63, placeArgument = 64, resolveEndpoint = 65, endpointPosition = 66, endpointFound = 67, resolveWord = 68, resolutionStep = 69, externalField = 70, externalPosition = 71, externalMatched = 72, externalUnknown = 73, externalEnd = 74, acquireListValue = 75, selectEnvironment = 76, recordCorrespondence = 77, sequenceChoiceMatched = 78, boundaryAccess = 79, boundaryRelations = 80, boundaryMember = 81, boundaryEnd = 82 };
+              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62, scalarCorrespondence = 63, placeArgument = 64, resolveEndpoint = 65, endpointPosition = 66, endpointFound = 67, resolveWord = 68, resolutionStep = 69, externalField = 70, externalPosition = 71, externalMatched = 72, externalUnknown = 73, externalEnd = 74, acquireListValue = 75, selectEnvironment = 76, recordCorrespondence = 77, sequenceChoiceMatched = 78, boundaryAccess = 79, boundaryRelations = 80, boundaryMember = 81, boundaryEnd = 82, temporalSupport = 83, temporalCut = 84, temporalSide = 85, temporalValueFound = 86 };
 
 inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
     auto phase = query.kind == correspondenceEnter ? ListPhase::enter :
@@ -36,6 +36,8 @@ inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
 #include "WordForms.h"
 #include "FieldPredicate.h"
 #include "BoundaryGraph.h"
+#include "RelativeNavigation.h"
+#include "TemporalGraph.h"
 #include "PathSelection.h"
 #include "Resolution.h"
 #include "DefinitionProjection.h"
@@ -53,6 +55,7 @@ class ProteusStreamEvidence {
     struct Guard {
         std::weak_ptr<POV> source;
         std::weak_ptr<infonState> body;
+        bool temporal=false;
     };
     using Key = std::weak_ptr<infonView>;
     std::map<Key, std::vector<Guard>, std::owner_less<Key>> guards_;
@@ -68,7 +71,9 @@ public:
     explicit ProteusStreamEvidence(std::shared_ptr<ProteusGraphAccess> access) : access_(std::move(access)) {}
     bool inherit(const POVNode& target, const POVNode& source) {
         bool changed = false;
-        if (access_->prefixList(source)) changed |= add(target, {source, source->pItem->value});
+        bool temporal=BoundaryGraph::temporal(source);
+        if (access_->prefixList(source) || (temporal && access_->growingList(source)))
+            changed |= add(target, {source, source->pItem->value,temporal});
         auto found = guards_.find(source->pItem);
         if (found != guards_.end()) {
             auto guards = found->second;
@@ -88,7 +93,8 @@ public:
         for (auto it = guards.begin(); it != guards.end();) {
             auto source = it->source.lock(); auto body = it->body.lock();
             if (!source || !body || source->pItem->value != body ||
-                !access_->spanList(source) || !access_->orderedList(source))
+                (!access_->spanList(source) && !(it->temporal && access_->growingList(source))) ||
+                !access_->orderedList(source) || (it->temporal && !BoundaryGraph::temporal(source)))
                 throw std::runtime_error("stream prefix assumption changed: ordered list body required");
             auto error = access_->inputError(source);
             if (!error.empty()) throw std::runtime_error(error);
@@ -690,6 +696,8 @@ public:
     void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); definitions_->prune(); }
     std::vector<std::function<void()>> takeEffects() override { return completion_->takeEffects(); }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
+        if(query.kind>=temporalSupport && query.kind<=temporalSide)
+            return std::make_shared<ProteusTemporalGoal>(query,access_);
         if(query.kind==boundaryAccess || query.kind==boundaryRelations)
             return std::make_shared<ProteusBoundaryGoal>(query,access_);
         if(query.kind==recordCorrespondence) return std::make_shared<ProteusRecordGoal>(query,access_,definitions_);
@@ -726,6 +734,8 @@ public:
         return std::make_shared<ProteusGoal>(query, access_, completion_, evidence_, definitions_);
     }
     Expansion<POVNode> expand(const Query<POVNode>& query) override {
+        if(query.kind>=temporalSupport && query.kind<=temporalValueFound) return TemporalGraph(access_).expand(query);
+        if(query.kind>=selectRelative && query.kind<=relativeBoundary) return RelativeNavigation(access_,definitions_).expand(query);
         if(query.kind>=boundaryAccess && query.kind<=boundaryEnd) return BoundaryGraph(access_).expand(query);
         if(query.kind==selectEnvironment) {
             Expansion<POVNode> out;
@@ -751,17 +761,6 @@ public:
         return result;
     }
 private:
-    void relativeStep(Expansion<POVNode>& result, const Query<POVNode>& query, ListPhase phase,
-                      Cost inspection = 0) {
-        if (phase == ListPhase::leave && query.node == query.related) { result.deferred = true; return; }
-        auto at = ListPosition<POVNode>{query.node, phase, query.context};
-        auto next = phase == ListPhase::enter ? nextListPosition(*access_, std::move(at), true, query.argument < 0) :
-                                               adjacentListPosition(*access_, std::move(at), true, query.argument < 0);
-        if (next.phase == ListPhase::done || next.phase == ListPhase::cycle) { result.deferred = true; return; }
-        auto kind = next.phase == ListPhase::member ? relativeMember : relativeBoundary;
-        auto edge = direct("logical neighbor step", {next.node, kind, query.argument, query.related, next.owners});
-        edge.work.visits += inspection; result.edges.push_back(std::move(edge));
-    }
     void boundaryNeeds(Expansion<POVNode>& result, const POVNode& node, const ListBoundary<POVNode>& boundary) {
         for (const auto& missing : boundary.missingExtents)
             result.refinements.push_back({{missing, sizeOnly, 0}, {boundary.visits, 0}, "find embedded extent", true});
@@ -818,55 +817,6 @@ private:
         }
         if (query.kind == itemFound || query.kind == listEnd || query.kind == correspondenceEnd || query.kind == concatEnd || query.kind == selectionFound)
             return result;
-        if (query.kind == selectRelative) {
-            if (!query.context.empty() && (!access_->definitionOrderedCandidate(query.context.back()) ||
-                access_->hasConcat(query.context.back(),1) || access_->hasConcat(query.context.back(),2))) {
-                result.deferred = true; return result;
-            }
-            result.edges.push_back(direct("relative occurrence", {query.related, relativeItem, query.argument, query.context.empty() ? POVNode{} : query.context.front(), query.context}));
-            return result;
-        }
-        if (query.kind == relativeItem) {
-            if (auto owner = definitions_->retainedOccurrenceOwner(node)) {
-                auto index = description.occurrenceIndex();
-                auto extent = access_->listExtent(owner);
-                if (index >= 0 && index < extent &&
-                    (query.argument < 0 ? index > 0 : index < extent - 1))
-                    result.edges.push_back(direct("relative sparse coordinate", {owner, itemAt, index + query.argument}));
-            } else relativeStep(result, query, ListPhase::leave);
-            return result;
-        }
-        if (query.kind == relativeMember || query.kind == relativeBoundary) {
-            if (query.kind == relativeMember && !access_->subList(node)) {
-                result.edges.push_back(direct("adjacent occurrence", {node, itemFound, 0})); return result;
-            }
-            if (!access_->navigationList(node)) {
-                result.refinements.push_back({{node, valueOnly, 0}, {1, 0}, "resolve navigation span", true});
-                result.deferred = true; return result;
-            }
-            // The known beginning of a span and a closed end need no extent
-            // scan. Open ends require evidence about the remaining positions.
-            if (!access_->openTail(node) || (query.kind == relativeMember && query.argument > 0 && description.member()) ||
-                (query.kind == relativeBoundary && query.argument < 0)) {
-                relativeStep(result, query, query.kind == relativeMember ? ListPhase::enter : ListPhase::leave);
-                return result;
-            }
-            auto boundary = listBoundary(*access_, node);
-            if (!boundary.valid) { result.deferred = true; return result; }
-            boundaryNeeds(result, node, boundary);
-            if (boundary.tail == 0) {
-                relativeStep(result, query, query.kind == relativeMember ? ListPhase::enter : ListPhase::leave, boundary.visits);
-            } else {
-                auto index = query.kind == relativeBoundary ? boundary.prefix :
-                             query.argument < 0 ? boundary.extent - 1 : 0;
-                if (index >= 0 && (boundary.extent < 0 || index < boundary.extent)) {
-                    auto edge = direct("open span position", {node, itemAt, index}, true);
-                    edge.work.visits += boundary.visits; result.edges.push_back(std::move(edge));
-                }
-                result.refinements.push_back({{node, valueOnly, 0}, {boundary.visits, 0}, "resolve open span boundary", true});
-            }
-            return result;
-        }
         if (query.kind == selectIntersection) {
             if (!access_->canSelect(node)) { result.deferred = true; return result; }
             if (auto index = access_->selectionIndex(node); index >= 0) {
@@ -1006,7 +956,7 @@ private:
             // Do not compare noncanonical scalar evidence while its local Set
             // is pending; that publication will expose the same edges again.
             if (access_->planNumericLiteral(node).changed) { result.deferred = true; return result; }
-            auto owners = access_->subList(node) ? query.context : std::vector<POVNode>{};
+            auto owners = (access_->subList(node) || BoundaryGraph::temporal(node)) ? query.context : std::vector<POVNode>{};
             if (!owners.empty()) owners.erase(owners.begin());
             if (access_->inputPending(node)) {
                 result.deferred = true;
@@ -1041,7 +991,7 @@ private:
             if (auto direction = access_->relativeDirection(node); direction && !selectedView) {
                 auto context = positions_->context(node, query.context, access_->registry.get());
                 auto anchor = context.front(); context.erase(context.begin());
-                result.refinements.push_back({{node, selectRelative, direction, anchor, context}, {0, 0},
+                result.refinements.push_back({{node, selectRelative, direction, anchor, context,{access_->temporalCursor(node) ? 1 : 0}}, {0, 0},
                     "resolve relative position", false});
             }
             // A member's missing facts can be supplied by its containing type

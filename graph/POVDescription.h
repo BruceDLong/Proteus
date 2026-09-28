@@ -12,10 +12,10 @@ public:
         // Work and replaceable result links live in POV structure. Permanent
         // identities retain the actual registry record and its provenance.
         std::shared_ptr<IdentityRelation> identity;
-        bool derived = false, consolidated = false;
+        bool derived = false, consolidated = false, valueOnly = false;
         bool isWork() const { return consolidated || (!identity && !derived); }
         const char* description() const {
-            return consolidated ? "consolidated equality" : identity ? "registry identity" : derived ? "selected result" : "work-list constraint";
+            return valueOnly ? "temporal value reference" : consolidated ? "consolidated equality" : identity ? "registry identity" : derived ? "selected result" : "work-list constraint";
         }
     };
 private:
@@ -45,6 +45,8 @@ public:
     const std::vector<POVNode>& work() const { return node_->pItem->wrkList; }
     std::vector<Relationship> relationships(bool includeWork = true) const {
         std::vector<Relationship> result;
+        if (includeWork && node_->pItem->temporalValueSource)
+            result.push_back({node_,node_->pItem->temporalValueSource,{},true,false,true});
         if (includeWork) for (const auto& rhs : work()) {
             // A published view borrows its source's header. Those RHSs still
             // belong to the source occurrence; the derived link exposes them

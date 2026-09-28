@@ -209,7 +209,7 @@ public:
         :access_(std::move(access)),definitions_(std::move(definitions)),navigate_(std::move(navigate)) {}
     Expansion<POVNode> expand(const Query<POVNode>& q) const {
         Expansion<POVNode> out;
-        if(q.kind==pathMatched && BoundaryGraph::direction(q.related)) return out;
+        if(q.kind==pathMatched && (BoundaryGraph::direction(q.related) || TemporalGraph::pathKind(q.related))) return out;
         if(q.kind>=filterChoice) return choice(q);
         if(q.kind==selectSelf) {
             out.edges.push_back(edge("retain path source",{q.node,pathSelfFound,0,q.related,{q.node}}));return out;
@@ -251,6 +251,15 @@ public:
                     auto next=q;next.node=field->result;
                     out.edges.push_back(edge("continue from selected path",std::move(next)));
                 }
+                return out;
+            }
+            if(q.kind==selectField) if(auto kind=TemporalGraph::pathKind(q.related)) {
+                TemporalGraph temporal(access_);auto owner=q.context.front();
+                out.refinements.push_back({{q.node,kind,0,owner},{1,0},"find temporal reference",false});
+                auto ref=kind==temporalCut ? temporal.split(owner) : nullptr;
+                auto selected=kind==temporalSupport ? temporal.support(q.node) : ref ? ref->symbolicCut : POVNode{};
+                if(selected) out.edges.push_back(edge("selected temporal reference",{selected,pathMatched,0,q.related,{q.node}}));
+                else out.deferred=true;
                 return out;
             }
             if(q.kind==selectField) if(auto direction=BoundaryGraph::direction(q.related)) {
@@ -344,7 +353,7 @@ class PathExpression {
         auto parts=syntax->parts;if(syntax->partRef) parts.push_back(syntax->partRef);
         for(const auto& part:parts) {
             auto kind=getModeBits(part->flags,PartPath::pathMode);
-            if(!seen.insert(part).second || !part->path || (kind!=PartPath::dotField && kind!=PartPath::idxField && kind!=PartPath::resolutionField && kind!=PartPath::upField) ||
+            if(!seen.insert(part).second || !part->path || (kind!=PartPath::dotField && kind!=PartPath::idxField && kind!=PartPath::resolutionField && kind!=PartPath::upField && kind!=PartPath::asTListField) ||
                (kind!=PartPath::idxField && (part->spec || part->continuation))) return false;
             auto continuation=tail(part);
             if(continuation && continuation->funcArgs) return false;
@@ -596,7 +605,7 @@ public:
             return {};
         }
         if(q.kind==pathSelfFound) q.kind=pathMatched;
-        if(request.kind==selectField && BoundaryGraph::direction(request.related) && q.kind==pathMatched) {
+        if(request.kind==selectField && (BoundaryGraph::direction(request.related) || TemporalGraph::pathKind(request.related)) && q.kind==pathMatched) {
             matches_={q.node};locations_[q.node]={q.node};return publish();
         }
         if(q.kind==pathMatched) {

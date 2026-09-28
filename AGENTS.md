@@ -20,6 +20,16 @@ are requested lazily through graph/BoundaryGraph.h and published with priced Set
 Keep occurrence identity separate from list position; do not merge adjacent null
 entries or expand sparse tails to discover boundaries. See graph/boundary-results.md.
 
+Temporal value references must not identify successive occurrences or their
+supports. `%tprev`/`%tnext` use RelativeNavigation's temporal policy; ordinary
+`%prev`/`%next` retain their structural boundary. An S-list is one temporal value;
+only nested T-lists and explicit embedded spans continue temporal navigation.
+TemporalGraph supplies symbolic support/cut goals. Reading either side of an
+interior S-state cut yields the same source value. A cut in a changing T-history
+stays unresolved until its location is known. Do not infer time duration from
+member count, expand sparse histories, or copy missing fields by persistence.
+See graph/temporal-context-results.md for the current implementation boundary.
+
 Current priority: make the existing test suites work before further context,
 T-list, or word-model redesign. If a test's intended semantics are ambiguous,
 record the exact fixture and question in graph/test-ambiguities.md and skip it

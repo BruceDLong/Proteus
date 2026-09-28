@@ -1,14 +1,17 @@
-# Older language compatibility, 2026-09-27
+# Older language compatibility, 2026-09-28
 
-The obsolete AItem engine has been removed. The source build and
-**1,091/1,091 registered graph tests** pass. All six older language suites retain
-exactly their previous individual statuses: **261 passed, 92 failed, and 8
-explicit ambiguity skips**, out of 361. No language fixture or expectation
-changed during this cleanup. See [aitem-cleanup-results.md](aitem-cleanup-results.md).
+Temporal context reads and symbolic support/cut goals are implemented. The
+source build and **1,127/1,127 registered graph tests** pass, including 36 new
+temporal checks. The older suites report **265 passed, 88 failed, and 8 explicit
+ambiguity skips**, out of 361. Four unchanged default fixtures now pass:
+`temporal/directTPrev`, `temporal/directTNext`, `temporal/nestedBoundaryPrev`, and
+`temporal/nestedBoundaryNext`. Every other individual status is unchanged.
+See [temporal-context-results.md](temporal-context-results.md).
 
 The preceding boundary increment introduced `NULL:<ID>` and universal
-`.begin`/`.end` access, with 26 graph tests. See
-[boundary-results.md](boundary-results.md).
+`.begin`/`.end` access; the subsequent cleanup removed the obsolete AItem
+engine. See [boundary-results.md](boundary-results.md) and
+[aitem-cleanup-results.md](aitem-cleanup-results.md).
 
 Named grammar choices and basic plural/text rules were recovered in the preceding
 increment; see [word-grammar-results.md](word-grammar-results.md).
@@ -27,7 +30,7 @@ Its old closed-result expectation was updated in that earlier increment.
 
 | Suite | Passing | Failing | Ambiguous skips | Total |
 |---|---:|---:|---:|---:|
-| `defaultTests.tst` | 243 | 17 | 8 | 268 |
+| `defaultTests.tst` | 247 | 13 | 8 | 268 |
 | `demoTests.tst` | 8 | 14 | 0 | 22 |
 | `sparseTests.tst` | 2 | 21 | 0 | 23 |
 | `timeTests.tst` | 4 | 32 | 0 | 36 |
@@ -136,9 +139,9 @@ resolved: unknown numeric sizes and subscribed open tails remain symbolic.
 
 The complete fixture status and input hashes are recorded in
 [language-compatibility-status.json](language-compatibility-status.json).
-Current language logs are in `/tmp/p4-aitem-language-final`; compiled logs are
-in `/tmp/p4-aitem-compiled-final`. The previous compiled baseline is preserved
-in `/tmp/p4-null-compiled-final`.
+Current language logs are in `/tmp/p4-temporal-language-final`; compiled logs
+are in `/tmp/p4-temporal-compiled-final`. The pre-change compiled baseline is
+preserved in `/tmp/p4-aitem-compiled-final`.
 
 ## Remaining work
 
