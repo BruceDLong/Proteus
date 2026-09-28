@@ -1,10 +1,13 @@
 # Older language compatibility, 2026-09-28
 
-Language-tagged definitions and partial sparse type headers are implemented.
-Full source builds and **1,156/1,156 registered graph tests** pass, including 29
-new definition checks. The compiled audit reports **1,206 pass / 8 existing fail**.
-The six older language suites remain **265 pass / 88 fail / 8 ambiguity skips**;
-every pre-existing status and fixture is unchanged. See
+Unordered definition composition and unique nominal record correspondence are
+implemented. Full source builds and **1,176/1,176 registered graph tests** pass,
+including 20 new record checks. The compiled audit reports **1,226 pass / 8
+existing fail**. The six older language suites remain **265 pass / 88 fail / 8
+ambiguity skips**; every pre-existing fixture status is unchanged. See
+[record-definition-results.md](record-definition-results.md).
+
+The preceding language-tag and sparse-header changes are documented in
 [definition-language-results.md](definition-language-results.md) and
 [definition-shape-results.md](definition-shape-results.md).
 
@@ -147,7 +150,8 @@ resolved: unknown numeric sizes and subscribed open tails remain symbolic.
 
 The complete fixture status and input hashes are recorded in
 [language-compatibility-status.json](language-compatibility-status.json).
-Current language and compiled logs are in `/tmp/p4-definition-final`.
+Current language and compiled logs are in `/tmp/p4-record-final`.
+The preceding definition results are in `/tmp/p4-definition-final`.
 The preceding results are in `/tmp/p4-temporal-language-final` and
 `/tmp/p4-temporal-compiled-final`. The pre-change compiled baseline is
 preserved in `/tmp/p4-aitem-compiled-final`.
@@ -156,7 +160,7 @@ preserved in `/tmp/p4-aitem-compiled-final`.
 
 Ambiguous crossing spans need additional placement evidence. General nested or
 contextual parent requirements remain beyond scalar field projection. Contextual
-type meaning, unordered structural correspondence, recursive grammars, fuller stream
+type meaning, unordered structural predicates and ambiguous correspondence, recursive grammars, fuller stream
 publication, and temporal operations retain their documented boundaries.
 Ambiguous writes also need the semantic decision tracked in
 [open-questions.md](open-questions.md).

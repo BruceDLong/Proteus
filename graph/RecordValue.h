@@ -2,7 +2,8 @@
 
 // Copy a supplied description into an unknown value using ordinary independent
 // member views and identities. Replay follows those same identities as source
-// parts arrive; it never pairs independently supplied fields by position/name.
+// parts arrive. Independent typed fields use unique nominal correspondence;
+// ambiguous matches wait for more distinguishing information.
 class ProteusRecordGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusDefinitions> definitions_;
@@ -29,14 +30,35 @@ public:
             throw DefinitionConflict("incompatible unordered value constraints");
         if(combined.hasSize && (combined.size<0 || combined.size.getDenominator()!=1 || combined.size<static_cast<std::int64_t>(right.size())))
             throw DefinitionConflict("unordered members exceed explicit extent");
-        if(!RecordStructure::pairs(*access_,left,right,paired,missing,work)) return {};
+        MemberCorrespondence mapping(left.size(),right.size(),[&](std::size_t a,std::size_t b) {
+            return access_->sameInfon(left[a],right[b]) || access_->hasDirectIdentity(left[a],right[b]);
+        },[&](std::size_t a,std::size_t b) {
+            if(!access_->hasTypeRequirements(right[b])) return ScalarMatch::unknown;
+            return compareNominal(*definitions_,right[b],left[a],work);
+        },work);
+        if(!mapping.unambiguous) return {};
+        for(auto index:mapping.missing) missing.push_back(right[index]);
+        if(combined.hasSize && combined.size<static_cast<std::int64_t>(left.size()+missing.size()))
+            throw DefinitionConflict("unordered members exceed explicit extent");
+        std::vector<std::shared_ptr<ProteusDefinitionPlan>> plans;
+        for(const auto& pair:mapping.pairs) {
+            auto lhs=left[pair.first],rhs=right[pair.second];
+            if(access_->sameInfon(lhs,rhs) || access_->hasDirectIdentity(lhs,rhs)) continue;
+            auto meaning=definitions_->describe(rhs,work);
+            if(!meaning) return {};
+            auto plan=std::make_shared<ProteusDefinitionPlan>(access_,lhs,meaning->requirement);
+            work.visits=addCost(work.visits,plan->work.visits);
+            work.creations=addCost(work.creations,plan->work.creations+1);
+            if(!plan->supported) return {};
+            plans.push_back(plan);paired.push_back({lhs,rhs});
+        }
         for(const auto& member:missing) if(!access_->canMakeMember(member)) return {};
         bool facts=!required.accepts(actual);
-        verified_=!adopt && !facts && missing.empty();
+        verified_=!adopt && !facts && missing.empty() && paired.empty();
         if(verified_) return {};
         work.creations=addCost(work.creations,2*missing.size()+static_cast<unsigned>(adopt));
         auto access=access_;
-        return {{"Set supplied record value",[access,target,source,adopt,required,missing] {
+        return {{"Set supplied record value",[access,target,source,adopt,required,missing,plans,paired] {
             bool changed=false;
             if(adopt) {
                 changed=access->adoptDefinitionList(target);
@@ -51,6 +73,11 @@ public:
                 }
             }
             changed=access->applyTypeFacts(target,required) || changed;
+            for(const auto& plan:plans) changed=plan->apply() || changed;
+            for(const auto& pair:paired) {
+                access->bind(pair.first);access->bind(pair.second);
+                access->registry->recordIdentity(pair.first,pair.second,iekListCorrespondence,0);changed=true;
+            }
             for(const auto& member:missing) {access->bind(member);access->appendTailMember(target,member);changed=true;}
             return changed;
         },work}};

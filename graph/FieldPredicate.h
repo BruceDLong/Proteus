@@ -99,8 +99,9 @@ class FieldPredicate {
             if(!meaning->requirement->choices.empty()) return {};
             if (meaning->requirement->list && std::any_of(specification->members.begin(),specification->members.end(),
                     [](const auto& member){return !member;})) return {};
-            try {specification=combineDefinitions(specification,meaning->requirement);}
+            try {specification=combineDefinitions(specification,meaning->requirement,work);}
             catch(const DefinitionConflict&) {conflict_=true;return {};}
+            catch(const DefinitionPending&) {return {};}
         }
         return specification;
     }
@@ -121,7 +122,7 @@ class FieldPredicate {
             if (!pair.first->list) continue;
             // Open and unordered structures need their own correspondence
             // proof. Never turn missing positions into successful omission.
-            if (!pair.second->list || pair.first->open || pair.second->open) {unknown=true;continue;}
+            if (!pair.second->list || pair.first->order!=uOrdered || pair.second->order!=uOrdered || pair.first->open || pair.second->open) {unknown=true;continue;}
             if (pair.first->members.size()!=pair.second->members.size()) return ScalarMatch::no;
             for (std::size_t i=0;i<pair.first->members.size();++i)
                 pending.push_back({pair.first->members[i],pair.second->members[i]});

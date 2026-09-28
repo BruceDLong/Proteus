@@ -2,7 +2,7 @@
 
 // Supplied unordered parts have no positional correspondence. An existing
 // identity can pair members without inventing an ordering or equating names.
-// Independently supplied members still need a semantic matching plan.
+// Nominal correspondence is planned separately before publishing identities.
 struct RecordStructure {
     static bool record(ProteusGraphAccess& access,const POVNode& node) {
         return access.physicalList(node) && node->pItem->orderMode==uUnordered;
@@ -24,19 +24,12 @@ struct RecordStructure {
     static bool pairs(ProteusGraphAccess& access,const std::vector<POVNode>& left,
                       const std::vector<POVNode>& right,std::vector<std::pair<POVNode,POVNode>>& paired,
                       std::vector<POVNode>& missing,Work& work) {
-        std::set<POVNode> used;
-        for(const auto& source:right) {
-            POVNode match;
-            for(const auto& target:left) {
-                ++work.visits;
-                if(access.sameInfon(target,source) || access.hasDirectIdentity(target,source)) {
-                    if(match || used.count(target)) return false;
-                    match=target;
-                }
-            }
-            if(match) {used.insert(match);paired.push_back({match,source});}
-            else missing.push_back(source);
-        }
-        return used.size()==left.size();
+        MemberCorrespondence mapping(left.size(),right.size(),[&](std::size_t a,std::size_t b) {
+            return access.sameInfon(left[a],right[b]) || access.hasDirectIdentity(left[a],right[b]);
+        },[](std::size_t,std::size_t){return ScalarMatch::no;},work);
+        if(!mapping.unambiguous) return false;
+        for(const auto& pair:mapping.pairs) paired.push_back({left[pair.first],right[pair.second]});
+        for(auto index:mapping.missing) missing.push_back(right[index]);
+        return true;
     }
 };

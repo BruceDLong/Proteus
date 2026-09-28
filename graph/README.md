@@ -38,6 +38,10 @@ symbolic alternatives, subscriptions, and validation.
 
 Strict oneOf equalities now reuse the candidate matcher and result publisher;
 see [choice-constraint-results.md](choice-constraint-results.md).
+Unordered definition bodies and independently supplied record fields share unique
+nominal correspondence, with atomic plans and retained identities. See
+[record-definition-results.md](record-definition-results.md) for partial-description
+semantics, validation, and the remaining ambiguous and mixed-order cases.
 Partial typed descriptions and retained parents are covered in
 [partial-type-results.md](partial-type-results.md); contained open spans use the
 shared planner described in [open-span-correspondence-results.md](open-span-correspondence-results.md).

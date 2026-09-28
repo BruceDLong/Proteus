@@ -29,6 +29,7 @@ inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
     return {query.node, phase, query.context};
 }
 
+#include "MemberCorrespondence.h"
 #include "DefinitionApplications.h"
 #include "ScalarPredicate.h"
 #include "RecordStructure.h"

@@ -63,6 +63,13 @@ pending. This is a partial priced Set, not a type certificate: do not mark it
 isNormed, expand virtual members, or mutate the shared template to make printing
 match. See graph/definition-shape-results.md.
 
+Unordered definition bodies and supplied record RHSs share unique nominal
+correspondence. Existing identities take precedence; duplicate-type or unknown
+matches stay pending. Plan all member checks before publishing values or
+identities. Unordered extents remain unknown unless explicitly given. Preserve
+partial descriptions inside definitions as well as directly supplied instances.
+See graph/record-definition-results.md for supported composition and boundaries.
+
 Current checkpoint: scalar/finite definitions, lazy member templates, and
 fixed-width whole-list grouping use graph requirements and priced plans.
 Empty open definition bodies retain virtual positions; their known extent

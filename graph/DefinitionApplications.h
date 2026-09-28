@@ -13,7 +13,7 @@ public:
         GraphTypeFacts facts;
         std::vector<std::string> names;
         std::vector<POVNode> work, members;
-        bool list = false, embedded = false, open = false;
+        bool list = false, embedded = false, open = false, ordered = true;
         POVNode memberTemplate, choiceBody;
     };
     struct Evidence {
@@ -25,6 +25,7 @@ public:
         std::shared_ptr<Evidence> evidence = std::make_shared<Evidence>();
         DefinitionSpec requirement;
         bool compilable = true;
+        Work composition{0,0};
     };
     using Certificate = std::shared_ptr<Proof>;
 private:
@@ -46,7 +47,7 @@ private:
     POVNode memberTemplate(const POVNode& node) const { return view(access_->memberTemplate(node)); }
     POVNode occurrenceOwner(const POVNode& node) const { return view(access_->occurrenceOwner(node)); }
     bool listRequirement(const POVNode& node) const {
-        return access_->positionalDefinitionList(node) || access_->repeatedDefinitionList(node);
+        return access_->positionalDefinitionList(node) || access_->repeatedDefinitionList(node) || access_->recordDefinitionList(node);
     }
     // Admitted requirements are context-free. Contextual meanings will need a
     // binding-context key; an additional POV alone must not repeat application.
@@ -210,7 +211,7 @@ public:
         auto add = [&](const POVNode& child) {
             if (std::find(result.begin(), result.end(), child) == result.end()) result.push_back(child);
         };
-        for (const auto& name : names(node)) {
+        if(node==root || !describesParts(node)) for (const auto& name : names(node)) {
             auto body = lookup(name);
             if (body) add(body);
             else if (declared(name)) return false;
@@ -232,11 +233,11 @@ public:
         }
         if (node == root || proof->evidence->witnesses.count(node)) return;
         proof->evidence->witnesses.emplace(node, Witness{node, node->pItem, facts(node),
-            names(node), work(node), members(node), listRequirement(node), access_->definitionEmbedded(node), access_->openTail(node), memberTemplate(node), choiceBody(node)});
+            names(node), work(node), members(node), listRequirement(node), access_->definitionEmbedded(node), access_->openTail(node), node->pItem->orderMode!=uUnordered, memberTemplate(node), choiceBody(node)});
     }
     // The graph's leave edge supplies postorder: every required child has
     // already been walked. Compile requirements, never execute child normalize.
-    void finish(const POVNode& node, const POVNode& root, const Certificate& proof) {
+    void finish(const POVNode& node, const POVNode& root, const Certificate& proof) try {
         if (!proof->compilable) return;
         auto& compiled = proof->evidence->compiled;
         auto requirement = std::make_shared<DefinitionRequirement>();
@@ -247,7 +248,8 @@ public:
         if (node != root) {
             auto& witness = proof->evidence->witnesses.at(node);
             requirement->facts = witness.facts;
-            requirement->list = witness.list; requirement->open = witness.list && witness.open;
+            requirement->list = witness.list; requirement->order=witness.ordered ? uOrdered : uUnordered;
+            requirement->open = witness.list && (witness.open || !witness.ordered);
             if(witness.choiceBody) {
                 DefinitionRequirement::Choice choice;choice.source=node;
                 for(const auto& member:witness.members) choice.alternatives.push_back(compiled.at(member));
@@ -277,21 +279,21 @@ public:
             repeated->list = true; repeated->open = true; repeated->repeated = compiled.at(source); repeated->templateSource = source;
             // A local member template constrains each present part without
             // turning an explicitly unordered collection into an ordered one.
-            repeated->ordered=node!=root;
+            repeated->order=node!=root ? uOrdered : uUnknown;
             // An open body denotes repeated positions, not an empty finite list.
             if (node != root && access_->repeatedDefinitionList(node)) {
                 requirement->repeated = repeated->repeated; requirement->templateSource = source;
-            } else requirement = combineDefinitions(requirement, repeated);
+            } else requirement = combineDefinitions(requirement, repeated,proof->composition);
         }
         if (node == root) if (auto owner = occurrenceOwner(node)) {
             auto repeated = compiled.at(owner)->repeated;
             if (!repeated) { proof->compilable = false; return; }
-            requirement = combineDefinitions(requirement, repeated);
+            requirement = combineDefinitions(requirement, repeated,proof->composition);
         }
-        for (const auto& name : names(node))
-            if (auto body=lookup(name)) requirement = combineDefinitions(requirement, compiled.at(body));
+        if(node==root || !describesParts(node)) for (const auto& name : names(node))
+            if (auto body=lookup(name)) requirement = combineDefinitions(requirement, compiled.at(body),proof->composition);
         if (node != root)
-            for (auto rhs : work(node)) requirement = combineDefinitions(requirement, compiled.at(rhs));
+            for (auto rhs : work(node)) requirement = combineDefinitions(requirement, compiled.at(rhs),proof->composition);
         compiled[node] = requirement;
         if (node == root) {
             proof->requirement = requirement;
@@ -299,7 +301,7 @@ public:
             // weak-keyed certificate cache after the walk finishes.
             compiled.clear();
         }
-    }
+    } catch(const DefinitionPending&) {proof->compilable=false;}
     // Compile one selected declaration subtree, including its written facts.
     // A null instance root lets the existing compiler treat every visited POV
     // as read-only source data. Unselected siblings are never compiled.
@@ -317,6 +319,7 @@ public:
             collect(node,{},proof);pending.push_back({node,true});
             for(auto i=next.rbegin();i!=next.rend();++i) pending.push_back({*i,false});
         }
+        work.visits=addCost(work.visits,proof->composition.visits);
         proof->requirement=proof->evidence->compiled.at(source);
         proof->evidence->compiled.clear();return proof;
     }
@@ -330,6 +333,7 @@ public:
                 witness.names != names(witness.node) || witness.work != work(witness.node) ||
                 witness.list != listRequirement(witness.node) || witness.members != members(witness.node) ||
                 witness.embedded != access_->definitionEmbedded(witness.node) || witness.open != access_->openTail(witness.node) ||
+                witness.ordered != (witness.node->pItem->orderMode!=uUnordered) ||
                 witness.memberTemplate != memberTemplate(witness.node) || witness.choiceBody!=choiceBody(witness.node) || !POVDescription(witness.node, access_->registry.get()).relationships(false).empty()) return false;
         }
         return true;
@@ -526,10 +530,11 @@ public:
             auto definitions = definitions_; auto target = request.node;
             return {{"Record read-only type meaning", [definitions, target, certificate] {
                 return definitions->remember(target, certificate);
-            }, {1, 0}}};
+            }, {entry ? 1 : addCost(1,certificate->composition.visits), 0}}};
         }
         auto plan = definitions_->plan(request.node, certificate);
         if (!plan || !plan->supported) return {};
+        if(!entry) plan->work.visits=addCost(plan->work.visits,certificate->composition.visits);
         auto definitions = definitions_; auto target = request.node;
         return {{certificate->requirement->repeated ? "Apply repeated member requirements" :
             certificate->requirement->list ? "Apply finite list type requirements" : "Apply scalar type requirements",

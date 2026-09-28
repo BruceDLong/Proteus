@@ -7,6 +7,9 @@ public:
     using GoalRejected::GoalRejected;
 };
 
+// An unsupported or ambiguous conjunction is not a contradiction.
+class DefinitionPending : public std::exception {};
+
 // Compiled requirements are certificate data, not graph nodes. Their source
 // graph is walked through existing POVs before any instance Set is offered.
 struct DefinitionRequirement {
@@ -15,7 +18,8 @@ struct DefinitionRequirement {
     // An open requirement may carry a proved prefix with an unresolved tail.
     // Compiling prefixed/embedded virtual definitions remains a separate
     // obligation from publishing a sequence proof's explicit members.
-    bool list = false, open = false, ordered = true;
+    bool list = false, open = false;
+    int order = uOrdered; // a local member template can leave container order unspecified
     std::vector<std::shared_ptr<DefinitionRequirement>> members;
     // A homogeneous constraint on each occurrence, not N copied positions.
     std::shared_ptr<DefinitionRequirement> repeated;
@@ -57,7 +61,7 @@ struct DefinitionRequirement {
 };
 using DefinitionSpec = std::shared_ptr<DefinitionRequirement>;
 
-inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const DefinitionSpec& right) {
+inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const DefinitionSpec& right, Work& work) {
     auto result = std::make_shared<DefinitionRequirement>(*left);
     if (!result->facts.combine(right->facts))
         throw DefinitionConflict("incompatible definition requirements");
@@ -74,10 +78,22 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
     std::sort(result->types.begin(), result->types.end());
     if (result->label.empty()) {result->label = right->label;result->writtenType=right->writtenType;}
     if (result->list && right->list) {
-        result->ordered=result->ordered || right->ordered;
-        if (result->open && right->open) {
+        if(result->order==uUnknown) result->order=right->order;
+        else if(right->order!=uUnknown && result->order!=right->order) throw DefinitionPending{};
+        if(result->order==uUnordered) {
+            if(result->repeated || right->repeated) throw DefinitionPending{};
+            MemberCorrespondence mapping(result->members.size(),right->members.size(),
+                [](std::size_t,std::size_t){return false;},[&](std::size_t a,std::size_t b) {
+                    const auto& x=result->members[a];const auto& y=right->members[b];
+                    if(x->label.empty() || y->label.empty()) return ScalarMatch::unknown;
+                    return compareNominal(y->label,y->types,x->label,x->types);
+                },work);
+            if(!mapping.unambiguous) throw DefinitionPending{};
+            for(const auto& pair:mapping.pairs) result->members[pair.first]=combineDefinitions(result->members[pair.first],right->members[pair.second],work);
+            for(auto member:mapping.missing) result->members.push_back(right->members[member]);
+        } else if (result->open && right->open) {
             if (result->repeated && right->repeated)
-                result->repeated = combineDefinitions(result->repeated, right->repeated);
+                result->repeated = combineDefinitions(result->repeated, right->repeated,work);
             else if (right->repeated) {
                 result->repeated = right->repeated; result->templateSource = right->templateSource;
             }
@@ -85,16 +101,16 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
             auto repeated = result->open ? result->repeated : right->repeated;
             auto finite = result->open ? right : result;
             result->members = finite->members;
-            if (repeated) for (auto& member : result->members) member = combineDefinitions(member, repeated);
+            if (repeated) for (auto& member : result->members) member = combineDefinitions(member, repeated,work);
             result->open = false; result->repeated.reset(); result->templateSource.reset();
         } else {
             if (result->members.size() != right->members.size())
                 throw DefinitionConflict("incompatible finite definition lengths");
             for (std::size_t i = 0; i < result->members.size(); ++i)
-                result->members[i] = combineDefinitions(result->members[i], right->members[i]);
+                result->members[i] = combineDefinitions(result->members[i], right->members[i],work);
         }
     } else if (right->list) {
-        result->list = true; result->ordered=right->ordered; result->open = right->open; result->members = right->members;
+        result->list = true; result->order=right->order; result->open = right->open; result->members = right->members;
         result->repeated = right->repeated; result->templateSource = right->templateSource;
     }
     if (result->list && !result->memberLayout().valid)
@@ -104,7 +120,7 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
 
 inline bool sameDefinition(const DefinitionSpec& a, const DefinitionSpec& b) {
     if (a == b) return true;
-    if (!a || !b || a->list != b->list || a->open != b->open || a->ordered!=b->ordered || !a->facts.same(b->facts) || !a->numeric.same(b->numeric) ||
+    if (!a || !b || a->list != b->list || a->open != b->open || a->order!=b->order || !a->facts.same(b->facts) || !a->numeric.same(b->numeric) ||
         a->types != b->types || a->members.size() != b->members.size() || a->choices.size()!=b->choices.size() ||
         !sameDefinition(a->repeated, b->repeated)) return false;
     for(std::size_t i=0;i<a->choices.size();++i) {
@@ -173,7 +189,7 @@ private:
         bool open = adopt || access->openTail(target->node);
         std::vector<POVNode> members;
         if (!adopt) {
-            if ((requirement->ordered && !access->definitionOrderedCandidate(target->node)) ||
+            if ((requirement->order==uOrdered && !access->definitionOrderedCandidate(target->node)) ||
                 (!access->physicalList(target->node) && !access->templatePrefixList(target->node))) {
                 supported = false; return;
             }
@@ -214,6 +230,53 @@ private:
             return access->finishTail(target->node, true, 0);
         });
         for (const auto& member : members) prepare(place(member), requirement->repeated);
+    }
+    void prepareRecord(const Place& target,const DefinitionSpec& requirement,const GraphTypeFacts& actual) {
+        auto access=access_;
+        // Unnamed/duplicate descriptions need richer disambiguating predicates.
+        for(std::size_t i=0;i<requirement->members.size();++i) {
+            const auto& member=requirement->members[i];
+            if(member->label.empty()) {supported=false;return;}
+            for(std::size_t j=0;j<i;++j) {
+                ++work.visits;
+                if(compareNominal(member->label,member->types,requirement->members[j]->label,requirement->members[j]->types)==ScalarMatch::yes) {
+                    supported=false;return;
+                }
+            }
+        }
+        bool adopt=!target->node || access->adoptableList(target->node);
+        std::vector<POVNode> present;
+        if(!adopt) {
+            if(!access->physicalList(target->node)) {supported=false;return;}
+            for(auto member=POVDescription(target->node).member();member;member=POVDescription(member).adjacent()) {
+                ++work.visits;
+                if(access->subList(member)) {supported=false;return;}
+                present.push_back(member);
+            }
+        }
+        MemberCorrespondence mapping(present.size(),requirement->members.size(),
+            [](std::size_t,std::size_t){return false;},[&](std::size_t a,std::size_t b) {
+                const auto& member=requirement->members[b];auto names=access->typeNames(present[a]);
+                std::vector<std::string> types(names.begin(),names.end());
+                return compareNominal(member->label,member->types,types.empty() ? "" : types.front(),types);
+            },work);
+        if(!mapping.unambiguous || (!adopt && !mapping.missing.empty())) {supported=false;return;}
+        if(adopt) writes.push_back([access,target] {
+            bool changed=access->adoptDefinitionList(target->node);
+            target->node->pItem->orderMode=uUnordered;
+            SetFlagBit(target->node->pItem->value->flags,infonState::tailUnfinished,false);
+            return changed;
+        });
+        if(!requirement->facts.accepts(actual)) writes.push_back([access,target,requirement] {
+            return access->applyTypeFacts(target->node,requirement->facts);
+        });
+        for(const auto& pair:mapping.pairs) prepare(place(present[pair.first]),requirement->members[pair.second]);
+        for(auto index:mapping.missing) {
+            auto member=std::make_shared<Slot>();auto spec=requirement->members[index];
+            work.creations=addCost(work.creations,2);
+            writes.push_back([access,target,member,spec] {member->node=spec->appendMember(*access,target->node);return true;});
+            prepare(member,spec);
+        }
     }
     void prepare(const Place& target, const DefinitionSpec& requirement) {
         if (!supported) return;
@@ -283,6 +346,7 @@ private:
             plannedLists_.push_back(infon);
         }
         if (requirement->repeated) { prepareRepeated(target, requirement, actual); return; }
+        if (requirement->order==uUnordered) {prepareRecord(target,requirement,actual);return;}
         SpanLayout<Position> left, right;
         if (!target->node || access_->adoptableList(target->node)) {
             writes.push_back([access, target] { return access->adoptDefinitionList(target->node); });
