@@ -78,6 +78,12 @@ public:
         if(registry_) registry_->collectExternalAssociationsForAnchor(node_,type,&result);
         return result;
     }
+    std::shared_ptr<BoundaryReference> boundaryReference() const {
+        if(!registry_) return {};
+        std::lock_guard<std::mutex> lock(registry_->registryMutex);
+        auto found=registry_->boundaries.find(node_);
+        return found==registry_->boundaries.end() ? nullptr : found->second;
+    }
     std::shared_ptr<EndRelativeReference> endReference() const {
         if(!registry_) return {};
         std::lock_guard<std::mutex> lock(registry_->registryMutex);

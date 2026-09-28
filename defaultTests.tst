@@ -260,10 +260,10 @@ slice/sugar,           Select sugar,                   {1 2 3 4 5 6 7 8 9 0}@[3:
 lang/splitText,        Split English text,             {english-text:"Whoever says they can't is right"},                      {english-phrase:{Whoever says they can't is right}}, norm
 temp/t1,               Merge many idents,              _=_=321,                                                                321,                            norm
 time/t2,               Simple T-infon,                 *5+{T *256+_ = (*256+3) | 1 ...},                                       {T 1 *256+3 *256+3 *256+3 *256+3}, norm
-temporal/beginBoundary, Temporal begin is the null value at cut zero, {T 1 2}.begin,                                           0,                              norm
-temporal/endBoundary, Temporal end is the null value at the exact extent, {T 1 2}.end,                                        0,                              norm
-temporal/namedBoundaries, Named T-list boundaries resolve after definition lookup, {#timeline={T 1 2}}\ntimeline.begin//:0\ntimeline.end//:0,                   -,                              multi
-temporal/sBeginField, S-list begin remains an ordinary named field, {#begin=_}\n{begin:7}.begin//:begin:7,                                      -,                              multi
+temporal/beginBoundary, Identity-bearing null at the T-list beginning, {T 1 2}.begin, NULL:1, norm
+temporal/endBoundary, Identity-bearing null at the eventual T-list end, {T 1 2}.end, NULL:1, norm
+temporal/namedBoundaries, Named infon boundaries exist without resolving its definition, {#timeline={T 1 2}}\ntimeline.begin//:NULL:1\ntimeline.end//:NULL:2, -, multi
+temporal/sBeginField, S-list boundary access also applies when it contains a begin-typed member, {#begin=_}\n{begin:7}.begin//:NULL:1, -, multi
 temporal/identityCarriesT, List identity retains T context, {1 2} = {T 1 2},                                                   {T 1 2},                        norm
 temporal/openShapeCarriesT, Open list identity retains T context, {1 2} = {T _ | ...},                                        {T 1 2},                        norm
 temporal/definitionCarriesT, Definition-backed list retains T context, {#timeline = {T _ | ...}}\ntimeline:{1 2}//:timeline:{T 1 2}, -, multi

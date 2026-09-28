@@ -11,7 +11,14 @@ correspondence, preserving shared definitions and accepting the first complete
 parse. WordForms.h owns collection-type inference and the small English-text
 splitter; these are not general word/context interpretation. Arithmetic operands
 must not borrow a list occurrence for %prev/%next. See graph/word-grammar-results.md
-and the discussion-only graph/time-word-design-plan.md.
+and graph/time-word-design-plan.md for the remaining design discussion.
+
+Nulls use known size/value zero with value overlay tUnknown, printed as NULL:
+or NULL:<positive scoped ID>. Bare NULL remains a word. Every infon has begin/end;
+only T-list composition currently equates adjoining boundaries. Boundary nodes
+are requested lazily through graph/BoundaryGraph.h and published with priced Sets.
+Keep occurrence identity separate from list position; do not merge adjacent null
+entries or expand sparse tails to discover boundaries. See graph/boundary-results.md.
 
 Current priority: make the existing test suites work before further context,
 T-list, or word-model redesign. If a test's intended semantics are ambiguous,

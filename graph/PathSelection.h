@@ -209,6 +209,7 @@ public:
         :access_(std::move(access)),definitions_(std::move(definitions)),navigate_(std::move(navigate)) {}
     Expansion<POVNode> expand(const Query<POVNode>& q) const {
         Expansion<POVNode> out;
+        if(q.kind==pathMatched && BoundaryGraph::direction(q.related)) return out;
         if(q.kind>=filterChoice) return choice(q);
         if(q.kind==selectSelf) {
             out.edges.push_back(edge("retain path source",{q.node,pathSelfFound,0,q.related,{q.node}}));return out;
@@ -243,9 +244,20 @@ public:
                 if(!field->updates.empty())
                     out.refinements.push_back({{q.node,relationshipConstraints,0},{1,0},"apply preceding path constraints",false});
                 if (field->result) {
+                    if(q.kind==selectField && BoundaryGraph::direction(q.related))
+                        for(const auto& location:field->locations) if(location.source==field->result)
+                            for(const auto& owner:location.context) if(owner!=field->result && BoundaryGraph::temporal(owner))
+                                out.refinements.push_back({{owner,boundaryRelations,0},{1,0},"boundary in selected occurrence context",false});
                     auto next=q;next.node=field->result;
                     out.edges.push_back(edge("continue from selected path",std::move(next)));
                 }
+                return out;
+            }
+            if(q.kind==selectField) if(auto direction=BoundaryGraph::direction(q.related)) {
+                BoundaryGraph boundaries(access_);
+                out.refinements.push_back({{q.node,boundaryAccess,direction},{1,0},"find infon boundary",false});
+                if(auto boundary=boundaries.lookup(q.node,direction>0))
+                    out.edges.push_back(edge("selected infon boundary",{boundary,pathMatched,0,q.related,{q.node}}));
                 return out;
             }
             if(q.node->pItem->isOrLike()) {
@@ -584,6 +596,9 @@ public:
             return {};
         }
         if(q.kind==pathSelfFound) q.kind=pathMatched;
+        if(request.kind==selectField && BoundaryGraph::direction(request.related) && q.kind==pathMatched) {
+            matches_={q.node};locations_[q.node]={q.node};return publish();
+        }
         if(q.kind==pathMatched) {
             std::vector<POVNode> location{q.node};
             auto offset=q.coordinates.empty() ? 1 : 3;

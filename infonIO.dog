@@ -55,6 +55,31 @@ struct ProteusParser{
     me int64: errorSuppressDepth
 
     me GraphPublication: publication
+    flag: independentIdentities
+    our InfonIdentityScope: localIdentityScope
+
+    our InfonIdentity: parseNullIdentity(me string: digits, me int64: pos) <- <%{
+        std::uint64_t id=0;
+        for(char digit:digits) {
+            if(id>(std::uint64_t(INT64_MAX)-(digit-'0'))/10) {
+                setError("Null identity ID exceeds positive int64",pos);return {};
+            }
+            id=id*10+(digit-'0');
+        }
+        if(!id) {setError("Null identity ID must be positive",pos);return {};}
+        return parseIdentity(id);
+    }%>
+    our InfonIdentity: parseIdentity(me uint64: id) <- {
+        if(CORE!=NULL and CORE!.agent!=NULL and !independentIdentities){
+            return(CORE!.agent!.identityRegistry!.occurrenceScope.claim(id))
+        }
+        if(localIdentityScope==NULL){Allocate(localIdentityScope)}
+        our InfonIdentity: token <- localIdentityScope!.claim(id)
+        if(CORE!=NULL and CORE!.agent!=NULL){
+            return(CORE!.agent!.identityRegistry!.occurrenceScope.importIdentity(token))
+        }
+        return(token)
+    }
 
     // Parser state is protected while parsing; input may block outside that
     // lock so completed siblings can normalize and deliver replies.
@@ -257,7 +282,7 @@ struct ProteusParser{
         if(waitingForBuffer(cPos)){return(valid_notDone)}
         our strBufItr: txtItr <- input_getItrAt(cPos)
         withEach i in range 0 .. len{
-            if(txtItr == NULL or txtItr!.status!=bfOK){return(other_error)}
+            if(txtItr == NULL or txtItr!.status!=bfOK){return(syntax_error)}
             if(txtItr!.ch() != str[i]){return(syntax_error)}
             cPos <+- 1
             if(i==len-1){break()}
@@ -640,6 +665,14 @@ struct ProteusParser{
         me int64: cPos <- pos
         me ppStatus: status
         me char: peek; WCHK_PEEK(cPos,valid_notDone)
+        me int64: nullPos <- cPos
+        me ppStatus: nullStatus <- preChkStr(nullPos, "NULL:")
+        if(nullStatus==valid_done){
+            cPos <- nullPos
+            WCHK_PEEK(cPos,valid_maybeDone)
+            while(isdigit(peek)) {cPos <+- 1; WCHK_PEEK(cPos,valid_maybeDone)}
+            pos! <- cPos; return(valid_done)
+        }
         if(chkPeek(cPos, peek, "?"))         {pos! <- cPos; return(valid_done)}
         else if(chkPeek(cPos, peek, "%"))    {
             CHK_PEEK(cPos,valid_notDone)
@@ -693,6 +726,10 @@ struct ProteusParser{
         }
         return(valid_done)
     }
+    me bool: preCheckNullStart(me int64: pos) <- {
+        me int64: end <- pos
+        return(preChkStr(end, "NULL:")==valid_done)
+    }
     me ppStatus: preCheckInfonView(their int64: pos, me bool: allowIDs, me parseContext: prsCtxt) <- {
         me int64: cPos <- pos
         me ppStatus: status
@@ -707,6 +744,9 @@ struct ProteusParser{
             }
             fetchInnerInfon <- false
             WCHK_PEEK(cPos,valid_done)
+        }
+        else if(peek=="N" and preCheckNullStart(cPos)){
+            // Leave the reserved token for the inner-infon checker.
         }
         else if(statusOK(checkUniID(cPos), status)){
             WCHK_PEEK(cPos,valid_maybeDone)
@@ -1226,7 +1266,20 @@ struct ProteusParser{
         me int64: len
 
         me char: peek <- input_at(cPos)
-        if(chkPeek(cPos, peek, "?")){
+        if(chkStr(cPos, "NULL:")){
+            infn!.setToNull()
+            // The optional ID is contiguous with the colon. Whitespace starts
+            // the next list item, so {NULL: 42} contains two members.
+            me string: digits
+            while(isdigit(input_at(cPos))){digits <+- input_at(cPos); cPos <+- 1}
+            if(digits!=""){
+                infn!.identityName <- parseNullIdentity(digits, cPos-digits.size())
+                if(errorSet){return(-1)}
+            }
+            me char: nextChar <- input_at(cPos)
+            if(nextChar=="-") {setError("Null identity ID must be positive",cPos);return(-1)}
+        } else if(chkPeek(cPos, peek, "?")){
+            infn!.value!.overlayType <- tUnknown
             infn!.viewMode        <- vmAny
             infn!.value!.evalMode   <- emUnknown
             infn!.infSize!.evalMode <- emUnknown
@@ -1343,13 +1396,14 @@ struct ProteusParser{
         // WordUse:type
 //  change to scrapeWordType()
         me bool: wordsFound <- false
-        if(fetchInnerInfon){wordsFound <- chk(input_scrapeUniID(cPos), cPos,len)}
+        if(fetchInnerInfon and input_chkStr(cPos, "NULL:")!=5){wordsFound <- chk(input_scrapeUniID(cPos), cPos,len)}
         if(wordsFound){
             our WordUse:: type
             type!.setAsGiven(makeStr(cPos-len, cPos)) // Set word type
             infn!.type <- type
             if(chkStrWSC(cPos, ":")){
-                wordsFound <- chk(input_scrapeUniID(cPos), cPos,len)
+                wordsFound <- false
+                if(input_chkStr(cPos, "NULL:")!=5){wordsFound <- chk(input_scrapeUniID(cPos), cPos,len)}
                 if(!wordsFound){
                    // cPos <+- parseInfonView(infn, cPos, allowIDs, isFromDefn, prsCtxt)
                    // infn!.hasTypeAndValue <- true
@@ -1567,6 +1621,13 @@ struct InfonViewPrinter{
 
     me string: printInfonState(their infonState: pure, their infonState: size, me bool: asInnr, me bool: isSpec, their infonView: parentInfon, our Map<me string,me int>: used, me int: verbosity, their infonView: special, me bool: suppressSizeOp <- false) <- {
         me string: S <- ""
+        if(parentInfon!=NULL and pure===parentInfon!.value and parentInfon!.isNull()){
+            S <- "NULL:"
+            if(parentInfon!.identityName!=NULL and parentInfon!.identityName!.id>0){
+                S <+- toString(parentInfon!.identityName!.id)
+            }
+            return(S)
+        }
         // An open ordered list cannot recover its extent by counting stored
         // members. Preserve a known bound, including a shared unresolved span.
         me bool: boundedOpenList <- size!=NULL and
@@ -1737,7 +1798,7 @@ struct InfonViewPrinter{
         if(i===special){resetColor <- true; S<+-tam.pushColor(4)}
         if(i!.isTentative){S <+- "t"}
         me string: iSymbol <- i!.mySymbol()
-        if(used.containsKey(iSymbol)){
+        if(used.containsKey(iSymbol) and !i!.isNull()){
             S <+- iSymbol
             if(resetColor){S<+-tam.popColor();}
             return(S)

@@ -314,7 +314,50 @@ struct RepetitionFamily{}
 
 // One registry belongs to one Agent/semantic universe.  Direct unit-level POV
 // use may bind an explicitly constructed registry with the same contract.
+// Optional occurrence names. Token identity is scoped by allocation, not by
+// its printed integer. Independent imports retain a consistent remapping.
+struct InfonIdentity { me uint64: id <- 0 }
+struct InfonIdentityScope {
+    me uint64: nextID <- 1
+    me Map<me uint64, our InfonIdentity>: identities
+    me Map<our InfonIdentity, our InfonIdentity>: imports
+    me Mutex: scopeMutex
+    our InfonIdentity: claim(me uint64: id) <- <%{
+        std::lock_guard<std::mutex> lock(scopeMutex);
+        if (!id || id>INT64_MAX) throw std::invalid_argument("identity ID must be positive int64");
+        auto& token=identities[id];
+        if(!token) {token=std::make_shared<InfonIdentity>();token->id=id;}
+        nextID=std::max(nextID,id+1);
+        return token;
+    }%>
+    our InfonIdentity: allocate() <- <%{
+        std::lock_guard<std::mutex> lock(scopeMutex);
+        if(nextID>INT64_MAX) throw std::overflow_error("identity ID space exhausted");
+        auto token=std::make_shared<InfonIdentity>();token->id=nextID++;
+        identities.emplace(token->id,token);return token;
+    }%>
+    our InfonIdentity: importIdentity(our InfonIdentity: source) <- <%{
+        if(!source) return {};
+        std::lock_guard<std::mutex> lock(scopeMutex);
+        auto local=identities.find(source->id);
+        if(local!=identities.end() && local->second==source) return source;
+        auto prior=imports.find(source);
+        if(prior!=imports.end()) return prior->second;
+        if(!source->id || source->id>INT64_MAX) throw std::invalid_argument("invalid imported identity ID");
+        if(nextID>INT64_MAX) throw std::overflow_error("identity ID space exhausted");
+        auto token=std::make_shared<InfonIdentity>();token->id=nextID++;
+        identities.emplace(token->id,token);imports.emplace(source,token);return token;
+    }%>
+}
+struct BoundaryReference {
+    our POV: source
+    our POV: begin
+    our POV: end
+}
 model IdentityRegistry{
+    me InfonIdentityScope: occurrenceScope
+    me Map<our InfonIdentity, our POV>: namedOccurrences
+    me Map<our POV, our BoundaryReference>: boundaries
     me uint64: nextEvidenceID <- 1
     me uint64: nextReferenceID <- 1
     me uint64: nextRepetitionID <- 1
@@ -331,6 +374,25 @@ model IdentityRegistry{
     me Mutex: registryMutex
 }
 struct IdentityRegistry{
+    void: bindOccurrenceName(our POV: node) <- <%{
+        if(!node || !node->pItem || !node->pItem->identityName) return;
+        auto token=occurrenceScope.importIdentity(node->pItem->identityName);
+        if(token!=node->pItem->identityName) {
+            node->pItem=std::make_shared<infonView>(*node->pItem);
+            node->pItem->identityName=token;
+        }
+        // A query wrapper can later denote a different result. The plain
+        // source POV created by path lowering owns its persistent name.
+        if(node->pItem->partRef || !node->pItem->parts.empty() || node->pItem->pathSelection) return;
+        std::shared_ptr<POV> existing;
+        {
+            std::lock_guard<std::mutex> lock(registryMutex);
+            auto& first=namedOccurrences[token];
+            if(!first) first=node;
+            existing=first;
+        }
+        if(existing!=node) recordIdentity(existing,node,iekAssertion,0);
+    }%>
     our ExternalAssociationReference: recordExternalAssociation(
             our POV: anchorPOV, our POV: predicatePOV,
             our POV: valuePOV, our POV: witnessPOV,
@@ -1186,33 +1248,29 @@ struct IdentityRegistry{
         }
     }
 
-    me bool: areIdentical(our POV: firstPOV, our POV: secondPOV) <- {
-        if(firstPOV==NULL or secondPOV==NULL){return(false)}
-        if(firstPOV===secondPOV){return(true)}
-        me List<our POV>: visited
-        me List<our POV>: pending
-        pending.append(firstPOV)
-        protect(registryMutex){
-            while(!pending.isEmpty()){
-                our POV: current <- pending.first()
-                pending.popFirst()
-                me bool: alreadyVisited <- false
-                withEach visitedPOV in visited{
-                    if(visitedPOV===current){alreadyVisited <- true; break()}
-                }
-                if(alreadyVisited){continue()}
-                visited.append(current)
-                withEach identity in identities{
-                    our POV: neighbor <- NULL
-                    if(identity!.leftPOV===current){neighbor <- identity!.rightPOV}
-                    else if(identity!.rightPOV===current){neighbor <- identity!.leftPOV}
-                    if(neighbor===secondPOV){return(true)}
-                    if(neighbor!=NULL){pending.append(neighbor)}
-                }
+    me bool: areIdentical(our POV: firstPOV, our POV: secondPOV) <- <%{
+        if(!firstPOV || !secondPOV) return false;
+        auto same=[](const std::shared_ptr<POV>& a,const std::shared_ptr<POV>& b) {
+            return a==b || (a && b && a->pItem && b->pItem && a->pItem->identityName &&
+                a->pItem->identityName==b->pItem->identityName);
+        };
+        if(same(firstPOV,secondPOV)) return true;
+        std::vector<std::shared_ptr<POV>> pending{firstPOV},visited;
+        std::lock_guard<std::mutex> lock(registryMutex);
+        while(!pending.empty()) {
+            auto current=pending.back();pending.pop_back();
+            if(std::find(visited.begin(),visited.end(),current)!=visited.end()) continue;
+            visited.push_back(current);
+            for(const auto& identity:identities) {
+                auto neighbor=same(identity->leftPOV,current) ? identity->rightPOV :
+                    same(identity->rightPOV,current) ? identity->leftPOV : std::shared_ptr<POV>{};
+                if(!neighbor) continue;
+                if(same(neighbor,secondPOV)) return true;
+                pending.push_back(neighbor);
             }
         }
-        return(false)
-    }
+        return false;
+    }%>
 
     void: recordRepetitionMaterialization(our POV: occurrenceReferencePOV,
             our POV: materializedPOV, me uint64: normalizationID) <- {
@@ -1445,6 +1503,7 @@ model infonState{
         evalMode <- from!.evalMode
         sizeMode <- from!.sizeMode
         switch(sourceType){
+            case tUnknown: {num <- from!.num}
             case NUM: {num <- from!.num}
             case STR: {
                 if(sizeToCopy==0){str <- from!.str}
@@ -1494,6 +1553,9 @@ model infonView {
     // -----------------------------------------------------------------
     our infonState: infSize
     our infonState: value
+    // An explicit occurrence reference survives reference/view copies. Fresh
+    // definition instances do not inherit it through _copyAsTypeTo().
+    our InfonIdentity: identityName
 
     me OrderMode: orderMode
 
@@ -1573,6 +1635,19 @@ model infonView {
 }
 
 struct infonView{
+    me bool: isNull() <- {
+        return(infSize!=NULL and value!=NULL and
+            infSize!.overlayType==NUM and infSize!.evalMode==emLiteral and infSize!.num==0 and
+            value!.overlayType==tUnknown and value!.evalMode==emLiteral and value!.num==0 and
+            !infSize!.inverted and !value!.inverted and !infSize!.undefined and !value!.undefined)
+    }
+    void: setToNull() <- {
+        infSize!.clear(); value!.clear()
+        infSize!.resetFlagsAndModes(); value!.resetFlagsAndModes()
+        infSize!.overlayType <- NUM; infSize!.evalMode <- emLiteral
+        value!.overlayType <- tUnknown; value!.evalMode <- emLiteral
+        viewMode <- vmOverlay; itmMode <- mItem; isNormed <- false
+    }
      // -----------------------------------------------------------------
     // Legacy intersection-as-function machinery
     // Remove when the old function syntax is removed.
@@ -2009,6 +2084,7 @@ struct infonView{
     void: _copyAsTypeTo(our infonView: to, me bool: copyWrkList, me bool: copyPartRef, our infonView: topThis, their List<their infonView>: copied) <- {
         withEach item in copied{if(item===this){return()}}
         copied.append(self)
+        to!.identityName <- NULL
         to!.flags      <- flags
         to!.copySource <- copySource
         to!.doReply    <- false
@@ -2347,6 +2423,7 @@ struct infonView{
         infSize!.clear()
         value!.clear()
         resetFlagsAndModes()
+        identityName <- NULL
         copySource <- NULL
         funcArgs   <- NULL
         innr       <- NULL
@@ -3003,16 +3080,17 @@ struct ProteusCore{
         } else {return(topParsedNode)}
     }
 
-    our infonView: parseAndExtractStream(their strBuf: streamToParse) <- {
+    our infonView: parseAndExtractStream(their strBuf: streamToParse, me bool: independentIdentities <- false) <- {
         me ProteusParser: parser{self, streamingMode, 0}
+        parser.independentIdentities <- independentIdentities
         our infonView: topParsedNode <- parse(parser, streamToParse)
         return(topParsedNode)
     }
 
-    our infonView: parseAndExtractString(me string: textToParse, me string: streamName) <- {
+    our infonView: parseAndExtractString(me string: textToParse, me string: streamName, me bool: independentIdentities <- false) <- {
         their strBuf:: bufToParse
         bufToParse!.initForString(textToParse, streamName)
-        return(parseAndExtractStream(bufToParse))
+        return(parseAndExtractStream(bufToParse, independentIdentities))
     }
 
     void: initParserParseExtractNormalizeInfonView_stream(our POV: toFill, their strBuf: streamToParse) <- {

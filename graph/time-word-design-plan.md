@@ -1,6 +1,8 @@
-# Proposed next design discussion: time and words
+# Time and words: agreed foundation and next discussion
 
-This is a discussion plan, not authorization to implement the remaining rules.
+The null/boundary foundation below was approved and implemented; see
+[boundary-results.md](boundary-results.md). The remaining time and word rules
+still require discussion.
 Use a small set of semantic relationships and shared graph operations. A test
 should demonstrate a language construct or a composition of constructs, not
 introduce another dispatch exception.
@@ -24,13 +26,112 @@ introduce another dispatch exception.
 - Definitions should eventually be searchable directly. The current catalogue
   is an implementation bridge, not a permanent second knowledge system.
 
+## Agreed null parsing and printing contract
+
+The null state is exactly `infSize=0`, `value=0`, and
+`value.overlayType=tUnknown`. Both zeros are known values, not default payloads
+of unresolved states. This allows null to be recognized from the existing state
+fields without requiring a separate null flag. Unknown overlay alone is not
+sufficient.
+
+Print this state as `NULL:` if no identity ID is assigned, or `NULL:<ID>` when
+an ID is assigned (for example, `NULL:647`). Always retain the colon; bare
+`NULL` remains a word in the printed syntax.
+
+Parsing `NULL:` constructs the same known-zero size/value state with unknown
+value overlay. A positive ID suffix identifies the occurrence, not a numeric
+value assignment. Recognize this literal alongside `?` in the inner-infon
+parser, ensuring the outer word parser does not consume the reserved `NULL:`
+form first. Bare `NULL` retains its ordinary word meaning.
+
+Parsing `?` must explicitly set `value.overlayType=tUnknown`, as well as its
+existing unknown size/value evaluation modes. The parser now makes that
+overlay assignment explicitly. Null's size and value
+are known, while those of `?` remain unknown.
+
+Assigned IDs must be positive and never zero. Zero may serve internally as the
+unassigned sentinel, but the printer omits that sentinel rather than emitting
+`NULL:0`. Allocation must start at one and must not wrap around to zero.
+The ID identifies the occurrence; it is not the null's value. Zero is the only
+valid null value, which is why printing `NULL:0` would be misleading.
+
+IDs belong to an explicit identity scope, normally the Agent's registry.
+Repeated IDs within that scope identify the same occurrence, including across
+inputs sharing that scope. Independent model imports remap their IDs into the
+destination scope unless identity sharing is explicitly intended. Remapping
+preserves repeated references within the imported model; matching numeric IDs
+from independent scopes alone do not establish identity.
+
+The graph implementation now uses this null state and identity scope. The
+legacy AItem boundary constructor is outside the graph entry point and remains
+unmigrated; its numeric placeholder does not define the new boundary contract.
+
+## Agreed boundary availability
+
+Every infon occurrence has `.begin` and `.end`; boundary access is not limited
+to T-lists or explicit temporal projections. This includes scalar, list, null,
+and incompletely known infons. Boundary existence does not require knowing its
+coordinate or the infon's extent. Which relationships identify boundaries with
+one another is a separate semantic question.
+
+For a null occurrence `N`, `N.begin`, `N.end`, and `N` identify the same
+occurrence. Boundary access returns that occurrence rather than allocating a
+new boundary. If an ID is assigned, all three references denote that same ID
+within its identity scope. This rule does not identify unrelated null
+occurrences merely because their size, value, and overlay state match.
+
+## Agreed identity at adjoining boundaries
+
+For now, only T-list composition implies shared adjoining boundaries:
+`A.end = B.begin` for adjacent members of `{T A B}`. Use this identity
+rather than introducing `A.end.next = B.begin` as a separate
+connection between two boundaries. Retain the contextual POVs that describe
+A's end and B's beginning; their roles and the containing structure supply
+ordering and navigation. Boundary identity does not require physically merging
+POVs or identifying the whole spans A and B.
+
+This also applies when an adjoining T-list member is null. Together with the
+null self-boundary rule, adjacent null entries in a T-list may refer to one boundary while
+remaining separate list positions with their own POVs. Do not remove entries,
+change list size, or discard structural order merely because their boundaries
+are identical. The full singlet theory is not required for this implementation.
+
+Ordinary ordered-list adjacency in `{A B}` does not imply this identity under
+the current contract. Every infon still has `.begin` and `.end`. Extending the
+composition rule beyond T-lists is deferred until the user develops the theory
+further and explicitly changes this decision. The implementation need not wait
+for that theoretical work.
+
+## Agreed T-list container boundaries
+
+For a closed, nonempty T-list `L = {T A B}`, establish:
+
+```
+L.begin = A.begin
+A.end   = B.begin
+B.end   = L.end
+```
+
+The same rules compose through nested T-lists using ordinary boundary identity
+relationships.
+
+For an open T-list `L = {T A B ...}`, the first two identities still hold, but
+the received prefix does not establish `B.end = L.end`. `L.end` denotes the
+eventual end and can have an identity before its location is known. Closing the
+stream with B as the final member establishes the last identity. Pending closure
+does not assert that the two boundaries are unequal.
+
+For a closed empty T-list `L = {T}`, `L.begin = L.end` identifies one boundary.
+An open T-list having no received members does not by itself establish that
+identity. If it closes empty, establish the shared begin/end boundary then.
+
 ## 1. Agree on examples before adding time rules
 
 Use a one-page matrix of inputs, requested relations, expected identities and
-expected values. Include a finite T-list, an open T-list, two adjacent nested
-T-spans, a sparse span with a known extent, and two timelines with different
-units/origins. For each ask for: begin/end, tprev/tnext, a position, and an item
-at a stated time. Include missing information, late arrival, and a contradiction.
+expected values. Include scalar, null, unknown, and ordinary-list boundary
+queries, a finite T-list, an open T-list, two adjacent nested T-spans, a sparse
+span with a known extent, and two timelines with different units/origins. For
+each ask for: begin/end, tprev/tnext, a position, and an item at a stated time. Include missing information, late arrival, and a contradiction.
 
 Keep three notions distinct in that matrix:
 
@@ -38,9 +139,10 @@ Keep three notions distinct in that matrix:
 2. A boundary/cut between occurrences, including the two ends.
 3. A temporal coordinate or interval, with its unit and origin when known.
 
-The existing boundary tests print zero, but two boundaries that both print zero
-need not be the same node. Decide what their identities mean before coding the
-boundary lookup. Also settle what a temporal query outside a T-list means:
+Boundary fixtures now print identity-bearing nulls. Equal null states alone do
+not identify their boundaries; the graph establishes the agreed identities
+while retaining contextual POVs. Boundary access outside T-lists is agreed; separately
+settle what temporal-neighbor queries such as `%tprev` outside a T-list mean:
 unknown/subscribed, empty result, or a definite rejection.
 
 ## 2. Implement time relationships in dependency order

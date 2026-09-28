@@ -54,6 +54,12 @@ meaning through list identities and definition requirements. See
 [temporal-header-results.md](temporal-header-results.md). Temporal navigation
 and context-state modeling are separate, still unfinished capabilities.
 
+Every infon now exposes `.begin` and `.end` as null occurrences. Only T-list
+composition currently identifies adjoining boundaries; ordinary list order does
+not. Boundary access uses graph subgoals and priced Sets, retains contextual
+POVs, and leaves sparse tails virtual. See [boundary-results.md](boundary-results.md)
+for null syntax, scoped IDs, streaming closure and the supported boundary.
+
 Field lookup exposes missing source structure as an exploratory size/value goal.
 Already represented source relationships remain searchable, and instantiated
 definition fields preserve written type metadata. See

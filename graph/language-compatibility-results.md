@@ -1,10 +1,15 @@
 # Older language compatibility, 2026-09-27
 
-Named grammar choices now use sequence traversal, and the basic plural/text
-rules publish normal graph Sets. The source build and **1,169/1,169** focused
-checks pass. The six old language suites report **258 passed, 95 failed, and
-8 explicit ambiguity skips**, out of 361. No previous passing fixture was lost.
-See [word-grammar-results.md](word-grammar-results.md).
+Nulls and identity-bearing boundaries now use graph goals and priced Sets.
+The source build and **1,091/1,091 registered graph tests** pass, including
+26 new boundary tests. The six old language suites report **261 passed,
+92 failed, and 8 explicit ambiguity skips**, out of 361. No previous passing
+status was lost. The three boundary fixtures now pass with the agreed
+`NULL:<ID>` representation; the S-list `.begin` fixture also adopts universal
+boundary access. See [boundary-results.md](boundary-results.md).
+
+Named grammar choices and basic plural/text rules were recovered in the preceding
+increment; see [word-grammar-results.md](word-grammar-results.md).
 
 Recovered default fixtures: `parse/lang`, `word/pluralize`, and `lang/splitText`.
 The bounded plural-lookup regression passes; the old `word/findPlural` fixture
@@ -20,7 +25,7 @@ Its old closed-result expectation was updated in that earlier increment.
 
 | Suite | Passing | Failing | Ambiguous skips | Total |
 |---|---:|---:|---:|---:|
-| `defaultTests.tst` | 240 | 20 | 8 | 268 |
+| `defaultTests.tst` | 243 | 17 | 8 | 268 |
 | `demoTests.tst` | 8 | 14 | 0 | 22 |
 | `sparseTests.tst` | 2 | 21 | 0 | 23 |
 | `timeTests.tst` | 4 | 32 | 0 | 36 |
@@ -28,8 +33,8 @@ Its old closed-result expectation was updated in that earlier increment.
 | `endRelativeR1Tests.tst` | 4 | 6 | 0 | 10 |
 
 All six language suites were rerun without crashes, timeouts, or incomplete
-summaries. The 125 legacy helper checks were not rerun; their preceding result
-remains 102/125. The R1 file records an
+summaries. The 125 legacy helper checks were also rerun; all individual statuses
+remain unchanged at 102 pass / 23 fail. The R1 file records an
 experimental contract and excludes itself from the default tests. Some legacy
 helpers call old reasoners or assert old registry bookkeeping; their passing
 counts do not establish graph coverage. Focused checks include some language
