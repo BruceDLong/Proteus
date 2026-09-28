@@ -1,12 +1,14 @@
 # Older language compatibility, 2026-09-27
 
-Nulls and identity-bearing boundaries now use graph goals and priced Sets.
-The source build and **1,091/1,091 registered graph tests** pass, including
-26 new boundary tests. The six old language suites report **261 passed,
-92 failed, and 8 explicit ambiguity skips**, out of 361. No previous passing
-status was lost. The three boundary fixtures now pass with the agreed
-`NULL:<ID>` representation; the S-list `.begin` fixture also adopts universal
-boundary access. See [boundary-results.md](boundary-results.md).
+The obsolete AItem engine has been removed. The source build and
+**1,091/1,091 registered graph tests** pass. All six older language suites retain
+exactly their previous individual statuses: **261 passed, 92 failed, and 8
+explicit ambiguity skips**, out of 361. No language fixture or expectation
+changed during this cleanup. See [aitem-cleanup-results.md](aitem-cleanup-results.md).
+
+The preceding boundary increment introduced `NULL:<ID>` and universal
+`.begin`/`.end` access, with 26 graph tests. See
+[boundary-results.md](boundary-results.md).
 
 Named grammar choices and basic plural/text rules were recovered in the preceding
 increment; see [word-grammar-results.md](word-grammar-results.md).
@@ -33,13 +35,19 @@ Its old closed-result expectation was updated in that earlier increment.
 | `endRelativeR1Tests.tst` | 4 | 6 | 0 | 10 |
 
 All six language suites were rerun without crashes, timeouts, or incomplete
-summaries. The 125 legacy helper checks were also rerun; all individual statuses
-remain unchanged at 102 pass / 23 fail. The R1 file records an
-experimental contract and excludes itself from the default tests. Some legacy
-helpers call old reasoners or assert old registry bookkeeping; their passing
-counts do not establish graph coverage. Focused checks include some language
-fixtures, so the counts must not be added. Exact helper results are in
-[legacy-helper-status.json](legacy-helper-status.json).
+summaries. The 58 retained helper checks report **50 pass / 8 existing fail**;
+every retained status is unchanged. The cleanup retired 67 registrations that
+directly tested the deleted engine (52 previously passed, 15 failed), plus one
+unregistered declaration. These are recorded in
+[retired-aitem-tests.json](retired-aitem-tests.json), not counted as semantic
+recoveries. The R1 file records an experimental contract and excludes itself
+from the default tests. Helper passing counts do not establish graph coverage.
+Focused checks include some language fixtures, so the counts must not be added.
+Exact current helper results are in [legacy-helper-status.json](legacy-helper-status.json).
+
+The standalone streaming build also passed, with **33/33 checks** across the
+supported `-f 1`, `2`, `4`, `5`, `6`, and `8` selections. Cases 3 and 7 remain
+outside this migrated coverage.
 
 The unchanged standalone scheduler passed **38/38** at the preceding checkpoint,
 also under address, undefined-behavior, and leak sanitizers. Earlier unchanged
@@ -128,8 +136,9 @@ resolved: unknown numeric sizes and subscribed open tails remain symbolic.
 
 The complete fixture status and input hashes are recorded in
 [language-compatibility-status.json](language-compatibility-status.json).
-Current language logs are in `/tmp/p4-word-grammar-audit-*`; earlier helper
-logs remain in `/tmp/p4-compat-audit-*`.
+Current language logs are in `/tmp/p4-aitem-language-final`; compiled logs are
+in `/tmp/p4-aitem-compiled-final`. The previous compiled baseline is preserved
+in `/tmp/p4-null-compiled-final`.
 
 ## Remaining work
 

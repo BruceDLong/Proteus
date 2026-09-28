@@ -27,42 +27,13 @@ infonDumpMode='text'
 #include Functions.dog
 #include ModelManager.dog
 #include WordRules.dog
-#include WorldManager.dog
-#include debugSystems.dog
-#include Diagnostics.dog
-#include AItemLifecycle.dog
-#include Reasoner.dog
-#include AgendaEngine.dog
 #include InfonStreamLoader.dog
 #include xlators/xlator_en.dog
 //include DB_workAround.dog
 
 struct SizeMode: inherits=<mode[fromCount, fromContext, fromGiven]> {}
-struct evalRangeMode: inherits=<mode[error, unknown, reject, pass]> {}
 struct OrderMode: inherits=<mode[uUnknown, uOrdered, uUnordered]> {}
 
-struct aitemSrcID: inherits=<mode[srcPMVA1, srcPMVA2, srcPiCVA, srcNrmSize, srcNormInit, srcMrg0, srcPropagate, srcPartsPath, srcItsALT, srcItsFunc, srcUnordd]> {}
-
-// How an AItem parent participates in a newly constructed work item. This is
-// a call-time classification; the child stores only the resulting parent link
-// and list-completion flag.
-struct AItemParentRole: inherits=<mode[
-    aprNoParent,
-    aprContextOnly,
-    aprListCompletion
-]> {}
-
-// How processing one wrkList constraint affected its persistent obligation.
-// wrkList remains the semantic AND representation. Terminal constraints are
-// released; only unresolved constraints are indexed as deferred work.
-struct ConstraintDisposition: inherits=<mode[
-    cdNotSourceWork,
-    cdInFlight,
-    cdDischarged,
-    cdRedundant,
-    cdRetained,
-    cdContradiction
-]> {}
 
 // End-relative navigation needs an exact coordinate, not a generally closed
 // list.  Keep extent knowledge independent from availability of the logical
@@ -1327,14 +1298,6 @@ model TemporalContainmentIdentity{
 }
 struct TemporalContainmentIdentity{}
 
-struct EndRelativePatternMeasureStatus: inherits=<mode[
-    erpmResolved,
-    erpmPending,
-    erpmInvalidRequest,
-    erpmIncompatibleUnit,
-    erpmNonIntegralUnit,
-    erpmExtentOverflow
-]> {}
 
 struct EndRelativeExtentResult{
     me EndRelativeExtentStatus: status <- eresUnknownOrUnbounded
@@ -1349,97 +1312,6 @@ struct EndRelativeWindowAvailability{
     our POV: firstSourcePOV
     our POV: lastSourcePOV
 }
-
-struct EndRelativePatternMeasureResult{
-    me EndRelativePatternMeasureStatus: status <- erpmInvalidRequest
-    me int64: patternLogicalExtent <- 0
-    me int64: sourceLogicalExtent <- 0
-    me int64: failingPatternIndex <- -1
-    our WordUse: traversalUnit
-    our WordUse: patternCoordinateUnit
-}
-
-struct IntersectionTraversalPlanStatus: inherits=<mode[
-    itpNotApplicable,
-    itpPending,
-    itpResolved,
-    itpRejected
-]> {}
-
-struct IntersectionTraversalOrigin: inherits=<mode[
-    itoSourceStart,
-    itoSourceEnd
-]> {}
-
-model IntersectionCorrespondence{
-    our POV: patternPOV
-    our POV: localViewPOV
-    our POV: sourceContextPOV
-    our POV: sourceStartPOV
-}
-struct IntersectionCorrespondence{}
-
-model IntersectionTraversalPlan{
-    me IntersectionTraversalPlanStatus: status <- itpNotApplicable
-    me IntersectionTraversalOrigin: origin <- itoSourceStart
-    me EndRelativeExtentStatus: extentStatus <- eresUnknownOrUnbounded
-    me EndRelativeWindowContentStatus: windowContentStatus <- erwcPending
-    me EndRelativePatternMeasureStatus: patternMeasureStatus <- erpmInvalidRequest
-    our POV: sourceContextPOV
-    our POV: sourceStartPOV
-    me int64: sourceLogicalExtent <- 0
-    me int64: patternLogicalExtent <- 0
-    me int64: sourceWindowLogicalExtent <- 0
-    me int64: sourceStartIndex <- -1
-    me int64: patternOffset <- 0
-    our WordUse: traversalUnit
-    our POV: localSourceViewPOV
-    me List<our IntersectionCorrespondence>: correspondences
-    me List<our POV>: retainedDependencies
-    me uint64: observedStreamingRevision <- 0
-    me string: diagnostic
-}
-struct IntersectionTraversalPlan{
-    void: recordCorrespondence(our POV: patternPOV,
-            our POV: localViewPOV, our POV: sourceContextPOV,
-            our POV: sourceStartPOV) <- {
-        if(patternPOV==NULL or localViewPOV==NULL or
-                sourceContextPOV==NULL or sourceStartPOV==NULL){return()}
-        withEach existing in correspondences{
-            if(existing!.patternPOV===patternPOV and
-                    existing!.localViewPOV===localViewPOV){return()}
-        }
-        our IntersectionCorrespondence:: correspondence
-        correspondence!.patternPOV <- patternPOV
-        correspondence!.localViewPOV <- localViewPOV
-        correspondence!.sourceContextPOV <- sourceContextPOV
-        correspondence!.sourceStartPOV <- sourceStartPOV
-        correspondences.append(correspondence)
-        retainDependency(patternPOV)
-        retainDependency(localViewPOV)
-        retainDependency(sourceContextPOV)
-        retainDependency(sourceStartPOV)
-    }
-    void: retainDependency(our POV: dependencyPOV) <- {
-        if(dependencyPOV==NULL){return()}
-        withEach retainedPOV in retainedDependencies{
-            if(retainedPOV===dependencyPOV){return()}
-        }
-        retainedDependencies.append(dependencyPOV)
-    }
-}
-
-// Candidate provenance for a marked selection is transient until the merge
-// owning the whole intersection accepts. Keeping the complete tuple on that
-// AItem lets acceptance publish one reversible SelectionReference without
-// treating propagation alone as semantic evidence.
-model PendingSelectionCorrespondence{
-    our POV: queryPOV
-    our POV: resultPOV
-    our POV: sourceContextPOV
-    our POV: sourceStartPOV
-}
-struct PendingSelectionCorrespondence{}
 
 
 model infonState{
@@ -1464,7 +1336,7 @@ model infonState{
     // -----------------------------------------------------------------
     our infonView: listSpec     // Applies to every member as a template
     // A T-list is an ordinary ordered list plus the explicitly enumerated
-    // identity implications owned by TemporalIdentityReasoner.
+    // identity relationships; boundary composition is handled by the graph.
     flag: timelike
     flag: tailUnfinished
 
@@ -1580,7 +1452,7 @@ model infonView {
 
     // The counted wildcard prefix generated by a positive range selector.
     // Its unit is the selected source's immediate item unit; it is not a
-    // user-written type constraint. OrderedSpanReasoner may therefore adopt
+    // user-written type constraint. A compatible derived view may therefore adopt
     // the source listSpec solely to align this skip as one sparse run.
     flag: positionalIndexSkip
 
@@ -1621,8 +1493,7 @@ model infonView {
     // the legacy function use.
     our infonView: funcArgs
 
-    // Currently mixes persistent identity knowledge with Reasoner work.
-    // Eventually split into semantic identities + Reasoner agenda state.
+    // Persistent identity relationships and pending RHS constraints.
     me List<our POV>: wrkList
 
     // Local adjacency index for T-list boundary implications.  The semantic
@@ -1693,7 +1564,7 @@ struct infonView{
     flag: doReply
 
     // -----------------------------------------------------------------
-    // Old WorldManager / Reasoner state
+    // Normalization metadata and compatibility helpers
     // -----------------------------------------------------------------
     mode[umAssert, umQuestion, umCommand]: useMode
 
@@ -1706,16 +1577,11 @@ struct infonView{
     flag: isFromDefn
 
     // Type-definition application caches.
-    flag: isTypeExample
     flag: alreadyTypeChecked
 
     // Child-side marker used by current intersection processing.
     flag: isInnr
 
-    // Secondary execution index over unresolved POVs that remain in wrkList
-    // but should not be retried until they gain information. Membership here
-    // has no additional semantic meaning.
-    me List<our POV>: deferredWrkList
 
     // Keep-alive references for temporary POVs.
     me List<our POV>: retainedPOVs
@@ -1736,13 +1602,9 @@ struct infonView{
     // incorrectly on its RHS infon.
     flag: asRHSInternalIdent
 
-    // One-pass / completion caches.
-    flag: altRulesApplied
-    flag: defnRegistered
-    flag: sizeNormed
+    // Definition and member-copy metadata.
     flag: wordDerefed
     flag: addedTypesAlreadyCopied
-    flag: wasProcessed
 
     // Parser-specific behavior; investigate/delete with parser cleanup.
     flag: altUse
@@ -1765,41 +1627,6 @@ struct infonView{
                 }
             }
             count <- count+1
-            pov <- pov!.next
-        }
-        return(NULL)
-    }
-    me int: isCompatibleWith(our infonView: RHSInf, me bool: trueByDefinition) <- {
-        our WordUse: typeRHS <- RHSInf!.type
-        our WordUse: typeLHS <- type
-        if(typeLHS==NULL){return(tvTrue)}
-        else if(typeRHS==NULL){return(tvUnknown)}
-        if(itmMode != mNone and RHSInf!.itmMode != mNone and itmMode != RHSInf!.itmMode){return(tvFalse)}
-        if(typeLHS!.asGiven == "" or typeRHS!.asGiven == ""){return(tvTrue)}
-        // TODO: Make typeID() work when words aren't defined e.g.  word/findPlural lang/splitText user/getNth
-        me string: rhsTypeID <- typeRHS!.typeID()
-        me string: lhsTypeID <- typeLHS!.typeID()
-        if(lhsTypeID == rhsTypeID){return(tvTrue)}
-
-        withEach LHSSpec in addedTypes{
-            if(LHSSpec!.typeID() == rhsTypeID){return(tvTrue)}
-        }
-        withEach RHSSpec in RHSInf!.addedTypes{
-            if(RHSSpec!.typeID() == lhsTypeID){return(tvTrue)}
-        }
-        return(tvFalse)
-    }
-    our POV: fetchCompatibleField(their Agent: agent, our infonView: pattern) <- {
-        our WordUse: patternType <- pattern!.type
-        if(patternType==NULL){log("WARNING: field has no type to search on in:"+toString(pattern)); return(NULL)}
-        if(value!.items.isEmpty()){return(NULL)}
-        our POV: pov <- value!.items.head
-        while(pov != NULL){
-            our infonView: inf <- pov!.pItem
-            fleshOutWord(agent, inf)
-            if(inf!.type!=NULL and inf!.isCompatibleWith(pattern, pov!.trueByDefinition)==tvTrue){
-                return(pov)
-            }
             pov <- pov!.next
         }
         return(NULL)
@@ -1880,20 +1707,6 @@ struct infonView{
     }
     me bool: isASeq() <- {return((value!.evalMode==emLiteral and value!.overlayType==LST) or value!.evalMode==emConcat)}
     me bool: isOrLike() <- {return(value!.evalMode==emIntersection and intersectPos==ipGetLast and innr!=NULL and innr!.infSize!.evalMode==emUnknown and innr!.value!.sizeMode==fromGiven and innr!.value!.evalMode==emLiteral)}
-    me OrderMode: getOrderMode(their Agent: agent) <- {
-        if(orderMode!=uUnknown){return(orderMode)}
-        if(type!=NULL){
-            me vocabularySpec: vSpec
-            vSpec.init(agent!.getLocaleBaseName())
-            me List<our WordDefn>: resultDefns
-            me int: numAdded <- modelMngr.lookupWord(type!.typeID(), vSpec, resultDefns)
-            if(!resultDefns.isEmpty()){
-                our WordDefn: def <- resultDefns[0]
-                orderMode <- def!.meaning!.orderMode
-            }
-        }
-        return(orderMode)
-    }
     void: setOrderMode() <- {
         if(funcArgs!=NULL){
             if(funcArgs!.orderMode!=uUnknown){
@@ -2246,21 +2059,6 @@ struct infonView{
         }
         return(false)
     }
-    bool: deferredWorkListContainsPOV(our POV: target) <- {
-        withEach wrkListItem in deferredWrkList{
-            if(wrkListItem===target){return(true)}
-        }
-        return(false)
-    }
-    bool: hasReadyWrkListPOV(our POV: excludedPOV) <- {
-        withEach wrkListItem in wrkList{
-            if(!(wrkListItem===excludedPOV) and
-                    !deferredWorkListContainsPOV(wrkListItem)){
-                return(true)
-            }
-        }
-        return(false)
-    }
     void: removePOVFromWrkList(our POV: target) <- {
         me List<our POV>: retainedWork
         withEach wrkListItem in wrkList{
@@ -2268,56 +2066,14 @@ struct infonView{
         }
         wrkList <- retainedWork
     }
-    void: removePOVFromDeferredWrkList(our POV: target) <- {
-        me List<our POV>: retainedWork
-        withEach wrkListItem in deferredWrkList{
-            if(!(wrkListItem===target)){retainedWork.append(wrkListItem)}
-        }
-        deferredWrkList <- retainedWork
-    }
-    void: pruneDeferredWrkList() <- {
-        me List<our POV>: retainedDeferredWork
-        withEach deferredWorkPOV in deferredWrkList{
-            if(workListContainsPOV(deferredWorkPOV)){
-                retainedDeferredWork.append(deferredWorkPOV)
-            }
-        }
-        deferredWrkList <- retainedDeferredWork
-    }
     void: discardWrkListPOV(our POV: target) <- {
-        removePOVFromDeferredWrkList(target)
         removePOVFromWrkList(target)
     }
-    void: deferWrkListPOV(our POV: target) <- {
-        if(workListContainsPOV(target) and !deferredWorkListContainsPOV(target)){
-            deferredWrkList.append(target)
-        }
-    }
     void: makeWrkListPOVReady(our POV: target) <- {
-        removePOVFromDeferredWrkList(target)
         isNormed <- false
     }
     void: clearWrkList() <- {
         wrkList.clear()
-        deferredWrkList.clear()
-    }
-    bool: hasConsumerWork() <- {
-        withEach wrkListItem in wrkList{
-            if(wrkListItem!=NULL and !wrkListItem!.selectorLocalWork){
-                return(true)
-            }
-        }
-        return(false)
-    }
-    void: discardSelectorLocalWork() <- {
-        me List<our POV>: retainedConsumerWork
-        withEach wrkListItem in wrkList{
-            if(wrkListItem!=NULL and !wrkListItem!.selectorLocalWork){
-                retainedConsumerWork.append(wrkListItem)
-            }
-        }
-        wrkList <- retainedConsumerWork
-        pruneDeferredWrkList()
     }
     bool: infonViewHasType(me string: typeIDStr) <- {
         if(type!=NULL and type!.typeID()==typeIDStr){return(alreadyTypeChecked)}
@@ -2481,34 +2237,14 @@ model infItr{
 }
 
 struct GLOBAL{
-    // Traversal waitState values. Keep these primitive because waitState
-    // crosses the low-level POV iterator API, but name the semantic
-    // distinction explicitly.
+    // Compatibility marker for loaded-list iterators. Streaming waits and
+    // resumption belong to graph sessions and parser publications.
     const int: propWaitNone              <- 0
-    const int: propWaitWithinList        <- 1
-    const int: propWaitAfterListBoundary <- 2
-    const int: pqsDrained                  <- 0
-    const int: pqsWaitingWithinList        <- 1
-    const int: pqsWaitingAfterListBoundary <- 2
-
-    me bool: streamingNormMode
-    me Mutex: streamingNormMutex
-    me SyncLock: streamingNormLock
-    // Incremented under streamingNormMutex for every parser state
-    // notification.  AgendaEngine uses it to avoid losing a notification
-    // between a nonblocking propagation attempt and its scheduler-level wait.
-    me uint64: streamingStateRevision
 
 
     me string: crntRHSMySymbol
     me string: crntLHSMySymbol
 
-    void: reFunctionize(our infonView: infn) <- {
-        infn!.cnvtToFunc <- false
-        our infonView:: newInnr
-        newInnr! <- infn!
-        infn!.convertThisToIntersection(newInnr, fromCount)
-    }
     our infonView: makeInnrInfonView() <- {
         our infonView:: newListInfon
         newListInfon!.itmMode        <- mItem
@@ -2545,60 +2281,6 @@ struct GLOBAL{
             }
         }
     }
-    void: fleshOutWord(their Agent: agent, our infonView: infn) <- {//  if type and no defn look up defn call derefInf()
-        agent!.worldMgr.derefInfonView(infn)
-    }
-    me bool: descendantOwnsReply(our infonView: inf) <- {
-        // Returns true if a child of `inf` (or a deeper descendant via still-parsing sub-list)
-        // already owns the doReply, meaning waiting on `inf` itself for parseDone is wrong.
-        our POV: crntPov <- inf!.value!.items.head
-        while(crntPov != NULL){
-            if(crntPov!.pItem!.doReply){return(true)}
-            if(crntPov!.pItem!.value!.overlayType==LST and crntPov!.pItem!.streamState!=parseDone and crntPov!.pItem!.streamState!=notParsing){
-                return(true)
-            }
-            crntPov <- crntPov!.next
-        }
-        return(false)
-    }
-    me bool: checkIfReplyRequested(their POV: pov) <- {
-        if(pov==NULL or pov!.pItem==NULL){return(false)}
-        our infonView: inf <- pov!.pItem
-        // Only fire the early-wake gate when the reply is actually ready: doReply is set
-        // AND there is no pending path navigation. For path expressions, intermediate
-        // infons carry doReply forward through partRef/parts; firing the gate while
-        // navigation is still pending wakes the parent rsInfon prematurely and skips
-        // segments.
-        me bool: pathPending <- (inf!.partRef!=NULL or !inf!.parts.isEmpty())
-        if(inf!.doReply and !pathPending){return(true)}
-        // For a streaming list at parseListReady, doReply might be set when the closing
-        // `}` and `>>` are parsed. Wait briefly for that — but only when we won't end up
-        // blocked on an unfinished nested sub-list (whose own close gates the parent's).
-        if(streamingNormMode and inf!.value!.overlayType==LST and pov!.pParent!=NULL and inf!.streamState==parseListReady){
-            me MutexMngr: MtxMgr{streamingNormMutex}
-            while(inf!.streamState==parseListReady){
-                if(descendantOwnsReply(inf)){break()}
-                streamingNormLock.wait(MtxMgr)
-            }
-        }
-        pathPending <- (inf!.partRef!=NULL or !inf!.parts.isEmpty())
-        return(inf!.doReply and !pathPending)
-    }
-    me string: toString(our AItem: aItem) <- {
-        me string: S <- aItem!.mySymbol()+":"+aItem!.stringify()
-        if(! aItem!.subscribers.isEmpty()){
-            //S <- aItem!.subscribers[0]!.mySymbol()+":"+ S
-        }
-        return(S)
-    }
-    me string: indentStr(me int: lvl) <- {
-        me string: S <- ""
-        withEach c in range 0 .. lvl{
-            S <+- " |"
-        }
-        return (S)
-    }
-    me int: lastLineAltID <- 0
     // To use this to debug, set InfonToMonitor then from relevant places call printDebInf() passing in a tag and a sub-infon to highlight.
     our infonView: infonToMonitor
     me string: prevInfToMonitorState
@@ -2628,183 +2310,6 @@ struct GLOBAL{
     }
 
 }
-struct AItemPedigree{
-    me aitemSrcID: source
-}
-model AItem{
-    mode[rsInfon, rsMerge, rsIntersect, rsPure]: ruleSet
-    me uint64: aItemID
-    me uint64: runID
-    me uint64: lastEnqueueID
-    our POV: LHS_item
-    our POV: RHS
-    our POV: cursorAnchor
-    // Negative-sized intersections create their navigation decision on the
-    // merge AItem that owns the lifecycle. Resolved descendant work borrows
-    // the same record as matching context. The plan is not an infonView and
-    // therefore cannot change the locally zero-based value model.
-    our IntersectionTraversalPlan: intersectionTraversalPlan
-    // A marked candidate is published to the registry only if this owning
-    // merge accepts.
-    our PendingSelectionCorrespondence: pendingMarkedSelection
-    our infItr: LHSItr
-    our infItr: RHSItr
-    me int64: priority
-    flag: looseSize
-    //flag: reject
-    mode[msUnknown, msPending, msAccept, msReject]: mergeStatus  // Did this merge have a contradiction?
-    flag: concatProcessed
-    flag: dontProcess
-    flag: candidateForLast
-    flag: skipRHSUsageInPAI  // With unordered lists, we get the RHS another way.
-    flag: wokenEarly
-    // Execution-only list fan-out state. Direct subscriber continuations do
-    // not participate in this barrier.
-    flag: waitingForListChildren
-    flag: countsTowardParentListCompletion
-    me int: step
-    me int: pendingListChildren
-    FlexNum: sizeToCopy
-    me List<our AItem>: subscribers
-    me AItemPedigree: pedigree
-    our AItem: parent
-    our AItem: debugArg     // For debugSystems validateAItem()
-    // Set only on the rsMerge spawned for one semantic wrkList obligation.
-    our infonView: sourceWorkOwner
-    our POV: sourceWorkPOV
-    our AItem: sourceWorkParent
-    me uint64: sourceWorkRevision
-    me ConstraintDisposition: constraintDisposition
-    // Transient rsInfon state. The source constraint stays in wrkList while
-    // one child merge is in flight, and deferred items are skipped for the
-    // remainder of this normalization pass.
-    our POV: inFlightWorkPOV
-    me int: indentLvl
-    flag: initRulesApplied
-    me List<me string>: phase1HandlerEvents
-    me bool: phase1UnsupportedReached
-    me int: distanceToTop() <- {
-        me int: retVal <- 0
-        our AItem: crnt <- parent
-        while(crnt!=NULL){
-            retVal <+- 1
-            crnt <- crnt!.parent
-        }
-        return(retVal)
-    }
-
-    our AItem: prntOrSub() <- {
-        if(parent!=NULL){return(parent)}
-        if(!subscribers.isEmpty()){return(subscribers[0])}
-        return(NULL)
-    }
-
-    our AItem: parentListsMrgAItem() <- {
-        their POV: parentList <- LHS_item!.pParent
-        our AItem: crnt <- prntOrSub()
-        while(crnt!=NULL and crnt!.LHS_item!==parentList and crnt!.ruleSet!=rsMerge){
-            crnt <- crnt!.prntOrSub()
-        }
-        return(crnt)
-    }
-
-    our IntersectionTraversalPlan: activeIntersectionTraversalPlan() <- {
-        if(intersectionTraversalPlan!=NULL){
-            return(intersectionTraversalPlan)
-        }
-        our AItem: crnt <- parent
-        while(crnt!=NULL){
-            if(crnt!.intersectionTraversalPlan!=NULL){
-                return(crnt!.intersectionTraversalPlan)
-            }
-            crnt <- crnt!.parent
-        }
-        return(NULL)
-    }
-
-    me string: stringify() <- {
-        me string: S <- ""
-        if(self==NULL){S<-S+"NULL"}
-        else{
-            S <+- LHS_item!.mySymbol()+":"+LHS_item!.pItem!.mySymbol()+":"
-            const int: strLen <- 1000
-            switch(ruleSet){
-                case rsInfon:{
-                    S <+- "INF:<"+ shortedStr(toString(LHS_item!.pItem),strLen*2)+">"
-                }
-                case rsMerge:{
-                    S <+- "MRG:"+ shortedStr(toString(LHS_item!.pItem),strLen)
-                    if(RHS!=NULL) {
-                        me string: equalStr <- "="
-                        if (RHS!.looseType()){equalStr <- "=="}
-                        if(RHS!.looseTop){ S <+- ":"}
-                        S <+- " '"+equalStr+"' "+ shortedStr(toString(RHS!.pItem),strLen)
-                    }
-                }
-                case rsIntersect:{
-                    S <+- "INSCT:"+ shortedStr(toString(LHS_item!.pItem),strLen*2)
-                }
-                case rsPure:{
-                    S <+- "PURE:"
-                }
-            }
-            if(mergeStatus==msReject){S <+- "REJ"}
-            else if(mergeStatus==msAccept){S <+- "ACPT"}
-            else if(mergeStatus==msPending){S <+- "PEND"}
-            //S <+- "[P_"+toString(priority)+"]"
-        }
-        return (S)
-    }
-    void: INIT() <- {clearSymbol(self)}
-    none: AItem(me aitemSrcID: source) <- {
-        INIT()  // TODO:
-        flags     <- 0
-        aItemID   <- 0
-        runID     <- 0
-        lastEnqueueID <- 0
-        LHS_item  <- NULL
-        RHS       <- NULL
-        intersectionTraversalPlan <- NULL
-        LHSItr    <- NULL
-        RHSItr    <- NULL
-        parent    <- NULL
-        sourceWorkOwner <- NULL
-        sourceWorkPOV <- NULL
-        sourceWorkParent <- NULL
-        sourceWorkRevision <- 0
-        constraintDisposition <- cdNotSourceWork
-        inFlightWorkPOV <- NULL
-        priority  <- 0
-        step      <- 0
-        pendingListChildren <- 0
-        sizeToCopy   <- 0
-        indentLvl    <- 0
-        pedigree.source <- source
-    }
-}
-struct AItem{
-    void: phase1BeginRun() <- {
-        phase1HandlerEvents.clear()
-        phase1UnsupportedReached <- false
-    }
-    void: phase1RecordHandler(me string: handlerID, me bool: unsupported) <- {
-        if(unsupported){
-            phase1UnsupportedReached <- true
-            phase1HandlerEvents.append("UNSUPPORTED:"+handlerID)
-        }else{
-            phase1HandlerEvents.append(handlerID)
-        }
-    }
-    me string: phase1HandlerSummary() <- {
-        me string: summary
-        withEach handlerID in phase1HandlerEvents{
-            if(summary!=""){summary <+- ";"}
-            summary <+- handlerID
-        }
-        if(summary==""){summary <- "UNCLASSIFIED"}
-        return(summary)
-    }
-}
 model PartPath{
     our infonView: path
     our infonView: spec
@@ -2832,120 +2337,8 @@ struct infonState{
 
 struct GLOBAL{
     me ModelManager: modelMngr
-    me uint64: phase1NextNormalizationID <- 1
-    me Mutex: phase1NormalizationIDMutex
 }
 
-struct Agenda{
-    our POV: topPOV
-    me uint64: normalizationID <- 0
-    me uint64: nextAItemID <- 1
-    me uint64: nextRunID <- 1
-    me uint64: nextEnqueueID <- 1
-    me uint64: totalAItemsAdded <- 0
-    me uint64: totalPropagationsQueued <- 0
-    me uint64: totalPropagationsProcessed <- 0
-    me Multimap<me int64, our AItem: rangeIteration=logarithmic>: AItems
-    // Pending end-relative merges remain owned by this normalization run.
-    // A parser revision moves them back to AItems for deterministic replanning.
-    me List<our AItem>: pendingIntersectionTraversalAItems
-    me Mutex: agendaDoneMutex
-    me SyncLock: agendaDoneLock
-
-    me List<our PropagateRecord>: propagationsTodo // Buffer for propagations
-
-    void: insert(our AItem: aItem, me int64: priority) <- {AItems.insert(priority, aItem)}
-
-    me bool: povIsOnAgenda(our POV:pov)<-{
-        withEach aItem in AItems{
-            if(aItem!.ruleSet==rsInfon and aItem!.LHS_item===pov){return(true)}
-        }
-        return(false)
-    }
-    me bool: addAItemToAgenda(our AItem: aItem) <- {
-        // An ordinary wake-up transfers ownership back to AItems. This also
-        // prevents a non-parser dependency from leaving a stale copy in the
-        // traversal-pending owner list.
-        releasePendingIntersectionTraversal(aItem)
-        me bool: itmAdded <- true
-        if(aItem!.aItemID==0){
-            aItem!.aItemID <- nextAItemID
-            nextAItemID <+- 1
-        }
-        aItem!.lastEnqueueID <- nextEnqueueID
-        nextEnqueueID <+- 1
-        totalAItemsAdded <+- 1
-        //me string: logStr <- "        ADD_TO_AGENDA:"+shortedStr(toString(aItem),120)+"  PRIORITY:"+toString(aItem!.priority)
-        if(aItem!.ruleSet == rsInfon){
-                insert(aItem, aItem!.priority)
-        }else{insert(aItem, aItem!.priority)}
-        //log(logStr)
-        return(itmAdded)
-    }
-
-    void: releasePendingIntersectionTraversal(our AItem: aItem) <- {
-        if(aItem==NULL or pendingIntersectionTraversalAItems.isEmpty()){
-            return()
-        }
-        me List<our AItem>: retainedAItems
-        withEach pendingAItem in pendingIntersectionTraversalAItems{
-            if(!(pendingAItem===aItem)){retainedAItems.append(pendingAItem)}
-        }
-        pendingIntersectionTraversalAItems <- retainedAItems
-    }
-
-    void: retainPendingIntersectionTraversal(our AItem: aItem) <- {
-        if(aItem==NULL or aItem!.intersectionTraversalPlan==NULL or
-                aItem!.intersectionTraversalPlan!.status!=itpPending){return()}
-        withEach pendingAItem in pendingIntersectionTraversalAItems{
-            if(pendingAItem===aItem){return()}
-        }
-        pendingIntersectionTraversalAItems.append(aItem)
-    }
-
-    me bool: pendingIntersectionTraversalNeedsRetry(
-            me uint64: currentStreamingRevision) <- {
-        withEach pendingAItem in pendingIntersectionTraversalAItems{
-            if(pendingAItem!=NULL and
-                    pendingAItem!.intersectionTraversalPlan!=NULL and
-                    pendingAItem!.intersectionTraversalPlan!.
-                            observedStreamingRevision!=currentStreamingRevision){
-                return(true)
-            }
-        }
-        return(false)
-    }
-
-    me bool: pendingIntersectionTraversalMayAdvance() <- {
-        if(pendingIntersectionTraversalAItems.isEmpty() or
-                topPOV==NULL or topPOV!.pItem==NULL){return(false)}
-        return(topPOV!.pItem!.streamState==parseStarted or
-               topPOV!.pItem!.streamState==parseListReady)
-    }
-
-    void: wakePendingIntersectionTraversals() <- {
-        while(!pendingIntersectionTraversalAItems.isEmpty()){
-            our AItem: pendingAItem <-
-                    pendingIntersectionTraversalAItems.first()
-            pendingIntersectionTraversalAItems.popFirst()
-            if(pendingAItem!=NULL){
-                // Step 0 originally established positive acceptance before
-                // entering step 1; a retry resumes at that same boundary.
-                pendingAItem!.mergeStatus <- msAccept
-                addAItemToAgenda(pendingAItem)
-            }
-        }
-    }
-}
-
-struct PropagateRecord{  // Store a call to propagateProxy and propagate it later. Because propagate may block so we need to delay it.
-    our AItem: aItem
-    our POV: LHSPov
-    our POV: RHSPov
-    our POV: remainder
-    me bool: looseSize
-    bool: dontEnque
-}
 
 //////////////////////////
 // Infon Interface Routines
@@ -2955,7 +2348,6 @@ struct Agent{
     our infonView: user
     our infonView: world
     me AgentContext: context
-    me WorldManager: worldMgr
     their ProteusCore: CORE
     me Locale: locale
     our Map<string, string>: settings
@@ -3023,7 +2415,6 @@ struct Agent{
         Allocate(user);   user!.setToList()
         Allocate(world); world!.setToList()
         context.init(identityRegistry)
-        worldMgr.init(this)
         graphNormalizer.initWithRegistry(identityRegistry)
         graphNormalizer.setContext(context.topicHistoryPOV)
         graphNormalizer.access!.replyCore <- CORE
@@ -3262,4 +2653,4 @@ struct ProteusCore{
 
 /////////////////////////////////////////
  //do codeDataDisplay(infonView, TAG_infonDumpMode)
-do GeneratePtrSymbols(AItem, POV, infItr, infonView, infonState, stateRec)
+do GeneratePtrSymbols(POV, infItr, infonView, infonState, stateRec)

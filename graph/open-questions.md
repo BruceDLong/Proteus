@@ -144,3 +144,10 @@ test is evidence to investigate, not automatically a new language-design questio
 See [field-selection-contract.md](field-selection-contract.md),
 [unordered-field-results.md](unordered-field-results.md), and
 [language-compatibility-status.json](language-compatibility-status.json).
+
+## Boundary names and typed fields
+
+The `.begin` / `.end` boundary syntax can collide with ordinary typed-field
+selection using those words. The user explicitly deferred resolving this
+overload until a concrete modeling need arises. Keep the current boundary
+behavior; do not redesign syntax as part of the AItem cleanup.

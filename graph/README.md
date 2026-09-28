@@ -5,8 +5,8 @@ This private experiment starts at Proteus commit
 It has no Git remote. Open design decisions are tracked in
 [open-questions.md](open-questions.md). Proteus4 is an independent redesign. Remove obsolete code
 as its responsibilities move to the graph reasoner. Ordinary Agent normalization
-now uses the graph reasoner. Legacy AItem rules remain compiled for unmigrated facilities and reference tests; normalization
-has no agenda fallback.
+uses the graph reasoner. The AItem engine and its direct internal tests have
+been removed; see [aitem-cleanup-results.md](aitem-cleanup-results.md).
 
 Sequence correspondence propagates successful matches through the graph
 frontier and applies the first complete result. See
@@ -97,9 +97,8 @@ remaining sessions. `ProteusCore.deInit()` calls that shutdown.
 Standalone `GraphNormalizer` contexts remain available for focused experiments.
 One normalizer owns one semantic context, registry, and worker.
 `initWithRegistry(existing)` explicitly adopts a pre-existing registry;
-a POV already bound to another registry cannot silently be rebound. Do not run
-the legacy normalizer concurrently against this context: it does not use this
-runtime's synchronization boundary. Keep one manager per shared semantic context.
+a POV already bound to another registry cannot silently be rebound. Publish changes through the
+graph runtime synchronization boundary. Keep one manager per shared semantic context.
 
 `GraphNormalizer.findItem(source, index)` starts a zero-based positional goal. Its handle's
 `result()` is the selected POV (possibly an implicit sparse occurrence). A

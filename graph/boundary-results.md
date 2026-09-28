@@ -97,5 +97,6 @@ Exact refreshed inventories are in `language-compatibility-status.json` and
 
 S-list/T-list conversions, temporal coordinates and units, `%tprev`/`%tnext`
 across boundary identities, general singlet theory and the wider word/context
-model remain separate design steps. Legacy AItem temporal helpers remain outside
-the graph entry point; this change does not claim to migrate their internals.
+model remain separate design steps. The later
+[AItem cleanup](aitem-cleanup-results.md) removed the legacy temporal helpers;
+it did not migrate their unsupported behavior.

@@ -63,8 +63,8 @@ preserves repeated references within the imported model; matching numeric IDs
 from independent scopes alone do not establish identity.
 
 The graph implementation now uses this null state and identity scope. The
-legacy AItem boundary constructor is outside the graph entry point and remains
-unmigrated; its numeric placeholder does not define the new boundary contract.
+legacy AItem boundary constructor and its numeric placeholder were removed
+with the old engine.
 
 ## Agreed boundary availability
 
