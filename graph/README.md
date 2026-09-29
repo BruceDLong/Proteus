@@ -44,6 +44,9 @@ nominal correspondence, with atomic plans and retained identities. See
 semantics, validation, and the remaining ambiguous and mixed-order cases.
 Explicit normalization now requests immediate definition parts, while related
 source traversal stays lazy; see [normalization-parts-results.md](normalization-parts-results.md).
+Written definition prefixes and inferred collection labels now compose through
+the same requirements, with indexed access to the virtual tail; see
+[definition-prefix-results.md](definition-prefix-results.md).
 This updates the direct-normalization policy recorded in
 [partial-type-results.md](partial-type-results.md). Contained open spans use the
 shared planner described in [open-span-correspondence-results.md](open-span-correspondence-results.md).

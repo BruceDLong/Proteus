@@ -233,7 +233,7 @@ public:
                 [](const POVNode& member) { return member; })) return false;
         bool supplied = false;
         for (const auto& segment : layout.segments) if (!segment.gap) {
-            if (!access_->hasTypeRequirements(segment.node)) return false;
+            if (!access_->hasTypeRequirements(segment.node) && !WordForms::collectionType(*access_,segment.node)) return false;
             supplied = true;
         }
         return supplied;
@@ -285,6 +285,12 @@ public:
         requirement->facts.valid = true;
         requirement->types = names(node);
         requirement->captureLabel(node);
+        if(!requirement->writtenType) if(auto type=WordForms::collectionType(*access_,node)) {
+            // Infer the same nominal collection label as normalization without
+            // recursively applying a declaration for that inferred spelling.
+            requirement->writtenType=type;requirement->label=type->typeID();
+            requirement->types.push_back(type->typeID());
+        }
         std::sort(requirement->types.begin(), requirement->types.end());
         if (node != root) {
             auto& witness = proof->evidence->witnesses.at(node);
@@ -327,9 +333,11 @@ public:
             } else requirement = combineDefinitions(requirement, repeated,proof->composition);
         }
         if (node == root) if (auto owner = occurrenceOwner(node)) {
-            auto repeated = compiled.at(owner)->repeated;
-            if (!repeated) { proof->compilable = false; return; }
-            requirement = combineDefinitions(requirement, repeated,proof->composition);
+            auto body=compiled.at(owner);
+            auto index=POVDescription(node).occurrenceIndex();
+            auto member=index>=0 && static_cast<std::size_t>(index)<body->members.size() ? body->members[index] : body->repeated;
+            if (!member) { proof->compilable = false; return; }
+            requirement = combineDefinitions(requirement, member,proof->composition);
         }
         if(node==root || !describesParts(node)) for (const auto& name : names(node)) {
             if (auto body=lookup(name)) requirement = combineDefinitions(requirement, compiled.at(body),proof->composition);

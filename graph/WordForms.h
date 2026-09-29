@@ -27,7 +27,8 @@ public:
     }
     // In a field description the noun's plural form describes a collection.
     // An explicit declaration takes precedence over inferred English spelling.
-    static bool collectionPredicate(const POVNode& node,ProteusDefinitions& definitions) {
+    template<class Definitions>
+    static bool collectionPredicate(const POVNode& node,Definitions& definitions) {
         auto type=node->pItem->type;
         return type && type->modelID.empty() && !definitions.declared(type->typeID()) &&
             !pluralSingular(type->normalType()).empty();

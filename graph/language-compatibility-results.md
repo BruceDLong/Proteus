@@ -13,11 +13,16 @@ Use that model for future integration examples, including verb application;
 those must exercise ordinary graph search and normalization, with no cube-specific
 engine behavior. This removal does not establish that verb application works yet.
 
-Explicit normalization now requests immediate definition parts; related source
-traversal stays lazy. Unspecified list order is inferred through type headers.
-All **1,206/1,206 registered graph tests** pass, including 30 new checks. The
-compiled audit reports **1,256 pass / 8 existing fail**. Six older language
-suites report **266 pass / 86 fail / 8 ambiguity skips**. See
+Written definition prefixes now compose without expanding virtual tails, and
+read-only compilation reuses collection-type inference. All **1,224/1,224
+registered graph tests** pass, including 18 new checks. The compiled audit reports
+**1,274 pass / 8 existing fail**. Six older language suites report **266 pass /
+86 fail / 8 ambiguity skips**. See
+[definition-prefix-results.md](definition-prefix-results.md).
+
+The preceding change made explicit normalization request immediate definition
+parts while related source traversal stays lazy. Unspecified list order is
+inferred through type headers; see
 [normalization-parts-results.md](normalization-parts-results.md).
 
 `word/setColor` now fills all three fields. Its expected text was updated to

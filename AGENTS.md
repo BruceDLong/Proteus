@@ -77,6 +77,10 @@ fixed-width whole-list grouping use graph requirements and priced plans.
 Empty open definition bodies retain virtual positions; their known extent
 feeds the shared span layout without allocating members.
 Loaded instance prefixes can be checked without expanding their virtual tails.
+Written definition prefixes also contribute concrete members without enumerating
+virtual positions. Reuse existing occurrence POVs when a prefix arrives later,
+and share WordForms collection inference during read-only compilation.
+See graph/definition-prefix-results.md.
 A proved contradiction uses GoalRejected (or its DefinitionConflict subtype),
 so rejection propagates only through required goal dependencies. Exploratory
 rejection must not abort unrelated routes, mutate the RHS into a global failure,
@@ -98,7 +102,7 @@ See graph/repetition-prefix-results.md; parser-owned open input remains deferred
 Scalar exclusion predicates distinguish a known mismatch from missing information.
 Accepted list-valued input members retain their atomic identity on replay; do not
 reinterpret their copied values as more grammar. Composite exclusion,
-contextual typed predicates, prefixed definition bodies, recursive grammar,
+contextual typed predicates, embedded virtual definition bodies, recursive grammar,
 and unordered record matching remain later boundaries.
 Single-step field predicates support finite ordered structures. Context-free scalar type
 meanings can be compiled read-only for speculative matching and reused on accepted

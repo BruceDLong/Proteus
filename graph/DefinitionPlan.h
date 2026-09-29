@@ -16,8 +16,8 @@ struct DefinitionRequirement {
     GraphTypeFacts facts;
     NumericBounds numeric; // optional symbolic value constraint, not infSize
     // An open requirement may carry a proved prefix with an unresolved tail.
-    // Compiling prefixed/embedded virtual definitions remains a separate
-    // obligation from publishing a sequence proof's explicit members.
+    // Embedded virtual definitions remain a separate obligation; a written
+    // prefix never allocates the unresolved positions of its tail.
     bool list = false, open = false;
     int order = uOrdered; // a local member template can leave container order unspecified
     std::vector<std::shared_ptr<DefinitionRequirement>> members;
@@ -98,23 +98,24 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
             if(!mapping.unambiguous) throw DefinitionPending{};
             for(const auto& pair:mapping.pairs) result->members[pair.first]=combineDefinitions(result->members[pair.first],right->members[pair.second],work);
             for(auto member:mapping.missing) result->members.push_back(right->members[member]);
-        } else if (result->open && right->open) {
-            if (result->repeated && right->repeated)
-                result->repeated = combineDefinitions(result->repeated, right->repeated,work);
-            else if (right->repeated) {
-                result->repeated = right->repeated; result->templateSource = right->templateSource;
-            }
-        } else if (result->open || right->open) {
-            auto repeated = result->open ? result->repeated : right->repeated;
-            auto finite = result->open ? right : result;
-            result->members = finite->members;
-            if (repeated) for (auto& member : result->members) member = combineDefinitions(member, repeated,work);
-            result->open = false; result->repeated.reset(); result->templateSource.reset();
         } else {
-            if (result->members.size() != right->members.size())
-                throw DefinitionConflict("incompatible finite definition lengths");
-            for (std::size_t i = 0; i < result->members.size(); ++i)
-                result->members[i] = combineDefinitions(result->members[i], right->members[i],work);
+            // Closed ends must agree; open bodies contribute only their known
+            // prefix. Conjoin common positions before considering the tail.
+            const auto leftCount=result->members.size(), rightCount=right->members.size();
+            if ((!result->open && rightCount>leftCount) || (!right->open && leftCount>rightCount))
+                throw DefinitionConflict("incompatible definition lengths");
+            for (std::size_t i=0;i<std::min(leftCount,rightCount);++i)
+                result->members[i]=combineDefinitions(result->members[i],right->members[i],work);
+            result->members.insert(result->members.end(),right->members.begin()+std::min(leftCount,rightCount),right->members.end());
+            if (result->repeated && right->repeated)
+                result->repeated=combineDefinitions(result->repeated,right->repeated,work);
+            else if (right->repeated) {
+                result->repeated=right->repeated;result->templateSource=right->templateSource;
+            }
+            if(result->repeated) for(auto& member:result->members)
+                member=combineDefinitions(member,result->repeated,work);
+            result->open=result->open && right->open;
+            if(!result->open) {result->repeated.reset();result->templateSource.reset();}
         }
     } else if (right->list) {
         result->list = true; result->order=right->order; result->open = right->open; result->members = right->members;
@@ -231,8 +232,7 @@ private:
                 if (!count.combine(actual) || !count.combine(requirement->facts))
                     throw DefinitionConflict("incompatible repeated definition extent");
             }
-            auto demanded = access->demandedOccurrences(target->node);
-            members.insert(members.end(), demanded.begin(), demanded.end());
+
         }
         if (adopt) writes.push_back([access, target] { return access->adoptDefinitionList(target->node); });
         if (!requirement->facts.accepts(actual)) writes.push_back([access, target, requirement] {
@@ -251,10 +251,46 @@ private:
         }
         auto finalFacts = actual;
         finalFacts.combine(requirement->facts);
-        if (open && finalFacts.hasSize && finalFacts.size == 0) writes.push_back([access, target] {
-            return access->finishTail(target->node, true, 0);
+        if(finalFacts.hasSize && finalFacts.size<static_cast<std::int64_t>(requirement->members.size()))
+            throw DefinitionConflict("definition prefix exceeds instance extent");
+        if(!open && members.size()<requirement->members.size())
+            throw DefinitionConflict("definition prefix exceeds closed instance");
+        // Only written positions are added. Reuse an already demanded POV
+        // when its position becomes concrete; no new virtual tail is walked.
+        std::set<POVNode> prepared;
+        auto demanded=target->node ? access->demandedOccurrences(target->node) : std::vector<POVNode>{};
+        for(std::size_t i=0;i<std::max(members.size(),requirement->members.size());++i) {
+            auto spec=i<requirement->members.size() ? requirement->members[i] : requirement->repeated;
+            Place member;
+            if(i<members.size()) member=place(members[i]);
+            else {
+                POVNode existing;
+                for(const auto& occurrence:demanded)
+                    if(POVDescription(occurrence).occurrenceIndex()==static_cast<std::int64_t>(i)) {
+                        // Distinct views need a joint identity plan, as in
+                        // grouped correspondence; never discard one silently.
+                        if(existing && existing!=occurrence) {supported=false;return;}
+                        existing=occurrence;
+                    }
+                member=existing ? place(existing) : std::make_shared<Slot>();
+                work.creations=addCost(work.creations,existing ? 0 : 2);
+                writes.push_back([access,target,member,spec,existing] {
+                    member->node=existing ? access->appendOccurrence(target->node,existing) : spec->appendMember(*access,target->node);
+                    return true;
+                });
+            }
+            if(member->node) prepared.insert(member->node);
+            prepare(member,spec);
+        }
+        for(const auto& member:demanded) if(!prepared.count(member)) {
+            auto index=POVDescription(member).occurrenceIndex();
+            prepare(place(member),index>=0 && static_cast<std::size_t>(index)<requirement->members.size() ?
+                requirement->members[index] : requirement->repeated);
+        }
+        auto count=static_cast<std::int64_t>(std::max(members.size(),requirement->members.size()));
+        if(open && finalFacts.hasSize && finalFacts.size==count) writes.push_back([access,target,count] {
+            return access->finishTail(target->node,true,count);
         });
-        for (const auto& member : members) prepare(place(member), requirement->repeated);
     }
     void prepareRecord(const Place& target,const DefinitionSpec& requirement,const GraphTypeFacts& actual,bool lazy=false) {
         auto access=access_;

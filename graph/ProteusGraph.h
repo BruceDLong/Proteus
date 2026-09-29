@@ -34,11 +34,11 @@ inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
 }
 
 #include "MemberCorrespondence.h"
+#include "WordForms.h"
 #include "DefinitionApplications.h"
 #include "ScalarPredicate.h"
 #include "RecordStructure.h"
 #include "RHSRepresentation.h"
-#include "WordForms.h"
 #include "FieldPredicate.h"
 #include "BoundaryGraph.h"
 #include "RelativeNavigation.h"
@@ -1165,14 +1165,21 @@ private:
                 result.refinements.push_back({{node, valueOnly, 0}, {1, 0}, "find value to expose indexed access", true});
                 return result;
             }
-            if (access_->sparse(node) && access_->listExtent(node) >= 0) {
-                if (query.argument >= access_->extent(node)) {
+            ListBoundary<POVNode> boundary;
+            if(access_->templatePrefixList(node)) {
+                boundary=listBoundary(*access_,node);
+                boundaryNeeds(result,node,boundary);
+            }
+            bool virtualPosition=access_->templatePrefixList(node) && boundary.valid &&
+                boundary.prefix>=0 && boundary.extent>=0 && query.argument>=boundary.prefix;
+            if (virtualPosition) {
+                if (query.argument >= boundary.extent) {
                     return result;
                 }
                 auto access = access_; auto definitions = definitions_;
                 // The virtual edge is visible before even a single implicit
                 // occurrence is created. Its cost is independent of the index.
-                result.edges.push_back({"sparse occurrence", {1, 1}, true,
+                result.edges.push_back({"sparse occurrence", {boundary.visits, 1}, true,
                     [access, definitions, node, query] {
                         definitions->retainOccurrenceOwner(node);
                         auto existing = access->existingSparseItem(node, query.argument);
