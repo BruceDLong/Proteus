@@ -1,10 +1,23 @@
 # Older language compatibility, 2026-09-28
 
+The user retired `rubix/materializedDefinitionMembers` and its sole fixture,
+`Resources/rubix_copy_when_needed.pr`. Its synthetic side values (`1111`, `3333`,
+and so on) are no longer a basis for choosing definition semantics. The failure
+count drops by one because the test was removed, not because it was repaired.
+`rubix/sparseNestedContinuation` remains a separate, unchanged regression.
+
+The actual model is in
+`/home/bruce/devl/Slipstream/Resources/public/Things/rubixCube.pr`. It describes
+six centers, twelve edges, eight corners, a solved state, and a temporal cube.
+Use that model for future integration examples, including verb application;
+those must exercise ordinary graph search and normalization, with no cube-specific
+engine behavior. This removal does not establish that verb application works yet.
+
 Explicit normalization now requests immediate definition parts; related source
 traversal stays lazy. Unspecified list order is inferred through type headers.
 All **1,206/1,206 registered graph tests** pass, including 30 new checks. The
 compiled audit reports **1,256 pass / 8 existing fail**. Six older language
-suites report **266 pass / 87 fail / 8 ambiguity skips**. See
+suites report **266 pass / 86 fail / 8 ambiguity skips**. See
 [normalization-parts-results.md](normalization-parts-results.md).
 
 `word/setColor` now fills all three fields. Its expected text was updated to
@@ -47,7 +60,7 @@ Its old closed-result expectation was updated in that earlier increment.
 
 | Suite | Passing | Failing | Ambiguous skips | Total |
 |---|---:|---:|---:|---:|
-| `defaultTests.tst` | 248 | 12 | 8 | 268 |
+| `defaultTests.tst` | 248 | 11 | 8 | 267 |
 | `demoTests.tst` | 8 | 14 | 0 | 22 |
 | `sparseTests.tst` | 2 | 21 | 0 | 23 |
 | `timeTests.tst` | 4 | 32 | 0 | 36 |
