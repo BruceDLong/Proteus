@@ -26,7 +26,10 @@ supports. `%tprev`/`%tnext` use RelativeNavigation's temporal policy; ordinary
 only nested T-lists and explicit embedded spans continue temporal navigation.
 TemporalGraph supplies symbolic support/cut goals. Reading either side of an
 interior S-state cut yields the same source value. A cut in a changing T-history
-stays unresolved until its location is known. Do not infer time duration from
+stays unresolved until its location is known. Located cuts follow stored member
+boundaries and explicit history identities; already demanded sparse occurrences
+are visible without enumerating missing ones. See graph/temporal-cut-results.md.
+Do not infer time duration from
 member count, expand sparse histories, or silently copy missing fields between arbitrary states. The 2026-09-29
 clarification establishes preservation across a modeled change unless the model
 implies another change, including indirect causal consequences. This transition

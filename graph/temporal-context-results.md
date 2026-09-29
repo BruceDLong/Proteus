@@ -89,3 +89,10 @@ multiple temporal supports/cuts remain a subsequent step.
 The temporal-side API selects the support retained by that cut's reference. It
 is not a global search for every system obtaining at an identical cut. The
 existing `.begin`/`.end` typed-field naming question remains deferred.
+
+## Later increment: located cuts
+
+[Temporal cut results](temporal-cut-results.md) adds side lookup through known
+boundary identities, nested T-spans, explicit history aliases, and existing sparse
+occurrences. Unlocated cuts remain unresolved. General parent/part projection and
+verb application are still outside the implemented boundary.

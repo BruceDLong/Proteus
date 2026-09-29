@@ -137,6 +137,18 @@ TestsToRun = `
     unit/graphDefinitionLanguage/isolatedLanguages
     unit/graphDefinitionLanguage/publicEntry
 
+    unit/graphTemporal/cubeOrientationMapping
+    unit/graphTemporal/lateSideValue
+    unit/graphTemporal/sparseLocatedCut
+    unit/graphTemporal/locatedCut
+    unit/graphTemporal/lateCutIdentity
+    unit/graphTemporal/nestedLocatedCut
+    unit/graphTemporal/mappedHistory
+    unit/graphTemporal/unmappedState
+    unit/graphTemporal/cutEndpoint
+    unit/graphTemporal/cutCancellation
+    unit/graphTemporal/sparseUnlocatedCut
+    unit/graphTemporal/contradictoryCut
     unit/graphTemporal/structuralBoundary
     unit/graphTemporal/embeddedContext
 
@@ -9974,6 +9986,19 @@ struct GLOBAL {
 
     GRAPHTEMPORAL(unit/graphTemporal/changedStreamContext, 34)
 
+    GRAPHTEMPORAL(unit/graphTemporal/sparseLocatedCut, 48)
+    GRAPHTEMPORAL(unit/graphTemporal/lateSideValue, 46)
+    GRAPHTEMPORAL(unit/graphTemporal/cubeOrientationMapping, 47)
+    GRAPHTEMPORAL(unit/graphTemporal/locatedCut, 37)
+    GRAPHTEMPORAL(unit/graphTemporal/lateCutIdentity, 38)
+    GRAPHTEMPORAL(unit/graphTemporal/nestedLocatedCut, 39)
+    GRAPHTEMPORAL(unit/graphTemporal/mappedHistory, 40)
+    GRAPHTEMPORAL(unit/graphTemporal/unmappedState, 41)
+    GRAPHTEMPORAL(unit/graphTemporal/cutEndpoint, 42)
+    GRAPHTEMPORAL(unit/graphTemporal/cutCancellation, 43)
+    GRAPHTEMPORAL(unit/graphTemporal/sparseUnlocatedCut, 44)
+    GRAPHTEMPORAL(unit/graphTemporal/contradictoryCut, 45)
+
     GRAPHTEMPORAL(unit/graphTemporal/structuralBoundary, 35)
     GRAPHTEMPORAL(unit/graphTemporal/embeddedContext, 36)
 
@@ -10113,6 +10138,153 @@ struct GLOBAL {
             auto h=norm(p);
             if(caseID==35) ok=!h.status().failed && h.status().withSubscribers && h.status().symbolicValues;
             else ok=!h.status().failed && h.status().fullyNormed && toString(p->pItem.get())=="{&{{T *10+1 *10+1}}}";
+        }
+        if(caseID>=37 && caseID<=45) {
+            auto p=parse(caseID==39 ? "{T {T *10+1 *10+2} {T *10+3 *10+4}}" :
+                         caseID==44 ? "*1000000000+{T *10+7|...}" : "{T *10+1 *10+2 *10+3}");
+            auto original=toString(p->pItem.get());
+            auto c=cut(p).result();
+            auto a=POVDescription(p).member(),b=a ? a->next : nullptr;
+            auto before=caseID==39 ? POVDescription(a).member(true) : a;
+            auto after=caseID==39 ? POVDescription(b).member() : b;
+            if(caseID==37) n.recordIdentity(c,bound(a,true));
+            auto left=n.findTemporalSide(c,false),right=n.findTemporalSide(c,true);
+            left.waitForCompletion();right.waitForCompletion();
+            ok=caseID==37 ? left.result()==before && right.result()==after :
+                !left.result() && !right.result() && left.status().withSubscribers && right.status().withSubscribers;
+            if(caseID==44) {
+                ok &= p->pItem->value->items.size()==0 &&
+                    (!p->repetitionSpan.family || p->repetitionSpan.family->occurrences.empty());
+            } else {
+                if(caseID==43) {left.cancel();right.cancel();}
+                // No state copying: boundary identity locates an existing cut.
+                n.recordIdentity(c,bound(a,true));
+                left.waitForCompletion();right.waitForCompletion();
+                if(caseID==43) ok &= left.status().cancelled && right.status().cancelled && !left.result() && !right.result();
+                else ok &= !left.status().failed && !right.status().failed && left.result()==before && right.result()==after;
+                if(caseID==37) {
+                    auto again=n.findTemporalSide(c,true);again.waitForCompletion();
+                    ok &= again.result()==after && !reg->areIdentical(before,after);
+                }
+                if(caseID==40) {
+                    auto mapped=parse("?");n.recordIdentity(mapped,p);
+                    auto mappedCut=cut(mapped).result();n.recordIdentity(mappedCut,c);
+                    auto mappedLeft=n.findTemporalSide(mappedCut,false),mappedRight=n.findTemporalSide(mappedCut,true);
+                    mappedLeft.waitForCompletion();mappedRight.waitForCompletion();
+                    ok &= mappedLeft.result()==before && mappedRight.result()==after;
+                }
+                if(caseID==41) {
+                    auto unchanged=parse("{orientation:*10+7 location:*10+8}");
+                    auto unchangedCut=cut(unchanged).result();n.recordIdentity(unchangedCut,c);
+                    auto unchangedLeft=n.findTemporalSide(unchangedCut,false),unchangedRight=n.findTemporalSide(unchangedCut,true);
+                    unchangedLeft.waitForCompletion();unchangedRight.waitForCompletion();
+                    ok &= unchangedLeft.result()==unchanged && unchangedRight.result()==unchanged &&
+                          !reg->areIdentical(unchanged,p) && unchanged->pItem->value->items.size()==2;
+                }
+                if(caseID==42 || caseID==45) {
+                    // A later contradictory placement must fail when normalized again.
+                    n.recordIdentity(c,bound(caseID==42 ? p : b,caseID==45));
+                    auto invalid=n.findTemporalSide(c,false);invalid.waitForCompletion();
+                    ok &= invalid.status().failed;
+                }
+            }
+            ok &= toString(p->pItem.get())==original;
+            if(!ok) std::cout<<"Located cut "<<caseID<<" left="<<bool(left.result())<<" right="<<bool(right.result())
+                <<" left error="<<left.status().error<<" right error="<<right.status().error<<"\n";
+        }
+        if(caseID==46) {
+            auto p=parse("{T *10+1 ?}");auto a=POVDescription(p).member(),b=a->next;
+            auto c=cut(p).result();n.recordIdentity(c,bound(a,true));
+            auto left=n.findTemporalSide(c,false),right=n.findTemporalSide(c,true);
+            left.waitForCompletion();right.waitForCompletion();
+            ok=left.result()==a && !right.result() && right.status().withSubscribers;
+            n.addRHS(b,parse("*10+2"));right.waitForCompletion();
+            ok &= !right.status().failed && right.result()==b && b->pItem->value->num==2 && a->pItem->value->num==1;
+        }
+        if(caseID==48) {
+            auto p=parse("*1000000000+{T *10+7|...}");
+            auto a=n.findItem(p,4000000),b=n.findItem(p,4000001);
+            a.waitForCompletion();b.waitForCompletion();
+            auto first=a.result(),second=b.result();
+            if(!first || !second) return false;
+            auto c=cut(p).result();
+            n.recordIdentity(c,bound(first,true));n.recordIdentity(c,bound(second,false));
+            auto left=n.findTemporalSide(c,false),right=n.findTemporalSide(c,true);
+            left.waitForCompletion();right.waitForCompletion();
+            ok=!left.status().failed && !right.status().failed && left.result()==first && right.result()==second &&
+                p->pItem->value->items.size()==0 && p->repetitionSpan.family->occurrences.size()==2;
+        }
+        if(caseID==47) {
+            // Exercise actual stored cube data, independently of the still-
+            // pending application of its complete contextual type definition.
+            // Parsing a second occurrence keeps the shared declaration intact.
+            auto text=readAssetAsString("public/Things/rubixCube.pr");
+            if(text.empty()) {std::cout<<"Cube model asset is required\n";return false;}
+            auto model=parse(text);norm(model);POVNode declaration;
+            for(auto at=POVDescription(model).member();at;at=at->next)
+                if(n.access->isDefinition(at) && n.access->definitionName(at)==parse("solvedState")->pItem->type->typeID()) declaration=at;
+            if(!declaration) {std::cout<<"solvedState declaration not found\n";return false;}
+            auto written=toString(declaration->pItem->funcArgs.get());
+            auto cube=parse(written);
+            // Fixture preparation reads only explicitly stored model data.
+            // Full definition/positional application has its own failing
+            // regression; it is not a premise of these temporal graph checks.
+            auto item=[](const POVNode& source,int index) {
+                auto at=POVDescription(source).member();
+                while(at && index-->0) at=at->next;
+                return at;
+            };
+            auto field=[&](const POVNode& source,const char* type) -> POVNode {
+                if(!source) return {};
+                auto word=parse(type)->pItem->type->typeID();
+                for(auto at=POVDescription(source).member();at;at=at->next)
+                    if(at->pItem->type && at->pItem->type->typeID()==word) return at;
+                return {};
+            };
+            auto edges=item(cube,1);if(!edges) return false;
+            auto cubie=item(edges,9),neighbor=item(edges,10);
+            auto orientation=field(field(cubie,"thing"),"orientation");
+            auto x=field(orientation,"xRot"),y=field(orientation,"yRot"),z=field(orientation,"zRot");
+            auto neighborOrientation=field(field(neighbor,"thing"),"orientation");
+            auto location=field(field(cubie,"thing"),"location");
+            if(!x || !y || !z || !neighborOrientation || !location) {
+                std::cout<<"Stored cube fields not reachable\n";return false;
+            }
+            auto oldOrientation=toString(orientation->pItem.get()),oldNeighbor=toString(neighborOrientation->pItem.get());
+            auto history=parse("{T ? xRot:0.5}");
+            auto initial=POVDescription(history).member(),changed=initial->next;
+            n.recordIdentity(initial,x);
+            auto change=cut(history).result();n.recordIdentity(change,bound(initial,true));
+            // A second cube's x-rotation history is explicitly mapped to this
+            // one. No identity is asserted for their other parts or supports.
+            auto mappedHistory=parse("?");n.recordIdentity(mappedHistory,history);
+            auto mappedCut=cut(mappedHistory).result();n.recordIdentity(mappedCut,change);
+            auto before=n.findTemporalSide(mappedCut,false),after=n.findTemporalSide(mappedCut,true);
+            before.waitForCompletion();after.waitForCompletion();
+            // Side lookup returns an occurrence, not a normalized copy of its
+            // payload. Compare the parsed 5/10 numerically without changing it.
+            mpq_class afterValue=after.result() ? after.result()->pItem->value->num.val : mpq_class(-1);
+            afterValue.canonicalize();
+            ok=!before.status().failed && !after.status().failed && before.result() && after.result() &&
+                before.result()->pItem->value->num==0 && afterValue==mpq_class(1,2) &&
+                !reg->areIdentical(initial,changed);
+            // These S-values span the change. Aligning an interior cut does
+            // not manufacture a transition in any of them.
+            for(auto unchanged:{y,z,location,neighborOrientation}) {
+                auto c=cut(unchanged).result();n.recordIdentity(c,change);
+                auto a=n.findTemporalSide(c,false),b=n.findTemporalSide(c,true);
+                a.waitForCompletion();b.waitForCompletion();
+                bool same=!a.status().failed && !b.status().failed && a.result()==unchanged && b.result()==unchanged;
+                if(!same) std::cout<<"Unchanged cut failed: "<<toString(unchanged->pItem.get())<<" before="<<a.status().error<<" after="<<b.status().error<<"\n";
+                ok &= same;
+            }
+            bool untouched=toString(orientation->pItem.get())==oldOrientation && toString(neighborOrientation->pItem.get())==oldNeighbor &&
+                toString(declaration->pItem->funcArgs.get())==written && x->pItem->value->num==0;
+            if(!untouched) std::cout<<"Cube source comparison: orientation="<<(toString(orientation->pItem.get())==oldOrientation)
+                <<" neighbor="<<(toString(neighborOrientation->pItem.get())==oldNeighbor)<<" declaration="<<(toString(declaration->pItem->funcArgs.get())==written)<<"\n";
+            ok &= untouched;
+            std::cout<<"Cube xRot at mapped cut: "<<(before.result() ? toString(before.result()->pItem.get()) : "unresolved")
+                <<" -> "<<(after.result() ? toString(after.result()->pItem.get()) : "unresolved")<<"\n";
         }
         if(!ok) std::cout<<"Temporal case "<<caseID<<" failed\n";
         n.close();return ok;

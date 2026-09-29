@@ -92,3 +92,15 @@ claimed. Log: `/tmp/p4-signed-cube-final.log`.
 The Foundation location and orientation definitions and cube coordinates were
 not changed. See [signed-number-results.md](signed-number-results.md) for the
 representation change, sizing compatibility, and focused validation.
+
+## Located temporal cuts and full-model loading diagnosis
+
+See [temporal-cut-results.md](temporal-cut-results.md) for explicit history
+mapping, unchanged S-values at an aligned cut, and the real stored cube-data
+exercise. This is a graph-API transition test, not completed verb application.
+
+The four unresolved full-world reads have two separate blockers: `%INSERT` has
+not been migrated to graph dispatch, and direct loading exposes whole-definition
+compilation waiting on the unrelated contextual `centerCube` template. Earlier
+cube fixture failures did not by themselves prove that the imported definitions
+were loaded. The small signed-number regressions remain valid independent checks.

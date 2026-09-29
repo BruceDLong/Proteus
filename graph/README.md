@@ -11,7 +11,10 @@ been removed; see [aitem-cleanup-results.md](aitem-cleanup-results.md).
 Temporal `%tprev`/`%tnext` reads share structural neighbor traversal, with
 T-list context and nested T-span continuation. Lazy `.asTList` and `.cut`
 references expose support and cuts without choosing a clock or state count.
-See [temporal-context-results.md](temporal-context-results.md).
+Known boundary identities can locate the values before and after a cut, including
+through explicit history mappings and already demanded sparse occurrences.
+See [temporal-context-results.md](temporal-context-results.md) and
+[temporal-cut-results.md](temporal-cut-results.md).
 
 Sequence correspondence propagates successful matches through the graph
 frontier and applies the first complete result. See

@@ -1,0 +1,3 @@
+# Separate regression suite: the contextual-sibling case currently fails.
+definition/control, known field without contextual sibling declaration, {#scene={*1+{center|center:{color:1}} *1+{edge|edge:{xRot:0}}} scene@[2]@[1].xRot}, {#scene = {{center| center:{color:1}} {edge| edge:{xRot:0}}} xRot:0}, norm
+definition/contextualSibling, known field should not wait on unrelated sibling template, {#center={color\,*2+{side|{%.color}{pink}}} #scene={*1+{center|center:{color:1}} *1+{edge|edge:{xRot:0}}} scene@[2]@[1].xRot}, {#center = {color\, {side| {%.color} {pink}}} #scene = {{center| center:{color:1}} {edge| edge:{xRot:0}}} xRot:0}, norm

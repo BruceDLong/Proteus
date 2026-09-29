@@ -71,23 +71,61 @@ public:
             out.refinements.push_back({{q.node,temporalSupport,0},{1,0},"retain temporal support",false});
             return out;
         }
-        if(q.kind!=temporalSide) return out;
-        auto ref=q.node->temporalSplit.reference;
-        if(!ref) {out.deferred=true;return out;}
-        auto projection=access_->registry->findTemporalProjectionForView(ref->sourceSpan.get());
-        if(!projection || BoundaryGraph::temporal(projection->sourcePOV)) {
-            // An unlocated cut in a changing history does not choose an item.
+        auto edge=[&](const char* label,Query<POVNode> next) {
+            out.edges.push_back({label,{1,0},false,[next]{return next;}});
+        };
+        if(q.kind==temporalSide) {
+            auto ref=q.node->temporalSplit.reference;
+            if(!ref) {out.deferred=true;return out;}
+            // A located strict-interior cut cannot become an outer endpoint.
+            for(const auto& endpoint:{ref->sourceBegin,ref->sourceEnd})
+                if(access_->registry->areIdentical(q.node,endpoint))
+                    throw GoalRejected("strict interior cut coincides with support endpoint");
+            edge("source span of temporal cut",{ref->sourceSpan,temporalSideSpan,q.argument,q.node,{}, {1}});
+            return out;
+        }
+        if(q.kind==temporalSideMember) {
+            edge("inspect temporal member at cut",{q.node,temporalSideSpan,q.argument,q.related});
+            if(auto next=POVDescription(q.node).adjacent())
+                edge("next temporal span",{next,temporalSideMember,q.argument,q.related});
+            return out;
+        }
+        if(q.kind!=temporalSideSpan) return out;
+        // Identical histories provide alternative descriptions of this same
+        // occurrence. Value-only references must not supply its time boundaries.
+        for(const auto& relation:POVDescription(q.node,access_->registry.get()).relationships(false)) {
+            if(relation.valueOnly) continue;
+            auto next=q;next.node=relation.target;
+            edge("identical temporal span",next);
+        }
+        if(auto projection=access_->registry->findTemporalProjectionForView(q.node.get())) {
+            auto next=q;next.node=projection->sourcePOV;
+            edge("source of temporal support",next);
+            return out;
+        }
+        if(access_->inputPending(q.node) ||
+           getModeBits(q.node->pItem->value->flags,infonState::evalMode)!=infonState::emLiteral) {
+            out.refinements.push_back({{q.node,valueOnly,0},{1,0},"resolve span at temporal cut",true});
             out.deferred=true;return out;
         }
-        auto source=projection->sourcePOV;
-        if(source->pItem->isNull()) throw GoalRejected("strict interior cut has empty support");
-        if(access_->inputPending(source) || getModeBits(source->pItem->value->flags,infonState::evalMode)!=infonState::emLiteral) {
-            out.refinements.push_back({{source,valueOnly,0},{1,0},"resolve state at temporal cut",true});
-            out.deferred=true;return out;
+        if(BoundaryGraph::temporal(q.node)) {
+            // Compose only stored T-members. Sparse tails remain virtual;
+            // neither a state count nor equal values locate a cut within them.
+            out.refinements.push_back({{q.node,boundaryRelations,0},{1,0},"locate temporal member boundaries",true});
+            if(auto member=POVDescription(q.node).member())
+                edge("first temporal span",{member,temporalSideMember,q.argument,q.related});
+            for(const auto& member:access_->demandedOccurrences(q.node))
+                edge("already demanded temporal occurrence",{member,temporalSideSpan,q.argument,q.related});
+            return out;
         }
-        // Left and right are routes to one S-value, not duplicated states.
-        out.edges.push_back({q.argument<0 ? "S-value before interior cut" : "S-value after interior cut",
-            {1,0},false,[source]{return Query<POVNode>{source,temporalValueFound,0};}});
+        bool interior=!q.coordinates.empty() && q.coordinates.front()!=0;
+        if(q.node->pItem->isNull()) {
+            if(interior) throw GoalRejected("strict interior cut has empty support");
+            return out; // A null joins spans; it supplies no state on either side.
+        }
+        auto boundary=BoundaryGraph(access_).lookup(q.node,q.argument<0);
+        if(interior || (boundary && access_->registry->areIdentical(q.related,boundary)))
+            edge(q.argument<0 ? "S-value before cut" : "S-value after cut",{q.node,temporalValueFound,0});
         return out;
     }
 };
@@ -103,7 +141,11 @@ public:
     void beginPass() override {result_.reset();}
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
         if(request.kind==temporalSide) {
-            if(visit.query.kind==temporalValueFound) result_=visit.query.node;
+            if(visit.query.kind==temporalValueFound) {
+                if(result_ && !access_->registry->areIdentical(result_,visit.query.node))
+                    throw GoalRejected("cut identifies different temporal occurrences on one side");
+                result_=visit.query.node;
+            }
             return {};
         }
         auto source=request.node;
