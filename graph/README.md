@@ -51,6 +51,8 @@ Definition-derived units and sparse fixed correspondence share measured span
 layouts and source-backed views, for ordinary and temporal lists. See
 [sparse-unit-correspondence.md](sparse-unit-correspondence.md) for behavior,
 validation, and remaining fixture discrepancies.
+The ordinary-assignment/`forceID` distinction and rejection coverage are recorded
+in [force-id-contract.md](force-id-contract.md).
 This updates the direct-normalization policy recorded in
 [partial-type-results.md](partial-type-results.md). Contained open spans use the
 shared planner described in [open-span-correspondence-results.md](open-span-correspondence-results.md).

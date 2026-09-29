@@ -48,6 +48,7 @@ sparse/guard/nonAligningMinuteDoesNotSkipHalfMinute, Sparse minute selector does
 sparse/traverse/writeBothSparseBoundaries, Sparse write first and last symbolic seconds, [<_> &*3599+{second| ...}] <~ %W.secondRun = 11\n[&*3599+{second| ...} <_>] <~ %W.secondRun = 22\n[<_> &*3599+{second| ...}] <~ %W.secondRun//:second:11\n[&*3599+{second| ...} <_>] <~ %W.secondRun//:second:22, -, world, TestFiles/sparseTestCases.pr
 sparse/traverse/splitPreservesTailMarker, Sparse split preserves following concrete marker, [&*59+{second| ...} <_> &*60+{second| ...} _] <~ %W.twoSparseThenMarker = 81\n[&*120+{second| ...} <_>] <~ %W.twoSparseThenMarker//:123, -, world, TestFiles/sparseTestCases.pr
 
-# Pending: a writable marked span should be able to cross sparse/concrete/sparse
-# boundaries and merge the write back into the parent during re-normalization.
-sparse/pending/writeSpanAcrossSparseConcreteSparse, Pending sparse write across sparse concrete sparse, [&*119+{second| ...} <&*3+{second| ...}> &*239+{second| ...} _ &*360+{second| ...}] <~ %W.sparseMarkers = {10 20 30}\n[&*119+{second| ...} <&*3+{second| ...}> &*239+{second| ...} _ &*360+{second| ...}] <~ %W.sparseMarkers, seconds:{10 20 30}, world, TestFiles/sparseTestCases.pr
+# A conflicting write across sparse/concrete/sparse boundaries must reject.
+# The known 777 cannot become 20 without forceID (<<=); no partial values
+# should be written into either adjacent sparse span.
+sparse/pending/writeSpanAcrossSparseConcreteSparse, Reject conflicting sparse crossing write, [&*119+{second| ...} <&*3+{second| ...}> &*239+{second| ...} _ &*360+{second| ...}] <~ %W.sparseMarkers = {10 20 30}//:<REJECTED>\n%W.sparseMarkers//:sparseMarkers:{&seconds:*120+{second|  ... } 777 &seconds:*240+{second|  ... } 888 &seconds:*360+{second|  ... }}, -, world, TestFiles/sparseTestCases.pr

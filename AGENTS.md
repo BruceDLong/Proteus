@@ -115,7 +115,10 @@ oneOf alternatives. Collected positional results use the generic finishPass Set
 hook so a partial publication cannot starve a slower successful route.
 See graph/positional-path-results.md, graph/slice-results.md, and
 graph/path-write-results.md. Unambiguous path writes add constraints to the
-selected source occurrence; ambiguous targets remain pending. Retained parts
+selected source occurrence; ambiguous targets remain pending. Ordinary `=` rejects
+conflicting known values. Only explicit `forceID` (`<<=`) permits replacement;
+its parser flag exists, but its graph operation is still an implementation gap.
+Do not add a replacement exception for units or temporal lists. Retained parts
 are required subgoals, while partRef determines the returned descendant.
 Preserve the original owner stack when normalizing a selected occurrence;
 copied source RHSs must not run again under the query alias.

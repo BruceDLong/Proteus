@@ -3,6 +3,8 @@
 Dot, item, and fixed-extent slice paths now apply their following RHSs to a
 uniquely selected source occurrence. They use the existing constraint/Set
 machinery: a contradictory known value fails instead of being overwritten.
+The 2026-09-29 clarification makes `forceID` (`<<=`) the explicit exception;
+the graph engine has not yet implemented that operation.
 An ambiguous or unresolved selection cannot write to an arbitrary candidate.
 Repeated normalization reuses the target and does not append the same RHS again.
 

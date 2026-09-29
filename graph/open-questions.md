@@ -84,14 +84,13 @@ been reopened.
     Later, searches must be able to refer to definitions themselves. Which goal
     expresses that request while keeping ordinary value selection distinct?
 
-11. **Replacing known values through paths.** The old unit fixtures assign new
-    numbers to already known members (for example 8 becomes 80). The current
-    graph path-write contract rejects conflicting known values. Should all path
-    assignments replace known values, or should these fixtures assert a later
-    state/change explicitly? This is not a unit-specific policy. Until clarified,
-    keep the contradiction check and permit writes that supply unknown values.
-
 ## Decisions already made
+
+- Assigning a conflicting known value is a contradiction unless the relationship
+  explicitly uses `forceID` (written `<<=`). Ordinary `=` may supply an unknown
+  value but must not overwrite a known one, through units or any other path.
+  This was clarified on 2026-09-29. The graph implementation of `forceID`
+  remains a separate gap; its parser and printer already preserve the flag.
 
 - Preserve a rejected RHS and its context: it may match something else later.
   A failed comparison establishes no identity and supplies no continuation for

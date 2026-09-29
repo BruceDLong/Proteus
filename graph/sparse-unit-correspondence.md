@@ -1,5 +1,9 @@
 # Sparse correspondence and definition-derived units
 
+The validation below records commit `646672a`. The subsequent 2026-09-29
+assignment clarification and corrected rejection checks are in
+[force-id-contract.md](force-id-contract.md).
+
 A list's size still counts its own members. A four-cell list can supply a view
 of two pairs without becoming identical to that two-member container. Unit
 conversion follows homogeneous ordered definitions, with no time-unit names or
@@ -53,8 +57,8 @@ unit conversion:
   expectation also omits its known size. Generic regressions cover both the
   unknown-overlay selection and the numeric mismatch.
 - The old unit writes replace known numbers, such as 8 with 80. Existing path
-  assignment rejects contradictory known values. No overwrite exception is
-  introduced for units; the desired assignment policy is awaiting clarification.
+  assignment rejects contradictory known values. The 2026-09-29 clarification
+  confirms that only explicit `forceID` (`<<=`) permits replacement. That operation still needs a graph implementation.
 
 ## Validation at this checkpoint
 
@@ -122,7 +126,8 @@ One uses a numeric pattern to request a list:
 
 - `sparse/implicit/readAfterSparsePrefixInSizedCompositeList`
 
-Nine require a decision about replacement of known values:
+Nine fixtures expected replacement without `forceID`. The 2026-09-29
+clarification says those ordinary assignments are contradictions:
 
 - `sparse/pending/writeSpanAcrossSparseConcreteSparse`
 - `unit/nestedDay/writeMinutesAcrossHourNegativeSpan`
@@ -135,8 +140,8 @@ Nine require a decision about replacement of known values:
 - `unit/world/dayFromSeconds/writeTwoMinutesNegativeIntersection`
 
 Writes that supply unknown values are covered and preserve source identities.
-No replacement exception is attached to unit words or temporal lists. The shared
-assignment question is in [open-questions.md](open-questions.md).
+Replacement requires explicit `forceID`, regardless of units or temporal
+meaning. This is now a settled decision in [open-questions.md](open-questions.md).
 
 ## Supported boundary
 
