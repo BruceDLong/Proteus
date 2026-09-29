@@ -14,6 +14,7 @@ class SliceSelection {
         }
         return true;
     }
+public:
     static POVNode manifest(const std::shared_ptr<ProteusGraphAccess>& access,
                             const std::shared_ptr<ProteusDefinitions>& definitions,
                             const std::shared_ptr<GraphSliceView>& view,const Window& window,bool& changed) {

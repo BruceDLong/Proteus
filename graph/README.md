@@ -47,6 +47,10 @@ source traversal stays lazy; see [normalization-parts-results.md](normalization-
 Written definition prefixes and inferred collection labels now compose through
 the same requirements, with indexed access to the virtual tail; see
 [definition-prefix-results.md](definition-prefix-results.md).
+Definition-derived units and sparse fixed correspondence share measured span
+layouts and source-backed views, for ordinary and temporal lists. See
+[sparse-unit-correspondence.md](sparse-unit-correspondence.md) for behavior,
+validation, and remaining fixture discrepancies.
 This updates the direct-normalization policy recorded in
 [partial-type-results.md](partial-type-results.md). Contained open spans use the
 shared planner described in [open-span-correspondence-results.md](open-span-correspondence-results.md).

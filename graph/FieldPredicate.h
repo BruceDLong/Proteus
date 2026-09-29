@@ -70,7 +70,15 @@ class FieldPredicate {
         // An empty open ordered body constrains the list header/extent only.
         // It adds no member predicates and need not expand a sparse candidate.
         if (predicate && listHeaderOnly(*access_,node)) scalarOnly=true;
-        if (!scalarOnly && access_->literalList(node)) {
+        if (!scalarOnly && predicate && access_->repeatedDefinitionList(node) && specification->facts.hasSize) {
+            // A fixed repeated predicate describes every candidate position;
+            // it is not an instruction to allocate that many pattern nodes.
+            active_.insert(node->pItem);
+            specification->list=true;specification->open=true;
+            specification->repeated=read(definitions_->repeatedBody(node),true,context,false,useMeaning);
+            active_.erase(node->pItem);
+            if(!specification->repeated) return {};
+        } else if (!scalarOnly && access_->literalList(node)) {
             active_.insert(node->pItem);
             SpanLayout<POVNode> layout;
             std::map<POVNode,std::vector<POVNode>> locations;
@@ -120,6 +128,11 @@ class FieldPredicate {
             if (typeMatch==ScalarMatch::no || match==ScalarMatch::no) return ScalarMatch::no;
             unknown |= typeMatch==ScalarMatch::unknown || match==ScalarMatch::unknown;
             if (!pair.first->list) continue;
+            if(pair.first->repeated && pair.first->members.empty() && pair.first->facts.hasSize &&
+               pair.second->list && !pair.second->open && pair.second->order==uOrdered) {
+                for(const auto& member:pair.second->members) pending.push_back({pair.first->repeated,member});
+                continue;
+            }
             // Open and unordered structures need their own correspondence
             // proof. Never turn missing positions into successful omission.
             if (!pair.second->list || pair.first->order!=uOrdered || pair.second->order!=uOrdered || pair.first->open || pair.second->open) {unknown=true;continue;}

@@ -1,4 +1,5 @@
 #pragma once
+#include "FixedSpanCorrespondence.h"
 
 // A correspondence cursor walks existing list members and read-only templates.
 // A successful scalar comparison supplies the next edge. A mismatch supplies
@@ -132,6 +133,11 @@ public:
         if (q.kind == sequenceComplete) return out;
         if (q.kind == correspondenceInput) return input(q);
         if (q.kind == sequenceCorrespondence) {
+            // A selected window can contain neutral identity aliases whose
+            // source facts have not arrived yet. Expose that payload route
+            // before treating the aliases' missing values as unconstrained.
+            if(q.related->pItem->pathSelection)
+                out.refinements.push_back({{definitions_->payload(q.related),sizeAndValue,0},{1,0},"resolve selected RHS payload",true});
             // A prefix relationship cannot prove the end of an unsized open
             // target. This finite Set planner must not close that stream from
             // an arbitrary nullable match; prefix publications come later.
@@ -302,6 +308,13 @@ public:
     void beginPass() override { verified_ = false; templates_.clear(); prefixes_.clear(); }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
         const auto& q=visit.query;
+        if(q.kind==sequenceCorrespondence) {
+            auto plan=std::make_shared<FixedSpanCorrespondence>(access_,definitions_,request.node,request.related);
+            if(plan->supported) {
+                verified_=true;
+                return {{"Set fixed span correspondence",[plan]{return plan->apply();},plan->work}};
+            }
+        }
         if(SequenceCorrespondence::rootBoundary(q) && q.node==request.node &&
            getFlagBit(request.related->flags,POV::isOutrFeed) && access_->fedTemplate(q.node) &&
            q.coordinates[q.coordinates.size()-3]>0)

@@ -213,11 +213,63 @@ private:
         auto access = access_;
         bool adopt = !target->node || access->adoptableList(target->node);
         bool open = adopt || access->openTail(target->node);
+        // An enclosing repetition constrains virtual members too. Conjoin its
+        // template on this instance, never mutate a shared declaration or wait
+        // until every virtual position has been enumerated.
+        if(target->node && open && requirement->templateSource) {
+            auto existing=access->memberTemplate(target->node);
+            auto supplied=requirement->templateSource->pItem;
+            if(existing && existing!=supplied && !existing->hasRHS(supplied)) {
+                auto view=std::make_shared<POV>(923);view->pItem=existing;
+                auto facts=access->typeFacts(view);auto combined=facts;
+                ++work.visits;
+                if(facts.valid && !combined.combine(requirement->repeated->facts))
+                    throw DefinitionConflict("incompatible repeated member template");
+                auto sameWord=existing->type && supplied->type && existing->type->typeID()==supplied->type->typeID();
+                auto sameLiteral=access->plain(view,false,false,false,false) && access->plain(requirement->templateSource,false,false,false,false) &&
+                    existing->wrkList.empty() && supplied->wrkList.empty() && !access->literalList(view) &&
+                    !access->literalList(requirement->templateSource) && facts.same(access->typeFacts(requirement->templateSource)) &&
+                    existing->addedTypes.empty() && supplied->addedTypes.empty() &&
+                    ((!existing->type && !supplied->type) || sameWord);
+                if(!sameLiteral) {
+                    work.creations=addCost(work.creations,2);
+                    writes.push_back([access,target,existing,supplied] {
+                        auto combined=std::make_shared<infonView>(*existing);
+                        auto rhs=std::make_shared<POV>(923);rhs->pItem=supplied;access->bind(rhs);
+                        combined->addPOVToWrkList(rhs);target->node->pItem->value->listSpec=combined;
+                        SetFlagBit(target->node->pItem->flags,infonView::isNormed,false);++target->node->workRevision;
+                        return true;
+                    });
+                }
+            }
+        }
         std::vector<POVNode> members;
         if (!adopt) {
             if ((requirement->order==uOrdered && !access->definitionOrderedCandidate(target->node)) ||
                 (!access->physicalList(target->node) && !access->templatePrefixList(target->node))) {
                 supported = false; return;
+            }
+            bool embedded=false;
+            for(auto item=access->first(target->node,false);item;item=access->next(item,false)) embedded|=access->subList(item);
+            if(embedded && requirement->members.empty()) {
+                SpanLayout<POVNode> structure;
+                if(!readListLayout(*access,target->node,structure,work.visits,[&](const auto& at) {
+                    return at.phase!=ListPhase::enter || ((access->physicalList(at.node) || access->templatePrefixList(at.node)) && access->definitionOrderedCandidate(at.node));
+                },[](const POVNode& node){return node;}) || !structure.solve()) {supported=false;return;}
+                auto repeated=std::make_shared<DefinitionRequirement>(*requirement);
+                repeated->facts.hasSize=false;repeated->facts.explicitSize=false;
+                repeated->label.clear();repeated->writtenType.reset();repeated->types.clear();repeated->expandedTypes.clear();
+                for(const auto& segment:structure.segments) {
+                    if(segment.gap && segment.node==target->node) continue;
+                    prepare(place(segment.node),segment.gap ? repeated : requirement->repeated);
+                }
+                if(!requirement->facts.accepts(actual)) writes.push_back([access,target,requirement] {
+                    return access->applyTypeFacts(target->node,requirement->facts);
+                });
+                if(!access->definitionOrderKnown(target->node)) {
+                    ++orderWrites;writes.push_back([access,target]{return access->setDefinitionOrder(target->node);});
+                }
+                return;
             }
             for (auto item = access->first(target->node, false); item; item = access->next(item, false)) {
                 if (!access->correspondingMembers(item, item)) { supported = false; return; }

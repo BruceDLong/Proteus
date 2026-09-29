@@ -39,9 +39,29 @@ public:
             SetModeBits(spec->pItem->value->flags,infonState::evalMode,infonState::emLiteral);
             SetFlagBit(spec->pItem->value->flags,infonState::tailUnfinished,true);
             spec->pItem->value->sizeMode=fromGiven;
+            // The signed origin is measured in the pattern's unit. Keep that
+            // unit on the window query so positional selection uses the same
+            // definition-derived coordinates as an explicit typed slice.
+            auto first=body->value->items.head;
+            if(first) {
+                auto item=first->pItem;
+                if(item->value->listSpec) spec->pItem->value->listSpec=item->value->listSpec;
+                else if(item->type) {
+                    auto unit=std::make_shared<infonView>();unit->type=item->type;
+                    SetModeBits(unit->flags,infonView::viewMode,infonView::vmOverlay);
+                    SetModeBits(unit->flags,infonView::itmMode,infonView::mItem);
+                    SetModeBits(unit->value->flags,infonState::overlayType,infonState::tUnknown);
+                    SetModeBits(unit->value->flags,infonState::evalMode,infonState::emUnknown);
+                    SetModeBits(unit->infSize->flags,infonState::evalMode,infonState::emUnknown);
+                    spec->pItem->value->listSpec=unit;
+                }
+            }
             auto window=PathExpression::positionQuery(access,source,index,spec);
             window->flags=input->flags;
             // The window already supplies exactly the requested local extent.
+            // Fixing the window's endpoints does not remove its permission
+            // to interpret the source in the pattern's unit/representation.
+            SetFlagBit(window->flags,POV::looseMode,input->looseType());
             SetFlagBit(window->flags,POV::looseTop,false);
             SetFlagBit(window->flags,POV::selectorLocalWork,false);input=window;
         }

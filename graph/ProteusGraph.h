@@ -21,7 +21,7 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectionExtentMember = 20, selectionExtentEnd = 21,
               typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27,
               selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31,
-              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62, scalarCorrespondence = 63, placeArgument = 64, resolveEndpoint = 65, endpointPosition = 66, endpointFound = 67, resolveWord = 68, resolutionStep = 69, externalField = 70, externalPosition = 71, externalMatched = 72, externalUnknown = 73, externalEnd = 74, acquireListValue = 75, selectEnvironment = 76, recordCorrespondence = 77, sequenceChoiceMatched = 78, boundaryAccess = 79, boundaryRelations = 80, boundaryMember = 81, boundaryEnd = 82, temporalSupport = 83, temporalCut = 84, temporalSide = 85, temporalValueFound = 86 };
+              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62, scalarCorrespondence = 63, placeArgument = 64, resolveEndpoint = 65, endpointPosition = 66, endpointFound = 67, resolveWord = 68, resolutionStep = 69, externalField = 70, externalPosition = 71, externalMatched = 72, externalUnknown = 73, externalEnd = 74, acquireListValue = 75, selectEnvironment = 76, recordCorrespondence = 77, sequenceChoiceMatched = 78, boundaryAccess = 79, boundaryRelations = 80, boundaryMember = 81, boundaryEnd = 82, temporalSupport = 83, temporalCut = 84, temporalSide = 85, temporalValueFound = 86, resolvePathExpression = 87 };
 
 // Only the explicitly normalized result requests its immediate omitted parts.
 // Related sources and member refinements retain demand-driven expansion.
@@ -49,6 +49,7 @@ inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
 #include "IntersectionInput.h"
 #include "EndpointDemand.h"
 #include "GroupedListPlan.h"
+#include "SparseOccurrence.h"
 #include "ListValueShape.h"
 #include "RecordValue.h"
 
@@ -322,6 +323,8 @@ public:
             return {{"Register definition", [definitions, node] { return definitions->publish(node); }, {0, 1}}};
         }
         if(request.kind>=sizeOnly && request.kind<=sizeAndValue && visit.query.node==request.node) {
+            auto materialize=SparseOccurrence::commands(access_,definitions_,request.node);
+            if(!materialize.empty()) return materialize;
             auto commands=WordForms::commands(access_,request.node);
             if(!commands.empty()) return commands;
         }
@@ -714,6 +717,8 @@ public:
         if(query.kind==acquireListValue) return std::make_shared<ProteusListValueGoal>(query,access_,definitions_);
         if (query.kind==resolveWord || query.kind==externalField || query.kind==selectEnvironment)
             return std::make_shared<ProteusPathGoal>(query,access_,definitions_);
+        if(query.kind==resolvePathExpression)
+            return std::make_shared<ProteusPathExpressionGoal>(query,access_);
         if (query.kind==placeArgument || query.kind==resolveEndpoint)
             return std::make_shared<ProteusEndpointGoal>(query,access_);
         if (query.kind == scalarCorrespondence)
@@ -1106,6 +1111,8 @@ private:
                     result.refinements.push_back({{payload,relationshipConstraints,0},{1,0},"prove RHS payload constraints",false});
                     result.refinements.push_back({{payload,sizeAndValue,0},{1,0},"refine RHS payload",true});
                 }
+                if(source->looseType() && (PathExpression::ready(*access_,source) || source->pItem->pathSelection))
+                    result.refinements.push_back({{source,resolvePathExpression,0},{1,0},"resolve qualified RHS path",false});
                 // Expose endpoint expressions before deciding which kind of
                 // correspondence their resulting payload can participate in.
                 if (relation.isWork() && source->looseType())
@@ -1149,7 +1156,17 @@ private:
             }
             return result;
         }
+        if(query.kind==resolvePathExpression) {
+            if(auto state=node->pItem->pathSelection) {
+                result.refinements.push_back({pathRequest(node),{0,0},"select RHS path result",false});
+                for(const auto& effect:state->effects)
+                    result.refinements.push_back({{effect,sizeAndValue,0},{1,0},"complete retained RHS path",false});
+                result.deferred=!PathExpression::updatesReady(state);
+            } else result.deferred=true;
+            return result;
+        }
         if (query.kind == itemAt) {
+            if(auto unit=UnitProjection::indexed(access_,definitions_,query)) return *unit;
             for(const auto& owner:query.context)
                 if(access_->sameInfon(owner,node)) {result.deferred=true;return result;}
             // Type information may expose order, extent and a virtual sparse

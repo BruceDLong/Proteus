@@ -1,5 +1,6 @@
 #pragma once
 #include "DefinitionPlan.h"
+#include "UnitMeasure.h"
 
 // Context-owned catalogue and reusable type evidence. Bodies are read through
 // existing POVs. Application never normalizes or specializes the shared body.
@@ -29,6 +30,29 @@ public:
         Work composition{0,0};
     };
     using Certificate = std::shared_ptr<Proof>;
+    // Derived unit views keep identities to the original members. Cache only
+    // the result of an explicit window demand, never an expanded unit domain.
+    using UnitKey=std::tuple<POVNode,std::string,std::int64_t,std::int64_t,bool>;
+    struct UnitView {
+        DefinitionSpec shape;
+        std::vector<std::tuple<POVNode,bool,std::int64_t,std::int64_t>> pieces;
+        POVNode result;
+    };
+    std::map<UnitKey,UnitView> unitViews;
+    // A virtual unit run is a coordinate relationship, not an identity between
+    // containers with different cardinalities. Indexed access exposes it before
+    // allocating ordinary repetition occurrences.
+    struct UnitSpan {POVNode source; DefinitionSpec member; std::int64_t start,count;};
+    std::map<POVNode,UnitSpan> unitSpans;
+    const UnitSpan* unitSpan(POVNode node) const {
+        std::set<POVNode> seen;
+        while(node && seen.insert(node).second) {
+            if(auto found=unitSpans.find(node);found!=unitSpans.end()) return &found->second;
+            node=node->pItem->selectedResult;
+        }
+        return nullptr;
+    }
+
 private:
     std::shared_ptr<ProteusGraphAccess> access_;
     std::map<std::string, std::vector<Definition>> catalogue_;
@@ -159,6 +183,20 @@ public:
         }
         return selected;
     }
+    DefinitionSpec unit(const std::shared_ptr<WordUse>& word,Work& work) try {
+        if(!word) return {};
+        DefinitionSpec result;
+        if(auto body=lookup(word->typeID())) {
+            auto proof=describe(body,work);if(!proof) return {};
+            result=std::make_shared<DefinitionRequirement>(*proof->requirement);
+        } else {
+            if(declared(word->typeID())) return {};
+            result=std::make_shared<DefinitionRequirement>();result->facts.valid=true;
+        }
+        result->label=word->typeID();result->writtenType=word;
+        if(std::find(result->types.begin(),result->types.end(),result->label)==result->types.end()) result->types.push_back(result->label);
+        return result;
+    } catch(const DefinitionConflict&) { return {}; } // An optional conversion route cannot enforce an unrelated definition.
     POVNode repeatedBody(const POVNode& node) const { return memberTemplate(node); }
     // An untyped virtual position has no stored POV. One read-only unknown
     // describes that position; occurrence data remains in the search cursor.
@@ -196,6 +234,9 @@ public:
             auto at=pending[i];if(!seen.insert(at).second) continue;
             if(cost) ++cost->visits;
             auto order=at->pItem->orderMode;
+            // An explicit repeated member specification supplies positional
+            // structure unless a comma has declared unordered membership.
+            if(order==uUnknown && access_->memberTemplate(at)) order=uOrdered;
             if(order!=uUnknown) {
                 if(result!=uUnknown && result!=order) return -1;
                 result=order;continue;
@@ -340,7 +381,8 @@ public:
             requirement = combineDefinitions(requirement, member,proof->composition);
         }
         if(node==root || !describesParts(node)) for (const auto& name : names(node)) {
-            if (auto body=lookup(name)) requirement = combineDefinitions(requirement, compiled.at(body),proof->composition);
+            if (auto body=lookup(name))
+                requirement = combineDefinitions(requirement, definitionInUnits(compiled.at(body),requirement),proof->composition);
             if(std::find(requirement->expandedTypes.begin(),requirement->expandedTypes.end(),name)==requirement->expandedTypes.end())
                 requirement->expandedTypes.push_back(name);
         }

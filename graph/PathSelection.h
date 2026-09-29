@@ -1,6 +1,7 @@
 #pragma once
 #include "SliceSelection.h"
 #include "SignedCoordinate.h"
+#include "UnitSelection.h"
 
 // A path needs the complete candidate set, even when that set is a oneOf.
 // A caller asking for the resulting value still sees that value as symbolic.
@@ -77,6 +78,10 @@ class PathSelection {
         return word=="first" ? 1 : word=="last" ? -1 : 0;
     }
     Expansion<POVNode> position(const Query<POVNode>& q,int endpoint=0) const {
+        if(!endpoint) {
+            auto units=UnitSelection(access_,definitions_).expand(q);
+            if(units.handled) return units.expansion;
+        }
         Expansion<POVNode> out;
         auto state=q.related->pItem->pathSelection;
         auto selector=endpoint ? q.related : state->predicate;
@@ -285,6 +290,8 @@ public:
             if(auto endpoint=orderedEndpoint(q.node,q.related)) {
                 auto start=q;start.context={q.node};return position(start,endpoint);
             }
+            auto units=UnitSelection(access_,definitions_).expand(q);
+            if(units.handled) return units.expansion;
             out.edges.push_back(edge("scan field candidates",{q.node,fieldPosition,static_cast<int>(ListPhase::enter),q.related,{q.node}}));
             return out;
         }
@@ -378,7 +385,7 @@ class PathExpression {
         auto item=node->pItem;
         bool contextual=environmentCursor(item);
         if((!contextual && !item->partRef && item->parts.empty()) || !item->wrkList.empty() || item->pathSelection ||
-           !access.plainStructure(node,item->isOrLike(),false,false,contextual,true,false) ||
+           !access.plainStructure(node,item->isOrLike(),false,true,contextual,true,false) ||
            !POVDescription(node,access.registry.get()).relationships(false).empty()) return 0;
         Cost result=contextual ? 1 : 0;std::set<Part> seen;
         return inspect(item,seen,result) ? result : 0;
@@ -737,4 +744,29 @@ public:
     bool satisfied() const override {return verified_ || ((request.kind==selectPosition || request.kind==selectSelf) && positionReady_ && !waiting_);}
     bool symbolic() const override {return !verified_ || (request.argument==pathValue && result_ && result_->pItem->isOrLike());}
     POVNode result() const override {return result_;}
+};
+
+// A relationship can demand a path result without demanding literal size/value
+// on the incoming qualified POV. The path owns its retained effects and updates;
+// correspondence separately proves what its discovered payload supplies.
+class ProteusPathExpressionGoal : public GoalSpec<POVNode> {
+    std::shared_ptr<ProteusGraphAccess> access_;
+public:
+    ProteusPathExpressionGoal(Query<POVNode> query,std::shared_ptr<ProteusGraphAccess> access)
+        :GoalSpec<POVNode>(query),access_(std::move(access)) {}
+    std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
+        if(visit.query.node!=request.node) return {};
+        auto access=access_;auto node=request.node;
+        if(PathExpression::ready(*access,node))
+            return {{"Prepare RHS path selection",[access,node]{return PathExpression::prepare(*access,node);},PathExpression::work(*access,node)}};
+        auto state=node->pItem->pathSelection;
+        if(state && PathExpression::needsUpdates(state))
+            return {{"Set RHS path updates",[access,state]{return PathExpression::applyUpdates(*access,state);},{state->updates.size(),0}}};
+        return {};
+    }
+    bool satisfied() const override {
+        auto state=request.node->pItem->pathSelection;
+        return state && state->result && !state->pending && PathExpression::updatesReady(state);
+    }
+    bool symbolic() const override {return !satisfied();}
 };

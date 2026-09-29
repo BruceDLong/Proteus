@@ -84,6 +84,13 @@ been reopened.
     Later, searches must be able to refer to definitions themselves. Which goal
     expresses that request while keeping ordinary value selection distinct?
 
+11. **Replacing known values through paths.** The old unit fixtures assign new
+    numbers to already known members (for example 8 becomes 80). The current
+    graph path-write contract rejects conflicting known values. Should all path
+    assignments replace known values, or should these fixtures assert a later
+    state/change explicitly? This is not a unit-specific policy. Until clarified,
+    keep the contradiction check and permit writes that supply unknown values.
+
 ## Decisions already made
 
 - Preserve a rejected RHS and its context: it may match something else later.
