@@ -1,5 +1,10 @@
 # Partial typed descriptions and chained writes
 
+Later clarification: explicit normalization fills the requested item's immediate
+parts; incidental traversal stays lazy. See
+[normalization-parts-results.md](normalization-parts-results.md). The historical
+partial-normalization observations below predate that distinction.
+
 Returning a selected parent with `;` or `;;` now normalizes its supplied typed
 parts without imposing the entire positional layout of the parent's definition.
 For example, `#spoke={color:$ length:_}` does not make

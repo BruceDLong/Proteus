@@ -13,7 +13,8 @@ public:
         GraphTypeFacts facts;
         std::vector<std::string> names;
         std::vector<POVNode> work, members;
-        bool list = false, embedded = false, open = false, ordered = true;
+        bool list = false, embedded = false, open = false;
+        int order = uUnknown;
         POVNode memberTemplate, choiceBody;
     };
     struct Evidence {
@@ -81,7 +82,13 @@ public:
     }
     GraphTypeFacts facts(const POVNode& node,bool predicate=false) const {
         if(choiceBody(node)) {GraphTypeFacts result;result.valid=true;return result;}
-        return predicate ? access_->predicateFacts(node,false) : access_->typeFacts(node);
+        auto result=predicate ? access_->predicateFacts(node,false) : access_->typeFacts(node);
+        if(access_->literalList(node)) {
+            auto order=listOrder(node);
+            if(order<0) result.valid=false;
+            if(order==uUnordered && !result.explicitSize) result.hasSize=false;
+        }
+        return result;
     }
     std::vector<std::string> names(const POVNode& node) const {
         auto raw = access_->typeNames(node);
@@ -179,8 +186,42 @@ public:
         for (const auto& owner : occurrenceOwners_) if (owner.get() == source) return owner;
         return {};
     }
-    // A supplied description of typed parts is useful on its own. Normalizing
-    // it demands its present members, not every part of the container's type.
+    // Order is header evidence, independent of the parent's member meaning.
+    // Read aliases through existing declaration POVs; never normalize a body.
+    // -1 means competing/unavailable meanings, not a proved ordered list.
+    int listOrder(const POVNode& node,Work* cost=nullptr) const {
+        std::vector<POVNode> pending{node};std::set<POVNode> seen;
+        int result=uUnknown;
+        for(std::size_t i=0;i<pending.size();++i) {
+            auto at=pending[i];if(!seen.insert(at).second) continue;
+            if(cost) ++cost->visits;
+            auto order=at->pItem->orderMode;
+            if(order!=uUnknown) {
+                if(result!=uUnknown && result!=order) return -1;
+                result=order;continue;
+            }
+            for(const auto& name:names(at)) {
+                if(auto body=lookup(name)) pending.push_back(body);
+                else if(declared(name)) return -1;
+            }
+        }
+        return result;
+    }
+    bool pendingOrder(const POVNode& node) const {
+        return access_->literalList(node) && node->pItem->orderMode==uUnknown && listOrder(node)!=uUnknown;
+    }
+    std::vector<SetCommand> orderCommands(const POVNode& node) const {
+        if(!access_->literalList(node) || node->pItem->orderMode!=uUnknown) return {};
+        Work cost{0,0};auto order=listOrder(node,&cost);
+        if(order<=uUnknown) return {};
+        if(order==uUnordered && node->pItem->value->sizeMode==fromCount) ++cost.creations;
+        auto access=access_;
+        return {{"Set list order from type header",[access,node,order] {
+            return access->setListOrder(node,static_cast<OrderMode>(order));
+        },cost}};
+    }
+    // A supplied description of typed parts is useful on its own. Incidental
+    // traversal demands its present members, not every part of the container's type.
     // Bare type references and positional value sequences still expand through
     // their definitions; explicit RHSs remain ordinary graph constraints.
     bool describesParts(const POVNode& node) const {
@@ -233,7 +274,7 @@ public:
         }
         if (node == root || proof->evidence->witnesses.count(node)) return;
         proof->evidence->witnesses.emplace(node, Witness{node, node->pItem, facts(node),
-            names(node), work(node), members(node), listRequirement(node), access_->definitionEmbedded(node), access_->openTail(node), node->pItem->orderMode!=uUnordered, memberTemplate(node), choiceBody(node)});
+            names(node), work(node), members(node), listRequirement(node), access_->definitionEmbedded(node), access_->openTail(node), (listRequirement(node) ? listOrder(node,&proof->composition) : uUnknown), memberTemplate(node), choiceBody(node)});
     }
     // The graph's leave edge supplies postorder: every required child has
     // already been walked. Compile requirements, never execute child normalize.
@@ -248,8 +289,8 @@ public:
         if (node != root) {
             auto& witness = proof->evidence->witnesses.at(node);
             requirement->facts = witness.facts;
-            requirement->list = witness.list; requirement->order=witness.ordered ? uOrdered : uUnordered;
-            requirement->open = witness.list && (witness.open || !witness.ordered);
+            requirement->list = witness.list; requirement->order=witness.order==uUnknown ? uOrdered : witness.order;
+            requirement->open = witness.list && (witness.open || witness.order==uUnordered);
             if(witness.choiceBody) {
                 DefinitionRequirement::Choice choice;choice.source=node;
                 for(const auto& member:witness.members) choice.alternatives.push_back(compiled.at(member));
@@ -290,8 +331,12 @@ public:
             if (!repeated) { proof->compilable = false; return; }
             requirement = combineDefinitions(requirement, repeated,proof->composition);
         }
-        if(node==root || !describesParts(node)) for (const auto& name : names(node))
+        if(node==root || !describesParts(node)) for (const auto& name : names(node)) {
             if (auto body=lookup(name)) requirement = combineDefinitions(requirement, compiled.at(body),proof->composition);
+            if(std::find(requirement->expandedTypes.begin(),requirement->expandedTypes.end(),name)==requirement->expandedTypes.end())
+                requirement->expandedTypes.push_back(name);
+        }
+        std::sort(requirement->expandedTypes.begin(),requirement->expandedTypes.end());
         if (node != root)
             for (auto rhs : work(node)) requirement = combineDefinitions(requirement, compiled.at(rhs),proof->composition);
         compiled[node] = requirement;
@@ -333,12 +378,12 @@ public:
                 witness.names != names(witness.node) || witness.work != work(witness.node) ||
                 witness.list != listRequirement(witness.node) || witness.members != members(witness.node) ||
                 witness.embedded != access_->definitionEmbedded(witness.node) || witness.open != access_->openTail(witness.node) ||
-                witness.ordered != (witness.node->pItem->orderMode!=uUnordered) ||
+                witness.order != (witness.list ? listOrder(witness.node) : uUnknown) ||
                 witness.memberTemplate != memberTemplate(witness.node) || witness.choiceBody!=choiceBody(witness.node) || !POVDescription(witness.node, access_->registry.get()).relationships(false).empty()) return false;
         }
         return true;
     }
-    bool covers(const Certificate& proof, const POVNode& node) const {
+    bool covers(const Certificate& proof, const POVNode& node, bool fullMeaning=false) const {
         if (!proof->requirement) return false;
         // Root-local template/occurrence relationships are not captured as a
         // witness of the target itself (which would retain its weak cache key).
@@ -346,13 +391,16 @@ public:
         if (auto source = memberTemplate(node)) if (!proof->evidence->witnesses.count(source)) return false;
         if (auto owner = occurrenceOwner(node)) if (!proof->evidence->witnesses.count(owner)) return false;
         const auto& types = proof->requirement->types;
-        for (const auto& name : names(node))
+        for (const auto& name : names(node)) {
             if (std::find(types.begin(), types.end(), name) == types.end()) return false;
+            const auto& expanded=proof->requirement->expandedTypes;
+            if(fullMeaning && std::find(expanded.begin(),expanded.end(),name)==expanded.end()) return false;
+        }
         return true;
     }
-    Certificate saved(const POVNode& node) const {
+    Certificate saved(const POVNode& node, bool fullMeaning=false) const {
         auto found = evidence_.find(node->pItem); if (found == evidence_.end()) return {};
-        for (const auto& proof : found->second) if (current(proof) && covers(proof, node)) return proof;
+        for (const auto& proof : found->second) if (current(proof) && covers(proof, node, fullMeaning)) return proof;
         return {};
     }
     // Meaning evidence can be compiled without applying it to a candidate or
@@ -364,13 +412,13 @@ public:
         if (!proof || proof->requirement->list || !proof->requirement->choices.empty() || !facts.combine(proof->requirement->facts)) facts.valid = false;
         return facts;
     }
-    bool accepts(const Certificate& proof, const POVNode& node) const {
-        try { return ProteusDefinitionPlan(access_, node, proof->requirement).satisfied(); }
+    bool accepts(const Certificate& proof, const POVNode& node, bool fillParts=false) const {
+        try { return ProteusDefinitionPlan(access_, node, proof->requirement, {}, true, fillParts).satisfied(); }
         catch (const std::runtime_error&) { return false; }
     }
-    bool satisfied(const POVNode& node) const {
+    bool satisfied(const POVNode& node, bool fillParts=false) const {
         if (!required(node)) return true;
-        auto proof = saved(node); return proof && accepts(proof, node);
+        auto proof = saved(node,fillParts); return proof && accepts(proof, node, fillParts);
     }
     bool remember(const POVNode& node, const Certificate& proof) {
         auto& certificates = evidence_[node->pItem];
@@ -391,9 +439,9 @@ public:
         }
         certificates.push_back(proof); return true;
     }
-    std::shared_ptr<ProteusDefinitionPlan> plan(const POVNode& node, const Certificate& proof) const {
-        if (!current(proof) || !covers(proof, node)) return {};
-        return std::make_shared<ProteusDefinitionPlan>(access_, node, proof->requirement);
+    std::shared_ptr<ProteusDefinitionPlan> plan(const POVNode& node, const Certificate& proof, bool fillParts=false) const {
+        if (!current(proof) || !covers(proof, node, fillParts)) return {};
+        return std::make_shared<ProteusDefinitionPlan>(access_, node, proof->requirement, std::map<POVNode,std::int64_t>{}, true, fillParts);
     }
     bool apply(const POVNode& node, const Certificate& proof, const std::shared_ptr<ProteusDefinitionPlan>& plan) {
         if (!current(proof) || !covers(proof, node) || !plan->supported) return false;
@@ -523,7 +571,7 @@ public:
         if (q.kind == definitionEnter) definitions_->collect(q.node, request.node, proof_);
         if (q.kind == definitionLeave) definitions_->finish(q.node, request.node, proof_);
         bool entry = q.kind == typeRequirements || q.kind == compileTypeRequirements;
-        auto certificate = entry ? definitions_->saved(request.node) : proof_;
+        auto certificate = entry ? definitions_->saved(request.node,request.kind==typeRequirements && request.argument==fillImmediateParts) : proof_;
         if (q.kind != definitionEnd && (!entry || !certificate || satisfied())) return {};
         if (request.kind == compileTypeRequirements) {
             if (!certificate || !certificate->compilable || !certificate->requirement) return {};
@@ -532,7 +580,7 @@ public:
                 return definitions->remember(target, certificate);
             }, {entry ? 1 : addCost(1,certificate->composition.visits), 0}}};
         }
-        auto plan = definitions_->plan(request.node, certificate);
+        auto plan = definitions_->plan(request.node, certificate, request.argument==fillImmediateParts);
         if (!plan || !plan->supported) return {};
         if(!entry) plan->work.visits=addCost(plan->work.visits,certificate->composition.visits);
         auto definitions = definitions_; auto target = request.node;
@@ -542,7 +590,7 @@ public:
     }
     bool satisfied() const override {
         return request.kind == compileTypeRequirements ?
-            (!definitions_->required(request.node) || bool(definitions_->saved(request.node))) : definitions_->satisfied(request.node);
+            (!definitions_->required(request.node) || bool(definitions_->saved(request.node))) : definitions_->satisfied(request.node, request.argument==fillImmediateParts);
     }
     bool symbolic() const override { return !satisfied(); }
 };

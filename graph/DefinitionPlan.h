@@ -27,6 +27,9 @@ struct DefinitionRequirement {
     struct Choice { POVNode source; std::vector<std::shared_ptr<DefinitionRequirement>> alternatives; };
     std::vector<Choice> choices;
     std::vector<std::string> types;
+    // Names whose declarations were actually traversed, distinct from names
+    // merely present on a supplied partial description.
+    std::vector<std::string> expandedTypes;
     std::string label; // normalized nominal identity, used by comparisons
     std::shared_ptr<WordUse> writtenType;
     void captureLabel(const POVNode& node) {
@@ -34,8 +37,8 @@ struct DefinitionRequirement {
         if(!writtenType && !node->pItem->addedTypes.empty()) writtenType=node->pItem->addedTypes.front();
         if(writtenType) label=writtenType->typeID();
     }
-    POVNode appendMember(ProteusGraphAccess& access,const POVNode& owner) const {
-        auto member=access.appendDefinitionMember(owner,writtenType ? "" : label);
+    POVNode appendMember(ProteusGraphAccess& access,const POVNode& owner,const POVNode& before={}) const {
+        auto member=access.insertDefinitionMember(owner,writtenType ? "" : label,before);
         // Keep spelling/model metadata separate from the normalized comparison
         // key, and never share mutable WordUse state with the declaration.
         if(writtenType) member->pItem->type=std::make_shared<WordUse>(*writtenType);
@@ -74,8 +77,12 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
             result->choices.push_back(choice);
     for (const auto& name : right->types)
         if (std::find(result->types.begin(), result->types.end(), name) == result->types.end()) result->types.push_back(name);
+    for(const auto& name:right->expandedTypes)
+        if(std::find(result->expandedTypes.begin(),result->expandedTypes.end(),name)==result->expandedTypes.end())
+            result->expandedTypes.push_back(name);
     // Equivalent conjunctions share evidence regardless of application order.
     std::sort(result->types.begin(), result->types.end());
+    std::sort(result->expandedTypes.begin(), result->expandedTypes.end());
     if (result->label.empty()) {result->label = right->label;result->writtenType=right->writtenType;}
     if (result->list && right->list) {
         if(result->order==uUnknown) result->order=right->order;
@@ -121,7 +128,7 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
 inline bool sameDefinition(const DefinitionSpec& a, const DefinitionSpec& b) {
     if (a == b) return true;
     if (!a || !b || a->list != b->list || a->open != b->open || a->order!=b->order || !a->facts.same(b->facts) || !a->numeric.same(b->numeric) ||
-        a->types != b->types || a->members.size() != b->members.size() || a->choices.size()!=b->choices.size() ||
+        a->types != b->types || a->expandedTypes != b->expandedTypes || a->members.size() != b->members.size() || a->choices.size()!=b->choices.size() ||
         !sameDefinition(a->repeated, b->repeated)) return false;
     for(std::size_t i=0;i<a->choices.size();++i) {
         const auto& left=a->choices[i];const auto& right=b->choices[i];
@@ -182,7 +189,25 @@ private:
             equation.expected = found->second;
         }
     }
-    Place unmeasuredRoot_;
+    Place unmeasuredRoot_, fillRoot_;
+    bool typedDescription(const Place& target,const DefinitionSpec& requirement) const {
+        if(!target->node || !requirement->list || requirement->repeated ||
+           !access_->physicalList(target->node) || access_->openTail(target->node) ||
+           !access_->hasTypeRequirements(target->node)) return false;
+        for(const auto& member:requirement->members) if(member->label.empty()) return false;
+        for(auto member=POVDescription(target->node).member();member;member=POVDescription(member).adjacent())
+            if(access_->subList(member) || !access_->hasTypeRequirements(member)) return false;
+        // A complete ordered layout can disambiguate repeated field types by
+        // position. Missing positions still require unique nominal evidence.
+        if(requirement->order==uOrdered && target->node->pItem->value->items.size()==requirement->members.size()) {
+            std::set<std::string> labels;
+            for(const auto& member:requirement->members) if(!labels.insert(member->label).second) return false;
+        }
+        return true;
+    }
+    bool fillDescription(const Place& target,const DefinitionSpec& requirement) const {
+        return target==fillRoot_ && typedDescription(target,requirement);
+    }
     void prepareRepeated(const Place& target, const DefinitionSpec& requirement, GraphTypeFacts actual) {
         auto access = access_;
         bool adopt = !target->node || access->adoptableList(target->node);
@@ -231,7 +256,7 @@ private:
         });
         for (const auto& member : members) prepare(place(member), requirement->repeated);
     }
-    void prepareRecord(const Place& target,const DefinitionSpec& requirement,const GraphTypeFacts& actual) {
+    void prepareRecord(const Place& target,const DefinitionSpec& requirement,const GraphTypeFacts& actual,bool lazy=false) {
         auto access=access_;
         // Unnamed/duplicate descriptions need richer disambiguating predicates.
         for(std::size_t i=0;i<requirement->members.size();++i) {
@@ -247,39 +272,68 @@ private:
         bool adopt=!target->node || access->adoptableList(target->node);
         std::vector<POVNode> present;
         if(!adopt) {
-            if(!access->physicalList(target->node)) {supported=false;return;}
+            if(!access->physicalList(target->node) ||
+               (target->node->pItem->orderMode!=uUnknown && target->node->pItem->orderMode!=requirement->order)) {supported=false;return;}
             for(auto member=POVDescription(target->node).member();member;member=POVDescription(member).adjacent()) {
                 ++work.visits;
                 if(access->subList(member)) {supported=false;return;}
                 present.push_back(member);
             }
         }
+        if(requirement->facts.hasSize && requirement->facts.size<static_cast<std::int64_t>(present.size()))
+            throw DefinitionConflict("definition members exceed explicit extent");
         MemberCorrespondence mapping(present.size(),requirement->members.size(),
             [](std::size_t,std::size_t){return false;},[&](std::size_t a,std::size_t b) {
                 const auto& member=requirement->members[b];auto names=access->typeNames(present[a]);
                 std::vector<std::string> types(names.begin(),names.end());
                 return compareNominal(member->label,member->types,types.empty() ? "" : types.front(),types);
             },work);
-        if(!mapping.unambiguous || (!adopt && !mapping.missing.empty())) {supported=false;return;}
-        if(adopt) writes.push_back([access,target] {
+        if(!mapping.unambiguous || (!adopt && !lazy && target!=fillRoot_ && !mapping.missing.empty())) {supported=false;return;}
+        // Ordered typed descriptions can omit fields, but cannot reorder them
+        // or guess where an extra field belongs. Reuse the same nominal proof.
+        if(requirement->order==uOrdered) {
+            if(!lazy && mapping.pairs.size()!=present.size()) {supported=false;return;}
+            for(std::size_t i=1;i<mapping.pairs.size();++i)
+                if(mapping.pairs[i-1].first>=mapping.pairs[i].first) throw DefinitionConflict("typed fields contradict definition order");
+        }
+        auto count=static_cast<std::int64_t>(present.size()+(lazy ? 0 : mapping.missing.size()));
+        if((actual.hasSize && actual.size<count) || (requirement->facts.hasSize && requirement->facts.size<count))
+            throw DefinitionConflict("definition parts exceed explicit extent");
+        if(adopt) writes.push_back([access,target,requirement] {
             bool changed=access->adoptDefinitionList(target->node);
-            target->node->pItem->orderMode=uUnordered;
+            changed=access->setListOrder(target->node,static_cast<OrderMode>(requirement->order)) || changed;
             SetFlagBit(target->node->pItem->value->flags,infonState::tailUnfinished,false);
             return changed;
         });
+        if(!adopt && target->node->pItem->orderMode==uUnknown) writes.push_back([access,target,requirement] {
+            return access->setListOrder(target->node,static_cast<OrderMode>(requirement->order));
+        });
+        if(!adopt && !actual.hasSize && access->typeFacts(target->node).hasSize) {
+            ++work.creations;
+            writes.push_back([access,target] {return access->invalidateCountedSize(target->node);});
+        }
         if(!requirement->facts.accepts(actual)) writes.push_back([access,target,requirement] {
             return access->applyTypeFacts(target->node,requirement->facts);
         });
         for(const auto& pair:mapping.pairs) prepare(place(present[pair.first]),requirement->members[pair.second]);
-        for(auto index:mapping.missing) {
+        if(!lazy) for(auto index:mapping.missing) {
             auto member=std::make_shared<Slot>();auto spec=requirement->members[index];
             work.creations=addCost(work.creations,2);
-            writes.push_back([access,target,member,spec] {member->node=spec->appendMember(*access,target->node);return true;});
+            POVNode before;
+            if(requirement->order==uOrdered) for(const auto& pair:mapping.pairs)
+                if(pair.second>index) {before=present[pair.first];break;}
+            writes.push_back([access,target,member,spec,before] {member->node=spec->appendMember(*access,target->node,before);return true;});
             prepare(member,spec);
         }
     }
-    void prepare(const Place& target, const DefinitionSpec& requirement) {
+    void prepare(const Place& target, const DefinitionSpec& sourceRequirement) {
         if (!supported) return;
+        auto requirement=sourceRequirement;
+        bool lazy=fillRoot_ && target!=fillRoot_ && typedDescription(target,requirement);
+        if(lazy && !requirement->facts.explicitSize) {
+            requirement=std::make_shared<DefinitionRequirement>(*requirement);
+            requirement->facts.hasSize=false;
+        }
         ++work.visits;
         auto access = access_;
         GraphTypeFacts actual;
@@ -295,6 +349,8 @@ private:
                 if(previous!=proposedNumbers_.end()) number.bounds=previous->second;
             }
             if (!actual.valid) { supported = false; return; }
+            if(!actual.explicitSize && ((requirement->list && requirement->order==uUnordered && target->node->pItem->orderMode==uUnknown) ||
+                                       (fillDescription(target,requirement) && requirement->facts.hasSize && actual.hasSize && actual.size!=requirement->facts.size))) actual.hasSize=false;
             auto found = proposed_.find(target->node->pItem);
             if (found != proposed_.end()) actual = found->second;
         }
@@ -318,7 +374,9 @@ private:
         if (!combined.combine(requirement->facts))
             throw DefinitionConflict("incompatible definition requirements");
         if (target->node) proposed_[target->node->pItem] = combined;
-        bindings.push_back({target, requirement});
+        // Cache the full meaning, not the subset demanded by this application.
+        // A later explicit normalization of this child must still see its parts.
+        bindings.push_back({target, sourceRequirement});
         if (!requirement->list) {
             if(requirement->numeric.valid) {
                 NumericView result;result.facts=combined;result.expression=true;
@@ -346,7 +404,7 @@ private:
             plannedLists_.push_back(infon);
         }
         if (requirement->repeated) { prepareRepeated(target, requirement, actual); return; }
-        if (requirement->order==uUnordered) {prepareRecord(target,requirement,actual);return;}
+        if (requirement->order==uUnordered || lazy || fillDescription(target,requirement)) {prepareRecord(target,requirement,actual,lazy);return;}
         SpanLayout<Position> left, right;
         if (!target->node || access_->adoptableList(target->node)) {
             writes.push_back([access, target] { return access->adoptDefinitionList(target->node); });
@@ -399,9 +457,10 @@ private:
     }
 public:
     ProteusDefinitionPlan(std::shared_ptr<ProteusGraphAccess> access, const POVNode& target, const DefinitionSpec& requirement,
-                          std::map<POVNode, std::int64_t> extents = {}, bool measureRoot=true)
+                          std::map<POVNode, std::int64_t> extents = {}, bool measureRoot=true, bool fillParts=false)
         : access_(std::move(access)), extents_(std::move(extents)) {
         if(!measureRoot) unmeasuredRoot_=place(target);
+        if(fillParts) fillRoot_=place(target);
         prepare(place(target), requirement);
     }
     // Deferred allocation clients can prepare a member before the priced Set

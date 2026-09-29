@@ -23,6 +23,10 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31,
               sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62, scalarCorrespondence = 63, placeArgument = 64, resolveEndpoint = 65, endpointPosition = 66, endpointFound = 67, resolveWord = 68, resolutionStep = 69, externalField = 70, externalPosition = 71, externalMatched = 72, externalUnknown = 73, externalEnd = 74, acquireListValue = 75, selectEnvironment = 76, recordCorrespondence = 77, sequenceChoiceMatched = 78, boundaryAccess = 79, boundaryRelations = 80, boundaryMember = 81, boundaryEnd = 82, temporalSupport = 83, temporalCut = 84, temporalSide = 85, temporalValueFound = 86 };
 
+// Only the explicitly normalized result requests its immediate omitted parts.
+// Related sources and member refinements retain demand-driven expansion.
+enum NormalizationExtent { lazyParts = 0, fillImmediateParts = 1 };
+
 inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
     auto phase = query.kind == correspondenceEnter ? ListPhase::enter :
                  query.kind == correspondenceMember ? ListPhase::member : ListPhase::leave;
@@ -340,6 +344,11 @@ public:
                 }}};
             }
             return {};
+        }
+        if(request.kind==relationshipConstraints || (request.kind>=sizeOnly && request.kind<=sizeAndValue)) {
+            auto commands=definitions_->orderCommands(visit.query.node);
+            if(!commands.empty()) return commands;
+            if(definitions_->pendingOrder(visit.query.node)) return {};
         }
         // Local scalar normalization precedes comparison, just as Proteus3's
         // rangeRules does. Canonicalization must publish a revision even when
@@ -780,7 +789,7 @@ private:
             return result;
         }
         if (query.kind == typeRequirements || query.kind == compileTypeRequirements) {
-            if (definitions_->required(node) && !definitions_->saved(node))
+            if (definitions_->required(node) && !definitions_->saved(node,query.kind==typeRequirements && query.argument==fillImmediateParts))
                 result.edges.push_back(direct("inspect type definitions", {node, definitionEnter, 0, node}));
             return result;
         }
@@ -953,6 +962,7 @@ private:
         }
         if ((query.kind >= sizeOnly && query.kind <= sizeAndValue) || query.kind == relationshipConstraints) {
             const bool constraintsOnly = query.kind == relationshipConstraints;
+            if(definitions_->pendingOrder(node)) {result.deferred=true;return result;}
             const int demand = constraintsOnly ? sizeAndValue : query.kind;
             // Do not compare noncanonical scalar evidence while its local Set
             // is pending; that publication will expose the same edges again.
@@ -982,7 +992,7 @@ private:
                 // They are alternatives, not identities of the choice root.
                 if(field->pending || field->matches.size()!=1)
                     for(const auto& match:field->matches)
-                        result.refinements.push_back({{match,demand,0,{},PathExpression::location(field,match)},{1,0},"normalize path alternative",false});
+                        result.refinements.push_back({{match,demand,query.argument,{},PathExpression::location(field,match)},{1,0},"normalize path alternative",false});
             }
             result.deferred = pendingUpdate || !access_->supports(node, demand);
             if(access_->hasArgument(node))
@@ -1009,8 +1019,8 @@ private:
                     if(!access_->subList(parent)) break;
                 }
             }
-            if (definitions_->required(node) && !definitions_->describesParts(node))
-                result.refinements.push_back({{node, typeRequirements, 0}, {1, 0}, "validate type and member requirements", false});
+            if (definitions_->required(node) && (query.argument==fillImmediateParts || !definitions_->describesParts(node)))
+                result.refinements.push_back({{node, typeRequirements, query.argument}, {1, 0}, "validate type and member requirements", false});
             if (access_->hasInnerSource(node)) { result.deferred = true; return result; }
             if (access_->canSelect(node)) {
                 auto body = definitions_->selectionBody(node);
@@ -1078,13 +1088,17 @@ private:
             };
             for (const auto& relation : description.relationships()) {
                 auto source = relation.target;
+                if(definitions_->pendingOrder(source)) {
+                    result.refinements.push_back({{source,sizeAndValue,0},{1,0},"resolve RHS list order",false});
+                    continue;
+                }
                 // A selected view already shares these exact state slots.
                 // Validate its source directly; positional correspondence would
                 // invent work merely because the view headers are distinct.
                 if (relation.derived && node->pItem->value==source->pItem->value &&
                     node->pItem->infSize==source->pItem->infSize) {
                     if(constraintsOnly) result.edges.push_back(direct("selected source constraints",{source,relationshipConstraints,0}));
-                    else result.refinements.push_back({{source,query.kind,0,{},PathExpression::location(node->pItem->pathSelection,source)},{0,0},"normalize selected source",false});
+                    else result.refinements.push_back({{source,query.kind,query.argument,{},PathExpression::location(node->pItem->pathSelection,source)},{0,0},"normalize selected source",false});
                     continue;
                 }
                 if(source->looseType() && (!source->pItem->wrkList.empty() || access_->hasTypeRequirements(source) || access_->hasArgument(source))) {

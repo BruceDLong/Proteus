@@ -42,8 +42,10 @@ Unordered definition bodies and independently supplied record fields share uniqu
 nominal correspondence, with atomic plans and retained identities. See
 [record-definition-results.md](record-definition-results.md) for partial-description
 semantics, validation, and the remaining ambiguous and mixed-order cases.
-Partial typed descriptions and retained parents are covered in
-[partial-type-results.md](partial-type-results.md); contained open spans use the
+Explicit normalization now requests immediate definition parts, while related
+source traversal stays lazy; see [normalization-parts-results.md](normalization-parts-results.md).
+This updates the direct-normalization policy recorded in
+[partial-type-results.md](partial-type-results.md). Contained open spans use the
 shared planner described in [open-span-correspondence-results.md](open-span-correspondence-results.md).
 Missing scalar fields can use their parent definition without expanding omitted
 parts; see [definition-projection-results.md](definition-projection-results.md).

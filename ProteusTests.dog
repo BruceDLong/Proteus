@@ -1,6 +1,37 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphNormalizeParts/ordered
+    unit/graphNormalizeParts/unordered
+    unit/graphNormalizeParts/beforeAndAfter
+    unit/graphNormalizeParts/lazyLookup
+    unit/graphNormalizeParts/lazyNested
+    unit/graphNormalizeParts/explicitBound
+    unit/graphNormalizeParts/replay
+    unit/graphNormalizeParts/rhs
+    unit/graphNormalizeParts/selected
+    unit/graphNormalizeParts/conflict
+    unit/graphNormalizeParts/reverse
+    unit/graphNormalizeParts/empty
+    unit/graphNormalizeParts/normalizeChild
+    unit/graphNormalizeParts/lateDefinition
+    unit/graphDefinitionOrder/partial
+    unit/graphDefinitionOrder/alias
+    unit/graphDefinitionOrder/aliasChain
+    unit/graphDefinitionOrder/replay
+    unit/graphDefinitionOrder/bounded
+    unit/graphDefinitionOrder/partialExtent
+    unit/graphDefinitionOrder/cost
+    unit/graphDefinitionOrder/lateDeclaration
+    unit/graphDefinitionOrder/ambiguousMeaning
+    unit/graphDefinitionOrder/explicitOrder
+    unit/graphDefinitionOrder/orderedType
+    unit/graphDefinitionOrder/omittedContext
+    unit/graphDefinitionOrder/headerRevision
+    unit/graphDefinitionOrder/fieldAlternatives
+    unit/graphDefinitionOrder/empty
+    unit/graphDefinitionOrder/explicitComma
+
     unit/graphRecordDefinitions/bare
     unit/graphRecordDefinitions/bounded
     unit/graphRecordDefinitions/partialAlias
@@ -8052,8 +8083,8 @@ struct GLOBAL {
     me bool: graphPartialTypeCase(me string: testName, me int: caseID) <- <%{
         GraphNormalizer normalizer;normalizer.init();
         std::string definitions="{#length=*10+_ #spoke={color:$ length:_} #wheel={position:_ spoke}}";
-        std::string expression="spoke:{length:_}.length=7;",expected="spoke:{length:*10+7}";
-        if(caseID==1) {expression="wheel:{spoke:{length:_}}.spoke.length=7;;";expected="wheel:{spoke:{length:*10+7}}";}
+        std::string expression="spoke:{length:_}.length=7;",expected="spoke:{color:$ length:*10+7}";
+        if(caseID==1) {expression="wheel:{spoke:{length:_}}.spoke.length=7;;";expected="wheel:{position:_ spoke:{length:*10+7}}";}
         if(caseID==2 || caseID==8) expression="spoke:{length:*10+7}";
         if(caseID==3) expression="spoke:{length:_}";
         if(caseID==4) expression="spoke:{length:*10+7}.length=8;";
@@ -8063,22 +8094,26 @@ struct GLOBAL {
         if(caseID==8) definitions="{#length=*10+_ #spoke={color:%prev length:_}}";
         auto defs=graphParsed(testName,definitions);auto declared=normalizer.normalize(defs);declared.waitForCompletion();
         auto original=toString(defs->pItem.get());
-        auto root=graphParsed(testName,expression);auto handle=normalizer.normalize(root);handle.waitForCompletion();
+        auto root=graphParsed(testName,expression);auto supplied=root->pItem->value->items.head;
+        normalizer.runtime.update([&] {normalizer.access->bind(root);});
+        auto run=[&] {return caseID==8 ? normalizer.runtime.normalize({root,proteus4::sizeAndValue,proteus4::lazyParts}) : normalizer.normalize(root);};
+        if(caseID==8) expected="spoke:{length:*10+7}";
+        auto handle=run();handle.waitForCompletion();
         bool passed=!declared.status().failed;
         if(caseID==3) {
             passed &= !handle.status().failed && handle.status().symbolicValues && handle.status().withSubscribers &&
-                root->pItem->value->items.size()==1;
-            normalizer.addRHS(root->pItem->value->items.head,graphParsed(testName,"7"));handle.waitForCompletion();
+                root->pItem->value->items.size()==2;
+            normalizer.addRHS(supplied,graphParsed(testName,"7"));handle.waitForCompletion();
         }
         if(caseID==4 || caseID==6) passed &= handle.status().failed;
         else if(caseID==5) passed &= !handle.status().failed && handle.status().symbolicValues && root->pItem->value->items.size()==2;
         else if(caseID==7) passed &= !handle.status().failed && handle.status().symbolicValues && root->pItem->value->items.size()==2;
         else {
-            passed &= !handle.status().failed && !handle.status().symbolicValues && getFlagBit(root->pItem->flags,infonView::isNormed) &&
-                toString(root->pItem.get())==expected && root->pItem->infSize->num==1;
+            passed &= !handle.status().failed && handle.status().symbolicValues==(caseID!=8) && getFlagBit(root->pItem->flags,infonView::isNormed)==(caseID==8) &&
+                toString(root->pItem.get())==expected && root->pItem->infSize->num==(caseID==8 ? 1 : 2);
             auto count=normalizer.access->registry->identities.size();
-            auto again=normalizer.normalize(root);again.waitForCompletion();
-            passed &= !again.status().failed && !again.status().symbolicValues && toString(root->pItem.get())==expected &&
+            auto again=run();again.waitForCompletion();
+            passed &= !again.status().failed && again.status().symbolicValues==(caseID!=8) && toString(root->pItem.get())==expected &&
                 normalizer.access->registry->identities.size()==count;
             again.cancel();
         }
@@ -8673,7 +8708,8 @@ struct GLOBAL {
                 auto next=graphParsed(testName,"_");normalizer.addRHS(cursor,next);cursor=next;
             }
             normalizer.addRHS(cursor,graphParsed(testName,"*1000+123"));
-            auto result=normalizer.normalize(root);result.waitForCompletion();
+            normalizer.runtime.update([&] {normalizer.access->bind(root);});
+            auto result=normalizer.runtime.normalize({root,proteus4::sizeAndValue,proteus4::lazyParts});result.waitForCompletion();
             bool rejected=false;for(const auto& step:result.steps()) if(step.action.find("reject: ")==0) rejected=true;
             passed &= !declared.status().failed && rejected && !result.status().failed && !result.status().symbolicValues &&
                 toString(root->pItem.get())=="spoke:{length:*1000+123}" && toString(defs->pItem.get())==original;
@@ -9417,7 +9453,7 @@ struct GLOBAL {
         else {
             passed &= target->pItem->orderMode==uUnordered && first && first!=data->pItem->value->items.head &&
                 first->pItem!=data->pItem->value->items.head->pItem && first->pParent==target.get() &&
-                normalizer.access->hasDirectIdentity(first,data->pItem->value->items.head) && target->pItem->value->items.size()==2;
+                normalizer.access->hasDirectIdentity(first,data->pItem->value->items.head) && target->pItem->value->items.size()==(caseID==4 ? 3 : 2);
             if(first && caseID!=6 && caseID!=7 && caseID!=2) passed &= first->pItem->value->num==1;
             if(caseID==1) passed &= getFlagBit(root->pItem->flags,infonView::isNormed) && !handle.status().symbolicValues;
             if(caseID==0 || caseID==4 || caseID==14) passed &= handle.status().symbolicValues && !getFlagBit(root->pItem->flags,infonView::isNormed);
@@ -10282,6 +10318,184 @@ struct GLOBAL {
     }%>
     void: unitTestGraphRecordDefinitions(me string: testName, me int: caseID) <- {
         me bool: passed <- graphRecordDefinitionsCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHDEFINITIONORDER(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphDefinitionOrder(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHDEFINITIONORDER(unit/graphDefinitionOrder/partial, 0)
+    GRAPHDEFINITIONORDER(unit/graphDefinitionOrder/alias, 1)
+    GRAPHDEFINITIONORDER(unit/graphDefinitionOrder/aliasChain, 2)
+    GRAPHDEFINITIONORDER(unit/graphDefinitionOrder/replay, 3)
+    GRAPHDEFINITIONORDER(unit/graphDefinitionOrder/bounded, 4)
+    GRAPHDEFINITIONORDER(unit/graphDefinitionOrder/partialExtent, 5)
+    GRAPHDEFINITIONORDER(unit/graphDefinitionOrder/cost, 6)
+    GRAPHDEFINITIONORDER(unit/graphDefinitionOrder/lateDeclaration, 7)
+    GRAPHDEFINITIONORDER(unit/graphDefinitionOrder/ambiguousMeaning, 8)
+    GRAPHDEFINITIONORDER(unit/graphDefinitionOrder/explicitOrder, 9)
+    GRAPHDEFINITIONORDER(unit/graphDefinitionOrder/orderedType, 10)
+    GRAPHDEFINITIONORDER(unit/graphDefinitionOrder/omittedContext, 11)
+    GRAPHDEFINITIONORDER(unit/graphDefinitionOrder/headerRevision, 12)
+    GRAPHDEFINITIONORDER(unit/graphDefinitionOrder/fieldAlternatives, 13)
+    GRAPHDEFINITIONORDER(unit/graphDefinitionOrder/empty, 14)
+    GRAPHDEFINITIONORDER(unit/graphDefinitionOrder/explicitComma, 15)
+
+    me bool: graphDefinitionOrderCase(me string: testName, me int: caseID) <- <%{
+        GraphNormalizer normalizer;normalizer.init();
+        std::string declarations="{#record={X:*10+1, Y:*10+2}}",expression="record:{X:*10+1}";
+        if(caseID==1 || caseID==12) {declarations="{#record={X:*10+1, Y:*10+2} #alias=record:{X:*10+1}}";expression="alias";}
+        if(caseID==2) {declarations="{#record={X:*10+1, Y:*10+2} #alias=record #other=alias}";expression="other:{X:*10+1}";}
+        if(caseID==4) expression="record:*1+{X:*10+1}";
+        if(caseID==5) expression="record:*4+{X:*10+1}";
+        if(caseID==7) declarations="{}";
+        if(caseID==8) declarations="{#record={X, Y} #record={Z, W}}";
+        if(caseID==10) declarations="{#record={X:*10+1 Y:*10+2}}";
+        if(caseID==11) declarations="{#record={X:*10+1, Y=%ctx.missing}}";
+        if(caseID==13) expression="record:{X:*10+1 X:*10+2}";
+        if(caseID==14) expression="record:{}";
+        if(caseID==15) {declarations="{#record={X:*10+1 Y:*10+2}}";expression="record:{X:*10+1, Y:*10+2}";}
+        auto defs=graphParsed(testName,declarations);
+        auto registered=normalizer.normalize(defs);registered.waitForCompletion();
+        auto before=toString(defs->pItem.get());
+        auto root=graphParsed(testName,expression);
+        if(caseID==9) root->pItem->orderMode=uOrdered;
+        auto original=toString(root->pItem.get());auto first=root->pItem->value->items.head;
+        if(caseID==12) {
+            auto meaning=normalizer.runtime.normalize({root,proteus4::compileTypeRequirements,0});meaning.waitForCompletion();
+            normalizer.runtime.update([&] {defs->pItem->value->items.head->pItem->funcArgs->orderMode=uOrdered;});
+            meaning.cancel();before=toString(defs->pItem.get());
+        }
+        if(caseID==13) {
+            auto selected=normalizer.findField(root,graphParsed(testName,"X"));selected.waitForCompletion();
+            auto result=selected.result();
+            bool passed=result && result->pItem->isOrLike() && result->pItem->innr->value->items.size()==2 &&
+                root->pItem->orderMode==uUnordered && root->pItem->value->items.head==first && before==toString(defs->pItem.get());
+            if(!passed) std::cout << "Order selection: " << toString(root->pItem.get()) << " " << selected.status().error << "\n";
+            selected.cancel();registered.cancel();normalizer.close();return passed;
+        }
+        normalizer.runtime.update([&] {normalizer.access->bind(root);});
+        auto lazy=[&] {return normalizer.runtime.normalize({root,proteus4::sizeAndValue,proteus4::lazyParts});};
+        auto handle=caseID==6 ? normalizer.normalizeWithCost(root,0) : lazy();
+        handle.waitForCompletion();
+        bool deferred=caseID==6 || caseID==8;
+        bool unordered=caseID!=7 && caseID!=9 && caseID!=10 && caseID!=12 && !deferred;
+        bool passed=!handle.status().failed;
+        if(deferred) passed &= handle.status().symbolicValues && root->pItem->orderMode==uUnknown && toString(root->pItem.get())==original;
+        else passed &= (root->pItem->orderMode==uUnordered)==unordered;
+        if(caseID==14) passed &= root->pItem->value->items.isEmpty();
+        else if(caseID!=15) passed &= root->pItem->value->items.size()==1 && root->pItem->value->items.head->pItem->value->num==1;
+        if(first) passed &= root->pItem->value->items.head==first;
+        if(unordered && caseID!=4 && caseID!=5) passed &= getModeBits(root->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown;
+        if(caseID==4 || caseID==5) passed &= root->pItem->infSize->num==(caseID==4 ? 1 : 4) && root->pItem->value->sizeMode==fromGiven;
+        if(caseID==4) passed &= !handle.status().symbolicValues && getFlagBit(root->pItem->flags,infonView::isNormed);
+        if(caseID==7) {
+            auto more=graphParsed(testName,"{#record={X:*10+1, Y:*10+2}}");
+            auto publish=normalizer.normalize(more);publish.waitForCompletion();
+            passed &= root->pItem->orderMode==uUnknown;
+            handle=lazy();handle.waitForCompletion();
+            passed &= root->pItem->orderMode==uUnordered && root->pItem->value->items.size()==1 &&
+                getModeBits(root->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown;
+            publish.cancel();
+        }
+        if(caseID==3) {
+            auto count=normalizer.access->registry->identities.size();auto next=lazy();next.waitForCompletion();
+            passed &= !next.status().failed && normalizer.access->registry->identities.size()==count;
+            for(const auto& step:next.steps()) passed &= step.action!="Set list order from type header";
+            next.cancel();
+        }
+        passed &= before==toString(defs->pItem.get());
+        if(!passed) {
+            std::cout << "Definition order " << caseID << ": " << toString(root->pItem.get()) << " order=" << root->pItem->orderMode <<
+                " symbolic=" << handle.status().symbolicValues << " error=" << handle.status().error << "\n";
+            for(const auto& step:handle.steps()) if(step.action!="visit") std::cout << step.action << "\n";
+        }
+        handle.cancel();registered.cancel();normalizer.close();return passed;
+    }%>
+    void: unitTestGraphDefinitionOrder(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphDefinitionOrderCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+
+}
+
+#define GRAPHNORMALIZEPARTS(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphNormalizeParts(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHNORMALIZEPARTS(unit/graphNormalizeParts/ordered, 0)
+    GRAPHNORMALIZEPARTS(unit/graphNormalizeParts/unordered, 1)
+    GRAPHNORMALIZEPARTS(unit/graphNormalizeParts/beforeAndAfter, 2)
+    GRAPHNORMALIZEPARTS(unit/graphNormalizeParts/lazyLookup, 3)
+    GRAPHNORMALIZEPARTS(unit/graphNormalizeParts/lazyNested, 4)
+    GRAPHNORMALIZEPARTS(unit/graphNormalizeParts/explicitBound, 5)
+    GRAPHNORMALIZEPARTS(unit/graphNormalizeParts/replay, 6)
+    GRAPHNORMALIZEPARTS(unit/graphNormalizeParts/rhs, 7)
+    GRAPHNORMALIZEPARTS(unit/graphNormalizeParts/selected, 8)
+    GRAPHNORMALIZEPARTS(unit/graphNormalizeParts/conflict, 9)
+    GRAPHNORMALIZEPARTS(unit/graphNormalizeParts/reverse, 10)
+    GRAPHNORMALIZEPARTS(unit/graphNormalizeParts/empty, 11)
+    GRAPHNORMALIZEPARTS(unit/graphNormalizeParts/normalizeChild, 12)
+    GRAPHNORMALIZEPARTS(unit/graphNormalizeParts/lateDefinition, 13)
+
+    me bool: graphNormalizePartsCase(me string: testName, me int: caseID) <- <%{
+        GraphNormalizer normalizer;normalizer.init();
+        std::string declarations="{#record={X:*10+1 Y:*10+2 Z:*10+3}}",expression="record:{Y:*10+2}";
+        if(caseID==1 || caseID==7) declarations="{#record={X:*10+1, Y:*10+2, Z:*10+3}}";
+        if(caseID==2) expression="record:{X:*10+1 Z:*10+3}";
+        if(caseID==4 || caseID==12) {declarations="{#Child={A:*10+1 B:*10+2} #record={Child:{B:*10+2} Z:*10+3}}";expression="record:{Child:{B:*10+2}}";}
+        if(caseID==5) expression="record:*1+{Y:*10+2}";
+        if(caseID==7) expression="record=record:{Y:*10+2}";
+        if(caseID==8) expression="{record:{Y:*10+2}}.record";
+        if(caseID==9) expression="record:{Y:*10+8}";
+        if(caseID==10) expression="record:{Z:*10+3 X:*10+1}";
+        if(caseID==11) expression="record:{}";
+        auto defs=graphParsed(testName,caseID==13 ? "{}" : declarations);auto registered=normalizer.normalize(defs);registered.waitForCompletion();
+        auto saved=toString(defs->pItem.get());auto root=graphParsed(testName,expression);
+        auto first=caseID==8 ? proteus4::POVNode{} : root->pItem->value->items.head;
+        auto handle=caseID==3 ? normalizer.findField(root,graphParsed(testName,"Y")) : normalizer.normalize(root);
+        handle.waitForCompletion();
+        bool lateStable=true;
+        if(caseID==13) {
+            auto later=graphParsed(testName,declarations);auto publish=normalizer.normalize(later);publish.waitForCompletion();
+            lateStable=root->pItem->value->items.size()==1;
+            handle=normalizer.normalize(root);handle.waitForCompletion();publish.cancel();
+        }
+        bool rejected=caseID==5 || caseID==9 || caseID==10;
+        bool passed=lateStable && handle.status().failed==rejected && saved==toString(defs->pItem.get());
+        if(rejected || caseID==3) passed &= root->pItem->value->items.size()==(caseID==10 ? 2 : 1) && root->pItem->value->items.head==first;
+        else {
+            passed &= root->pItem->value->items.size()==((caseID==4 || caseID==12) ? 2 : 3);
+            if(first) {
+                bool kept=false;for(auto member=root->pItem->value->items.head;member;member=member->next) kept |= member==first;
+                passed &= kept;
+            }
+            if(caseID==4 || caseID==12) passed &= root->pItem->value->items.head->pItem->value->items.size()==1;
+            else {
+                auto member=root->pItem->value->items.head;
+                std::set<int> values;for(;member;member=member->next) values.insert(member->pItem->value->num.getNumerator().get_si());
+                passed &= values==std::set<int>{1,2,3};
+            }
+        }
+        if(caseID==12) {
+            auto child=root->pItem->value->items.head;auto supplied=child->pItem->value->items.head;
+            auto complete=normalizer.normalize(child);complete.waitForCompletion();
+            passed &= !complete.status().failed && child->pItem->value->items.size()==2 &&
+                child->pItem->value->items.tail==supplied && supplied->pItem->value->num==2;
+            complete.cancel();
+        }
+        if(caseID==6) {
+            auto text=toString(root->pItem.get());auto identities=normalizer.access->registry->identities.size();
+            auto again=normalizer.normalize(root);again.waitForCompletion();
+            passed &= !again.status().failed && text==toString(root->pItem.get()) && identities==normalizer.access->registry->identities.size();again.cancel();
+        }
+        if(!passed) std::cout << "Normalize parts " << caseID << ": " << toString(root->pItem.get()) << " error=" << handle.status().error << "\n";
+        handle.cancel();registered.cancel();normalizer.close();return passed;
+    }%>
+    void: unitTestGraphNormalizeParts(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphNormalizePartsCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

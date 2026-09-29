@@ -67,7 +67,9 @@ Unordered definition bodies and supplied record RHSs share unique nominal
 correspondence. Existing identities take precedence; duplicate-type or unknown
 matches stay pending. Plan all member checks before publishing values or
 identities. Unordered extents remain unknown unless explicitly given. Preserve
-partial descriptions inside definitions as well as directly supplied instances.
+partial descriptions inside definitions and during incidental traversal. Explicit
+normalization requests the result's immediate definition parts; see
+graph/normalization-parts-results.md.
 See graph/record-definition-results.md for supported composition and boundaries.
 
 Current checkpoint: scalar/finite definitions, lazy member templates, and
@@ -163,18 +165,18 @@ even on explicit re-normalization. Future caller-authorized rebinding is tracked
 in graph/open-questions.md; do not infer permission to rebind from normalization.
 See graph/scalar-compatibility-results.md for tests and remaining boundaries.
 
-Supplied typed-field descriptions may be partial even when ordered. Normalizing
-such a description (including a parent returned by `;` or `;;`) normalizes the
-present members without forcing the complete parent definition onto it. Bare type
-references and positional value sequences still expand; member type constraints,
-explicit RHSs, and repetition requirements retain their own goals. See
-graph/partial-type-results.md for the boundary on projecting parent-specific
-meaning. Do not add missing-field subscriptions merely because a definition
-mentions omitted parts.
+Supplied typed-field descriptions may be partial even when ordered. Explicit
+normalization requests at least the result's immediate definition parts, while
+incidental traversal of related items remains lazy. Preserve this distinction in
+the goal, including after RHS adoption or path selection; route cost must not
+choose whether omitted parts appear. Use nominal correspondence for typed parts
+and retain existing POVs. Explicit sizes still constrain membership. A counted
+size may be revised when missing ordered parts are inserted. This supersedes
+the direct-normalization policy in graph/partial-type-results.md; that note still
+describes lazy traversal. See graph/normalization-parts-results.md.
 
-For unordered lists, the user clarified that omitted items are non-relevant to
-that instance. Do not create missing-field subscriptions or eagerly insert all
-definition members. Instance size counts the items it holds. Ordered lists can
+For unordered lists, omitted items need not be enumerated for a field lookup.
+Instance size counts the items it holds. Ordered lists can
 also contain typed fields (as in a C struct); field selection does not imply
 unorderedness. Preserve the space-separated query/chain fixtures. The latest
 clarification says unordered descriptions have an implied open tail: unlisted

@@ -1,11 +1,17 @@
 # Older language compatibility, 2026-09-28
 
-Unordered definition composition and unique nominal record correspondence are
-implemented. Full source builds and **1,176/1,176 registered graph tests** pass,
-including 20 new record checks. The compiled audit reports **1,226 pass / 8
-existing fail**. The six older language suites remain **265 pass / 88 fail / 8
-ambiguity skips**; every pre-existing fixture status is unchanged. See
-[record-definition-results.md](record-definition-results.md).
+Explicit normalization now requests immediate definition parts; related source
+traversal stays lazy. Unspecified list order is inferred through type headers.
+All **1,206/1,206 registered graph tests** pass, including 30 new checks. The
+compiled audit reports **1,256 pass / 8 existing fail**. Six older language
+suites report **266 pass / 87 fail / 8 ambiguity skips**. See
+[normalization-parts-results.md](normalization-parts-results.md).
+
+`word/setColor` now fills all three fields. Its expected text was updated to
+preserve the declared unknown numeric sizes. `query/chain3` now expects the
+omitted color because the returned spoke is explicitly normalized. The returned
+wheel in `query/chain4` retains its lazy nested spoke; that fixture is unchanged.
+Every other old language status and every retained compiled status is unchanged.
 
 The preceding language-tag and sparse-header changes are documented in
 [definition-language-results.md](definition-language-results.md) and
@@ -41,7 +47,7 @@ Its old closed-result expectation was updated in that earlier increment.
 
 | Suite | Passing | Failing | Ambiguous skips | Total |
 |---|---:|---:|---:|---:|
-| `defaultTests.tst` | 247 | 13 | 8 | 268 |
+| `defaultTests.tst` | 248 | 12 | 8 | 268 |
 | `demoTests.tst` | 8 | 14 | 0 | 22 |
 | `sparseTests.tst` | 2 | 21 | 0 | 23 |
 | `timeTests.tst` | 4 | 32 | 0 | 36 |
@@ -150,7 +156,7 @@ resolved: unknown numeric sizes and subscribed open tails remain symbolic.
 
 The complete fixture status and input hashes are recorded in
 [language-compatibility-status.json](language-compatibility-status.json).
-Current language and compiled logs are in `/tmp/p4-record-final`.
+Current language and compiled logs are in `/tmp/p4-parts-final`.
 The preceding definition results are in `/tmp/p4-definition-final`.
 The preceding results are in `/tmp/p4-temporal-language-final` and
 `/tmp/p4-temporal-compiled-final`. The pre-change compiled baseline is

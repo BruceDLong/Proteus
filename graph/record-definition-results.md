@@ -1,5 +1,10 @@
 # Unordered definitions and supplied record correspondence
 
+Later clarification: explicit normalization fills the requested item's immediate
+parts; incidental traversal stays lazy. See
+[normalization-parts-results.md](normalization-parts-results.md). The historical
+partial-normalization observations below predate that distinction.
+
 Unordered definition bodies now participate in the existing read-only type
 compiler. A bare reference can create independent member POVs from its declared
 parts. A supplied partial description, including one used inside a definition,

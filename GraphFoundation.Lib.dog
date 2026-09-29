@@ -71,13 +71,13 @@ struct GraphNormalizer {
     }%>
     me NormalizationHandle: normalize(our POV: target) <- <%{
         runtime.update([&] { access->bind(target); });
-        return runtime.normalize({target, proteus4::sizeAndValue, 0});
+        return runtime.normalize({target, proteus4::sizeAndValue, proteus4::fillImmediateParts});
     }%>
     me NormalizationHandle: normalizeWithCost(our POV: target, me uint64: maximumRoute) <- <%{
         runtime.update([&] { access->bind(target); });
         proteus4::CostPolicy policy;
         policy.maximumRoute = maximumRoute;
-        return runtime.normalize({target, proteus4::sizeAndValue, 0}, policy);
+        return runtime.normalize({target, proteus4::sizeAndValue, proteus4::fillImmediateParts}, policy);
     }%>
     me NormalizationHandle: findBoundary(our POV: source, me bool: end) <- <%{
         runtime.update([&] {access->bind(source);});
@@ -455,11 +455,27 @@ struct ProteusGraphAccess {
         return(pov!.pItem!.orderMode==uUnknown or pov!.pItem!.orderMode==uOrdered)
     }
     me bool: definitionOrderKnown(our POV: pov) <- {return(pov!.pItem!.orderMode==uOrdered)}
-    me bool: setDefinitionOrder(our POV: pov) <- {
-        if(pov!.pItem!.orderMode!=uUnknown){return(false)}
-        pov!.pItem!.orderMode <- uOrdered; pov!.workRevision <+- 1
-        return(true)
-    }
+    me bool: setDefinitionOrder(our POV: pov) <- {return(setListOrder(pov, uOrdered))}
+    me bool: setListOrder(our POV: pov, me OrderMode: order) <- <%{
+        if(pov->pItem->orderMode!=uUnknown || order==uUnknown) return false;
+        auto item=pov->pItem;
+        item->orderMode=order;
+        if(order==uUnordered) invalidateCountedSize(pov);
+        ++pov->workRevision;SetFlagBit(item->flags,infonView::isNormed,false);
+        return true;
+    }%>
+    me bool: invalidateCountedSize(our POV: pov) <- <%{
+        auto item=pov->pItem;
+        if(item->value->sizeMode!=fromCount ||
+           getModeBits(item->infSize->flags,infonState::evalMode)!=infonState::emLiteral) return false;
+        // Counted membership is revisable; explicit extent constraints are not.
+        // Detach the slot before clearing it because another view may share it.
+        auto previous=item->infSize;item->infSize=std::make_shared<infonState>();
+        item->infSize->flags=previous->flags;item->infSize->num=previous->num;
+        SetModeBits(item->infSize->flags,infonState::evalMode,infonState::emUnknown);
+        ++pov->workRevision;SetFlagBit(item->flags,infonView::isNormed,false);
+        return true;
+    }%>
     me List<our POV>: definitionMembers(our POV: pov) <- {
         me List<our POV>: result
         if(positionalDefinitionList(pov) or recordDefinitionList(pov)){
@@ -479,6 +495,9 @@ struct ProteusGraphAccess {
         return(true)
     }
     our POV: appendDefinitionMember(our POV: owner, me string: typeName) <- {
+        return(insertDefinitionMember(owner, typeName, NULL))
+    }
+    our POV: insertDefinitionMember(our POV: owner, me string: typeName, our POV: before) <- {
         // Instance-owned storage. No identity or work edge points back into a
         // shared definition, so local values cannot specialize that definition.
         our infonView:: item
@@ -488,7 +507,9 @@ struct ProteusGraphAccess {
         if(typeName!=""){
             Allocate(item!.type); item!.type!.setAsGiven(typeName)
         }
-        our POV: member <- owner!.pItem!.value!.items.append(item, false, 913)
+        our POV: member
+        if(before!=NULL){member <- owner!.pItem!.value!.items.insertBefore(before, item, 913)}
+        else{member <- owner!.pItem!.value!.items.append(item, false, 913)}
         member!.pParent <- owner; bind(member)
         owner!.pItem!.isNormed <- false; owner!.workRevision <+- 1
         return(member)

@@ -44,7 +44,7 @@ class PathSelection {
         out.edges.push_back(edge("next field position",std::move(follow),visits));
     }
     bool sourceReady(const POVNode& node,Expansion<POVNode>& out,Cost& visits) const {
-        bool ready=access_->physicalList(node) || access_->unreferencedTemplateSpan(node);
+        bool ready=(access_->physicalList(node) || access_->unreferencedTemplateSpan(node)) && !definitions_->pendingOrder(node);
         if(ready) for (const auto& relation:POVDescription(node,access_->registry.get()).relationships()) {
             if(access_->sameInfon(node,relation.target)) continue;
             RHSRepresentation proof(access_,node,relation.target,definitions_);
