@@ -1,6 +1,12 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphSignedNumber/parser
+    unit/graphSignedNumber/replayAndCopy
+    unit/graphSignedNumber/lateSize
+    unit/graphSignedNumber/sizeModes
+    unit/graphSignedNumber/definitionReadOnly
+
     unit/graphOrderedUnits/billionUnitSkip
     unit/graphOrderedUnits/sparseUnitDemand
     unit/graphOrderedUnits/sparseUnitWrite
@@ -10810,4 +10816,73 @@ struct GLOBAL {
         REQUIRE(actual==expected)
     }
 
+}
+
+#define GRAPHSIGNED(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphSignedNumber(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHSIGNED(unit/graphSignedNumber/parser, 0)
+    GRAPHSIGNED(unit/graphSignedNumber/replayAndCopy, 1)
+    GRAPHSIGNED(unit/graphSignedNumber/lateSize, 2)
+    GRAPHSIGNED(unit/graphSignedNumber/sizeModes, 3)
+    GRAPHSIGNED(unit/graphSignedNumber/definitionReadOnly, 4)
+    me bool: graphSignedNumberCase(me string: testName, me int: caseID) <- <%{
+        bool passed=true;
+        if(caseID==0) {
+            for(const std::string text:{"-1.1","-11/10","*10-1","/64-34","+2"}) {
+                auto root=graphParsed(testName,text);auto value=root->pItem->value;
+                mpq_class expected(text=="*10-1" ? "-1" : text=="/64-34" ? "-34" : text=="+2" ? "2" : "-11/10");
+                passed &= value->num.val==expected && !getFlagBit(value->flags,infonState::inverted);
+                passed &= getFlagBit(root->pItem->infSize->flags,infonState::inverted)==(text=="/64-34");
+                auto again=graphParsed(testName,toString(root->pItem.get()));
+                passed &= again->pItem->value->num.val==expected && again->pItem->value->sizeMode==value->sizeMode;
+            }
+            return passed;
+        }
+        GraphNormalizer normalizer;normalizer.init();
+        if(caseID==1 || caseID==3) {
+            std::vector<std::tuple<std::string,std::string,int>> cases=caseID==1 ?
+                std::vector<std::tuple<std::string,std::string,int>>{{"*10-1","9",10},{"*10-11","-1",10},{"*0-1","-1",0},{"*10+11","11",10},{"*10-1/2","19/2",10}} :
+                std::vector<std::tuple<std::string,std::string,int>>{{"(*10+9 +2)","11",10},{"(*10+1 -2)","-1",10},{"(*10+1 *10+2)","12",100}};
+            for(const auto& [text,expected,size]:cases) {
+                auto root=graphParsed(testName,text);auto handle=normalizer.normalize(root);handle.waitForCompletion();
+                bool ok=!handle.status().failed && root->pItem->value->num.val==mpq_class(expected) && root->pItem->infSize->num==size;
+                auto revision=root->workRevision;
+                auto replay=normalizer.normalize(root);replay.waitForCompletion();
+                ok &= !replay.status().failed && root->pItem->value->num.val==mpq_class(expected) && root->workRevision==revision;
+                if(caseID==1) {
+                    auto copy=graphParsed(testName,"_");normalizer.addRHS(copy,root);
+                    auto copied=normalizer.normalize(copy);copied.waitForCompletion();
+                    ok &= !copied.status().failed && copy->pItem->value->num.val==mpq_class(expected) && copy->pItem->infSize->num==size;
+                    copied.cancel();
+                }
+                if(!ok) std::cout << "Signed numeric " << text << " -> " << toString(root->pItem.get()) << " error=" << handle.status().error << " replay=" << replay.status().error << "\n";
+                passed &= ok;handle.cancel();replay.cancel();
+            }
+        } else if(caseID==2) {
+            auto root=graphParsed(testName,"-1");auto handle=normalizer.normalize(root);handle.waitForCompletion();
+            passed &= !handle.status().failed && handle.status().symbolicValues && root->pItem->value->num==-1;
+            normalizer.addRHS(root,graphParsed(testName,"*10+_"));handle.waitForCompletion();
+            passed &= !handle.status().failed && root->pItem->value->num==9 && root->pItem->infSize->num==10;
+            auto contradiction=graphParsed(testName,"*10+8");normalizer.addRHS(root,contradiction);
+            // Completed handles are reconsidered by an explicit normalization.
+            handle=normalizer.normalize(root);handle.waitForCompletion();
+            passed &= handle.status().failed && root->pItem->value->num==9 && contradiction->pItem->value->num==8;
+            if(!passed) std::cout << "Late signed size: " << toString(root->pItem.get()) << " error=" << handle.status().error << "\n";
+            handle.cancel();
+        } else if(caseID==4) {
+            auto root=graphParsed(testName,"{#pose={xRot:0 xLoc:-1.1} pose.xLoc}");
+            auto definition=root->pItem->value->items.head->pItem;
+            auto before=toString(definition.get());auto handle=normalizer.normalize(root);handle.waitForCompletion();
+            passed &= !handle.status().failed && root->pItem->value->items.tail->pItem->value->num.val==mpq_class("-11/10") && toString(definition.get())==before;
+            if(!passed) std::cout << "Signed definition: " << toString(root->pItem.get()) << " error=" << handle.status().error << "\n";
+            handle.cancel();
+        }
+        normalizer.close();return passed;
+    }%>
+    void: unitTestGraphSignedNumber(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphSignedNumberCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
 }

@@ -27,7 +27,12 @@ only nested T-lists and explicit embedded spans continue temporal navigation.
 TemporalGraph supplies symbolic support/cut goals. Reading either side of an
 interior S-state cut yields the same source value. A cut in a changing T-history
 stays unresolved until its location is known. Do not infer time duration from
-member count, expand sparse histories, or copy missing fields by persistence.
+member count, expand sparse histories, or silently copy missing fields between arbitrary states. The 2026-09-29
+clarification establishes preservation across a modeled change unless the model
+implies another change, including indirect causal consequences. This transition
+behavior is not yet implemented; preserve distinct temporal occurrences and
+represent dependencies rather than identifying entire successive states.
+See graph/cubie-transition-exercise.md for the current world-model exercise.
 See graph/temporal-context-results.md for the current implementation boundary.
 
 Definition catalogues select language-only tags using the existing base/full

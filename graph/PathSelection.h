@@ -67,8 +67,8 @@ class PathSelection {
         }
     }
     // Index syntax translates to the existing zero-based navigation demand.
-    // An inverted literal is a signed coordinate here, rather than a scalar
-    // waiting for a size against which to take its complement.
+    // Numeric coordinates carry their sign in the rational payload; their
+    // source-list bounds are resolved by navigation, not scalar wraparound.
     int orderedEndpoint(const POVNode& source,const POVNode& predicate) const {
         if(!access_->navigationList(source) || !access_->plain(predicate,false,false,false,false) || !predicate->pItem->type ||
            !predicate->pItem->addedTypes.empty() || !POVDescription(predicate,access_->registry.get()).relationships().empty()) return 0;
@@ -99,7 +99,7 @@ class PathSelection {
         if(!literal) {
             unresolved(out,q,"unresolved path index");return out;
         }
-        if(number.getDenominator()==0) {access_->numericLiteralError();return out;}
+        if(number.getDenominator()==0) throw std::runtime_error("numeric literal has zero denominator");
         number.val.canonicalize();
         if(number.getDenominator()!=1 || (!spec && number==0) || number>INT64_MAX || number < -INT64_MAX) {
             unresolved(out,q,"unsupported path index");return out;

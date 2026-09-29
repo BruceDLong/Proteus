@@ -1,6 +1,6 @@
 #pragma once
 
-// Coordinates interpret a complemented literal as a signed offset. A single
+// Coordinates retain signed rational offsets. A single
 // parenthesized term is the same coordinate; it need not acquire a scalar
 // radix merely to reveal its sign. Other expressions remain ordinary goals.
 inline bool signedCoordinate(ProteusGraphAccess& access,const std::shared_ptr<infonState>& state,

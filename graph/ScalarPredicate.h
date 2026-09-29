@@ -4,6 +4,7 @@
 // facts are not a mismatch, even when another candidate is already available.
 inline ScalarMatch compareScalar(GraphTypeFacts required, const GraphTypeFacts& actual) {
     if (!required.valid || !actual.valid) return ScalarMatch::unknown;
+    if (required.pendingNumericValue(actual)) return ScalarMatch::unknown;
     if (required.accepts(actual)) return ScalarMatch::yes;
     return required.combine(actual) ? ScalarMatch::unknown : ScalarMatch::no;
 }
@@ -22,8 +23,10 @@ inline ScalarMatch scalarConstraint(GraphTypeFacts left,GraphTypeFacts right,
                                    ScalarMatch nominal=ScalarMatch::yes,ScalarMatch reverseNominal=ScalarMatch::yes) {
     if(!left.valid || !right.valid) return ScalarMatch::unknown;
     if(looseSize) left.hasSize=right.hasSize=false;
-    if(!negativeLeft && !negativeRight)
+    if(!negativeLeft && !negativeRight) {
+        if(left.pendingNumericValue(right)) return ScalarMatch::unknown;
         return left.combine(right) ? ScalarMatch::yes : ScalarMatch::no;
+    }
     if(negativeLeft && negativeRight) {
         // Equivalent exclusions are redundant. Other conjunctions remain
         // explicit; neither negative operand supplies positive value evidence.

@@ -13,10 +13,10 @@ been reopened.
    as an independent object or as a part of something else? What evidence
    distinguishes an unmentioned part from a removed, destroyed, or replaced part?
 
-2. **State across time.** When a later description mentions only the part that
-   changed, how can the reasoner obtain other parts' states? Is persistence an
-   explicit relation or theorem, a property of a temporal model, or something
-   else? Omission itself must not assert either change or no change. When does a
+2. **Implementing preservation across change.** The default preservation rule is
+   settled below. How do graph dependencies represent its exceptions from implied
+   changes, and how should tentative preserved results respond to later evidence?
+   How are consequences with different temporal supports related? When does a
    membership bound apply to one time versus an interval?
 
 3. **Subscriptions to temporal results.** Should a query follow a part as the
@@ -85,6 +85,15 @@ been reopened.
     expresses that request while keeping ordinary value selection distinct?
 
 ## Decisions already made
+
+- A change, including one expressed by a verb, preserves other values unless
+  the applicable model implies changes to them (2026-09-29). Consequences can
+  propagate: forward pedaling on a functioning bicycle implies chain and wheel
+  movement, and typical riding can imply movement of the bicycle itself.
+  Preservation therefore applies beyond both direct and model-implied effects;
+  it is not limited to the fields explicitly written in the change. The graph
+  implementation is pending. This decision does not supply a transition
+  relationship between arbitrary disconnected partial descriptions.
 
 - Assigning a conflicting known value is a contradiction unless the relationship
   explicitly uses `forceID` (written `<<=`). Ordinary `=` may supply an unknown

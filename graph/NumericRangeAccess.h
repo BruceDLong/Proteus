@@ -22,7 +22,10 @@ class NumericRangeAccess {
         if(getFlagBit(body->flags,infonState::inverted)) return {};
         if(overlay==infonState::NUM) {
             if(mode==infonState::emLiteral) {
-                auto n=body->num.val;if(n.get_den()==0) return {};n.canonicalize();
+                if(body->num.getDenominator()==0) return {};
+                out.facts.numericExtentApplied=getFlagBit(body->flags,infonState::numericExtentApplied) || out.facts.hasSize;
+                auto n=finiteNumericRepresentative(body->num,
+                    out.facts.hasSize && !getFlagBit(body->flags,infonState::numericExtentApplied),out.facts.size).val;
                 out.bounds=NumericBounds::literal(n);out.facts.hasValue=true;out.facts.number.val=n;
             } else if(mode==infonState::emUnknown) {
                 out.constraint=true;
@@ -80,6 +83,7 @@ public:
             SetModeBits(body->flags,infonState::overlayType,infonState::NUM);
             SetModeBits(body->flags,infonState::evalMode,infonState::emLiteral);
             body->num.val=result.bounds.low;
+            SetFlagBit(body->flags,infonState::numericExtentApplied,result.facts.numericExtentApplied || result.facts.hasSize);
         } else {
             SetModeBits(body->flags,infonState::overlayType,infonState::LST);
             SetModeBits(body->flags,infonState::evalMode,infonState::emConcat);

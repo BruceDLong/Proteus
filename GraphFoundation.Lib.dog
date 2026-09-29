@@ -228,11 +228,23 @@ struct infonView {
         return false;
     }%>
 }
+struct GLOBAL {
+    // Proteus3 rangeRules translates a negative displacement once, when its
+    // extent is known. SizeMode does not change this rule; no modulo is added.
+    me FlexNum: finiteNumericRepresentative(me FlexNum: number, me bool: sizeKnown, me FlexNum: size) <- <%{
+        if(number.getDenominator()==0) throw std::runtime_error("numeric literal has zero denominator");
+        number.val.canonicalize();
+        if(sizeKnown && number<0) number.val+=size.val;
+        return number;
+    }%>
+}
+
 // The local numeric rule from Proteus3 WorldManager.rangeRules, planned
 // without changing the source so the normal graph Set/revision path owns it.
 struct GraphNumericLiteral {
     me FlexNum: number
     me bool: inverted <- false
+    me bool: extentApplied <- false
     me bool: changed <- false
 }
 struct GraphConcatTerms { me List<our POV>: items }
@@ -259,31 +271,51 @@ struct GraphTypeFacts {
     me bool: timelike <- false  // Positive list meaning; false makes no temporal assertion.
     me FlexNum: size
     me bool: hasValue <- false
+    me bool: numericExtentApplied <- false
     me FlexNum: number
     me string: text
     me bool: same(me GraphTypeFacts: other) <- {
         return(valid==other.valid and overlay==other.overlay and hasSize==other.hasSize and
-               explicitSize==other.explicitSize and timelike==other.timelike and
+               explicitSize==other.explicitSize and numericExtentApplied==other.numericExtentApplied and timelike==other.timelike and
                (!hasSize or size==other.size) and hasValue==other.hasValue and
                (!hasValue or (number==other.number and text==other.text)))
+    }
+    me bool: sameValue(me GraphTypeFacts: other) <- {
+        if(overlay==NUM or other.overlay==NUM){
+            me bool: extentKnown <- hasSize or other.hasSize
+            me FlexNum: extent <- size
+            if(!hasSize){extent <- other.size}
+            return(finiteNumericRepresentative(number, extentKnown and !numericExtentApplied, extent)==
+                   finiteNumericRepresentative(other.number, extentKnown and !other.numericExtentApplied, extent))
+        }
+        return(number==other.number and text==other.text)
+    }
+    me bool: pendingNumericValue(me GraphTypeFacts: other) <- {
+        return(hasValue and other.hasValue and !hasSize and !other.hasSize and
+               overlay==NUM and other.overlay==NUM and number!=other.number and
+               ((number<0 and !numericExtentApplied)!=(other.number<0 and !other.numericExtentApplied)))
     }
     me bool: combine(me GraphTypeFacts: other) <- {
         if(!other.valid){return(false)}
         if(overlay>=0 and other.overlay>=0 and overlay!=other.overlay){return(false)}
         if(hasSize and other.hasSize and size!=other.size){return(false)}
-        if(hasValue and other.hasValue and (number!=other.number or text!=other.text)){return(false)}
+        if(hasValue and other.hasValue and !sameValue(other)){return(false)}
         timelike <- timelike or other.timelike
         explicitSize <- explicitSize or other.explicitSize
         if(other.overlay>=0){overlay <- other.overlay}
         if(other.hasSize){hasSize <- true; size <- other.size}
-        if(other.hasValue){hasValue <- true; number <- other.number; text <- other.text}
+        if(other.hasValue){hasValue <- true; number <- other.number; text <- other.text; numericExtentApplied <- other.numericExtentApplied}
+        if(hasValue and overlay==NUM){
+            number <- finiteNumericRepresentative(number, hasSize and !numericExtentApplied, size)
+            numericExtentApplied <- numericExtentApplied or hasSize
+        }
         valid <- true
         return(true)
     }
     me bool: accepts(me GraphTypeFacts: actual) <- {
         return(actual.valid and (!timelike or actual.timelike) and (overlay<0 or overlay==actual.overlay) and
                (!hasSize or (actual.hasSize and actual.size==size)) and
-               (!hasValue or (actual.hasValue and actual.number==number and actual.text==text)))
+               (!hasValue or (actual.hasValue and sameValue(actual))))
     }
 }
 
@@ -557,7 +589,8 @@ struct ProteusGraphAccess {
     me GraphTypeFacts: predicateFacts(our POV: pov, me bool: relationship <- false) <- {
         me GraphTypeFacts: facts
         if(!plainStructure(pov, false, false, relationship, false) or !definitionTypeShape(pov) or
-                pov!.pItem!.value!.sizeMode==fromContext or
+                (pov!.pItem!.value!.sizeMode==fromContext and
+                 !(pov!.pItem!.value!.overlayType==NUM and pov!.pItem!.value!.evalMode==emLiteral)) or
                 pov!.pItem!.infSize!.overlayType!=NUM or hasArgument(pov)){return(facts)}
         facts.valid <- true
         facts.timelike <- pov!.pItem!.value!.overlayType==LST and pov!.pItem!.value!.timelike
@@ -572,6 +605,7 @@ struct ProteusGraphAccess {
                 // facts without rewriting the shared definition body.
                 me GraphNumericLiteral: literal <- planNumericLiteral(pov)
                 facts.number <- literal.number
+                facts.numericExtentApplied <- literal.extentApplied or facts.hasSize
             }else{facts.text <- pov!.pItem!.value!.str}
         }
         return(facts)
@@ -598,9 +632,13 @@ struct ProteusGraphAccess {
         }
         if(!actual.hasValue and required.hasValue){
             target!.pItem!.value!.evalMode <- emLiteral
-            if(required.overlay==NUM){target!.pItem!.value!.num <- required.number}
+            if(required.overlay==NUM){target!.pItem!.value!.num <- combined.number}
             else{target!.pItem!.value!.str <- required.text}
             changed <- true
+        }
+        if(changed and combined.hasValue and combined.overlay==NUM){
+            target!.pItem!.value!.num <- combined.number
+            target!.pItem!.value!.numericExtentApplied <- combined.numericExtentApplied
         }
         // Preserve a learned explicit size in normal output. Otherwise, e.g.
         // *16+10 would print as 10 and reparse with a different numeric size.
@@ -608,31 +646,30 @@ struct ProteusGraphAccess {
         if(changed){target!.workRevision <+- 1; target!.pItem!.isNormed <- false}
         return(changed)
     }
-    void: numericLiteralError() <- <%{ throw std::runtime_error("numeric literal has zero denominator"); }%>
     me GraphNumericLiteral: planNumericLiteral(our POV: pov) <- {
         me GraphNumericLiteral: plan
         if(inputPending(pov) or pov!.pItem!.value!.overlayType!=NUM or
                 pov!.pItem!.value!.evalMode!=emLiteral or pov!.pItem!.value!.undefined){return(plan)}
         our infonState: value <- pov!.pItem!.value
         plan.number <- value!.num
-        plan.inverted <- value!.inverted
-        if(plan.number.getDenominator()==0){numericLiteralError()}
-        plan.number.normalize()
-        if(plan.inverted and pov!.pItem!.infSize!.overlayType==NUM and
+        // A symbolic minus may have become literal after a later publication.
+        if(value!.inverted){plan.number <- -plan.number}
+        me bool: sizeKnown <- pov!.pItem!.infSize!.overlayType==NUM and
                 pov!.pItem!.infSize!.evalMode==emLiteral and
-                !pov!.pItem!.infSize!.inverted and !pov!.pItem!.infSize!.undefined){
-            plan.number <- pov!.pItem!.infSize!.num - plan.number
-            plan.inverted <- false
-        }
+                !pov!.pItem!.infSize!.inverted and !pov!.pItem!.infSize!.undefined
+        plan.extentApplied <- value!.numericExtentApplied
+        if(sizeKnown and plan.number<0 and !plan.extentApplied){plan.extentApplied <- true}
+        plan.number <- finiteNumericRepresentative(plan.number, sizeKnown and !value!.numericExtentApplied, pov!.pItem!.infSize!.num)
         plan.changed <- plan.number.getNumerator()!=value!.num.getNumerator() or
                         plan.number.getDenominator()!=value!.num.getDenominator() or
-                        plan.inverted!=value!.inverted
+                        plan.inverted!=value!.inverted or plan.extentApplied!=value!.numericExtentApplied
         return(plan)
     }
     me bool: applyNumericLiteral(our POV: pov, me GraphNumericLiteral: plan) <- {
         if(!plan.changed){return(false)}
         pov!.pItem!.value!.num <- plan.number
         pov!.pItem!.value!.inverted <- plan.inverted
+        pov!.pItem!.value!.numericExtentApplied <- plan.extentApplied
         pov!.pItem!.isNormed <- false; pov!.workRevision <+- 1
         return(true)
     }
@@ -837,6 +874,8 @@ struct ProteusGraphAccess {
         // The goal validated the whole path before this batch. Recheck at the
         // mutation boundary; nothing can interleave under the context lock.
         if(inputPending(target) or compatible(target, source, demand)!=1){return(false)}
+        me GraphTypeFacts: combined <- typeFacts(target)
+        if(scalarCandidate(target) and scalarCandidate(source)){combined.combine(typeFacts(source))}
         me bool: copySize <- !inputPending(source) and (demand==1 or demand==3) and
                 target!.pItem!.infSize!.evalMode==emUnknown and
                 source!.pItem!.infSize!.evalMode==emLiteral
@@ -883,6 +922,11 @@ struct ProteusGraphAccess {
         if(copyValue){target!.pItem!.value!.copyOverlayFrom(source!.pItem!.value, 0)}
         if(copyTemporal){target!.pItem!.value!.timelike <- true}
         if(copySize or copyType or copyValue or copyList or copyNominal or copyTemporal){
+            if(target!.pItem!.value!.overlayType==NUM and target!.pItem!.value!.evalMode==emLiteral and
+                    combined.valid and combined.hasValue){
+                target!.pItem!.value!.num <- combined.number
+                target!.pItem!.value!.numericExtentApplied <- combined.numericExtentApplied
+            }
             if(explicitSize and target!.pItem!.value!.overlayType==NUM){target!.pItem!.value!.sizeMode <- fromGiven}
             target!.pItem!.isNormed <- false
             target!.workRevision <+- 1
@@ -1143,6 +1187,7 @@ struct ProteusGraphAccess {
                 result!.sizeMode <- owner!.pItem!.value!.sizeMode
                 if(plan.type==NUM and plan.sizeKnown){result!.sizeMode <- fromGiven}
                 result!.num <- plan.number; result!.str <- plan.text
+                result!.numericExtentApplied <- plan.type==NUM and plan.sizeKnown
                 result!.tailUnfinished <- plan.type==LST
                 owner!.pItem!.value <- result
                 changed <- true

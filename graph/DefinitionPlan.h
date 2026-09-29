@@ -66,6 +66,7 @@ using DefinitionSpec = std::shared_ptr<DefinitionRequirement>;
 
 inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const DefinitionSpec& right, Work& work) {
     auto result = std::make_shared<DefinitionRequirement>(*left);
+    if (result->facts.pendingNumericValue(right->facts)) throw DefinitionPending{};
     if (!result->facts.combine(right->facts))
         throw DefinitionConflict("incompatible definition requirements");
     if(right->numeric.valid) {
@@ -459,6 +460,7 @@ private:
             if(!accepted) {supported=false;return;}
         }
         auto combined = actual;
+        if (combined.pendingNumericValue(requirement->facts)) { supported=false; return; }
         if (!combined.combine(requirement->facts))
             throw DefinitionConflict("incompatible definition requirements");
         if (target->node) proposed_[target->node->pItem] = combined;
