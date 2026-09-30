@@ -4,6 +4,7 @@
 // no shadow graph is constructed. All callbacks run under the context mutex and
 // must be bounded, nonblocking operations. I/O is represented by subscriptions.
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -199,6 +200,7 @@ template<class Node> struct SearchSession {
         }
     };
     std::vector<Task> tasks;
+    std::map<Query<Node>,std::size_t> taskIndex;
     std::priority_queue<Pending, std::vector<Pending>, Later> frontier;
     std::shared_ptr<GoalSpec<Node>> root;
     CostPolicy policy;
@@ -212,6 +214,8 @@ template<class Node> struct SearchSession {
 template<class Node> struct Context {
     std::mutex mutex, joinMutex;
     std::condition_variable changed;
+    std::atomic<std::size_t> waitingPublications{0};
+    std::uint64_t publicationTurn=0; // protected by mutex
     std::thread worker;
     bool stopping = false, dispatching = false;
     std::uint64_t revision = 0;
@@ -245,7 +249,8 @@ template<class Node> class Publication {
     bool dirty_ = false;
 public:
     explicit Publication(std::shared_ptr<Context<Node>> context)
-        : context_(std::move(context)), lock_(context_->mutex) {
+        : context_(std::move(context)), lock_(context_->mutex,std::defer_lock) {
+        resume();
         if (context_->stopping) throw std::logic_error("graph context is closed");
     }
     void changed() { dirty_ = true; }
@@ -253,7 +258,13 @@ public:
         if (dirty_) { dirty_ = false; context_->graphChanged(); }
     }
     void suspend() { flush(); lock_.unlock(); }
-    void resume() { lock_.lock(); }
+    void resume() {
+        ++context_->waitingPublications;
+        lock_.lock();
+        --context_->waitingPublications;
+        ++context_->publicationTurn;
+        context_->changed.notify_all();
+    }
     ~Publication() { if (lock_.owns_lock()) flush(); }
 };
 
@@ -350,26 +361,26 @@ template<class Node> class GraphManager {
     static std::size_t startTask(Session& s, std::shared_ptr<GoalSpec<Node>> goal, Cost cost) {
         auto query = goal->request;
         auto index = s.tasks.size();
-        for (std::size_t i = 0; i < s.tasks.size(); ++i) {
-            auto& task = s.tasks[i];
-            const auto& existing = task.goal->request;
-            if (!(query < existing) && !(existing < query)) {
-                if (!task.rejection.empty() || task.baseCost <= cost) return i;
-                // A shared subgoal may first be advertised by a costly route.
-                // Retry at the cheaper price and discard its old queued steps.
-                index = i;
-                task.baseCost = cost;
-                task.visited.clear();
-                task.required.clear();
-                task.deferred = false;
-                task.finishedPass = false;
-                ++task.generation;
-                goal = task.goal;
-                break;
-            }
+        auto existing=s.taskIndex.find(query);
+        if(existing!=s.taskIndex.end()) {
+            index=existing->second;
+            auto& task=s.tasks[index];
+            if (!task.rejection.empty() || task.baseCost <= cost) return index;
+            // A shared subgoal may first be advertised by a costly route.
+            // Retry at the cheaper price and discard its old queued steps.
+            task.baseCost = cost;
+            task.visited.clear();
+            task.required.clear();
+            task.deferred = false;
+            task.finishedPass = false;
+            ++task.generation;
+            goal = task.goal;
         }
         goal->beginPass();
-        if (index == s.tasks.size()) s.tasks.push_back({std::move(goal), cost, {}, {}, false, 0, false, {}});
+        if (index == s.tasks.size()) {
+            s.taskIndex.emplace(query,index);
+            s.tasks.push_back({std::move(goal), cost, {}, {}, false, 0, false, {}});
+        }
         enqueue(s, index, cost, {"visit", {0, 0}, false,
                                  [query] { return query; }}, {});
         return index;
@@ -424,6 +435,7 @@ template<class Node> class GraphManager {
             s.restart = false;
             s.frontier = {};
             s.tasks.clear();
+            s.taskIndex.clear();
             s.status.revision = c.revision;
             startTask(s, s.root, 0);
             s.steps.push_back({"search", s.root->request, 0, c.revision});
@@ -514,6 +526,17 @@ template<class Node> class GraphManager {
     static void run(Context<Node>* c) {
         std::unique_lock<std::mutex> lock(c->mutex);
         while (!c->stopping) {
+            // Repeated search passes must not win every mutex reacquisition
+            // while a producer is waiting to supply their missing information.
+            // Give one producer a turn, then take another bounded search step;
+            // a continuous stream of producers must not starve search either.
+            if(c->waitingPublications.load()) {
+                auto turn=c->publicationTurn;
+                c->changed.wait(lock,[&] {
+                    return c->stopping || !c->waitingPublications.load() || c->publicationTurn!=turn;
+                });
+                if(c->stopping) break;
+            }
             std::shared_ptr<Session> next;
             auto count = c->sessions.size();
             for (std::size_t i = 0; i < count; ++i) {

@@ -566,5 +566,21 @@ int main() {
         assert(!result.status().failed && result.status().withSubscribers && !access->rejected->complete);
         assert(saw(result,inSet ? "reject: rejected Set" : "reject: rejected finish"));result.cancel();++cases;
     }
+    {
+        // A busy search shares its context with a producer repeatedly publishing
+        // prefixes. Neither side may require the other to finish its lifetime.
+        auto access=std::make_shared<TestAccess>();GraphManager<Node> manager(access);
+        auto root=node();root->endless=true;
+        auto result=manager.normalize({root,1,0});
+        auto producer=std::async(std::launch::async,[&] {
+            for(int i=0;i<1000;++i) {
+                auto publication=manager.beginPublication();
+                root->size=i;publication->changed();
+            }
+        });
+        bool responsive=producer.wait_for(std::chrono::seconds(2))==std::future_status::ready;
+        result.cancel();producer.get();
+        assert(responsive && root->size==999 && result.status().cancelled);++cases;
+    }
     std::cout << "Graph search: " << cases << "/" << cases << " scenarios passed\n";
 }
