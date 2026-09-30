@@ -1,6 +1,10 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphPublication/querySubmission
+    unit/graphPublication/completionPreserved
+    unit/graphPublication/unchangedEnvironment
+    unit/graphPublication/namedOccurrence
     unit/graphContextual/writtenStructure
     unit/graphContextual/selfValue
     unit/graphContextual/independentInstances
@@ -11375,6 +11379,51 @@ struct GLOBAL {
     }%>
     void: unitTestContextualDefinition(me string: testName, me int: caseID) <- {
         me bool: passed <- contextualDefinitionCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHPUBLICATION(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphPublication(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHPUBLICATION(unit/graphPublication/querySubmission, 1)
+    GRAPHPUBLICATION(unit/graphPublication/completionPreserved, 2)
+    GRAPHPUBLICATION(unit/graphPublication/unchangedEnvironment, 3)
+    GRAPHPUBLICATION(unit/graphPublication/namedOccurrence, 4)
+    me bool: graphPublicationCase(me int: caseID) <- <%{
+        GraphNormalizer n;n.init();
+        auto root=graphScalar(caseID==2 ? 7 : -1,caseID==2 ? 10 : -1);
+        auto other=graphScalar(-1,-1);
+        if(caseID==4) root->pItem->identityName=n.access->registry->occurrenceScope.allocate();
+        auto h=n.normalize(root);h.waitForCompletion();
+        auto before=h.steps().size();auto revision=n.runtime.revision();bool ok=!h.status().failed;
+        if(caseID<=2) {
+            auto unrelated=n.normalize(other);unrelated.waitForCompletion();h.waitForCompletion();
+            ok &= n.runtime.revision()==revision && h.steps().size()==before && !unrelated.status().failed;
+            if(caseID==2) ok &= getFlagBit(root->pItem->flags,infonView::isNormed);
+            else ok &= h.status().withSubscribers;
+        } else if(caseID==3) {
+            n.setContext(root);n.setWorld(other->pItem);h.waitForCompletion();
+            revision=n.runtime.revision();before=h.steps().size();
+            n.setContext(root);n.setWorld(other->pItem);h.waitForCompletion();
+            ok &= n.runtime.revision()==revision && h.steps().size()==before;
+            n.setContext(other);h.waitForCompletion();ok &= n.runtime.revision()>revision;
+        } else {
+            // Binding a newly named occurrence really does add an identity.
+            // Idempotent query submission must not suppress that publication.
+            other=graphScalar(7,10);other->pItem->identityName=root->pItem->identityName;
+            auto alias=n.normalize(other);alias.waitForCompletion();h.waitForCompletion();
+            ok &= n.runtime.revision()>revision && !h.status().symbolicValues && !h.status().failed && root->pItem->value->num==7;
+            revision=n.runtime.revision();
+            auto again=n.normalize(other);again.waitForCompletion();
+            ok &= !again.status().failed && n.runtime.revision()==revision;
+        }
+        if(!ok) std::cout<<"Publication case "<<caseID<<": "<<h.status().error<<" revision "<<revision<<" -> "<<n.runtime.revision()<<"\n";
+        n.close();return ok;
+    }%>
+    void: unitTestGraphPublication(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphPublicationCase(caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

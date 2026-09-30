@@ -10,6 +10,7 @@ struct TestNode;
 using Node = std::shared_ptr<TestNode>;
 struct TestNode {
     int value = -1, size = -1;
+    DependencyKey facts = std::make_shared<Dependency>();
     Cost setCreations = 0;
     std::vector<Node> rhs;
     Node prerequisite, afterRefinement;
@@ -138,6 +139,35 @@ public:
     std::shared_ptr<int> publications=std::make_shared<int>(0);
     std::shared_ptr<GoalSpec<Node>> goal(const Query<Node>& query) override {
         return std::make_shared<CollectedGoal>(query,publications);
+    }
+};
+
+// The scheduler knows none of these fields. This adapter reports every read,
+// including failed lookups, and scopes writes to the same evidence tokens.
+class TrackedGoal : public TestGoal {
+public:
+    using TestGoal::TestGoal;
+    bool satisfied() const override {
+        ReadScope::observe(request.node->facts);return TestGoal::satisfied();
+    }
+    std::vector<SetCommand> found(const Visit<Node>& visit) override {
+        ReadScope::observe(request.node->facts);
+        for(const auto& step:visit.path) ReadScope::observe(step.node->facts);
+        auto commands=TestGoal::found(visit);
+        for(auto& command:commands) command.changes=Changes::only({request.node->facts});
+        return commands;
+    }
+};
+class TrackedAccess : public TestAccess {
+public:
+    bool tracksDependencies() const override {return true;}
+    std::shared_ptr<GoalSpec<Node>> goal(const Query<Node>& query) override {
+        return std::make_shared<TrackedGoal>(query);
+    }
+    Expansion<Node> expand(const Query<Node>& query) override {
+        ReadScope::observe(query.node->facts);
+        if(query.node->prerequisite) ReadScope::observe(query.node->prerequisite->facts);
+        return TestAccess::expand(query);
     }
 };
 
@@ -581,6 +611,180 @@ int main() {
         bool responsive=producer.wait_for(std::chrono::seconds(2))==std::future_status::ready;
         result.cancel();producer.get();
         assert(responsive && root->size==999 && result.status().cancelled);++cases;
+    }
+    {
+        // Many independent subscriptions must not wake for one local write.
+        auto a=std::make_shared<TrackedAccess>();GraphManager<Node> manager(a);
+        std::vector<Node> nodes;std::vector<NormalizationHandle<Node>> handles;
+        for(int i=0;i<128;++i) {nodes.push_back(node());handles.push_back(manager.normalize({nodes.back(),1}));}
+        for(auto& h:handles) h.waitForCompletion();
+        int before=a->expanded;auto rev=manager.revision();
+        assert(!manager.updateIfChanged([] {return false;}));
+        assert(manager.revision()==rev && a->expanded==before);
+        for(int i=0;i<128;++i) {
+            manager.updateIfChanged([&] {nodes[i]->value=i;return true;},Changes::only({nodes[i]->facts}));
+            handles[i].waitForCompletion();
+            assert(!handles[i].status().symbolicValues && nodes[i]->value==i);
+        }
+        assert(a->expanded==before+128);
+        std::cout<<"Independent subscriptions: 128 writes, "<<a->expanded-before<<" additional expansions\n";
+        ++cases;
+    }
+    {
+        // Readiness/negative evidence is subscribed even when no RHS exists.
+        auto a=std::make_shared<TrackedAccess>();GraphManager<Node> manager(a);
+        auto root=node(),source=node(7),unrelated=node();
+        auto h=manager.normalize({root,1});h.waitForCompletion();auto steps=h.steps().size();
+        manager.updateIfChanged([&] {unrelated->value=3;return true;},Changes::only({unrelated->facts}));
+        h.waitForCompletion();assert(h.steps().size()==steps && h.status().withSubscribers);
+        {auto publication=manager.beginPublication();root->rhs={source};publication->changed(Changes::only({root->facts}));}
+        h.waitForCompletion();assert(root->value==7 && !h.status().failed && !h.status().symbolicValues);
+        // Completed handles retain the explicit re-normalization contract.
+        steps=h.steps().size();manager.updateIfChanged([&] {source->value=8;return true;},Changes::only({source->facts}));
+        assert(h.steps().size()==steps);
+        auto again=manager.normalize({root,1});again.waitForCompletion();assert(again.status().failed);++cases;
+    }
+    {
+        // A followed transitive edge subscribes its actual endpoint. Removing
+        // an edge also retires obsolete reads when the search rebuilds.
+        auto a=std::make_shared<TrackedAccess>();GraphManager<Node> manager(a);
+        auto root=node(),middle=node(),leaf=node();root->rhs={middle};middle->rhs={leaf};
+        auto h=manager.normalize({root,1});h.waitForCompletion();
+        manager.updateIfChanged([&] {middle->rhs.clear();return true;},Changes::only({middle->facts}));h.waitForCompletion();
+        int before=a->expanded;
+        manager.updateIfChanged([&] {leaf->value=9;return true;},Changes::only({leaf->facts}));h.waitForCompletion();
+        assert(a->expanded==before && root->value==-1 && h.status().withSubscribers);
+        manager.updateIfChanged([&] {middle->rhs={leaf};return true;},Changes::only({middle->facts}));h.waitForCompletion();
+        assert(root->value==9 && !h.status().failed);++cases;
+    }
+    {
+        // Collected findings reset rather than appending stale evidence when
+        // one contributor changes under a scoped publication.
+        struct WaitingSum : CollectedGoal {
+            using CollectedGoal::CollectedGoal;
+            bool symbolic() const override {return true;}
+            std::vector<SetCommand> found(const Visit<Node>& visit) override {
+                ReadScope::observe(visit.query.node->facts);
+                return CollectedGoal::found(visit);
+            }
+            CommandBatch<Node> finishPass() override {
+                ReadScope::observe(request.node->facts);
+                auto batch=CollectedGoal::finishPass();
+                for(auto& command:batch.commands) command.changes=Changes::only({request.node->facts});
+                return batch;
+            }
+        };
+        struct SumAccess : TrackedAccess {
+            std::shared_ptr<int> publications=std::make_shared<int>(0);
+            std::shared_ptr<GoalSpec<Node>> goal(const Query<Node>& q) override {
+                return std::make_shared<WaitingSum>(q,publications);
+            }
+        };
+        auto a=std::make_shared<SumAccess>();GraphManager<Node> manager(a);
+        auto root=node(),left=node(2),right=node(3);root->rhs={left,right};
+        auto h=manager.normalize({root,1});h.waitForCompletion();assert(root->value==5 && h.status().withSubscribers);
+        manager.updateIfChanged([&] {right->value=4;return true;},Changes::only({right->facts}));h.waitForCompletion();
+        assert(root->value==6 && !h.status().failed && *a->publications==2);h.cancel();++cases;
+    }
+    {
+        // Broad fallback still wakes tracked readers. One publication may
+        // contain both scoped and unclassified writes.
+        auto a=std::make_shared<TrackedAccess>();GraphManager<Node> manager(a);
+        auto root=node(),other=node();auto h=manager.normalize({root,1});h.waitForCompletion();
+        {auto p=manager.beginPublication();other->value=2;p->changed(Changes::only({other->facts}));root->value=8;p->changed();}
+        h.waitForCompletion();assert(root->value==8 && !h.status().symbolicValues);++cases;
+    }
+    {
+        // Shared required children remain one subgoal per request, with its
+        // dependency retained by both paths through the refinement graph.
+        auto a=std::make_shared<TrackedAccess>();GraphManager<Node> manager(a);
+        auto root=node(1),left=node(1),right=node(1),child=node();
+        root->required={{left,0},{right,0}};left->required={{child,0}};right->required={{child,0}};
+        auto h=manager.normalize({root,1});h.waitForCompletion();assert(h.status().withSubscribers);
+        manager.updateIfChanged([&] {child->value=1;return true;},Changes::only({child->facts}));h.waitForCompletion();
+        assert(!h.status().symbolicValues && child->complete && left->complete && right->complete);++cases;
+    }
+    {
+        // Scope does not weaken lock handoff: a producer racing a read/subscribe
+        // step must either be observed initially or wake the waiting search.
+        for(int i=0;i<100;++i) {
+            auto a=std::make_shared<TrackedAccess>();GraphManager<Node> manager(a);auto root=node();
+            auto h=manager.normalize({root,1});
+            auto writer=std::async(std::launch::async,[&] {
+                auto p=manager.beginPublication();root->value=7;p->changed(Changes::only({root->facts}));
+            });
+            writer.get();h.waitForCompletion();assert(!h.status().symbolicValues && root->value==7);
+        }
+        ++cases;
+    }
+    {
+        // Cancellation releases execution even if its dependencies later change.
+        auto a=std::make_shared<TrackedAccess>();GraphManager<Node> manager(a);auto root=node();
+        auto h=manager.normalize({root,1});h.waitForCompletion();h.cancel();auto before=h.steps().size();
+        manager.updateIfChanged([&] {root->value=1;return true;},Changes::only({root->facts}));
+        assert(h.status().cancelled && h.steps().size()==before);++cases;
+    }
+    {
+        // Partly converted readers can explicitly retain a broad dependency.
+        struct MixedAccess : TrackedAccess {
+            Expansion<Node> expand(const Query<Node>& q) override {
+                ReadScope::observe({});return TrackedAccess::expand(q);
+            }
+        };
+        auto a=std::make_shared<MixedAccess>();GraphManager<Node> manager(a);
+        auto root=node(),other=node();auto h=manager.normalize({root,1});h.waitForCompletion();
+        int before=a->expanded;
+        manager.updateIfChanged([&] {other->value=1;return true;},Changes::only({other->facts}));h.waitForCompletion();
+        assert(a->expanded==before+1 && h.status().withSubscribers);h.cancel();++cases;
+    }
+    {
+        // Empty footprints and untouched publication batches are not revisions.
+        auto a=std::make_shared<TrackedAccess>();GraphManager<Node> manager(a);auto root=node();
+        auto h=manager.normalize({root,1});h.waitForCompletion();auto revision=manager.revision();auto count=h.steps().size();
+        {auto p=manager.beginPublication();p->changed(Changes::only({}));}
+        bool metadata=false;
+        manager.updateIfChanged([&] {metadata=true;return true;},Changes::only({}));h.waitForCompletion();
+        assert(metadata && manager.revision()==revision && h.steps().size()==count);h.cancel();++cases;
+    }
+    {
+        // A publication between visits must preserve an unrelated active
+        // frontier, not just avoid waking an already quiescent subscription.
+        struct PublishingGoal : TrackedGoal {
+            Node unrelated;bool offered=false;
+            PublishingGoal(Query<Node> q,Node other):TrackedGoal(q),unrelated(std::move(other)) {}
+            std::vector<SetCommand> found(const Visit<Node>& visit) override {
+                auto commands=TrackedGoal::found(visit);
+                if(!offered) {
+                    offered=true;auto other=unrelated;
+                    commands.push_back({"publish independent fact",[other] {other->value=9;return true;},
+                        {0,0},Changes::only({other->facts})});
+                }
+                return commands;
+            }
+        };
+        struct PublishingAccess : TrackedAccess {
+            Node other=node();
+            std::shared_ptr<GoalSpec<Node>> goal(const Query<Node>& q) override {
+                return std::make_shared<PublishingGoal>(q,other);
+            }
+        };
+        auto a=std::make_shared<PublishingAccess>();GraphManager<Node> manager(a);
+        auto root=node(7),middle=node(7),last=node(7);root->rhs={middle};middle->rhs={last};
+        auto h=manager.normalize({root,1});h.waitForCompletion();int passes=0;
+        for(const auto& step:h.steps()) passes+=step.action=="search";
+        assert(!h.status().failed && passes==1 && a->expanded==3 && a->other->value==9);++cases;
+    }
+    {
+        // Retaining a dependency token does not retain the model/search it
+        // once notified. A later write cleans up the expired weak observer.
+        auto a=std::make_shared<TrackedAccess>();GraphManager<Node> manager(a);
+        auto root=node();auto token=root->facts;std::weak_ptr<TestNode> weak=root;
+        {auto h=manager.normalize({root,1});h.waitForCompletion();}
+        root.reset();
+        auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+        while(!weak.expired() && std::chrono::steady_clock::now()<deadline) std::this_thread::yield();
+        assert(weak.expired());
+        manager.updateIfChanged([] {return true;},Changes::only({token}));++cases;
     }
     std::cout << "Graph search: " << cases << "/" << cases << " scenarios passed\n";
 }

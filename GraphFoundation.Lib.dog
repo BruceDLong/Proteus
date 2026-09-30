@@ -61,19 +61,20 @@ struct GraphNormalizer {
         runtime.init(semanticAccess);
     }%>
     void: setContext(our POV: source) <- <%{
-        runtime.update([&] {
-            if(source) access->bind(source);
-            access->contextSource=source;
+        runtime.updateIfChanged([&] {
+            bool bound=source && access->bind(source);
+            bool changed=bound || access->contextSource!=source;
+            access->contextSource=source;return changed;
         });
     }%>
     // Keep a canonical view of the current Agent world. Replacing the world
     // creates a new source; existing query provenance retains its old source.
     void: setWorld(our infonView: source) <- <%{
-        runtime.update([&] {
-            if(access->worldSource && access->worldSource->pItem==source) return;
-            if(!source) {access->worldSource.reset();return;}
+        runtime.updateIfChanged([&] {
+            if(access->worldSource && access->worldSource->pItem==source) return false;
+            if(!source) {bool changed=bool(access->worldSource);access->worldSource.reset();return changed;}
             auto node=std::make_shared<POV>(920);node->pItem=source;
-            access->bind(node);access->worldSource=node;
+            access->bind(node);access->worldSource=node;return true;
         });
     }%>
     // Read-only nominal compatibility, including declared aliases.
@@ -85,37 +86,37 @@ struct GraphNormalizer {
         return semanticAccess ? semanticAccess->knownField(source,name) : nullptr;
     }%>
     me NormalizationHandle: normalize(our POV: target) <- <%{
-        runtime.update([&] { access->bind(target); });
+        runtime.updateIfChanged([&] { return access->bind(target); });
         return runtime.normalize({target, proteus4::sizeAndValue, proteus4::fillImmediateParts});
     }%>
     me NormalizationHandle: normalizeWithCost(our POV: target, me uint64: maximumRoute) <- <%{
-        runtime.update([&] { access->bind(target); });
+        runtime.updateIfChanged([&] { return access->bind(target); });
         proteus4::CostPolicy policy;
         policy.maximumRoute = maximumRoute;
         return runtime.normalize({target, proteus4::sizeAndValue, proteus4::fillImmediateParts}, policy);
     }%>
     me NormalizationHandle: findBoundary(our POV: source, me bool: end) <- <%{
-        runtime.update([&] {access->bind(source);});
+        runtime.updateIfChanged([&] {return access->bind(source);});
         return runtime.normalize({source,proteus4::boundaryAccess,end ? 1 : -1});
     }%>
     me NormalizationHandle: findTemporalSupport(our POV: source) <- <%{
-        runtime.update([&] {access->bind(source);});
+        runtime.updateIfChanged([&] {return access->bind(source);});
         return runtime.normalize({source,proteus4::temporalSupport,0});
     }%>
     me NormalizationHandle: findTemporalCut(our POV: source) <- <%{
-        runtime.update([&] {access->bind(source);});
+        runtime.updateIfChanged([&] {return access->bind(source);});
         return runtime.normalize({source,proteus4::temporalCut,0});
     }%>
     me NormalizationHandle: findTemporalSide(our POV: cut, me bool: after) <- <%{
-        runtime.update([&] {access->bind(cut);});
+        runtime.updateIfChanged([&] {return access->bind(cut);});
         return runtime.normalize({cut,proteus4::temporalSide,after ? 1 : -1});
     }%>
     me NormalizationHandle: findItem(our POV: source, me int64: index) <- <%{
-        runtime.update([&] { access->bind(source); });
+        runtime.updateIfChanged([&] { return access->bind(source); });
         return runtime.normalize({source, proteus4::itemAt, index});
     }%>
     me NormalizationHandle: findField(our POV: source, our POV: predicate) <- <%{
-        runtime.update([&] { access->bind(source); access->bind(predicate); });
+        runtime.updateIfChanged([&] { bool changed=access->bind(source); return access->bind(predicate) || changed; });
         return runtime.normalize({source, proteus4::selectField, 0, predicate});
     }%>
     void: addRHS(our POV: target, our POV: rhs) <- <%{
@@ -378,13 +379,13 @@ struct ProteusGraphAccess {
     me string: replyText(our POV: pov) <- {return(toString(pov!.pItem))}
 
     void: initialize() <- {Allocate(registry)}
-    void: bind(our POV: pov) <- <%{
+    me bool: bind(our POV: pov) <- <%{
         if (!pov || !pov->pItem) throw std::invalid_argument("POV with infonView required");
         auto existing = pov->effectiveIdentityRegistry();
         if (existing && existing != registry.get())
             throw std::logic_error("POV belongs to another registry; use initWithRegistry");
         pov->bindIdentityRegistry(registry.get());
-        registry->bindOccurrenceName(pov);
+        return registry->bindOccurrenceName(pov);
     }%>
     void: recordIdentity(our POV: left, our POV: right) <- {
         bind(left); bind(right)

@@ -744,6 +744,11 @@ public:
         }
         return result;
     }
+    void beginSearch(const Query<POVNode>&) override {
+        // Re-normalization rechecks definition witnesses, including edits made
+        // between quiescent calls. Query submission is not a graph mutation.
+        definitions_->prune();
+    }
     void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); definitions_->prune(); }
     std::vector<std::function<void()>> takeEffects() override {
         auto result=insertion_->takeEffects();

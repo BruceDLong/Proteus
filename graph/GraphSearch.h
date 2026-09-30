@@ -3,6 +3,7 @@
 // Domain-independent scheduling and traversal. Node is an opaque domain handle;
 // no shadow graph is constructed. All callbacks run under the context mutex and
 // must be bounded, nonblocking operations. I/O is represented by subscriptions.
+#include "GraphDependencies.h"
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
@@ -72,6 +73,7 @@ struct SetCommand {
     // Validate the entire batch before its first write. true means graph change.
     std::function<bool()> apply;
     Work work{0, 0};
+    Changes changes;
 };
 
 // A proved contradiction belongs to one goal, not to the source node or the
@@ -113,8 +115,10 @@ public:
 template<class Node> struct Arrival {
     Query<Node> query;
     bool graphChanged = false;
+    Changes changes;
     Arrival(Query<Node> q) : query(std::move(q)) {}
-    Arrival(Query<Node> q, bool changed) : query(std::move(q)), graphChanged(changed) {}
+    Arrival(Query<Node> q, bool changed, Changes footprint = {})
+        : query(std::move(q)), graphChanged(changed), changes(std::move(footprint)) {}
 };
 
 template<class Node> struct Edge {
@@ -150,10 +154,21 @@ public:
     // Called under the context lock for every semantic publication, including
     // Sets and lazy materialization. Retired sessions may have left metadata.
     virtual void invalidateCompletion() {}
+    // A tracked adapter must invalidate completion evidence with the same
+    // precision, or include the resulting metadata changes in its footprint.
+    virtual void invalidateCompletion(const Changes&) { invalidateCompletion(); }
+    // Opt in only when all semantic callbacks report their reads. Mixed
+    // implementations must observe({}) in helpers with unknown read sets.
+    virtual bool tracksDependencies() const { return false; }
+    // Explicit queries may refresh validation caches. This hook must not alter
+    // semantic information, adjacency, or another search's completion state.
+    virtual void beginSearch(const Query<Node>&) {}
     // Captured under the context lock; delivered outside it. Effects must not
     // wait for this worker, but may publish new information.
     virtual std::vector<std::function<void()>> takeEffects() { return {}; }
     virtual Expansion<Node> expand(const Query<Node>&) = 0;
+    // Construct a specification, not a snapshot of mutable facts. Read those
+    // facts in beginPass/found/finishPass/completion callbacks on each pass.
     virtual std::shared_ptr<GoalSpec<Node>> goal(const Query<Node>&) = 0;
 };
 
@@ -209,6 +224,8 @@ template<class Node> struct SearchSession {
     bool quiescent = false, terminal = false, restart = true;
     bool watch = true;
     std::uint64_t sequence = 0;
+    std::set<DependencyKey> dependencies;
+    std::shared_ptr<Dependency::Wake> wake;
 };
 
 template<class Node> struct Context {
@@ -223,19 +240,32 @@ template<class Node> struct Context {
     std::shared_ptr<GraphAccess<Node>> access;
     std::vector<std::weak_ptr<SearchSession<Node>>> sessions;
 
-    void graphChanged() {
-        access->invalidateCompletion();
+    DependencyKey untracked = std::make_shared<Dependency>();
+
+    static void wakeSession(const std::shared_ptr<SearchSession<Node>>& session) {
+        if (!session->terminal &&
+            (!session->quiescent || session->status.withSubscribers)) {
+            session->restart = true;
+            session->quiescent = false;
+            session->status.fullyNormed = false;
+            session->status.withSubscribers = false;
+        }
+    }
+    void observe(SearchSession<Node>& session, const DependencyKey& key) {
+        auto token=key ? key : untracked;
+        if(session.dependencies.insert(token).second) token->subscribe(session.wake);
+    }
+    void graphChanged(const Changes& changes = {}) {
+        if(changes.empty()) return;
+        access->invalidateCompletion(changes);
         ++revision;
-        // Conservative context-wide invalidation first. A dependency index can
-        // narrow this later without changing the subscribe/publish contract.
-        for (auto& weak : sessions) if (auto session = weak.lock()) {
-            if (!session->terminal &&
-                (!session->quiescent || session->status.withSubscribers)) {
-                session->restart = true;
-                session->quiescent = false;
-                session->status.fullyNormed = false;
-                session->status.withSubscribers = false;
-            }
+        if(changes.all) {
+            for (auto& weak : sessions) if (auto session = weak.lock()) wakeSession(session);
+        } else {
+            // Indexed by the evidence actually read. Unrelated sessions retain
+            // their frontier, visited queries, accumulated findings and costs.
+            untracked->publish();
+            for(const auto& key:changes.keys) key->publish();
         }
         changed.notify_all();
     }
@@ -246,16 +276,19 @@ template<class Node> struct Context {
 template<class Node> class Publication {
     std::shared_ptr<Context<Node>> context_;
     std::unique_lock<std::mutex> lock_;
-    bool dirty_ = false;
+    Changes changes_ = Changes::only({});
 public:
     explicit Publication(std::shared_ptr<Context<Node>> context)
         : context_(std::move(context)), lock_(context_->mutex,std::defer_lock) {
         resume();
         if (context_->stopping) throw std::logic_error("graph context is closed");
     }
-    void changed() { dirty_ = true; }
+    void changed(const Changes& changes = {}) { changes_.include(changes); }
     void flush() {
-        if (dirty_) { dirty_ = false; context_->graphChanged(); }
+        if (!changes_.empty()) {
+            auto changes=std::move(changes_);changes_=Changes::only({});
+            context_->graphChanged(changes);
+        }
     }
     void suspend() { flush(); lock_.unlock(); }
     void resume() {
@@ -353,7 +386,7 @@ template<class Node> class GraphManager {
                                 std::vector<SetCommand> commands) {
         for (auto& command : commands) {
             Edge<Node> operation{command.description, command.work, false,
-                [query=finding.query, apply=std::move(command.apply)] { return Arrival<Node>{query, apply()}; }};
+                [query=finding.query, apply=std::move(command.apply), changes=std::move(command.changes)] { return Arrival<Node>{query, apply(), changes}; }};
             operation.command = true;
             enqueue(s, task, finding.cost, std::move(operation), finding.path);
         }
@@ -431,6 +464,14 @@ template<class Node> class GraphManager {
         s.status.symbolicValues = !resolved[0];
     }
     static void advance(Context<Node>& c, Session& s) {
+        if(s.restart) {
+            // Retire old observations when rebuilding. Tokens hold only weak
+            // subscriptions; keeping a node alive does not keep its search alive.
+            auto wake=std::make_shared<Dependency::Wake>(*s.wake);
+            s.wake=std::move(wake);s.dependencies.clear();
+        }
+        ReadScope reads([&](const DependencyKey& key) {c.observe(s,key);});
+        if(!c.access->tracksDependencies()) ReadScope::observe({});
         if (s.restart) {
             s.restart = false;
             s.frontier = {};
@@ -481,7 +522,7 @@ template<class Node> class GraphManager {
         if (arrival.graphChanged) {
             s.steps.push_back({pending.edge.command ? pending.edge.description : "materialize: " + pending.edge.description,
                                query, pending.cost, c.revision});
-            c.graphChanged();
+            c.graphChanged(arrival.changes);
             return;
         }
         if (pending.edge.command) return; // an unchanged Set has no new finding
@@ -601,6 +642,11 @@ public:
         if (context_->stopping) throw std::logic_error("graph context is closed");
         if (!query.node) throw std::invalid_argument("normalize requires a node");
         auto session = std::make_shared<Session>();
+        std::weak_ptr<Session> weak=session;
+        session->wake=std::make_shared<Dependency::Wake>([weak] {
+            if(auto current=weak.lock()) Context<Node>::wakeSession(current);
+        });
+        context_->access->beginSearch(query);
         session->root = context_->access->goal(query);
         session->policy = policy;
         session->watch = watch;
@@ -633,6 +679,16 @@ public:
         if (context_->stopping) throw std::logic_error("graph context is closed");
         action();
         context_->graphChanged();
+    }
+    // A caller that can distinguish an idempotent operation from a semantic
+    // write must not publish merely because it acquired the writer lock.
+    template<class Function> bool updateIfChanged(Function action, Changes changes = {}) {
+        if (!context_) throw std::logic_error("initialize graph context first");
+        std::lock_guard<std::mutex> lock(context_->mutex);
+        if (context_->stopping) throw std::logic_error("graph context is closed");
+        bool changed=action();
+        if(changed) context_->graphChanged(changes);
+        return changed;
     }
     void close() {
         if (!context_) return;

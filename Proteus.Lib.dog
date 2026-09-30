@@ -346,24 +346,30 @@ model IdentityRegistry{
     me Mutex: registryMutex
 }
 struct IdentityRegistry{
-    void: bindOccurrenceName(our POV: node) <- <%{
-        if(!node || !node->pItem || !node->pItem->identityName) return;
+    me bool: bindOccurrenceName(our POV: node) <- <%{
+        if(!node || !node->pItem || !node->pItem->identityName) return false;
+        bool changed=false;
         auto token=occurrenceScope.importIdentity(node->pItem->identityName);
         if(token!=node->pItem->identityName) {
             node->pItem=std::make_shared<infonView>(*node->pItem);
-            node->pItem->identityName=token;
+            node->pItem->identityName=token;changed=true;
         }
         // A query wrapper can later denote a different result. The plain
         // source POV created by path lowering owns its persistent name.
-        if(node->pItem->partRef || !node->pItem->parts.empty() || node->pItem->pathSelection) return;
+        if(node->pItem->partRef || !node->pItem->parts.empty() || node->pItem->pathSelection) return changed;
         std::shared_ptr<POV> existing;
+        bool linked=false;
         {
             std::lock_guard<std::mutex> lock(registryMutex);
             auto& first=namedOccurrences[token];
-            if(!first) first=node;
+            if(!first) {first=node;changed=true;}
             existing=first;
+            if(existing!=node) for(const auto& relation:identities)
+                if((relation->leftPOV==existing && relation->rightPOV==node) ||
+                   (relation->leftPOV==node && relation->rightPOV==existing)) {linked=true;break;}
         }
-        if(existing!=node) recordIdentity(existing,node,iekAssertion,0);
+        if(existing!=node && !linked) {recordIdentity(existing,node,iekAssertion,0);changed=true;}
+        return changed;
     }%>
     our ExternalAssociationReference: recordExternalAssociation(
             our POV: anchorPOV, our POV: predicatePOV,

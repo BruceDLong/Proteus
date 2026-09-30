@@ -176,6 +176,7 @@ selection, end-relative indexes, and mixed field/index paths.
 | Component | Responsibility |
 |---|---|
 | `GraphSearch.h` | Opaque-node search, lazy edges, route costs, sub-goals, revisions, subscriptions, cancellation, collected Set batches, local rejection, worker lifetime |
+| `GraphDependencies.h` | Opaque evidence tokens, observed reads, scoped publication footprints, weak subscriptions |
 | `GraphFoundation.Lib.dog` | Public CodeDog API; Proteus graph access, compatibility checks and atomic Set batches |
 | `POVDescription.h` | Live, goal-independent access to existing POV links, state slots, work entries and registry identities |
 | `ProteusGraph.h` | Translate semantic access into graph edges and refinement opportunities; GoalSpec turns findings into Sets |
@@ -227,6 +228,68 @@ a billion-item size. `findItem(listPOV, 999999999)` proceeds as follows:
 This is exercised by `unit/graphFoundation/refinement`, including the actual
 parser-created list and existing repetition registry.
 
+## Incremental search checkpoint (2026-09-30)
+
+Query submission is no longer a semantic publication. Binding an existing POV,
+reusing the same world/context, or acquiring the writer lock does not discard
+other searches' progress. A new occurrence name or identity still publishes.
+`GraphAccess::beginSearch` refreshes validation caches for an explicit request
+without publishing a revision or changing other searches' completion flags.
+This preserves re-normalization after a definition's members or template change.
+Live edits still belong inside `runtime.update` or a parser publication.
+
+The runtime now supports evidence-scoped subscriptions:
+
+- Semantic callbacks observe opaque `DependencyKey` tokens through `ReadScope`.
+  These may represent facts, adjacency, aliases, or absent catalogue bindings.
+  Tokens belong to one context; they do not store POVs or graph edges.
+- Sets, materializing edges, and publications can supply `Changes::only({...})`.
+  Only searches subscribed to those tokens are restarted. An unaffected search
+  retains its frontier, visited queries, subgoals, collected findings, and costs.
+- Affected searches rebuild their findings. List counts and candidate sets must
+  not retain stale contributions. Finished/cancelled handles are not restarted;
+  completed results are reconsidered on explicit normalization as before.
+- Unknown read/write footprints retain broad invalidation. Adapters must opt in
+  to complete read tracking; partly converted helpers can observe an unknown
+  dependency. All observations and publications use the existing context lock.
+  Weak subscriptions do not retain searches after their handles disappear.
+
+This is **session-level** dependency tracking. Proteus's semantic Sets and parser
+publications still use the broad fallback. `isNormed`, RHS representation proofs,
+compiled-definition witnesses, and accepted-instance caches must participate in
+precise invalidation before that fallback can be narrowed safely. A write to a
+shared infon state can affect several POVs; its request node alone is not a
+correct footprint. Likewise, a search must observe unsuccessful lookups as well
+as the edges it follows.
+
+The next stage is to report full read/write footprints for Proteus operations,
+then retain unaffected tasks within an affected session. Do not merely keep old
+queued Sets after a revision: they may have been planned against replaced
+members or an abandoned candidate. Ordered evidence collectors need an explicit
+reset/replay boundary. Identical subgoals currently share work within one search
+pass, not across independent handles; their complete Query context remains part
+of their identity.
+
+Validation of this checkpoint:
+
+- Native scheduler: 51 scenarios, including scoped Sets/publications, late
+  adjacency, retired dependencies, aggregate recomputation, shared subgoals,
+  racing producers, broad fallback and cancellation. 128 independent waiting
+  searches take exactly 128 additional expansions for 128 local updates.
+- Four real-adapter publication tests check unrelated query submission,
+  preserved completion, unchanged environment sources and new named identities.
+- Default suite: 40 failures / 1,685 tests, exactly the same failure names as
+  commit `e144fed` (40 / 1,681); the four added tests pass. The existing replaced
+  member/template checks pass without changing their expectations.
+- Rebuilt Slipstream and checked it on an isolated display: populated Kanban,
+  rotating colored cube, and terminal `{| 3>> }` returning `3`. The cube remains
+  gray in the 30-second sample and colored in the 60-second sample; this is a
+  visibility check, not evidence of a startup speed improvement.
+- The original single-session chain probe still takes 8,384 expansions and 129
+  passes for 128 writes under broad invalidation. Static 128-stage diamonds take
+  385 expansions for 385 nodes. This checkpoint does not claim to fix repeated
+  work inside that single affected search or the cube's first-color latency.
+
 ## Cost and settlement
 
 Edges describe immediate work and an optional lower bound on remaining work.
@@ -235,7 +298,8 @@ accumulated cost plus the remaining estimate; an estimate is not charged twice.
 An edge is materialized only when selected. Proposed Sets enter the same
 frontier with their own work estimate. A finite fill is therefore priced before
 it creates members; a cheaper route can win or a policy can exclude the fill
-without mutating the list. A semantic revision discards stale queued plans.
+without mutating the list. A relevant semantic publication discards stale queued
+plans; an unknown change footprint conservatively affects every live search.
 Estimates must be nonnegative and
 must not overestimate remaining work if optimal route ordering is required.
 
