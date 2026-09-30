@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -68,10 +69,20 @@ template<class Node> struct Visit {
     Cost cost = 0;
 };
 
+// A compound operation can report its actual effects after execution. Plain
+// boolean producers keep the command's declared (by default broad) footprint.
+struct SetResult {
+    bool changed;
+    std::optional<Changes> changes;
+    SetResult(bool value):changed(value) {}
+    SetResult(bool value, Changes effects):changed(value),changes(std::move(effects)) {}
+    operator bool() const {return changed;}
+};
+
 struct SetCommand {
     std::string description;
     // Validate the entire batch before its first write. true means graph change.
-    std::function<bool()> apply;
+    std::function<SetResult()> apply;
     Work work{0, 0};
     Changes changes;
 };
@@ -160,6 +171,9 @@ public:
     // Opt in only when all semantic callbacks report their reads. Mixed
     // implementations must observe({}) in helpers with unknown read sets.
     virtual bool tracksDependencies() const { return false; }
+    virtual void observeTask(const Query<Node>&) {
+        if(!tracksDependencies()) ReadScope::observe({});
+    }
     // Explicit queries may refresh validation caches. This hook must not alter
     // semantic information, adjacency, or another search's completion state.
     virtual void beginSearch(const Query<Node>&) {}
@@ -189,17 +203,7 @@ template<class Node> struct Step {
     std::uint64_t revision = 0;
 };
 
-template<class Node> struct SearchSession {
-    struct Task {
-        std::shared_ptr<GoalSpec<Node>> goal;
-        Cost baseCost = 0;
-        std::map<Query<Node>, Cost> visited;
-        std::vector<std::size_t> required;
-        bool deferred = false;
-        std::uint64_t generation = 0;
-        bool finishedPass = false;
-        std::string rejection;
-    };
+template<class Node> struct SearchSession : std::enable_shared_from_this<SearchSession<Node>> {
     struct Pending {
         std::size_t task = 0;
         Cost cost = 0;
@@ -208,6 +212,22 @@ template<class Node> struct SearchSession {
         Edge<Node> edge;
         std::vector<Query<Node>> path;
         std::uint64_t generation = 0;
+    };
+    struct Task {
+        std::shared_ptr<GoalSpec<Node>> goal;
+        Cost baseCost = 0;
+        std::map<Query<Node>, Cost> visited;
+        struct Link {std::size_t child;Cost cost;};
+        std::vector<std::size_t> required;
+        std::vector<Link> children;
+        bool deferred = false;
+        std::uint64_t generation = 0;
+        bool finishedPass = false;
+        std::string rejection;
+        bool active = false, dirty = true;
+        std::set<DependencyKey> dependencies;
+        std::shared_ptr<Dependency::Wake> wake;
+        std::vector<Pending> parked;
     };
     struct Later {
         bool operator()(const Pending& a, const Pending& b) const {
@@ -221,11 +241,10 @@ template<class Node> struct SearchSession {
     CostPolicy policy;
     Status status;
     std::vector<Step<Node>> steps;
-    bool quiescent = false, terminal = false, restart = true;
+    bool quiescent = false, terminal = false, reconcile = false, prune = false;
+    std::set<std::size_t> invalidated, rejected;
     bool watch = true;
     std::uint64_t sequence = 0;
-    std::set<DependencyKey> dependencies;
-    std::shared_ptr<Dependency::Wake> wake;
 };
 
 template<class Node> struct Context {
@@ -242,25 +261,41 @@ template<class Node> struct Context {
 
     DependencyKey untracked = std::make_shared<Dependency>();
 
-    static void wakeSession(const std::shared_ptr<SearchSession<Node>>& session) {
-        if (!session->terminal &&
-            (!session->quiescent || session->status.withSubscribers)) {
-            session->restart = true;
+    static void wakeTask(const std::shared_ptr<SearchSession<Node>>& session, std::size_t index) {
+        if(session->terminal) return;
+        auto& task=session->tasks[index];
+        bool newlyDirty=!task.dirty;
+        if(newlyDirty) {task.dirty=true;++task.generation;}
+        session->invalidated.insert(index);
+        if(task.active) {
+            session->prune |= !task.children.empty();
+            session->reconcile = true;
             session->quiescent = false;
             session->status.fullyNormed = false;
             session->status.withSubscribers = false;
         }
+        // A required child's rejection is also evidence held by its parents.
+        // Ordinary completion is recomputed by settle; a propagated rejection
+        // must be reopened when that child's evidence changes.
+        if(newlyDirty) for(auto parent:session->rejected) {
+            const auto& candidate=session->tasks[parent];
+            if(!candidate.rejection.empty() &&
+               std::find(candidate.required.begin(),candidate.required.end(),index)!=candidate.required.end())
+                wakeTask(session,parent);
+        }
     }
-    void observe(SearchSession<Node>& session, const DependencyKey& key) {
+    void observe(SearchSession<Node>& session, std::size_t index, const DependencyKey& key) {
         auto token=key ? key : untracked;
-        if(session.dependencies.insert(token).second) token->subscribe(session.wake);
+        auto& task=session.tasks[index];
+        if(task.dependencies.insert(token).second) token->subscribe(task.wake);
     }
     void graphChanged(const Changes& changes = {}) {
         if(changes.empty()) return;
         access->invalidateCompletion(changes);
         ++revision;
         if(changes.all) {
-            for (auto& weak : sessions) if (auto session = weak.lock()) wakeSession(session);
+            for (auto& weak : sessions) if (auto session = weak.lock())
+                for(std::size_t i=0;i<session->tasks.size();++i) wakeTask(session,i);
         } else {
             // Indexed by the evidence actually read. Unrelated sessions retain
             // their frontier, visited queries, accumulated findings and costs.
@@ -386,36 +421,103 @@ template<class Node> class GraphManager {
                                 std::vector<SetCommand> commands) {
         for (auto& command : commands) {
             Edge<Node> operation{command.description, command.work, false,
-                [query=finding.query, apply=std::move(command.apply), changes=std::move(command.changes)] { return Arrival<Node>{query, apply(), changes}; }};
+                [query=finding.query, apply=std::move(command.apply), changes=std::move(command.changes)] {
+                    auto result=apply();return Arrival<Node>{query,result.changed,result.changes.value_or(changes)};
+                }};
             operation.command = true;
             enqueue(s, task, finding.cost, std::move(operation), finding.path);
         }
     }
-    static std::size_t startTask(Session& s, std::shared_ptr<GoalSpec<Node>> goal, Cost cost) {
-        auto query = goal->request;
-        auto index = s.tasks.size();
-        auto existing=s.taskIndex.find(query);
-        if(existing!=s.taskIndex.end()) {
-            index=existing->second;
+    static ReadScope observeTask(Context<Node>& c, Session& s, std::size_t index) {
+        return ReadScope([&c,&s,index](const DependencyKey& key) {c.observe(s,index,key);});
+    }
+    static void resetTask(Context<Node>& c, Session& s, std::size_t index) {
+        auto& task=s.tasks[index];
+        s.rejected.erase(index);
+        task.dirty=false;task.visited.clear();task.required.clear();task.children.clear();
+        task.deferred=false;task.finishedPass=false;task.rejection.clear();task.parked.clear();
+        std::weak_ptr<Session> weak=s.weak_from_this();
+        task.wake=std::make_shared<Dependency::Wake>([weak,index] {
+            if(auto current=weak.lock()) Context<Node>::wakeTask(current,index);
+        });
+        task.dependencies.clear();
+        auto reads=observeTask(c,s,index);c.access->observeTask(task.goal->request);
+        task.goal->beginPass();
+        auto query=task.goal->request;
+        enqueue(s,index,task.baseCost,{"visit",{0,0},false,[query] {return query;}},{});
+        s.steps.push_back({index ? "resume subgoal" : "search",query,task.baseCost,c.revision});
+    }
+    // A dirty parent's old outgoing demands cannot authorize work. Clean shared
+    // children remain reusable if another current route reaches them. Parked
+    // work retains its price and sequence; abandoned branches cannot write.
+    static void activate(Context<Node>& c, Session& s, std::size_t first, Cost cost) {
+        std::vector<typename Session::Task::Link> pending{{first,cost}};
+        while(!pending.empty()) {
+            auto link=pending.back();pending.pop_back();auto index=link.child;
             auto& task=s.tasks[index];
-            if (!task.rejection.empty() || task.baseCost <= cost) return index;
-            // A shared subgoal may first be advertised by a costly route.
-            // Retry at the cheaper price and discard its old queued steps.
-            task.baseCost = cost;
-            task.visited.clear();
-            task.required.clear();
-            task.deferred = false;
-            task.finishedPass = false;
-            ++task.generation;
-            goal = task.goal;
+            if(!task.dirty && !task.rejection.empty()) {task.active=true;continue;}
+            if((!task.active && task.baseCost!=link.cost) || (task.active && link.cost<task.baseCost)) {
+                // A removed cheap route cannot subsidize later expensive work.
+                task.baseCost=link.cost;task.dirty=true;++task.generation;
+                if(task.active) {s.reconcile=true;s.prune=true;}
+            }
+            if(task.active && !task.dirty) continue;
+            task.active=true;
+            if(task.dirty) resetTask(c,s,index);
+            else {
+                for(auto& item:task.parked) if(item.generation==task.generation) s.frontier.push(std::move(item));
+                task.parked.clear();
+                pending.insert(pending.end(),task.children.begin(),task.children.end());
+            }
         }
-        goal->beginPass();
-        if (index == s.tasks.size()) {
-            s.taskIndex.emplace(query,index);
-            s.tasks.push_back({std::move(goal), cost, {}, {}, false, 0, false, {}});
+    }
+    static void reconcileTasks(Context<Node>& c, Session& s) {
+        // Ignore outgoing demands of dirty tasks. Reprice shared goals from
+        // surviving routes before scheduling any work; otherwise removal of a
+        // cheap parent could leave a stale discount on an expensive route.
+        std::map<std::size_t,Cost> reached;
+        bool repriced;
+        do {
+            reached.clear();reached[0]=0;
+            std::queue<std::size_t> pending;pending.push(0);
+            while(!pending.empty()) {
+                auto index=pending.front();pending.pop();
+                if(s.tasks[index].dirty) continue;
+                for(const auto& link:s.tasks[index].children) {
+                    auto old=reached.find(link.child);
+                    if(old==reached.end() || link.cost<old->second) {
+                        reached[link.child]=link.cost;pending.push(link.child);
+                    }
+                }
+            }
+            repriced=false;
+            for(const auto& entry:reached) {
+                auto& task=s.tasks[entry.first];
+                if(task.baseCost==entry.second || (!task.dirty && !task.rejection.empty())) continue;
+                task.baseCost=entry.second;task.dirty=true;++task.generation;
+                repriced |= !task.children.empty();
+            }
+        } while(repriced);
+        for(std::size_t i=0;i<s.tasks.size();++i) {
+            auto& task=s.tasks[i];task.active=reached.count(i);
+            if(!task.active) continue;
+            if(task.dirty) resetTask(c,s,i);
+            else {
+                for(auto& item:task.parked) if(item.generation==task.generation) s.frontier.push(std::move(item));
+                task.parked.clear();
+            }
         }
-        enqueue(s, index, cost, {"visit", {0, 0}, false,
-                                 [query] { return query; }}, {});
+    }
+    static std::size_t startTask(Context<Node>& c, Session& s, std::shared_ptr<GoalSpec<Node>> goal, Cost cost) {
+        const auto query=goal->request;
+        auto existing=s.taskIndex.find(query);
+        std::size_t index;
+        if(existing==s.taskIndex.end()) {
+            index=s.tasks.size();s.taskIndex.emplace(query,index);
+            typename Session::Task task;task.goal=std::move(goal);task.baseCost=cost;
+            s.tasks.push_back(std::move(task));
+        } else index=existing->second;
+        activate(c,s,index,cost);
         return index;
     }
     static void reject(Session& s, std::size_t task, const std::string& reason, Cost cost) {
@@ -425,9 +527,11 @@ template<class Node> class GraphManager {
             if (!rejected.rejection.empty()) continue;
             rejected.rejection=reason.empty() ? "goal rejected" : reason;
             rejected.finishedPass=true;
+            s.rejected.insert(index);
             ++rejected.generation; // discard this goal's queued visits and Sets
             s.steps.push_back({"reject: " + rejected.rejection,rejected.goal->request,cost,s.status.revision});
             for (std::size_t parent=0;parent<s.tasks.size();++parent) {
+                if(!s.tasks[parent].active) continue;
                 const auto& required=s.tasks[parent].required;
                 if (std::find(required.begin(),required.end(),index)!=required.end()) pending.push_back(parent);
             }
@@ -437,7 +541,7 @@ template<class Node> class GraphManager {
             s.status.error=s.tasks[0].rejection;s.terminal=true;s.frontier={};
         }
     }
-    static void settle(Session& s) {
+    static void settle(Context<Node>& c, Session& s) {
         // Resolve the dependency DAG from its leaves. Cycles cannot establish
         // their own completion; they stay symbolic until other evidence breaks
         // the dependency. No recursive calls or domain-specific fields here.
@@ -447,6 +551,8 @@ template<class Node> class GraphManager {
         std::queue<std::size_t> ready;
         for (std::size_t i = 0; i < s.tasks.size(); ++i) {
             const auto& task = s.tasks[i];
+            if(!task.active) continue;
+            auto reads=observeTask(c,s,i);c.access->observeTask(task.goal->request);
             local[i] = task.rejection.empty() && !task.deferred && !task.goal->symbolic();
             remaining[i] = task.required.size();
             for (auto child : task.required) parents[child].push_back(i);
@@ -455,37 +561,36 @@ template<class Node> class GraphManager {
         while (!ready.empty()) {
             auto i = ready.front(); ready.pop();
             resolved[i] = true;
-            s.tasks[i].goal->settled(true);
+            {auto reads=observeTask(c,s,i);c.access->observeTask(s.tasks[i].goal->request);
+             s.tasks[i].goal->settled(true);}
             for (auto parent : parents[i])
                 if (!--remaining[parent] && local[parent]) ready.push(parent);
         }
         for (std::size_t i = 0; i < s.tasks.size(); ++i)
-            if (!resolved[i] && s.tasks[i].rejection.empty()) s.tasks[i].goal->settled(false);
+            if (s.tasks[i].active && !resolved[i] && s.tasks[i].rejection.empty()) {
+                auto reads=observeTask(c,s,i);c.access->observeTask(s.tasks[i].goal->request);
+                s.tasks[i].goal->settled(false);
+            }
         s.status.symbolicValues = !resolved[0];
     }
     static void advance(Context<Node>& c, Session& s) {
-        if(s.restart) {
-            // Retire old observations when rebuilding. Tokens hold only weak
-            // subscriptions; keeping a node alive does not keep its search alive.
-            auto wake=std::make_shared<Dependency::Wake>(*s.wake);
-            s.wake=std::move(wake);s.dependencies.clear();
-        }
-        ReadScope reads([&](const DependencyKey& key) {c.observe(s,key);});
-        if(!c.access->tracksDependencies()) ReadScope::observe({});
-        if (s.restart) {
-            s.restart = false;
-            s.frontier = {};
-            s.tasks.clear();
-            s.taskIndex.clear();
-            s.status.revision = c.revision;
-            startTask(s, s.root, 0);
-            s.steps.push_back({"search", s.root->request, 0, c.revision});
+        s.status.revision=c.revision;
+        if(s.tasks.empty()) startTask(c,s,s.root,0);
+        if(s.reconcile) {
+            s.reconcile=false;
+            if(s.prune) {
+                s.prune=false;
+                reconcileTasks(c,s);
+            } else for(auto index:s.invalidated)
+                if(s.tasks[index].active && s.tasks[index].dirty) resetTask(c,s,index);
+            s.invalidated.clear();
         }
         if (s.frontier.empty()) {
             for (std::size_t i=0;i<s.tasks.size();++i) {
                 auto& task=s.tasks[i];
-                if (task.finishedPass) continue;
+                if (!task.active || task.finishedPass) continue;
                 task.finishedPass=true;
+                auto reads=observeTask(c,s,i);c.access->observeTask(task.goal->request);
                 try {
                     auto batch=task.goal->finishPass();
                     enqueueCommands(s,i,batch.finding,std::move(batch.commands));
@@ -495,7 +600,7 @@ template<class Node> class GraphManager {
                 }
             }
             if (!s.frontier.empty()) return;
-            settle(s);
+            settle(c,s);
             s.status.fullyNormed = true;
             s.status.withSubscribers = s.watch && s.status.symbolicValues;
             s.quiescent = true;
@@ -507,7 +612,10 @@ template<class Node> class GraphManager {
         }
         auto pending = s.frontier.top();
         s.frontier.pop();
-        if (pending.generation != s.tasks[pending.task].generation) return;
+        auto& task=s.tasks[pending.task];
+        if (pending.generation != task.generation) return;
+        if(!task.active) {task.parked.push_back(std::move(pending));return;}
+        auto reads=observeTask(c,s,pending.task);c.access->observeTask(task.goal->request);
         try { follow(c,s,pending); }
         catch (const GoalRejected& error) {
             reject(s,pending.task,error.what(),pending.cost);
@@ -551,7 +659,11 @@ template<class Node> class GraphManager {
             // route may reach that same subgoal cheaply enough to satisfy it.
             s.steps.push_back({"subgoal: " + refinement.description,
                                refinement.query, cost, c.revision});
-            auto child = startTask(s, c.access->goal(refinement.query), cost);
+            auto child = startTask(c,s,c.access->goal(refinement.query),cost);
+            auto& children=s.tasks[pending.task].children;
+            auto link=std::find_if(children.begin(),children.end(),[child](const auto& item){return item.child==child;});
+            if(link==children.end()) children.push_back({child,cost});
+            else link->cost=std::min(link->cost,cost);
             if (!refinement.alternative) {
                 auto& required = s.tasks[pending.task].required;
                 if (std::find(required.begin(), required.end(), child) == required.end())
@@ -642,10 +754,6 @@ public:
         if (context_->stopping) throw std::logic_error("graph context is closed");
         if (!query.node) throw std::invalid_argument("normalize requires a node");
         auto session = std::make_shared<Session>();
-        std::weak_ptr<Session> weak=session;
-        session->wake=std::make_shared<Dependency::Wake>([weak] {
-            if(auto current=weak.lock()) Context<Node>::wakeSession(current);
-        });
         context_->access->beginSearch(query);
         session->root = context_->access->goal(query);
         session->policy = policy;

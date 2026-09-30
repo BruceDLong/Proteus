@@ -379,7 +379,7 @@ public:
             if (!definitions_->canInherit(target, source)) return {};
             auto definitions = definitions_;
             return {{"Reuse checked type requirements", [definitions, target, source] {
-                return definitions->inherit(target, source);
+                return definitions->inheritChanges(target, source);
             }}};
         }
         // Work is conjunctive. A route is evidence only if each intermediate
@@ -394,7 +394,11 @@ public:
         return {{"Set requested size/value/type", [access, evidence, definitions, target, source, demand] {
             bool changed = access->apply(target, source, demand);
             if (changed) evidence->inherit(target, source);
-            return definitions->inherit(target, source) || changed;
+            auto inherited=definitions->inheritChanges(target,source);
+            if(!changed) return inherited;
+            auto changes=inherited.changes.value_or(Changes::only({}));
+            changes.include(definitions->modelChanges());
+            return SetResult{true,changes};
         }}};
     }
     bool satisfied() const override {
@@ -691,6 +695,7 @@ public:
 };
 
 class ProteusAccess : public GraphAccess<POVNode> {
+    DependencyKey modelFacts_ = std::make_shared<Dependency>();
     std::shared_ptr<ProteusRelativePositions> positions_ = std::make_shared<ProteusRelativePositions>();
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<StreamInsertion> insertion_;
@@ -713,7 +718,7 @@ public:
           insertion_(std::make_shared<StreamInsertion>(access_)),
           completion_(std::make_shared<ProteusCompletion>(access_)),
           evidence_(std::make_shared<ProteusStreamEvidence>(access_)),
-          definitions_(std::make_shared<ProteusDefinitions>(access_)) {}
+          definitions_(std::make_shared<ProteusDefinitions>(access_,modelFacts_)) {}
     bool knownType(const POVNode& source,const std::string& name) const {
         if(!source) return false;
         auto names=definitions_->names(source);bool complete=true;Work work{0,0};
@@ -743,6 +748,16 @@ public:
             result=member;
         }
         return result;
+    }
+    void observeTask(const Query<POVNode>&) override {
+        // Structural/value/registry readers currently share this conservative
+        // model token. Proof-cache reads add their own instance-specific token.
+        ReadScope::observe(modelFacts_);
+    }
+    void invalidateCompletion(const Changes& changes) override {
+        // Recording a proof does not change model facts or invalidate an
+        // existing proof. Actual writes still invalidate all model evidence.
+        if(changes.all || changes.keys.count(modelFacts_)) invalidateCompletion();
     }
     void beginSearch(const Query<POVNode>&) override {
         // Re-normalization rechecks definition witnesses, including edits made

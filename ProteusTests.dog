@@ -1,6 +1,7 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphPublication/proofScaling
     unit/graphPublication/querySubmission
     unit/graphPublication/completionPreserved
     unit/graphPublication/unchangedEnvironment
@@ -11391,8 +11392,38 @@ struct GLOBAL {
     GRAPHPUBLICATION(unit/graphPublication/completionPreserved, 2)
     GRAPHPUBLICATION(unit/graphPublication/unchangedEnvironment, 3)
     GRAPHPUBLICATION(unit/graphPublication/namedOccurrence, 4)
+    GRAPHPUBLICATION(unit/graphPublication/proofScaling, 5)
     me bool: graphPublicationCase(me int: caseID) <- <%{
         GraphNormalizer n;n.init();
+        if(caseID==5) {
+            auto defs=graphParsed("proof scaling","{#seven=*10+7}");
+            auto defined=n.normalize(defs);defined.waitForCompletion();
+            bool ok=!defined.status().failed;
+            // Recording each already-satisfied member's type proof must not
+            // replay the list or earlier members. Count work, not wall time.
+            for(int count:{16,64,128}) {
+                std::string text="*"+std::to_string(count)+"+{";
+                for(int i=0;i<count;++i) text+="seven:*10+7 ";
+                auto target=graphParsed("proof scaling",text+"}");
+                auto h=n.normalize(target);h.waitForCompletion();
+                int passes=0,proofs=0,members=0;auto steps=h.steps();
+                for(const auto& step:steps) {
+                    passes+=step.action=="search";
+                    proofs+=step.action=="Apply scalar type requirements";
+                }
+                for(auto item=target->pItem->value->items.front();item;item=item->next) {
+                    ++members;
+                    ok &= item->pItem->value->num==7 && item->pItem->infSize->num==10 &&
+                        getFlagBit(item->pItem->flags,infonView::isNormed);
+                }
+                ok &= !h.status().failed && !h.status().symbolicValues &&
+                    getFlagBit(target->pItem->flags,infonView::isNormed) &&
+                    members==count && proofs==count && passes==1 && steps.size()<=20*count+20;
+                if(!ok) std::cout<<"Proof scaling: "<<count<<" members, "<<steps.size()<<" steps, "
+                    <<passes<<" root passes, "<<proofs<<" proofs: "<<h.status().error<<"\n";
+            }
+            n.close();return ok;
+        }
         auto root=graphScalar(caseID==2 ? 7 : -1,caseID==2 ? 10 : -1);
         auto other=graphScalar(-1,-1);
         if(caseID==4) root->pItem->identityName=n.access->registry->occurrenceScope.allocate();

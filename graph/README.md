@@ -238,57 +238,78 @@ without publishing a revision or changing other searches' completion flags.
 This preserves re-normalization after a definition's members or template change.
 Live edits still belong inside `runtime.update` or a parser publication.
 
-The runtime now supports evidence-scoped subscriptions:
+Subscriptions now belong to individual goals within each search:
 
 - Semantic callbacks observe opaque `DependencyKey` tokens through `ReadScope`.
-  These may represent facts, adjacency, aliases, or absent catalogue bindings.
-  Tokens belong to one context; they do not store POVs or graph edges.
-- Sets, materializing edges, and publications can supply `Changes::only({...})`.
-  Only searches subscribed to those tokens are restarted. An unaffected search
-  retains its frontier, visited queries, subgoals, collected findings, and costs.
-- Affected searches rebuild their findings. List counts and candidate sets must
-  not retain stale contributions. Finished/cancelled handles are not restarted;
-  completed results are reconsidered on explicit normalization as before.
-- Unknown read/write footprints retain broad invalidation. Adapters must opt in
-  to complete read tracking; partly converted helpers can observe an unknown
-  dependency. All observations and publications use the existing context lock.
-  Weak subscriptions do not retain searches after their handles disappear.
+  These represent facts, adjacency, aliases, or absent catalogue bindings.
+  Tokens belong to one context and hold weak subscriptions, not graph nodes.
+- Sets, materializing edges, and publications report `Changes::only({...})`.
+  A `SetResult` can report actual changes after a compound operation runs;
+  existing boolean producers retain their declared, by default broad, footprint.
+- Only goals that read changed evidence reset their findings and queued work.
+  Unaffected goals retain their visited queries, collected results and costs.
+  Completion still accounts for required children. A repaired child's rejection
+  also invalidates the rejection propagated to its required parents.
+- A changed parent withdraws its old outgoing demands before further execution.
+  Unreachable children are parked; unchanged work can resume if demanded again.
+  Shared children remain active through surviving routes. Admission costs are
+  recalculated when routes disappear, so a removed cheap route cannot subsidize
+  an expensive route or authorize a stale Set.
+- Unknown footprints still invalidate broadly. Observations and publication use
+  the same context lock. Finished/cancelled handles are not reopened; completed
+  results are reconsidered on explicit normalization as before.
 
-This is **session-level** dependency tracking. Proteus's semantic Sets and parser
-publications still use the broad fallback. `isNormed`, RHS representation proofs,
-compiled-definition witnesses, and accepted-instance caches must participate in
-precise invalidation before that fallback can be narrowed safely. A write to a
-shared infon state can affect several POVs; its request node alone is not a
-correct footprint. Likewise, a search must observe unsuccessful lookups as well
-as the edges it follows.
+Proteus now distinguishes recording a checked type requirement from changing
+model data. Proof reads subscribe by shared `infonView`, so aliases share the
+notification. Applying requirements reports the proof tokens it actually adds;
+if it also changes values, order, members or relationships, it publishes the
+model change too. Proof-only updates preserve unrelated completion metadata and
+validated definition caches.
 
-The next stage is to report full read/write footprints for Proteus operations,
-then retain unaffected tasks within an affected session. Do not merely keep old
-queued Sets after a revision: they may have been planned against replaced
-members or an abandoned candidate. Ordered evidence collectors need an explicit
-reset/replay boundary. Identical subgoals currently share work within one search
-pass, not across independent handles; their complete Query context remains part
-of their identity.
+Structural, value and registry reads still share a conservative model token;
+parser publications and unconverted operations retain broad invalidation.
+`isNormed`, RHS representation proofs, compiled-definition witnesses, and
+accepted-instance caches still invalidate together on model writes. Narrowing
+those footprints requires tracing all affected readers, including unsuccessful
+lookups and shared state aliases. No permanent POV expansion cache or second
+model graph has been introduced: the retained links describe goal dependencies.
+Identical queries share work within a handle, including across relevant updates,
+but independent handles still have separate search state.
 
 Validation of this checkpoint:
 
-- Native scheduler: 51 scenarios, including scoped Sets/publications, late
-  adjacency, retired dependencies, aggregate recomputation, shared subgoals,
-  racing producers, broad fallback and cancellation. 128 independent waiting
-  searches take exactly 128 additional expansions for 128 local updates.
-- Four real-adapter publication tests check unrelated query submission,
-  preserved completion, unchanged environment sources and new named identities.
-- Default suite: 40 failures / 1,685 tests, exactly the same failure names as
-  commit `e144fed` (40 / 1,681); the four added tests pass. The existing replaced
-  member/template checks pass without changing their expectations.
-- Rebuilt Slipstream and checked it on an isolated display: populated Kanban,
-  rotating colored cube, and terminal `{| 3>> }` returning `3`. The cube remains
-  gray in the 30-second sample and colored in the 60-second sample; this is a
-  visibility check, not evidence of a startup speed improvement.
-- The original single-session chain probe still takes 8,384 expansions and 129
-  passes for 128 writes under broad invalidation. Static 128-stage diamonds take
-  385 expansions for 385 nodes. This checkpoint does not claim to fix repeated
-  work inside that single affected search or the cube's first-color latency.
+- Native scheduler: 55 scenarios, including local updates within one search,
+  parked Sets, disappearance/reappearance of cheap routes, repaired rejected
+  children, late adjacency, aggregate recomputation, racing producers and
+  cancellation. A root with N independent member writes takes 4N+1 expansions
+  (tested at 16, 32, 64 and 128 members).
+- `unit/graphPublication/proofScaling` normalizes populated typed lists at 16,
+  64 and 128 members. It checks every member's value/size/completion, all type
+  applications, one root pass, and a linear bound on recorded search steps.
+- Comparing the same generated-engine fixture against `3a90449`:
+
+  | Typed members | Previous steps | Current steps | Previous root passes | Current root passes |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 16 | 1,651 | 247 | 17 | 1 |
+  | 32 | 4,795 | 487 | 33 | 1 |
+  | 64 | 14,923 | 967 | 65 | 1 |
+  | 128 | 50,539 | 1,927 | 129 | 1 |
+
+- Regenerated Proteus4: 5/5 publication tests pass. The full suite reports
+  40 failures / 1,686 tests, with exactly the same failing names as `3a90449`
+  (40 / 1,685). Existing expectations were not changed.
+- All 55 native scenarios also pass with address and undefined-behavior
+  sanitizers (leak detection disabled because fixtures contain ownership cycles).
+- Rebuilt Slipstream and verified its isolated window: populated Kanban,
+  rotating colored cube, and terminal `{| 3>> }` returning `3`. The final run
+  was gray at the 30-second sample and colored at 60 seconds, matching the
+  previous checkpoint's sampling interval rather than proving a startup gain.
+
+This proves reduced replay for proof-only type applications, not a general
+linear bound for all normalization. A single goal with broad model writes may
+still replay its whole traversal. The cube's first-color latency needs separate
+measurement; fewer restarts in this fixture are not evidence of faster app
+startup.
 
 ## Cost and settlement
 
@@ -704,9 +725,9 @@ later routes. See [grouping-results.md](grouping-results.md).
 - `addRHS()` and `recordIdentity()` publish under the same context lock used to
   install subscriptions. There is no gap in which a wakeup can be lost.
 - A Set publishes a revision before settlement. Lazy edge materialization also
-  reports whether it changed the graph, even when it yields no Set. The first implementation
-  conservatively restarts affected sessions across the whole context. Finer
-  dependency indexing is a later optimization.
+  reports whether it changed the graph, even when it yields no Set. Observed
+  evidence determines which goals retry; unknown footprints retain broad
+  invalidation. See the incremental search checkpoint above.
 - `cancel()` stops this session and its child goals, removes its subscription,
   and releases its pending frontier. It takes effect between bounded graph
   steps/atomic Set batches; it preserves established writes. Other sessions

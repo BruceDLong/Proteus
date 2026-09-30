@@ -17,10 +17,16 @@ public:
     using Wake = std::function<void()>;
 private:
     std::vector<std::weak_ptr<Wake>> readers_;
+    std::size_t cleanupAt_ = 64;
 public:
     void subscribe(const std::shared_ptr<Wake>& reader) {
-        readers_.erase(std::remove_if(readers_.begin(),readers_.end(),
-            [](const auto& weak) {return weak.expired();}),readers_.end());
+        // Many goals may observe the same fact. Compact in batches, rather
+        // than rescanning every live reader for each new subscription.
+        if(readers_.size()>=cleanupAt_) {
+            readers_.erase(std::remove_if(readers_.begin(),readers_.end(),
+                [](const auto& weak) {return weak.expired();}),readers_.end());
+            cleanupAt_=std::max<std::size_t>(64,2*readers_.size());
+        }
         readers_.push_back(reader);
     }
     void publish() {
@@ -29,6 +35,7 @@ public:
                 if(auto reader=weak.lock()) {(*reader)();return false;}
                 return true;
             }),readers_.end());
+        cleanupAt_=std::max<std::size_t>(64,2*readers_.size());
     }
 };
 using DependencyKey = std::shared_ptr<Dependency>;

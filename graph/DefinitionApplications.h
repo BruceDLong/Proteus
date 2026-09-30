@@ -57,6 +57,7 @@ public:
 
 private:
     std::shared_ptr<ProteusGraphAccess> access_;
+    DependencyKey modelFacts_;
     std::map<std::string, std::vector<Definition>> catalogue_;
     // Read-only declaration compilation survives unrelated instance writes.
     // Every reuse validates the source witnesses and vocabulary bindings.
@@ -88,6 +89,12 @@ private:
     // happens in the plan. An additional POV must not repeat application.
     using Key = std::weak_ptr<infonView>;
     std::map<Key, std::vector<Certificate>, std::owner_less<Key>> evidence_;
+    mutable std::map<Key, DependencyKey, std::owner_less<Key>> evidenceKeys_;
+    DependencyKey evidenceKey(const POVNode& node) const {
+        auto& key=evidenceKeys_[node->pItem];
+        if(!key) key=std::make_shared<Dependency>();
+        ReadScope::observe(key);return key;
+    }
     std::vector<POVNode> members(const POVNode& node) const {
         if(auto body=choiceBody(node)) {
             std::vector<POVNode> result;
@@ -103,7 +110,9 @@ private:
         return POVDescription(node).work();
     }
 public:
-    explicit ProteusDefinitions(std::shared_ptr<ProteusGraphAccess> access) : access_(std::move(access)) {}
+    explicit ProteusDefinitions(std::shared_ptr<ProteusGraphAccess> access, DependencyKey modelFacts = {})
+        : access_(std::move(access)),modelFacts_(std::move(modelFacts)) {}
+    Changes modelChanges() const {return Changes::only({modelFacts_});}
     POVNode choiceBody(const POVNode& node) const {
         auto item=node->pItem;
         if(!item->isOrLike() || !access_->plain(node,true,false,false,false) || !access_->literalSelectionBody(item->innr) ||
@@ -538,6 +547,7 @@ public:
         return true;
     }
     Certificate saved(const POVNode& node, bool fullMeaning=false) const {
+        evidenceKey(node);
         auto found = evidence_.find(node->pItem); if (found == evidence_.end()) return {};
         for (const auto& proof : found->second) if (current(proof) && covers(proof, node, fullMeaning)) return proof;
         return {};
@@ -564,6 +574,7 @@ public:
         auto proof = saved(node,fillParts); return proof && accepts(proof, node, fillParts);
     }
     bool remember(const POVNode& node, const Certificate& proof) {
+        evidenceKey(node);
         auto& certificates = evidence_[node->pItem];
         certificates.erase(std::remove_if(certificates.begin(), certificates.end(),
             [&](const Certificate& old) { return !current(old); }), certificates.end());
@@ -586,15 +597,23 @@ public:
         if (!proof || !current(proof) || !covers(proof, node, fillParts)) return {};
         return std::make_shared<ProteusDefinitionPlan>(access_, node, proof->requirement, std::map<POVNode,std::int64_t>{}, true, fillParts);
     }
-    bool apply(const POVNode& node, const Certificate& proof, const std::shared_ptr<ProteusDefinitionPlan>& plan) {
+    SetResult rememberChanges(const POVNode& node, const Certificate& proof) {
+        bool changed=remember(node,proof);
+        return {changed,Changes::only({evidenceKey(node)})};
+    }
+    SetResult applyChanges(const POVNode& node, const Certificate& proof, const std::shared_ptr<ProteusDefinitionPlan>& plan) {
         if (!current(proof) || !covers(proof, node) || !plan->supported) return false;
-        bool changed = plan->apply();
+        Changes changes=Changes::only({});
+        if(plan->apply()) changes.include(modelChanges());
         for (const auto& binding : plan->bindings) {
             auto child = std::make_shared<Proof>();
             child->evidence = proof->evidence; child->requirement = binding.second;
-            changed |= remember(binding.first->node, child);
+            if(remember(binding.first->node,child)) changes.include(Changes::only({evidenceKey(binding.first->node)}));
         }
-        return changed;
+        return {!changes.empty(),changes};
+    }
+    bool apply(const POVNode& node, const Certificate& proof, const std::shared_ptr<ProteusDefinitionPlan>& plan) {
+        return applyChanges(node,proof,plan);
     }
     std::shared_ptr<ProteusDefinitionPlan> reusable(const POVNode& target, const POVNode& source, const Certificate& proof) const {
         if (!current(proof)) return {};
@@ -606,25 +625,29 @@ public:
         } catch (const std::runtime_error&) { return {}; }
     }
     bool canInherit(const POVNode& target, const POVNode& source) const {
+        evidenceKey(source);
         auto found = evidence_.find(source->pItem); if (found == evidence_.end()) return false;
         for (const auto& proof : found->second) if (reusable(target, source, proof)) return true;
         return false;
     }
-    bool inherit(const POVNode& target, const POVNode& source) {
+    SetResult inheritChanges(const POVNode& target, const POVNode& source) {
+        evidenceKey(source);
         auto found = evidence_.find(source->pItem); if (found == evidence_.end()) return false;
         auto certificates = found->second;
-        bool changed = false;
+        Changes changes=Changes::only({});
         for (const auto& proof : certificates) if (auto plan = reusable(target, source, proof)) {
             // Only order metadata may remain: required contents already exist.
-            changed |= plan->apply();
+            if(plan->apply()) changes.include(modelChanges());
             for (const auto& binding : plan->bindings) {
                 auto child = std::make_shared<Proof>();
                 child->evidence = proof->evidence; child->requirement = binding.second;
-                changed |= remember(binding.first->node, child);
+                if(remember(binding.first->node,child)) changes.include(Changes::only({evidenceKey(binding.first->node)}));
             }
         }
-        return changed;
+        return {!changes.empty(),changes};
     }
+    bool inherit(const POVNode& target, const POVNode& source) {return inheritChanges(target,source);}
+
     // Publish a sparse header independently of its still-symbolic members.
     // Only top-level conjuncts are read; full member validation stays pending.
     // All allocation and mutation still belongs to the priced Set.
@@ -725,6 +748,8 @@ public:
     }
     void prune() {
         ++validationEpoch_;accepted_.clear();
+        for(auto it=evidenceKeys_.begin();it!=evidenceKeys_.end();)
+            if(it->first.expired()) it=evidenceKeys_.erase(it);else ++it;
         for (auto it = evidence_.begin(); it != evidence_.end();)
             if (it->first.expired()) it = evidence_.erase(it); else ++it;
     }
@@ -773,7 +798,7 @@ public:
             if (!certificate || !certificate->compilable || !certificate->requirement) return {};
             auto definitions = definitions_; auto target = request.node;
             return {{"Record read-only type meaning", [definitions, target, certificate] {
-                return definitions->remember(target, certificate);
+                return definitions->rememberChanges(target, certificate);
             }, {entry ? 1 : addCost(1,certificate->composition.visits), 0}}};
         }
         auto plan = definitions_->plan(request.node, certificate, request.argument==fillImmediateParts);
@@ -782,7 +807,7 @@ public:
         auto definitions = definitions_; auto target = request.node;
         return {{certificate->requirement->repeated ? "Apply repeated member requirements" :
             certificate->requirement->list ? "Apply finite list type requirements" : "Apply scalar type requirements",
-            [definitions, target, certificate, plan] { return definitions->apply(target, certificate, plan); }, plan->work}};
+            [definitions, target, certificate, plan] { return definitions->applyChanges(target, certificate, plan); }, plan->work}};
     }
     bool satisfied() const override {
         return request.kind == compileTypeRequirements ?

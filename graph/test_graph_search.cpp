@@ -786,5 +786,76 @@ int main() {
         assert(weak.expired());
         manager.updateIfChanged([] {return true;},Changes::only({token}));++cases;
     }
+    {
+        // One normalization with many independent members used to rebuild its
+        // root and every earlier member for each Set. Local writes now retry
+        // just the member that consumed that fact.
+        for(int count:{16,32,64,128}) {
+            auto a=std::make_shared<TrackedAccess>();GraphManager<Node> manager(a);auto root=node(1);
+            for(int i=0;i<count;++i) {auto member=node();member->rhs={node(i)};root->required.push_back({member,0});}
+            auto h=manager.normalize({root,1});h.waitForCompletion();
+            assert(!h.status().failed && !h.status().symbolicValues && a->expanded==4*count+1);
+            for(int i=0;i<count;++i) assert(root->required[i].first->value==i);
+            std::cout<<"Shared search: "<<count<<" writes, "<<a->expanded<<" expansions\n";
+        }
+        ++cases;
+    }
+    {
+        // A delayed Set on a removed route must be parked. If that exact
+        // demand becomes relevant again, its unchanged work can resume.
+        struct RemovingGoal : TrackedGoal {
+            Node root, waiting;std::shared_ptr<bool> removed;
+            RemovingGoal(Query<Node> q,Node r,Node w,std::shared_ptr<bool> done)
+                :TrackedGoal(q),root(r),waiting(w),removed(done) {}
+            std::vector<SetCommand> found(const Visit<Node>& visit) override {
+                auto commands=TrackedGoal::found(visit);
+                if(request.node==root && !*removed) {
+                    auto r=root,w=waiting;auto done=removed;
+                    commands.push_back({"remove candidate",[r,w,done] {
+                        *done=true;r->required={{w,0}};
+                        return SetResult{true,Changes::only({r->facts})};
+                    },{5,0}});
+                }
+                return commands;
+            }
+        };
+        struct RemovingAccess : TrackedAccess {
+            Node root,waiting;std::shared_ptr<bool> removed=std::make_shared<bool>(false);
+            std::shared_ptr<GoalSpec<Node>> goal(const Query<Node>& q) override {
+                return std::make_shared<RemovingGoal>(q,root,waiting,removed);
+            }
+        };
+        auto a=std::make_shared<RemovingAccess>();GraphManager<Node> manager(a);
+        auto branch=node(),source=node(9);source->setCreations=100;branch->rhs={source};
+        a->root=node(1);a->waiting=node();a->root->required={{branch,0},{a->waiting,0}};
+        auto h=manager.normalize({a->root,1});h.waitForCompletion();
+        assert(h.status().withSubscribers && *a->removed && branch->value==-1);
+        manager.updateIfChanged([&] {a->root->required.push_back({branch,0});return true;},Changes::only({a->root->facts}));
+        h.waitForCompletion();assert(branch->value==9 && h.status().withSubscribers && !h.status().failed);h.cancel();++cases;
+    }
+    {
+        // A cached subgoal cannot retain the price of a route that disappeared.
+        auto a=std::make_shared<TrackedAccess>();GraphManager<Node> manager(a);
+        auto root=node(1),cheap=node(1),expensive=node(1),shared=node();
+        cheap->required={{shared,1}};expensive->required={{shared,10}};
+        root->required={{cheap,0},{expensive,0}};CostPolicy policy;policy.maximumRoute=5;
+        auto h=manager.normalize({root,1},policy);h.waitForCompletion();
+        manager.updateIfChanged([&] {root->required={{expensive,0}};return true;},Changes::only({root->facts}));h.waitForCompletion();
+        manager.updateIfChanged([&] {shared->rhs={node(7)};return true;},Changes::only({shared->facts}));h.waitForCompletion();
+        assert(shared->value==-1 && h.status().withSubscribers);
+        manager.updateIfChanged([&] {root->required.push_back({cheap,0});return true;},Changes::only({root->facts}));h.waitForCompletion();
+        assert(shared->value==7 && !h.status().failed && !h.status().symbolicValues);++cases;
+    }
+    {
+        // A failed required child rejects its exploratory parent. Repairing
+        // that child must reopen the parent's derived rejection as well.
+        auto a=std::make_shared<TrackedAccess>();GraphManager<Node> manager(a);
+        auto root=node(),branch=node(3),bad=node();bad->rhs={node(1),node(2)};
+        root->exploratory={{branch,0}};branch->required={{bad,0}};
+        auto h=manager.normalize({root,1});h.waitForCompletion();
+        assert(!h.status().failed && !branch->complete);
+        manager.updateIfChanged([&] {bad->rhs.resize(1);return true;},Changes::only({bad->facts}));h.waitForCompletion();
+        assert(!h.status().failed && branch->complete && bad->complete);h.cancel();++cases;
+    }
     std::cout << "Graph search: " << cases << "/" << cases << " scenarios passed\n";
 }
