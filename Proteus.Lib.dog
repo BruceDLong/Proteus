@@ -2442,6 +2442,7 @@ struct ThreadedNormalizer: inherits=Threads {
     our POV: pov
     their Agent: agent
     me NormalizationHandle: handle
+    their ThreadedInfonParser: parseBeforeNormalize
     me Mutex: lifecycleMutex
     me bool: cancellationRequested
 
@@ -2455,6 +2456,7 @@ struct ThreadedNormalizer: inherits=Threads {
         protect(lifecycleMutex){cancellationRequested <- true; handle.cancel()}
     }
     void: run() <- {
+        if(parseBeforeNormalize!=NULL){parseBeforeNormalize!.waitForParseCompletion()}
         protect(lifecycleMutex){
             handle <- agent!.normalize(pov)
             if(cancellationRequested){handle.cancel()}
@@ -2469,6 +2471,8 @@ struct ProteusCore{
     me sessionFile: DB_session
     our infonView: WORLD
     our Agent: agent
+    me InfonStreamLoader: defaultStreamLoader
+    their InfonStreamLoader: streamLoader
     me bool: streamingMode
     me string: errorMesg
 
@@ -2506,49 +2510,49 @@ struct ProteusCore{
         }
     }
 
-    me bool: loadKernelContext() <- {
-        me string: kernelPath <- "public/KernelKB.pr"
-        me string: kernelStr <- readAssetAsString(kernelPath)
-        if(kernelStr==""){
-            errorMesg <- "Proteus file '"+kernelPath+"' not found"
-            return(false)
+    // These convenience methods load a finite asset document. They wait for
+    // that document only; inserted streams may remain open and subscribed.
+    me bool: loadAssetInto(our infonView: target, me string: filename) <- {
+        our InfonStream: stream <- streamLoader!.startNewConnection(
+                target, streamLoader!.canonicalFileSpec(filename))
+        if(stream==NULL){errorMesg <- "Could not open Proteus asset: "+filename; return(false)}
+        stream.waitForCompletion()
+        if(stream.normerThread.handle.failed()){
+            errorMesg <- stream.normerThread.handle.error(); return(false)
         }
-        our infonView: kernelNode <- parseAndExtractString(kernelStr, kernelPath)
-        if(kernelNode == NULL){
-            errorMesg <- "Proteus file '"+kernelPath+"' did not parse correctly"
-            return(false)
-        }
-        agent!.kernel <- kernelNode
-        our POV:: kernelPov{29}; kernelPov!.pItem <- agent!.kernel
-        agent!.normalizeAndWait(kernelPov)
         return(true)
     }
-
+    me bool: loadKernelContext() <- {
+        Allocate(agent!.kernel)
+        return(loadAssetInto(agent!.kernel, "public/KernelKB.pr"))
+    }
     me bool: loadWorld(me string: filename) <- {
-        me string: worldFilePath <- filename
-        if(findString(worldFilePath, "PublicKB.pr")!=-1){
+        if(findString(filename, "PublicKB.pr")!=-1){
             if(!loadKernelContext()){return(false)}
         }
-        me string: worldStr <- readAssetAsString(worldFilePath)
-        if(worldStr==""){
-            errorMesg <- "Proteus file '"+worldFilePath+"' not found"
-            return(false)
-        }
-        WORLD <- parseAndExtractString(worldStr, worldFilePath)
-        if(WORLD == NULL){
-            errorMesg <- "Proteus file '"+worldFilePath+"' did not parse correctly"
-            return(false)
-        }
+        Allocate(WORLD)
         agent!.world <- WORLD
-        our POV:: normPov{27}; normPov!.pItem <- agent!.world
-        agent!.normalizeAndWait(normPov)
-        return(true)
+        return(loadAssetInto(WORLD, filename))
     }
 
-    // Derived cores provide protocol policy for InfonStreamLoader.  Returning
+    // Default asset-file policy; applications supply additional protocols.
     // NULL rejects the request before a parse/normalize stream is started.
     our InfonConnector: makeInfonConnector(me string: streamSpec, me int: loadNumber) <- {
-        return(NULL)
+        our InfonStreamSpec:: spec
+        spec.setSpec(streamSpec)
+        if(spec.protocolTag!="file"){return(NULL)}
+        our AssetFileConnector:: connector
+        connector.init(spec)
+        if(connector.statusCode!=0){return(NULL)}
+        return(connector)
+    }
+
+    // Nonblocking insertion contract: true means accepted, not finished.
+    // The active loader owns the stream until shutdown; publications signal
+    // readiness or failure through the existing graph subscriptions.
+    me bool: requestStreamInsert(our infonView: target, me string: spec, me uint64: parentOrigin) <- {
+        if(streamLoader==NULL){return(false)}
+        return(streamLoader!.startNewConnection(target, spec, parentOrigin)!=NULL)
     }
 
     me uint64: streamSourceOriginID(our POV: sourcePOV,
@@ -2564,32 +2568,12 @@ struct ProteusCore{
         return(0)
     }
 
-    // Existing cores can continue to override the two-argument entry point.
-    // Loaders that support relative nested streams can additionally override
-    // normalizeFromStreamSpecAtOrigin().
     me bool: normalizeFromStreamSpecAtOrigin(our POV: toFill,
             me string: streamSpec, me uint64: sourceOriginID) <- {
-        return(normalizeFromStreamSpec(toFill, streamSpec))
+        return(requestStreamInsert(toFill!.pItem, streamSpec, streamSourceOriginID(toFill,sourceOriginID)))
     }
-
     me bool: normalizeFromStreamSpec(our POV: toFill, me string: streamSpec) <- {
-        trimWS(streamSpec)
-        log("ProteusCORE:Normalize:"+streamSpec)
-        me int: colonPos <- findString(streamSpec, ":")
-        me string: streamSpecType <- streamSpec.subStr(0,colonPos)
-        if(streamSpecType!="file"){
-            logFatalError("Unknown file specification type:"+streamSpecType)
-        }
-        me string: filename <- streamSpec.subStr(colonPos+1)
-        me string: infonStr <- readAssetAsString(filename)
-        if(infonStr==""){
-            errorMesg <- "Proteus file '"+filename+"' not found"
-            return(false)
-        }
-        their strBuf:: bufToParse
-        bufToParse!.initForString(infonStr, streamSpec)
-        initParserParseExtractNormalizeInfonView_stream(toFill, bufToParse)
-        return(true)
+        return(normalizeFromStreamSpecAtOrigin(toFill, streamSpec, 0))
     }
 
     me string: resultString(our infonView: inf) <- {
@@ -2636,6 +2620,7 @@ struct ProteusCore{
     void: handleSyntaxError  (me uint64: originID, me string: mesg)  <- {print(mesg+"\n")}
     void: handleProteusError (me uint64: originID, me string: mesg)  <- {log(mesg)}
     me string: getOriginIDString(me uint64: originID) <- {
+        if(streamLoader!=NULL){return(streamLoader!.getOriginIDString(originID))}
         return("source#"+toString(originID))
     }
 
@@ -2646,6 +2631,7 @@ struct ProteusCore{
         setStreamingMode(streamingMode)
         Allocate(agent)
         agent!.init(this)
+        defaultStreamLoader.init(agent, this)
         Allocate(agent!.kernel)
         agent!.kernel!.setToList()
         if(worldFileName!=""){
@@ -2658,6 +2644,7 @@ struct ProteusCore{
     }
 
     me void: deInit() <- {
+        if(streamLoader!=NULL){streamLoader!.shutdown()}
         if(agent!=NULL){agent!.close()}
         DB_session.closeSession()
     }

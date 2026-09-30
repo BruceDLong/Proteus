@@ -655,6 +655,67 @@ context or a handle retaining it alive while using registry-bound POVs. Calling
 The manager holds weak session references. Dropping every copy of a handle
 releases its session after any current bounded step, including its subscription.
 
+## Inserted streams
+
+`%INSERT` remains a list directive; `#` starts a word definition. The resource
+specification occupies the rest of its line:
+
+```proteus
+{
+    %INSERT nested/values.pr
+}
+```
+
+`StreamInsertion.h` supplies a priced Set that claims the placeholder once and
+marks its input pending. Its queued effect starts the owning core's registered
+`InfonStreamLoader` outside the graph lock. The parser fills the same infon,
+retaining graph dependencies instead of recursively normalizing or replacing
+it with a detached result. Source-relative paths use the containing stream's
+origin before the inserted stream receives its own origin.
+
+`ProteusCore.requestStreamInsert()` returns whether the request was accepted;
+it does not wait for its contents. `InfonStream.start()` starts managed input,
+parser and normalizer threads. Rejection and parse failure become failed graph
+goals. Normalizing the same occurrence again does not open another connection.
+A derived core registers its loader through `InfonStreamLoader.init()` and
+supplies protocol policy through `makeInfonConnector()`; the base core supports
+asset files. Files are opened read-only.
+
+A live connector publishes prefixes. Searches can consume known members while
+remaining subscribed to an unfinished source, and newly imported definitions
+can resolve an already pending query. A connector explicitly requesting
+parse-first behavior with `allowStreamingNormalize=false` withholds the list
+prefix until its document is parsed. This policy applies to parent searches
+as well as the stream's own normalizer.
+
+`NormalizationHandle.waitForCompletion()` means current quiescence, not EOF.
+Its `fullyNormed` flag can coexist with `symbolicValues` and `withSubscribers`;
+inspect those flags and the result for unresolved information. Cancelling one
+query does not cancel a separately owned imported stream. Loader shutdown stops
+accepting connections, requests input closure and cancellation, and joins its
+owned threads. Protocol implementations must arrange for blocking input pumps
+to return when shutdown is requested.
+
+`InfonStream.waitForCompletion()` explicitly joins that stream. The finite-asset
+convenience methods wait for their own document, allowing inserted children to
+remain open. `waitForAllStreams()` is a finite-batch/test helper, not an application
+startup barrier for live streams.
+
+Run the insertion integration tests with `./TestProteus -t unit/streamInsert/`
+from `LocalBuild`. They exercise the actual connector, parser and graph lifecycle,
+including nested relative files, late definitions, open-prefix replies, replay,
+rejection, cancellation, shutdown and a finite document with an open dependency.
+
+The scheduler indexes existing subgoals by query while preserving cheaper-route
+retries. Between bounded search steps it grants a waiting publisher a turn, so
+repeated subscribed searches cannot keep reacquiring the mutex ahead of input.
+This also leaves search a turn when producers keep supplying data.
+
+Validation for insertion: 13/13 integration scenarios and 39/39 generic scheduler
+scenarios pass. The full generated suite finishes at 40/1668, with exactly the
+same failing names as the previous 40/1655 baseline. No existing expectations
+were changed for this work.
+
 ## Parser and reply lifecycle
 
 Streaming parsers share their Agent's graph publication lock. They release it

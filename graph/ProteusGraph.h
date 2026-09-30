@@ -52,6 +52,7 @@ inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
 #include "SparseOccurrence.h"
 #include "ListValueShape.h"
 #include "RecordValue.h"
+#include "StreamInsertion.h"
 
 // Early correspondence is conditional on the parser retaining the ordered
 // list body. Weak provenance witnesses neither copy nodes nor own a second
@@ -259,15 +260,16 @@ class ProteusGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusCompletion> completion_;
     std::shared_ptr<ProteusStreamEvidence> evidence_;
     std::shared_ptr<ProteusDefinitions> definitions_;
+    std::shared_ptr<StreamInsertion> insertion_;
     POVNode selected_;
     bool deferred_ = false, reachedEnd_ = false;
     GraphListMeasure measure_;
 public:
     ProteusGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access,
                 std::shared_ptr<ProteusCompletion> completion, std::shared_ptr<ProteusStreamEvidence> evidence,
-                std::shared_ptr<ProteusDefinitions> definitions)
+                std::shared_ptr<ProteusDefinitions> definitions, std::shared_ptr<StreamInsertion> insertion)
         : GoalSpec<POVNode>(query), access_(std::move(access)),
-          completion_(std::move(completion)), evidence_(std::move(evidence)), definitions_(std::move(definitions)) {}
+          completion_(std::move(completion)), evidence_(std::move(evidence)), definitions_(std::move(definitions)), insertion_(std::move(insertion)) {}
     void beginPass() override {
         deferred_ = false;
         reachedEnd_ = false;
@@ -285,6 +287,10 @@ public:
         if (!error.empty()) throw std::runtime_error(error);
         if (access_->inputPending(visit.query.node) && request.kind != listContents &&
             !access_->prefixList(visit.query.node)) return {};
+        if (request.kind >= sizeOnly && request.kind <= sizeAndValue) {
+            auto commands=insertion_->found(visit.query.node);
+            if (!commands.empty()) return commands;
+        }
         if (request.kind >= sizeOnly && request.kind <= sizeAndValue &&
             visit.query.node == request.node && PathExpression::ready(*access_,request.node)) {
             auto access=access_;auto node=request.node;
@@ -687,6 +693,7 @@ public:
 class ProteusAccess : public GraphAccess<POVNode> {
     std::shared_ptr<ProteusRelativePositions> positions_ = std::make_shared<ProteusRelativePositions>();
     std::shared_ptr<ProteusGraphAccess> access_;
+    std::shared_ptr<StreamInsertion> insertion_;
     std::shared_ptr<ProteusCompletion> completion_;
     std::shared_ptr<ProteusStreamEvidence> evidence_;
     std::shared_ptr<ProteusDefinitions> definitions_;
@@ -703,11 +710,17 @@ class ProteusAccess : public GraphAccess<POVNode> {
 public:
     explicit ProteusAccess(std::shared_ptr<ProteusGraphAccess> access)
         : access_(std::move(access)),
+          insertion_(std::make_shared<StreamInsertion>(access_)),
           completion_(std::make_shared<ProteusCompletion>(access_)),
           evidence_(std::make_shared<ProteusStreamEvidence>(access_)),
           definitions_(std::make_shared<ProteusDefinitions>(access_)) {}
     void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); definitions_->prune(); }
-    std::vector<std::function<void()>> takeEffects() override { return completion_->takeEffects(); }
+    std::vector<std::function<void()>> takeEffects() override {
+        auto result=insertion_->takeEffects();
+        auto replies=completion_->takeEffects();
+        result.insert(result.end(),std::make_move_iterator(replies.begin()),std::make_move_iterator(replies.end()));
+        return result;
+    }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
         if(query.kind>=temporalSupport && query.kind<=temporalSide)
             return std::make_shared<ProteusTemporalGoal>(query,access_);
@@ -746,7 +759,7 @@ public:
             return std::make_shared<ProteusConcatGoal>(query, access_);
         if (query.kind == selectIntersection)
             return std::make_shared<ProteusSelectionGoal>(query, access_);
-        return std::make_shared<ProteusGoal>(query, access_, completion_, evidence_, definitions_);
+        return std::make_shared<ProteusGoal>(query, access_, completion_, evidence_, definitions_, insertion_);
     }
     Expansion<POVNode> expand(const Query<POVNode>& query) override {
         if((query.kind>=temporalSupport && query.kind<=temporalValueFound) ||

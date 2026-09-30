@@ -83,8 +83,8 @@ model InfonConnector{
     me strBuf: outputBuf
     me int:    statusCode
     me string: statusMesg
-    me bool:   inputEOF
-    me bool:   shutdownRequested
+    flag:      inputEOF
+    flag:      shutdownRequested
     me bool:   allowStreamingNormalize
     their InfonStream: iStreamParent
 
@@ -107,9 +107,7 @@ model InfonConnector{
 }
 struct InfonConnector{}
 
-// Reusable file policy for cores whose file specifications are relative to
-// the application's asset directory.  ProteusCore does not select it; derived
-// cores opt in from makeInfonConnector().
+// Default file policy; applications may override it or supply other protocols.
 struct AssetFileConnector: inherits=InfonConnector {
     me FileStream: dataFile
 
@@ -119,7 +117,7 @@ struct AssetFileConnector: inherits=InfonConnector {
         shutdownRequested <- false
         allowStreamingNormalize <- false
         me string: filePath <- getAssetsDir()+"/"+streamSpec.contentArgs
-        dataFile.open(filePath)
+        openForReading(filePath)
         if(dataFile.failure()){
             statusCode <- 1
             statusMesg <- "Failed to open file: "+filePath
@@ -131,6 +129,8 @@ struct AssetFileConnector: inherits=InfonConnector {
             log("Initialized file stream:"+filePath)
         }
     }
+
+    void: openForReading(me string: path) <- <%{dataFile.open(path,std::ios::in);}%>
 
     void: pumpInputBuff() <- {
         while(iStreamParent.pumpParserInputBuf()){}
@@ -199,6 +199,20 @@ struct ThreadedInfonParser: inherits=Threads{
     }
 }
 
+// Protocol input can block independently of both the caller and graph worker.
+// Push-based connectors return immediately and publish input later.
+struct ThreadedStreamInput: inherits=Threads {
+    our InfonConnector: source
+    void: run() <- <%{
+        try {source->pumpInputBuff();}
+        catch (const std::exception& error) {
+            source->iStreamParent->parentAgent->graphNormalizer.failInput(source->iStreamParent->toFill,error.what());
+            source->handleSystemError(error.what());
+            source->inputBuf.close();
+        }
+    }%>
+}
+
 struct InfonStream{ // InfonConnector -> Parse -> Extract -> Normalize
     me string: name
     our InfonConnector: source
@@ -208,6 +222,7 @@ struct InfonStream{ // InfonConnector -> Parse -> Extract -> Normalize
     our infonView: toFill
     me ThreadedInfonParser: parserThread
     me ThreadedNormalizer: normerThread
+    me ThreadedStreamInput: inputThread
     me Mutex: completionWaitMtx
     me bool: completionWaited
 
@@ -240,30 +255,29 @@ struct InfonStream{ // InfonConnector -> Parse -> Extract -> Normalize
         source.inputBuf.init(source.streamSpec.spec)
         source.outputBuf.init(source.streamSpec.spec+":out")
         if(toFill==NULL){Allocate(toFill)}
-        toFill.originID <- originID
+        publishOrigin()
         parserThread.sourceConnector <- source
     }
+
+    void: publishOrigin() <- <%{
+        parentAgent->graphNormalizer.runtime.update([&] {toFill->originID=originID;});
+    }%>
 
     void: start(me string: Name) <- {
         name <- Name
         normerThread.init(parentAgent, toFill)
-        if(source.allowStreamingNormalize){
-            normerThread.start(name+"_NRM")
-            parserThread.initAndStart(parser, source.inputBuf, toFill, name+"_PnE")
-            source.pumpInputBuff()
-        } else {
-            parserThread.initAndStart(parser, source.inputBuf, toFill, name+"_PnE")
-            source.pumpInputBuff()
-            // Normalization must follow parsing, but the parser thread is
-            // joined exactly once later by waitForCompletion().
-            parserThread.waitForParseCompletion()
-            normerThread.start(name+"_NRM")
-        }
+        parser!.deferPrefix <- !source.allowStreamingNormalize
+        parserThread.initAndStart(parser, source.inputBuf, toFill, name+"_PnE")
+        if(!source.allowStreamingNormalize){normerThread.parseBeforeNormalize <- parserThread}
+        normerThread.start(name+"_NRM")
+        inputThread.source <- source
+        inputThread.start(name+"_IN")
     }
 
     void: waitForCompletion() <- {
         protect(completionWaitMtx){
             if(completionWaited){return()}
+            inputThread.waitForExit()
             parserThread.waitForExit()
             normerThread.waitForExit()
             completionWaited <- true
@@ -294,6 +308,7 @@ struct InfonStreamLoader{
     their ProteusCore: core
     me int: numFilesLoaded <- 0
     me int: connectionsStarting <- 0
+    me bool: stopping <- false
     me Mutex: connMgrMtx
     me uint64: lastOriginID
     me Map<uint64, our InfonStream>: infonSourceRecords
@@ -301,6 +316,8 @@ struct InfonStreamLoader{
     void: init(their Agent: agnt, their ProteusCore: owningCore) <- {
         agent <- agnt
         core <- owningCore
+        core!.streamLoader <- self
+        stopping <- false
         lastOriginID <- 0
         numFilesLoaded <- 0
         connectionsStarting <- 0
@@ -351,37 +368,36 @@ struct InfonStreamLoader{
     }
 
     our InfonStream: startNewConnection(our infonView: toFill,
-            me string: specString, me uint64: parentOriginID <- 0) <- {
-        me string: parentPath <- ""
-        if(parentOriginID>0){parentPath <- parentDirForOrigin(parentOriginID)}
-        else if(toFill!=NULL){parentPath <- parentDirForOrigin(toFill.originID)}
-        me string: resolvedSpec <- resolveStreamSpec(specString, parentPath)
-
-        me int: loadNumber
-        protect(connMgrMtx){
-            numFilesLoaded <+- 1
-            connectionsStarting <+- 1
-            loadNumber <- numFilesLoaded
+            me string: specString, me uint64: parentOriginID <- 0) <- <%{
+        auto parent=parentDirForOrigin(parentOriginID ? parentOriginID : (toFill ? toFill->originID : 0));
+        auto resolved=resolveStreamSpec(specString,parent);
+        int number;
+        {
+            std::lock_guard<std::mutex> lock(connMgrMtx);
+            if(stopping) return {};
+            number=++numFilesLoaded;++connectionsStarting;
         }
-        our InfonConnector: connector <- core!.makeInfonConnector(resolvedSpec, loadNumber)
-        if(connector==NULL){
-            protect(connMgrMtx){connectionsStarting <-- 1}
-            return(NULL)
-        }
+        // Connector creation may reject or throw. Every accepted start must
+        // release the shutdown barrier on all paths, including exceptions.
+        struct Starting {
+            InfonStreamLoader& loader;
+            ~Starting() {std::lock_guard<std::mutex> lock(loader.connMgrMtx);--loader.connectionsStarting;}
+        } starting{*this};
+        auto connector=core->makeInfonConnector(resolved,number);
+        if(!connector) return {};
+        uint64_t origin;
+        {std::lock_guard<std::mutex> lock(connMgrMtx);origin=++lastOriginID;}
+        auto stream=std::make_shared<InfonStream>();
+        auto parser=std::make_shared<ProteusParser>(core,true,origin);
+        stream->init(connector,agent,parser,toFill,origin);
+        {std::lock_guard<std::mutex> lock(connMgrMtx);infonSourceRecords[origin]=stream;}
+        try {stream->start("IS"+std::to_string(number));}
+        catch (...) {stream->requestFinish();stream->waitForCompletion();throw;}
+        return stream;
+    }%>
 
-        our InfonStream:: iStream
-        protect(connMgrMtx){
-            lastOriginID <+- 1
-            me uint64: originID <- lastOriginID
-            our ProteusParser:: parser{core, true, originID}
-            iStream.init(connector, agent, parser, toFill, originID)
-            infonSourceRecords[originID] <- iStream
-        }
-        iStream.start("IS"+toString(loadNumber))
-        protect(connMgrMtx){connectionsStarting <-- 1}
-        return(iStream)
-    }
-
+    // Explicit finite-batch helper for tests and command-line file loading.
+    // Live application startup must not use this as a readiness barrier.
     void: waitForAllStreams() <- {
         me int: stablePasses <- 0
         while(stablePasses<2){
@@ -403,7 +419,10 @@ struct InfonStreamLoader{
                 continue()
             }
             withEach stream in streamsToWaitFor{
-                if(stream!=NULL){stream.waitForCompletion()}
+                if(stream!=NULL){
+                    stream.waitForCompletion()
+                    stream.normerThread.handle.waitForCompletion()
+                }
             }
             me int: countAfterWait
             me int: stillStarting
@@ -450,6 +469,14 @@ struct InfonStreamLoader{
     }
 
     void: shutdown() <- {
+        // Reject new inserts, then let already accepted starts finish before
+        // cancelling and joining their owned parser/input/normalizer threads.
+        protect(connMgrMtx){stopping <- true}
+        me bool: startsPending <- true
+        while(startsPending){
+            protect(connMgrMtx){startsPending <- connectionsStarting>0}
+            if(startsPending){sleep(1)}
+        }
         me List<our InfonStream>: streamsToStop
         protect(connMgrMtx){
             withEach (originID, stream) in infonSourceRecords{
