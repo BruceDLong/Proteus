@@ -714,6 +714,36 @@ public:
           completion_(std::make_shared<ProteusCompletion>(access_)),
           evidence_(std::make_shared<ProteusStreamEvidence>(access_)),
           definitions_(std::make_shared<ProteusDefinitions>(access_)) {}
+    bool knownType(const POVNode& source,const std::string& name) const {
+        if(!source) return false;
+        auto names=definitions_->names(source);bool complete=true;Work work{0,0};
+        if(std::find(names.begin(),names.end(),name)!=names.end()) return true;
+        names=definitions_->nominalNames(std::move(names),complete,work);
+        return std::find(names.begin(),names.end(),name)!=names.end();
+    }
+    // Rendering can inspect already materialized typed fields without starting
+    // another normalization. This uses the same nominal alias walk as paths.
+    // It reports a unique known field, not complete membership or absence;
+    // ambiguous known matches and unresolved aliases yield no display value.
+    POVNode knownField(const POVNode& source,const std::string& name) const {
+        if(!source || !access_->physicalList(source)) return {};
+        POVNode result;bool unordered=source->pItem->orderMode==uUnordered;
+        for(auto member=POVDescription(source).member();member;member=member->next) {
+            if(access_->subList(member)) return {};
+            auto names=definitions_->names(member);bool complete=true;Work work{0,0};
+            bool match=std::find(names.begin(),names.end(),name)!=names.end();
+            if(!match) {
+                if(names.empty()) return {};
+                names=definitions_->nominalNames(std::move(names),complete,work);
+                match=std::find(names.begin(),names.end(),name)!=names.end();
+            }
+            if(!match) {if(!complete) return {};continue;}
+            if(!unordered) return member;
+            if(result && !access_->sameInfon(result,member)) return {};
+            result=member;
+        }
+        return result;
+    }
     void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); definitions_->prune(); }
     std::vector<std::function<void()>> takeEffects() override {
         auto result=insertion_->takeEffects();
@@ -770,7 +800,10 @@ public:
             Expansion<POVNode> out;
             auto cursor=query.context.front()->pItem->pathSelection->environmentCursor;
             auto source=cursor==infonView::cmWorld ? access_->worldSource : access_->contextSource;
-            if(source) out.edges.push_back(direct(cursor==infonView::cmWorld ? "Agent world" : "Agent topic history",
+            if(cursor==infonView::cmSelf) {
+                source=definitions_->selfSource(query.node);
+            }
+            if(source) out.edges.push_back(direct(cursor==infonView::cmSelf ? "definition instance self" : cursor==infonView::cmWorld ? "Agent world" : "Agent topic history",
                 {source,pathSelfFound,0,query.related,{source}}));
             else out.deferred=true;
             return out;
@@ -809,7 +842,7 @@ private:
         }
         if (query.kind == typeRequirements || query.kind == compileTypeRequirements) {
             if (definitions_->required(node) && !definitions_->saved(node,query.kind==typeRequirements && query.argument==fillImmediateParts))
-                result.edges.push_back(direct("inspect type definitions", {node, definitionEnter, 0, node}));
+                result.edges.push_back(direct("inspect type definitions", {node, definitionEnter, query.kind==typeRequirements ? query.argument : lazyParts, node}));
             return result;
         }
         if (query.kind == definitionEnd) return result;
@@ -820,24 +853,24 @@ private:
                     result.deferred = true; return result;
                 }
                 std::vector<POVNode> children;
-                if (!definitions_->children(node, query.related, children)) {
+                if (!definitions_->children(node, query.related, children,query.argument==fillImmediateParts)) {
                     result.deferred = true; return result;
                 }
                 if (!children.empty()) {
                     context.push_back(node);
-                    result.edges.push_back(direct("definition constraint", {children.front(), definitionEnter, 0, query.related, context}));
-                } else result.edges.push_back(direct("definition boundary", {node, definitionLeave, 0, query.related, context}));
+                    result.edges.push_back(direct("definition constraint", {children.front(), definitionEnter, query.argument, query.related, context}));
+                } else result.edges.push_back(direct("definition boundary", {node, definitionLeave, query.argument, query.related, context}));
             } else if (context.empty()) {
                 result.edges.push_back(direct("type requirements available", {query.related, definitionEnd, 0}));
             } else {
                 auto parent = context.back(); context.pop_back();
                 std::vector<POVNode> children;
-                if (!definitions_->children(parent, query.related, children)) { result.deferred = true; return result; }
+                if (!definitions_->children(parent, query.related, children,query.argument==fillImmediateParts)) { result.deferred = true; return result; }
                 auto current = std::find(children.begin(), children.end(), node);
                 if (current != children.end() && ++current != children.end()) {
                     context.push_back(parent);
-                    result.edges.push_back(direct("next definition constraint", {*current, definitionEnter, 0, query.related, context}));
-                } else result.edges.push_back(direct("leave definition", {parent, definitionLeave, 0, query.related, context}));
+                    result.edges.push_back(direct("next definition constraint", {*current, definitionEnter, query.argument, query.related, context}));
+                } else result.edges.push_back(direct("leave definition", {parent, definitionLeave, query.argument, query.related, context}));
             }
             return result;
         }
@@ -1039,7 +1072,7 @@ private:
                 }
             }
             if (definitions_->required(node) && (query.argument==fillImmediateParts || !definitions_->describesParts(node)))
-                result.refinements.push_back({{node, typeRequirements, query.argument}, {1, 0}, "validate type and member requirements", false});
+                result.refinements.push_back({{node, typeRequirements, query.argument, {}, query.context}, {1, 0}, "validate type and member requirements", false});
             if (access_->hasInnerSource(node)) { result.deferred = true; return result; }
             if (access_->canSelect(node)) {
                 auto body = definitions_->selectionBody(node);

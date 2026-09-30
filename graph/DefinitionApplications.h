@@ -22,6 +22,8 @@ public:
         std::vector<Binding> bindings;
         std::map<POVNode, Witness> witnesses;
         std::map<POVNode, DefinitionSpec> compiled;
+        std::uint64_t checkedEpoch=0;
+        bool checkedCurrent=false;
     };
     struct Proof {
         std::shared_ptr<Evidence> evidence = std::make_shared<Evidence>();
@@ -56,6 +58,14 @@ public:
 private:
     std::shared_ptr<ProteusGraphAccess> access_;
     std::map<std::string, std::vector<Definition>> catalogue_;
+    // Read-only declaration compilation survives unrelated instance writes.
+    // Every reuse validates the source witnesses and vocabulary bindings.
+    std::set<POVNode> declarationBodies_;
+    std::map<POVNode,Certificate> compiledBodies_;
+    std::uint64_t validationEpoch_=1;
+    // Successful instance checks remain true until the next publication.
+    // Do not cache a pending check: settling a child can establish completion.
+    mutable std::set<std::tuple<POVNode,DefinitionSpec,bool>> accepted_;
     // Stable read-only POVs for existing template/owner infons. This exposes
     // stored relations to the walk; it does not clone or normalize their data.
     mutable std::map<std::shared_ptr<infonView>, POVNode> views_;
@@ -74,8 +84,8 @@ private:
     bool listRequirement(const POVNode& node) const {
         return access_->positionalDefinitionList(node) || access_->repeatedDefinitionList(node) || access_->recordDefinitionList(node);
     }
-    // Admitted requirements are context-free. Contextual meanings will need a
-    // binding-context key; an additional POV alone must not repeat application.
+    // Compiled declaration expressions retain symbolic scopes; instance binding
+    // happens in the plan. An additional POV must not repeat application.
     using Key = std::weak_ptr<infonView>;
     std::map<Key, std::vector<Certificate>, std::owner_less<Key>> evidence_;
     std::vector<POVNode> members(const POVNode& node) const {
@@ -156,9 +166,10 @@ public:
         if (!access_->definitionReady(node) || registered(node)) return false;
         auto& entries = catalogue_[access_->definitionName(node)];
         for (auto& entry : entries) if (entry.declaration->pItem == node->pItem) {
-            entry.body = access_->definitionBody(node); return true;
+            entry.body = access_->definitionBody(node);declarationBodies_.insert(entry.body);return true;
         }
-        entries.push_back({node, access_->definitionBody(node)}); return true;
+        entries.push_back({node, access_->definitionBody(node)});
+        declarationBodies_.insert(entries.back().body);return true;
     }
     bool declared(const std::string& name) const {
         auto found=catalogue_.find(name);
@@ -215,6 +226,7 @@ public:
         return unspecifiedMember_;
     }
     POVNode payload(const POVNode& node) const { return view(node->pItem); }
+    POVNode selfSource(const POVNode& node) const { return view(node->pItem->thisPtr); }
     POVNode selectionBody(const POVNode& node) const { return view(access_->selectionSource(node)); }
     void retainOccurrenceOwner(const POVNode& owner) { occurrenceOwners_.insert(owner); }
     POVNode retainedOccurrenceOwner(const POVNode& node) const {
@@ -283,7 +295,29 @@ public:
         return (access_->hasTypeRequirements(node) && !optional(node)) ||
             (access_->memberTemplate(node) && !access_->fedTemplate(node)) || access_->occurrenceOwner(node);
     }
-    bool children(const POVNode& node, const POVNode& root, std::vector<POVNode>& result) const {
+    static bool selfExpression(const POVNode& node) {
+        return getModeBits(node->pItem->flags,infonView::viewMode)==infonView::vmCursor &&
+            getModeBits(node->pItem->flags,infonView::cursorMode)==infonView::cmSelf;
+    }
+    Certificate compiledBody(const POVNode& node,const POVNode& root) const {
+        if(node==root) return {};
+        auto found=compiledBodies_.find(node);
+        return found!=compiledBodies_.end() && current(found->second) ? found->second : Certificate{};
+    }
+    // Explicit normalization demands the named value through its alias chain.
+    // Incidental reads still use only a supplied partial description.
+    bool definitionNames(const POVNode& node,const POVNode& root,bool fullMeaning,
+                         std::vector<std::string>& result,Work* cost=nullptr) const {
+        result=names(node);
+        if(node!=root || !fullMeaning) return true;
+        bool complete=true;Work work{0,0};
+        result=nominalNames(std::move(result),complete,work);
+        if(cost) cost->visits=addCost(cost->visits,work.visits);
+        return complete;
+    }
+    bool children(const POVNode& node, const POVNode& root, std::vector<POVNode>& result, bool fullMeaning=false) const {
+        if(compiledBody(node,root)) return true;
+        if(node!=root && selfExpression(node)) return true;
         if (!facts(node,node==root).valid) return false;
         if (node != root && !access_->scalarTypeShape(node) && !listRequirement(node) && !choiceBody(node)) return false;
         // Registry constraints within a shared body need a read-only relation
@@ -293,10 +327,12 @@ public:
         auto add = [&](const POVNode& child) {
             if (std::find(result.begin(), result.end(), child) == result.end()) result.push_back(child);
         };
-        if(node==root || !describesParts(node)) for (const auto& name : names(node)) {
+        std::vector<std::string> required;
+        if(!definitionNames(node,root,fullMeaning,required)) return false;
+        if(node==root || !describesParts(node)) for (const auto& name : required) {
             auto body = lookup(name);
-            if (body) add(body);
-            else if (declared(name)) return false;
+            if (body && body!=node) add(body);
+            else if (!body && declared(name)) return false;
         }
         if (auto spec = memberTemplate(node)) add(spec);
         if (node == root) if (auto owner = occurrenceOwner(node)) add(owner);
@@ -306,8 +342,16 @@ public:
         }
         return true;
     }
-    void collect(const POVNode& node, const POVNode& root, const Certificate& proof) {
-        for (const auto& name : names(node)) {
+    void collect(const POVNode& node, const POVNode& root, const Certificate& proof, bool fullMeaning=false) {
+        if(auto cached=compiledBody(node,root)) if(cached->evidence!=proof->evidence) {
+            proof->evidence->witnesses.insert(cached->evidence->witnesses.begin(),cached->evidence->witnesses.end());
+            for(const auto& binding:cached->evidence->bindings)
+                if(std::none_of(proof->evidence->bindings.begin(),proof->evidence->bindings.end(),[&](const Binding& old){return old.name==binding.name;}))
+                    proof->evidence->bindings.push_back(binding);
+        }
+        std::vector<std::string> required;
+        if(!definitionNames(node,root,fullMeaning,required,&proof->composition)) proof->compilable=false;
+        for (const auto& name : required) {
             auto body = lookup(name);
             auto& bindings = proof->evidence->bindings;
             if (std::none_of(bindings.begin(), bindings.end(), [&](const Binding& b) { return b.name == name; }))
@@ -319,8 +363,18 @@ public:
     }
     // The graph's leave edge supplies postorder: every required child has
     // already been walked. Compile requirements, never execute child normalize.
-    void finish(const POVNode& node, const POVNode& root, const Certificate& proof) try {
+    void finish(const POVNode& node, const POVNode& root, const Certificate& proof, bool fullMeaning=false) try {
         if (!proof->compilable) return;
+        if(auto cached=compiledBody(node,root)) {
+            proof->evidence->compiled[node]=cached->requirement;
+            proof->composition.visits=addCost(proof->composition.visits,cached->evidence->witnesses.size());
+            return;
+        }
+        if(node!=root && selfExpression(node)) {
+            auto expression=std::make_shared<DefinitionRequirement>();expression->facts.valid=true;
+            expression->expressions.push_back({node,{}});
+            proof->evidence->compiled[node]=expression;return;
+        }
         auto& compiled = proof->evidence->compiled;
         auto requirement = std::make_shared<DefinitionRequirement>();
         requirement->facts.valid = true;
@@ -380,9 +434,14 @@ public:
             if (!member) { proof->compilable = false; return; }
             requirement = combineDefinitions(requirement, member,proof->composition);
         }
-        if(node==root || !describesParts(node)) for (const auto& name : names(node)) {
-            if (auto body=lookup(name))
-                requirement = combineDefinitions(requirement, definitionInUnits(compiled.at(body),requirement),proof->composition);
+        std::vector<std::string> required;
+        if(!definitionNames(node,root,fullMeaning,required,&proof->composition)) {proof->compilable=false;return;}
+        if(node==root || !describesParts(node)) for (const auto& name : required) {
+            if (auto body=lookup(name);body && body!=node) {
+                auto meaning=scopeDefinition(compiled.at(body),body,proof->composition);
+                if(meaning!=compiled.at(body)) meaning->selfScopes.push_back(body);
+                requirement = combineDefinitions(requirement, definitionInUnits(meaning,requirement),proof->composition);
+            }
             if(std::find(requirement->expandedTypes.begin(),requirement->expandedTypes.end(),name)==requirement->expandedTypes.end())
                 requirement->expandedTypes.push_back(name);
         }
@@ -390,6 +449,27 @@ public:
         if (node != root)
             for (auto rhs : work(node)) requirement = combineDefinitions(requirement, compiled.at(rhs),proof->composition);
         compiled[node] = requirement;
+        if(node!=root && declarationBodies_.count(node)) {
+            auto cached=std::make_shared<Proof>();cached->requirement=requirement;
+            std::vector<POVNode> sources{node};
+            for(std::size_t i=0;i<sources.size();++i) {
+                auto source=sources[i];
+                auto witness=proof->evidence->witnesses.find(source);
+                if(witness==proof->evidence->witnesses.end() || !cached->evidence->witnesses.insert(*witness).second) continue;
+                const auto& value=witness->second;
+                sources.insert(sources.end(),value.work.begin(),value.work.end());
+                sources.insert(sources.end(),value.members.begin(),value.members.end());
+                if(value.memberTemplate) sources.push_back(value.memberTemplate);
+                for(const auto& name:value.names) for(const auto& binding:proof->evidence->bindings) if(binding.name==name) {
+                    if(std::none_of(cached->evidence->bindings.begin(),cached->evidence->bindings.end(),[&](const Binding& old){return old.name==name;}))
+                        cached->evidence->bindings.push_back(binding);
+                    if(binding.body) sources.push_back(binding.body);
+                    break;
+                }
+            }
+            proof->composition.visits=addCost(proof->composition.visits,sources.size());
+            compiledBodies_[node]=cached;
+        }
         if (node == root) {
             proof->requirement = requirement;
             // Compilation scratch must not retain the target through its own
@@ -416,10 +496,17 @@ public:
         }
         work.visits=addCost(work.visits,proof->composition.visits);
         proof->requirement=proof->evidence->compiled.at(source);
-        proof->evidence->compiled.clear();return proof;
+        proof->evidence->compiled.clear();
+        // Speculative readers do not bind %self. They must not treat an
+        // unevaluated contextual constraint as an unconstrained predicate.
+        return proof->requirement->hasExpressions() ? Certificate{} : proof;
     }
     bool current(const Certificate& proof) const {
         if (!proof->requirement) return false;
+        auto& evidence=*proof->evidence;
+        if(evidence.checkedEpoch==validationEpoch_) return evidence.checkedCurrent;
+        evidence.checkedEpoch=validationEpoch_;
+        evidence.checkedCurrent=false;
         for (const auto& binding : proof->evidence->bindings)
             if (lookup(binding.name) != binding.body || (!binding.body && declared(binding.name))) return false;
         for (auto& entry : proof->evidence->witnesses) {
@@ -431,7 +518,7 @@ public:
                 witness.order != (witness.list ? listOrder(witness.node) : uUnknown) ||
                 witness.memberTemplate != memberTemplate(witness.node) || witness.choiceBody!=choiceBody(witness.node) || !POVDescription(witness.node, access_->registry.get()).relationships(false).empty()) return false;
         }
-        return true;
+        evidence.checkedCurrent=true;return true;
     }
     bool covers(const Certificate& proof, const POVNode& node, bool fullMeaning=false) const {
         if (!proof->requirement) return false;
@@ -441,7 +528,9 @@ public:
         if (auto source = memberTemplate(node)) if (!proof->evidence->witnesses.count(source)) return false;
         if (auto owner = occurrenceOwner(node)) if (!proof->evidence->witnesses.count(owner)) return false;
         const auto& types = proof->requirement->types;
-        for (const auto& name : names(node)) {
+        std::vector<std::string> required;
+        if(!definitionNames(node,node,fullMeaning,required)) return false;
+        for (const auto& name : required) {
             if (std::find(types.begin(), types.end(), name) == types.end()) return false;
             const auto& expanded=proof->requirement->expandedTypes;
             if(fullMeaning && std::find(expanded.begin(),expanded.end(),name)==expanded.end()) return false;
@@ -459,12 +548,16 @@ public:
         auto facts = predicate ? access_->predicateFacts(node,false) : access_->typeFacts(node);
         if (!facts.valid || !access_->hasTypeRequirements(node) || optional(node)) return facts;
         auto proof = saved(node);
-        if (!proof || proof->requirement->list || !proof->requirement->choices.empty() || !facts.combine(proof->requirement->facts)) facts.valid = false;
+        if (!proof || proof->requirement->hasExpressions() || proof->requirement->list || !proof->requirement->choices.empty() || !facts.combine(proof->requirement->facts)) facts.valid = false;
         return facts;
     }
     bool accepts(const Certificate& proof, const POVNode& node, bool fillParts=false) const {
-        try { return ProteusDefinitionPlan(access_, node, proof->requirement, {}, true, fillParts).satisfied(); }
-        catch (const std::runtime_error&) { return false; }
+        auto key=std::make_tuple(node,proof->requirement,fillParts);
+        if(accepted_.count(key)) return true;
+        try {
+            if(!ProteusDefinitionPlan(access_, node, proof->requirement, {}, true, fillParts).satisfied()) return false;
+            accepted_.insert(std::move(key));return true;
+        } catch (const std::runtime_error&) { return false; }
     }
     bool satisfied(const POVNode& node, bool fillParts=false) const {
         if (!required(node)) return true;
@@ -490,7 +583,7 @@ public:
         certificates.push_back(proof); return true;
     }
     std::shared_ptr<ProteusDefinitionPlan> plan(const POVNode& node, const Certificate& proof, bool fillParts=false) const {
-        if (!current(proof) || !covers(proof, node, fillParts)) return {};
+        if (!proof || !current(proof) || !covers(proof, node, fillParts)) return {};
         return std::make_shared<ProteusDefinitionPlan>(access_, node, proof->requirement, std::map<POVNode,std::int64_t>{}, true, fillParts);
     }
     bool apply(const POVNode& node, const Certificate& proof, const std::shared_ptr<ProteusDefinitionPlan>& plan) {
@@ -588,7 +681,50 @@ public:
             return changed;
         },cost}};
     }
+    std::vector<SetCommand> exposeWrittenStructure(const POVNode& target) {
+        // A bare use can acquire finite written structure before the complete
+        // meaning is compiled. Sparse templates and embedded spans keep their
+        // own shape goals; this Set never records a type certificate.
+        if(!access_->adoptableList(target)) return {};
+        for(const auto& name:names(target)) if(auto body=lookup(name)) {
+            if(!access_->literalList(body) || access_->inputPending(body) || access_->memberTemplate(body) || access_->openTail(body)) continue;
+            bool embedded=false;
+            for(auto member=POVDescription(body).member();member;member=member->next) embedded |= access_->definitionEmbedded(member);
+            if(embedded) continue;
+            auto required=facts(body),actual=access_->typeFacts(target),combined=actual;
+            if(!actual.valid || !required.valid) continue;
+            if(!combined.combine(required)) throw DefinitionConflict("incompatible definition headers");
+            Work cost{1,2};
+            std::vector<POVNode> pending{body};std::set<POVNode> seen;
+            while(!pending.empty()) {
+                auto at=pending.back();pending.pop_back();if(!seen.insert(at).second) continue;
+                ++cost.visits;cost.creations+=2;
+                for(auto child=POVDescription(at).member();child;child=child->next) pending.push_back(child);
+                for(const auto& rhs:POVDescription(at).work()) pending.push_back(rhs);
+            }
+            auto access=access_;
+            return {{"Expose written definition structure",[access,target,body,required] {
+                auto original=target->pItem;
+                auto instance=std::make_shared<infonView>();
+                std::vector<infonView*> copied;
+                body->pItem->_copyAsTypeTo(instance,true,true,original,&copied);
+                original->value=instance->value;
+                original->orderMode=instance->orderMode;
+                if(instance->type && (!original->type || original->type->typeID()!=instance->type->typeID()))
+                    original->addedTypes.push_back(std::make_shared<WordUse>(*instance->type));
+                for(const auto& type:instance->addedTypes) original->addedTypes.push_back(type);
+                for(const auto& rhs:instance->wrkList) original->addPOVToWrkList(rhs);
+                SetModeBits(original->flags,infonView::viewMode,infonView::vmOverlay);
+                SetFlagBit(original->flags,infonView::isNormed,false);
+                access->applyTypeFacts(target,required);
+                access->bind(target);++target->workRevision;
+                return true;
+            },cost}};
+        }
+        return {};
+    }
     void prune() {
+        ++validationEpoch_;accepted_.clear();
         for (auto it = evidence_.begin(); it != evidence_.end();)
             if (it->first.expired()) it = evidence_.erase(it); else ++it;
     }
@@ -613,13 +749,23 @@ public:
     void beginPass() override { proof_ = std::make_shared<ProteusDefinitions::Proof>(); entered_=false; }
     CommandBatch<POVNode> finishPass() override {
         if(request.kind!=typeRequirements || !entered_ || satisfied()) return {};
-        return {entry_,definitions_->exposeShape(request.node)};
+        auto commands=definitions_->exposeShape(request.node);
+        bool recursive=false;
+        if(request.argument!=fillImmediateParts) {
+            const auto names=definitions_->names(request.node);
+            for(const auto& ancestor:request.context) if(ancestor!=request.node)
+                for(const auto& name:definitions_->names(ancestor))
+                    recursive |= std::find(names.begin(),names.end(),name)!=names.end();
+        }
+        if(commands.empty() && !recursive)
+            commands=definitions_->exposeWrittenStructure(request.node);
+        return {entry_,std::move(commands)};
     }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
         auto q = visit.query;
         if(q.kind==typeRequirements) {entry_=visit;entered_=true;}
-        if (q.kind == definitionEnter) definitions_->collect(q.node, request.node, proof_);
-        if (q.kind == definitionLeave) definitions_->finish(q.node, request.node, proof_);
+        if (q.kind == definitionEnter) definitions_->collect(q.node, request.node, proof_,request.kind==typeRequirements && request.argument==fillImmediateParts);
+        if (q.kind == definitionLeave) definitions_->finish(q.node, request.node, proof_,request.kind==typeRequirements && request.argument==fillImmediateParts);
         bool entry = q.kind == typeRequirements || q.kind == compileTypeRequirements;
         auto certificate = entry ? definitions_->saved(request.node,request.kind==typeRequirements && request.argument==fillImmediateParts) : proof_;
         if (q.kind != definitionEnd && (!entry || !certificate || satisfied())) return {};

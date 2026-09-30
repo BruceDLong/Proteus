@@ -23,7 +23,7 @@ class SequenceCorrespondence {
         const auto& spec=meaning->requirement;
         // Additional conjunctions remain explicit obligations; do not discard
         // them by treating an arbitrary constrained value as a bare choice.
-        if(spec->facts.overlay>=0 || spec->facts.hasSize || spec->facts.hasValue || spec->numeric.valid) return {};
+        if(spec->hasExpressions() || spec->facts.overlay>=0 || spec->facts.hasSize || spec->facts.hasValue || spec->numeric.valid) return {};
         return definitions_->choiceBody(spec->choices.front().source);
     }
     bool sequence(const POVNode& node) const { return access_->literalList(pattern(node)); }

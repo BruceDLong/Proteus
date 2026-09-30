@@ -104,7 +104,7 @@ class FieldPredicate {
             if (!available) return {};
         }
         if (meaning) {
-            if(!meaning->requirement->choices.empty()) return {};
+            if(meaning->requirement->hasExpressions() || !meaning->requirement->choices.empty()) return {};
             if (meaning->requirement->list && std::any_of(specification->members.begin(),specification->members.end(),
                     [](const auto& member){return !member;})) return {};
             try {specification=combineDefinitions(specification,meaning->requirement,work);}

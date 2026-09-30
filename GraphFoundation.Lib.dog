@@ -7,6 +7,8 @@ LibDescription = { useStatus=dynamic description='Proteus4 graph foundation' fea
 embedVeryHigh = `
 #define PROTEUS_GRAPH_NORMALIZER 1
 # include "../graph/GraphSearch.h"
+namespace proteus4 {class ProteusAccess;}
+using Proteus4SemanticAccess = std::shared_ptr<proteus4::ProteusAccess>;
 using Proteus4Handle = proteus4::NormalizationHandle<std::shared_ptr<POV>>;
 using Proteus4Runtime = proteus4::GraphManager<std::shared_ptr<POV>>;
 using Proteus4Publication = std::shared_ptr<proteus4::Publication<std::shared_ptr<POV>>>;
@@ -32,6 +34,7 @@ struct NormalizationHandle: wraps=Proteus4Handle {
     our POV: result() <- <%!result()%>
 }
 struct GraphRuntime: wraps=Proteus4Runtime {}
+struct GraphSemanticAccess: wraps=Proteus4SemanticAccess {}
 struct GraphPublication: wraps=Proteus4Publication {}
 
 // A semantic context owns one graph manager and its registry. Agent uses one
@@ -39,20 +42,23 @@ struct GraphPublication: wraps=Proteus4Publication {}
 struct GraphNormalizer {
     me GraphRuntime: runtime
     our ProteusGraphAccess: access
+    me GraphSemanticAccess: semanticAccess
     void: init() <- {initForLanguage("")}
     void: initForLanguage(me string: languageSpec) <- <%{
         if (access) throw std::logic_error("GraphNormalizer already initialized");
         access = std::make_shared<ProteusGraphAccess>();
         access->initialize();
         access->initializeVocabulary(languageSpec);
-        runtime.init(std::make_shared<proteus4::ProteusAccess>(access));
+        semanticAccess=std::make_shared<proteus4::ProteusAccess>(access);
+        runtime.init(semanticAccess);
     }%>
     void: initWithRegistry(our IdentityRegistry: existing) <- <%{
         if (access || !existing) throw std::logic_error("new context and registry required");
         access = std::make_shared<ProteusGraphAccess>();
         access->registry = existing;
         access->initializeVocabulary("");
-        runtime.init(std::make_shared<proteus4::ProteusAccess>(access));
+        semanticAccess=std::make_shared<proteus4::ProteusAccess>(access);
+        runtime.init(semanticAccess);
     }%>
     void: setContext(our POV: source) <- <%{
         runtime.update([&] {
@@ -69,6 +75,14 @@ struct GraphNormalizer {
             auto node=std::make_shared<POV>(920);node->pItem=source;
             access->bind(node);access->worldSource=node;
         });
+    }%>
+    // Read-only nominal compatibility, including declared aliases.
+    me bool: knownType(our POV: source, me string: name) <- <%{
+        return semanticAccess && semanticAccess->knownType(source,name);
+    }%>
+    // Call inside runtime.read() when displaying a live result.
+    our POV: knownField(our POV: source, me string: name) <- <%{
+        return semanticAccess ? semanticAccess->knownField(source,name) : nullptr;
     }%>
     me NormalizationHandle: normalize(our POV: target) <- <%{
         runtime.update([&] { access->bind(target); });
@@ -129,7 +143,7 @@ struct GraphNormalizer {
     void: waitForInput(me NormalizationHandle: handle, our POV: target) <- <%{
         handle.waitUntil([this, target] { return !access->inputPending(target); });
     }%>
-    void: close() <- <%{ runtime.close(); }%>
+    void: close() <- <%{ runtime.close();semanticAccess.reset(); }%>
 }
 
 // Evidence collected by a physical-member walk, not a second list or graph.

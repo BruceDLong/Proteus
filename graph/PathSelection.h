@@ -378,7 +378,8 @@ class PathExpression {
     }
     static bool environmentCursor(const Infon& item) {
         return getModeBits(item->flags,infonView::viewMode)==infonView::vmCursor &&
-               (getModeBits(item->flags,infonView::cursorMode)==infonView::cmContext ||
+               (getModeBits(item->flags,infonView::cursorMode)==infonView::cmSelf ||
+                getModeBits(item->flags,infonView::cursorMode)==infonView::cmContext ||
                 getModeBits(item->flags,infonView::cursorMode)==infonView::cmWorld);
     }
     static Cost count(ProteusGraphAccess& access,const POVNode& node) {

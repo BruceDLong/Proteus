@@ -615,6 +615,11 @@ public:
         if (!context_) throw std::logic_error("initialize graph context first");
         return std::make_shared<Publication<Node>>(context_);
     }
+    std::uint64_t revision() const {
+        if(!context_) return 0;
+        std::lock_guard<std::mutex> lock(context_->mutex);
+        return context_->revision;
+    }
     // Writers use this boundary so publication and subscription installation
     // cannot miss each other. Readers of a live result use read() as well.
     template<class Function> auto read(Function action) const -> decltype(action()) {

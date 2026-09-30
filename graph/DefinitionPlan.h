@@ -14,6 +14,11 @@ class DefinitionPending : public std::exception {};
 // graph is walked through existing POVs before any instance Set is offered.
 struct DefinitionRequirement {
     GraphTypeFacts facts;
+    // Contextual expressions remain graph constraints in each instance. Their
+    // declaration scopes identify the instance that %self must refer to.
+    struct Expression {POVNode source, scope;};
+    std::vector<Expression> expressions;
+    std::vector<POVNode> selfScopes;
     NumericBounds numeric; // optional symbolic value constraint, not infSize
     // An open requirement may carry a proved prefix with an unresolved tail.
     // Embedded virtual definitions remain a separate obligation; a written
@@ -32,6 +37,13 @@ struct DefinitionRequirement {
     std::vector<std::string> expandedTypes;
     std::string label; // normalized nominal identity, used by comparisons
     std::shared_ptr<WordUse> writtenType;
+    bool hasExpressions() const {
+        if(!expressions.empty() || (repeated && repeated->hasExpressions())) return true;
+        for(const auto& member:members) if(member && member->hasExpressions()) return true;
+        for(const auto& choice:choices) for(const auto& alternative:choice.alternatives)
+            if(alternative->hasExpressions()) return true;
+        return false;
+    }
     void captureLabel(const POVNode& node) {
         writtenType=node->pItem->type;
         if(!writtenType && !node->pItem->addedTypes.empty()) writtenType=node->pItem->addedTypes.front();
@@ -66,6 +78,12 @@ using DefinitionSpec = std::shared_ptr<DefinitionRequirement>;
 
 inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const DefinitionSpec& right, Work& work) {
     auto result = std::make_shared<DefinitionRequirement>(*left);
+    for(const auto& scope:right->selfScopes)
+        if(std::find(result->selfScopes.begin(),result->selfScopes.end(),scope)==result->selfScopes.end()) result->selfScopes.push_back(scope);
+    for(const auto& expression:right->expressions)
+        if(std::none_of(result->expressions.begin(),result->expressions.end(),[&](const auto& old) {
+            return old.source==expression.source && old.scope==expression.scope;
+        })) result->expressions.push_back(expression);
     if (result->facts.pendingNumericValue(right->facts)) throw DefinitionPending{};
     if (!result->facts.combine(right->facts))
         throw DefinitionConflict("incompatible definition requirements");
@@ -116,7 +134,8 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
             if(result->repeated) for(auto& member:result->members)
                 member=combineDefinitions(member,result->repeated,work);
             result->open=result->open && right->open;
-            if(!result->open) {result->repeated.reset();result->templateSource.reset();}
+            // Closing the extent does not remove the per-member constraint.
+            // Retain it so a later finite prefix can fill an existing sparse instance.
         }
     } else if (right->list) {
         result->list = true; result->order=right->order; result->open = right->open; result->members = right->members;
@@ -127,11 +146,33 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
     return result;
 }
 
+// Bind only expressions written in this declaration. A nested named meaning
+// has already established its own scope and keeps that binding.
+inline DefinitionSpec scopeDefinition(const DefinitionSpec& source,const POVNode& scope,Work& work) {
+    ++work.visits;
+    auto result=source;
+    auto edit=[&] {if(result==source) result=std::make_shared<DefinitionRequirement>(*source);};
+    for(std::size_t i=0;i<source->expressions.size();++i) if(!source->expressions[i].scope) {
+        edit();result->expressions[i].scope=scope;
+    }
+    for(std::size_t i=0;i<source->members.size();++i) {
+        auto member=scopeDefinition(source->members[i],scope,work);
+        if(member!=source->members[i]) {edit();result->members[i]=member;}
+    }
+    if(source->repeated) {
+        auto repeated=scopeDefinition(source->repeated,scope,work);
+        if(repeated!=source->repeated) {edit();result->repeated=repeated;}
+    }
+    return result;
+}
+
 inline bool sameDefinition(const DefinitionSpec& a, const DefinitionSpec& b) {
     if (a == b) return true;
     if (!a || !b || a->list != b->list || a->open != b->open || a->order!=b->order || !a->facts.same(b->facts) || !a->numeric.same(b->numeric) ||
-        a->types != b->types || a->expandedTypes != b->expandedTypes || a->members.size() != b->members.size() || a->choices.size()!=b->choices.size() ||
+        a->types != b->types || a->expandedTypes != b->expandedTypes || a->members.size() != b->members.size() || a->choices.size()!=b->choices.size() || a->selfScopes!=b->selfScopes || a->expressions.size()!=b->expressions.size() ||
         !sameDefinition(a->repeated, b->repeated)) return false;
+    for(std::size_t i=0;i<a->expressions.size();++i)
+        if(a->expressions[i].source!=b->expressions[i].source || a->expressions[i].scope!=b->expressions[i].scope) return false;
     for(std::size_t i=0;i<a->choices.size();++i) {
         const auto& left=a->choices[i];const auto& right=b->choices[i];
         if(left.source!=right.source || left.alternatives.size()!=right.alternatives.size()) return false;
@@ -162,6 +203,58 @@ public:
     std::size_t orderWrites = 0;
 private:
     std::shared_ptr<ProteusGraphAccess> access_;
+    std::map<POVNode,Place> selfScopes_;
+    bool pendingExpressions_=false;
+    bool prepareExpressions(const Place& target,const DefinitionSpec& requirement) {
+        bool direct=false;
+        for(const auto& expression:requirement->expressions) {
+            auto binding=selfScopes_.find(expression.scope);
+            auto self=binding==selfScopes_.end() ? Place{} : binding->second;
+            auto matches=[&](const POVNode& node) {
+                // Path lowering retains the original expression and may move
+                // result constraints into a choice predicate. Those are still
+                // the installed RHS, not permission to add another copy.
+                std::vector<std::shared_ptr<infonView>> pending{node->pItem};
+                std::set<std::shared_ptr<infonView>> seen;
+                while(!pending.empty()) {
+                    auto infon=pending.back();pending.pop_back();
+                    if(!infon || !seen.insert(infon).second) continue;
+                    ++work.visits;
+                    if(infon->copySource==expression.source->pItem && infon->thisPtr &&
+                       (!self || (self->node && infon->thisPtr==self->node->pItem))) return true;
+                    if(auto state=infon->pathSelection) {
+                        pending.push_back(state->expression);
+                        if(state->predicate) pending.push_back(state->predicate->pItem);
+                    }
+                    for(const auto& rhs:infon->wrkList) pending.push_back(rhs->pItem);
+                }
+                return false;
+            };
+            POVNode existing;
+            if(target->node) {
+                if(matches(target->node)) {existing=target->node;direct=true;}
+                else for(const auto& relation:POVDescription(target->node,access_->registry.get()).relationships())
+                    if(matches(relation.target)) {existing=relation.target;break;}
+            }
+            if(existing) {
+                pendingExpressions_ |= !getFlagBit(existing->pItem->flags,infonView::isNormed);
+                continue;
+            }
+            if(!self) {supported=false;return false;}
+            auto access=access_;work.creations=addCost(work.creations,2);
+            writes.push_back([access,target,self,expression] {
+                auto rhs=std::make_shared<POV>(923);rhs->pItem=std::make_shared<infonView>();
+                std::vector<infonView*> copied;
+                expression.source->pItem->_copyAsTypeTo(rhs->pItem,true,true,self->node->pItem,&copied);
+                rhs->pItem->copySource=expression.source->pItem;
+                SetModeBits(rhs->pItem->flags,infonView::copySourceType,infonView::cstDefinition);
+                access->bind(rhs);target->node->pItem->addPOVToWrkList(rhs);
+                SetFlagBit(target->node->pItem->flags,infonView::isNormed,false);++target->node->workRevision;
+                return true;
+            });
+        }
+        return direct;
+    }
     // Accepted correspondence may prove embedded extents without publishing
     // them first. Keep that evidence in the atomic plan, not in live nodes.
     std::map<POVNode, std::int64_t> extents_;
@@ -418,6 +511,14 @@ private:
     void prepare(const Place& target, const DefinitionSpec& sourceRequirement) {
         if (!supported) return;
         auto requirement=sourceRequirement;
+        struct RestoreScopes {
+            std::map<POVNode,Place>& scopes;
+            std::map<POVNode,Place> old;
+            ~RestoreScopes(){scopes=std::move(old);}
+        } restore{selfScopes_,selfScopes_};
+        for(const auto& scope:requirement->selfScopes) selfScopes_[scope]=target;
+        bool directExpression=prepareExpressions(target,requirement);
+        if(!supported) return;
         bool lazy=fillRoot_ && target!=fillRoot_ && typedDescription(target,requirement);
         if(lazy && !requirement->facts.explicitSize) {
             requirement=std::make_shared<DefinitionRequirement>(*requirement);
@@ -436,6 +537,14 @@ private:
                 if(number.bounds.valid) actual=number.facts;
                 auto previous=proposedNumbers_.find(target->node->pItem);
                 if(previous!=proposedNumbers_.end()) number.bounds=previous->second;
+            }
+            // A bound expression may now be an unresolved choice. Keep its
+            // complete requirement pending, while independent sibling facts
+            // can still be published. This never certifies the symbolic value.
+            if(!actual.valid && directExpression) {
+                pendingExpressions_=true;
+                bindings.push_back({target,sourceRequirement});
+                return;
             }
             if (!actual.valid) { supported = false; return; }
             if(!actual.explicitSize && ((requirement->list && requirement->order==uUnordered && target->node->pItem->orderMode==uUnknown) ||
@@ -556,8 +665,8 @@ public:
     // Deferred allocation clients can prepare a member before the priced Set
     // creates its POV. All other slots and writes remain instance-local.
     void bindTarget(const POVNode& node) { place({})->node = node; }
-    bool satisfied() const { return supported && writes.empty(); }
-    bool dataSatisfied() const { return supported && writes.size() == orderWrites; }
+    bool satisfied() const { return supported && writes.empty() && !pendingExpressions_; }
+    bool dataSatisfied() const { return supported && writes.size() == orderWrites && !pendingExpressions_; }
     bool apply() {
         if (!supported) return false;
         bool changed = false;

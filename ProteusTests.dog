@@ -1,6 +1,19 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphContextual/writtenStructure
+    unit/graphContextual/selfValue
+    unit/graphContextual/independentInstances
+    unit/graphContextual/lateValue
+    unit/graphContextual/sparseSibling
+    unit/graphContextual/knownField
+    unit/graphContextual/partialInstance
+    unit/graphContextual/nestedScope
+    unit/graphContextual/recursiveMeaning
+    unit/graphContextual/predicateStaysPending
+    unit/graphContextual/nominalDisplayField
+    unit/graphContextual/inheritedContextualParts
+    unit/graphContextual/lateInheritedParts
     unit/streamInsert/parseFirstPolicy
     unit/streamInsert/assetRelative
     unit/streamInsert/openAssetDependency
@@ -10679,7 +10692,7 @@ struct GLOBAL {
         GraphNormalizer normalizer;normalizer.init();
         std::string declarations="{#record={X:*10+1, Y:*10+2}}",expression="record",expected="record:{X:*10+1, Y:*10+2}";
         if(caseID==1) {declarations="{#record=*2+{X:*10+1, Y:*10+2}}";expected="record:*2+{X:*10+1, Y:*10+2}";}
-        if(caseID==2) {declarations="{#record={X:*10+1, Y:*10+2} #alias=record:{X:*10+1}}";expression="alias";expected="alias:{X:*10+1}";}
+        if(caseID==2) {declarations="{#record={X:*10+1, Y:*10+2} #alias=record:{X:*10+1}}";expression="alias";expected="alias:{X:*10+1, Y:*10+2}";}
         if(caseID==3) declarations="{#record={X:*10+_, Y:*10+2}={Y:*10+2, X:*10+1}}";
         if(caseID==4) {declarations="{#record={X:*10+1, Y:*10+2}={Z:*10+3, W:*10+4}}";expected="record:{X:*10+1, Y:*10+2, Z:*10+3, W:*10+4}";}
         if(caseID==5) declarations="{#record={X:*10+_, Y:*10+2}={X:*10+1, Y:*10+3}}";
@@ -11231,6 +11244,137 @@ struct GLOBAL {
     }%>
     void: unitTestGraphSignedNumber(me string: testName, me int: caseID) <- {
         me bool: passed <- graphSignedNumberCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+
+#define GRAPHCONTEXTUAL(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestContextualDefinition(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHCONTEXTUAL(unit/graphContextual/writtenStructure, 1)
+    GRAPHCONTEXTUAL(unit/graphContextual/selfValue, 2)
+    GRAPHCONTEXTUAL(unit/graphContextual/independentInstances, 3)
+    GRAPHCONTEXTUAL(unit/graphContextual/lateValue, 4)
+    GRAPHCONTEXTUAL(unit/graphContextual/sparseSibling, 5)
+    GRAPHCONTEXTUAL(unit/graphContextual/knownField, 6)
+    GRAPHCONTEXTUAL(unit/graphContextual/partialInstance, 7)
+    GRAPHCONTEXTUAL(unit/graphContextual/nestedScope, 8)
+    GRAPHCONTEXTUAL(unit/graphContextual/recursiveMeaning, 9)
+    GRAPHCONTEXTUAL(unit/graphContextual/predicateStaysPending, 11)
+    GRAPHCONTEXTUAL(unit/graphContextual/nominalDisplayField, 12)
+    GRAPHCONTEXTUAL(unit/graphContextual/inheritedContextualParts, 13)
+    GRAPHCONTEXTUAL(unit/graphContextual/lateInheritedParts, 14)
+    me bool: contextualDefinitionCase(me string: testName, me int: caseID) <- <%{
+        using namespace proteus4;
+        GraphNormalizer n;n.init();
+        auto parse=[&](const std::string& text){return graphParsed(testName,text);};
+        auto norm=[&](const POVNode& p){auto h=n.normalize(p);h.waitForCompletion();return h;};
+        if(caseID==13 || caseID==14) {
+            const std::string layout="#layout={*1+{center|center:{shade}} *1+{edge|edge:{thing, *2+{side|{shade}{shade}}}}}";
+            auto declarations=parse("{#color={hue:_} #shade=color:{hue:30} #side={color} #thing={location} "
+                "#center={thing, color, *2+{side|{%.color}{shade}}} #edge={thing, *2+{side|...}} "
+                "#placed=layout:{*1+{center|center:{thing:{location:1},}} *1+{edge|edge:{thing:{location:2},}}} " +
+                (caseID==13 ? layout : "") + "}");
+            norm(declarations);auto unchanged=toString(declarations->pItem.get());
+            auto target=parse("placed");auto handle=norm(target);bool ok=!handle.status().failed;
+            if(caseID==14) {norm(parse("{"+layout+"}"));handle=norm(target);ok &= !handle.status().failed;}
+            auto groups=target->pItem->value->items.head;
+            auto edge=groups && groups->next ? groups->next->pItem->value->items.head : POVNode{};
+            if(edge) norm(edge);
+            auto sides=edge ? n.runtime.read([&] {return n.knownField(edge,"sides");}) : POVNode{};
+            if(sides) norm(sides);
+            auto side=sides ? sides->pItem->value->items.head : POVNode{};
+            if(side) norm(side);
+            auto color=side ? n.runtime.read([&] {return n.knownField(side,"color");}) : POVNode{};
+            if(color) norm(color);
+            auto hue=color ? color->pItem->fetchField("hue") : POVNode{};
+            auto facts=hue ? n.access->typeFacts(hue) : GraphTypeFacts{};
+            ok &= facts.valid && facts.hasValue && facts.number==30;
+            // Path lowering can move an installed RHS into a choice predicate.
+            // Replay must retain it, not append the same contextual expression.
+            auto retainedWork=[&] {
+                std::vector<std::shared_ptr<infonView>> pending{target->pItem};
+                std::set<std::shared_ptr<infonView>> seen;std::size_t count=0;
+                while(!pending.empty()) {
+                    auto value=pending.back();pending.pop_back();if(!value || !seen.insert(value).second) continue;
+                    count+=value->wrkList.size();
+                    for(const auto& rhs:value->wrkList) pending.push_back(rhs->pItem);
+                    for(auto member=value->value->items.head;member;member=member->next) pending.push_back(member->pItem);
+                    if(auto path=value->pathSelection) {
+                        pending.push_back(path->expression);
+                        if(path->predicate) pending.push_back(path->predicate->pItem);
+                    }
+                }
+                return count;
+            };
+            handle.cancel();norm(target); // Finish requested child updates before measuring replay.
+            auto count=retainedWork();auto before=toString(target->pItem.get());norm(target);
+            ok &= count==retainedWork() && before==toString(target->pItem.get()) && unchanged==toString(declarations->pItem.get());
+            if(!ok) std::cout<<"Contextual demand "<<caseID<<": "<<handle.status().error<<"\n"<<toString(target->pItem.get())<<"\n";
+            n.close();return ok;
+        }
+        auto defs=parse(caseID==12 ? "{#shade=color:{hue:30} #sample={shade}}" : caseID==8 ? "{#inner={x:*10+1 y=%.x} #child=inner #sample={x:*10+2 child}}" :
+                        caseID==9 ? "{#sample={x:*10+1 next=sample y=%.x}}" : caseID==5 ? "{#sample={x:*10+1 values:*1000000000+{_ | ...} y=%.x}}" :
+                        caseID==3 || caseID==4 ? "{#sample={x:*10+_ y=%.x}}" : "{#sample={x:*10+1 y=%.x}}");
+        norm(defs);auto original=toString(defs->pItem.get());
+        auto a=parse(caseID==6 ? "sample.x" : caseID==7 ? "sample:{x:1}" : "sample");
+        auto h=norm(a);bool ok=!h.status().failed;
+        auto x=a->pItem->fetchField("x"),y=a->pItem->fetchField("y");
+        auto hasNumber=[&](const POVNode& p,int value) {
+            if(!p) return false;
+            auto facts=n.access->typeFacts(p);
+            return facts.valid && facts.hasValue && facts.number==value;
+        };
+        if(caseID==12) {
+            auto field=n.runtime.read([&] {return n.knownField(a,"color");});
+            ok &= field && hasNumber(field->pItem->fetchField("hue"),30);
+            ok &= n.runtime.read([&] {return n.knownType(field,"color") && !n.knownType(field,"unrelated");});
+        } else if(caseID==11) {
+            Work work;ProteusDefinitions meanings(n.access);
+            meanings.publish(defs->pItem->value->items.head);
+            auto meaning=meanings.describe(meanings.lookup("sample"),work);
+            ok &= !meaning;
+        } else if(caseID==6) ok &= hasNumber(a,1);
+        else if(caseID==8) {
+            auto child=a->pItem->fetchField("child");
+            if(child) norm(child);
+            ok &= child && hasNumber(child->pItem->fetchField("y"),1) && hasNumber(x,2);
+        } else {
+            ok &= bool(x) && bool(y);
+            if(caseID==1) ok &= a->pItem->value->items.size()==2;
+            if(caseID==2 || caseID==5 || caseID==7 || caseID==9) ok &= hasNumber(y,1);
+            if(caseID==9) {
+                auto next=a->pItem->fetchField("next");
+                ok &= next && next->pItem->value->items.size()==0;
+            }
+            if(caseID==3 || caseID==4) {
+                ok &= h.status().withSubscribers && !getFlagBit(a->pItem->flags,infonView::isNormed) && !hasNumber(y,1);
+                auto b=parse("sample");norm(b);auto bx=b->pItem->fetchField("x"),by=b->pItem->fetchField("y");
+                if(!x || !bx) {n.close();return false;}
+                n.addRHS(x,parse("*10+1"));n.addRHS(bx,parse("*10+2"));
+                h.waitForCompletion();norm(b);norm(a);
+                ok &= hasNumber(y,1) && hasNumber(by,2) && x->pItem!=bx->pItem && y->pItem!=by->pItem;
+            }
+            if(caseID==5) {
+                auto values=a->pItem->fetchField("values");
+                ok &= values && values->pItem->value->items.size()==0 && !values->repetitionSpan.family;
+            }
+            auto oldValue=a->pItem->value;auto oldX=x;auto before=toString(a->pItem.get());
+            auto workCount=y ? y->pItem->wrkList.size() : 0;
+            norm(a);ok &= a->pItem->value==oldValue && a->pItem->fetchField("x")==oldX && before==toString(a->pItem.get());
+            ok &= !y || (y->pItem->wrkList.size()==workCount && workCount<=1);
+        }
+        ok &= original==toString(defs->pItem.get());
+        if(!ok) {
+            std::cout<<"Contextual case "<<caseID<<": "<<h.status().error<<"\n"<<toString(a->pItem.get())<<"\n";
+            for(const auto& step:h.steps()) if(step.action.find("Set")!=std::string::npos || step.action.find("Expose")!=std::string::npos) std::cout<<step.action<<"\n";
+        }
+        n.close();return ok;
+    }%>
+    void: unitTestContextualDefinition(me string: testName, me int: caseID) <- {
+        me bool: passed <- contextualDefinitionCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

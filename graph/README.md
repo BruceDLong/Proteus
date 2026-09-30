@@ -47,6 +47,20 @@ nominal correspondence, with atomic plans and retained identities. See
 semantics, validation, and the remaining ambiguous and mixed-order cases.
 Explicit normalization now requests immediate definition parts, while related
 source traversal stays lazy; see [normalization-parts-results.md](normalization-parts-results.md).
+Explicit requests follow declared aliases as well. Contextual `%self` expressions
+in definitions remain instance-bound RHSs; pending expressions do not certify a
+completed type. Their retained path provenance prevents duplicate application.
+Closing a repeated definition's extent preserves its per-member constraints, so
+later finite prefixes can fill existing sparse instances. Declaration compilation
+is read-only and validates source evidence; successful instance checks are reused
+only until the next graph publication.
+
+`GraphNormalizer.knownField` and `knownType` provide read-only display inspection
+under `runtime.read()`, including nominal aliases. `knownField` returns an ordered
+first match or a unique known unordered match; it does not prove complete
+membership. Missing or symbolic display data still requires a normalization
+request. Ordinary model queries continue to use the graph field-selection goals.
+
 Written definition prefixes and inferred collection labels now compose through
 the same requirements, with indexed access to the virtual tail; see
 [definition-prefix-results.md](definition-prefix-results.md).
