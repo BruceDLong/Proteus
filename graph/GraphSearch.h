@@ -112,6 +112,7 @@ public:
     // subgoals have been examined. Independent children can complete separately.
     // This callback must not change semantic information or graph adjacency.
     virtual void settled(bool fullyResolved) { (void)fullyResolved; }
+    virtual void settled(bool fullyResolved, const DependencyProof::Ptr&) {settled(fullyResolved);}
     virtual std::vector<SetCommand> found(const Visit<Node>&) = 0;
     // Called once after this pass's queued work, before completion metadata.
     // Return priced Sets; do not mutate graph state from this callback.
@@ -226,6 +227,7 @@ template<class Node> struct SearchSession : std::enable_shared_from_this<SearchS
         std::string rejection;
         bool active = false, dirty = true;
         std::set<DependencyKey> dependencies;
+        std::vector<std::shared_ptr<void>> evidence;
         std::shared_ptr<Dependency::Wake> wake;
         std::vector<Pending> parked;
     };
@@ -260,6 +262,7 @@ template<class Node> struct Context {
     std::vector<std::weak_ptr<SearchSession<Node>>> sessions;
 
     DependencyKey untracked = std::make_shared<Dependency>();
+    DependencyKey broadChanges = std::make_shared<Dependency>();
 
     static void wakeTask(const std::shared_ptr<SearchSession<Node>>& session, std::size_t index) {
         if(session->terminal) return;
@@ -287,14 +290,20 @@ template<class Node> struct Context {
     void observe(SearchSession<Node>& session, std::size_t index, const DependencyKey& key) {
         auto token=key ? key : untracked;
         auto& task=session.tasks[index];
-        if(task.dependencies.insert(token).second) token->subscribe(task.wake);
+        if(task.dependencies.insert(token).second) {
+            token->subscribe(task.wake);
+            if(auto evidence=token->evidence.lock()) task.evidence.push_back(std::move(evidence));
+        }
     }
     void graphChanged(const Changes& changes = {}) {
         if(changes.empty()) return;
         access->invalidateCompletion(changes);
         ++revision;
         if(changes.all) {
-            for (auto& weak : sessions) if (auto session = weak.lock())
+            // Cached evidence can survive its handle. Broad writes must also
+            // invalidate those proofs, not just the currently running tasks.
+            broadChanges->publish();untracked->publish();
+            for (auto& weak : sessions) if (auto session = weak.lock(); session && !session->terminal)
                 for(std::size_t i=0;i<session->tasks.size();++i) wakeTask(session,i);
         } else {
             // Indexed by the evidence actually read. Unrelated sessions retain
@@ -440,7 +449,7 @@ template<class Node> class GraphManager {
         task.wake=std::make_shared<Dependency::Wake>([weak,index] {
             if(auto current=weak.lock()) Context<Node>::wakeTask(current,index);
         });
-        task.dependencies.clear();
+        task.dependencies.clear();task.evidence.clear();
         auto reads=observeTask(c,s,index);c.access->observeTask(task.goal->request);
         task.goal->beginPass();
         auto query=task.goal->request;
@@ -548,6 +557,7 @@ template<class Node> class GraphManager {
         std::vector<std::vector<std::size_t>> parents(s.tasks.size());
         std::vector<std::size_t> remaining(s.tasks.size());
         std::vector<bool> resolved(s.tasks.size(), false), local(s.tasks.size());
+        std::vector<DependencyProof::Ptr> proofs(s.tasks.size());
         std::queue<std::size_t> ready;
         for (std::size_t i = 0; i < s.tasks.size(); ++i) {
             const auto& task = s.tasks[i];
@@ -562,14 +572,19 @@ template<class Node> class GraphManager {
             auto i = ready.front(); ready.pop();
             resolved[i] = true;
             {auto reads=observeTask(c,s,i);c.access->observeTask(s.tasks[i].goal->request);
-             s.tasks[i].goal->settled(true);}
+             auto& task=s.tasks[i];std::vector<DependencyProof::Ptr> children;
+             for(auto child:task.required) children.push_back(proofs[child]);
+             auto proof=DependencyProof::make(task.dependencies,std::move(children));
+             proof->observe({c.broadChanges});
+             task.goal->settled(true,proof);
+             proof->observe(task.dependencies);proofs[i]=std::move(proof);}
             for (auto parent : parents[i])
                 if (!--remaining[parent] && local[parent]) ready.push(parent);
         }
         for (std::size_t i = 0; i < s.tasks.size(); ++i)
             if (s.tasks[i].active && !resolved[i] && s.tasks[i].rejection.empty()) {
                 auto reads=observeTask(c,s,i);c.access->observeTask(s.tasks[i].goal->request);
-                s.tasks[i].goal->settled(false);
+                s.tasks[i].goal->settled(false,{});
             }
         s.status.symbolicValues = !resolved[0];
     }

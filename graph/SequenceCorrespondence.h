@@ -484,9 +484,9 @@ private:
 public:
     bool satisfied() const override { return verified_; }
     bool symbolic() const override { return !verified_; }
-    void settled(bool resolved) override {
+    void settled(bool resolved, const DependencyProof::Ptr& evidence) override {
         if (!resolved) return;
-        completion_->represented(request.node, request.related);
-        for (const auto& entry : templates_) completion_->representedTemplate(entry.first, entry.second);
+        completion_->represented(request.node, request.related,evidence);
+        for (const auto& entry : templates_) completion_->representedTemplate(entry.first, entry.second,evidence);
     }
 };

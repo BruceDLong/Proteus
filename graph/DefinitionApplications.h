@@ -59,6 +59,12 @@ private:
     std::shared_ptr<ProteusGraphAccess> access_;
     DependencyKey modelFacts_;
     std::map<std::string, std::vector<Definition>> catalogue_;
+    mutable std::map<std::string,DependencyKey> catalogueKeys_;
+    DependencyKey catalogueChanges_ = std::make_shared<Dependency>();
+    DependencyKey catalogueKey(const std::string& name) const {
+        auto& key=catalogueKeys_[name];if(!key) key=std::make_shared<Dependency>();
+        ReadScope::observe(key);return key;
+    }
     // Read-only declaration compilation survives unrelated instance writes.
     // Every reuse validates the source witnesses and vocabulary bindings.
     std::set<POVNode> declarationBodies_;
@@ -164,6 +170,7 @@ public:
         return names;
     }
     bool registered(const POVNode& node) const {
+        catalogueKey(access_->definitionName(node));
         if (!access_->definitionReady(node)) return false;
         auto found = catalogue_.find(access_->definitionName(node));
         if (found == catalogue_.end()) return false;
@@ -180,7 +187,15 @@ public:
         entries.push_back({node, access_->definitionBody(node)});
         declarationBodies_.insert(entries.back().body);return true;
     }
+    SetResult publishChanges(const POVNode& node) {
+        bool changed=publish(node);
+        return {changed,Changes::only({catalogueChanges_,catalogueKey(access_->definitionName(node))})};
+    }
+    bool changesCatalogue(const Changes& changes) const {
+        return changes.keys.count(catalogueChanges_);
+    }
     bool declared(const std::string& name) const {
+        catalogueKey(name);
         auto found=catalogue_.find(name);
         return found!=catalogue_.end() && std::any_of(found->second.begin(),found->second.end(),
             [&](const Definition& entry) {return access_->definitionApplies(entry.declaration);});
@@ -192,6 +207,7 @@ public:
         return true;
     }
     POVNode lookup(const std::string& name) const {
+        catalogueKey(name);
         auto found = catalogue_.find(name);
         if (found == catalogue_.end()) return {};
         POVNode selected;
@@ -513,6 +529,8 @@ public:
     bool current(const Certificate& proof) const {
         if (!proof->requirement) return false;
         auto& evidence=*proof->evidence;
+        // The validation cache may skip lookup work, never its dependencies.
+        for(const auto& binding:evidence.bindings) catalogueKey(binding.name);
         if(evidence.checkedEpoch==validationEpoch_) return evidence.checkedCurrent;
         evidence.checkedEpoch=validationEpoch_;
         evidence.checkedCurrent=false;
@@ -563,10 +581,13 @@ public:
     }
     bool accepts(const Certificate& proof, const POVNode& node, bool fillParts=false) const {
         auto key=std::make_tuple(node,proof->requirement,fillParts);
-        if(accepted_.count(key)) return true;
+        // Contextual expressions consume other goals' completion evidence.
+        // Reobserve it on each use; plain data checks remain revision-cached.
+        bool cacheable=!proof->requirement->hasExpressions();
+        if(cacheable && accepted_.count(key)) return true;
         try {
             if(!ProteusDefinitionPlan(access_, node, proof->requirement, {}, true, fillParts).satisfied()) return false;
-            accepted_.insert(std::move(key));return true;
+            if(cacheable) accepted_.insert(std::move(key));return true;
         } catch (const std::runtime_error&) { return false; }
     }
     bool satisfied(const POVNode& node, bool fillParts=false) const {
@@ -760,16 +781,16 @@ class ProteusTypeGoal : public GoalSpec<POVNode> {
     ProteusDefinitions::Certificate proof_;
     Visit<POVNode> entry_;
     bool entered_=false;
-    std::function<void(const POVNode&,const POVNode&)> representedTemplate_;
+    std::function<void(const POVNode&,const POVNode&,const DependencyProof::Ptr&)> representedTemplate_;
 public:
     ProteusTypeGoal(Query<POVNode> query, std::shared_ptr<ProteusDefinitions> definitions,
-                   std::function<void(const POVNode&,const POVNode&)> representedTemplate)
+                   std::function<void(const POVNode&,const POVNode&,const DependencyProof::Ptr&)> representedTemplate)
         : GoalSpec<POVNode>(query), definitions_(std::move(definitions)), representedTemplate_(std::move(representedTemplate)) {}
-    void settled(bool resolved) override {
+    void settled(bool resolved, const DependencyProof::Ptr& evidence) override {
         // A proved template may be represented while member values remain
         // unknown. Reuse this goal's proof, without an unpriced second scan.
         if(resolved && request.kind==typeRequirements)
-            if(auto source=definitions_->repeatedBody(request.node)) representedTemplate_(request.node,source);
+            if(auto source=definitions_->repeatedBody(request.node)) representedTemplate_(request.node,source,evidence);
     }
     void beginPass() override { proof_ = std::make_shared<ProteusDefinitions::Proof>(); entered_=false; }
     CommandBatch<POVNode> finishPass() override {

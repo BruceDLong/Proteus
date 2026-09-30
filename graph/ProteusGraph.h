@@ -116,31 +116,37 @@ public:
 
 // Completion flags are derived metadata. Keep weak witnesses independently
 // of handles so later information invalidates even a released search result.
-// Context-wide invalidation matches the foundation's existing revision policy.
+// Their evidence retains subscriptions after the originating handle retires.
 class ProteusCompletion {
     std::shared_ptr<ProteusGraphAccess> access_;
-    std::vector<std::weak_ptr<POV>> marked_;
-    std::vector<std::weak_ptr<GraphRHSProof>> represented_;
     struct Reply { std::uint64_t origin, order, position; POVNode node; };
     std::vector<Reply> effects_;
 public:
     explicit ProteusCompletion(std::shared_ptr<ProteusGraphAccess> access)
         : access_(std::move(access)) {}
-    void mark(const POVNode& node) {
-        marked_.push_back(node);
+    void mark(const POVNode& node, const DependencyProof::Ptr& evidence) {
+        node->pItem->normalizationEvidence=evidence;
+        std::weak_ptr<infonView> weak=node->pItem;
+        evidence->onInvalidated([weak] {
+            if(auto view=weak.lock()) SetFlagBit(view->flags,infonView::isNormed,false);
+        });
         access_->setNormed(node, true);
     }
-    void represented(const POVNode& node, const POVNode& rhs) {
+    static void retain(const std::shared_ptr<GraphRHSProof>& proof, const DependencyProof::Ptr& evidence) {
+        proof->evidence=evidence;std::weak_ptr<GraphRHSProof> weak=proof;
+        evidence->onInvalidated([weak] {if(auto proof=weak.lock()) proof->valid=false;});
+    }
+    void represented(const POVNode& node, const POVNode& rhs, const DependencyProof::Ptr& evidence) {
         if (node->pItem->workIsRepresented(rhs)) return;
         auto& records = node->pItem->representedWork;
         records.erase(std::remove_if(records.begin(), records.end(),
             [](const auto& record) { return !record->valid; }), records.end());
         auto proof = std::make_shared<GraphRHSProof>(); proof->rhs = rhs;
-        records.push_back(proof); represented_.push_back(proof);
+        records.push_back(proof);retain(proof,evidence);
     }
-    void representedTemplate(const POVNode& node, const POVNode& source) {
+    void representedTemplate(const POVNode& node, const POVNode& source, const DependencyProof::Ptr& evidence) {
         auto proof = std::make_shared<GraphRHSProof>(); proof->rhs = source;
-        node->pItem->representedTemplate = proof; represented_.push_back(proof);
+        node->pItem->representedTemplate = proof;retain(proof,evidence);
     }
     void reply(const POVNode& node) {
         if (!access_->replyReady(node)) return;
@@ -164,14 +170,6 @@ public:
             });
         }
         effects_.clear(); return result;
-    }
-    void invalidate() {
-        for (auto& weak : marked_)
-            if (auto node = weak.lock()) access_->setNormed(node, false);
-        marked_.clear();
-        for (const auto& weak : represented_)
-            if (auto proof = weak.lock()) proof->valid = false;
-        represented_.clear();
     }
 };
 
@@ -217,8 +215,8 @@ public:
     }
     bool satisfied() const override { return checked_; }
     bool symbolic() const override { return !checked_; }
-    void settled(bool fullyResolved) override {
-        if (fullyResolved && represented_) completion_->represented(request.node, request.related);
+    void settled(bool fullyResolved, const DependencyProof::Ptr& evidence) override {
+        if (fullyResolved && represented_) completion_->represented(request.node, request.related,evidence);
     }
 };
 
@@ -246,9 +244,9 @@ public:
     }
     bool satisfied() const override { return verified_; }
     bool symbolic() const override { return !verified_; }
-    void settled(bool fullyResolved) override {
-        if (fullyResolved && template_) completion_->representedTemplate(request.node, template_);
-        if (fullyResolved && represented_) completion_->represented(request.node, request.related);
+    void settled(bool fullyResolved, const DependencyProof::Ptr& evidence) override {
+        if (fullyResolved && template_) completion_->representedTemplate(request.node, template_,evidence);
+        if (fullyResolved && represented_) completion_->represented(request.node, request.related,evidence);
     }
 };
 
@@ -276,9 +274,9 @@ public:
         measure_.reset();
         if (request.kind == sizeAndValue) access_->setNormed(request.node, false);
     }
-    void settled(bool fullyResolved) override {
+    void settled(bool fullyResolved, const DependencyProof::Ptr& evidence) override {
         if (request.kind == sizeAndValue && fullyResolved && satisfied())
-            completion_->mark(request.node);
+            completion_->mark(request.node,evidence);
         if (request.kind == sizeAndValue) completion_->reply(request.node);
     }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
@@ -326,7 +324,7 @@ public:
             if (visit.query.node != request.node || request.kind != sizeAndValue ||
                 !access_->definitionReady(request.node) || definitions_->registered(request.node)) return {};
             auto definitions = definitions_; auto node = request.node;
-            return {{"Register definition", [definitions, node] { return definitions->publish(node); }, {0, 1}}};
+            return {{"Register definition", [definitions, node] { return definitions->publishChanges(node); }, {0, 1}}};
         }
         if(request.kind>=sizeOnly && request.kind<=sizeAndValue && visit.query.node==request.node) {
             auto materialize=SparseOccurrence::commands(access_,definitions_,request.node);
@@ -755,16 +753,17 @@ public:
         ReadScope::observe(modelFacts_);
     }
     void invalidateCompletion(const Changes& changes) override {
-        // Recording a proof does not change model facts or invalidate an
-        // existing proof. Actual writes still invalidate all model evidence.
+        // Completion metadata follows its recorded dependencies. Definition
+        // registration refreshes catalogue validation without a model-wide wake.
         if(changes.all || changes.keys.count(modelFacts_)) invalidateCompletion();
+        else if(definitions_->changesCatalogue(changes)) definitions_->prune();
     }
     void beginSearch(const Query<POVNode>&) override {
         // Re-normalization rechecks definition witnesses, including edits made
         // between quiescent calls. Query submission is not a graph mutation.
         definitions_->prune();
     }
-    void invalidateCompletion() override { completion_->invalidate(); evidence_->prune(); definitions_->prune(); }
+    void invalidateCompletion() override { evidence_->prune(); definitions_->prune(); }
     std::vector<std::function<void()>> takeEffects() override {
         auto result=insertion_->takeEffects();
         auto replies=completion_->takeEffects();
@@ -800,8 +799,8 @@ public:
             return std::make_shared<ProteusRepresentationGoal>(query, access_, completion_,definitions_);
         if (query.kind == typeRequirements || query.kind == compileTypeRequirements)
             return std::make_shared<ProteusTypeGoal>(query, definitions_,
-                [access=access_,completion=completion_](const POVNode& node,const POVNode& source) {
-                    if(!access->openTail(node)) completion->representedTemplate(node,source);
+                [access=access_,completion=completion_](const POVNode& node,const POVNode& source,const DependencyProof::Ptr& evidence) {
+                    if(!access->openTail(node)) completion->representedTemplate(node,source,evidence);
                 });
         if (query.kind == listCorrespondence)
             return std::make_shared<ProteusCorrespondenceGoal>(query, access_, evidence_, definitions_);

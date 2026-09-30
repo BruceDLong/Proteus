@@ -94,5 +94,5 @@ public:
     }
     bool satisfied() const override {return verified_;}
     bool symbolic() const override {return !verified_;}
-    void settled(bool resolved) override {if(resolved) completion_->represented(request.node,request.related);}
+    void settled(bool resolved, const DependencyProof::Ptr& evidence) override {if(resolved) completion_->represented(request.node,request.related,evidence);}
 };

@@ -237,7 +237,8 @@ private:
                     if(matches(relation.target)) {existing=relation.target;break;}
             }
             if(existing) {
-                pendingExpressions_ |= !getFlagBit(existing->pItem->flags,infonView::isNormed);
+                auto proof=existing->pItem->normalizationEvidence;
+                pendingExpressions_ |= (proof && !proof->valid()) || !getFlagBit(existing->pItem->flags,infonView::isNormed);
                 continue;
             }
             if(!self) {supported=false;return false;}

@@ -15,6 +15,9 @@ namespace proteus4 {
 class Dependency {
 public:
     using Wake = std::function<void()>;
+    // A reader of derived evidence retains its producer, even if the cache
+    // replaces that certificate before the reader has settled.
+    std::weak_ptr<void> evidence;
 private:
     std::vector<std::weak_ptr<Wake>> readers_;
     std::size_t cleanupAt_ = 64;
@@ -76,6 +79,48 @@ public:
     ReadScope(const ReadScope&)=delete;
     ReadScope& operator=(const ReadScope&)=delete;
     static void observe(const DependencyKey& key) {if(current_) (*current_)(key);}
+};
+
+// A derived fact outlives the search that proved it. Parents retain required
+// child proofs, not flattened copies of all descendant reads. Subscriptions
+// remain weak; releasing cached evidence releases this dependency DAG.
+class DependencyProof : public std::enable_shared_from_this<DependencyProof> {
+    bool valid_ = true;
+    DependencyKey changed_ = std::make_shared<Dependency>();
+    std::set<DependencyKey> reads_;
+    std::shared_ptr<Dependency::Wake> wake_;
+    std::vector<std::shared_ptr<DependencyProof>> children_;
+    std::vector<std::shared_ptr<void>> evidence_;
+    std::vector<std::function<void()>> invalidators_;
+    void invalidate() {
+        if(!valid_) return;
+        valid_=false;
+        for(auto& invalidate:invalidators_) invalidate();
+        invalidators_.clear();changed_->publish();
+    }
+public:
+    using Ptr = std::shared_ptr<DependencyProof>;
+    static Ptr make(const std::set<DependencyKey>& reads, std::vector<Ptr> children = {}) {
+        auto proof=Ptr(new DependencyProof());proof->changed_->evidence=proof;
+        std::weak_ptr<DependencyProof> weak=proof;
+        proof->wake_=std::make_shared<Dependency::Wake>([weak] {if(auto p=weak.lock()) p->invalidate();});
+        proof->children_=std::move(children);proof->observe(reads);
+        for(const auto& child:proof->children_) {
+            proof->observe({child->changed_});
+            if(!child->valid_) proof->invalidate();
+        }
+        return proof;
+    }
+    void observe(const std::set<DependencyKey>& reads) {
+        for(const auto& key:reads) if(key!=changed_ && reads_.insert(key).second) {
+            key->subscribe(wake_);
+            if(auto evidence=key->evidence.lock()) evidence_.push_back(std::move(evidence));
+        }
+    }
+    bool valid() const {ReadScope::observe(changed_);return valid_;}
+    void onInvalidated(std::function<void()> action) {
+        if(valid_) invalidators_.push_back(std::move(action));else action();
+    }
 };
 
 } // namespace proteus4

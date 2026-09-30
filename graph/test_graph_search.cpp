@@ -857,5 +857,79 @@ int main() {
         manager.updateIfChanged([&] {bad->rhs.resize(1);return true;},Changes::only({bad->facts}));h.waitForCompletion();
         assert(!h.status().failed && branch->complete && bad->complete);h.cancel();++cases;
     }
+    {
+        struct EvidenceGoal : TrackedGoal {
+            std::shared_ptr<std::map<Node,DependencyProof::Ptr>> saved;
+            DependencyKey finalRead;
+            EvidenceGoal(Query<Node> q,decltype(saved) p,DependencyKey k):TrackedGoal(q),saved(p),finalRead(k) {}
+            void settled(bool complete,const DependencyProof::Ptr& proof) override {
+                TrackedGoal::settled(complete);if(!complete) return;
+                ReadScope::observe(finalRead); // includes reads made during settlement
+                (*saved)[request.node]=proof;std::weak_ptr<TestNode> weak=request.node;
+                proof->onInvalidated([weak] {if(auto node=weak.lock()) node->complete=false;});
+            }
+        };
+        struct EvidenceAccess : TrackedAccess {
+            std::shared_ptr<std::map<Node,DependencyProof::Ptr>> saved=std::make_shared<std::map<Node,DependencyProof::Ptr>>();
+            DependencyKey finalRead=std::make_shared<Dependency>();
+            std::shared_ptr<GoalSpec<Node>> goal(const Query<Node>& q) override {
+                return std::make_shared<EvidenceGoal>(q,saved,finalRead);
+            }
+        };
+        auto access=std::make_shared<EvidenceAccess>();GraphManager<Node> manager(access);
+        auto root=node(1),child=node(2);root->required={{child,0}};
+        auto normalize=[&] {auto h=manager.normalize({root,1});h.waitForCompletion();assert(root->complete);};
+        normalize();auto rootProof=access->saved->at(root);auto childProof=access->saved->at(child);
+        access->saved->erase(child);childProof.reset(); // parent retains required evidence after all handles retire
+        manager.updateIfChanged([] {return true;},Changes::only({node()->facts}));assert(rootProof->valid() && root->complete);
+        manager.updateIfChanged([] {return true;},Changes::only({child->facts}));
+        assert(!rootProof->valid() && !root->complete && !child->complete);++cases;
+        normalize();rootProof=access->saved->at(root);
+        manager.updateIfChanged([] {return true;},Changes::only({access->finalRead}));
+        assert(!rootProof->valid() && !root->complete);++cases;
+        normalize();rootProof=access->saved->at(root);
+        manager.update([] {});assert(!rootProof->valid() && !root->complete);
+        std::weak_ptr<DependencyProof> weak=rootProof;rootProof.reset();access->saved->clear();assert(weak.expired());++cases;
+    }
+    {
+        // A cache replacement must not disconnect an in-flight reader from
+        // the certificate it actually used, or from that certificate's inputs.
+        struct Cache {
+            DependencyProof::Ptr current,result;
+            Node root;
+        };
+        struct CacheGoal : TrackedGoal {
+            std::shared_ptr<Cache> cache;
+            CacheGoal(Query<Node> q,std::shared_ptr<Cache> c):TrackedGoal(q),cache(c) {}
+            std::vector<SetCommand> found(const Visit<Node>& visit) override {
+                if(request.node==cache->root && visit.query.node==request.node) assert(cache->current->valid());
+                return TrackedGoal::found(visit);
+            }
+            void settled(bool complete,const DependencyProof::Ptr& proof) override {
+                TrackedGoal::settled(complete);
+                if(complete && request.node==cache->root) cache->result=proof;
+            }
+        };
+        struct CacheAccess : TrackedAccess {
+            std::shared_ptr<Cache> cache=std::make_shared<Cache>();
+            std::shared_ptr<GoalSpec<Node>> goal(const Query<Node>& q) override {return std::make_shared<CacheGoal>(q,cache);}
+        };
+        auto access=std::make_shared<CacheAccess>();GraphManager<Node> manager(access);
+        auto input=std::make_shared<Dependency>(),other=std::make_shared<Dependency>();
+        access->cache->current=DependencyProof::make({input});
+        std::weak_ptr<DependencyProof> original=access->cache->current;
+        auto root=node(1),waiting=node();root->required={{waiting,0}};access->cache->root=root;
+        {
+            auto h=manager.normalize({root,1});h.waitForCompletion();assert(h.status().withSubscribers);
+            manager.read([&] {access->cache->current=DependencyProof::make({other});});
+            assert(!original.expired());
+            manager.updateIfChanged([&] {waiting->value=2;return true;},Changes::only({waiting->facts}));
+            h.waitForCompletion();assert(!h.status().symbolicValues && access->cache->result->valid());
+        }
+        assert(!original.expired());
+        manager.updateIfChanged([] {return true;},Changes::only({input}));
+        assert(!access->cache->result->valid());
+        access->cache->result.reset();assert(original.expired());++cases;
+    }
     std::cout << "Graph search: " << cases << "/" << cases << " scenarios passed\n";
 }

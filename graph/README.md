@@ -266,10 +266,26 @@ if it also changes values, order, members or relationships, it publishes the
 model change too. Proof-only updates preserve unrelated completion metadata and
 validated definition caches.
 
+Definition registration now publishes the affected catalogue name. Lookups
+subscribe even when no definition exists, and cached compiled meanings expose
+their vocabulary bindings on every reuse. Registering an unrelated word does
+not discard a waiting search. Replacing source nodes or editing definition
+bodies still follows the ordinary model publication boundary.
+
+Completion and represented-RHS metadata now retain `DependencyProof` evidence.
+The scheduler supplies each successful goal's own observed reads plus its
+required child proofs. Those proofs retain subscriptions independently of the
+handle, so a relevant change clears a member's `isNormed` flag and the flags of
+containing lists that relied on it. Readers of cached proofs retain the actual
+certificate, even when its cache entry is replaced. Required proofs form a DAG;
+there is no flattened copy of every descendant's reads. Contextual definition
+checks reobserve completion evidence rather than reusing a cached boolean.
+
 Structural, value and registry reads still share a conservative model token;
 parser publications and unconverted operations retain broad invalidation.
-`isNormed`, RHS representation proofs, compiled-definition witnesses, and
-accepted-instance caches still invalidate together on model writes. Narrowing
+General model writes still invalidate completion, representation and definition
+caches conservatively. Catalogue writes invalidate only dependent completion
+and representation evidence while refreshing vocabulary validation caches. Narrowing
 those footprints requires tracing all affected readers, including unsuccessful
 lookups and shared state aliases. No permanent POV expansion cache or second
 model graph has been introduced: the retained links describe goal dependencies.
@@ -278,7 +294,7 @@ but independent handles still have separate search state.
 
 Validation of this checkpoint:
 
-- Native scheduler: 55 scenarios, including local updates within one search,
+- Native scheduler: 59 scenarios, including local updates within one search,
   parked Sets, disappearance/reappearance of cheap routes, repaired rejected
   children, late adjacency, aggregate recomputation, racing producers and
   cancellation. A root with N independent member writes takes 4N+1 expansions
@@ -295,11 +311,17 @@ Validation of this checkpoint:
   | 64 | 14,923 | 967 | 65 | 1 |
   | 128 | 50,539 | 1,927 | 129 | 1 |
 
-- Regenerated Proteus4: 5/5 publication tests pass. The full suite reports
-  40 failures / 1,686 tests, with exactly the same failing names as `3a90449`
-  (40 / 1,685). Existing expectations were not changed.
-- All 55 native scenarios also pass with address and undefined-behavior
-  sanitizers (leak detection disabled because fixtures contain ownership cycles).
+- The publication tests also exercise 32 unrelated registrations without any
+  additional search steps, resolution by a relevant late definition, and
+  completion invalidation after handles retire, including nominal aliases.
+- Native tests retain required child evidence after handle release, invalidate
+  settlement reads, check broad publication, and replace a cache while a reader
+  is pending. The reader's final proof still invalidates on its original inputs.
+- Final validation: 9/9 publication tests and 59/59 native scheduler scenarios
+  pass. The native scenarios also pass address and undefined-behavior sanitizers
+  (leak detection disabled for fixtures containing model ownership cycles).
+  The full generated suite reports 40 failures / 1,690 tests, with exactly the
+  same failing names as `4e1e2db` (40 / 1,686). No existing expectations changed.
 - Rebuilt Slipstream and verified its isolated window: populated Kanban,
   rotating colored cube, and terminal `{| 3>> }` returning `3`. The final run
   was gray at the 30-second sample and colored at 60 seconds, matching the
@@ -372,11 +394,12 @@ The existing printer then hides the retained work list. Failed, cancelled,
 cost-limited, or otherwise symbolic goals are not marked. Successful children
 may be marked independently of a symbolic parent.
 
-A new normalization pass clears the target flag. Each semantic publication
-also invalidates completion flags conservatively across the context, including
-flags whose process handles have been released. The adapter tracks weak POV
-references for this metadata; it does not retain another graph or keep nodes
-alive. Completion metadata does not itself publish a semantic revision.
+A new normalization pass clears the target flag. Publications invalidate the
+completion evidence that consumed the changed tokens, including evidence whose
+process handles have been released. Unknown publications retain conservative
+invalidation across the context. Invalidation callbacks hold weak references to
+the model; cached proofs retain dependencies and required proofs, not a second
+model graph. Completion metadata does not itself publish a semantic revision.
 Completed handles remain records of their finished run; call `normalize()`
 again to revalidate a result invalidated by later information.
 
