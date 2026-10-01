@@ -436,6 +436,11 @@ public:
     static Work work(ProteusGraphAccess& access,const POVNode& node) {auto n=count(access,node);return {n+1,8*n+6};}
     static SetResult prepare(ProteusGraphAccess& access,const POVNode& node) {
         auto changes=ReadScope::changedObjects({node.get()});
+        auto before=POVDescription::positionSnapshot(node);
+        auto published=[&] {
+            POVDescription::includePositionChange(changes,node,before);
+            return SetResult{true,changes};
+        };
         if(!ready(access,node)) return false;
         auto original=readView(node);
         if(choiceReady(access,node)) {
@@ -444,7 +449,7 @@ public:
             initialize(access,node,leftChoice ? left : right,leftChoice ? right : left,{},false,false,original,&changes);
             readView(node)->pathSelection->alternatives=true;
             SetFlagBit(readView(node)->flags,infonView::doReply,getFlagBit(original->flags,infonView::doReply));
-            return {true,changes};
+            return published();
         }
         auto expression=std::make_shared<infonView>(*original);SetFlagBit(expression->flags,infonView::doReply,false);
         auto source=node->snapshotView(915);readView(source)=std::make_shared<infonView>(*original);
@@ -455,7 +460,7 @@ public:
             readView(cursor)->pathSelection->environmentCursor=getModeBits(original->flags,infonView::cursorMode);
             if(cursor==node) {
                 SetFlagBit(readView(node)->flags,infonView::doReply,getFlagBit(original->flags,infonView::doReply));
-                return {true,changes};
+                return published();
             }
             source=cursor;
         }
@@ -473,7 +478,7 @@ public:
         std::set<POVNode> seen;
         for(const auto& effect:effects) if(effect!=node && seen.insert(effect).second) state->effects.push_back(effect);
         SetFlagBit(readView(node)->flags,infonView::doReply,getFlagBit(original->flags,infonView::doReply));
-        return {true,changes};
+        return published();
     }
     static std::vector<POVNode> choiceConstraints(const POVNode& node) {
         std::vector<POVNode> result;auto state=readView(node)->pathSelection;
@@ -692,8 +697,14 @@ private:
         if (!request.context.empty()) ++work.creations;
         return {{"Set path selection result",[this,matches,access,pending,alternatives,reusable]() -> SetResult {
             auto changes=Changes::only({});
+            // A distinct view can share this mutable inner state without
+            // sharing the innr view itself. Until state-slot readers have
+            // their own keys, keep publication conservative for that alias.
+            if(collectedAlternatives() && readView(result_)->innr->value.use_count()>1) changes=Changes{};
+            std::map<POVNode,POVDescription::PositionFacts> positions;
             auto changedNode=[&](const POVNode& node) {
                 if(!node) return;
+                positions.emplace(node,POVDescription::positionSnapshot(node));
                 auto view=readView(node);
                 changes.include(ReadScope::changedObjects({node.get(),view.get(),view->pathSelection.get(),view->innr.get()}));
             };
@@ -763,6 +774,8 @@ private:
                     publication.retainEvidence=std::move(inherited.retainEvidence);
                 }
             }
+            for(const auto& previous:positions)
+                POVDescription::includePositionChange(*publication.changes,previous.first,previous.second);
             return publication;
         },work}};
     }

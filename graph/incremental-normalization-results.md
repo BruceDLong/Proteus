@@ -71,5 +71,97 @@ is `narrow-invalidation-all/`; the control is `definition-transfer/`.
 `/tmp/p4-stage-tests.py` runs the behavior groups. Test logs are in
 `/tmp/p4-cube-chart-bench/narrow-all-tests/`.
 
-This does not yet preserve intermediate scalar discoveries or separate list
-membership walks from member-result completion. Those are the next experiment.
+At this checkpoint, intermediate scalar discoveries and list-walk reuse were
+unchanged. They are measured separately below.
+
+
+## 2. Preserve intermediate results (2026-10-01)
+
+Control: `5996034`, measured again immediately before each candidate run.
+The candidate contains that change plus the following two forms of retained work:
+
+- A scalar finding is applied to the requested POV and plain scalar intermediate
+  POVs on its validated RHS route. The existing Set primitive fills only missing
+  fields. The whole batch is checked before any write, and type-check evidence
+  is transferred as before. Existing RHS consolidation removes work now fully
+  represented, while preserving registry identities for later contradictions.
+  Merely filling fields does not certify all of an intermediate's constraints.
+- List discovery depends on positions and their count contributions. Its required
+  member goals still resolve values and validate constraints. Replacing an
+  ordinary member's payload no longer throws away the completed walk. Embedded
+  spans still read their size; a newly known extent must wake the count. Changes
+  to adjacency, membership classification, or parse errors also invalidate it.
+
+The position token uses a stable slot in the existing POV. It adds neither a
+new graph node nor a persistent expansion cache. Path publication compares the
+relevant position facts and publishes that token only when those facts change.
+Other model producers continue to use the conservative fallback.
+
+A publication audit also found that a distinct view can share the mutable state
+inside a choice without sharing its inner-view address. Choice rebuilding now
+uses broad publication in that case. A regression explicitly exercises it; the
+extra benchmark counter stayed **zero in all three cube runs**, so this safeguard
+was not a contributor to the measured result.
+
+### Controlled list traversal
+
+Each fixture is an ordinary list of independent paths resolving to a scalar.
+The count below includes accepted `listMember` visits of the outer list only,
+not all work needed to resolve its members.
+
+| Members | Control position visits | Retained walk position visits |
+| --- | ---: | ---: |
+| 16 | 522 | 16 |
+| 64 | 6,909 | 64 |
+
+The control used the same regenerated test program with the first-stage graph
+headers and original counting method. Both control outputs resolved correctly but exceeded the new single-walk
+regression expectation. The candidate also
+checks that a symbolic embedded extent wakes counting and computes the outer
+size when it becomes known.
+
+### Visible cube benchmark
+
+The same isolated Slipstream procedure was used, with builds and tests stopped
+while timing. The candidate includes the regenerated `GraphListMeasure::add`
+as well as all 119 `ProteusGraphAccess` methods. GUI code and assets are unchanged.
+
+| Pair | Narrower invalidation only (s) | Plus retained results (s) | Control visits | Candidate visits |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 12.55–13.63 | 12.62–13.71 | 83,818 | 72,969 |
+| 2 | 12.04–13.15 | 12.80–13.98 | 70,977 | 69,195 |
+| 3 | 13.96–15.08 | 12.83–14.01 | 72,815 | 68,680 |
+| Median upper bound | **13.63** | **13.98** | **72,815** | **69,195** |
+
+This second change reduced median visits by about **5%**, but did **not demonstrate
+an elapsed-time improvement** on the cube. The observed time ranges overlap and
+the median upper bound is slightly slower. First-known-hue medians were 5.78 and
+6.05 seconds, respectively. Sequence/chart counters remained zero. Both the
+colored cube and Kanban were visually checked.
+
+The first-stage control here is a fresh set of runs, which is why its median
+is 13.63 rather than the 13.84 reported in the earlier comparison. The large
+cube improvement is attributable to narrower invalidation; the second stage
+principally removes repeated list walks and preserves useful scalar discoveries.
+
+### Validation
+
+- **1,347/1,347** checks: 1,320 across 61 graph groups, 13 insertion checks, and
+  14 legacy parsing checks.
+- **62/62** native scheduler scenarios.
+- Six new progress tests cover list scaling, embedded extent resumption, retained
+  scalar intermediates, partial size/value findings, immediate conflicts, and
+  later contradictions through consolidated identities.
+- One additional publication test covers distinct views sharing choice state.
+- Three existing expectations changed deliberately: `graphFoundation/throughRHS`,
+  `graphFoundation/overlay/throughUnknown`, and `graphConsolidation/lateSize` now
+  expect intermediate facts to be stored instead of left unknown. Their result,
+  identity, and contradiction assertions remain in place.
+- Final CodeDog regeneration/build and `git diff --check` passed. The full older
+  default suite was not rerun. Normal Slipstream binaries were not replaced.
+
+Artifacts: `preserve-control-{1,2,3}/` and `preserve-final-{1,2,3}/` under
+`/tmp/p4-cube-chart-bench/`; the GUI candidate is `preserved-results/`. The isolated
+list control is `progress-control/`, with logs `/tmp/p4-progress-control-16.log`
+and `/tmp/p4-progress-control-64.log`. Final behavior logs are in
+`/tmp/p4-cube-chart-bench/preserve-final-tests/`.

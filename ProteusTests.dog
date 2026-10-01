@@ -9,10 +9,17 @@ TestsToRun = `
     unit/graphSequenceChart/packedAlternatives
     unit/graphSequenceChart/nestedChoiceScaling
 
+    unit/graphProgress/listSixteen
+    unit/graphProgress/listSixtyFour
+    unit/graphProgress/embeddedExtent
+    unit/graphProgress/scalarIntermediates
+    unit/graphProgress/scalarConflict
+    unit/graphProgress/partialIntermediates
     unit/graphPublication/pathIsolation
     unit/graphPublication/pathIsolationEight
     unit/graphPublication/pathIsolationThirtyTwo
     unit/graphPublication/pathChoiceIsolation
+    unit/graphPublication/sharedChoiceState
     unit/graphPublication/catalogueIsolation
     unit/graphPublication/lateCatalogue
     unit/graphPublication/retiredCompletion
@@ -3418,7 +3425,7 @@ struct GLOBAL {
 struct GLOBAL {
     GRAPHFOUNDATION(unit/graphFoundation/oneRHS, "one RHS supplies size and value", 1)
     GRAPHFOUNDATION(unit/graphFoundation/twoRHSs, "separate constraints supply separate fields", 2)
-    GRAPHFOUNDATION(unit/graphFoundation/throughRHS, "traverse an unresolved RHS without normalizing it", 3)
+    GRAPHFOUNDATION(unit/graphFoundation/throughRHS, "retain findings through unresolved scalar RHSs", 3)
     GRAPHFOUNDATION(unit/graphFoundation/noRoute, "quiescent symbolic result retains a subscription", 4)
     GRAPHFOUNDATION(unit/graphFoundation/subscription, "publish information after symbolic completion", 5)
     GRAPHFOUNDATION(unit/graphFoundation/cancel, "cancel only one of two subscribers", 6)
@@ -3569,8 +3576,9 @@ struct GLOBAL {
             handle.waitForCompletion()
             passed <- handle.fullyNormed() and !handle.failed() and
                     target!.pItem!.value!.num==7 and
-                    middle!.pItem!.value!.evalMode==emUnknown and
-                    middle!.pItem!.wrkList.size()==2
+                    middle!.pItem!.value!.evalMode==emLiteral and middle!.pItem!.value!.num==7 and
+                    middle!.pItem!.infSize!.num==10 and middle!.pItem!.wrkList.size()==1 and
+                    middle!.pItem!.hasRHS(source!.pItem) and middle!.pItem!.hasRHS(target!.pItem)
         }else if(caseID==4){
             handle <- normalizer.normalize(target)
             handle.waitForCompletion()
@@ -4385,7 +4393,8 @@ struct GLOBAL {
         }else if(caseID==7){
             passed <- !handle.failed() and !handle.symbolicValues() and target!.pItem!.isNormed and
                     target!.pItem!.value!.overlayType==NUM and target!.pItem!.value!.num==7 and
-                    source!.pItem!.value!.overlayType==tUnset and source!.pItem!.value!.evalMode==emUnknown
+                    source!.pItem!.value!.overlayType==NUM and source!.pItem!.value!.evalMode==emLiteral and
+                    source!.pItem!.value!.num==7 and source!.pItem!.infSize!.num==10
         }else if(caseID==9){
             passed <- handle.failed() and !target!.pItem!.isNormed and
                     target!.pItem!.value!.overlayType==NUM and target!.pItem!.value!.num==7 and
@@ -8958,9 +8967,10 @@ struct GLOBAL {
             normalizer.addRHS(source,graphParsed(testName,caseID==8 ? "%prev" : caseID==10 ? "*10+2" : "*10+3"));
             handle.waitForCompletion();
             if(caseID==10) {
-                // The target can finish while this source still needs its own
-                // size proof. Only consolidate after that source is resolved.
-                passed &= target->pItem->workListContainsPOV(source);
+                // The later size finding is now retained at the source too,
+                // so both equalities can consolidate in the original search.
+                passed &= !target->pItem->workListContainsPOV(source) &&
+                    target->pItem->hasRHS(source->pItem) && source->pItem->infSize->num==10;
                 auto supplied=normalizer.normalize(source);supplied.waitForCompletion();
                 passed &= !supplied.status().failed;supplied.cancel();
             }
@@ -11444,8 +11454,36 @@ struct GLOBAL {
     GRAPHPUBLICATION(unit/graphPublication/pathIsolationEight, 11)
     GRAPHPUBLICATION(unit/graphPublication/pathIsolationThirtyTwo, 12)
     GRAPHPUBLICATION(unit/graphPublication/pathChoiceIsolation, 13)
+    GRAPHPUBLICATION(unit/graphPublication/sharedChoiceState, 14)
     me bool: graphPublicationCase(me int: caseID) <- <%{
         GraphNormalizer n;n.init();
+        if(caseID==14) {
+            using namespace proteus4;
+            auto root=graphParsed("shared choice state","*3+{wheel:*10+7, wheel:*10+3, wheel:*10+1}");
+            auto predicate=graphParsed("shared choice predicate","wheel");
+            auto first=root->pItem->value->items.head,second=first->next,third=second->next;
+            auto definitions=std::make_shared<ProteusDefinitions>(n.access);
+            ProteusPathGoal goal({root,selectField,0,predicate},n.access,definitions);
+            bool ok=true;
+            n.runtime.update([&] {
+                auto publish=[&](bool includeThird) {
+                    goal.beginPass();
+                    for(const auto& item:std::vector<POVNode>{first,second})
+                        ok &= goal.found({{item,pathMatched,0,{}, {root}}, {},0}).empty();
+                    if(includeThird) goal.found({{third,pathMatched,0,{}, {root}}, {},0});
+                    auto commands=goal.found({{root,pathEnd,0,{}, {root}}, {},0});
+                    if(commands.size()!=1) {ok=false;return SetResult{false};}
+                    return commands.front().apply();
+                };
+                auto initial=publish(false);ok &= initial.changed && initial.changes && !initial.changes->all;
+                // A separate view shares the mutable state, not its inner-view
+                // address. Rebuilding that state must retain the broad fallback.
+                auto alias=std::make_shared<infonView>(*goal.result()->pItem->innr);
+                auto changed=publish(true);
+                ok &= changed.changed && changed.changes && changed.changes->all && alias->value->items.size()==3;
+            });
+            n.close();return ok;
+        }
         if(caseID>=10) {
             const int count=caseID==10 ? 1 : caseID==11 ? 8 : 32;
             std::vector<proteus4::POVNode> waiting;
@@ -11814,6 +11852,76 @@ struct GLOBAL {
     }%>
     void: unitTestGraphDefinitionReuse(me string: testName, me int: caseID) <- {
         me bool: passed <- graphDefinitionReuseCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHPROGRESS(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphProgress(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHPROGRESS(unit/graphProgress/listSixteen, 1)
+    GRAPHPROGRESS(unit/graphProgress/listSixtyFour, 2)
+    GRAPHPROGRESS(unit/graphProgress/embeddedExtent, 3)
+    GRAPHPROGRESS(unit/graphProgress/scalarIntermediates, 4)
+    GRAPHPROGRESS(unit/graphProgress/scalarConflict, 5)
+    GRAPHPROGRESS(unit/graphProgress/partialIntermediates, 6)
+    me bool: graphProgressCase(me string: testName, me int: caseID) <- <%{
+        GraphNormalizer n;n.init();bool ok=true;
+        if(caseID<=3) {
+            const int count=caseID==1 ? 16 : caseID==2 ? 64 : 1;
+            std::string text=caseID==3 ? "{" : "*"+std::to_string(count)+"+{";
+            for(int i=0;i<count;++i) text+="*1+{wheel:*10+7}.wheel ";
+            auto root=graphParsed(testName,text+"}");
+            if(caseID==3) {
+                auto expression=graphParsed(testName,"*1+{*4+{*10+1 *10+2 *10+3 *10+4}}@[1]");
+                auto member=root->pItem->value->items.head;member->pItem=expression->pItem;
+                SetModeBits(root->pItem->infSize->flags,infonState::evalMode,infonState::emUnknown);
+                SetFlagBit(member->flags,POV::isSubItm,true);
+                // Begin with a symbolic span extent. Its result publication
+                // must invalidate the count, unlike an ordinary member value.
+                n.runtime.update([&] {proteus4::PathExpression::prepare(*n.access,member);});
+            }
+            auto h=caseID==3 ? n.runtime.normalize({root,proteus4::sizeOnly,0}) : n.normalize(root);h.waitForCompletion();
+            int members=0;
+            for(const auto& step:h.steps())
+                if(step.query.kind==proteus4::listMember && !step.query.context.empty() &&
+                   step.query.context.back()==root) ++members;
+            ok &= !h.status().failed && !h.status().symbolicValues;
+            if(caseID<=2) {
+                ok &= getFlagBit(root->pItem->flags,infonView::isNormed) && members==count && root->pItem->infSize->num==count;
+                for(auto member=root->pItem->value->items.head;member;member=member->next)
+                    ok &= member->pItem->value->num==7 && getFlagBit(member->pItem->flags,infonView::isNormed);
+            } else ok &= members>=2 && root->pItem->infSize->num==4 &&
+                root->pItem->value->items.head->pItem->infSize->num==4;
+            std::cout<<"List progress: "<<count<<" positions, "<<members<<" visits, "<<h.status().error<<"\n";
+            if(!ok) std::cout<<"  symbolic="<<h.status().symbolicValues<<" result="<<toString(root->pItem.get())<<"\n";
+        } else {
+            auto target=graphScalar(-1,-1);
+            auto middle=graphScalar(caseID==5 ? 4 : -1,caseID==6 ? 10 : -1);
+            auto source=graphScalar(7,caseID==6 ? -1 : 10);
+            n.addRHS(target,middle);n.addRHS(middle,source);
+            auto h=n.normalize(target);h.waitForCompletion();
+            if(caseID==5) ok &= h.status().failed && middle->pItem->value->num==4 && source->pItem->value->num==7;
+            else {
+                ok &= !h.status().failed && !h.status().symbolicValues && target->pItem->value->num==7 &&
+                    target->pItem->infSize->num==10 && middle->pItem->value->num==7 && middle->pItem->infSize->num==10;
+                if(caseID==6) ok &= getModeBits(source->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown;
+                else ok &= middle->pItem->wrkList.empty() && middle->pItem->hasRHS(source->pItem);
+                auto again=n.normalize(middle);again.waitForCompletion();
+                ok &= !again.status().failed && !again.status().symbolicValues;
+                for(const auto& step:again.steps()) ok &= step.action!="Set requested size/value/type";
+                // A later constraint is still checked through the retained
+                // identity, even though the original RHS left pending work.
+                n.addRHS(middle,graphScalar(8,10));
+                auto conflict=n.normalize(target);conflict.waitForCompletion();ok &= conflict.status().failed;
+            }
+        }
+        if(!ok) std::cout<<"Progress case "<<caseID<<" failed\n";
+        n.close();return ok;
+    }%>
+    void: unitTestGraphProgress(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphProgressCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

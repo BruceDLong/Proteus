@@ -280,6 +280,22 @@ public:
         if (request.kind == sizeAndValue) completion_->reply(request.node);
     }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
+        if (request.kind == listContents) {
+            if(visit.query.kind==listContents) {
+                access_->bind(visit.query.node);
+                auto error=access_->inputError(visit.query.node);
+                if(!error.empty()) throw std::runtime_error(error);
+            }
+            if (visit.query.kind == listMember) measure_.add(visit.query.node);
+            if (visit.query.kind != listEnd) return {};
+            reachedEnd_ = true;
+            auto access = access_;
+            auto target = request.node;
+            auto measure = measure_;
+            return {{"Set counted list size", [access, target, measure] {
+                return access->applyCountedSize(target, measure);
+            }}};
+        }
         access_->bind(visit.query.node);
         auto error = access_->inputError(visit.query.node);
         if (!error.empty()) throw std::runtime_error(error);
@@ -332,17 +348,6 @@ public:
             auto commands=WordForms::commands(access_,request.node);
             if(!commands.empty()) return commands;
         }
-        if (request.kind == listContents) {
-            if (visit.query.kind == listMember) measure_.add(visit.query.node);
-            if (visit.query.kind != listEnd) return {};
-            reachedEnd_ = true;
-            auto access = access_;
-            auto target = request.node;
-            auto measure = measure_;
-            return {{"Set counted list size", [access, target, measure] {
-                return access->applyCountedSize(target, measure);
-            }}};
-        }
         if (request.kind == itemAt) {
             if (visit.query.kind == itemFound && !selected_) {
                 auto selected = visit.query.node;
@@ -387,18 +392,34 @@ public:
             if (verdict < 0) throw GoalRejected("incompatible scalar constraints");
             if (!verdict) { deferred_ = true; return {}; }
         }
+        std::vector<POVNode> targets{target};
+        if(access_->scalarCandidate(source)) for(const auto& step:visit.path)
+            if(step.node!=source && access_->scalarCandidate(step.node) &&
+               std::find(targets.begin(),targets.end(),step.node)==targets.end()) targets.push_back(step.node);
         auto access = access_;
         auto evidence = evidence_; auto definitions = definitions_;
-        return {{"Set requested size/value/type", [access, evidence, definitions, target, source, demand] {
-            bool changed = access->apply(target, source, demand);
-            if (changed) evidence->inherit(target, source);
-            auto inherited=definitions->inheritChanges(target,source);
-            if(!changed) return inherited;
-            inherited.changed=true;
-            auto changes=inherited.changes.value_or(Changes::only({}));
-            changes.include(definitions->modelChanges());inherited.changes=std::move(changes);
-            return inherited;
-        }}};
+        return {{"Set requested size/value/type", [access, evidence, definitions, targets, source, demand] {
+            // Recheck the whole batch before its first write. A discovery is
+            // stored in each plain scalar intermediate, using the same Set
+            // primitive and type-evidence transfer as the requested endpoint.
+            for(const auto& node:targets) {
+                int verdict=access->compatible(node,source,demand);
+                if(verdict<0) throw GoalRejected("incompatible scalar constraints");
+                if(!verdict || access->inputPending(node)) return SetResult{false};
+            }
+            SetResult result{false,Changes::only({})};
+            std::vector<std::function<void()>> receipts;
+            for(const auto& node:targets) {
+                bool changed=access->apply(node,source,demand);
+                if(changed) {evidence->inherit(node,source);result.changes->include(definitions->modelChanges());}
+                auto inherited=definitions->inheritChanges(node,source);
+                result.changed=changed || inherited.changed || result.changed;
+                if(inherited.changed) result.changes->include(inherited.changes.value_or(Changes{}));
+                if(inherited.retainEvidence) receipts.push_back(std::move(inherited.retainEvidence));
+            }
+            if(!receipts.empty()) result.retainEvidence=[receipts=std::move(receipts)] {for(const auto& keep:receipts) keep();};
+            return result;
+        },{targets.size()-1,0}}};
     }
     bool satisfied() const override {
         if (request.kind == relationshipConstraints) return true;
@@ -843,7 +864,11 @@ public:
             return PathSelection(access_, definitions_, [this](const Query<POVNode>& q) {return expandSemantic(q);}).expand(query);
         if ((query.kind >= sequenceCorrespondence && query.kind <= sequenceComplete) || query.kind == correspondenceInput || query.kind == sequenceAtomMatched || query.kind == sequenceChoiceMatched)
             return SequenceCorrespondence(access_, definitions_).expand(query);
-        bool pending = evidence_->pending(query.node);
+        // Ordinary member discovery depends on position, not the member's
+        // payload. Its required normalization goal owns value/error readiness.
+        bool positionOnly=query.kind==listEnd ||
+            (query.kind==listMember && !POVDescription(query.node).position().embedded);
+        bool pending = !positionOnly && evidence_->pending(query.node);
         auto result = expandSemantic(query);
         result.deferred = result.deferred || pending;
         return result;
@@ -1028,7 +1053,7 @@ private:
         if (query.kind == listMember) {
             // Normalization requires the member's complete result. A size-only
             // count needs just an embedded span's extent; nested values count 1.
-            if (query.argument != sizeOnly || access_->subList(node)) {
+            if (query.argument != sizeOnly || description.position().embedded) {
                 auto context = query.context; context.insert(context.begin(), node);
                 if(query.argument==relationshipConstraints)
                     result.edges.push_back(direct("check member constraints",{node,relationshipConstraints,0,{},context}));
