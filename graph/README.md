@@ -773,6 +773,15 @@ later routes. See [grouping-results.md](grouping-results.md).
   and releases its pending frontier. It takes effect between bounded graph
   steps/atomic Set batches; it preserves established writes. Other sessions
   remain active. `cancelled` is distinct from `fullyNormed`.
+- External reads, updates, handle operations and parser publications announce
+  their lock request before waiting. Between graph steps the worker hands a
+  waiting caller a turn, then resumes search even if more callers are queued.
+  This extends the parser handoff to GUI access without interrupting a Set or
+  adding another graph/task queue. It is cooperative access, not a FIFO mutex.
+- `runtime.revision()` is an atomic notification and never waits for the graph
+  mutex. It does not provide a model snapshot or permission to inspect nodes;
+  use `runtime.read()` for the actual inspection. Publication/retry semantics
+  are unchanged, and empty or read-only operations do not raise the revision.
 - All access callbacks must be bounded and nonblocking. External I/O must
   publish later through the context, not block an edge callback. Callbacks must
   not recursively call the manager APIs while holding the context lock.
@@ -847,9 +856,10 @@ including nested relative files, late definitions, open-prefix replies, replay,
 rejection, cancellation, shutdown and a finite document with an open dependency.
 
 The scheduler indexes existing subgoals by query while preserving cheaper-route
-retries. Between bounded search steps it grants a waiting publisher a turn, so
-repeated subscribed searches cannot keep reacquiring the mutex ahead of input.
-This also leaves search a turn when producers keep supplying data.
+retries. Between bounded search steps it grants a waiting external caller a
+turn, including readers and publishers, so subscribed searches cannot repeatedly
+reacquire the mutex ahead of GUI access or input. Search also gets a turn while
+callers continue arriving; long individual steps still need to be bounded.
 
 Validation for insertion: 13/13 integration scenarios and 39/39 generic scheduler
 scenarios pass. The full generated suite finishes at 40/1668, with exactly the

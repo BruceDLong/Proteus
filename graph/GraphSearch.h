@@ -263,11 +263,13 @@ template<class Node> struct SearchSession : std::enable_shared_from_this<SearchS
 template<class Node> struct Context {
     std::mutex mutex, joinMutex;
     std::condition_variable changed;
-    std::atomic<std::size_t> waitingPublications{0};
-    std::uint64_t publicationTurn=0; // protected by mutex
+    std::atomic<std::size_t> waitingAccess{0};
+    std::uint64_t accessTurn=0; // protected by mutex
     std::thread worker;
     bool stopping = false, dispatching = false;
-    std::uint64_t revision = 0;
+    // Notification only: observing this counter never grants access to nodes.
+    // Actual model reads still acquire mutex through GraphManager::read().
+    std::atomic<std::uint64_t> revision{0};
     std::size_t cursor = 0;
     std::shared_ptr<GraphAccess<Node>> access;
     std::vector<std::weak_ptr<SearchSession<Node>>> sessions;
@@ -275,6 +277,20 @@ template<class Node> struct Context {
     ObjectDependencies objectDependencies;
     DependencyKey untracked = std::make_shared<Dependency>();
     DependencyKey broadChanges = std::make_shared<Dependency>();
+
+    // Announce before competing for the mutex so the worker hands a turn to
+    // external callers between steps. Reads, writes, cancellation and parser
+    // publications use the same boundary; no model operation is interrupted.
+    std::unique_lock<std::mutex> acquire() {
+        std::unique_lock<std::mutex> lock(mutex,std::defer_lock);
+        ++waitingAccess;
+        try { lock.lock(); }
+        catch (...) { --waitingAccess;changed.notify_all();throw; }
+        --waitingAccess;
+        ++accessTurn;
+        changed.notify_all();
+        return lock;
+    }
 
     static void wakeTask(const std::shared_ptr<SearchSession<Node>>& session, std::size_t index) {
         if(session->terminal) return;
@@ -336,7 +352,7 @@ template<class Node> class Publication {
     std::chrono::steady_clock::time_point yieldAt_;
 public:
     explicit Publication(std::shared_ptr<Context<Node>> context)
-        : context_(std::move(context)), lock_(context_->mutex,std::defer_lock) {
+        : context_(std::move(context)) {
         resume();
         if (context_->stopping) throw std::logic_error("graph context is closed");
     }
@@ -352,10 +368,7 @@ public:
     }
     void suspend() { flush(); lock_.unlock(); }
     void resume() {
-        ++context_->waitingPublications;
-        lock_.lock();
-        --context_->waitingPublications;
-        ++context_->publicationTurn;
+        lock_=context_->acquire();
         yieldAt_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
         context_->changed.notify_all();
     }
@@ -384,7 +397,7 @@ public:
         : context_(std::move(c)), session_(std::move(s)) {}
     template<class Predicate> void waitUntil(Predicate ready) const {
         if (!session_) return;
-        std::unique_lock<std::mutex> lock(context_->mutex);
+        auto lock=context_->acquire();
         context_->changed.wait(lock, [&] {
             return !context_->dispatching &&
                 (session_->terminal || (session_->quiescent && ready()));
@@ -393,7 +406,7 @@ public:
     void waitForCompletion() const { waitUntil([] { return true; }); }
     void cancel() const {
         if (!session_) return;
-        std::lock_guard<std::mutex> lock(context_->mutex);
+        auto lock=context_->acquire();
         if (session_->terminal) return;
         session_->terminal = true;
         session_->status.cancelled = true;
@@ -406,22 +419,22 @@ public:
     }
     bool active() const {
         if (!session_) return false;
-        std::lock_guard<std::mutex> lock(context_->mutex);
+        auto lock=context_->acquire();
         return !session_->terminal;
     }
     Status status() const {
         if (!session_) return {};
-        std::lock_guard<std::mutex> lock(context_->mutex);
+        auto lock=context_->acquire();
         return session_->status;
     }
     std::vector<Step<Node>> steps() const {
         if (!session_) return {};
-        std::lock_guard<std::mutex> lock(context_->mutex);
+        auto lock=context_->acquire();
         return session_->steps;
     }
     Node result() const {
         if (!session_) return {};
-        std::lock_guard<std::mutex> lock(context_->mutex);
+        auto lock=context_->acquire();
         return session_->root->result();
     }
 };
@@ -718,14 +731,14 @@ template<class Node> class GraphManager {
     static void run(Context<Node>* c) {
         std::unique_lock<std::mutex> lock(c->mutex);
         while (!c->stopping) {
-            // Repeated search passes must not win every mutex reacquisition
-            // while a producer is waiting to supply their missing information.
-            // Give one producer a turn, then take another bounded search step;
-            // a continuous stream of producers must not starve search either.
-            if(c->waitingPublications.load()) {
-                auto turn=c->publicationTurn;
+            // Hand a waiting caller a turn before the next search step.
+            // Unlock/yield/relock alone can repeatedly outrun a GUI reader or
+            // producer. One completed acquisition lets search progress again
+            // even while callers continue to arrive.
+            if(c->waitingAccess.load()) {
+                auto turn=c->accessTurn;
                 c->changed.wait(lock,[&] {
-                    return c->stopping || !c->waitingPublications.load() || c->publicationTurn!=turn;
+                    return c->stopping || !c->waitingAccess.load() || c->accessTurn!=turn;
                 });
                 if(c->stopping) break;
             }
@@ -789,7 +802,7 @@ public:
     NormalizationHandle<Node> normalize(Query<Node> query, CostPolicy policy = {},
                                         bool watch = true) {
         if (!context_) throw std::logic_error("initialize graph context first");
-        std::lock_guard<std::mutex> lock(context_->mutex);
+        auto lock=context_->acquire();
         if (context_->stopping) throw std::logic_error("graph context is closed");
         if (!query.node) throw std::invalid_argument("normalize requires a node");
         ReadScope objects({},&context_->objectDependencies);
@@ -810,21 +823,21 @@ public:
         return std::make_shared<Publication<Node>>(context_);
     }
     std::uint64_t revision() const {
-        if(!context_) return 0;
-        std::lock_guard<std::mutex> lock(context_->mutex);
-        return context_->revision;
+        // Polling for change must not block a GUI behind ongoing search.
+        // The counter is only a hint to acquire a fresh model snapshot/read.
+        return context_ ? context_->revision.load(std::memory_order_relaxed) : 0;
     }
     // Writers use this boundary so publication and subscription installation
     // cannot miss each other. Readers of a live result use read() as well.
     template<class Function> auto read(Function action) const -> decltype(action()) {
         if (!context_) throw std::logic_error("initialize graph context first");
-        std::lock_guard<std::mutex> lock(context_->mutex);
+        auto lock=context_->acquire();
         ReadScope objects({},&context_->objectDependencies);
         return action();
     }
     template<class Function> void update(Function action) {
         if (!context_) throw std::logic_error("initialize graph context first");
-        std::lock_guard<std::mutex> lock(context_->mutex);
+        auto lock=context_->acquire();
         if (context_->stopping) throw std::logic_error("graph context is closed");
         ReadScope objects({},&context_->objectDependencies);
         action();
@@ -834,7 +847,7 @@ public:
     // write must not publish merely because it acquired the writer lock.
     template<class Function> bool updateIfChanged(Function action, Changes changes = {}) {
         if (!context_) throw std::logic_error("initialize graph context first");
-        std::lock_guard<std::mutex> lock(context_->mutex);
+        auto lock=context_->acquire();
         if (context_->stopping) throw std::logic_error("graph context is closed");
         ReadScope objects({},&context_->objectDependencies);
         bool changed=action();
@@ -845,7 +858,7 @@ public:
         if (!context_) return;
         std::lock_guard<std::mutex> joinLock(context_->joinMutex);
         {
-            std::lock_guard<std::mutex> lock(context_->mutex);
+            auto lock=context_->acquire();
             context_->stopping = true;
             for (auto& weak : context_->sessions) if (auto s = weak.lock()) {
                 if (!s->terminal) {

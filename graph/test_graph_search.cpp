@@ -1001,5 +1001,57 @@ int main() {
         for(const auto& key:changed.keys) key->publish();assert(!proof->valid());
         assert(ReadScope::changedObjects({value.get()}).all);++cases;
     }
+    {
+        // Revision polling remains responsive even while a producer owns the
+        // model lock. It reports publications, not unflushed parser edits.
+        GraphManager<Node> manager(std::make_shared<TestAccess>());
+        auto publication=manager.beginPublication();
+        publication->changed();
+        auto before=std::async(std::launch::async,[&] {return manager.revision();});
+        bool readyBefore=before.wait_for(std::chrono::seconds(1))==std::future_status::ready;
+        if(!readyBefore) publication.reset(); // let a regressed implementation exit
+        auto previous=before.get();
+        assert(readyBefore && previous==0);
+        publication->flush();
+        auto after=std::async(std::launch::async,[&] {return manager.revision();});
+        bool readyAfter=after.wait_for(std::chrono::seconds(1))==std::future_status::ready;
+        publication.reset();
+        assert(readyAfter && after.get()==previous+1);++cases;
+    }
+    {
+        // Repeated display reads, publications and an endless search must all
+        // make progress. The read callback always sees an atomic model state.
+        auto access=std::make_shared<TestAccess>();GraphManager<Node> manager(access);
+        auto root=node();root->endless=true;root->value=root->size=0;
+        auto result=manager.normalize({root,1});
+        while(access->expanded<5) std::this_thread::yield();
+        auto readers=std::async(std::launch::async,[&] {
+            for(int i=0;i<1000;++i) manager.read([&] {assert(root->value==root->size);});
+        });
+        auto producer=std::async(std::launch::async,[&] {
+            for(int i=1;i<=1000;++i) {
+                auto publication=manager.beginPublication();
+                root->value=i;root->size=i;publication->changed();
+            }
+        });
+        auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+        bool readReady=readers.wait_until(deadline)==std::future_status::ready;
+        bool producerReady=producer.wait_until(deadline)==std::future_status::ready;
+        result.cancel();readers.get();producer.get();
+        assert(readReady && producerReady && access->expanded>5 && root->value==1000);++cases;
+    }
+    {
+        // A throwing read releases its turn and lock; later reads, writes,
+        // cancellation and context shutdown remain usable.
+        auto access=std::make_shared<TestAccess>();GraphManager<Node> manager(access);
+        auto root=node();root->endless=true;auto result=manager.normalize({root,1});
+        bool threw=false;
+        try {manager.read([] {throw std::runtime_error("read failed");});}
+        catch(const std::runtime_error&) {threw=true;}
+        manager.update([&] {root->size=12;});
+        assert(threw && manager.read([&] {return root->size;})==12);
+        result.cancel();result.waitForCompletion();manager.close();
+        assert(result.status().cancelled);++cases;
+    }
     std::cout << "Graph search: " << cases << "/" << cases << " scenarios passed\n";
 }

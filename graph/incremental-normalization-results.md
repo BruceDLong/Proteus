@@ -311,3 +311,76 @@ Construction/runner scripts: `/tmp/p4-preserve-ablation.py`,
 These results support retaining narrower invalidation. The next memory targets
 suggested by the measurements are optional bounded event history and more compact
 subscription storage, evaluated separately from model-result preservation.
+
+## 4. Keep GUI access responsive during background normalization
+
+2026-10-01. A first colored frame does not mean that all subscribed searches
+have settled. Extended Slipstream runs showed that the GUI spent most of the
+post-color period waiting for the graph context mutex. Both `SlipView::draw`
+and its 50 ms revision poll acquired that mutex. The old frame timer began
+inside the read callback and therefore excluded the lock wait.
+
+`Context::acquire()` now extends the existing parser handoff to external
+readers, updates, query submission, handle operations and shutdown. A waiting
+caller announces itself before competing for the mutex; the worker gives a
+caller a turn between steps. This is cooperative access rather than a FIFO
+mutex, and does not interrupt any semantic callback or atomic Set. It reuses
+the existing counter/turn mechanism without adding a queue of model objects.
+`revision()` now reads an atomic notification without taking the graph mutex.
+It is not permission to read the model without `runtime.read()`.
+
+Slipstream's source and normal executable were rebuilt. Its CSV now appends
+`graph_wait_ms`, `graph_wait_window_ms` and `graph_wait_max_ms`; `draw_total_ms`
+measures the whole draw callback, including lock acquisition and display
+submissions. Build/render times remain separate. Window sums and maxima expose
+stalls even when the final sampled frame is fast.
+
+### Visible application measurements
+
+These are isolated Xvfb runs using identical 39-file assets and the same debug
+compiler flags, without concurrent builds. They establish responsiveness on
+this machine rather than an exact speed guarantee. The control uses the prior
+engine with narrow invalidation and intermediate preservation still enabled.
+
+| Measurement | Before | After |
+| --- | ---: | ---: |
+| Visible colored cube, screenshot upper bound | 13.24 s | 16.52 s |
+| Typical draw rate during remaining search | about 3 FPS | about 21-22 FPS |
+| Typical draw rate after search becomes idle | about 22 FPS | about 22 FPS |
+| Sustained normalizer activity ends, approximately | 60 s | 80 s |
+| Normalizer thread CPU over capture | 55.32 s | 56.06 s |
+
+The instrumented pre-change capture spent about 46 of 50 post-color seconds
+waiting for the graph lock, with individual waits up to 785 ms. In the updated
+unmodified application, the 18-80 s reporting windows accumulated about 7 s of
+lock wait; the longest was 238 ms. The median window rate was 21.5 FPS, and the
+slowest window was 12 FPS. The later idle windows had a median of 22 FPS.
+Rendering now gets processor/lock time while search continues, so this change
+improves responsiveness rather than reducing normalization work. Background
+completion is later; its CPU cost is approximately unchanged. Rare worker CPU
+ticks after quiescence come from GUI reads waking the idle context and must not
+be mistaken for continued normalization.
+
+A second updated run, with temporary slow-step tracing, again displayed colors
+at 16.51 s. The remaining long holds were attributed to the ordinary definition
+application and completion mechanisms: nine post-color applications of finite
+list type requirements to `solvedState` took about 226-239 ms each. Settlement
+of 2,920 subgoals took up to 106 ms, and a 4,387-subgoal cube-root settlement took
+199 ms. These general operations remain the next targets. No definition checks,
+subscriptions, model obligations or cube-specific paths were bypassed.
+
+### Validation and artifacts
+
+- Native scheduler: 65/65 scenarios, including concurrent reader/producer/search
+  progress, nonblocking revision polling with the model locked, and recovery
+  after a throwing read. Address/undefined-behavior/leak sanitizers also passed.
+- Generated graph foundation: 155/155; graph streaming: 19/19; insertion: 13/13.
+- Both Proteus4 and Slipstream regenerated and built successfully.
+- Both visible application runs retained the colored cube and populated Kanban.
+- Full legacy suite was not rerun for this scheduling-only change.
+
+Artifacts under `/tmp/p4-cube-chart-bench/`:
+`stutter-run-1/` (original detailed diagnosis), `stutter-control-1/` (original
+control), `gui-fairness-run-1/` (rebuilt normal app, CSV, CPU samples, screenshots
+and analysis), and `gui-fairness-profile-run-1/` (slow-step attribution).
+Diagnostic source/build copies are separate from the normal application.
