@@ -14,6 +14,16 @@ TestsToRun = `
     unit/graphPublication/retiredCompletion
     unit/graphPublication/aliasCatalogue
     unit/graphPublication/proofScaling
+    unit/graphDefinitionReuse/sharedSourceChange
+    unit/graphDefinitionReuse/instanceIsolation
+    unit/graphDefinitionReuse/lateSharedMeaning
+    unit/graphDefinitionReuse/distinctSnapshots
+    unit/graphDefinitionReuse/cachedReadSubscription
+    unit/graphDefinitionReuse/catalogueAmbiguity
+    unit/graphDefinitionReuse/changedCopiedDefinition
+    unit/graphDefinitionReuse/additionalRequirement
+    unit/graphDefinitionReuse/copiedList
+    unit/graphDefinitionReuse/copiedScalar
     unit/graphPublication/querySubmission
     unit/graphPublication/completionPreserved
     unit/graphPublication/unchangedEnvironment
@@ -11646,6 +11656,123 @@ struct GLOBAL {
     }%>
     void: unitTestGraphSequenceChart(me string: testName, me int: caseID) <- {
         me bool: passed <- graphSequenceChartCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+
+#define GRAPHDEFINITIONREUSE(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphDefinitionReuse(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHDEFINITIONREUSE(unit/graphDefinitionReuse/sharedSourceChange, 1)
+    GRAPHDEFINITIONREUSE(unit/graphDefinitionReuse/instanceIsolation, 2)
+    GRAPHDEFINITIONREUSE(unit/graphDefinitionReuse/lateSharedMeaning, 3)
+    GRAPHDEFINITIONREUSE(unit/graphDefinitionReuse/distinctSnapshots, 4)
+    GRAPHDEFINITIONREUSE(unit/graphDefinitionReuse/cachedReadSubscription, 5)
+    GRAPHDEFINITIONREUSE(unit/graphDefinitionReuse/catalogueAmbiguity, 6)
+    GRAPHDEFINITIONREUSE(unit/graphDefinitionReuse/changedCopiedDefinition, 10)
+    GRAPHDEFINITIONREUSE(unit/graphDefinitionReuse/additionalRequirement, 9)
+    GRAPHDEFINITIONREUSE(unit/graphDefinitionReuse/copiedList, 8)
+    GRAPHDEFINITIONREUSE(unit/graphDefinitionReuse/copiedScalar, 7)
+    me bool: graphDefinitionReuseCase(me string: testName, me int: caseID) <- <%{
+        using namespace proteus4;
+        GraphNormalizer n;n.init();
+        auto parse=[&](const std::string& text){return graphParsed(testName,text);};
+        auto norm=[&](const POVNode& node){auto h=n.normalize(node);h.waitForCompletion();return h;};
+        bool ok=true;
+        if(caseID>=7) {
+            bool list=caseID==8;
+            auto declarations=parse(list ? "{#checked={x:*10+1 y:*10+2}}" : "{#checked=*10+3 #extra=*10+4}");
+            ok &= !norm(declarations).status().failed;
+            auto b=parse("checked");auto hb=norm(b);
+            ok &= !hb.status().failed && !hb.status().symbolicValues;
+            auto a=parse(caseID==9 ? "extra" : "?");n.addRHS(a,b);
+            auto ha=norm(a);
+            if(caseID==9) ok &= ha.status().failed;
+            else {
+                ok &= !ha.status().failed && !ha.status().symbolicValues;
+                if(list) {
+                    auto ax=a->pItem->fetchField("x"),bx=b->pItem->fetchField("x");
+                    ok &= ax && bx && ax->pItem->value->num==1 && bx->pItem->value->num==1;
+                } else ok &= a->pItem->infSize->num==10 && a->pItem->value->num==3;
+                auto again=norm(a);ok &= !again.status().failed && !again.status().symbolicValues;
+                if(caseID==10) {
+                    auto body=std::make_shared<POV>(956);body->pItem=declarations->pItem->value->items.head->pItem->funcArgs;
+                    n.addRHS(body,parse("*10+4"));
+                    ok &= norm(a).status().failed && norm(b).status().failed;
+                }
+            }
+        } else if(caseID<=3) {
+            auto declarations=parse(caseID==3 ? "{#left=base #right=base}" :
+                "{#base={x:*10+1, y:*10+2} #left=base #right=base}");
+            ok &= !norm(declarations).status().failed;
+            auto a=parse(caseID==3 ? "left:*10+1" : "left");
+            auto b=parse(caseID==3 ? "right:*10+1" : "right");
+            auto ha=norm(a),hb=norm(b);ha.waitForCompletion();
+            ok &= !ha.status().failed && !hb.status().failed;
+            if(caseID==3) {
+                // Both cached alias proofs must retain the initially absent
+                // base name even after the searches that proved them retire.
+                ha={};hb={};
+                ok &= getFlagBit(a->pItem->flags,infonView::isNormed) && getFlagBit(b->pItem->flags,infonView::isNormed);
+                ok &= !norm(parse("{#base=*10+2}")).status().failed;
+                ok &= !getFlagBit(a->pItem->flags,infonView::isNormed) && !getFlagBit(b->pItem->flags,infonView::isNormed);
+                ok &= norm(a).status().failed && norm(b).status().failed;
+            } else {
+                auto ax=a->pItem->fetchField("x"),bx=b->pItem->fetchField("x");
+                ok &= ax && bx && ax->pItem!=bx->pItem && ax->pItem->value->num==1 && bx->pItem->value->num==1;
+                auto shared=std::make_shared<POV>(955);
+                shared->pItem=declarations->pItem->value->items.head->pItem->funcArgs;
+                auto changed=caseID==1 ? shared->pItem->fetchField("x") : ax;
+                if(!changed) {n.close();return false;}
+                n.addRHS(changed,parse("*10+3"));ha.waitForCompletion();hb.waitForCompletion();
+                ok &= ha.status().failed;
+                if(caseID==1) ok &= hb.status().failed;
+                else ok &= !hb.status().failed && bx->pItem->value->num==1;
+            }
+        } else {
+            // Direct read-only compilation isolates the evidence protocol
+            // from normalization: no instance writes can explain these checks.
+            ProteusDefinitions definitions(n.access);Work cost{0,0};
+            auto declarations=parse(caseID==4 ? "{#base=*10+1}" : "{#alias=base:*10+1}");
+            auto declaration=declarations->pItem->value->items.head;
+            ok &= definitions.publish(declaration);
+            auto body=definitions.lookup(caseID==4 ? "base" : "alias");
+            auto old=definitions.describe(body,cost);
+            if(!old) {n.close();return false;}
+            ok &= definitions.current(old) && definitions.current(old);
+            if(caseID==4) {
+                body->pItem->value->num=2;definitions.prune();
+                auto fresh=definitions.describe(body,cost);
+                ok &= fresh && definitions.current(fresh) && !definitions.current(old) && definitions.current(fresh);
+                // A registry relation is part of source evidence too.
+                n.access->registry->recordIdentity(body,parse("*10+2"),iekAssertion,0);
+                definitions.prune();ok &= !definitions.current(fresh);
+            } else {
+                std::set<DependencyKey> reads;
+                {ReadScope capture([&](const DependencyKey& key){reads.insert(key);});ok &= definitions.current(old);}
+                bool woke=false;
+                auto wake=std::make_shared<Dependency::Wake>([&]{woke=true;});
+                for(const auto& key:reads) key->subscribe(wake);
+                ok &= !definitions.lookup("base") && !definitions.declared("base");
+                auto added=parse("{#base=*10+1}");
+                auto change=definitions.publishChanges(added->pItem->value->items.head);
+                for(const auto& key:change.changes->keys) key->publish();
+                ok &= woke && definitions.lookup("base") && definitions.declared("base") && !definitions.current(old);
+                auto fresh=definitions.describe(body,cost);ok &= fresh && definitions.current(fresh);
+                if(caseID==6) {
+                    auto competing=parse("{#base=*10+2}");
+                    ok &= definitions.publish(competing->pItem->value->items.head);
+                    ok &= definitions.declared("base") && !definitions.lookup("base") && !definitions.current(fresh);
+                }
+            }
+        }
+        if(!ok) std::cout<<"Definition reuse case "<<caseID<<" failed\n";
+        n.close();return ok;
+    }%>
+    void: unitTestGraphDefinitionReuse(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphDefinitionReuseCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

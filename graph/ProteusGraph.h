@@ -394,9 +394,10 @@ public:
             if (changed) evidence->inherit(target, source);
             auto inherited=definitions->inheritChanges(target,source);
             if(!changed) return inherited;
+            inherited.changed=true;
             auto changes=inherited.changes.value_or(Changes::only({}));
-            changes.include(definitions->modelChanges());
-            return SetResult{true,changes};
+            changes.include(definitions->modelChanges());inherited.changes=std::move(changes);
+            return inherited;
         }}};
     }
     bool satisfied() const override {
@@ -568,7 +569,13 @@ public:
                 append(part.right,middle,true);
                 access->finishTail(part.left,true,-1);access->finishTail(part.right,true,-1);changed=true;
             }
-            return definitions->inherit(left, right) || changed;
+            auto inherited=definitions->inheritChanges(left,right);
+            if(changed) {
+                inherited.changed=true;
+                auto changes=inherited.changes.value_or(Changes::only({}));
+                changes.include(definitions->modelChanges());inherited.changes=std::move(changes);
+            }
+            return inherited;
         }, work}};
     }
     bool satisfied() const override { return verified_; }

@@ -55,8 +55,12 @@ in definitions remain instance-bound RHSs; pending expressions do not certify a
 completed type. Their retained path provenance prevents duplicate application.
 Closing a repeated definition's extent preserves its per-member constraints, so
 later finite prefixes can fill existing sparse instances. Declaration compilation
-is read-only and validates source evidence; successful instance checks are reused
-only until the next graph publication.
+is read-only and validates source evidence. Shared source snapshots and catalogue
+answers are checked once per validation epoch; cached reads retain subscriptions.
+Atomic scalar-copy and span-correspondence Sets retain the data checks they just
+established after invalidating older evidence. Later model publications still
+conservatively clear instance checks. See
+[definition-validation-results.md](definition-validation-results.md).
 
 `GraphNormalizer.knownField` and `knownType` provide read-only display inspection
 under `runtime.read()`, including nominal aliases. `knownField` returns an ordered
@@ -647,8 +651,13 @@ Copies can inherit certificates only when their destination has all supporting
 contents; a size-only copy cannot inherit proof of a missing list value. The
 copy can also establish orderedness from checked evidence. Changed definitions,
 replaced members, new ambiguity, and new type requirements force validation
-again. These constraints are context-free; future contextual types need binding
-context in the cache key. Witness and destination checks still cost work.
+again. Transferred data checks survive the producing Set's publication through
+`SetResult::retainEvidence`, which runs under the graph lock after old evidence
+is invalidated. Contextual requirements retain their instance-bound expression
+and completion checks. A transferred certificate does not satisfy additional
+type words on the destination, nor does it set the whole object `isNormed`.
+Witness and destination checks still cost work; inherited data is validated at
+the copy boundary before its successful check is retained.
 
 The catalogue currently admits exact, Unicode-normalized, untagged names.
 Distinct definitions of one name stay ambiguous. Missing names retain

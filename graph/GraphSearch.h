@@ -74,6 +74,10 @@ template<class Node> struct Visit {
 struct SetResult {
     bool changed;
     std::optional<Changes> changes;
+    // Retain evidence established by this atomic Set after old evidence has
+    // been invalidated. Runs under the context lock, before any next search
+    // step; it must not change model data or perform another search.
+    std::function<void()> retainEvidence;
     SetResult(bool value):changed(value) {}
     SetResult(bool value, Changes effects):changed(value),changes(std::move(effects)) {}
     operator bool() const {return changed;}
@@ -107,6 +111,7 @@ template<class Node> struct Arrival {
     Query<Node> query;
     bool graphChanged = false;
     Changes changes;
+    std::function<void()> retainEvidence;
     Arrival(Query<Node> q) : query(std::move(q)) {}
     Arrival(Query<Node> q, bool changed, Changes footprint = {})
         : query(std::move(q)), graphChanged(changed), changes(std::move(footprint)) {}
@@ -444,7 +449,9 @@ template<class Node> class GraphManager {
         for (auto& command : commands) {
             Edge<Node> operation{command.description, command.work, false,
                 [query=finding.query, apply=std::move(command.apply), changes=std::move(command.changes)] {
-                    auto result=apply();return Arrival<Node>{query,result.changed,result.changes.value_or(changes)};
+                    auto result=apply();
+                    Arrival<Node> arrival{query,result.changed,result.changes.value_or(changes)};
+                    arrival.retainEvidence=std::move(result.retainEvidence);return arrival;
                 }};
             operation.command = true;
             enqueue(s, task, finding.cost, std::move(operation), finding.path);
@@ -659,8 +666,10 @@ template<class Node> class GraphManager {
             s.steps.push_back({pending.edge.command ? pending.edge.description : "materialize: " + pending.edge.description,
                                query, pending.cost, c.revision});
             c.graphChanged(arrival.changes);
+            if(arrival.retainEvidence) arrival.retainEvidence();
             return;
         }
+        if(arrival.retainEvidence) arrival.retainEvidence();
         if (pending.edge.command) return; // an unchanged Set has no new finding
         if (!query.node) { s.tasks[pending.task].deferred = true; return; }
         auto& visited = s.tasks[pending.task].visited;

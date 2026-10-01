@@ -946,5 +946,40 @@ int main() {
         assert(!access->cache->result->valid());
         access->cache->result.reset();assert(original.expired());++cases;
     }
+    {
+        // A Set can preserve its newly established proof through its own
+        // publication, while a later input edit still invalidates that proof.
+        struct Receipt {DependencyProof::Ptr proof;int retained=0;};
+        struct ReceiptGoal : TrackedGoal {
+            std::shared_ptr<Receipt> receipt;
+            ReceiptGoal(Query<Node> q,std::shared_ptr<Receipt> r):TrackedGoal(q),receipt(r) {}
+            std::vector<SetCommand> found(const Visit<Node>& visit) override {
+                auto commands=TrackedGoal::found(visit);
+                for(auto& command:commands) {
+                    auto apply=command.apply;auto target=request.node;auto cache=receipt;
+                    command.apply=[apply,target,cache] {
+                        auto result=apply();
+                        result.retainEvidence=[target,cache] {
+                            assert(!cache->proof->valid());
+                            cache->proof=DependencyProof::make({target->facts});++cache->retained;
+                        };
+                        return result;
+                    };
+                }
+                return commands;
+            }
+        };
+        struct ReceiptAccess : TrackedAccess {
+            std::shared_ptr<Receipt> receipt=std::make_shared<Receipt>();
+            std::shared_ptr<GoalSpec<Node>> goal(const Query<Node>& q) override {return std::make_shared<ReceiptGoal>(q,receipt);}
+        };
+        auto access=std::make_shared<ReceiptAccess>();GraphManager<Node> manager(access);
+        auto root=node(),source=node(7);root->rhs={source};
+        access->receipt->proof=DependencyProof::make({root->facts});
+        auto h=manager.normalize({root,1});h.waitForCompletion();
+        assert(!h.status().symbolicValues && root->value==7 && access->receipt->retained==1 && access->receipt->proof->valid());
+        manager.updateIfChanged([&] {root->value=8;return true;},Changes::only({root->facts}));
+        assert(!access->receipt->proof->valid());++cases;
+    }
     std::cout << "Graph search: " << cases << "/" << cases << " scenarios passed\n";
 }

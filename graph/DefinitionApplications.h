@@ -17,11 +17,19 @@ public:
         bool list = false, embedded = false, open = false;
         int order = uUnknown;
         POVNode memberTemplate, choiceBody;
+        // Immutable source snapshot shared by every proof compiled from it.
+        // Validation belongs to the snapshot, not each enclosing certificate.
+        mutable std::uint64_t checkedEpoch=0;
+        mutable bool checkedCurrent=false;
+        mutable std::set<DependencyKey> reads;
     };
     struct Evidence {
         std::vector<Binding> bindings;
-        std::map<POVNode, Witness> witnesses;
+        std::map<POVNode, std::shared_ptr<const Witness>> witnesses;
         std::map<POVNode, DefinitionSpec> compiled;
+        // Cached validation re-observes one shared dependency group, including
+        // header-alias reads made while checking the source witnesses.
+        DependencyProof::Ptr reads;
         std::uint64_t checkedEpoch=0;
         bool checkedCurrent=false;
     };
@@ -70,6 +78,23 @@ private:
     std::set<POVNode> declarationBodies_;
     std::map<POVNode,Certificate> compiledBodies_;
     std::uint64_t validationEpoch_=1;
+    struct CatalogueResolution {bool declared=false; POVNode body;};
+    mutable std::map<std::string,CatalogueResolution> resolutions_;
+    const CatalogueResolution& resolveCatalogue(const std::string& name) const {
+        catalogueKey(name); // A cached absence is still an observed name.
+        auto found=resolutions_.find(name);
+        if(found!=resolutions_.end()) return found->second;
+        CatalogueResolution result;bool ambiguous=false;
+        auto entries=catalogue_.find(name);
+        if(entries!=catalogue_.end()) for(const auto& entry:entries->second) {
+            if(!access_->definitionApplies(entry.declaration)) continue;
+            ambiguous |= result.declared || !access_->definitionSelectable(entry.declaration) ||
+                access_->definitionName(entry.declaration)!=name || !registered(entry.declaration);
+            result.declared=true;result.body=entry.body;
+        }
+        if(ambiguous) result.body.reset();
+        return resolutions_.emplace(name,std::move(result)).first->second;
+    }
     // Successful instance checks remain true until the next publication.
     // Do not cache a pending check: settling a child can establish completion.
     mutable std::set<std::tuple<POVNode,DefinitionSpec,bool>> accepted_;
@@ -180,6 +205,8 @@ public:
     }
     bool publish(const POVNode& node) {
         if (!access_->definitionReady(node) || registered(node)) return false;
+        // Direct catalogue clients also cross the validation boundary.
+        prune();
         auto& entries = catalogue_[access_->definitionName(node)];
         for (auto& entry : entries) if (entry.declaration->pItem == node->pItem) {
             entry.body = access_->definitionBody(node);declarationBodies_.insert(entry.body);return true;
@@ -194,31 +221,14 @@ public:
     bool changesCatalogue(const Changes& changes) const {
         return changes.keys.count(catalogueChanges_);
     }
-    bool declared(const std::string& name) const {
-        catalogueKey(name);
-        auto found=catalogue_.find(name);
-        return found!=catalogue_.end() && std::any_of(found->second.begin(),found->second.end(),
-            [&](const Definition& entry) {return access_->definitionApplies(entry.declaration);});
-    }
+    bool declared(const std::string& name) const { return resolveCatalogue(name).declared; }
     // Missing declarations impose no constraints. Type identity still exists;
     // an unavailable definition never equates distinct written types.
     bool optional(const POVNode& node) const {
         for (const auto& name:names(node)) if (declared(name)) return false;
         return true;
     }
-    POVNode lookup(const std::string& name) const {
-        catalogueKey(name);
-        auto found = catalogue_.find(name);
-        if (found == catalogue_.end()) return {};
-        POVNode selected;
-        for(const auto& entry:found->second) {
-            if(!access_->definitionApplies(entry.declaration)) continue;
-            if(selected || !access_->definitionSelectable(entry.declaration) ||
-               access_->definitionName(entry.declaration)!=name || !registered(entry.declaration)) return {};
-            selected=entry.body;
-        }
-        return selected;
-    }
+    POVNode lookup(const std::string& name) const { return resolveCatalogue(name).body; }
     DefinitionSpec unit(const std::shared_ptr<WordUse>& word,Work& work) try {
         if(!word) return {};
         DefinitionSpec result;
@@ -383,8 +393,8 @@ public:
                 bindings.push_back({name, body});
         }
         if (node == root || proof->evidence->witnesses.count(node)) return;
-        proof->evidence->witnesses.emplace(node, Witness{node, node->pItem, facts(node),
-            names(node), work(node), members(node), listRequirement(node), access_->definitionEmbedded(node), access_->openTail(node), (listRequirement(node) ? listOrder(node,&proof->composition) : uUnknown), memberTemplate(node), choiceBody(node)});
+        proof->evidence->witnesses.emplace(node, std::make_shared<const Witness>(Witness{node, node->pItem, facts(node),
+            names(node), work(node), members(node), listRequirement(node), access_->definitionEmbedded(node), access_->openTail(node), (listRequirement(node) ? listOrder(node,&proof->composition) : uUnknown), memberTemplate(node), choiceBody(node)}));
     }
     // The graph's leave edge supplies postorder: every required child has
     // already been walked. Compile requirements, never execute child normalize.
@@ -413,7 +423,7 @@ public:
         }
         std::sort(requirement->types.begin(), requirement->types.end());
         if (node != root) {
-            auto& witness = proof->evidence->witnesses.at(node);
+            const auto& witness = *proof->evidence->witnesses.at(node);
             requirement->facts = witness.facts;
             requirement->list = witness.list; requirement->order=witness.order==uUnknown ? uOrdered : witness.order;
             requirement->open = witness.list && (witness.open || witness.order==uUnordered);
@@ -481,7 +491,7 @@ public:
                 auto source=sources[i];
                 auto witness=proof->evidence->witnesses.find(source);
                 if(witness==proof->evidence->witnesses.end() || !cached->evidence->witnesses.insert(*witness).second) continue;
-                const auto& value=witness->second;
+                const auto& value=*witness->second;
                 sources.insert(sources.end(),value.work.begin(),value.work.end());
                 sources.insert(sources.end(),value.members.begin(),value.members.end());
                 if(value.memberTemplate) sources.push_back(value.memberTemplate);
@@ -526,26 +536,49 @@ public:
         // unevaluated contextual constraint as an unconstrained predicate.
         return proof->requirement->hasExpressions() ? Certificate{} : proof;
     }
+    bool current(const Witness& witness) const {
+        if(witness.checkedEpoch!=validationEpoch_) {
+            std::set<DependencyKey> reads;
+            bool matches;
+            {
+                ReadScope capture([&](const DependencyKey& key){reads.insert(key);});
+                matches = witness.node->pItem == witness.infon && facts(witness.node).same(witness.facts) &&
+                    witness.names == names(witness.node) && witness.work == work(witness.node) &&
+                    witness.list == listRequirement(witness.node) && witness.members == members(witness.node) &&
+                    witness.embedded == access_->definitionEmbedded(witness.node) && witness.open == access_->openTail(witness.node) &&
+                    witness.order == (witness.list ? listOrder(witness.node) : uUnknown) &&
+                    witness.memberTemplate == memberTemplate(witness.node) && witness.choiceBody==choiceBody(witness.node) &&
+                    POVDescription(witness.node, access_->registry.get()).relationships(false).empty();
+            }
+            witness.reads=std::move(reads);witness.checkedCurrent=matches;witness.checkedEpoch=validationEpoch_;
+        }
+        for(const auto& key:witness.reads) ReadScope::observe(key);
+        return witness.checkedCurrent;
+    }
     bool current(const Certificate& proof) const {
         if (!proof->requirement) return false;
         auto& evidence=*proof->evidence;
-        // The validation cache may skip lookup work, never its dependencies.
-        for(const auto& binding:evidence.bindings) catalogueKey(binding.name);
-        if(evidence.checkedEpoch==validationEpoch_) return evidence.checkedCurrent;
-        evidence.checkedEpoch=validationEpoch_;
-        evidence.checkedCurrent=false;
-        for (const auto& binding : proof->evidence->bindings)
-            if (lookup(binding.name) != binding.body || (!binding.body && declared(binding.name))) return false;
-        for (auto& entry : proof->evidence->witnesses) {
-            auto& witness = entry.second;
-            if (witness.node->pItem != witness.infon || !witness.facts.same(facts(witness.node)) ||
-                witness.names != names(witness.node) || witness.work != work(witness.node) ||
-                witness.list != listRequirement(witness.node) || witness.members != members(witness.node) ||
-                witness.embedded != access_->definitionEmbedded(witness.node) || witness.open != access_->openTail(witness.node) ||
-                witness.order != (witness.list ? listOrder(witness.node) : uUnknown) ||
-                witness.memberTemplate != memberTemplate(witness.node) || witness.choiceBody!=choiceBody(witness.node) || !POVDescription(witness.node, access_->registry.get()).relationships(false).empty()) return false;
+        bool observed=evidence.reads && evidence.reads->valid();
+        if(observed && evidence.checkedEpoch==validationEpoch_) return evidence.checkedCurrent;
+        std::set<DependencyKey> reads;
+        bool matches;
+        {
+            ReadScope capture([&](const DependencyKey& key){reads.insert(key);});
+            // Retain names even when an earlier binding invalidates the proof.
+            for(const auto& binding:evidence.bindings) catalogueKey(binding.name);
+            matches=std::all_of(evidence.bindings.begin(),evidence.bindings.end(),[&](const Binding& binding) {
+                return lookup(binding.name)==binding.body && (binding.body || !declared(binding.name));
+            }) && std::all_of(evidence.witnesses.begin(),evidence.witnesses.end(),[&](const auto& entry) {
+                return current(*entry.second);
+            });
         }
-        evidence.checkedCurrent=true;return true;
+        // Keep the observable group across unrelated model writes. A changed
+        // name retires it; existing readers still retain that older evidence.
+        if(!observed) evidence.reads=DependencyProof::make(reads);
+        else evidence.reads->observe(reads);
+        evidence.reads->valid();
+        evidence.checkedCurrent=matches;evidence.checkedEpoch=validationEpoch_;
+        return matches;
     }
     bool covers(const Certificate& proof, const POVNode& node, bool fullMeaning=false) const {
         if (!proof->requirement) return false;
@@ -639,6 +672,8 @@ public:
     std::shared_ptr<ProteusDefinitionPlan> reusable(const POVNode& target, const POVNode& source, const Certificate& proof) const {
         if (!current(proof)) return {};
         try {
+            // This can run after another write in the same atomic Set; a
+            // pre-Set instance check does not describe that intermediate state.
             ProteusDefinitionPlan sourcePlan(access_, source, proof->requirement);
             if (!sourcePlan.dataSatisfied()) return {};
             auto targetPlan = std::make_shared<ProteusDefinitionPlan>(access_, target, proof->requirement);
@@ -656,16 +691,34 @@ public:
         auto found = evidence_.find(source->pItem); if (found == evidence_.end()) return false;
         auto certificates = found->second;
         Changes changes=Changes::only({});
+        std::vector<std::pair<POVNode,Certificate>> checked;
         for (const auto& proof : certificates) if (auto plan = reusable(target, source, proof)) {
             // Only order metadata may remain: required contents already exist.
+            bool transferable=!proof->requirement->hasExpressions();
             if(plan->apply()) changes.include(modelChanges());
             for (const auto& binding : plan->bindings) {
                 auto child = std::make_shared<Proof>();
                 child->evidence = proof->evidence; child->requirement = binding.second;
                 if(remember(binding.first->node,child)) changes.include(Changes::only({evidenceKey(binding.first->node)}));
+                // Contextual requirements belong to their bound instance and
+                // consume goal-completion proofs; only data checks transfer.
+                if(transferable) checked.push_back({binding.first->node,child});
             }
         }
-        return {!changes.empty(),changes};
+        SetResult result{!changes.empty(),changes};
+        if(!checked.empty()) result.retainEvidence=[this,checked=std::move(checked)] {
+            for(const auto& entry:checked) {
+                // A Set can also affect a declaration used by its own proof.
+                // Its new data check cannot certify an obsolete meaning.
+                if(!current(entry.second)) continue;
+                auto found=evidence_.find(entry.first->pItem);
+                if(found==evidence_.end()) continue;
+                for(const auto& proof:found->second)
+                    if(sameDefinition(proof->requirement,entry.second->requirement) && current(proof))
+                        accepted_.insert(std::make_tuple(entry.first,proof->requirement,false));
+            }
+        };
+        return result;
     }
     bool inherit(const POVNode& target, const POVNode& source) {return inheritChanges(target,source);}
 
@@ -768,7 +821,7 @@ public:
         return {};
     }
     void prune() {
-        ++validationEpoch_;accepted_.clear();
+        ++validationEpoch_;accepted_.clear();resolutions_.clear();
         for(auto it=evidenceKeys_.begin();it!=evidenceKeys_.end();)
             if(it->first.expired()) it=evidenceKeys_.erase(it);else ++it;
         for (auto it = evidence_.begin(); it != evidence_.end();)
