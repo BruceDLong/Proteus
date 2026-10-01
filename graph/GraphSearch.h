@@ -327,12 +327,16 @@ template<class Node> class Publication {
     std::shared_ptr<Context<Node>> context_;
     std::unique_lock<std::mutex> lock_;
     Changes changes_ = Changes::only({});
+    std::chrono::steady_clock::time_point yieldAt_;
 public:
     explicit Publication(std::shared_ptr<Context<Node>> context)
         : context_(std::move(context)), lock_(context_->mutex,std::defer_lock) {
         resume();
         if (context_->stopping) throw std::logic_error("graph context is closed");
     }
+    // A producer may batch input operations proved nonblocking, but must
+    // periodically publish and yield even when a large document is buffered.
+    bool inputYieldDue() const { return std::chrono::steady_clock::now() >= yieldAt_; }
     void changed(const Changes& changes = {}) { changes_.include(changes); }
     void flush() {
         if (!changes_.empty()) {
@@ -346,6 +350,7 @@ public:
         lock_.lock();
         --context_->waitingPublications;
         ++context_->publicationTurn;
+        yieldAt_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
         context_->changed.notify_all();
     }
     ~Publication() { if (lock_.owns_lock()) flush(); }
@@ -354,8 +359,10 @@ public:
 template<class Node> class InputPause {
     std::shared_ptr<Publication<Node>> publication_;
 public:
-    explicit InputPause(std::shared_ptr<Publication<Node>> publication)
-        : publication_(std::move(publication)) {
+    // The caller must prove the whole operation cannot wait for input before
+    // passing false. Unknown/open input keeps the immediate-release behavior.
+    explicit InputPause(std::shared_ptr<Publication<Node>> publication, bool mayBlock=true)
+        : publication_(publication && (mayBlock || publication->inputYieldDue()) ? std::move(publication) : nullptr) {
         if (publication_) publication_->suspend();
     }
     ~InputPause() { if (publication_) publication_->resume(); }

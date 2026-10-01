@@ -427,6 +427,21 @@ int main() {
         publication.reset(); ++cases;
     }
     {
+        // Nonblocking input still yields on the publication deadline. Buffered
+        // producers must not withhold completed facts indefinitely.
+        auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
+        auto root = node(); auto h = manager.normalize({root, 1, 0}); h.waitForCompletion();
+        auto publication = manager.beginPublication();
+        root->rhs.push_back(node(52)); publication->changed();
+        std::this_thread::sleep_for(std::chrono::milliseconds(3));
+        {
+            InputPause<Node> pause(publication, false);
+            h.waitForCompletion();
+            assert(root->value == 52 && !h.status().symbolicValues);
+        }
+        publication.reset(); ++cases;
+    }
+    {
         // Quiescence can precede producer EOF; cancellation releases the wait.
         auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
         auto h = manager.normalize({node(), 1, 0}); h.waitForCompletion();

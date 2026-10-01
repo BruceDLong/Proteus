@@ -845,7 +845,12 @@ were changed for this work.
 
 Streaming parsers share their Agent's graph publication lock. They release it
 around potentially blocking input-buffer operations and publish parse milestones
-before yielding. The graph can visit finished children of a growing literal
+before yielding. Reads from closed input share short publication batches, yielding
+at the next input operation after a two-millisecond interval. Open buffers retain
+immediate release because even a buffered token prefix may need more input.
+See [loading-batching-results.md](loading-batching-results.md) for measured Rubix
+startup improvement and streaming validation.
+The graph can visit finished children of a growing literal
 list. It defers value writes and indexed materialization on unfinished
 parser-owned infons. This avoids the old independent parser/agenda
 wake-up mechanism and its initial timing delay.
