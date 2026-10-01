@@ -102,27 +102,6 @@ template<class Node> struct CommandBatch {
     std::vector<SetCommand> commands;
 };
 
-template<class Node> class GoalSpec {
-public:
-    Query<Node> request;
-    explicit GoalSpec(Query<Node> q) : request(std::move(q)) {}
-    virtual ~GoalSpec() = default;
-    virtual void beginPass() {}
-    // Publish completion metadata only, after this goal and its required
-    // subgoals have been examined. Independent children can complete separately.
-    // This callback must not change semantic information or graph adjacency.
-    virtual void settled(bool fullyResolved) { (void)fullyResolved; }
-    virtual void settled(bool fullyResolved, const DependencyProof::Ptr&) {settled(fullyResolved);}
-    virtual std::vector<SetCommand> found(const Visit<Node>&) = 0;
-    // Called once after this pass's queued work, before completion metadata.
-    // Return priced Sets; do not mutate graph state from this callback.
-    virtual CommandBatch<Node> finishPass() { return {}; }
-    // Only alternative routes may be pruned after satisfaction. Constraints
-    // remain searchable even when every requested field is already concrete.
-    virtual bool satisfied() const = 0;
-    virtual bool symbolic() const = 0;
-    virtual Node result() const { return request.node; }
-};
 
 template<class Node> struct Arrival {
     Query<Node> query;
@@ -158,6 +137,33 @@ template<class Node> struct Expansion {
     std::vector<Edge<Node>> edges;
     std::vector<Refinement<Node>> refinements;
     bool deferred = false;
+};
+
+template<class Node> class GoalSpec {
+public:
+    Query<Node> request;
+    explicit GoalSpec(Query<Node> q) : request(std::move(q)) {}
+    virtual ~GoalSpec() = default;
+    virtual void beginPass() {}
+    // A goal may maintain a shared traversal chart for its demand. Its edges
+    // still run on this scheduler, with the same costs and lifecycle rules.
+    // nullopt delegates ordinary edge access to the domain adapter.
+    virtual std::optional<Expansion<Node>> expand(const Visit<Node>&) { return std::nullopt; }
+    virtual bool retainPath() const { return true; }
+    // Publish completion metadata only, after this goal and its required
+    // subgoals have been examined. Independent children can complete separately.
+    // This callback must not change semantic information or graph adjacency.
+    virtual void settled(bool fullyResolved) { (void)fullyResolved; }
+    virtual void settled(bool fullyResolved, const DependencyProof::Ptr&) {settled(fullyResolved);}
+    virtual std::vector<SetCommand> found(const Visit<Node>&) = 0;
+    // Called once after this pass's queued work, before completion metadata.
+    // Return priced Sets; do not mutate graph state from this callback.
+    virtual CommandBatch<Node> finishPass() { return {}; }
+    // Only alternative routes may be pruned after satisfaction. Constraints
+    // remain searchable even when every requested field is already concrete.
+    virtual bool satisfied() const = 0;
+    virtual bool symbolic() const = 0;
+    virtual Node result() const { return request.node; }
 };
 
 template<class Node> class GraphAccess {
@@ -654,11 +660,12 @@ template<class Node> class GraphManager {
         auto previous = visited.find(query);
         if (previous != visited.end() && previous->second <= pending.cost) return;
         visited[query] = pending.cost;
-        pending.path.push_back(query);
+        if (goal->retainPath()) pending.path.push_back(query);
         s.steps.push_back({pending.edge.description, query, pending.cost, c.revision});
         Visit<Node> visit{query, pending.path, pending.cost};
         enqueueCommands(s,pending.task,visit,goal->found(visit));
-        auto expansion = c.access->expand(query);
+        auto local = goal->expand(visit);
+        auto expansion = local ? std::move(*local) : c.access->expand(query);
         s.tasks[pending.task].deferred |= expansion.deferred;
         for (auto& edge : expansion.edges)
             enqueue(s, pending.task, pending.cost, std::move(edge), pending.path);

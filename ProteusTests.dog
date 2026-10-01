@@ -1,6 +1,14 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphSequenceChart/nestedRepetitionScaling
+    unit/graphSequenceChart/acceptedList
+    unit/graphSequenceChart/lateInput
+    unit/graphSequenceChart/cancel
+    unit/graphSequenceChart/cost
+    unit/graphSequenceChart/packedAlternatives
+    unit/graphSequenceChart/nestedChoiceScaling
+
     unit/graphPublication/catalogueIsolation
     unit/graphPublication/lateCatalogue
     unit/graphPublication/retiredCompletion
@@ -11506,6 +11514,121 @@ struct GLOBAL {
     }%>
     void: unitTestGraphPublication(me string: testName, me int: caseID) <- {
         me bool: passed <- graphPublicationCase(caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+// Shared recognition must bound work without discarding distinct derivations.
+#define GRAPHSEQUENCECHART(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphSequenceChart(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHSEQUENCECHART(unit/graphSequenceChart/nestedRepetitionScaling, 1)
+    GRAPHSEQUENCECHART(unit/graphSequenceChart/acceptedList, 2)
+    GRAPHSEQUENCECHART(unit/graphSequenceChart/lateInput, 3)
+    GRAPHSEQUENCECHART(unit/graphSequenceChart/cancel, 4)
+    GRAPHSEQUENCECHART(unit/graphSequenceChart/cost, 5)
+    GRAPHSEQUENCECHART(unit/graphSequenceChart/packedAlternatives, 6)
+    GRAPHSEQUENCECHART(unit/graphSequenceChart/nestedChoiceScaling, 7)
+    me bool: graphSequenceChartCase(me string: testName, me int: caseID) <- <%{
+        using namespace proteus4;
+        if(caseID==1 || caseID==7) {
+            std::size_t previous=0;
+            for(int count:{4,8,16}) {
+                GraphNormalizer normalizer;normalizer.init();
+                std::string pattern="'A'",rhs="{";
+                if(caseID==7) {
+                    // Shared definitions make the grammar grow linearly while
+                    // its derivations double at every level.
+                    std::string definitions="{#p0='A'";
+                    int depth=count/2;
+                    for(int d=1;d<=depth;++d) {
+                        auto child="p"+std::to_string(d-1);
+                        definitions+=" #p"+std::to_string(d)+"=*_+[{"+child+"} "+child+"]";
+                    }
+                    definitions+="}";
+                    auto declared=normalizer.normalize(graphParsed(testName,definitions));declared.waitForCompletion();
+                    if(declared.status().failed) {normalizer.close();return false;}
+                    pattern="p"+std::to_string(depth);rhs+="'A' ";
+                } else {
+                    for(int depth=0;depth<3;++depth) pattern="{"+pattern+"|...}";
+                    for(int i=0;i<count;++i) rhs+="'A' ";
+                }
+                rhs+="'Y'}";
+                auto root=graphParsed(testName,"{"+pattern+" 'X'} == "+rhs);
+                auto source=root->pItem->wrkList.front();
+                auto before=toString(root->pItem.get()),sourceBefore=toString(source->pItem.get());
+                auto handle=normalizer.normalize(root);handle.waitForCompletion();
+                auto steps=handle.steps().size();
+                std::size_t matches=0;for(const auto& step:handle.steps()) matches+=step.action=="matched input member";
+                // Doubling input may require cubic chart work, but not the
+                // exponential enumeration of nested parses. Count work, not
+                // wall time, so this gate is independent of machine speed.
+                bool passed=!handle.status().failed && handle.status().symbolicValues &&
+                    before==toString(root->pItem.get()) && sourceBefore==toString(source->pItem.get()) &&
+                    (!previous || steps<previous*8) && steps<100*count*count;
+                if(caseID==7) passed &= matches<=count+1;
+                std::cout<<"Sequence chart "<<caseID<<" scale="<<count<<" steps="<<steps<<" matches="<<matches<<"\n";
+                previous=steps;handle.cancel();normalizer.close();if(!passed) return false;
+            }
+            return true;
+        }
+        GraphNormalizer normalizer;normalizer.init();
+        auto root=graphParsed(testName,"{&{*_+['A' {'A'}]|...} 'X'} == "+
+            std::string(caseID==3 || caseID==4 ? "{'A' $ 'X'}" : "{'A' 'A' 'X'}"));
+        auto source=root->pItem->wrkList.front();
+        auto sourceBefore=toString(source->pItem.get());
+        auto span=root->pItem->value->items.head;
+        auto body=span->pItem->value->listSpec;
+        auto bodyBefore=toString(body.get());
+        bool passed=true;
+        if(caseID==6) {
+            // Inspect the recognition forest before choosing a result. Two
+            // independent occurrences, each with two derivations, must retain
+            // all four proofs even though their continuation is shared.
+            SequenceChart chart(normalizer.access,std::make_shared<ProteusDefinitions>(normalizer.access),
+                                {root,sequenceCorrespondence,0,source});
+            std::vector<Query<POVNode>> pending{{root,sequenceCorrespondence,0,source}};
+            std::set<Query<POVNode>> visited;
+            for(std::size_t i=0;i<pending.size();++i) {
+                if(!visited.insert(pending[i]).second) continue;
+                auto next=chart.expand({pending[i],{},0});
+                for(auto& edge:next.edges) pending.push_back(edge.follow().query);
+            }
+            std::set<std::vector<Query<POVNode>>> paths;
+            chart.proofs([&](Visit<POVNode> visit) {paths.insert(std::move(visit.path));return false;});
+            passed=paths.size()==4 && span->pItem->value->items.isEmpty();
+            if(!passed) std::cout<<"Packed derivations: "<<paths.size()<<"\n";
+        } else {
+            auto handle=caseID==5 ? normalizer.normalizeWithCost(root,0) : normalizer.normalize(root);
+            handle.waitForCompletion();passed=!handle.status().failed;
+            if(caseID==3 || caseID==4) {
+                passed &= handle.status().symbolicValues && handle.status().withSubscribers && span->pItem->value->items.isEmpty();
+                if(caseID==4) handle.cancel();
+                normalizer.addRHS(source->pItem->value->items.head->next,graphParsed(testName,"'A'"));
+                handle.waitForCompletion();
+            }
+            if(caseID==4 || caseID==5) {
+                passed &= handle.status().symbolicValues && span->pItem->value->items.isEmpty();
+                if(caseID==4) passed &= handle.status().cancelled;
+            } else {
+                passed &= !handle.status().failed && !handle.status().symbolicValues &&
+                    toString(root->pItem.get())=="{&{'A' 'A'} 'X'}";
+                auto first=span->pItem->value->items.head;
+                auto identities=normalizer.access->registry->identities.size();
+                auto again=normalizer.normalize(root);again.waitForCompletion();
+                passed &= !again.status().symbolicValues && first==span->pItem->value->items.head &&
+                    identities==normalizer.access->registry->identities.size();
+            }
+            handle.cancel();
+        }
+        passed &= bodyBefore==toString(body.get());
+        if(caseID!=3 && caseID!=4) passed &= sourceBefore==toString(source->pItem.get());
+        if(!passed) std::cout<<"Chart case "<<caseID<<": "<<toString(root->pItem.get())<<"\n";
+        normalizer.close();return passed;
+    }%>
+    void: unitTestGraphSequenceChart(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphSequenceChartCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

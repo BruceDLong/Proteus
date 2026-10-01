@@ -16,8 +16,11 @@ through explicit history mappings and already demanded sparse occurrences.
 See [temporal-context-results.md](temporal-context-results.md) and
 [temporal-cut-results.md](temporal-cut-results.md).
 
-Sequence correspondence propagates successful matches through the graph
-frontier and applies the first complete result. See
+Whole sequence correspondence shares matching subproblems across callers and
+retains alternative derivations as packed proof links. The graph frontier still
+schedules each transition, and the existing Set planner publishes the first
+accepted result. See [sequence-chart-results.md](sequence-chart-results.md) for
+scaling checks and the boundary around prefix publication. See
 [text-correspondence-notes.md](text-correspondence-notes.md) for fixed-width,
 repetition, embedded-span, subscription and ambiguity behavior.
 Direct and repeated `<~` source injection reuse that same walk; see

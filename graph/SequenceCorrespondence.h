@@ -93,13 +93,13 @@ public:
     }
     // ':' loosens the current pair only. '==' propagates loose matching
     // into members; do not mutate shared source POV flags while exploring.
-    static bool looseSize(const Query<POVNode>& q) {
+    static bool looseSize(const Query<POVNode>& q, bool nested = false) {
         auto source=q.context.front();
-        return q.context.size()==stackStart(q) ? source->looseSize() :
+        return !nested && q.context.size()==stackStart(q) ? source->looseSize() :
             getFlagBit(source->flags,POV::looseMode) || getFlagBit(source->flags,POV::looseInhtd);
     }
-    static bool looseType(const Query<POVNode>& q) {
-        return q.context.size()==stackStart(q) ? q.context.front()->looseType() : looseSize(q);
+    static bool looseType(const Query<POVNode>& q, bool nested = false) {
+        return !nested && q.context.size()==stackStart(q) ? q.context.front()->looseType() : looseSize(q,nested);
     }
     static bool relationship(ProteusGraphAccess& access, const POVNode& target, const POVNode& source) {
         bool scalar = access.wholeLooseRHS(source) && access.scalarCandidate(target) &&
@@ -111,8 +111,8 @@ public:
     // An identity obtained while matching names an atomic input member even
     // when that member's value is a list. Replaying its accepted proof must not
     // reinterpret the copied value as a grammar that consumes more input.
-    static bool inputIdentity(ProteusGraphAccess& access, const Query<POVNode>& q) {
-        return q.context.size()>stackStart(q) && q.context[1] && !access.subList(q.node) &&
+    static bool inputIdentity(ProteusGraphAccess& access, const Query<POVNode>& q, bool nested = false) {
+        return (nested || q.context.size()>stackStart(q)) && q.context[1] && !access.subList(q.node) &&
             getModeBits(q.context[0]->pItem->value->flags,infonState::overlayType)==infonState::LST &&
             access.hasDirectIdentity(q.node,q.context[1]);
     }
@@ -128,7 +128,7 @@ public:
             ((overlay==infonState::STR && value->str.size()<=static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) ||
              (overlay==infonState::LST && access_->orderedList(source) && !access_->openTail(source) && !value->listSpec));
     }
-    Expansion<POVNode> expand(const Query<POVNode>& q) const {
+    Expansion<POVNode> expand(const Query<POVNode>& q, bool nested = false) const {
         Expansion<POVNode> out;
         if (q.kind == sequenceComplete) return out;
         if (q.kind == correspondenceInput) return input(q);
@@ -156,11 +156,11 @@ public:
         const auto& text = POVDescription(source).value()->str;
         bool textInput=getModeBits(source->pItem->value->flags,infonState::overlayType)==infonState::STR;
         auto body=pattern(q.node);
-        bool fedRoot=getFlagBit(source->flags, POV::isOutrFeed) && q.context.size()==stackStart(q) && access_->fedTemplate(q.node);
+        bool fedRoot=!nested && getFlagBit(source->flags, POV::isOutrFeed) && q.context.size()==stackStart(q) && access_->fedTemplate(q.node);
         if (q.kind == sequenceEnter) {
             if (access_->hasTypeRequirements(q.node))
                 out.refinements.push_back({{q.node,compileTypeRequirements,0},{1,0},"read pattern type meaning",true});
-            if (!readable(q.node, q.context.size() == stackStart(q), true)) return out;
+            if (!readable(q.node, !nested && q.context.size() == stackStart(q), true)) return out;
             // Composite exclusion needs a proof for the entire subpattern.
             // The scalar predicate rule must not negate individual children.
             NumericRangeAccess numeric(*access_);auto range=numeric.read(q.node,true);
@@ -175,7 +175,7 @@ public:
                     next.coordinates.insert(next.coordinates.end(),{0,q.argument,-1});
                     out.edges.push_back(edge("try grammar alternative",std::move(next)));
                 }
-            } else if (sequence(q.node) && !inputIdentity(*access_,q)) {
+            } else if (sequence(q.node) && !inputIdentity(*access_,q,nested)) {
                 if ((!access_->physicalList(body) && !access_->unreferencedTemplateSpan(body) &&
                      !(fedRoot && access_->templatePrefixList(body))) ||
                     !access_->orderedList(body) || access_->listExtent(body) == -2) return out;
@@ -201,7 +201,7 @@ public:
                     if (!supplied.valid && !actualRange.bounds.valid) return out;
                     auto nominal=compareNominal(*definitions_,q.node,item);
                     if(range.bounds.valid && range.constraint) {
-                        auto match=actualRange.bounds.valid ? matchNumeric(range,actualRange,looseSize(q),looseType(q)).verdict :
+                        auto match=actualRange.bounds.valid ? matchNumeric(range,actualRange,looseSize(q,nested),looseType(q,nested)).verdict :
                             compareNumeric(range,actualRange,supplied);
                         if(inverted(q.node) ? (nominal!=ScalarMatch::no && match!=ScalarMatch::no) :
                             (nominal==ScalarMatch::no || match!=ScalarMatch::yes)) return out;
@@ -214,7 +214,7 @@ public:
                     out.edges.push_back(std::move(matched)); return out;
                 }
                 if ((facts.overlay>=0 && facts.overlay!=infonState::STR) ||
-                    (!facts.hasValue && !facts.hasSize && q.context.size()!=stackStart(q))) return out;
+                    (!facts.hasValue && !facts.hasSize && (nested || q.context.size()!=stackStart(q)))) return out;
                 // At the relation root, whole correspondence supplies an
                 // unknown string's width. Inside a list it still needs a width
                 // demand; consuming an arbitrary remainder would hide suffixes.
@@ -249,7 +249,7 @@ public:
             }
             if (extent >= 0 && count > extent) return out;
             auto child = q.related;
-            bool feed=getFlagBit(source->flags, POV::isOutrFeed) && q.context.size()==stackStart(q)+1 && access_->fedTemplate(q.node);
+            bool feed=!nested && getFlagBit(source->flags, POV::isOutrFeed) && q.context.size()==stackStart(q)+1 && access_->fedTemplate(q.node);
             if (!child && (feed || access_->openTail(body)) && (extent<0 || count<extent) && q.coordinates[n-1])
                 child=feed ? definitions_->repeatedBody(q.node) : definitions_->matchingBody(body);
             if (child) {
@@ -292,11 +292,14 @@ public:
     }
 };
 
+#include "SequenceChart.h"
+
 class ProteusSequenceGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusDefinitions> definitions_;
     std::shared_ptr<ProteusCompletion> completion_;
     bool verified_ = false;
+    std::unique_ptr<SequenceChart> chart_;
     std::vector<Visit<POVNode>> prefixes_;
     std::vector<std::pair<POVNode, POVNode>> templates_;
 public:
@@ -305,7 +308,18 @@ public:
                     std::shared_ptr<ProteusCompletion> completion)
         : GoalSpec<POVNode>(q), access_(std::move(access)), definitions_(std::move(definitions)),
           completion_(std::move(completion)) {}
-    void beginPass() override { verified_ = false; templates_.clear(); prefixes_.clear(); }
+    void beginPass() override {
+        verified_ = false; templates_.clear(); prefixes_.clear();
+        // Prefix publication still uses its established common-route proof.
+        // Whole correspondences can share recognition independently of callers.
+        chart_.reset();
+        if (!getFlagBit(request.related->flags,POV::isOutrFeed))
+            chart_=std::make_unique<SequenceChart>(access_,definitions_,request);
+    }
+    bool retainPath() const override { return !chart_; }
+    std::optional<Expansion<POVNode>> expand(const Visit<POVNode>& visit) override {
+        return chart_ ? std::optional<Expansion<POVNode>>(chart_->expand(visit)) : std::nullopt;
+    }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
         const auto& q=visit.query;
         if(q.kind==sequenceCorrespondence) {
@@ -315,6 +329,13 @@ public:
                 return {{"Set fixed span correspondence",[plan]{return plan->apply();},plan->work}};
             }
         }
+        if(chart_) {
+            std::vector<SetCommand> result;
+            chart_->finding(visit,[&](Visit<POVNode> proof) {
+                result=publish(proof,false);return !result.empty();
+            });
+            return result;
+        }
         if(SequenceCorrespondence::rootBoundary(q) && q.node==request.node &&
            getFlagBit(request.related->flags,POV::isOutrFeed) && access_->fedTemplate(q.node) &&
            q.coordinates[q.coordinates.size()-3]>0)
@@ -323,6 +344,15 @@ public:
     }
     CommandBatch<POVNode> finishPass() override {
         if(verified_) return {};
+        if(chart_) {
+            CommandBatch<POVNode> result;
+            chart_->proofs([&](Visit<POVNode> visit) {
+                auto commands=publish(visit,false);
+                if(commands.empty()) return false;
+                result={std::move(visit),std::move(commands)};return true;
+            });
+            return result;
+        }
         // Publish only after complete routes have had their chance. Competing
         // derivations must agree through the chosen repetition boundary; a
         // longer prefix of the same route supplies additional proved members.
