@@ -28,13 +28,13 @@ public:
         // An unordered duplicate has no distinguished occurrence to project.
         std::size_t ordinal=0,total=0;bool present=false;
         for(const auto& segment:instance.segments) {
-            if(segment.gap) {if(!present && owner->pItem->orderMode!=uUnordered && segment.width!=0) pending_=true;continue;}
+            if(segment.gap) {if(!present && readView(owner)->orderMode!=uUnordered && segment.width!=0) pending_=true;continue;}
             auto match=matcher.matchType(target,segment.node);
             if(match==ScalarMatch::unknown && !present) pending_=true;
             if(segment.node==target) {present=true;ordinal=total;}
             if(match==ScalarMatch::yes) ++total;
         }
-        if(!present || pending_ || (owner->pItem->orderMode==uUnordered && total!=1)) {pending_=true;return {};}
+        if(!present || pending_ || (readView(owner)->orderMode==uUnordered && total!=1)) {pending_=true;return {};}
         std::vector<POVNode> sources;
         auto addMeanings=[&](const POVNode& node) {
             for(const auto& name:definitions_->names(node)) {
@@ -55,7 +55,7 @@ public:
             if(!access_->literalList(body)) continue;
             SpanLayout<POVNode> meaning;
             if(!layout(body,meaning,work)) {pending_=true;continue;}
-            std::vector<POVNode> candidates;bool ordered=body->pItem->orderMode!=uUnordered;
+            std::vector<POVNode> candidates;bool ordered=readView(body)->orderMode!=uUnordered;
             for(const auto& segment:meaning.segments) {
                 if(segment.gap) {if(ordered && segment.width!=0) {pending_=true;break;}continue;}
                 auto match=matcher.matchType(target,segment.node);

@@ -349,6 +349,10 @@ struct GraphTypeFacts {
 // known only when its interpretation is known. Relationship demands are interpreted by
 // the graph interface, never by the generic traverser.
 struct ProteusGraphAccess {
+    // All model readers use the same live-view dependency boundary. Producers
+    // retain broad invalidation unless they explicitly report their footprint.
+    void: observeRead(their POV: pov) <- <%{if(pov) proteus4::readView(pov);}%>
+    void: observeViewRead(our infonView: view) <- <%{proteus4::observeInfon(view);}%>
     our IdentityRegistry: registry
     their ProteusCore: replyCore
     our POV: contextSource  // The Agent topic-history POV; no copied context graph.
@@ -363,28 +367,51 @@ struct ProteusGraphAccess {
     }
 
     void: prepareInput(our infonView: inf) <- {
+        observeViewRead(inf);
         inf!.streamState <- parseStarted; inf!.graphParseError <- ""
     }
     me bool: inputPending(our POV: pov) <- {
+        observeRead(pov);
         return(pov!.pItem!.streamState==parseStarted or pov!.pItem!.streamState==parseListReady)
     }
     me bool: growingList(our POV: pov) <- {
+        observeRead(pov);
         return(pov!.pItem!.streamState==parseListReady and pov!.pItem!.value!.overlayType==LST and
                pov!.pItem!.value!.evalMode==emLiteral and pov!.pItem!.value!.listSpec==NULL)
     }
-    me string: inputError(our POV: pov) <- {return(pov!.pItem!.graphParseError)}
+    me string: inputError(our POV: pov) <- {
+        observeRead(pov);
+        return(pov!.pItem!.graphParseError)
+    }
     me bool: replyReady(our POV: pov) <- {
+        observeRead(pov);
         return(replyCore!=NULL and !inputPending(pov) and pov!.pItem!.graphParseError=="" and pov!.pItem!.doReply)
     }
-    me uint64: replyOrigin(our POV: pov) <- {return(pov!.pItem!.originID)}
-    me uint64: replyPosition(our POV: pov) <- {return(pov!.pItem!.infCharPos)}
-    me uint64: replyOrder(our POV: pov) <- {return(pov!.pItem!.replyCharPos)}
-    void: claimReply(our POV: pov) <- {pov!.pItem!.doReply <- false}
-    me string: replyText(our POV: pov) <- {return(toString(pov!.pItem))}
+    me uint64: replyOrigin(our POV: pov) <- {
+        observeRead(pov);
+        return(pov!.pItem!.originID)
+    }
+    me uint64: replyPosition(our POV: pov) <- {
+        observeRead(pov);
+        return(pov!.pItem!.infCharPos)
+    }
+    me uint64: replyOrder(our POV: pov) <- {
+        observeRead(pov);
+        return(pov!.pItem!.replyCharPos)
+    }
+    void: claimReply(our POV: pov) <- {
+        observeRead(pov);
+        pov!.pItem!.doReply <- false
+    }
+    me string: replyText(our POV: pov) <- {
+        observeRead(pov);
+        return(toString(pov!.pItem))
+    }
 
     void: initialize() <- {Allocate(registry)}
     me bool: bind(our POV: pov) <- <%{
-        if (!pov || !pov->pItem) throw std::invalid_argument("POV with infonView required");
+        if(pov) proteus4::readView(pov);
+        if (!pov || !proteus4::readView(pov)) throw std::invalid_argument("POV with infonView required");
         auto existing = pov->effectiveIdentityRegistry();
         if (existing && existing != registry.get())
             throw std::logic_error("POV belongs to another registry; use initWithRegistry");
@@ -392,10 +419,12 @@ struct ProteusGraphAccess {
         return registry->bindOccurrenceName(pov);
     }%>
     void: recordIdentity(our POV: left, our POV: right) <- {
+        observeRead(left); observeRead(right);
         bind(left); bind(right)
         registry!.recordIdentity(left, right, iekAssertion, 0)
     }
     me bool: unknownOverlay(our POV: pov) <- {
+        observeRead(pov);
         return(pov!=NULL and pov!.pItem!=NULL and
                (pov!.pItem!.value!.overlayType==tUnknown or pov!.pItem!.value!.overlayType==tUnset) and
                pov!.pItem!.value!.evalMode==emUnknown)
@@ -403,9 +432,11 @@ struct ProteusGraphAccess {
     // The predicate reader may inspect a complemented template, but ordinary
     // normalization still requires a positive payload. Share every other guard.
     me bool: plain(our POV: pov, me bool: selection <- false, me bool: readingPrefix <- false, me bool: relationship <- false, me bool: cursor <- false) <- {
+        observeRead(pov);
         return(plainStructure(pov, selection, readingPrefix, relationship, cursor) and !pov!.pItem!.invertMatch)
     }
     me bool: plainStructure(our POV: pov, me bool: selection, me bool: readingPrefix, me bool: relationship, me bool: cursor, me bool: path <- false, me bool: signedValue <- false) <- {
+        observeRead(pov);
         if(pov==NULL or pov!.pItem==NULL or (inputPending(pov) and !readingPrefix)){return(false)}
         our infonView: inf <- pov!.pItem
         return((inf!.viewMode==vmOverlay or (inf!.viewMode==vmAny and unknownOverlay(pov)) or
@@ -428,48 +459,57 @@ struct ProteusGraphAccess {
     // This permits reading scalar fields, not skipping their named-type
     // obligations. Graph access always exposes a required type goal as well.
     me bool: scalarTypeShape(our POV: pov) <- {
+        observeRead(pov);
         return((pov!.pItem!.value!.overlayType==NUM or pov!.pItem!.value!.overlayType==STR or pov!.pItem!.isNull() or unknownOverlay(pov)) and
                (pov!.pItem!.value!.evalMode==emUnknown or pov!.pItem!.value!.evalMode==emLiteral))
     }
     me bool: definitionTypeShape(our POV: pov) <- {
+        observeRead(pov);
         return(scalarTypeShape(pov) or (pov!.pItem!.value!.overlayType==LST and
                (pov!.pItem!.value!.evalMode==emLiteral or pov!.pItem!.value!.evalMode==emUnknown)))
     }
     // Read only the published positions of a definition. An open tail is
     // extent evidence, never an instruction to enumerate virtual members.
     me bool: positionalDefinitionList(our POV: pov) <- {
+        observeRead(pov);
         return((physicalList(pov) or templatePrefixList(pov)) and !inputPending(pov) and
                definitionOrderedCandidate(pov) and
                pov!.pItem!.value!.sizeMode!=fromContext and listExtent(pov)!=-2)
     }
     me bool: recordDefinitionList(our POV: pov) <- {
+        observeRead(pov);
         return(physicalList(pov) and pov!.pItem!.orderMode==uUnordered and
                pov!.pItem!.value!.sizeMode!=fromContext and listExtent(pov)!=-2)
     }
     // Empty homogeneous spans are also used by compressed correspondence.
     // Keep this narrower than a template with a published prefix.
     me bool: repeatedDefinitionList(our POV: pov) <- {
+        observeRead(pov);
         return(templatePrefixList(pov) and pov!.pItem!.value!.items.isEmpty())
     }
     // A loaded prefix shares one template with its virtual tail.
     me bool: templatePrefixList(our POV: pov) <- {
+        observeRead(pov);
         return(literalList(pov) and definitionOrderedCandidate(pov) and
                pov!.pItem!.value!.tailUnfinished and
                pov!.pItem!.value!.listSpec!=NULL and
                pov!.pItem!.value!.sizeMode!=fromContext and listExtent(pov)!=-2)
     }
     me bool: wholeLooseRHS(our POV: pov) <- {
+        observeRead(pov);
         return(pov!.looseMode and !pov!.looseTop and !pov!.looseInhtd)
     }
     // The loose bits qualify the relationship, not this endpoint's payload.
     // Only this dedicated route may inspect that payload independently.
     me bool: groupingSource(our POV: pov) <- {
+        observeRead(pov);
         return(wholeLooseRHS(pov) and plain(pov, false, false, true) and orderedList(pov) and
                !pov!.pItem!.value!.tailUnfinished and !pov!.pItem!.value!.timelike and
                pov!.pItem!.value!.listSpec==NULL and !hasTypeRequirements(pov) and
                pov!.pItem!.wrkList.isEmpty() and pov!.pItem!.value!.sizeMode!=fromContext)
     }
     our POV: appendOccurrence(our POV: owner, our POV: occurrence) <- {
+        observeRead(owner); observeRead(occurrence);
         bind(occurrence)
         owner!.pItem!.value!.items.appendPov(occurrence)
         occurrence!.pParent <- owner
@@ -478,17 +518,22 @@ struct ProteusGraphAccess {
         return(occurrence)
     }
     our infonView: memberTemplate(our POV: pov) <- {
+        observeRead(pov);
         if(!literalList(pov)){return(NULL)}
         return(pov!.pItem!.value!.listSpec)
     }
     our infonView: occurrenceOwner(our POV: pov) <- {
+        observeRead(pov);
         if(pov!.implicitItem.sourcePov==NULL){return(NULL)}
+        observeRead(pov!.implicitItem.sourcePov)
         return(pov!.implicitItem.sourcePov!.pItem)
     }
     our POV: requirementView(our infonView: inf) <- {
+        observeViewRead(inf);
         our POV:: view{915}; view!.pItem <- inf; bind(view); return(view)
     }
     me List<our POV>: demandedOccurrences(our POV: pov) <- {
+        observeRead(pov);
         me List<our POV>: result
         // A second POV may share the same list storage. Its own span-family
         // field is not enough to discover all already-demanded positions.
@@ -496,6 +541,7 @@ struct ProteusGraphAccess {
             withEach family in registry!.repetitionFamilies{
                 withEach occurrence in family!.occurrences{
                     their POV: source <- occurrence!.referencePOV!.implicitItem.sourcePov
+                    observeRead(source)
                     if(source!=NULL and source!.pItem===pov!.pItem){result.append(occurrence!.referencePOV)}
                 }
             }
@@ -503,26 +549,36 @@ struct ProteusGraphAccess {
         return(result)
     }
     me bool: installMemberTemplate(our POV: pov, our POV: source) <- {
+        observeRead(pov); observeRead(source);
         if(pov!.pItem!.value!.listSpec!=NULL){return(false)}
         pov!.pItem!.value!.listSpec <- source!.pItem
         pov!.pItem!.isNormed <- false; pov!.workRevision <+- 1
         return(true)
     }
     me bool: definitionOrderedCandidate(our POV: pov) <- {
+        observeRead(pov);
         return(pov!.pItem!.orderMode==uUnknown or pov!.pItem!.orderMode==uOrdered)
     }
-    me bool: definitionOrderKnown(our POV: pov) <- {return(pov!.pItem!.orderMode==uOrdered)}
-    me bool: setDefinitionOrder(our POV: pov) <- {return(setListOrder(pov, uOrdered))}
+    me bool: definitionOrderKnown(our POV: pov) <- {
+        observeRead(pov);
+        return(pov!.pItem!.orderMode==uOrdered)
+    }
+    me bool: setDefinitionOrder(our POV: pov) <- {
+        observeRead(pov);
+        return(setListOrder(pov, uOrdered))
+    }
     me bool: setListOrder(our POV: pov, me OrderMode: order) <- <%{
-        if(pov->pItem->orderMode!=uUnknown || order==uUnknown) return false;
-        auto item=pov->pItem;
+        if(pov) proteus4::readView(pov);
+        if(proteus4::readView(pov)->orderMode!=uUnknown || order==uUnknown) return false;
+        auto item=proteus4::readView(pov);
         item->orderMode=order;
         if(order==uUnordered) invalidateCountedSize(pov);
         ++pov->workRevision;SetFlagBit(item->flags,infonView::isNormed,false);
         return true;
     }%>
     me bool: invalidateCountedSize(our POV: pov) <- <%{
-        auto item=pov->pItem;
+        if(pov) proteus4::readView(pov);
+        auto item=proteus4::readView(pov);
         if(item->value->sizeMode!=fromCount ||
            getModeBits(item->infSize->flags,infonState::evalMode)!=infonState::emLiteral) return false;
         // Counted membership is revisable; explicit extent constraints are not.
@@ -534,6 +590,7 @@ struct ProteusGraphAccess {
         return true;
     }%>
     me List<our POV>: definitionMembers(our POV: pov) <- {
+        observeRead(pov);
         me List<our POV>: result
         if(positionalDefinitionList(pov) or recordDefinitionList(pov)){
             our POV: member <- first(pov)
@@ -541,8 +598,12 @@ struct ProteusGraphAccess {
         }
         return(result)
     }
-    me bool: definitionEmbedded(our POV: pov) <- {return(pov!.isSubItm)}
+    me bool: definitionEmbedded(our POV: pov) <- {
+        observeRead(pov);
+        return(pov!.isSubItm)
+    }
     me bool: adoptDefinitionList(our POV: pov) <- {
+        observeRead(pov);
         if(!adoptableList(pov)){return(false)}
         pov!.pItem!.viewMode <- vmOverlay
         pov!.pItem!.value!.overlayType <- LST
@@ -552,9 +613,11 @@ struct ProteusGraphAccess {
         return(true)
     }
     our POV: appendDefinitionMember(our POV: owner, me string: typeName) <- {
+        observeRead(owner);
         return(insertDefinitionMember(owner, typeName, NULL))
     }
     our POV: insertDefinitionMember(our POV: owner, me string: typeName, our POV: before) <- {
+        observeRead(owner); observeRead(before);
         // Instance-owned storage. No identity or work edge points back into a
         // shared definition, so local values cannot specialize that definition.
         our infonView:: item
@@ -572,16 +635,22 @@ struct ProteusGraphAccess {
         return(member)
     }
     me bool: hasTypeRequirements(our POV: pov) <- {
+        observeRead(pov);
         return(pov!.pItem!.type!=NULL or !pov!.pItem!.addedTypes.isEmpty())
     }
     me List<string>: typeNames(our POV: pov) <- {
+        observeRead(pov);
         me List<string>: names
         if(pov!.pItem!.type!=NULL){names.append(pov!.pItem!.type!.typeID())}
         withEach extra in pov!.pItem!.addedTypes{names.append(extra!.typeID())}
         return(names)
     }
-    me bool: isDefinition(our POV: pov) <- {return(pov!.pItem!.itmMode==mWordDefn)}
+    me bool: isDefinition(our POV: pov) <- {
+        observeRead(pov);
+        return(pov!.pItem!.itmMode==mWordDefn)
+    }
     me bool: definitionReady(our POV: pov) <- {
+        observeRead(pov);
         return(isDefinition(pov) and !inputPending(pov) and pov!.pItem!.graphParseError=="" and
                pov!.pItem!.definedWord!=NULL and
                pov!.pItem!.funcArgs!=NULL)
@@ -589,17 +658,21 @@ struct ProteusGraphAccess {
     // The first usage tag is the language, using the same rule as ModelManager.
     // Additional qualifiers need contextual meaning selection, not silent erasure.
     me bool: definitionApplies(our POV: pov) <- {
+        observeRead(pov);
         if(!definitionReady(pov)){return(false)}
         if(pov!.pItem!.definedWord!.UsageTags.isEmpty()){return(true)}
         return(modelMngr.wordValidForLang(unicodeMgr.normalizeStr(pov!.pItem!.definedWord!.UsageTags[0]), vocabulary))
     }
     me bool: definitionSelectable(our POV: pov) <- {
+        observeRead(pov);
         return(definitionApplies(pov) and pov!.pItem!.definedWord!.UsageTags.size()<=1)
     }
     me string: definitionName(our POV: pov) <- {
+        observeRead(pov);
         return(unicodeMgr.normalizeStr(pov!.pItem!.definedWord!.defWord))
     }
     our POV: definitionBody(our POV: declaration) <- {
+        observeRead(declaration);
         our POV:: body{910}
         body!.pItem <- declaration!.pItem!.funcArgs
         body!.pParent <- declaration
@@ -607,12 +680,14 @@ struct ProteusGraphAccess {
         return(body)
     }
     me GraphTypeFacts: typeFacts(our POV: pov) <- {
+        observeRead(pov);
         me GraphTypeFacts: facts
         if(!plain(pov)){return(facts)}
         return(predicateFacts(pov))
     }
     // These are the positive facts tested by !pattern, not facts asserted by it.
     me GraphTypeFacts: predicateFacts(our POV: pov, me bool: relationship <- false) <- {
+        observeRead(pov);
         me GraphTypeFacts: facts
         if(!plainStructure(pov, false, false, relationship, false) or !definitionTypeShape(pov) or
                 (pov!.pItem!.value!.sizeMode==fromContext and
@@ -637,6 +712,7 @@ struct ProteusGraphAccess {
         return(facts)
     }
     me bool: applyTypeFacts(our POV: target, me GraphTypeFacts: required) <- {
+        observeRead(target);
         me GraphTypeFacts: actual <- typeFacts(target)
         if(!actual.valid){return(false)}
         me GraphTypeFacts: combined <- actual
@@ -673,6 +749,7 @@ struct ProteusGraphAccess {
         return(changed)
     }
     me GraphNumericLiteral: planNumericLiteral(our POV: pov) <- {
+        observeRead(pov);
         me GraphNumericLiteral: plan
         if(inputPending(pov) or pov!.pItem!.value!.overlayType!=NUM or
                 pov!.pItem!.value!.evalMode!=emLiteral or pov!.pItem!.value!.undefined){return(plan)}
@@ -692,6 +769,7 @@ struct ProteusGraphAccess {
         return(plan)
     }
     me bool: applyNumericLiteral(our POV: pov, me GraphNumericLiteral: plan) <- {
+        observeRead(pov);
         if(!plan.changed){return(false)}
         pov!.pItem!.value!.num <- plan.number
         pov!.pItem!.value!.inverted <- plan.inverted
@@ -700,6 +778,7 @@ struct ProteusGraphAccess {
         return(true)
     }
     me bool: scalar(our POV: pov) <- {
+        observeRead(pov);
         if(!plain(pov)){return(false)}
         return((pov!.pItem!.value!.overlayType==NUM or
                 pov!.pItem!.value!.overlayType==STR or pov!.pItem!.isNull()) and
@@ -709,54 +788,65 @@ struct ProteusGraphAccess {
     // An unknown overlay can acquire scalar evidence without pretending its
     // payload is already numeric or textual. Other interpretations stay deferred.
     me bool: scalarCandidate(our POV: pov) <- {
+        observeRead(pov);
         return(plain(pov) and (scalar(pov) or unknownOverlay(pov)))
     }
     me bool: literalList(our POV: pov) <- {
+        observeRead(pov);
         return(plain(pov) and pov!.pItem!.value!.overlayType==LST and
                pov!.pItem!.value!.evalMode==emLiteral)
     }
     // Physical contents are safe to walk without expanding templates. More
     // list representations will advertise their own edges in later slices.
     me bool: physicalList(our POV: pov) <- {
+        observeRead(pov);
         return(literalList(pov) and (pov!.pItem!.value!.listSpec==NULL or !pov!.pItem!.value!.tailUnfinished) and
                (pov!.pItem!.streamState==parseDone or pov!.pItem!.streamState==notParsing))
     }
     // Read-only evidence from a parser-owned list. Its unfinished member and
     // eventual extent are deliberately absent from the correspondence layout.
     me bool: prefixList(our POV: pov) <- {
+        observeRead(pov);
         return(growingList(pov) and plain(pov, false, true) and
                !pov!.pItem!.value!.timelike and orderedList(pov))
     }
     me bool: unreferencedTemplateSpan(our POV: pov) <- {
+        observeRead(pov);
         if(!repeatedDefinitionList(pov)){return(false)}
         me List<our POV>: demanded <- demandedOccurrences(pov)
         return(demanded.isEmpty())
     }
     me bool: spanList(our POV: pov) <- {
+        observeRead(pov);
         // <~ stores selected results in the prefix; its listSpec describes
         // future input matching, not extra members of that output prefix.
         return(physicalList(pov) or prefixList(pov) or unreferencedTemplateSpan(pov) or
                (fedTemplate(pov) and templatePrefixList(pov)))
     }
     me bool: unknownList(our POV: pov) <- {
+        observeRead(pov);
         return(plain(pov) and pov!.pItem!.value!.overlayType==LST and
                pov!.pItem!.value!.evalMode==emUnknown)
     }
     me bool: adoptableList(our POV: pov) <- {
+        observeRead(pov);
         return((scalarCandidate(pov) and unknownOverlay(pov)) or unknownList(pov))
     }
     me bool: closedPhysicalList(our POV: pov) <- <%{
+        if(pov) proteus4::readView(pov);
         if (!physicalList(pov)) return false;
-        if (pov->pItem->orderMode!=uUnordered) return !getFlagBit(pov->pItem->value->flags,infonState::tailUnfinished);
+        if (proteus4::readView(pov)->orderMode!=uUnordered) return !getFlagBit(proteus4::readView(pov)->value->flags,infonState::tailUnfinished);
         auto boundary=proteus4::listBoundary(*this,pov);
         return boundary.valid && boundary.tail==0 && boundary.missingExtents.empty();
     }%>
     me bool: listExtentAgrees(our POV: pov, me GraphListMeasure: measure) <- {
+        observeRead(pov);
         return(measure.known and closedPhysicalList(pov) and
                pov!.pItem!.infSize!.evalMode==emLiteral and
                pov!.pItem!.infSize!.num==measure.count)
     }
     me bool: applyCountedSize(our POV: pov, me GraphListMeasure: measure) <- {
+        observeRead(pov);
         if(!measure.known or !closedPhysicalList(pov) or
                 pov!.pItem!.value!.sizeMode==fromGiven or
                 pov!.pItem!.infSize!.evalMode!=emUnknown){return(false)}
@@ -769,6 +859,7 @@ struct ProteusGraphAccess {
         return(true)
     }
     me int: known(our POV: pov) <- {
+        observeRead(pov);
         if(pov==NULL or pov!.pItem==NULL or inputPending(pov)){return(0)}
         if(pov!.pItem!.value!.evalMode==emIntersection){return(0)}
         me int: mask <- 0
@@ -781,6 +872,7 @@ struct ProteusGraphAccess {
     // The GoalSpec calls this only at validated completion or invalidation.
     // The list goal has also checked extent and all required member goals.
     void: setNormed(our POV: pov, me bool: complete) <- {
+        observeRead(pov);
         if(pov!=NULL and pov!.pItem!=NULL){
             pov!.pItem!.isNormed <- complete and (definitionReady(pov) or
                     ((scalar(pov) or closedPhysicalList(pov)) and known(pov)==3))
@@ -789,12 +881,14 @@ struct ProteusGraphAccess {
     // Unsupported semantics stay symbolic. This deliberately does not infer
     // equality from arbitrary cursor, range, negation or selection work.
     me bool: supports(our POV: pov, me int: demand) <- {
+        observeRead(pov);
         if(canSelect(pov)){return(true)}
         if(!plain(pov)){return(false)}
         if(scalarCandidate(pov) or unknownList(pov) or hasConcat(pov, 2)){return(true)}
         return(physicalList(pov) or (demand==1 and literalList(pov)))
     }
     me bool: relationSupported(our POV: lhs, our POV: rhs, me int: demand) <- {
+        observeRead(lhs); observeRead(rhs);
         if((adoptableList(lhs) and spanList(rhs) and orderedList(rhs)) or
            (adoptableList(rhs) and spanList(lhs) and orderedList(lhs))){return(true)}
         if(spanList(lhs) and (demand!=1 or inputPending(lhs) or inputPending(rhs))){return(correspondingLists(lhs, rhs))}
@@ -806,23 +900,30 @@ struct ProteusGraphAccess {
                lhs!.pItem!.value!.overlayType==rhs!.pItem!.value!.overlayType)
     }
     me bool: correspondingLists(our POV: left, our POV: right) <- {
+        observeRead(left); observeRead(right);
         return(spanList(left) and spanList(right) and
                orderedList(left) and orderedList(right))
     }
     me bool: correspondingMembers(our POV: left, our POV: right) <- {
+        observeRead(left); observeRead(right);
         return(left!=NULL and right!=NULL and left!.pItem!=NULL and right!.pItem!=NULL and
                !left!.isSubItm and !right!.isSubItm and
                left!.pItem!.itmMode==mItem and right!.pItem!.itmMode==mItem)
     }
     me bool: openTail(our POV: pov) <- {
+        observeRead(pov);
         // Unordered members leave a virtual remainder. A known total extent
         // can reduce that remainder to zero without enumerating other parts.
         return(inputPending(pov) or pov!.pItem!.value!.tailUnfinished or pov!.pItem!.orderMode==uUnordered)
     }
-    me bool: sameInfon(our POV: left, our POV: right) <- {return(left!.pItem===right!.pItem)}
+    me bool: sameInfon(our POV: left, our POV: right) <- {
+        observeRead(left); observeRead(right);
+        return(left!.pItem===right!.pItem)
+    }
     // -1 means unknown; -2 means an unsupported extent. Do not narrow an
     // arbitrary FlexNum to an index before checking the range and integrality.
     me int64: listExtent(our POV: pov) <- {
+        observeRead(pov);
         if(inputPending(pov)){return(-1)}
         if(pov!.pItem!.infSize!.evalMode==emUnknown){return(-1)}
         if(pov!.pItem!.infSize!.evalMode!=emLiteral){return(-2)}
@@ -831,9 +932,11 @@ struct ProteusGraphAccess {
         return(pov!.pItem!.infSize!.num.getNumerator().convertToIntVal())
     }
     me bool: canMakeMember(our POV: source) <- {
+        observeRead(source);
         return(scalarCandidate(source) or physicalList(source))
     }
     our POV: appendTailMember(our POV: owner, our POV: source) <- {
+        observeRead(owner); observeRead(source);
         // New physical position, independent view, and a persistent identity
         // to the source. Never shallow-copy the source list's member links.
         our infonView:: item
@@ -859,6 +962,7 @@ struct ProteusGraphAccess {
         return(member)
     }
     me bool: finishTail(our POV: owner, me bool: close, me int64: extent) <- {
+        observeRead(owner);
         me bool: changed <- false
         if(close and owner!.pItem!.value!.tailUnfinished){
             owner!.pItem!.value!.tailUnfinished <- false
@@ -873,11 +977,13 @@ struct ProteusGraphAccess {
         return(changed)
     }
     me bool: hasDirectIdentity(our POV: left, our POV: right) <- <%{
+        if(left) proteus4::readView(left); if(right) proteus4::readView(right);
         return proteus4::POVDescription(left, registry.get()).hasIdentity(right);
     }%>
     // -1: conflicting known scalar fields; 0: unsupported;
     // 1: compatible in this foundation's supported subset.
     me int: compatible(our POV: target, our POV: source, me int: demand) <- {
+        observeRead(target); observeRead(source);
         if(!relationSupported(target, source, demand)){return(0)}
         if(!inputPending(target) and !inputPending(source) and target!.pItem!.infSize!.evalMode==emLiteral and
                 source!.pItem!.infSize!.evalMode==emLiteral and
@@ -893,10 +999,12 @@ struct ProteusGraphAccess {
         return(1)
     }
     me int: scalarCompatibility(our POV: target, our POV: source) <- <%{
+        if(target) proteus4::readView(target); if(source) proteus4::readView(source);
         auto result=proteus4::scalarConstraint(typeFacts(target),typeFacts(source),false,false);
         return result==proteus4::ScalarMatch::yes ? 1 : result==proteus4::ScalarMatch::no ? -1 : 0;
     }%>
     me bool: apply(our POV: target, our POV: source, me int: demand) <- {
+        observeRead(target); observeRead(source);
         // The goal validated the whole path before this batch. Recheck at the
         // mutation boundary; nothing can interleave under the context lock.
         if(inputPending(target) or compatible(target, source, demand)!=1){return(false)}
@@ -961,18 +1069,21 @@ struct ProteusGraphAccess {
         return(false)
     }
     our infonView: selectionSource(our POV: pov) <- {
+        observeRead(pov);
         if(pov==NULL or pov!.pItem==NULL){return(NULL)}
         if(pov!.pItem!.selectionExpression!=NULL){return(pov!.pItem!.selectionExpression)}
         if(pov!.pItem!.value!.evalMode==emIntersection){return(pov!.pItem!.innr)}
         return(NULL)
     }
     me int: selectionMode(our POV: pov) <- {
+        observeRead(pov);
         if(pov!.pItem!.selectionExpression!=NULL){return(pov!.pItem!.selectionKind)}
         return(pov!.pItem!.intersectPos)
     }
     // Direct <~ constrains one inner prefix. On a repeated intersection it
     // constrains successive occurrences, carrying the same source cursor.
     our infonView: innerSourceOwner(our POV: pov) <- {
+        observeRead(pov);
         if(pov==NULL or pov!.pItem==NULL or inputPending(pov)){return(NULL)}
         our infonView: item <- pov!.pItem
         if(!item!.hasInnrOutr or item!.viewMode!=vmOverlay){return(NULL)}
@@ -983,15 +1094,18 @@ struct ProteusGraphAccess {
         return(NULL)
     }
     me bool: hasInnerSource(our POV: pov) <- {
+        observeRead(pov);
         our infonView: owner <- innerSourceOwner(pov)
         return(owner!=NULL and owner!.funcArgs!=NULL and !owner!.hasRHS(owner!.funcArgs))
     }
     me bool: fedTemplate(our POV: pov) <- {
+        observeRead(pov);
         if(pov==NULL or pov!.pItem==NULL or pov!.pItem!.value!.listSpec==NULL){return(false)}
         withEach source in pov!.pItem!.wrkList{if(source!.isOutrFeed){return(true)}}
         return(false)
     }
     me bool: applyInnerSource(our POV: pov) <- {
+        observeRead(pov);
         if(!hasInnerSource(pov)){return(false)}
         our infonView: body <- innerSourceOwner(pov)
         me bool: repeated <- body===pov!.pItem
@@ -1006,10 +1120,12 @@ struct ProteusGraphAccess {
         return(true)
     }
     me bool: hasArgument(our POV: pov) <- {
+        observeRead(pov);
         return(pov!=NULL and pov!.pItem!=NULL and pov!.pItem!.funcArgs!=NULL and
                pov!.pItem!.argPos!=apNoArgs and !inputPending(pov))
     }
     me bool: literalSelectionBody(our infonView: source) <- {
+        observeViewRead(source);
         return(source!=NULL and source!.viewMode==vmOverlay and source!.type==NULL and source!.addedTypes.isEmpty() and
                (source!.funcArgs==NULL or source!.argPos!=apNoArgs) and source!.parts.isEmpty() and
                source!.value!.overlayType==LST and source!.value!.evalMode==emLiteral and
@@ -1018,6 +1134,7 @@ struct ProteusGraphAccess {
                (source!.orderMode==uUnknown or source!.orderMode==uOrdered))
     }
     me bool: canSelect(our POV: pov) <- {
+        observeRead(pov);
         our infonView: source <- selectionSource(pov)
         if(source==NULL or !plain(pov, true) or pov!.pItem!.positionalSelection or
                 pov!.pItem!.selectionRequestID!=0 or pov!.pItem!.isOrLike()){return(false)}
@@ -1027,6 +1144,7 @@ struct ProteusGraphAccess {
     // A positive given intersection extent selects the last position of
     // that prefix. It is not an assertion that the stored body ends there.
     me int64: selectionIndex(our POV: pov) <- {
+        observeRead(pov);
         our infonView: source <- selectionSource(pov)
         if(source==NULL or !selectionIsLast(pov) or source!.value!.sizeMode!=fromGiven or
                 source!.infSize!.overlayType!=NUM or source!.infSize!.evalMode!=emLiteral or
@@ -1035,6 +1153,7 @@ struct ProteusGraphAccess {
         return(source!.infSize!.num.getNumerator().convertToIntVal()-1)
     }
     me bool: selectionExtentAgrees(our POV: owner, me GraphListMeasure: measure) <- {
+        observeRead(owner);
         our infonView: source <- selectionSource(owner)
         me bool: given <- source!.infSize!.overlayType==NUM and source!.infSize!.evalMode==emLiteral
         if(given){
@@ -1048,31 +1167,43 @@ struct ProteusGraphAccess {
         }
         return(true)
     }
-    me bool: selectionIsMarked(our POV: owner) <- {return(selectionMode(owner)==ipGetMarked)}
-    me bool: selectionIsLast(our POV: owner) <- {return(selectionMode(owner)==ipGetLast)}
+    me bool: selectionIsMarked(our POV: owner) <- {
+        observeRead(owner);
+        return(selectionMode(owner)==ipGetMarked)
+    }
+    me bool: selectionIsLast(our POV: owner) <- {
+        observeRead(owner);
+        return(selectionMode(owner)==ipGetLast)
+    }
     our POV: selectionStart(our POV: owner) <- <%{
+        if(owner) proteus4::readView(owner);
         auto source = selectionSource(owner);
         if (selectionIsMarked(owner)) return source->intersectMarkedRetPOV;
         return proteus4::POVDescription::boundary(source->value, selectionIsLast(owner));
     }%>
     me bool: selectionSpan(our POV: member, me bool: last) <- {
+        observeRead(member);
         return(physicalList(member) and orderedList(member) and (!last or !openTail(member)))
     }
     me bool: selectionCycle(our POV: owner, our POV: member) <- {
+        observeRead(owner); observeRead(member);
         return(member!.pItem===owner!.pItem or member!.pItem===selectionSource(owner))
     }
     // Cursor syntax contributes a position demand. Ordinary identities and
     // field Sets resolve the selected occurrence after this binding is known.
     me int: relativeDirection(our POV: pov) <- {
+        observeRead(pov);
         if(!plain(pov, false, false, false, true)){return(0)}
         if(pov!.pItem!.cursorMode==cmPrev or pov!.pItem!.cursorMode==cmTPrev){return(-1)}
         if(pov!.pItem!.cursorMode==cmNext or pov!.pItem!.cursorMode==cmTNext){return(1)}
         return(0)
     }
     me bool: temporalCursor(our POV: owner) <- {
+        observeRead(owner);
         return(owner!.pItem!.cursorMode==cmTPrev or owner!.pItem!.cursorMode==cmTNext)
     }
     me bool: applyRelative(our POV: owner, our POV: selected) <- {
+        observeRead(owner); observeRead(selected);
         if(!relativeDirection(owner) or owner!.pItem!.viewMode!=vmCursor){return(false)}
         bind(owner); bind(selected)
         // Cursor parsing leaves a default zero size, not a size assertion.
@@ -1087,10 +1218,12 @@ struct ProteusGraphAccess {
         return(true)
     }
     me bool: selectionAgrees(our POV: owner, our POV: selected) <- {
+        observeRead(owner); observeRead(selected);
         return(canSelect(owner) and selected!=NULL and
                (owner!.pItem!.selectedResult==NULL or owner!.pItem!.selectedResult===selected))
     }
     me bool: applySelection(our POV: owner, our POV: selected) <- {
+        observeRead(owner); observeRead(selected);
         if(!selectionAgrees(owner, selected) or owner!.pItem!.selectedResult!=NULL){return(false)}
         bind(owner); bind(selected)
         owner!.pItem!.selectionKind <- selectionMode(owner)
@@ -1110,6 +1243,7 @@ struct ProteusGraphAccess {
         return(true)
     }
     our infonState: concatSource(our POV: pov, me int: slot) <- {
+        observeRead(pov);
         if(pov==NULL or pov!.pItem==NULL){return(NULL)}
         our infonState: source <- pov!.pItem!.valueExpression
         our infonState: current <- pov!.pItem!.value
@@ -1119,6 +1253,7 @@ struct ProteusGraphAccess {
         return(NULL)
     }
     me bool: hasConcat(our POV: pov, me int: slot) <- {
+        observeRead(pov);
         our infonState: source <- concatSource(pov, slot)
         // The loose bits qualify an incoming relationship. They do not
         // prevent evaluating this endpoint's own stored expression.
@@ -1127,10 +1262,12 @@ struct ProteusGraphAccess {
                !source!.tailUnfinished and source!.listSpec==NULL and !source!.timelike)
     }
     me bool: concatNeedsRadix(our POV: member) <- {
+        observeRead(member);
         return(scalar(member) and member!.pItem!.value!.overlayType==NUM and
                member!.prev!=NULL and member!.pItem!.value!.sizeMode!=fromContext)
     }
     me GraphConcatPlan: planConcat(our POV: owner, me int: slot, me GraphConcatTerms: terms) <- {
+        observeRead(owner);
         me GraphConcatPlan: plan
         if(!hasConcat(owner, slot) or terms.items.isEmpty()){return(plan)}
         me bool: first <- true
@@ -1194,6 +1331,7 @@ struct ProteusGraphAccess {
         return(plan)
     }
     me bool: applyConcat(our POV: owner, me int: slot, me GraphConcatTerms: terms) <- {
+        observeRead(owner);
         me GraphConcatPlan: plan <- planConcat(owner, slot, terms)
         if(!plan.valid){return(false)}
         withEach member in plan.members{bind(member)}
@@ -1238,28 +1376,43 @@ struct ProteusGraphAccess {
         if(changed){owner!.workRevision <+- 1; owner!.pItem!.isNormed <- false}
         return(changed)
     }
-    me bool: sparse(our POV: pov) <- <%{ return proteus4::POVDescription(pov).hasVirtualMembers(); }%>
-    me int64: extent(our POV: pov) <- <%{ return proteus4::POVDescription(pov).virtualExtent(); }%>
+    me bool: sparse(our POV: pov) <- <%{
+        if(pov) proteus4::readView(pov);
+return proteus4::POVDescription(pov).hasVirtualMembers(); }%>
+    me int64: extent(our POV: pov) <- <%{
+        if(pov) proteus4::readView(pov);
+return proteus4::POVDescription(pov).virtualExtent(); }%>
     our POV: existingSparseItem(our POV: pov, me int64: index) <- <%{
+        if(pov) proteus4::readView(pov);
         return proteus4::POVDescription(pov).existingOccurrence(index);
     }%>
     our POV: sparseItem(our POV: pov, me int64: index) <- {
+        observeRead(pov);
         bind(pov)
         return(registry!.getOrCreateIndexedRepetitionOccurrence(pov, index))
     }
     // Parsed untyped ordered literals normally retain uUnknown. Explicit
     // unordered lists and unresolved type-dependent order stay unsupported.
     me bool: orderedList(our POV: pov) <- {
+        observeRead(pov);
         return(pov!=NULL and pov!.pItem!=NULL and
                pov!.pItem!.value!.overlayType==LST and
                pov!.pItem!.value!.evalMode==emLiteral and
                (pov!.pItem!.orderMode==uOrdered or
                 (pov!.pItem!.orderMode==uUnknown and pov!.pItem!.type==NULL)))
     }
-    our POV: first(our POV: pov, me bool: reverse <- false) <- <%{ return proteus4::POVDescription(pov).member(reverse); }%>
-    our POV: next(our POV: pov, me bool: reverse <- false) <- <%{ return proteus4::POVDescription(pov).adjacent(reverse); }%>
+    our POV: first(our POV: pov, me bool: reverse <- false) <- <%{
+        if(pov) proteus4::readView(pov);
+return proteus4::POVDescription(pov).member(reverse); }%>
+    our POV: next(our POV: pov, me bool: reverse <- false) <- <%{
+        if(pov) proteus4::readView(pov);
+return proteus4::POVDescription(pov).adjacent(reverse); }%>
     me bool: navigationList(our POV: pov) <- {
+        observeRead(pov);
         return(orderedList(pov) and (physicalList(pov) or prefixList(pov) or templatePrefixList(pov)))
     }
-    me bool: subList(our POV: pov) <- {return(pov!.isSubItm)}
+    me bool: subList(our POV: pov) <- {
+        observeRead(pov);
+        return(pov!.isSubItm)
+    }
 }

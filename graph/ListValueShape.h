@@ -30,7 +30,7 @@ public:
         }
         auto requirement=std::make_shared<DefinitionRequirement>();requirement->list=true;
         requirement->facts.valid=true;requirement->facts.overlay=infonState::LST;
-        requirement->facts.timelike=getFlagBit(source->pItem->value->flags,infonState::timelike);
+        requirement->facts.timelike=getFlagBit(readView(source)->value->flags,infonState::timelike);
         requirement->facts.hasSize=!partial || facts.hasSize;requirement->facts.size=count;
         for(std::int64_t i=0;i<count;++i) {
             auto member=std::make_shared<DefinitionRequirement>();member->facts.valid=true;
@@ -42,7 +42,7 @@ public:
         auto target=request.node;
         return {{"Set acquired list shape",[plan,target,partial] {
             bool changed=plan->apply();
-            if(partial) target->pItem->value->sizeMode=fromGiven;
+            if(partial) readView(target)->value->sizeMode=fromGiven;
             return changed;
         },plan->work}};
     }

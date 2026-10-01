@@ -45,15 +45,15 @@ struct DefinitionRequirement {
         return false;
     }
     void captureLabel(const POVNode& node) {
-        writtenType=node->pItem->type;
-        if(!writtenType && !node->pItem->addedTypes.empty()) writtenType=node->pItem->addedTypes.front();
+        writtenType=readView(node)->type;
+        if(!writtenType && !readView(node)->addedTypes.empty()) writtenType=readView(node)->addedTypes.front();
         if(writtenType) label=writtenType->typeID();
     }
     POVNode appendMember(ProteusGraphAccess& access,const POVNode& owner,const POVNode& before={}) const {
         auto member=access.insertDefinitionMember(owner,writtenType ? "" : label,before);
         // Keep spelling/model metadata separate from the normalized comparison
         // key, and never share mutable WordUse state with the declaration.
-        if(writtenType) member->pItem->type=std::make_shared<WordUse>(*writtenType);
+        if(writtenType) readView(member)->type=std::make_shared<WordUse>(*writtenType);
         return member;
     }
     // Explicit positions and an unmaterialized tail share the runtime's span
@@ -214,19 +214,19 @@ private:
                 // Path lowering retains the original expression and may move
                 // result constraints into a choice predicate. Those are still
                 // the installed RHS, not permission to add another copy.
-                std::vector<std::shared_ptr<infonView>> pending{node->pItem};
+                std::vector<std::shared_ptr<infonView>> pending{readView(node)};
                 std::set<std::shared_ptr<infonView>> seen;
                 while(!pending.empty()) {
                     auto infon=pending.back();pending.pop_back();
                     if(!infon || !seen.insert(infon).second) continue;
                     ++work.visits;
-                    if(infon->copySource==expression.source->pItem && infon->thisPtr &&
-                       (!self || (self->node && infon->thisPtr==self->node->pItem))) return true;
+                    if(infon->copySource==readView(expression.source) && infon->thisPtr &&
+                       (!self || (self->node && infon->thisPtr==readView(self->node)))) return true;
                     if(auto state=infon->pathSelection) {
                         pending.push_back(state->expression);
-                        if(state->predicate) pending.push_back(state->predicate->pItem);
+                        if(state->predicate) pending.push_back(readView(state->predicate));
                     }
-                    for(const auto& rhs:infon->wrkList) pending.push_back(rhs->pItem);
+                    for(const auto& rhs:infon->wrkList) pending.push_back(readView(rhs));
                 }
                 return false;
             };
@@ -237,20 +237,20 @@ private:
                     if(matches(relation.target)) {existing=relation.target;break;}
             }
             if(existing) {
-                auto proof=existing->pItem->normalizationEvidence;
-                pendingExpressions_ |= (proof && !proof->valid()) || !getFlagBit(existing->pItem->flags,infonView::isNormed);
+                auto proof=readView(existing)->normalizationEvidence;
+                pendingExpressions_ |= (proof && !proof->valid()) || !getFlagBit(readView(existing)->flags,infonView::isNormed);
                 continue;
             }
             if(!self) {supported=false;return false;}
             auto access=access_;work.creations=addCost(work.creations,2);
             writes.push_back([access,target,self,expression] {
-                auto rhs=std::make_shared<POV>(923);rhs->pItem=std::make_shared<infonView>();
+                auto rhs=std::make_shared<POV>(923);readView(rhs)=std::make_shared<infonView>();
                 std::vector<infonView*> copied;
-                expression.source->pItem->_copyAsTypeTo(rhs->pItem,true,true,self->node->pItem,&copied);
-                rhs->pItem->copySource=expression.source->pItem;
-                SetModeBits(rhs->pItem->flags,infonView::copySourceType,infonView::cstDefinition);
-                access->bind(rhs);target->node->pItem->addPOVToWrkList(rhs);
-                SetFlagBit(target->node->pItem->flags,infonView::isNormed,false);++target->node->workRevision;
+                readView(expression.source)->_copyAsTypeTo(readView(rhs),true,true,readView(self->node),&copied);
+                readView(rhs)->copySource=readView(expression.source);
+                SetModeBits(readView(rhs)->flags,infonView::copySourceType,infonView::cstDefinition);
+                access->bind(rhs);readView(target->node)->addPOVToWrkList(rhs);
+                SetFlagBit(readView(target->node)->flags,infonView::isNormed,false);++target->node->workRevision;
                 return true;
             });
         }
@@ -295,7 +295,7 @@ private:
             if(access_->subList(member) || !access_->hasTypeRequirements(member)) return false;
         // A complete ordered layout can disambiguate repeated field types by
         // position. Missing positions still require unique nominal evidence.
-        if(requirement->order==uOrdered && target->node->pItem->value->items.size()==requirement->members.size()) {
+        if(requirement->order==uOrdered && readView(target->node)->value->items.size()==requirement->members.size()) {
             std::set<std::string> labels;
             for(const auto& member:requirement->members) if(!labels.insert(member->label).second) return false;
         }
@@ -313,9 +313,9 @@ private:
         // until every virtual position has been enumerated.
         if(target->node && open && requirement->templateSource) {
             auto existing=access->memberTemplate(target->node);
-            auto supplied=requirement->templateSource->pItem;
+            auto supplied=readView(requirement->templateSource);
             if(existing && existing!=supplied && !existing->hasRHS(supplied)) {
-                auto view=std::make_shared<POV>(923);view->pItem=existing;
+                auto view=std::make_shared<POV>(923);readView(view)=existing;
                 auto facts=access->typeFacts(view);auto combined=facts;
                 ++work.visits;
                 if(facts.valid && !combined.combine(requirement->repeated->facts))
@@ -330,9 +330,9 @@ private:
                     work.creations=addCost(work.creations,2);
                     writes.push_back([access,target,existing,supplied] {
                         auto combined=std::make_shared<infonView>(*existing);
-                        auto rhs=std::make_shared<POV>(923);rhs->pItem=supplied;access->bind(rhs);
-                        combined->addPOVToWrkList(rhs);target->node->pItem->value->listSpec=combined;
-                        SetFlagBit(target->node->pItem->flags,infonView::isNormed,false);++target->node->workRevision;
+                        auto rhs=std::make_shared<POV>(923);readView(rhs)=supplied;access->bind(rhs);
+                        combined->addPOVToWrkList(rhs);readView(target->node)->value->listSpec=combined;
+                        SetFlagBit(readView(target->node)->flags,infonView::isNormed,false);++target->node->workRevision;
                         return true;
                     });
                 }
@@ -456,7 +456,7 @@ private:
         std::vector<POVNode> present;
         if(!adopt) {
             if(!access->physicalList(target->node) ||
-               (target->node->pItem->orderMode!=uUnknown && target->node->pItem->orderMode!=requirement->order)) {supported=false;return;}
+               (readView(target->node)->orderMode!=uUnknown && readView(target->node)->orderMode!=requirement->order)) {supported=false;return;}
             for(auto member=POVDescription(target->node).member();member;member=POVDescription(member).adjacent()) {
                 ++work.visits;
                 if(access->subList(member)) {supported=false;return;}
@@ -485,10 +485,10 @@ private:
         if(adopt) writes.push_back([access,target,requirement] {
             bool changed=access->adoptDefinitionList(target->node);
             changed=access->setListOrder(target->node,static_cast<OrderMode>(requirement->order)) || changed;
-            SetFlagBit(target->node->pItem->value->flags,infonState::tailUnfinished,false);
+            SetFlagBit(readView(target->node)->value->flags,infonState::tailUnfinished,false);
             return changed;
         });
-        if(!adopt && target->node->pItem->orderMode==uUnknown) writes.push_back([access,target,requirement] {
+        if(!adopt && readView(target->node)->orderMode==uUnknown) writes.push_back([access,target,requirement] {
             return access->setListOrder(target->node,static_cast<OrderMode>(requirement->order));
         });
         if(!adopt && !actual.hasSize && access->typeFacts(target->node).hasSize) {
@@ -536,7 +536,7 @@ private:
                 NumericRangeAccess reader(*access_);number=reader.read(target->node);
                 work.visits=addCost(work.visits,reader.work.visits);
                 if(number.bounds.valid) actual=number.facts;
-                auto previous=proposedNumbers_.find(target->node->pItem);
+                auto previous=proposedNumbers_.find(readView(target->node));
                 if(previous!=proposedNumbers_.end()) number.bounds=previous->second;
             }
             // A bound expression may now be an unresolved choice. Keep its
@@ -548,9 +548,9 @@ private:
                 return;
             }
             if (!actual.valid) { supported = false; return; }
-            if(!actual.explicitSize && ((requirement->list && requirement->order==uUnordered && target->node->pItem->orderMode==uUnknown) ||
+            if(!actual.explicitSize && ((requirement->list && requirement->order==uUnordered && readView(target->node)->orderMode==uUnknown) ||
                                        (fillDescription(target,requirement) && requirement->facts.hasSize && actual.hasSize && actual.size!=requirement->facts.size))) actual.hasSize=false;
-            auto found = proposed_.find(target->node->pItem);
+            auto found = proposed_.find(readView(target->node));
             if (found != proposed_.end()) actual = found->second;
         }
         // A choice constrains the result, but does not authorize choosing an
@@ -573,7 +573,7 @@ private:
         if (combined.pendingNumericValue(requirement->facts)) { supported=false; return; }
         if (!combined.combine(requirement->facts))
             throw DefinitionConflict("incompatible definition requirements");
-        if (target->node) proposed_[target->node->pItem] = combined;
+        if (target->node) proposed_[readView(target->node)] = combined;
         // Cache the full meaning, not the subset demanded by this application.
         // A later explicit normalization of this child must still see its parts.
         bindings.push_back({target, sourceRequirement});
@@ -582,7 +582,7 @@ private:
                 NumericView result;result.facts=combined;result.expression=true;
                 result.bounds=number.bounds.valid ? number.bounds.intersect(requirement->numeric) : requirement->numeric;
                 if(result.bounds.empty) throw DefinitionConflict("incompatible numeric value requirements");
-                if(target->node) proposedNumbers_[target->node->pItem]=result.bounds;
+                if(target->node) proposedNumbers_[readView(target->node)]=result.bounds;
                 if(!number.bounds.same(result.bounds) || !requirement->facts.accepts(actual)) {
                     work.creations=addCost(work.creations,result.bounds.point ? 1 : 5);
                     writes.push_back([access,target,result] {return NumericRangeAccess::write(*access,target->node,result);});
@@ -597,7 +597,7 @@ private:
         // Shared/cyclic writable list storage needs an explicit joint plan.
         // Do not independently fill the same underlying list twice in a batch.
         if (target->node) {
-            auto infon = target->node->pItem;
+            auto infon = readView(target->node);
             if (std::find(plannedLists_.begin(), plannedLists_.end(), infon) != plannedLists_.end()) {
                 supported = false; return;
             }

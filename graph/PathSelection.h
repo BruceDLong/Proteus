@@ -7,7 +7,7 @@
 // A caller asking for the resulting value still sees that value as symbolic.
 enum PathResultUse { pathValue = 0, pathCandidates = 1 };
 inline Query<POVNode> pathRequest(const POVNode& owner,int use=pathValue) {
-    auto state=owner->pItem->pathSelection;
+    auto state=readView(owner)->pathSelection;
     return {state->source,state->environmentCursor ? selectEnvironment : state->alternatives ? filterChoice : state->identity ? selectSelf : state->external ? externalField : state->resolution ? resolveWord : state->positional ? selectPosition : selectField,use,
             state->identity || state->positional ? owner : state->predicate,{owner}};
 }
@@ -23,7 +23,7 @@ class PathSelection {
         return {label, {visits,0}, true, [query] { return query; }};
     }
     static bool unordered(const POVNode& node) {
-        return node->pItem->orderMode==uUnordered;
+        return readView(node)->orderMode==uUnordered;
     }
     // Ordinary path walks store [source, embedded owners...]. A walk through
     // a choice stores [source, choice, alternative, embedded owners...] and
@@ -31,7 +31,7 @@ class PathSelection {
     // not additional graph nodes or adjacency storage.
     static std::size_t ownerOffset(const Query<POVNode>& q) {return q.coordinates.empty() ? 1 : 3;}
     void nextAlternative(Expansion<POVNode>& out,const POVNode& choice,const POVNode& current,const POVNode& predicate,int kind) const {
-        auto next=current ? current->next : choice->pItem->innr->value->items.head;
+        auto next=current ? current->next : readView(choice)->innr->value->items.head;
         out.edges.push_back(edge("next path alternative",
             {next ? next : choice,next ? pathAlternative : pathAlternativesEnd,kind,predicate,{choice}}));
     }
@@ -70,11 +70,11 @@ class PathSelection {
     // Numeric coordinates carry their sign in the rational payload; their
     // source-list bounds are resolved by navigation, not scalar wraparound.
     int orderedEndpoint(const POVNode& source,const POVNode& predicate) const {
-        if(!access_->navigationList(source) || !access_->plain(predicate,false,false,false,false) || !predicate->pItem->type ||
-           !predicate->pItem->addedTypes.empty() || !POVDescription(predicate,access_->registry.get()).relationships().empty()) return 0;
+        if(!access_->navigationList(source) || !access_->plain(predicate,false,false,false,false) || !readView(predicate)->type ||
+           !readView(predicate)->addedTypes.empty() || !POVDescription(predicate,access_->registry.get()).relationships().empty()) return 0;
         auto facts=access_->typeFacts(predicate);
         if(!facts.valid || facts.hasSize || facts.hasValue || facts.overlay>=0) return 0;
-        auto word=predicate->pItem->type->typeID();
+        auto word=readView(predicate)->type->typeID();
         return word=="first" ? 1 : word=="last" ? -1 : 0;
     }
     Expansion<POVNode> position(const Query<POVNode>& q,int endpoint=0) const {
@@ -83,10 +83,10 @@ class PathSelection {
             if(units.handled) return units.expansion;
         }
         Expansion<POVNode> out;
-        auto state=q.related->pItem->pathSelection;
+        auto state=readView(q.related)->pathSelection;
         auto selector=endpoint ? q.related : state->predicate;
         auto spec=endpoint ? POVNode{} : state->spec;
-        auto item=selector->pItem;auto value=item->value;
+        auto item=readView(selector);auto value=item->value;
         bool constrained=!endpoint && (!POVDescription(selector,access_->registry.get()).relationships().empty() || definitions_->required(selector));
         FlexNum number;Cost coordinateVisits=0;
         bool literal=access_->plainStructure(selector,false,false,false,false,false,true) &&
@@ -151,7 +151,7 @@ class PathSelection {
         auto prefix=frame.context;
         prefix.insert(prefix.end(),navigation.context.begin(),navigation.context.end());
         if(navigation.kind==itemFound)
-            return {navigation.node,frame.related->pItem->pathSelection && frame.related->pItem->pathSelection->spec ? pathSliceCandidate : pathMatched,static_cast<int>(ListPhase::member),frame.related,prefix,frame.coordinates};
+            return {navigation.node,readView(frame.related)->pathSelection && readView(frame.related)->pathSelection->spec ? pathSliceCandidate : pathMatched,static_cast<int>(ListPhase::member),frame.related,prefix,frame.coordinates};
         auto kind=navigation.kind;
         return {navigation.node,pathIndexStep,navigation.argument,frame.related,prefix,{kind,static_cast<std::int64_t>(frame.context.size()),frame.coordinates.empty() ? 0 : frame.coordinates.front()}};
     }
@@ -177,8 +177,8 @@ class PathSelection {
         Expansion<POVNode> out;
         if(q.kind>=choiceMatched) return out;
         if(q.kind==filterChoice) {
-            auto body=q.node->pItem->innr;
-            if(!q.node->pItem->isOrLike() || !access_->plain(q.node,true,false,false,false) || !access_->literalSelectionBody(body) ||
+            auto body=readView(q.node)->innr;
+            if(!readView(q.node)->isOrLike() || !access_->plain(q.node,true,false,false,false) || !access_->literalSelectionBody(body) ||
                body->partRef || !body->wrkList.empty() || !POVDescription(q.node,access_->registry.get()).relationships().empty()) {
                 out.deferred=true;return out;
             }
@@ -229,7 +229,7 @@ public:
         }
         if(q.kind==pathIndexStep) return indexStep(q);
         if(q.kind==pathAlternativesEnd) {
-            out.deferred=getFlagBit(q.node->pItem->innr->value->flags,infonState::tailUnfinished);
+            out.deferred=getFlagBit(readView(q.node)->innr->value->flags,infonState::tailUnfinished);
             return out;
         }
         if(q.kind==pathEnd || q.kind==pathAlternativeUnknown) {
@@ -244,7 +244,7 @@ public:
         if(q.kind==selectField || q.kind==selectPosition) {
             // A path continuation demands its predecessor's selection, not
             // complete normalization of that intermediate object.
-            if (auto field=q.node->pItem->pathSelection) {
+            if (auto field=readView(q.node)->pathSelection) {
                 out.refinements.push_back({pathRequest(q.node,pathCandidates),{0,0},"select preceding path segment",false});
                 if(!field->updates.empty())
                     out.refinements.push_back({{q.node,relationshipConstraints,0},{1,0},"apply preceding path constraints",false});
@@ -274,8 +274,8 @@ public:
                     out.edges.push_back(edge("selected infon boundary",{boundary,pathMatched,0,q.related,{q.node}}));
                 return out;
             }
-            if(q.node->pItem->isOrLike()) {
-                auto body=q.node->pItem->innr;
+            if(readView(q.node)->isOrLike()) {
+                auto body=readView(q.node)->innr;
                 if(!access_->plain(q.node,true,false,false,false) || !access_->literalSelectionBody(body) ||
                     body->partRef || !body->wrkList.empty() ||
                     !POVDescription(q.node,access_->registry.get()).relationships().empty()) {
@@ -369,12 +369,12 @@ class PathExpression {
         return true;
     }
     static bool choiceReady(ProteusGraphAccess& access,const POVNode& node) {
-        const auto& item=node->pItem;
+        const auto& item=readView(node);
         if(item->pathSelection || item->wrkList.size()!=1 || !access.plain(node,item->isOrLike(),false,false,false) ||
            !POVDescription(node,access.registry.get()).relationships(false).empty()) return false;
         auto rhs=item->wrkList.front();
-        if(!access.plain(rhs,rhs->pItem->isOrLike(),false,false,false) || !POVDescription(rhs,access.registry.get()).relationships().empty()) return false;
-        return item->isOrLike()!=rhs->pItem->isOrLike();
+        if(!access.plain(rhs,readView(rhs)->isOrLike(),false,false,false) || !POVDescription(rhs,access.registry.get()).relationships().empty()) return false;
+        return item->isOrLike()!=readView(rhs)->isOrLike();
     }
     static bool environmentCursor(const Infon& item) {
         return getModeBits(item->flags,infonView::viewMode)==infonView::vmCursor &&
@@ -383,7 +383,7 @@ class PathExpression {
                 getModeBits(item->flags,infonView::cursorMode)==infonView::cmWorld);
     }
     static Cost count(ProteusGraphAccess& access,const POVNode& node) {
-        auto item=node->pItem;
+        auto item=readView(node);
         bool contextual=environmentCursor(item);
         if((!contextual && !item->partRef && item->parts.empty()) || !item->wrkList.empty() || item->pathSelection ||
            !access.plainStructure(node,item->isOrLike(),false,true,contextual,true,false) ||
@@ -392,8 +392,8 @@ class PathExpression {
         return inspect(item,seen,result) ? result : 0;
     }
     static void initialize(ProteusGraphAccess& access,const POVNode& owner,const POVNode& source,
-                           const POVNode& predicate,const POVNode& spec,bool positional,bool identity,const Infon& expression={}) {
-        auto result=owner->pItem=std::make_shared<infonView>();
+                           const POVNode& predicate,const POVNode& spec,bool positional,bool identity,const Infon& expression={},Changes* changes=nullptr) {
+        auto result=readView(owner)=std::make_shared<infonView>();
         SetModeBits(result->flags,infonView::itmMode,infonView::mItem);
         SetModeBits(result->flags,infonView::viewMode,infonView::vmOverlay);
         SetModeBits(result->infSize->flags,infonState::overlayType,infonState::NUM);
@@ -403,25 +403,27 @@ class PathExpression {
         auto state=result->pathSelection=std::make_shared<GraphPathSelection>();
         state->positional=positional;state->identity=identity;state->source=source;state->predicate=predicate;state->spec=spec;state->expression=expression;
         if(expression) {result->originID=expression->originID;result->infCharPos=expression->infCharPos;result->replyCharPos=expression->replyCharPos;}
-        access.bind(source);if(predicate) access.bind(predicate);if(spec) access.bind(spec);access.bind(owner);++owner->workRevision;
+        for(const auto& node:{source,predicate,spec,owner})
+            if(node && access.bind(node) && changes) *changes=Changes{};
+        ++owner->workRevision;
     }
     static POVNode lower(ProteusGraphAccess& access,const POVNode& source,const Infon& syntax,
-                         const POVNode& destination,const Infon& expression,std::vector<POVNode>& effects) {
+                         const POVNode& destination,const Infon& expression,std::vector<POVNode>& effects,Changes& changes) {
         if(!syntax) return source;
         auto step=[&](const Part& part,const POVNode& output) {
             auto continuation=tail(part);
             auto owner=continuation && continuation->partRef ? std::make_shared<POV>(915) : output;
             bool positional=getModeBits(part->flags,PartPath::pathMode)==PartPath::idxField;
-            auto predicate=std::make_shared<POV>(915);predicate->pItem=std::make_shared<infonView>(*part->path);
-            if(!positional) {predicate->pItem->partRef.reset();predicate->pItem->parts.clear();predicate->pItem->wrkList.clear();}
+            auto predicate=std::make_shared<POV>(915);readView(predicate)=std::make_shared<infonView>(*part->path);
+            if(!positional) {readView(predicate)->partRef.reset();readView(predicate)->parts.clear();readView(predicate)->wrkList.clear();}
             POVNode spec;
-            if(part->spec) {spec=std::make_shared<POV>(916);spec->pItem=part->spec;}
-            initialize(access,owner,source,predicate,spec,positional,false,expression);
-            owner->pItem->pathSelection->external=getModeBits(part->flags,PartPath::pathMode)==PartPath::upField;
-            owner->pItem->pathSelection->resolution=getModeBits(part->flags,PartPath::pathMode)==PartPath::resolutionField;
-            if(continuation) owner->pItem->pathSelection->updates=continuation->wrkList;
+            if(part->spec) {spec=std::make_shared<POV>(916);readView(spec)=part->spec;}
+            initialize(access,owner,source,predicate,spec,positional,false,expression,&changes);
+            readView(owner)->pathSelection->external=getModeBits(part->flags,PartPath::pathMode)==PartPath::upField;
+            readView(owner)->pathSelection->resolution=getModeBits(part->flags,PartPath::pathMode)==PartPath::resolutionField;
+            if(continuation) readView(owner)->pathSelection->updates=continuation->wrkList;
             if(continuation && !continuation->wrkList.empty()) effects.push_back(owner);
-            return lower(access,owner,continuation,output,expression,effects);
+            return lower(access,owner,continuation,output,expression,effects,changes);
         };
         for(const auto& part:syntax->parts) effects.push_back(step(part,std::make_shared<POV>(915)));
         return syntax->partRef ? step(syntax->partRef,destination) : source;
@@ -432,27 +434,28 @@ public:
     }
     static bool ready(ProteusGraphAccess& access,const POVNode& node) {return choiceReady(access,node) || count(access,node)!=0;}
     static Work work(ProteusGraphAccess& access,const POVNode& node) {auto n=count(access,node);return {n+1,8*n+6};}
-    static bool prepare(ProteusGraphAccess& access,const POVNode& node) {
+    static SetResult prepare(ProteusGraphAccess& access,const POVNode& node) {
+        auto changes=ReadScope::changedObjects({node.get()});
         if(!ready(access,node)) return false;
-        auto original=node->pItem;
+        auto original=readView(node);
         if(choiceReady(access,node)) {
-            auto left=node->snapshotView(915);left->pItem=std::make_shared<infonView>(*original);left->pItem->wrkList.clear();
-            auto right=original->wrkList.front();bool leftChoice=left->pItem->isOrLike();
-            initialize(access,node,leftChoice ? left : right,leftChoice ? right : left,{},false,false,original);
-            node->pItem->pathSelection->alternatives=true;
-            SetFlagBit(node->pItem->flags,infonView::doReply,getFlagBit(original->flags,infonView::doReply));
-            return true;
+            auto left=node->snapshotView(915);readView(left)=std::make_shared<infonView>(*original);readView(left)->wrkList.clear();
+            auto right=original->wrkList.front();bool leftChoice=readView(left)->isOrLike();
+            initialize(access,node,leftChoice ? left : right,leftChoice ? right : left,{},false,false,original,&changes);
+            readView(node)->pathSelection->alternatives=true;
+            SetFlagBit(readView(node)->flags,infonView::doReply,getFlagBit(original->flags,infonView::doReply));
+            return {true,changes};
         }
         auto expression=std::make_shared<infonView>(*original);SetFlagBit(expression->flags,infonView::doReply,false);
-        auto source=node->snapshotView(915);source->pItem=std::make_shared<infonView>(*original);
-        source->pItem->partRef.reset();source->pItem->parts.clear();SetFlagBit(source->pItem->flags,infonView::doReply,false);access.bind(source);
+        auto source=node->snapshotView(915);readView(source)=std::make_shared<infonView>(*original);
+        readView(source)->partRef.reset();readView(source)->parts.clear();SetFlagBit(readView(source)->flags,infonView::doReply,false);if(access.bind(source)) changes=Changes{};
         if(environmentCursor(original)) {
             auto cursor=original->partRef || !original->parts.empty() ? std::make_shared<POV>(915) : node;
-            initialize(access,cursor,source,{},{},false,true,expression);
-            cursor->pItem->pathSelection->environmentCursor=getModeBits(original->flags,infonView::cursorMode);
+            initialize(access,cursor,source,{},{},false,true,expression,&changes);
+            readView(cursor)->pathSelection->environmentCursor=getModeBits(original->flags,infonView::cursorMode);
             if(cursor==node) {
-                SetFlagBit(node->pItem->flags,infonView::doReply,getFlagBit(original->flags,infonView::doReply));
-                return true;
+                SetFlagBit(readView(node)->flags,infonView::doReply,getFlagBit(original->flags,infonView::doReply));
+                return {true,changes};
             }
             source=cursor;
         }
@@ -464,27 +467,27 @@ public:
         // references form a DAG instead of parent -> child -> parent.
         bool retainedParent=expression->partRef && returnedSyntax && !returnedSyntax->parts.empty();
         auto destination=retainedParent ? std::make_shared<POV>(915) : node;
-        auto returned=lower(access,source,expression,destination,expression,effects);
-        if(returned!=node) initialize(access,node,returned,{},{},false,true,expression);
-        auto state=node->pItem->pathSelection;
+        auto returned=lower(access,source,expression,destination,expression,effects,changes);
+        if(returned!=node) initialize(access,node,returned,{},{},false,true,expression,&changes);
+        auto state=readView(node)->pathSelection;
         std::set<POVNode> seen;
         for(const auto& effect:effects) if(effect!=node && seen.insert(effect).second) state->effects.push_back(effect);
-        SetFlagBit(node->pItem->flags,infonView::doReply,getFlagBit(original->flags,infonView::doReply));
-        return true;
+        SetFlagBit(readView(node)->flags,infonView::doReply,getFlagBit(original->flags,infonView::doReply));
+        return {true,changes};
     }
     static std::vector<POVNode> choiceConstraints(const POVNode& node) {
-        std::vector<POVNode> result;auto state=node->pItem->pathSelection;
+        std::vector<POVNode> result;auto state=readView(node)->pathSelection;
         if(!state || !state->alternatives) return result;
-        for(const auto& rhs:node->pItem->wrkList)
+        for(const auto& rhs:readView(node)->wrkList)
             if(!state->resultView || !state->resultView->workListContainsPOV(rhs)) result.push_back(rhs);
         return result;
     }
     static bool constrainChoice(ProteusGraphAccess& access,const POVNode& node,const std::vector<POVNode>& constraints) {
         if(constraints.empty()) return false;
-        auto predicate=node->pItem->pathSelection->predicate;
+        auto predicate=readView(node)->pathSelection->predicate;
         for(const auto& rhs:constraints) {
-            access.bind(rhs);predicate->pItem->addPOVToWrkList(rhs);
-            auto& work=node->pItem->wrkList;work.erase(std::remove(work.begin(),work.end(),rhs),work.end());
+            access.bind(rhs);readView(predicate)->addPOVToWrkList(rhs);
+            auto& work=readView(node)->wrkList;work.erase(std::remove(work.begin(),work.end(),rhs),work.end());
         }
         ++predicate->workRevision;++node->workRevision;return true;
     }
@@ -497,13 +500,13 @@ public:
     }
     static bool needsUpdates(const std::shared_ptr<GraphPathSelection>& state) {
         if(!updatesReady(state) || state->updates.empty()) return false;
-        for(const auto& rhs:state->updates) if(!state->result->pItem->hasRHS(rhs->pItem)) return true;
+        for(const auto& rhs:state->updates) if(!readView(state->result)->hasRHS(readView(rhs))) return true;
         return false;
     }
     static bool applyUpdates(ProteusGraphAccess& access,const std::shared_ptr<GraphPathSelection>& state) {
         if(!needsUpdates(state)) return false;
         auto target=state->result;access.bind(target);
-        for(const auto& rhs:state->updates) {access.bind(rhs);target->pItem->addPOVToWrkList(rhs);}
+        for(const auto& rhs:state->updates) {access.bind(rhs);readView(target)->addPOVToWrkList(rhs);}
         ++target->workRevision;return true;
     }
 };
@@ -532,7 +535,7 @@ class ProteusPathGoal : public GoalSpec<POVNode> {
         if(q.kind==pathEnd) positionEnds_.insert(q.context.front());
         if(q.kind==pathAlternativesEnd) {
             positionsEnded_=true;
-            positionTailPending_=getFlagBit(q.node->pItem->innr->value->flags,infonState::tailUnfinished);
+            positionTailPending_=getFlagBit(readView(q.node)->innr->value->flags,infonState::tailUnfinished);
         }
         if(aggregating_ || positionsEnded_) {
             matches_.clear();waiting_=positionTailPending_;
@@ -551,7 +554,7 @@ public:
                      std::shared_ptr<ProteusDefinitions> definitions)
         :GoalSpec<POVNode>(query),access_(std::move(access)),definitions_(std::move(definitions)) {
         if(!request.context.empty()) {
-            auto state=request.context.front()->pItem->pathSelection;
+            auto state=readView(request.context.front())->pathSelection;
             if(state) {result_=state->result;published_=state->matches;publishedPending_=state->pending;}
         }
     }
@@ -562,24 +565,24 @@ public:
     }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
         auto q=visit.query;
-        if(q.kind==externalField && request.kind==externalField && !q.node->pItem->pathSelection && !q.node->pItem->isOrLike()) {
-            auto state=request.context.front()->pItem->pathSelection;
-            auto type=q.related->pItem->type;
+        if(q.kind==externalField && request.kind==externalField && !readView(q.node)->pathSelection && !readView(q.node)->isOrLike()) {
+            auto state=readView(request.context.front())->pathSelection;
+            auto type=readView(q.related)->type;
             if(type && !state->updates.empty() && POVDescription(q.node,access_->registry.get()).associations(type->typeID()).empty()) {
                 auto access=access_;auto anchor=q.node,predicate=q.related;
                 return {{"Set external property",[access,anchor,predicate] {
-                    auto value=std::make_shared<POV>(919);value->pItem=std::make_shared<infonView>();
-                    value->pItem->type=predicate->pItem->type;value->pItem->addedTypes=predicate->pItem->addedTypes;
-                    SetModeBits(value->pItem->flags,infonView::itmMode,infonView::mItem);
-                    SetModeBits(value->pItem->flags,infonView::viewMode,infonView::vmOverlay);
-                    SetModeBits(value->pItem->infSize->flags,infonState::evalMode,infonState::emUnknown);
-                    SetModeBits(value->pItem->value->flags,infonState::evalMode,infonState::emUnknown);
-                    SetModeBits(value->pItem->value->flags,infonState::overlayType,infonState::tUnknown);
+                    auto value=std::make_shared<POV>(919);readView(value)=std::make_shared<infonView>();
+                    readView(value)->type=readView(predicate)->type;readView(value)->addedTypes=readView(predicate)->addedTypes;
+                    SetModeBits(readView(value)->flags,infonView::itmMode,infonView::mItem);
+                    SetModeBits(readView(value)->flags,infonView::viewMode,infonView::vmOverlay);
+                    SetModeBits(readView(value)->infSize->flags,infonState::evalMode,infonState::emUnknown);
+                    SetModeBits(readView(value)->value->flags,infonState::evalMode,infonState::emUnknown);
+                    SetModeBits(readView(value)->value->flags,infonState::overlayType,infonState::tUnknown);
                     access->bind(value);access->bind(anchor);
                     // Predicate storage stays read-only. Its explicit facts
                     // constrain independent property storage through ordinary work.
-                    value->pItem->addPOVToWrkList(predicate);
-                    access->registry->recordExternalAssociation(anchor,predicate,value,{},predicate->pItem->type->typeID(),0);
+                    readView(value)->addPOVToWrkList(predicate);
+                    access->registry->recordExternalAssociation(anchor,predicate,value,{},readView(predicate)->type->typeID(),0);
                     return true;
                 },{1,2}}};
             }
@@ -637,9 +640,9 @@ public:
             if(std::find(matches_.begin(),matches_.end(),q.node)==matches_.end()) matches_.push_back(q.node);
         }
         if(q.kind==pathEnd && aggregating_ && !branchMatched_) waiting_=true;
-        if(q.kind==pathAlternativesEnd && getFlagBit(q.node->pItem->innr->value->flags,infonState::tailUnfinished)) waiting_=true;
+        if(q.kind==pathAlternativesEnd && getFlagBit(readView(q.node)->innr->value->flags,infonState::tailUnfinished)) waiting_=true;
         finished=q.kind==pathAlternativesEnd || (!aggregating_ && (q.kind==pathEnd ||
-            (q.kind==pathMatched && q.context.front()->pItem->orderMode!=uUnordered)));
+            (q.kind==pathMatched && readView(q.context.front())->orderMode!=uUnordered)));
         return finished ? publish() : std::vector<SetCommand>{};
     }
     CommandBatch<POVNode> finishPass() override {
@@ -652,18 +655,18 @@ private:
         if(result_ && published_==matches_ && publishedPending_==waiting_) {
             bool current=true;
             if(!alternatives && !request.context.empty()) {
-                auto state=request.context.front()->pItem->pathSelection;
-                current=state->resultView==result_->pItem && state->resultRevision==result_->workRevision && PathExpression::location(state,result_)==locations_.at(result_);
+                auto state=readView(request.context.front())->pathSelection;
+                current=state->resultView==readView(result_) && state->resultRevision==result_->workRevision && PathExpression::location(state,result_)==locations_.at(result_);
             }
             if(alternatives) {
                 if(!request.context.empty()) {
-                    auto state=request.context.front()->pItem->pathSelection;
+                    auto state=readView(request.context.front())->pathSelection;
                     for(const auto& source:matches_)
                         if(PathExpression::location(state,source)!=locations_.at(source)) current=false;
                 }
-                auto member=result_->pItem->innr->value->items.head;
+                auto member=readView(result_)->innr->value->items.head;
                 for(const auto& source:matches_) {
-                    if(!member || member->pItem!=source->pItem) {current=false;break;}
+                    if(!member || readView(member)!=readView(source)) {current=false;break;}
                     member=member->next;
                 }
             }
@@ -673,7 +676,7 @@ private:
         // arrives. Only newly matching source occurrences need a new alias.
         std::map<POVNode,POVNode> reusable;
         if(collectedAlternatives()) {
-            auto member=result_->pItem->innr->value->items.head;
+            auto member=readView(result_)->innr->value->items.head;
             for(const auto& source:published_) {
                 if(!member) break;
                 reusable[source]=member;member=member->next;
@@ -687,7 +690,18 @@ private:
         }
         Work work{matches.size(),created};
         if (!request.context.empty()) ++work.creations;
-        return {{"Set path selection result",[this,matches,access,pending,alternatives,reusable] {
+        return {{"Set path selection result",[this,matches,access,pending,alternatives,reusable]() -> SetResult {
+            auto changes=Changes::only({});
+            auto changedNode=[&](const POVNode& node) {
+                if(!node) return;
+                auto view=readView(node);
+                changes.include(ReadScope::changedObjects({node.get(),view.get(),view->pathSelection.get(),view->innr.get()}));
+            };
+            // Replacing a selection changes its binding and shared path state.
+            // Rebuilding a choice also changes its inner list and alias links.
+            if(!request.context.empty()) changedNode(request.context.front());
+            if(collectedAlternatives()) changedNode(result_);
+            for(const auto& entry:reusable) changedNode(entry.second);
             if(!alternatives) {
                 // Registry-held aliases can outlive their retired choice.
                 for(const auto& entry:reusable) entry.second->pParent=nullptr;
@@ -697,9 +711,9 @@ private:
                     auto item=std::make_shared<infonView>();
                     item->convertThisToIntersection(makeInnrInfonView(),fromGiven);
                     SetModeBits(item->value->flags,infonState::overlayType,infonState::tUnknown);
-                    result_=std::make_shared<POV>(914);result_->pItem=item;access->bind(result_);
+                    result_=std::make_shared<POV>(914);readView(result_)=item;access->bind(result_);
                 }
-                auto body=result_->pItem->innr->value;
+                auto body=readView(result_)->innr->value;
                 body->items.clear();
                 for(const auto& entry:reusable) {
                     entry.second->next.reset();entry.second->prev.reset();entry.second->pParent=nullptr;
@@ -708,42 +722,53 @@ private:
                     auto found=reusable.find(source);
                     POVNode member;
                     if(found!=reusable.end()) {
-                        member=found->second;member->pItem=source->pItem;body->items.appendPov(member);
+                        member=found->second;readView(member)=readView(source);body->items.appendPov(member);
                     } else {
-                        member=body->items.append(source->pItem,false,914);
-                        access->bind(member);access->bind(source);
+                        member=body->items.append(readView(source),false,914);
+                        bool named=access->bind(member);named=access->bind(source) || named;
                         access->registry->recordIdentity(member,source,iekListCorrespondence,0);
+                        // Existing searches may inspect relationships at the
+                        // source endpoint before this new alias is attached.
+                        changedNode(source);changedNode(member);
+                        if(named) changes=Changes{};
                     }
                     member->pParent=result_.get();
                 }
                 SetFlagBit(body->flags,infonState::tailUnfinished,pending);
                 ++result_->workRevision;
             }
+            SetResult publication{true,changes};
             published_=matches;publishedPending_=pending;verified_=!pending;
             if(!request.context.empty()) {
-                auto owner=request.context.front();auto previous=owner->pItem;
+                auto owner=request.context.front();auto previous=readView(owner);
                 auto state=previous->pathSelection;
-                auto result=std::make_shared<infonView>(*result_->pItem);
+                auto result=std::make_shared<infonView>(*readView(result_));
                 result->pathSelection=state;result->selectedResult=result_;
                 result->originID=previous->originID;result->infCharPos=previous->infCharPos;result->replyCharPos=previous->replyCharPos;
                 SetFlagBit(result->flags,infonView::doReply,getFlagBit(previous->flags,infonView::doReply));
                 SetFlagBit(result->flags,infonView::isNormed,false);
                 state->result=result_;state->matches=matches;state->pending=pending;
-                state->resultView=result_->pItem;state->resultRevision=result_->workRevision;
+                state->resultView=readView(result_);state->resultRevision=result_->workRevision;
                 state->locations.clear();
                 for(const auto& source:matches) {
                     GraphPathLocation at;at.source=source;at.context=locations_.at(source);
                     state->locations.push_back(std::move(at));
                 }
-                owner->pItem=result;access->bind(owner);++owner->workRevision;
-                if(!alternatives) definitions_->inherit(owner,result_);
+                readView(owner)=result;
+                if(access->bind(owner)) publication.changes=Changes{};
+                ++owner->workRevision;
+                if(!alternatives) {
+                    auto inherited=definitions_->inheritChanges(owner,result_);
+                    if(inherited.changed) publication.changes->include(inherited.changes.value_or(Changes{}));
+                    publication.retainEvidence=std::move(inherited.retainEvidence);
+                }
             }
-            return true;
+            return publication;
         },work}};
     }
 public:
     bool satisfied() const override {return verified_ || ((request.kind==selectPosition || request.kind==selectSelf) && positionReady_ && !waiting_);}
-    bool symbolic() const override {return !verified_ || (request.argument==pathValue && result_ && result_->pItem->isOrLike());}
+    bool symbolic() const override {return !verified_ || (request.argument==pathValue && result_ && readView(result_)->isOrLike());}
     POVNode result() const override {return result_;}
 };
 
@@ -760,13 +785,13 @@ public:
         auto access=access_;auto node=request.node;
         if(PathExpression::ready(*access,node))
             return {{"Prepare RHS path selection",[access,node]{return PathExpression::prepare(*access,node);},PathExpression::work(*access,node)}};
-        auto state=node->pItem->pathSelection;
+        auto state=readView(node)->pathSelection;
         if(state && PathExpression::needsUpdates(state))
             return {{"Set RHS path updates",[access,state]{return PathExpression::applyUpdates(*access,state);},{state->updates.size(),0}}};
         return {};
     }
     bool satisfied() const override {
-        auto state=request.node->pItem->pathSelection;
+        auto state=readView(request.node)->pathSelection;
         return state && state->result && !state->pending && PathExpression::updatesReady(state);
     }
     bool symbolic() const override {return !satisfied();}

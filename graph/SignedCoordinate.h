@@ -15,7 +15,7 @@ inline bool signedCoordinate(ProteusGraphAccess& access,const std::shared_ptr<in
         auto term=state->items.head;
         if(!access.plainStructure(term,false,false,false,false,false,true) || access.hasTypeRequirements(term) ||
            !POVDescription(term,access.registry.get()).relationships().empty() ||
-           !signedCoordinate(access,term->pItem->value,number,visits,std::move(seen))) return false;
+           !signedCoordinate(access,readView(term)->value,number,visits,std::move(seen))) return false;
     } else return false;
     if(getFlagBit(state->flags,infonState::inverted)) number.val=-number.val;
     return true;

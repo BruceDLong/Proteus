@@ -68,7 +68,7 @@ class ProteusStreamEvidence {
     std::map<Key, std::vector<Guard>, std::owner_less<Key>> guards_;
     std::shared_ptr<ProteusGraphAccess> access_;
     bool add(const POVNode& target, const Guard& guard) {
-        auto& list = guards_[target->pItem];
+        auto& list = guards_[readView(target)];
         for (const auto& existing : list)
             if (!existing.source.owner_before(guard.source) && !guard.source.owner_before(existing.source))
                 return false;
@@ -80,8 +80,8 @@ public:
         bool changed = false;
         bool temporal=BoundaryGraph::temporal(source);
         if (access_->prefixList(source) || (temporal && access_->growingList(source)))
-            changed |= add(target, {source, source->pItem->value,temporal});
-        auto found = guards_.find(source->pItem);
+            changed |= add(target, {source, readView(source)->value,temporal});
+        auto found = guards_.find(readView(source));
         if (found != guards_.end()) {
             auto guards = found->second;
             for (const auto& guard : guards) changed |= add(target, guard);
@@ -94,12 +94,12 @@ public:
             else ++it;
     }
     bool pending(const POVNode& node) {
-        auto found = guards_.find(node->pItem);
+        auto found = guards_.find(readView(node));
         if (found == guards_.end()) return false;
         auto& guards = found->second;
         for (auto it = guards.begin(); it != guards.end();) {
             auto source = it->source.lock(); auto body = it->body.lock();
-            if (!source || !body || source->pItem->value != body ||
+            if (!source || !body || readView(source)->value != body ||
                 (!access_->spanList(source) && !(it->temporal && access_->growingList(source))) ||
                 !access_->orderedList(source) || (it->temporal && !BoundaryGraph::temporal(source)))
                 throw std::runtime_error("stream prefix assumption changed: ordered list body required");
@@ -125,8 +125,8 @@ public:
     explicit ProteusCompletion(std::shared_ptr<ProteusGraphAccess> access)
         : access_(std::move(access)) {}
     void mark(const POVNode& node, const DependencyProof::Ptr& evidence) {
-        node->pItem->normalizationEvidence=evidence;
-        std::weak_ptr<infonView> weak=node->pItem;
+        readView(node)->normalizationEvidence=evidence;
+        std::weak_ptr<infonView> weak=readView(node);
         evidence->onInvalidated([weak] {
             if(auto view=weak.lock()) SetFlagBit(view->flags,infonView::isNormed,false);
         });
@@ -137,8 +137,8 @@ public:
         evidence->onInvalidated([weak] {if(auto proof=weak.lock()) proof->valid=false;});
     }
     void represented(const POVNode& node, const POVNode& rhs, const DependencyProof::Ptr& evidence) {
-        if (node->pItem->workIsRepresented(rhs)) return;
-        auto& records = node->pItem->representedWork;
+        if (readView(node)->workIsRepresented(rhs)) return;
+        auto& records = readView(node)->representedWork;
         records.erase(std::remove_if(records.begin(), records.end(),
             [](const auto& record) { return !record->valid; }), records.end());
         auto proof = std::make_shared<GraphRHSProof>(); proof->rhs = rhs;
@@ -146,7 +146,7 @@ public:
     }
     void representedTemplate(const POVNode& node, const POVNode& source, const DependencyProof::Ptr& evidence) {
         auto proof = std::make_shared<GraphRHSProof>(); proof->rhs = source;
-        node->pItem->representedTemplate = proof;retain(proof,evidence);
+        readView(node)->representedTemplate = proof;retain(proof,evidence);
     }
     void reply(const POVNode& node) {
         if (!access_->replyReady(node)) return;
@@ -187,7 +187,7 @@ public:
     void beginPass() override { checked_ = false; represented_ = false; }
     std::vector<SetCommand> found(const Visit<POVNode>&) override {
         RHSRepresentation plan(access_, request.node, request.related,definitions_);
-        if(plan.complete && request.node->pItem->workListContainsPOV(request.related)) {
+        if(plan.complete && readView(request.node)->workListContainsPOV(request.related)) {
             auto access=access_;auto owner=request.node,source=request.related;
             ++plan.work.creations;
             return {{"Consolidate RHS equality",[this,access,owner,source] {
@@ -198,13 +198,13 @@ public:
                     auto& storedOwner=relation->leftPOV==owner ? relation->leftWorkOwner : relation->rightWorkOwner;
                     // Reusing a POV after replacing its view must not overwrite
                     // a constraint still owned by the earlier shared view.
-                    if(storedOwner && storedOwner!=owner->pItem) {
+                    if(storedOwner && storedOwner!=readView(owner)) {
                         checked_=represented_=true;return false;
                     }
-                    storedOwner=owner->pItem;
+                    storedOwner=readView(owner);
                 }
-                owner->pItem->discardWrkListPOV(source);
-                ++owner->workRevision;SetFlagBit(owner->pItem->flags,infonView::isNormed,false);
+                readView(owner)->discardWrkListPOV(source);
+                ++owner->workRevision;SetFlagBit(readView(owner)->flags,infonView::isNormed,false);
                 return true;
             },plan.work}};
         }
@@ -307,7 +307,7 @@ public:
             visit.query.node==request.node && IntersectionInput::ready(*access_,request.node)) {
             auto access=access_;auto owner=request.node;
             return {{"Prepare end-relative input window",[access,owner] {return IntersectionInput::prepare(*access,owner);},
-                {owner->pItem->wrkList.size(),12*owner->pItem->wrkList.size()}}};
+                {readView(owner)->wrkList.size(),12*readView(owner)->wrkList.size()}}};
         }
         if ((request.kind==relationshipConstraints || (request.kind>=sizeOnly && request.kind<=sizeAndValue)) && visit.query.node==request.node) {
             auto constraints=PathExpression::choiceConstraints(request.node);
@@ -315,7 +315,7 @@ public:
                 auto access=access_;auto node=request.node;
                 return {{"Set choice constraints",[access,node,constraints] {return PathExpression::constrainChoice(*access,node,constraints);},{constraints.size(),0}}};
             }
-            if(auto state=request.node->pItem->pathSelection;state && PathExpression::needsUpdates(state)) {
+            if(auto state=readView(request.node)->pathSelection;state && PathExpression::needsUpdates(state)) {
                 auto access=access_;
                 return {{"Set selected source constraints",[access,state] {return PathExpression::applyUpdates(*access,state);},{state->updates.size(),0}}};
             }
@@ -548,8 +548,8 @@ public:
                 changed=access->finishTail(splice.owner,true,-1) || changed;
             }
             for(const auto& part:plan.crossings) {
-                auto middle=std::make_shared<POV>(904);middle->pItem=std::make_shared<infonView>();
-                auto item=middle->pItem;
+                auto middle=std::make_shared<POV>(904);readView(middle)=std::make_shared<infonView>();
+                auto item=readView(middle);
                 SetModeBits(item->flags,infonView::viewMode,infonView::vmOverlay);
                 SetModeBits(item->flags,infonView::itmMode,infonView::mItem);
                 SetModeBits(item->value->flags,infonState::overlayType,infonState::LST);
@@ -645,7 +645,7 @@ class ProteusRelativePositions {
     std::map<Key, Binding, std::owner_less<Key>> bindings_;
 public:
     std::vector<POVNode> context(const POVNode& node, const std::vector<POVNode>& proposed, IdentityRegistry* registry) const {
-        auto found = bindings_.find(node->pItem);
+        auto found = bindings_.find(readView(node));
         if (found == bindings_.end()) return proposed.empty() ? std::vector<POVNode>{node} : proposed;
         const auto& saved = found->second.context;
         // Result aliases carry the same view and an explicit correspondence
@@ -654,21 +654,21 @@ public:
         if(proposed.empty() && node!=found->second.expression.lock())
             for(const auto& relation:POVDescription(node,registry).relationships(false))
                 if(relation.identity && relation.identity->evidenceKind==iekListCorrespondence &&
-                   relation.target==found->second.expression.lock() && relation.target->pItem==node->pItem) return saved;
+                   relation.target==found->second.expression.lock() && readView(relation.target)==readView(node)) return saved;
         if (node != found->second.expression.lock() || (!proposed.empty() && proposed.front() != saved.front()) ||
             (proposed.size() > 1 && saved.size() > 1 && proposed != saved))
             throw std::runtime_error("relative cursor used in different occurrence contexts");
         return proposed.size() > saved.size() ? proposed : saved;
     }
     bool bind(const POVNode& node, const std::vector<POVNode>& context, const POVNode& selected) {
-        auto found = bindings_.find(node->pItem);
+        auto found = bindings_.find(readView(node));
         if (found != bindings_.end()) {
             if (found->second.context.front() != context.front() || found->second.selected != selected)
                 throw std::runtime_error("relative position changed after binding");
             if (context.size() > found->second.context.size()) { found->second.context = context; return true; }
             return false;
         }
-        bindings_.emplace(node->pItem, Binding{context, selected, node}); return true;
+        bindings_.emplace(readView(node), Binding{context, selected, node}); return true;
     }
 };
 
@@ -737,7 +737,7 @@ public:
     // ambiguous known matches and unresolved aliases yield no display value.
     POVNode knownField(const POVNode& source,const std::string& name) const {
         if(!source || !access_->physicalList(source)) return {};
-        POVNode result;bool unordered=source->pItem->orderMode==uUnordered;
+        POVNode result;bool unordered=readView(source)->orderMode==uUnordered;
         for(auto member=POVDescription(source).member();member;member=member->next) {
             if(access_->subList(member)) return {};
             auto names=definitions_->names(member);bool complete=true;Work work{0,0};
@@ -755,14 +755,14 @@ public:
         return result;
     }
     void observeTask(const Query<POVNode>&) override {
-        // Structural/value/registry readers currently share this conservative
-        // model token. Proof-cache reads add their own instance-specific token.
+        // Unconverted model producers retain this conservative token. View
+        // reads additionally observe object keys for precise path publications.
         ReadScope::observe(modelFacts_);
     }
     void invalidateCompletion(const Changes& changes) override {
         // Completion metadata follows its recorded dependencies. Definition
         // registration refreshes catalogue validation without a model-wide wake.
-        if(changes.all || changes.keys.count(modelFacts_)) invalidateCompletion();
+        if(changes.all || changes.objectWrites || changes.keys.count(modelFacts_)) invalidateCompletion();
         else if(definitions_->changesCatalogue(changes)) definitions_->prune();
     }
     void beginSearch(const Query<POVNode>&) override {
@@ -824,7 +824,7 @@ public:
         if(query.kind>=boundaryAccess && query.kind<=boundaryEnd) return BoundaryGraph(access_).expand(query);
         if(query.kind==selectEnvironment) {
             Expansion<POVNode> out;
-            auto cursor=query.context.front()->pItem->pathSelection->environmentCursor;
+            auto cursor=readView(query.context.front())->pathSelection->environmentCursor;
             auto source=cursor==infonView::cmWorld ? access_->worldSource : access_->contextSource;
             if(cursor==infonView::cmSelf) {
                 source=definitions_->selfSource(query.node);
@@ -915,7 +915,7 @@ private:
             if(access_->selectionIsLast(node) && access_->openTail(body) && access_->listExtent(body)<0) {
                 auto access=access_;auto definitions=definitions_;
                 result.edges.push_back({"symbolic last position",{1,1},true,[access,definitions,node,body] {
-                    auto old=access->registry->findEndRelativeReference(body.get(),body->pItem.get(),-1);
+                    auto old=access->registry->findEndRelativeReference(body.get(),readView(body).get(),-1);
                     definitions->retainOccurrenceOwner(body);access->bind(body);
                     auto reference=access->registry->getOrCreateEndRelativeReference(body.get(),-1);
                     return Arrival<POVNode>{{reference->referencePOV,selectionFound,0,node},!old};
@@ -1058,14 +1058,14 @@ private:
                 result.deferred = !definitions_->registered(node); return result;
             }
             bool pendingUpdate=false,selectedView=false;
-            if(auto field=node->pItem->pathSelection) {
+            if(auto field=readView(node)->pathSelection) {
                 result.refinements.push_back({pathRequest(node),{0,0},"select path result",false});
                 pendingUpdate=!PathExpression::updatesReady(field);
                 if(!constraintsOnly) for(const auto& effect:field->effects)
                     result.refinements.push_back({{effect,sizeAndValue,0},{1,0},"complete retained path",false});
                 if(!field->result) return result;
                 selectedView=!field->pending && field->matches.size()==1 &&
-                    node->pItem->value==field->result->pItem->value && node->pItem->infSize==field->result->pItem->infSize;
+                    readView(node)->value==readView(field->result)->value && readView(node)->infSize==readView(field->result)->infSize;
                 // Normalizing a choice also demands its available candidates.
                 // They are alternatives, not identities of the choice root.
                 if(field->pending || field->matches.size()!=1)
@@ -1085,7 +1085,7 @@ private:
             }
             // A member's missing facts can be supplied by its containing type
             // without requiring the entire parent's definition to normalize.
-            if (!constraintsOnly && !node->pItem->pathSelection && access_->hasTypeRequirements(node) &&
+            if (!constraintsOnly && !readView(node)->pathSelection && access_->hasTypeRequirements(node) &&
                 access_->scalarCandidate(node) && (access_->known(node)&demand)!=demand &&
                 query.context.size()>1 && query.context.front()==node) {
                 // Embedded spans preserve membership in their containing list;
@@ -1132,7 +1132,7 @@ private:
             auto relationship = [&](const POVNode& source, const char* label, bool isWork) {
                 auto context = isWork ? (query.context.empty() ? std::vector<POVNode>{node} : query.context)
                                       : std::vector<POVNode>{};
-                if(!isWork) if(auto field=node->pItem->pathSelection)
+                if(!isWork) if(auto field=readView(node)->pathSelection)
                     if(field->result==source && !field->pending && field->matches.size()==1) context=PathExpression::location(field,source);
                 if (access_->inputPending(source)) {
                     result.refinements.push_back({{source, demand, 0, {}, context}, {1, 0}, "await RHS input", false});
@@ -1144,7 +1144,7 @@ private:
                         result.edges.push_back(direct("checked type evidence", {source, demand, 0, origin}));
                     if (access_->canSelect(source))
                         result.refinements.push_back({{source, selectIntersection, 0}, {1, 0}, "find RHS intersection result", false});
-                    if (PathExpression::ready(*access_,source) || source->pItem->pathSelection || access_->hasInnerSource(source) || access_->relativeDirection(source) || access_->hasConcat(source, 1) || access_->hasConcat(source, 2))
+                    if (PathExpression::ready(*access_,source) || readView(source)->pathSelection || access_->hasInnerSource(source) || access_->relativeDirection(source) || access_->hasConcat(source, 1) || access_->hasConcat(source, 2))
                         result.refinements.push_back({{source, demand, 0, {}, context}, {1, 0}, "resolve expression RHS", false});
                     result.deferred = true; return;
                 }
@@ -1173,18 +1173,18 @@ private:
                 // A selected view already shares these exact state slots.
                 // Validate its source directly; positional correspondence would
                 // invent work merely because the view headers are distinct.
-                if (relation.derived && node->pItem->value==source->pItem->value &&
-                    node->pItem->infSize==source->pItem->infSize) {
+                if (relation.derived && readView(node)->value==readView(source)->value &&
+                    readView(node)->infSize==readView(source)->infSize) {
                     if(constraintsOnly) result.edges.push_back(direct("selected source constraints",{source,relationshipConstraints,0}));
-                    else result.refinements.push_back({{source,query.kind,query.argument,{},PathExpression::location(node->pItem->pathSelection,source)},{0,0},"normalize selected source",false});
+                    else result.refinements.push_back({{source,query.kind,query.argument,{},PathExpression::location(readView(node)->pathSelection,source)},{0,0},"normalize selected source",false});
                     continue;
                 }
-                if(source->looseType() && (!source->pItem->wrkList.empty() || access_->hasTypeRequirements(source) || access_->hasArgument(source))) {
+                if(source->looseType() && (!readView(source)->wrkList.empty() || access_->hasTypeRequirements(source) || access_->hasArgument(source))) {
                     auto payload=definitions_->payload(source);
                     result.refinements.push_back({{payload,relationshipConstraints,0},{1,0},"prove RHS payload constraints",false});
                     result.refinements.push_back({{payload,sizeAndValue,0},{1,0},"refine RHS payload",true});
                 }
-                if(source->looseType() && (PathExpression::ready(*access_,source) || source->pItem->pathSelection))
+                if(source->looseType() && (PathExpression::ready(*access_,source) || readView(source)->pathSelection))
                     result.refinements.push_back({{source,resolvePathExpression,0},{1,0},"resolve qualified RHS path",false});
                 // Expose endpoint expressions before deciding which kind of
                 // correspondence their resulting payload can participate in.
@@ -1193,8 +1193,8 @@ private:
                         result.refinements.push_back({{source, concatField, slot}, {1, 0},
                             "resolve qualified RHS expression", false});
                 if(demand!=sizeOnly && source->looseType() && access_->adoptableList(node) &&
-                   getModeBits(source->pItem->value->flags,infonState::overlayType)==infonState::LST &&
-                   getModeBits(source->pItem->value->flags,infonState::evalMode)==infonState::emLiteral) {
+                   getModeBits(readView(source)->value->flags,infonState::overlayType)==infonState::LST &&
+                   getModeBits(readView(source)->value->flags,infonState::evalMode)==infonState::emLiteral) {
                     result.refinements.push_back({{node,acquireListValue,0,source},{1,0},"acquire list value shape",false});
                     continue;
                 }
@@ -1230,7 +1230,7 @@ private:
             return result;
         }
         if(query.kind==resolvePathExpression) {
-            if(auto state=node->pItem->pathSelection) {
+            if(auto state=readView(node)->pathSelection) {
                 result.refinements.push_back({pathRequest(node),{0,0},"select RHS path result",false});
                 for(const auto& effect:state->effects)
                     result.refinements.push_back({{effect,sizeAndValue,0},{1,0},"complete retained RHS path",false});

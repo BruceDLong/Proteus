@@ -12,8 +12,8 @@ public:
             ::inflect.convert_to_modern_plural(singular)==word ? singular : std::string{};
     }
     static std::shared_ptr<WordUse> collectionType(ProteusGraphAccess& access,const POVNode& node) {
-        if(!access.literalList(node) || node->pItem->type) return {};
-        auto spec=node->pItem->value->listSpec;
+        if(!access.literalList(node) || readView(node)->type) return {};
+        auto spec=readView(node)->value->listSpec;
         if(!spec || !spec->type || spec->type->asGiven.empty() || getFlagBit(spec->type->flags,WordUse::plural)) return {};
         auto plural=::inflect.convert_to_modern_plural(spec->type->normalType());
         // Invariant spellings do not distinguish the member from its
@@ -29,19 +29,19 @@ public:
     // An explicit declaration takes precedence over inferred English spelling.
     template<class Definitions>
     static bool collectionPredicate(const POVNode& node,Definitions& definitions) {
-        auto type=node->pItem->type;
+        auto type=readView(node)->type;
         return type && type->modelID.empty() && !definitions.declared(type->typeID()) &&
             !pluralSingular(type->normalType()).empty();
     }
     static std::vector<SetCommand> commands(std::shared_ptr<ProteusGraphAccess> access,const POVNode& node) {
         if(auto type=collectionType(*access,node)) {
             return {{"Set collection type",[node,type] {
-                if(node->pItem->type) return false;
-                node->pItem->type=type;SetFlagBit(node->pItem->flags,infonView::wordDerefed,true);
+                if(readView(node)->type) return false;
+                readView(node)->type=type;SetFlagBit(readView(node)->flags,infonView::wordDerefed,true);
                 ++node->workRevision;return true;
             },{1,1}}};
         }
-        auto item=node->pItem;
+        auto item=readView(node);
         if(!access->scalar(node) || !item->type || item->type->normalType()!="english-text" ||
            getModeBits(item->value->flags,infonState::overlayType)!=infonState::STR ||
            getModeBits(item->value->flags,infonState::evalMode)!=infonState::emLiteral ||
@@ -54,7 +54,7 @@ public:
             start=end+1;
         }
         return {{"Set English phrase words",[access,node,words] {
-            auto item=node->pItem;
+            auto item=readView(node);
             item->type=std::make_shared<WordUse>();item->type->setAsGiven("english-phrase");
             item->value=std::make_shared<infonState>();
             SetModeBits(item->value->flags,infonState::overlayType,infonState::LST);
@@ -66,7 +66,7 @@ public:
             item->infSize->num=static_cast<std::int64_t>(words.size());
             for(const auto& word:words) {
                 auto member=access->appendDefinitionMember(node,word);
-                SetModeBits(member->pItem->flags,infonView::viewMode,infonView::vmAny);
+                SetModeBits(readView(member)->flags,infonView::viewMode,infonView::vmAny);
             }
             // The template describes the words without requiring a dictionary
             // definition or inventing meanings for the individual spellings.

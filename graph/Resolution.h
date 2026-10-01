@@ -27,7 +27,7 @@ public:
                 q.coordinates.erase(q.coordinates.begin(),q.coordinates.begin()+2);
             } else q.kind=selectField;
             // Choice branches require separate precedence proofs per branch.
-            if(q.node->pItem->isOrLike()) {out.deferred=true;return out;}
+            if(readView(q.node)->isOrLike()) {out.deferred=true;return out;}
             if(q.kind==pathEnd && !matched) {
                 out.edges.push_back(edge("look up external property",{q.context.front(),externalField,0,q.related,q.context}));return out;
             }
@@ -40,8 +40,8 @@ public:
             return out;
         }
         if(q.kind==externalMatched || q.kind==externalUnknown || q.kind==externalEnd) return out;
-        if(q.kind==externalField && q.node->pItem->pathSelection) {
-            auto state=q.node->pItem->pathSelection;
+        if(q.kind==externalField && readView(q.node)->pathSelection) {
+            auto state=readView(q.node)->pathSelection;
             out.refinements.push_back({pathRequest(q.node,pathCandidates),{0,0},"select external property anchor",false});
             if(state->result && !state->pending && state->matches.size()==1) {
                 q.node=state->result;out.edges.push_back(edge("use selected property anchor",q));
@@ -49,8 +49,8 @@ public:
             return out;
         }
         if(q.kind==externalField) {
-            if(q.node->pItem->isOrLike() || !q.related || !q.related->pItem->type) {out.deferred=true;return out;}
-            auto references=POVDescription(q.node,access_->registry.get()).associations(q.related->pItem->type->typeID());
+            if(readView(q.node)->isOrLike() || !q.related || !readView(q.related)->type) {out.deferred=true;return out;}
+            auto references=POVDescription(q.node,access_->registry.get()).associations(readView(q.related)->type->typeID());
             Cost visits=references.size()+1;
             for(const auto& reference:references)
                 out.edges.push_back(edge("external property candidate",{reference->valuePOV,externalPosition,0,q.related,{q.node}},visits));

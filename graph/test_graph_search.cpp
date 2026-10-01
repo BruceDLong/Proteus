@@ -981,5 +981,25 @@ int main() {
         manager.updateIfChanged([&] {root->value=8;return true;},Changes::only({root->facts}));
         assert(!access->receipt->proof->valid());++cases;
     }
+    {
+        // Object read keys are per context, survive nested proof captures,
+        // and never wake an unrelated subscriber. No model-node API changes.
+        ObjectDependencies objects,otherContext;
+        auto value=node();std::set<DependencyKey> reads;
+        DependencyProof::Ptr proof;
+        Changes changed;
+        {
+            ReadScope outer([&](const auto& key){reads.insert(key);},&objects);
+            ReadScope::observeObject(value.get());
+            {ReadScope nested([&](const auto& key){reads.insert(key);});ReadScope::observeObject(value.get());}
+            changed=ReadScope::changedObjects({value.get()});
+            assert(reads.size()==1 && changed.keys==reads && changed.objectWrites);
+            proof=DependencyProof::make(reads);
+        }
+        otherContext.key(value.get())->publish();assert(proof->valid());
+        objects.key(node().get())->publish();assert(proof->valid());
+        for(const auto& key:changed.keys) key->publish();assert(!proof->valid());
+        assert(ReadScope::changedObjects({value.get()}).all);++cases;
+    }
     std::cout << "Graph search: " << cases << "/" << cases << " scenarios passed\n";
 }

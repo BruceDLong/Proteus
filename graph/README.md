@@ -63,6 +63,8 @@ conservatively clear instance checks. See
 [definition-validation-results.md](definition-validation-results.md).
 The subsequent [traversal profile](traversal-profile-results.md) attributes most
 remaining revisits to broad path-result publications and lists the next steps.
+The first measured change is [narrower invalidation](incremental-normalization-results.md):
+path publication now targets its actual readers, including shared views and choices.
 
 `GraphNormalizer.knownField` and `knownType` provide read-only display inspection
 under `runtime.read()`, including nominal aliases. `knownField` returns an ordered

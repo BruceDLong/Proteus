@@ -100,7 +100,7 @@ public:
             auto plan = std::make_shared<ProteusDefinitionPlan>(access_, existing[i], spec);
             if (!plan->supported) return;
             for (const auto& binding : plan->bindings) if (binding.first->node &&
-                !writable.insert(binding.first->node->pItem).second) return;
+                !writable.insert(readView(binding.first->node)).second) return;
             work.visits = addCost(work.visits, plan->work.visits);
             work.creations = addCost(work.creations, plan->work.creations);
             if (i >= prefix && !existing[i]) work.creations = addCost(work.creations, 2);

@@ -15,7 +15,7 @@ public:
     Result expand(const Query<POVNode>& q) const {
         Result result;auto& out=result.expansion;Work work{0,0};
         bool positional=q.kind==selectPosition || q.kind==positionStart;
-        auto state=positional ? q.related->pItem->pathSelection : std::shared_ptr<GraphPathSelection>{};
+        auto state=positional ? readView(q.related)->pathSelection : std::shared_ptr<GraphPathSelection>{};
         if(!access_->navigationList(q.node) || definitions_->pendingOrder(q.node)) return result;
         DefinitionSpec shape;bool span=false;std::int64_t count=1;
         if(positional && state->spec) {
@@ -24,13 +24,13 @@ public:
                 auto body=definitions_->repeatedBody(spec);if(!body) return result;
                 auto proof=definitions_->describe(body,work);if(!proof) return result;
                 shape=proof->requirement;span=true;count=access_->listExtent(spec);if(count<0) return result;
-            } else shape=definitions_->unit(spec->pItem->type,work);
+            } else shape=definitions_->unit(readView(spec)->type,work);
         } else if(positional) {
-            auto parent=definitions_->unit(q.node->pItem->type,work);
+            auto parent=definitions_->unit(readView(q.node)->type,work);
             if(parent && parent->list) shape=parent->repeated;
         } else {
-            if(getFlagBit(q.related->pItem->flags,infonView::invertMatch)) return result;
-            shape=definitions_->unit(q.related->pItem->type,work);
+            if(getFlagBit(readView(q.related)->flags,infonView::invertMatch)) return result;
+            shape=definitions_->unit(readView(q.related)->type,work);
         }
         UnitMeasure unit(shape);
         // A scalar nominal field remains ordinary field selection. Conversion
@@ -46,7 +46,7 @@ public:
             work.visits=addCost(work.visits,ready.work.visits);
             if(!ready.ready) return result;
             FlexNum number;Cost visits=0;
-            if(!signedCoordinate(*access_,state->predicate->pItem->value,number,visits) || number.getDenominator()!=1 || number>INT64_MAX || number<-INT64_MAX) return result;
+            if(!signedCoordinate(*access_,readView(state->predicate)->value,number,visits) || number.getDenominator()!=1 || number>INT64_MAX || number<-INT64_MAX) return result;
             work.visits=addCost(work.visits,visits);
             auto coordinate=number.getNumerator().get_si();
             if(!state->spec && coordinate==0) return result;

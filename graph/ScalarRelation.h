@@ -16,8 +16,8 @@ public:
         bool ready=payload.ready && (!access.hasTypeRequirements(target) || definitions->satisfied(target));
         work=payload.work;
         auto positive=access.predicateFacts(target,false),supplied=access.predicateFacts(source,true);
-        bool negativeLeft=getFlagBit(target->pItem->flags,infonView::invertMatch);
-        bool negativeRight=getFlagBit(source->pItem->flags,infonView::invertMatch);
+        bool negativeLeft=getFlagBit(readView(target)->flags,infonView::invertMatch);
+        bool negativeRight=getFlagBit(readView(source)->flags,infonView::invertMatch);
         bool scalar=positive.overlay!=infonState::LST && supplied.overlay!=infonState::LST;
         bool different=positive.overlay>=0 && supplied.overlay>=0 && positive.overlay!=supplied.overlay;
         if(!source->looseType() && positive.valid && supplied.valid &&
@@ -31,7 +31,7 @@ public:
         }
         auto actual=access.typeFacts(target);
         if(source->looseType() && actual.valid && (actual.overlay<0 || actual.overlay==infonState::STR) &&
-           access.plain(source,false,false,true,false) && source->pItem->value->sizeMode!=fromContext &&
+           access.plain(source,false,false,true,false) && readView(source)->value->sizeMode!=fromContext &&
            ready) {
             auto supplied=access.predicateFacts(source,true);
             if(supplied.valid && supplied.overlay==infonState::STR) {
@@ -87,7 +87,7 @@ public:
                 // A copied prefix has a counted width only when that width is
                 // proved. Unknown endpoints must remain visibly unknown.
                 auto mode=result.facts.hasSize ? fromCount : fromGiven;
-                if(target->pItem->value->sizeMode!=mode) {target->pItem->value->sizeMode=mode;changed=true;}
+                if(readView(target)->value->sizeMode!=mode) {readView(target)->value->sizeMode=mode;changed=true;}
             }
             verified_=true;return changed;
         },plan.work}};

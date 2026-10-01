@@ -13,7 +13,7 @@ class NumericRangeAccess {
     ProteusGraphAccess& access_;
     std::set<POVNode> active_;
     NumericView value(const POVNode& node,const std::shared_ptr<infonState>& body) {
-        NumericView out;auto item=node->pItem;
+        NumericView out;auto item=readView(node);
         out.facts.valid=true;out.facts.overlay=infonState::NUM;
         out.facts.hasSize=getModeBits(item->infSize->flags,infonState::evalMode)==infonState::emLiteral;
         out.facts.size=item->infSize->num;out.facts.explicitSize=body->sizeMode==fromGiven;
@@ -47,7 +47,7 @@ class NumericRangeAccess {
             auto part=read(at);if(!part.bounds.valid) return {};
             if(first) out.bounds=part.bounds;
             else {
-                if(at->pItem->value->sizeMode!=fromContext || !part.bounds.point) return {};
+                if(readView(at)->value->sizeMode!=fromContext || !part.bounds.point) return {};
                 out.bounds=out.bounds.shifted(part.bounds.low);
             }
             first=false;
@@ -61,10 +61,10 @@ public:
     NumericView read(const POVNode& node,bool predicate=false,bool relationship=false,bool provenance=true) {
         ++work.visits;
         if(!node || access_.unknownOverlay(node) || !access_.plainStructure(node,false,false,relationship,false,false,false) ||
-           (!predicate && getFlagBit(node->pItem->flags,infonView::invertMatch)) || !active_.insert(node).second) return {};
-        auto out=value(node,node->pItem->value);
-        if(provenance && node->pItem->valueExpression && out.bounds.valid) {
-            auto original=value(node,node->pItem->valueExpression);
+           (!predicate && getFlagBit(readView(node)->flags,infonView::invertMatch)) || !active_.insert(node).second) return {};
+        auto out=value(node,readView(node)->value);
+        if(provenance && readView(node)->valueExpression && out.bounds.valid) {
+            auto original=value(node,readView(node)->valueExpression);
             out.bounds=out.bounds.intersect(original.bounds);
             out.constraint=out.constraint || original.constraint;out.expression=out.expression || original.expression;
         }
@@ -74,7 +74,7 @@ public:
         NumericRangeAccess reader(access);auto current=reader.read(target,false,false,false);
         if(!result.bounds.valid || result.bounds.empty || !result.bounds.bounded ||
            (current.bounds.same(result.bounds) && (!result.facts.hasSize || current.facts.hasSize))) return false;
-        auto item=target->pItem;access.bind(target);
+        auto item=readView(target);access.bind(target);
         SetModeBits(item->flags,infonView::viewMode,infonView::vmOverlay);
         if(!item->valueExpression) item->valueExpression=item->value;
         auto body=std::make_shared<infonState>();

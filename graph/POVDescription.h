@@ -5,6 +5,19 @@
 // records or persistent adjacency are created by inspection. Relationship
 // descriptors retain the original endpoints and evidence; they take no goal.
 // Read under the graph context lock; registry enumeration also takes its lock.
+inline void observeInfon(const std::shared_ptr<infonView>& view) {
+    if(!view) return;
+    ReadScope::observeObject(view.get());
+    ReadScope::observeObject(view->pathSelection.get());
+    ReadScope::observeObject(view->innr.get());
+}
+inline std::shared_ptr<infonView>& readView(POV* node) {
+    ReadScope::observeObject(node);
+    observeInfon(node->pItem);
+    return node->pItem;
+}
+inline std::shared_ptr<infonView>& readView(const POVNode& node) {return readView(node.get());}
+
 class POVDescription {
 public:
     struct Relationship {
@@ -23,13 +36,13 @@ private:
     IdentityRegistry* registry_;
 public:
     explicit POVDescription(POVNode node, IdentityRegistry* registry = nullptr)
-        : node_(std::move(node)), registry_(registry) {}
+        : node_(std::move(node)), registry_(registry) {if(node_) readView(node_);}
     const POVNode& adjacent(bool reverse = false) const { return reverse ? node_->prev : node_->next; }
     POV* parent() const { return node_->pParent; }
     const POVNode& alternative() const { return node_->altPOV; }
     const POVNode& outer() const { return node_->outerPOV; }
-    const std::shared_ptr<infonState>& size() const { return node_->pItem->infSize; }
-    const std::shared_ptr<infonState>& value() const { return node_->pItem->value; }
+    const std::shared_ptr<infonState>& size() const { return readView(node_)->infSize; }
+    const std::shared_ptr<infonState>& value() const { return readView(node_)->value; }
     const std::shared_ptr<infonView>& memberSpecification() const { return value()->listSpec; }
     static POVNode boundary(const std::shared_ptr<infonState>& body, bool last = false) {
         return last ? body->items.tail : body->items.head;
@@ -42,16 +55,17 @@ public:
     POVNode existingOccurrence(std::int64_t index) const { return node_->findImplicitItemPOV(index); }
     POV* occurrenceSource() const { return node_->implicitItem.sourcePov; }
     std::int64_t occurrenceIndex() const { return node_->implicitItem.sourceIndex; }
-    const std::vector<POVNode>& work() const { return node_->pItem->wrkList; }
+    const std::vector<POVNode>& work() const { return readView(node_)->wrkList; }
     std::vector<Relationship> relationships(bool includeWork = true) const {
         std::vector<Relationship> result;
-        if (includeWork && node_->pItem->temporalValueSource)
-            result.push_back({node_,node_->pItem->temporalValueSource,{},true,false,true});
+        const auto& view=readView(node_);
+        if (includeWork && view->temporalValueSource)
+            result.push_back({node_,view->temporalValueSource,{},true,false,true});
         if (includeWork) for (const auto& rhs : work()) {
             // A published view borrows its source's header. Those RHSs still
             // belong to the source occurrence; the derived link exposes them
             // there. Reinterpreting them here would change cursor context.
-            auto field=node_->pItem->pathSelection;
+            auto field=view->pathSelection;
             if(field && field->resultView && field->result && !field->pending && field->matches.size()==1 &&
                field->resultView->workListContainsPOV(rhs)) continue;
             result.push_back({node_, rhs, {}});
@@ -59,14 +73,14 @@ public:
         // A query result may change when explicitly normalized again. Read its
         // current source link here instead of asserting a permanent identity
         // between the working query POV and every result it has ever selected.
-        if (auto field=node_->pItem->pathSelection)
+        if (auto field=view->pathSelection)
             if (field->result && !field->pending && field->matches.size()==1 && field->result!=node_)
                 result.push_back({node_,field->result,{},true});
         if (registry_) {
             std::lock_guard<std::mutex> lock(registry_->registryMutex);
             for (const auto& record : registry_->identities) {
-                bool leftWork=record->leftWorkOwner==node_->pItem;
-                bool rightWork=record->rightWorkOwner==node_->pItem;
+                bool leftWork=record->leftWorkOwner==view;
+                bool rightWork=record->rightWorkOwner==view;
                 if (leftWork || record->leftPOV == node_)
                     result.push_back({node_, record->rightPOV, record, false, leftWork});
                 else if (rightWork || record->rightPOV == node_)

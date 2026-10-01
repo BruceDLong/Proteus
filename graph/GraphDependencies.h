@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <functional>
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
 #include <set>
 #include <vector>
 
@@ -47,6 +49,7 @@ using DependencyKey = std::shared_ptr<Dependency>;
 // footprint is a metadata-only change and does not advance semantic revision.
 struct Changes {
     bool all = true;
+    bool objectWrites = false; // adapter data writes, as opposed to proof-cache updates
     std::set<DependencyKey> keys;
     static Changes only(std::initializer_list<DependencyKey> keys) {
         Changes result;result.all=false;
@@ -58,9 +61,30 @@ struct Changes {
     }
     bool empty() const {return !all && keys.empty();}
     void include(const Changes& other) {
+        objectWrites=objectWrites || other.objectWrites;
         all=all || other.all;
         if(all) keys.clear();
         else keys.insert(other.keys.begin(),other.keys.end());
+    }
+};
+
+// Per-context evidence tokens for addresses inspected by the adapter. These
+// are subscriptions, not graph nodes or adjacency. Keys never retain model
+// objects. Address reuse can only over-invalidate; unused tokens are reclaimed.
+class ObjectDependencies {
+    std::unordered_map<const void*,DependencyKey> keys_;
+    std::size_t cleanupAt_=256;
+public:
+    DependencyKey key(const void* object) {
+        if(!object) return {};
+        auto found=keys_.find(object);
+        if(found!=keys_.end()) return found->second;
+        if(keys_.size()>=cleanupAt_) {
+            for(auto it=keys_.begin();it!=keys_.end();)
+                if(it->second.use_count()==1) it=keys_.erase(it);else ++it;
+            cleanupAt_=std::max<std::size_t>(256,2*keys_.size());
+        }
+        return keys_[object]=std::make_shared<Dependency>();
     }
 };
 
@@ -70,15 +94,39 @@ struct Changes {
 // synchronous and must not escape a callback or be carried to another thread.
 class ReadScope {
     using Reader = std::function<void(const DependencyKey&)>;
-    inline static thread_local const Reader* current_ = nullptr;
+    inline static thread_local ReadScope* current_ = nullptr;
+    inline static thread_local ObjectDependencies* objects_ = nullptr;
+    ObjectDependencies* previousObjects_;
     Reader reader_;
-    const Reader* previous_;
+    ReadScope* previous_;
+    std::unordered_set<const void*> observedObjects_;
+    const void* recent_[8]{};
+    unsigned recentIndex_=0;
 public:
-    explicit ReadScope(Reader reader):reader_(std::move(reader)),previous_(current_) {current_=&reader_;}
-    ~ReadScope() {current_=previous_;}
+    explicit ReadScope(Reader reader,ObjectDependencies* objects=nullptr)
+        :previousObjects_(objects_),reader_(std::move(reader)),previous_(current_) {
+        current_=this;if(objects) objects_=objects;
+    }
+    ~ReadScope() {current_=previous_;objects_=previousObjects_;}
     ReadScope(const ReadScope&)=delete;
     ReadScope& operator=(const ReadScope&)=delete;
-    static void observe(const DependencyKey& key) {if(current_) (*current_)(key);}
+    static void observe(const DependencyKey& key) {if(current_ && current_->reader_) current_->reader_(key);}
+    static void observeObject(const void* object) {
+        if(!object || !current_ || !current_->reader_ || !objects_) return;
+        // Helpers often inspect the same view many times in one callback.
+        // Register it once per reader scope; a nested proof capture has its
+        // own set and therefore still records and replays its dependencies.
+        auto& scope=*current_;
+        for(auto recent:scope.recent_) if(recent==object) return;
+        scope.recent_[scope.recentIndex_++ % 8]=object;
+        if(scope.observedObjects_.insert(object).second) observe(objects_->key(object));
+    }
+    static Changes changedObjects(std::initializer_list<const void*> objects) {
+        if(!objects_) return {}; // callers outside a tracked search stay conservative
+        auto changes=Changes::only({});changes.objectWrites=true;
+        for(auto object:objects) if(object) changes.keys.insert(objects_->key(object));
+        return changes;
+    }
 };
 
 // A derived fact outlives the search that proved it. Parents retain required

@@ -9,9 +9,9 @@ class StreamInsertion {
 public:
     explicit StreamInsertion(std::shared_ptr<ProteusGraphAccess> access) : access_(std::move(access)) {}
     std::vector<SetCommand> found(const POVNode& node) {
-        if (getModeBits(node->pItem->flags,infonView::itmMode)!=infonView::mIncludeStream) return {};
+        if (getModeBits(readView(node)->flags,infonView::itmMode)!=infonView::mIncludeStream) return {};
         return {{"Start inserted stream",[this,node] {
-            auto item=node->pItem;
+            auto item=readView(node);
             if (getModeBits(item->flags,infonView::itmMode)!=infonView::mIncludeStream) return false;
             auto core=access_->replyCore;
             if (!core) throw std::runtime_error("stream insertion requires a ProteusCore");

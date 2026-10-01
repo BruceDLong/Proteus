@@ -62,14 +62,14 @@ public:
             bool changed=false;
             if(adopt) {
                 changed=access->adoptDefinitionList(target);
-                target->pItem->orderMode=uUnordered;
-                SetFlagBit(target->pItem->value->flags,infonState::tailUnfinished,
-                    getFlagBit(source->pItem->value->flags,infonState::tailUnfinished));
+                readView(target)->orderMode=uUnordered;
+                SetFlagBit(readView(target)->value->flags,infonState::tailUnfinished,
+                    getFlagBit(readView(source)->value->flags,infonState::tailUnfinished));
                 // Unknown result types acquire the supplied nominal identity;
                 // a written target type keeps its own name.
-                if(!target->pItem->type) {
-                    target->pItem->type=source->pItem->type;
-                    target->pItem->addedTypes=source->pItem->addedTypes;
+                if(!readView(target)->type) {
+                    readView(target)->type=readView(source)->type;
+                    readView(target)->addedTypes=readView(source)->addedTypes;
                 }
             }
             changed=access->applyTypeFacts(target,required) || changed;

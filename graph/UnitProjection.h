@@ -57,8 +57,8 @@ class UnitProjection {
             if(part.owner) {part.leaf->pParent=part.owner.get();definitions_->retainOccurrenceOwner(part.owner);}
             return access_->sparseItem(part.leaf,part.index);
         }
-        auto node=std::make_shared<POV>(922);node->pItem=std::make_shared<infonView>();
-        auto item=node->pItem;auto shape=part.shape;
+        auto node=std::make_shared<POV>(922);readView(node)=std::make_shared<infonView>();
+        auto item=readView(node);auto shape=part.shape;
         SetModeBits(item->flags,infonView::viewMode,infonView::vmOverlay);
         SetModeBits(item->flags,infonView::itmMode,infonView::mItem);item->orderMode=uOrdered;
         SetModeBits(item->value->flags,infonState::overlayType,infonState::LST);
@@ -81,7 +81,7 @@ class UnitProjection {
             item->type=shape->writtenType ? std::make_shared<WordUse>(*shape->writtenType) : nullptr;
             SetFlagBit(item->value->flags,infonState::timelike,shape->facts.timelike);
             item->value->sizeMode=fromCount;item->infSize->num=shape->memberLayout().extent();
-            item->value->listSpec=shape->templateSource ? shape->templateSource->pItem : nullptr;
+            item->value->listSpec=shape->templateSource ? readView(shape->templateSource) : nullptr;
             for(const auto& child:part.children) {
                 auto member=materialize(child);
                 if(child.gap || child.shape->list) {item->value->items.appendPov(member);member->pParent=node.get();}

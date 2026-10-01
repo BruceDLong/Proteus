@@ -28,11 +28,11 @@ struct SparseOccurrence {
             auto span=index ? source->splitSparseSpanPrefix(index) : source;
             if(!span) return false;
             definitions->retainOccurrenceOwner(span);
-            auto exposed=span->exposeSparseHeadWithItem(item->pItem);
+            auto exposed=span->exposeSparseHeadWithItem(readView(item));
             if(!exposed) return false;
             access->bind(exposed);
             ++source->workRevision;++exposed->workRevision;
-            if(exposed->pParent) {++exposed->pParent->workRevision;SetFlagBit(exposed->pParent->pItem->flags,infonView::isNormed,false);}
+            if(exposed->pParent) {++exposed->pParent->workRevision;SetFlagBit(readView(exposed->pParent)->flags,infonView::isNormed,false);}
             return true;
         },{addCost(proofWork.visits,1),3}}};
     }

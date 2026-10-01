@@ -14,7 +14,7 @@ class SequenceCorrespondence {
     }
     static std::size_t stackStart(const Query<POVNode>& q) { return 2 + q.coordinates[0]; }
     POVNode pattern(const POVNode& node) const {
-        return access_->canSelect(node) && !node->pItem->selectedResult ? definitions_->selectionBody(node) : node;
+        return access_->canSelect(node) && !readView(node)->selectedResult ? definitions_->selectionBody(node) : node;
     }
     POVNode choice(const POVNode& node) const {
         if(auto body=definitions_->choiceBody(node)) return body;
@@ -73,7 +73,7 @@ class SequenceCorrespondence {
         next = storeInput(next, nextListPosition(*access_, inputPosition(next)));
         next.coordinates[2]=next.kind; next.kind=correspondenceInput; return next;
     }
-    static bool inverted(const POVNode& node) { return getFlagBit(node->pItem->flags, infonView::invertMatch); }
+    static bool inverted(const POVNode& node) { return getFlagBit(readView(node)->flags, infonView::invertMatch); }
     bool readable(const POVNode& node, bool root, bool predicate = false) const {
         if (!access_->plainStructure(node, access_->canSelect(node) || bool(choice(node)), false, false, false, false, false) ||
             (!predicate && inverted(node)) ||
@@ -113,7 +113,7 @@ public:
     // reinterpret the copied value as a grammar that consumes more input.
     static bool inputIdentity(ProteusGraphAccess& access, const Query<POVNode>& q, bool nested = false) {
         return (nested || q.context.size()>stackStart(q)) && q.context[1] && !access.subList(q.node) &&
-            getModeBits(q.context[0]->pItem->value->flags,infonState::overlayType)==infonState::LST &&
+            getModeBits(readView(q.context[0])->value->flags,infonState::overlayType)==infonState::LST &&
             access.hasDirectIdentity(q.node,q.context[1]);
     }
     bool sourceReady(const POVNode& source,Cost& visits) const {
@@ -136,7 +136,7 @@ public:
             // A selected window can contain neutral identity aliases whose
             // source facts have not arrived yet. Expose that payload route
             // before treating the aliases' missing values as unconstrained.
-            if(q.related->pItem->pathSelection)
+            if(readView(q.related)->pathSelection)
                 out.refinements.push_back({{definitions_->payload(q.related),sizeAndValue,0},{1,0},"resolve selected RHS payload",true});
             // A prefix relationship cannot prove the end of an unsized open
             // target. This finite Set planner must not close that stream from
@@ -144,7 +144,7 @@ public:
             if (q.related->looseSize() && access_->openTail(q.node) && access_->listExtent(q.node) < 0) return out;
             Cost visits=0;
             if (sourceReady(q.related,visits)) {
-                bool list=getModeBits(q.related->pItem->value->flags,infonState::overlayType)==infonState::LST;
+                bool list=getModeBits(readView(q.related)->value->flags,infonState::overlayType)==infonState::LST;
                 Query<POVNode> next{q.node,list ? correspondenceInput : sequenceEnter,0,{}, {q.related,q.related},
                                     {0,static_cast<int>(ListPhase::enter),sequenceEnter}};
                 auto start=edge("enter sequence correspondence",std::move(next));
@@ -154,7 +154,7 @@ public:
         }
         const auto source = q.context.front();
         const auto& text = POVDescription(source).value()->str;
-        bool textInput=getModeBits(source->pItem->value->flags,infonState::overlayType)==infonState::STR;
+        bool textInput=getModeBits(readView(source)->value->flags,infonState::overlayType)==infonState::STR;
         auto body=pattern(q.node);
         bool fedRoot=!nested && getFlagBit(source->flags, POV::isOutrFeed) && q.context.size()==stackStart(q) && access_->fedTemplate(q.node);
         if (q.kind == sequenceEnter) {
@@ -392,9 +392,9 @@ private:
         for (const auto& q : path) {
             if (q.kind == sequenceEnter) {
                 auto spec = std::make_shared<DefinitionRequirement>();
-                auto body=access_->canSelect(q.node) && !q.node->pItem->selectedResult ? definitions_->selectionBody(q.node) : q.node;
+                auto body=access_->canSelect(q.node) && !readView(q.node)->selectedResult ? definitions_->selectionBody(q.node) : q.node;
                 spec->facts=definitions_->scalarFacts(body); spec->list=access_->literalList(body) && !SequenceCorrespondence::inputIdentity(*access_,q);
-                if (!getFlagBit(q.node->pItem->flags,infonView::invertMatch)) spec->captureLabel(q.node);
+                if (!getFlagBit(readView(q.node)->flags,infonView::invertMatch)) spec->captureLabel(q.node);
                 bool instance=stack.empty() || (stack.back().instance && definitions_->matchingBody(stack.back().body)!=q.node);
                 // A feed's stored members are results, not its consumed pattern.
                 if (!stack.empty() && access_->fedTemplate(stack.back().node)) instance=false;
@@ -413,7 +413,7 @@ private:
                     bool openRoot=partial && stack.empty();
                     spec->open=openRoot;
                     bool preserveSize=stack.empty() && request.related->looseSize() &&
-                        !access_->typeFacts(request.node).hasSize && request.node->pItem->value->sizeMode==fromGiven;
+                        !access_->typeFacts(request.node).hasSize && readView(request.node)->value->sizeMode==fromGiven;
                     if(!openRoot && !preserveSize) {spec->facts.hasSize=true;spec->facts.size=count;}
                     if (frame.body!=frame.node) {
                         auto mode=access_->selectionMode(frame.node);
@@ -425,12 +425,12 @@ private:
                     if (frame.instance && frame.body==frame.node && !openRoot && !preserveSize) extents[frame.node] = count;
                     if (frame.instance)
                         if (auto body = definitions_->repeatedBody(frame.node)) templates_.push_back({frame.node, body});
-                } else if (getModeBits(request.related->pItem->value->flags,infonState::overlayType)==infonState::LST) {
+                } else if (getModeBits(readView(request.related)->value->flags,infonState::overlayType)==infonState::LST) {
                     auto supplied=definitions_->scalarFacts(frame.source);
                     NumericRangeAccess numeric(*access_);auto range=numeric.read(frame.node,true);
                     if(access_->hasTypeRequirements(frame.node)) range.constraint=false;
                     bool identity=true;
-                    if (getFlagBit(frame.node->pItem->flags,infonView::invertMatch)) spec->facts=supplied;
+                    if (getFlagBit(readView(frame.node)->flags,infonView::invertMatch)) spec->facts=supplied;
                     else if(range.bounds.valid && range.constraint) {
                         auto actual=numeric.read(frame.source);
                         auto match=matchNumeric(range,actual,frame.looseSize,frame.looseType);
@@ -454,11 +454,11 @@ private:
                 // A selection passes through its chosen child's proof. Its
                 // input cursor does not describe the selected result's type.
                 if (!frame.choice && frame.body==frame.node && !spec->list) {
-                    auto typed=access_->hasTypeRequirements(frame.node) && !getFlagBit(frame.node->pItem->flags,infonView::invertMatch) ? frame.node : frame.source;
+                    auto typed=access_->hasTypeRequirements(frame.node) && !getFlagBit(readView(frame.node)->flags,infonView::invertMatch) ? frame.node : frame.source;
                     auto meaning=typed ? definitions_->saved(typed) : nullptr;
                     if (meaning && !meaning->requirement->list && meaning->requirement->facts.accepts(spec->facts)) meanings[spec]=meaning;
                 }
-                if (!stack.empty() && (stack.back().choice || stack.back().body->pItem->intersectMarkedRetPOV==frame.node)) stack.back().selected=spec;
+                if (!stack.empty() && (stack.back().choice || readView(stack.back().body)->intersectMarkedRetPOV==frame.node)) stack.back().selected=spec;
                 if (stack.empty()) result = spec;
                 else if (access_->subList(frame.node))
                     stack.back().spec->members.insert(stack.back().spec->members.end(), spec->members.begin(), spec->members.end());
@@ -505,8 +505,8 @@ private:
             }
             // Proteus3 mergeLooseStrings changes a copied fixed-width string
             // from a given size to its now-observed character count.
-            for (const auto& place : counted) if (place->node->pItem->value->sizeMode != fromCount) {
-                place->node->pItem->value->sizeMode = fromCount; changed = true;
+            for (const auto& place : counted) if (readView(place->node)->value->sizeMode != fromCount) {
+                readView(place->node)->value->sizeMode = fromCount; changed = true;
             }
             return changed;
         }, plan->work}};

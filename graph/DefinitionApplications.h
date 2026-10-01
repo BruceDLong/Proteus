@@ -58,7 +58,7 @@ public:
         std::set<POVNode> seen;
         while(node && seen.insert(node).second) {
             if(auto found=unitSpans.find(node);found!=unitSpans.end()) return &found->second;
-            node=node->pItem->selectedResult;
+            node=readView(node)->selectedResult;
         }
         return nullptr;
     }
@@ -122,7 +122,7 @@ private:
     std::map<Key, std::vector<Certificate>, std::owner_less<Key>> evidence_;
     mutable std::map<Key, DependencyKey, std::owner_less<Key>> evidenceKeys_;
     DependencyKey evidenceKey(const POVNode& node) const {
-        auto& key=evidenceKeys_[node->pItem];
+        auto& key=evidenceKeys_[readView(node)];
         if(!key) key=std::make_shared<Dependency>();
         ReadScope::observe(key);return key;
     }
@@ -145,7 +145,7 @@ public:
         : access_(std::move(access)),modelFacts_(std::move(modelFacts)) {}
     Changes modelChanges() const {return Changes::only({modelFacts_});}
     POVNode choiceBody(const POVNode& node) const {
-        auto item=node->pItem;
+        auto item=readView(node);
         if(!item->isOrLike() || !access_->plain(node,true,false,false,false) || !access_->literalSelectionBody(item->innr) ||
            item->innr->partRef || item->innr->funcArgs || !item->innr->wrkList.empty() ||
            getFlagBit(item->innr->value->flags,infonState::tailUnfinished)) return {};
@@ -200,7 +200,7 @@ public:
         auto found = catalogue_.find(access_->definitionName(node));
         if (found == catalogue_.end()) return false;
         for (const auto& entry : found->second)
-            if (entry.declaration->pItem == node->pItem && entry.body->pItem == node->pItem->funcArgs) return true;
+            if (readView(entry.declaration) == readView(node) && readView(entry.body) == readView(node)->funcArgs) return true;
         return false;
     }
     bool publish(const POVNode& node) {
@@ -208,7 +208,7 @@ public:
         // Direct catalogue clients also cross the validation boundary.
         prune();
         auto& entries = catalogue_[access_->definitionName(node)];
-        for (auto& entry : entries) if (entry.declaration->pItem == node->pItem) {
+        for (auto& entry : entries) if (readView(entry.declaration) == readView(node)) {
             entry.body = access_->definitionBody(node);declarationBodies_.insert(entry.body);return true;
         }
         entries.push_back({node, access_->definitionBody(node)});
@@ -260,8 +260,8 @@ public:
         }
         return unspecifiedMember_;
     }
-    POVNode payload(const POVNode& node) const { return view(node->pItem); }
-    POVNode selfSource(const POVNode& node) const { return view(node->pItem->thisPtr); }
+    POVNode payload(const POVNode& node) const { return view(readView(node)); }
+    POVNode selfSource(const POVNode& node) const { return view(readView(node)->thisPtr); }
     POVNode selectionBody(const POVNode& node) const { return view(access_->selectionSource(node)); }
     void retainOccurrenceOwner(const POVNode& owner) { occurrenceOwners_.insert(owner); }
     POVNode retainedOccurrenceOwner(const POVNode& node) const {
@@ -280,7 +280,7 @@ public:
         for(std::size_t i=0;i<pending.size();++i) {
             auto at=pending[i];if(!seen.insert(at).second) continue;
             if(cost) ++cost->visits;
-            auto order=at->pItem->orderMode;
+            auto order=readView(at)->orderMode;
             // An explicit repeated member specification supplies positional
             // structure unless a comma has declared unordered membership.
             if(order==uUnknown && access_->memberTemplate(at)) order=uOrdered;
@@ -296,13 +296,13 @@ public:
         return result;
     }
     bool pendingOrder(const POVNode& node) const {
-        return access_->literalList(node) && node->pItem->orderMode==uUnknown && listOrder(node)!=uUnknown;
+        return access_->literalList(node) && readView(node)->orderMode==uUnknown && listOrder(node)!=uUnknown;
     }
     std::vector<SetCommand> orderCommands(const POVNode& node) const {
-        if(!access_->literalList(node) || node->pItem->orderMode!=uUnknown) return {};
+        if(!access_->literalList(node) || readView(node)->orderMode!=uUnknown) return {};
         Work cost{0,0};auto order=listOrder(node,&cost);
         if(order<=uUnknown) return {};
-        if(order==uUnordered && node->pItem->value->sizeMode==fromCount) ++cost.creations;
+        if(order==uUnordered && readView(node)->value->sizeMode==fromCount) ++cost.creations;
         auto access=access_;
         return {{"Set list order from type header",[access,node,order] {
             return access->setListOrder(node,static_cast<OrderMode>(order));
@@ -331,8 +331,8 @@ public:
             (access_->memberTemplate(node) && !access_->fedTemplate(node)) || access_->occurrenceOwner(node);
     }
     static bool selfExpression(const POVNode& node) {
-        return getModeBits(node->pItem->flags,infonView::viewMode)==infonView::vmCursor &&
-            getModeBits(node->pItem->flags,infonView::cursorMode)==infonView::cmSelf;
+        return getModeBits(readView(node)->flags,infonView::viewMode)==infonView::vmCursor &&
+            getModeBits(readView(node)->flags,infonView::cursorMode)==infonView::cmSelf;
     }
     Certificate compiledBody(const POVNode& node,const POVNode& root) const {
         if(node==root) return {};
@@ -393,7 +393,7 @@ public:
                 bindings.push_back({name, body});
         }
         if (node == root || proof->evidence->witnesses.count(node)) return;
-        proof->evidence->witnesses.emplace(node, std::make_shared<const Witness>(Witness{node, node->pItem, facts(node),
+        proof->evidence->witnesses.emplace(node, std::make_shared<const Witness>(Witness{node, readView(node), facts(node),
             names(node), work(node), members(node), listRequirement(node), access_->definitionEmbedded(node), access_->openTail(node), (listRequirement(node) ? listOrder(node,&proof->composition) : uUnknown), memberTemplate(node), choiceBody(node)}));
     }
     // The graph's leave edge supplies postorder: every required child has
@@ -542,7 +542,7 @@ public:
             bool matches;
             {
                 ReadScope capture([&](const DependencyKey& key){reads.insert(key);});
-                matches = witness.node->pItem == witness.infon && facts(witness.node).same(witness.facts) &&
+                matches = readView(witness.node) == witness.infon && facts(witness.node).same(witness.facts) &&
                     witness.names == names(witness.node) && witness.work == work(witness.node) &&
                     witness.list == listRequirement(witness.node) && witness.members == members(witness.node) &&
                     witness.embedded == access_->definitionEmbedded(witness.node) && witness.open == access_->openTail(witness.node) &&
@@ -599,7 +599,7 @@ public:
     }
     Certificate saved(const POVNode& node, bool fullMeaning=false) const {
         evidenceKey(node);
-        auto found = evidence_.find(node->pItem); if (found == evidence_.end()) return {};
+        auto found = evidence_.find(readView(node)); if (found == evidence_.end()) return {};
         for (const auto& proof : found->second) if (current(proof) && covers(proof, node, fullMeaning)) return proof;
         return {};
     }
@@ -629,7 +629,7 @@ public:
     }
     bool remember(const POVNode& node, const Certificate& proof) {
         evidenceKey(node);
-        auto& certificates = evidence_[node->pItem];
+        auto& certificates = evidence_[readView(node)];
         certificates.erase(std::remove_if(certificates.begin(), certificates.end(),
             [&](const Certificate& old) { return !current(old); }), certificates.end());
         for (const auto& old : certificates) {
@@ -682,13 +682,13 @@ public:
     }
     bool canInherit(const POVNode& target, const POVNode& source) const {
         evidenceKey(source);
-        auto found = evidence_.find(source->pItem); if (found == evidence_.end()) return false;
+        auto found = evidence_.find(readView(source)); if (found == evidence_.end()) return false;
         for (const auto& proof : found->second) if (reusable(target, source, proof)) return true;
         return false;
     }
     SetResult inheritChanges(const POVNode& target, const POVNode& source) {
         evidenceKey(source);
-        auto found = evidence_.find(source->pItem); if (found == evidence_.end()) return false;
+        auto found = evidence_.find(readView(source)); if (found == evidence_.end()) return false;
         auto certificates = found->second;
         Changes changes=Changes::only({});
         std::vector<std::pair<POVNode,Certificate>> checked;
@@ -711,7 +711,7 @@ public:
                 // A Set can also affect a declaration used by its own proof.
                 // Its new data check cannot certify an obsolete meaning.
                 if(!current(entry.second)) continue;
-                auto found=evidence_.find(entry.first->pItem);
+                auto found=evidence_.find(readView(entry.first));
                 if(found==evidence_.end()) continue;
                 for(const auto& proof:found->second)
                     if(sameDefinition(proof->requirement,entry.second->requirement) && current(proof))
@@ -750,7 +750,7 @@ public:
             if(!header.valid || !POVDescription(source,access_->registry.get()).relationships(false).empty()) return {};
             if(!required.combine(header)) throw DefinitionConflict("incompatible definition headers");
             if(auto member=memberTemplate(source)) {
-                if(!access_->templatePrefixList(source) || (specification && specification->pItem!=member->pItem)) return {};
+                if(!access_->templatePrefixList(source) || (specification && readView(specification)!=readView(member))) return {};
                 specification=member;
             }
             if(!meanings(source)) return {};
@@ -764,7 +764,7 @@ public:
         if(!adopt && ((!access_->physicalList(target) && !access_->templatePrefixList(target)) ||
                       !access_->definitionOrderedCandidate(target))) return {};
         auto existing=memberTemplate(target);
-        if(existing && existing->pItem!=specification->pItem) return {};
+        if(existing && readView(existing)!=readView(specification)) return {};
         bool install=(adopt || access_->openTail(target)) && !existing;
         bool order=!access_->definitionOrderKnown(target);
         if(!adopt && !install && !order && required.accepts(actual)) return {};
@@ -801,10 +801,10 @@ public:
             }
             auto access=access_;
             return {{"Expose written definition structure",[access,target,body,required] {
-                auto original=target->pItem;
+                auto original=readView(target);
                 auto instance=std::make_shared<infonView>();
                 std::vector<infonView*> copied;
-                body->pItem->_copyAsTypeTo(instance,true,true,original,&copied);
+                readView(body)->_copyAsTypeTo(instance,true,true,original,&copied);
                 original->value=instance->value;
                 original->orderMode=instance->orderMode;
                 if(instance->type && (!original->type || original->type->typeID()!=instance->type->typeID()))

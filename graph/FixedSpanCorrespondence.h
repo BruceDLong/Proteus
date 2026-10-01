@@ -26,7 +26,7 @@ class FixedSpanCorrespondence {
         }
         if(!exemplar) return false;
         UnitMeasure measure(exemplar);auto payload=definitions_->payload(source);
-        if(auto field=source->pItem->pathSelection;field && !field->pending && field->matches.size()==1) payload=field->result;
+        if(auto field=readView(source)->pathSelection;field && !field->pending && field->matches.size()==1) payload=field->result;
         UnitLayout right(access_,definitions_,payload,measure);
         work.visits=addCost(work.visits,right.work.visits);if(!right.valid) return false;
         std::int64_t start=0;
@@ -108,7 +108,7 @@ public:
         :access_(std::move(access)),definitions_(std::move(definitions)) {
         if(!source->looseType() || getFlagBit(source->flags,POV::isOutrFeed)) return;
         auto payload=definitions_->payload(source);
-        if(auto field=source->pItem->pathSelection;field && !field->pending && field->matches.size()==1) payload=field->result;
+        if(auto field=readView(source)->pathSelection;field && !field->pending && field->matches.size()==1) payload=field->result;
         Layout left,right;
         if(!layout(target,left)) return;
         if(!layout(payload,right)) return;
@@ -129,8 +129,8 @@ public:
                     if(existing) actualNode=existing;
                     if((!b.gap || existing) && !candidateReady(actualNode)) return;
                     auto actual=description(actualNode);
-                    bool atomicUnit=UnitMeasure(required) && required->list && !b.gap && b.node->pItem->type &&
-                        compareNominal(required->label,required->types,b.node->pItem->type->typeID(),{})==ScalarMatch::yes;
+                    bool atomicUnit=UnitMeasure(required) && required->list && !b.gap && readView(b.node)->type &&
+                        compareNominal(required->label,required->types,readView(b.node)->type->typeID(),{})==ScalarMatch::yes;
                     if(atomicUnit) {
                         auto facts=required->facts;atomicUnit=facts.combine(access_->typeFacts(b.node));
                     }
@@ -171,17 +171,17 @@ public:
             } else {
                 auto view=std::make_shared<GraphSliceView>();for(const auto& piece:span.window.pieces) view->count+=piece.count;
                 auto result=SliceSelection::manifest(access_,definitions_,view,span.window,changed);
-                span.target->pItem->value->items=std::move(result->pItem->value->items);
+                readView(span.target)->value->items=std::move(readView(result)->value->items);
                 for(auto child=POVDescription(span.target).member();child;child=POVDescription(child).adjacent()) child->pParent=span.target.get();
-                SetFlagBit(span.target->pItem->value->flags,infonState::tailUnfinished,false);
+                SetFlagBit(readView(span.target)->value->flags,infonState::tailUnfinished,false);
                 ++span.target->workRevision;changed=true;
             }
         }
         for(const auto& fill:unitFills_) {
             auto source=fill.second->apply();
-            fill.first->pItem->value->items=std::move(source->pItem->value->items);
+            readView(fill.first)->value->items=std::move(readView(source)->value->items);
             for(auto child=POVDescription(fill.first).member();child;child=POVDescription(child).adjacent()) child->pParent=fill.first.get();
-            SetFlagBit(fill.first->pItem->value->flags,infonState::tailUnfinished,false);
+            SetFlagBit(readView(fill.first)->value->flags,infonState::tailUnfinished,false);
             ++fill.first->workRevision;changed=true;
         }
         for(const auto& span:unitSpans_) {
@@ -218,8 +218,8 @@ public:
             }
             changed=access_->apply(source,pair.target,sizeAndValue) || changed;
             for(auto& command:SparseOccurrence::commands(access_,definitions_,source)) changed=command.apply() || changed;
-            if(!pair.target->pItem->type && source->pItem->type) {
-                pair.target->pItem->type=std::make_shared<WordUse>(*source->pItem->type);++pair.target->workRevision;changed=true;
+            if(!readView(pair.target)->type && readView(source)->type) {
+                readView(pair.target)->type=std::make_shared<WordUse>(*readView(source)->type);++pair.target->workRevision;changed=true;
             }
         }
         return changed;

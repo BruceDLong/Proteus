@@ -7,8 +7,8 @@ class TemporalGraph {
 public:
     explicit TemporalGraph(std::shared_ptr<ProteusGraphAccess> access):access_(std::move(access)) {}
     static int pathKind(const POVNode& predicate) {
-        if(!predicate || !predicate->pItem) return 0;
-        const auto& p=predicate->pItem;
+        if(!predicate || !readView(predicate)) return 0;
+        const auto& p=readView(predicate);
         if(!p->type || getModeBits(p->flags,infonView::viewMode)!=infonView::vmAny ||
            !p->addedTypes.empty() || !p->wrkList.empty() || p->partRef || !p->parts.empty() ||
            getFlagBit(p->flags,infonView::invertMatch)) return 0;
@@ -26,13 +26,13 @@ public:
         return {};
     }
     POVNode newSpan() const {
-        auto p=std::make_shared<POV>(611);p->pItem=std::make_shared<infonView>();p->pItem->setToList();
-        p->pItem->orderMode=uOrdered;
-        SetFlagBit(p->pItem->value->flags,infonState::timelike,true);
-        SetFlagBit(p->pItem->value->flags,infonState::tailUnfinished,true);
-        p->pItem->value->sizeMode=fromGiven;
-        SetModeBits(p->pItem->infSize->flags,infonState::overlayType,infonState::NUM);
-        SetModeBits(p->pItem->infSize->flags,infonState::evalMode,infonState::emUnknown);
+        auto p=std::make_shared<POV>(611);readView(p)=std::make_shared<infonView>();readView(p)->setToList();
+        readView(p)->orderMode=uOrdered;
+        SetFlagBit(readView(p)->value->flags,infonState::timelike,true);
+        SetFlagBit(readView(p)->value->flags,infonState::tailUnfinished,true);
+        readView(p)->value->sizeMode=fromGiven;
+        SetModeBits(readView(p)->infSize->flags,infonState::overlayType,infonState::NUM);
+        SetModeBits(readView(p)->infSize->flags,infonState::evalMode,infonState::emUnknown);
         access_->bind(p);return p;
     }
     // Manifestations run only in priced Sets under the publication lock.
@@ -66,7 +66,7 @@ public:
             // Keep an unresolved source as an obligation: later information
             // can disprove the strict interior even though the cut is named.
             out.deferred=access_->inputPending(q.node) ||
-                getModeBits(q.node->pItem->value->flags,infonState::evalMode)!=infonState::emLiteral;
+                getModeBits(readView(q.node)->value->flags,infonState::evalMode)!=infonState::emLiteral;
             if(out.deferred) out.refinements.push_back({{q.node,valueOnly,0},{1,0},"refine cut support",true});
             out.refinements.push_back({{q.node,temporalSupport,0},{1,0},"retain temporal support",false});
             return out;
@@ -104,7 +104,7 @@ public:
             return out;
         }
         if(access_->inputPending(q.node) ||
-           getModeBits(q.node->pItem->value->flags,infonState::evalMode)!=infonState::emLiteral) {
+           getModeBits(readView(q.node)->value->flags,infonState::evalMode)!=infonState::emLiteral) {
             out.refinements.push_back({{q.node,valueOnly,0},{1,0},"resolve span at temporal cut",true});
             out.deferred=true;return out;
         }
@@ -119,7 +119,7 @@ public:
             return out;
         }
         bool interior=!q.coordinates.empty() && q.coordinates.front()!=0;
-        if(q.node->pItem->isNull()) {
+        if(readView(q.node)->isNull()) {
             if(interior) throw GoalRejected("strict interior cut has empty support");
             return out; // A null joins spans; it supplies no state on either side.
         }
@@ -174,7 +174,7 @@ public:
             auto graph=graph_;
             return {{"Create symbolic temporal support",[this,graph,source]{result_=graph.ensureSupport(source);return true;},{1,6}}};
         }
-        if(source->pItem->isNull() || (BoundaryGraph::temporal(source) && access_->listExtent(source)==0))
+        if(readView(source)->isNull() || (BoundaryGraph::temporal(source) && access_->listExtent(source)==0))
             throw GoalRejected("strict interior cut requires a nonempty support");
         if(!split_) split_=graph_.split(request.related);
         if(split_) {result_=split_->symbolicCut;return {};}

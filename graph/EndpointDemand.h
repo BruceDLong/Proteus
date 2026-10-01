@@ -28,7 +28,7 @@ public:
         auto source=q.node;std::int64_t index=0;bool last=false;
         if(q.kind==placeArgument) {
             if(!access_->hasArgument(source)) return out;
-            last=getModeBits(source->pItem->flags,infonView::argPos)==infonView::apArgIsLastItem;
+            last=getModeBits(readView(source)->flags,infonView::argPos)==infonView::apArgIsLastItem;
         } else {
             auto reference=POVDescription(q.node,access_->registry.get()).endReference();
             if(!reference) return out;
@@ -71,11 +71,11 @@ public:
         auto access=access_;auto owner=request.node,selected=visit.query.node;
         if(request.kind==placeArgument) {
             if(!access->hasArgument(owner)) return {};
-            auto argument=owner->pItem->funcArgs;
+            auto argument=readView(owner)->funcArgs;
             return {{"Set argument constraint",[this,access,owner,selected,argument] {
-                auto rhs=std::make_shared<POV>(918);rhs->pItem=argument;access->bind(rhs);access->bind(selected);
-                if(!selected->pItem->hasRHS(argument)) selected->pItem->addPOVToWrkList(rhs);
-                owner->pItem->funcArgs.reset();SetModeBits(owner->pItem->flags,infonView::argPos,infonView::apNoArgs);
+                auto rhs=std::make_shared<POV>(918);readView(rhs)=argument;access->bind(rhs);access->bind(selected);
+                if(!readView(selected)->hasRHS(argument)) readView(selected)->addPOVToWrkList(rhs);
+                readView(owner)->funcArgs.reset();SetModeBits(readView(owner)->flags,infonView::argPos,infonView::apNoArgs);
                 ++selected->workRevision;++owner->workRevision;verified_=true;return true;
             },{1,1}}};
         }

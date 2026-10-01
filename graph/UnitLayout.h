@@ -44,8 +44,8 @@ class UnitLayout {
             if(owner) if(auto templ=definitions_->repeatedBody(owner)) {
                 auto proof=definitions_->describe(templ,work);if(!proof) return false;required=proof->requirement;
             }
-            if(!segment.gap && segment.node->pItem->type) {
-                auto named=definitions_->unit(segment.node->pItem->type,work);
+            if(!segment.gap && readView(segment.node)->type) {
+                auto named=definitions_->unit(readView(segment.node)->type,work);
                 if(named && UnitMeasure(named)) required=named;
             }
             if(!required) required=leaf;

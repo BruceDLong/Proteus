@@ -5,7 +5,7 @@
 // Nominal correspondence is planned separately before publishing identities.
 struct RecordStructure {
     static bool record(ProteusGraphAccess& access,const POVNode& node) {
-        return access.physicalList(node) && node->pItem->orderMode==uUnordered;
+        return access.physicalList(node) && readView(node)->orderMode==uUnordered;
     }
     static bool members(ProteusGraphAccess& access,const POVNode& node,
                         std::vector<POVNode>& result,Work& work) {

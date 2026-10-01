@@ -272,6 +272,7 @@ template<class Node> struct Context {
     std::shared_ptr<GraphAccess<Node>> access;
     std::vector<std::weak_ptr<SearchSession<Node>>> sessions;
 
+    ObjectDependencies objectDependencies;
     DependencyKey untracked = std::make_shared<Dependency>();
     DependencyKey broadChanges = std::make_shared<Dependency>();
 
@@ -458,7 +459,7 @@ template<class Node> class GraphManager {
         }
     }
     static ReadScope observeTask(Context<Node>& c, Session& s, std::size_t index) {
-        return ReadScope([&c,&s,index](const DependencyKey& key) {c.observe(s,index,key);});
+        return ReadScope([&c,&s,index](const DependencyKey& key) {c.observe(s,index,key);},&c.objectDependencies);
     }
     static void resetTask(Context<Node>& c, Session& s, std::size_t index) {
         auto& task=s.tasks[index];
@@ -791,6 +792,7 @@ public:
         std::lock_guard<std::mutex> lock(context_->mutex);
         if (context_->stopping) throw std::logic_error("graph context is closed");
         if (!query.node) throw std::invalid_argument("normalize requires a node");
+        ReadScope objects({},&context_->objectDependencies);
         auto session = std::make_shared<Session>();
         context_->access->beginSearch(query);
         session->root = context_->access->goal(query);
@@ -817,12 +819,14 @@ public:
     template<class Function> auto read(Function action) const -> decltype(action()) {
         if (!context_) throw std::logic_error("initialize graph context first");
         std::lock_guard<std::mutex> lock(context_->mutex);
+        ReadScope objects({},&context_->objectDependencies);
         return action();
     }
     template<class Function> void update(Function action) {
         if (!context_) throw std::logic_error("initialize graph context first");
         std::lock_guard<std::mutex> lock(context_->mutex);
         if (context_->stopping) throw std::logic_error("graph context is closed");
+        ReadScope objects({},&context_->objectDependencies);
         action();
         context_->graphChanged();
     }
@@ -832,6 +836,7 @@ public:
         if (!context_) throw std::logic_error("initialize graph context first");
         std::lock_guard<std::mutex> lock(context_->mutex);
         if (context_->stopping) throw std::logic_error("graph context is closed");
+        ReadScope objects({},&context_->objectDependencies);
         bool changed=action();
         if(changed) context_->graphChanged(changes);
         return changed;

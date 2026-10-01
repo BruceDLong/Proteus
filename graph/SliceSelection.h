@@ -20,7 +20,7 @@ public:
                             const std::shared_ptr<GraphSliceView>& view,const Window& window,bool& changed) {
         if(!view->result) {
             view->result=std::make_shared<POV>(916);
-            auto item=view->result->pItem=std::make_shared<infonView>();
+            auto item=readView(view->result)=std::make_shared<infonView>();
             SetModeBits(item->flags,infonView::itmMode,infonView::mItem);
             SetModeBits(item->flags,infonView::viewMode,infonView::vmOverlay);
             item->orderMode=uOrdered;
@@ -40,19 +40,19 @@ public:
                 reusable[{piece->source,piece->gap,piece->offset,piece->count}]=piece;
                 piece->alias->pParent=nullptr;piece->alias->next.reset();piece->alias->prev.reset();
             }
-            view->result->pItem->value->items.clear();view->pieces.clear();
+            readView(view->result)->value->items.clear();view->pieces.clear();
             for(const auto& part:window.pieces) {
                 auto found=reusable.find({part.node,part.gap,part.offset,part.count});
                 if(found!=reusable.end()) {
                     auto piece=found->second;piece->alias->pParent=view->result.get();
-                    view->result->pItem->value->items.appendPov(piece->alias);view->pieces.push_back(piece);continue;
+                    readView(view->result)->value->items.appendPov(piece->alias);view->pieces.push_back(piece);continue;
                 }
                 auto piece=std::make_shared<GraphSlicePiece>();
                 piece->source=part.node;piece->gap=part.gap;piece->offset=part.offset;piece->count=part.count;
                 if(part.gap) {
                     piece->alias=std::make_shared<POV>(916);
                     SetFlagBit(piece->alias->flags,POV::isSubItm,true);piece->alias->pParent=view->result.get();
-                    view->result->pItem->value->items.appendPov(piece->alias);
+                    readView(view->result)->value->items.appendPov(piece->alias);
                 } else {
                     // The expression belongs to the source occurrence. A
                     // neutral identity view acquires its facts through normal
@@ -64,11 +64,11 @@ public:
             }
         }
         for(auto& piece:view->pieces) {
-            if(piece->sourceView==piece->source->pItem && piece->sourceRevision==piece->source->workRevision) continue;
-            piece->sourceView=piece->source->pItem;piece->sourceRevision=piece->source->workRevision;
+            if(piece->sourceView==readView(piece->source) && piece->sourceRevision==piece->source->workRevision) continue;
+            piece->sourceView=readView(piece->source);piece->sourceRevision=piece->source->workRevision;
             if(piece->gap) {
-                piece->alias->pItem=piece->source->makeSparseSpanCopy(piece->count);
-                piece->alias->pItem->orderMode=uOrdered;
+                readView(piece->alias)=piece->source->makeSparseSpanCopy(piece->count);
+                readView(piece->alias)->orderMode=uOrdered;
                 if(access->sparse(piece->source)) {
                     auto family=access->registry->getOrCreateRepetitionFamily(piece->source.get());
                     piece->alias->repetitionSpan.family=family;
@@ -77,15 +77,15 @@ public:
                     definitions->retainOccurrenceOwner(piece->alias);
                 }
             } else {
-                piece->alias->pItem->type=piece->source->pItem->type;
-                piece->alias->pItem->addedTypes=piece->source->pItem->addedTypes;
+                readView(piece->alias)->type=readView(piece->source)->type;
+                readView(piece->alias)->addedTypes=readView(piece->source)->addedTypes;
                 definitions->inherit(piece->alias,piece->source);
             }
             access->bind(piece->alias);++piece->alias->workRevision;changed=true;
         }
         if(changed) {
             ++view->result->workRevision;
-            SetFlagBit(view->result->pItem->flags,infonView::isNormed,false);
+            SetFlagBit(readView(view->result)->flags,infonView::isNormed,false);
         }
         return view->result;
     }
@@ -94,7 +94,7 @@ public:
         :access_(std::move(access)),definitions_(std::move(definitions)) {}
     Expansion<POVNode> expand(const Query<POVNode>& q) const {
         Expansion<POVNode> out;
-        auto state=q.related->pItem->pathSelection;auto spec=state->spec;
+        auto state=readView(q.related)->pathSelection;auto spec=state->spec;
         if(q.kind==pathSliceCandidate) {
             FieldPredicate predicate(access_,definitions_,out);
             auto match=predicate.match(spec,q.node,{});
@@ -137,7 +137,7 @@ public:
         }
         if(!window.complete) {out.deferred=true;return out;}
         for(const auto& piece:window.pieces)
-            if(piece.gap && piece.node->pItem->value->listSpec && !access_->sparse(piece.node)) {
+            if(piece.gap && readView(piece.node)->value->listSpec && !access_->sparse(piece.node)) {
                 // A prefixed repetition needs its tail's occurrence mapping.
                 // Do not reuse the root's ordinals as if that prefix were absent.
                 out.deferred=true;return out;
@@ -156,7 +156,7 @@ public:
         Work work{visits,0};
         if(!saved || !samePieces(saved,window)) work.creations=3+3*window.pieces.size();
         else for(const auto& piece:saved->pieces)
-            if(piece->sourceView!=piece->source->pItem || piece->sourceRevision!=piece->source->workRevision) ++work.creations;
+            if(piece->sourceView!=readView(piece->source) || piece->sourceRevision!=piece->source->workRevision) ++work.creations;
         auto access=access_;auto definitions=definitions_;
         out.edges.push_back({"materialize span view",work,true,[access,definitions,state,saved,window,q,count=boundary.extent]() mutable {
             if(!saved) {

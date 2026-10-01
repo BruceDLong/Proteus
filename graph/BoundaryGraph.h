@@ -7,21 +7,21 @@ class BoundaryGraph {
 public:
     explicit BoundaryGraph(std::shared_ptr<ProteusGraphAccess> access):access_(std::move(access)) {}
     static bool temporal(const POVNode& source) {
-        return source && source->pItem &&
-            getModeBits(source->pItem->value->flags,infonState::overlayType)==infonState::LST &&
-            getModeBits(source->pItem->value->flags,infonState::evalMode)==infonState::emLiteral &&
-            getFlagBit(source->pItem->value->flags,infonState::timelike) && source->pItem->orderMode!=uUnordered;
+        return source && readView(source) &&
+            getModeBits(readView(source)->value->flags,infonState::overlayType)==infonState::LST &&
+            getModeBits(readView(source)->value->flags,infonState::evalMode)==infonState::emLiteral &&
+            getFlagBit(readView(source)->value->flags,infonState::timelike) && readView(source)->orderMode!=uUnordered;
     }
     static int direction(const POVNode& predicate) {
-        if(!predicate || !predicate->pItem) return 0;
-        const auto& item=predicate->pItem;
+        if(!predicate || !readView(predicate)) return 0;
+        const auto& item=readView(predicate);
         if(!item->type || getModeBits(item->flags,infonView::viewMode)!=infonView::vmAny ||
            !item->addedTypes.empty() || !item->wrkList.empty() || item->partRef || !item->parts.empty() ||
            getFlagBit(item->flags,infonView::invertMatch)) return 0;
         auto word=item->type->typeID();return word=="begin" ? -1 : word=="end" ? 1 : 0;
     }
     POVNode lookup(const POVNode& source,bool end) const {
-        if(source->pItem->isNull()) return source;
+        if(readView(source)->isNull()) return source;
         auto reference=POVDescription(source,access_->registry.get()).boundaryReference();
         return reference ? (end ? reference->end : reference->begin) : POVNode{};
     }
@@ -30,8 +30,8 @@ public:
         if(auto existing=lookup(source,end)) return existing;
         access_->bind(source);
         auto boundary=std::make_shared<POV>(609); // povSrcTemporalBoundary
-        boundary->pItem=std::make_shared<infonView>();boundary->pItem->setToNull();
-        boundary->pItem->identityName=access_->registry->occurrenceScope.allocate();
+        readView(boundary)=std::make_shared<infonView>();readView(boundary)->setToNull();
+        readView(boundary)->identityName=access_->registry->occurrenceScope.allocate();
         access_->bind(boundary);
         std::lock_guard<std::mutex> lock(access_->registry->registryMutex);
         auto& reference=access_->registry->boundaries[source];
@@ -95,7 +95,7 @@ public:
             auto graph=graph_;auto source=request.node,alias=q.node;bool end=request.argument>0;
             // Boundaries requested before the source became null remain valid
             // references. Identify them with the now-known self boundary.
-            if(alias->pItem->isNull())
+            if(readView(alias)->isNull())
                 if(auto prior=POVDescription(alias,access_->registry.get()).boundaryReference()) {
                     std::vector<SetCommand> commands;
                     for(const auto& boundary:{prior->begin,prior->end})

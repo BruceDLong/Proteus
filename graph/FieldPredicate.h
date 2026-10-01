@@ -12,7 +12,7 @@ class FieldPredicate {
     std::map<DefinitionSpec,NumericView> numbers_;
     bool readable(const POVNode& node, bool predicate) {
         if (!access_->plainStructure(node,false,false,false,false,false,false) ||
-            (!predicate && getFlagBit(node->pItem->flags,infonView::invertMatch))) return false;
+            (!predicate && getFlagBit(readView(node)->flags,infonView::invertMatch))) return false;
         for (const auto& relation:POVDescription(node,access_->registry.get()).relationships()) {
             if (access_->sameInfon(node,relation.target)) continue;
             RHSRepresentation proof(access_,node,relation.target,definitions_);
@@ -32,7 +32,7 @@ class FieldPredicate {
     DefinitionSpec read(const POVNode& node, bool predicate, std::vector<POVNode> context,
                         bool scalarOnly=false, bool useMeaning=false) {
         ++work.visits;
-        if (active_.count(node->pItem)) return {};
+        if (active_.count(readView(node))) return {};
         auto specification=std::make_shared<DefinitionRequirement>();
         specification->types=definitions_->names(node);
         specification->captureLabel(node);
@@ -45,7 +45,7 @@ class FieldPredicate {
         if(predicate && specification->facts.valid && specification->facts.overlay<0 &&
            WordForms::collectionPredicate(node,*definitions_)) specification->facts.overlay=infonState::LST;
         const bool canRead=readable(node,predicate);
-        if ((!predicate || !getFlagBit(node->pItem->flags,infonView::invertMatch)) && !access_->literalList(node) &&
+        if ((!predicate || !getFlagBit(readView(node)->flags,infonView::invertMatch)) && !access_->literalList(node) &&
             (!access_->hasTypeRequirements(node) || !POVDescription(node).work().empty() || !canRead))
             out_.refinements.push_back({{node,sizeAndValue,0,{},refinementContext},{1,0},"refine field candidate",true});
         if (!canRead) return {};
@@ -65,7 +65,7 @@ class FieldPredicate {
         // A complemented literal list cannot use the positive-only list
         // accessors. Keep it unresolved rather than comparing just its header.
         if (specification->facts.overlay==infonState::LST &&
-            getModeBits(node->pItem->value->flags,infonState::evalMode)==infonState::emLiteral &&
+            getModeBits(readView(node)->value->flags,infonState::evalMode)==infonState::emLiteral &&
             !access_->literalList(node)) return {};
         // An empty open ordered body constrains the list header/extent only.
         // It adds no member predicates and need not expand a sparse candidate.
@@ -73,13 +73,13 @@ class FieldPredicate {
         if (!scalarOnly && predicate && access_->repeatedDefinitionList(node) && specification->facts.hasSize) {
             // A fixed repeated predicate describes every candidate position;
             // it is not an instruction to allocate that many pattern nodes.
-            active_.insert(node->pItem);
+            active_.insert(readView(node));
             specification->list=true;specification->open=true;
             specification->repeated=read(definitions_->repeatedBody(node),true,context,false,useMeaning);
-            active_.erase(node->pItem);
+            active_.erase(readView(node));
             if(!specification->repeated) return {};
         } else if (!scalarOnly && access_->literalList(node)) {
-            active_.insert(node->pItem);
+            active_.insert(readView(node));
             SpanLayout<POVNode> layout;
             std::map<POVNode,std::vector<POVNode>> locations;
             bool available=readListLayout(*access_,node,layout,work.visits,[&](const auto& at) {
@@ -93,14 +93,14 @@ class FieldPredicate {
                 GraphTypeFacts count;count.valid=true;count.hasSize=true;count.size=static_cast<std::int64_t>(layout.segments.size());
                 if (!specification->facts.combine(count)) conflict_=true;
                 for (const auto& position:layout.segments) {
-                    if (position.gap || getFlagBit(position.node->pItem->flags,infonView::invertMatch)) {available=false;break;}
+                    if (position.gap || getFlagBit(readView(position.node)->flags,infonView::invertMatch)) {available=false;break;}
                     auto owners=context;
                     const auto& local=locations.at(position.node);owners.insert(owners.end(),local.begin(),local.end());
                     auto child=read(position.node,predicate,std::move(owners),false,useMeaning);
                     specification->members.push_back(child);
                 }
             }
-            active_.erase(node->pItem);
+            active_.erase(readView(node));
             if (!available) return {};
         }
         if (meaning) {
@@ -176,7 +176,7 @@ public:
             auto exclusion=read(predicate,true,{},false,true);
             if (!conflict_ && compare(exclusion,actual)==ScalarMatch::no) result=ScalarMatch::no;
         }
-        if(getFlagBit(predicate->pItem->flags,infonView::invertMatch)) result=complement(result);
+        if(getFlagBit(readView(predicate)->flags,infonView::invertMatch)) result=complement(result);
         return result;
     }
 };
