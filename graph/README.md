@@ -61,6 +61,8 @@ Atomic scalar-copy and span-correspondence Sets retain the data checks they just
 established after invalidating older evidence. Later model publications still
 conservatively clear instance checks. See
 [definition-validation-results.md](definition-validation-results.md).
+The subsequent [traversal profile](traversal-profile-results.md) attributes most
+remaining revisits to broad path-result publications and lists the next steps.
 
 `GraphNormalizer.knownField` and `knownType` provide read-only display inspection
 under `runtime.read()`, including nominal aliases. `knownField` returns an ordered
