@@ -127,7 +127,11 @@ oneOf alternatives. Collected positional results use the generic finishPass Set
 hook so a partial publication cannot starve a slower successful route.
 See graph/positional-path-results.md, graph/slice-results.md, and
 graph/path-write-results.md. Unambiguous path writes add constraints to the
-selected source occurrence; ambiguous targets remain pending. Ordinary `=` rejects
+selected source occurrence; ambiguous targets remain pending. The 2026-10-01
+clarification permits a sole proved match despite an unordered record's implied
+open membership. Multiple matches, unresolved candidates, explicit open syntax,
+and arbitrary open oneOfs still withhold writes; retain that distinction through
+chained fields and positional selection. Ordinary `=` rejects
 conflicting known values. Only explicit `forceID` (`<<=`) permits replacement;
 its parser flag exists, but its graph operation is still an implementation gap.
 Do not add a replacement exception for units or temporal lists. Retained parts

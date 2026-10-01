@@ -500,17 +500,22 @@ public:
         for(const auto& at:state->locations) if(at.source==source) return at.context;
         return {};
     }
+    static POVNode updateTarget(const std::shared_ptr<GraphPathSelection>& state) {
+        if(!state->result || state->matches.size()!=1 ||
+           (state->pending && !readView(state->result)->implicitMembershipChoice)) return {};
+        return state->matches.front();
+    }
     static bool updatesReady(const std::shared_ptr<GraphPathSelection>& state) {
-        return state->updates.empty() || (state->result && !state->pending && state->matches.size()==1);
+        return state->updates.empty() || bool(updateTarget(state));
     }
     static bool needsUpdates(const std::shared_ptr<GraphPathSelection>& state) {
         if(!updatesReady(state) || state->updates.empty()) return false;
-        for(const auto& rhs:state->updates) if(!readView(state->result)->hasRHS(readView(rhs))) return true;
+        for(const auto& rhs:state->updates) if(!readView(updateTarget(state))->hasRHS(readView(rhs))) return true;
         return false;
     }
     static bool applyUpdates(ProteusGraphAccess& access,const std::shared_ptr<GraphPathSelection>& state) {
         if(!needsUpdates(state)) return false;
-        auto target=state->result;access.bind(target);
+        auto target=updateTarget(state);access.bind(target);
         for(const auto& rhs:state->updates) {access.bind(rhs);readView(target)->addPOVToWrkList(rhs);}
         ++target->workRevision;return true;
     }
@@ -523,11 +528,11 @@ class ProteusPathGoal : public GoalSpec<POVNode> {
     POVNode result_;
     std::map<POVNode,std::vector<POVNode>> locations_;
     bool verified_=false,waiting_=false,publishedPending_=false,aggregating_=false;
-    bool branchMatched_=false;
+    bool branchMatched_=false,uncertainCandidates_=false;
     std::vector<POVNode> positionBranches_;
     std::map<POVNode,POVNode> positionWinners_;
     std::set<POVNode> positionEnds_;
-    bool positionsEnded_=false,positionTailPending_=false,positionReady_=false;
+    bool positionsEnded_=false,positionTailPending_=false,positionTailUncertain_=false,positionReady_=false;
     Visit<POVNode> positionFinding_;
     bool collectPosition(const Query<POVNode>& q) {
         if(q.kind==pathAlternative) {aggregating_=true;positionBranches_.push_back(q.node);}
@@ -541,12 +546,13 @@ class ProteusPathGoal : public GoalSpec<POVNode> {
         if(q.kind==pathAlternativesEnd) {
             positionsEnded_=true;
             positionTailPending_=getFlagBit(readView(q.node)->innr->value->flags,infonState::tailUnfinished);
+            positionTailUncertain_=positionTailPending_ && !readView(q.node)->implicitMembershipChoice;
         }
         if(aggregating_ || positionsEnded_) {
-            matches_.clear();waiting_=positionTailPending_;
+            matches_.clear();waiting_=positionTailPending_;uncertainCandidates_=positionTailUncertain_;
             for(const auto& branch:positionBranches_) {
                 auto winner=positionWinners_.find(branch);
-                if(winner==positionWinners_.end()) {if(!positionEnds_.count(branch)) waiting_=true;}
+                if(winner==positionWinners_.end()) {if(!positionEnds_.count(branch)) waiting_=uncertainCandidates_=true;}
                 else if(std::find(matches_.begin(),matches_.end(),winner->second)==matches_.end()) matches_.push_back(winner->second);
             }
             return positionsEnded_;
@@ -564,8 +570,8 @@ public:
         }
     }
     void beginPass() override {
-        matches_.clear();locations_.clear();verified_=waiting_=aggregating_=false;branchMatched_=false;
-        positionBranches_.clear();positionWinners_.clear();positionEnds_.clear();positionsEnded_=positionTailPending_=positionReady_=false;
+        matches_.clear();locations_.clear();verified_=waiting_=aggregating_=false;branchMatched_=uncertainCandidates_=false;
+        positionBranches_.clear();positionWinners_.clear();positionEnds_.clear();positionsEnded_=positionTailPending_=positionTailUncertain_=positionReady_=false;
         positionFinding_={request,{},0};
     }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
@@ -604,7 +610,7 @@ public:
                 if(std::find(matches_.begin(),matches_.end(),q.node)==matches_.end()) matches_.push_back(q.node);
                 locations_.emplace(q.node,std::vector<POVNode>{q.node});
             }
-            if(q.kind==externalUnknown) waiting_=true;
+            if(q.kind==externalUnknown) waiting_=uncertainCandidates_=true;
             if(q.kind==externalEnd) positionReady_=true;
             if(visit.cost>=positionFinding_.cost) positionFinding_=visit;
             return {};
@@ -615,7 +621,7 @@ public:
                 std::vector<POVNode> location{q.node};location.insert(location.end(),q.context.begin()+1,q.context.end());
                 locations_.emplace(q.node,std::move(location));
             }
-            if(q.kind==choiceUnknown || q.kind==choicePending) waiting_=true;
+            if(q.kind==choiceUnknown || q.kind==choicePending) waiting_=uncertainCandidates_=true;
             if(q.kind==choiceEnd) positionReady_=true;
             if(visit.cost>=positionFinding_.cost) positionFinding_=visit;
             return {};
@@ -639,13 +645,25 @@ public:
             return {};
         }
         if(q.kind==pathAlternative) {aggregating_=true;branchMatched_=false;}
-        if(q.kind==pathUnknown || q.kind==pathAlternativeUnknown) waiting_=true;
+        if(q.kind==pathUnknown || q.kind==pathAlternativeUnknown) {
+            waiting_=true;
+            // Only the implicit open membership of a fully inspected record
+            // leaves its known candidates usable. Explicit tails, unknown
+            // spans, and unresolved predicates still withhold a write.
+            bool implicit=q.kind==pathUnknown && q.argument==static_cast<int>(ListPhase::leave) &&
+                readView(q.node)->orderMode==uUnordered && access_->physicalList(q.node) &&
+                !getFlagBit(readView(q.node)->value->flags,infonState::tailUnfinished);
+            if(implicit) implicit=listBoundary(*access_,q.node).missingExtents.empty();
+            uncertainCandidates_ |= !implicit;
+        }
         if(q.kind==pathMatched) {
             branchMatched_=true;
             if(std::find(matches_.begin(),matches_.end(),q.node)==matches_.end()) matches_.push_back(q.node);
         }
-        if(q.kind==pathEnd && aggregating_ && !branchMatched_) waiting_=true;
-        if(q.kind==pathAlternativesEnd && getFlagBit(readView(q.node)->innr->value->flags,infonState::tailUnfinished)) waiting_=true;
+        if(q.kind==pathEnd && aggregating_ && !branchMatched_) waiting_=uncertainCandidates_=true;
+        if(q.kind==pathAlternativesEnd && getFlagBit(readView(q.node)->innr->value->flags,infonState::tailUnfinished)) {
+            waiting_=true;uncertainCandidates_ |= !readView(q.node)->implicitMembershipChoice;
+        }
         finished=q.kind==pathAlternativesEnd || (!aggregating_ && (q.kind==pathEnd ||
             (q.kind==pathMatched && readView(q.context.front())->orderMode!=uUnordered)));
         return finished ? publish() : std::vector<SetCommand>{};
@@ -657,7 +675,9 @@ public:
 private:
     std::vector<SetCommand> publish() {
         const bool alternatives=waiting_ || matches_.size()!=1;
-        if(result_ && published_==matches_ && publishedPending_==waiting_) {
+        const bool implicitMembership=waiting_ && !uncertainCandidates_;
+        if(result_ && published_==matches_ && publishedPending_==waiting_ &&
+           (!alternatives || readView(result_)->implicitMembershipChoice==implicitMembership)) {
             bool current=true;
             if(!alternatives && !request.context.empty()) {
                 auto state=readView(request.context.front())->pathSelection;
@@ -695,7 +715,7 @@ private:
         }
         Work work{matches.size(),created};
         if (!request.context.empty()) ++work.creations;
-        return {{"Set path selection result",[this,matches,access,pending,alternatives,reusable]() -> SetResult {
+        return {{"Set path selection result",[this,matches,access,pending,alternatives,reusable,implicitMembership]() -> SetResult {
             auto changes=Changes::only({});
             // A distinct view can share this mutable inner state without
             // sharing the innr view itself. Until state-slot readers have
@@ -746,6 +766,7 @@ private:
                     member->pParent=result_.get();
                 }
                 SetFlagBit(body->flags,infonState::tailUnfinished,pending);
+                readView(result_)->implicitMembershipChoice=implicitMembership;
                 ++result_->workRevision;
             }
             SetResult publication{true,changes};

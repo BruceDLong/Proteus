@@ -51,6 +51,7 @@ TestsToRun = `
     unit/graphContextual/predicateStaysPending
     unit/graphContextual/nominalDisplayField
     unit/graphContextual/inheritedContextualParts
+    unit/graphContextual/unorderedWrittenParts
     unit/graphContextual/lateInheritedParts
     unit/streamInsert/parseFirstPolicy
     unit/streamInsert/assetRelative
@@ -590,6 +591,14 @@ TestsToRun = `
     unit/graphPathWrite/typedOrderPending
     unit/graphPathWrite/sparse
 
+    unit/graphOpenRecordWrite/single
+    unit/graphOpenRecordWrite/chain
+    unit/graphOpenRecordWrite/multiple
+    unit/graphOpenRecordWrite/unknownCandidate
+    unit/graphOpenRecordWrite/explicitTail
+    unit/graphOpenRecordWrite/multipleParents
+    unit/graphOpenRecordWrite/position
+    unit/graphOpenRecordWrite/conflict
     unit/graphPathWrite/dot
     unit/graphPathWrite/index
     unit/graphPathWrite/negative
@@ -8257,6 +8266,68 @@ struct GLOBAL {
     }
 }
 
+
+#define GRAPHOPENRECORDWRITE(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphOpenRecordWrite(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHOPENRECORDWRITE(unit/graphOpenRecordWrite/single, 0)
+    GRAPHOPENRECORDWRITE(unit/graphOpenRecordWrite/chain, 1)
+    GRAPHOPENRECORDWRITE(unit/graphOpenRecordWrite/multiple, 2)
+    GRAPHOPENRECORDWRITE(unit/graphOpenRecordWrite/unknownCandidate, 3)
+    GRAPHOPENRECORDWRITE(unit/graphOpenRecordWrite/explicitTail, 4)
+    GRAPHOPENRECORDWRITE(unit/graphOpenRecordWrite/multipleParents, 5)
+    GRAPHOPENRECORDWRITE(unit/graphOpenRecordWrite/position, 6)
+    GRAPHOPENRECORDWRITE(unit/graphOpenRecordWrite/conflict, 7)
+
+    me bool: graphOpenRecordWriteCase(me string: testName, me int: caseID) <- <%{
+        const std::vector<std::string> expressions{
+            "{a:_, b:8}.a=*10+7;",
+            "{orientation:{xRot:_, yRot:8}, keep:9}.orientation.xRot=*10+7;;",
+            "{a:_, a:_}.a=*10+7;",
+            "{a:_, ?}.a=*10+7;",
+            "{a:_, ...}.a=*10+7;",
+            "{orientation:{xRot:_,}, orientation:{xRot:_,}}.orientation.xRot=*10+7;;",
+            "{group:{_ _},}.group@[2]=*10+7;;",
+            "{a:*10+1, b:8}.a=*10+7;"
+        };
+        GraphNormalizer normalizer;normalizer.init();
+        if(caseID==6) {
+            auto defs=graphParsed(testName,"{#group={_ _}}");
+            auto declared=normalizer.normalize(defs);declared.waitForCompletion();declared.cancel();
+        }
+        auto root=graphParsed(testName,expressions.at(caseID));
+        auto source=root->pItem->value;
+        auto target=source->items.head;
+        if(caseID==1 || caseID==5) target=target->pItem->value->items.head;
+        if(caseID==6) target=target->pItem->value->items.tail;
+        auto original=target->pItem;
+        auto other=source->items.tail;
+        auto otherText=toString(other->pItem.get());
+        auto handle=normalizer.normalize(root);handle.waitForCompletion();
+        bool writes=caseID==0 || caseID==1 || caseID==6;
+        bool passed=handle.status().failed==(caseID==7) && target->pItem==original;
+        if(writes) passed &= getModeBits(target->pItem->value->flags,infonState::evalMode)==infonState::emLiteral && target->pItem->value->num==7;
+        else if(caseID==7) passed &= target->pItem->value->num==1;
+        else passed &= target->pItem->wrkList.empty() && getModeBits(target->pItem->value->flags,infonState::evalMode)==infonState::emUnknown;
+        if(caseID!=6) passed &= otherText==toString(other->pItem.get());
+        if(caseID!=7) {
+            passed &= handle.status().symbolicValues;
+            auto count=target->pItem->wrkList.size();
+            auto replay=normalizer.normalize(root);replay.waitForCompletion();
+            passed &= !replay.status().failed && target->pItem->wrkList.size()==count;
+            for(const auto& step:replay.steps()) passed &= step.action!="Set selected source constraints";
+            replay.cancel();
+        }
+        if(!passed) std::cout<<"Open record write "<<caseID<<": "<<toString(root->pItem.get())<<" target="<<toString(target->pItem.get())<<" error="<<handle.status().error<<"\n";
+        handle.cancel();normalizer.close();return passed;
+    }%>
+    void: unitTestGraphOpenRecordWrite(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphOpenRecordWriteCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
 #define GRAPHCHOICE(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphChoice(tname, CASE_ID)}%>
 struct GLOBAL {
     GRAPHCHOICE(unit/graphChoice/number, 0)
@@ -11366,20 +11437,24 @@ struct GLOBAL {
     GRAPHCONTEXTUAL(unit/graphContextual/predicateStaysPending, 11)
     GRAPHCONTEXTUAL(unit/graphContextual/nominalDisplayField, 12)
     GRAPHCONTEXTUAL(unit/graphContextual/inheritedContextualParts, 13)
+    GRAPHCONTEXTUAL(unit/graphContextual/unorderedWrittenParts, 15)
     GRAPHCONTEXTUAL(unit/graphContextual/lateInheritedParts, 14)
     me bool: contextualDefinitionCase(me string: testName, me int: caseID) <- <%{
         using namespace proteus4;
         GraphNormalizer n;n.init();
         auto parse=[&](const std::string& text){return graphParsed(testName,text);};
         auto norm=[&](const POVNode& p){auto h=n.normalize(p);h.waitForCompletion();return h;};
-        if(caseID==13 || caseID==14) {
-            const std::string layout="#layout={*1+{center|center:{shade}} *1+{edge|edge:{thing, *2+{side|{shade}{shade}}}}}";
+        if(caseID==13 || caseID==14 || caseID==15) {
+            const std::string separator=caseID==15 ? ", " : " ";
+            const std::string layout="#layout={*1+{center|center:{shade}}"+separator+"*1+{edge|edge:{thing, *2+{side|{shade}{shade}}}}}";
             auto declarations=parse("{#color={hue:_} #shade=color:{hue:30} #side={color} #thing={location} "
                 "#center={thing, color, *2+{side|{%.color}{shade}}} #edge={thing, *2+{side|...}} "
-                "#placed=layout:{*1+{center|center:{thing:{location:1},}} *1+{edge|edge:{thing:{location:2},}}} " +
-                (caseID==13 ? layout : "") + "}");
+                "#placed=layout:{*1+{center|center:{thing:{location:1},}}"+separator+"*1+{edge|edge:{thing:{location:2},}}} " +
+                (caseID!=14 ? layout : "") + "}");
             norm(declarations);auto unchanged=toString(declarations->pItem.get());
             auto target=parse("placed");auto handle=norm(target);bool ok=!handle.status().failed;
+            if(caseID==15) ok &= target->pItem->orderMode==uUnordered && handle.status().symbolicValues &&
+                getModeBits(target->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown;
             if(caseID==14) {norm(parse("{"+layout+"}"));handle=norm(target);ok &= !handle.status().failed;}
             auto groups=target->pItem->value->items.head;
             auto edge=groups && groups->next ? groups->next->pItem->value->items.head : POVNode{};

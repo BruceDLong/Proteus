@@ -784,7 +784,11 @@ public:
         // own shape goals; this Set never records a type certificate.
         if(!access_->adoptableList(target)) return {};
         for(const auto& name:names(target)) if(auto body=lookup(name)) {
-            if(!access_->literalList(body) || access_->inputPending(body) || access_->memberTemplate(body) || access_->openTail(body)) continue;
+            // An unordered record's implicit remainder does not hide its
+            // written fields. Explicit unfinished syntax still uses the span
+            // goals; exposing these fields never certifies total membership.
+            if(!access_->literalList(body) || access_->inputPending(body) || access_->memberTemplate(body) ||
+               getFlagBit(readView(body)->value->flags,infonState::tailUnfinished)) continue;
             bool embedded=false;
             for(auto member=POVDescription(body).member();member;member=member->next) embedded |= access_->definitionEmbedded(member);
             if(embedded) continue;
@@ -856,7 +860,9 @@ public:
                 for(const auto& name:definitions_->names(ancestor))
                     recursive |= std::find(names.begin(),names.end(),name)!=names.end();
         }
-        if(commands.empty() && !recursive)
+        // This fallback exposes facts hidden by unfinished compilation. It
+        // must not bypass a compiled plan that cannot establish correspondence.
+        if(commands.empty() && !recursive && (!proof_->compilable || !proof_->requirement))
             commands=definitions_->exposeWrittenStructure(request.node);
         return {entry_,std::move(commands)};
     }

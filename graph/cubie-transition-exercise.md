@@ -1,18 +1,32 @@
 # One-cubie transition exercise
 
-The first change uses the actual cube model: edge cubie 10, at
-`location:{xLoc:-1.1, yLoc:0, zLoc:-1.1}`, changes `xRot` from `0` to `0.5`.
-This is the small orientation edit already present in `Resources/userKB.pr`'s
-`solvedState2`; it is not yet a physical face turn.
+The current target is edge cubie 1, at
+`location:{xLoc:0, yLoc:-1.1, zLoc:1.1}`: change `xRot` from `0` to `0.3` in
+T-item 2. This is a single-cubie orientation edit, not a physical face turn.
+Earlier checkpoints below used edge cubie 10 and `0.5`.
 
-`Resources/TestFiles/rubixTransition.pr` imports the existing Foundation and cube
-models and places `solvedState` before an unknown second state. These public
-model assets exist in this workspace but are not tracked by the Proteus4 Git
-repository. The exercise requires them in the runtime assets directory.
+`Resources/TestFiles/rubixTransition.pr` imports the Foundation and cube models.
+Its second state now retains the parent of one leaf constraint:
+
+```proteus
+rubixState.edgeCubes@[1].thing.orientation.xRot=0.3;;;;;
+```
+
+The five semicolons return through the five selected descendants to the
+`rubixState`. This uses existing retained-path syntax. The matching change in
+Slipstream's `Resources/userKB.pr` removes the duplicated `solvedState2` body;
+its outer T-item also relies on preservation for the omitted whole-cube `thing`.
+The test history contains direct rubixState values; the GUI history wraps them
+with that whole-object thing description.
+
+The shared public model is tracked in the separate `/home/bruce/devl/World`
+repository. Its center/edge/corner group record is now unordered. Cubies within
+each group and the six stickers remain ordered, because their positions matter.
+The single-color side representation remains unchanged.
 
 ## Required transition observations
 
-- Later selected cubie xRot is 0.5; earlier xRot remains 0.
+- Later selected cubie xRot is 0.3; earlier xRot remains 0.
 - Its yRot, zRot, location, and sticker information remain available.
 - A neighboring cubie retains its known values.
 - Information genuinely unknown in the source is not invented.
@@ -26,11 +40,10 @@ forward pedaling on a functioning bicycle can imply chain and wheel movement,
 and typical riding can imply a location change. Preservation must account for
 those consequences, not merely the directly written changes.
 
-The second state remains `?` until this transition is implemented. The rule
-applies to a modeled change; this fixture does not invent a transition between
-arbitrary disconnected partial descriptions. Concrete verb syntax, dependency
-tracking, and how tentative preservation responds to later evidence remain
-implementation/design work.
+The partial second-state statement is now an acceptance case. T-list adjacency
+supplies preservation, as clarified below; implementing the demand-driven
+correspondence and its evidence remains necessary. Inferred changes must retain
+precedence over inherited values, without identifying successive occurrences.
 
 ## First reproduced blocker
 
@@ -68,8 +81,10 @@ After the usual build/resource staging, from `LocalBuild`:
 ```
 
 The suite is separate from the default inventory. It includes positive controls,
-negative-definition regressions, and original-state cube reads. It does not yet
-test successful verb application or claim preserved after-state values.
+negative-definition regressions, original-state reads, and explicit acceptance
+checks for the changed rotation, unchanged sibling rotation, location, sticker,
+and original state after reading the second. Unimplemented behavior remains a
+failure; these expectations are not skips or adjusted to incomplete output.
 
 ## Initial result (2026-09-29)
 
@@ -167,13 +182,58 @@ contradiction against a default or retract an authored earlier-state fact. The
 existing history-mapping goals already supply the explicit mapping case; general
 parent/part projection and preservation remain to be implemented.
 
-The current fixture intentionally leaves its second state unknown while that
-behavior is implemented. This checkpoint establishes original-state access and
-mapping regressions; it does not implement automatic preservation, verb
-application, or the partial description of `solvedState2`.
+At that checkpoint the fixture left its second state unknown. It established
+original-state access and mapping regressions; it did not implement automatic
+preservation or verb application. The newer fixture described above makes the
+partial second state and its acceptance observations explicit.
 
 Validation for this groundwork: source build succeeded; temporal graph tests
 **51/51**, cube groundwork **8/8**, and `git diff --check` passed. Logs are
 `/tmp/p4-temporal-return-build.log`, `/tmp/p4-temporal-return-51.log`, and
 `/tmp/p4-temporal-return-cube-final.log`. The complete legacy suite and GUI were
 not exercised; no engine implementation or production cube asset changed.
+
+## Unordered model and single-target path groundwork
+
+Early definition exposure now includes written unordered fields, even though the
+record's total membership is unknown. Parser-pending bodies, explicit unfinished
+syntax, member templates and embedded root spans retain their existing goals.
+This fallback is only for unfinished compilation: it cannot bypass a compiled
+plan whose member correspondence is ambiguous. It never grants a type certificate.
+
+The path-write clarification and its regressions are documented in
+[path-write-results.md](path-write-results.md). There is no cube-specific edge or
+normalizer branch.
+
+The GUI `<` and `>` buttons select physical T-items through `TimeView`. The
+final isolated run exercised first -> second -> first. The first state displays
+colored cubies and returns after switching back. The second displays colored,
+overlapping geometry: inherited cubie locations and other rotations remain
+unknown. Captures are under `/tmp/p4-cube-state-ui-final/`. This confirms control
+behavior and the initial rendering, not completed temporal preservation. The
+user's live window was not controlled.
+
+The one-world batch of 11 query assertions passes eight. The selected second
+X-rotation is 0.3, the requested sticker hue is 160, all initial-state reads pass,
+and reading the second state leaves the original X-rotation at 0. The three
+failures are second-state Y-rotation, location Z, and a neighboring cubie's
+X-rotation. They remain acceptance failures for preservation, not changed
+expectations. The standalone 15-case file was not run to completion; the batch
+avoids reloading and normalizing the full model for every query. Log:
+`/tmp/p4-cube-transition-verified-batch.log` (rerun against the final source and
+model). The initial-state-only fixture also passed
+five independent position/orientation queries.
+
+An open semantic question is whether an explicitly unknown next-state field
+(e.g. `b:?`) inherits the previous value just like an omitted field. The user has
+been asked; ordinary omission preservation is already settled. Automatic
+preservation is not implemented by this checkpoint.
+
+Final source verification: Proteus4 and Slipstream builds succeeded; all **1,332
+graph tests across 62 suites** passed, including the new unordered-definition
+case and eight path-write regressions. Four parsing checks cover the actual
+shared cube model, Slipstream knowledge base, transition fixture, and retained
+path syntax. The complete legacy suite was not run for this checkpoint. Logs:
+`/tmp/p4-cube-verified-build.log`, `/tmp/p4-cube-verified-audit/results.json`,
+`/tmp/p4-cube-model-final-parse.log`, and
+`/tmp/p4-cube-slipstream-final-build.log`.

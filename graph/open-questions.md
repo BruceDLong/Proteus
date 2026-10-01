@@ -170,3 +170,10 @@ The `.begin` / `.end` boundary syntax can collide with ordinary typed-field
 selection using those words. The user explicitly deferred resolving this
 overload until a concrete modeling need arises. Keep the current boundary
 behavior; do not redesign syntax as part of the AItem cleanup.
+
+## Explicit unknowns during temporal preservation
+
+T-list adjacency preserves omitted parts unless the model implies a change.
+Pending clarification: does `{T {a:1, b:7} {a:2, b:?}}` also retain `b:7`, or does
+an explicitly written unknown withhold that default? This distinguishes authored
+unknown descriptions from fields absent in a partial later-state statement.

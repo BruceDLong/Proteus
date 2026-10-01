@@ -5,7 +5,9 @@ uniquely selected source occurrence. They use the existing constraint/Set
 machinery: a contradictory known value fails instead of being overwritten.
 The 2026-09-29 clarification makes `forceID` (`<<=`) the explicit exception;
 the graph engine has not yet implemented that operation.
-An ambiguous or unresolved selection cannot write to an arbitrary candidate.
+An ambiguous or unresolved candidate selection cannot write to an arbitrary candidate.
+An implied open membership tail alone does not make a sole known target ambiguous
+(2026-10-01 clarification).
 Repeated normalization reuses the target and does not append the same RHS again.
 
 The parser already distinguishes a returning `partRef` from retained `parts`.
@@ -68,3 +70,31 @@ For the subsequent partial-definition composition fix and the original
 Logs: `/tmp/p4-write-final-build.log`, `/tmp/p4-write-verified-summary.log`,
 `/tmp/p4-write-verified-focused.json`, and
 `/tmp/p4-write-final-default/results.json`.
+
+## A sole known target in an open record (2026-10-01)
+
+The user clarified that an orientation's single X-rotation should be selectable
+for an update. Field selection now distinguishes the implicit remainder of an
+unordered record from unresolved candidate matching. A generated oneOf records
+when its open tail represents only unspecified membership. A single proved
+candidate can then receive the path constraint, including through chained fields
+and a positional continuation. The read result retains its open oneOf rendering;
+this does not assert a closed membership set or make the whole record isNormed.
+
+Two known matches, an unresolved competing member, an explicit unfinished tail,
+and a user-written open oneOf still withhold the write. A contradictory known
+value is still rejected. The update targets the original matched occurrence,
+never the oneOf wrapper. Replay does not append the constraint again.
+
+Positional matching recomputes certainty from its completed branch winners.
+An unfinished or failed route to a position cannot permanently disqualify a
+winner subsequently reached by another route.
+
+Eight added tests exercise a single field, nested orientation fields, multiple
+matches, an unknown candidate, an explicit tail, multiple parents, an ordered
+index reached through a record, and rejection of a conflicting value. They also
+check replay and preservation of unrelated data.
+
+Validation: the final source build passed, all eight new cases passed, and the
+full graph inventory passed **1,332/1,332**. Existing path-write expectations
+were retained. See `/tmp/p4-cube-verified-audit/results.json`.
