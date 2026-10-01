@@ -204,6 +204,9 @@ TestsToRun = `
     unit/graphDefinitionLanguage/publicEntry
 
     unit/graphTemporal/cubeOrientationMapping
+    unit/graphTemporal/mappedChain
+    unit/graphTemporal/lateMappedChain
+    unit/graphTemporal/alignedIndependentHistories
     unit/graphTemporal/lateSideValue
     unit/graphTemporal/sparseLocatedCut
     unit/graphTemporal/locatedCut
@@ -10238,6 +10241,9 @@ struct GLOBAL {
     GRAPHTEMPORAL(unit/graphTemporal/sparseLocatedCut, 48)
     GRAPHTEMPORAL(unit/graphTemporal/lateSideValue, 46)
     GRAPHTEMPORAL(unit/graphTemporal/cubeOrientationMapping, 47)
+    GRAPHTEMPORAL(unit/graphTemporal/mappedChain, 49)
+    GRAPHTEMPORAL(unit/graphTemporal/lateMappedChain, 50)
+    GRAPHTEMPORAL(unit/graphTemporal/alignedIndependentHistories, 51)
     GRAPHTEMPORAL(unit/graphTemporal/locatedCut, 37)
     GRAPHTEMPORAL(unit/graphTemporal/lateCutIdentity, 38)
     GRAPHTEMPORAL(unit/graphTemporal/nestedLocatedCut, 39)
@@ -10463,9 +10469,46 @@ struct GLOBAL {
             ok=!left.status().failed && !right.status().failed && left.result()==first && right.result()==second &&
                 p->pItem->value->items.size()==0 && p->repetitionSpan.family->occurrences.size()==2;
         }
+        if(caseID==49 || caseID==50) {
+            // Mappings relate histories, not just equal-valued initial states.
+            // Multiple hops and a cycle must still use the ordinary graph walk.
+            auto history=parse(caseID==50 ? "{T *10+0 ?}" : "{T *10+0 *10+5}");
+            auto first=POVDescription(history).member(),second=first->next;
+            auto middle=parse("?"),last=parse("?");
+            n.recordIdentity(middle,history);n.recordIdentity(last,middle);
+            auto sourceCut=cut(history).result();n.recordIdentity(sourceCut,bound(first,true));
+            auto mappedCut=cut(last).result();n.recordIdentity(mappedCut,sourceCut);
+            auto before=n.findTemporalSide(mappedCut,false),after=n.findTemporalSide(mappedCut,true);
+            before.waitForCompletion();after.waitForCompletion();
+            ok=!before.status().failed && before.result()==first && !after.status().failed;
+            if(caseID==50) {
+                ok &= !after.result() && after.status().withSubscribers && first->pItem->value->num==0;
+                n.addRHS(second,parse("*10+5"));after.waitForCompletion();
+            }
+            ok &= !after.status().failed && after.result()==second && second->pItem->value->num==5 &&
+                first->pItem->value->num==0 && !reg->areIdentical(first,second);
+            // First prove the two-hop route, then add a redundant cycle.
+            if(caseID==49) n.recordIdentity(history,last);
+            auto identities=reg->identities.size();
+            auto again=n.findTemporalSide(mappedCut,true);again.waitForCompletion();
+            ok &= !again.status().failed && again.result()==second && reg->identities.size()==identities;
+            if(!ok) std::cout<<"Mapped chain "<<caseID<<" before="<<before.status().error<<" after="<<after.status().error<<"\n";
+        }
+        if(caseID==51) {
+            // Equal initial values and a shared cut do not equate histories.
+            auto a=parse("{T *10+0 *10+5}"),b=parse("{T *10+0 *10+2}");
+            auto aFirst=POVDescription(a).member(),bFirst=POVDescription(b).member();
+            auto aCut=cut(a).result(),bCut=cut(b).result();
+            n.recordIdentity(aCut,bound(aFirst,true));n.recordIdentity(bCut,bound(bFirst,true));
+            n.recordIdentity(aCut,bCut);
+            auto aAfter=n.findTemporalSide(aCut,true),bAfter=n.findTemporalSide(bCut,true);
+            aAfter.waitForCompletion();bAfter.waitForCompletion();
+            ok=!aAfter.status().failed && !bAfter.status().failed && aAfter.result()==aFirst->next &&
+                bAfter.result()==bFirst->next && aAfter.result()->pItem->value->num==5 &&
+                bAfter.result()->pItem->value->num==2 && !reg->areIdentical(a,b) && !reg->areIdentical(aFirst,bFirst);
+        }
         if(caseID==47) {
-            // Exercise actual stored cube data, independently of the still-
-            // pending application of its complete contextual type definition.
+            // Exercise stored cube data independently of full-model querying.
             // Parsing a second occurrence keeps the shared declaration intact.
             auto text=readAssetAsString("public/Things/rubixCube.pr");
             if(text.empty()) {std::cout<<"Cube model asset is required\n";return false;}
@@ -10476,8 +10519,8 @@ struct GLOBAL {
             auto written=toString(declaration->pItem->funcArgs.get());
             auto cube=parse(written);
             // Fixture preparation reads only explicitly stored model data.
-            // Full definition/positional application has its own failing
-            // regression; it is not a premise of these temporal graph checks.
+            // Full definition/positional application has separate world tests;
+            // it is not a premise of these temporal graph checks.
             auto item=[](const POVNode& source,int index) {
                 auto at=POVDescription(source).member();
                 while(at && index-->0) at=at->next;

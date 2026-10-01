@@ -92,8 +92,12 @@ been reopened.
   movement, and typical riding can imply movement of the bicycle itself.
   Preservation therefore applies beyond both direct and model-implied effects;
   it is not limited to the fields explicitly written in the change. The graph
-  implementation is pending. This decision does not supply a transition
-  relationship between arbitrary disconnected partial descriptions.
+  implementation is pending. On 2026-10-01 the user clarified that T-list
+  adjacency supplies this preservation: `{T {a:0, b:7} {a:1}}` retains `b:7`
+  in state 2 unless the model implies a change. A later-state part reference
+  targets that occurrence; its RHS describes the change without modifying the
+  known prior state. No separate transition operator is needed. Disconnected
+  descriptions outside such a history do not acquire this relationship.
 
 - Assigning a conflicting known value is a contradiction unless the relationship
   explicitly uses `forceID` (written `<<=`). Ordinary `=` may supply an unknown

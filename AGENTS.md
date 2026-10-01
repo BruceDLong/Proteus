@@ -34,7 +34,11 @@ member count, expand sparse histories, or silently copy missing fields between a
 clarification establishes preservation across a modeled change unless the model
 implies another change, including indirect causal consequences. This transition
 behavior is not yet implemented; preserve distinct temporal occurrences and
-represent dependencies rather than identifying entire successive states.
+represent dependencies rather than identifying entire successive states. The
+2026-10-01 clarification makes T-list adjacency the source of preservation:
+`{T {a:0, b:7} {a:1}}` retains `b:7` in the second state unless the model
+implies a change. Later-state part references and RHSs target that occurrence,
+leaving the known prior state intact; no separate transition operator is needed.
 See graph/cubie-transition-exercise.md for the current world-model exercise.
 See graph/temporal-context-results.md for the current implementation boundary.
 

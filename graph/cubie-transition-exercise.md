@@ -99,8 +99,81 @@ See [temporal-cut-results.md](temporal-cut-results.md) for explicit history
 mapping, unchanged S-values at an aligned cut, and the real stored cube-data
 exercise. This is a graph-API transition test, not completed verb application.
 
-The four unresolved full-world reads have two separate blockers: `%INSERT` has
-not been migrated to graph dispatch, and direct loading exposes whole-definition
-compilation waiting on the unrelated contextual `centerCube` template. Earlier
+At that checkpoint, the four unresolved full-world reads had two separate
+blockers: `%INSERT` had not been migrated to graph dispatch, and direct loading
+exposed whole-definition compilation waiting on the unrelated contextual
+`centerCube` template. Earlier
 cube fixture failures did not by themselves prove that the imported definitions
 were loaded. The small signed-number regressions remain valid independent checks.
+
+
+## Return to temporal work (2026-10-01)
+
+Stream lock refinement is deferred until heavier stream use provides evidence.
+The next semantic objective remains a partial change with preserved unrelated
+knowledge and consequences obtained through ordinary model relationships.
+
+Re-running the untouched cube groundwork still produced 4/8 passes, but the
+old import and definition diagnosis was no longer the first failure. Inspection
+of the live world and the search steps showed:
+
+1. Both imports loaded, their definitions were registered, and the initial cube
+   already contained the written orientations and locations.
+2. `%W.cubeTransition` stopped at the first unnamed imported list. In an ordered
+   field search, an untyped earlier member cannot silently be excluded.
+3. Naming the import container exposed the history, but indexed access still
+   waited for its order. `T` specifies temporal composition independently of
+   order; the previously undefined `cubeTransition` type supplied no order.
+
+The fixture now names the import container `libraries` and defines
+`#cubeTransition = {T ? ?}`. This states its intended two-position ordered shape
+without supplying either state's values. No engine matching rule or cube asset
+was changed. The four queries now reach the original known values. Their expected
+printing retains the established open oneOf form, for example
+`*_+[xRot:0 ... ]`, because the path crosses unordered partial descriptions.
+The known value is tested without claiming that those descriptions are closed.
+
+Three added temporal regressions establish the next step's graph groundwork:
+
+- A chain of history identities, including a cycle, reaches the same before and
+  after occurrences without identifying those occurrences. Repeating the query
+  adds no identities.
+- A missing later value stays subscribed through that chain; supplying the value
+  resolves the existing handle and leaves the earlier value unchanged.
+- Two independent histories can have equal initial values and the same aligned
+  cut while retaining different later values. Neither coincidence nor boundary
+  alignment is a history mapping.
+
+These are history-identity cases, not a general causal-rule evaluator. More
+complex modeled relationships must expose their own constraints and demands.
+
+## Agreed state succession and next implementation boundary
+
+The user clarified on 2026-10-01 that T-list adjacency itself supplies
+preservation. In `{T {a:0, b:7} {a:1}}`, the second state retains `b:7` unless
+an applicable model implies a change to it. A separate transition operator is
+not required. In the cube history, position 1 is the initial state and position
+2 is the next state. A reference to a cubelet in state 2 targets that later
+occurrence, with an RHS specifying its orientation change. The known initial
+state remains intact.
+
+The graph should expose that correspondence from existing T-list relationships
+and POVs. It must not duplicate the entire state or identify entire successive
+states. A requested later part can obtain unchanged information from the prior
+state, while explicit and model-implied changes determine affected parts.
+Preservation needs retained derivation evidence, not an unconditional equality
+with an old value: discovering an applicable consequence must not manufacture a
+contradiction against a default or retract an authored earlier-state fact. The
+existing history-mapping goals already supply the explicit mapping case; general
+parent/part projection and preservation remain to be implemented.
+
+The current fixture intentionally leaves its second state unknown while that
+behavior is implemented. This checkpoint establishes original-state access and
+mapping regressions; it does not implement automatic preservation, verb
+application, or the partial description of `solvedState2`.
+
+Validation for this groundwork: source build succeeded; temporal graph tests
+**51/51**, cube groundwork **8/8**, and `git diff --check` passed. Logs are
+`/tmp/p4-temporal-return-build.log`, `/tmp/p4-temporal-return-51.log`, and
+`/tmp/p4-temporal-return-cube-final.log`. The complete legacy suite and GUI were
+not exercised; no engine implementation or production cube asset changed.
