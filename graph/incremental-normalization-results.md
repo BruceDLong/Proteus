@@ -165,3 +165,149 @@ Artifacts: `preserve-control-{1,2,3}/` and `preserve-final-{1,2,3}/` under
 list control is `progress-control/`, with logs `/tmp/p4-progress-control-16.log`
 and `/tmp/p4-progress-control-64.log`. Final behavior logs are in
 `/tmp/p4-cube-chart-bench/preserve-final-tests/`.
+
+
+## 3. Preservation without narrower invalidation (2026-10-01)
+
+The experiment does **not** show that storing intermediate scalar results can
+replace narrower invalidation on the cube. Preservation alone performs much like
+the original control. The variants with narrower invalidation are faster and use
+less total process memory at the visible-cube milestone.
+
+### What was isolated
+
+The preservation-only variant starts with `3b5fd5a` / functional engine `926d579`
+and applies only the scalar Set batch from `b3fb3c3`. The new per-object dependency
+index and per-callback address sets are absent, rather than merely disabling
+notifications while continuing to allocate them. This variant fills scalar
+intermediates and consolidates fully represented RHSs. Ordinary model writes
+still cause broad invalidation; the older catalogue/proof subscriptions remain.
+
+There is a dependency between the earlier two changes: retaining a completed
+list walk across unrelated member writes requires selective invalidation. That
+portion of the second change cannot operate with all those writes published
+broadly. This is therefore a test of **facts stored in the model versus selective
+search reuse**, not a claim that every line of the second commit is independent
+of the first. It does not test a future implementation that preserves additional
+kinds of intermediate list results.
+
+The exact small patch is saved as
+[experiments/preserve-with-broad-invalidation.patch](experiments/preserve-with-broad-invalidation.patch).
+It applies to the earlier baseline, not the current branch. The working engine
+continues to contain both accepted optimizations; this experiment used isolated
+builds under `/tmp`.
+
+### Four-way cube comparison
+
+Three runs of each variant, with run order rotated. Every run used fresh data
+and its own display. No build or test process ran during timing. Both the colored
+cube and Kanban were visually checked for the experimental variant.
+
+Time is the upper polling bound for first visible cube color, as before. Memory
+is the process's Linux `VmHWM` through that milestone, converted from KiB to MiB.
+`VmRSS` equaled that high-water mark in these runs. It includes GUI, model, search,
+allocator and library memory; it is not a measurement of the index alone or of
+steady-state memory after all normalization. Polling intervals are about 1.1 s.
+
+| Variant | Median visible time (s) | Median graph visits | Median peak RSS (MiB) |
+| --- | ---: | ---: | ---: |
+| Neither change | 23.54 | 201,305 | 260.8 |
+| Stored scalar results only | 23.15 | 198,148 | 264.1 |
+| Narrower invalidation only | 13.80 | 75,340 | 215.6 |
+| Both, including list-walk reuse | 13.96 | 68,987 | 215.3 |
+
+Preservation alone reduces the median visits by only 1.6%; its timing differences
+are within the observed run-to-run spread. Both changes use about **18.5% less
+peak RSS** than preservation alone. This gives no evidence of a net memory
+penalty from narrower invalidation on this workload. It does not prove a bound
+for arbitrary models or attribute the whole memory difference to one container.
+
+### What the memory bookkeeping actually stores
+
+`SearchSession::Task::visited` is the pre-existing per-goal map of query and cost.
+It distinguishes goals/contexts and prevents revisiting the same query within a
+pass; it is cleared when that task restarts. It was not introduced by narrower
+invalidation.
+
+`ObjectDependencies` adds address-to-token entries per graph context. These
+entries do not own POVs or copy adjacency. Tasks and cached proofs retain sets
+of tokens they read; tokens hold weak subscriptions. The temporary address set
+used to suppress repeated reads lives only for one callback. Unreferenced index
+entries are reclaimed in batches when the insertion threshold is reached.
+
+`SearchSession::steps` is a different, older source of retention: the handle's
+history appends events across retries, including queries that reference POVs.
+It has no configured history limit. Releasing the last handle releases that
+session's visited-query and history containers; cached completion proofs can
+outlive the handle by design.
+
+### Controlled growth and repeated normalization
+
+A separate diagnostic build counted bookkeeping under the graph context lock.
+The fixtures are the same independent scalar paths used in section 2. These
+counts are after normalization with one retained handle; they are not timing
+measurements and introduce no production instrumentation.
+
+| Members | Referenced object keys | Task-to-token entries | Cached proof read entries | Retained history events |
+| --- | ---: | ---: | ---: | ---: |
+| 16 | 162 | 374 | 473 | 407 |
+| 64 | 642 | 1,478 | 1,865 | 1,607 |
+| 256 | 2,562 | 5,894 | 7,433 | 6,407 |
+| 1,024 | 10,242 | 23,558 | 29,705 | 25,607 |
+
+All grow linearly in this fixture. These are addresses and read relationships,
+not counts of distinct POVs: views, path state and position slots have keys too.
+In general the storage cost depends on **goal-to-evidence relationships**, not
+just the number of nodes. Many distinct goals reading many of the same facts can
+still require many entries; this test does not rule out quadratic growth on a
+dense dependency workload.
+
+For the 64-member fixture, preservation with broad invalidation and the current
+engine both end with **451 visited-query entries**. Their history sizes are
+**65,728 versus 1,607 events**, respectively. The corresponding vector capacities
+are 131,072 versus 2,048. On this build `Step<shared_ptr<POV>>` is 144 bytes: just
+that array reserves **18 MiB versus 0.28 MiB**, before strings and query-context
+allocations. This is a concrete example of retry history outweighing the added
+tracking structures.
+
+Repeating the same 64-member normalization 1,000 times, releasing each handle,
+leaves **668 total index entries / 642 referenced entries** and **194 live
+completion proofs** unchanged. Released sessions retain zero visited/history
+entries. Expired weak subscriptions do consume spare capacity: it rose from
+3,824 slots initially to 41,192 after 100 repetitions, and remained 41,192 after
+1,000. At 16 bytes per weak pointer that final capacity is about **0.63 MiB**;
+only 1,092 subscriptions were live at the final snapshot. The cleanup batches
+prevented continued growth here, but their space overhead is worth reducing.
+
+Closing the entire test context left 192 proof objects associated with the
+64-member model in **both** the broad and current variants. This establishes
+that the survival is not specific to the new index, but is not a lifetime audit
+of model ownership. No claim of complete model reclamation is made.
+
+### Validation and artifacts
+
+The preservation-only variant passed **317/317 focused checks** covering scalar
+foundations, consolidation, representation, streaming, finite definitions, open
+spans, crossing, numeric ranges, definition reuse, sequence charts, and the new
+scalar/conflict/embedded-size cases. Performance assertions that require selective
+invalidation were not treated as semantic gates for a deliberately broad variant.
+The full legacy suite was not rerun. The production engine source and normal
+Slipstream binaries were not changed.
+
+All artifacts are under `/tmp/p4-cube-chart-bench/`:
+
+- `preserve-only/`: isolated source, patch, manifest and app/test builds.
+- `ablation-<variant>-{1,2,3}/`: per-run screenshots, logs, memory and timing JSON.
+- `ablation-summary.json`: four-way medians.
+- `ablation-tests/`: focused behavior logs and summary.
+- `memory-probe/` and `memory-probe-broad/`: instrumented sources and growth logs.
+- `ablation-memory-scaling.json`: parsed memory snapshots.
+
+Construction/runner scripts: `/tmp/p4-preserve-ablation.py`,
+`/tmp/p4-cube-chart-bench/run-memory.py`,
+`/tmp/p4-cube-chart-bench/run-ablation-matrix.py`, `/tmp/p4-memory-probe.py`, and
+`/tmp/p4-ablation-tests.py`.
+
+These results support retaining narrower invalidation. The next memory targets
+suggested by the measurements are optional bounded event history and more compact
+subscription storage, evaluated separately from model-result preservation.

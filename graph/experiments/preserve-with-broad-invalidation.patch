@@ -1,0 +1,47 @@
+--- a/graph/ProteusGraph.h
++++ b/graph/ProteusGraph.h
+@@ -387,18 +387,34 @@
+             if (verdict < 0) throw GoalRejected("incompatible scalar constraints");
+             if (!verdict) { deferred_ = true; return {}; }
+         }
++        std::vector<POVNode> targets{target};
++        if(access_->scalarCandidate(source)) for(const auto& step:visit.path)
++            if(step.node!=source && access_->scalarCandidate(step.node) &&
++               std::find(targets.begin(),targets.end(),step.node)==targets.end()) targets.push_back(step.node);
+         auto access = access_;
+         auto evidence = evidence_; auto definitions = definitions_;
+-        return {{"Set requested size/value/type", [access, evidence, definitions, target, source, demand] {
+-            bool changed = access->apply(target, source, demand);
+-            if (changed) evidence->inherit(target, source);
+-            auto inherited=definitions->inheritChanges(target,source);
+-            if(!changed) return inherited;
+-            inherited.changed=true;
+-            auto changes=inherited.changes.value_or(Changes::only({}));
+-            changes.include(definitions->modelChanges());inherited.changes=std::move(changes);
+-            return inherited;
+-        }}};
++        return {{"Set requested size/value/type", [access, evidence, definitions, targets, source, demand] {
++            // Recheck the whole batch before its first write. A discovery is
++            // stored in each plain scalar intermediate, using the same Set
++            // primitive and type-evidence transfer as the requested endpoint.
++            for(const auto& node:targets) {
++                int verdict=access->compatible(node,source,demand);
++                if(verdict<0) throw GoalRejected("incompatible scalar constraints");
++                if(!verdict || access->inputPending(node)) return SetResult{false};
++            }
++            SetResult result{false,Changes::only({})};
++            std::vector<std::function<void()>> receipts;
++            for(const auto& node:targets) {
++                bool changed=access->apply(node,source,demand);
++                if(changed) {evidence->inherit(node,source);result.changes->include(definitions->modelChanges());}
++                auto inherited=definitions->inheritChanges(node,source);
++                result.changed=changed || inherited.changed || result.changed;
++                if(inherited.changed) result.changes->include(inherited.changes.value_or(Changes{}));
++                if(inherited.retainEvidence) receipts.push_back(std::move(inherited.retainEvidence));
++            }
++            if(!receipts.empty()) result.retainEvidence=[receipts=std::move(receipts)] {for(const auto& keep:receipts) keep();};
++            return result;
++        },{targets.size()-1,0}}};
+     }
+     bool satisfied() const override {
+         if (request.kind == relationshipConstraints) return true;
