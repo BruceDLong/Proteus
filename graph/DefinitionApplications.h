@@ -712,6 +712,11 @@ public:
         return applyChanges(node,proof,plan);
     }
     std::shared_ptr<ProteusDefinitionPlan> reusable(const POVNode& target, const POVNode& source, const Certificate& proof) const {
+        // Certificates belong to the infonView: aliases already share them.
+        // There is no transfer to plan, including child-certificate replay.
+        // This does not certify the data; ordinary type goals still check it.
+        // Sharing only value storage is insufficient: headers may differ.
+        if (readView(target) == readView(source)) return {};
         if (!current(proof)) return {};
         try {
             // This can run after another write in the same atomic Set; a

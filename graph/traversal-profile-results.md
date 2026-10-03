@@ -584,3 +584,76 @@ The setup/analysis scripts are `/tmp/p4-phase-profile-setup.py`,
 `/tmp/p4-phase-profile-after-setup.py`, and their `-analyze.py` counterparts.
 Aborted scratch setup runs were excluded; the completed diagnostic runs were
 sequential.
+
+
+## Transfers between shared infonViews (2026-10-03)
+
+Baseline `6e757fb`. The follow-up profile separated source and destination
+plans used by `ProteusDefinitions::reusable()`. It found 3,077 of 3,118
+transfer checks had the exact same `infonView` at both endpoints. One
+`edgecubes` destination/requirement pair was planned 1,229 times, returning
+605,897 member bindings and no staged writes. Those counts include repeated
+checks across publications, not that many distinct objects.
+
+Certificates are already keyed by `infonView`. The implementation therefore
+returns no transfer plan when the two endpoints share that exact view. Both
+discovery (`canInherit`) and execution (`inheritChanges`) use this guard;
+they no longer rebuild source/target plans or replay child certificates merely
+to transfer evidence back into its existing owner. The guard observes both
+POVs, so retargeting an alias remains a relevant dependency change.
+
+This is not successful validation or a new acceptance receipt. Ordinary type
+goals still validate current data, publish needed child certificates, and
+observe contextual completion and demanded sparse occurrences. Distinct views
+keep both fresh checks even when their value or size buffers are shared. That
+also preserves detection of a mutation earlier in the same atomic Set, before
+publication could invalidate a cached check. No cache, retained instance
+history, graph adjacency, or cube-specific rule was added.
+
+CodeDog regeneration/build succeeded. All **1,423 registered graph tests
+in 71 groups passed**, including eight new `unit/graphViewTransfer/`
+cases. They cover bounded alias work and retargeting dependencies, separate
+headers sharing a value buffer, partial copies, unpublished source/destination
+edits, child-certificate propagation, invalid shared data, independent contextual
+instances, and a contradiction in one demanded item of a billion-item sparse
+list without enumerating the list. Existing expectations were unchanged.
+
+Ordinary executable comparison, sequential with no overlapping build/test/probe:
+
+| Eleven-observation temporal cube | Baseline | Shared-view guard |
+| --- | ---: | ---: |
+| Elapsed | 153.23 s | 66.68 s |
+| Peak RSS | 156,760 KiB | 115,672 KiB |
+| Observations passed | 11/11 | 11/11 |
+
+This pair used **56.5% less elapsed time** and **26.2% less peak
+RSS**. It is one paired measurement, not a stable performance guarantee or a
+live GUI measurement. The full legacy suite and Slipstream GUI were not rerun.
+
+The separate diagnostic run also passed all eleven observations and took the
+identity guard **1,042 times**. Its
+counter comparison with the preceding investigation is:
+
+| Diagnostic work | Before | After |
+| --- | ---: | ---: |
+| Model load/normalization | 94.411 s | 46.149 s |
+| Eleven query phases | 52.447 s | 16.789 s |
+| Public plan constructions | 20,331 | 10,637 |
+| Recursive preparations | 3,449,600 | 638,274 |
+| Source transfer plans | 3,118 | 41 |
+| Destination transfer plans | 3,099 | 22 |
+| Certificate remember calls | 1,179,195 | 5,446 |
+
+Instrumented phase times are separate from the ordinary executable comparison.
+Scheduling/publication timing can change counts between runs. Inclusive nested
+timers overlap and must not be added together. The before/after diagnostics
+use the same counters plus the new guard counter; instrumentation remains in
+scratch copies only.
+
+Evidence: `/tmp/p4-view-transfer/baseline/` preserves the prior executable and
+headers; `/tmp/p4-view-transfer/cube/` has ordinary logs, times and hashes.
+`/tmp/p4-view-transfer/tests/` contains the graph results. Diagnostic sources,
+logs and counts are in `/tmp/p4-plan-origin-profile/` (before) and
+`/tmp/p4-view-transfer/profile/` (after). Reproduction scripts are
+`/tmp/p4-view-transfer-benchmark.py`, `/tmp/p4-view-transfer-checks.py`,
+`/tmp/p4-view-transfer-profile-setup.py` and its `-analyze.py` counterpart.

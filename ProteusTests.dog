@@ -1,6 +1,15 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphViewTransfer/sharedViewBound
+    unit/graphViewTransfer/sharedValueHeader
+    unit/graphViewTransfer/partialCopy
+    unit/graphViewTransfer/atomicEdit
+    unit/graphViewTransfer/childEvidence
+    unit/graphViewTransfer/invalidSharedView
+    unit/graphViewTransfer/contextualAliases
+    unit/graphViewTransfer/sparseAliases
+
     unit/graphProofIdentity/sharedEvidence
     unit/graphProofIdentity/differentRequirement
     unit/graphProofIdentity/equivalentEvidence
@@ -12396,6 +12405,142 @@ struct GLOBAL {
     }%>
     void: unitTestGraphDefinitionHelpers(me string: testName, me int: caseID) <- {
         me bool: passed <- graphDefinitionHelpersCase(caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+
+// Aliases share evidence, but that never certifies unknown or changed data.
+#define GRAPHVIEWTRANSFER(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphViewTransfer(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHVIEWTRANSFER(unit/graphViewTransfer/sharedViewBound, 1)
+    GRAPHVIEWTRANSFER(unit/graphViewTransfer/sharedValueHeader, 2)
+    GRAPHVIEWTRANSFER(unit/graphViewTransfer/partialCopy, 3)
+    GRAPHVIEWTRANSFER(unit/graphViewTransfer/atomicEdit, 4)
+    GRAPHVIEWTRANSFER(unit/graphViewTransfer/childEvidence, 5)
+    GRAPHVIEWTRANSFER(unit/graphViewTransfer/invalidSharedView, 6)
+    GRAPHVIEWTRANSFER(unit/graphViewTransfer/contextualAliases, 7)
+    GRAPHVIEWTRANSFER(unit/graphViewTransfer/sparseAliases, 8)
+    me bool: graphViewTransferCase(me string: testName, me int: caseID) <- <%{
+        using namespace proteus4;
+        GraphNormalizer n;n.init();
+        auto parse=[&](const std::string& text){return graphParsed(testName,text);};
+        auto aliasOf=[&](const POVNode& source){auto p=std::make_shared<POV>(923);p->pItem=source->pItem;return p;};
+        auto norm=[&](const POVNode& p){auto h=n.normalize(p);h.waitForCompletion();return h;};
+        bool ok=true;
+        if(caseID==7) {
+            auto declarations=parse("{#sample={x:*10+_ y=%.x}}");ok &= !norm(declarations).status().failed;
+            auto a=parse("sample"),b=parse("sample");auto ha=norm(a);norm(b);
+            auto alias=aliasOf(a);auto h=norm(alias);
+            auto x=a->pItem->fetchField("x"),y=a->pItem->fetchField("y");
+            auto bx=b->pItem->fetchField("x"),by=b->pItem->fetchField("y");
+            ok &= h.status().symbolicValues && x && y && bx && by;
+            if(x && y && bx && by) {
+                auto before=y->pItem->wrkList.size();
+                n.addRHS(x,parse("*10+1"));n.addRHS(bx,parse("*10+2"));
+                ha.waitForCompletion();h.waitForCompletion();norm(b);h=norm(alias);
+                auto left=n.access->typeFacts(y),right=n.access->typeFacts(by);
+                ok &= !h.status().failed && left.hasValue && left.number==1 && right.hasValue && right.number==2 &&
+                    alias->pItem==a->pItem && a->pItem!=b->pItem && y->pItem->wrkList.size()<=before;
+            }
+        } else if(caseID==8) {
+            ok &= !norm(parse("{#many=*1000000000+{*10+7| ...}}")).status().failed;
+            auto source=parse("many");ok &= !norm(source).status().failed;
+            auto alias=aliasOf(source);auto selection=n.findItem(alias,999999999);selection.waitForCompletion();
+            auto member=selection.result();
+            ok &= !selection.status().failed && member && n.access->demandedOccurrences(source).size()==1 &&
+                source->pItem->value->items.isEmpty();
+            if(member) {
+                ok &= member->pItem->value->num==7;
+                // The alias cannot hide a contradictory demanded virtual item.
+                n.addRHS(member,parse("*10+8"));auto h=norm(alias);
+                ok &= h.status().failed && !getFlagBit(source->pItem->flags,infonView::isNormed) && source->pItem->value->items.isEmpty();
+            }
+        } else {
+            ProteusDefinitions definitions(n.access);
+            auto proofFor=[&](const POVNode& source) {
+                auto proof=std::make_shared<ProteusDefinitions::Proof>();
+                proof->requirement=std::make_shared<DefinitionRequirement>();
+                auto requirement=proof->requirement;requirement->list=true;requirement->facts=n.access->typeFacts(source);
+                for(auto member=source->pItem->value->items.head;member;member=member->next) {
+                    auto part=std::make_shared<DefinitionRequirement>();part->facts=n.access->typeFacts(member);
+                    requirement->members.push_back(part);
+                }
+                return proof;
+            };
+            auto source=parse("*2+{*10+1 *10+2}");n.access->setDefinitionOrder(source);
+            auto proof=proofFor(source);ok &= definitions.remember(source,proof);
+            if(caseID==1) {
+                ObjectDependencies objects;ReadScope tracked({},&objects);
+                for(int count:{2,64,256}) {
+                    std::string text="*"+std::to_string(count)+"+{";
+                    for(int i=0;i<count;++i) text+="*10+1 ";
+                    auto root=parse(text+"}");n.access->setDefinitionOrder(root);
+                    auto meaning=proofFor(root);definitions.remember(root,meaning);auto alias=aliasOf(root);
+                    std::set<DependencyKey> reads;
+                    {
+                        ReadScope capture([&](const DependencyKey& key){reads.insert(key);});
+                        ok &= !definitions.canInherit(alias,root);
+                        auto result=definitions.inheritChanges(alias,root);
+                        ok &= !result.changed && !result.retainEvidence;
+                    }
+                    // Shared evidence access is independent of descendant count.
+                    ok &= reads.size()<=12 && definitions.saved(alias)==meaning;
+                    auto consumer=DependencyProof::make(reads);ok &= consumer->valid();
+                    alias->pItem=parse("_")->pItem;
+                    for(const auto& key:ReadScope::changedObjects({alias.get()}).keys) key->publish();
+                    ok &= !consumer->valid();
+                }
+            } else if(caseID==2) {
+                auto target=parse("*3+{}");target->pItem->value=source->pItem->value;n.access->setDefinitionOrder(target);
+                ok &= !definitions.canInherit(target,source) && !definitions.inheritChanges(target,source).changed;
+                target->pItem->infSize=source->pItem->infSize;
+                ok &= definitions.canInherit(target,source) && definitions.inheritChanges(target,source).changed &&
+                    definitions.saved(target) && target->pItem!=source->pItem;
+            } else if(caseID==3) {
+                auto target=parse("*2+{*10+1 *10+_}");n.access->setDefinitionOrder(target);
+                ok &= !definitions.canInherit(target,source) && !definitions.inheritChanges(target,source).changed &&
+                    !definitions.saved(target) && !n.access->typeFacts(target->pItem->value->items.tail).hasValue;
+            } else if(caseID==4) {
+                auto target=parse("*2+{*10+1 *10+2}");n.access->setDefinitionOrder(target);
+                ok &= definitions.accepts(proof,source) && definitions.accepts(proof,target);
+                // Simulate earlier writes in one Set, before publication. Cached
+                // acceptance cannot authorize transfer from/to the changed data.
+                source->pItem->value->items.tail->pItem->value->num=static_cast<std::int64_t>(3);
+                ok &= !definitions.canInherit(target,source) && !definitions.inheritChanges(target,source).changed;
+                source->pItem->value->items.tail->pItem->value->num=static_cast<std::int64_t>(2);
+                target->pItem->value->items.tail->pItem->value->num=static_cast<std::int64_t>(3);
+                ok &= !definitions.canInherit(target,source) && !definitions.inheritChanges(target,source).changed && !definitions.saved(target);
+            } else if(caseID==5) {
+                auto target=parse("*2+{*10+1 *10+2}");n.access->setDefinitionOrder(target);
+                auto result=definitions.inheritChanges(target,source);
+                ok &= result.changed && bool(result.retainEvidence);
+                if(result.retainEvidence) result.retainEvidence();
+                auto child=target->pItem->value->items.tail;auto saved=definitions.saved(child);
+                ok &= saved && saved->requirement==proof->requirement->members[1] &&
+                    saved->evidence==proof->evidence && definitions.accepts(saved,child);
+            } else {
+                auto alias=aliasOf(source);
+                source->pItem->value->items.tail->pItem->value->num=static_cast<std::int64_t>(3);
+                auto result=definitions.inheritChanges(alias,source);
+                ok &= !result.changed && !result.retainEvidence && !definitions.accepts(proof,alias);
+                // Root meaning recorded by compilation does not require a
+                // transfer through an alias to publish the child certificates.
+                source->pItem->value->items.tail->pItem->value->num=static_cast<std::int64_t>(2);
+                auto plan=definitions.plan(alias,proof);ok &= plan && plan->dataSatisfied();
+                if(plan) {
+                    ok &= definitions.applyChanges(alias,proof,plan).changed;
+                    ok &= bool(definitions.saved(source->pItem->value->items.tail));
+                }
+            }
+        }
+        if(!ok) std::cout<<"View transfer case "<<caseID<<" failed\n";
+        n.close();return ok;
+    }%>
+    void: unitTestGraphViewTransfer(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphViewTransferCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

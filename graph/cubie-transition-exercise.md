@@ -422,3 +422,24 @@ eleven observations, including changed orientation, preserved fields,
 neighboring cubie, sticker color, and the unchanged original state. All 1,415
 graph tests also pass. The broad legacy suite and live GUI were not rerun.
 Ordinary-build logs, timings, and hashes are in `/tmp/p4-proof-identity-cube/`.
+
+
+## Shared-view evidence transfer measurement (2026-10-03)
+
+Type evidence belongs to the `infonView`, so two POVs pointing to that same
+view already share it. A single guard now avoids planning transfers between
+those aliases. Current type validation remains in the ordinary goals; distinct
+headers, contextual expressions, and sparse occurrences retain their checks.
+No per-instance cache or additional retained state was added.
+
+Against baseline `6e757fb`, the ordinary eleven-observation batch took
+**153.23 s / 156,760 KiB peak RSS** before and
+**66.68 s / 115,672 KiB** after:
+**56.5% less time and 26.2% less peak memory in one sequential
+pair**. Both passed all eleven observations, including the changed rotation,
+preserved fields and sticker color, neighboring cubie, and unchanged original
+state. All **1,423 graph tests** pass, including eight new focused cases.
+The broad legacy suite and live GUI were not rerun. Detailed semantics,
+diagnostic counts, and validation are in
+[the traversal report](traversal-profile-results.md#transfers-between-shared-infonviews-2026-10-03).
+Ordinary logs and hashes are in `/tmp/p4-view-transfer/cube/`.
