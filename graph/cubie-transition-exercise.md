@@ -370,3 +370,17 @@ Evidence: `/tmp/p4-instance-check-comparison.json`,
 `/tmp/p4-instance-check-cube/`, `/tmp/p4-instance-check-refined-cube/`, and
 `/tmp/p4-instance-check-refined-all-tests.log`. Both measurement directories
 include logs, timings, and source/binary manifests.
+
+
+## Shared definition work measurement (2026-10-02)
+
+The scoping/conjunction helpers preserve shared requirements, and nested
+alternative checks share their outcome within a planning pass. Against saved
+baseline `e26d4ff`, the eleven-observation transition batch took
+**323.04 s / 152,576 KiB peak RSS** before and
+**331.28 s / 160,784 KiB** after. Both passed
+all eleven observations, including the changed orientation, preserved parts,
+neighbor, sticker color, and unchanged original state. This is one sequential
+timing pair; no live Slipstream performance claim is made. All 1,404 graph tests
+also pass. See `graph/traversal-profile-results.md` for the scaling probes and
+validation limits; raw cube results are in `/tmp/p4-definition-sharing-cube/`.

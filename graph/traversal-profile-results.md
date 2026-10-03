@@ -328,3 +328,72 @@ See [the cube exercise](cubie-transition-exercise.md) and
 `/tmp/p4-instance-check-comparison.json`. The slower first executable/header
 are retained under `/tmp/p4-instance-check-first/`; the final measurement is
 under `/tmp/p4-instance-check-refined-cube/`. GUI performance was not tested.
+
+
+## Shared conjunctions, scopes, and pending alternatives (2026-10-02)
+
+Baseline `e26d4ff`. Definition compilation still revisited shared subrequirements
+in `scopeDefinition()` and copied repeated pairs into separate trees in
+`combineDefinitions()`. The helpers now share results within one operation:
+source requirements for scoping, ordered requirement pairs for conjunction.
+An unchanged scoped result is reused as evidence that this subtree needs no
+rebinding in that call. A conjunction retains the original left/right nominal
+metadata precedence and validates the same scalar, layout, and member constraints.
+It now counts its recursive helper work in the existing route-cost estimate.
+
+Nested alternative validation now shares accepted, rejected, and pending
+outcomes for the same POV and requirement during a single plan construction.
+Each alternative still checks instance facts with its own local binding scope,
+as in the previous independent plan constructor; staged writes are not executed
+or shared. A reentrant check remains pending. Scratch is allocated only when
+alternatives occur and released before the public constructor returns. A later
+plan reads the current instance and definition again. No persistent attempted-POV
+table, new graph nodes, or structural type equivalence was introduced.
+
+Operation-count probes use the same generated translation unit and build flags
+against the before/after headers. Direct DAG probes share each child twice.
+Parsed definitions use `#p0=*10+_`, `#p1={p0 p0}`, and so on; the conjunction
+query is `pN=pN`. Parsed alternatives use `#p0=*10+7`,
+`#p1=*_+[p0 p0]`, and so on, checked against `*10+_`.
+Compilation does not materialize the exponentially many described item positions.
+
+| Probe | Depth | Metric | Before | After |
+| --- | ---: | --- | ---: | ---: |
+| Direct shared scoping | 20 | Scope visits | 2,097,151 | 41 |
+| Direct shared conjunction | 16 | Result requirement objects | 131,071 | 17 |
+| Parsed shared definitions | 20 | Scope visits over compilation | 6,291,411 | 1,563 |
+| Parsed conjunction | 16 | Result requirement objects | 131,071 | 33 |
+| Parsed pending alternatives | 16 | Plan preparation calls | 131,071 | 33 |
+
+Pending alternative probes remain pending and produce zero writes. Sharing is
+bounded by distinct subproblems within each operation; this does not claim that
+all compilation, matching, or scheduling is linear. Probe sources/results are
+under `/tmp/p4-definition-analysis/` and `/tmp/p4-definition-sharing-probe/`.
+
+Validation: CodeDog regeneration/build succeeded and all **1,404 distinct
+registered graph tests passed**, including eight new cases for sharing bounds,
+scope preservation, changed source requirements, unequal conjunction pairs,
+pending-to-known transitions, distinct targets, separate instance writes, and
+parsed definition/alternative DAGs. The source bodies remain unchanged by plans.
+
+The same eleven-observation temporal-cube batch ran sequentially against the
+saved baseline and updated binaries, without test/build/probe overlap:
+
+| Temporal cube | Baseline | Shared definition work |
+| --- | ---: | ---: |
+| Elapsed | 323.04 s | 331.28 s |
+| Peak RSS | 152,576 KiB | 160,784 KiB |
+| Observations | 11/11 | 11/11 |
+
+This pair shows no cube speedup: the updated run took 8.24 s longer and
+8,208 KiB more peak RSS. Runtime scheduling remains nondeterministic, so one
+pair does not establish a stable difference. These are batch measurements,
+not Slipstream frame-rate/startup measurements. The broad
+legacy language suite and live GUI were not rerun. Logs, timings, and hashes are
+under `/tmp/p4-definition-sharing-cube/`; graph test results are under
+`/tmp/p4-definition-sharing-tests/`.
+
+This is the first graph-simplification step: repeated compiled requirements and
+equivalent branch checks are consolidated. Per-definition record analysis,
+implication-based pruning, and removal of residual instance RHS obligations
+remain separate work. Existing model relationships and subscriptions are retained.

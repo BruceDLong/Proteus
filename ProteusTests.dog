@@ -1,6 +1,15 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphDefinitionSharing/scopeSharing
+    unit/graphDefinitionSharing/scopeBindings
+    unit/graphDefinitionSharing/conjunctionSharing
+    unit/graphDefinitionSharing/distinctConjunctions
+    unit/graphDefinitionSharing/pendingAlternatives
+    unit/graphDefinitionSharing/distinctTargets
+    unit/graphDefinitionSharing/parsedSharing
+    unit/graphDefinitionSharing/parsedAlternatives
+
     unit/graphInstanceChecks/unrelatedWrites
     unit/graphInstanceChecks/sharedDescendantValue
     unit/graphInstanceChecks/sharedSize
@@ -12374,6 +12383,151 @@ struct GLOBAL {
     }%>
     void: unitTestGraphDefinitionHelpers(me string: testName, me int: caseID) <- {
         me bool: passed <- graphDefinitionHelpersCase(caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+// Repeated definition paths share proofs, preserving distinct instance data.
+#define GRAPHDEFINITIONSHARING(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphDefinitionSharing(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHDEFINITIONSHARING(unit/graphDefinitionSharing/scopeSharing, 1)
+    GRAPHDEFINITIONSHARING(unit/graphDefinitionSharing/scopeBindings, 2)
+    GRAPHDEFINITIONSHARING(unit/graphDefinitionSharing/conjunctionSharing, 3)
+    GRAPHDEFINITIONSHARING(unit/graphDefinitionSharing/distinctConjunctions, 4)
+    GRAPHDEFINITIONSHARING(unit/graphDefinitionSharing/pendingAlternatives, 5)
+    GRAPHDEFINITIONSHARING(unit/graphDefinitionSharing/distinctTargets, 6)
+    GRAPHDEFINITIONSHARING(unit/graphDefinitionSharing/parsedSharing, 7)
+    GRAPHDEFINITIONSHARING(unit/graphDefinitionSharing/parsedAlternatives, 8)
+
+    me bool: graphDefinitionSharingCase(me int: caseID) <- <%{
+        using namespace proteus4;
+        auto scalar=[] {
+            auto result=std::make_shared<DefinitionRequirement>();result->facts.valid=true;return result;
+        };
+        auto nest=[&](DefinitionSpec leaf,int depth) {
+            for(int i=0;i<depth;++i) {
+                auto parent=scalar();parent->list=true;parent->members={leaf,leaf};leaf=parent;
+            }
+            return leaf;
+        };
+        auto count=[](DefinitionSpec root) {
+            std::vector<DefinitionSpec> pending{root};std::set<DefinitionSpec> seen;
+            while(!pending.empty()) {
+                auto at=pending.back();pending.pop_back();if(!at || !seen.insert(at).second) continue;
+                pending.insert(pending.end(),at->members.begin(),at->members.end());
+                if(at->repeated) pending.push_back(at->repeated);
+                for(const auto& choice:at->choices)
+                    pending.insert(pending.end(),choice.alternatives.begin(),choice.alternatives.end());
+            }
+            return seen.size();
+        };
+        if(caseID==1 || caseID==2) {
+            auto leaf=scalar(),source=nest(leaf,24);Work work{0,0};
+            auto scope=std::make_shared<POV>(),otherScope=std::make_shared<POV>();
+            if(caseID==1) return scopeDefinition(source,scope,work)==source && work.visits<100;
+            auto expression=std::make_shared<POV>();leaf->expressions={{expression,{}}};
+            auto bound=scopeDefinition(source,scope,work);
+            bool ok=bound!=source && count(bound)==25 && work.visits<100 && !leaf->expressions.front().scope;
+            auto bottom=bound;
+            for(int i=0;i<24;++i) {
+                ok &= bottom->members[0]==bottom->members[1];bottom=bottom->members[0];
+            }
+            ok &= bottom->expressions.front().scope==scope;
+            // An already bound nested meaning must not be rebound. An unbound
+            // occurrence of the original declaration gets its own context.
+            auto wrapper=scalar();wrapper->list=true;wrapper->members={bound,source};
+            auto next=scopeDefinition(wrapper,otherScope,work);
+            ok &= next->members[0]==bound && next->members[1]!=bound;
+            bottom=next->members[1];while(!bottom->members.empty())bottom=bottom->members[0];
+            ok &= bottom->expressions.front().scope==otherScope;
+            leaf->expressions.clear();Work fresh{0,0};
+            return ok && scopeDefinition(source,scope,fresh)==source;
+        }
+        if(caseID==3) {
+            auto leaf=scalar(),other=scalar();auto a=nest(leaf,20),b=nest(other,20);Work work{0,0};
+            auto result=combineDefinitions(a,b,work);
+            bool ok=count(result)==21 && work.visits<100 && result!=a && result!=b && sameDefinition(result,a);
+            // New facts on a shared leaf are observed by a fresh conjunction;
+            // changing a result must not change either source declaration.
+            other->facts.hasSize=true;other->facts.size=static_cast<std::int64_t>(7);
+            auto changed=combineDefinitions(a,b,work);auto bottom=changed;
+            while(!bottom->members.empty())bottom=bottom->members[0];
+            ok &= bottom->facts.hasSize && bottom->facts.size==7 && !leaf->facts.hasSize && !sameDefinition(changed,result);
+            leaf->facts.hasSize=true;leaf->facts.size=static_cast<std::int64_t>(8);bool rejected=false;
+            try {combineDefinitions(a,b,work);}catch(const DefinitionConflict&){rejected=true;}
+            return ok && rejected;
+        }
+        if(caseID==4) {
+            auto shared=scalar(),one=scalar(),two=scalar(),a=scalar(),b=scalar();
+            a->list=b->list=true;a->members={shared,shared};b->members={one,two};
+            one->facts.hasSize=two->facts.hasSize=true;one->facts.size=static_cast<std::int64_t>(3);two->facts.size=static_cast<std::int64_t>(4);
+            one->label="first";two->label="second";Work work{0,0};auto result=combineDefinitions(a,b,work);
+            bool ok=result->members[0]!=result->members[1] && result->members[0]->facts.size==3 &&
+                result->members[1]->facts.size==4 && result->members[0]->label=="first" && result->members[1]->label=="second";
+            // Preserve shared repetition and finite prefixes under conjunction.
+            a->open=b->open=true;a->repeated=shared;b->repeated=scalar();
+            b->repeated->facts.hasSize=true;b->repeated->facts.size=static_cast<std::int64_t>(3);
+            bool rejected=false;try {combineDefinitions(a,b,work);}catch(const DefinitionConflict&){rejected=true;}
+            return ok && rejected && !shared->facts.hasSize;
+        }
+        GraphNormalizer n;n.init();bool ok=true;
+        auto literal=[&](int value) {auto result=scalar();result->facts=n.access->typeFacts(graphScalar(value,10));return result;};
+        if(caseID==5) {
+            auto required=literal(7);auto leaf=required;
+            for(int depth=0;depth<20;++depth) {auto choice=scalar();choice->choices={{ {},{required,required} }};required=choice;}
+            auto target=graphScalar(-1,10);
+            ProteusDefinitionPlan pending(n.access,target,required);
+            ok &= !pending.supported && pending.writes.empty() && pending.work.visits<100;
+            target->pItem=graphScalar(7,10)->pItem;
+            ProteusDefinitionPlan accepted(n.access,target,required);ok &= accepted.dataSatisfied();
+            target->pItem=graphScalar(8,10)->pItem;bool rejected=false;
+            try {ProteusDefinitionPlan wrong(n.access,target,required);}catch(const DefinitionConflict&){rejected=true;}
+            ok &= rejected && leaf->facts.number==7;
+        } else if(caseID==6) {
+            auto seven=literal(7),eight=literal(8);auto choice=scalar();choice->choices={{{},{seven,seven}}};
+            auto required=scalar();required->list=true;required->members={choice,choice};
+            auto target=graphParsed("shared definition targets","{*10+7 *10+8}");n.access->setDefinitionOrder(target);
+            auto before=toString(target->pItem.get());bool rejected=false;
+            try {ProteusDefinitionPlan check(n.access,target,required);}catch(const DefinitionConflict&){rejected=true;}
+            ok &= rejected && before==toString(target->pItem.get());
+            choice->choices.front().alternatives={seven,eight};
+            ProteusDefinitionPlan check(n.access,target,required);ok &= check.dataSatisfied();
+            // Planning a shared requirement still creates distinct instance
+            // slots and commands; only the read-only branch checks are shared.
+            auto unknown=graphParsed("shared definition writes","{*10+_ *10+_}");n.access->setDefinitionOrder(unknown);
+            required->members={seven,seven};ProteusDefinitionPlan fill(n.access,unknown,required);
+            ok &= fill.supported && fill.apply() && unknown->pItem->value->items.head!=unknown->pItem->value->items.tail &&
+                unknown->pItem->value->items.head->pItem!=unknown->pItem->value->items.tail->pItem &&
+                unknown->pItem->value->items.head->pItem->value->num==7 && unknown->pItem->value->items.tail->pItem->value->num==7;
+        } else {
+            const bool choice=caseID==8;const int depth=16;
+            std::string text=choice ? "{#p0=*10+7" : "{#p0=*10+_";
+            for(int i=1;i<=depth;++i) {
+                auto child="p"+std::to_string(i-1);
+                text+=" #p"+std::to_string(i)+(choice ? "=*_+[" : "={")+child+" "+child+(choice ? "]" : "}");
+            }
+            auto declarations=graphParsed("shared definition declarations",text+"}");ProteusDefinitions definitions(n.access);
+            for(auto at=declarations->pItem->value->items.head;at;at=at->next)ok &= definitions.publish(at);
+            Work work{0,0};auto target=graphParsed("shared definition query",choice ? "p16" : "p16=p16");
+            auto proof=definitions.describe(target,work);
+            ok &= bool(proof) && work.visits<5000;
+            if(proof) {
+                ok &= count(proof->requirement)<70;
+                if(choice) {
+                    auto value=graphScalar(-1,10);ProteusDefinitionPlan pending(n.access,value,proof->requirement);
+                    ok &= !pending.supported && pending.writes.empty() && pending.work.visits<200;
+                    value->pItem=graphScalar(7,10)->pItem;ProteusDefinitionPlan accepted(n.access,value,proof->requirement);
+                    ok &= accepted.dataSatisfied();
+                }
+            }
+        }
+        if(!ok)std::cout<<"Definition sharing case "<<caseID<<" failed\n";
+        n.close();return ok;
+    }%>
+    void: unitTestGraphDefinitionSharing(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphDefinitionSharingCase(caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

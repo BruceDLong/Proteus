@@ -86,7 +86,17 @@ struct DefinitionRequirement {
 };
 using DefinitionSpec = std::shared_ptr<DefinitionRequirement>;
 
-inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const DefinitionSpec& right, Work& work) {
+// Conjunction preserves the compiled DAG. Cache ordered pairs only within
+// this operation: left/right retain their spelling and provenance precedence.
+using DefinitionPairs = std::map<std::pair<DefinitionSpec,DefinitionSpec>,DefinitionSpec>;
+inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const DefinitionSpec& right, Work& work,
+                                         DefinitionPairs& combined) {
+    ++work.visits;
+    auto [entry,inserted]=combined.emplace(std::make_pair(left,right),DefinitionSpec{});
+    if(!inserted) {
+        if(!entry->second) throw DefinitionPending{};
+        return entry->second;
+    }
     auto result = std::make_shared<DefinitionRequirement>(*left);
     result->independentTemporalValue |= right->independentTemporalValue;
     for(const auto& scope:right->selfScopes)
@@ -126,7 +136,7 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
                     return compareNominal(y->label,y->types,x->label,x->types);
                 },work);
             if(!mapping.unambiguous) throw DefinitionPending{};
-            for(const auto& pair:mapping.pairs) result->members[pair.first]=combineDefinitions(result->members[pair.first],right->members[pair.second],work);
+            for(const auto& pair:mapping.pairs) result->members[pair.first]=combineDefinitions(result->members[pair.first],right->members[pair.second],work,combined);
             for(auto member:mapping.missing) result->members.push_back(right->members[member]);
         } else {
             // Closed ends must agree; open bodies contribute only their known
@@ -135,15 +145,15 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
             if ((!result->open && rightCount>leftCount) || (!right->open && leftCount>rightCount))
                 throw DefinitionConflict("incompatible definition lengths");
             for (std::size_t i=0;i<std::min(leftCount,rightCount);++i)
-                result->members[i]=combineDefinitions(result->members[i],right->members[i],work);
+                result->members[i]=combineDefinitions(result->members[i],right->members[i],work,combined);
             result->members.insert(result->members.end(),right->members.begin()+std::min(leftCount,rightCount),right->members.end());
             if (result->repeated && right->repeated)
-                result->repeated=combineDefinitions(result->repeated,right->repeated,work);
+                result->repeated=combineDefinitions(result->repeated,right->repeated,work,combined);
             else if (right->repeated) {
                 result->repeated=right->repeated;result->templateSource=right->templateSource;
             }
             if(result->repeated) for(auto& member:result->members)
-                member=combineDefinitions(member,result->repeated,work);
+                member=combineDefinitions(member,result->repeated,work,combined);
             result->open=result->open && right->open;
             // Closing the extent does not remove the per-member constraint.
             // Retain it so a later finite prefix can fill an existing sparse instance.
@@ -154,27 +164,47 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
     }
     if (result->list && !result->memberLayout().valid)
         throw DefinitionConflict("incompatible definition extent");
+    entry->second=result;
     return result;
+}
+
+inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const DefinitionSpec& right, Work& work) {
+    DefinitionPairs combined;
+    return combineDefinitions(left,right,work,combined);
 }
 
 // Bind only expressions written in this declaration. A nested named meaning
 // has already established its own scope and keeps that binding.
-inline DefinitionSpec scopeDefinition(const DefinitionSpec& source,const POVNode& scope,Work& work) {
+inline DefinitionSpec scopeDefinition(const DefinitionSpec& source,const POVNode& scope,Work& work,
+                                      std::map<DefinitionSpec,DefinitionSpec>& scoped) {
     ++work.visits;
+    auto [entry,inserted]=scoped.emplace(source,DefinitionSpec{});
+    if(!inserted) {
+        if(!entry->second) throw DefinitionPending{};
+        return entry->second;
+    }
     auto result=source;
     auto edit=[&] {if(result==source) result=std::make_shared<DefinitionRequirement>(*source);};
     for(std::size_t i=0;i<source->expressions.size();++i) if(!source->expressions[i].scope) {
         edit();result->expressions[i].scope=scope;
     }
     for(std::size_t i=0;i<source->members.size();++i) {
-        auto member=scopeDefinition(source->members[i],scope,work);
+        auto member=scopeDefinition(source->members[i],scope,work,scoped);
         if(member!=source->members[i]) {edit();result->members[i]=member;}
     }
     if(source->repeated) {
-        auto repeated=scopeDefinition(source->repeated,scope,work);
+        auto repeated=scopeDefinition(source->repeated,scope,work,scoped);
         if(repeated!=source->repeated) {edit();result->repeated=repeated;}
     }
+    entry->second=result;
     return result;
+}
+
+inline DefinitionSpec scopeDefinition(const DefinitionSpec& source,const POVNode& scope,Work& work) {
+    // An unchanged result proves that this subtree needs no rebinding in this
+    // pass. Both unchanged and copied subtrees remain shared by all parents.
+    std::map<DefinitionSpec,DefinitionSpec> scoped;
+    return scopeDefinition(source,scope,work,scoped);
 }
 
 inline bool sameDefinition(const DefinitionSpec& left, const DefinitionSpec& right) {
@@ -226,6 +256,28 @@ public:
     std::size_t orderWrites = 0;
 private:
     std::shared_ptr<ProteusGraphAccess> access_;
+    enum class Check { active, pending, accepted, rejected };
+    struct PlanningPass {
+        std::map<std::pair<POVNode,DefinitionSpec>,Check> alternatives;
+    };
+    std::shared_ptr<PlanningPass> pass_;
+    Check checkAlternative(const POVNode& target,const DefinitionSpec& requirement) {
+        ++work.visits;
+        if(!pass_) pass_=std::make_shared<PlanningPass>();
+        auto [entry,inserted]=pass_->alternatives.emplace(std::make_pair(target,requirement),Check::active);
+        if(!inserted) return entry->second;
+        try {
+            ProteusDefinitionPlan check(access_,target,requirement,pass_);
+            work.visits=addCost(work.visits,check.work.visits);
+            entry->second=check.dataSatisfied() ? Check::accepted : Check::pending;
+        } catch(const DefinitionConflict&) {entry->second=Check::rejected;}
+        return entry->second;
+    }
+    ProteusDefinitionPlan(std::shared_ptr<ProteusGraphAccess> access,const POVNode& target,
+                          const DefinitionSpec& requirement,std::shared_ptr<PlanningPass> pass)
+        :access_(std::move(access)),pass_(std::move(pass)) {
+        prepare(place(target),requirement);
+    }
     std::map<POVNode,Place> selfScopes_;
     bool pendingExpressions_=false;
     // Registry-changing operations retain the model-wide fallback until
@@ -617,12 +669,9 @@ private:
         for(const auto& choice:requirement->choices) {
             bool accepted=false,pending=!target->node;
             if(target->node) for(const auto& alternative:choice.alternatives) {
-                try {
-                    ProteusDefinitionPlan check(access_,target->node,alternative);
-                    work.visits=addCost(work.visits,check.work.visits);
-                    if(check.dataSatisfied()) {accepted=true;break;}
-                    pending=true;
-                } catch(const DefinitionConflict&) {}
+                auto checked=checkAlternative(target->node,alternative);
+                if(checked==Check::accepted) {accepted=true;break;}
+                pending |= checked!=Check::rejected;
             }
             if(!accepted && !pending) throw DefinitionConflict("no compatible definition alternative");
             if(!accepted) {supported=false;return;}
@@ -720,6 +769,9 @@ public:
         if(!measureRoot) unmeasuredRoot_=place(target);
         if(fillParts) fillRoot_=place(target);
         prepare(place(target), requirement);
+        // Retain commands and bindings, never a history of attempted POVs.
+        // A later construction reads current values and completion evidence.
+        pass_.reset();
     }
     // Deferred allocation clients can prepare a member before the priced Set
     // creates its POV. All other slots and writes remain instance-local.
