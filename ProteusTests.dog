@@ -1,6 +1,9 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphDefinitionHelpers/sharedBranches
+    unit/graphDefinitionHelpers/expressionRoutes
+    unit/graphDefinitionHelpers/distinctPairs
     unit/graphSequenceChart/nestedRepetitionScaling
     unit/graphSequenceChart/acceptedList
     unit/graphSequenceChart/lateInput
@@ -12085,6 +12088,75 @@ struct GLOBAL {
     }
 }
 
+// Requirement helpers must preserve sharing without hiding real differences.
+#define GRAPHDEFINITIONHELPERS(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphDefinitionHelpers(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHDEFINITIONHELPERS(unit/graphDefinitionHelpers/sharedBranches, 1)
+    GRAPHDEFINITIONHELPERS(unit/graphDefinitionHelpers/expressionRoutes, 2)
+    GRAPHDEFINITIONHELPERS(unit/graphDefinitionHelpers/distinctPairs, 3)
+    me bool: graphDefinitionHelpersCase(me int: caseID) <- <%{
+        using namespace proteus4;
+        auto leaf=std::make_shared<DefinitionRequirement>();
+        if(caseID==1) {
+            auto shared=[](DefinitionSpec node) {
+                for(int depth=0;depth<32;++depth) {
+                    auto parent=std::make_shared<DefinitionRequirement>();
+                    parent->list=true;parent->members={node};parent->repeated=node;
+                    parent->choices.push_back({{}, {node,node}});node=parent;
+                }
+                return node;
+            };
+            auto other=std::make_shared<DefinitionRequirement>();
+            auto a=shared(leaf),b=shared(other);
+            bool ok=!a->hasExpressions() && sameDefinition(a,b);
+            // A second call must see changes even in a deeply shared leaf.
+            other->independentTemporalValue=true;
+            ok &= !sameDefinition(a,b);
+            other->independentTemporalValue=false;
+            leaf->expressions.push_back({{}, {}});
+            ok &= a->hasExpressions() && !b->hasExpressions() && !sameDefinition(a,b);
+            leaf->expressions.clear();
+            return ok && !a->hasExpressions() && sameDefinition(a,b);
+        }
+        if(caseID==2) {
+            auto parent=std::make_shared<DefinitionRequirement>();
+            leaf->expressions.push_back({{}, {}});
+            parent->repeated=leaf;bool ok=parent->hasExpressions();parent->repeated.reset();
+            parent->members={leaf};ok &= parent->hasExpressions();parent->members.clear();
+            parent->choices.push_back({{}, {leaf}});ok &= parent->hasExpressions();
+            parent->choices.clear();ok &= !parent->hasExpressions();
+            parent->expressions=leaf->expressions;
+            return ok && parent->hasExpressions();
+        }
+        auto a=std::make_shared<DefinitionRequirement>(),b=std::make_shared<DefinitionRequirement>();
+        auto one=std::make_shared<DefinitionRequirement>(),two=std::make_shared<DefinitionRequirement>();
+        a->members={leaf,leaf};b->members={one,two};
+        bool ok=sameDefinition(a,b) && sameDefinition(b,a);
+        one->facts.hasSize=true;one->facts.size=3;
+        ok &= !sameDefinition(a,b) && !sameDefinition(b,a);
+        one->facts.hasSize=false;two->independentTemporalValue=true;
+        ok &= !sameDefinition(a,b) && !sameDefinition(b,a);
+        two->independentTemporalValue=false;
+        auto expression=std::make_shared<POV>(),scope=std::make_shared<POV>();
+        leaf->expressions={{expression,scope}};one->expressions=leaf->expressions;two->expressions=leaf->expressions;
+        ok &= sameDefinition(a,b);
+        one->expressions.front().scope.reset();ok &= !sameDefinition(a,b);
+        one->expressions=leaf->expressions;two->expressions.front().source.reset();ok &= !sameDefinition(a,b);
+        two->expressions=leaf->expressions;
+        a->choices={{expression,{leaf,leaf}}};b->choices={{expression,{one,two}}};
+        ok &= sameDefinition(a,b);
+        b->choices.front().source=scope;ok &= !sameDefinition(a,b);
+        b->choices.front().source=expression;
+        return ok && sameDefinition(a,b) && sameDefinition({}, {}) && !sameDefinition(a, {}) && !sameDefinition({}, b);
+    }%>
+    void: unitTestGraphDefinitionHelpers(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphDefinitionHelpersCase(caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
 // Shared recognition must bound work without discarding distinct derivations.
 #define GRAPHSEQUENCECHART(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphSequenceChart(tname, CASE_ID)}%>
 struct GLOBAL {
@@ -12099,7 +12171,9 @@ struct GLOBAL {
         using namespace proteus4;
         if(caseID==1 || caseID==7) {
             std::size_t previous=0;
-            for(int count:{4,8,16}) {
+            // Depth 20 also exercises helpers over shared compiled meanings;
+            // the chart can stay small while a tree walk repeats exponentially.
+            for(int count:(caseID==7 ? std::vector<int>{4,8,16,40} : std::vector<int>{4,8,16})) {
                 GraphNormalizer normalizer;normalizer.init();
                 std::string pattern="'A'",rhs="{";
                 if(caseID==7) {

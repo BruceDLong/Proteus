@@ -171,3 +171,41 @@ are not optimization benchmarks. The previous uninstrumented comparison remains
 in `definition-validation-results.md`. Engine source and the regular Slipstream
 executable were unchanged by this investigation; regression suites were not
 rerun for diagnostic instrumentation.
+
+
+## Shared definition helper fix (2026-10-02)
+
+Baseline `7a354e3`. `DefinitionRequirement::hasExpressions()` and
+`sameDefinition()` recursively treated the compiled requirement DAG as a tree.
+Repeated references therefore multiplied helper work without increasing the
+number of graph visits. Both now use an iterative worklist and a temporary
+visited set: requirement nodes for expression detection, requirement pairs for
+structural comparison. The sets live for one call, so edits between calls stay
+visible. Existing comparison fields and contextual-expression checks are retained.
+
+An uninstrumented before/after probe used the same generated source and build
+flags (`-g -std=gnu++17 -fpermissive`, no optimization), with only these helpers
+changed. Definitions have the form `#p0='A'`, `#p1=*_+[{p0} p0]`, and so on;
+`{pN 'X'} == {'A' 'Y'}` forces consideration of the shared alternatives before
+rejecting the suffix. Both versions leave the same symbolic result.
+
+| Probe | Before | After | Graph steps, both versions | Input matches, both versions |
+| --- | ---: | ---: | ---: | ---: |
+| Nested definitions, depth 18 | 17.484 s | 0.458 s | 6,704 | 37 |
+| Nested definitions, depth 20 | 80.835 s | 0.451 s | 8,112 | 41 |
+
+A direct depth-20 DAG probe with 42 distinct requirement objects took 1.038 s
+before and 0.170 ms after, returning the same expression/equality answers.
+These are single-run measurements. They exclude diagnostic helper counters;
+the earlier instrumented timings are not the same benchmark. Temporary probe
+sources and results are in `/tmp/p4-helper-baseline/`, `/tmp/p4-helper-fixed/`,
+and `/tmp/p4-helper-benchmark-results.json`.
+
+Validation: CodeDog regeneration/build succeeded; all **1,382 distinct registered
+graph tests passed**. Three new helper cases cover deeply shared requirements,
+all expression-bearing edge kinds, unequal comparison counterparts, expression
+source/scope differences, and mutations between calls. The existing language
+scaling regression now reaches depth 20. Nested suite selectors caused 113
+additional repeat executions; none failed. Full legacy tests and cube startup
+were not rerun for this change. Preservation scheduling, model-wide definition
+notifications, and step-history retention are unchanged.

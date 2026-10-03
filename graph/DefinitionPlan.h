@@ -39,10 +39,19 @@ struct DefinitionRequirement {
     std::string label; // normalized nominal identity, used by comparisons
     std::shared_ptr<WordUse> writtenType;
     bool hasExpressions() const {
-        if(!expressions.empty() || (repeated && repeated->hasExpressions())) return true;
-        for(const auto& member:members) if(member && member->hasExpressions()) return true;
-        for(const auto& choice:choices) for(const auto& alternative:choice.alternatives)
-            if(alternative->hasExpressions()) return true;
+        // Compiled definitions share subrequirements. Walk the DAG, not every
+        // path through it; keep visits local so later edits remain observable.
+        std::vector<const DefinitionRequirement*> pending{this};
+        std::set<const DefinitionRequirement*> seen;
+        while(!pending.empty()) {
+            auto node=pending.back();pending.pop_back();
+            if(!node || !seen.insert(node).second) continue;
+            if(!node->expressions.empty()) return true;
+            if(node->repeated) pending.push_back(node->repeated.get());
+            for(const auto& member:node->members) pending.push_back(member.get());
+            for(const auto& choice:node->choices) for(const auto& alternative:choice.alternatives)
+                pending.push_back(alternative.get());
+        }
         return false;
     }
     void captureLabel(const POVNode& node) {
@@ -168,22 +177,33 @@ inline DefinitionSpec scopeDefinition(const DefinitionSpec& source,const POVNode
     return result;
 }
 
-inline bool sameDefinition(const DefinitionSpec& a, const DefinitionSpec& b) {
-    if (a == b) return true;
-    if (!a || !b || a->list != b->list || a->open != b->open || a->order!=b->order || !a->facts.same(b->facts) || !a->numeric.same(b->numeric) ||
-        a->independentTemporalValue != b->independentTemporalValue ||
-        a->types != b->types || a->expandedTypes != b->expandedTypes || a->members.size() != b->members.size() || a->choices.size()!=b->choices.size() || a->selfScopes!=b->selfScopes || a->expressions.size()!=b->expressions.size() ||
-        !sameDefinition(a->repeated, b->repeated)) return false;
-    for(std::size_t i=0;i<a->expressions.size();++i)
-        if(a->expressions[i].source!=b->expressions[i].source || a->expressions[i].scope!=b->expressions[i].scope) return false;
-    for(std::size_t i=0;i<a->choices.size();++i) {
-        const auto& left=a->choices[i];const auto& right=b->choices[i];
-        if(left.source!=right.source || left.alternatives.size()!=right.alternatives.size()) return false;
-        for(std::size_t j=0;j<left.alternatives.size();++j)
-            if(!sameDefinition(left.alternatives[j],right.alternatives[j])) return false;
+inline bool sameDefinition(const DefinitionSpec& left, const DefinitionSpec& right) {
+    if(left==right) return true;
+    // One node can be compared with several distinct counterparts. Deduplicate
+    // pairs, preserving structural equality regardless of how sharing differs.
+    using Pair=std::pair<DefinitionSpec,DefinitionSpec>;
+    std::vector<Pair> pending{{left,right}};
+    std::set<Pair> seen;
+    while(!pending.empty()) {
+        auto [a,b]=pending.back();pending.pop_back();
+        if(a==b) continue;
+        if(!a || !b) return false;
+        if(!seen.insert({a,b}).second) continue;
+        if(a->list != b->list || a->open != b->open || a->order!=b->order || !a->facts.same(b->facts) || !a->numeric.same(b->numeric) ||
+           a->independentTemporalValue != b->independentTemporalValue ||
+           a->types != b->types || a->expandedTypes != b->expandedTypes || a->members.size() != b->members.size() || a->choices.size()!=b->choices.size() || a->selfScopes!=b->selfScopes || a->expressions.size()!=b->expressions.size()) return false;
+        for(std::size_t i=0;i<a->expressions.size();++i)
+            if(a->expressions[i].source!=b->expressions[i].source || a->expressions[i].scope!=b->expressions[i].scope) return false;
+        pending.push_back({a->repeated,b->repeated});
+        for(std::size_t i=0;i<a->choices.size();++i) {
+            const auto& x=a->choices[i];const auto& y=b->choices[i];
+            if(x.source!=y.source || x.alternatives.size()!=y.alternatives.size()) return false;
+            for(std::size_t j=0;j<x.alternatives.size();++j)
+                pending.push_back({x.alternatives[j],y.alternatives[j]});
+        }
+        for(std::size_t i=0;i<a->members.size();++i)
+            pending.push_back({a->members[i],b->members[i]});
     }
-    for (std::size_t i = 0; i < a->members.size(); ++i)
-        if (!sameDefinition(a->members[i], b->members[i])) return false;
     return true;
 }
 
