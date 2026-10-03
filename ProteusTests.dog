@@ -1,6 +1,9 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphPreservation/contextualSibling
+    unit/graphPreservation/symbolicSibling
+    unit/graphPreservation/pendingCompositeGuard
     unit/graphPreservation/latePartAlias
     unit/graphPreservation/latePartValue
     unit/graphPreservation/cancelLatePart
@@ -10436,6 +10439,10 @@ struct GLOBAL {
     GRAPHPRESERVATION(unit/graphPreservation/latePartValue, 35)
     GRAPHPRESERVATION(unit/graphPreservation/cancelLatePart, 36)
 
+    GRAPHPRESERVATION(unit/graphPreservation/contextualSibling, 37)
+    GRAPHPRESERVATION(unit/graphPreservation/symbolicSibling, 38)
+    GRAPHPRESERVATION(unit/graphPreservation/pendingCompositeGuard, 39)
+
     me bool: graphLateTemporalPartCase(me string: testName, me int: caseID) <- <%{
         using namespace proteus4;
         GraphNormalizer n;n.init();
@@ -10499,7 +10506,51 @@ struct GLOBAL {
         loaded.cancel();n.close();return ok;
     }%>
 
+
+    me bool: graphPartialTemporalPartsCase(me string: testName, me int: caseID) <- <%{
+        using namespace proteus4;
+        GraphNormalizer n;n.init();
+        auto parse=[&](const std::string& text){return graphParsed(testName,text);};
+        if(caseID==39) {
+            auto root=parse("{T {a:0,b:7} {a:1,}}");
+            auto after=POVDescription(root).member(true),source=parse("?");
+            n.prepareInput(source->pItem);n.addRHS(after,source);
+            auto h=n.normalize(root);h.waitForCompletion();
+            bool ok=!h.status().failed && h.status().withSubscribers && !n.knownField(after,"b");
+            auto declaration=parse("%?");
+            n.runtime.update([&]{source->pItem=declaration->pItem;});h.waitForCompletion();
+            ok &= !h.status().failed && POVDescription(after).independentTemporalValue() && !n.knownField(after,"b");
+            if(!ok) std::cout<<"Pending composite: "<<toString(root->pItem.get())<<" error="<<h.status().error<<"\n";
+            h.cancel();n.close();return ok;
+        }
+        std::string sibling=caseID==38 ? "%.missing" : "%.shade";
+        auto world=parse("{#shade={hue:_} #red=shade:{hue:5} #pose={x:_} #side={shade} "
+            "#item={pose,shade,*2+{side|{"+sibling+"}{red}}} "
+            "#layout={*1+{item|item:{red}},marker:_} "
+            "#initial=layout:{*1+{item|item:{pose:{x:7},}},marker:1} "
+            "#history={T layout|...} history:{T initial layout:{marker:2,}}}");
+        n.setWorld(world->pItem);auto loaded=n.normalize(world);loaded.waitForCompletion();
+        bool ok=!loaded.status().failed;
+        // An unresolved contextual sibling must not block existing correspondence.
+        std::vector<std::pair<std::string,std::string>> reads={
+            {"%W.history@[2].items@[1].pose.x","*_+[x:7 ... ]"},
+            {"%W.history@[1].items@[1].pose.x","*_+[x:7 ... ]"},
+            {"%W.history@[2].marker","*_+[marker:2 ... ]"},
+            {"%W.history@[1].marker","*_+[marker:1 ... ]"}
+        };
+        if(caseID==37) reads.push_back({"%W.history@[2].items@[1].shade.hue","*_+[hue:5 ... ]"});
+        for(const auto& read:reads) {
+            auto query=parse(read.first);auto h=n.normalize(query);h.waitForCompletion();
+            auto actual=toString(query->pItem.get());bool correct=!h.status().failed && actual==read.second;
+            if(!correct) std::cout<<read.first<<" => "<<actual<<" error="<<h.status().error<<"\n";
+            ok &= correct;h.cancel();
+        }
+        if(caseID==38) ok &= loaded.status().withSubscribers;
+        loaded.cancel();n.close();return ok;
+    }%>
+
     me bool: graphPreservationCase(me string: testName, me int: caseID) <- <%{
+        if(caseID>=37 && caseID<=39) return graphPartialTemporalPartsCase(testName,caseID);
         if(caseID==32 || caseID==33) return graphWrappedTemporalPathCase(testName,caseID==33);
         if(caseID>=34 && caseID<=36) return graphLateTemporalPartCase(testName,caseID);
         using namespace proteus4;

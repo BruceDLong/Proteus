@@ -618,3 +618,51 @@ A final TimeView-entry trace directly observes state 2 progressing from
 `rubixState` to exactly `rubixState, thing`; no extra `solvedState` is appended.
 The same run renders the later edge at 3.14 radians:
 `/tmp/p4-final-state-members-2/app.log`. All isolated test GUIs were then stopped.
+
+## Existing correspondence with symbolic child constraints (2026-10-03)
+
+The next visual check exposed a gap in the prior acceptance check: the changed
+edge's angle was correct, but all six later center cubies reached the renderer
+with unresolved poses. The renderer consequently placed them at the origin.
+The center definition's contextual side-color expression was keeping complete
+member validation symbolic, which also blocked linking its existing parts to
+the prior occurrence. A small `item`/`pose`/`shade` model reproduces the same
+failure without cube types or the GUI.
+
+Preservation now has an optional step that links existing corresponding list
+members before descendant constraints finish. It reuses the ordinary member
+mapping. It requires literal lists, settled direct relationships, and compatible
+known definition headers; root expressions, choices, and pending input remain
+barriers. This step neither creates missing members nor copies scalar values.
+Those operations still use the original change/independence guards. A symbolic
+sibling therefore cannot hide a usable correspondence edge, while a pending
+whole-object `%?` still prevents inheritance. New regressions exercise known
+and unresolved contextual siblings and a delayed composite independence marker.
+
+The sticker issue was separate. Both colored faces were present in the mesh;
+an X-only half-turn pointed them into the cube. The GUI example now sets the
+edge's orientation to `{xRot:1.57,yRot:3.14}` while preserving zRot and all
+other parts. In the renderer's X-then-Y convention this swaps the outward bottom
+and back faces. The direct engine fixture keeps its original X-only change;
+the GUI-shaped fixture tests the two-angle flip and all six preserved center
+locations. Frame-driven animation is unchanged.
+
+Diagnostic evidence before the change: `/tmp/p4-render-materials-before/app.log`.
+The generic reproducer and staged experiment are in `/tmp/p4-center-small` and
+`/tmp/p4-center-probe`.
+
+Validation: regenerated both production programs successfully. All 1,450 graph
+tests across 74 groups pass (including 40 preservation tests); all 17 Rubix
+acceptance cases pass. Logs: `/tmp/p4-center-final-graph/summary.json` and
+`/tmp/p4-centers-acceptance.log`.
+
+The exact renderer-input trace shows all six later center objects acquiring
+literal values for all three location coordinates and all three rotation
+coordinates: `/tmp/p4-center-tree3/app.log`. Continuous debugger breakpoints
+substantially perturb live normalization and can capture incomplete intermediate
+poses. The final check therefore also runs the production program without a
+debugger. Its state-2 screenshot at
+`/tmp/p4-centers-visible-final/at-40.png` shows complete center squares and the
+purple edge sticker on the otherwise orange face. The original state remains
+unchanged. No renderer or animation algorithm was changed, and this is not a
+normalization performance benchmark.

@@ -2,10 +2,23 @@
 
 // Adjacency supplies a guarded route, never equality of successive states.
 // Composite preservation exposes fresh parts and correspondence one level at a
-// time. Ordinary graph goals resolve expressions/declarations before a Set.
+// time. Value inheritance and missing-part construction retain their guards.
 class ProteusPreservationGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusDefinitions> definitions_;
+    static constexpr std::int64_t linkExistingParts=1;
+    bool correspondenceOnly() const {return request.argument==linkExistingParts;}
+    // Existing membership can expose correspondence before child values settle.
+    // Direct relationships and root expressions still need their guarded pass.
+    bool correspondenceReady(const POVNode& node) const {
+        if(!access_->literalList(node) || access_->inputPending(node) ||
+           !POVDescription(node,access_->registry.get()).relationships().empty()) return false;
+        if(!definitions_->required(node)) return true;
+        auto proof=definitions_->saved(node);
+        return proof && proof->requirement && proof->requirement->expressions.empty() &&
+            proof->requirement->choices.empty() && !proof->requirement->independentTemporalValue &&
+            proof->requirement->facts.accepts(access_->typeFacts(node));
+    }
     bool done_=false;
     Visit<POVNode> finding_;
     bool disabled() const {return POVDescription(request.node).independentTemporalValue();}
@@ -53,7 +66,7 @@ public:
                            std::shared_ptr<ProteusDefinitions> definitions)
         :GoalSpec<POVNode>(std::move(q)),access_(std::move(access)),definitions_(std::move(definitions)) {}
     void beginPass() override {done_=false;finding_={request,{},0};}
-    bool waitForRequirements() const override {return request.kind==preserveTemporal;}
+    bool waitForRequirements() const override {return request.kind==preserveTemporal && !correspondenceOnly();}
     std::optional<Expansion<POVNode>> expand(const Visit<POVNode>& visit) override {
         if(visit.query.kind!=request.kind) return std::nullopt;
         Expansion<POVNode> out;
@@ -67,6 +80,10 @@ public:
         }
         auto source=POVDescription(request.node).temporalPredecessor();
         if(!source) return out;
+        if(correspondenceOnly()) return out;
+        if(access_->literalList(request.node) && access_->literalList(source))
+            out.refinements.push_back({{request.node,preserveTemporal,linkExistingParts,{},request.context},
+                {1,0},"connect existing temporal parts",true});
         // Exhaust ordinary scalar routes, filling intermediates as usual. An
         // unknown with no further evidence is a proved absence of supplied
         // value; pending expressions/inputs remain required dependencies.
@@ -103,6 +120,8 @@ public:
         auto target=request.node,source=POVDescription(target).temporalPredecessor();
         if(!source || access_->inputPending(target) || access_->inputPending(source)) return out;
         auto access=access_;
+        bool linksOnly=correspondenceOnly();
+        if(linksOnly && (!correspondenceReady(target) || !correspondenceReady(source))) return out;
         if(access_->scalarCandidate(source) && access_->scalarCandidate(target)) {
             // A known later value is an explicit change, not a constraint that
             // it equal the prior value. Never import a prior declaration.
@@ -146,14 +165,16 @@ public:
             if(adopt) missing=right;
             else for(std::size_t i=0;i<left.size();++i) pairs.push_back({left[i],right[i]});
         }
+        if(linksOnly) {missing.clear();pendingPart=false;}
         pairs.erase(std::remove_if(pairs.begin(),pairs.end(),[](const auto& pair) {
             return POVDescription(pair.first).independentTemporalValue() ||
                    POVDescription(pair.first).temporalPredecessor()==pair.second;
         }),pairs.end());
         if(!adopt && pairs.empty() && missing.empty()) {done_=!pendingPart;return out;}
         work.creations=addCost(work.creations,missing.size()*3+adopt);
-        out.commands.push_back({"Set corresponding temporal parts",[access,target,source,adopt,order,pairs,missing]() -> SetResult {
+        out.commands.push_back({linksOnly ? "Set existing temporal correspondence" : "Set corresponding temporal parts",[this,access,target,source,adopt,order,pairs,missing,linksOnly]() -> SetResult {
             if(POVDescription(target).independentTemporalValue()) return false;
+            if(linksOnly && (!correspondenceReady(target) || !correspondenceReady(source))) return false;
             bool changed=false;
             auto changes=ReadScope::changedObjects({target.get(),readView(target).get(),readView(target)->value.get()});
             auto oldTail=POVDescription(target).member(true);
@@ -163,7 +184,7 @@ public:
                 readView(target)->orderMode=order;
                 SetFlagBit(readView(target)->value->flags,infonState::tailUnfinished,false);
             }
-            for(const auto& pair:pairs) if(link(pair.first,pair.second)) {
+            for(const auto& pair:pairs) if(!POVDescription(pair.first).independentTemporalValue() && link(pair.first,pair.second)) {
                 changed=true;changes.include(ReadScope::changedObjects({pair.first.get(),readView(pair.first).get()}));
             }
             for(const auto& prior:missing) {
