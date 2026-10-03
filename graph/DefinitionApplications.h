@@ -22,6 +22,7 @@ public:
         // Validation belongs to the snapshot, not each enclosing certificate.
         mutable std::uint64_t checkedEpoch=0;
         mutable bool checkedCurrent=false;
+        mutable bool objectsTracked=false;
         mutable std::set<DependencyKey> reads;
     };
     struct Evidence {
@@ -31,8 +32,8 @@ public:
         // Cached validation re-observes one shared dependency group, including
         // header-alias reads made while checking the source witnesses.
         DependencyProof::Ptr reads;
-        std::uint64_t checkedEpoch=0;
-        bool checkedCurrent=false;
+        std::uint64_t checkedEpoch=0, checkedReset=0;
+        bool checkedCurrent=false, objectsTracked=false;
     };
     struct Proof {
         std::shared_ptr<Evidence> evidence = std::make_shared<Evidence>();
@@ -79,6 +80,9 @@ private:
     std::set<POVNode> declarationBodies_;
     std::map<POVNode,Certificate> compiledBodies_;
     std::uint64_t validationEpoch_=1;
+    // Untracked edits and explicit normalization still recheck source snapshots.
+    // Scoped publications can retain the existing dependency proof instead.
+    std::uint64_t validationReset_=1;
     struct CatalogueResolution {bool declared=false; POVNode body;};
     mutable std::map<std::string,CatalogueResolution> resolutions_;
     const CatalogueResolution& resolveCatalogue(const std::string& name) const {
@@ -559,8 +563,9 @@ public:
         // unevaluated contextual constraint as an unconstrained predicate.
         return proof->requirement->hasExpressions() ? Certificate{} : proof;
     }
-    bool current(const Witness& witness) const {
-        if(witness.checkedEpoch!=validationEpoch_) {
+    bool current(const Witness& witness, bool fresh=false) const {
+        if(fresh || witness.checkedEpoch!=validationEpoch_ ||
+           (ReadScope::tracksObjects() && !witness.objectsTracked)) {
             std::set<DependencyKey> reads;
             bool matches;
             {
@@ -575,15 +580,20 @@ public:
                     POVDescription(witness.node, access_->registry.get()).relationships(false).empty();
             }
             witness.reads=std::move(reads);witness.checkedCurrent=matches;witness.checkedEpoch=validationEpoch_;
+            witness.objectsTracked=ReadScope::tracksObjects();
         }
         for(const auto& key:witness.reads) ReadScope::observe(key);
         return witness.checkedCurrent;
     }
-    bool current(const Certificate& proof) const {
+    bool current(const Certificate& proof, bool fresh=false) const {
         if (!proof->requirement) return false;
+        if(fresh) resolutions_.clear(); // an unpublished edit may change a binding too
         auto& evidence=*proof->evidence;
         bool observed=evidence.reads && evidence.reads->valid();
-        if(observed && evidence.checkedEpoch==validationEpoch_) return evidence.checkedCurrent;
+        if(!fresh && observed && (!ReadScope::tracksObjects() || evidence.objectsTracked) &&
+           (evidence.checkedEpoch==validationEpoch_ ||
+           (evidence.checkedCurrent && evidence.objectsTracked && ReadScope::tracksObjects() &&
+            evidence.checkedReset==validationReset_))) return evidence.checkedCurrent;
         std::set<DependencyKey> reads;
         bool matches;
         {
@@ -593,7 +603,7 @@ public:
             matches=std::all_of(evidence.bindings.begin(),evidence.bindings.end(),[&](const Binding& binding) {
                 return lookup(binding.name)==binding.body && (binding.body || !declared(binding.name));
             }) && std::all_of(evidence.witnesses.begin(),evidence.witnesses.end(),[&](const auto& entry) {
-                return current(*entry.second);
+                return current(*entry.second,fresh);
             });
         }
         // Keep the observable group across unrelated model writes. A changed
@@ -602,6 +612,7 @@ public:
         else evidence.reads->observe(reads);
         evidence.reads->valid();
         evidence.checkedCurrent=matches;evidence.checkedEpoch=validationEpoch_;
+        evidence.checkedReset=validationReset_;evidence.objectsTracked=ReadScope::tracksObjects();
         return matches;
     }
     bool covers(const Certificate& proof, const POVNode& node, bool fullMeaning=false) const {
@@ -699,7 +710,7 @@ public:
         return {changed,Changes::only({evidenceKey(node)})};
     }
     SetResult applyChanges(const POVNode& node, const Certificate& proof, const std::shared_ptr<ProteusDefinitionPlan>& plan) {
-        if (!current(proof) || !covers(proof, node) || !plan->supported) return false;
+        if (!current(proof,true) || !covers(proof, node) || !plan->supported) return false;
         Changes changes=Changes::only({});
         auto applied=plan->applyChanges();
         if(applied.changed) changes.include(applied.changes.value_or(modelChanges()));
@@ -719,7 +730,8 @@ public:
         // This does not certify the data; ordinary type goals still check it.
         // Sharing only value storage is insufficient: headers may differ.
         if (readView(target) == readView(source)) return {};
-        if (!current(proof)) return {};
+        // Earlier writes in this Set may not have published their changes.
+        if (!current(proof,true)) return {};
         try {
             // This can run after another write in the same atomic Set; a
             // pre-Set instance check does not describe that intermediate state.
@@ -874,9 +886,9 @@ public:
         }
         return {};
     }
-    void prune(bool preserveInstanceChecks=false) {
+    void prune(bool preserveTrackedChecks=false) {
         ++validationEpoch_;resolutions_.clear();
-        if(!preserveInstanceChecks) {accepted_.clear();checkCleanupAt_=64;}
+        if(!preserveTrackedChecks) {++validationReset_;accepted_.clear();checkCleanupAt_=64;}
         for(auto it=evidenceKeys_.begin();it!=evidenceKeys_.end();)
             if(it->first.expired()) it=evidenceKeys_.erase(it);else ++it;
         for (auto it = evidence_.begin(); it != evidence_.end();)

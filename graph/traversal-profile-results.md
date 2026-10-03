@@ -657,3 +657,92 @@ logs and counts are in `/tmp/p4-plan-origin-profile/` (before) and
 `/tmp/p4-view-transfer/profile/` (after). Reproduction scripts are
 `/tmp/p4-view-transfer-benchmark.py`, `/tmp/p4-view-transfer-checks.py`,
 `/tmp/p4-view-transfer-profile-setup.py` and its `-analyze.py` counterpart.
+
+
+## Compiled contextuality and retained source validation (2026-10-03)
+
+These two changes follow baseline `13d275b` and were implemented and timed
+separately. Step 1 is commit `8ce4f7e`; step 2 accompanies this report.
+
+1. The definition compiler records whether a completed requirement contains
+   contextual expressions. `hasExpressions()` can read that summary and stop
+   at already analyzed children, rather than revisiting shared descendants.
+   A copied requirement loses its summary and becomes an editable builder;
+   unfinished builders remain uncached. Contextual expressions still execute
+   in their instance's graph goals, and changed meanings compile new snapshots.
+2. A positive source-certificate check can survive an unrelated scoped
+   publication when its existing dependency proof remains valid and all its
+   object reads were tracked. Broad invalidation, catalogue changes, and an
+   explicit normalization retain the conservative reset. Negative results and
+   untracked reads do not acquire cross-publication reuse.
+
+The second change reuses existing dependency groups. It adds a reset counter
+and small flags to existing evidence/witness objects, not another cache,
+per-POV traversal history, or graph. A proof first checked outside object
+tracking must capture tracked reads before serving a tracked consumer. Shared
+witnesses have the same rule. Before applying a definition plan or transferring
+evidence between distinct views, a fresh check also rereads bindings and source
+witnesses: an earlier write in the same Set may not have published yet.
+
+CodeDog regeneration/build succeeded. Step 1 passed all **1,426 graph tests**
+after correcting the open-template setup of one newly added unit-conversion
+fixture. The final build passed all **1,435 registered graph tests in 73
+groups**, with no existing expectation changes. Three contextuality cases
+exercise copies, conjunction/scope/unit transformations, and changed meanings.
+Nine source-validity cases cover unrelated writes, shared-value edits, list
+link changes, explicit resets, untracked reads, tracking upgrades, late
+declarations, and unpublished source/binding edits at a Set boundary. The
+strengthened tracking-upgrade case failed before the guard correction and
+passed afterward. Both an existing proof and another proof sharing its
+witnesses must wake when their source changes.
+
+Ordinary executables ran sequentially on the same eleven-observation temporal
+cube fixture, with no build, test suite, or diagnostic probe overlapping a
+timed run:
+
+| Temporal cube batch | Baseline | Step 1 only | Both changes |
+| --- | ---: | ---: | ---: |
+| Elapsed | 59.30 s | 55.21 s | 47.81 s |
+| Peak RSS | 117,252 KiB | 115,596 KiB | 111,932 KiB |
+| Observations passed | 11/11 | 11/11 | 11/11 |
+
+Step 1 reduced elapsed time **6.9%**; adding step 2 reduced it a further
+**13.4%**. Together they used **19.4% less time** and **4.5% less peak RSS**
+than this sequence's baseline. This is one three-version measurement, not a
+stable performance guarantee. The previous report's 66.68 s measurement is a
+different run; 59.30 s is the freshly measured baseline used here. The full
+legacy language suite and live Slipstream GUI were not rerun.
+
+A separate scratch diagnostic also passed all eleven observations. Compared
+with the preceding shared-view diagnostic:
+
+| Diagnostic work | Before | Both changes |
+| --- | ---: | ---: |
+| Model load/normalization | 46.149 s | 36.629 s |
+| Eleven query phases | 16.789 s | 11.938 s |
+| Contextuality checks | 165,865 | 174,893 |
+| Time in contextuality checks | 4.514 s | 0.159 s |
+| Source-witness checks | 226,209 | 60,919 |
+| Time in source-witness checks | 8.185 s | 1.981 s |
+| Public plan constructions | 10,637 | 11,731 |
+| Recursive plan preparations | 638,274 | 648,472 |
+
+The new counters record 62,586 direct contextuality-summary hits and 112,307
+builder checks, which can stop at analyzed children. Source-certificate
+validation reused its tracked proof across publications 200,444 times; 57,444
+witness calls actually reread their snapshots. Thus the savings come from
+less work inside repeated checks, not a reduction in plan count. Scheduling
+can vary between runs. Inclusive nested timers overlap and must not be added
+together; the diagnostic time is separate from the ordinary comparison.
+
+Evidence is under `/tmp/p4-definition-validity/`: `baseline/`, `step1/`, and
+`step2/` preserve executables and headers; `cube/` contains ordinary timings,
+logs, and hashes; `tests-step1/` and `tests-final/` contain graph results;
+`diagnostics/` contains scratch instrumentation, logs, and per-phase counters.
+The earlier diagnostic is `/tmp/p4-view-transfer/profile/phases.json`.
+Reproduction scripts are `/tmp/p4-definition-validity-benchmark.py`,
+`/tmp/p4-definition-validity-tests-final.py`,
+`/tmp/p4-definition-validity-profile-setup.py`, and its `-analyze.py`
+counterpart. `upgrade-before.log` records the reproduced tracking failure;
+the final graph log records its passing result. Instrumentation is not part
+of the production sources.

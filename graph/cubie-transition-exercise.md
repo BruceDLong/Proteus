@@ -443,3 +443,29 @@ The broad legacy suite and live GUI were not rerun. Detailed semantics,
 diagnostic counts, and validation are in
 [the traversal report](traversal-profile-results.md#transfers-between-shared-infonviews-2026-10-03).
 Ordinary logs and hashes are in `/tmp/p4-view-transfer/cube/`.
+
+
+## Definition contextuality and source-validity measurement (2026-10-03)
+
+Two general definition optimizations were measured separately. Compiled
+requirements now retain their contextuality analysis; unchanged source
+certificates retain a positive validation across unrelated tracked writes.
+Real source changes, explicit normalization, and checks before applying a Set
+retain their freshness requirements. This adds small metadata to existing
+definition objects, without a per-POV traversal history.
+
+The ordinary eleven-observation batch took **59.30 s / 117,252 KiB peak
+RSS** at baseline `13d275b`, **55.21 s / 115,596 KiB** with contextuality
+analysis alone (`8ce4f7e`), and **47.81 s / 111,932 KiB** with both changes.
+That is **19.4% less elapsed time** in one sequential three-version
+measurement. All three passed the eleven observations: changed rotation,
+preserved fields and color, neighboring cubie, and unchanged original state.
+All **1,435 graph tests** pass in the final build, including twelve added
+regressions. The broad legacy suite and live Slipstream GUI were not rerun.
+
+The diagnostic confirms less repeated contextuality and witness validation;
+plan counts did not decrease. See
+[the traversal report](traversal-profile-results.md#compiled-contextuality-and-retained-source-validation-2026-10-03)
+for the separate timing steps, invalidation boundaries, counters, and
+validation limits. Ordinary logs and hashes are in
+`/tmp/p4-definition-validity/cube/`.

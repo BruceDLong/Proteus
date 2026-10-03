@@ -1,6 +1,16 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphDefinitionValidity/unrelatedWrites
+    unit/graphDefinitionValidity/sharedValue
+    unit/graphDefinitionValidity/listLink
+    unit/graphDefinitionValidity/explicitReset
+    unit/graphDefinitionValidity/untrackedReads
+    unit/graphDefinitionValidity/trackingUpgrade
+    unit/graphDefinitionValidity/lateDeclaration
+    unit/graphDefinitionValidity/unpublishedDefinitionEdit
+    unit/graphDefinitionValidity/unpublishedBindingEdit
+
     unit/graphExpressionAnalysis/copiedBuilder
     unit/graphExpressionAnalysis/composedMeaning
     unit/graphExpressionAnalysis/compiledChange
@@ -12416,6 +12426,125 @@ struct GLOBAL {
 }
 
 
+
+
+// A source certificate keeps its readers and freshness across unrelated edits.
+#define GRAPHDEFINITIONVALIDITY(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphDefinitionValidity(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHDEFINITIONVALIDITY(unit/graphDefinitionValidity/unrelatedWrites, 1)
+    GRAPHDEFINITIONVALIDITY(unit/graphDefinitionValidity/sharedValue, 2)
+    GRAPHDEFINITIONVALIDITY(unit/graphDefinitionValidity/listLink, 3)
+    GRAPHDEFINITIONVALIDITY(unit/graphDefinitionValidity/explicitReset, 4)
+    GRAPHDEFINITIONVALIDITY(unit/graphDefinitionValidity/untrackedReads, 5)
+    GRAPHDEFINITIONVALIDITY(unit/graphDefinitionValidity/trackingUpgrade, 6)
+    GRAPHDEFINITIONVALIDITY(unit/graphDefinitionValidity/lateDeclaration, 7)
+    GRAPHDEFINITIONVALIDITY(unit/graphDefinitionValidity/unpublishedDefinitionEdit, 8)
+    GRAPHDEFINITIONVALIDITY(unit/graphDefinitionValidity/unpublishedBindingEdit, 9)
+    me bool: graphDefinitionValidityCase(me string: testName, me int: caseID) <- <%{
+        using namespace proteus4;
+        GraphNormalizer n;n.init();ProteusDefinitions definitions(n.access);
+        auto parse=[&](const std::string& text){return graphParsed(testName,text);};
+        auto source=parse("*2+{*10+1 *10+2}");Work work{0,0};
+        auto proof=definitions.describe(source,work);if(!proof){n.close();return false;}
+        auto first=source->pItem->value->items.head;bool ok=true;
+        ProteusDefinitions::Certificate untrackedProof;
+        if(caseID==5 || caseID==6) {
+            ok &= definitions.current(proof);
+            if(caseID==5) {
+                first->pItem->value->num=static_cast<std::int64_t>(3);
+                definitions.prune(true);ok &= !definitions.current(proof);
+                n.close();return ok;
+            }
+            // Another certificate can share witnesses first checked without
+            // object tracking in this same epoch. Upgrade those witnesses too.
+            untrackedProof=proof;
+            auto other=std::make_shared<ProteusDefinitions::Proof>();other->requirement=proof->requirement;
+            other->evidence->witnesses=proof->evidence->witnesses;other->evidence->bindings=proof->evidence->bindings;
+            proof=other;
+        }
+        if(caseID==7) proof->evidence->bindings.push_back({"later",{}});
+        POVNode declaration;
+        if(caseID==9) {
+            declaration=parse("{#later=*10+7}")->pItem->value->items.head;
+            ok &= definitions.publish(declaration);
+            proof->evidence->bindings.push_back({"later",definitions.lookup("later")});
+        }
+        {
+            ObjectDependencies objects;ReadScope tracked({},&objects);
+            auto checked=[&] {
+                std::set<DependencyKey> reads;
+                {ReadScope capture([&](const DependencyKey& key){reads.insert(key);});ok &= definitions.current(proof);}
+                return reads;
+            };
+            auto reads=checked();auto consumer=DependencyProof::make(reads);
+            DependencyProof::Ptr upgradedConsumer;
+            if(untrackedProof) {
+                std::set<DependencyKey> upgradedReads;
+                {ReadScope capture([&](const DependencyKey& key){upgradedReads.insert(key);});
+                 ok &= definitions.current(untrackedProof);}
+                upgradedConsumer=DependencyProof::make(upgradedReads);
+            }
+            ok &= consumer->valid();auto initialEpoch=proof->evidence->checkedEpoch;
+            if(caseID==1) {
+                auto unrelated=graphScalar(7,10);
+                for(int i=0;i<32;++i) {
+                    auto changes=ReadScope::changedObjects({unrelated->pItem->value.get()});
+                    definitions.prune(true);for(const auto& key:changes.keys) key->publish();
+                    ok &= consumer->valid() && checked()==reads && proof->evidence->checkedEpoch==initialEpoch;
+                }
+                // Explicit normalization still reads the witnesses afresh.
+                definitions.prune();ok &= definitions.current(proof) && proof->evidence->checkedEpoch!=initialEpoch;
+            } else if(caseID==9) {
+                auto known=parse("*2+{*10+1 *10+2}");n.access->setDefinitionOrder(known);
+                definitions.remember(known,proof);definitions.prune(true);
+                ok &= definitions.current(proof,true); // populate the binding cache
+                declaration->pItem->funcArgs=parse("*10+8")->pItem; // not yet published
+                auto target=parse("*2+{*10+1 *10+2}");n.access->setDefinitionOrder(target);
+                ok &= !definitions.inheritChanges(target,known).changed && !definitions.saved(target);
+            } else if(caseID==8) {
+                auto known=parse("*2+{*10+1 *10+2}");n.access->setDefinitionOrder(known);
+                auto target=parse("*2+{*10+_ *10+_}");n.access->setDefinitionOrder(target);
+                auto plan=definitions.plan(target,proof);ok &= plan && plan->supported;
+                definitions.remember(known,proof);
+                definitions.prune(true); // an unrelated preceding publication
+                first->pItem->value->num=static_cast<std::int64_t>(3); // not yet published
+                if(plan) ok &= !definitions.applyChanges(target,proof,plan).changed;
+                ok &= !n.access->typeFacts(target->pItem->value->items.head).hasValue;
+                auto destination=parse("*2+{*10+1 *10+2}");n.access->setDefinitionOrder(destination);
+                ok &= !definitions.inheritChanges(destination,known).changed && !definitions.saved(destination);
+            } else if(caseID==4) {
+                first->pItem->value->num=static_cast<std::int64_t>(3);
+                definitions.prune();ok &= !definitions.current(proof);
+            } else if(caseID==7) {
+                auto declaration=parse("{#later=*10+7}")->pItem->value->items.head;
+                auto result=definitions.publishChanges(declaration);ok &= result.changed && bool(result.changes);
+                if(result.changes) for(const auto& key:result.changes->keys) key->publish();
+                ok &= !consumer->valid() && !definitions.current(proof);
+            } else {
+                Changes changes;
+                if(caseID==3) {
+                    auto tail=source->pItem->value->items.tail;n.access->appendDefinitionMember(source,"");
+                    changes=ReadScope::changedObjects({POVDescription::positionKey(tail)});
+                } else {
+                    auto alias=graphScalar(1,10);alias->pItem->value=first->pItem->value;
+                    alias->pItem->value->num=static_cast<std::int64_t>(3);
+                    changes=ReadScope::changedObjects({alias->pItem->value.get()});
+                }
+                definitions.prune(true);for(const auto& key:changes.keys) key->publish();
+                ok &= !consumer->valid() && !definitions.current(proof);
+                if(upgradedConsumer) ok &= !upgradedConsumer->valid();
+            }
+        }
+        if(!ok)std::cout<<"Definition validity case "<<caseID<<" failed\n";
+        n.close();return ok;
+    }%>
+    void: unitTestGraphDefinitionValidity(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphDefinitionValidityCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
 
 // Published definition analysis belongs to its version, not future builders.
 #define GRAPHEXPRESSIONANALYSIS(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphExpressionAnalysis(tname, CASE_ID)}%>
