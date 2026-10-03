@@ -647,11 +647,24 @@ public:
         if (!proof || proof->requirement->hasExpressions() || proof->requirement->list || !proof->requirement->choices.empty() || !facts.combine(proof->requirement->facts)) facts.valid = false;
         return facts;
     }
+    bool validate(const POVNode& node,const DefinitionSpec& requirement,bool fillParts) const {
+        // Reuse the existing positive-check cache for completed subrequirements
+        // too. Their proofs retain only actual reads and share child evidence.
+        ProteusDefinitionPlan::ValidationChecks checks;
+        checks.lookup=[this](const POVNode& node,const DefinitionSpec& requirement) {
+            auto found=accepted_.find(std::make_tuple(node,requirement,false));
+            return found==accepted_.end() ? DependencyProof::Ptr{} : found->second.reads;
+        };
+        checks.remember=[this](const POVNode& node,const DefinitionSpec& requirement,const DependencyProof::Ptr& evidence) {
+            rememberCheck(std::make_tuple(node,requirement,false),evidence);
+        };
+        return ProteusDefinitionPlan::validates(access_,node,requirement,fillParts,std::move(checks));
+    }
     bool accepts(const Certificate& proof, const POVNode& node, bool fillParts=false) const {
         auto key=std::make_tuple(node,proof->requirement,fillParts);
         // Contextual and pending checks must reobserve completion evidence.
         if(proof->requirement->hasExpressions()) {
-            try {return ProteusDefinitionPlan(access_,node,proof->requirement,{},true,fillParts).satisfied();}
+            try {return validate(node,proof->requirement,fillParts);}
             catch(const std::runtime_error&) {return false;}
         }
         auto found=accepted_.find(key);
@@ -662,7 +675,7 @@ public:
         bool accepted=false;
         {
             ReadScope capture([&](const DependencyKey& dependency){reads.push_back(dependency);});
-            try {accepted=ProteusDefinitionPlan(access_,node,proof->requirement,{},true,fillParts).satisfied();}
+            try {accepted=validate(node,proof->requirement,fillParts);}
             catch(const std::runtime_error&) {}
         }
         if(accepted && ReadScope::tracksObjects() && std::find(reads.begin(),reads.end(),DependencyKey{})==reads.end()) {

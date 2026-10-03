@@ -1,6 +1,14 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphPartialValidation/pendingSibling
+    unit/graphPartialValidation/sharedValue
+    unit/graphPartialValidation/listLink
+    unit/graphPartialValidation/siblingResolved
+    unit/graphPartialValidation/stagedWrites
+    unit/graphPartialValidation/explicitParts
+    unit/graphPartialValidation/writableBindings
+
     unit/graphDefinitionValidity/unrelatedWrites
     unit/graphDefinitionValidity/sharedValue
     unit/graphDefinitionValidity/listLink
@@ -12427,6 +12435,96 @@ struct GLOBAL {
 
 
 
+
+
+// A pending definition keeps the proofs of its already-satisfied parts.
+#define GRAPHPARTIALVALIDATION(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphPartialValidation(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHPARTIALVALIDATION(unit/graphPartialValidation/pendingSibling, 1)
+    GRAPHPARTIALVALIDATION(unit/graphPartialValidation/sharedValue, 2)
+    GRAPHPARTIALVALIDATION(unit/graphPartialValidation/listLink, 3)
+    GRAPHPARTIALVALIDATION(unit/graphPartialValidation/siblingResolved, 4)
+    GRAPHPARTIALVALIDATION(unit/graphPartialValidation/stagedWrites, 5)
+    GRAPHPARTIALVALIDATION(unit/graphPartialValidation/explicitParts, 6)
+    GRAPHPARTIALVALIDATION(unit/graphPartialValidation/writableBindings, 7)
+
+    me bool: graphPartialValidationCase(me string: testName, me int: caseID) <- <%{
+        using namespace proteus4;
+        GraphNormalizer n;n.init();bool ok=true;
+        for(int count:std::vector<int>{16,64,128}) {
+            std::string text="*2+{*"+std::to_string(count)+"+{";
+            for(int i=0;i<count;++i) text+="*10+7 ";
+            auto target=graphParsed(testName,text+"} *10+_}");
+            auto known=target->pItem->value->items.head,pending=known->next;
+            n.access->setDefinitionOrder(target);n.access->setDefinitionOrder(known);
+            auto requirement=std::make_shared<DefinitionRequirement>();requirement->list=true;
+            requirement->facts=n.access->typeFacts(target);
+            auto part=std::make_shared<DefinitionRequirement>();part->list=true;part->facts=n.access->typeFacts(known);
+            for(auto member=known->pItem->value->items.head;member;member=member->next) {
+                auto scalar=std::make_shared<DefinitionRequirement>();scalar->facts=n.access->typeFacts(member);
+                part->members.push_back(scalar);
+            }
+            auto missing=std::make_shared<DefinitionRequirement>();missing->facts=n.access->typeFacts(graphScalar(8,10));
+            requirement->members={part,missing};
+            ObjectDependencies objects;ReadScope tracked({},&objects);
+            std::map<std::pair<POVNode,DefinitionSpec>,DependencyProof::Ptr> cache;
+            std::size_t lookups=0,stores=0;
+            ProteusDefinitionPlan::ValidationChecks checks;
+            checks.lookup=[&](const POVNode& node,const DefinitionSpec& spec) {
+                ++lookups;auto found=cache.find({node,spec});return found==cache.end() ? DependencyProof::Ptr{} : found->second;
+            };
+            checks.remember=[&](const POVNode& node,const DefinitionSpec& spec,const DependencyProof::Ptr& proof) {
+                ++stores;cache[{node,spec}]=proof;
+            };
+            auto validate=[&](bool fill=false) {return ProteusDefinitionPlan::validates(n.access,target,requirement,fill,checks);};
+            ok &= !validate() && cache.count({known,part});
+            auto saved=cache[{known,part}];auto initialStores=stores;lookups=0;
+            if(caseID==1) {
+                for(int i=0;i<32;++i) ok &= !validate();
+                ok &= stores==initialStores && lookups==64 && saved->valid();
+                ok &= !getFlagBit(target->pItem->flags,infonView::isNormed);
+            } else if(caseID==2 || caseID==3) {
+                Changes changes;
+                if(caseID==2) {
+                    auto alias=graphScalar(7,10);alias->pItem->value=known->pItem->value->items.head->pItem->value;
+                    alias->pItem->value->num=static_cast<std::int64_t>(6);
+                    changes=ReadScope::changedObjects({alias->pItem->value.get()});
+                } else {
+                    auto tail=known->pItem->value->items.tail;n.access->appendDefinitionMember(known,"");
+                    changes=ReadScope::changedObjects({POVDescription::positionKey(tail)});
+                }
+                for(const auto& key:changes.keys) key->publish();
+                bool rejected=false;try {validate();} catch(const DefinitionConflict&) {rejected=true;}
+                ok &= !saved->valid() && rejected;
+            } else if(caseID==4 || caseID==6) {
+                n.access->applyTypeFacts(pending,missing->facts);
+                auto changes=ReadScope::changedObjects({pending->pItem->value.get()});
+                for(const auto& key:changes.keys) key->publish();
+                ok &= validate(caseID==6) && saved->valid();
+                ok &= caseID==6 ? lookups==0 : lookups==2;
+            } else if(caseID==5) {
+                // An earlier staged write can affect later proposed facts.
+                // Validation must retain the joint-plan walk in this case.
+                auto reversed=graphParsed(testName,"*2+{*10+_ ?}");
+                reversed->pItem->value->items.tail->pItem=known->pItem;n.access->setDefinitionOrder(reversed);
+                auto spec=std::make_shared<DefinitionRequirement>(*requirement);spec->members={missing,part};
+                ok &= !ProteusDefinitionPlan::validates(n.access,reversed,spec,false,checks) && lookups==1;
+            } else {
+                ProteusDefinitionPlan plan(n.access,target,requirement);
+                ok &= plan.supported && !plan.satisfied() && plan.bindings.size()==static_cast<std::size_t>(count+3);
+                ok &= plan.applyChanges().changed && pending->pItem->value->num==8;
+            }
+        }
+        if(!ok) std::cout<<"Partial validation case "<<caseID<<" failed\n";
+        n.close();return ok;
+    }%>
+    void: unitTestGraphPartialValidation(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphPartialValidationCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
 
 // A source certificate keeps its readers and freshness across unrelated edits.
 #define GRAPHDEFINITIONVALIDITY(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphDefinitionValidity(tname, CASE_ID)}%>

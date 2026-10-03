@@ -746,3 +746,115 @@ Reproduction scripts are `/tmp/p4-definition-validity-benchmark.py`,
 counterpart. `upgrade-before.log` records the reproduced tracking failure;
 the final graph log records its passing result. Instrumentation is not part
 of the production sources.
+
+
+## Retaining completed parts of pending definitions (2026-10-03)
+
+Baseline `0fb1267`. This investigation tested whether the temporal cube was
+re-solving information already known, including whether `isNormed` could stop
+that work. Only 36 of 6,350 normalization starts in the diagnostic found that
+flag set. Whole-infon completion is too coarse here: one unresolved contextual
+obligation can leave a definition pending while its other parts are satisfied.
+The prior validator rebuilt the complete nested plan on each such attempt.
+
+The accepted change reuses a positive validation for a completed,
+context-free subrequirement while the parent remains pending. It uses the
+existing instance-check cache and dependency proofs. Parents retain shared
+child proof groups, rather than flattened copies of all descendant reads.
+The cache still resets on explicit normalization/broad invalidation; a relevant
+object or list-link publication invalidates the affected child. A cached value
+does not certify an incoming contradictory assertion or a changed definition.
+
+`ProteusDefinitionPlan::validates()` is a read-only entry point. It cannot
+return a Set plan or incomplete certificate bindings. Ordinary writable plans
+retain the full preparation. Reuse is also excluded for contextual subtrees,
+explicit immediate-part validation, untracked reads, deferred allocations, and
+after an earlier staged write. No `isNormed` rule, temporal preservation rule,
+size/value interpretation, or compiler setting was changed.
+
+Seven new `unit/graphPartialValidation/` cases each run with 16, 64, and 128
+known members. Repeated validation with a pending sibling performs two cache
+lookups per attempt, independent of the known subtree's width, and stores no
+additional entries. Other cases check a shared-value mutation, an appended
+list link, resolution of the pending sibling, earlier staged writes, explicit
+part policy, and complete bindings when a writable plan is applied.
+CodeDog regeneration/build succeeded. All **1,442 registered graph tests in
+74 groups pass**, in both the normal build and a separate `-O2` build.
+Existing expectations were unchanged.
+
+The diagnostic experiment reduced recursive uncached definition preparations
+from **633,470 to 71,315**. There were 41,945 successful subtree reuses and
+16,187 stores over the full load plus eleven queries. Time in public plan
+construction fell from **16.553 s to 3.243 s**, and total diagnostic time
+fell from **47.95 s to 31.90 s**. These counters were collected in scratch
+instrumented prototypes; the ordinary final-build comparison below validates
+the resulting implementation independently. Nested inclusive timers overlap
+and must not be added together.
+
+Final ordinary executable measurements, sequential with no overlapping
+build/test/probe, using the same eleven-observation cube fixture:
+
+| Compiler setting | Baseline elapsed | Final elapsed | Baseline peak RSS | Final peak RSS |
+| --- | ---: | ---: | ---: | ---: |
+| Current normal build, no optimization | 48.61 s | 32.25 s | 119,908 KiB | 112,948 KiB |
+| Separate `-O2` build | 10.37 s | 6.09 s | 106,956 KiB | 100,544 KiB |
+
+The algorithm change reduced elapsed time **33.7%** in the normal build
+and **41.3%** in the optimized comparison. Each executable passed all eleven
+observations: changed rotation, preserved other fields and color, neighboring
+cubie, and unchanged original state. This is one sequential measurement per
+configuration, not a stable performance guarantee. The optimized final test
+executable has lightweight phase timers; the other ordinary executables have
+no diagnostic instrumentation.
+
+The optimized final run spent **4.885 s** loading/normalizing the two-state
+world and **1.113 s** in the eleven queries. Its five state-2 queries took:
+
+| Query after loading | Seconds |
+| --- | ---: |
+| Changed first edge cubie's x rotation | 0.098 |
+| Preserved y rotation | 0.121 |
+| Preserved z location | 0.150 |
+| Neighboring cubie's x rotation | 0.196 |
+| Preserved sticker hue | 0.234 |
+
+Loading already performs work on both states. These are field-query latencies,
+not a measurement of constructing all of state 2 from an already loaded state
+1. A complete cold load/normalization is still above one second. The full
+legacy language suite and live Slipstream GUI were not rerun. Compiler
+optimization was measured separately: CodeDog's current Linux builder emits
+`-g -std=gnu++17 -fpermissive` without an optimization flag
+(`/home/bruce/devl/CodeDog/buildDog.py`, `LinuxBuilder`); neither that builder
+nor Slipstream was modified here.
+
+Other experiments were not incorporated:
+
+- Narrowing path-write publication reduced one event from 4,277 newly dirty
+  goals to four. A following broad scalar Set overlapped with it. Narrowing
+  both events still gave 48.64 s versus 47.95 s, with no meaningful total-time
+  gain. Dirty-notification counts alone overstated the useful work removed.
+- Allowing whole contextual checks into the positive cache gave 47.96 s:
+  those checks were pending, so they had no completed result to reuse.
+- Publishing completion at the preservation guard, with per-task retained
+  proofs, passed the graph tests but took 55.26 s and 262,624 KiB peak RSS.
+  It did not increase the number of already-marked normalization starts.
+- Scanning registry relationships was only 0.219 s in this diagnostic;
+  the definition-write footprints were small. Neither was the main cause.
+
+Evidence is under `/tmp/p4-transition-work/`: `profile.log` and `labels.json`
+hold the baseline counters; `scoped*`, `context*`, `scoped-both*`, `subchecks*`,
+and `settle*` retain the individual experiments. `tests-final/` and
+`final-optimized-tests/` contain final graph results. `ordinary/` contains
+final timings, hashes, logs, and per-query durations. `final/` retains final
+headers, generated source, normal executable, and optimized timed executable.
+`optimized-baseline/` retains the unchanged baseline executable and source.
+The scripts `/tmp/p4-transition-profile-setup.py`,
+`/tmp/p4-transition-subchecks-experiment.py`,
+`/tmp/p4-transition-tests-final.py`, `/tmp/p4-transition-final-setup.py`, and
+`/tmp/p4-transition-final-benchmark.py` reproduce the main checks.
+The optimized compiler command was:
+
+```sh
+g++ -std=gnu++17 -fpermissive -g0 -O2 -pthread TestProteus.cpp \
+    -lgmp -lgmpxx -licuio -licui18n -licuuc -licudata -o TestProteus-O2
+```

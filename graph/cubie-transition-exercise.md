@@ -469,3 +469,29 @@ plan counts did not decrease. See
 for the separate timing steps, invalidation boundaries, counters, and
 validation limits. Ordinary logs and hashes are in
 `/tmp/p4-definition-validity/cube/`.
+
+
+## Completed definition parts in the temporal cube (2026-10-03)
+
+An unfinished contextual requirement previously caused its already-satisfied
+sibling parts to be validated repeatedly. Read-only definition checks now
+reuse those completed parts through the existing dependency cache, while Sets
+retain their full preparation. Whole-infon `isNormed` semantics are unchanged.
+
+Against baseline `0fb1267`, the same eleven-observation batch took
+**48.61 -> 32.25 seconds** in the normal unoptimized build. A separate
+optimized-build comparison took **10.37 -> 6.09 seconds**. Both compiler
+settings passed all **1,442 graph tests** and all eleven cube observations.
+The algorithm change and the compiler-setting difference are separate effects.
+
+The optimized final run loaded/normalized the world in **4.885 seconds**;
+its five subsequent state-2 queries took **0.098-0.234 seconds each**. Loading
+already does work on both states, so these timings do not establish a complete
+sub-second transition from a preloaded state 1. Cold normalization remains
+above one second, and live Slipstream performance was not measured. Neither
+the default build settings nor the GUI were changed.
+
+See [the traversal report](traversal-profile-results.md#retaining-completed-parts-of-pending-definitions-2026-10-03)
+for work counts, rejected experiments, invalidation boundaries, and the full
+timing table. Logs and executable hashes are in
+`/tmp/p4-transition-work/ordinary/`.

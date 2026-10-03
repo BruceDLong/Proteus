@@ -277,6 +277,10 @@ inline bool sameDefinition(const DefinitionSpec& left, const DefinitionSpec& rig
 // requirements. Allocation, writes and certificates wait for the priced Set.
 class ProteusDefinitionPlan {
 public:
+    struct ValidationChecks {
+        std::function<DependencyProof::Ptr(const POVNode&,const DefinitionSpec&)> lookup;
+        std::function<void(const POVNode&,const DefinitionSpec&,const DependencyProof::Ptr&)> remember;
+    };
     struct Slot { POVNode node; };
     using Place = std::shared_ptr<Slot>;
     struct Position {
@@ -635,7 +639,29 @@ private:
             prepare(member,spec);
         }
     }
+    ValidationChecks checks_;
+    Place checkRoot_;
     void prepare(const Place& target, const DefinitionSpec& sourceRequirement) {
+        if(!supported) return;
+        // A pending sibling must not erase a proved part. Reuse only complete,
+        // context-free checks of existing data, before any staged write. The
+        // explicit-part policy and writable plans keep their original walk.
+        if(!checks_.lookup || !target->node || target==checkRoot_ || fillRoot_ || !writes.empty() ||
+           sourceRequirement->hasExpressions() || !ReadScope::tracksObjects()) {
+            prepareUncached(target,sourceRequirement);return;
+        }
+        if(auto proof=checks_.lookup(target->node,sourceRequirement);proof && proof->valid()) return;
+        std::set<DependencyKey> reads;
+        try {
+            ReadScope capture([&](const DependencyKey& key){reads.insert(key);});
+            prepareUncached(target,sourceRequirement);
+        } catch(...) {for(const auto& key:reads) ReadScope::observe(key);throw;}
+        if(supported && writes.empty() && !reads.count(DependencyKey{})) {
+            auto proof=DependencyProof::make(reads);
+            checks_.remember(target->node,sourceRequirement,proof);proof->valid();
+        } else for(const auto& key:reads) ReadScope::observe(key);
+    }
+    void prepareUncached(const Place& target, const DefinitionSpec& sourceRequirement) {
         if (!supported) return;
         auto requirement=sourceRequirement;
         struct RestoreScopes {
@@ -786,16 +812,26 @@ private:
             });
         }
     }
-public:
     ProteusDefinitionPlan(std::shared_ptr<ProteusGraphAccess> access, const POVNode& target, const DefinitionSpec& requirement,
-                          std::map<POVNode, std::int64_t> extents = {}, bool measureRoot=true, bool fillParts=false)
-        : access_(std::move(access)), extents_(std::move(extents)) {
+                          std::map<POVNode, std::int64_t> extents, bool measureRoot, bool fillParts, ValidationChecks checks)
+        : access_(std::move(access)), extents_(std::move(extents)), checks_(std::move(checks)) {
+        checkRoot_=place(target);
         if(!measureRoot) unmeasuredRoot_=place(target);
         if(fillParts) fillRoot_=place(target);
         prepare(place(target), requirement);
         // Retain commands and bindings, never a history of attempted POVs.
         // A later construction reads current values and completion evidence.
         pass_.reset();
+    }
+public:
+    ProteusDefinitionPlan(std::shared_ptr<ProteusGraphAccess> access, const POVNode& target, const DefinitionSpec& requirement,
+                          std::map<POVNode, std::int64_t> extents = {}, bool measureRoot=true, bool fillParts=false)
+        :ProteusDefinitionPlan(std::move(access),target,requirement,std::move(extents),measureRoot,fillParts,{}) {}
+    // A validation cannot expose commands or incomplete child bindings. Plans
+    // used to publish data/certificates never bypass their complete preparation.
+    static bool validates(std::shared_ptr<ProteusGraphAccess> access,const POVNode& target,
+                          const DefinitionSpec& requirement,bool fillParts,ValidationChecks checks) {
+        return ProteusDefinitionPlan(std::move(access),target,requirement,{},true,fillParts,std::move(checks)).satisfied();
     }
     // Deferred allocation clients can prepare a member before the priced Set
     // creates its POV. All other slots and writes remain instance-local.
