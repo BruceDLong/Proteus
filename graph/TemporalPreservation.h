@@ -16,6 +16,12 @@ class ProteusPreservationGoal : public GoalSpec<POVNode> {
         prior=source;++target->workRevision;
         SetFlagBit(readView(target)->flags,infonView::isNormed,false);return true;
     }
+    // An absent optional definition is not evidence that an unresolved word
+    // denotes an extra part. Keep that negative correspondence provisional.
+    bool unresolvedWord(const POVNode& node) const {
+        return access_->hasTypeRequirements(node) && access_->unknownOverlay(node) &&
+               !(access_->known(node)&valueOnly) && definitions_->optional(node);
+    }
     bool members(const POVNode& owner,std::vector<POVNode>& parts,Work& work) const {
         if(readView(owner)->orderMode==uUnordered)
             return RecordStructure::members(*access_,owner,parts,work) &&
@@ -74,6 +80,11 @@ public:
         if(!access_->literalList(source))
             out.refinements.push_back({{source,valueOnly,0},{1,0},"resolve prior value",false});
         else out.refinements.push_back({{source,relationshipConstraints,0},{1,0},"prove prior description",false});
+        if(RecordStructure::record(*access_,source)) {
+            Work work{0,0};std::vector<POVNode> parts;
+            if(members(source,parts,work)) for(const auto& part:parts) if(unresolvedWord(part))
+                out.refinements.push_back({{part,valueOnly,0},{1,0},"resolve prior part meaning",true});
+        }
         return out;
     }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
@@ -110,7 +121,7 @@ public:
         }
         bool adopt=access_->adoptableList(target);
         if(!adopt && !access_->physicalList(target)) return out;
-        Work work{0,0};std::vector<POVNode> left,right,missing;
+        Work work{0,0};std::vector<POVNode> left,right,missing;bool pendingPart=false;
         std::vector<std::pair<POVNode,POVNode>> pairs;
         if(!members(source,right,work) || (!adopt && !members(target,left,work))) return out;
         auto order=readView(source)->orderMode;
@@ -124,7 +135,10 @@ public:
             },work);
             if(!mapping.unambiguous) return out;
             for(const auto& pair:mapping.pairs) pairs.push_back({left[pair.first],right[pair.second]});
-            for(auto index:mapping.missing) missing.push_back(right[index]);
+            for(auto index:mapping.missing) {
+                if(unresolvedWord(right[index])) pendingPart=true;
+                else missing.push_back(right[index]);
+            }
             auto extent=access_->listExtent(target);
             if(extent>=0 && static_cast<std::uint64_t>(extent)<left.size()+missing.size()) return out;
         } else {
@@ -136,7 +150,7 @@ public:
             return POVDescription(pair.first).independentTemporalValue() ||
                    POVDescription(pair.first).temporalPredecessor()==pair.second;
         }),pairs.end());
-        if(!adopt && pairs.empty() && missing.empty()) {done_=true;return out;}
+        if(!adopt && pairs.empty() && missing.empty()) {done_=!pendingPart;return out;}
         work.creations=addCost(work.creations,missing.size()*3+adopt);
         out.commands.push_back({"Set corresponding temporal parts",[access,target,source,adopt,order,pairs,missing]() -> SetResult {
             if(POVDescription(target).independentTemporalValue()) return false;
@@ -154,6 +168,7 @@ public:
             }
             for(const auto& prior:missing) {
                 auto item=std::make_shared<infonView>();
+                SetModeBits(item->infSize->flags,infonState::evalMode,infonState::emUnknown);
                 item->type=readView(prior)->type;item->addedTypes=readView(prior)->addedTypes;
                 item->temporalPredecessor=prior;
                 auto member=readView(target)->value->items.append(item,false,609);

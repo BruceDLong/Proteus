@@ -1,6 +1,9 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphPreservation/latePartAlias
+    unit/graphPreservation/latePartValue
+    unit/graphPreservation/cancelLatePart
     unit/graphPreservation/wrappedOrderedPath
     unit/graphPreservation/wrappedRepeatedPath
     unit/graphPartialValidation/pendingSibling
@@ -10429,6 +10432,40 @@ struct GLOBAL {
     GRAPHPRESERVATION(unit/graphPreservation/impliedChange, 31)
     GRAPHPRESERVATION(unit/graphPreservation/wrappedOrderedPath, 32)
     GRAPHPRESERVATION(unit/graphPreservation/wrappedRepeatedPath, 33)
+    GRAPHPRESERVATION(unit/graphPreservation/latePartAlias, 34)
+    GRAPHPRESERVATION(unit/graphPreservation/latePartValue, 35)
+    GRAPHPRESERVATION(unit/graphPreservation/cancelLatePart, 36)
+
+    me bool: graphLateTemporalPartCase(me string: testName, me int: caseID) <- <%{
+        using namespace proteus4;
+        GraphNormalizer n;n.init();
+        auto parse=[&](const std::string& text){return graphParsed(testName,text);};
+        auto defs=parse("{#piece={a,b}}");auto dh=n.normalize(defs);dh.waitForCompletion();dh.cancel();
+        auto root=parse("{T {anchor:5,solved} {piece.a=3;,}}");
+        auto before=POVDescription(root).member(),after=POVDescription(root).member(true);
+        auto part=POVDescription(after).member();
+        auto h=n.normalize(root);h.waitForCompletion();
+        bool ok=!h.status().failed && h.status().withSubscribers && after->pItem->value->items.size()==2 &&
+            n.knownField(after,"anchor") && n.knownField(after,"anchor")->pItem->value->num==5 &&
+            !part->pItem->temporalPredecessor;
+        auto a=n.knownField(part,"a");ok &= a && a->pItem->value->num==3;
+        if(caseID==36) h.cancel();
+        auto meaning=parse(caseID==35 ? "{#solved=*10+7}" : "{#solved=piece:{a:0,b:7}}");
+        auto arrived=n.normalize(meaning);arrived.waitForCompletion();h.waitForCompletion();
+        if(caseID==36) {
+            ok &= h.status().cancelled && !part->pItem->temporalPredecessor && after->pItem->value->items.size()==2;
+        } else if(caseID==35) {
+            auto inherited=n.knownField(after,"solved");
+            ok &= !h.status().failed && inherited && inherited->pItem->value->num==7 && after->pItem->value->items.size()==3;
+        } else {
+            auto b=n.knownField(part,"b");auto prior=n.knownField(before,"solved");
+            ok &= !h.status().failed && after->pItem->value->items.size()==2 && part->pItem->temporalPredecessor==prior &&
+                b && b->pItem->value->num==7 && a->pItem->value->num==3 &&
+                prior && n.knownField(prior,"a") && n.knownField(prior,"a")->pItem->value->num==0;
+        }
+        if(!ok) std::cout<<"Late temporal part "<<caseID<<": "<<toString(root->pItem.get())<<" error="<<h.status().error<<"\n";
+        arrived.cancel();h.cancel();n.close();return ok;
+    }%>
 
     me bool: graphWrappedTemporalPathCase(me string: testName, me bool: repeated) <- <%{
         GraphNormalizer n;n.init();
@@ -10464,6 +10501,7 @@ struct GLOBAL {
 
     me bool: graphPreservationCase(me string: testName, me int: caseID) <- <%{
         if(caseID==32 || caseID==33) return graphWrappedTemporalPathCase(testName,caseID==33);
+        if(caseID>=34 && caseID<=36) return graphLateTemporalPartCase(testName,caseID);
         using namespace proteus4;
         GraphNormalizer n;n.init();
         auto parse=[&](const std::string& text){return graphParsed(testName,text);};

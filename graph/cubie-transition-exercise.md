@@ -571,3 +571,50 @@ object and still has xRot 0. Both cube objects also advance the frame counter,
 explaining the faster state-2 animation. The next investigation is why temporal
 correspondence treated those two type words as distinct during startup.
 Evidence: `/tmp/p4-edge-ancestry/app.log`. Animation remains frame-driven.
+
+## Delayed meanings during temporal preservation (2026-10-03)
+
+The extra cube was created before its definitions loaded. At that point,
+`solvedState` and the authored `rubixState` were unresolved words. Treating
+their temporary lack of a known alias as evidence of different parts caused
+preservation to append `solvedState`. Its later definition then created the
+second cube. A temporary diagnostic recorded this before `Things.pr` and
+`rubixCube.pr` loaded: `/tmp/p4-gui-missing-trace/app.log`.
+
+The accepted policy is to defer an unmatched prior part that is still an
+unresolved word. The preservation goal offers a per-part value refinement and
+observes the named definition dependency. It keeps the missing correspondence
+symbolic while applying known matches and other available inherited parts.
+A later alias can therefore link to the existing changed part; a distinct
+resolved meaning can still supply a genuinely missing part. Cancellation
+retires the pending work. This does not wait for other streams to finish or
+make definitions mandatory for already known values.
+
+The new delayed-value regression also exposed a separate placeholder error:
+fresh inherited parts started with the infonView constructor's known size zero.
+Their size now starts unknown so an arriving finite scalar definition can
+supply it without a false contradiction.
+
+
+Final validation: all 1,447 graph tests across 74 groups pass, including the
+37 preservation tests and the new delayed-alias, delayed-value, and cancellation
+cases. All 16 Rubix transition acceptance cases pass, as does the separate
+world query with the alias published after the history is normalized.
+Evidence: `/tmp/p4-wrapped-probe/deferred-tests/summary.json`,
+`/tmp/p4-deferred-preservation-final.log`,
+`/tmp/p4-deferred-cube-acceptance.log`, and
+`/tmp/p4-wrapped-context/late-alias-final.log`.
+
+Slipstream was regenerated and rebuilt against these changes. In an isolated
+production-binary run, the actual `<`/`>` controls select the two states and
+the renderer receives xRot 0 for the first edge cubie and 3.14 for its later
+occurrence. Screenshots show the half-turned cubie. See
+`/tmp/p4-deferred-production-ui/app.log` and `at-30.png` in that directory.
+The model remains an inline change; no full second-state body or cube-specific
+engine behavior was introduced. Animation remains frame-driven. This was a
+correctness check, not a performance benchmark.
+
+A final TimeView-entry trace directly observes state 2 progressing from
+`rubixState` to exactly `rubixState, thing`; no extra `solvedState` is appended.
+The same run renders the later edge at 3.14 radians:
+`/tmp/p4-final-state-members-2/app.log`. All isolated test GUIs were then stopped.

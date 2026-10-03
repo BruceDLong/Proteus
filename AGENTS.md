@@ -54,7 +54,12 @@ copy must not bypass a child's `%?`; expose independent corresponding parts and
 resolve them through the normal goals. Recheck prerequisites at Set execution.
 This does not retract committed values when new assertions arrive afterward.
 Sparse correspondence and open explicit tails remain symbolic; do not enumerate
-them to discover inherited parts. See graph/TemporalPreservation.h.
+them to discover inherited parts. An unmatched prior part that is only an
+unresolved word stays symbolic until its meaning or value arrives. Subscribe
+to that part and its named definition; do not infer an extra part from the
+temporary absence of an optional definition or wait for all input streams.
+Known corresponding parts and unrelated fields can proceed independently.
+See graph/TemporalPreservation.h.
 See graph/cubie-transition-exercise.md for the current world-model exercise.
 See graph/temporal-context-results.md for the current implementation boundary.
 
