@@ -54,14 +54,30 @@ struct DefinitionRequirement {
         }
         return recordIndex;
     }
+private:
+    // Only the compiler finalizes this analysis, after constructing a read-only
+    // requirement. A copied requirement is a new builder and loses the summary.
+    struct ExpressionAnalysis {
+        int value=-1;
+        ExpressionAnalysis()=default;
+        ExpressionAnalysis(const ExpressionAnalysis&) {}
+        ExpressionAnalysis& operator=(const ExpressionAnalysis&) {value=-1;return *this;}
+    } expressionAnalysis_;
+public:
+    void analyzeExpressions() { expressionAnalysis_.value=hasExpressions(); }
     bool hasExpressions() const {
-        // Compiled definitions share subrequirements. Walk the DAG, not every
-        // path through it; keep visits local so later edits remain observable.
+        if(expressionAnalysis_.value>=0) return expressionAnalysis_.value;
+        // Unfinished builders remain editable. Completed subrequirements can
+        // supply their analysis without walking their shared descendants.
         std::vector<const DefinitionRequirement*> pending{this};
         std::set<const DefinitionRequirement*> seen;
         while(!pending.empty()) {
             auto node=pending.back();pending.pop_back();
             if(!node || !seen.insert(node).second) continue;
+            if(node->expressionAnalysis_.value>=0) {
+                if(node->expressionAnalysis_.value) return true;
+                continue;
+            }
             if(!node->expressions.empty()) return true;
             if(node->repeated) pending.push_back(node->repeated.get());
             for(const auto& member:node->members) pending.push_back(member.get());

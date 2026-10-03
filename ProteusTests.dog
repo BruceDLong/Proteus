@@ -1,6 +1,10 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphExpressionAnalysis/copiedBuilder
+    unit/graphExpressionAnalysis/composedMeaning
+    unit/graphExpressionAnalysis/compiledChange
+
     unit/graphViewTransfer/sharedViewBound
     unit/graphViewTransfer/sharedValueHeader
     unit/graphViewTransfer/partialCopy
@@ -12411,6 +12415,68 @@ struct GLOBAL {
     }
 }
 
+
+
+// Published definition analysis belongs to its version, not future builders.
+#define GRAPHEXPRESSIONANALYSIS(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphExpressionAnalysis(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHEXPRESSIONANALYSIS(unit/graphExpressionAnalysis/copiedBuilder, 1)
+    GRAPHEXPRESSIONANALYSIS(unit/graphExpressionAnalysis/composedMeaning, 2)
+    GRAPHEXPRESSIONANALYSIS(unit/graphExpressionAnalysis/compiledChange, 3)
+    me bool: graphExpressionAnalysisCase(me string: testName, me int: caseID) <- <%{
+        using namespace proteus4;
+        auto scalar=[] {auto p=std::make_shared<DefinitionRequirement>();p->facts.valid=true;return p;};
+        auto leaf=scalar();leaf->analyzeExpressions();
+        auto root=scalar();root->members={leaf,leaf};root->analyzeExpressions();
+        bool ok=!root->hasExpressions();
+        if(caseID==1) {
+            auto copy=std::make_shared<DefinitionRequirement>(*root);
+            copy->expressions.push_back({{}, {}});ok &= copy->hasExpressions() && !root->hasExpressions();
+            copy->expressions.clear();ok &= !copy->hasExpressions();
+            auto expr=scalar();expr->expressions.push_back({{}, {}});expr->analyzeExpressions();
+            copy->choices={{{},{expr}}};ok &= copy->hasExpressions();copy->analyzeExpressions();
+            *copy=*root;copy->repeated=expr;ok &= copy->hasExpressions();
+            copy->repeated.reset();ok &= !copy->hasExpressions();
+        } else if(caseID==2) {
+            auto expr=scalar();expr->expressions.push_back({{}, {}});expr->analyzeExpressions();
+            Work work{0,0};auto plain=scalar();plain->analyzeExpressions();
+            auto conjunction=combineDefinitions(plain,expr,work);
+            ok &= conjunction->hasExpressions() && !plain->hasExpressions();conjunction->analyzeExpressions();
+            auto scope=graphScalar(1,10);auto bound=scopeDefinition(conjunction,scope,work);
+            ok &= bound->hasExpressions() && bound->expressions.front().scope==scope && !conjunction->expressions.front().scope;
+            // Unit conversion replaces a repeated subtree, so it must not
+            // preserve the original container's context-free summary.
+            auto unit=scalar();unit->list=true;unit->open=true;unit->facts.hasSize=true;unit->facts.size=static_cast<std::int64_t>(2);
+            unit->repeated=scalar();unit->repeated->label="part";unit->analyzeExpressions();
+            auto declared=scalar();declared->list=true;declared->repeated=unit;declared->analyzeExpressions();
+            auto supplied=scalar();supplied->list=true;supplied->repeated=std::make_shared<DefinitionRequirement>(*unit->repeated);
+            supplied->repeated->expressions=expr->expressions;
+            auto converted=definitionInUnits(declared,supplied);
+            ok &= converted!=declared && converted->hasExpressions() && !declared->hasExpressions();
+        } else {
+            GraphNormalizer n;n.init();ProteusDefinitions definitions(n.access);
+            auto declarations=graphParsed(testName,"{#sample={x:*10+1 y:*10+1}}");
+            auto declaration=declarations->pItem->value->items.head;ok &= definitions.publish(declaration);
+            Work work{0,0};auto body=definitions.lookup("sample");auto proof=definitions.describe(body,work);
+            ok &= proof && !proof->requirement->hasExpressions() && definitions.current(proof);
+            auto original=proof ? proof->requirement : DefinitionSpec{};
+            // Editing the declaration creates a new compiled meaning; it
+            // cannot reuse analysis attached to the previous requirement.
+            auto y=body->pItem->value->items.tail;auto expression=graphParsed(testName,"%.x");
+            y->pItem=expression->pItem;definitions.prune();
+            ok &= proof && !definitions.current(proof) && !definitions.describe(body,work) && original && !original->hasExpressions();
+            n.close();
+        }
+        if(!ok)std::cout<<"Expression analysis case "<<caseID<<" failed\n";
+        return ok;
+    }%>
+    void: unitTestGraphExpressionAnalysis(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphExpressionAnalysisCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
 
 // Aliases share evidence, but that never certifies unknown or changed data.
 #define GRAPHVIEWTRANSFER(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphViewTransfer(tname, CASE_ID)}%>

@@ -428,6 +428,7 @@ public:
         if(node!=root && selfExpression(node)) {
             auto expression=std::make_shared<DefinitionRequirement>();expression->facts.valid=true;
             expression->expressions.push_back({node,{}});
+            expression->analyzeExpressions();
             proof->evidence->compiled[node]=expression;return;
         }
         auto& compiled = proof->evidence->compiled;
@@ -504,6 +505,7 @@ public:
         std::sort(requirement->expandedTypes.begin(),requirement->expandedTypes.end());
         if (node != root)
             for (auto rhs : work(node)) requirement = combineDefinitions(requirement, compiled.at(rhs),proof->composition);
+        requirement->analyzeExpressions();
         compiled[node] = requirement;
         if(node!=root && declarationBodies_.count(node)) {
             auto cached=std::make_shared<Proof>();cached->requirement=requirement;
