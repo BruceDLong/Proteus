@@ -268,3 +268,37 @@ passing values as proof of interactive rendering speed.
 Evidence: `/tmp/p4-preservation-final-cube.log` and
 `/tmp/p4-cube-transition-batch.tst`. The harness reports this as one passing test
 containing 11 observations. No Slipstream GUI run was made for this increment.
+
+
+## Cube timing after shared-definition helper fix (2026-10-02)
+
+The same one-world batch passes all **11 observations** with both helper
+implementations. The changed X-rotation is 0.3; the preserved Y-rotation,
+location, neighboring cubie, and sticker values still resolve, and rereading
+state 1 returns X-rotation 0.
+
+| Implementation | Elapsed time | Peak RSS | Observations |
+| --- | ---: | ---: | ---: |
+| Previous helpers (`7a354e3`) | 312.34 s | 193,376 KiB | 11/11 |
+| DAG-aware helpers (`68196a0`) | 326.43 s | 198,336 KiB | 11/11 |
+
+This pair shows **no cube speedup**: the updated run was 4.5% slower and used
+4,960 KiB more peak RSS. These are single sequential runs, updated first and
+baseline second; the small difference does not distinguish helper bookkeeping
+cost from the engine's known scheduling variation. The dramatic improvement on
+deep shared definition alternatives does not establish an improvement for this
+world-model workload. Repeated definition-plan construction and broad definition
+notifications remain candidates from the earlier cube profile.
+
+The isolated baseline uses the current generated program with only
+`graph/DefinitionPlan.h` restored to `7a354e3`. Compiler flags, model assets,
+empty session file, test catalogue, and query assertions match. Neither measured
+run overlaps a build or uses profiling counters. Both include loading and
+normalizing one world plus its observation queries. Incomplete attempts made
+while aligning the isolated test catalogue were excluded.
+
+Evidence: `/tmp/p4-helper-cube-after.log`, `/tmp/p4-helper-cube-before.log`,
+`/tmp/p4-helper-cube-comparison.json`, and the unchanged
+`/tmp/p4-cube-transition-batch.tst`. Model/binary hashes are recorded in
+`/tmp/p4-helper-cube-before/manifest.json`. No engine or model source changed
+in this check. GUI frame rate and the standalone 15-case fixture were not tested.
