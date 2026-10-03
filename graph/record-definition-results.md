@@ -50,6 +50,17 @@ A three-state order requirement distinguishes ordered, unordered, and
 unspecified order. This preserves the existing behavior of local member
 templates, which need not change their containing list's order.
 
+## Subsequent descriptive-selection work (2026-10-03)
+
+Finite repeated type words in a newly instantiated record now create separate
+parts. In an existing record, distinguishing supplied properties can prove a
+unique correspondence through `MemberCorrespondence`; unknown or competing
+matches still defer. No permutation search was added. An unordered record's
+implied omitted parts no longer make `typedDescription` treat it as an explicitly
+unfinished positional stream. Incidental nested descriptions remain lazy.
+
+The historical boundaries and counts below describe the earlier increment.
+
 ## Boundaries
 
 This increment does not supply general unordered structural predicates, resolve

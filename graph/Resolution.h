@@ -26,16 +26,26 @@ public:
                 q.kind=q.coordinates[0];matched=q.coordinates[1];
                 q.coordinates.erase(q.coordinates.begin(),q.coordinates.begin()+2);
             } else q.kind=selectField;
-            // Choice branches require separate precedence proofs per branch.
-            if(readView(q.node)->isOrLike()) {out.deferred=true;return out;}
+            // Each alternative has its own direct-before-external proof.
+            if(q.kind==pathAlternative) matched=false;
             if(q.kind==pathEnd && !matched) {
-                out.edges.push_back(edge("look up external property",{q.context.front(),externalField,0,q.related,q.context}));return out;
+                out.edges.push_back(edge("look up external property",{q.context.front(),externalField,0,q.related,q.context,q.coordinates}));return out;
             }
             matched=matched || q.kind==pathMatched || q.kind==pathUnknown;
             out=PathSelection(access_,definitions_,navigate_).expand(q);
             for(auto& route:out.edges) {
                 auto follow=route.follow;
                 route.follow=[follow,matched] {auto at=follow();return Arrival<POVNode>{wrap(std::move(at.query),matched),at.graphChanged};};
+            }
+            return out;
+        }
+        if(q.kind==externalEnd && !q.coordinates.empty()) {
+            // Continue the enclosing choice after this branch's external tier.
+            q.kind=pathEnd;
+            out=PathSelection(access_,definitions_,navigate_).expand(q);
+            for(auto& route:out.edges) {
+                auto follow=route.follow;
+                route.follow=[follow] {auto at=follow();return Arrival<POVNode>{wrap(std::move(at.query),false),at.graphChanged};};
             }
             return out;
         }
@@ -53,14 +63,14 @@ public:
             auto references=POVDescription(q.node,access_->registry.get()).associations(readView(q.related)->type->typeID());
             Cost visits=references.size()+1;
             for(const auto& reference:references)
-                out.edges.push_back(edge("external property candidate",{reference->valuePOV,externalPosition,0,q.related,{q.node}},visits));
-            out.edges.push_back(edge("external property boundary",{q.node,externalEnd,0,q.related,{q.node}},visits));return out;
+                out.edges.push_back(edge("external property candidate",{reference->valuePOV,externalPosition,0,q.related,q.context,q.coordinates},visits));
+            out.edges.push_back(edge("external property boundary",{q.node,externalEnd,0,q.related,q.context,q.coordinates},visits));return out;
         }
         auto candidate=q.node;Cost visits=1;
         FieldPredicate predicate(access_,definitions_,out);
         auto match=predicate.match(q.related,candidate,{});visits=addCost(visits,predicate.work.visits);
         if(match!=ScalarMatch::no)
-            out.edges.push_back(edge("matching external property",{candidate,match==ScalarMatch::yes ? externalMatched : externalUnknown,0,q.related,q.context},visits));
+            out.edges.push_back(edge("matching external property",{candidate,match==ScalarMatch::yes ? externalMatched : externalUnknown,0,q.related,q.context,q.coordinates},visits));
         return out;
     }
 };

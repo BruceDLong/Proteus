@@ -763,10 +763,28 @@ public:
     // It reports a unique known field, not complete membership or absence;
     // ambiguous known matches and unresolved aliases yield no display value.
     POVNode knownField(const POVNode& source,const std::string& name) const {
-        if(!source || !access_->physicalList(source)) return {};
-        POVNode result;bool unordered=readView(source)->orderMode==uUnordered;
-        for(auto member=POVDescription(source).member();member;member=member->next) {
-            if(access_->subList(member)) return {};
+        // A displayed reference can be a provisional singleton selection.
+        // Inspect its one known candidate without committing that choice or
+        // treating an explicit unfinished alternative list as complete.
+        auto knownCandidate=[&](POVNode node) {
+            std::set<POVNode> seen;
+            while(node && readView(node)->isOrLike()) {
+                if(!seen.insert(node).second) return POVNode{};
+                auto view=readView(node);auto body=view->innr;
+                if(!access_->literalSelectionBody(body) || body->partRef || !body->wrkList.empty() ||
+                   (getFlagBit(body->value->flags,infonState::tailUnfinished) && !view->implicitMembershipChoice)) return POVNode{};
+                auto member=body->value->items.head;
+                if(!member || member->next) return POVNode{};
+                node=member;
+            }
+            return node;
+        };
+        auto owner=knownCandidate(source);
+        if(!owner || !access_->physicalList(owner)) return {};
+        POVNode result;bool unordered=readView(owner)->orderMode==uUnordered;
+        for(auto entry=POVDescription(owner).member();entry;entry=entry->next) {
+            auto member=knownCandidate(entry);
+            if(!member || access_->subList(member)) return {};
             auto names=definitions_->names(member);bool complete=true;Work work{0,0};
             bool match=std::find(names.begin(),names.end(),name)!=names.end();
             if(!match) {
@@ -1183,8 +1201,12 @@ private:
                         result.edges.push_back(direct("checked type evidence", {source, demand, 0, origin}));
                     if (access_->canSelect(source))
                         result.refinements.push_back({{source, selectIntersection, 0}, {1, 0}, "find RHS intersection result", false});
-                    if (PathExpression::ready(*access_,source) || readView(source)->pathSelection || access_->hasInnerSource(source) || access_->relativeDirection(source) || access_->hasConcat(source, 1) || access_->hasConcat(source, 2))
-                        result.refinements.push_back({{source, demand, 0, {}, context}, {1, 0}, "resolve expression RHS", false});
+                    // A newly known LHS shape must not hide an unresolved
+                    // named RHS. Its definition can still supply the matching
+                    // shape and values, just as an expression can.
+                    if ((definitions_->required(source) && !(access_->known(source)&valueOnly)) ||
+                        PathExpression::ready(*access_,source) || readView(source)->pathSelection || access_->hasInnerSource(source) || access_->relativeDirection(source) || access_->hasConcat(source, 1) || access_->hasConcat(source, 2))
+                        result.refinements.push_back({{source, demand, 0, {}, context}, {1, 0}, "resolve RHS source", false});
                     result.deferred = true; return;
                 }
                 if(constraintsOnly) {

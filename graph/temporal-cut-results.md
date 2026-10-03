@@ -29,10 +29,11 @@ Completed results reconsider later constraints when explicitly queried again.
 
 `unit/graphTemporal/cubeOrientationMapping` reads the existing
 `public/Things/rubixCube.pr` asset. It registers the original declarations and
-parses a separate occurrence of the stored `solvedState` body, preserving the
-shared declaration. Fixture preparation reads the explicitly stored orientation/location of edge
-cubelet 10 and the orientation of edge cubelet 11, without invoking the blocked
-whole-definition/positional application. The test supplies an x-rotation
+parses a separate occurrence of the stored `solved-rubix-state` body, preserving
+the shared declaration. Fixture preparation finds the red–white edge and its
+red–blue neighbor by their written color descriptions and reads their stored
+orientation/location. There is no intrinsic cubie index. This test isolates
+temporal cut semantics from full-model selection. The test supplies an x-rotation
 history changing from the selected 0 to 0.5, then explicitly identifies a second
 history with that history. Both histories are queried at the same cut.
 

@@ -64,13 +64,15 @@ separate from this unordered field-selection requirement.
 ## Current implementation boundary
 
 Dot queries, including read-only chains, and `GraphNormalizer.findField` use
-nominal compatibility, scalar constraints, and finite ordered structural
-constraints. Each path segment is another selection goal over the preceding
+nominal compatibility, scalar constraints, and finite ordered or unordered
+structural constraints. Each path segment is another selection goal over the preceding
 result. See [chained-field-results.md](chained-field-results.md) and
 [structured-field-results.md](structured-field-results.md). Unambiguous writes
 and retained parents are covered in [path-write-results.md](path-write-results.md)
-and [partial-type-results.md](partial-type-results.md). Contextual meanings and
-unordered structure correspondence remain pending. Partial publication and continuation are described in
+and [partial-type-results.md](partial-type-results.md). Partial unordered
+predicates compare only the requested typed properties, including nested
+properties. Missing relevant facts remain subscribed; unrelated unknown fields
+do not need normalization. General contextual theorem matching remains pending. Partial publication and continuation are described in
 [unordered-field-results.md](unordered-field-results.md).
 
 ## Unordered descriptions are partial

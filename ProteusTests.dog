@@ -1,6 +1,23 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphDescriptive/subset
+    unit/graphDescriptive/choose
+    unit/graphDescriptive/nominal
+    unit/graphDescriptive/absent
+    unit/graphDescriptive/nested
+    unit/graphDescriptive/unrelatedUnknown
+    unit/graphDescriptive/alias
+    unit/graphDescriptive/repeatedType
+    unit/graphDescriptive/namedValue
+    unit/graphDescriptive/orderedNamedValue
+    unit/graphDescriptive/resolveChoice
+    unit/graphDescriptive/resolveChain
+    unit/graphDescriptive/externalChoice
+    unit/graphDescriptive/displayColor
+    unit/graphDescriptive/lateDescription
+    unit/graphDescriptive/modelPalette
+
     unit/graphPreservation/contextualSibling
     unit/graphPreservation/symbolicSibling
     unit/graphPreservation/pendingCompositeGuard
@@ -240,7 +257,7 @@ TestsToRun = `
     unit/graphRecordDefinitions/contradictoryDefinition
     unit/graphRecordDefinitions/nested
     unit/graphRecordDefinitions/cost
-    unit/graphRecordDefinitions/ambiguousDefinition
+    unit/graphRecordDefinitions/distinctSameTypeParts
     unit/graphRecordDefinitions/lateFieldMeaning
     unit/graphRecordDefinitions/cancel
     unit/graphRecordDefinitions/definitionExtent
@@ -10545,7 +10562,15 @@ struct GLOBAL {
             if(!correct) std::cout<<read.first<<" => "<<actual<<" error="<<h.status().error<<"\n";
             ok &= correct;h.cancel();
         }
-        if(caseID==38) ok &= loaded.status().withSubscribers;
+        if(caseID==38) {
+            // Loading the containing model can leave an undemanded side lazy.
+            // Asking for that side must retain its missing contextual dependency.
+            auto query=parse("%W.history@[2].items@[1].sides@[1].shade");
+            auto requested=n.normalize(query);requested.waitForCompletion();
+            ok &= loaded.status().symbolicValues && !requested.status().failed &&
+                requested.status().withSubscribers;
+            requested.cancel();
+        }
         loaded.cancel();n.close();return ok;
     }%>
 
@@ -11124,18 +11149,13 @@ struct GLOBAL {
             if(text.empty()) {std::cout<<"Cube model asset is required\n";return false;}
             auto model=parse(text);norm(model);POVNode declaration;
             for(auto at=POVDescription(model).member();at;at=at->next)
-                if(n.access->isDefinition(at) && n.access->definitionName(at)==parse("solvedState")->pItem->type->typeID()) declaration=at;
-            if(!declaration) {std::cout<<"solvedState declaration not found\n";return false;}
+                if(n.access->isDefinition(at) && n.access->definitionName(at)==parse("solved-rubix-state")->pItem->type->typeID()) declaration=at;
+            if(!declaration) {std::cout<<"solved-rubix-state declaration not found\n";return false;}
             auto written=toString(declaration->pItem->funcArgs.get());
             auto cube=parse(written);
             // Fixture preparation reads only explicitly stored model data.
             // Full definition/positional application has separate world tests;
             // it is not a premise of these temporal graph checks.
-            auto item=[](const POVNode& source,int index) {
-                auto at=POVDescription(source).member();
-                while(at && index-->0) at=at->next;
-                return at;
-            };
             auto field=[&](const POVNode& source,const char* type) -> POVNode {
                 if(!source) return {};
                 auto word=parse(type)->pItem->type->typeID();
@@ -11143,8 +11163,20 @@ struct GLOBAL {
                     if(at->pItem->type && at->pItem->type->typeID()==word) return at;
                 return {};
             };
-            auto edges=item(cube,1);if(!edges) return false;
-            auto cubie=item(edges,9),neighbor=item(edges,10);
+            auto edges=field(field(cube,"parts"),"edge-cubes");if(!edges) return false;
+            auto described=[&](const char* front,const char* top) -> POVNode {
+                auto hasColor=[&](const POVNode& owner,const char* role,const char* word) {
+                    auto color=field(owner,role);if(!color) return false;
+                    auto type=parse(word)->pItem->type->typeID();
+                    for(const auto& rhs:color->pItem->wrkList)
+                        if(rhs->pItem->type && rhs->pItem->type->typeID()==type) return true;
+                    return false;
+                };
+                for(auto member=POVDescription(edges).member();member;member=member->next)
+                    if(hasColor(member,"front-color",front) && hasColor(member,"top-color",top)) return member;
+                return {};
+            };
+            auto cubie=described("red","white"),neighbor=described("red","blue");
             auto orientation=field(field(cubie,"thing"),"orientation");
             auto x=field(orientation,"xRot"),y=field(orientation,"yRot"),z=field(orientation,"zRot");
             auto neighborOrientation=field(field(neighbor,"thing"),"orientation");
@@ -11386,7 +11418,7 @@ struct GLOBAL {
     GRAPHRECORDDEFINITIONS(unit/graphRecordDefinitions/contradictoryDefinition, 5)
     GRAPHRECORDDEFINITIONS(unit/graphRecordDefinitions/nested, 6)
     GRAPHRECORDDEFINITIONS(unit/graphRecordDefinitions/cost, 7)
-    GRAPHRECORDDEFINITIONS(unit/graphRecordDefinitions/ambiguousDefinition, 8)
+    GRAPHRECORDDEFINITIONS(unit/graphRecordDefinitions/distinctSameTypeParts, 8)
     GRAPHRECORDDEFINITIONS(unit/graphRecordDefinitions/lateFieldMeaning, 9)
     GRAPHRECORDDEFINITIONS(unit/graphRecordDefinitions/cancel, 10)
     GRAPHRECORDDEFINITIONS(unit/graphRecordDefinitions/definitionExtent, 11)
@@ -11408,7 +11440,7 @@ struct GLOBAL {
         if(caseID==4) {declarations="{#record={X:*10+1, Y:*10+2}={Z:*10+3, W:*10+4}}";expected="record:{X:*10+1, Y:*10+2, Z:*10+3, W:*10+4}";}
         if(caseID==5) declarations="{#record={X:*10+_, Y:*10+2}={X:*10+1, Y:*10+3}}";
         if(caseID==6) {declarations="{#part={X:*10+1, Y:*10+2} #Child=part #record={Child, Z:*10+3}}";expected="record:{Child:{X:*10+1, Y:*10+2}, Z:*10+3}";}
-        if(caseID==8) declarations="{#record={X:*10+1, X:*10+2}}";
+        if(caseID==8) {declarations="{#record={X:*10+1, X:*10+2}}";expected="record:{X:*10+1, X:*10+2}";}
         if(caseID==9 || caseID==10) declarations="{#record={X, Y:*10+2}}";
         if(caseID==11) declarations="{#record=*1+{X:*10+1, Y:*10+2}}";
         if(caseID>=12) declarations="{}";
@@ -11430,7 +11462,7 @@ struct GLOBAL {
         auto handle=caseID==7 ? normalizer.normalizeWithCost(root,0) : normalizer.normalize(root);
         handle.waitForCompletion();
         bool rejected=caseID==5 || caseID==11 || caseID==15 || caseID==18;
-        bool pending=caseID==7 || caseID==8 || caseID==16;
+        bool pending=caseID==7 || caseID==16;
         bool passed=handle.status().failed==rejected;
         auto first=root->pItem->value->items.head;
         if(rejected || pending) {
@@ -13592,6 +13624,135 @@ struct GLOBAL {
         me bool: passed <- graphProgressCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHDESCRIPTIVE(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphDescriptive(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHDESCRIPTIVE(unit/graphDescriptive/subset, 0)
+    GRAPHDESCRIPTIVE(unit/graphDescriptive/choose, 1)
+    GRAPHDESCRIPTIVE(unit/graphDescriptive/nominal, 2)
+    GRAPHDESCRIPTIVE(unit/graphDescriptive/absent, 3)
+    GRAPHDESCRIPTIVE(unit/graphDescriptive/nested, 4)
+    GRAPHDESCRIPTIVE(unit/graphDescriptive/unrelatedUnknown, 5)
+    GRAPHDESCRIPTIVE(unit/graphDescriptive/alias, 6)
+    GRAPHDESCRIPTIVE(unit/graphDescriptive/repeatedType, 7)
+    GRAPHDESCRIPTIVE(unit/graphDescriptive/namedValue, 8)
+    GRAPHDESCRIPTIVE(unit/graphDescriptive/orderedNamedValue, 9)
+    GRAPHDESCRIPTIVE(unit/graphDescriptive/resolveChoice, 10)
+    GRAPHDESCRIPTIVE(unit/graphDescriptive/resolveChain, 11)
+    GRAPHDESCRIPTIVE(unit/graphDescriptive/externalChoice, 12)
+    GRAPHDESCRIPTIVE(unit/graphDescriptive/displayColor, 13)
+    GRAPHDESCRIPTIVE(unit/graphDescriptive/lateDescription, 14)
+    GRAPHDESCRIPTIVE(unit/graphDescriptive/modelPalette, 15)
+    me bool: graphDescriptiveCase(me string: testName, me int: caseID) <- <%{
+        using namespace proteus4;
+        GraphNormalizer n;n.init();
+        auto parse=[&](const std::string& text){return graphParsed(testName,text);};
+        auto norm=[&](const POVNode& p){auto h=n.normalize(p);h.waitForCompletion();return h;};
+        if(caseID==15) {
+            bool successful=true;
+            auto checked=[&](const POVNode& p) {auto h=norm(p);successful &= !h.status().failed;return h;};
+            checked(parse("{#rat=*_+_}"));
+            auto foundation=parse(readAssetAsString("public/Informatics/Foundation.pr"));checked(foundation);
+            auto declarations=parse(readAssetAsString("public/Things/rubixCube.pr"));checked(declarations);
+            auto unchanged=toString(declarations->pItem.get());
+            auto root=parse("solved-rubix-state");auto h=checked(root);
+            auto parts=n.knownField(root,"parts");if(parts) checked(parts);
+            std::map<int,int> paints;int cubies=0,surfaces=0,unknown=0,invalid=0;
+            for(auto group=parts ? POVDescription(parts).member() : POVNode{};group;group=group->next) {
+                checked(group);
+                for(auto cubie=POVDescription(group).member();cubie;cubie=cubie->next) {
+                    ++cubies;checked(cubie);
+                    auto sides=n.knownField(cubie,"sides");if(sides) checked(sides);
+                    for(auto side=sides ? POVDescription(sides).member() : POVNode{};side;side=side->next) {
+                        ++surfaces;checked(side);
+                        auto color=n.knownField(side,"color");if(color) checked(color);
+                        auto sat=n.knownField(color,"saturation"),bright=n.knownField(color,"brightness"),hue=n.knownField(color,"hue");
+                        auto known=[&](const POVNode& at){return at && (n.access->known(at)&valueOnly);};
+                        if(known(sat) && sat->pItem->value->num==0 && known(bright)) {
+                            auto level=bright->pItem->value->num.val;level.canonicalize();
+                            if(level==mpq_class(1,2)) ++paints[-1];
+                            else if(level==1) ++paints[-2];
+                            else ++invalid;
+                        } else if(known(hue)) ++paints[hue->pItem->fetchInt()];
+                        else ++unknown;
+                    }
+                }
+            }
+            // Gray references may remain unresolved while color modeling is
+            // incomplete; the renderer displays those surfaces in pink. Every
+            // outward sticker must still have its actual known model color.
+            auto backing=paints[-1];paints.erase(-1);
+            const std::map<int,int> expected={{-2,9},{0,9},{4,9},{30,9},{55,9},{110,9}};
+            bool ok=successful && !invalid && cubies==26 && surfaces==156 && backing+unknown==102 && paints==expected &&
+                toString(declarations->pItem.get())==unchanged;
+            if(!ok) {
+                std::cout<<"Model palette: cubies="<<cubies<<" surfaces="<<surfaces<<" unknown="<<unknown<<" error="<<h.status().error<<"\n";
+                for(const auto& paint:paints) std::cout<<"paint "<<paint.first<<" count="<<paint.second<<"\n";
+            }
+            h.cancel();n.close();return ok;
+        }
+        if(caseID==14) {
+            auto root=parse("*2+{part:{key:_,other:7},part:{key:2,other:8}}.part:{key:1,}");
+            auto h=norm(root);auto state=root->pItem->pathSelection;
+            auto member=state ? state->source->pItem->value->items.head : POVNode{};
+            auto key=member ? member->pItem->fetchField("key") : POVNode{};
+            bool ok=!h.status().failed && h.status().withSubscribers && state && state->pending && key;
+            if(key) {n.addRHS(key,parse("1"));h.waitForCompletion();}
+            ok &= !h.status().failed && state && !state->pending && state->matches.size()==1 && state->matches.front()==member;
+            ok &= toString(root->pItem.get())=="part:{key:1, other:7}";
+            if(!ok) std::cout<<"Late description: "<<toString(root->pItem.get())<<" error="<<h.status().error<<"\n";
+            h.cancel();n.close();return ok;
+        }
+        if(caseID==13) {
+            auto defs=parse("{#color={hue:_, saturation:_, brightness:_} #red=color:{hue:0} #front-color=color #gray=color:{saturation:0, brightness:0.5} #base-color=gray #side={color} #piece={front-color,base-color,*2+{side|{%.front-color}{%.base-color}}}} ");
+            norm(defs);auto before=toString(defs->pItem.get());
+            auto root=parse("piece:{front-color=red,}");auto h=norm(root);
+            auto sides=n.knownField(root,"sides");if(sides) norm(sides);
+            auto side=sides ? sides->pItem->value->items.head : POVNode{};if(side) norm(side);
+            auto color=side ? n.knownField(side,"color") : POVNode{};if(color) norm(color);
+            auto hue=color ? n.knownField(color,"hue") : POVNode{};
+            bool ok=!h.status().failed && hue && hue->pItem->value->num==0 && before==toString(defs->pItem.get());
+            auto closed=parse("*_+[{hue:0}]");auto ambiguous=parse("*_+[{hue:0} {hue:1}]");
+            auto unfinished=parse("*_+[{hue:0} ...]");
+            auto snapshot=toString(closed->pItem.get())+toString(ambiguous->pItem.get())+toString(unfinished->pItem.get());
+            ok &= bool(n.knownField(closed,"hue")) && !n.knownField(ambiguous,"hue") && !n.knownField(unfinished,"hue");
+            ok &= snapshot==toString(closed->pItem.get())+toString(ambiguous->pItem.get())+toString(unfinished->pItem.get());
+            if(!ok) {
+                std::cout<<"Display: "<<toString(root->pItem.get())<<" sides="<<bool(sides)<<" side="<<bool(side)<<" color="<<bool(color)<<" error="<<h.status().error<<"\n";
+            }
+            n.close();return ok;
+        }
+        struct Case {std::string definitions, expression, expected;};
+        const std::vector<Case> cases={
+            {"{}","{part:{key:1, other:7}}.part:{key:1,}","part:{key:1, other:7}"},
+            {"{}","{part:{key:1, other:7}, part:{key:2, other:8}}.part:{key:2,}","*_+[part:{key:2, other:8} ... ]"},
+            {"{}","{wheel:{key:1, other:7}}.pedal:{key:1,}","*_+[]"},
+            {"{}","*2+{part:{key:1,},part:{key:2,}}.part:{key:3,}","*_+[]"},
+            {"{}","{piece:{paint:{hue:0, saturation:1}, place:7}}.piece:{paint:{hue:0,},}","piece:{paint:{hue:0, saturation:1}, place:7}"},
+            {"{}","{part:{key:1, other:?}}.part:{key:1,}","part:{key:1, other}"},
+            {"{#component=part}","{component:{key:1, other:7}}.part:{key:1,}","component:{key:1, other:7}"},
+            {"{#collection=*2+{part:{key:1},part:{key:2}}}","collection.part:{key:2,}.key","key:2"},
+            {"{#hue=_ #color={hue,} #red=color:{hue:0} #front-color=color}","{front-color=red,}.front-color.hue","*_+[hue:0 ... ]"},
+            {"{#hue=_ #color={hue,} #red=color:{hue:0} #front-color=color}","{front-color=red}.front-color.hue","*_+[hue:0 ... ]"},
+            {"{}","*_+[{badge:1} {badge:2}]~badge","*_+[badge:1 badge:2]"},
+            {"{}","{group:*2+{part:{key:1},part:{key:2}},}.group~part:{key:2,}","*_+[part:{key:2} ... ]"},
+            {"{}","*_+[{marker:1}^badge=7; {badge:2}]~badge","*_+[badge:7 badge:2]"},
+        };
+        auto fixture=cases.at(caseID);auto defs=parse(fixture.definitions);norm(defs);
+        auto before=toString(defs->pItem.get());auto root=parse(fixture.expression);auto h=norm(root);
+        bool ok=!h.status().failed && toString(root->pItem.get())==fixture.expected && before==toString(defs->pItem.get());
+        if(!ok) {
+            std::cout<<"Descriptive "<<caseID<<": "<<toString(root->pItem.get())<<" expected="<<fixture.expected<<" error="<<h.status().error<<"\n";
+            for(const auto& step:h.steps()) if(step.action!="visit") std::cout<<step.action<<" kind="<<step.query.kind<<"\n";
+        }
+        h.cancel();n.close();return ok;
+    }%>
+    void: unitTestGraphDescriptive(me string: testName, me int: caseID) <- {
+        me string: actual <- "false"; me string: expected <- "true"
+        if(graphDescriptiveCase(testName,caseID)){actual <- "true"}
         REQUIRE(actual==expected)
     }
 }

@@ -46,6 +46,12 @@ class PathSelection {
     }
     bool sourceReady(const POVNode& node,Expansion<POVNode>& out,Cost& visits) const {
         ProteusPreservationGoal::contribute(*access_,node,{},out,false);
+        if(auto state=readView(node)->pathSelection) {
+            if(!state->updates.empty())
+                out.refinements.push_back({{node,relationshipConstraints,0},{1,0},"apply source path constraints",false});
+            for(const auto& effect:state->effects)
+                out.refinements.push_back({{effect,sizeAndValue,0},{1,0},"complete source path effect",false});
+        }
         bool ready=(access_->physicalList(node) || access_->unreferencedTemplateSpan(node)) && !definitions_->pendingOrder(node);
         if(ready) for (const auto& relation:POVDescription(node,access_->registry.get()).relationships()) {
             if(access_->sameInfon(node,relation.target)) continue;
@@ -188,7 +194,10 @@ class PathSelection {
         }
         ListPosition<POVNode> at{q.node,static_cast<ListPhase>(q.argument),{q.context.begin()+1,q.context.end()}};
         Cost visits=1;
-        auto pending=[&] {out.edges.push_back(edge("unresolved choice information",{q.node,choicePending}));};
+        auto pending=[&] {
+            auto missing=q;missing.kind=choicePending;
+            out.edges.push_back(edge("unresolved choice information",std::move(missing)));
+        };
         if(at.phase==ListPhase::enter && !sourceReady(at.node,out,visits)) {pending();out.deferred=true;return out;}
         if(at.phase==ListPhase::leave) {
             auto boundary=listBoundary(*access_,at.node);visits=addCost(visits,boundary.visits);
@@ -614,7 +623,7 @@ public:
                 locations_.emplace(q.node,std::vector<POVNode>{q.node});
             }
             if(q.kind==externalUnknown) waiting_=uncertainCandidates_=true;
-            if(q.kind==externalEnd) positionReady_=true;
+            if(q.kind==externalEnd && q.coordinates.empty()) positionReady_=true;
             if(visit.cost>=positionFinding_.cost) positionFinding_=visit;
             return {};
         }
@@ -624,7 +633,20 @@ public:
                 std::vector<POVNode> location{q.node};location.insert(location.end(),q.context.begin()+1,q.context.end());
                 locations_.emplace(q.node,std::move(location));
             }
-            if(q.kind==choiceUnknown || q.kind==choicePending) waiting_=uncertainCandidates_=true;
+            if(q.kind==choiceUnknown || q.kind==choicePending) {
+                waiting_=true;
+                // Filtering an implicit membership choice must retain why its
+                // tail is open. Known matches stay actionable; an unresolved
+                // predicate, explicit tail, or nested gap remains uncertain.
+                bool implicit=q.kind==choicePending && q.argument==static_cast<int>(ListPhase::leave) &&
+                    readView(request.node)->implicitMembershipChoice &&
+                    q.node==definitions_->selectionBody(request.node);
+                if(implicit) {
+                    auto boundary=listBoundary(*access_,q.node);
+                    implicit=boundary.valid && boundary.missingExtents.empty();
+                }
+                uncertainCandidates_ |= !implicit;
+            }
             if(q.kind==choiceEnd) positionReady_=true;
             if(visit.cost>=positionFinding_.cost) positionFinding_=visit;
             return {};
@@ -669,6 +691,13 @@ public:
         }
         finished=q.kind==pathAlternativesEnd || (!aggregating_ && (q.kind==pathEnd ||
             (q.kind==pathMatched && readView(q.context.front())->orderMode!=uUnordered)));
+        if(request.kind==resolveWord) {
+            // External candidates can cost more than their branch boundary.
+            // Collect all explored routes before publishing a choice result.
+            positionReady_=positionReady_ || finished;
+            if(visit.cost>=positionFinding_.cost) positionFinding_=visit;
+            return {};
+        }
         return finished ? publish() : std::vector<SetCommand>{};
     }
     CommandBatch<POVNode> finishPass() override {

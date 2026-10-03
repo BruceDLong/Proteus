@@ -40,12 +40,22 @@ public:
             // actual graph traversal still follows every retained constraint.
             // A checked scalar meaning is already expressed by its fields;
             // consumers with that evidence need not reject it for its label.
+            if(access_->hasTypeRequirements(right)) {
+                if(!definitions || (!access_->scalarTypeShape(right) && !definitions->describesParts(right)) ||
+                   (!definitions->describesParts(right) && !definitions->satisfied(right))) return;
+                if(compareNominal(*definitions,right,left,work)!=ScalarMatch::yes) {
+                    // This is an asserted equality, not a type-based search.
+                    // Distinct labels may express the same value. Prove the
+                    // supplied meaning in the target without adding an alias.
+                    auto meaning=definitions->saved(right);
+                    if(!meaning || meaning->requirement->hasExpressions()) return;
+                    ProteusDefinitionPlan check(access_,left,meaning->requirement);
+                    work.visits=addCost(work.visits,check.work.visits);
+                    if(!check.supported || !check.satisfied()) return;
+                }
+            }
             if (!visited.insert(pair).second || !access_->inputError(left).empty() ||
                 !access_->inputError(right).empty() ||
-                (access_->hasTypeRequirements(right) &&
-                 !(definitions && (access_->scalarTypeShape(right) || definitions->describesParts(right)) &&
-                   (definitions->describesParts(right) || definitions->satisfied(right)) &&
-                   compareNominal(*definitions,right,left,work)==ScalarMatch::yes)) ||
                 access_->occurrenceOwner(right) ||
                 (!access_->scalarCandidate(right) && !access_->literalList(right))) return;
             // A repeated requirement is redundant only when the target itself

@@ -427,8 +427,12 @@ private:
     Place unmeasuredRoot_, fillRoot_;
     bool typedDescription(const Place& target,const DefinitionSpec& requirement) const {
         if(!target->node || !requirement->list || requirement->repeated ||
-           !access_->physicalList(target->node) || access_->openTail(target->node) ||
+           !access_->physicalList(target->node) ||
+           getFlagBit(readView(target->node)->value->flags,infonState::tailUnfinished) ||
            !access_->hasTypeRequirements(target->node)) return false;
+        // An unordered description has implicit omitted parts; that does not
+        // make it an unfinished positional prefix. Only an explicit tail above
+        // withholds the finite member correspondence used for lazy children.
         for(const auto& member:requirement->members) if(member->label.empty()) return false;
         for(auto member=POVDescription(target->node).member();member;member=POVDescription(member).adjacent())
             if(access_->subList(member) || !access_->hasTypeRequirements(member)) return false;
@@ -583,7 +587,6 @@ private:
     void prepareRecord(const Place& target,const DefinitionSpec& requirement,const GraphTypeFacts& actual,bool lazy=false) {
         auto access=access_;
         auto fields=requirement->recordMembers(work);
-        if(!fields->distinguishable) {supported=false;return;}
         bool adopt=!target->node || access->adoptableList(target->node);
         std::vector<POVNode> present;
         if(!adopt) {
@@ -597,10 +600,31 @@ private:
         }
         if(requirement->facts.hasSize && requirement->facts.size<static_cast<std::int64_t>(present.size()))
             throw DefinitionConflict("definition members exceed explicit extent");
-        auto mapping=MemberCorrespondence::nominal(*fields,present.size(),[&](std::size_t at) {
-            auto names=access->typeNames(present[at]);
-            return NominalDescription{names.empty() ? "" : names.front(),{names.begin(),names.end()}};
-        },work);
+        MemberCorrespondence mapping;
+        if(adopt) {
+            // A new record has no competing occurrences to identify. Each
+            // written description introduces its own part, even for equal types.
+            for(std::size_t i=0;i<requirement->members.size();++i) mapping.missing.push_back(i);
+        } else if(fields->distinguishable) {
+            mapping=MemberCorrespondence::nominal(*fields,present.size(),[&](std::size_t at) {
+                auto names=access->typeNames(present[at]);
+                return NominalDescription{names.empty() ? "" : names.front(),{names.begin(),names.end()}};
+            },work);
+        } else {
+            // Repeated type words need distinguishing facts. Preflight each
+            // nominal candidate without applying its Sets; never try permutations.
+            mapping=MemberCorrespondence(present.size(),requirement->members.size(),
+                [](std::size_t,std::size_t){return false;},[&](std::size_t a,std::size_t b) {
+                    auto names=access->typeNames(present[a]);const auto& wanted=requirement->members[b];
+                    auto kind=compareNominal(wanted->label,wanted->types,names.empty() ? "" : names.front(),names);
+                    if(kind!=ScalarMatch::yes) return kind;
+                    try {
+                        ProteusDefinitionPlan candidate(access,present[a],wanted);
+                        work.visits=addCost(work.visits,candidate.work.visits);
+                        return candidate.supported && candidate.satisfied() ? ScalarMatch::yes : ScalarMatch::unknown;
+                    } catch(const DefinitionConflict&) {return ScalarMatch::no;}
+                },work);
+        }
         if(!mapping.unambiguous || (!adopt && !lazy && target!=fillRoot_ && !mapping.missing.empty())) {supported=false;return;}
         // Ordered typed descriptions can omit fields, but cannot reorder them
         // or guess where an extra field belongs. Reuse the same nominal proof.
