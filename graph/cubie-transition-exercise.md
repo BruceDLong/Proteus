@@ -542,3 +542,32 @@ comparison); `/tmp/p4-edge-render-trace-2/app.log` (actual renderer poses);
 `/tmp/p4-half-turn-wrapper-test/` (wrapper fixture, chained-read failure and
 whole-state diagnostic dump). The user's live window was not controlled.
 No engine, renderer, or animation change was made in this step.
+
+## Wrapped descendant queries (2026-10-03)
+
+The chained-read gap above was an RHS representation proof failure. A selected
+view shares the source's members, but the proof revalidated those same infons
+and declined typed ordered roots after already checking their nominal meaning.
+The proof now recognizes shared member facts and permits that checked root in
+the ordered layout. Embedded owner guards remain. Shared facts establish only
+representation, not complete normalization or permission to remove pending work.
+
+`graphPreservation/wrappedOrderedPath` and `wrappedRepeatedPath` cover changed
+and preserved descendants, the unchanged earlier state, an omitted wrapper
+member, and a neighboring repeated member. `rubixWrappedTransition.pr` adds the
+GUI-shaped outer history to `rubixTransitionTests.tst`.
+
+Validation after regeneration: all 1,444 graph tests across 74 groups pass, and
+all 16 Rubix transition test cases pass. The latter includes the wrapped
+half-turn, preserved sibling rotation/sticker, and unchanged first state.
+Logs: `/tmp/p4-wrapped-probe/production-tests/summary.json` and
+`/tmp/p4-wrapped-cube-acceptance.log`.
+
+This does not yet repair the GUI's asynchronous startup case. An isolated
+rebuilt Slipstream trace found that its second outer state has three members:
+the authored `rubixState`, the preserved `thing`, and an extra preserved
+`solvedState`. The rendered edge at the original location belongs to that extra
+object and still has xRot 0. Both cube objects also advance the frame counter,
+explaining the faster state-2 animation. The next investigation is why temporal
+correspondence treated those two type words as distinct during startup.
+Evidence: `/tmp/p4-edge-ancestry/app.log`. Animation remains frame-driven.

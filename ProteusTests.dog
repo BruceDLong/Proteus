@@ -1,6 +1,8 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphPreservation/wrappedOrderedPath
+    unit/graphPreservation/wrappedRepeatedPath
     unit/graphPartialValidation/pendingSibling
     unit/graphPartialValidation/sharedValue
     unit/graphPartialValidation/listLink
@@ -10425,8 +10427,43 @@ struct GLOBAL {
     GRAPHPRESERVATION(unit/graphPreservation/priorDeclaration, 29)
     GRAPHPRESERVATION(unit/graphPreservation/sharedValueObserver, 30)
     GRAPHPRESERVATION(unit/graphPreservation/impliedChange, 31)
+    GRAPHPRESERVATION(unit/graphPreservation/wrappedOrderedPath, 32)
+    GRAPHPRESERVATION(unit/graphPreservation/wrappedRepeatedPath, 33)
+
+    me bool: graphWrappedTemporalPathCase(me string: testName, me bool: repeated) <- <%{
+        GraphNormalizer n;n.init();
+        auto parse=[&](const std::string& text){return graphParsed(testName,text);};
+        auto world=parse(repeated ?
+            "{#pose={a,b} #unit={pose,} #piece={*2+{unit|unit:{pose,} unit:{pose,}},} "
+            "#solved=piece:{*2+{unit|unit:{pose:{a:0,b:7},} unit:{pose:{a:0,b:8},}},} "
+            "#history={T {anchor,piece}|...} history:{T {anchor,piece}| "
+            "{anchor:5,solved} {piece.units@[1].pose.a=3;;;;,}}}" :
+            "{#pose={a,b} #piece={pose} #solved=piece:{pose:{a:0,b:7}} "
+            "#history={T {anchor,piece}|...} history:{T {anchor,piece}| "
+            "{anchor:5,solved} {piece.pose.a=3;;,}}}");
+        n.setWorld(world->pItem);
+        auto loaded=n.normalize(world);loaded.waitForCompletion();
+        bool ok=!loaded.status().failed;
+        std::string part=repeated ? ".piece.units@[1].pose" : ".piece.pose";
+        std::vector<std::pair<std::string,std::string>> reads={
+            {"%W.history@[2]"+part+".a","*_+[a:3 ... ]"},
+            {"%W.history@[2]"+part+".b","*_+[b:7 ... ]"},
+            {"%W.history@[1]"+part+".a","*_+[a:0 ... ]"},
+            {"%W.history@[2].anchor","*_+[anchor:5 ... ]"}
+        };
+        if(repeated) reads.push_back({"%W.history@[2].piece.units@[2].pose.b","*_+[b:8 ... ]"});
+        for(const auto& read:reads) {
+            auto query=parse(read.first);auto h=n.normalize(query);h.waitForCompletion();
+            auto actual=toString(query->pItem.get());
+            bool correct=!h.status().failed && actual==read.second;
+            if(!correct) std::cout<<read.first<<" => "<<actual<<" error="<<h.status().error<<"\n";
+            ok &= correct;h.cancel();
+        }
+        loaded.cancel();n.close();return ok;
+    }%>
 
     me bool: graphPreservationCase(me string: testName, me int: caseID) <- <%{
+        if(caseID==32 || caseID==33) return graphWrappedTemporalPathCase(testName,caseID==33);
         using namespace proteus4;
         GraphNormalizer n;n.init();
         auto parse=[&](const std::string& text){return graphParsed(testName,text);};

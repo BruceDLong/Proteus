@@ -14,7 +14,9 @@ class RHSRepresentation {
                 return at.phase != ListPhase::enter ||
                     (access_->physicalList(at.node) && access_->orderedList(at.node) &&
                      (at.node==node || !access_->memberTemplate(at.node)) && access_->inputError(at.node).empty() &&
-                     (!source || (!access_->hasTypeRequirements(at.node) && POVDescription(at.node).work().empty())));
+                     // The root's nominal requirements were checked before
+                     // layout. Embedded owners still need separate evidence.
+                     (!source || ((at.node==node || !access_->hasTypeRequirements(at.node)) && POVDescription(at.node).work().empty())));
             }, [](const POVNode& member) { return member; });
     }
 public:
@@ -30,6 +32,10 @@ public:
             auto pair = pending.back(); pending.pop_back();
             auto left = pair.first, right = pair.second;
             ++work.visits;
+            // Selected views may share their actual members. Their facts are
+            // already present, including pending member requirements. This is
+            // representation evidence, not proof of a closed normalization.
+            if(access_->sameInfon(left,right)) {fullyExpressed=false;continue;}
             // A cyclic proof cannot establish itself. Decline conservatively;
             // actual graph traversal still follows every retained constraint.
             // A checked scalar meaning is already expressed by its fields;
