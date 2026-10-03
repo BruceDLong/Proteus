@@ -209,3 +209,60 @@ scaling regression now reaches depth 20. Nested suite selectors caused 113
 additional repeat executions; none failed. Full legacy tests and cube startup
 were not rerun for this change. Preservation scheduling, model-wide definition
 notifications, and step-history retention are unchanged.
+
+
+## Scoped definition publication (2026-10-02)
+
+`ProteusDefinitionPlan` already identifies the instance slots it can modify.
+Ordinary plan application now publishes those destinations through the existing
+object-dependency mechanism instead of publishing the shared `modelFacts` token.
+The footprint includes the POV/view, shared size/value states, and neighboring
+position slots. It is collected before and after application so replaced state
+slots, old tail links, and newly allocated members are represented. Embedded
+owners come from the existing layout places; no virtual members are enumerated.
+The temporary footprint adds no persistent validation cache or adjacency graph.
+
+Operations that can alter registry relationships retain the existing broad
+fallback: binding contextual-expression copies, combining a named member
+template, and materializing an already registered sparse occurrence. Their
+registry effects need explicit dependency keys before they can be narrowed.
+Type-certificate publication continues to use its existing evidence keys.
+
+A control executable retains the previous `DefinitionApplications.h` while
+using the same generated tests and remaining headers. After declaring
+`#seven=*10+7` and `#pair={seven seven}`, four independent scalar/list definition
+applications produce the following extra steps in unrelated waiting searches:
+
+| Waiting searches | Previous publication | Scoped publication |
+| ---: | ---: | ---: |
+| 1 | 12 | 0 |
+| 8 | 96 | 0 |
+| 32 | 384 | 0 |
+
+Actual incoming RHSs still resolve those waiting searches. Additional regressions
+verify a distinct view sharing the modified value state and position-only
+subscriptions across tail append and middle insertion. All six new cases pass;
+the control fails the four cases that require isolation. The same control passes
+the two direct footprint/link checks, which exercise the new plan helper in both
+executables. CodeDog regeneration/build succeeds, and all **1,388 distinct graph
+tests in 66 groups** pass, including temporal preservation and sparse cases.
+
+Evidence: `/tmp/p4-definition-publication-focused.log`,
+`/tmp/p4-definition-publication-control-focused.log`, and
+`/tmp/p4-definition-publication-tests/results.json`. The retained pre-change
+executable is in `/tmp/p4-definition-publication-baseline/`; the isolated
+publication control is in `/tmp/p4-definition-publication-control/`.
+
+
+The unchanged temporal-cube batch passes all 11 observations in both versions.
+The scoped run took **311.71 s / 158,964 KiB peak RSS**, compared with
+**324.90 s / 178,708 KiB** for the publication control: 4.1% less elapsed time
+and 11.0% less peak RSS in this single sequential pair. This is a modest result;
+the timing difference alone does not separate improvement from scheduling
+variation. See [the cube exercise](cubie-transition-exercise.md) for the setup.
+The independent-subscriber tests establish the eliminated cross-product in work
+directly, without depending on wall-clock timing.
+
+A separate remaining candidate is `ProteusDefinitions::prune()`, which still
+clears successful instance checks on every data publication. Its contribution
+was not independently measured in this change.

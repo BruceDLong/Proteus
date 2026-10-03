@@ -1,6 +1,13 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphDefinitionPublication/isolatedSubscriber
+    unit/graphDefinitionPublication/eightSubscribers
+    unit/graphDefinitionPublication/thirtyTwoSubscribers
+    unit/graphDefinitionPublication/sharedValue
+    unit/graphDefinitionPublication/appendedPosition
+    unit/graphDefinitionPublication/insertedPosition
+
     unit/graphDefinitionHelpers/sharedBranches
     unit/graphDefinitionHelpers/expressionRoutes
     unit/graphDefinitionHelpers/distinctPairs
@@ -12082,6 +12089,104 @@ struct GLOBAL {
     }%>
     void: unitTestGraphPublication(me string: testName, me int: caseID) <- {
         me bool: passed <- graphPublicationCase(caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+
+// Definition writes wake readers of their destinations, including shared state
+// and list links, without replaying independent normalization requests.
+#define GRAPHDEFINITIONPUBLICATION(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphDefinitionPublication(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHDEFINITIONPUBLICATION(unit/graphDefinitionPublication/isolatedSubscriber, 1)
+    GRAPHDEFINITIONPUBLICATION(unit/graphDefinitionPublication/eightSubscribers, 2)
+    GRAPHDEFINITIONPUBLICATION(unit/graphDefinitionPublication/thirtyTwoSubscribers, 3)
+    GRAPHDEFINITIONPUBLICATION(unit/graphDefinitionPublication/sharedValue, 4)
+    GRAPHDEFINITIONPUBLICATION(unit/graphDefinitionPublication/appendedPosition, 5)
+    GRAPHDEFINITIONPUBLICATION(unit/graphDefinitionPublication/insertedPosition, 6)
+    me bool: graphDefinitionPublicationCase(me int: caseID) <- <%{
+        using namespace proteus4;
+        GraphNormalizer n;n.init();
+        auto parse=[](const std::string& text) {return graphParsed("definition publication",text);};
+        auto norm=[&](const POVNode& node) {auto h=n.normalize(node);h.waitForCompletion();return h;};
+        bool ok=true;
+        if(caseID>=5) {
+            const bool insert=caseID==6;
+            auto root=parse(insert ? "triple:{x:*10+1 z:*10+3}" : "{*10+1 ...}");
+            auto first=root->pItem->value->items.head;
+            auto last=root->pItem->value->items.tail;
+            auto requirement=std::make_shared<DefinitionRequirement>();
+            requirement->list=true;requirement->facts.valid=true;
+            requirement->facts.hasSize=true;requirement->facts.size=static_cast<std::int64_t>(insert ? 3 : 2);
+            requirement->captureLabel(root);
+            for(int i=1;i<=(insert ? 3 : 2);++i) {
+                auto member=std::make_shared<DefinitionRequirement>();
+                auto value=parse((insert ? std::string(1,"xyz"[i-1])+":" : "")+"*10+"+std::to_string(i));
+                member->facts=n.access->typeFacts(value);member->captureLabel(value);
+                requirement->members.push_back(member);
+            }
+            // These readers depend only on the existing adjacency slots, not
+            // on the owner's contents or the values of its members.
+            ObjectDependencies objects;ReadScope tracked({},&objects);
+            std::set<DependencyKey> reads;
+            {
+                ReadScope capture([&](const DependencyKey& key){reads.insert(key);});
+                POVDescription(first).adjacent();
+                if(insert) POVDescription(last).adjacent(true);
+            }
+            auto proof=DependencyProof::make(reads);
+            ProteusDefinitionPlan plan(n.access,root,requirement,{},true,insert);
+            auto applied=plan.applyChanges();
+            ok &= applied.changed && applied.changes && !applied.changes->all && proof->valid();
+            if(applied.changes) for(const auto& key:applied.changes->keys) key->publish();
+            ok &= !proof->valid() && first->next && first->next->pItem->value->num==2;
+            if(insert) ok &= first->next->next==last && last->prev==first->next;
+            else ok &= first->next==root->pItem->value->items.tail;
+        } else {
+            auto defs=parse("{#seven=*10+7 #pair={seven seven}}");
+            ok &= !norm(defs).status().failed;
+            const int count=caseID==2 ? 8 : caseID==3 ? 32 : 1;
+            std::vector<POVNode> waiting;
+            std::vector<Proteus4Handle> handles;
+            std::vector<std::size_t> steps;
+            for(int i=0;i<count;++i) {
+                waiting.push_back(graphScalar(-1,10));handles.push_back(norm(waiting.back()));
+                steps.push_back(handles.back().steps().size());
+                ok &= handles.back().status().withSubscribers;
+            }
+            if(caseID==4) {
+                auto target=parse("seven:*10+_");auto alias=graphScalar(-1,10);
+                alias->pItem->value=target->pItem->value;
+                auto h=norm(alias);ok &= h.status().withSubscribers;
+                ok &= !norm(target).status().failed;h.waitForCompletion();
+                ok &= !h.status().failed && !h.status().symbolicValues && alias->pItem->value->num==7;
+            } else {
+                for(int i=0;i<4;++i) {
+                    auto target=parse(i%2 ? "pair" : "seven");auto h=norm(target);
+                    ok &= !h.status().failed && !h.status().symbolicValues;
+                    if(i%2) ok &= target->pItem->value->items.size()==2 &&
+                        target->pItem->value->items.head->pItem->value->num==7 &&
+                        target->pItem->value->items.tail->pItem->value->num==7;
+                    else ok &= target->pItem->value->num==7;
+                }
+            }
+            for(int i=0;i<count;++i) {
+                handles[i].waitForCompletion();
+                auto extra=handles[i].steps().size()-steps[i];
+                ok &= handles[i].status().withSubscribers && extra==0;
+                if(extra) std::cout<<"Unrelated definition wake: "<<extra<<" extra steps\n";
+            }
+            n.addRHS(waiting.front(),graphScalar(4,10));handles.front().waitForCompletion();
+            ok &= !handles.front().status().failed && !handles.front().status().symbolicValues &&
+                waiting.front()->pItem->value->num==4;
+        }
+        if(!ok) std::cout<<"Definition publication case "<<caseID<<" failed\n";
+        n.close();return ok;
+    }%>
+    void: unitTestGraphDefinitionPublication(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphDefinitionPublicationCase(caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

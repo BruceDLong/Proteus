@@ -661,7 +661,8 @@ public:
     SetResult applyChanges(const POVNode& node, const Certificate& proof, const std::shared_ptr<ProteusDefinitionPlan>& plan) {
         if (!current(proof) || !covers(proof, node) || !plan->supported) return false;
         Changes changes=Changes::only({});
-        if(plan->apply()) changes.include(modelChanges());
+        auto applied=plan->applyChanges();
+        if(applied.changed) changes.include(applied.changes.value_or(modelChanges()));
         for (const auto& binding : plan->bindings) {
             auto child = std::make_shared<Proof>();
             child->evidence = proof->evidence; child->requirement = binding.second;
@@ -698,7 +699,8 @@ public:
         for (const auto& proof : certificates) if (auto plan = reusable(target, source, proof)) {
             // Only order metadata may remain: required contents already exist.
             bool transferable=!proof->requirement->hasExpressions();
-            if(plan->apply()) changes.include(modelChanges());
+            auto applied=plan->applyChanges();
+            if(applied.changed) changes.include(applied.changes.value_or(modelChanges()));
             for (const auto& binding : plan->bindings) {
                 auto child = std::make_shared<Proof>();
                 child->evidence = proof->evidence; child->requirement = binding.second;

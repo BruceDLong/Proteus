@@ -302,3 +302,35 @@ Evidence: `/tmp/p4-helper-cube-after.log`, `/tmp/p4-helper-cube-before.log`,
 `/tmp/p4-cube-transition-batch.tst`. Model/binary hashes are recorded in
 `/tmp/p4-helper-cube-before/manifest.json`. No engine or model source changed
 in this check. GUI frame rate and the standalone 15-case fixture were not tested.
+
+
+## Cube timing after scoped definition publication (2026-10-02)
+
+Ordinary definition plans now notify their instance destinations and shared state
+readers. Plans with potential registry effects retain the broad notification.
+The notification change and its regression coverage are described in
+[the traversal report](traversal-profile-results.md#scoped-definition-publication-2026-10-02).
+
+| Definition publication | Elapsed time | Peak RSS | Observations |
+| --- | ---: | ---: | ---: |
+| Previous model-wide publication | 324.90 s | 178,708 KiB | 11/11 |
+| Scoped instance publication | 311.71 s | 158,964 KiB | 11/11 |
+
+This is **4.1% less time and 11.0% less peak memory in one pair**. The cube still
+takes roughly five minutes for this batch. The timing difference is modest and
+may include scheduling variation; it does not establish a large cube speedup.
+Both versions resolve the changed X-rotation to 0.3, preserve the other checked
+fields and neighboring cubie, and return the original first-state X-rotation 0.
+
+The isolated control uses the same generated tests and headers with only
+`DefinitionApplications.h` restored to the pre-change version. Thus both contain
+the DAG-aware definition helpers. Compiler flags, model assets, empty session
+files, catalogue, and 11-observation fixture match. Runs were sequential, scoped
+first and control second, with no diagnostic counters or concurrent builds.
+The measurement includes loading/normalizing one world and its queries; the
+harness reports the 11-observation batch as **0 failures / 1 test**.
+
+Artifacts: `/tmp/p4-definition-publication-cube/{after,before}.log`,
+`{after,before}.time`, `results.json`, and `manifest.json`. The unchanged fixture
+is `/tmp/p4-cube-transition-batch.tst`. All 1,388 registered graph tests passed
+separately. GUI frame rate and the full legacy suite were not measured here.

@@ -228,6 +228,29 @@ private:
     std::shared_ptr<ProteusGraphAccess> access_;
     std::map<POVNode,Place> selfScopes_;
     bool pendingExpressions_=false;
+    // Registry-changing operations retain the model-wide fallback until
+    // their registry reads and writes have their own dependency keys.
+    bool scopedWrites_=true;
+    Changes writeFootprint() const {
+        auto changes=Changes::only({});
+        auto position=[&](const POVNode& node) {
+            if(node) changes.include(ReadScope::changedObjects({POVDescription::positionKey(node)}));
+        };
+        auto destination=[&](const POVNode& node) {
+            if(!node) return;
+            auto view=readView(node);
+            changes.include(ReadScope::changedObjects({node.get(),view.get(),view->infSize.get(),view->value.get()}));
+            // Filling a gap can replace a tail link or insert before a mapped
+            // member. Position-only readers need those existing links too.
+            position(node);position(node->prev);position(node->next);
+            position(view->value->items.head);position(view->value->items.tail);
+        };
+        // Layout places include embedded owners; bindings also include slots
+        // whose POVs will be allocated by the plan itself.
+        for(const auto& entry:places_) destination(entry.second->node);
+        for(const auto& binding:bindings) destination(binding.first->node);
+        return changes;
+    }
     bool prepareExpressions(const Place& target,const DefinitionSpec& requirement) {
         bool direct=false;
         for(const auto& expression:requirement->expressions) {
@@ -265,6 +288,8 @@ private:
                 continue;
             }
             if(!self) {supported=false;return false;}
+            // Copying an expression may bind named occurrences in the registry.
+            scopedWrites_=false;
             auto access=access_;work.creations=addCost(work.creations,2);
             writes.push_back([access,target,self,expression] {
                 auto rhs=std::make_shared<POV>(923);readView(rhs)=std::make_shared<infonView>();
@@ -350,6 +375,7 @@ private:
                     existing->addedTypes.empty() && supplied->addedTypes.empty() &&
                     ((!existing->type && !supplied->type) || sameWord);
                 if(!sameLiteral) {
+                    if(supplied->identityName) scopedWrites_=false;
                     work.creations=addCost(work.creations,2);
                     writes.push_back([access,target,existing,supplied] {
                         auto combined=std::make_shared<infonView>(*existing);
@@ -443,6 +469,7 @@ private:
                         existing=occurrence;
                     }
                 member=existing ? place(existing) : std::make_shared<Slot>();
+                if(existing) scopedWrites_=false; // repetition materialization updates registry identity
                 work.creations=addCost(work.creations,existing ? 0 : 2);
                 writes.push_back([access,target,member,spec,existing] {
                     member->node=existing ? access->appendOccurrence(target->node,existing) : spec->appendMember(*access,target->node);
@@ -699,6 +726,14 @@ public:
     void bindTarget(const POVNode& node) { place({})->node = node; }
     bool satisfied() const { return supported && writes.empty() && !pendingExpressions_; }
     bool dataSatisfied() const { return supported && writes.size() == orderWrites && !pendingExpressions_; }
+    SetResult applyChanges() {
+        if(!supported || writes.empty()) return false;
+        if(!scopedWrites_) return apply();
+        auto changes=writeFootprint();
+        bool changed=apply();
+        if(changed) changes.include(writeFootprint());
+        return {changed,changed ? changes : Changes::only({})};
+    }
     bool apply() {
         if (!supported) return false;
         bool changed = false;
