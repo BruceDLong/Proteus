@@ -2,6 +2,10 @@
 # columns: name,display,input,expected,mode(parse|norm|multi|world),world-file optional
 
 parser/misc/tUnknown,  type unknown,                   ?,                                                                      ?,                              parse
+parser/misc/temporalIndependent, Explicit temporal value independence, %?, %?, parse
+parser/misc/typedTemporalIndependent, Typed temporal declaration, b:%?, b:%?, parse
+parser/list/temporalIndependent, Independent later value, {T 7 %?}, {T 7 %?}, parse
+parser/list/separateSelfUnknown, Whitespace keeps two infons, {% ?}, {% ?}, parse
 parser/misc/isWord,    parse a word,                   ImAWord ,                                                               ImAWord,                        parse
 parser/misc/isNot,     Not word,                       !ImAWord,                                                               !ImAWord,                       parse
 parser/misc/world,     World cursor,                   %W,                                                                     %W,                             parse

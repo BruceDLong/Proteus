@@ -187,3 +187,22 @@ public:
     bool symbolic() const override {return !result_;}
     POVNode result() const override {return result_;}
 };
+
+// An explicit %? declaration follows same-occurrence constraints independently
+// of value acquisition. Copying a prior temporal value does not copy its policy.
+class ProteusTemporalDeclarationGoal : public GoalSpec<POVNode> {
+public:
+    explicit ProteusTemporalDeclarationGoal(Query<POVNode> q):GoalSpec<POVNode>(std::move(q)) {}
+    std::vector<SetCommand> found(const Visit<POVNode>&) override {
+        if(satisfied() || !request.related || !POVDescription(request.related).independentTemporalValue()) return {};
+        auto node=request.node,source=request.related;
+        return {{"Set temporal value independence",[node,source] {
+            if(POVDescription(node).independentTemporalValue() || !POVDescription(source).independentTemporalValue()) return false;
+            SetFlagBit(readView(node)->flags,infonView::independentTemporalValue,true);
+            SetFlagBit(readView(node)->flags,infonView::isNormed,false);
+            ++node->workRevision;return true;
+        }}};
+    }
+    bool satisfied() const override {return POVDescription(request.node).independentTemporalValue();}
+    bool symbolic() const override {return !satisfied();}
+};

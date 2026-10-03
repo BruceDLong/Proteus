@@ -17,6 +17,7 @@ public:
         bool list = false, embedded = false, open = false;
         int order = uUnknown;
         POVNode memberTemplate, choiceBody;
+        bool independentTemporalValue = false;
         // Immutable source snapshot shared by every proof compiled from it.
         // Validation belongs to the snapshot, not each enclosing certificate.
         mutable std::uint64_t checkedEpoch=0;
@@ -394,7 +395,7 @@ public:
         }
         if (node == root || proof->evidence->witnesses.count(node)) return;
         proof->evidence->witnesses.emplace(node, std::make_shared<const Witness>(Witness{node, readView(node), facts(node),
-            names(node), work(node), members(node), listRequirement(node), access_->definitionEmbedded(node), access_->openTail(node), (listRequirement(node) ? listOrder(node,&proof->composition) : uUnknown), memberTemplate(node), choiceBody(node)}));
+            names(node), work(node), members(node), listRequirement(node), access_->definitionEmbedded(node), access_->openTail(node), (listRequirement(node) ? listOrder(node,&proof->composition) : uUnknown), memberTemplate(node), choiceBody(node), POVDescription(node).independentTemporalValue()}));
     }
     // The graph's leave edge supplies postorder: every required child has
     // already been walked. Compile requirements, never execute child normalize.
@@ -425,6 +426,7 @@ public:
         if (node != root) {
             const auto& witness = *proof->evidence->witnesses.at(node);
             requirement->facts = witness.facts;
+            requirement->independentTemporalValue = witness.independentTemporalValue;
             requirement->list = witness.list; requirement->order=witness.order==uUnknown ? uOrdered : witness.order;
             requirement->open = witness.list && (witness.open || witness.order==uUnordered);
             if(witness.choiceBody) {
@@ -543,6 +545,7 @@ public:
             {
                 ReadScope capture([&](const DependencyKey& key){reads.insert(key);});
                 matches = readView(witness.node) == witness.infon && facts(witness.node).same(witness.facts) &&
+                    witness.independentTemporalValue == POVDescription(witness.node).independentTemporalValue() &&
                     witness.names == names(witness.node) && witness.work == work(witness.node) &&
                     witness.list == listRequirement(witness.node) && witness.members == members(witness.node) &&
                     witness.embedded == access_->definitionEmbedded(witness.node) && witness.open == access_->openTail(witness.node) &&

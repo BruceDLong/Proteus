@@ -21,7 +21,7 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectionExtentMember = 20, selectionExtentEnd = 21,
               typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27,
               selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31,
-              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62, scalarCorrespondence = 63, placeArgument = 64, resolveEndpoint = 65, endpointPosition = 66, endpointFound = 67, resolveWord = 68, resolutionStep = 69, externalField = 70, externalPosition = 71, externalMatched = 72, externalUnknown = 73, externalEnd = 74, acquireListValue = 75, selectEnvironment = 76, recordCorrespondence = 77, sequenceChoiceMatched = 78, boundaryAccess = 79, boundaryRelations = 80, boundaryMember = 81, boundaryEnd = 82, temporalSupport = 83, temporalCut = 84, temporalSide = 85, temporalValueFound = 86, resolvePathExpression = 87, temporalSideSpan = 88, temporalSideMember = 89, sequenceChartState = 90, sequenceChartCall = 91 };
+              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62, scalarCorrespondence = 63, placeArgument = 64, resolveEndpoint = 65, endpointPosition = 66, endpointFound = 67, resolveWord = 68, resolutionStep = 69, externalField = 70, externalPosition = 71, externalMatched = 72, externalUnknown = 73, externalEnd = 74, acquireListValue = 75, selectEnvironment = 76, recordCorrespondence = 77, sequenceChoiceMatched = 78, boundaryAccess = 79, boundaryRelations = 80, boundaryMember = 81, boundaryEnd = 82, temporalSupport = 83, temporalCut = 84, temporalSide = 85, temporalValueFound = 86, resolvePathExpression = 87, temporalSideSpan = 88, temporalSideMember = 89, sequenceChartState = 90, sequenceChartCall = 91, temporalDeclaration = 92 };
 
 // Only the explicitly normalized result requests its immediate omitted parts.
 // Related sources and member refinements retain demand-driven expansion.
@@ -799,6 +799,8 @@ public:
         return result;
     }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
+        if(query.kind==temporalDeclaration)
+            return std::make_shared<ProteusTemporalDeclarationGoal>(query);
         if(query.kind>=temporalSupport && query.kind<=temporalSide)
             return std::make_shared<ProteusTemporalGoal>(query,access_);
         if(query.kind==boundaryAccess || query.kind==boundaryRelations)
@@ -855,7 +857,7 @@ public:
             else out.deferred=true;
             return out;
         }
-        if(query.kind==acquireListValue) return {};
+        if(query.kind==acquireListValue || query.kind==temporalDeclaration) return {};
         if(query.kind>=resolveWord && query.kind<=externalEnd)
             return Resolution(access_,definitions_,[this](const Query<POVNode>& q){return expandSemantic(q);}).expand(query);
         if(query.kind>=placeArgument && query.kind<=endpointFound)
@@ -1191,6 +1193,15 @@ private:
             };
             for (const auto& relation : description.relationships()) {
                 auto source = relation.target;
+                // Inspect the declaration on this already enumerated edge;
+                // do not start a second relationship walk for every value goal.
+                if(!relation.valueOnly && !description.independentTemporalValue() &&
+                   POVDescription(source).independentTemporalValue() &&
+                   !source->looseType() && !source->looseSize() &&
+                   !access_->inputPending(source) &&
+                   !getFlagBit(readView(source)->flags,infonView::invertMatch) &&
+                   !getFlagBit(readView(node)->flags,infonView::invertMatch))
+                    result.refinements.push_back({{node,temporalDeclaration,0,source},{1,0},"retain temporal declaration",false});
                 if(definitions_->pendingOrder(source)) {
                     result.refinements.push_back({{source,sizeAndValue,0},{1,0},"resolve RHS list order",false});
                     continue;

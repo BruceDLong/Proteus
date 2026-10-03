@@ -224,10 +224,11 @@ avoids reloading and normalizing the full model for every query. Log:
 model). The initial-state-only fixture also passed
 five independent position/orientation queries.
 
-An open semantic question is whether an explicitly unknown next-state field
-(e.g. `b:?`) inherits the previous value just like an omitted field. The user has
-been asked; ordinary omission preservation is already settled. Automatic
-preservation is not implemented by this checkpoint.
+The unknown-description question was settled on 2026-10-02 with a separate
+`%?` marker: `b:%?` explicitly withholds preservation, while ordinary `b:?`
+retains its ordinary infon meaning. The marker permits later constraints to
+supply any compatible value, including the earlier value. No new `!%` behavior
+is requested. Automatic preservation is not implemented by this checkpoint.
 
 Final source verification: Proteus4 and Slipstream builds succeeded; all **1,332
 graph tests across 62 suites** passed, including the new unordered-definition

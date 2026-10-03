@@ -81,6 +81,9 @@ public:
     POV* occurrenceSource() const { readView(node_); return node_->implicitItem.sourcePov; }
     std::int64_t occurrenceIndex() const { readView(node_); return node_->implicitItem.sourceIndex; }
     const std::vector<POVNode>& work() const { return readView(node_)->wrkList; }
+    bool independentTemporalValue() const {
+        return getFlagBit(readView(node_)->flags,infonView::independentTemporalValue);
+    }
     std::vector<Relationship> relationships(bool includeWork = true) const {
         std::vector<Relationship> result;
         const auto& view=readView(node_);

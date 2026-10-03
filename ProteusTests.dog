@@ -204,6 +204,22 @@ TestsToRun = `
     unit/graphDefinitionLanguage/isolatedLanguages
     unit/graphDefinitionLanguage/publicEntry
 
+    unit/graphTemporalIndependence/syntax
+    unit/graphTemporalIndependence/preflight
+    unit/graphTemporalIndependence/ordinaryUnknown
+    unit/graphTemporalIndependence/pending
+    unit/graphTemporalIndependence/sameValue
+    unit/graphTemporalIndependence/differentValue
+    unit/graphTemporalIndependence/conflict
+    unit/graphTemporalIndependence/rhs
+    unit/graphTemporalIndependence/lateValue
+    unit/graphTemporalIndependence/explicitRead
+    unit/graphTemporalIndependence/definition
+    unit/graphTemporalIndependence/copyAndClear
+    unit/graphTemporalIndependence/selectedField
+    unit/graphTemporalIndependence/streamFragments
+    unit/graphTemporalIndependence/embeddedRoundTrip
+
     unit/graphTemporal/cubeOrientationMapping
     unit/graphTemporal/mappedChain
     unit/graphTemporal/lateMappedChain
@@ -10270,6 +10286,128 @@ struct GLOBAL {
 }
 
 // Temporal relations use the same graph lifecycle and list navigation as S-lists.
+#define GRAPHTEMPORALINDEPENDENCE(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphTemporalIndependence(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHTEMPORALINDEPENDENCE(unit/graphTemporalIndependence/syntax, 0)
+    GRAPHTEMPORALINDEPENDENCE(unit/graphTemporalIndependence/preflight, 1)
+    GRAPHTEMPORALINDEPENDENCE(unit/graphTemporalIndependence/ordinaryUnknown, 2)
+    GRAPHTEMPORALINDEPENDENCE(unit/graphTemporalIndependence/pending, 3)
+    GRAPHTEMPORALINDEPENDENCE(unit/graphTemporalIndependence/sameValue, 4)
+    GRAPHTEMPORALINDEPENDENCE(unit/graphTemporalIndependence/differentValue, 5)
+    GRAPHTEMPORALINDEPENDENCE(unit/graphTemporalIndependence/conflict, 6)
+    GRAPHTEMPORALINDEPENDENCE(unit/graphTemporalIndependence/rhs, 7)
+    GRAPHTEMPORALINDEPENDENCE(unit/graphTemporalIndependence/lateValue, 8)
+    GRAPHTEMPORALINDEPENDENCE(unit/graphTemporalIndependence/explicitRead, 9)
+    GRAPHTEMPORALINDEPENDENCE(unit/graphTemporalIndependence/definition, 10)
+    GRAPHTEMPORALINDEPENDENCE(unit/graphTemporalIndependence/copyAndClear, 11)
+    GRAPHTEMPORALINDEPENDENCE(unit/graphTemporalIndependence/selectedField, 12)
+    GRAPHTEMPORALINDEPENDENCE(unit/graphTemporalIndependence/streamFragments, 13)
+    GRAPHTEMPORALINDEPENDENCE(unit/graphTemporalIndependence/embeddedRoundTrip, 14)
+
+    me bool: graphTemporalIndependenceCase(me string: testName, me int: caseID) <- <%{
+        using namespace proteus4;
+        GraphNormalizer n;n.init();
+        auto parse=[&](const std::string& text){return graphParsed(testName,text);};
+        auto norm=[&](const POVNode& p){auto h=n.normalize(p);h.waitForCompletion();return h;};
+        auto declared=[](const POVNode& p){return POVDescription(p).independentTemporalValue();};
+        bool ok=true;
+        if(caseID==0) {
+            for(auto text:{"%?","b:%?","{T 7 %?}","{% ?}"}) {
+                auto p=parse(text);ok &= p && toString(p->pItem.get())==text;
+            }
+            auto p=parse("{%? % ?}");auto a=p->pItem->value->items.head,b=a->next,c=b->next;
+            ok &= p->pItem->value->items.size()==3 && declared(a) && !declared(b) && !declared(c) &&
+                getModeBits(b->pItem->flags,infonView::cursorMode)==infonView::cmSelf;
+        } else if(caseID==1) {
+            for(auto text:{"%?","b:%?","{T 7 %?}","%? = *10+7","b:?","? = *10+7"}) {
+                ProteusParser parser;parser.initParseFromString(testName,text);std::int64_t pos=0;
+                auto status=parser.preCheckInfonView(&pos,true,pcMainInfn);
+                bool valid=(status==valid_done || status==valid_maybeDone) && !parser.doesParseHaveError();
+                if(!valid) std::cout<<"Marker preflight "<<text<<" status="<<int(status)<<" position="<<pos<<"\n";
+                ok &= valid;
+            }
+            strBuf buffer;buffer.init(testName);buffer.putStr("%");
+            ProteusParser parser;parser.initParseFromStream(&buffer);std::int64_t pos=0;
+            auto partial=parser.preCheckInnerInfonView(&pos,pcMainInfn);
+            ok &= partial==valid_notDone;
+            buffer.putStr("?");buffer.close();pos=0;
+            auto complete=parser.preCheckInnerInfonView(&pos,pcMainInfn);
+            if(partial!=valid_notDone || complete!=valid_done || pos!=2)
+                std::cout<<"Marker fragments "<<int(partial)<<"/"<<int(complete)<<" position="<<pos<<"\n";
+            ok &= complete==valid_done && pos==2;
+        } else if(caseID==2) {
+            for(auto text:{"?","_","b:?"}) {
+                auto p=parse(text);auto h=norm(p);ok &= !h.status().failed && !declared(p);h.cancel();
+            }
+        } else if(caseID==14) {
+            for(auto text:{"{&%? = { ... }}","{&%? = {1 2}}"}) {
+                auto p=parse(text);auto h=norm(p);auto member=p->pItem->value->items.head;
+                ok &= !h.status().failed && declared(member) && toString(p->pItem.get())==text;
+                auto copy=parse(toString(p->pItem.get()));auto again=norm(copy);
+                ok &= !again.status().failed && declared(copy->pItem->value->items.head) && toString(copy->pItem.get())==text;
+                again.cancel();h.cancel();
+            }
+        } else if(caseID==11) {
+            auto p=parse("%?");auto copy=std::make_shared<POV>(609);copy->pItem=std::make_shared<infonView>();
+            p->pItem->copyAsTypeTo(copy->pItem,true,true);
+            ok=declared(copy) && toString(copy->pItem.get())=="%?";
+            copy->pItem->clear();ok &= !declared(copy) && declared(p);
+        } else if(caseID==13) {
+            ProteusCore core;core.init("",false);auto& streamNorm=core.agent->graphNormalizer;
+            auto source=std::make_shared<POV>(609);source->pItem=std::make_shared<infonView>();
+            strBuf buffer;buffer.init(testName);
+            ProteusParser parser;parser.CORE=&core;parser.streamingMode=true;parser.initParseFromStream(&buffer);
+            streamNorm.prepareInput(source->pItem);
+            std::thread reader([&] {parser.doParse(source->pItem);});
+            buffer.putStr("{T *10+7 %");
+            auto h=streamNorm.normalize(source);h.waitForCompletion();
+            buffer.putStr("?}");buffer.close();reader.join();h.waitForCompletion();
+            auto a=source->pItem->value->items.head,b=a ? a->next : nullptr;
+            ok=!parser.doesParseHaveError() && !h.status().failed && source->pItem->value->items.size()==2 &&
+                a && b && !declared(a) && declared(b) && streamNorm.access->known(b)==0;
+            h.cancel();
+        } else {
+            std::string input="{T *10+7 %?}";
+            if(caseID==4) input="{T *10+7 %? = *10+7}";
+            if(caseID==5) input="{T *10+7 %? = *10+8}";
+            if(caseID==6) input="%? = *10+7 = *10+8";
+            if(caseID==7) input="*10+7 = %?";
+            if(caseID==9) input="{T %? = *10+7 %tprev}";
+            if(caseID==10) {
+                auto definitions=parse("{#fresh=%?}");auto h=norm(definitions);h.cancel();
+                input="fresh = *10+7";
+            }
+            if(caseID==12) input="{a:%?, b:8}.a=*10+7;";
+            auto p=parse(input);auto h=norm(p);auto target=p;
+            if(caseID==3 || caseID==4 || caseID==5 || caseID==8 || caseID==9) target=p->pItem->value->items.tail;
+            if(caseID==12) target=p->pItem->value->items.head;
+            if(caseID==8) {n.addRHS(target,parse("*10+7"));h.waitForCompletion();}
+            if(caseID==6) ok=h.status().failed;
+            else {
+                ok=!h.status().failed && declared(target)==(caseID!=9);
+                if(caseID==3) ok &= n.access->known(target)==0 && h.status().symbolicValues;
+                else ok &= n.access->known(target)==3 && target->pItem->value->num==(caseID==5 ? 8 : 7);
+                if(caseID==9) ok &= declared(p->pItem->value->items.head) && target->pItem->temporalValueSource &&
+                    !n.access->registry->areIdentical(target,p->pItem->value->items.head);
+                if(caseID==12) ok &= !declared(p) && !declared(target->next) && target->next->pItem->value->num==8;
+                auto text=toString(p->pItem.get());auto roundTrip=parse(text);auto again=norm(roundTrip);
+                ok &= !again.status().failed && text==toString(roundTrip->pItem.get());again.cancel();
+                auto replay=norm(p);ok &= !replay.status().failed;
+                for(const auto& step:replay.steps()) ok &= step.action!="Set temporal value independence";
+                replay.cancel();
+            }
+            if(!ok) std::cout<<"Temporal independence "<<caseID<<": "<<toString(p->pItem.get())<<" error="<<h.status().error<<"\n";
+            h.cancel();
+        }
+        n.close();return ok;
+    }%>
+    void: unitTestGraphTemporalIndependence(me string: testName, me int: caseID) <- {
+        me string: actual <- "false"; me string: expected <- "true"
+        if(graphTemporalIndependenceCase(testName,caseID)){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
 #define GRAPHTEMPORAL(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphTemporal(tname, CASE_ID)}%>
 struct GLOBAL {
     GRAPHTEMPORAL(unit/graphTemporal/directPrev, 1)

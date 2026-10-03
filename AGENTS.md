@@ -39,6 +39,13 @@ represent dependencies rather than identifying entire successive states. The
 `{T {a:0, b:7} {a:1}}` retains `b:7` in the second state unless the model
 implies a change. Later-state part references and RHSs target that occurrence,
 leaving the known prior state intact; no separate transition operator is needed.
+The 2026-10-02 clarification uses `%?` to withhold default preservation of the
+later value. It supplies no value or inequality: an explicit constraint may
+still resolve it to the same value as before. Ordinary `_` and `?` retain their
+existing meanings and do not by themselves declare temporal independence.
+The marker is a contiguous token; `% ?` remains two infons. No new `!%` behavior
+is requested. Preserve the declaration through printing and same-occurrence
+constraints; a temporal value read must not copy the prior state's declaration.
 See graph/cubie-transition-exercise.md for the current world-model exercise.
 See graph/temporal-context-results.md for the current implementation boundary.
 

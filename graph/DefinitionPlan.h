@@ -14,6 +14,7 @@ class DefinitionPending : public std::exception {};
 // graph is walked through existing POVs before any instance Set is offered.
 struct DefinitionRequirement {
     GraphTypeFacts facts;
+    bool independentTemporalValue = false;
     // Contextual expressions remain graph constraints in each instance. Their
     // declaration scopes identify the instance that %self must refer to.
     struct Expression {POVNode source, scope;};
@@ -78,6 +79,7 @@ using DefinitionSpec = std::shared_ptr<DefinitionRequirement>;
 
 inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const DefinitionSpec& right, Work& work) {
     auto result = std::make_shared<DefinitionRequirement>(*left);
+    result->independentTemporalValue |= right->independentTemporalValue;
     for(const auto& scope:right->selfScopes)
         if(std::find(result->selfScopes.begin(),result->selfScopes.end(),scope)==result->selfScopes.end()) result->selfScopes.push_back(scope);
     for(const auto& expression:right->expressions)
@@ -169,6 +171,7 @@ inline DefinitionSpec scopeDefinition(const DefinitionSpec& source,const POVNode
 inline bool sameDefinition(const DefinitionSpec& a, const DefinitionSpec& b) {
     if (a == b) return true;
     if (!a || !b || a->list != b->list || a->open != b->open || a->order!=b->order || !a->facts.same(b->facts) || !a->numeric.same(b->numeric) ||
+        a->independentTemporalValue != b->independentTemporalValue ||
         a->types != b->types || a->expandedTypes != b->expandedTypes || a->members.size() != b->members.size() || a->choices.size()!=b->choices.size() || a->selfScopes!=b->selfScopes || a->expressions.size()!=b->expressions.size() ||
         !sameDefinition(a->repeated, b->repeated)) return false;
     for(std::size_t i=0;i<a->expressions.size();++i)
@@ -518,6 +521,14 @@ private:
             ~RestoreScopes(){scopes=std::move(old);}
         } restore{selfScopes_,selfScopes_};
         for(const auto& scope:requirement->selfScopes) selfScopes_[scope]=target;
+        if(requirement->independentTemporalValue &&
+           (!target->node || !POVDescription(target->node).independentTemporalValue())) {
+            writes.push_back([target] {
+                SetFlagBit(readView(target->node)->flags,infonView::independentTemporalValue,true);
+                SetFlagBit(readView(target->node)->flags,infonView::isNormed,false);
+                ++target->node->workRevision;return true;
+            });
+        }
         bool directExpression=prepareExpressions(target,requirement);
         if(!supported) return;
         bool lazy=fillRoot_ && target!=fillRoot_ && typedDescription(target,requirement);

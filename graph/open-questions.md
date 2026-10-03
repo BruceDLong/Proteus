@@ -171,9 +171,15 @@ selection using those words. The user explicitly deferred resolving this
 overload until a concrete modeling need arises. Keep the current boundary
 behavior; do not redesign syntax as part of the AItem cleanup.
 
-## Explicit unknowns during temporal preservation
+## Temporal independence marker (settled 2026-10-02)
 
-T-list adjacency preserves omitted parts unless the model implies a change.
-Pending clarification: does `{T {a:1, b:7} {a:2, b:?}}` also retain `b:7`, or does
-an explicitly written unknown withhold that default? This distinguishes authored
-unknown descriptions from fields absent in a partial later-state statement.
+T-list adjacency supplies default preservation unless the model implies a change.
+Use `b:%?` to explicitly withhold preservation for the later value. Ordinary
+`b:?` and `b:_` are infon descriptions, not declarations about preservation;
+no authored-versus-generated unknown distinction is needed. `%?` permits other
+constraints to determine the value, including the same value as before. It does
+not erase a known value, assert inequality, or suppress explicit relationships.
+`% ?` remains two infons. The user does not request new `!%` functionality.
+
+General adjacency-based preservation and causal precedence remain implementation
+work; accepting the marker does not by itself supply missing cube-state fields.

@@ -52,6 +52,9 @@ public:
                 work.visits=addCost(work.visits,meaning.work.visits);
                 if(!meaning.supported || !meaning.satisfied()) return;
             }
+            // A represented value alone cannot erase a transition declaration.
+            if(POVDescription(right).independentTemporalValue() &&
+               !POVDescription(left).independentTemporalValue()) return;
             auto actual = access_->typeFacts(left), required = access_->typeFacts(right);
             if (!required.valid || !required.accepts(actual)) return;
             // Rendering can suppress partial facts. Removing pending work
