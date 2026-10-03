@@ -1,6 +1,14 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphRecordIndex/nominalRules
+    unit/graphRecordIndex/matchingEquivalence
+    unit/graphRecordIndex/sharedAnalysis
+    unit/graphRecordIndex/changedLayout
+    unit/graphRecordIndex/valueChecks
+    unit/graphRecordIndex/unknownAndDuplicate
+    unit/graphRecordIndex/linearMatching
+
     unit/graphDefinitionSharing/scopeSharing
     unit/graphDefinitionSharing/scopeBindings
     unit/graphDefinitionSharing/conjunctionSharing
@@ -12383,6 +12391,133 @@ struct GLOBAL {
     }%>
     void: unitTestGraphDefinitionHelpers(me string: testName, me int: caseID) <- {
         me bool: passed <- graphDefinitionHelpersCase(caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+// Definition facts prune nominal candidates; instance ambiguity remains live.
+#define GRAPHRECORDINDEX(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphRecordIndex(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHRECORDINDEX(unit/graphRecordIndex/nominalRules, 1)
+    GRAPHRECORDINDEX(unit/graphRecordIndex/matchingEquivalence, 2)
+    GRAPHRECORDINDEX(unit/graphRecordIndex/sharedAnalysis, 3)
+    GRAPHRECORDINDEX(unit/graphRecordIndex/changedLayout, 4)
+    GRAPHRECORDINDEX(unit/graphRecordIndex/valueChecks, 5)
+    GRAPHRECORDINDEX(unit/graphRecordIndex/unknownAndDuplicate, 6)
+    GRAPHRECORDINDEX(unit/graphRecordIndex/linearMatching, 7)
+
+    me bool: graphRecordIndexCase(me int: caseID) <- <%{
+        using namespace proteus4;
+        if(caseID<=2) {
+            std::vector<NominalDescription> descriptions={
+                {"wheel",{"part"}}, {"pedal",{"part"}}, {"part",{}},
+                {"wheel",{"round"}}, {"round",{}}, {"",{}},
+                {"wheel",{"wheel","wheel"}}, {"wheel",{"pedal"}}
+            };
+            if(caseID==1) {
+                Work work{0,0};NominalMemberIndex index({descriptions[0],descriptions[1]},work);
+                auto match=[&](NominalDescription value) {return index.candidates(value,work);};
+                return index.distinguishable && match(descriptions[0])==std::vector<std::size_t>{0} &&
+                    match(descriptions[1])==std::vector<std::size_t>{1} &&
+                    match(descriptions[2])==std::vector<std::size_t>{0,1} &&
+                    match(descriptions[7])==std::vector<std::size_t>{0,1};
+            }
+            // Compare against the original nominal correspondence contract,
+            // including omissions, aliases, duplicate matches, and unknowns.
+            std::vector<std::vector<NominalDescription>> layouts{{}};
+            for(const auto& a:descriptions) {
+                layouts.push_back({a});
+                for(const auto& b:descriptions) layouts.push_back({a,b});
+            }
+            for(const auto& required:layouts) for(const auto& actual:layouts) {
+                Work oldWork{0,0},work{0,0};bool distinct=true;
+                for(std::size_t i=0;i<required.size();++i) {
+                    distinct &= !required[i].primary.empty();
+                    for(std::size_t j=0;j<i;++j)
+                        distinct &= compareNominal(required[i].primary,required[i].types,required[j].primary,required[j].types)!=ScalarMatch::yes;
+                }
+                MemberCorrespondence old(actual.size(),required.size(),[](auto,auto){return false;},[&](auto a,auto b) {
+                    return compareNominal(required[b].primary,required[b].types,actual[a].primary,actual[a].types);
+                },oldWork);
+                NominalMemberIndex index(required,work);
+                auto result=MemberCorrespondence::nominal(index,actual.size(),[&](auto i){return actual[i];},work);
+                bool expected=distinct && old.unambiguous;
+                if(result.unambiguous!=expected || (expected && (result.pairs!=old.pairs || result.missing!=old.missing))) {
+                    std::cout<<"Nominal index changed correspondence\n";return false;
+                }
+            }
+            return true;
+        }
+        auto member=[](std::string type) {
+            auto result=std::make_shared<DefinitionRequirement>();result->facts.valid=true;
+            result->label=type;result->types={type};return result;
+        };
+        auto requirement=std::make_shared<DefinitionRequirement>();requirement->facts.valid=true;
+        requirement->list=true;requirement->order=uUnordered;requirement->open=true;
+        requirement->members={member("wheel"),member("pedal")};
+        if(caseID==3) {
+            Work work{0,0};auto empty=std::make_shared<DefinitionRequirement>();empty->facts.valid=true;
+            auto first=combineDefinitions(empty,requirement,work),second=combineDefinitions(empty,requirement,work);
+            auto analysis=requirement->recordMembers(work);
+            bool ok=first->recordMembers(work)==analysis && second->recordMembers(work)==analysis;
+            // Copies can acquire different layouts without altering a shared
+            // immutable analysis or the other definitions using it.
+            first->members.push_back(member("chain"));auto expanded=first->recordMembers(work);
+            return ok && expanded!=analysis && expanded->descriptions.size()==3 &&
+                second->recordMembers(work)==analysis && analysis->descriptions.size()==2;
+        }
+        if(caseID==4) {
+            Work work{0,0};auto before=requirement->recordMembers(work);
+            std::swap(requirement->members[0],requirement->members[1]);auto reordered=requirement->recordMembers(work);
+            bool ok=reordered!=before && reordered->descriptions.front().primary=="pedal";
+            requirement->members[0]->types.push_back("wheel");auto aliased=requirement->recordMembers(work);
+            ok &= aliased!=reordered && !aliased->distinguishable && reordered->distinguishable;
+            requirement->members[0]->types={"pedal"};auto restored=requirement->recordMembers(work);
+            requirement->members[0]->label.clear();auto unknown=requirement->recordMembers(work);
+            return ok && restored->distinguishable && !unknown->distinguishable;
+        }
+        GraphNormalizer n;n.init();bool ok=true;
+        auto parse=[](const std::string& text){return graphParsed("record index",text);};
+        if(caseID==5) {
+            auto target=parse("{wheel:*10+7, pedal:*10+2}");
+            auto at=target->pItem->value->items.head;
+            for(auto& part:requirement->members) {part->facts=n.access->typeFacts(at);at=at->next;}
+            ProteusDefinitionPlan accepted(n.access,target,requirement);ok &= accepted.satisfied();
+            Work work{0,0};auto analysis=requirement->recordMembers(work);
+            requirement->members[0]->facts.number=static_cast<std::int64_t>(8);bool rejected=false;
+            auto before=toString(target->pItem.get());
+            try {ProteusDefinitionPlan conflict(n.access,target,requirement);}catch(const DefinitionConflict&){rejected=true;}
+            ok &= rejected && before==toString(target->pItem.get()) && requirement->recordMembers(work)==analysis;
+        } else if(caseID==6) {
+            requirement->members[0]->facts=n.access->typeFacts(graphScalar(7,10));
+            for(const auto& input:{"{wheel:*10+_, ?}","{wheel:*10+_, wheel:*10+_, pedal:*10+2}"}) {
+                auto target=parse(input);auto before=toString(target->pItem.get());
+                ProteusDefinitionPlan pending(n.access,target,requirement);
+                ok &= !pending.supported && !pending.apply() && before==toString(target->pItem.get());
+            }
+            // A known unrelated part does not make correspondence ambiguous.
+            auto target=parse("{wheel:*10+_, pedal:*10+2, chain:*10+3}");
+            ProteusDefinitionPlan fill(n.access,target,requirement);
+            ok &= fill.supported && fill.apply() && target->pItem->value->items.head->pItem->value->num==7;
+        } else {
+            requirement->members.clear();std::string text="{";const int count=64;
+            for(int i=0;i<count;++i) {
+                if(i)text+=", ";auto type="field"+std::to_string(i);text+=type+":*10+7";
+                auto part=member(type);part->facts=n.access->typeFacts(graphScalar(7,10));requirement->members.push_back(part);
+            }
+            text+="}";Work work{0,0};auto analysis=requirement->recordMembers(work);
+            for(int instance=0;instance<16;++instance) {
+                auto target=parse(text);ProteusDefinitionPlan check(n.access,target,requirement);
+                ok &= check.satisfied() && check.work.visits<24*count && requirement->recordIndex==analysis;
+            }
+        }
+        if(!ok)std::cout<<"Record index case "<<caseID<<" failed\n";
+        n.close();return ok;
+    }%>
+    void: unitTestGraphRecordIndex(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphRecordIndexCase(caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

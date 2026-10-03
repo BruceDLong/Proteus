@@ -397,3 +397,77 @@ This is the first graph-simplification step: repeated compiled requirements and
 equivalent branch checks are consolidated. Per-definition record analysis,
 implication-based pruning, and removal of residual instance RHS obligations
 remain separate work. Existing model relationships and subscriptions are retained.
+
+
+## Reusable nominal record analysis (2026-10-02)
+
+Baseline `bd24158`. Record definition validation previously compared every
+requirement with every other requirement to establish distinguishability, then
+compared each requirement with every supplied instance field. It reread an
+instance field's types for every requirement.
+
+`NominalMemberIndex` compiles the three existing positive nominal matching
+rules into name-to-slot lookups. Primary words remain distinct from additional
+types: sibling `wheel` and `pedal` fields do not become interchangeable merely
+because both advertise `part`. Unknown primary words, duplicate candidates, and
+one field matching multiple requirements still leave the plan pending. Pairs
+retain requirement order, including ordered partial-description checks.
+
+The immutable index belongs to the compiled requirement. Conjunctions adopting
+an unordered declaration share its analysis. A linear signature check compares
+member count, order, primary words, and additional types before reuse, rebuilding
+when any changes. Copies with different layouts acquire their own analysis.
+Changing a scalar constraint does not rebuild this purely nominal index, but
+the instance is still checked against the changed constraint before any writes.
+There is no instance-POV history in this cache; storage is proportional to the
+definition's names and slots. Existing identity-first correspondence elsewhere
+retains its original matcher.
+
+The probe repeats the same record plan 16 times, independently of successful
+instance-check caching. It uses the same generated translation unit/build flags
+with before/after headers and counts operations at their source. Separate
+regression tests check reuse across 16 different instances.
+
+| Fields | Metric over 16 plans | Before | After |
+| ---: | --- | ---: | ---: |
+| 64 | Required-field pair comparisons | 32,256 | 0 |
+| 64 | Instance type reads | 65,536 | 1,024 |
+| 64 | Accounted work visits | 165,392 | 9,488 |
+| 256 | Required-field pair comparisons | 522,240 | 0 |
+| 256 | Instance type reads | 1,048,576 | 4,096 |
+| 256 | Accounted work visits | 2,627,600 | 37,904 |
+
+The updated probe builds one index across all 16 plans at every tested size
+(8, 16, 32, 64, 128, and 256 fields). These counts demonstrate removal of the
+all-pairs scans for distinct typed fields, not a universal linear-time claim:
+map lookups, aliases, and candidate sorting still have their own costs.
+Probe sources, logs, and counts are under `/tmp/p4-record-index-probe/`.
+
+Validation: CodeDog regeneration/build succeeded. All **1,411 registered graph
+tests in 69 groups passed**, including seven new record-index tests. The new
+matcher agrees with the previous record matching contract across 5,329 small
+layout pairs involving aliases, shared ancestors, unknowns, omissions, and
+duplicates. Other cases cover shared analysis, copied/edited layouts, changed
+value constraints, atomic pending/rejected plans, and bounded repeated matching.
+Results are in `/tmp/p4-record-index-tests/`.
+
+The unchanged eleven-observation temporal-cube batch ran sequentially against
+the saved baseline and rebuilt executable, without other tests, builds, or
+probes overlapping either run:
+
+| Temporal cube | Baseline | Indexed records |
+| --- | ---: | ---: |
+| Elapsed | 325.90 s | 304.55 s |
+| Peak RSS | 157,848 KiB | 157,964 KiB |
+| Observations | 11/11 | 11/11 |
+
+The measured deltas are -21.35 s and +116 KiB peak RSS.
+This is one timing pair, not evidence of a stable runtime difference. The
+operation-count improvement is established independently; the cube still takes
+several minutes. These are batch measurements, not live Slipstream frame-rate
+measurements. The full legacy language suite and GUI were not rerun. Logs,
+timings, and source/binary hashes are under `/tmp/p4-record-index-cube/`.
+
+This step prunes impossible nominal candidates using existing definition facts.
+It does not add structural type equivalence, implication/theorem-based pruning,
+or remove unresolved instance obligations and their subscriptions.

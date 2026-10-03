@@ -384,3 +384,22 @@ neighbor, sticker color, and unchanged original state. This is one sequential
 timing pair; no live Slipstream performance claim is made. All 1,404 graph tests
 also pass. See `graph/traversal-profile-results.md` for the scaling probes and
 validation limits; raw cube results are in `/tmp/p4-definition-sharing-cube/`.
+
+
+## Nominal record index measurement (2026-10-02)
+
+Definition record matching now reuses a name-to-slot index, reading each
+instance field's type set once per plan. Ambiguous correspondence and unknown
+fields retain the existing pending behavior; scalar and contextual checks still
+run. See [the traversal report](traversal-profile-results.md#reusable-nominal-record-analysis-2026-10-02)
+for the operation-count probes and semantic checks.
+
+Against saved baseline `bd24158`, the unchanged eleven-observation transition
+batch took **325.90 s / 157,848 KiB peak RSS**
+before and **304.55 s / 157,964 KiB** after.
+Both passed all eleven observations: changed orientation, preserved fields,
+neighboring cubie, sticker color, and unchanged original state. Runs were
+sequential with no other tests, builds, or probes overlapping. This single pair
+does not establish a stable runtime difference or live GUI improvement.
+All 1,411 registered graph tests also pass; the broad legacy suite and live GUI
+were not rerun. Results and hashes are in `/tmp/p4-record-index-cube/`.

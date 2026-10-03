@@ -38,6 +38,22 @@ struct DefinitionRequirement {
     std::vector<std::string> expandedTypes;
     std::string label; // normalized nominal identity, used by comparisons
     std::shared_ptr<WordUse> writtenType;
+    // The signature keeps copies and direct test/embedding edits honest.
+    // Unrelated scalar constraints do not invalidate nominal layout facts.
+    mutable std::shared_ptr<const NominalMemberIndex> recordIndex;
+    std::shared_ptr<const NominalMemberIndex> recordMembers(Work& work) const {
+        bool current=recordIndex && recordIndex->descriptions.size()==members.size();
+        if(current) for(std::size_t i=0;i<members.size();++i) {
+            ++work.visits;const auto& old=recordIndex->descriptions[i];
+            if(old.primary!=members[i]->label || old.types!=members[i]->types) {current=false;break;}
+        }
+        if(!current) {
+            std::vector<NominalDescription> descriptions;
+            for(const auto& member:members) {++work.visits;descriptions.push_back({member->label,member->types});}
+            recordIndex=std::make_shared<NominalMemberIndex>(std::move(descriptions),work);
+        }
+        return recordIndex;
+    }
     bool hasExpressions() const {
         // Compiled definitions share subrequirements. Walk the DAG, not every
         // path through it; keep visits local so later edits remain observable.
@@ -161,6 +177,9 @@ inline DefinitionSpec combineDefinitions(const DefinitionSpec& left, const Defin
     } else if (right->list) {
         result->list = true; result->order=right->order; result->open = right->open; result->members = right->members;
         result->repeated = right->repeated; result->templateSource = right->templateSource;
+        // Instances adopting this record use the declaration's analysis.
+        // Ordered layouts also retain an already analysed typed description.
+        result->recordIndex=right->order==uUnordered && !right->repeated ? right->recordMembers(work) : right->recordIndex;
     }
     if (result->list && !result->memberLayout().valid)
         throw DefinitionConflict("incompatible definition extent");
@@ -543,17 +562,8 @@ private:
     }
     void prepareRecord(const Place& target,const DefinitionSpec& requirement,const GraphTypeFacts& actual,bool lazy=false) {
         auto access=access_;
-        // Unnamed/duplicate descriptions need richer disambiguating predicates.
-        for(std::size_t i=0;i<requirement->members.size();++i) {
-            const auto& member=requirement->members[i];
-            if(member->label.empty()) {supported=false;return;}
-            for(std::size_t j=0;j<i;++j) {
-                ++work.visits;
-                if(compareNominal(member->label,member->types,requirement->members[j]->label,requirement->members[j]->types)==ScalarMatch::yes) {
-                    supported=false;return;
-                }
-            }
-        }
+        auto fields=requirement->recordMembers(work);
+        if(!fields->distinguishable) {supported=false;return;}
         bool adopt=!target->node || access->adoptableList(target->node);
         std::vector<POVNode> present;
         if(!adopt) {
@@ -567,12 +577,10 @@ private:
         }
         if(requirement->facts.hasSize && requirement->facts.size<static_cast<std::int64_t>(present.size()))
             throw DefinitionConflict("definition members exceed explicit extent");
-        MemberCorrespondence mapping(present.size(),requirement->members.size(),
-            [](std::size_t,std::size_t){return false;},[&](std::size_t a,std::size_t b) {
-                const auto& member=requirement->members[b];auto names=access->typeNames(present[a]);
-                std::vector<std::string> types(names.begin(),names.end());
-                return compareNominal(member->label,member->types,types.empty() ? "" : types.front(),types);
-            },work);
+        auto mapping=MemberCorrespondence::nominal(*fields,present.size(),[&](std::size_t at) {
+            auto names=access->typeNames(present[at]);
+            return NominalDescription{names.empty() ? "" : names.front(),{names.begin(),names.end()}};
+        },work);
         if(!mapping.unambiguous || (!adopt && !lazy && target!=fillRoot_ && !mapping.missing.empty())) {supported=false;return;}
         // Ordered typed descriptions can omit fields, but cannot reorder them
         // or guess where an extra field belongs. Reuse the same nominal proof.
