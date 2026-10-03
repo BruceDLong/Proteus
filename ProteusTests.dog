@@ -1,6 +1,15 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphInstanceChecks/unrelatedWrites
+    unit/graphInstanceChecks/sharedDescendantValue
+    unit/graphInstanceChecks/sharedSize
+    unit/graphInstanceChecks/listLink
+    unit/graphInstanceChecks/broadReset
+    unit/graphInstanceChecks/pendingCheck
+    unit/graphInstanceChecks/untrackedReads
+    unit/graphInstanceChecks/explicitRenormalization
+
     unit/graphDefinitionPublication/isolatedSubscriber
     unit/graphDefinitionPublication/eightSubscribers
     unit/graphDefinitionPublication/thirtyTwoSubscribers
@@ -12095,6 +12104,115 @@ struct GLOBAL {
     }
 }
 
+
+
+// A reused type check must keep its readers subscribed to the data it checked.
+#define GRAPHINSTANCECHECKS(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphInstanceChecks(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHINSTANCECHECKS(unit/graphInstanceChecks/unrelatedWrites, 1)
+    GRAPHINSTANCECHECKS(unit/graphInstanceChecks/sharedDescendantValue, 2)
+    GRAPHINSTANCECHECKS(unit/graphInstanceChecks/sharedSize, 3)
+    GRAPHINSTANCECHECKS(unit/graphInstanceChecks/listLink, 4)
+    GRAPHINSTANCECHECKS(unit/graphInstanceChecks/broadReset, 5)
+    GRAPHINSTANCECHECKS(unit/graphInstanceChecks/pendingCheck, 6)
+    GRAPHINSTANCECHECKS(unit/graphInstanceChecks/untrackedReads, 7)
+    GRAPHINSTANCECHECKS(unit/graphInstanceChecks/explicitRenormalization, 8)
+    me bool: graphInstanceChecksCase(me string: testName, me int: caseID) <- <%{
+        using namespace proteus4;
+        GraphNormalizer n;n.init();
+        auto parse=[&](const std::string& text){return graphParsed(testName,text);};
+        if(caseID==8) {
+            auto declarations=parse("{#pair={*10+1 *10+2}}");
+            auto h=n.normalize(declarations);h.waitForCompletion();
+            auto target=parse("pair");h=n.normalize(target);h.waitForCompletion();
+            bool ok=!h.status().failed && !h.status().symbolicValues;
+            // A caller can edit a quiescent model and then explicitly ask for
+            // normalization. Old cached acceptance must not hide that edit.
+            target->pItem->value->items.tail->pItem->value->num=static_cast<std::int64_t>(3);
+            h=n.normalize(target);h.waitForCompletion();ok &= h.status().failed;
+            n.close();return ok;
+        }
+        ProteusDefinitions definitions(n.access);
+        auto target=parse("*2+{*10+1 *10+2}");n.access->setDefinitionOrder(target);
+        auto proof=std::make_shared<ProteusDefinitions::Proof>();
+        proof->requirement=std::make_shared<DefinitionRequirement>();
+        auto requirement=proof->requirement;
+        requirement->list=true;requirement->facts=n.access->typeFacts(target);
+        for(auto member=target->pItem->value->items.head;member;member=member->next) {
+            auto part=std::make_shared<DefinitionRequirement>();part->facts=n.access->typeFacts(member);
+            requirement->members.push_back(part);
+        }
+        auto first=target->pItem->value->items.head;
+        bool ok=true;
+        if(caseID==7) {
+            // No object registry means no complete read footprint. Such a
+            // check must retain the previous publication-scoped lifetime.
+            ok &= definitions.accepts(proof,target);
+            first->pItem->value->num=static_cast<std::int64_t>(3);
+            definitions.prune(true);
+            ok &= !definitions.accepts(proof,target);
+            n.close();return ok;
+        }
+        ObjectDependencies objects;ReadScope tracked({},&objects);
+        if(caseID==6) {
+            target=graphScalar(-1,10);requirement->list=false;requirement->members.clear();
+            requirement->facts=n.access->typeFacts(graphScalar(7,10));
+            ok &= !definitions.accepts(proof,target);
+            n.access->applyTypeFacts(target,requirement->facts);
+            auto changes=ReadScope::changedObjects({target->pItem->value.get()});
+            definitions.prune(true);for(const auto& key:changes.keys) key->publish();
+            ok &= definitions.accepts(proof,target);
+        } else {
+            auto checked=[&] {
+                std::set<DependencyKey> reads;
+                {ReadScope capture([&](const DependencyKey& key){reads.insert(key);});ok &= definitions.accepts(proof,target);}
+                return reads;
+            };
+            auto initial=checked();
+            auto cached=checked();
+            // Both fresh and cached readers receive the same proof. A hit
+            // cannot hide the member reads from a later consumer.
+            ok &= initial.size()==1 && initial==cached;
+            auto consumer=DependencyProof::make(cached);
+            if(caseID==1) {
+                auto unrelated=graphScalar(7,10);
+                for(int i=0;i<32;++i) {
+                    auto changes=ReadScope::changedObjects({unrelated.get(),unrelated->pItem.get(),unrelated->pItem->value.get()});
+                    definitions.prune(true);for(const auto& key:changes.keys) key->publish();
+                    ok &= consumer->valid() && checked()==initial;
+                }
+            } else if(caseID==5) {
+                first->pItem->value->num=static_cast<std::int64_t>(3);
+                definitions.prune();ok &= !definitions.accepts(proof,target);
+            } else {
+                Changes changes;
+                if(caseID==2) {
+                    auto alias=graphScalar(1,10);alias->pItem->value=first->pItem->value;
+                    alias->pItem->value->num=static_cast<std::int64_t>(3);
+                    changes=ReadScope::changedObjects({alias->pItem->value.get()});
+                } else if(caseID==3) {
+                    auto alias=graphScalar(1,10);alias->pItem->infSize=first->pItem->infSize;
+                    alias->pItem->infSize->num=static_cast<std::int64_t>(11);
+                    changes=ReadScope::changedObjects({alias->pItem->infSize.get()});
+                } else {
+                    auto tail=target->pItem->value->items.tail;
+                    n.access->appendDefinitionMember(target,"");
+                    changes=ReadScope::changedObjects({POVDescription::positionKey(tail)});
+                }
+                definitions.prune(true);for(const auto& key:changes.keys) key->publish();
+                ok &= !consumer->valid() && !definitions.accepts(proof,target);
+            }
+        }
+        if(!ok) std::cout<<"Instance check case "<<caseID<<" failed\n";
+        n.close();return ok;
+    }%>
+    void: unitTestGraphInstanceChecks(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphInstanceChecksCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
 
 // Definition writes wake readers of their destinations, including shared state
 // and list links, without replaying independent normalization requests.

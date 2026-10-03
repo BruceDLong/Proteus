@@ -266,3 +266,65 @@ directly, without depending on wall-clock timing.
 A separate remaining candidate is `ProteusDefinitions::prune()`, which still
 clears successful instance checks on every data publication. Its contribution
 was not independently measured in this change.
+
+
+## Reusing successful instance checks (2026-10-02)
+
+`ProteusDefinitions::accepts()` now keeps a dependency proof for a successful,
+context-free instance check. Both the first validation and subsequent cache hits
+expose that proof to readers. It includes the shared size/value states and list
+positions actually examined, so a later reader does not lose subscriptions when
+the answer comes from the cache.
+
+Scoped object publications preserve these records; publishing a dependency
+invalidates its check. Unknown-footprint/model-wide changes, catalogue updates,
+and a new top-level normalization retain the conservative cache reset. This
+keeps edits made between quiescent normalization calls visible. A Set receipt
+without captured reads, and a check made outside an object-tracking scope,
+retain their existing publication-scoped lifetime. Pending and contextual
+checks are not cached. The atomic Set's source/target rechecks remain direct.
+
+Invalid records are reclaimed in batches when the cache grows, rather than
+scanning all cached instances on each publication. The existing cache key still
+distinguishes the POV, compiled requirement, and immediate-parts demand.
+Records do not survive the next top-level search reset; no separate graph or
+list of unsuccessful attempts is introduced.
+
+Validation: CodeDog regeneration/build succeeds and all **1,396 distinct graph
+tests in 67 groups** pass. Eight new cases check proof reuse through 32 unrelated
+publications, shared descendant value and size edits, list-link changes, broad
+reset, pending-to-known refinement, untracked access, and explicit
+re-normalization after a raw edit. Shared-state/link cases subscribe a new
+reader through a cache hit before changing the data.
+
+The old-cache control fails the five cases requiring consistent dependency
+publication on cache hits; pending, untracked, and re-normalization behavior
+already work there. Its only API shim accepts the new optional `prune` argument
+while preserving the original unconditional reset. The cube timing baseline
+uses the untouched executable from `1a7c54c`, not that shim.
+
+Evidence: `/tmp/p4-instance-check-focused.log`,
+`/tmp/p4-instance-check-control-focused.log`,
+`/tmp/p4-instance-check-tests/results.json`, and
+`/tmp/p4-instance-check-baseline/`.
+
+
+The first implementation collected an indexed dependency set even for
+contextual checks that cannot enter this cache. It passed the tests but took
+349.64 s / 177,288 KiB on the cube, versus 335.10 s / 156,848 KiB for the
+unchanged baseline. The final version keeps contextual checks on their direct
+path and collects other reads into a vector, building a proof only on success.
+It passes the full 1,396-test graph suite again.
+
+The final cube run passed all 11 observations in **335.75 s / 157,504 KiB**.
+Against baseline, that is 0.65 s more elapsed time and 656 KiB more peak RSS:
+essentially unchanged in this single-run comparison. **There is no measured
+cube speedup from this change.** The reuse regression demonstrates the avoided
+repeat checks across unrelated publications, but those checks do not explain
+most of this workload's cost. Repeated construction of incomplete definition
+plans remains a candidate for a separate profile; it was not measured here.
+
+See [the cube exercise](cubie-transition-exercise.md) and
+`/tmp/p4-instance-check-comparison.json`. The slower first executable/header
+are retained under `/tmp/p4-instance-check-first/`; the final measurement is
+under `/tmp/p4-instance-check-refined-cube/`. GUI performance was not tested.

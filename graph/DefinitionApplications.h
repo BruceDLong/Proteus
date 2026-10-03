@@ -96,9 +96,28 @@ private:
         if(ambiguous) result.body.reset();
         return resolutions_.emplace(name,std::move(result)).first->second;
     }
-    // Successful instance checks remain true until the next publication.
-    // Do not cache a pending check: settling a child can establish completion.
-    mutable std::set<std::tuple<POVNode,DefinitionSpec,bool>> accepted_;
+    // Complete, context-free checks follow their actual instance reads.
+    // A Set receipt has no captured reads and lasts only for its publication.
+    // Broad writes and explicit normalization retain the conservative reset.
+    using CheckKey=std::tuple<POVNode,DefinitionSpec,bool>;
+    struct InstanceCheck {
+        DependencyProof::Ptr reads;
+        std::uint64_t epoch;
+        bool current(std::uint64_t now) const {return reads ? reads->valid() : epoch==now;}
+    };
+    mutable std::map<CheckKey,InstanceCheck> accepted_;
+    mutable std::size_t checkCleanupAt_=64;
+    void rememberCheck(CheckKey key,DependencyProof::Ptr reads={}) const {
+        // Reclaim invalid checks in batches, not by scanning all live checks
+        // on every publication. The next top-level search clears this cache.
+        if(accepted_.size()>=checkCleanupAt_) {
+            ReadScope silent({});
+            for(auto it=accepted_.begin();it!=accepted_.end();)
+                if(!it->second.current(validationEpoch_)) it=accepted_.erase(it);else ++it;
+            checkCleanupAt_=std::max<std::size_t>(64,2*accepted_.size());
+        }
+        accepted_[std::move(key)]={std::move(reads),validationEpoch_};
+    }
     // Stable read-only POVs for existing template/owner infons. This exposes
     // stored relations to the walk; it does not clone or normalize their data.
     mutable std::map<std::shared_ptr<infonView>, POVNode> views_;
@@ -617,14 +636,30 @@ public:
     }
     bool accepts(const Certificate& proof, const POVNode& node, bool fillParts=false) const {
         auto key=std::make_tuple(node,proof->requirement,fillParts);
-        // Contextual expressions consume other goals' completion evidence.
-        // Reobserve it on each use; plain data checks remain revision-cached.
-        bool cacheable=!proof->requirement->hasExpressions();
-        if(cacheable && accepted_.count(key)) return true;
-        try {
-            if(!ProteusDefinitionPlan(access_, node, proof->requirement, {}, true, fillParts).satisfied()) return false;
-            if(cacheable) accepted_.insert(std::move(key));return true;
-        } catch (const std::runtime_error&) { return false; }
+        // Contextual and pending checks must reobserve completion evidence.
+        if(proof->requirement->hasExpressions()) {
+            try {return ProteusDefinitionPlan(access_,node,proof->requirement,{},true,fillParts).satisfied();}
+            catch(const std::runtime_error&) {return false;}
+        }
+        auto found=accepted_.find(key);
+        if(found!=accepted_.end() && found->second.current(validationEpoch_)) return true;
+        // Pending checks are common. Collect cheaply and build an indexed
+        // dependency proof only after a successful validation.
+        std::vector<DependencyKey> reads;
+        bool accepted=false;
+        {
+            ReadScope capture([&](const DependencyKey& dependency){reads.push_back(dependency);});
+            try {accepted=ProteusDefinitionPlan(access_,node,proof->requirement,{},true,fillParts).satisfied();}
+            catch(const std::runtime_error&) {}
+        }
+        if(accepted && ReadScope::tracksObjects() && std::find(reads.begin(),reads.end(),DependencyKey{})==reads.end()) {
+            auto evidence=DependencyProof::make(std::set<DependencyKey>(reads.begin(),reads.end()));
+            rememberCheck(std::move(key),evidence);
+            return evidence->valid(); // Cache hits and misses expose the same dependency group.
+        }
+        for(const auto& dependency:reads) ReadScope::observe(dependency);
+        if(accepted) rememberCheck(std::move(key));
+        return accepted;
     }
     bool satisfied(const POVNode& node, bool fillParts=false) const {
         if (!required(node)) return true;
@@ -720,7 +755,7 @@ public:
                 if(found==evidence_.end()) continue;
                 for(const auto& proof:found->second)
                     if(sameDefinition(proof->requirement,entry.second->requirement) && current(proof))
-                        accepted_.insert(std::make_tuple(entry.first,proof->requirement,false));
+                        rememberCheck(std::make_tuple(entry.first,proof->requirement,false));
             }
         };
         return result;
@@ -829,8 +864,9 @@ public:
         }
         return {};
     }
-    void prune() {
-        ++validationEpoch_;accepted_.clear();resolutions_.clear();
+    void prune(bool preserveInstanceChecks=false) {
+        ++validationEpoch_;resolutions_.clear();
+        if(!preserveInstanceChecks) {accepted_.clear();checkCleanupAt_=64;}
         for(auto it=evidenceKeys_.begin();it!=evidenceKeys_.end();)
             if(it->first.expired()) it=evidenceKeys_.erase(it);else ++it;
         for (auto it = evidence_.begin(); it != evidence_.end();)

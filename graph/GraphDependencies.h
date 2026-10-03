@@ -121,6 +121,7 @@ public:
         scope.recent_[scope.recentIndex_++ % 8]=object;
         if(scope.observedObjects_.insert(object).second) observe(objects_->key(object));
     }
+    static bool tracksObjects() {return objects_!=nullptr;}
     static Changes changedObjects(std::initializer_list<const void*> objects) {
         if(!objects_) return {}; // callers outside a tracked search stay conservative
         auto changes=Changes::only({});changes.objectWrites=true;

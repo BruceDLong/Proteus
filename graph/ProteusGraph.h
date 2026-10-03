@@ -789,8 +789,10 @@ public:
     void invalidateCompletion(const Changes& changes) override {
         // Completion metadata follows its recorded dependencies. Definition
         // registration refreshes catalogue validation without a model-wide wake.
-        if(changes.all || changes.objectWrites || changes.keys.count(modelFacts_)) invalidateCompletion();
-        else if(definitions_->changesCatalogue(changes)) definitions_->prune();
+        if(changes.all || changes.objectWrites || changes.keys.count(modelFacts_)) {
+            evidence_->prune();
+            definitions_->prune(!changes.all && !changes.keys.count(modelFacts_));
+        } else if(definitions_->changesCatalogue(changes)) definitions_->prune();
     }
     void beginSearch(const Query<POVNode>&) override {
         // Re-normalization rechecks definition witnesses, including edits made

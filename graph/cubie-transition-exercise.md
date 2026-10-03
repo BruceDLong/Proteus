@@ -334,3 +334,39 @@ Artifacts: `/tmp/p4-definition-publication-cube/{after,before}.log`,
 `{after,before}.time`, `results.json`, and `manifest.json`. The unchanged fixture
 is `/tmp/p4-cube-transition-batch.tst`. All 1,388 registered graph tests passed
 separately. GUI frame rate and the full legacy suite were not measured here.
+
+
+## Cube timing after instance-check reuse (2026-10-02)
+
+Successful context-free instance checks now reuse captured dependency proofs
+across unrelated scoped writes. Relevant shared-state and position changes
+invalidate those proofs. Pending/contextual checks, inherited Set receipts,
+untracked access, broad changes, and explicit re-normalization retain their
+conservative behavior. See [the traversal report](traversal-profile-results.md#reusing-successful-instance-checks-2026-10-02).
+
+| Implementation | Elapsed time | Peak RSS | Observations |
+| --- | ---: | ---: | ---: |
+| Baseline `1a7c54c` | 335.10 s | 156,848 KiB | 11/11 |
+| Initial dependency capture | 349.64 s | 177,288 KiB | 11/11 |
+| Final cache, cheaper capture | 335.75 s | 157,504 KiB | 11/11 |
+
+The first attempt added unnecessary collection overhead to uncached contextual
+checks. The final version leaves those on their original path and builds an
+indexed proof only for successful checks. Its cube time and peak memory are
+essentially unchanged from baseline: **0.2% more time and 0.4% more peak RSS**
+in this run. These measurements establish no cube speedup. The focused tests
+do establish that a successful validation survives 32 unrelated publications
+and that a cached reader still responds to shared-state/link edits.
+
+The run order was initial attempt, untouched baseline, then final version.
+All used the unchanged one-world, 11-observation batch with matching assets,
+catalogue, empty session file, and compiler flags. No diagnostic counters,
+builds, or other test runs overlapped the timed runs. All three passed the
+changed rotation, preserved fields, neighboring cubie, sticker, and original
+state checks. The final version also passes all 1,396 registered graph tests.
+GUI frame rate and the full legacy suite were not tested.
+
+Evidence: `/tmp/p4-instance-check-comparison.json`,
+`/tmp/p4-instance-check-cube/`, `/tmp/p4-instance-check-refined-cube/`, and
+`/tmp/p4-instance-check-refined-all-tests.log`. Both measurement directories
+include logs, timings, and source/binary manifests.
