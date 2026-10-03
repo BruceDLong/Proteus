@@ -471,3 +471,116 @@ timings, and source/binary hashes are under `/tmp/p4-record-index-cube/`.
 This step prunes impossible nominal candidates using existing definition facts.
 It does not add structural type equivalence, implication/theorem-based pruning,
 or remove unresolved instance obligations and their subscriptions.
+
+
+## Phase profile and shared evidence identity (2026-10-03)
+
+Baseline `bc9ddce`. The current eleven-observation cube exercise was profiled
+by model load and individual query, with counts for definition planning,
+correspondence, and scheduler activity. Diagnostic counters and nested timers
+were added only to scratch copies of the generated executable and graph headers.
+No per-POV history or instrumentation was added to the production engine.
+
+The largest measured component was `ProteusDefinitions::remember()`:
+**1,204,411 calls and
+150.31 seconds of exclusive measured time**.
+The initial diagnostic batch took 302.03 seconds and passed all eleven
+observations. Public plan construction took 91.73 seconds inclusively;
+its recursive `prepare` was called 3,510,315 times. Nested inclusive times
+overlap and must not be added together. Temporal preservation's entire
+`finishPass()` took only 0.53 seconds inclusively, and goal factories 0.09 seconds.
+Those were not the appropriate first optimization targets for this workload.
+
+The expensive duplicate-certificate check walked the witnesses of inherited
+source evidence and used nested scans to compare catalogue bindings, even when
+both certificates shared exactly the same `Evidence` object. Every member
+certificate propagated by `applyChanges()`/`inheritChanges()` shares that source
+evidence. Repeated checks therefore compared these collections with themselves.
+
+The production change adds one identity shortcut after requirement equality:
+shared evidence already establishes equal witnesses and bindings. Current-proof
+validation still runs first; different requirements remain distinct. Separately
+constructed evidence still uses the existing dependency comparison. This adds
+no new cache, metadata, subscriptions, or instance-retention structure.
+
+The updated profile took the shortcut **1,196,195 times**.
+`remember()` exclusive time fell to
+**3.15 seconds**.
+Pending/contextual checks and the atomic Set's source/target validation remain
+unchanged; this step removes repeated equality work rather than weakening checks.
+
+After the shortcut, public plan construction is the largest remaining measured
+component at 90.14 seconds
+inclusively, with 3,497,716 recursive preparations.
+The source/target rechecks in `reusable()` account for
+72.97 seconds inclusively
+within that planning work. Those checks can run after another write in the
+same atomic Set; any later reuse must describe that intermediate state.
+
+Diagnostic phase times (not ordinary-build performance figures):
+
+| Phase | Before | After |
+| --- | ---: | ---: |
+| Model load/normalization | 182.349 s | 95.174 s |
+| Five initial-state reads | 6.148 s | 4.948 s |
+| First second-state read (changed rotation) | 6.990 s | 3.517 s |
+| Further second-state reads | 104.592 s | 45.479 s |
+| Recheck original state | 1.716 s | 1.740 s |
+
+The initial-state and transition rows are read requests after loading. Loading
+itself normalizes the model and may do work affecting both states. These rows
+must not be interpreted as an attribution of every operation to one state.
+
+| Counter | Before | After |
+| --- | ---: | ---: |
+| `plan.construct` | 22,002 | 21,975 |
+| `plan.prepare` | 3,510,315 | 3,497,716 |
+| `definitions.remember` | 1,204,411 | 1,197,869 |
+| `graph.startRequests` | 44,205 | 44,257 |
+| `graph.tasksCreated` | 6,937 | 6,938 |
+| `graph.wakeCalls` | 58,991 | 58,426 |
+| `graph.newlyDirty` | 18,477 | 18,483 |
+| `graph.resetTask` | 33,767 | 33,816 |
+| `graph.visits` | 136,493 | 135,339 |
+| `preservation.exactComparisons` | 16,639 | 16,569 |
+| `preservation.nominalComparisons` | 13,116 | 13,116 |
+
+Counts include repeats across publications. Wake calls include notifications
+to already dirty tasks; initial task activation is included in resets.
+Scheduling/streaming publication timing can change between executions, so
+differences in graph counts do not by themselves establish a scheduling change.
+The production edit changes only certificate equality checking.
+
+Validation: CodeDog regeneration/build succeeded and **all 1,415 registered
+graph tests passed**. Four focused cases cover shared provenance, different
+requirements on shared evidence, equivalent independent evidence, and distinct
+missing-name dependencies. They check later definition publication still
+invalidates the affected proof.
+
+Ordinary builds were then compared sequentially against the saved baseline,
+with the same fixture, assets, and empty session data. No profile, build, or
+other test overlapped either timed run:
+
+| Temporal cube | Baseline | Shared evidence shortcut |
+| --- | ---: | ---: |
+| Elapsed | 291.89 s | 148.28 s |
+| Peak RSS | 155,508 KiB | 171,432 KiB |
+| Observations | 11/11 | 11/11 |
+
+Elapsed time decreased 49.2% in this pair. One pair is not a stable
+performance guarantee; the independent before/after profile identifies the
+removed work. Ordinary peak RSS increased 15,924 KiB
+(10.2%). The diagnostic pair
+went the other way, from 171,672 to 158,932 KiB; these runs establish no consistent
+memory improvement. The code adds no retained state. The full legacy language
+suite and live Slipstream GUI were not
+rerun. All timings are for the batch model/query exercise.
+
+Evidence: `/tmp/p4-phase-profile/` and `/tmp/p4-phase-profile-after/` contain
+the diagnostic sources, labels, logs, and per-phase JSON counts.
+`/tmp/p4-proof-identity-tests/` contains graph test results;
+`/tmp/p4-proof-identity-cube/` contains ordinary timings, logs, and hashes.
+The setup/analysis scripts are `/tmp/p4-phase-profile-setup.py`,
+`/tmp/p4-phase-profile-after-setup.py`, and their `-analyze.py` counterparts.
+Aborted scratch setup runs were excluded; the completed diagnostic runs were
+sequential.

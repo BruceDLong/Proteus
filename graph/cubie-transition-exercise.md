@@ -403,3 +403,22 @@ sequential with no other tests, builds, or probes overlapping. This single pair
 does not establish a stable runtime difference or live GUI improvement.
 All 1,411 registered graph tests also pass; the broad legacy suite and live GUI
 were not rerun. Results and hashes are in `/tmp/p4-record-index-cube/`.
+
+
+## Shared evidence equality measurement (2026-10-03)
+
+The phase profile found repeated comparison of inherited definition evidence
+to itself as the largest measured component. Certificates with equal
+requirements can now recognize a shared evidence object directly, preserving
+current-proof checks and distinct dependencies. See
+[the traversal report](traversal-profile-results.md#phase-profile-and-shared-evidence-identity-2026-10-03)
+for the phase breakdown and before/after counters.
+
+The ordinary eleven-observation batch took **291.89 s /
+155,508 KiB peak RSS** at baseline `bc9ddce`, and
+**148.28 s / 171,432 KiB** with the shortcut:
+**49.2% less elapsed time in one sequential pair**. Both passed all
+eleven observations, including changed orientation, preserved fields,
+neighboring cubie, sticker color, and the unchanged original state. All 1,415
+graph tests also pass. The broad legacy suite and live GUI were not rerun.
+Ordinary-build logs, timings, and hashes are in `/tmp/p4-proof-identity-cube/`.

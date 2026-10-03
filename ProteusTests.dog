@@ -1,6 +1,11 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphProofIdentity/sharedEvidence
+    unit/graphProofIdentity/differentRequirement
+    unit/graphProofIdentity/equivalentEvidence
+    unit/graphProofIdentity/differentDependencies
+
     unit/graphRecordIndex/nominalRules
     unit/graphRecordIndex/matchingEquivalence
     unit/graphRecordIndex/sharedAnalysis
@@ -12391,6 +12396,60 @@ struct GLOBAL {
     }%>
     void: unitTestGraphDefinitionHelpers(me string: testName, me int: caseID) <- {
         me bool: passed <- graphDefinitionHelpersCase(caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+// Shared provenance can skip equality work, never requirement/dependency checks.
+#define GRAPHPROOFIDENTITY(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphProofIdentity(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHPROOFIDENTITY(unit/graphProofIdentity/sharedEvidence, 1)
+    GRAPHPROOFIDENTITY(unit/graphProofIdentity/differentRequirement, 2)
+    GRAPHPROOFIDENTITY(unit/graphProofIdentity/equivalentEvidence, 3)
+    GRAPHPROOFIDENTITY(unit/graphProofIdentity/differentDependencies, 4)
+
+    me bool: graphProofIdentityCase(me int: caseID) <- <%{
+        using namespace proteus4;
+        GraphNormalizer n;n.init();ProteusDefinitions definitions(n.access);
+        auto target=graphScalar(3,10);
+        auto first=std::make_shared<ProteusDefinitions::Proof>();
+        first->requirement=std::make_shared<DefinitionRequirement>();
+        first->requirement->facts=n.access->typeFacts(target);
+        // A missing catalogue name is still an observed dependency.
+        first->evidence->bindings.push_back({"futurea",{}});
+        auto second=std::make_shared<ProteusDefinitions::Proof>(*first);
+        if(caseID==2) {
+            second->requirement=std::make_shared<DefinitionRequirement>(*first->requirement);
+            second->requirement->facts.number=static_cast<std::int64_t>(4);
+        }
+        if(caseID>=3) {
+            second->requirement=std::make_shared<DefinitionRequirement>(*first->requirement);
+            second->evidence=std::make_shared<ProteusDefinitions::Evidence>();
+            second->evidence->bindings.push_back({caseID==4 ? "futureb" : "futurea",{}});
+        }
+        bool ok=definitions.current(first) && definitions.current(second) && definitions.remember(target,first);
+        ok &= definitions.remember(target,second)==(caseID==2 || caseID==4);
+        ok &= !definitions.remember(target,second);
+        if(caseID==2) {
+            ok &= definitions.accepts(first,target) && !definitions.accepts(second,target);
+        } else if(caseID==4) {
+            auto declarations=graphParsed("proof dependencies","{#futurea=*10+3}");
+            ok &= definitions.publish(declarations->pItem->value->items.head);
+            ok &= !definitions.current(first) && definitions.current(second) && definitions.saved(target)==second;
+        } else {
+            ok &= definitions.saved(target)==first && definitions.accepts(second,target);
+            // Sharing/equivalence never makes a changed source meaning current.
+            auto declarations=graphParsed("proof shared dependencies","{#futurea=*10+3}");
+            ok &= definitions.publish(declarations->pItem->value->items.head);
+            ok &= !definitions.current(first) && !definitions.current(second) && !definitions.saved(target);
+        }
+        if(!ok)std::cout<<"Proof identity case "<<caseID<<" failed\n";
+        n.close();return ok;
+    }%>
+    void: unitTestGraphProofIdentity(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphProofIdentityCase(caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

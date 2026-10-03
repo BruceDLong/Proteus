@@ -672,8 +672,11 @@ public:
             [&](const Certificate& old) { return !current(old); }), certificates.end());
         for (const auto& old : certificates) {
             if (old == proof) return false;
+            // Inherited member certificates share the same source evidence.
+            // Its bindings and witnesses are then identical by construction.
             if (sameDefinition(old->requirement, proof->requirement) &&
-                old->evidence->bindings.size() == proof->evidence->bindings.size() &&
+                (old->evidence == proof->evidence ||
+                (old->evidence->bindings.size() == proof->evidence->bindings.size() &&
                 old->evidence->witnesses.size() == proof->evidence->witnesses.size() &&
                 std::all_of(proof->evidence->witnesses.begin(), proof->evidence->witnesses.end(),
                     [&](const auto& entry) { return old->evidence->witnesses.count(entry.first); }) &&
@@ -681,7 +684,7 @@ public:
                     return std::any_of(old->evidence->bindings.begin(), old->evidence->bindings.end(), [&](const Binding& other) {
                         return binding.name == other.name && binding.body == other.body;
                     });
-                })) return false;
+                })))) return false;
         }
         certificates.push_back(proof); return true;
     }
