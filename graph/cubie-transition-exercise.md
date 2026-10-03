@@ -238,3 +238,33 @@ path syntax. The complete legacy suite was not run for this checkpoint. Logs:
 `/tmp/p4-cube-verified-build.log`, `/tmp/p4-cube-verified-audit/results.json`,
 `/tmp/p4-cube-model-final-parse.log`, and
 `/tmp/p4-cube-slipstream-final-build.log`.
+
+
+## Guarded adjacency preservation (2026-10-02)
+
+The unchanged one-world batch now passes **all 11 query assertions**. In state 2,
+the selected first edge cubie has X-rotation 0.3, preserved Y-rotation 0, and
+preserved location Z 1.1. The neighboring cubie's X-rotation remains 0. The
+sticker hue remains 160, and rereading state 1 still gives X-rotation 0.
+The three previous acceptance failures are resolved without changing the world
+model or expected query strings. The standalone 15-case file was not rerun;
+this batch loads the same actual cube once and checks the 11 retained observations.
+
+These results use the general routes in `TemporalPreservation.h`: previous
+occurrence navigation, finite ordered/nominal part correspondence, current
+constraint guards, and ordinary scalar Sets. No cube-specific solver branch was
+added. The `%?` behavior and scope are documented in
+[temporal-context-results.md](temporal-context-results.md).
+
+Performance is still a limitation. The successful batch took **330.45 seconds**
+with peak RSS **196,964 KiB** on this run; source regeneration overlapped its
+early portion, so this is an integration observation, not a controlled benchmark.
+The run now resolves parts that the previous checkpoint left unknown. Earlier
+150/180-second bounded attempts did not finish. Preservation Sets now publish
+specific changed objects and shared state slots instead of a broad graph change,
+but the full model still performs substantial normalization work. Do not treat
+passing values as proof of interactive rendering speed.
+
+Evidence: `/tmp/p4-preservation-final-cube.log` and
+`/tmp/p4-cube-transition-batch.tst`. The harness reports this as one passing test
+containing 11 observations. No Slipstream GUI run was made for this increment.

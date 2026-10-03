@@ -45,6 +45,7 @@ class PathSelection {
         out.edges.push_back(edge("next field position",std::move(follow),visits));
     }
     bool sourceReady(const POVNode& node,Expansion<POVNode>& out,Cost& visits) const {
+        ProteusPreservationGoal::contribute(*access_,node,{},out,false);
         bool ready=(access_->physicalList(node) || access_->unreferencedTemplateSpan(node)) && !definitions_->pendingOrder(node);
         if(ready) for (const auto& relation:POVDescription(node,access_->registry.get()).relationships()) {
             if(access_->sameInfon(node,relation.target)) continue;
@@ -249,6 +250,8 @@ public:
                 if(!field->updates.empty())
                     out.refinements.push_back({{q.node,relationshipConstraints,0},{1,0},"apply preceding path constraints",false});
                 if (field->result) {
+                    for(const auto& location:field->locations)
+                        ProteusPreservationGoal::contribute(*access_,location.source,location.context,out,false);
                     if(q.kind==selectField && BoundaryGraph::direction(q.related))
                         for(const auto& location:field->locations) if(location.source==field->result)
                             for(const auto& owner:location.context) if(owner!=field->result && BoundaryGraph::temporal(owner))

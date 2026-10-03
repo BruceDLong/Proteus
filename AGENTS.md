@@ -33,8 +33,9 @@ Do not infer time duration from
 member count, expand sparse histories, or silently copy missing fields between arbitrary states. The 2026-09-29
 clarification establishes preservation across a modeled change unless the model
 implies another change, including indirect causal consequences. This transition
-behavior is not yet implemented; preserve distinct temporal occurrences and
-represent dependencies rather than identifying entire successive states. The
+behavior is implemented for scalar and finite, unambiguous part correspondence.
+Preserve distinct temporal occurrences and represent dependencies rather than
+identifying entire successive states. The
 2026-10-01 clarification makes T-list adjacency the source of preservation:
 `{T {a:0, b:7} {a:1}}` retains `b:7` in the second state unless the model
 implies a change. Later-state part references and RHSs target that occurrence,
@@ -46,6 +47,14 @@ existing meanings and do not by themselves declare temporal independence.
 The marker is a contiguous token; `% ?` remains two infons. No new `!%` behavior
 is requested. Preserve the declaration through printing and same-occurrence
 constraints; a temporal value read must not copy the prior state's declaration.
+Preservation is a guarded graph route: exhaust current supplied constraints
+before applying a previous value, including transitive prerequisites. Pending
+input or ambiguous part correspondence must withhold the default. A parent
+copy must not bypass a child's `%?`; expose independent corresponding parts and
+resolve them through the normal goals. Recheck prerequisites at Set execution.
+This does not retract committed values when new assertions arrive afterward.
+Sparse correspondence and open explicit tails remain symbolic; do not enumerate
+them to discover inherited parts. See graph/TemporalPreservation.h.
 See graph/cubie-transition-exercise.md for the current world-model exercise.
 See graph/temporal-context-results.md for the current implementation boundary.
 

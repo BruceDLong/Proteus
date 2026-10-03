@@ -136,6 +136,7 @@ template<class Node> struct Refinement {
     std::string description;
     // false makes completion of this subgoal a requirement of its parent.
     bool alternative = true;
+    bool pruneWhenSatisfied = true; // optional discovery may still expose missing parts
 };
 
 template<class Node> struct Expansion {
@@ -164,6 +165,9 @@ public:
     // Called once after this pass's queued work, before completion metadata.
     // Return priced Sets; do not mutate graph state from this callback.
     virtual CommandBatch<Node> finishPass() { return {}; }
+    // Guarded publications wait for required subgoals, including their own
+    // prerequisites. A visited frontier alone does not prove a guard.
+    virtual bool waitForRequirements() const { return false; }
     // Only alternative routes may be pruned after satisfaction. Constraints
     // remain searchable even when every requested field is already concrete.
     virtual bool satisfied() const = 0;
@@ -584,7 +588,7 @@ template<class Node> class GraphManager {
             s.status.error=s.tasks[0].rejection;s.terminal=true;s.frontier={};
         }
     }
-    static void settle(Context<Node>& c, Session& s) {
+    static std::vector<bool> settle(Context<Node>& c, Session& s, bool publish = true) {
         // Resolve the dependency DAG from its leaves. Cycles cannot establish
         // their own completion; they stay symbolic until other evidence breaks
         // the dependency. No recursive calls or domain-specific fields here.
@@ -605,7 +609,7 @@ template<class Node> class GraphManager {
         while (!ready.empty()) {
             auto i = ready.front(); ready.pop();
             resolved[i] = true;
-            {auto reads=observeTask(c,s,i);c.access->observeTask(s.tasks[i].goal->request);
+            if(publish) {auto reads=observeTask(c,s,i);c.access->observeTask(s.tasks[i].goal->request);
              auto& task=s.tasks[i];std::vector<DependencyProof::Ptr> children;
              for(auto child:task.required) children.push_back(proofs[child]);
              auto proof=DependencyProof::make(task.dependencies,std::move(children));
@@ -615,12 +619,13 @@ template<class Node> class GraphManager {
             for (auto parent : parents[i])
                 if (!--remaining[parent] && local[parent]) ready.push(parent);
         }
-        for (std::size_t i = 0; i < s.tasks.size(); ++i)
+        if(publish) for (std::size_t i = 0; i < s.tasks.size(); ++i)
             if (s.tasks[i].active && !resolved[i] && s.tasks[i].rejection.empty()) {
                 auto reads=observeTask(c,s,i);c.access->observeTask(s.tasks[i].goal->request);
                 s.tasks[i].goal->settled(false,{});
             }
-        s.status.symbolicValues = !resolved[0];
+        if(publish) s.status.symbolicValues = !resolved[0];
+        return resolved;
     }
     static void advance(Context<Node>& c, Session& s) {
         s.status.revision=c.revision;
@@ -635,20 +640,38 @@ template<class Node> class GraphManager {
             s.invalidated.clear();
         }
         if (s.frontier.empty()) {
-            for (std::size_t i=0;i<s.tasks.size();++i) {
-                auto& task=s.tasks[i];
-                if (!task.active || task.finishedPass) continue;
-                task.finishedPass=true;
-                auto reads=observeTask(c,s,i);c.access->observeTask(task.goal->request);
-                try {
-                    auto batch=task.goal->finishPass();
-                    enqueueCommands(s,i,batch.finding,std::move(batch.commands));
-                } catch (const GoalRejected& error) {
-                    reject(s,i,error.what(),task.baseCost);
-                    if (s.terminal) { c.changed.notify_all();return; }
-                }
+            // Ordinary collected results get the first publication opportunity.
+            // Then resolve prerequisite closure for guarded Sets. Completion
+            // metadata is published only after both phases have become quiet.
+            for(int guarded=0;guarded!=2;++guarded) {
+                bool progressed;
+                do {
+                    progressed=false;
+                    std::vector<bool> resolved;
+                    if(guarded) {
+                        if(std::none_of(s.tasks.begin(),s.tasks.end(),[](const auto& task) {
+                            return task.active && !task.finishedPass && task.goal->waitForRequirements();
+                        })) break;
+                        resolved=settle(c,s,false);
+                    }
+                    for(std::size_t i=0;i<s.tasks.size();++i) {
+                        auto& task=s.tasks[i];
+                        if(!task.active || task.finishedPass || task.goal->waitForRequirements()!=bool(guarded)) continue;
+                        if(guarded && (task.deferred || !task.rejection.empty() ||
+                           std::any_of(task.required.begin(),task.required.end(),[&](auto child){return !resolved[child];}))) continue;
+                        task.finishedPass=true;progressed=true;
+                        auto reads=observeTask(c,s,i);c.access->observeTask(task.goal->request);
+                        try {
+                            auto batch=task.goal->finishPass();
+                            enqueueCommands(s,i,batch.finding,std::move(batch.commands));
+                        } catch(const GoalRejected& error) {
+                            reject(s,i,error.what(),task.baseCost);
+                            if(s.terminal) {c.changed.notify_all();return;}
+                        }
+                    }
+                    if(!s.frontier.empty()) return;
+                } while(guarded && progressed);
             }
-            if (!s.frontier.empty()) return;
             settle(c,s);
             s.status.fullyNormed = true;
             s.status.withSubscribers = s.watch && s.status.symbolicValues;
@@ -671,8 +694,33 @@ template<class Node> class GraphManager {
             if (s.terminal) c.changed.notify_all();
         }
     }
+    static bool requirementsReady(Context<Node>& c, Session& s, std::size_t consumer) {
+        // Recheck only this prerequisite DAG at the execution boundary. Scoped
+        // writes can reopen a child without invalidating its consumer's reads.
+        std::vector<std::pair<std::size_t,bool>> pending;
+        std::map<std::size_t,int> state;
+        for(auto child:s.tasks[consumer].required) pending.push_back({child,false});
+        while(!pending.empty()) {
+            auto [index,leaving]=pending.back();pending.pop_back();
+            if(leaving) {state[index]=2;continue;}
+            if(state[index]==2) continue;
+            if(state[index]==1) return false;
+            const auto& task=s.tasks[index];
+            if(!task.active || task.dirty || !task.finishedPass || task.deferred || !task.rejection.empty()) return false;
+            {auto reads=observeTask(c,s,index);c.access->observeTask(task.goal->request);
+             if(task.goal->symbolic()) return false;}
+            state[index]=1;pending.push_back({index,true});
+            for(auto child:task.required) pending.push_back({child,false});
+        }
+        return true;
+    }
     static void follow(Context<Node>& c, Session& s, typename Session::Pending& pending) {
         auto goal = s.tasks[pending.task].goal;
+        if(pending.edge.command && goal->waitForRequirements() && !requirementsReady(c,s,pending.task)) {
+            s.tasks[pending.task].finishedPass=false;
+            s.steps.push_back({"wait for changed prerequisites",goal->request,pending.cost,c.revision});
+            return;
+        }
         if (pending.edge.alternative && goal->satisfied()) return;
         auto arrival = pending.edge.follow();
         auto query = arrival.query;
@@ -700,7 +748,7 @@ template<class Node> class GraphManager {
         for (auto& edge : expansion.edges)
             enqueue(s, pending.task, pending.cost, std::move(edge), pending.path);
         for (const auto& refinement : expansion.refinements) {
-            if (refinement.alternative && goal->satisfied()) continue;
+            if (refinement.alternative && refinement.pruneWhenSatisfied && goal->satisfied()) continue;
             Cost cost = addCost(pending.cost, s.policy.estimate(refinement.work));
             if (cost > s.policy.maximumRoute && refinement.alternative) {
                 s.steps.push_back({"exclude: " + refinement.description,

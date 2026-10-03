@@ -139,3 +139,55 @@ Logs: `/tmp/p4-temporal-marker-final-build.log`,
 `/tmp/p4-temporal-marker-audit/results.json`, and
 `/tmp/p4-temporal-marker-parser.log`. No full legacy-language or GUI run was
 performed for this syntax/declaration increment.
+
+
+## Guarded preservation routes (2026-10-02)
+
+T-list adjacency now contributes a previous-occurrence route using the existing
+relative-navigation goal. The occurrence view retains that correspondence; it
+is not a strict identity, a copied RHS, or an identification of temporal supports.
+The normalizer and path selector both expose this route to the graph.
+
+`TemporalPreservation.h` applies a default only after its required graph goals
+have exhausted the current supplied constraints. Scalar guards use the ordinary
+value traversal and Set primitives, including intermediate results, without
+requiring an otherwise unconstrained unknown to acquire a value. Pending input,
+unresolved expressions, required cycles, and ambiguous correspondence keep the
+route pending. The runtime checks the transitive prerequisites again immediately
+before a guarded Set; a publication can reopen them after the Set was queued.
+
+Composite preservation exposes independent corresponding parts one level at a
+time. Finite ordered lists correspond by position; unordered parts use the
+existing unique nominal correspondence. The next state's explicit values win,
+ordinary unknowns can preserve the prior value, and `%?` excludes only this
+default route. Explicit relationships can still supply the same or a different
+compatible value. A parent cannot import an entire value and bypass a child's
+marker. Source occurrences and their values remain distinct and unchanged.
+
+The new Sets publish their actual modified objects, including shared value/size
+slots. View reads observe those slots so an already-subscribed alias wakes
+without a broad graph restart. Structural discovery remains available even when
+a list's header is already known; knowing the header does not establish that
+all inherited parts have been exposed.
+
+This increment does not implement retraction after a value has been committed,
+part removal/replacement, ambiguous correspondence, or correspondence across
+unresolved sparse/open spans. Such spans are left symbolic without enumeration.
+It is groundwork for causal transitions, not a claim of general causal closure.
+
+Validation: a regenerated CodeDog/C++ build succeeded. All **1,379 graph tests**
+across 64 suites pass, including 32 new preservation cases. The **57-case parser
+suite** and **68 native runtime scenarios** pass. The runtime regressions cover
+transitive and cyclic guards and a queued Set whose prerequisite is invalidated
+by another scoped publication. The domain cases include late input, `%?` from
+RHSs/definitions, explicit reads, implied changes, original-state isolation,
+retained paths, cancellation, cost exclusion, shared-state notification, and
+non-enumeration of a million-item sparse list. No existing expectation changed.
+
+Logs: `/tmp/p4-preservation-verified-build.log`,
+`/tmp/p4-preservation-verified-focused.log`,
+`/tmp/p4-preservation-verified-audit.log`, `/tmp/p4-preservation-verified-parser.log`,
+and `/tmp/p4-preservation-runtime-final.log`. The unchanged cube batch also
+passes all 11 observations; its performance limitation is recorded in
+[cubie-transition-exercise.md](cubie-transition-exercise.md).
+The complete legacy language suite and Slipstream GUI were not run for this step.

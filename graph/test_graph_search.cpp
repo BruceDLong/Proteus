@@ -142,6 +142,25 @@ public:
     }
 };
 
+// A default publication must wait for the transitive prerequisite closure.
+class GuardedGoal : public TestGoal {
+public:
+    using TestGoal::TestGoal;
+    bool waitForRequirements() const override {return true;}
+    CommandBatch<Node> finishPass() override {
+        if(satisfied()) return {};
+        auto target=request.node;
+        return {{request,{},0},{{"Set guarded default",[target]{target->value=7;return true;}}}};
+    }
+};
+class GuardedAccess : public TestAccess {
+public:
+    std::shared_ptr<GoalSpec<Node>> goal(const Query<Node>& q) override {
+        if(q.kind==3) return std::make_shared<GuardedGoal>(q);
+        return TestAccess::goal(q);
+    }
+};
+
 // The scheduler knows none of these fields. This adapter reports every read,
 // including failed lookups, and scopes writes to the same evidence tokens.
 class TrackedGoal : public TestGoal {
@@ -178,6 +197,65 @@ static bool saw(const NormalizationHandle<Node>& h, const std::string& label) {
 
 int main() {
     int cases = 0;
+    {
+        // A scoped publication can invalidate a prerequisite after a guarded
+        // Set was queued, without invalidating the consumer's own reads.
+        struct GuardChange : TestGoal {
+            Node leaf;std::shared_ptr<bool> fired;
+            GuardChange(Query<Node> q,Node l,std::shared_ptr<bool> f):TestGoal(q),leaf(l),fired(f) {}
+            bool waitForRequirements() const override {return true;}
+            CommandBatch<Node> finishPass() override {
+                if(*fired) return {};
+                auto l=leaf;auto f=fired;
+                return {{request,{},0},{{"Invalidate pending guard",[l,f] {
+                    *f=true;l->value=-1;return SetResult{true,Changes::only({l->facts})};
+                }}}};
+            }
+        };
+        struct SlowDefault : GuardedGoal {
+            using GuardedGoal::GuardedGoal;
+            CommandBatch<Node> finishPass() override {
+                auto batch=GuardedGoal::finishPass();
+                for(auto& command:batch.commands) command.work={100,100};
+                return batch;
+            }
+        };
+        struct Access : TrackedAccess {
+            Node root,receiver,changer,leaf;
+            std::shared_ptr<bool> fired=std::make_shared<bool>(false);
+            std::shared_ptr<GoalSpec<Node>> goal(const Query<Node>& q) override {
+                if(q.kind==3) return std::make_shared<SlowDefault>(q);
+                if(q.kind==4) return std::make_shared<GuardChange>(q,leaf,fired);
+                return TrackedAccess::goal(q);
+            }
+            Expansion<Node> expand(const Query<Node>& q) override {
+                if(q.node!=root) return TrackedAccess::expand(q);
+                Expansion<Node> out;
+                out.refinements={{{receiver,3},{0,0},"guarded consumer",false},{{changer,4},{0,0},"guard change",false}};
+                return out;
+            }
+        };
+        auto access=std::make_shared<Access>();access->root=node(1);access->receiver=node();access->changer=node(1);access->leaf=node(1);
+        access->receiver->required={{access->leaf,0}};
+        GraphManager<Node> manager(access);auto h=manager.normalize({access->root,1});h.waitForCompletion();
+        assert(*access->fired && access->receiver->value==-1 && h.status().withSubscribers);
+        h.cancel();++cases;
+    }
+
+    {
+        auto access=std::make_shared<GuardedAccess>();GraphManager<Node> manager(access);
+        auto root=node(),guard=node(1),leaf=node();guard->required={{leaf,0}};root->required={{guard,0}};
+        auto h=manager.normalize({root,3});h.waitForCompletion();
+        assert(root->value==-1 && h.status().withSubscribers);
+        manager.update([&]{leaf->value=1;});h.waitForCompletion();
+        assert(root->value==7 && !h.status().symbolicValues);++cases;
+    }
+    {
+        auto access=std::make_shared<GuardedAccess>();GraphManager<Node> manager(access);
+        auto root=node(),guard=node(1);guard->required={{guard,0}};root->required={{guard,0}};
+        auto h=manager.normalize({root,3});h.waitForCompletion();
+        assert(root->value==-1 && h.status().withSubscribers);h.cancel();++cases;
+    }
     {
         auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
         auto root = node(), middle = node(), leaf = node(7);

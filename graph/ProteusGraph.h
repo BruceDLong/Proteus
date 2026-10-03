@@ -21,11 +21,13 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectionExtentMember = 20, selectionExtentEnd = 21,
               typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27,
               selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31,
-              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62, scalarCorrespondence = 63, placeArgument = 64, resolveEndpoint = 65, endpointPosition = 66, endpointFound = 67, resolveWord = 68, resolutionStep = 69, externalField = 70, externalPosition = 71, externalMatched = 72, externalUnknown = 73, externalEnd = 74, acquireListValue = 75, selectEnvironment = 76, recordCorrespondence = 77, sequenceChoiceMatched = 78, boundaryAccess = 79, boundaryRelations = 80, boundaryMember = 81, boundaryEnd = 82, temporalSupport = 83, temporalCut = 84, temporalSide = 85, temporalValueFound = 86, resolvePathExpression = 87, temporalSideSpan = 88, temporalSideMember = 89, sequenceChartState = 90, sequenceChartCall = 91, temporalDeclaration = 92 };
+              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62, scalarCorrespondence = 63, placeArgument = 64, resolveEndpoint = 65, endpointPosition = 66, endpointFound = 67, resolveWord = 68, resolutionStep = 69, externalField = 70, externalPosition = 71, externalMatched = 72, externalUnknown = 73, externalEnd = 74, acquireListValue = 75, selectEnvironment = 76, recordCorrespondence = 77, sequenceChoiceMatched = 78, boundaryAccess = 79, boundaryRelations = 80, boundaryMember = 81, boundaryEnd = 82, temporalSupport = 83, temporalCut = 84, temporalSide = 85, temporalValueFound = 86, resolvePathExpression = 87, temporalSideSpan = 88, temporalSideMember = 89, sequenceChartState = 90, sequenceChartCall = 91, temporalDeclaration = 92, temporalPredecessor = 93, preserveTemporal = 94 };
 
 // Only the explicitly normalized result requests its immediate omitted parts.
 // Related sources and member refinements retain demand-driven expansion.
-enum NormalizationExtent { lazyParts = 0, fillImmediateParts = 1 };
+// A value-only guard may exhaust existing routes without requiring a value;
+// it excludes preservation and still retains unresolved input/expression work.
+enum NormalizationExtent { settleExistingRoutes = -1, lazyParts = 0, fillImmediateParts = 1 };
 
 inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
     auto phase = query.kind == correspondenceEnter ? ListPhase::enter :
@@ -43,6 +45,7 @@ inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
 #include "BoundaryGraph.h"
 #include "RelativeNavigation.h"
 #include "TemporalGraph.h"
+#include "TemporalPreservation.h"
 #include "PathSelection.h"
 #include "Resolution.h"
 #include "DefinitionProjection.h"
@@ -430,7 +433,10 @@ public:
         if (request.kind == itemAt) return bool(selected_);
         return (access_->known(request.node) & request.kind) == request.kind;
     }
-    bool symbolic() const override { return deferred_ || !satisfied(); }
+    bool symbolic() const override {
+        bool routesOnly=request.kind==valueOnly && request.argument==settleExistingRoutes;
+        return deferred_ || (!routesOnly && !satisfied());
+    }
     POVNode result() const override {
         return request.kind == itemAt ? selected_ : request.node;
     }
@@ -799,6 +805,8 @@ public:
         return result;
     }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
+        if(query.kind==temporalPredecessor || query.kind==preserveTemporal)
+            return std::make_shared<ProteusPreservationGoal>(query,access_,definitions_);
         if(query.kind==temporalDeclaration)
             return std::make_shared<ProteusTemporalDeclarationGoal>(query);
         if(query.kind>=temporalSupport && query.kind<=temporalSide)
@@ -1067,6 +1075,8 @@ private:
         }
         if ((query.kind >= sizeOnly && query.kind <= sizeAndValue) || query.kind == relationshipConstraints) {
             const bool constraintsOnly = query.kind == relationshipConstraints;
+            if(!constraintsOnly && !(query.kind==valueOnly && query.argument==settleExistingRoutes))
+                ProteusPreservationGoal::contribute(*access_,node,query.context,result);
             if(definitions_->pendingOrder(node)) {result.deferred=true;return result;}
             const int demand = constraintsOnly ? sizeAndValue : query.kind;
             // Do not compare noncanonical scalar evidence while its local Set
@@ -1180,7 +1190,7 @@ private:
                     if(verdict<0) throw GoalRejected("incompatible scalar constraints");
                     if(!verdict) result.deferred=true;
                 }
-                result.edges.push_back(direct(label, {source, query.kind, 0, origin, context}));
+                result.edges.push_back(direct(label, {source, query.kind, query.argument==settleExistingRoutes ? settleExistingRoutes : lazyParts, origin, context}));
                 if (demand != sizeOnly && access_->correspondingLists(origin, source)) {
                     result.refinements.push_back({{origin, listCorrespondence, demand, source},
                         {1, 0}, "match list RHS members", false});

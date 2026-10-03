@@ -181,5 +181,8 @@ constraints to determine the value, including the same value as before. It does
 not erase a known value, assert inequality, or suppress explicit relationships.
 `% ?` remains two infons. The user does not request new `!%` functionality.
 
-General adjacency-based preservation and causal precedence remain implementation
-work; accepting the marker does not by itself supply missing cube-state fields.
+Scalar and finite unambiguous part preservation now use guarded graph routes;
+see [temporal-context-results.md](temporal-context-results.md). Pending supplied
+constraints prevent a default Set. Evidence arriving after a value has been
+committed, general causal closure, membership changes, and sparse correspondence
+remain separate implementation/design boundaries.

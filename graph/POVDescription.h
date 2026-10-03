@@ -8,6 +8,9 @@
 inline void observeInfon(const std::shared_ptr<infonView>& view) {
     if(!view) return;
     ReadScope::observeObject(view.get());
+    // Selected views can share state slots while retaining distinct headers.
+    ReadScope::observeObject(view->infSize.get());
+    ReadScope::observeObject(view->value.get());
     ReadScope::observeObject(view->pathSelection.get());
     ReadScope::observeObject(view->innr.get());
 }
@@ -81,6 +84,7 @@ public:
     POV* occurrenceSource() const { readView(node_); return node_->implicitItem.sourcePov; }
     std::int64_t occurrenceIndex() const { readView(node_); return node_->implicitItem.sourceIndex; }
     const std::vector<POVNode>& work() const { return readView(node_)->wrkList; }
+    POVNode temporalPredecessor() const { return readView(node_)->temporalPredecessor; }
     bool independentTemporalValue() const {
         return getFlagBit(readView(node_)->flags,infonView::independentTemporalValue);
     }
