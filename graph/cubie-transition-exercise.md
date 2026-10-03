@@ -1,15 +1,15 @@
 # One-cubie transition exercise
 
 The current target is edge cubie 1, at
-`location:{xLoc:0, yLoc:-1.1, zLoc:1.1}`: change `xRot` from `0` to `0.3` in
-T-item 2. This is a single-cubie orientation edit, not a physical face turn.
+`location:{xLoc:0, yLoc:-1.1, zLoc:1.1}`: change `xRot` from `0` to
+`3.14` (approximately a half-turn about X) in T-item 2. This is a single-cubie orientation edit, not a physical face turn.
 Earlier checkpoints below used edge cubie 10 and `0.5`.
 
 `Resources/TestFiles/rubixTransition.pr` imports the Foundation and cube models.
 Its second state now retains the parent of one leaf constraint:
 
 ```proteus
-rubixState.edgeCubes@[1].thing.orientation.xRot=0.3;;;;;
+rubixState.edgeCubes@[1].thing.orientation.xRot=3.14;;;;;
 ```
 
 The five semicolons return through the five selected descendants to the
@@ -26,7 +26,7 @@ The single-color side representation remains unchanged.
 
 ## Required transition observations
 
-- Later selected cubie xRot is 0.3; earlier xRot remains 0.
+- Later selected cubie xRot is 3.14; earlier xRot remains 0.
 - Its yRot, zRot, location, and sticker information remain available.
 - A neighboring cubie retains its known values.
 - Information genuinely unknown in the source is not invented.
@@ -495,3 +495,50 @@ See [the traversal report](traversal-profile-results.md#retaining-completed-part
 for work counts, rejected experiments, invalidation boundaries, and the full
 timing table. Logs and executable hashes are in
 `/tmp/p4-transition-work/ordinary/`.
+
+
+## Visible half-turn and the remaining wrapped-history issue (2026-10-03)
+
+The authored second state now changes edge cubie 1's X rotation to 3.14
+radians in both the test fixture and Slipstream's userKB. The existing
+eleven-observation direct-history batch passes with that expectation: the
+earlier rotation stays zero, and the checked other rotations, location,
+neighbor and sticker are preserved. The renderer and its frame-driven
+presentation animation are unchanged, as requested.
+
+This model change does **not** yet establish a visible half-turn in Slipstream.
+An isolated run switched the actual `<`/`>` controls and compared rendering
+at fixed presentation angles. A subsequent debugger-owned run observed
+`Scene3D::attempt3DDraw` for the cubie at `(0,-1.1,1.1)`: both the earlier and
+later occurrence supplied rotation `(0,0,0)` to the renderer. This is actual
+render-path evidence, not an inference from an unchanged-looking image.
+
+A separate synchronous world reproducer uses the GUI's extra outer S-list:
+
+```proteus
+rubixCube:{T {thing, rubixState}|
+    {
+        thing:{orientation:{xRot:3, yRot:3, zRot:0},
+               location:{xLoc:0, yLoc:0, zLoc:3.5}},
+        solvedState
+    }
+    {rubixState.edgeCubes@[1].thing.orientation.xRot=3.14;;;;;,}
+}
+```
+
+With the same public definitions loaded, direct chained reads of the later
+rubixState's X rotation, Y rotation and sticker hue return an empty open
+oneOf in that reproducer; the earlier rotation is found. By contrast, explicitly
+normalizing the whole second outer state produces a body containing the changed
+X rotation 3.14, preserved Y/Z rotations, positions and stickers. That establishes
+a difference between the whole-state and descendant-demand paths. It does not
+yet identify which preparation, correspondence or lifecycle step is missing.
+Do not repair it by duplicating solvedState or changing the expected values.
+
+Evidence: `/tmp/p4-edge-half-turn-tests.log` and `/tmp/p4-edge-half-turn.tst`
+(11 direct-history observations); `/tmp/p4-edge-flip-after/` (isolated
+screenshots; only the test process's presentation counter was held for
+comparison); `/tmp/p4-edge-render-trace-2/app.log` (actual renderer poses);
+`/tmp/p4-half-turn-wrapper-test/` (wrapper fixture, chained-read failure and
+whole-state diagnostic dump). The user's live window was not controlled.
+No engine, renderer, or animation change was made in this step.

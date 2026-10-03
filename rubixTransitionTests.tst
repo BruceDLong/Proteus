@@ -10,7 +10,7 @@ world/cubie/beforeOtherRotation, Read original cube state, %W.cubeTransition@[1]
 world/cubie/beforeLocation, Read original cube state, %W.cubeTransition@[1].edgeCubes@[10].thing.location.zLoc, *_+[zLoc:-1.1 ... ], world, TestFiles/rubixTransition.pr
 world/cubie/beforeSiblingRotation, Read original cube state, %W.cubeTransition@[1].edgeCubes@[11].thing.orientation.xRot, *_+[xRot:0 ... ], world, TestFiles/rubixTransition.pr
 world/cubie/beforeChangedRotation, First cubie starts unchanged, %W.cubeTransition@[1].edgeCubes@[1].thing.orientation.xRot, *_+[xRot:0 ... ], world, TestFiles/rubixTransition.pr
-world/cubie/afterRotation, RHS changes only the later orientation, %W.cubeTransition@[2].edgeCubes@[1].thing.orientation.xRot, *_+[xRot:0.3 ... ], world, TestFiles/rubixTransition.pr
+world/cubie/afterRotation, RHS changes only the later orientation, %W.cubeTransition@[2].edgeCubes@[1].thing.orientation.xRot, *_+[xRot:3.14 ... ], world, TestFiles/rubixTransition.pr
 world/cubie/afterOtherRotation, Preserve the changed cubies other rotation, %W.cubeTransition@[2].edgeCubes@[1].thing.orientation.yRot, *_+[yRot:0 ... ], world, TestFiles/rubixTransition.pr
 world/cubie/afterLocation, Preserve the changed cubies location, %W.cubeTransition@[2].edgeCubes@[1].thing.location.zLoc, *_+[zLoc:1.1 ... ], world, TestFiles/rubixTransition.pr
 world/cubie/afterSiblingRotation, Preserve a different cubies orientation, %W.cubeTransition@[2].edgeCubes@[2].thing.orientation.xRot, *_+[xRot:0 ... ], world, TestFiles/rubixTransition.pr
