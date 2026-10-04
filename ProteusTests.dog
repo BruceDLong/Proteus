@@ -158,6 +158,7 @@ TestsToRun = `
     unit/graphContextual/retainedNestedFacts
     unit/graphContextual/lateDescriptiveTransfer
     unit/graphContextual/composedTransfer
+    unit/graphContextual/composedPartialTransfer
     unit/streamInsert/parseFirstPolicy
     unit/streamInsert/assetRelative
     unit/streamInsert/openAssetDependency
@@ -12066,40 +12067,42 @@ struct GLOBAL {
     GRAPHCONTEXTUAL(unit/graphContextual/retainedNestedFacts, 18)
     GRAPHCONTEXTUAL(unit/graphContextual/lateDescriptiveTransfer, 19)
     GRAPHCONTEXTUAL(unit/graphContextual/composedTransfer, 20)
+    GRAPHCONTEXTUAL(unit/graphContextual/composedPartialTransfer, 21)
     me bool: contextualDefinitionCase(me string: testName, me int: caseID) <- <%{
         using namespace proteus4;
         GraphNormalizer n;n.init();
         auto parse=[&](const std::string& text){return graphParsed(testName,text);};
         auto norm=[&](const POVNode& p){auto h=n.normalize(p);h.waitForCompletion();return h;};
-        if(caseID==20) {
+        if(caseID==20 || caseID==21) {
             auto defs=parse("{#item=*3+{label:$,cargo,position:_} #left=item:{label:'left',} #right=item:{label:'right',} "
                 "#state=*2+{left,right} #known=state:{left:{cargo={tag:'x',},position:1},right:{cargo={tag:'y',},position:2}} "
                 "#table={2 1} #swap={T state state:{"
                 "left:{cargo:%?=%@[1]~item:{label:'right',}.cargo,position=table@[%@[1]~item:{label:'right',}.position]},"
                 "right:{cargo:%?=%@[1]~item:{label:'left',}.cargo,position=table@[%@[1]~item:{label:'left',}.position]}}}}");
+            auto hold=parse("{#hold={T state state:{right:{position:1,},}}}");norm(hold);
             norm(defs);auto declarations=toString(defs->pItem.get());
             auto read=[&](const POVNode& state) {
-                norm(state);std::string result;
+                norm(state);std::map<std::string,std::string> fields;
                 for(auto part=POVDescription(state).member();part;part=part->next) {
                     norm(part);auto cargo=n.knownField(part,"cargo"),position=n.knownField(part,"position");
                     if(cargo) norm(cargo);
                     auto tag=cargo ? cargo->pItem->fetchField("tag") : POVNode{};
                     if(!tag || !position || !(n.access->known(position)&valueOnly)) return std::string("unresolved");
-                    result+=tag->pItem->value->str+":"+position->pItem->value->num.val.get_str()+";";
+                    fields[part->pItem->type->typeID()]=tag->pItem->value->str+":"+position->pItem->value->num.val.get_str()+";";
                 }
-                return result;
+                std::string result;for(const auto& field:fields) result+=field.second;return result;
             };
             std::vector<POVNode> histories;
             std::vector<std::pair<POVNode,std::string>> snapshots;
             POVNode previous;bool ok=true;
-            for(int step=0;step<4;++step) {
-                auto history=parse(previous ? "swap:{T ? ?}" : "swap:{T known ?}");histories.push_back(history);
+            for(int step=0;step<(caseID==21 ? 2 : 4);++step) {
+                auto history=parse(!previous ? "swap:{T known ?}" : caseID==21 ? "hold:{T ? ?}" : "swap:{T ? ?}");histories.push_back(history);
                 auto first=POVDescription(history).member();
                 if(previous) n.addRHS(first,previous);
                 else {auto value=read(first);ok &= value=="x:1;y:2;";snapshots.push_back({first,value});}
                 auto h=norm(history);ok &= !h.status().failed;
                 previous=POVDescription(history).member(true);auto value=read(previous);
-                ok &= value==(step%2 ? "x:1;y:2;" : "y:1;x:2;");snapshots.push_back({previous,value});
+                ok &= value==(caseID==21 && step==1 ? "y:1;x:1;" : step%2 ? "x:1;y:2;" : "y:1;x:2;");snapshots.push_back({previous,value});
                 if(!ok) std::cout<<"Composed transfer "<<step+1<<": "<<value<<" error="<<h.status().error<<"\n";
                 h.cancel();
             }

@@ -11,8 +11,13 @@ class ProteusPreservationGoal : public GoalSpec<POVNode> {
     // Existing membership can expose correspondence before child values settle.
     // Direct relationships and root expressions still need their guarded pass.
     bool correspondenceReady(const POVNode& node) const {
-        if(!access_->literalList(node) || access_->inputPending(node) ||
-           !POVDescription(node,access_->registry.get()).relationships().empty()) return false;
+        if(!access_->literalList(node) || access_->inputPending(node)) return false;
+        // A retained identity whose facts are already represented cannot add
+        // a competing part. Unresolved relationships still block correspondence.
+        for(const auto& relation:POVDescription(node,access_->registry.get()).relationships()) {
+            RHSRepresentation proof(access_,node,relation.target,definitions_);
+            if(!proof.represented) return false;
+        }
         if(!definitions_->required(node)) return true;
         auto proof=definitions_->saved(node);
         return proof && proof->requirement && proof->requirement->expressions.empty() &&
