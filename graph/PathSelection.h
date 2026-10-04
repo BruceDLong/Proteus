@@ -185,8 +185,39 @@ class PathSelection {
         Expansion<POVNode> out;
         if(q.kind>=choiceMatched) return out;
         if(q.kind==filterChoice) {
+            // A provisional choice is still a live path query. Refresh its
+            // producer before filtering the current alternatives, just as a
+            // chained field/index access refreshes its preceding segment.
+            if(auto field=readView(q.node)->pathSelection) {
+                out.refinements.push_back({pathRequest(q.node,pathCandidates),{0,0},"refresh choice source",false});
+                if(!field->updates.empty())
+                    out.refinements.push_back({{q.node,relationshipConstraints,0},{1,0},"apply choice source constraints",false});
+                if(field->result) {
+                    auto next=q;next.node=field->result;
+                    for(const auto& location:field->locations) if(location.source==field->result && !location.context.empty()) {
+                        next.context.resize(1);
+                        next.context.insert(next.context.end(),location.context.begin()+1,location.context.end());
+                        break;
+                    }
+                    out.edges.push_back(edge("filter selected path alternatives",std::move(next)));
+                }
+                return out;
+            }
+            // A formerly provisional choice can collapse to one concrete
+            // value. Filter that value itself, not its record/list members.
+            if(!readView(q.node)->isOrLike()) {
+                FieldPredicate predicate(access_,definitions_,out);
+                auto match=predicate.match(q.related,q.node,{q.context.begin()+1,q.context.end()});
+                if(match!=ScalarMatch::no) {
+                    auto found=q;found.kind=match==ScalarMatch::yes ? choiceMatched : choiceUnknown;
+                    out.edges.push_back(edge("compatible resolved choice",std::move(found),predicate.work.visits));
+                }
+                auto end=q;end.kind=choiceEnd;
+                out.edges.push_back(edge("resolved choice boundary",std::move(end)));
+                return out;
+            }
             auto body=readView(q.node)->innr;
-            if(!readView(q.node)->isOrLike() || !access_->plain(q.node,true,false,false,false) || !access_->literalSelectionBody(body) ||
+            if(!access_->plain(q.node,true,false,false,false) || !access_->literalSelectionBody(body) ||
                body->partRef || !body->wrkList.empty() || !POVDescription(q.node,access_->registry.get()).relationships().empty()) {
                 out.deferred=true;return out;
             }

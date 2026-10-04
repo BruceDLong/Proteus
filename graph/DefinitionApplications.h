@@ -354,9 +354,15 @@ public:
         return (access_->hasTypeRequirements(node) && !optional(node)) ||
             (access_->memberTemplate(node) && !access_->fedTemplate(node)) || access_->occurrenceOwner(node);
     }
-    static bool selfExpression(const POVNode& node) {
-        return getModeBits(readView(node)->flags,infonView::viewMode)==infonView::vmCursor &&
-            getModeBits(readView(node)->flags,infonView::cursorMode)==infonView::cmSelf;
+    static bool instanceExpression(const POVNode& node) {
+        const auto& value=readView(node);
+        // Paths are instance expressions even when the outer source is a
+        // named value: table@[%.index] must bind its index in this instance.
+        // Keep the complete syntax as an RHS and let ordinary path goals
+        // resolve it; compiling just the source would lose its constraints.
+        return value->partRef || !value->parts.empty() ||
+            (getModeBits(value->flags,infonView::viewMode)==infonView::vmCursor &&
+             getModeBits(value->flags,infonView::cursorMode)==infonView::cmSelf);
     }
     Certificate compiledBody(const POVNode& node,const POVNode& root) const {
         if(node==root) return {};
@@ -376,7 +382,7 @@ public:
     }
     bool children(const POVNode& node, const POVNode& root, std::vector<POVNode>& result, bool fullMeaning=false) const {
         if(compiledBody(node,root)) return true;
-        if(node!=root && selfExpression(node)) return true;
+        if(node!=root && instanceExpression(node)) return true;
         if (!facts(node,node==root).valid) return false;
         if (node != root && !access_->scalarTypeShape(node) && !listRequirement(node) && !choiceBody(node)) return false;
         // Registry constraints within a shared body need a read-only relation
@@ -429,7 +435,7 @@ public:
             proof->composition.visits=addCost(proof->composition.visits,cached->evidence->witnesses.size());
             return;
         }
-        if(node!=root && selfExpression(node)) {
+        if(node!=root && instanceExpression(node)) {
             auto expression=std::make_shared<DefinitionRequirement>();expression->facts.valid=true;
             expression->expressions.push_back({node,{}});
             expression->analyzeExpressions();
@@ -734,6 +740,34 @@ public:
         }
         return {!changes.empty(),changes};
     }
+    // A containing definition can defer a child's written parts. When that
+    // child is requested directly, apply those retained facts before expanding
+    // its generic type; a broader type certificate must not hide them.
+    std::vector<SetCommand> retainedParts(const POVNode& node) {
+        evidenceKey(node);
+        auto found=evidence_.find(readView(node));
+        if(found==evidence_.end()) return {};
+        auto selected=saved(node,true);
+        for(const auto& proof:found->second) {
+            // The ordinary type goal already plans its selected certificate.
+            // Only additional retained requirements need a separate plan.
+            if(proof==selected || !current(proof) || !covers(proof,node) || !proof->requirement->list) continue;
+            auto requirement=proof->requirement;
+            // A supplied typed description may omit ordered fields. Its
+            // counted width is not an explicit extent of the completed type.
+            if(requirement->facts.hasSize && !requirement->facts.explicitSize && !covers(proof,node,true)) {
+                requirement=std::make_shared<DefinitionRequirement>(*requirement);
+                requirement->facts.hasSize=false;
+            }
+            auto plan=std::make_shared<ProteusDefinitionPlan>(access_,node,requirement,
+                std::map<POVNode,std::int64_t>{},true,true);
+            if(!plan->supported || plan->writes.empty()) continue;
+            return {{"Apply retained part requirements",[this,node,proof,plan] {
+                return applyChanges(node,proof,plan);
+            },plan->work}};
+        }
+        return {};
+    }
     bool apply(const POVNode& node, const Certificate& proof, const std::shared_ptr<ProteusDefinitionPlan>& plan) {
         return applyChanges(node,proof,plan);
     }
@@ -945,6 +979,10 @@ public:
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
         auto q = visit.query;
         if(q.kind==typeRequirements) {entry_=visit;entered_=true;}
+        if(q.kind==typeRequirements && request.argument==fillImmediateParts) {
+            auto retained=definitions_->retainedParts(request.node);
+            if(!retained.empty()) return retained;
+        }
         if (q.kind == definitionEnter) definitions_->collect(q.node, request.node, proof_,request.kind==typeRequirements && request.argument==fillImmediateParts);
         if (q.kind == definitionLeave) definitions_->finish(q.node, request.node, proof_,request.kind==typeRequirements && request.argument==fillImmediateParts);
         bool entry = q.kind == typeRequirements || q.kind == compileTypeRequirements;

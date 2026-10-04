@@ -152,6 +152,10 @@ TestsToRun = `
     unit/graphContextual/inheritedContextualParts
     unit/graphContextual/unorderedWrittenParts
     unit/graphContextual/lateInheritedParts
+    unit/graphContextual/namedIndex
+    unit/graphContextual/lateNamedIndex
+    unit/graphContextual/retainedNestedFacts
+    unit/graphContextual/lateDescriptiveTransfer
     unit/streamInsert/parseFirstPolicy
     unit/streamInsert/assetRelative
     unit/streamInsert/openAssetDependency
@@ -12039,11 +12043,65 @@ struct GLOBAL {
     GRAPHCONTEXTUAL(unit/graphContextual/inheritedContextualParts, 13)
     GRAPHCONTEXTUAL(unit/graphContextual/unorderedWrittenParts, 15)
     GRAPHCONTEXTUAL(unit/graphContextual/lateInheritedParts, 14)
+    GRAPHCONTEXTUAL(unit/graphContextual/namedIndex, 16)
+    GRAPHCONTEXTUAL(unit/graphContextual/lateNamedIndex, 17)
+    GRAPHCONTEXTUAL(unit/graphContextual/retainedNestedFacts, 18)
+    GRAPHCONTEXTUAL(unit/graphContextual/lateDescriptiveTransfer, 19)
     me bool: contextualDefinitionCase(me string: testName, me int: caseID) <- <%{
         using namespace proteus4;
         GraphNormalizer n;n.init();
         auto parse=[&](const std::string& text){return graphParsed(testName,text);};
         auto norm=[&](const POVNode& p){auto h=n.normalize(p);h.waitForCompletion();return h;};
+        if(caseID==18 || caseID==19) {
+            std::string declarations="{#item=*3+{label:$,cargo,position:_} #left=item:{label:'left',} #right=item:{label:'right',} "
+                "#state=*2+{left,right} #known=state:{left:{cargo={tag:'x',},position:1},right:{cargo={tag:'y',},position:2}} "
+                "#change={T state state:{left:{position:10},}}}";
+            if(caseID==19) declarations=declarations.substr(0,declarations.find("#change="))+
+                "#table={20 10} #change={T state state:{left:{cargo=%@[1]~item:{label:'right',}.cargo,position=table@[%@[1]~item:{label:'right',}.position]},"
+                "right:{cargo=%@[1]~item:{label:'left',}.cargo,position=table@[%@[1]~item:{label:'left',}.position]}}}}";
+            auto defs=parse(declarations);norm(defs);auto original=toString(defs->pItem.get());
+            auto history=parse("change:{T known ?}");auto h=norm(history);
+            auto first=POVDescription(history).member(),second=POVDescription(history).member(true);
+            auto read=[&](const POVNode& state) {
+                norm(state);std::string result;
+                for(auto part=POVDescription(state).member();part;part=part->next) {
+                    norm(part);auto cargo=n.knownField(part,"cargo"),position=n.knownField(part,"position");
+                    if(cargo) norm(cargo);
+                    auto tag=cargo ? cargo->pItem->fetchField("tag") : POVNode{};
+                    if(!tag || !position || !(n.access->known(position)&valueOnly)) return std::string("unresolved");
+                    result+=tag->pItem->value->str+":"+position->pItem->value->num.val.get_str()+";";
+                }
+                return result;
+            };
+            bool ok=!h.status().failed && first && second && first!=second;
+            auto before=ok ? read(first) : "unresolved",after=ok ? read(second) : "unresolved";
+            ok &= before=="x:1;y:2;" && after==(caseID==18 ? "x:10;y:2;" : "y:10;x:20;") && read(first)==before && read(second)==after;
+            ok &= original==toString(defs->pItem.get());
+            if(!ok) std::cout<<"Retained nested facts: "<<before<<" -> "<<after<<" error="<<h.status().error<<"\n";
+            h.cancel();n.close();return ok;
+        }
+        if(caseID==16 || caseID==17) {
+            auto defs=parse("{#table={10 20 30} #sample={index:_ result=table@[%.index]}}");
+            norm(defs);auto original=toString(defs->pItem.get());
+            auto a=parse(caseID==16 ? "sample:{index:2}" : "sample");auto h=norm(a);
+            auto index=a->pItem->fetchField("index"),result=a->pItem->fetchField("result");
+            auto known=[&](const POVNode& p,int value) {
+                auto facts=p ? n.access->typeFacts(p) : GraphTypeFacts{};
+                return facts.valid && facts.hasValue && facts.number==value;
+            };
+            bool ok=!h.status().failed && index && result;
+            if(caseID==17) {
+                ok &= h.status().withSubscribers && !(n.access->known(result)&valueOnly);
+                n.addRHS(index,parse("2"));h.waitForCompletion();norm(a);
+            }
+            ok &= known(result,20);
+            auto b=parse("sample:{index:3}");norm(b);
+            ok &= known(b->pItem->fetchField("result"),30) && known(result,20);
+            auto before=toString(a->pItem.get());norm(a);
+            ok &= before==toString(a->pItem.get()) && original==toString(defs->pItem.get());
+            if(!ok) std::cout<<"Named index "<<caseID<<": "<<toString(a->pItem.get())<<" error="<<h.status().error<<"\n";
+            h.cancel();n.close();return ok;
+        }
         if(caseID==13 || caseID==14 || caseID==15) {
             const std::string separator=caseID==15 ? ", " : " ";
             const std::string layout="#layout={*1+{center|center:{shade}}"+separator+"*1+{edge|edge:{thing, *2+{side|{shade}{shade}}}}}";
