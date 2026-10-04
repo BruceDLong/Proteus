@@ -166,6 +166,9 @@ public:
             if(auto evidence=key->evidence.lock()) evidence_.push_back(std::move(evidence));
         }
     }
+    // Evidence shared on a model object may have been produced by another
+    // graph context. Reuse can require the current context's token explicitly.
+    bool observes(const DependencyKey& key) const {return reads_.count(key)!=0;}
     bool valid() const {ReadScope::observe(changed_);return valid_;}
     void onInvalidated(std::function<void()> action) {
         if(valid_) invalidators_.push_back(std::move(action));else action();

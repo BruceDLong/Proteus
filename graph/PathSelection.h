@@ -56,9 +56,9 @@ class PathSelection {
         const bool hasStructure=ready;
         if(ready) for (const auto& relation:POVDescription(node,access_->registry.get()).relationships()) {
             if(access_->sameInfon(node,relation.target)) continue;
-            RHSRepresentation proof(access_,node,relation.target,definitions_);
-            visits=addCost(visits,proof.work.visits);
-            ready=ready && proof.represented;
+            Work work{0,0};bool represented=RHSRepresentation::expressed(access_,node,relation.target,definitions_,work);
+            visits=addCost(visits,work.visits);
+            ready=ready && represented;
         }
         // A source may acquire its list structure through a definition or RHS.
         // Keep that opportunity visible without requiring unrelated fields to

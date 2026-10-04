@@ -788,6 +788,22 @@ public:
             return targetPlan->dataSatisfied() ? targetPlan : nullptr;
         } catch (const std::runtime_error&) { return {}; }
     }
+    // Retaining this exact scalar meaning makes another transfer a no-op.
+    // It does not certify instance data or skip ordinary validation goals.
+    bool retainsScalarMeaning(const POVNode& target,const Certificate& proof) const {
+        const auto& requirement=proof->requirement;
+        if(!requirement || requirement->list || requirement->hasExpressions() || !requirement->choices.empty()) return false;
+        evidenceKey(target);
+        auto retained=evidence_.find(readView(target));
+        return retained!=evidence_.end() && std::any_of(retained->second.begin(),retained->second.end(),
+            [&](const Certificate& old) {return old->requirement==requirement && old->evidence==proof->evidence;});
+    }
+    bool mayInherit(const POVNode& target,const POVNode& source) const {
+        evidenceKey(source);
+        auto found=evidence_.find(readView(source));
+        return found!=evidence_.end() && std::any_of(found->second.begin(),found->second.end(),
+            [&](const Certificate& proof) {return !retainsScalarMeaning(target,proof);});
+    }
     bool canInherit(const POVNode& target, const POVNode& source) const {
         evidenceKey(source);
         auto found = evidence_.find(readView(source)); if (found == evidence_.end()) return false;
@@ -801,16 +817,7 @@ public:
         Changes changes=Changes::only({});
         std::vector<std::pair<POVNode,Certificate>> checked;
         for (const auto& proof : certificates) {
-            // A scalar certificate has no child bindings or order metadata to
-            // replay. Holding this exact meaning already makes transfer a no-op;
-            // it does not certify the target's data or skip its ordinary goals.
-            const auto& requirement=proof->requirement;
-            if(requirement && !requirement->list && !requirement->hasExpressions() && requirement->choices.empty()) {
-                evidenceKey(target);
-                auto retained=evidence_.find(readView(target));
-                if(retained!=evidence_.end() && std::any_of(retained->second.begin(),retained->second.end(),
-                    [&](const Certificate& old) {return old->requirement==requirement && old->evidence==proof->evidence;})) continue;
-            }
+            if(retainsScalarMeaning(target,proof)) continue;
             auto plan=reusable(target,source,proof);
             if(!plan) continue;
             // Only order metadata may remain: required contents already exist.

@@ -35,8 +35,18 @@ struct RecordStructure {
     static bool pairs(ProteusGraphAccess& access,const std::vector<POVNode>& left,
                       const std::vector<POVNode>& right,std::vector<std::pair<POVNode,POVNode>>& paired,
                       std::vector<POVNode>& missing,Work& work,Match match) {
+        // Each member participates in many pair comparisons. Read its live
+        // identity links once in this read-only plan, not once per other member.
+        // Nothing is retained across calls or publications.
+        std::vector<std::optional<std::set<POVNode>>> identities(left.size());
         MemberCorrespondence mapping(left.size(),right.size(),[&](std::size_t a,std::size_t b) {
-            return access.sameInfon(left[a],right[b]) || access.hasDirectIdentity(left[a],right[b]);
+            if(access.sameInfon(left[a],right[b])) return true;
+            auto& related=identities[a];
+            if(!related) {
+                related.emplace();
+                for(const auto& relation:POVDescription(left[a],access.registry.get()).relationships(false)) related->insert(relation.target);
+            }
+            return related->count(right[b])!=0;
         },match,work);
         if(!mapping.unambiguous) return false;
         for(const auto& pair:mapping.pairs) paired.push_back({left[pair.first],right[pair.second]});

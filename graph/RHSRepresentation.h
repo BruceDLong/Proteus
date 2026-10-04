@@ -20,6 +20,44 @@ class RHSRepresentation {
             }, [](const POVNode& member) { return member; });
     }
 public:
+    static void retain(const std::shared_ptr<GraphRHSProof>& proof,const DependencyProof::Ptr& evidence) {
+        proof->evidence=evidence;std::weak_ptr<GraphRHSProof> weak=proof;
+        evidence->onInvalidated([weak] {if(auto record=weak.lock()) record->valid=false;});
+    }
+    static void remember(const POVNode& target,const POVNode& source,const DependencyProof::Ptr& evidence) {
+        if(readView(target)->workIsRepresented(source)) return;
+        auto& records=readView(target)->representedWork;
+        records.erase(std::remove_if(records.begin(),records.end(),
+            [](const auto& record){return !record->valid;}),records.end());
+        auto proof=std::make_shared<GraphRHSProof>();proof->rhs=source;
+        records.push_back(proof);retain(proof,evidence);
+    }
+    // Discovery can reuse a proved representation before the whole search
+    // settles. Retain only positive proofs in the existing RHS records, and
+    // observe their dependencies on every reuse. Mutation planners still use
+    // the constructor's fresh check: unpublished writes cannot reuse a proof.
+    static bool expressed(const std::shared_ptr<ProteusGraphAccess>& access,const POVNode& target,const POVNode& source,
+                          const std::shared_ptr<ProteusDefinitions>& definitions,Work& cost) {
+        auto context=definitions ? definitions->modelChanges() : Changes{};
+        if(!ReadScope::tracksObjects() || context.all) {
+            RHSRepresentation proof(access,target,source,definitions);
+            cost.visits=addCost(cost.visits,proof.work.visits);return proof.represented;
+        }
+        for(const auto& proof:readView(target)->representedWork)
+            if(proof->valid && proof->rhs==source && proof->evidence &&
+               std::all_of(context.keys.begin(),context.keys.end(),[&](const auto& key){return proof->evidence->observes(key);}) &&
+               proof->evidence->valid()) {++cost.visits;return true;}
+        auto reads=context.keys;bool reusable=true,represented;Work work;
+        {
+            ReadScope capture([&](const DependencyKey& key){reads.insert(key);if(!key) reusable=false;});
+            RHSRepresentation proof(access,target,source,definitions);
+            represented=proof.represented;work=proof.work;
+        }
+        for(const auto& key:reads) ReadScope::observe(key);
+        cost.visits=addCost(cost.visits,work.visits);
+        if(represented && reusable) remember(target,source,DependencyProof::make(reads));
+        return represented;
+    }
     Work work{0, 0};
     bool represented = false, complete = false;
     RHSRepresentation(std::shared_ptr<ProteusGraphAccess> access, POVNode target, POVNode source,

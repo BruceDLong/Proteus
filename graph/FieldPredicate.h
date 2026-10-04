@@ -16,9 +16,7 @@ class FieldPredicate {
             (!predicate && getFlagBit(readView(node)->flags,infonView::invertMatch))) return false;
         for (const auto& relation:POVDescription(node,access_->registry.get()).relationships()) {
             if (access_->sameInfon(node,relation.target)) continue;
-            RHSRepresentation proof(access_,node,relation.target,definitions_);
-            work.visits=addCost(work.visits,proof.work.visits);
-            if (!proof.represented) return false;
+            if(!RHSRepresentation::expressed(access_,node,relation.target,definitions_,work)) return false;
         }
         return true;
     }

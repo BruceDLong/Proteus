@@ -74,6 +74,11 @@ reinstalling identical scalar type evidence. The changes preserve shared-state
 subscribers and reduce repeated cube-turn work without a new cache. Registry
 publications and longer-sequence traversal remain separate optimization targets.
 
+The [representation reuse measurements](representation-reuse-performance.md)
+cover empty Set filtering and longer cube sequences. Discovery retains positive
+RHS proofs during traversal, with scoped and broad invalidation, and record
+comparisons read each member's identity links once within their local plan.
+
 `GraphNormalizer.knownField` and `knownType` provide read-only display inspection
 under `runtime.read()`, including nominal aliases. `knownField` returns an ordered
 first match or a unique known unordered match; it does not prove complete

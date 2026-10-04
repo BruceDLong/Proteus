@@ -136,21 +136,12 @@ public:
         });
         access_->setNormed(node, true);
     }
-    static void retain(const std::shared_ptr<GraphRHSProof>& proof, const DependencyProof::Ptr& evidence) {
-        proof->evidence=evidence;std::weak_ptr<GraphRHSProof> weak=proof;
-        evidence->onInvalidated([weak] {if(auto proof=weak.lock()) proof->valid=false;});
-    }
     void represented(const POVNode& node, const POVNode& rhs, const DependencyProof::Ptr& evidence) {
-        if (readView(node)->workIsRepresented(rhs)) return;
-        auto& records = readView(node)->representedWork;
-        records.erase(std::remove_if(records.begin(), records.end(),
-            [](const auto& record) { return !record->valid; }), records.end());
-        auto proof = std::make_shared<GraphRHSProof>(); proof->rhs = rhs;
-        records.push_back(proof);retain(proof,evidence);
+        RHSRepresentation::remember(node,rhs,evidence);
     }
     void representedTemplate(const POVNode& node, const POVNode& source, const DependencyProof::Ptr& evidence) {
         auto proof = std::make_shared<GraphRHSProof>(); proof->rhs = source;
-        readView(node)->representedTemplate = proof;retain(proof,evidence);
+        readView(node)->representedTemplate = proof;RHSRepresentation::retain(proof,evidence);
     }
     void reply(const POVNode& node) {
         if (!access_->replyReady(node)) return;
@@ -296,6 +287,7 @@ public:
             auto access = access_;
             auto target = request.node;
             auto measure = measure_;
+            if(!access->canSetCountedSize(target,measure)) return {};
             return {{"Set counted list size", [access, target, measure] {
                 return access->applyCountedSize(target, measure);
             }}};
@@ -400,6 +392,17 @@ public:
         if(access_->scalarCandidate(source)) for(const auto& step:visit.path)
             if(step.node!=source && access_->scalarCandidate(step.node) &&
                std::find(targets.begin(),targets.end(),step.node)==targets.end()) targets.push_back(step.node);
+        // Finding a compatible route is not itself a write. Inspect every
+        // destination, including intermediate scalar constraints, before queuing
+        // a Set. Execution still recomputes the live copy plan and validation.
+        bool effect=false;
+        for(const auto& node:targets) {
+            int verdict=access_->compatible(node,source,demand);
+            if(verdict<0) throw GoalRejected("incompatible scalar constraints");
+            if(!verdict || access_->inputPending(node)) {deferred_=true;return {};}
+            effect |= access_->planCopy(node,source,demand).any() || definitions_->mayInherit(node,source);
+        }
+        if(!effect) return {};
         auto access = access_;
         auto evidence = evidence_; auto definitions = definitions_;
         return {{"Set requested size/value/type", [access, evidence, definitions, targets, source, demand] {
@@ -813,6 +816,10 @@ public:
         ReadScope::observe(modelFacts_);
     }
     void invalidateCompletion(const Changes& changes) override {
+        // Read-only proofs can be retained during traversal, before settle()
+        // adds the runtime's broad token. Their adapter token must cover broad
+        // publications too, including updates made while no search is active.
+        if(changes.all) modelFacts_->publish();
         // Completion metadata follows its recorded dependencies. Definition
         // registration refreshes catalogue validation without a model-wide wake.
         if(changes.all || changes.objectWrites || changes.keys.count(modelFacts_)) {

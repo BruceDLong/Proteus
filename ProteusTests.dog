@@ -73,6 +73,7 @@ TestsToRun = `
     unit/graphRecordIndex/valueChecks
     unit/graphRecordIndex/unknownAndDuplicate
     unit/graphRecordIndex/linearMatching
+    unit/graphRecordIndex/liveIdentities
 
     unit/graphDefinitionSharing/scopeSharing
     unit/graphDefinitionSharing/scopeBindings
@@ -109,6 +110,18 @@ TestsToRun = `
     unit/graphSequenceChart/cost
     unit/graphSequenceChart/packedAlternatives
     unit/graphSequenceChart/nestedChoiceScaling
+
+    unit/graphRepresentationReuse/repeat
+    unit/graphRepresentationReuse/sharedValue
+    unit/graphRepresentationReuse/broadUpdate
+    unit/graphRepresentationReuse/otherContext
+    unit/graphRepresentationReuse/untracked
+    unit/graphRepresentationReuse/unpublishedEdit
+
+    unit/graphSetDiscovery/noOp
+    unit/graphSetDiscovery/conflict
+    unit/graphSetDiscovery/intermediate
+    unit/graphSetDiscovery/lateValue
 
     unit/graphProgress/listSixteen
     unit/graphProgress/listSixtyFour
@@ -13087,11 +13100,13 @@ struct GLOBAL {
             Work work{0,0};auto proof=definitions.describe(meaning,work);
             ok &= proof && definitions.remember(source,proof);
             if(proof) {
+                ok &= definitions.mayInherit(target,source);
                 auto first=definitions.inheritChanges(target,source);
                 ok &= first.changed && bool(first.retainEvidence);
                 if(first.retainEvidence) first.retainEvidence();
                 auto epoch=proof->evidence->checkedEpoch;
                 definitions.prune(true); // an unrelated scoped publication
+                ok &= !definitions.mayInherit(target,source);
                 auto again=definitions.inheritChanges(target,source);
                 ok &= !again.changed && !again.retainEvidence && proof->evidence->checkedEpoch==epoch;
                 // A retained meaning is not an assertion that the instance
@@ -13102,6 +13117,7 @@ struct GLOBAL {
                 target->pItem->value->num=static_cast<std::int64_t>(7);
                 auto other=definitions.describe(parse("*10+7"),work);
                 auto secondSource=parse("*10+7");ok &= other && definitions.remember(secondSource,other);
+                ok &= definitions.mayInherit(target,secondSource);
                 auto distinct=definitions.inheritChanges(target,secondSource);
                 ok &= distinct.changed && bool(distinct.retainEvidence);
             }
@@ -13286,9 +13302,27 @@ struct GLOBAL {
     GRAPHRECORDINDEX(unit/graphRecordIndex/valueChecks, 5)
     GRAPHRECORDINDEX(unit/graphRecordIndex/unknownAndDuplicate, 6)
     GRAPHRECORDINDEX(unit/graphRecordIndex/linearMatching, 7)
+    GRAPHRECORDINDEX(unit/graphRecordIndex/liveIdentities, 8)
 
     me bool: graphRecordIndexCase(me int: caseID) <- <%{
         using namespace proteus4;
+        if(caseID==8) {
+            GraphNormalizer n;n.init();bool ok=true;
+            n.runtime.read([&] {
+                std::vector<POVNode> left{graphScalar(1,10),graphScalar(2,10)},right{graphScalar(2,10),graphScalar(1,10)};
+                std::vector<POVNode> missing;std::vector<std::pair<POVNode,POVNode>> paired;
+                Work work{0,0};
+                auto match=[](auto a,auto b){return a==b ? ScalarMatch::yes : ScalarMatch::no;};
+                auto check=[&]{paired.clear();missing.clear();return RecordStructure::pairs(*n.access,left,right,paired,missing,work,match);};
+                // Asserted identities override the nominal fallback.
+                n.access->recordIdentity(left[0],right[1]);n.access->recordIdentity(left[1],right[0]);
+                ok &= check() && missing.empty() && paired==std::vector<std::pair<POVNode,POVNode>>{{left[1],right[0]},{left[0],right[1]}};
+                // A later relationship must be read by the next plan, including
+                // the ambiguity it introduces into a formerly unique match.
+                n.access->recordIdentity(left[0],right[0]);ok &= !check();
+            });
+            n.close();return ok;
+        }
         if(caseID<=2) {
             std::vector<NominalDescription> descriptions={
                 {"wheel",{"part"}}, {"pedal",{"part"}}, {"part",{}},
@@ -13776,6 +13810,120 @@ struct GLOBAL {
     }%>
     void: unitTestGraphDefinitionReuse(me string: testName, me int: caseID) <- {
         me bool: passed <- graphDefinitionReuseCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+// Representation is reusable evidence, not permission to ignore a later
+// source constraint, a broad publication, or an unpublished atomic write.
+#define GRAPHREPRESENTATIONREUSE(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphRepresentationReuse(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHREPRESENTATIONREUSE(unit/graphRepresentationReuse/repeat, 1)
+    GRAPHREPRESENTATIONREUSE(unit/graphRepresentationReuse/sharedValue, 2)
+    GRAPHREPRESENTATIONREUSE(unit/graphRepresentationReuse/broadUpdate, 3)
+    GRAPHREPRESENTATIONREUSE(unit/graphRepresentationReuse/otherContext, 4)
+    GRAPHREPRESENTATIONREUSE(unit/graphRepresentationReuse/untracked, 5)
+    GRAPHREPRESENTATIONREUSE(unit/graphRepresentationReuse/unpublishedEdit, 6)
+    me bool: graphRepresentationReuseCase(me string: testName, me int: caseID) <- <%{
+        using namespace proteus4;
+        GraphNormalizer n;n.init();bool ok=true;DependencyKey model;
+        n.runtime.read([&] {
+            ReadScope capture([&](const DependencyKey& key){model=key;});
+            n.semanticAccess->observeTask({});
+        });
+        auto definitions=std::make_shared<ProteusDefinitions>(n.access,model);
+        auto target=graphParsed(testName,"*2+{*10+1 *10+2}"),source=graphParsed(testName,"*2+{*10+1 *10+2}");
+        Work first{0,0};std::shared_ptr<GraphRHSProof> saved;
+        n.runtime.read([&] {
+            ok &= RHSRepresentation::expressed(n.access,target,source,definitions,first);
+            ok &= target->pItem->representedWork.size()==1;
+            if(!target->pItem->representedWork.empty()) saved=target->pItem->representedWork.front();
+        });
+        if(!saved) {n.close();return false;}
+        if(caseID==2) {
+            auto alias=graphScalar(1,10);alias->pItem->value=source->pItem->value->items.head->pItem->value;
+            auto changes=n.runtime.read([&]{return ReadScope::changedObjects({alias->pItem->value.get()});});
+            n.runtime.updateIfChanged([&]{alias->pItem->value->num=static_cast<std::int64_t>(3);return true;},changes);
+        }
+        if(caseID==3) n.runtime.update([]{});
+        if(caseID==4) definitions=std::make_shared<ProteusDefinitions>(n.access,std::make_shared<Dependency>());
+        Work again{0,0};std::set<DependencyKey> reads;
+        auto inspect=[&] {
+            ReadScope capture([&](const DependencyKey& key){reads.insert(key);});
+            bool represented=RHSRepresentation::expressed(n.access,target,source,definitions,again);
+            ok &= represented==(caseID!=2);
+        };
+        if(caseID==5) inspect();else n.runtime.read(inspect);
+        if(caseID==1) {
+            auto consumer=DependencyProof::make(reads);
+            ok &= again.visits<first.visits && target->pItem->representedWork.front()==saved && consumer->valid();
+            n.runtime.update([]{});ok &= !saved->valid && !consumer->valid();
+        } else if(caseID==2 || caseID==3) ok &= !saved->valid && again.visits>1;
+        else if(caseID==4 || caseID==5) ok &= saved->valid && again.visits==first.visits;
+        else {
+            n.runtime.read([&] {
+                source->pItem->value->items.head->pItem->value->num=static_cast<std::int64_t>(3);
+                RHSRepresentation fresh(n.access,target,source,definitions);
+                ok &= saved->valid && !fresh.represented;
+            });
+        }
+        if(!ok)std::cout<<"Representation reuse case "<<caseID<<" failed: visits "<<first.visits<<" -> "<<again.visits<<"\n";
+        n.close();return ok;
+    }%>
+    void: unitTestGraphRepresentationReuse(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphRepresentationReuseCase(testName, caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+// Discovery can omit writes while retaining contradictions, intermediate
+// destinations and the dependencies that make a later finding useful.
+#define GRAPHSETDISCOVERY(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphSetDiscovery(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHSETDISCOVERY(unit/graphSetDiscovery/noOp, 1)
+    GRAPHSETDISCOVERY(unit/graphSetDiscovery/conflict, 2)
+    GRAPHSETDISCOVERY(unit/graphSetDiscovery/intermediate, 3)
+    GRAPHSETDISCOVERY(unit/graphSetDiscovery/lateValue, 4)
+    me bool: graphSetDiscoveryCase(me string: testName, me int: caseID) <- <%{
+        using namespace proteus4;
+        GraphNormalizer n;n.init();bool ok=true;
+        n.runtime.read([&] {
+            ObjectDependencies objects;ReadScope tracked({},&objects);
+            auto target=graphScalar(7,10),source=graphScalar(caseID==2 ? 8 : caseID==4 ? -1 : 7,10);
+            auto middle=caseID==3 ? graphScalar(-1,10) : target;
+            if(caseID==4) target=graphScalar(-1,10);
+            Query<POVNode> request{target,sizeAndValue,0},finding{source,sizeAndValue,0};
+            auto goal=n.semanticAccess->goal(request);goal->beginPass();
+            Visit<POVNode> visit{finding,{request,{middle,sizeAndValue,0},finding},0};
+            bool rejected=false;std::vector<SetCommand> commands;std::set<DependencyKey> reads;
+            try {ReadScope capture([&](const DependencyKey& key){reads.insert(key);});commands=goal->found(visit);}
+            catch(const GoalRejected&) {rejected=true;}
+            if(caseID==2) ok &= rejected && target->pItem->value->num==7;
+            else if(caseID==3) {
+                ok &= !rejected && commands.size()==1 && n.access->typeFacts(target).number==7 && !n.access->typeFacts(middle).hasValue;
+                for(auto& command:commands) command.apply();
+                ok &= n.access->typeFacts(middle).hasValue && middle->pItem->value->num==7 && goal->found(visit).empty();
+            } else {
+                ok &= !rejected && commands.empty();
+                if(caseID==4) {
+                    auto proof=DependencyProof::make(reads);ok &= proof->valid();
+                    n.access->apply(source,graphScalar(7,10),valueOnly);
+                    for(const auto& key:ReadScope::changedObjects({source.get(),source->pItem.get(),source->pItem->value.get()}).keys) key->publish();
+                    ok &= !proof->valid();
+                    auto next=goal->found(visit);ok &= next.size()==1;
+                    for(auto& command:next) command.apply();
+                    ok &= target->pItem->value->num==7;
+                }
+            }
+        });
+        n.close();return ok;
+    }%>
+    void: unitTestGraphSetDiscovery(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphSetDiscoveryCase(testName, caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
         REQUIRE(actual==expected)

@@ -278,6 +278,17 @@ struct GraphNumericLiteral {
     me bool: extentApplied <- false
     me bool: changed <- false
 }
+// The same read-only copy decision is used during discovery and at the Set
+// boundary. Do not retain a plan across publications; its inputs are live views.
+struct GraphCopyPlan {
+    me bool: copySize <- false
+    me bool: copyList <- false
+    me bool: copyTemporal <- false
+    me bool: copyNominal <- false
+    me bool: copyType <- false
+    me bool: copyValue <- false
+    me bool: any() <- {return(copySize or copyList or copyTemporal or copyNominal or copyType or copyValue)}
+}
 struct GraphConcatTerms { me List<our POV>: items }
 struct GraphConcatPlan {
     me bool: valid <- false
@@ -850,11 +861,14 @@ struct ProteusGraphAccess {
                pov!.pItem!.infSize!.evalMode==emLiteral and
                pov!.pItem!.infSize!.num==measure.count)
     }
-    me bool: applyCountedSize(our POV: pov, me GraphListMeasure: measure) <- {
+    me bool: canSetCountedSize(our POV: pov, me GraphListMeasure: measure) <- {
         observeRead(pov);
-        if(!measure.known or !closedPhysicalList(pov) or
-                pov!.pItem!.value!.sizeMode==fromGiven or
-                pov!.pItem!.infSize!.evalMode!=emUnknown){return(false)}
+        return(measure.known and closedPhysicalList(pov) and
+               pov!.pItem!.value!.sizeMode!=fromGiven and
+               pov!.pItem!.infSize!.evalMode==emUnknown)
+    }
+    me bool: applyCountedSize(our POV: pov, me GraphListMeasure: measure) <- {
+        if(!canSetCountedSize(pov, measure)){return(false)}
         // This is count evidence, not a request to close a tail or resolve a
         // contextual reference. Preserve the representation's size mode.
         pov!.pItem!.infSize!.evalMode <- emLiteral
@@ -1008,40 +1022,47 @@ struct ProteusGraphAccess {
         auto result=proteus4::scalarConstraint(typeFacts(target),typeFacts(source),false,false);
         return result==proteus4::ScalarMatch::yes ? 1 : result==proteus4::ScalarMatch::no ? -1 : 0;
     }%>
+    me GraphCopyPlan: planCopy(our POV: target, our POV: source, me int: demand) <- {
+        observeRead(target); observeRead(source);
+        me GraphCopyPlan: plan
+        plan.copySize <- !inputPending(source) and (demand==1 or demand==3) and
+                target!.pItem!.infSize!.evalMode==emUnknown and
+                source!.pItem!.infSize!.evalMode==emLiteral
+        plan.copyList <- (demand==2 or demand==3) and adoptableList(target) and
+                spanList(source) and orderedList(source)
+        plan.copyTemporal <- (demand==2 or demand==3) and
+                source!.pItem!.value!.overlayType==LST and source!.pItem!.value!.timelike and
+                !target!.pItem!.value!.timelike
+        plan.copyNominal <- (demand==2 or demand==3) and
+                (unknownOverlay(target) or target!.pItem!.selectedResult!=NULL) and
+                target!.pItem!.type==NULL and source!.pItem!.type!=NULL
+        plan.copyType <- (demand==2 or demand==3) and
+                unknownOverlay(target) and scalar(source)
+        plan.copyValue <- (demand==2 or demand==3) and
+                scalarCandidate(target) and target!.pItem!.value!.evalMode==emUnknown and
+                scalar(source) and source!.pItem!.value!.evalMode==emLiteral
+        return(plan)
+    }
     me bool: apply(our POV: target, our POV: source, me int: demand) <- {
         observeRead(target); observeRead(source);
         // The goal validated the whole path before this batch. Recheck at the
         // mutation boundary; nothing can interleave under the context lock.
         if(inputPending(target) or compatible(target, source, demand)!=1){return(false)}
+        me GraphCopyPlan: plan <- planCopy(target, source, demand)
+        if(!plan.any()){return(false)}
         me GraphTypeFacts: combined <- typeFacts(target)
         if(scalarCandidate(target) and scalarCandidate(source)){combined.combine(typeFacts(source))}
-        me bool: copySize <- !inputPending(source) and (demand==1 or demand==3) and
-                target!.pItem!.infSize!.evalMode==emUnknown and
-                source!.pItem!.infSize!.evalMode==emLiteral
-        me bool: copyList <- (demand==2 or demand==3) and adoptableList(target) and
-                spanList(source) and orderedList(source)
-        me bool: copyTemporal <- (demand==2 or demand==3) and
-                source!.pItem!.value!.overlayType==LST and source!.pItem!.value!.timelike and
-                !target!.pItem!.value!.timelike
-        me bool: copyNominal <- (demand==2 or demand==3) and
-                (unknownOverlay(target) or target!.pItem!.selectedResult!=NULL) and
-                target!.pItem!.type==NULL and source!.pItem!.type!=NULL
-        me bool: copyType <- (demand==2 or demand==3) and
-                unknownOverlay(target) and scalar(source)
-        me bool: copyValue <- (demand==2 or demand==3) and
-                scalarCandidate(target) and target!.pItem!.value!.evalMode==emUnknown and
-                scalar(source) and source!.pItem!.value!.evalMode==emLiteral
         // Size and value can arrive in separate Sets. A value-only copy must
         // not erase numeric size evidence, which cannot be inferred from the value.
         me bool: explicitSize <- target!.pItem!.value!.sizeMode==fromGiven or
-                (copySize and source!.pItem!.value!.sizeMode==fromGiven)
+                (plan.copySize and source!.pItem!.value!.sizeMode==fromGiven)
         // A Set uses the state primitive directly and retains work constraints.
-        if(copySize){target!.pItem!.infSize!.copyOverlayFrom(source!.pItem!.infSize, 0)}
+        if(plan.copySize){target!.pItem!.infSize!.copyOverlayFrom(source!.pItem!.infSize, 0)}
         // Establish interpretation before the matching-overlay copy primitive.
         // Type-only evidence must not fabricate a value or replace metadata.
         // Adopt only the list interpretation. Correspondence fills independent
         // member views on subsequent graph passes, preserving compressed tails.
-        if(copyList){
+        if(plan.copyList){
             // The admitted source is ordered, including an untyped literal
             // whose order flag was implicit. Carry that established order.
             target!.pItem!.orderMode <- uOrdered
@@ -1050,17 +1071,17 @@ struct ProteusGraphAccess {
             target!.pItem!.value!.tailUnfinished <- true
             target!.pItem!.viewMode <- vmOverlay
         }
-        if(copyNominal){
+        if(plan.copyNominal){
             target!.pItem!.type <- source!.pItem!.type
             target!.pItem!.addedTypes <- source!.pItem!.addedTypes
         }
-        if(copyType){
+        if(plan.copyType){
             target!.pItem!.value!.overlayType <- source!.pItem!.value!.overlayType
             target!.pItem!.viewMode <- vmOverlay
         }
-        if(copyValue){target!.pItem!.value!.copyOverlayFrom(source!.pItem!.value, 0)}
-        if(copyTemporal){target!.pItem!.value!.timelike <- true}
-        if(copySize or copyType or copyValue or copyList or copyNominal or copyTemporal){
+        if(plan.copyValue){target!.pItem!.value!.copyOverlayFrom(source!.pItem!.value, 0)}
+        if(plan.copyTemporal){target!.pItem!.value!.timelike <- true}
+        if(plan.any()){
             if(target!.pItem!.value!.overlayType==NUM and target!.pItem!.value!.evalMode==emLiteral and
                     combined.valid and combined.hasValue){
                 target!.pItem!.value!.num <- combined.number
