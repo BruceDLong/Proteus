@@ -68,6 +68,12 @@ separate narrower path invalidation from retained scalar findings and list walks
 The first change reduced visible cube latency; the second removes repeated list
 position visits but did not show a further cube timing improvement.
 
+The later [scalar transfer measurements](scalar-transfer-performance.md) narrow
+ordinary Set publications to the affected views/state slots and avoid
+reinstalling identical scalar type evidence. The changes preserve shared-state
+subscribers and reduce repeated cube-turn work without a new cache. Registry
+publications and longer-sequence traversal remain separate optimization targets.
+
 `GraphNormalizer.knownField` and `knownType` provide read-only display inspection
 under `runtime.read()`, including nominal aliases. `knownField` returns an ordered
 first match or a unique known unordered match; it does not prove complete

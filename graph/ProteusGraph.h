@@ -415,7 +415,14 @@ public:
             std::vector<std::function<void()>> receipts;
             for(const auto& node:targets) {
                 bool changed=access->apply(node,source,demand);
-                if(changed) {evidence->inherit(node,source);result.changes->include(definitions->modelChanges());}
+                if(changed) {
+                    evidence->inherit(node,source);
+                    // apply updates this header and its existing state slots.
+                    // Publish the slots too: other views can share either one.
+                    auto view=readView(node);
+                    result.changes->include(ReadScope::changedObjects({node.get(),view.get(),
+                        view->infSize.get(),view->value.get()}));
+                }
                 auto inherited=definitions->inheritChanges(node,source);
                 result.changed=changed || inherited.changed || result.changed;
                 if(inherited.changed) result.changes->include(inherited.changes.value_or(Changes{}));

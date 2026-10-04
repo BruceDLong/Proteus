@@ -800,7 +800,19 @@ public:
         auto certificates = found->second;
         Changes changes=Changes::only({});
         std::vector<std::pair<POVNode,Certificate>> checked;
-        for (const auto& proof : certificates) if (auto plan = reusable(target, source, proof)) {
+        for (const auto& proof : certificates) {
+            // A scalar certificate has no child bindings or order metadata to
+            // replay. Holding this exact meaning already makes transfer a no-op;
+            // it does not certify the target's data or skip its ordinary goals.
+            const auto& requirement=proof->requirement;
+            if(requirement && !requirement->list && !requirement->hasExpressions() && requirement->choices.empty()) {
+                evidenceKey(target);
+                auto retained=evidence_.find(readView(target));
+                if(retained!=evidence_.end() && std::any_of(retained->second.begin(),retained->second.end(),
+                    [&](const Certificate& old) {return old->requirement==requirement && old->evidence==proof->evidence;})) continue;
+            }
+            auto plan=reusable(target,source,proof);
+            if(!plan) continue;
             // Only order metadata may remain: required contents already exist.
             bool transferable=!proof->requirement->hasExpressions();
             auto applied=plan->applyChanges();

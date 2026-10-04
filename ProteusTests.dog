@@ -55,6 +55,7 @@ TestsToRun = `
     unit/graphViewTransfer/sharedValueHeader
     unit/graphViewTransfer/partialCopy
     unit/graphViewTransfer/atomicEdit
+    unit/graphViewTransfer/retainedScalar
     unit/graphViewTransfer/childEvidence
     unit/graphViewTransfer/invalidSharedView
     unit/graphViewTransfer/contextualAliases
@@ -120,6 +121,9 @@ TestsToRun = `
     unit/graphPublication/pathIsolationThirtyTwo
     unit/graphPublication/pathChoiceIsolation
     unit/graphPublication/sharedChoiceState
+    unit/graphPublication/scalarIsolation
+    unit/graphPublication/sharedScalarValue
+    unit/graphPublication/sharedScalarSize
     unit/graphPublication/catalogueIsolation
     unit/graphPublication/lateCatalogue
     unit/graphPublication/retiredCompletion
@@ -12289,8 +12293,57 @@ struct GLOBAL {
     GRAPHPUBLICATION(unit/graphPublication/pathIsolationThirtyTwo, 12)
     GRAPHPUBLICATION(unit/graphPublication/pathChoiceIsolation, 13)
     GRAPHPUBLICATION(unit/graphPublication/sharedChoiceState, 14)
+    GRAPHPUBLICATION(unit/graphPublication/scalarIsolation, 15)
+    GRAPHPUBLICATION(unit/graphPublication/sharedScalarValue, 16)
+    GRAPHPUBLICATION(unit/graphPublication/sharedScalarSize, 17)
     me bool: graphPublicationCase(me int: caseID) <- <%{
         GraphNormalizer n;n.init();
+        if(caseID>=15) {
+            using namespace proteus4;
+            auto norm=[&](const POVNode& node) {auto h=n.normalize(node);h.waitForCompletion();return h;};
+            bool ok=true;
+            if(caseID==15) {
+                for(int count:{1,8,32}) {
+                    std::vector<Proteus4Handle> waiting;
+                    std::vector<std::size_t> steps;
+                    for(int i=0;i<count;++i) {
+                        waiting.push_back(norm(graphScalar(-1,10)));
+                        steps.push_back(waiting.back().steps().size());
+                        ok &= waiting.back().status().withSubscribers;
+                    }
+                    auto target=graphScalar(-1,10);
+                    target->pItem->addPOVToWrkList(graphScalar(7,10));
+                    // A value demand isolates the scalar Set. Whole equality
+                    // consolidation also writes the registry, whose publication
+                    // deliberately remains broad in this change.
+                    n.runtime.updateIfChanged([&] {return n.access->bind(target);});
+                    auto h=n.runtime.normalize({target,valueOnly});h.waitForCompletion();
+                    ok &= !h.status().failed && !h.status().symbolicValues && target->pItem->value->num==7;
+                    bool copied=false;
+                    for(const auto& step:h.steps()) copied |= step.action=="Set requested size/value/type";
+                    ok &= copied && !target->pItem->wrkList.empty();
+                    for(int i=0;i<count;++i) {
+                        waiting[i].waitForCompletion();
+                        auto extra=waiting[i].steps().size()-steps[i];
+                        ok &= waiting[i].status().withSubscribers && extra==0;
+                        if(extra) std::cout<<"Unrelated scalar wake: "<<extra<<" extra steps\n";
+                    }
+                }
+            } else {
+                const bool size=caseID==17;
+                auto target=graphScalar(size ? 7 : -1,size ? -1 : 10);
+                auto alias=graphScalar(size ? 4 : -1,size ? -1 : 10);
+                if(size) alias->pItem->infSize=target->pItem->infSize;
+                else alias->pItem->value=target->pItem->value;
+                auto waiting=norm(alias);ok &= waiting.status().withSubscribers;
+                target->pItem->addPOVToWrkList(graphScalar(7,10));
+                auto h=norm(target);waiting.waitForCompletion();
+                ok &= !h.status().failed && !waiting.status().failed && !waiting.status().symbolicValues &&
+                    alias->pItem->value->num==(size ? 4 : 7) && alias->pItem->infSize->num==10;
+            }
+            if(!ok) std::cout<<"Scalar publication case "<<caseID<<" failed\n";
+            n.close();return ok;
+        }
         if(caseID==14) {
             using namespace proteus4;
             auto root=graphParsed("shared choice state","*3+{wheel:*10+7, wheel:*10+3, wheel:*10+1}");
@@ -13015,6 +13068,7 @@ struct GLOBAL {
     GRAPHVIEWTRANSFER(unit/graphViewTransfer/sharedValueHeader, 2)
     GRAPHVIEWTRANSFER(unit/graphViewTransfer/partialCopy, 3)
     GRAPHVIEWTRANSFER(unit/graphViewTransfer/atomicEdit, 4)
+    GRAPHVIEWTRANSFER(unit/graphViewTransfer/retainedScalar, 9)
     GRAPHVIEWTRANSFER(unit/graphViewTransfer/childEvidence, 5)
     GRAPHVIEWTRANSFER(unit/graphViewTransfer/invalidSharedView, 6)
     GRAPHVIEWTRANSFER(unit/graphViewTransfer/contextualAliases, 7)
@@ -13026,7 +13080,32 @@ struct GLOBAL {
         auto aliasOf=[&](const POVNode& source){auto p=std::make_shared<POV>(923);p->pItem=source->pItem;return p;};
         auto norm=[&](const POVNode& p){auto h=n.normalize(p);h.waitForCompletion();return h;};
         bool ok=true;
-        if(caseID==7) {
+        if(caseID==9) {
+            ProteusDefinitions definitions(n.access);
+            ObjectDependencies objects;ReadScope tracked({},&objects);
+            auto meaning=parse("*10+7"),source=parse("*10+7"),target=parse("*10+7");
+            Work work{0,0};auto proof=definitions.describe(meaning,work);
+            ok &= proof && definitions.remember(source,proof);
+            if(proof) {
+                auto first=definitions.inheritChanges(target,source);
+                ok &= first.changed && bool(first.retainEvidence);
+                if(first.retainEvidence) first.retainEvidence();
+                auto epoch=proof->evidence->checkedEpoch;
+                definitions.prune(true); // an unrelated scoped publication
+                auto again=definitions.inheritChanges(target,source);
+                ok &= !again.changed && !again.retainEvidence && proof->evidence->checkedEpoch==epoch;
+                // A retained meaning is not an assertion that the instance
+                // still satisfies it, nor a licence to suppress another proof.
+                target->pItem->value->num=static_cast<std::int64_t>(8);
+                for(const auto& key:ReadScope::changedObjects({target->pItem->value.get()}).keys) key->publish();
+                ok &= !definitions.accepts(proof,target);
+                target->pItem->value->num=static_cast<std::int64_t>(7);
+                auto other=definitions.describe(parse("*10+7"),work);
+                auto secondSource=parse("*10+7");ok &= other && definitions.remember(secondSource,other);
+                auto distinct=definitions.inheritChanges(target,secondSource);
+                ok &= distinct.changed && bool(distinct.retainEvidence);
+            }
+        } else if(caseID==7) {
             auto declarations=parse("{#sample={x:*10+_ y=%.x}}");ok &= !norm(declarations).status().failed;
             auto a=parse("sample"),b=parse("sample");auto ha=norm(a);norm(b);
             auto alias=aliasOf(a);auto h=norm(alias);
