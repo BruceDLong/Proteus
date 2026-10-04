@@ -196,11 +196,12 @@ public:
     std::vector<SetCommand> found(const Visit<POVNode>&) override {
         if(satisfied() || !request.related || !POVDescription(request.related).independentTemporalValue()) return {};
         auto node=request.node,source=request.related;
-        return {{"Set temporal value independence",[node,source] {
+        return {{"Set temporal value independence",[node,source]() -> SetResult {
             if(POVDescription(node).independentTemporalValue() || !POVDescription(source).independentTemporalValue()) return false;
             SetFlagBit(readView(node)->flags,infonView::independentTemporalValue,true);
             SetFlagBit(readView(node)->flags,infonView::isNormed,false);
-            ++node->workRevision;return true;
+            ++node->workRevision;
+            return {true,ReadScope::changedObjects({node.get(),readView(node).get()})};
         }}};
     }
     bool satisfied() const override {return POVDescription(request.node).independentTemporalValue();}

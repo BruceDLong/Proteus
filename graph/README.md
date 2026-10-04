@@ -79,6 +79,12 @@ cover empty Set filtering and longer cube sequences. Discovery retains positive
 RHS proofs during traversal, with scoped and broad invalidation, and record
 comparisons read each member's identity links once within their local plan.
 
+The [record publication measurements](record-publication-performance.md) complete
+scoped notifications for ordinary record copies, including identity endpoints,
+shared fields, and appended list positions. Transitive identity readers track
+the endpoints they visit. This removes broad restarts in the two-turn cube
+exercise while leaving completed-goal reuse and cost repricing unchanged.
+
 `GraphNormalizer.knownField` and `knownType` provide read-only display inspection
 under `runtime.read()`, including nominal aliases. `knownField` returns an ordered
 first match or a unique known unordered match; it does not prove complete

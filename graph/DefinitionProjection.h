@@ -79,7 +79,14 @@ public:
         if(!combined.combine(facts)) throw DefinitionConflict("incompatible projected field facts");
         if(facts.accepts(actual)) return {};
         auto access=access_;
-        return {{"Set field facts from parent definition",[access,target,facts] {return access->applyTypeFacts(target,facts);},work}};
+        return {{"Set field facts from parent definition",[access,target,facts] {
+            auto view=readView(target);
+            auto changes=ReadScope::changedObjects({target.get(),view.get(),view->infSize.get(),view->value.get()});
+            bool changed=access->applyTypeFacts(target,facts);
+            view=readView(target);
+            changes.include(ReadScope::changedObjects({target.get(),view.get(),view->infSize.get(),view->value.get()}));
+            return SetResult{changed,changes};
+        },work}};
     }
     bool satisfied() const override {return !pending_;}
     bool symbolic() const override {return pending_;}

@@ -66,6 +66,16 @@ TestsToRun = `
     unit/graphProofIdentity/equivalentEvidence
     unit/graphProofIdentity/differentDependencies
 
+    unit/graphRecordPublication/isolatedSubscriber
+    unit/graphRecordPublication/eightSubscribers
+    unit/graphRecordPublication/thirtyTwoSubscribers
+    unit/graphRecordPublication/transitiveIdentity
+    unit/graphRecordPublication/namedIdentity
+    unit/graphRecordPublication/recordAliasesAndPosition
+    unit/graphRecordPublication/projectedFieldAlias
+    unit/graphRecordPublication/lateIdentityValue
+    unit/graphRecordPublication/temporalDeclarationAlias
+
     unit/graphRecordIndex/nominalRules
     unit/graphRecordIndex/matchingEquivalence
     unit/graphRecordIndex/sharedAnalysis
@@ -14177,6 +14187,155 @@ struct GLOBAL {
     void: unitTestGraphDescriptive(me string: testName, me int: caseID) <- {
         me string: actual <- "false"; me string: expected <- "true"
         if(graphDescriptiveCase(testName,caseID)){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+// Publications must reach actual readers, including aliases and identity
+// chains, without reopening independent unresolved goals.
+#define GRAPHRECORDPUBLICATION(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphRecordPublication(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHRECORDPUBLICATION(unit/graphRecordPublication/isolatedSubscriber, 1)
+    GRAPHRECORDPUBLICATION(unit/graphRecordPublication/eightSubscribers, 2)
+    GRAPHRECORDPUBLICATION(unit/graphRecordPublication/thirtyTwoSubscribers, 3)
+    GRAPHRECORDPUBLICATION(unit/graphRecordPublication/transitiveIdentity, 4)
+    GRAPHRECORDPUBLICATION(unit/graphRecordPublication/namedIdentity, 5)
+    GRAPHRECORDPUBLICATION(unit/graphRecordPublication/recordAliasesAndPosition, 6)
+    GRAPHRECORDPUBLICATION(unit/graphRecordPublication/projectedFieldAlias, 7)
+    GRAPHRECORDPUBLICATION(unit/graphRecordPublication/temporalDeclarationAlias, 8)
+    GRAPHRECORDPUBLICATION(unit/graphRecordPublication/lateIdentityValue, 9)
+    me bool: graphRecordPublicationCase(me int: caseID) <- <%{
+        using namespace proteus4;
+        GraphNormalizer n;n.init();bool ok=true;
+        auto parse=[](const std::string& text) {return graphParsed("record publication",text);};
+        if(caseID==9) {
+            auto source=parse("{a:*10+_,}"),target=parse("{a:*10+7,}");
+            auto sourceField=POVDescription(source).member();
+            auto waiting=n.normalize(sourceField);waiting.waitForCompletion();
+            ok &= waiting.status().withSubscribers;
+            target->pItem->addPOVToWrkList(source);
+            auto h=n.runtime.normalize({target,valueOnly});h.waitForCompletion();waiting.waitForCompletion();
+            ok &= !h.status().failed && !waiting.status().failed && !waiting.status().symbolicValues &&
+                sourceField->pItem->value->num==7;
+        } else if(caseID<=3) {
+            int count=caseID==1 ? 1 : caseID==2 ? 8 : 32;
+            std::vector<Proteus4Handle> waiting;std::vector<std::size_t> before;
+            for(int i=0;i<count;++i) {
+                auto h=n.normalize(graphScalar(-1,10));h.waitForCompletion();
+                ok &= h.status().withSubscribers;before.push_back(h.steps().size());waiting.push_back(h);
+            }
+            auto target=parse("?");auto source=parse("*2+{a:*10+7, b:*10+3}");
+            target->pItem->addPOVToWrkList(source);
+            // Demand the value so whole-equality consolidation is independent
+            // of this record-copy publication measurement.
+            auto h=n.runtime.normalize({target,valueOnly});h.waitForCompletion();
+            ok &= !h.status().failed && target->pItem->value->items.size()==2 &&
+                target->pItem->value->items.head->pItem->value->num==7 &&
+                target->pItem->value->items.tail->pItem->value->num==3;
+            bool copied=false;
+            for(const auto& step:h.steps()) copied |= step.action=="Set supplied record value";
+            ok &= copied;
+            for(int i=0;i<count;++i) {
+                waiting[i].waitForCompletion();
+                auto extra=waiting[i].steps().size()-before[i];
+                ok &= waiting[i].status().withSubscribers && extra==0;
+                if(extra) std::cout<<"Unrelated record wake: "<<extra<<" steps\n";
+            }
+        } else {
+            ObjectDependencies objects;ReadScope tracked({},&objects);
+            auto capture=[&](auto read) {
+                std::set<DependencyKey> reads;
+                {ReadScope scope([&](const auto& key){reads.insert(key);});read();}
+                return DependencyProof::make(reads);
+            };
+            auto publish=[&](const Changes& changes) {
+                ok &= !changes.all && !changes.empty();
+                for(const auto& key:changes.keys) key->publish();
+            };
+            auto unrelated=graphScalar(-1,10);
+            auto independent=capture([&]{readView(unrelated);});
+            if(caseID<=5) {
+                auto a=graphScalar(-1,10),b=graphScalar(-1,10),c=graphScalar(-1,10),d=graphScalar(-1,10);
+                auto reg=n.access->registry;
+                if(caseID==5) {
+                    a->pItem->identityName=reg->occurrenceScope.allocate();
+                    b->pItem->identityName=a->pItem->identityName;
+                } else reg->recordIdentity(a,b,iekAssertion,0);
+                reg->recordIdentity(b,c,iekAssertion,0);
+                bool equal=true;
+                auto transitive=capture([&]{equal=reg->areIdentical(a,d);});
+                ok &= !equal;
+                auto direct=capture([&]{POVDescription(c,reg.get()).relationships(false);});
+                Changes changes=Changes::only({});
+                {WriteScope writes;reg->recordIdentity(c,d,iekAssertion,0);changes=writes.changes();}
+                ok &= transitive->valid() && direct->valid(); // no mid-command publication
+                publish(changes);
+                ok &= !transitive->valid() && !direct->valid() && reg->areIdentical(a,d);
+                {WriteScope writes;reg->recordIdentity(c,d,iekAssertion,0);ok &= writes.changes().empty();}
+                if(caseID==5) {
+                    // A link at a different POV bearing the same occurrence
+                    // name must also wake readers of the named component.
+                    auto other=graphScalar(-1,10),alias=graphScalar(-1,10);
+                    alias->pItem->identityName=a->pItem->identityName;
+                    auto absent=capture([&]{ok &= !reg->areIdentical(a,other);});
+                    {WriteScope writes;reg->recordIdentity(alias,other,iekAssertion,0);changes=writes.changes();}
+                    publish(changes);ok &= !absent->valid() && reg->areIdentical(a,other);
+                }
+            } else if(caseID==6) {
+                auto target=parse("{a:*10+_,}"),source=parse("{a:*10+7, b:*10+3}");
+                auto first=POVDescription(target).member(),right=POVDescription(source).member(true);
+                auto alias=graphScalar(-1,10);alias->pItem->value=first->pItem->value;
+                auto value=capture([&]{readView(alias);});
+                auto position=capture([&]{POVDescription(first).adjacent();});
+                auto reverse=capture([&]{POVDescription(right,n.access->registry.get()).relationships(false);});
+                auto defs=std::make_shared<ProteusDefinitions>(n.access);
+                Query<POVNode> q{target,recordCorrespondence,0,source};
+                ProteusRecordGoal goal(q,n.access,defs);auto commands=goal.found({q,{},0});
+                ok &= commands.size()==1;
+                if(!commands.empty()) {
+                    auto result=commands.front().apply();ok &= result.changed && result.changes.has_value();
+                    if(result.changes) publish(*result.changes);
+                }
+                ok &= !value->valid() && !position->valid() && !reverse->valid() &&
+                    alias->pItem->value->num==7 && first->next &&
+                    n.access->hasDirectIdentity(first->next,right);
+            } else if(caseID==7) {
+                auto declaration=parse("{#pair={a:*10+7,}}");
+                auto defs=std::make_shared<ProteusDefinitions>(n.access);
+                ok &= defs->publish(POVDescription(declaration).member());
+                auto owner=parse("pair:{a:*10+_,}");auto target=POVDescription(owner).member();
+                auto alias=graphScalar(-1,10);alias->pItem->value=target->pItem->value;
+                auto proof=capture([&]{readView(alias);});
+                Query<POVNode> q{target,projectField,sizeAndValue,owner};
+                ProteusProjectionGoal goal(q,n.access,defs);auto commands=goal.found({q,{},0});
+                ok &= commands.size()==1;
+                if(!commands.empty()) {
+                    auto result=commands.front().apply();ok &= result.changed && result.changes.has_value();
+                    if(result.changes) publish(*result.changes);
+                }
+                ok &= !proof->valid() && alias->pItem->value->num==7;
+            } else {
+                auto target=graphScalar(-1,10),source=parse("%?"),alias=graphScalar(-1,10);
+                alias->pItem=target->pItem;
+                auto proof=capture([&]{POVDescription(alias).independentTemporalValue();});
+                Query<POVNode> q{target,temporalDeclaration,0,source};
+                ProteusTemporalDeclarationGoal goal(q);auto commands=goal.found({q,{},0});
+                ok &= commands.size()==1;
+                if(!commands.empty()) {
+                    auto result=commands.front().apply();ok &= result.changed && result.changes.has_value();
+                    if(result.changes) publish(*result.changes);
+                }
+                ok &= !proof->valid() && POVDescription(alias).independentTemporalValue();
+            }
+            ok &= independent->valid();
+        }
+        if(!ok) std::cout<<"Record publication case "<<caseID<<" failed\n";
+        n.close();return ok;
+    }%>
+    void: unitTestGraphRecordPublication(me string: testName, me int: caseID) <- {
+        me bool: passed <- graphRecordPublicationCase(caseID)
+        me string: actual <- "false"; me string: expected <- "true"
+        if(passed){actual <- "true"}
         REQUIRE(actual==expected)
     }
 }

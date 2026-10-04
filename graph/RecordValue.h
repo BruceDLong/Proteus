@@ -58,7 +58,15 @@ public:
         if(verified_) return {};
         work.creations=addCost(work.creations,2*missing.size()+static_cast<unsigned>(adopt));
         auto access=access_;
-        return {{"Set supplied record value",[access,target,source,adopt,required,missing,plans,paired] {
+        return {{"Set supplied record value",[access,target,source,adopt,required,missing,plans,paired]() -> SetResult {
+            WriteScope identities;
+            auto footprint=[&] {
+                auto view=readView(target);
+                return ReadScope::changedObjects({target.get(),view.get(),view->infSize.get(),view->value.get()});
+            };
+            auto changes=footprint();
+            auto tail=POVDescription(target).member(true);
+            if(tail && !missing.empty()) changes.include(ReadScope::changedObjects({POVDescription::positionKey(tail)}));
             bool changed=false;
             if(adopt) {
                 changed=access->adoptDefinitionList(target);
@@ -73,13 +81,23 @@ public:
                 }
             }
             changed=access->applyTypeFacts(target,required) || changed;
-            for(const auto& plan:plans) changed=plan->apply() || changed;
+            for(const auto& plan:plans) {
+                auto result=plan->applyChanges();changed=result.changed || changed;
+                if(result.changed) changes.include(result.changes.value_or(Changes{}));
+            }
             for(const auto& pair:paired) {
-                access->bind(pair.first);access->bind(pair.second);
+                // Importing a named occurrence may also replace its view;
+                // that separate operation retains its conservative footprint.
+                bool named=access->bind(pair.first);named=access->bind(pair.second) || named;
+                if(named) changes=Changes{};
                 access->registry->recordIdentity(pair.first,pair.second,iekListCorrespondence,0);changed=true;
             }
-            for(const auto& member:missing) {access->bind(member);access->appendTailMember(target,member);changed=true;}
-            return changed;
+            for(const auto& member:missing) {
+                if(access->bind(member)) changes=Changes{};
+                access->appendTailMember(target,member);changed=true;
+            }
+            changes.include(footprint());changes.include(identities.changes());
+            return {changed,changes};
         },work}};
     }
     bool satisfied() const override {return verified_;}

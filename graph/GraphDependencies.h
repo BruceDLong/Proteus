@@ -130,6 +130,22 @@ public:
     }
 };
 
+// An atomic domain operation can collect indirect writes from lower-level
+// helpers. Collection never publishes: the enclosing Set returns the footprint
+// after all writes finish. No model objects or graph edges are retained here.
+class WriteScope {
+    inline static thread_local WriteScope* current_ = nullptr;
+    WriteScope* previous_;
+    Changes changes_ = Changes::only({});
+public:
+    WriteScope():previous_(current_) {current_=this;}
+    ~WriteScope() {current_=previous_;if(previous_) previous_->changes_.include(changes_);}
+    WriteScope(const WriteScope&)=delete;
+    WriteScope& operator=(const WriteScope&)=delete;
+    static void record(const Changes& changes) {if(current_) current_->changes_.include(changes);}
+    const Changes& changes() const {return changes_;}
+};
+
 // A derived fact outlives the search that proved it. Parents retain required
 // child proofs, not flattened copies of all descendant reads. Subscriptions
 // remain weak; releasing cached evidence releases this dependency DAG.

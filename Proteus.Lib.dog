@@ -1205,6 +1205,16 @@ struct IdentityRegistry{
         }
     }
 
+    // Collect only; the enclosing atomic Set publishes after all writes.
+    void: captureIdentityWrite(our POV: leftPOV, our POV: rightPOV) <- <%{
+        // Direct readers observe endpoints. Transitive readers also observe
+        // occurrence names, since distinct POVs may share one.
+        proteus4::WriteScope::record(proteus4::ReadScope::changedObjects({
+            leftPOV.get(),rightPOV.get(),
+            leftPOV->pItem ? leftPOV->pItem->identityName.get() : nullptr,
+            rightPOV->pItem ? rightPOV->pItem->identityName.get() : nullptr}));
+    }%>
+
     our IdentityRelation: recordIdentity(our POV: leftPOV,
             our POV: rightPOV, me IdentityEvidenceKind: evidenceKind,
             me uint64: normalizationID) <- {
@@ -1226,6 +1236,7 @@ struct IdentityRegistry{
             identity!.leftPOV <- leftPOV
             identity!.rightPOV <- rightPOV
             identities.append(identity)
+            captureIdentityWrite(leftPOV, rightPOV)
             return(identity)
         }
     }
@@ -1236,13 +1247,21 @@ struct IdentityRegistry{
             return a==b || (a && b && a->pItem && b->pItem && a->pItem->identityName &&
                 a->pItem->identityName==b->pItem->identityName);
         };
+        auto observe=[](const std::shared_ptr<POV>& node) {
+            proteus4::ReadScope::observeObject(node.get());
+            if(node->pItem) {
+                proteus4::ReadScope::observeObject(node->pItem.get());
+                proteus4::ReadScope::observeObject(node->pItem->identityName.get());
+            }
+        };
+        observe(firstPOV);observe(secondPOV);
         if(same(firstPOV,secondPOV)) return true;
         std::vector<std::shared_ptr<POV>> pending{firstPOV},visited;
         std::lock_guard<std::mutex> lock(registryMutex);
         while(!pending.empty()) {
             auto current=pending.back();pending.pop_back();
             if(std::find(visited.begin(),visited.end(),current)!=visited.end()) continue;
-            visited.push_back(current);
+            visited.push_back(current);observe(current);
             for(const auto& identity:identities) {
                 auto neighbor=same(identity->leftPOV,current) ? identity->rightPOV :
                     same(identity->rightPOV,current) ? identity->leftPOV : std::shared_ptr<POV>{};
