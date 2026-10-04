@@ -53,6 +53,7 @@ class PathSelection {
                 out.refinements.push_back({{effect,sizeAndValue,0},{1,0},"complete source path effect",false});
         }
         bool ready=(access_->physicalList(node) || access_->unreferencedTemplateSpan(node)) && !definitions_->pendingOrder(node);
+        const bool hasStructure=ready;
         if(ready) for (const auto& relation:POVDescription(node,access_->registry.get()).relationships()) {
             if(access_->sameInfon(node,relation.target)) continue;
             RHSRepresentation proof(access_,node,relation.target,definitions_);
@@ -63,7 +64,7 @@ class PathSelection {
         // Keep that opportunity visible without requiring unrelated fields to
         // finish before a usable member can be selected. Existing relationships
         // remain valid evidence once their facts are represented in the source.
-        if(!ready) out.refinements.push_back({{node,sizeAndValue,0},{visits,0},"expose field source structure",true});
+        if(!ready) out.refinements.push_back({{node,hasStructure ? sizeAndValue : valueOnly,hasStructure ? lazyParts : exposeStructure},{visits,0},"expose field source structure",true});
         return ready;
     }
     void unresolved(Expansion<POVNode>& out,const Query<POVNode>& q,const char* label,Cost visits=1) const {

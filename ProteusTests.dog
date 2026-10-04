@@ -17,7 +17,9 @@ TestsToRun = `
     unit/graphDescriptive/displayColor
     unit/graphDescriptive/lateDescription
     unit/graphDescriptive/modelPalette
+    unit/graphDescriptive/modelTransition
 
+    unit/graphPreservation/descriptiveTarget
     unit/graphPreservation/contextualSibling
     unit/graphPreservation/symbolicSibling
     unit/graphPreservation/pendingCompositeGuard
@@ -10459,6 +10461,7 @@ struct GLOBAL {
     GRAPHPRESERVATION(unit/graphPreservation/contextualSibling, 37)
     GRAPHPRESERVATION(unit/graphPreservation/symbolicSibling, 38)
     GRAPHPRESERVATION(unit/graphPreservation/pendingCompositeGuard, 39)
+    GRAPHPRESERVATION(unit/graphPreservation/descriptiveTarget, 40)
 
     me bool: graphLateTemporalPartCase(me string: testName, me int: caseID) <- <%{
         using namespace proteus4;
@@ -10528,6 +10531,32 @@ struct GLOBAL {
         using namespace proteus4;
         GraphNormalizer n;n.init();
         auto parse=[&](const std::string& text){return graphParsed(testName,text);};
+        if(caseID==40) {
+            auto world=parse("{#state={parts,} #parts={items,} #piece={key,pose} #pose={x,y} "
+                "#history={T state|...} history:{T "
+                "state:{parts:{items:*2+{piece:{key:1,pose:{x:0,y:7}},piece:{key:2,pose:{x:0,y:8}}},},} "
+                "state.parts.items.piece:{key:1,}.pose.x=5;;;;;}}");
+            n.setWorld(world->pItem);auto loaded=n.normalize(world);loaded.waitForCompletion();
+            bool ok=!loaded.status().failed;
+            for(const auto& test:std::vector<std::pair<std::string,std::string>>{
+                {"%W.history@[2].parts.items.piece:{key:1,}.pose.x","*_+[x:5 ... ]"},
+                {"%W.history@[2].parts.items.piece:{key:1,}.pose.y","*_+[y:7 ... ]"},
+                {"%W.history@[2].parts.items.piece:{key:2,}.pose.x","*_+[x:0 ... ]"},
+                {"%W.history@[2].parts.items.piece:{key:2,}.pose.y","*_+[y:8 ... ]"},
+                {"%W.history@[1].parts.items.piece:{key:1,}.pose.x","*_+[x:0 ... ]"}}) {
+                auto q=parse(test.first);auto h=n.normalize(q);h.waitForCompletion();
+                auto actual=toString(q->pItem.get());
+                bool match=!h.status().failed && actual==test.second;
+                if(!match) std::cout<<test.first<<" -> "<<actual<<" error="<<h.status().error<<"\n";
+                ok &= match;h.cancel();
+            }
+            if(!ok) {
+                std::cout<<"World "<<toString(world->pItem.get())<<" error="<<loaded.status().error<<"\n";
+                for(const auto& step:loaded.steps()) if(step.action!="visit")
+                    std::cout<<step.action<<" kind="<<step.query.kind<<" node="<<step.query.node->mySymbol()<<"\n";
+            }
+            loaded.cancel();n.close();return ok;
+        }
         if(caseID==39) {
             auto root=parse("{T {a:0,b:7} {a:1,}}");
             auto after=POVDescription(root).member(true),source=parse("?");
@@ -10575,7 +10604,7 @@ struct GLOBAL {
     }%>
 
     me bool: graphPreservationCase(me string: testName, me int: caseID) <- <%{
-        if(caseID>=37 && caseID<=39) return graphPartialTemporalPartsCase(testName,caseID);
+        if(caseID>=37 && caseID<=40) return graphPartialTemporalPartsCase(testName,caseID);
         if(caseID==32 || caseID==33) return graphWrappedTemporalPathCase(testName,caseID==33);
         if(caseID>=34 && caseID<=36) return graphLateTemporalPartCase(testName,caseID);
         using namespace proteus4;
@@ -13646,11 +13675,63 @@ struct GLOBAL {
     GRAPHDESCRIPTIVE(unit/graphDescriptive/displayColor, 13)
     GRAPHDESCRIPTIVE(unit/graphDescriptive/lateDescription, 14)
     GRAPHDESCRIPTIVE(unit/graphDescriptive/modelPalette, 15)
+    GRAPHDESCRIPTIVE(unit/graphDescriptive/modelTransition, 16)
     me bool: graphDescriptiveCase(me string: testName, me int: caseID) <- <%{
         using namespace proteus4;
         GraphNormalizer n;n.init();
         auto parse=[&](const std::string& text){return graphParsed(testName,text);};
         auto norm=[&](const POVNode& p){auto h=n.normalize(p);h.waitForCompletion();return h;};
+        if(caseID==16) {
+            bool ok=true;
+            auto checked=[&](const POVNode& p) {auto h=norm(p);if(h.status().failed) {ok=false;std::cout<<h.status().error<<"\n";}return h;};
+            checked(parse("{#rat=*_+_}"));
+            checked(parse(readAssetAsString("public/Informatics/Foundation.pr")));
+            auto definitions=parse(readAssetAsString("public/Things/rubixCube.pr"));checked(definitions);
+            auto original=toString(definitions->pItem.get());
+            auto history=parse(readAssetAsString("TestFiles/descriptiveRubixHistory.pr"));checked(history);
+            auto first=POVDescription(history).member(),second=POVDescription(history).member(true);
+            if(!first || !second || first==second) {std::cout<<"Two temporal occurrences required\n";n.close();return false;}
+            using Pose=std::array<mpq_class,6>;
+            using Poses=std::map<std::string,Pose>;
+            auto number=[&](const POVNode& owner,const char* name,mpq_class& result) {
+                auto field=n.knownField(owner,name);
+                if(field && !(n.access->known(field)&valueOnly)) checked(field);
+                if(!field || !(n.access->known(field)&valueOnly)) {ok=false;return false;}
+                result=field->pItem->value->num.val;result.canonicalize();return true;
+            };
+            auto poses=[&](const POVNode& state) {
+                Poses result;checked(state);
+                auto parts=n.knownField(state,"parts");if(parts) checked(parts);
+                for(auto group=parts ? POVDescription(parts).member() : POVNode{};group;group=group->next) {
+                    checked(group);
+                    for(auto piece=POVDescription(group).member();piece;piece=piece->next) {
+                        checked(piece);auto thing=n.knownField(piece,"thing");if(thing) checked(thing);
+                        auto location=n.knownField(thing,"location"),rotation=n.knownField(thing,"orientation");
+                        if(location) checked(location);if(rotation) checked(rotation);
+                        Pose value;bool known=true;
+                        const char* names[]={"xloc","yloc","zloc","xrot","yrot","zrot"};
+                        for(int i=0;i<6;++i) known=number(i<3 ? location : rotation,names[i],value[i]) && known;
+                        if(!known) {std::cout<<"Unresolved pose: "<<toString(piece->pItem.get())<<"\n";continue;}
+                        auto key=piece->pItem->type->typeID()+":"+value[0].get_str()+","+value[1].get_str()+","+value[2].get_str();
+                        ok &= result.emplace(key,value).second;
+                    }
+                }
+                return result;
+            };
+            auto before=poses(first);
+            auto after=poses(second);
+            const std::string target="edge-cube:0,11/10,11/10";
+            auto expected=before;
+            if(expected.count(target)) {
+                expected[target][3]=mpq_class("-1570796326794897/1000000000000000");
+                expected[target][4]=mpq_class("3141592653589793/1000000000000000");
+            }
+            ok &= before.size()==26 && after.size()==26 && expected.count(target) && after==expected;
+            ok &= poses(first)==before && toString(definitions->pItem.get())==original;
+            auto stage=checked(second);ok &= poses(second)==after;
+            std::cout<<"Temporal cube: "<<before.size()<<" -> "<<after.size()<<" cubies; one described edge changes; source preserved="<<ok<<"\n";
+            stage.cancel();n.close();return ok;
+        }
         if(caseID==15) {
             bool successful=true;
             auto checked=[&](const POVNode& p) {auto h=norm(p);successful &= !h.status().failed;return h;};

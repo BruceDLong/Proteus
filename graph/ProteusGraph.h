@@ -27,7 +27,8 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
 // Related sources and member refinements retain demand-driven expansion.
 // A value-only guard may exhaust existing routes without requiring a value;
 // it excludes preservation and still retains unresolved input/expression work.
-enum NormalizationExtent { settleExistingRoutes = -1, lazyParts = 0, fillImmediateParts = 1 };
+// Structure access exposes immediate relationships without normalizing member values.
+enum NormalizationExtent { settleExistingRoutes = -1, lazyParts = 0, fillImmediateParts = 1, exposeStructure = 2 };
 
 inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
     auto phase = query.kind == correspondenceEnter ? ListPhase::enter :
@@ -1114,13 +1115,19 @@ private:
             if (access_->isDefinition(node)) {
                 result.deferred = !definitions_->registered(node); return result;
             }
-            bool pendingUpdate=false,selectedView=false;
+            bool pendingUpdate=false,selectedView=false,pendingEffects=false;
             if(auto field=readView(node)->pathSelection) {
                 result.refinements.push_back({pathRequest(node),{0,0},"select path result",false});
                 pendingUpdate=!PathExpression::updatesReady(field);
+                // Locate and attach every retained write before normalizing
+                // its enclosing value; preservation must see those constraints.
+                for(const auto& effect:field->effects) if(auto pending=readView(effect)->pathSelection)
+                    pendingEffects |= !PathExpression::updatesReady(pending) || PathExpression::needsUpdates(pending);
                 if(!constraintsOnly) for(const auto& effect:field->effects)
-                    result.refinements.push_back({{effect,sizeAndValue,0},{1,0},"complete retained path",false});
-                if(!field->result) return result;
+                    result.refinements.push_back({{effect,pendingEffects ? valueOnly : sizeAndValue,pendingEffects ? exposeStructure : lazyParts},{1,0},"complete retained path",false});
+                // A provisional match is not yet a writable target. Do not
+                // fill its previous value while competing matches are pending.
+                if(!field->result || pendingUpdate || PathExpression::needsUpdates(field)) return result;
                 selectedView=!field->pending && field->matches.size()==1 &&
                     readView(node)->value==readView(field->result)->value && readView(node)->infSize==readView(field->result)->infSize;
                 // Normalizing a choice also demands its available candidates.
@@ -1172,12 +1179,12 @@ private:
                 result.refinements.push_back({{node, concatField, 1, {}, query.context}, {0, 0}, "resolve size expression", false});
             if (access_->hasConcat(node, 2))
                 result.refinements.push_back({{node, concatField, 2, {}, query.context}, {0, 0}, "resolve value expression", false});
-            if (!constraintsOnly && !selectedView && access_->physicalList(node)) {
+            if (!constraintsOnly && !selectedView && query.argument!=exposeStructure && access_->physicalList(node)) {
                 if (demand != sizeOnly || !(access_->known(node) & sizeOnly))
                     result.refinements.push_back({{node, listContents, demand, {}, owners}, {0, 0},
                         "inspect list contents", demand == sizeOnly});
             }
-            if (!constraintsOnly && !selectedView && demand != sizeOnly && (access_->templatePrefixList(node) || access_->sparse(node))) {
+            if (!constraintsOnly && !selectedView && query.argument!=exposeStructure && demand != sizeOnly && (access_->templatePrefixList(node) || access_->sparse(node))) {
                 for (auto member = description.member(); member; member = POVDescription(member).adjacent())
                     result.refinements.push_back({{member, sizeAndValue, 0}, {1, 0}, "normalize template prefix member", false});
                 for (auto member : access_->demandedOccurrences(node))
@@ -1214,7 +1221,7 @@ private:
                     if(verdict<0) throw GoalRejected("incompatible scalar constraints");
                     if(!verdict) result.deferred=true;
                 }
-                result.edges.push_back(direct(label, {source, query.kind, query.argument==settleExistingRoutes ? settleExistingRoutes : lazyParts, origin, context}));
+                result.edges.push_back(direct(label, {source, query.kind, query.argument==settleExistingRoutes ? settleExistingRoutes : query.argument==exposeStructure ? exposeStructure : lazyParts, origin, context}));
                 if (demand != sizeOnly && access_->correspondingLists(origin, source)) {
                     result.refinements.push_back({{origin, listCorrespondence, demand, source},
                         {1, 0}, "match list RHS members", false});
@@ -1246,7 +1253,7 @@ private:
                 if (relation.derived && readView(node)->value==readView(source)->value &&
                     readView(node)->infSize==readView(source)->infSize) {
                     if(constraintsOnly) result.edges.push_back(direct("selected source constraints",{source,relationshipConstraints,0}));
-                    else result.refinements.push_back({{source,query.kind,query.argument,{},PathExpression::location(readView(node)->pathSelection,source)},{0,0},"normalize selected source",false});
+                    else result.refinements.push_back({{source,pendingEffects ? valueOnly : query.kind,pendingEffects ? exposeStructure : query.argument,{},PathExpression::location(readView(node)->pathSelection,source)},{0,0},"normalize selected source",false});
                     continue;
                 }
                 if(source->looseType() && (!readView(source)->wrkList.empty() || access_->hasTypeRequirements(source) || access_->hasArgument(source))) {

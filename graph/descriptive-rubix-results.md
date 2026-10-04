@@ -7,8 +7,9 @@ to the face frame; they are not asserted as the physical cubie's world location.
 No cubie has an intrinsic numeric identifier. The initial poses preserve handedness.
 
 The model is `World/public/Things/rubixCube.pr`. Slipstream's `userKB.pr` now
-instantiates `rubix-cube` with `solved-rubix-state`. The earlier verb/second-state
-demo is deferred. The separate draft in Slipstream's `Resources/rubixCube.pr`
+instantiates `rubix-cube` with `solved-rubix-state`. The subsequent change-only
+state-2 exercise is documented in [descriptive-transition-results.md](descriptive-transition-results.md);
+its rotation is currently pending on coordinate-comparison semantics. The separate draft in Slipstream's `Resources/rubixCube.pr`
 is untouched; runtime loading uses `Resources/public/Things/rubixCube.pr`.
 
 ## General engine changes

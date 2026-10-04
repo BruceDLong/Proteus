@@ -9,6 +9,7 @@ class FieldPredicate {
     Expansion<POVNode>& out_;
     std::set<std::shared_ptr<infonView>> active_;
     bool conflict_=false;
+    std::vector<Refinement<POVNode>> requestedFacts_;
     std::map<DefinitionSpec,NumericView> numbers_;
     bool readable(const POVNode& node, bool predicate) {
         if (!access_->plainStructure(node,false,false,false,false,false,false) ||
@@ -45,10 +46,18 @@ class FieldPredicate {
         if(predicate && specification->facts.valid && specification->facts.overlay<0 &&
            WordForms::collectionPredicate(node,*definitions_)) specification->facts.overlay=infonState::LST;
         const bool canRead=readable(node,predicate);
+        const bool needsFact=!predicate && demand &&
+            (demand->list || (demand->facts.hasValue && !specification->facts.hasValue) ||
+             (demand->facts.hasSize && !specification->facts.hasSize) ||
+             (demand->facts.overlay>=0 && specification->facts.overlay<0));
+        const bool structure=demand && (demand->list || demand->facts.overlay==infonState::LST);
+        Refinement<POVNode> refinement{{node,structure ? valueOnly : sizeAndValue,
+            structure ? exposeStructure : lazyParts,{},refinementContext},{1,0},"refine field candidate",true};
         if ((!predicate || !getFlagBit(readView(node)->flags,infonView::invertMatch)) &&
             (!canRead || (!access_->literalList(node) &&
              (!access_->hasTypeRequirements(node) || !POVDescription(node).work().empty()))))
-            out_.refinements.push_back({{node,sizeAndValue,0,{},refinementContext},{1,0},"refine field candidate",true});
+            out_.refinements.push_back(refinement);
+        else if(needsFact) requestedFacts_.push_back(refinement);
         if (!canRead) return {};
         NumericRangeAccess numeric(*access_);auto number=numeric.read(node,predicate);
         work.visits=addCost(work.visits,numeric.work.visits);
@@ -227,6 +236,10 @@ public:
             auto exclusion=read(predicate,true,{},false,true);
             if (!conflict_ && compare(exclusion,actual)==ScalarMatch::no) result=ScalarMatch::no;
         }
+        // A read-only definition proof may already answer the query. Only an
+        // undecided comparison needs to materialize its requested facts.
+        if(result==ScalarMatch::unknown)
+            out_.refinements.insert(out_.refinements.end(),requestedFacts_.begin(),requestedFacts_.end());
         if(getFlagBit(readView(predicate)->flags,infonView::invertMatch)) result=complement(result);
         return result;
     }
