@@ -41,8 +41,10 @@ public:
             // A checked scalar meaning is already expressed by its fields;
             // consumers with that evidence need not reject it for its label.
             if(access_->hasTypeRequirements(right)) {
-                if(!definitions || (!access_->scalarTypeShape(right) && !definitions->describesParts(right)) ||
-                   (!definitions->describesParts(right) && !definitions->satisfied(right))) return;
+                bool described=definitions && (definitions->describesParts(right) ||
+                    RecordStructure::typedParts(*access_,right,work));
+                if(!definitions || (!access_->scalarTypeShape(right) && !described) ||
+                   (!described && !definitions->satisfied(right))) return;
                 if(compareNominal(*definitions,right,left,work)!=ScalarMatch::yes) {
                     // This is an asserted equality, not a type-based search.
                     // Distinct labels may express the same value. Prove the
@@ -86,7 +88,12 @@ public:
                     std::vector<POVNode> a,b,missing;
                     std::vector<std::pair<POVNode,POVNode>> paired;
                     if(!RecordStructure::members(*access_,left,a,work) || !RecordStructure::members(*access_,right,b,work) ||
-                       !RecordStructure::pairs(*access_,a,b,paired,missing,work) || !missing.empty()) return;
+                       !RecordStructure::pairs(*access_,a,b,paired,missing,work,[&](std::size_t i,std::size_t j) {
+                           // Use the same unique typed-field correspondence as
+                           // record copying; no extra transitive identities are needed.
+                           if(!definitions || !access_->hasTypeRequirements(b[j])) return ScalarMatch::no;
+                           return compareNominal(*definitions,b[j],a[i],work);
+                       }) || !missing.empty()) return;
                     pending.insert(pending.end(),paired.begin(),paired.end());
                 } else {
                     SpanLayout<POVNode> a, b;
@@ -111,7 +118,8 @@ struct PayloadReadiness {
     PayloadReadiness(const std::shared_ptr<ProteusGraphAccess>& access,const POVNode& payload,
                      const std::shared_ptr<ProteusDefinitions>& definitions) {
         ready=!access->hasArgument(payload) &&
-            (!access->hasTypeRequirements(payload) || definitions->describesParts(payload) || definitions->satisfied(payload));
+            (!access->hasTypeRequirements(payload) || definitions->describesParts(payload) ||
+             RecordStructure::typedParts(*access,payload,work) || definitions->satisfied(payload));
         for(const auto& relation:POVDescription(payload,access->registry.get()).relationships()) {
             RHSRepresentation proof(access,payload,relation.target,definitions);
             work.visits=addCost(work.visits,proof.work.visits);

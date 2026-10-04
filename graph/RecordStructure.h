@@ -21,12 +21,23 @@ struct RecordStructure {
             throw DefinitionConflict("unordered members exceed explicit extent");
         return true;
     }
+    // Inherited views also carry useful typed payloads. Reading their facts
+    // must not change the separate policy for expanding written definitions.
+    static bool typedParts(ProteusGraphAccess& access,const POVNode& node,Work& work) {
+        if(!record(access,node) || access.memberTemplate(node) || access.occurrenceOwner(node)) return false;
+        std::vector<POVNode> parts;
+        if(!members(access,node,parts,work) || parts.empty()) return false;
+        return std::all_of(parts.begin(),parts.end(),[&](const auto& part) {
+            return access.hasTypeRequirements(part) || WordForms::collectionType(access,part);
+        });
+    }
+    template<class Match>
     static bool pairs(ProteusGraphAccess& access,const std::vector<POVNode>& left,
                       const std::vector<POVNode>& right,std::vector<std::pair<POVNode,POVNode>>& paired,
-                      std::vector<POVNode>& missing,Work& work) {
+                      std::vector<POVNode>& missing,Work& work,Match match) {
         MemberCorrespondence mapping(left.size(),right.size(),[&](std::size_t a,std::size_t b) {
             return access.sameInfon(left[a],right[b]) || access.hasDirectIdentity(left[a],right[b]);
-        },[](std::size_t,std::size_t){return ScalarMatch::no;},work);
+        },match,work);
         if(!mapping.unambiguous) return false;
         for(const auto& pair:mapping.pairs) paired.push_back({left[pair.first],right[pair.second]});
         for(auto index:mapping.missing) missing.push_back(right[index]);

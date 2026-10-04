@@ -20,6 +20,7 @@ TestsToRun = `
     unit/graphDescriptive/modelTransition
 
     unit/graphPreservation/descriptiveTarget
+    unit/graphPreservation/retainedRecordRHS
     unit/graphPreservation/contextualSibling
     unit/graphPreservation/symbolicSibling
     unit/graphPreservation/pendingCompositeGuard
@@ -156,6 +157,7 @@ TestsToRun = `
     unit/graphContextual/lateNamedIndex
     unit/graphContextual/retainedNestedFacts
     unit/graphContextual/lateDescriptiveTransfer
+    unit/graphContextual/composedTransfer
     unit/streamInsert/parseFirstPolicy
     unit/streamInsert/assetRelative
     unit/streamInsert/openAssetDependency
@@ -10466,6 +10468,7 @@ struct GLOBAL {
     GRAPHPRESERVATION(unit/graphPreservation/symbolicSibling, 38)
     GRAPHPRESERVATION(unit/graphPreservation/pendingCompositeGuard, 39)
     GRAPHPRESERVATION(unit/graphPreservation/descriptiveTarget, 40)
+    GRAPHPRESERVATION(unit/graphPreservation/retainedRecordRHS, 41)
 
     me bool: graphLateTemporalPartCase(me string: testName, me int: caseID) <- <%{
         using namespace proteus4;
@@ -10620,6 +10623,21 @@ struct GLOBAL {
             return POVNode{};
         };
         auto value=[&](const POVNode& p,int v) {return p && (n.access->known(p)&valueOnly) && p->pItem->value->num==v;};
+        if(caseID==41) {
+            auto norm=[&](const POVNode& node) {auto h=n.normalize(node);h.waitForCompletion();return h;};
+            auto definitions=parse("{#sample=*2+{a:_,b:_} #part=sample}");norm(definitions);
+            auto history=parse("{T {part:{a:1,b:7},} {part:{a:2,},}}");
+            auto h=norm(history);auto first=POVDescription(history).member(),last=POVDescription(history).member(true);
+            auto original=field(first,"part"),preserved=field(last,"part");
+            norm(preserved);
+            auto copy=parse("{part,}");n.addRHS(copy,last);auto copied=norm(copy);
+            auto part=field(copy,"part");if(part) norm(part);
+            bool ok=!h.status().failed && !copied.status().failed && part && part!=preserved &&
+                value(field(part,"a"),2) && value(field(part,"b"),7) &&
+                value(field(original,"a"),1) && value(field(original,"b"),7);
+            if(!ok) std::cout<<"Retained record RHS: "<<toString(copy->pItem.get())<<" error="<<copied.status().error<<"\n";
+            n.close();return ok;
+        }
         std::vector<std::string> inputs={
             "{T *10+7 ?}","{T *10+7 *10+8}","{T *10+7 %?}",
             "{T {a:0,b:7} {a:1,}}",
@@ -12047,11 +12065,48 @@ struct GLOBAL {
     GRAPHCONTEXTUAL(unit/graphContextual/lateNamedIndex, 17)
     GRAPHCONTEXTUAL(unit/graphContextual/retainedNestedFacts, 18)
     GRAPHCONTEXTUAL(unit/graphContextual/lateDescriptiveTransfer, 19)
+    GRAPHCONTEXTUAL(unit/graphContextual/composedTransfer, 20)
     me bool: contextualDefinitionCase(me string: testName, me int: caseID) <- <%{
         using namespace proteus4;
         GraphNormalizer n;n.init();
         auto parse=[&](const std::string& text){return graphParsed(testName,text);};
         auto norm=[&](const POVNode& p){auto h=n.normalize(p);h.waitForCompletion();return h;};
+        if(caseID==20) {
+            auto defs=parse("{#item=*3+{label:$,cargo,position:_} #left=item:{label:'left',} #right=item:{label:'right',} "
+                "#state=*2+{left,right} #known=state:{left:{cargo={tag:'x',},position:1},right:{cargo={tag:'y',},position:2}} "
+                "#table={2 1} #swap={T state state:{"
+                "left:{cargo:%?=%@[1]~item:{label:'right',}.cargo,position=table@[%@[1]~item:{label:'right',}.position]},"
+                "right:{cargo:%?=%@[1]~item:{label:'left',}.cargo,position=table@[%@[1]~item:{label:'left',}.position]}}}}");
+            norm(defs);auto declarations=toString(defs->pItem.get());
+            auto read=[&](const POVNode& state) {
+                norm(state);std::string result;
+                for(auto part=POVDescription(state).member();part;part=part->next) {
+                    norm(part);auto cargo=n.knownField(part,"cargo"),position=n.knownField(part,"position");
+                    if(cargo) norm(cargo);
+                    auto tag=cargo ? cargo->pItem->fetchField("tag") : POVNode{};
+                    if(!tag || !position || !(n.access->known(position)&valueOnly)) return std::string("unresolved");
+                    result+=tag->pItem->value->str+":"+position->pItem->value->num.val.get_str()+";";
+                }
+                return result;
+            };
+            std::vector<POVNode> histories;
+            std::vector<std::pair<POVNode,std::string>> snapshots;
+            POVNode previous;bool ok=true;
+            for(int step=0;step<4;++step) {
+                auto history=parse(previous ? "swap:{T ? ?}" : "swap:{T known ?}");histories.push_back(history);
+                auto first=POVDescription(history).member();
+                if(previous) n.addRHS(first,previous);
+                else {auto value=read(first);ok &= value=="x:1;y:2;";snapshots.push_back({first,value});}
+                auto h=norm(history);ok &= !h.status().failed;
+                previous=POVDescription(history).member(true);auto value=read(previous);
+                ok &= value==(step%2 ? "x:1;y:2;" : "y:1;x:2;");snapshots.push_back({previous,value});
+                if(!ok) std::cout<<"Composed transfer "<<step+1<<": "<<value<<" error="<<h.status().error<<"\n";
+                h.cancel();
+            }
+            for(const auto& [state,value]:snapshots) ok &= read(state)==value;
+            ok &= toString(defs->pItem.get())==declarations;
+            n.close();return ok;
+        }
         if(caseID==18 || caseID==19) {
             std::string declarations="{#item=*3+{label:$,cargo,position:_} #left=item:{label:'left',} #right=item:{label:'right',} "
                 "#state=*2+{left,right} #known=state:{left:{cargo={tag:'x',},position:1},right:{cargo={tag:'y',},position:2}} "
