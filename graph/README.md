@@ -42,6 +42,15 @@ equate types. Finite ordered structural constraints are also supported. See
 [field-selection-results.md](field-selection-results.md) for the initial scalar step,
 symbolic alternatives, subscriptions, and validation.
 
+Field selection retains each candidate comparison with subscriptions to the facts
+it inspected. A path goal keeps these answers across retries, rechecks invalid
+comparisons, and reuses the others. Required refinements remain ordinary graph
+work. Explicit normalization starts a fresh comparison epoch; existing handles
+keep their own epoch. The context uses a weak answer index with batched cleanup.
+This does not yet preserve the outer path traversal or its collected match list.
+The `unit/graphCandidateSubscriptions/` cases cover delayed acceptance/rejection,
+unchanged comparison evidence, and ordered selection after a pending candidate.
+
 Strict oneOf equalities now reuse the candidate matcher and result publisher;
 see [choice-constraint-results.md](choice-constraint-results.md).
 Unordered definition bodies and independently supplied record fields share unique

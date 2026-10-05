@@ -43,6 +43,7 @@ inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
 #include "RecordStructure.h"
 #include "RHSRepresentation.h"
 #include "FieldPredicate.h"
+#include "FieldCandidates.h"
 #include "BoundaryGraph.h"
 #include "RelativeNavigation.h"
 #include "TemporalGraph.h"
@@ -745,6 +746,7 @@ class ProteusAccess : public GraphAccess<POVNode> {
     std::shared_ptr<ProteusCompletion> completion_;
     std::shared_ptr<ProteusStreamEvidence> evidence_;
     std::shared_ptr<ProteusDefinitions> definitions_;
+    std::shared_ptr<FieldCandidates> candidates_;
     static Edge<POVNode> direct(std::string label, Query<POVNode> query,
                                 bool alternative = false, Cost remainingVisits = 0) {
         return {std::move(label), {1, 0}, alternative, [query] { return query; },
@@ -761,7 +763,8 @@ public:
           insertion_(std::make_shared<StreamInsertion>(access_)),
           completion_(std::make_shared<ProteusCompletion>(access_)),
           evidence_(std::make_shared<ProteusStreamEvidence>(access_)),
-          definitions_(std::make_shared<ProteusDefinitions>(access_,modelFacts_)) {}
+          definitions_(std::make_shared<ProteusDefinitions>(access_,modelFacts_)),
+          candidates_(std::make_shared<FieldCandidates>(access_,definitions_,modelFacts_)) {}
     bool knownType(const POVNode& source,const std::string& name) const {
         if(!source) return false;
         auto names=definitions_->names(source);bool complete=true;Work work{0,0};
@@ -830,7 +833,7 @@ public:
     void beginSearch(const Query<POVNode>&) override {
         // Re-normalization rechecks definition witnesses, including edits made
         // between quiescent calls. Query submission is not a graph mutation.
-        definitions_->prune();
+        definitions_->prune();candidates_->beginSearch();
     }
     void invalidateCompletion() override { evidence_->prune(); definitions_->prune(); }
     std::vector<std::function<void()>> takeEffects() override {
@@ -851,7 +854,7 @@ public:
         if(query.kind==recordCorrespondence) return std::make_shared<ProteusRecordGoal>(query,access_,definitions_);
         if(query.kind==acquireListValue) return std::make_shared<ProteusListValueGoal>(query,access_,definitions_);
         if (query.kind==resolveWord || query.kind==externalField || query.kind==selectEnvironment)
-            return std::make_shared<ProteusPathGoal>(query,access_,definitions_);
+            return std::make_shared<ProteusPathGoal>(query,access_,definitions_,candidates_,[this](const Query<POVNode>& q){return expand(q);});
         if(query.kind==resolvePathExpression)
             return std::make_shared<ProteusPathExpressionGoal>(query,access_);
         if (query.kind==placeArgument || query.kind==resolveEndpoint)
@@ -861,7 +864,7 @@ public:
         if (query.kind == projectField)
             return std::make_shared<ProteusProjectionGoal>(query, access_, definitions_);
         if (query.kind == selectField || query.kind == selectPosition || query.kind == selectSelf || query.kind == filterChoice)
-            return std::make_shared<ProteusPathGoal>(query, access_, definitions_);
+            return std::make_shared<ProteusPathGoal>(query,access_,definitions_,candidates_,[this](const Query<POVNode>& q){return expand(q);});
         if (query.kind == sequenceCorrespondence)
             return std::make_shared<ProteusSequenceGoal>(query, access_, definitions_, completion_);
         if (query.kind == selectRelative)
@@ -902,11 +905,11 @@ public:
         }
         if(query.kind==acquireListValue || query.kind==temporalDeclaration) return {};
         if(query.kind>=resolveWord && query.kind<=externalEnd)
-            return Resolution(access_,definitions_,[this](const Query<POVNode>& q){return expandSemantic(q);}).expand(query);
+            return Resolution(access_,definitions_,[this](const Query<POVNode>& q){return expandSemantic(q);},candidates_).expand(query);
         if(query.kind>=placeArgument && query.kind<=endpointFound)
             return EndpointDemand(access_,definitions_,[this](const Query<POVNode>& q){return expandSemantic(q);}).expand(query);
         if (query.kind >= selectField && query.kind <= choicePending)
-            return PathSelection(access_, definitions_, [this](const Query<POVNode>& q) {return expandSemantic(q);}).expand(query);
+            return PathSelection(access_, definitions_, [this](const Query<POVNode>& q) {return expandSemantic(q);},candidates_).expand(query);
         if ((query.kind >= sequenceCorrespondence && query.kind <= sequenceComplete) || query.kind == correspondenceInput || query.kind == sequenceAtomMatched || query.kind == sequenceChoiceMatched)
             return SequenceCorrespondence(access_, definitions_).expand(query);
         // Ordinary member discovery depends on position, not the member's

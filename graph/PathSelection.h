@@ -19,6 +19,7 @@ class PathSelection {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusDefinitions> definitions_;
     std::function<Expansion<POVNode>(const Query<POVNode>&)> navigate_;
+    std::shared_ptr<FieldCandidates> candidates_;
     static Edge<POVNode> edge(const char* label, Query<POVNode> query, Cost visits=1) {
         return {label, {visits,0}, true, [query] { return query; }};
     }
@@ -252,8 +253,8 @@ class PathSelection {
     }
 public:
     PathSelection(std::shared_ptr<ProteusGraphAccess> access,std::shared_ptr<ProteusDefinitions> definitions,
-                  std::function<Expansion<POVNode>(const Query<POVNode>&)> navigate)
-        :access_(std::move(access)),definitions_(std::move(definitions)),navigate_(std::move(navigate)) {}
+                  std::function<Expansion<POVNode>(const Query<POVNode>&)> navigate,std::shared_ptr<FieldCandidates> candidates)
+        :access_(std::move(access)),definitions_(std::move(definitions)),navigate_(std::move(navigate)),candidates_(std::move(candidates)) {}
     Expansion<POVNode> expand(const Query<POVNode>& q) const {
         Expansion<POVNode> out;
         if(q.kind==pathMatched && (BoundaryGraph::direction(q.related) || TemporalGraph::pathKind(q.related))) return out;
@@ -371,9 +372,7 @@ public:
                 out.refinements.push_back({{at.node,sizeAndValue,0},{1,0},"publish encountered definition",false});
                 advance(out,q,std::move(at),visits);return out;
             }
-            FieldPredicate predicate(access_,definitions_,out);
-            auto match=predicate.match(q.related,at.node,at.owners);
-            visits=addCost(visits,predicate.work.visits);
+            auto match=candidates_->match(q.related,at.node,at.owners,out,visits);
             if(match==ScalarMatch::yes) {
                 auto found=q;found.kind=pathMatched;
                 out.edges.push_back(edge("compatible field member",std::move(found),visits));return out;
@@ -567,6 +566,9 @@ public:
 
 class ProteusPathGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
+    std::function<Expansion<POVNode>(const Query<POVNode>&)> expand_;
+    FieldCandidates::Answers answers_;
+    std::int64_t candidateEpoch_;
     std::shared_ptr<ProteusDefinitions> definitions_;
     std::vector<POVNode> matches_,published_;
     POVNode result_;
@@ -606,12 +608,18 @@ class ProteusPathGoal : public GoalSpec<POVNode> {
     bool collectedAlternatives() const {return result_ && (publishedPending_ || published_.size()!=1);}
 public:
     ProteusPathGoal(Query<POVNode> query,std::shared_ptr<ProteusGraphAccess> access,
-                     std::shared_ptr<ProteusDefinitions> definitions)
-        :GoalSpec<POVNode>(query),access_(std::move(access)),definitions_(std::move(definitions)) {
+                     std::shared_ptr<ProteusDefinitions> definitions,std::shared_ptr<FieldCandidates> candidates={},
+                     std::function<Expansion<POVNode>(const Query<POVNode>&)> expand={})
+        :GoalSpec<POVNode>(query),access_(std::move(access)),expand_(std::move(expand)),candidateEpoch_(candidates ? candidates->epoch() : 0),definitions_(std::move(definitions)) {
         if(!request.context.empty()) {
             auto state=readView(request.context.front())->pathSelection;
             if(state) {result_=state->result;published_=state->matches;publishedPending_=state->pending;}
         }
+    }
+    std::optional<Expansion<POVNode>> expand(const Visit<POVNode>& visit) override {
+        if(!expand_) return std::nullopt;
+        FieldCandidates::Scope scope(answers_,candidateEpoch_);
+        return expand_(visit.query);
     }
     void beginPass() override {
         matches_.clear();locations_.clear();verified_=waiting_=aggregating_=false;branchMatched_=uncertainCandidates_=false;

@@ -858,3 +858,53 @@ The optimized compiler command was:
 g++ -std=gnu++17 -fpermissive -g0 -O2 -pthread TestProteus.cpp \
     -lgmp -lgmpxx -licuio -licui18n -licuuc -licudata -o TestProteus-O2
 ```
+
+## Retained field comparisons (2026-10-05)
+
+Baseline: `7609397`. Field-selection goals now retain individual candidate
+comparisons and their dependency proofs across retries. A scoped publication
+invalidates the affected comparison; unchanged comparisons reuse their answers.
+The existing path performs the comparison and schedules its ordinary required
+refinements. No new scheduler goal kind or change to `isNormed` is involved.
+A fresh explicit normalization uses a new comparison epoch. Answers belong to
+path goals; the context keeps a weak lookup index with batched reclamation.
+
+A single instrumented comparison used the current World definitions and
+Slipstream `Resources/userKB.pr`, with `-O1 -g0`, identical profiling hooks, and
+no concurrent builds. These are headless normalization timings, not GUI timings.
+
+| Measurement | Baseline | Retained comparisons |
+| --- | ---: | ---: |
+| Forward turn normalization | 1.839 s | 1.991 s |
+| Inverse turn normalization | 6.141 s | 6.409 s |
+| State-2 display-data normalization | 149.974 s | 125.006 s |
+| State-2 search steps | 2,970,754 | 2,988,575 |
+| State-2 task resets | 398,281 | 399,724 |
+| Exclusive field-selection expansion time | 52.282 s | 33.538 s |
+| Display-process peak RSS | 906,012 KiB | 920,380 KiB |
+
+This saves about 17% on the measured state-2 normalization, with approximately
+2% more peak memory, but does not reduce the outer traversal/reset count.
+The small raw-turn timings are slightly slower. The independent placement and
+axis-permutation oracle passes, and the previous state remains unchanged.
+Both display-data drivers still stop at the existing missing-`thing` lookup
+on a projected cubie; this change does not establish correct state-2 rendering.
+
+A discarded version made each candidate assessment a separate scheduled goal.
+It emitted 28,012 assessment publications in the bounded state-2 run; dependency
+reconciliation consumed 71 seconds and normalization exceeded the 150-second
+budget. Keeping comparison resumption inside the existing path avoids that
+extra scheduler traffic. Direct diagnostic counters verify one affected
+comparison and zero unaffected comparisons after an update, with 2, 9, and
+33 candidates, for both delayed acceptance and delayed rejection.
+
+Final validation: the optimized CodeDog build succeeds, and 1,505 selected graph
+checks pass, including seven new evidence/subscription tests. The older
+`unit/graphDescriptive/modelTransition` case remains excluded from this audit;
+the complete legacy suite and the live Slipstream GUI were not run.
+
+Detailed evidence and reproduction scripts are under
+`/tmp/p4-candidate-subscriptions/`; `direct-profile/` holds the accepted-design
+measurements, `comparison.json` records the main counters, and `accepted-audit/`
+holds the final production-binary checks. The earlier baseline is under
+`/tmp/p4-reprofile/`.

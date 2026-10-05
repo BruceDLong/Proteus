@@ -7,6 +7,7 @@ class Resolution {
     std::shared_ptr<ProteusGraphAccess> access_;
     std::shared_ptr<ProteusDefinitions> definitions_;
     std::function<Expansion<POVNode>(const Query<POVNode>&)> navigate_;
+    std::shared_ptr<FieldCandidates> candidates_;
     static Edge<POVNode> edge(const char* label,Query<POVNode> query,Cost visits=1) {
         return {label,{visits,0},true,[query]{return query;}};
     }
@@ -16,8 +17,8 @@ class Resolution {
     }
 public:
     Resolution(std::shared_ptr<ProteusGraphAccess> access,std::shared_ptr<ProteusDefinitions> definitions,
-               std::function<Expansion<POVNode>(const Query<POVNode>&)> navigate)
-        :access_(std::move(access)),definitions_(std::move(definitions)),navigate_(std::move(navigate)) {}
+               std::function<Expansion<POVNode>(const Query<POVNode>&)> navigate,std::shared_ptr<FieldCandidates> candidates)
+        :access_(std::move(access)),definitions_(std::move(definitions)),navigate_(std::move(navigate)),candidates_(std::move(candidates)) {}
     Expansion<POVNode> expand(Query<POVNode> q) const {
         Expansion<POVNode> out;
         if(q.kind==resolveWord || q.kind==resolutionStep) {
@@ -32,7 +33,7 @@ public:
                 out.edges.push_back(edge("look up external property",{q.context.front(),externalField,0,q.related,q.context,q.coordinates}));return out;
             }
             matched=matched || q.kind==pathMatched || q.kind==pathUnknown;
-            out=PathSelection(access_,definitions_,navigate_).expand(q);
+            out=PathSelection(access_,definitions_,navigate_,candidates_).expand(q);
             for(auto& route:out.edges) {
                 auto follow=route.follow;
                 route.follow=[follow,matched] {auto at=follow();return Arrival<POVNode>{wrap(std::move(at.query),matched),at.graphChanged};};
@@ -42,7 +43,7 @@ public:
         if(q.kind==externalEnd && !q.coordinates.empty()) {
             // Continue the enclosing choice after this branch's external tier.
             q.kind=pathEnd;
-            out=PathSelection(access_,definitions_,navigate_).expand(q);
+            out=PathSelection(access_,definitions_,navigate_,candidates_).expand(q);
             for(auto& route:out.edges) {
                 auto follow=route.follow;
                 route.follow=[follow] {auto at=follow();return Arrival<POVNode>{wrap(std::move(at.query),false),at.graphChanged};};

@@ -1,6 +1,14 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/graphCandidateSubscriptions/onePending
+    unit/graphCandidateSubscriptions/eightPending
+    unit/graphCandidateSubscriptions/thirtyTwoPending
+    unit/graphCandidateSubscriptions/oneExcluded
+    unit/graphCandidateSubscriptions/eightExcluded
+    unit/graphCandidateSubscriptions/thirtyTwoExcluded
+    unit/graphCandidateSubscriptions/orderedPending
+
     unit/graphDescriptive/subset
     unit/graphDescriptive/choose
     unit/graphDescriptive/nominal
@@ -14336,6 +14344,65 @@ struct GLOBAL {
         me bool: passed <- graphRecordPublicationCase(caseID)
         me string: actual <- "false"; me string: expected <- "true"
         if(passed){actual <- "true"}
+        REQUIRE(actual==expected)
+    }
+}
+
+#define GRAPHCANDIDATESUBSCRIPTIONS(NAME, CASE_ID) <%void: DESLASH(NAME)(me string: tname)<-{unitTestGraphCandidateSubscriptions(tname, CASE_ID)}%>
+struct GLOBAL {
+    GRAPHCANDIDATESUBSCRIPTIONS(unit/graphCandidateSubscriptions/onePending, 1)
+    GRAPHCANDIDATESUBSCRIPTIONS(unit/graphCandidateSubscriptions/eightPending, 2)
+    GRAPHCANDIDATESUBSCRIPTIONS(unit/graphCandidateSubscriptions/thirtyTwoPending, 3)
+    GRAPHCANDIDATESUBSCRIPTIONS(unit/graphCandidateSubscriptions/oneExcluded, 4)
+    GRAPHCANDIDATESUBSCRIPTIONS(unit/graphCandidateSubscriptions/eightExcluded, 5)
+    GRAPHCANDIDATESUBSCRIPTIONS(unit/graphCandidateSubscriptions/thirtyTwoExcluded, 6)
+    GRAPHCANDIDATESUBSCRIPTIONS(unit/graphCandidateSubscriptions/orderedPending, 7)
+    me bool: graphCandidateSubscriptionsCase(me string: testName, me int: caseID) <- <%{
+
+ using namespace proteus4;bool ok=true;
+ for(int outcome:{2,3}) for(int count:{1,8,32}) {
+  if(caseID!=(outcome==2 ? 0 : 3)+(count==1 ? 1 : count==8 ? 2 : 3)) continue;
+  GraphNormalizer n;n.init();auto parse=[](const std::string& s){return graphParsed("candidate subscription",s);};
+  std::string text="*"+std::to_string(count+1)+"+{part:{key:_,other:7},";
+  for(int i=0;i<count;++i)text+="part:{key:"+std::to_string(100+i)+",other:8},";
+  auto root=parse(text+"}.part:{key:2,}");auto h=n.normalize(root);h.waitForCompletion();
+  auto state=root->pItem->pathSelection;auto first=POVDescription(state->source).member();auto key=first->pItem->fetchField("key");
+  ok &= h.status().withSubscribers && state->pending;
+  auto modelFacts=std::make_shared<Dependency>();
+  auto definitions=std::make_shared<ProteusDefinitions>(n.access,modelFacts);
+  FieldCandidates cache(n.access,definitions,modelFacts);cache.beginSearch();FieldCandidates::Answers held;
+  auto proofs=[&] {return n.runtime.read([&] {
+   FieldCandidates::Scope scope(held,cache.epoch());std::vector<DependencyProof::Ptr> result;
+   for(auto member=first;member;member=member->next) {
+    Expansion<POVNode> out;Cost visits=0;cache.match(state->predicate,member,{state->source},out,visits);
+    result.push_back(cache.answer(cache.request(state->predicate,member,{state->source}))->evidence);
+   }
+   return result;
+  });};
+  auto before=proofs();
+  auto facts=n.access->typeFacts(parse(std::to_string(outcome)));
+  auto changes=n.runtime.read([&]{return ReadScope::changedObjects({key.get(),key->pItem.get(),key->pItem->value.get()});});
+  n.runtime.updateIfChanged([&]{return n.access->applyTypeFacts(key,facts);},changes);h.waitForCompletion();
+  auto after=proofs();size_t changed=after.front()!=before.front(),other=0;
+  for(size_t i=1;i<before.size();++i) other+=after[i]!=before[i];
+  bool passed=!h.status().failed && !state->pending && (outcome==2 ? state->matches.size()==1 && state->matches.front()==first : state->matches.empty()) && changed>0 && other==0;
+  ok &= passed;std::cout<<"EVIDENCE candidates="<<count+1<<" outcome="<<outcome<<" changed="<<changed<<" others="<<other<<" pass="<<passed<<std::endl;
+  h.cancel();n.close();
+ }
+ if(caseID==7) {
+  GraphNormalizer n;n.init();auto p=graphParsed("ordered candidate","*2+{part:{key:_,other:7} part:{key:2,other:8}}.part:{key:2,}");auto h=n.normalize(p);h.waitForCompletion();
+  auto state=p->pItem->pathSelection;auto first=POVDescription(state->source).member(),last=first->next;auto key=first->pItem->fetchField("key");
+  ok &= h.status().withSubscribers && state->matches.empty();auto rhs=graphParsed("ordered key","1");auto facts=n.access->typeFacts(rhs);
+  auto changes=n.runtime.read([&]{return ReadScope::changedObjects({key.get(),key->pItem.get(),key->pItem->value.get()});});
+  n.runtime.updateIfChanged([&]{return n.access->applyTypeFacts(key,facts);},changes);h.waitForCompletion();
+  bool passed=!h.status().failed && !state->pending && state->matches.size()==1 && state->matches.front()==last;
+  ok &= passed;std::cout<<"ORDERED pass="<<passed<<std::endl;h.cancel();n.close();
+ }
+ return ok;
+    }%>
+    void: unitTestGraphCandidateSubscriptions(me string: testName, me int: caseID) <- {
+        me string: actual <- "false"; me string: expected <- "true"
+        if(graphCandidateSubscriptionsCase(testName,caseID)){actual <- "true"}
         REQUIRE(actual==expected)
     }
 }
