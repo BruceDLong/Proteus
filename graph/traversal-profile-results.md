@@ -1133,3 +1133,70 @@ state snapshots, and prior-state checks; it is not GUI latency.
 The raw timing samples and model hashes are in
 `/tmp/p4-retained-next/comparison.json`; `before-*.log` and `after-*.log` retain
 all emitted placements and timings.
+
+## Contextual expression publication (2026-10-05)
+
+Baseline `d6da9a6`. Adding the optional depth API did not change Slipstream's
+request policy. Isolated renderer comparisons with every display request set to
+depth 1 or depth 3 did not establish a useful improvement; neither policy was
+installed. A temporary scheduler timing experiment also ruled out retained-goal
+reachability reconciliation as the main cost (under 1% of measured advance time).
+That scheduler experiment was not installed.
+
+Publication tracing found a remaining model-wide fallback in
+`ProteusDefinitionPlan::prepareExpressions`. Installing one cubie's contextual
+color expressions woke roughly 3,000–5,000 tasks. Across a 35-second diagnostic
+capture, finite-list definition applications accounted for 90,386 newly dirtied
+tasks. These are wake counts, not unique tasks or an asymptotic proof. Other
+remaining wide publications include list-order discovery and selected-source
+constraints.
+
+Expression copies now use the existing plan's before/after destination footprint.
+`_copyAsTypeTo` clears occurrence names; ordinary copies only add an instance-local
+RHS and its context binding. `bind` still runs, and an actual registry identity
+change restores the conservative fallback at execution time. Other registry-
+changing plan operations retain their existing fallback. No definition, field,
+subscription, normalization result, or renderer demand is skipped.
+
+The same instrumented renderer, assets, and production request policy were used
+for one baseline/candidate pair. Only the engine's expression-publication behavior
+changed. The candidate used a temporary optimized library with the same `-O2`
+setting, without debug symbols. The measurements ran after the engine and GUI builds finished.
+Counters were sampled about once per second:
+
+| Visible model milestone | Baseline interval | Scoped expression interval |
+| --- | ---: | ---: |
+| 26 cubies with their known poses | 8.35–9.38 s | 7.25–8.26 s |
+| All 156 sides materialized | 57.20–58.21 s | 8.26–9.30 s |
+| All 156 face colors resolved | 62.37–63.39 s | 32.75–33.78 s |
+
+The final color milestone is stricter than first visual appearance and should
+not be equated to a user's visual startup timing. This is one pair of runs in
+an isolated Xvfb display; scheduling and machine load vary. The first state's
+geometry is still delayed by about eight seconds, and this change does not claim
+to repair the separate state-2 dependency gap.
+
+Validation:
+
+- `graph/test_expression_publication.cpp` checks local contextual RHS installation
+  with 1, 8, and 32 unrelated subscribed roots, actual contextual results, distinct
+  instance contexts, late values, dependent wakes, and unchanged definitions.
+  The baseline fails with 12 extra steps on the first unrelated subscriber;
+  the candidate adds none. Real later input still wakes that subscriber.
+- 221/221 existing focused cases pass, covering contextual definitions,
+  definition reuse/validity/order/sharing, record and general publication,
+  preservation, proof identity, candidate subscriptions, and list/scalar
+  definitions. Tests used the existing generated test source with the changed
+  native header in an isolated `-O0` build. Expectations were unchanged; existing
+  `/cost` cases were excluded. This was not a full legacy-suite run.
+
+Benchmark scripts, timing builds, logs, and screenshots are under
+`/tmp/p4-batch-render/`; focused results are `/tmp/p4-expression-focused/results.json`.
+The production shared-library rebuild log is `/tmp/p4-expression-release-build.log`.
+
+The final production library was rebuilt and verified with the public expression,
+depth, and shared-library smoke tests. Slipstream's unchanged executable links
+without unresolved symbols and renders the colored first-state cube in an
+isolated 45-second run; the image is
+`/tmp/p4-expression-production/at-40.png`. Restart Slipstream to load the rebuilt
+library. The generated public interface did not change.

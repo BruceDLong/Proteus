@@ -379,16 +379,17 @@ private:
                 continue;
             }
             if(!self) {supported=false;return false;}
-            // Copying an expression may bind named occurrences in the registry.
-            scopedWrites_=false;
+            // Anonymous expression copies only change this instance. Retain
+            // the broad fallback if binding actually changes registry identities.
             auto access=access_;work.creations=addCost(work.creations,2);
-            writes.push_back([access,target,self,expression] {
+            writes.push_back([this,access,target,self,expression] {
                 auto rhs=std::make_shared<POV>(923);readView(rhs)=std::make_shared<infonView>();
                 std::vector<infonView*> copied;
                 readView(expression.source)->_copyAsTypeTo(readView(rhs),true,true,readView(self->node),&copied);
                 readView(rhs)->copySource=readView(expression.source);
                 SetModeBits(readView(rhs)->flags,infonView::copySourceType,infonView::cstDefinition);
-                access->bind(rhs);readView(target->node)->addPOVToWrkList(rhs);
+                if(access->bind(rhs)) scopedWrites_=false;
+                readView(target->node)->addPOVToWrkList(rhs);
                 SetFlagBit(readView(target->node)->flags,infonView::isNormed,false);++target->node->workRevision;
                 return true;
             });
@@ -867,6 +868,7 @@ public:
         if(!scopedWrites_) return apply();
         auto changes=writeFootprint();
         bool changed=apply();
+        if(!scopedWrites_) return changed;
         if(changed) changes.include(writeFootprint());
         return {changed,changed ? changes : Changes::only({})};
     }
