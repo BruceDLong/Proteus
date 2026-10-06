@@ -274,6 +274,19 @@ template<class Node> struct SearchSession : std::enable_shared_from_this<SearchS
     std::set<std::size_t> invalidated, rejected;
     bool watch = true;
     std::uint64_t sequence = 0;
+    // A shared producer retains one task table. Each caller still owns an
+    // ordinary session/handle, with independent cancellation and completion.
+    bool shared = false;
+    Query<Node> shareGroup;
+    std::vector<std::weak_ptr<SearchSession>> clients;
+    std::shared_ptr<SearchSession> producer;
+    std::size_t rootTask = 0;
+    std::atomic<bool> clientsChanged{false};
+    ~SearchSession() {
+        // Destruction may run under the context lock. Defer pruning to the
+        // next worker step; no locking or model writes belong in this path.
+        if(producer) producer->clientsChanged.store(true);
+    }
 };
 
 template<class Node> struct Context {
@@ -320,6 +333,10 @@ template<class Node> struct Context {
             session->quiescent = false;
             session->status.fullyNormed = false;
             session->status.withSubscribers = false;
+            for(auto& weak:session->clients) if(auto client=weak.lock();client && !client->terminal) {
+                client->quiescent=false;client->status.fullyNormed=false;
+                client->status.withSubscribers=false;
+            }
         }
         // A required child's rejection is also evidence held by its parents.
         // Ordinary completion is recomputed by settle; a propagated rejection
@@ -429,7 +446,10 @@ public:
         session_->status.fullyNormed = false;
         session_->status.withSubscribers = false;
         session_->frontier = {};
-        session_->steps.push_back({"cancel", session_->root->request, 0,
+        if(auto owner=session_->producer) {
+            owner->reconcile=owner->prune=true;owner->quiescent=false;
+        }
+        (session_->producer ? session_->producer : session_)->steps.push_back({"cancel", session_->root->request, 0,
                                   context_->revision});
         context_->changed.notify_all();
     }
@@ -446,19 +466,19 @@ public:
     std::vector<Step<Node>> steps() const {
         if (!session_) return {};
         auto lock=context_->acquire();
-        return session_->steps;
+        return session_->producer ? session_->producer->steps : session_->steps;
     }
     std::map<Query<Node>,std::size_t> deductionVisits() const {
         if(!session_) return {};
         auto lock=context_->acquire();std::map<Query<Node>,std::size_t> result;
-        for(const auto& task:session_->tasks)
+        for(const auto& task:(session_->producer ? session_->producer : session_)->tasks)
             for(const auto& entry:task.goal->deductionVisits()) result[entry.first]+=entry.second;
         return result;
     }
     DeductionStats deductionStats() const {
         if(!session_) return {};
         auto lock=context_->acquire();DeductionStats result;
-        for(const auto& task:session_->tasks) result+=task.goal->deductionStats();
+        for(const auto& task:(session_->producer ? session_->producer : session_)->tasks) result+=task.goal->deductionStats();
         return result;
     }
     Node result() const {
@@ -548,8 +568,12 @@ template<class Node> class GraphManager {
     static void reconcileTasks(Context<Node>& c, Session& s) {
         // Retain shared children reachable from current demands. Scheduling
         // order has no bearing on reachability or semantic completion.
-        std::set<std::size_t> reached{0};
-        std::queue<std::size_t> pending;pending.push(0);
+        std::set<std::size_t> reached;
+        if(s.shared) {
+            for(auto& weak:s.clients) if(auto client=weak.lock();client && !client->terminal)
+                reached.insert(client->rootTask);
+        } else reached.insert(0);
+        std::queue<std::size_t> pending;for(auto index:reached) pending.push(index);
         while(!pending.empty()) {
             auto index=pending.front();pending.pop();
             if(s.tasks[index].dirty && !s.tasks[index].goal->persistent()) continue;
@@ -594,7 +618,15 @@ template<class Node> class GraphManager {
                 if (std::find(required.begin(),required.end(),index)!=required.end()) pending.push_back(parent);
             }
         }
-        if (!s.tasks[0].rejection.empty()) {
+        if(s.shared) {
+            for(auto& weak:s.clients) if(auto client=weak.lock();client && !client->terminal &&
+                !s.tasks[client->rootTask].rejection.empty()) {
+                client->status.failed=true;client->status.fullyNormed=false;
+                client->status.withSubscribers=false;client->terminal=true;
+                client->status.error=s.tasks[client->rootTask].rejection;
+                s.reconcile=s.prune=true;
+            }
+        } else if (!s.tasks[0].rejection.empty()) {
             s.status.failed=true;s.status.fullyNormed=false;s.status.withSubscribers=false;
             s.status.error=s.tasks[0].rejection;s.terminal=true;s.frontier={};
         }
@@ -683,11 +715,23 @@ template<class Node> class GraphManager {
                     if(!s.frontier.empty()) return;
                 } while(guarded && progressed);
             }
-            settle(c,s);
+            auto resolved=settle(c,s);
+            if(s.shared) {
+                s.status.symbolicValues=false;
+                for(auto& weak:s.clients) if(auto client=weak.lock();client && !client->terminal) {
+                    client->status.revision=c.revision;
+                    client->status.fullyNormed=true;
+                    client->status.symbolicValues=!resolved[client->rootTask];
+                    client->status.withSubscribers=client->watch && client->status.symbolicValues;
+                    client->quiescent=true;client->terminal=!client->status.withSubscribers;
+                    s.status.symbolicValues |= client->status.symbolicValues;
+                }
+                reconcileTasks(c,s); // completed callers no longer authorize work
+            }
             s.status.fullyNormed = true;
             s.status.withSubscribers = s.watch && s.status.symbolicValues;
             s.quiescent = true;
-            s.terminal = !s.status.withSubscribers;
+            s.terminal = !s.shared && !s.status.withSubscribers;
             s.steps.push_back({s.status.withSubscribers ? "subscribe" : "settle",
                                s.root->request, 0, c.revision});
             c.changed.notify_all();
@@ -813,6 +857,9 @@ template<class Node> class GraphManager {
             for (std::size_t i = 0; i < count; ++i) {
                 c->cursor %= count;
                 auto candidate = c->sessions[c->cursor++].lock();
+                if(candidate && candidate->shared && candidate->clientsChanged.exchange(false)) {
+                    candidate->reconcile=candidate->prune=true;candidate->quiescent=false;
+                }
                 if (candidate && !candidate->quiescent && !candidate->terminal) {
                     next = std::move(candidate); break;
                 }
@@ -825,6 +872,9 @@ template<class Node> class GraphManager {
                 next->status.fullyNormed = false;
                 next->status.withSubscribers = false;
                 next->status.error = error.what();
+                for(auto& weak:next->clients) if(auto client=weak.lock();client && !client->terminal) {
+                    client->status=next->status;client->terminal=true;
+                }
                 next->steps.push_back({"failed: " + next->status.error,
                                        next->root->request, 0, c->revision});
                 c->changed.notify_all();
@@ -845,6 +895,9 @@ template<class Node> class GraphManager {
                 next->terminal = true; next->status.failed = true;
                 next->status.fullyNormed = false; next->status.withSubscribers = false;
                 next->status.error = effectError;
+                for(auto& weak:next->clients) if(auto client=weak.lock();client && !client->terminal) {
+                    client->status=next->status;client->terminal=true;
+                }
             }
             c->changed.notify_all();
             // Cancellation/publication enter between bounded steps and during
@@ -883,6 +936,45 @@ public:
         sessions.push_back(session);
         context_->changed.notify_all();
         return {context_, std::move(session)};
+    }
+    // The caller supplies a semantic sharing group, excluding only demand
+    // strength (such as output depth). Occurrence and cursor context remain
+    // part of that key. Live handles retain progress; no global strong cache.
+    NormalizationHandle<Node> normalizeShared(Query<Node> query, Query<Node> group,
+                                              bool watch = true) {
+        if(!context_) throw std::logic_error("initialize graph context first");
+        auto lock=context_->acquire();
+        if(context_->stopping) throw std::logic_error("graph context is closed");
+        if(!query.node) throw std::invalid_argument("normalize requires a node");
+        ReadScope objects({},&context_->objectDependencies);
+        context_->access->beginSearch(query);
+        std::shared_ptr<Session> owner;
+        auto& sessions=context_->sessions;
+        sessions.erase(std::remove_if(sessions.begin(),sessions.end(),
+            [](const auto& weak){return weak.expired();}),sessions.end());
+        for(auto& weak:sessions) if(auto candidate=weak.lock();candidate && candidate->shared &&
+            !candidate->terminal && !(group<candidate->shareGroup) && !(candidate->shareGroup<group)) {
+            owner=candidate;break;
+        }
+        if(!owner) {
+            owner=std::make_shared<Session>();owner->shared=true;owner->shareGroup=std::move(group);
+            owner->root=context_->access->goal(query);sessions.push_back(owner);
+        }
+        auto client=std::make_shared<Session>();
+        client->producer=owner;client->watch=watch;
+        client->rootTask=startTask(*context_,*owner,context_->access->goal(query),0);
+        client->root=owner->tasks[client->rootTask].goal;
+        owner->clients.erase(std::remove_if(owner->clients.begin(),owner->clients.end(),
+            [](const auto& weak){return weak.expired();}),owner->clients.end());
+        owner->clients.push_back(client);
+        owner->quiescent=false;owner->reconcile=owner->prune=true;
+        // A cached rejection is still specific to this request, not its peers.
+        const auto& rejection=owner->tasks[client->rootTask].rejection;
+        if(!rejection.empty()) {
+            client->status.failed=true;client->status.error=rejection;client->terminal=true;
+        }
+        context_->changed.notify_all();
+        return {context_,std::move(client)};
     }
     std::shared_ptr<Publication<Node>> beginPublication() {
         if (!context_) throw std::logic_error("initialize graph context first");
@@ -933,6 +1025,10 @@ public:
                     s->status.fullyNormed = false;
                     s->status.withSubscribers = false;
                     s->frontier = {};
+                    for(auto& weak:s->clients) if(auto client=weak.lock();client && !client->terminal) {
+                        client->terminal=true;client->status.cancelled=true;
+                        client->status.fullyNormed=false;client->status.withSubscribers=false;
+                    }
                 }
             }
             context_->changed.notify_all();

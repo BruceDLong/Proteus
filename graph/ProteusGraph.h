@@ -21,7 +21,7 @@ enum Demand { itemFound = 0, sizeOnly = 1, valueOnly = 2, sizeAndValue = 3,
               selectionExtentMember = 20, selectionExtentEnd = 21,
               typeRequirements = 22, definitionEnter = 23, definitionLeave = 24, definitionEnd = 25, assessRepresentation = 26, groupedList = 27,
               selectRelative = 28, relativeItem = 29, relativeMember = 30, relativeBoundary = 31,
-              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62, scalarCorrespondence = 63, placeArgument = 64, resolveEndpoint = 65, endpointPosition = 66, endpointFound = 67, resolveWord = 68, resolutionStep = 69, externalField = 70, externalPosition = 71, externalMatched = 72, externalUnknown = 73, externalEnd = 74, acquireListValue = 75, selectEnvironment = 76, recordCorrespondence = 77, sequenceChoiceMatched = 78, boundaryAccess = 79, boundaryRelations = 80, boundaryMember = 81, boundaryEnd = 82, temporalSupport = 83, temporalCut = 84, temporalSide = 85, temporalValueFound = 86, resolvePathExpression = 87, temporalSideSpan = 88, temporalSideMember = 89, sequenceChartState = 90, sequenceChartCall = 91, temporalDeclaration = 92, temporalPredecessor = 93, preserveTemporal = 94 };
+              sequenceCorrespondence = 32, sequenceEnter = 33, sequenceBoundary = 34, sequenceMatched = 35, sequenceComplete = 36, relationshipConstraints = 37, correspondenceInput = 38, sequenceAtomMatched = 39, compileTypeRequirements = 40, selectField = 41, fieldPosition = 42, pathMatched = 43, pathUnknown = 44, pathEnd = 45, pathAlternative = 46, pathAlternativesEnd = 47, pathAlternativeUnknown = 48, selectPosition = 49, pathIndexStep = 50, positionStart = 51, pathSliceStart = 52, pathSliceCandidate = 53, selectSelf = 54, pathSelfFound = 55, filterChoice = 56, choicePosition = 57, choiceMatched = 58, choiceUnknown = 59, choiceEnd = 60, choicePending = 61, projectField = 62, scalarCorrespondence = 63, placeArgument = 64, resolveEndpoint = 65, endpointPosition = 66, endpointFound = 67, resolveWord = 68, resolutionStep = 69, externalField = 70, externalPosition = 71, externalMatched = 72, externalUnknown = 73, externalEnd = 74, acquireListValue = 75, selectEnvironment = 76, recordCorrespondence = 77, sequenceChoiceMatched = 78, boundaryAccess = 79, boundaryRelations = 80, boundaryMember = 81, boundaryEnd = 82, temporalSupport = 83, temporalCut = 84, temporalSide = 85, temporalValueFound = 86, resolvePathExpression = 87, temporalSideSpan = 88, temporalSideMember = 89, sequenceChartState = 90, sequenceChartCall = 91, temporalDeclaration = 92, temporalPredecessor = 93, preserveTemporal = 94, normalizationDepth = 95, depthMember = 96 };
 
 // Only the explicitly normalized result requests its immediate omitted parts.
 // Related sources and member refinements retain demand-driven expansion.
@@ -170,6 +170,8 @@ public:
     }
 };
 
+#include "NormalizationDepth.h"
+
 // Partial representation supplies printer metadata. A closed strict equality
 // can instead leave pending work through a priced Set that retains its identity.
 class ProteusRepresentationGoal : public GoalSpec<POVNode> {
@@ -269,10 +271,10 @@ public:
         deferred_ = false;
         reachedEnd_ = false;
         measure_.reset();
-        if (request.kind == sizeAndValue) access_->setNormed(request.node, false);
+        if (request.kind == sizeAndValue && request.argument!=exposeStructure) access_->setNormed(request.node, false);
     }
     void settled(bool fullyResolved, const DependencyProof::Ptr& evidence) override {
-        if (request.kind == sizeAndValue && fullyResolved && satisfied())
+        if (request.kind == sizeAndValue && request.argument!=exposeStructure && fullyResolved && satisfied())
             completion_->mark(request.node,evidence);
         if (request.kind == sizeAndValue) completion_->reply(request.node);
     }
@@ -855,6 +857,7 @@ public:
         return result;
     }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
+        if(query.kind==normalizationDepth) return std::make_shared<ProteusDepthGoal>(query,access_,definitions_,completion_);
         // Counting/normalizing members retains a position chart. Constraint-only
         // walks still use the legacy producer until its deductions are migrated.
         if(query.kind==listContents && query.argument>=sizeOnly && query.argument<=sizeAndValue)
@@ -1143,7 +1146,7 @@ private:
             if (access_->inputPending(node)) {
                 result.deferred = true;
                 if (access_->growingList(node))
-                    result.refinements.push_back({{node, listContents, demand, {}, owners}, {0, 0},
+                    result.refinements.push_back({{node, listContents, query.argument==exposeStructure ? sizeOnly : demand, {}, owners}, {0, 0},
                         "visit published stream members", false});
                 return result;
             }
@@ -1214,9 +1217,10 @@ private:
                 result.refinements.push_back({{node, concatField, 1, {}, query.context}, {0, 0}, "resolve size expression", false});
             if (access_->hasConcat(node, 2))
                 result.refinements.push_back({{node, concatField, 2, {}, query.context}, {0, 0}, "resolve value expression", false});
-            if (!constraintsOnly && !selectedView && query.argument!=exposeStructure && access_->physicalList(node)) {
-                if (demand != sizeOnly || !(access_->known(node) & sizeOnly))
-                    result.refinements.push_back({{node, listContents, demand, {}, owners}, {0, 0},
+            if (!constraintsOnly && !selectedView && access_->physicalList(node)) {
+                auto contents=query.argument==exposeStructure ? sizeOnly : demand;
+                if (contents != sizeOnly || !(access_->known(node) & sizeOnly))
+                    result.refinements.push_back({{node, listContents, contents, {}, owners}, {0, 0},
                         "inspect list contents", demand == sizeOnly});
             }
             if (!constraintsOnly && !selectedView && query.argument!=exposeStructure && demand != sizeOnly && (access_->templatePrefixList(node) || access_->sparse(node))) {

@@ -453,6 +453,67 @@ that all information is concrete or that unsupported constraints are proved.
 `symbolicValues` also records residual symbolic obligations. The caller inspects
 the result to see exactly what remains unresolved.
 
+### Batched depth requests
+
+`GraphNormalizer.normalizeToDepth(pov, depth)` adds an optional, shared request
+path. The existing `normalize(pov)` behavior is retained. Depth zero resolves
+the requested value/header; depth one additionally requests its immediate parts;
+larger depths request further containment levels. Already stored information is
+not removed. Embedded spans and selected aliases do not consume a containment
+level. Virtual sparse members are not enumerated, and open streams remain
+subscribed. Dependency searches can go as far as needed to answer a requested
+value; depth is not a cutoff on those searches.
+
+```cpp
+auto shallow = normalizer.normalizeToDepth(state, 1);
+shallow.waitForCompletion();
+auto deeper = normalizer.normalizeToDepth(state, 3);
+deeper.waitForCompletion();
+```
+
+Requests for the same POV share a producer and its task table while their handles
+remain alive. Each depth retains its own completion goal. Repeated subgoals reuse
+existing deductions, and increasing depth keeps earlier header/dependency work.
+Task identity still includes occurrence and cursor context. Cancellation,
+rejection, and release withdraw only the corresponding caller's root; other
+callers can continue using shared dependencies. There is no strong global cache
+of these producers.
+
+Handles report status for their own requested depth and traces/counters for the
+shared producer. `waitForCompletion()` still means quiescence, including when
+subscriptions remain. Simultaneously attached requests settle at producer
+quiescence; an already completed shallow handle stays completed when a later,
+deeper request begins. Shallow completion alone cannot set the subtree's
+`isNormed` flag. Whole-list completion also requires its member-count proof and
+completed members.
+
+Implementation: `graph/NormalizationDepth.h` supplies depth goals using the
+existing retained traversal, ordinary header/type goals, and list-count goals.
+`GraphManager.normalizeShared` shares task storage while keeping caller handles
+separate. This entry point is available in the shared library; Slipstream has
+been rebuilt for the new interface, but its display request policy is unchanged.
+No Rubix state-2 rendering fix or speedup is claimed by this increment.
+
+Validation (2026-10-05):
+
+- Public-interface depth checks cover nested values, definitions, dependency
+  chains, selected aliases, embedded spans, late members/values, cancellation,
+  sparse lists, completion flags, invalid depths, and replay.
+- Expanding 8, 16, 32, and 64 two-field parts through depths 0, 1, and 2 takes
+  109, 213, 421, and 837 retained evaluations: `13 * parts + 5`. Repeating depth 2
+  adds zero evaluations. These are small controlled cases, not cube timings.
+- Shared-request lifecycle checks pass with address/undefined-behavior/leak
+  sanitizers, including dropping a caller while another retains the producer.
+- The 69 existing scheduler scenarios and retained-traversal scenarios pass.
+- The existing graph audit remains 1,459/1,468, with exactly the prior nine
+  cost-policy failures. It uses the prior exclusions for `/cost` and the two
+  older full-model palette/transition fixtures. Expectations are unchanged.
+
+The new standalone checks are `graph/test_shared_requests.cpp` (native scheduler)
+and `graph/test_normalization_depth.cpp` (link against the generated public
+header and shared library, as in `graph/shared-library.md`). Logs and the audit
+comparison are under `/tmp/p4-depth-*`.
+
 The infonView's `isNormed` flag is stricter than the handle's `fullyNormed`:
 a supported scalar is marked only when its overlay type, value, and size are
 known and its required search has settled without deferred constraints. A supported physical
