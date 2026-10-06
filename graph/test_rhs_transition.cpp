@@ -8,7 +8,7 @@ using Node=std::shared_ptr<POV>;
 
 int main() {
     proteusGraph_initialize("");
-    for(int wrapping=0;wrapping<3;++wrapping) {
+    for(int wrapping=0;wrapping<4;++wrapping) {
         ProteusCore core;core.init("",false);
         auto& graph=core.agent->graphNormalizer;
         auto check=[](bool pass,const char* why) {if(!pass) throw std::runtime_error(why);};
@@ -33,11 +33,23 @@ int main() {
             "pose:%?=table@[%@[1]~part:{label:'right',}.pose]},}}}");
         norm(definitions);auto declaration=definitions->stringify();
         const std::string expression="change:{T known ?}@[2]";
-        auto root=parse(wrapping==0 ? expression : wrapping==1 ?
+        auto root=parse(wrapping==3 ? expression+"~part:{label:'left',}.pose" : wrapping==0 ? expression : wrapping==1 ?
             "{result:%?="+expression+",}" :
             "{T {marker:100,} {result:%?="+expression+",}}");
         // Deliberately do not normalize the source state first.
         norm(root);
+        if(wrapping==3) {
+            auto value=root->pItem;
+            if(value->isOrLike()) {
+                check(value->innr && value->innr->value->items.head,"missing chained candidate");
+                value=value->innr->value->items.head->pItem;
+            }
+            check(getModeBits(value->value->flags,infonState::evalMode)==infonState::emLiteral &&
+                value->value->num==10,"direct descriptive chain lost changed pose");
+            check(definitions->stringify()==declaration,"shared declaration changed");
+            std::cout<<"direct descriptive chain pose=10\n";
+            for(auto& h:handles) h.cancel();core.deInit();continue;
+        }
         auto result=wrapping==0 ? root : graph.knownField(wrapping==1 ? root :
             root->pItem->value->items.tail,"result");
         norm(result);

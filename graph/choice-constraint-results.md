@@ -146,3 +146,37 @@ constraints include unrelated changed fields. Investigate that dependency cycle
 before claiming the Cube's derived poses or complete rendering work. Temporary
 membership and query-part experiments did not repair the chain and are not part
 of this checkpoint.
+
+
+## Projection through pending unordered fields (2026-10-06)
+
+The direct descriptive chain above now yields a candidate with pose 10. Its
+missing label could not be projected from the declared `left` meaning because
+`DefinitionProjection` used the positional span reader on the containing record.
+That reader requires each ordinary member to support positional correspondence;
+the unrelated cargo/pose expressions did not yet meet that requirement.
+
+Unordered projection now enumerates typed member headers through the existing
+`RecordStructure::members` reader. The same nominal ambiguity checks and scalar
+requirement compiler then select the requested field. Ordered/embedded layouts
+retain their span reader. This adds no Cube-specific rule and does not weaken
+preservation guards. The public regression includes the direct descriptive chain
+and still checks unchanged shared declarations.
+
+Validation: all four public transition cases pass against the rebuilt production
+shared library. The graph audit is again 1,459/1,468 with no changed result relative
+to the earlier baseline; 191 focused tests pass against the production executable.
+The unchanged Slipstream executable links to this library without unresolved
+symbols.
+
+The actual front-center turn query now returns a symbolic choice containing
+`cubie-frame:10`. The frame-catalog lookup using that result remains unresolved:
+the selection still has an open oneOf tail, so this is not yet a uniquely resolved
+numeric coordinate. A full Cube-history probe timed out after 90 seconds. In the
+isolated Slipstream run the first Cube was visible (pink at 30 seconds), and the
+second display was empty at 80 seconds. Complete state-2 rendering remains
+unverified and unsuccessful in that run. Next investigate why the selected
+placement/field remains open and how the finite definition's extent reaches that
+intermediate value; do not arbitrarily collapse an open choice to its first item.
+Logs and screenshots are under `/tmp/p4-state2-route/` and
+`/tmp/p4-state2-record-projection/`.

@@ -8,6 +8,15 @@ class ProteusProjectionGoal : public GoalSpec<POVNode> {
     std::map<POVNode,ProteusDefinitions::Certificate> descriptions_;
     bool pending_ = false;
     bool layout(const POVNode& node, SpanLayout<POVNode>& result, Work& work) {
+        // Typed record fields have correspondence before their payloads settle.
+        // Reading their names must not require unrelated expression values.
+        if(RecordStructure::record(*access_,node)) {
+            std::vector<POVNode> members;
+            if(!RecordStructure::members(*access_,node,members,work)) return false;
+            result={};
+            for(const auto& member:members) result.segments.push_back({member,false,1});
+            return true;
+        }
         return readListLayout(*access_,node,result,work.visits,[&](const auto& at) {
             return at.phase!=ListPhase::enter || (access_->physicalList(at.node) && !access_->memberTemplate(at.node));
         },[](const POVNode& member){return member;});
