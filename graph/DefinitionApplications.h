@@ -426,6 +426,36 @@ public:
         proof->evidence->witnesses.emplace(node, std::make_shared<const Witness>(Witness{node, readView(node), facts(node),
             names(node), work(node), members(node), listRequirement(node), access_->definitionEmbedded(node), access_->openTail(node), (listRequirement(node) ? listOrder(node,&proof->composition) : uUnknown), memberTemplate(node), choiceBody(node), POVDescription(node).independentTemporalValue()}));
     }
+    // A supplied partial description can omit members, but its declared
+    // type still supplies header constraints. Read aliases without entering
+    // their members or treating a counted definition width as an extent.
+    void constrainHeader(const POVNode& node,const POVNode& root,const Certificate& proof,
+                         const DefinitionSpec& requirement) {
+        std::vector<POVNode> pending;
+        auto meanings=[&](const POVNode& at) {
+            for(const auto& name:names(at)) {
+                auto body=lookup(name);
+                auto& bindings=proof->evidence->bindings;
+                if(std::none_of(bindings.begin(),bindings.end(),[&](const Binding& b){return b.name==name;}))
+                    bindings.push_back({name,body});
+                if(body) pending.push_back(body);
+            }
+        };
+        meanings(node);std::set<POVNode> seen{node};
+        for(std::size_t i=0;i<pending.size();++i) {
+            auto body=pending[i];if(!seen.insert(body).second) continue;
+            ++proof->composition.visits;
+            collect(body,root,proof);
+            auto header=facts(body);
+            if(!header.valid) continue;
+            if(!header.explicitSize) header.hasSize=false;
+            header.hasValue=false;
+            if(header.hasSize && !requirement->facts.explicitSize) requirement->facts.hasSize=false;
+            if(!requirement->facts.combine(header)) throw DefinitionConflict("incompatible declared type headers");
+            meanings(body);
+            for(const auto& rhs:work(body)) pending.push_back(rhs);
+        }
+    }
     // The graph's leave edge supplies postorder: every required child has
     // already been walked. Compile requirements, never execute child normalize.
     void finish(const POVNode& node, const POVNode& root, const Certificate& proof, bool fullMeaning=false) try {
@@ -512,6 +542,7 @@ public:
             if(std::find(requirement->expandedTypes.begin(),requirement->expandedTypes.end(),name)==requirement->expandedTypes.end())
                 requirement->expandedTypes.push_back(name);
         }
+        if(node!=root && describesParts(node)) constrainHeader(node,root,proof,requirement);
         std::sort(requirement->expandedTypes.begin(),requirement->expandedTypes.end());
         if (node != root)
             for (auto rhs : work(node)) requirement = combineDefinitions(requirement, compiled.at(rhs),proof->composition);

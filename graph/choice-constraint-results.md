@@ -180,3 +180,35 @@ placement/field remains open and how the finite definition's extent reaches that
 intermediate value; do not arbitrarily collapse an open choice to its first item.
 Logs and screenshots are under `/tmp/p4-state2-route/` and
 `/tmp/p4-state2-record-projection/`.
+
+
+## Finite headers on partial typed descriptions (2026-10-06)
+
+A partial typed description keeps its supplied members, but it must also keep
+explicit header constraints from its declared type. The compiler skipped the
+whole declared meaning for partial descriptions, which also discarded the finite
+size of a later state. Its selection therefore retained an open oneOf tail, and
+an outer numeric index could not consume the selected frame.
+
+The compiler now reads only those declared headers through aliases and existing
+RHS relationships. It records the usual catalogue bindings and witnesses, ignores
+inferred member counts, and leaves omitted type members unexpanded. Conflicting
+explicit extents still reject. No range, wrapping, or density rule changes.
+
+`graph/test_declared_headers.cpp` checks bounded and unbounded transitions, a
+second type alias, indexing a selected field, replay, unchanged declarations,
+omitted fields, conflicting extents, and a later publication relaxing the
+declared extent. The bounded result is pose 10 and indexes to 99; unbounded
+results remain symbolic. The regression fails against the preceding library
+because finite selection remains open. It passes against the rebuilt library.
+All four RHS-transition regressions and 191 focused production tests pass. The
+full graph audit remains 1,459/1,468 with the same nine cost-policy failures.
+
+The actual Cube frame-to-orientation query now returns a known zRot candidate
+-1.57079632679 in about 0.93 seconds (7,560 steps). The unsized orientation still
+has an implicit open choice; this is not a fully normalized scalar result.
+The isolated Slipstream run still shows an empty state 2 at 80 seconds; state 1
+shows colors when revisited at 100 seconds. A full Cube-history probe does not
+finish in 60 seconds. This checkpoint fixes the finite dependency route, not
+complete state-2 rendering or its remaining performance problem. Diagnostics
+are under `/tmp/p4-choice-extent/`.
