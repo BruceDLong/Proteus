@@ -81,3 +81,31 @@ state exposes `x:7`, after which the second state's query sees that value. This
 change does not repair that route and does not claim complete cube rendering.
 Depth-limited expansion must still discover definitions needed by requested
 values; no new depth parameter is implemented here.
+
+## Retained bare-word meaning (2026-10-05)
+
+The small temporal reproduction above now resolves its prior `x:7` during the
+original search. A normalization goal that first sees a bare typed value retains
+its type-meaning demand after another route materializes a generic list. Previously,
+the new structure made `describesParts` suppress that demand; the scheduler then
+retired a type goal that already had a valid compiled plan to set `x`.
+
+This is a goal-local obligation, not a second graph or a history of visited POVs.
+Initially supplied partial descriptions keep the existing lazy policy. The
+ordinary declaration goal and Set planner still resolve and apply the meaning.
+
+`graph/test_retained_meaning.cpp` covers the original and an extra alias, each
+with bounded and symbolic records. It verifies the known source fact without
+explicitly normalizing the first state, the second state's result, distinct
+occurrences, and unchanged declarations. Bounded fields resolve to `*10+7`;
+unbounded unordered fields retain a symbolic oneOf with known candidate 7.
+The previous library fails because the source fact remains unknown.
+
+The graph audit remains 1,459/1,468 with the same nine existing cost-policy
+failures. An initially missing asset caused the cube-orientation fixture to fail;
+it passes when rerun with the regular test assets. Existing depth and expression-
+publication regressions pass. Logs are in `/tmp/p4-state2-route/`.
+
+This repairs the small dependency gap. The full cube still has unresolved
+placement-description selection and derived poses; complete state-2 rendering
+is not claimed by this checkpoint.

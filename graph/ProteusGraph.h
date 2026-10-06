@@ -259,19 +259,39 @@ class ProteusGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusDefinitions> definitions_;
     std::shared_ptr<StreamInsertion> insertion_;
     POVNode selected_;
+    std::function<Expansion<POVNode>(const Query<POVNode>&)> navigate_;
+    // A bare word's meaning remains a demand after another route supplies its
+    // structure. Materialization must not turn it into a supplied description.
+    bool declaredMeaning_ = false;
     bool deferred_ = false, reachedEnd_ = false;
     GraphListMeasure measure_;
 public:
     ProteusGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access,
                 std::shared_ptr<ProteusCompletion> completion, std::shared_ptr<ProteusStreamEvidence> evidence,
-                std::shared_ptr<ProteusDefinitions> definitions, std::shared_ptr<StreamInsertion> insertion)
+                std::shared_ptr<ProteusDefinitions> definitions, std::shared_ptr<StreamInsertion> insertion,
+                std::function<Expansion<POVNode>(const Query<POVNode>&)> navigate)
         : GoalSpec<POVNode>(query), access_(std::move(access)),
-          completion_(std::move(completion)), evidence_(std::move(evidence)), definitions_(std::move(definitions)), insertion_(std::move(insertion)) {}
+          completion_(std::move(completion)), evidence_(std::move(evidence)), definitions_(std::move(definitions)), insertion_(std::move(insertion)),navigate_(std::move(navigate)) {}
     void beginPass() override {
+        if(!declaredMeaning_ && request.kind>=sizeOnly && request.kind<=sizeAndValue &&
+           !access_->inputPending(request.node) && access_->hasTypeRequirements(request.node) &&
+           !definitions_->describesParts(request.node)) declaredMeaning_=true;
         deferred_ = false;
         reachedEnd_ = false;
         measure_.reset();
         if (request.kind == sizeAndValue && request.argument!=exposeStructure) access_->setNormed(request.node, false);
+    }
+    std::optional<Expansion<POVNode>> expand(const Visit<POVNode>& visit) override {
+        auto out=navigate_(visit.query);
+        if(declaredMeaning_ && visit.query.node==request.node &&
+           visit.query.kind>=sizeOnly && visit.query.kind<=sizeAndValue &&
+           !access_->inputPending(request.node) && definitions_->required(request.node)) {
+            Query<POVNode> meaning{request.node,typeRequirements,visit.query.argument,{},visit.query.context};
+            if(std::none_of(out.refinements.begin(),out.refinements.end(),[&](const auto& r){
+                return !(r.query<meaning) && !(meaning<r.query);
+            })) out.refinements.push_back({meaning,{1,0},"retain requested type meaning",false});
+        }
+        return out;
     }
     void settled(bool fullyResolved, const DependencyProof::Ptr& evidence) override {
         if (request.kind == sizeAndValue && request.argument!=exposeStructure && fullyResolved && satisfied())
@@ -903,7 +923,8 @@ public:
             return std::make_shared<ProteusConcatGoal>(query, access_);
         if (query.kind == selectIntersection)
             return std::make_shared<ProteusSelectionGoal>(query, access_);
-        return std::make_shared<ProteusGoal>(query, access_, completion_, evidence_, definitions_, insertion_);
+        return std::make_shared<ProteusGoal>(query, access_, completion_, evidence_, definitions_, insertion_,
+            [this](const Query<POVNode>& q){return expand(q);});
     }
     Expansion<POVNode> expand(const Query<POVNode>& query) override {
         if((query.kind>=temporalSupport && query.kind<=temporalValueFound) ||
