@@ -56,6 +56,8 @@ class PathSelection {
         }
         bool ready=(access_->physicalList(node) || access_->unreferencedTemplateSpan(node)) && !definitions_->pendingOrder(node);
         const bool hasStructure=ready;
+        if(ready && definitions_->required(node) && definitions_->pendingMeaning(node))
+            out.refinements.push_back({{node,typeRequirements,fillImmediateParts},{1,0},"expose source word meaning",true});
         if(ready) for (const auto& relation:POVDescription(node,access_->registry.get()).relationships()) {
             if(access_->sameInfon(node,relation.target)) continue;
             Work work{0,0};bool represented=RHSRepresentation::expressed(access_,node,relation.target,definitions_,work);
@@ -264,6 +266,20 @@ public:
             out.edges.push_back(edge("retain path source",{q.node,pathSelfFound,0,q.related,{q.node}}));return out;
         }
         if(q.kind==pathSelfFound) return out;
+        // Demand only facts retained from a containing application. An omitted
+        // field in an initially supplied description still stays omitted.
+        if(q.kind==pathEnd && q.related && access_->physicalList(q.node) &&
+           !definitions_->retainedParts(q.node).empty() &&
+           !orderedEndpoint(q.node,q.related) &&
+           !(readView(q.related)->pathSelection && readView(q.related)->pathSelection->positional)) {
+            bool present=false;
+            FieldPredicate predicate(access_,definitions_,out);
+            for(auto part=POVDescription(q.node).member();part;part=POVDescription(part).adjacent())
+                if(predicate.matchType(q.related,part)==ScalarMatch::yes) {present=true;break;}
+            if(!present) out.refinements.push_back({{q.node,typeRequirements,fillImmediateParts},{1,0},
+                "expose missing field source parts",true});
+            // Keep the ordinary end/alternative continuation as well.
+        }
         if(q.kind==positionStart) return position(q);
         if(q.kind==pathSliceStart || q.kind==pathSliceCandidate) {
             auto result=SliceSelection(access_,definitions_).expand(q);

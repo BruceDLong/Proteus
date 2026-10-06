@@ -102,6 +102,8 @@ public:
         if(!access_->literalList(source))
             out.refinements.push_back({{source,valueOnly,0},{1,0},"resolve prior value",false});
         else out.refinements.push_back({{source,relationshipConstraints,0},{1,0},"prove prior description",false});
+        if(access_->literalList(source) && definitions_->required(source) && !definitions_->satisfied(source,true))
+            out.refinements.push_back({{source,typeRequirements,fillImmediateParts},{1,0},"expose needed prior parts",true});
         if(RecordStructure::record(*access_,source)) {
             Work work{0,0};std::vector<POVNode> parts;
             if(members(source,parts,work)) for(const auto& part:parts) if(unresolvedWord(part))

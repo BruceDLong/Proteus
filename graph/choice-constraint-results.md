@@ -109,3 +109,40 @@ publication regressions pass. Logs are in `/tmp/p4-state2-route/`.
 This repairs the small dependency gap. The full cube still has unresolved
 placement-description selection and derived poses; complete state-2 rendering
 is not claimed by this checkpoint.
+
+
+## Transition selected as a record RHS (2026-10-06)
+
+A selected later state can supply an ordinary record RHS without first normalizing
+its prior state explicitly. Graph access now advertises the selected occurrence's
+preservation route, resolves path-valued work RHSs even when their type qualifier
+is retained, and exposes prior/source definition parts through type goals rather
+than recursively normalizing unrelated fields. Record constraint checks do not
+request value preservation: that bypass initially broke
+`graphPreservation/descriptiveTarget`, and its explicit guard restores the test.
+
+Definition application preserves an explicit unordered extent even when it equals
+the current member count. This closes a bounded candidate set without changing
+scalar ranges or ordered repetition. Missing-field traversal may request retained
+part requirements; initially omitted fields still remain omitted. Property
+comparison carries the correct parent stack and can reject a conjunction using
+known literal facts while unrelated RHS obligations are pending; such incomplete
+facts do not establish a positive match.
+
+`graph/test_rhs_transition.cpp` exercises direct selection, selection inside a
+record, and selection inside a later T-item. The changed part transfers cargo 9
+and maps pose 2 to 10; the omitted part preserves cargo 9 and pose 2. It checks
+replay and unchanged shared declarations. All three cases pass. The graph audit
+is 1,459/1,468, with precisely the same nine baseline cost-policy failures and no
+new failure. The descriptive path-write regression passes again.
+
+This remains an intermediate correctness checkpoint. Actual Slipstream shows the
+first Cube but an empty second display at 80 seconds. A more reduced failure is
+`change:{T known ?}@[2]~part:{label:'left',}.pose`: selecting the whole later state
+and then normalizing its parts produces pose 10, whereas the direct descriptive
+chain remains unresolved. The requested label has a prior correspondence, but
+its preservation guard waits on containing transition constraints. Those
+constraints include unrelated changed fields. Investigate that dependency cycle
+before claiming the Cube's derived poses or complete rendering work. Temporary
+membership and query-part experiments did not repair the chain and are not part
+of this checkpoint.

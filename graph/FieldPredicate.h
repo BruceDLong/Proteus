@@ -8,7 +8,7 @@ class FieldPredicate {
     std::shared_ptr<ProteusDefinitions> definitions_;
     Expansion<POVNode>& out_;
     std::set<std::shared_ptr<infonView>> active_;
-    bool conflict_=false;
+    bool conflict_=false, incomplete_=false;
     std::vector<Refinement<POVNode>> requestedFacts_;
     std::map<DefinitionSpec,NumericView> numbers_;
     bool readable(const POVNode& node, bool predicate) {
@@ -56,7 +56,13 @@ class FieldPredicate {
              (!access_->hasTypeRequirements(node) || !POVDescription(node).work().empty()))))
             out_.refinements.push_back(refinement);
         else if(needsFact) requestedFacts_.push_back(refinement);
-        if (!canRead) return {};
+        if (!canRead) {
+            // Literal facts remain useful for disproving a conjunction while
+            // unrelated RHS obligations are pending. They cannot prove a match.
+            if(!access_->plainStructure(node,false,false,false,false,false,false) ||
+               readView(node)->pathSelection) return {};
+            incomplete_=true;
+        }
         NumericRangeAccess numeric(*access_);auto number=numeric.read(node,predicate);
         work.visits=addCost(work.visits,numeric.work.visits);
         if(access_->hasTypeRequirements(node)) number.constraint=false;
@@ -92,7 +98,9 @@ class FieldPredicate {
             active_.insert(readView(node));
             specification->list=true;specification->order=uUnordered;
             specification->open=!access_->closedPhysicalList(node);
-            auto owners=context;owners.insert(owners.begin(),node);
+            auto owners=context;
+            if(!access_->subList(node) && !getFlagBit(readView(node)->value->flags,infonState::timelike)) owners.clear();
+            owners.push_back(node);
             for(const auto& member:members) {
                 auto header=std::make_shared<DefinitionRequirement>();
                 header->types=definitions_->names(member);header->captureLabel(member);
@@ -209,6 +217,7 @@ public:
         return nominal(spec(predicate),spec(candidate));
     }
     ScalarMatch match(const POVNode& predicate,const POVNode& candidate,const std::vector<POVNode>& owners) {
+        auto firstRefinement=out_.refinements.size();
         auto required=read(predicate,true,{});
         if(required && !required->list && required->facts.valid && required->facts.overlay<0 &&
            !required->facts.hasSize && !required->facts.hasValue && !required->label.empty()) {
@@ -234,6 +243,8 @@ public:
             auto exclusion=read(predicate,true,{},false,true);
             if (!conflict_ && compare(exclusion,actual)==ScalarMatch::no) result=ScalarMatch::no;
         }
+        if(result==ScalarMatch::no) out_.refinements.resize(firstRefinement);
+        else if(incomplete_) result=ScalarMatch::unknown;
         // A read-only definition proof may already answer the query. Only an
         // undecided comparison needs to materialize its requested facts.
         if(result==ScalarMatch::unknown)

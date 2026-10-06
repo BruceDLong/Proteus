@@ -644,6 +644,12 @@ public:
         for (const auto& proof : found->second) if (current(proof) && covers(proof, node, fullMeaning)) return proof;
         return {};
     }
+    // Generic containing-type evidence cannot stand in for the source's
+    // own declared word (for example a supplied named initial state).
+    bool pendingMeaning(const POVNode& node) {
+        evidenceKey(node);
+        return (evidence_.count(readView(node)) && !saved(node,true)) || !retainedParts(node).empty();
+    }
     // Meaning evidence can be compiled without applying it to a candidate or
     // a shared grammar template. Nominal compatibility is checked separately.
     GraphTypeFacts scalarFacts(const POVNode& node, bool predicate = false) const {

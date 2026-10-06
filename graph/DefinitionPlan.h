@@ -756,6 +756,18 @@ private:
         if (!combined.combine(requirement->facts))
             throw DefinitionConflict("incompatible definition requirements");
         if (target->node) proposed_[readView(target->node)] = combined;
+        // An explicit unordered extent closes membership even when its number
+        // equals the current count. Ordered physical lists already have an end.
+        if(target->node && requirement->list && requirement->order==uUnordered && requirement->facts.hasSize &&
+           requirement->facts.explicitSize && actual.hasSize && !actual.explicitSize) {
+            writes.push_back([target] {
+                auto view=readView(target->node);
+                if(view->value->sizeMode==fromGiven) return false;
+                view->value->sizeMode=fromGiven;
+                SetFlagBit(view->flags,infonView::isNormed,false);++target->node->workRevision;
+                return true;
+            });
+        }
         // Cache the full meaning, not the subset demanded by this application.
         // A later explicit normalization of this child must still see its parts.
         bindings.push_back({target, sourceRequirement});

@@ -1321,7 +1321,8 @@ private:
                     result.refinements.push_back({{payload,relationshipConstraints,0},{1,0},"prove RHS payload constraints",false});
                     result.refinements.push_back({{payload,sizeAndValue,0},{1,0},"refine RHS payload",true});
                 }
-                if(source->looseType() && (PathExpression::ready(*access_,source) || readView(source)->pathSelection))
+                if((source->looseType() || relation.isWork()) &&
+                   (PathExpression::ready(*access_,source) || readView(source)->pathSelection))
                     result.refinements.push_back({{source,resolvePathExpression,0},{1,0},"resolve qualified RHS path",false});
                 // Expose endpoint expressions before deciding which kind of
                 // correspondence their resulting payload can participate in.
@@ -1337,6 +1338,11 @@ private:
                 }
                 if(demand!=sizeOnly && !source->looseType() && RecordStructure::record(*access_,source) &&
                    (access_->adoptableList(node) || RecordStructure::record(*access_,node))) {
+                    // A record can still obtain missing parts from its prior
+                    // occurrence. Constraint checks must not commit that default.
+                    if(!constraintsOnly && query.argument!=exposeStructure)
+                        ProteusPreservationGoal::contribute(*access_,source,{},result);
+
                     result.refinements.push_back({{node,recordCorrespondence,0,source},{1,0},"acquire supplied record parts",false});
                     if(relation.isWork() && !relation.consolidated && demand==sizeAndValue)
                         result.refinements.push_back({{node,assessRepresentation,0,source},{0,0},"assess represented record RHS",false});
@@ -1369,6 +1375,12 @@ private:
         if(query.kind==resolvePathExpression) {
             if(auto state=readView(node)->pathSelection) {
                 result.refinements.push_back({pathRequest(node),{0,0},"select RHS path result",false});
+                bool pendingEffects=std::any_of(state->effects.begin(),state->effects.end(),[](const auto& effect) {
+                    auto path=readView(effect)->pathSelection;
+                    return path && (!PathExpression::updatesReady(path) || PathExpression::needsUpdates(path));
+                });
+                if(!pendingEffects && state->result && !state->pending && state->matches.size()==1)
+                    ProteusPreservationGoal::contribute(*access_,state->result,PathExpression::location(state,state->result),result);
                 for(const auto& effect:state->effects)
                     result.refinements.push_back({{effect,sizeAndValue,0},{1,0},"complete retained RHS path",false});
                 result.deferred=!PathExpression::updatesReady(state);
