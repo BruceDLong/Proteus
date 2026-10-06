@@ -478,6 +478,22 @@ class PathExpression {
         return syntax->partRef ? step(syntax->partRef,destination) : source;
     }
 public:
+    // Filtering an asserted value changes the value, not the declaration of
+    // its containing field. Ordinary navigation still takes its source type.
+    static void retainChoiceDeclaration(const Infon& result,const Infon& declaration) {
+        if(!declaration) return;
+        auto add=[&](const std::shared_ptr<WordUse>& type) {
+            if(!type || (result->type && result->type->typeID()==type->typeID())) return;
+            for(const auto& old:result->addedTypes) if(old->typeID()==type->typeID()) return;
+            result->addedTypes.push_back(type);
+        };
+        if(declaration->type) {
+            auto selected=result->type;result->type=declaration->type;add(selected);
+        }
+        for(const auto& type:declaration->addedTypes) add(type);
+        if(getFlagBit(declaration->flags,infonView::independentTemporalValue))
+            SetFlagBit(result->flags,infonView::independentTemporalValue,true);
+    }
     static POVNode positionQuery(ProteusGraphAccess& access,const POVNode& source,const POVNode& predicate,const POVNode& spec) {
         auto owner=std::make_shared<POV>(915);initialize(access,owner,source,predicate,spec,true,false);return owner;
     }
@@ -497,6 +513,7 @@ public:
             auto right=original->wrkList.front();bool leftChoice=readView(left)->isOrLike();
             initialize(access,node,leftChoice ? left : right,leftChoice ? right : left,{},false,false,original,&changes);
             readView(node)->pathSelection->alternatives=true;
+            retainChoiceDeclaration(readView(node),original);
             SetFlagBit(readView(node)->flags,infonView::doReply,getFlagBit(original->flags,infonView::doReply));
             return published();
         }
@@ -993,6 +1010,7 @@ private:
                 auto state=previous->pathSelection;
                 auto result=std::make_shared<infonView>(*readView(result_));
                 result->pathSelection=state;result->selectedResult=result_;
+                if(state->alternatives) PathExpression::retainChoiceDeclaration(result,state->expression);
                 result->originID=previous->originID;result->infCharPos=previous->infCharPos;result->replyCharPos=previous->replyCharPos;
                 SetFlagBit(result->flags,infonView::doReply,getFlagBit(previous->flags,infonView::doReply));
                 SetFlagBit(result->flags,infonView::isNormed,false);

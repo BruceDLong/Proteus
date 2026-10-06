@@ -806,7 +806,10 @@ public:
         if(!owner || !access_->physicalList(owner)) return {};
         POVNode result;bool unordered=readView(owner)->orderMode==uUnordered;
         for(auto entry=POVDescription(owner).member();entry;entry=entry->next) {
-            auto member=knownCandidate(entry);
+            // The declared field type is available even while its value is
+            // an unresolved choice. Only an untyped entry needs a value to
+            // establish what field it could be.
+            auto member=definitions_->names(entry).empty() ? knownCandidate(entry) : entry;
             if(!member || access_->subList(member)) return {};
             auto names=definitions_->names(member);bool complete=true;Work work{0,0};
             bool match=std::find(names.begin(),names.end(),name)!=names.end();

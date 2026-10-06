@@ -37,3 +37,47 @@ Validation:
 
 Logs: `/tmp/p4-choice-final-build.log`, `/tmp/p4-choice-verified-summary.log`,
 `/tmp/p4-choice-default/results.json`.
+
+## Declared fields with choice values (2026-10-05)
+
+Choice filtering preserves the containing field's declared type and additional
+types through lowering and result publication. It also retains a `%?` declaration
+on that field. This does not change ordinary path navigation, whose result takes
+the selected source's type.
+
+`knownField` uses an entry's declared type before trying to unwrap its value.
+An unresolved value in `slot` therefore cannot hide an unrelated, known `thing`
+field later in the same record. Untyped unknown entries and ambiguous nominal
+matches still withhold a unique result.
+
+Validation:
+
+- Rebuilt `libproteusGraph.so` and the existing `TestProteus` executable.
+- Public shared-library regression `graph/test_choice_declarations.cpp` passes:
+  ordered/unordered fields, unresolved and resolved choices, `%?`, type aliases,
+  late publication, replay, ordinary navigation, and unresolved ambiguity.
+- Focused existing checks: 191 pass / 193 total. The two failures are the
+  previously disabled cost-policy assertions in `graphField/cost` and
+  `graphFieldSource/cost`; expectations are unchanged.
+- The 15 small descriptive-selection fixtures pass. Full-model palette/transition
+  fixtures remain outside this focused claim, as in the prior graph audit.
+  The attempted full descriptive group timed out after 90 seconds in the
+  palette fixture; it did not reach the transition fixture.
+- The unchanged Slipstream executable loads the rebuilt shared library. An
+  isolated GUI run still has an empty state-2 display at 60 seconds. The direct
+  display probe now finds `thing`, but rotation fields remain unresolved.
+
+A separate minimal reproduction identifies the remaining lazy-definition gap:
+
+```proteus
+#base = *1+{item:{x:_,}}
+#start = base:{item:{x:7,}}
+#act = {T base base:{item:{x:%?=%@[1].item.x,}}}
+act:{T start ?}
+```
+
+The second state's query initially sees `x:_`. Explicitly normalizing the first
+state exposes `x:7`, after which the second state's query sees that value. This
+change does not repair that route and does not claim complete cube rendering.
+Depth-limited expansion must still discover definitions needed by requested
+values; no new depth parameter is implemented here.
