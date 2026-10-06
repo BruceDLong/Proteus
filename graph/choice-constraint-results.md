@@ -212,3 +212,43 @@ shows colors when revisited at 100 seconds. A full Cube-history probe does not
 finish in 60 seconds. This checkpoint fixes the finite dependency route, not
 complete state-2 rendering or its remaining performance problem. Diagnostics
 are under `/tmp/p4-choice-extent/`.
+
+
+## Connect proved record members before recursive value copying (2026-10-06)
+
+A separate public regression reproduced another gap. Materializing `shape` first
+creates two typed occurrences containing their distinguishing key. Supplying a
+source with the same occurrences and an additional field (`table@[2]` in one,
+literal 3 in the other) left both target fields unknown. Recursive declaration
+compilation or its definition plan declined the runtime/partial description,
+which also prevented the already proved member correspondence from being linked.
+
+`ProteusRecordGoal` still preflights complete readable plans when available. If
+that recursive copying is unavailable, uniquely matched members with readable,
+compatible headers now receive their ordinary correspondence identities. The
+formulas stay at their source; existing relationship goals carry their eventual
+facts and constraints. This does not weaken unknown/ambiguous matching, ignore
+unreadable headers, or certify a whole value as normalized. It introduces no
+Cube-specific operation and no copied contextual formula.
+
+`graph/test_record_routes.cpp` exercises a pre-materialized partial target,
+formula result 4, literal result 3, stable replay, unchanged shared declarations,
+and rejection of a later contradictory value 5. The preceding library fails
+this test because the existing member never receives the supplied fact. The
+rebuilt production library passes it. The four transition cases and all six
+finite-header scenarios still pass. Both CodeDog production builds succeed;
+Slipstream continues to link to the updated shared library without undefined
+symbols. The production graph audit is 1,459/1,468 with no changed result
+relative to the established baseline. Its nine existing failures concern cost
+policy; the long modelTransition/modelPalette cases remain outside that audit.
+
+Actual integration is still incomplete. Slipstream shows a pink first state at
+30 seconds, an empty second display at 80 seconds, and a colored first state
+when revisited at 100 seconds. A shallow API probe exposes state 2's parts, but
+its front-center orientation remains unknown. That formula is still attached:
+its chained lookup is waiting at the placements record. Direct frame-catalog
+lookup works, while the same lookup through the derived display state does not.
+Temporary probes of correspondence, source readiness and individual headers are
+under `/tmp/p4-record-links/`; they are diagnostic evidence, not installed
+workarounds. Investigate how that chained goal becomes ready before claiming
+complete state-2 rendering or a Cube performance improvement.

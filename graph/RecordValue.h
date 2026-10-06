@@ -45,12 +45,24 @@ public:
             auto lhs=left[pair.first],rhs=right[pair.second];
             if(access_->sameInfon(lhs,rhs) || access_->hasDirectIdentity(lhs,rhs)) continue;
             auto meaning=definitions_->describe(rhs,work);
-            if(!meaning) return {};
-            auto plan=std::make_shared<ProteusDefinitionPlan>(access_,lhs,meaning->requirement);
-            work.visits=addCost(work.visits,plan->work.visits);
-            work.creations=addCost(work.creations,plan->work.creations+1);
-            if(!plan->supported) return {};
-            plans.push_back(plan);paired.push_back({lhs,rhs});
+            std::shared_ptr<ProteusDefinitionPlan> plan;
+            if(meaning) {
+                plan=std::make_shared<ProteusDefinitionPlan>(access_,lhs,meaning->requirement);
+                work.visits=addCost(work.visits,plan->work.visits);
+            }
+            if(plan && plan->supported) {
+                work.creations=addCost(work.creations,plan->work.creations);
+                plans.push_back(plan);
+            } else {
+                // Unique correspondence does not require a recursively copied
+                // value. Keep pending formulas in their original source context;
+                // ordinary relationship goals resolve and check them through the
+                // member identity. Do not infer facts from unreadable headers.
+                auto header=access_->typeFacts(lhs), supplied=access_->typeFacts(rhs);
+                if(!header.valid || !supplied.valid || header.pendingNumericValue(supplied)) return {};
+                if(!header.combine(supplied)) throw DefinitionConflict("incompatible record member headers");
+            }
+            ++work.creations;paired.push_back({lhs,rhs});
         }
         for(const auto& member:missing) if(!access_->canMakeMember(member)) return {};
         bool facts=!required.accepts(actual);
