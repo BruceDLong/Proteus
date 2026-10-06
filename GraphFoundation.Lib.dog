@@ -8,14 +8,21 @@ embedVeryHigh = `
 #define PROTEUS_GRAPH_NORMALIZER 1
 # include "../graph/GraphSearch.h"
 namespace proteus4 {class ProteusAccess;}
+using Proteus4Action = std::function<void()>;
 using Proteus4Evidence = proteus4::DependencyProof::Ptr;
 using Proteus4SemanticAccess = std::shared_ptr<proteus4::ProteusAccess>;
 using Proteus4Handle = proteus4::NormalizationHandle<std::shared_ptr<POV>>;
-using Proteus4Runtime = proteus4::GraphManager<std::shared_ptr<POV>>;
+// Host-side Agent allocation must also destroy the scheduler in the library.
+// Otherwise an implicit inline destructor emits GraphManager::close in the GUI.
+class Proteus4Runtime : public proteus4::GraphManager<std::shared_ptr<POV>> {
+public:
+    ~Proteus4Runtime();
+};
 using Proteus4Publication = std::shared_ptr<proteus4::Publication<std::shared_ptr<POV>>>;
 `
 embedHigh = `
 # include "../graph/ProteusGraph.h"
+Proteus4Runtime::~Proteus4Runtime() = default;
 `
 
 struct NormalizationHandle: wraps=Proteus4Handle {
@@ -36,6 +43,7 @@ struct NormalizationHandle: wraps=Proteus4Handle {
 }
 struct GraphCacheEvidence: wraps=Proteus4Evidence {}
 struct GraphRuntime: wraps=Proteus4Runtime {}
+struct GraphAction: wraps=Proteus4Action {}
 struct GraphSemanticAccess: wraps=Proteus4SemanticAccess {}
 struct GraphPublication: wraps=Proteus4Publication {}
 
@@ -45,6 +53,11 @@ struct GraphNormalizer {
     me GraphRuntime: runtime
     our ProteusGraphAccess: access
     me GraphSemanticAccess: semanticAccess
+    // Keep host callbacks inside the compiled runtime boundary. The caller still
+    // reads/writes the same POVs while the engine owns locking and publication.
+    void: withRead(me GraphAction: action) <- <%{ runtime.read(action); }%>
+    void: withUpdate(me GraphAction: action) <- <%{ runtime.update(action); }%>
+    me uint64: revision() <- <%{ return runtime.revision(); }%>
     void: init() <- {initForLanguage("")}
     void: initForLanguage(me string: languageSpec) <- <%{
         if (access) throw std::logic_error("GraphNormalizer already initialized");
