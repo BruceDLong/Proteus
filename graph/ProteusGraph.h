@@ -57,6 +57,7 @@ inline ListPosition<POVNode> listPosition(const Query<POVNode>& query) {
 #include "SparseOccurrence.h"
 #include "ListValueShape.h"
 #include "RecordValue.h"
+#include "ListContents.h"
 #include "StreamInsertion.h"
 
 // Early correspondence is conditional on the parser retaining the ordered
@@ -760,9 +761,10 @@ class ProteusAccess : public GraphAccess<POVNode> {
                 {remainingVisits, 0}};
     }
     static Edge<POVNode> sequence(const POVNode& endpoint, Query<POVNode> member, Query<POVNode> end) {
-        if (!endpoint) return direct("list boundary", std::move(end));
-        member.node = endpoint;
-        return direct("list position", std::move(member));
+        if(endpoint) member.node=endpoint;
+        auto query=endpoint ? std::move(member) : std::move(end);
+        auto edge=direct(endpoint ? "list position" : "list boundary",query);
+        edge.destination=query;return edge;
     }
 public:
     explicit ProteusAccess(std::shared_ptr<ProteusGraphAccess> access)
@@ -850,6 +852,10 @@ public:
         return result;
     }
     std::shared_ptr<GoalSpec<POVNode>> goal(const Query<POVNode>& query) override {
+        // Counting/normalizing members retains a position chart. Constraint-only
+        // walks still use the legacy producer until its deductions are migrated.
+        if(query.kind==listContents && query.argument>=sizeOnly && query.argument<=sizeAndValue)
+            return std::make_shared<ProteusListContentsGoal>(query,access_,[this](const Query<POVNode>& q){observeTask(q);return expand(q);});
         if(query.kind==temporalPredecessor || query.kind==preserveTemporal)
             return std::make_shared<ProteusPreservationGoal>(query,access_,definitions_);
         if(query.kind==temporalDeclaration)

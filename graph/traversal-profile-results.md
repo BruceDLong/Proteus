@@ -1009,3 +1009,127 @@ immutability checks. It is not a measurement of the full UserKB-to-GUI path.
 Raw logs, audit scripts, and before/after source snapshots for reproduction
 are in `/tmp/p4-incremental/`; the standalone native and field tests are kept
 in `graph/test_persistent_traversal.cpp` and `graph/test_persistent_fields.cpp`.
+
+## Retained list counting and member normalization (2026-10-05)
+
+Baseline: `5fb8bfd`. A fresh cube profile identified `listContents` as the
+largest source of repeated traversal visits: the inverse turn visited 1,619
+distinct list queries 4,996 times. Word resolution was the most expensive
+traversal family in the instrumented `found`/`expand` callbacks; those timings
+do not include all scheduler and publication work. Indexed paths contributed
+less repetition, so this checkpoint migrates list walks first.
+
+`ListContents.h` uses the existing `PersistentTraversal` for counting and
+member-normalization goals. A physical position contributes a `GraphListMeasure`
+and owns its member prerequisite. Refining an embedded extent replaces only
+that contribution. Appending a position retains the prefix; losing a support
+withdraws its contribution and prerequisite through the shared traversal.
+The existing adapter supplies positions, and the existing size rules publish
+counts. Open tails remain symbolic. No cube-specific rule, new adjacency store,
+new scheduler, or new cost policy was introduced.
+
+Constraint-only list walks remain on the earlier producer. Other normalization,
+word-resolution, indexed/materializing, definition, and representation goals
+still have restart paths. Count publication also retains its existing broad
+notification. This change establishes bounds for list-position deductions in
+the tested arrival patterns, not for total scheduler time or all graph goals.
+
+### Scaling and semantic checks
+
+The same parsed open-list fixture was run against the baseline and new engine.
+It appends one known scalar, publishes the root and prior tail's scoped writes,
+waits for quiescence, and finally closes the tail. Both engines produce the same
+finite list size and completion state.
+
+| Appended members N | Baseline position evaluations | Retained position evaluations | Retained records |
+|---:|---:|---:|---:|
+| 8 | 74 | 44 | 18 |
+| 16 | 206 | 84 | 34 |
+| 32 | 662 | 164 | 66 |
+| 64 | 2,342 | 324 | 130 |
+
+The baseline evaluates `N(N+1)/2 + 4N + 6` positions; the retained walk evaluates
+`5N + 4` and keeps `2N + 2` records, including previously encountered ends.
+This confirms quadratic prefix replay in the baseline and linear evaluation
+and record growth for this fixture. Map operations, notifications, output,
+and scheduler completion scans are separate costs. Old end records remain
+until the handle is released; disconnected records release their subscriptions.
+
+For 8, 16, 32, and 64 delayed scalar values, the new list walk uses N+2 initial
+position evaluations and **zero additional position evaluations** as the
+values arrive. The regression driver also checks that appends leave earlier
+positions untouched, late embedded extents update the measured count, open
+tails do not complete prematurely, and cancelled handles do not resume.
+
+The three existing `graphProgress` list tests now read `deductionVisits()`
+instead of counting the scheduler's outer step trace. Their value, size,
+normalization, and position-evaluation expectations are unchanged.
+
+### Cube profile
+
+| Measurement | Before | After |
+|---|---:|---:|
+| Clockwise list evaluations | 4,026 | 2,370 |
+| Clockwise list task resets | 443 | 0 |
+| Inverse list evaluations | 4,996 | 2,334 |
+| Inverse list task resets | 630 | 0 |
+| Inverse distinct list queries / retained records | 1,619 | 1,619 |
+| Clockwise recorded scheduler steps | 33,133 | 30,072 |
+| Inverse recorded scheduler steps | 54,093 | 49,614 |
+
+Inverse list evaluations fall 53%; repeated evaluations beyond the distinct
+queries fall from 3,377 to 715 (79%). A retained task still resumes when its
+lifecycle evidence changes, but it does not clear its position chart. Broader
+notifications can still reevaluate affected records. Some other goal families
+perform more work under the changed interleaving; their migration is separate.
+
+Both cube turns pass the independent integer-geometry oracle for all 26
+placements, occupant descriptions, and exact orientation frames. Re-reading
+all three states confirms that prior states remain unchanged.
+
+### Final verification
+
+- `codeDog Proteus.Lib.dog`: optimized production build succeeds.
+- Native scheduler: 69/69 scenarios pass.
+- Generic persistent-traversal scenarios pass, including support withdrawal,
+  shared cycles, cancellation, and completion-proof lifetime.
+- Parsed list scaling/arrival scenarios pass.
+- Production graph audit: 1,459/1,468 pass. The same nine failures assert the
+  paused cost policy. As in the baseline audit, 36 `/cost` entries and the older
+  `modelPalette` and `modelTransition` fixtures are excluded. No new semantic
+  failures; this is not a claim that the entire legacy suite passes.
+- Live Slipstream GUI and the full legacy language suite were not rerun.
+
+Temporary counters are confined to `/tmp/p4-retained-next/profile/` and
+`accepted/`; they are not production instrumentation. Reproduction scripts,
+source snapshots, raw logs, scaling results, and the audit JSON are under
+`/tmp/p4-retained-next/`. The committed regression driver is
+`graph/test_persistent_lists.cpp`.
+
+### Uninstrumented timing check
+
+The same generated engine source and World files were used with `-O1 -g0`
+in both binaries, with no diagnostic counters. After builds and audits stopped,
+two runs per version were performed in before/after/after/before order. Every
+run passed the independent geometry and immutability checks; model file hashes
+were unchanged. These are small-sample local measurements, not a guarantee.
+
+| Measurement (median of two runs) | Before | After |
+|---|---:|---:|
+| Clockwise turn, seconds | 1.193 | 1.291 |
+| Inverse turn, seconds | 2.804 | 2.788 |
+| Whole fixture, seconds | 24.333 | 25.270 |
+| Peak RSS, MiB | 210.793 | 211.658 |
+
+The inverse-turn time is essentially unchanged. Clockwise time is about 8%
+higher and whole-fixture time about 4% higher, despite fewer list evaluations.
+Peak RSS increases by less than 1 MiB. This is a verified scaling improvement
+for incremental list arrivals, **not a demonstrated cube latency improvement**.
+Retained evidence adds bookkeeping, and other producers still restart. Future
+work should measure those producers and scheduler overhead before attributing
+wall time to a particular cause. Whole-fixture time includes definition loading,
+state snapshots, and prior-state checks; it is not GUI latency.
+
+The raw timing samples and model hashes are in
+`/tmp/p4-retained-next/comparison.json`; `before-*.log` and `after-*.log` retain
+all emitted placements and timings.

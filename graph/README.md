@@ -24,6 +24,14 @@ at an unresolved earlier candidate. Match contributions and result aliases
 survive local resumption. Removing a real support withdraws disconnected
 contributions while preserving shared routes and cycles with surviving support.
 
+List counting and member normalization also retain their traversal through
+`ListContents.h`. Each encountered position contributes its count once; a late
+embedded extent replaces that position's contribution. Member values remain
+independent required goals, so receiving a value does not replay the list.
+Appends connect new positions to the retained prefix. Open tails stay symbolic,
+and size publication uses the existing list-size rules. Constraint-only list
+walks remain on the earlier producer.
+
 This is an incremental migration. Indexed/materializing routes and other goal
 families still use the existing scheduler; they have not all acquired retained
 continuations. Unconverted adapter writes retain their conservative notification
@@ -1024,6 +1032,17 @@ g++ -std=c++17 -Wall -Wextra -Werror graph/test_list_structure.cpp -o /tmp/prote
 g++ -std=c++17 -Wall -Wextra -Werror graph/test_span_alignment.cpp -o /tmp/proteus4-span-tests
 /tmp/proteus4-span-tests
 ```
+
+The retained-list regression driver uses the generated engine declarations:
+
+```sh
+g++ -std=gnu++17 -O1 -g0 -pthread -fpermissive graph/test_persistent_lists.cpp \
+  -lgmp -lgmpxx $(pkg-config --cflags --libs icu-uc icu-io) -o /tmp/proteus4-list-deductions
+/tmp/proteus4-list-deductions
+```
+
+It checks delayed values, incremental appends, late embedded extents, cancellation,
+and retained-record/evaluation counts as list lengths increase.
 
 Run the CodeDog tests **from `LocalBuild`**, where the generated resource paths
 resolve:
