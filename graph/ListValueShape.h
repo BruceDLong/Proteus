@@ -10,8 +10,21 @@ public:
     ProteusListValueGoal(Query<POVNode> query,std::shared_ptr<ProteusGraphAccess> access,
                          std::shared_ptr<ProteusDefinitions> definitions)
         :GoalSpec<POVNode>(query),access_(std::move(access)),definitions_(std::move(definitions)) {}
+    std::optional<Expansion<POVNode>> expand(const Visit<POVNode>&) override {
+        Expansion<POVNode> out;
+        if(definitions_->required(request.node) && !definitions_->saved(request.node))
+            out.refinements.push_back({{request.node,compileTypeRequirements,0},{0,0},"establish target shape constraints",false});
+        return out;
+    }
     std::vector<SetCommand> found(const Visit<POVNode>&) override {
         if(!access_->adoptableList(request.node)) return {};
+        // The target's declared structure determines its members. In loose
+        // correspondence the RHS may contain flattened units, so copying its
+        // cardinality before establishing that structure is not sound.
+        if(definitions_->required(request.node)) {
+            auto meaning=definitions_->saved(request.node);
+            if(!meaning || meaning->requirement->list) return {};
+        }
         auto source=definitions_->payload(request.related);
         PayloadReadiness ready(access_,source,definitions_);
         if(!ready.ready || !access_->closedPhysicalList(source) || !access_->orderedList(source)) return {};

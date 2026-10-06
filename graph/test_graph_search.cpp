@@ -198,6 +198,22 @@ static bool saw(const NormalizationHandle<Node>& h, const std::string& label) {
 int main() {
     int cases = 0;
     {
+        // An optional route to the same child cannot erase an earlier
+        // required demand emitted by a legacy producer in this pass.
+        struct Access : TestAccess {
+            Expansion<Node> expand(const Query<Node>& q) override {
+                auto out=TestAccess::expand(q);
+                for(auto& r:out.refinements) r.pruneWhenSatisfied=false;
+                return out;
+            }
+        };
+        auto a=std::make_shared<Access>();GraphManager<Node> manager(a);
+        auto root=node(1),child=node();root->required={{child,0}};root->exploratory={{child,0}};
+        auto h=manager.normalize({root,1});h.waitForCompletion();assert(h.status().withSubscribers);
+        manager.update([&]{child->value=2;});h.waitForCompletion();assert(!h.status().symbolicValues);
+        ++cases;
+    }
+    {
         // A scoped publication can invalidate a prerequisite after a guarded
         // Set was queued, without invalidating the consumer's own reads.
         struct GuardChange : TestGoal {
@@ -231,7 +247,7 @@ int main() {
             Expansion<Node> expand(const Query<Node>& q) override {
                 if(q.node!=root) return TrackedAccess::expand(q);
                 Expansion<Node> out;
-                out.refinements={{{receiver,3},{0,0},"guarded consumer",false},{{changer,4},{0,0},"guard change",false}};
+                out.refinements={{{changer,4},{0,0},"guard change",false},{{receiver,3},{0,0},"guarded consumer",false}};
                 return out;
             }
         };
@@ -271,19 +287,19 @@ int main() {
         auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
         auto root = node(); a->costRoot = root;
         auto h = manager.normalize({root, 1, 0}); h.waitForCompletion();
-        assert(root->value == 42 && a->cheap == 1 && a->expensive == 0);
-        assert(saw(h, "sparse shortcut")); ++cases;
+        assert(root->value == 42 && a->cheap == 1 && a->expensive == 1);
+        assert(saw(h, "expensive materialization")); ++cases;
     }
     {
         auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
         auto root = node(); a->costRoot = root;
         CostPolicy policy; policy.maximumRoute = 4;
         auto h = manager.normalize({root, 1, 0}, policy); h.waitForCompletion();
-        assert(root->value == -1 && a->cheap == 0 && a->expensive == 0);
-        assert(h.status().fullyNormed && h.status().symbolicValues && h.status().withSubscribers);
+        assert(root->value == 42 && a->cheap == 1 && a->expensive == 1);
+        assert(h.status().fullyNormed && !h.status().symbolicValues && !h.status().withSubscribers);
         assert(!h.status().cancelled && !h.status().failed);
         h.cancel(); h.waitForCompletion();
-        assert(h.status().cancelled && !h.status().withSubscribers && !h.status().fullyNormed);
+        assert(!h.status().cancelled && !h.status().withSubscribers && h.status().fullyNormed);
         ++cases;
     }
     {
@@ -291,12 +307,12 @@ int main() {
         auto root = node(); a->costRoot = root;
         CostPolicy policy; policy.maximumRoute = 5;
         auto h = manager.normalize({root, 1, 0}, policy); h.waitForCompletion();
-        assert(root->value == 42 && a->expensive == 0 && a->cheap == 1);
+        assert(root->value == 42 && a->expensive == 1 && a->cheap == 1);
         assert(!h.status().symbolicValues && !h.status().withSubscribers);
         ++cases;
     }
     {
-        // A route threshold does not consume a cumulative execution budget.
+        // Legacy route limits are ignored while FIFO scheduling is enabled.
         auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
         auto root = node(); for (int i = 0; i < 200; ++i) root->rhs.push_back(node(8));
         CostPolicy policy; policy.maximumRoute = 1;
@@ -403,8 +419,7 @@ int main() {
     }
     {
         CostPolicy policy;
-        assert(policy.estimate({std::numeric_limits<Cost>::max(), 1}) ==
-               std::numeric_limits<Cost>::max());
+        assert(policy.estimate({std::numeric_limits<Cost>::max(), 1}) == 0);
         assert(addCost(std::numeric_limits<Cost>::max(), 1) == std::numeric_limits<Cost>::max());
         ++cases;
     }
@@ -446,12 +461,12 @@ int main() {
         auto root = node(1), child = node(2); root->required = {{child, 1}};
         CostPolicy policy; policy.maximumRoute = 0;
         auto h = manager.normalize({root, 1, 0}, policy); h.waitForCompletion();
-        assert(!root->complete && !child->complete && h.status().symbolicValues);
+        assert(root->complete && child->complete && !h.status().symbolicValues);
         ++cases;
     }
     {
-        // An initially excluded shared task must be retried through its cheaper
-        // route; reaching it twice is still one completion obligation.
+        // Different annotated routes share one completion obligation; their
+        // old prices do not change whether the prerequisite is examined.
         auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
         auto root = node(1), child = node(2), bridge = node(3);
         root->required = {{child, 10}, {bridge, 1}}; bridge->required = {{child, 1}};
@@ -476,7 +491,7 @@ int main() {
         auto root = node(), source = node(9); source->setCreations = 2; root->rhs = {source};
         CostPolicy policy; policy.maximumRoute = 2;
         auto h = manager.normalize({root, 1, 0}, policy); h.waitForCompletion();
-        assert(root->value == -1 && h.status().symbolicValues && saw(h, "exclude: Set value")); ++cases;
+        assert(root->value == 9 && !h.status().symbolicValues && !saw(h, "exclude: Set value")); ++cases;
     }
     {
         auto a = std::make_shared<TestAccess>(); GraphManager<Node> manager(a);
@@ -486,7 +501,7 @@ int main() {
         assert(root->value == 9 && !h.status().symbolicValues);
         int writes = 0;
         for (const auto& step : h.steps()) if (step.action == "Set value") {
-            assert(step.cost == 1); ++writes;
+            assert(step.cost == 0); ++writes;
         }
         assert(writes == 1); ++cases;
     }
@@ -577,14 +592,14 @@ int main() {
         ++cases;
     }
     {
-        // Deferred publication keeps the winning route's cost. Exclusion
-        // must not requeue the same end-of-pass command forever.
+        // The old route limit must not suppress a collected result or
+        // cause it to be repeatedly queued.
         auto access=std::make_shared<CollectedAccess>();GraphManager<Node> manager(access);
         auto root=node();root->rhs={node(7)};
         CostPolicy cost;cost.maximumRoute=5; // route 1 + Set (1 visit, 1 creation) = 6
         auto result=manager.normalize({root,1,0},cost);result.waitForCompletion();
-        assert(root->value==-1 && *access->publications==0 && result.status().withSubscribers);
-        assert(saw(result,"exclude: Set collected result"));result.cancel();++cases;
+        assert(root->value==7 && *access->publications==1 && !result.status().withSubscribers);
+        assert(!saw(result,"exclude: Set collected result"));result.cancel();++cases;
     }
     {
         // Rejecting one exploratory comparison must leave the same source
@@ -927,7 +942,8 @@ int main() {
         h.waitForCompletion();assert(branch->value==9 && h.status().withSubscribers && !h.status().failed);h.cancel();++cases;
     }
     {
-        // A cached subgoal cannot retain the price of a route that disappeared.
+        // Removing one route retains a shared prerequisite through another,
+        // independently of either route's old price annotation.
         auto a=std::make_shared<TrackedAccess>();GraphManager<Node> manager(a);
         auto root=node(1),cheap=node(1),expensive=node(1),shared=node();
         cheap->required={{shared,1}};expensive->required={{shared,10}};
@@ -935,7 +951,7 @@ int main() {
         auto h=manager.normalize({root,1},policy);h.waitForCompletion();
         manager.updateIfChanged([&] {root->required={{expensive,0}};return true;},Changes::only({root->facts}));h.waitForCompletion();
         manager.updateIfChanged([&] {shared->rhs={node(7)};return true;},Changes::only({shared->facts}));h.waitForCompletion();
-        assert(shared->value==-1 && h.status().withSubscribers);
+        assert(shared->value==7 && !h.status().symbolicValues);
         manager.updateIfChanged([&] {root->required.push_back({cheap,0});return true;},Changes::only({root->facts}));h.waitForCompletion();
         assert(shared->value==7 && !h.status().failed && !h.status().symbolicValues);++cases;
     }

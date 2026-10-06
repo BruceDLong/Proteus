@@ -8,6 +8,27 @@ as its responsibilities move to the graph reasoner. Ordinary Agent normalization
 uses the graph reasoner. The AItem engine and its direct internal tests have
 been removed; see [aitem-cleanup-results.md](aitem-cleanup-results.md).
 
+Scheduling currently uses FIFO. Route prices, remaining-work estimates, and
+cost limits are disabled, including the limit supplied to `normalizeWithCost`.
+`CostPolicy` and `Work` remain inert API/diagnostic annotations for later design;
+the older cost-specific descriptions below document earlier experiments.
+The legacy language tests asserting cost exclusion still expect the old policy;
+those expectations are obsolete while cost control is paused. Native scheduler
+tests now assert that legacy budget arguments do not exclude work.
+
+Ordinary field traversal now uses `PersistentTraversal.h`: each distinct demand
+retains its navigation supports, local evidence, and prerequisite ownership.
+New information queues only deductions that consumed it. Unordered traversal
+continues independently of candidate acceptance; an ordered walk still stops
+at an unresolved earlier candidate. Match contributions and result aliases
+survive local resumption. Removing a real support withdraws disconnected
+contributions while preserving shared routes and cycles with surviving support.
+
+This is an incremental migration. Indexed/materializing routes and other goal
+families still use the existing scheduler; they have not all acquired retained
+continuations. Unconverted adapter writes retain their conservative notification
+token. This change does not establish a global linear-time bound.
+
 Temporal `%tprev`/`%tnext` reads share structural neighbor traversal, with
 T-list context and nested T-span continuation. Lazy `.asTList` and `.cut`
 references expose support and cuts without choosing a clock or state count.
@@ -47,7 +68,8 @@ it inspected. A path goal keeps these answers across retries, rechecks invalid
 comparisons, and reuses the others. Required refinements remain ordinary graph
 work. Explicit normalization starts a fresh comparison epoch; existing handles
 keep their own epoch. The context uses a weak answer index with batched cleanup.
-This does not yet preserve the outer path traversal or its collected match list.
+Ordinary field goals now also preserve their outer traversal and match contributions.
+Other path kinds retain the earlier retry behavior.
 The `unit/graphCandidateSubscriptions/` cases cover delayed acceptance/rejection,
 unchanged comparison evidence, and ordered selection after a pending candidate.
 

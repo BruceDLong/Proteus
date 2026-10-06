@@ -964,7 +964,7 @@ public:
 
 class ProteusTypeGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusDefinitions> definitions_;
-    ProteusDefinitions::Certificate proof_;
+    ProteusDefinitions::Certificate proof_,ready_;
     Visit<POVNode> entry_;
     bool entered_=false;
     std::function<void(const POVNode&,const POVNode&,const DependencyProof::Ptr&)> representedTemplate_;
@@ -978,9 +978,16 @@ public:
         if(resolved && request.kind==typeRequirements)
             if(auto source=definitions_->repeatedBody(request.node)) representedTemplate_(request.node,source,evidence);
     }
-    void beginPass() override { proof_ = std::make_shared<ProteusDefinitions::Proof>(); entered_=false; }
+    void beginPass() override { proof_ = std::make_shared<ProteusDefinitions::Proof>(); entered_=false;ready_.reset(); }
     CommandBatch<POVNode> finishPass() override {
         if(request.kind!=typeRequirements || !entered_ || satisfied()) return {};
+        // Let already available RHS facts establish the instance before filling
+        // missing facts from its definition. This is a dependency/publication
+        // boundary, independent of route costs.
+        if(ready_) {
+            auto commands=application(ready_);
+            if(!commands.empty()) return {entry_,std::move(commands)};
+        }
         auto commands=definitions_->exposeShape(request.node);
         bool recursive=false;
         if(request.argument!=fillImmediateParts) {
@@ -1014,14 +1021,18 @@ public:
                 return definitions->rememberChanges(target, certificate);
             }, {entry ? 1 : addCost(1,certificate->composition.visits), 0}}};
         }
+        ready_=certificate;return {};
+    }
+private:
+    std::vector<SetCommand> application(const ProteusDefinitions::Certificate& certificate) {
         auto plan = definitions_->plan(request.node, certificate, request.argument==fillImmediateParts);
         if (!plan || !plan->supported) return {};
-        if(!entry) plan->work.visits=addCost(plan->work.visits,certificate->composition.visits);
         auto definitions = definitions_; auto target = request.node;
         return {{certificate->requirement->repeated ? "Apply repeated member requirements" :
             certificate->requirement->list ? "Apply finite list type requirements" : "Apply scalar type requirements",
             [definitions, target, certificate, plan] { return definitions->applyChanges(target, certificate, plan); }, plan->work}};
     }
+public:
     bool satisfied() const override {
         return request.kind == compileTypeRequirements ?
             (!definitions_->required(request.node) || bool(definitions_->saved(request.node))) : definitions_->satisfied(request.node, request.argument==fillImmediateParts);

@@ -21,7 +21,8 @@ class PathSelection {
     std::function<Expansion<POVNode>(const Query<POVNode>&)> navigate_;
     std::shared_ptr<FieldCandidates> candidates_;
     static Edge<POVNode> edge(const char* label, Query<POVNode> query, Cost visits=1) {
-        return {label, {visits,0}, true, [query] { return query; }};
+        Edge<POVNode> result{label, {visits,0}, true, [query] { return query; }};
+        result.destination=query;return result;
     }
     static bool unordered(const POVNode& node) {
         return readView(node)->orderMode==uUnordered;
@@ -346,7 +347,8 @@ public:
                 if(!q.coordinates.empty()) nextAlternative(out,q.context[1],q.context[2],q.related,q.coordinates.front());
                 return out;
             }
-            advance(out,q,std::move(at));return out;
+            if(!unordered(q.context.front())) advance(out,q,std::move(at));
+            return out;
         }
         Cost visits=1;
         if(at.phase==ListPhase::enter) {
@@ -364,6 +366,7 @@ public:
                 if(unordered(q.context.front())) {
                     auto waiting=q;waiting.kind=pathUnknown;
                     out.edges.push_back(edge("unresolved field boundary",std::move(waiting),visits));
+                    advance(out,q,std::move(at),visits);
                 } else unresolved(out,q,"unresolved alternative boundary",visits);
                 return out;
             }
@@ -375,7 +378,9 @@ public:
             auto match=candidates_->match(q.related,at.node,at.owners,out,visits);
             if(match==ScalarMatch::yes) {
                 auto found=q;found.kind=pathMatched;
-                out.edges.push_back(edge("compatible field member",std::move(found),visits));return out;
+                out.edges.push_back(edge("compatible field member",std::move(found),visits));
+                if(unordered(q.context.front())) advance(out,q,std::move(at),visits);
+                return out;
             }
             if(match==ScalarMatch::unknown) {
                 out.deferred=true;
@@ -383,6 +388,7 @@ public:
                     auto waiting=q;waiting.kind=pathUnknown;
                     out.edges.push_back(edge("unresolved field candidate",std::move(waiting),visits));
                 } else unresolved(out,q,"unresolved alternative candidate",visits);
+                if(unordered(q.context.front())) advance(out,q,std::move(at),visits);
                 return out;
             }
         }
@@ -580,10 +586,108 @@ class ProteusPathGoal : public GoalSpec<POVNode> {
     std::set<POVNode> positionEnds_;
     bool positionsEnded_=false,positionTailPending_=false,positionTailUncertain_=false,positionReady_=false;
     Visit<POVNode> positionFinding_;
+    using Q=Query<POVNode>;
+    struct Contribution {
+        POVNode member,branch;
+        std::vector<POVNode> location;
+        std::shared_ptr<infonView> view;
+        std::uint64_t revision=0;
+        bool pending=false,uncertain=false,terminal=false,branchEnd=false;
+        bool operator==(const Contribution& b) const {
+            return std::tie(member,branch,location,view,revision,pending,uncertain,terminal,branchEnd)==
+                   std::tie(b.member,b.branch,b.location,b.view,b.revision,b.pending,b.uncertain,b.terminal,b.branchEnd);
+        }
+    };
+    std::unique_ptr<PersistentTraversal<POVNode>> traversal_;
+    std::function<void()> resume_;
+    std::map<Q,Contribution> contributions_;
+    std::map<POVNode,std::map<Q,std::vector<POVNode>>> memberProofs_;
+    struct Branch {std::size_t matches=0,ends=0;};
+    std::map<POVNode,Branch> branches_;
+    std::size_t pendingCount_=0,uncertainCount_=0,terminalCount_=0,emptyBranches_=0;
+    bool resultChanged_=true;
+    std::map<POVNode,std::size_t> sourceOrder_;
+    std::size_t nextSourceOrder_=0;
+    Contribution describe(const Q& q) {
+        Contribution c;
+        if(q.kind==pathMatched) {
+            c.member=q.node;c.view=readView(q.node);c.revision=q.node->workRevision;
+            c.location={q.node};auto offset=q.coordinates.empty() ? 1 : 3;
+            c.location.insert(c.location.end(),q.context.begin()+offset,q.context.end());
+            c.terminal=readView(q.context.front())->orderMode!=uUnordered;
+        }
+        if(q.kind==pathUnknown || q.kind==pathAlternativeUnknown) {
+            c.pending=true;
+            bool implicit=q.kind==pathUnknown && q.argument==static_cast<int>(ListPhase::leave) &&
+                readView(q.node)->orderMode==uUnordered && access_->physicalList(q.node) &&
+                !getFlagBit(readView(q.node)->value->flags,infonState::tailUnfinished);
+            if(implicit) implicit=listBoundary(*access_,q.node).missingExtents.empty();
+            c.uncertain=!implicit;
+        }
+        if(q.kind==pathEnd || q.kind==pathAlternativesEnd) c.terminal=true;
+        if(q.kind==pathAlternativesEnd && getFlagBit(readView(q.node)->innr->value->flags,infonState::tailUnfinished)) {
+            c.pending=true;c.uncertain=!readView(q.node)->implicitMembershipChoice;
+        }
+        if(!q.coordinates.empty() && (q.kind==pathMatched || q.kind==pathEnd)) {
+            c.branch=q.context[2];c.branchEnd=q.kind==pathEnd;
+        }
+        return c;
+    }
+    void contribute(const Q& q,bool active) {
+        if(active && q.kind==fieldPosition && q.argument==static_cast<int>(ListPhase::member))
+            if(!sourceOrder_.count(q.node)) sourceOrder_[q.node]=nextSourceOrder_++;
+        // Navigation has no output contribution. Its reads belong to the
+        // traversal entry, independently of candidate/result evidence.
+        if(q.kind!=pathMatched && q.kind!=pathUnknown && q.kind!=pathAlternativeUnknown &&
+           q.kind!=pathEnd && q.kind!=pathAlternativesEnd) return;
+        auto old=contributions_.find(q);Contribution next;
+        if(active) next=describe(q);
+        if(active && old!=contributions_.end() && old->second==next) return;
+        if(active && old!=contributions_.end() && next.member && old->second.member==next.member) {
+            // Refining a retained source updates its alias evidence, not its
+            // membership or place among the other known alternatives.
+            old->second=next;memberProofs_[next.member][q]=next.location;
+            locations_[next.member]=memberProofs_[next.member].begin()->second;
+            verified_=false;resultChanged_=true;return;
+        }
+        auto adjust=[&](const Contribution& c,bool add) {
+            auto amount=add ? 1 : -1;
+            pendingCount_+=amount*c.pending;uncertainCount_+=amount*c.uncertain;terminalCount_+=amount*c.terminal;
+            if(c.branch) {
+                auto& b=branches_[c.branch];emptyBranches_-=b.ends && !b.matches;
+                b.matches+=amount*bool(c.member);b.ends+=amount*c.branchEnd;
+                emptyBranches_+=b.ends && !b.matches;
+            }
+            if(c.member) {
+                auto& proofs=memberProofs_[c.member];
+                if(add) {
+                    if(proofs.empty()) {
+                        if(!sourceOrder_.count(c.member)) sourceOrder_[c.member]=nextSourceOrder_++;
+                        auto before=std::find_if(matches_.begin(),matches_.end(),[&](const POVNode& m) {
+                            return sourceOrder_.at(m)>sourceOrder_.at(c.member);
+                        });
+                        matches_.insert(before,c.member);
+                    }
+                    proofs[q]=c.location;locations_[c.member]=proofs.begin()->second;
+                } else {
+                    proofs.erase(q);
+                    if(proofs.empty()) {
+                        matches_.erase(std::remove(matches_.begin(),matches_.end(),c.member),matches_.end());
+                        locations_.erase(c.member);memberProofs_.erase(c.member);
+                    } else locations_[c.member]=proofs.begin()->second;
+                }
+            }
+        };
+        if(old!=contributions_.end()) {adjust(old->second,false);contributions_.erase(old);}
+        if(active) {contributions_[q]=next;adjust(next,true);}
+        waiting_=pendingCount_ || emptyBranches_;
+        uncertainCandidates_=uncertainCount_ || emptyBranches_;
+        verified_=false;resultChanged_=true;
+    }
     bool collectPosition(const Query<POVNode>& q) {
         if(q.kind==pathAlternative) {aggregating_=true;positionBranches_.push_back(q.node);}
         if(q.kind==pathMatched) {
-            // Search visits routes in cost order. Keep one winner for each
+            // Keep the first discovered winner for each
             // requested position, independently of the other oneOf branches.
             positionWinners_.emplace(q.context.front(),q.node);
             if(!aggregating_ && matches_.empty()) matches_.push_back(q.node);
@@ -615,11 +719,35 @@ public:
             auto state=readView(request.context.front())->pathSelection;
             if(state) {result_=state->result;published_=state->matches;publishedPending_=state->pending;}
         }
+        if(expand_ && request.kind==selectField && !BoundaryGraph::direction(request.related) && !TemporalGraph::pathKind(request.related))
+            traversal_=std::make_unique<PersistentTraversal<POVNode>>(request,[this](const Q& q,bool active){contribute(q,active);});
+    }
+    bool persistent() const override {return bool(traversal_);}
+    DeductionStats deductionStats() const override {return traversal_ ? traversal_->counters() : DeductionStats{};}
+    std::vector<std::pair<Q,std::size_t>> deductionVisits() const override {
+        return traversal_ ? traversal_->visits() : std::vector<std::pair<Q,std::size_t>>{};
+    }
+    bool retainPath() const override {return !traversal_;}
+    void connect(std::function<void()> wake,DependencyKey broad,DependencyKey untracked) override {
+        resume_=wake;if(traversal_) traversal_->connect(std::move(wake),std::move(broad),std::move(untracked));
     }
     std::optional<Expansion<POVNode>> expand(const Visit<POVNode>& visit) override {
         if(!expand_) return std::nullopt;
         FieldCandidates::Scope scope(answers_,candidateEpoch_);
-        return expand_(visit.query);
+        if(!traversal_) return expand_(visit.query);
+        try {traversal_->advance([this](const Q& q){return expand_(q);});}
+        catch(const NonPersistentNavigation&) {
+            // Indexed/unit navigation may materialize an occurrence. Keep that
+            // operation in the scheduler until it has an incremental producer.
+            traversal_.reset();contributions_.clear();memberProofs_.clear();branches_.clear();
+            pendingCount_=uncertainCount_=terminalCount_=emptyBranches_=0;
+            if(resume_) resume_();return Expansion<POVNode>{};
+        }
+        Expansion<POVNode> out;out.refinements=traversal_->takeRequirements();out.deferred=traversal_->deferred();
+        if(traversal_->ready()) {
+            auto q=request;out.edges.push_back({"continue field deduction",{0,0},false,[q]{return q;}});
+        }
+        return out;
     }
     void beginPass() override {
         matches_.clear();locations_.clear();verified_=waiting_=aggregating_=false;branchMatched_=uncertainCandidates_=false;
@@ -627,6 +755,7 @@ public:
         positionFinding_={request,{},0};
     }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
+        if(traversal_) return {};
         auto q=visit.query;
         if(q.kind==externalField && request.kind==externalField && !readView(q.node)->pathSelection && !readView(q.node)->isOrLike()) {
             auto state=readView(request.context.front())->pathSelection;
@@ -732,7 +861,7 @@ public:
         finished=q.kind==pathAlternativesEnd || (!aggregating_ && (q.kind==pathEnd ||
             (q.kind==pathMatched && readView(q.context.front())->orderMode!=uUnordered)));
         if(request.kind==resolveWord) {
-            // External candidates can cost more than their branch boundary.
+            // External candidates can arrive after their branch boundary.
             // Collect all explored routes before publishing a choice result.
             positionReady_=positionReady_ || finished;
             if(visit.cost>=positionFinding_.cost) positionFinding_=visit;
@@ -741,11 +870,16 @@ public:
         return finished ? publish() : std::vector<SetCommand>{};
     }
     CommandBatch<POVNode> finishPass() override {
+        if(traversal_) {
+            if(traversal_->ready() || !terminalCount_) return {};
+            return {{request,{},0},publish()};
+        }
         if(!positionReady_) return {};
         return {positionFinding_,publish()};
     }
 private:
     std::vector<SetCommand> publish() {
+        if(traversal_ && !resultChanged_) {verified_=!waiting_;return {};}
         const bool alternatives=waiting_ || matches_.size()!=1;
         const bool implicitMembership=waiting_ && !uncertainCandidates_;
         if(result_ && published_==matches_ && publishedPending_==waiting_ &&
@@ -767,7 +901,7 @@ private:
                     member=member->next;
                 }
             }
-            if(current) {verified_=!waiting_;return {};}
+            if(current) {verified_=!waiting_;resultChanged_=false;return {};}
         }
         // Existing alternatives keep their POV/identity when more information
         // arrives. Only newly matching source occurrences need a new alias.
@@ -804,10 +938,9 @@ private:
             // Rebuilding a choice also changes its inner list and alias links.
             if(!request.context.empty()) changedNode(request.context.front());
             if(collectedAlternatives()) changedNode(result_);
-            for(const auto& entry:reusable) changedNode(entry.second);
             if(!alternatives) {
                 // Registry-held aliases can outlive their retired choice.
-                for(const auto& entry:reusable) entry.second->pParent=nullptr;
+                for(const auto& entry:reusable) {changedNode(entry.second);entry.second->pParent=nullptr;}
                 result_=matches.front();
             } else {
                 if(!collectedAlternatives()) {
@@ -817,32 +950,44 @@ private:
                     result_=std::make_shared<POV>(914);readView(result_)=item;access->bind(result_);
                 }
                 auto body=readView(result_)->innr->value;
-                body->items.clear();
-                for(const auto& entry:reusable) {
-                    entry.second->next.reset();entry.second->prev.reset();entry.second->pParent=nullptr;
+                std::set<POVNode> retained(matches.begin(),matches.end());
+                for(const auto& entry:reusable) if(!retained.count(entry.first)) {
+                    auto member=entry.second;
+                    changedNode(member);changedNode(member->prev);changedNode(member->next);
+                    body->items.erase(member);member->prev.reset();member->next.reset();member->pParent=nullptr;
                 }
+                auto cursor=body->items.head;
                 for(const auto& source:matches) {
-                    auto found=reusable.find(source);
-                    POVNode member;
+                    auto found=reusable.find(source);POVNode member;
                     if(found!=reusable.end()) {
-                        member=found->second;readView(member)=readView(source);body->items.appendPov(member);
+                        member=found->second;
+                        if(readView(member)!=readView(source)) {changedNode(member);readView(member)=readView(source);}
                     } else {
-                        member=body->items.append(readView(source),false,914);
+                        member=std::make_shared<POV>(914);readView(member)=readView(source);
                         bool named=access->bind(member);named=access->bind(source) || named;
                         access->registry->recordIdentity(member,source,iekListCorrespondence,0);
-                        // Existing searches may inspect relationships at the
-                        // source endpoint before this new alias is attached.
                         changedNode(source);changedNode(member);
                         if(named) changes=Changes{};
                     }
-                    member->pParent=result_.get();
+                    if(member!=cursor) {
+                        // Splice just the changed member. Existing aliases and
+                        // their unchanged links remain intact across arrivals.
+                        changedNode(member);changedNode(member->prev);changedNode(member->next);
+                        if(found!=reusable.end()) body->items.erase(member);
+                        auto previous=cursor ? cursor->prev : body->items.tail;
+                        changedNode(previous);changedNode(cursor);
+                        member->prev=previous;member->next=cursor;
+                        if(previous) previous->next=member;else body->items.head=member;
+                        if(cursor) cursor->prev=member;else body->items.tail=member;
+                    }
+                    member->pParent=result_.get();cursor=member->next;
                 }
                 SetFlagBit(body->flags,infonState::tailUnfinished,pending);
                 readView(result_)->implicitMembershipChoice=implicitMembership;
                 ++result_->workRevision;
             }
             SetResult publication{true,changes};
-            published_=matches;publishedPending_=pending;verified_=!pending;
+            published_=matches;publishedPending_=pending;verified_=!pending;resultChanged_=false;
             if(!request.context.empty()) {
                 auto owner=request.context.front();auto previous=readView(owner);
                 auto state=previous->pathSelection;
@@ -874,7 +1019,7 @@ private:
     }
 public:
     bool satisfied() const override {return verified_ || ((request.kind==selectPosition || request.kind==selectSelf) && positionReady_ && !waiting_);}
-    bool symbolic() const override {return !verified_ || (request.argument==pathValue && result_ && readView(result_)->isOrLike());}
+    bool symbolic() const override {if(traversal_) traversal_->observe();return !verified_ || (request.argument==pathValue && result_ && readView(result_)->isOrLike());}
     POVNode result() const override {return result_;}
 };
 

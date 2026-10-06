@@ -908,3 +908,104 @@ Detailed evidence and reproduction scripts are under
 measurements, `comparison.json` records the main counters, and `accepted-audit/`
 holds the final production-binary checks. The earlier baseline is under
 `/tmp/p4-reprofile/`.
+
+
+## Persistent deductions and FIFO scheduling (2026-10-05)
+
+The next checkpoint retains ordinary field traversal, in addition to candidate
+comparisons. `PersistentTraversal.h` records one entry per semantic `Query`,
+with local read evidence, navigation support, and owned prerequisite demands.
+Unchanged supports keep their continuations and contributions. A changed
+premise queues its consumer; a removed support withdraws only unreachable
+contributions. Shared support and cycles are handled by reachability within
+the affected descendants. Disconnected entries release their read subscriptions.
+
+For unordered fields, testing a member and continuing to the next position are
+independent deductions. Resolving an earlier candidate therefore does not
+replay the suffix. Ordered walks continue to require that earlier candidates
+be decided before selecting a later match. OneOf publication preserves existing
+aliases and links where possible; actual membership changes still require a
+scan of the published membership. This is not a constant-time output format.
+
+The scheduler uses FIFO and does not estimate, rank, or exclude routes by cost.
+Legacy cost arguments are inert; `Work` counts remain annotations. Removing
+cost order exposed real prerequisites: definition shape must precede loose
+list-shape acquisition; definition filling waits for available RHS work;
+concatenation publishes after operand discovery; selecting an occurrence does
+not broadcast a model change and must retain its template requirement.
+
+The runtime retains a producer's progress and owned child demands on resume.
+Legacy producers still reset. The adapter's conservative model token must be
+observed inside each retained evaluation as well as at the outer task boundary;
+otherwise contextual definition writes can wake the task without queuing the
+actual deduction that needs reevaluation. Completion evidence retains local
+proofs through a separate witness, without retaining the query nodes themselves.
+This avoids a model-to-completion-to-model ownership cycle.
+
+### Work and lifetime checks
+
+- `test_graph_search.cpp`: 69 scheduler scenarios, including legacy budget
+  arguments being ignored, guarded Sets, shared prerequisites, cancellation,
+  and preservation of required demand when an optional route also exists.
+- `test_persistent_traversal.cpp`: 8, 16, 32, and 64 arriving values require
+  exactly 17, 33, 65, and 129 evaluations. The root is evaluated once. Other
+  checks cover duplicate notifications, new navigation, removal, shared cycles,
+  reactivation, cancellation, and completion-evidence lifetime.
+- `test_persistent_fields.cpp`: real parsed field queries with 2, 9, 33, and 65
+  candidates need exactly two extra deductions for a delayed match and one for
+  a delayed mismatch. Every unaffected candidate's visit count stays unchanged.
+  Retained record counts grow with distinct queries, not repeated arrivals.
+
+This gives a linear evaluation bound for those arrival fixtures. General work
+still depends on the number of distinct queries, support links, producer work,
+and changed premises. Support removal can inspect affected descendants. Cached
+entries are retained for reuse until their handle is released, and existing
+step tracing still retains a history of events. No global linear-time or
+constant-memory claim is made.
+
+Ordinary field paths are migrated; indexed/materializing paths explicitly use
+the old scheduler until they acquire incremental producers. Other goal families
+also retain their earlier restart behavior. The engine therefore still has
+retries outside this first migrated family. World, UserKB, and Slipstream
+sources are unchanged, and this checkpoint does not establish correct GUI
+projection of the second state.
+
+### Final audit and model check
+
+The generated optimized executable builds successfully. A final audit runs
+1,468 graph checks: 1,459 pass; the other nine still assert cost exclusion
+(`unitCost`, temporal/boundary/grammar `budget`, `indexCost`, `sparseCost`,
+`knownButDeferred`, `listCost`, and `pricedCreation`). Their old cost-limited
+outcomes are deliberately no longer produced. Another 36 tests named `/cost`
+were excluded from this semantic audit, as were the older `modelPalette` and
+`modelTransition` cases. This is not a claim that the entire default suite is
+green; those cost expectations remain to be retired or redesigned. The legacy
+language suite and live Slipstream GUI were not rerun.
+
+The current World turn fixture is checked separately against its independent
+integer geometry oracle. The original commit `eb6a101` and this implementation
+use the same generated engine source, current model files, and uninstrumented
+`World/tests/check_rubix_turns.cpp` driver, compiled with `-O1 -g0`. Clockwise
+and counterclockwise front turns both produce the expected 26 placements,
+occupant descriptions, and exact orientation frames. Re-reading all three
+states also verifies that previous states remain unchanged.
+
+The following paired run was made after all builds finished. Timings are a
+single local sample; recorded step counts distinguish actual work from timing
+noise. These numbers include the combined FIFO and persistence changes, not
+an isolated attribution to either mechanism.
+
+| Measurement | Before | After |
+|---|---:|---:|
+| Clockwise turn, seconds | 1.551 | 1.076 |
+| Clockwise turn, recorded steps | 42,934 | 33,133 |
+| Counterclockwise turn, seconds | 4.994 | 2.355 |
+| Counterclockwise turn, recorded steps | 106,793 | 54,093 |
+| Whole fixture, seconds | 25.82 | 21.39 |
+| Peak RSS, MiB | 224.7 | 210.8 |
+
+Whole-fixture time includes definition loading, both turns, snapshots, and
+immutability checks. It is not a measurement of the full UserKB-to-GUI path.
+Raw logs, audit scripts, and before/after source snapshots for reproduction
+are in `/tmp/p4-incremental/`; the standalone native and field tests are kept
+in `graph/test_persistent_traversal.cpp` and `graph/test_persistent_fields.cpp`.

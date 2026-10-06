@@ -30,18 +30,13 @@ inline Cost addCost(Cost a, Cost b) {
         ? std::numeric_limits<Cost>::max() : a + b;
 }
 
-// Structural estimates, not prices supplied by a semantic feature.
+// Work annotations remain available for diagnostics and a future cost policy.
+// Scheduling is FIFO; these compatibility fields do not limit or rank work.
 struct Work { Cost visits = 1; Cost creations = 0; };
 struct CostPolicy {
     Cost visit = 1, creation = 4;
     Cost maximumRoute = std::numeric_limits<Cost>::max();
-    Cost estimate(Work work) const {
-        auto product = [](Cost a, Cost b) {
-            return b && a > std::numeric_limits<Cost>::max() / b
-                ? std::numeric_limits<Cost>::max() : a * b;
-        };
-        return addCost(product(visit, work.visits), product(creation, work.creations));
-    }
+    Cost estimate(Work) const { return 0; }
 };
 
 template<class Node> struct Query {
@@ -99,7 +94,7 @@ public:
     using std::runtime_error::runtime_error;
 };
 
-// A collected result retains the finding's route cost and trace when its Set
+// A collected result retains the finding and trace when its Set
 // must wait until the current frontier has been examined.
 template<class Node> struct CommandBatch {
     Visit<Node> finding;
@@ -121,13 +116,14 @@ template<class Node> struct Edge {
     std::string description;
     Work work;
     bool alternative = false;
-    // Deferred until selected by cost. Enumerating an edge must not perform its
+    // Deferred until dequeued. Enumerating an edge must not perform its
     // expensive materialization. The returned query can carry a new demand.
     std::function<Arrival<Node>()> follow;
-    // Lower bound on work after this step (e.g. a remaining list walk). This
-    // ranks routes before expansion, without charging the estimate twice.
+    // Reserved work annotation for a future policy; ignored by FIFO scheduling.
     Work remaining{0, 0};
     bool command = false;
+    // A pure navigation edge. Its callback is not needed to discover its target.
+    std::optional<Query<Node>> destination;
 };
 
 template<class Node> struct Refinement {
@@ -137,6 +133,8 @@ template<class Node> struct Refinement {
     // false makes completion of this subgoal a requirement of its parent.
     bool alternative = true;
     bool pruneWhenSatisfied = true; // optional discovery may still expose missing parts
+    std::size_t owner = 0; // retained deduction that owns this demand
+    bool withdraw = false;
 };
 
 template<class Node> struct Expansion {
@@ -145,14 +143,30 @@ template<class Node> struct Expansion {
     bool deferred = false;
 };
 
+struct DeductionStats {
+    std::size_t evaluations=0, activations=0, withdrawals=0, supportAdds=0,
+                supportRemoves=0, pruneVisits=0, notifications=0, records=0;
+    DeductionStats& operator+=(const DeductionStats& b) {
+        evaluations+=b.evaluations;activations+=b.activations;withdrawals+=b.withdrawals;
+        supportAdds+=b.supportAdds;supportRemoves+=b.supportRemoves;pruneVisits+=b.pruneVisits;
+        notifications+=b.notifications;records+=b.records;return *this;
+    }
+};
+
 template<class Node> class GoalSpec {
 public:
     Query<Node> request;
     explicit GoalSpec(Query<Node> q) : request(std::move(q)) {}
     virtual ~GoalSpec() = default;
     virtual void beginPass() {}
+    // Opt in only with independently subscribed, retained deductions. The
+    // runtime resumes this producer without clearing its progress or demands.
+    virtual bool persistent() const { return false; }
+    virtual DeductionStats deductionStats() const { return {}; }
+    virtual std::vector<std::pair<Query<Node>,std::size_t>> deductionVisits() const {return {};}
+    virtual void connect(std::function<void()>,DependencyKey,DependencyKey) {}
     // A goal may maintain a shared traversal chart for its demand. Its edges
-    // still run on this scheduler, with the same costs and lifecycle rules.
+    // still run on this scheduler, with the same lifecycle rules.
     // nullopt delegates ordinary edge access to the domain adapter.
     virtual std::optional<Expansion<Node>> expand(const Visit<Node>&) { return std::nullopt; }
     virtual bool retainPath() const { return true; }
@@ -234,8 +248,11 @@ template<class Node> struct SearchSession : std::enable_shared_from_this<SearchS
         Cost baseCost = 0;
         std::map<Query<Node>, Cost> visited;
         struct Link {std::size_t child;Cost cost;};
-        std::vector<std::size_t> required;
-        std::vector<Link> children;
+        std::set<std::size_t> required;
+        std::map<std::size_t,Link> children;
+        std::map<std::pair<std::size_t,std::size_t>,bool> demands;
+        std::map<std::size_t,std::pair<std::size_t,std::size_t>> references;
+        bool started=false;
         bool deferred = false;
         std::uint64_t generation = 0;
         bool finishedPass = false;
@@ -246,14 +263,9 @@ template<class Node> struct SearchSession : std::enable_shared_from_this<SearchS
         std::shared_ptr<Dependency::Wake> wake;
         std::vector<Pending> parked;
     };
-    struct Later {
-        bool operator()(const Pending& a, const Pending& b) const {
-            return std::tie(a.estimate, a.sequence) > std::tie(b.estimate, b.sequence);
-        }
-    };
     std::vector<Task> tasks;
     std::map<Query<Node>,std::size_t> taskIndex;
-    std::priority_queue<Pending, std::vector<Pending>, Later> frontier;
+    std::queue<Pending> frontier;
     std::shared_ptr<GoalSpec<Node>> root;
     CostPolicy policy;
     Status status;
@@ -315,7 +327,7 @@ template<class Node> struct Context {
         if(newlyDirty) for(auto parent:session->rejected) {
             const auto& candidate=session->tasks[parent];
             if(!candidate.rejection.empty() &&
-               std::find(candidate.required.begin(),candidate.required.end(),index)!=candidate.required.end())
+               candidate.required.count(index))
                 wakeTask(session,parent);
         }
     }
@@ -339,7 +351,7 @@ template<class Node> struct Context {
                 for(std::size_t i=0;i<session->tasks.size();++i) wakeTask(session,i);
         } else {
             // Indexed by the evidence actually read. Unrelated sessions retain
-            // their frontier, visited queries, accumulated findings and costs.
+            // their frontier, visited queries and accumulated findings.
             untracked->publish();
             for(const auto& key:changes.keys) key->publish();
         }
@@ -436,6 +448,19 @@ public:
         auto lock=context_->acquire();
         return session_->steps;
     }
+    std::map<Query<Node>,std::size_t> deductionVisits() const {
+        if(!session_) return {};
+        auto lock=context_->acquire();std::map<Query<Node>,std::size_t> result;
+        for(const auto& task:session_->tasks)
+            for(const auto& entry:task.goal->deductionVisits()) result[entry.first]+=entry.second;
+        return result;
+    }
+    DeductionStats deductionStats() const {
+        if(!session_) return {};
+        auto lock=context_->acquire();DeductionStats result;
+        for(const auto& task:session_->tasks) result+=task.goal->deductionStats();
+        return result;
+    }
     Node result() const {
         if (!session_) return {};
         auto lock=context_->acquire();
@@ -451,17 +476,11 @@ template<class Node> class GraphManager {
                         Edge<Node> edge, std::vector<Query<Node>> path) {
         if (!s.tasks[task].rejection.empty() ||
             (edge.alternative && s.tasks[task].goal->satisfied())) return;
-        Cost cost = addCost(base, s.policy.estimate(edge.work));
-        Cost estimate = addCost(cost, s.policy.estimate(edge.remaining));
-        if (estimate > s.policy.maximumRoute) {
-            s.tasks[task].deferred = true;
-            s.steps.push_back({"exclude: " + edge.description,
-                              s.tasks[task].goal->request, estimate, s.status.revision});
-            return;
-        }
-        s.frontier.push({task, cost, estimate, s.sequence++, std::move(edge),
+        (void)base;
+        s.frontier.push({task, 0, 0, s.sequence++, std::move(edge),
                          std::move(path), s.tasks[task].generation});
     }
+
     static void enqueueCommands(Session& s, std::size_t task, const Visit<Node>& finding,
                                 std::vector<SetCommand> commands) {
         for (auto& command : commands) {
@@ -481,13 +500,24 @@ template<class Node> class GraphManager {
     static void resetTask(Context<Node>& c, Session& s, std::size_t index) {
         auto& task=s.tasks[index];
         s.rejected.erase(index);
-        task.dirty=false;task.visited.clear();task.required.clear();task.children.clear();
-        task.deferred=false;task.finishedPass=false;task.rejection.clear();task.parked.clear();
+        task.dirty=false;
+        // Refresh only the lifecycle/publication read scope. Semantic reads
+        // and continuations belong to the retained producer, not this scope.
+        task.dependencies.clear();task.evidence.clear();
         std::weak_ptr<Session> weak=s.weak_from_this();
         task.wake=std::make_shared<Dependency::Wake>([weak,index] {
             if(auto current=weak.lock()) Context<Node>::wakeTask(current,index);
         });
-        task.dependencies.clear();task.evidence.clear();
+        if(task.started && task.goal->persistent()) {
+            task.finishedPass=false;task.deferred=false;task.rejection.clear();
+            auto query=task.goal->request;
+            enqueue(s,index,0,{"continue deductions",{0,0},false,[query] {return query;}},{});
+            s.steps.push_back({"continue deductions",query,0,c.revision});
+            return;
+        }
+        task.visited.clear();task.required.clear();task.children.clear();task.demands.clear();task.references.clear();
+        task.deferred=false;task.finishedPass=false;task.rejection.clear();task.parked.clear();
+        if(!task.started) {task.goal->connect(*task.wake,c.broadChanges,c.untracked);task.started=true;}
         auto reads=observeTask(c,s,index);c.access->observeTask(task.goal->request);
         task.goal->beginPass();
         auto query=task.goal->request;
@@ -496,55 +526,36 @@ template<class Node> class GraphManager {
     }
     // A dirty parent's old outgoing demands cannot authorize work. Clean shared
     // children remain reusable if another current route reaches them. Parked
-    // work retains its price and sequence; abandoned branches cannot write.
+    // work retains its sequence; abandoned branches cannot write.
     static void activate(Context<Node>& c, Session& s, std::size_t first, Cost cost) {
         std::vector<typename Session::Task::Link> pending{{first,cost}};
         while(!pending.empty()) {
             auto link=pending.back();pending.pop_back();auto index=link.child;
             auto& task=s.tasks[index];
             if(!task.dirty && !task.rejection.empty()) {task.active=true;continue;}
-            if((!task.active && task.baseCost!=link.cost) || (task.active && link.cost<task.baseCost)) {
-                // A removed cheap route cannot subsidize later expensive work.
-                task.baseCost=link.cost;task.dirty=true;++task.generation;
-                if(task.active) {s.reconcile=true;s.prune=true;}
-            }
             if(task.active && !task.dirty) continue;
             task.active=true;
             if(task.dirty) resetTask(c,s,index);
             else {
                 for(auto& item:task.parked) if(item.generation==task.generation) s.frontier.push(std::move(item));
                 task.parked.clear();
-                pending.insert(pending.end(),task.children.begin(),task.children.end());
             }
+            // A resumed persistent producer keeps its demands. Reactivate
+            // their closure even when an ancestor temporarily detached it.
+            for(const auto& child:task.children) pending.push_back(child.second);
         }
     }
     static void reconcileTasks(Context<Node>& c, Session& s) {
-        // Ignore outgoing demands of dirty tasks. Reprice shared goals from
-        // surviving routes before scheduling any work; otherwise removal of a
-        // cheap parent could leave a stale discount on an expensive route.
-        std::map<std::size_t,Cost> reached;
-        bool repriced;
-        do {
-            reached.clear();reached[0]=0;
-            std::queue<std::size_t> pending;pending.push(0);
-            while(!pending.empty()) {
-                auto index=pending.front();pending.pop();
-                if(s.tasks[index].dirty) continue;
-                for(const auto& link:s.tasks[index].children) {
-                    auto old=reached.find(link.child);
-                    if(old==reached.end() || link.cost<old->second) {
-                        reached[link.child]=link.cost;pending.push(link.child);
-                    }
-                }
-            }
-            repriced=false;
-            for(const auto& entry:reached) {
-                auto& task=s.tasks[entry.first];
-                if(task.baseCost==entry.second || (!task.dirty && !task.rejection.empty())) continue;
-                task.baseCost=entry.second;task.dirty=true;++task.generation;
-                repriced |= !task.children.empty();
-            }
-        } while(repriced);
+        // Retain shared children reachable from current demands. Scheduling
+        // order has no bearing on reachability or semantic completion.
+        std::set<std::size_t> reached{0};
+        std::queue<std::size_t> pending;pending.push(0);
+        while(!pending.empty()) {
+            auto index=pending.front();pending.pop();
+            if(s.tasks[index].dirty && !s.tasks[index].goal->persistent()) continue;
+            for(const auto& link:s.tasks[index].children)
+                if(reached.insert(link.second.child).second) pending.push(link.second.child);
+        }
         for(std::size_t i=0;i<s.tasks.size();++i) {
             auto& task=s.tasks[i];task.active=reached.count(i);
             if(!task.active) continue;
@@ -682,7 +693,7 @@ template<class Node> class GraphManager {
             c.changed.notify_all();
             return;
         }
-        auto pending = s.frontier.top();
+        auto pending = s.frontier.front();
         s.frontier.pop();
         auto& task=s.tasks[pending.task];
         if (pending.generation != task.generation) return;
@@ -736,42 +747,49 @@ template<class Node> class GraphManager {
         if (!query.node) { s.tasks[pending.task].deferred = true; return; }
         auto& visited = s.tasks[pending.task].visited;
         auto previous = visited.find(query);
-        if (previous != visited.end() && previous->second <= pending.cost) return;
-        visited[query] = pending.cost;
+        if (!goal->persistent()) {
+            if (previous != visited.end()) return;
+            visited[query] = 0;
+        }
         if (goal->retainPath()) pending.path.push_back(query);
         s.steps.push_back({pending.edge.description, query, pending.cost, c.revision});
         Visit<Node> visit{query, pending.path, pending.cost};
         enqueueCommands(s,pending.task,visit,goal->found(visit));
         auto local = goal->expand(visit);
         auto expansion = local ? std::move(*local) : c.access->expand(query);
-        s.tasks[pending.task].deferred |= expansion.deferred;
+        if(goal->persistent()) s.tasks[pending.task].deferred=expansion.deferred;
+        else s.tasks[pending.task].deferred |= expansion.deferred;
         for (auto& edge : expansion.edges)
             enqueue(s, pending.task, pending.cost, std::move(edge), pending.path);
         for (const auto& refinement : expansion.refinements) {
-            if (refinement.alternative && refinement.pruneWhenSatisfied && goal->satisfied()) continue;
-            Cost cost = addCost(pending.cost, s.policy.estimate(refinement.work));
-            if (cost > s.policy.maximumRoute && refinement.alternative) {
-                s.steps.push_back({"exclude: " + refinement.description,
-                                   refinement.query, cost, c.revision});
-                continue;
+            if (!refinement.withdraw && refinement.alternative && refinement.pruneWhenSatisfied && goal->satisfied()) continue;
+            Cost cost = 0;
+            const auto existing=s.taskIndex.find(refinement.query);
+            if(refinement.withdraw && existing==s.taskIndex.end()) continue;
+            auto child=refinement.withdraw ? existing->second : startTask(c,s,c.access->goal(refinement.query),cost);
+            auto& parent=s.tasks[pending.task];
+            auto key=std::make_pair(refinement.owner,child);
+            auto old=parent.demands.find(key);
+            // Legacy owner zero accumulates demands for a whole pass. An
+            // optional route must not downgrade a required route already seen.
+            bool required=!refinement.alternative || (refinement.owner==0 &&
+                old!=parent.demands.end() && old->second);
+            if(old!=parent.demands.end()) {
+                auto& refs=parent.references[child];--refs.first;if(old->second) --refs.second;
+                parent.demands.erase(old);
             }
-            // Keep even an excluded required query as an obligation. Another
-            // route may reach that same subgoal cheaply enough to satisfy it.
-            s.steps.push_back({"subgoal: " + refinement.description,
-                               refinement.query, cost, c.revision});
-            auto child = startTask(c,s,c.access->goal(refinement.query),cost);
-            auto& children=s.tasks[pending.task].children;
-            auto link=std::find_if(children.begin(),children.end(),[child](const auto& item){return item.child==child;});
-            if(link==children.end()) children.push_back({child,cost});
-            else link->cost=std::min(link->cost,cost);
-            if (!refinement.alternative) {
-                auto& required = s.tasks[pending.task].required;
-                if (std::find(required.begin(), required.end(), child) == required.end())
-                    required.push_back(child);
-                if (!s.tasks[child].rejection.empty()) {
-                    reject(s,pending.task,s.tasks[child].rejection,pending.cost);
-                    return;
-                }
+            if(!refinement.withdraw) {
+                parent.demands[key]=required;
+                auto& refs=parent.references[child];++refs.first;if(required) ++refs.second;
+            }
+            auto refs=parent.references[child];
+            if(refs.first) parent.children[child]={child,0};
+            else {parent.children.erase(child);parent.references.erase(child);s.reconcile=s.prune=true;}
+            if(refs.second) parent.required.insert(child);else parent.required.erase(child);
+            s.steps.push_back({(refinement.withdraw ? "release subgoal: " : "subgoal: ")+refinement.description,
+                               refinement.query,0,c.revision});
+            if(refs.second && !s.tasks[child].rejection.empty()) {
+                reject(s,pending.task,s.tasks[child].rejection,0);return;
             }
         }
     }
@@ -924,3 +942,5 @@ public:
 };
 
 } // namespace proteus4
+
+#include "PersistentTraversal.h"

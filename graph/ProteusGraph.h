@@ -349,7 +349,7 @@ public:
             if (visit.query.kind == itemFound && !selected_) {
                 auto selected = visit.query.node;
                 return {{"Set selected POV", [this, selected] {
-                    selected_ = selected; return true;
+                    selected_ = selected; return SetResult{true,Changes::only({})};
                 }}};
             }
             return {};
@@ -626,22 +626,29 @@ public:
 class ProteusConcatGoal : public GoalSpec<POVNode> {
     std::shared_ptr<ProteusGraphAccess> access_;
     GraphConcatTerms terms_;
-    bool verified_ = false;
+    bool verified_ = false, reachedEnd_ = false;
 public:
     ProteusConcatGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access)
         : GoalSpec<POVNode>(query), access_(std::move(access)) {}
-    void beginPass() override { terms_.items.clear(); verified_ = false; }
+    void beginPass() override { terms_.items.clear(); verified_ = reachedEnd_ = false; }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
         if (visit.query.kind == concatMember) terms_.items.push_back(visit.query.node);
-        if (visit.query.kind != concatEnd) return {};
+        if (visit.query.kind == concatEnd) reachedEnd_ = true;
+        return {};
+    }
+    CommandBatch<POVNode> finishPass() override {
+        if (!reachedEnd_) return {};
+        // Drain operand discovery before publishing. A known contradiction
+        // rejects its required parent before any Set, while an open list can
+        // still contribute its available prefix without being fully normalized.
         auto plan = access_->planConcat(request.node, request.argument, terms_);
         if (!plan.valid) return {};
         verified_ = true;
         auto access = access_; auto owner = request.node; auto slot = request.argument;
         auto terms = terms_;
-        return {{"Set concatenation result", [access, owner, slot, terms] {
+        return {{request,{},0},{{"Set concatenation result", [access, owner, slot, terms] {
             return access->applyConcat(owner, slot, terms);
-        }, {plan.visits, plan.creations}}};
+        }, {plan.visits, plan.creations}}}};
     }
     bool satisfied() const override { return verified_; }
     bool symbolic() const override { return !verified_; }
@@ -854,7 +861,7 @@ public:
         if(query.kind==recordCorrespondence) return std::make_shared<ProteusRecordGoal>(query,access_,definitions_);
         if(query.kind==acquireListValue) return std::make_shared<ProteusListValueGoal>(query,access_,definitions_);
         if (query.kind==resolveWord || query.kind==externalField || query.kind==selectEnvironment)
-            return std::make_shared<ProteusPathGoal>(query,access_,definitions_,candidates_,[this](const Query<POVNode>& q){return expand(q);});
+            return std::make_shared<ProteusPathGoal>(query,access_,definitions_,candidates_,[this](const Query<POVNode>& q){observeTask(q);return expand(q);});
         if(query.kind==resolvePathExpression)
             return std::make_shared<ProteusPathExpressionGoal>(query,access_);
         if (query.kind==placeArgument || query.kind==resolveEndpoint)
@@ -864,7 +871,7 @@ public:
         if (query.kind == projectField)
             return std::make_shared<ProteusProjectionGoal>(query, access_, definitions_);
         if (query.kind == selectField || query.kind == selectPosition || query.kind == selectSelf || query.kind == filterChoice)
-            return std::make_shared<ProteusPathGoal>(query,access_,definitions_,candidates_,[this](const Query<POVNode>& q){return expand(q);});
+            return std::make_shared<ProteusPathGoal>(query,access_,definitions_,candidates_,[this](const Query<POVNode>& q){observeTask(q);return expand(q);});
         if (query.kind == sequenceCorrespondence)
             return std::make_shared<ProteusSequenceGoal>(query, access_, definitions_, completion_);
         if (query.kind == selectRelative)
@@ -976,6 +983,8 @@ private:
         if ((query.kind == itemAt || query.kind == physicalItemAt) && access_->inputPending(node)) {
             result.deferred = true; return result;
         }
+        if(query.kind==itemFound && access_->occurrenceOwner(node))
+            result.refinements.push_back({{node,typeRequirements,0},{0,0},"apply selected occurrence requirements",false});
         if (query.kind == itemFound || query.kind == listEnd || query.kind == correspondenceEnd || query.kind == concatEnd || query.kind == selectionFound)
             return result;
         if (query.kind == selectIntersection) {
