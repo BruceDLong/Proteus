@@ -135,6 +135,7 @@ struct WorldScalar {
     me bool: contentsComplete <- true
     me bool: representable <- true
     me bool: dischargeListSpec <- false
+    me bool: openTail <- false
     our WorldList: sequence
     me bool: hasRange <- false
     me FlexNum: lower
@@ -178,6 +179,7 @@ struct WorldFrame {
     me bool: pairedEmbedded <- false
     me bool: applyingListSpec <- false
     me bool: ownsRightCursor <- false
+    me bool: extendingTail <- false
     our WorldFrame: pairedMember
     our WorldList: pairedSequence
     their POV: expressionParent
@@ -216,6 +218,7 @@ struct WorldPublication {
     our POV: target
     our WorldFrame: frame
     our infonState: newList
+    our infonState: appendedList
 }
 struct WorldRequest {
     our WorldControl: control
@@ -230,6 +233,7 @@ struct WorldRequest {
     me uint64: publications <- 0
     me uint64: memberPairs <- 0
     me uint64: templateApplications <- 0
+    me uint64: tailMembers <- 0
     me uint64: sequenceVisits <- 0
     me uint64: publishedTextBytes <- 0
     me uint64: publishedTextNodes <- 0
@@ -322,6 +326,9 @@ struct WorldPOVGraph {
         if(facts.overlay!=LST or !facts.hasValue){
             frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Embedded member needs a closed list"; return(false)
         }
+        if(facts.openTail){
+            frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Embedded open spans need alignment"; return(false)
+        }
         if(facts.outcome!=worldReady or !facts.hasSize or facts.size!=FlexNum(sequenceLength(facts.sequence))){
             frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Embedded list extent is unresolved"; return(false)
         }
@@ -337,7 +344,7 @@ struct WorldPOVGraph {
             frame!.node!.pItem!.value!.evalMode==emLiteral)
     }
     me bool: completeFacts(me WorldScalar: facts, me bool: requireSize) <- {
-        return(facts.outcome==worldReady and !facts.negative and facts.hasValue and facts.contentsComplete and
+        return(facts.outcome==worldReady and !facts.negative and !facts.openTail and facts.hasValue and facts.contentsComplete and
             ((!requireSize and facts.overlay==NUM) or facts.hasSize) and
             (facts.overlay!=LST or facts.size==FlexNum(sequenceLength(facts.sequence))))
     }
@@ -369,7 +376,7 @@ struct WorldPOVGraph {
         }
         me bool: expression <- item!.value!.evalMode==emConcat
         if(!expression and item!.value!.overlayType==LST and
-           (item!.value!.evalMode!=emLiteral or item!.value!.tailUnfinished or
+           (item!.value!.evalMode!=emLiteral or
             item!.value!.timelike or item!.orderMode==uUnordered or item!.invertMatch)){
             facts.outcome <- worldUnsupported; facts.detail <- "List needs correspondence or template semantics"; return(facts)
         }
@@ -411,6 +418,7 @@ struct WorldPOVGraph {
             Allocate(facts.textSource); facts.textSource!.source <- item!.value
             facts.textLength <- item!.value!.str.size()
         }
+        facts.openTail <- facts.overlay==LST and item!.value!.tailUnfinished
         facts.negative <- item!.invertMatch
         facts.extentApplied <- item!.value!.numericExtentApplied
         facts.applyExtent()
@@ -443,7 +451,8 @@ struct WorldPOVGraph {
                 frame!.nextOperand <- slot!.items.head
                 // A finite template is read once, then projected into each member.
                 // Empty closed lists need no template evaluation.
-                if(memberSequence(frame) and slot!.listSpec!=NULL and frame!.nextOperand!=NULL){
+                if(memberSequence(frame) and slot!.listSpec!=NULL and
+                   (frame!.nextOperand!=NULL or (frame!.facts.openTail and !(frame!.facts.hasSize and frame!.facts.size==0)))){
                     Allocate(frame!.listSpecEdge, 934); frame!.listSpecEdge!.pItem <- slot!.listSpec
                     frame!.sourceIsOperand <- false; frame!.sourceIsListSpec <- true
                     return(frame!.listSpecEdge)
@@ -489,6 +498,9 @@ struct WorldPOVGraph {
         }
         if(left.overlay==NUM and right.overlay==NUM){return(appendNumber(left, right, additive))}
         if(left.overlay==LST and right.overlay==LST and !left.negative and !right.negative){
+            if(left.openTail or right.openTail){
+                left.outcome <- worldUnsupported; left.detail <- "Open list concatenation needs span alignment"; return(left)
+            }
             if((left.hasSize and left.size!=FlexNum(sequenceLength(left.sequence))) or
                (right.hasSize and right.size!=FlexNum(sequenceLength(right.sequence)))){
                 left.outcome <- worldPartial; left.detail <- "List operand endpoint needs span alignment"; return(left)
@@ -520,10 +532,13 @@ struct WorldPOVGraph {
 
     void: finishExpression(our WorldFrame: frame) <- {
         if(memberSequence(frame)){
-            if(!frame!.facts.hasSize and !frame!.facts.explicitSize){
+            if(frame!.facts.openTail and frame!.facts.hasSize and frame!.facts.size==FlexNum(frame!.operandsRead)){
+                frame!.facts.openTail <- false
+            }
+            if(!frame!.facts.openTail and !frame!.facts.hasSize and !frame!.facts.explicitSize){
                 frame!.facts.hasSize <- true; frame!.facts.size <- frame!.operandsRead
             }
-            frame!.facts.dischargeListSpec <- frame!.facts.representable
+            frame!.facts.dischargeListSpec <- frame!.facts.representable and !frame!.facts.openTail
             return()
         }
         me WorldScalar: expression <- frame!.expression
@@ -667,10 +682,17 @@ struct WorldPOVGraph {
         if((left.overlay>=0 and left.overlay!=LST) or (right.overlay>=0 and right.overlay!=LST)){
             left.outcome <- worldRejected; left.detail <- "Incompatible list types"; return(left)
         }
+        if(right.openTail){
+            left.outcome <- worldUnsupported; left.detail <- "Open source correspondence needs span alignment"; return(left)
+        }
+        if(left.openTail and (!right.hasValue or !right.hasSize)){
+            left.outcome <- worldPartial; left.detail <- "Tail closure needs a closed source endpoint"; return(left)
+        }
         if((left.hasSize and right.hasSize and left.size!=right.size) or
-           (left.hasValue and left.hasSize and left.size!=FlexNum(sequenceLength(left.sequence))) or
+           (left.hasValue and !left.openTail and left.hasSize and left.size!=FlexNum(sequenceLength(left.sequence))) or
            (right.hasValue and right.hasSize and right.size!=FlexNum(sequenceLength(right.sequence))) or
-           (left.hasValue and right.hasValue and sequenceLength(left.sequence)!=sequenceLength(right.sequence)) or
+           (left.hasValue and right.hasValue and ((!left.openTail and sequenceLength(left.sequence)!=sequenceLength(right.sequence)) or
+               (left.openTail and sequenceLength(left.sequence)>sequenceLength(right.sequence)))) or
            (!left.hasValue and left.hasSize and right.hasValue and left.size!=FlexNum(sequenceLength(right.sequence)))){
             left.outcome <- worldPartial; left.detail <- "List endpoints need span alignment"; return(left)
         }
@@ -789,6 +811,7 @@ struct WorldPOVGraph {
             frame!.facts <- merge(left, frame!.prerequisite!.facts, frame!.sourceEdge)
             if(frame!.facts.outcome==worldReady and left.overlay==LST and left.hasValue and
                frame!.prerequisite!.facts.overlay==LST and frame!.prerequisite!.facts.hasValue){
+                frame!.extendingTail <- left.openTail
                 beginCorrespondence(frame)
                 Allocate(frame!.rightMembers); frame!.ownsRightCursor <- true
                 frame!.rightMembers!.push(frame!.prerequisite!.facts.sequence)
@@ -849,6 +872,9 @@ struct WorldPOVGraph {
             if(facts.overlay==LST and facts.hasValue){
                 our infonState: body <- job.target!.pItem!.value
                 me bool: existing <- body!.overlayType==LST and body!.evalMode==emLiteral
+                if(!existing and facts.openTail){
+                    request!.outcome <- worldUnsupported; request!.detail <- "Copying an open list needs its future member requirements"; return()
+                }
                 if(!existing and !facts.representable){
                     request!.outcome <- worldPartial; request!.detail <- "List result still has unresolved member work"; return()
                 }
@@ -862,13 +888,21 @@ struct WorldPOVGraph {
                 me WorldMember: occurrence <- members.nextMember(false)
                 while(occurrence.frame!=NULL){
                     our WorldFrame: member <- occurrence.frame
-                    if(!existing){
+                    if(!existing or targetMember==NULL){
+                        if(member!.facts.outcome!=worldReady or !member!.facts.representable){
+                            request!.outcome <- worldPartial; request!.detail <- "New member still has unresolved work"; return()
+                        }
+                        our infonState: destination <- body
+                        if(existing){
+                            if(job.appendedList==NULL){Allocate(job.appendedList)}
+                            destination <- job.appendedList
+                        }
                         our infonView:: item
                         item!.viewMode <- vmAny; item!.itmMode <- mItem; item!.streamState <- parseDone
                         item!.infSize!.overlayType <- NUM; item!.infSize!.evalMode <- emUnknown
                         item!.value!.evalMode <- emUnknown; item!.value!.overlayType <- tUnknown
                         item!.orderMode <- member!.node!.pItem!.orderMode
-                        targetMember <- body!.items.append(item, occurrence.embedded, 933); targetMember!.pParent <- job.target
+                        targetMember <- destination!.items.append(item, occurrence.embedded, 933); targetMember!.pParent <- job.target
                     }
                     me WorldPublication: child; child.target <- targetMember; child.frame <- member; pending.append(child)
                     if(existing){targetMember <- targetMember!.next}
@@ -886,7 +920,17 @@ struct WorldPOVGraph {
         our infonView: item <- job.target!.pItem
         me WorldScalar: facts <- frame!.facts
         if(job.newList!=NULL){item!.value <- job.newList}
-        if(facts.overlay==LST and facts.dischargeListSpec and facts.hasSize and
+        // Detached suffixes join the target only after every destination has
+        // passed publication checks, preserving the original prefix POVs.
+        if(job.appendedList!=NULL){
+            our POV: member <- job.appendedList!.items.head
+            while(member!=NULL){
+                our POV: next <- member!.next
+                item!.value!.items.appendPov(member); member <- next
+            }
+        }
+        if(facts.overlay==LST){item!.value!.tailUnfinished <- facts.openTail}
+        if(facts.overlay==LST and !facts.openTail and facts.dischargeListSpec and facts.hasSize and
            facts.size==FlexNum(sequenceLength(facts.sequence))){item!.value!.listSpec <- NULL}
         // An unresolved expression is still the representation of its partial
         // result. Type evidence alone must not turn its body into 0 or ''.
@@ -1031,6 +1075,7 @@ struct WorldManager {
         our WorldFrame:: pair
         pair!.node <- left!.node; pair!.facts <- left!.facts
         pair!.retainedWork <- left!.retainedWork
+        pair!.listSpecFrame <- left!.listSpecFrame; pair!.listSpecEdge <- left!.listSpecEdge
         pair!.bodyBounds <- left!.bodyBounds; pair!.bodyHasSize <- left!.bodyHasSize; pair!.bodySize <- left!.bodySize
         pair!.initialized <- true; pair!.projected <- true
         request!.framesCreated <+- 1
@@ -1057,6 +1102,22 @@ struct WorldManager {
             frame!.pairedMember <- NULL
         }
         me WorldMember: left <- frame!.leftMembers.nextMember(false)
+        if(left.frame==NULL and frame!.extendingTail){
+            // The closed source proved the extent. Continue its cursor for
+            // the unique remainder; never enumerate from a declared size.
+            our WorldFrame: member <- frame!.rightMembers!.next()
+            if(member!=NULL){
+                frame!.pairedEmbedded <- false; request!.tailMembers <+- 1
+                frame!.pairedMember <- member
+                if(frame!.listSpecFrame!=NULL){
+                    frame!.pairedMember <- derivePair(request, member, frame!.listSpecFrame, frame!.listSpecEdge)
+                    request!.templateApplications <+- 1; request!.ready.append(frame!.pairedMember)
+                }
+                return()
+            }
+            frame!.extendingTail <- false; frame!.facts.openTail <- false
+            frame!.facts.dischargeListSpec <- frame!.facts.representable
+        }
         if(left.frame==NULL){
             frame!.facts.sequence <- frame!.pairedSequence; frame!.pairedSequence <- NULL
             if(!frame!.projected and !frame!.facts.representable){frame!.retainedWork.append(frame!.sourceEdge)}

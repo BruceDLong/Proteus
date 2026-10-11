@@ -39,8 +39,9 @@ Scope and tests
 ---------------
 
 The engine supports the scalar/expression cases, closed ordered-list composition,
-finite context-free listSpecs, closed embedded spans and local parser-completion continuation listed in
-the design status. Sparse/general list, definition, intersection, temporal and
+finite context-free listSpecs, closed embedded spans, finite open-tail closure
+and local parser-completion continuation listed in the design status. General
+sparse alignment, definition, intersection, temporal and
 effect semantics remain unsupported. Stream ownership and shutdown use the new
 path; general streamed list propagation and other link arrivals remain later work.
 An unsupported result must never be replaced with output from the old solver.
