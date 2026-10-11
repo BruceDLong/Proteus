@@ -1,3 +1,26 @@
+Normalizer redesign branch
+-------------------------
+
+The user approved a fresh solver on `codex/normalizer-redesign` in a separate
+worktree on 2026-10-11. The original `codex/proteus4` checkout at
+`/home/bruce/devl/Proteus4` retains checkpoint `b52322a867d2be2c1fda186929b05dc0c70e8be4`,
+including the pending source changes, tests, design documents, and diagnostics.
+Use `/home/bruce/devl/Proteus4-redesign` for replacement work.
+
+The accepted design is in [graph/normalization-design.md](graph/normalization-design.md);
+record choices and reasons in [graph/normalization-design-decisions.md](graph/normalization-design-decisions.md).
+These later decisions supersede conflicting implementation guidance below:
+WorldManager in WorldManager.dog owns the complete reasoning interface;
+CodeDog is the maintained source; live goals continue locally without reset;
+and ordinary numeric normalization can finish with unknown size under D02F.
+Planning remains deferred until intersections and definitions are considered.
+
+Build the replacement behind that interface. Reuse parser, POV storage, printing,
+and semantic tests where their contracts fit; assess existing solver internals
+individually. The remaining notes describe the checkpoint implementation and
+retained semantics, not a requirement to reproduce its architecture. This branch
+initially contains that implementation; creating the branch does not replace it.
+
 Proteus4 development
 --------------------
 

@@ -2,7 +2,7 @@
 
 The design discussion proceeds from the meaning of normalize and its solving loop through lists, intersections, definitions, and rules. Each choice must explain its streaming behavior, computational cost, alternatives, and justification. Semantics should be expressed through graph relationships, with optimizations justified by theorems.
 
-This is the issue agenda and decision history. The companion [consolidated design](/home/bruce/devl/Proteus4/graph/normalization-design.md) contains the resulting contract. The [framework audit](/home/bruce/devl/Proteus4/graph/normalization-framework-audit.md) supplies implementation evidence and proposals; its recommendations are not automatically accepted decisions.
+This is the issue agenda and decision history. The companion [consolidated design](normalization-design.md) contains the resulting contract. The [framework audit](/home/bruce/devl/Proteus4/graph/normalization-framework-audit.md) supplies implementation evidence and proposals; its recommendations are not automatically accepted decisions.
 
 Created 2026-10-10; updated 2026-10-11. Current issue: **D03, list correspondence, expansion scope, and shared span propagation**. D02 establishes directed acquisition, completion, and continuation without restart. Exact leaf and list interfaces remain under discussion, followed by intersections and definitions. D01 planning design is deferred until intersections and definitions have been considered. Develop the request contract alongside those examples. “T-rules” covers both theorem/transformation rules and temporal/T-list rules, as clarified in this discussion.
 
@@ -316,6 +316,16 @@ Two development options remain available: improve CodeDog or its build workflow 
 **Accepted architecture boundary, reaffirmed 2026-10-10.** The solver reads and writes POVs through an interface presenting a virtual graph. WorldManager remains the complete external reasoning interface (G03); this is the semantic access boundary inside the implementation. Reads expose usable relationships and pending links; writes apply semantic results and consolidate fully merged RHS work. A second materialized copy of the model graph is not required.
 
 **Reason:** separate the storage representation from reasoning routes, permit useful intermediates to be skipped, and support directions beyond hard-coded forward copying. Nesting, qualification, and context remain properties of the exposed relationships. Exact operations are still to be specified; accepting the boundary does not claim every edge is an unqualified identity or every write is a scalar copy.
+
+### G06 Separate branch and worktree for the replacement
+
+**Accepted, 2026-10-11.** Develop the replacement on `codex/normalizer-redesign` in `/home/bruce/devl/Proteus4-redesign`, within the existing Proteus4 repository. Keep the project named Proteus4. Checkpoint `b52322a867d2be2c1fda186929b05dc0c70e8be4` on `codex/proteus4` preserves the prior working state, including source changes, regression tests, this design discussion, and diagnostic evidence. The original checkout remains at `/home/bruce/devl/Proteus4`.
+
+**Reason and alternatives:** a separate worktree keeps the reference implementation available for comparisons while the branch permits replacing the solver and retiring superseded code. A separate repository fork is unnecessary for this continuing project and would complicate shared history and comparisons. Preserve parser, POV storage, printing, and tests where their contracts fit; do not adopt existing solver machinery merely because it is present in the starting checkout.
+
+**Implementation boundary:** the new solver follows G03–G05: the complete reasoning interface is WorldManager, CodeDog is maintained source, and POV access presents a virtual graph. Branch creation does not itself replace the runtime. Exact interfaces and the unresolved semantic cases remain on the existing agenda. The initial branch setup changes only development guidance and design documents; no replacement solver is implemented by it.
+
+**Validation and cost:** both checkouts were verified against a manifest of the checkpoint's file contents, modes, symlinks, and deletions. Saved diagnostic logs are included. Generated builds stay in the original checkout; the replacement uses separate build output and the same external public-world resource link. No normalization complexity or performance change is claimed from repository isolation.
 
 ### B01 Existing semantic constraints
 

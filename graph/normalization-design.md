@@ -1,6 +1,6 @@
 # Proteus4 normalization design
 
-Proteus4 represents semantics through graph relationships and justifies semantic optimizations through theorems. This specification consolidates settled choices for normalization. The [issues and decision log](/home/bruce/devl/Proteus4/graph/normalization-design-decisions.md) holds alternatives, reasons, evidence, and unresolved questions.
+Proteus4 represents semantics through graph relationships and justifies semantic optimizations through theorems. This specification consolidates settled choices for normalization. The [issues and decision log](normalization-design-decisions.md) holds alternatives, reasons, evidence, and unresolved questions.
 
 Status on 2026-10-11: the WorldManager and virtual graph boundaries, CodeDog policy, core D02 lifecycle, and D03 list principles below are settled. Goals acquire requested facts, stop when satisfied, and continue at waiting links without restart. List scope and shared propagation are specified; exact graph operations, matching records, and subsequent intersection/definition/rule composition remain open. Planning design stays deferred until intersections and definitions have been considered. The [architecture audit](/home/bruce/devl/Proteus4/graph/normalization-framework-audit.md) remains supporting evidence and a source of proposals.
 
@@ -9,6 +9,12 @@ Status on 2026-10-11: the WorldManager and virtual graph boundaries, CodeDog pol
 Semantic relationships must compose through the reasoning framework. A justified optimization may provide a cheaper way to establish the same result, with its premises and validity explicit. Native algorithms may still be needed; their boundary with graph-expressed rules is to be settled. Merely consolidating implementation classes does not establish this capability. See decision G01 and issues D06–D09.
 
 Streaming behavior and computational cost are part of every operation's contract. Complexity statements identify the workload, relevant graph size, virtual extent, candidate count, changes, and output. They distinguish initial work from incremental updates and memory retention. No general linear-time claim is made for arbitrary inference.
+
+## Replacement development
+
+Develop the new solver on `codex/normalizer-redesign` in `/home/bruce/devl/Proteus4-redesign`, within the Proteus4 repository. The original checkout at `/home/bruce/devl/Proteus4` retains checkpoint `b52322a867d2be2c1fda186929b05dc0c70e8be4` on `codex/proteus4` as the implementation and diagnostic reference. See G06.
+
+Build the replacement behind WorldManager in CodeDog. Reuse the parser, POV storage, printing, and semantic tests where their contracts fit; assess solver internals individually. The new branch starts with the checkpoint implementation. Its initial setup records this direction without changing runtime behavior or settling the remaining design questions. Build outputs are separate; public-world resources remain an external shared input.
 
 ## WorldManager reasoning interface
 
