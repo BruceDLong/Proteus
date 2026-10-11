@@ -232,6 +232,7 @@ struct WorldFrame {
     me bool: bodyHasSize <- false
     me FlexNum: bodySize
     me List<our POV>: retainedWork
+    me bool: retainSource <- false
     our POV: sourceEdge
     our WorldFrame: prerequisite
 }
@@ -961,12 +962,18 @@ struct WorldPOVGraph {
             me bool: scalarExpression <- supplied!.value!.evalMode==emConcat and frame!.prerequisite!.retainedWork.isEmpty() and
                 (frame!.prerequisite!.facts.overlay==NUM or frame!.prerequisite!.facts.overlay==STR) and
                 (frame!.prerequisite!.facts.hasValue or frame!.prerequisite!.facts.hasRange)
-            me bool: listSource <- frame!.prerequisite!.facts.overlay==LST and completeFacts(frame!.prerequisite!.facts, false)
-            if(!frame!.projected and !listSource and !scalarExpression and (!supplied!.wrkList.isEmpty() or
-               (supplied!.value!.evalMode!=emLiteral and supplied!.value!.evalMode!=emUnknown) or
-               !frame!.prerequisite!.facts.representable)){
-                frame!.retainedWork.append(frame!.sourceEdge)
-            }
+            // Checked list facts include explicit unknowns and ranges. The
+            // merge has checked their endpoint; correspondence retains this
+            // edge below if those facts cannot be represented in the target.
+            me bool: listSource <- frame!.prerequisite!.facts.overlay==LST and frame!.prerequisite!.facts.hasValue and
+                frame!.prerequisite!.facts.hasSize and !openLayout(frame!.prerequisite!.facts) and
+                representableFacts(frame!.prerequisite!.facts)
+            frame!.retainSource <- !listSource and !scalarExpression and (!supplied!.wrkList.isEmpty() or
+                (supplied!.value!.evalMode!=emLiteral and supplied!.value!.evalMode!=emUnknown) or
+                !frame!.prerequisite!.facts.representable)
+            // A corresponding list makes one retention decision after member
+            // work returns, including any unresolved obligations it discovers.
+            if(!frame!.projected and !frame!.corresponding and frame!.retainSource){frame!.retainedWork.append(frame!.sourceEdge)}
         }
         frame!.prerequisite <- NULL
     }
@@ -1297,7 +1304,9 @@ struct WorldManager {
                 request!.outcome <- worldError; request!.detail <- "Correspondence source ended before its checked extent"; return()
             }
             frame!.facts.dischargeListSpec <- frame!.facts.representable and !graph.openLayout(frame!.facts)
-            if(!frame!.projected and !frame!.applyingListSpec and !frame!.facts.representable){frame!.retainedWork.append(frame!.sourceEdge)}
+            if(!frame!.projected and !frame!.applyingListSpec and (frame!.retainSource or !frame!.facts.representable)){
+                frame!.retainedWork.append(frame!.sourceEdge)
+            }
             request!.sequenceVisits <+- frame!.leftMembers.visits
             if(frame!.ownsRightCursor){request!.sequenceVisits <+- frame!.rightMembers!.visits}
             frame!.leftMembers <- WorldListCursor(); frame!.rightMembers <- NULL; frame!.ownsRightCursor <- false

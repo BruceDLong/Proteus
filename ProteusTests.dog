@@ -15,6 +15,7 @@ TestsToRun = `
     unit/worldManager/spanRequirements
     unit/worldManager/requirementTraversal
     unit/worldManager/pendingComparisons
+    unit/worldManager/listDischarge
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -6905,9 +6906,8 @@ struct GLOBAL {
             {"{5| &{_ ...}} = {5 6}","",worldRejected},
             {"{*10+_| &{7| ...}} = {7 7} = {7 8}","",worldRejected},
             {"{*10+_| &{7| ...}} = {_ _} = {7 7}","{&{*10+7 *10+7}}",worldComplete},
-            // Existing consolidation retains an unresolved RHS expression even
-            // when its corresponding target members are complete.
-            {"{*10+_| &{7| ...}} = ({_} {_})","{&{*10+7 *10+7}} = ({_} {_})",worldComplete},
+            // All represented source facts have merged into the target.
+            {"{*10+_| &{7| ...}} = ({_} {_})","{&{*10+7 *10+7}}",worldComplete},
             {"{5| &{...}} = {_ ...}","",worldUnsupported},
             {"{_ _} = {5| &{...}}","",worldUnsupported},
             {"? = {5| &{...}}","",worldUnsupported},
@@ -7185,5 +7185,83 @@ struct GLOBAL {
         auto grouped=parse("_ = (_ = !5) = 7");auto g=agent.normalize(grouped);
         check(g->outcome==worldPartial && g->publications==0,"unresolved source grouping never lends unchecked facts to its consumer");
         core.deInit();std::cout<<"PENDING_COMPARISON_CHECKS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_listDischarge(me string: tname) <- {
+        if(!worldManagerListDischargeChecks()){FAIL("List discharge checks failed")}
+    }
+    me bool: worldManagerListDischargeChecks() <- <%{
+        ProteusCore core;core.init("",false);auto& agent=*core.agent;auto& manager=agent.worldManager;
+        int checks=0,failures=0;
+        auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+        auto parse=[&](const std::string& text){auto p=manager.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+        struct Case{std::string input,expected;int outcome;};
+        const Case cases[]={
+            {"{7 8} = ({_} {_})","{7 8}",worldComplete},
+            {"{_ _} = ({_} {2})","{_ 2}",worldPartial},
+            {"{_ _} = ({_} {2}) = {1 _}","{1 2}",worldComplete},
+            {"{?} = ({(*3+_ +2)})","{(*3+_ +2)}",worldPartial},
+            {"{7} = ({!5})","{7}",worldComplete},
+            {"? = ({!5})","{!5}",worldPartial},
+            {"{...} = ({!5})","{!5}",worldPartial},
+            {"? = ({?} {(*3+_ +2)})","{? (*3+_ +2)}",worldPartial},
+            {"{? ?} = ({{_}} {{2}})","{{_} {2}}",worldPartial},
+            {"{*10+_| &{7| ...}} = ({_} {_})","{&{*10+7 *10+7}}",worldComplete},
+            {"{7| &{!5| ...}} = ({_} {_})","{&{7 7}}",worldComplete},
+            {"{7} = ({_}) = ({!5})","{7}",worldComplete},
+            {"{5} = ({!5})","",worldRejected},
+            {"{7} = ({_}) = ({5})","",worldRejected},
+            {"{_ _} = ({_})","",worldPartial},
+            {"{_} = (*2+{_})","",worldPartial},
+            {"{_} == ({_})","",worldUnsupported},
+            {"{_} = ({_ ...})","",worldUnsupported},
+            {"? = ({(2 +_)})","",worldPartial},
+            {"{_} = ({_ = !5})","",worldPartial},
+            {"{(2 +_) _} = ({5} {6})","{(2 +_) 6} = ({5} {6})",worldPartial},
+            {"{!5} = (*_+{_})","{!5} = (*_+{_})",worldPartial},
+            {"{(2 +_)} = (*_+{_})","{(2 +_)} = (*_+{_})",worldPartial},
+            {"{_} = {_ = !5}","{_} = {_ = !5}",worldPartial},
+            {"{7} = (*_+{_})","{7} = (*_+{_})",worldComplete},
+            {"{_} = ({!5})","{_} = ({!5})",worldPartial}
+        };
+        for(const auto& c:cases){
+            auto root=parse(c.input);if(!root)continue;auto before=toString(root->pItem.get());
+            auto body=root->pItem->value;auto first=body->items.head;
+            bool literal=getModeBits(body->flags,infonState::evalMode)==infonState::emLiteral;
+            std::vector<std::pair<std::shared_ptr<POV>,std::string>> sources;
+            for(auto rhs:root->pItem->wrkList)sources.push_back({rhs,toString(rhs->pItem.get())});
+            auto h=agent.normalize(root);auto actual=toString(root->pItem.get());
+            check(h->outcome==c.outcome,c.input+" outcome "+std::to_string(h->outcome)+": "+h->detail);
+            check(actual==(c.expected.empty()?before:c.expected),c.input+" output "+actual);
+            bool unchanged=true;for(const auto& src:sources)unchanged &= toString(src.first->pItem.get())==src.second;
+            check(unchanged,c.input+" keeps source expressions unchanged");
+            if(literal)check(root->pItem->value==body && (!first || body->items.head==first),c.input+" preserves target occurrences");
+            if(c.expected.empty())check(h->publications==0,c.input+" does not publish unresolved or rejected adoption");
+            if(c.outcome==worldComplete){auto repeat=agent.normalize(root);check(repeat->complete() && repeat->framesCreated==0,c.input+" completed result creates no goals");}
+        }
+        for(const auto& input:{"{!5} = (*_+{_})", "{(2 +_)} = (*_+{_})", "{_} = {_ = !5}"}){
+            auto root=parse(input);auto original=root->pItem->wrkList.front();auto before=toString(root->pItem.get());
+            for(int i=0;i<3;++i){auto h=agent.normalize(root);check(h->outcome==worldPartial && root->pItem->wrkList.size()==1 && root->pItem->wrkList.front()==original && toString(root->pItem.get())==before,"unresolved source is retained once across repeated requests");}
+        }
+        for(int n:{32,64,128}){
+            std::string lhs="{|",rhs="({|";for(int i=0;i<n;++i){lhs+=" _";if(i==n/2)rhs+="} {|";rhs+=" _";}lhs+="}";rhs+="})";
+            auto root=parse(lhs+" = "+rhs);auto source=root->pItem->wrkList[0];auto first=root->pItem->value->items.head;auto h=agent.normalize(root);
+            check(h->outcome==worldPartial && root->pItem->wrkList.empty() && h->memberPairs==static_cast<unsigned>(n) && h->framesCreated<=static_cast<unsigned>(3*n+5) && h->sequenceVisits<=static_cast<unsigned>(n+8),"partial represented list discharges its source in one correspondence walk");
+            auto repeat=agent.normalize(root);
+            check(repeat->outcome==worldPartial && repeat->memberPairs==0 && repeat->relationshipsRead==static_cast<unsigned>(n) && repeat->framesCreated==static_cast<unsigned>(n+1) && first==root->pItem->value->items.head,"partial repeat only inspects stored members, not the old source expression");
+            std::cout<<"LIST_DISCHARGE: "<<n<<" members, "<<h->framesCreated<<" frames, "<<h->sequenceVisits<<" sequence visits; repeat "<<repeat->framesCreated<<" frames\n";
+        }
+        for(bool cancel:{false,true}){
+            auto root=parse("{7 8} = ({_} {?})");auto source=root->pItem->wrkList[0];auto waiting=source->pItem->value->items.tail->pItem->value->items.head->pItem;
+            manager.prepareInput(waiting);auto h=agent.normalize(root);auto edges=h->relationshipsRead;
+            check(h->outcome==worldWaiting && h->publications==0 && root->pItem->wrkList.size()==1,"source expression waits before discharge");
+            if(cancel)h->cancel();
+            ProteusParser parser(&core,true,0);parser.initParseFromString("list discharge","_");parser.doParse(waiting);
+            check(cancel ? h->outcome==worldCancelled && h->publications==0 && root->pItem->wrkList.size()==1 :
+                h->complete() && h->relationshipsRead==edges && root->pItem->wrkList.empty() && toString(root->pItem.get())=="{7 8}","arrival discharges once; cancellation retains the relationship");
+        }
+        core.deInit();std::cout<<"LIST_DISCHARGE_CHECKS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }
