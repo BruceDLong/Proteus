@@ -16,6 +16,7 @@ TestsToRun = `
     unit/worldManager/requirementTraversal
     unit/worldManager/pendingComparisons
     unit/worldManager/listDischarge
+    unit/worldManager/openAdoption
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -3661,7 +3662,9 @@ struct GLOBAL {
     void: unit_graphFoundation_expressions_computedSize(me string: testName) <- {
         if(!worldManagerComputedSizePort(false)){FAIL("Computed size port failed")}
     }
-    PENDING_ENGINE_TEST(unit/graphFoundation/expressions/computedListSize)
+    void: unit_graphFoundation_expressions_computedListSize(me string: tname) <- {
+        if(!worldManagerCompositionPort(28)){FAIL("List composition port failed")}
+    }
     void: unit_graphFoundation_expressions_strings(me string: testName) <- {
         if(!worldManagerStringPort(0)){FAIL("String expression port failed")}
     }
@@ -3699,7 +3702,9 @@ struct GLOBAL {
     void: unit_graphFoundation_adoption_empty(me string: testName) <- {
         if(!worldManagerCompositionPort(32)){FAIL("List composition port failed")}
     }
-    PENDING_ENGINE_TEST(unit/graphFoundation/adoption/open)
+    void: unit_graphFoundation_adoption_open(me string: tname) <- {
+        if(!worldManagerCompositionPort(33)){FAIL("List composition port failed")}
+    }
     void: unit_graphFoundation_adoption_nested(me string: testName) <- {
         if(!worldManagerCompositionPort(34)){FAIL("List composition port failed")}
     }
@@ -3708,7 +3713,9 @@ struct GLOBAL {
     }
     PENDING_ENGINE_TEST(unit/graphFoundation/adoption/registry)
     PENDING_ENGINE_TEST(unit/graphFoundation/adoption/subscription)
-    PENDING_ENGINE_TEST(unit/graphFoundation/adoption/billion)
+    void: unit_graphFoundation_adoption_billion(me string: tname) <- {
+        if(!worldManagerCompositionPort(38)){FAIL("List composition port failed")}
+    }
     PENDING_ENGINE_TEST(unit/graphFoundation/adoption/cost)
     void: unit_graphFoundation_adoption_knownTargetThroughUnknown(me string: testName) <- {
         if(!worldManagerCompositionPort(40)){FAIL("List composition port failed")}
@@ -6088,6 +6095,9 @@ struct GLOBAL {
             case 20:input="{*_+_} = {*10+_} = {*_+7}";break;
             case 26:input="({*10+1 *10+2} {} {*10+3})";break;
             case 27:input="(({*10+1} ({} {*10+2})))";break;
+            case 28:input="*(3)+{...} = {*10+1 *10+2 *10+3}";break;
+            case 33:input="? = {*10+1 ...}";break;
+            case 38:input="? = *1000000000+{...}";break;
             case 31:input="? = {*10+1 *10+2}";break;
             case 32:input="? = {}";break;
             case 34:input="? = {{*10+7} *10+8}";break;
@@ -6107,7 +6117,13 @@ struct GLOBAL {
         auto source=root->pItem->wrkList.empty()?nullptr:root->pItem->wrkList[0];
         auto sourceText=source?toString(source->pItem.get()):std::string();
         auto result=agent.normalize(root);bool ok=true;
-        if(caseID==5){
+        if(caseID==33 || caseID==38){
+            ok=result->outcome==worldPartial && !getFlagBit(root->pItem->flags,infonView::isNormed) &&
+                getFlagBit(root->pItem->value->flags,infonState::tailUnfinished) &&
+                getModeBits(root->pItem->value->flags,infonState::overlayType)==infonState::LST &&
+                root->pItem->value->items.size()==(caseID==33?1:0);
+            if(caseID==38)ok &= root->pItem->infSize->num==1000000000 && result->framesCreated<100;
+        }else if(caseID==5){
             ok=result->outcome==worldRejected && result->publications==0 && root->pItem->wrkList.size()==1 &&
                 !getFlagBit(root->pItem->flags,infonView::isNormed) && !getFlagBit(first->pItem->flags,infonView::isNormed);
         }else if(caseID==6 || caseID==7){
@@ -6130,10 +6146,11 @@ struct GLOBAL {
                 // D02F: the original value/unknown-size assertions remain;
                 // known numeric values now complete without inventing a size.
                 ok &= toString(root->pItem.get())=="{2 3 4}" && getModeBits(first->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown;
-            }else if(caseID==26 || caseID==27){
-                int count=caseID==26?3:2;
+            }else if(caseID==26 || caseID==27 || caseID==28){
+                int count=caseID==27?2:3;
                 ok &= root->pItem->infSize->num==count && root->pItem->value->items.size()==count &&
-                    root->pItem->value->items.head->pItem->value->num==1 && root->pItem->value!=original;
+                    root->pItem->value->items.head->pItem->value->num==1 &&
+                    (caseID==28?root->pItem->value==original:root->pItem->value!=original);
             }else{
                 auto head=root->pItem->value->items.head;
                 ok &= root->pItem->infSize->num==2 && root->pItem->value->items.size()==2;
@@ -6647,11 +6664,11 @@ struct GLOBAL {
             {"{*10+_| ...} = {1 *11+2}","",worldRejected},
             {"{...} = {1 ...}","",worldUnsupported},
             {"{1} = {...}","",worldUnsupported},
-            {"? = {1 ...}","",worldUnsupported},
+            {"? = {1 ...}","{1 ... }",worldPartial},
             {"({1} {2 ...})","",worldUnsupported},
             {"{rot| ...} = {1}","",worldUnsupported},
             {"{...} == {1}","",worldUnsupported},
-            {"{...} = {{...}}","",worldUnsupported}
+            {"{...} = {{...}}","{{ ... }}",worldPartial}
         };
         for(const auto& c:cases){
             auto root=parse(c.input);if(!root)continue;
@@ -6668,7 +6685,7 @@ struct GLOBAL {
             auto result=agent.normalize(root);auto actual=toString(root->pItem.get());
             check(result->outcome==c.outcome,c.input+" outcome: "+std::to_string(result->outcome)+" "+result->detail);
             check(actual==(c.expected.empty()?before:c.expected),c.input+" result: "+actual);
-            bool stable=root->pItem->value==body;for(auto& p:positions)stable &= p.node->pItem==p.item && p.node->prev==p.prev && (!p.next || p.node->next==p.next) && p.node->pParent==p.parent;
+            bool stable=getModeBits(body->flags,infonState::evalMode)!=infonState::emLiteral || root->pItem->value==body;for(auto& p:positions)stable &= p.node->pItem==p.item && p.node->prev==p.prev && (!p.next || p.node->next==p.next) && p.node->pParent==p.parent;
             check(stable,c.input+" existing prefix occurrences retained");
             bool untouched=true;for(auto& src:sources)untouched &= toString(src.first.get())==src.second;
             check(untouched,c.input+" source and template facts unchanged");
@@ -6807,7 +6824,7 @@ struct GLOBAL {
             {"{1 ... 4} = {1 2 3 4} = {1 9 3 4}","",worldRejected},
             {"{1 ... 4} = {1 ... 4}","",worldUnsupported},
             {"({1 ... 3} {4})","",worldUnsupported},
-            {"? = {1 ... 3}","",worldUnsupported},
+            {"? = {1 ... 3}","{1 ... 3}",worldPartial},
         };
         for(const auto& c:cases){
             auto root=parse(c.input);if(!root)continue;auto before=toString(root->pItem.get());
@@ -6910,7 +6927,7 @@ struct GLOBAL {
             {"{*10+_| &{7| ...}} = ({_} {_})","{&{*10+7 *10+7}}",worldComplete},
             {"{5| &{...}} = {_ ...}","",worldUnsupported},
             {"{_ _} = {5| &{...}}","",worldUnsupported},
-            {"? = {5| &{...}}","",worldUnsupported},
+            {"? = {5| &{...}}","{5| ...}",worldPartial},
             {"{rot| &{...}} = {_}","",worldUnsupported}
         };
         for(const auto& c:cases){
@@ -7263,5 +7280,120 @@ struct GLOBAL {
                 h->complete() && h->relationshipsRead==edges && root->pItem->wrkList.empty() && toString(root->pItem.get())=="{7 8}","arrival discharges once; cancellation retains the relationship");
         }
         core.deInit();std::cout<<"LIST_DISCHARGE_CHECKS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_openAdoption(me string: tname) <- {
+        if(!worldManagerOpenAdoptionChecks()){FAIL("Open adoption checks failed")}
+    }
+    me bool: worldManagerOpenAdoptionChecks() <- <%{
+        ProteusCore core;core.init("",false);auto& agent=*core.agent;auto& manager=agent.worldManager;
+        int checks=0,failures=0;
+        auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+        auto parse=[&](const std::string& text){auto p=manager.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+        struct Case{std::string input,expected;int outcome;};
+        const Case cases[]={
+            {"? = {...}","{ ... }",worldPartial},
+            {"? = {1 ...}","{1 ... }",worldPartial},
+            {"? = {1 ... 3}","{1 ... 3}",worldPartial},
+            {"? = {5| ...}","{5|  ... }",worldPartial},
+            {"? = {5| _ ...}","{5| 5 ... }",worldPartial},
+            {"? = {*10+_| &{7| _ ...}}","{*10+_| &{7| *10+7 ... }}",worldPartial},
+            {"? = {5| &{...}}","{5| ...}",worldPartial},
+            {"? = {{5| ...}}","{{5|  ... }}",worldPartial},
+            {"? = {&{1 ...} &{2 ...}}","{&{1 ... } &{2 ... }}",worldPartial},
+            {"? = {5| &{| _ ...}}","{5| &{5 ... }}",worldPartial},
+            {"? = {(*3+_ +2) !5 ...}","{(*3+_ +2) !5 ... }",worldPartial},
+            {"? = *1000000000+{...}","*1000000000+{ ... }",worldPartial},
+            {"? = *1000000000000000000000000000000+{...}","*1000000000000000000000000000000+{ ... }",worldPartial},
+            {"? = {5| ...} = {_ _}","{5 5}",worldComplete},
+            {"? = {1 ...} = {1 2}","{1 2}",worldComplete},
+            {"? = {*10+_| &{7| ...}} = {_ _}","{&{*10+7 *10+7}}",worldComplete},
+            {"? = {1 ... 3} = {1 2 3}","{1 &{2} 3}",worldComplete},
+            {"? = {{5| ...}} = {{_ _}}","{{5 5}}",worldComplete},
+            {"? = {5| &{| ...}} = {_ _}","{&{5 5}}",worldComplete},
+            {"{...} = {{...}}","{{ ... }}",worldPartial},
+            {"? = ({1 ...})","{1 ... }",worldPartial},
+            {"? = {5| ...} = {6}","",worldRejected},
+            {"? = {1 ...} = {2}","",worldRejected},
+            {"? = {_ = !5 ...}","",worldPartial},
+            {"? = {(2 +_) ...}","",worldPartial},
+            {"{...} = {1 ...}","",worldUnsupported},
+            {"*2+{...} = {1 ...}","",worldUnsupported},
+            {"? == {1 ...}","",worldUnsupported},
+            {"_ = {1 ...}","",worldRejected},
+            {"? = {1 ...} = {1 ...}","",worldUnsupported},
+            {"? = *2+{1 2 ...}","{1 2}",worldComplete},
+            {"? = {5| ...} = {}","{}",worldComplete},
+            {"? = (({5| ...}))","{5|  ... }",worldPartial},
+            {"? = (({5| ...})) = {_ _}","{5 5}",worldComplete},
+            {"? = {5| _}","{5}",worldComplete},
+            {"? = {5| _ _}","{5 5}",worldComplete},
+            {"? = ({5| _} {6| _})","{5 6}",worldComplete},
+            {"? = ({5| ...} {6})","",worldUnsupported},
+        };
+        for(const auto& c:cases){
+            auto root=parse(c.input);if(!root)continue;auto before=toString(root->pItem.get());
+            std::vector<std::pair<std::shared_ptr<POV>,std::string>> sources;
+            for(auto rhs:root->pItem->wrkList)sources.push_back({rhs,toString(rhs->pItem.get())});
+            auto h=agent.normalize(root);auto actual=toString(root->pItem.get());
+            check(h->outcome==c.outcome,c.input+" outcome "+std::to_string(h->outcome)+": "+h->detail);
+            check(actual==(c.expected.empty()?before:c.expected),c.input+" output "+actual);
+            bool unchanged=true;for(const auto& src:sources)unchanged &= toString(src.first->pItem.get())==src.second;
+            check(unchanged,c.input+" source structure and requirements remain unchanged");
+            if(c.expected.empty())check(h->publications==0,c.input+" no speculative publication");
+            else{
+                auto body=root->pItem->value;auto first=body->items.head;
+                auto again=agent.normalize(root);
+                check(again->outcome==h->outcome && toString(root->pItem.get())==actual && root->pItem->value==body && body->items.head==first,c.input+" stored result remains stable");
+                if(c.outcome==worldComplete)check(again->framesCreated==0,c.input+" completed target creates no goals");
+            }
+        }
+        // Adopted requirements must survive release of the first request's frames.
+        const Case later[]={
+            {"{5| _ ...}","{5 5}",worldComplete},
+            {"{*10+_| &{7| _ ...}}","{&{*10+7 *10+7}}",worldComplete},
+            {"{*10+_| &{7| ...}}","{&{*10+7 *10+7}}",worldComplete},
+            {"{7| &{!5| ...}}","{&{7 7}}",worldComplete},
+            {"{5| &{| ...}}","{&{5 5}}",worldComplete},
+            {"(({5| ...}))","{5 5}",worldComplete}
+        };
+        for(const auto& c:later){
+            auto source=parse(c.input);auto sourceText=toString(source->pItem.get());
+            auto a=parse("?"),b=parse("?");a->pItem->wrkList.push_back(source);b->pItem->wrkList.push_back(source);
+            auto ha=agent.normalize(a),hb=agent.normalize(b);auto body=a->pItem->value;auto first=body->items.head;
+            check(ha->outcome==worldPartial && hb->outcome==worldPartial && a->pItem->value!=b->pItem->value && a->pItem->value!=source->pItem->value,"separate adoptions own separate list bodies");
+            auto bText=toString(b->pItem.get());a->pItem->wrkList.push_back(parse("{_ _}"));a->pItem->noteNormalizationWork();
+            auto closed=agent.normalize(a);
+            check(closed->outcome==c.outcome && toString(a->pItem.get())==c.expected,"fresh request honors adopted future requirements: "+toString(a->pItem.get()));
+            check(ha->outcome==worldPartial && a->pItem->value==body && (!first || body->items.head==first),"new goal preserves prior result status and prefix occurrences");
+            check(toString(b->pItem.get())==bText && toString(source->pItem.get())==sourceText,"closing one adoption preserves the other occurrence and source");
+        }
+        auto conflict=parse("? = {5| ...}");auto partial=agent.normalize(conflict);auto before=toString(conflict->pItem.get());
+        conflict->pItem->wrkList.push_back(parse("{6}"));conflict->pItem->noteNormalizationWork();auto conflictText=toString(conflict->pItem.get());
+        auto rejected=agent.normalize(conflict);
+        check(partial->outcome==worldPartial && rejected->outcome==worldRejected && rejected->publications==0 && toString(conflict->pItem.get())==conflictText,"late conflict publishes no speculative suffix");
+        for(int n:{32,64,128}){
+            std::string text="? = {5|";for(int i=0;i<n;++i)text+=" _";text+=" ...}";
+            auto root=parse(text);auto source=root->pItem->wrkList[0];auto h=agent.normalize(root);
+            check(h->outcome==worldPartial && root->pItem->value->items.size()==n && root->pItem->value->listSpec && root->pItem->wrkList.empty(),"adopt exactly the represented prefix and its template");
+            check(h->framesCreated<=static_cast<unsigned>(3*n+4) && h->templateApplications==static_cast<unsigned>(n) && h->sequenceVisits<=static_cast<unsigned>(4*n+6),"open adoption traverses a finite prefix linearly");
+            auto a=root->pItem->value->items.head,b=source->pItem->value->items.head;bool independent=true;
+            for(;a && b;a=a->next,b=b->next)independent &= a!=b && a->pItem!=b->pItem && a->pItem->value!=b->pItem->value && a->pParent==root.get() && a->pItem->value->num==5;
+            check(independent && !a && !b,"each adopted member has its own occurrence and payload");
+            std::cout<<"OPEN_ADOPTION: "<<n<<" members, "<<h->framesCreated<<" frames, "<<h->relationshipsRead<<" edges, "<<h->sequenceVisits<<" sequence visits\n";
+        }
+        for(bool cancel:{false,true})for(bool waitOnTemplate:{false,true}){
+            auto root=parse("? = {5| ? ...}");auto source=root->pItem->wrkList[0]->pItem;
+            auto waiting=waitOnTemplate?source->value->listSpec:source->value->items.head->pItem;
+            manager.prepareInput(waiting);auto before=toString(root->pItem.get());auto h=agent.normalize(root);auto edges=h->relationshipsRead;
+            check(h->outcome==worldWaiting && h->publications==0,"incomplete source waits at its own frame before adoption");
+            if(cancel)h->cancel();
+            ProteusParser parser(&core,true,0);parser.initParseFromString("open adoption",waitOnTemplate?"5":"_");parser.doParse(waiting);
+            check(cancel ? h->outcome==worldCancelled && h->publications==0 :
+                h->outcome==worldPartial && toString(root->pItem.get())=="{5| 5 ... }" && h->relationshipsRead<=edges+1,"input resumes the same adoption; cancellation publishes nothing");
+        }
+        core.deInit();std::cout<<"OPEN_ADOPTION_CHECKS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }

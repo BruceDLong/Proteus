@@ -778,8 +778,8 @@ struct WorldPOVGraph {
         return(left)
     }
 
-    // Strict closed-list identity proves the outer shape before projecting
-    // member identities. An endpoint/shape mismatch is unresolved alignment.
+    // An unconstrained target adopts represented structure, including symbolic
+    // tails. Other list identities prove the shape before pairing members.
     me WorldScalar: mergeList(me WorldScalar: left, me WorldScalar: right, our POV: edge) <- {
         if(edge!.forceID or edge!.looseType() or left.negative or right.negative){
             left.outcome <- worldUnsupported; left.detail <- "Qualified list relationships need matching semantics"; return(left)
@@ -787,14 +787,14 @@ struct WorldPOVGraph {
         if((left.overlay>=0 and left.overlay!=LST) or (right.overlay>=0 and right.overlay!=LST)){
             left.outcome <- worldRejected; left.detail <- "Incompatible list types"; return(left)
         }
-        if(openLayout(right)){
+        if(openLayout(right) and (left.hasValue or left.hasSize)){
             left.outcome <- worldUnsupported; left.detail <- "Open source correspondence needs span alignment"; return(left)
         }
         if(openLayout(left) and (!right.hasValue or !right.hasSize)){
             left.outcome <- worldPartial; left.detail <- "Tail closure needs a closed source endpoint"; return(left)
         }
         if((left.hasSize and right.hasSize and left.size!=right.size) or
-           (right.hasValue and right.hasSize and right.size!=FlexNum(sequenceLength(right.sequence))) or
+           (right.hasValue and right.hasSize and !openLayout(right) and right.size!=FlexNum(sequenceLength(right.sequence))) or
            (!left.hasValue and left.hasSize and right.hasValue and left.size!=FlexNum(sequenceLength(right.sequence)))){
             left.outcome <- worldPartial; left.detail <- "List endpoints need span alignment"; return(left)
         }
@@ -808,7 +808,8 @@ struct WorldPOVGraph {
         left.overlay <- LST
         if(!left.hasSize and right.hasSize){left.hasSize <- true; left.size <- right.size}
         if(!left.hasValue and right.hasValue){
-            left.hasValue <- true; left.sequence <- right.sequence
+            left.hasValue <- true; left.sequence <- right.sequence; left.openTail <- right.openTail
+            left.dischargeListSpec <- right.dischargeListSpec
             left.explicitSize <- left.explicitSize or right.explicitSize
             left.contentsComplete <- right.contentsComplete; left.representable <- right.representable
         }
@@ -921,6 +922,11 @@ struct WorldPOVGraph {
     }
 
     // Semantic acceptance and work consolidation stay at the graph boundary.
+    void: adoptListRequirements(our WorldFrame: frame, our WorldFrame: source) <- {
+        frame!.listSpecFrame <- source!.listSpecFrame; frame!.listSpecEdge <- source!.listSpecEdge
+        frame!.tailRequirements <- source!.tailRequirements
+    }
+
     void: consumePrerequisite(our WorldRequest: request, our WorldFrame: frame) <- {
         if((frame!.prerequisite!.facts.outcome==worldPartial or frame!.prerequisite!.facts.pendingChecks!=NULL) and
            !(memberSequence(frame) and frame!.sourceIsOperand)){
@@ -938,7 +944,10 @@ struct WorldPOVGraph {
             frame!.facts.contentsComplete <- frame!.facts.contentsComplete and completeFacts(frame!.prerequisite!.facts, false)
             frame!.operandsRead <- sequenceLength(frame!.facts.sequence)
         }else if(frame!.sourceIsOperand){
-            if(frame!.operandsRead==0){frame!.expression <- frame!.prerequisite!.facts}
+            if(frame!.operandsRead==0){
+                frame!.expression <- frame!.prerequisite!.facts
+                if(frame!.expressionSlot==2 and frame!.expression.overlay==LST){adoptListRequirements(frame, frame!.prerequisite)}
+            }
             else{
                 frame!.expression <- appendOperand(frame!.expression, frame!.prerequisite!.facts,
                     frame!.sourceEdge!.pItem!.value!.sizeMode==fromContext)
@@ -948,6 +957,10 @@ struct WorldPOVGraph {
         }else{
             me WorldScalar: left <- frame!.facts
             mergeRelationship(request, frame)
+            if(frame!.facts.outcome==worldReady and !left.hasValue and frame!.facts.overlay==LST){
+                // Adoption includes the requirements of members not yet present.
+                adoptListRequirements(frame, frame!.prerequisite)
+            }
             if(frame!.facts.outcome==worldReady and left.overlay==LST and left.hasValue and
                frame!.prerequisite!.facts.overlay==LST and frame!.prerequisite!.facts.hasValue){
                 beginCorrespondence(frame, FlexNum(sequenceLength(frame!.prerequisite!.facts.sequence)))
@@ -962,12 +975,13 @@ struct WorldPOVGraph {
             me bool: scalarExpression <- supplied!.value!.evalMode==emConcat and frame!.prerequisite!.retainedWork.isEmpty() and
                 (frame!.prerequisite!.facts.overlay==NUM or frame!.prerequisite!.facts.overlay==STR) and
                 (frame!.prerequisite!.facts.hasValue or frame!.prerequisite!.facts.hasRange)
-            // Checked list facts include explicit unknowns and ranges. The
-            // merge has checked their endpoint; correspondence retains this
-            // edge below if those facts cannot be represented in the target.
+            // Closed correspondence checks the source endpoint. Unconstrained
+            // adoption copies the whole layout and its future requirements.
+            // Retain this edge below if any contribution is still unresolved.
             me bool: listSource <- frame!.prerequisite!.facts.overlay==LST and frame!.prerequisite!.facts.hasValue and
-                frame!.prerequisite!.facts.hasSize and !openLayout(frame!.prerequisite!.facts) and
-                representableFacts(frame!.prerequisite!.facts)
+                representableFacts(frame!.prerequisite!.facts) and
+                ((frame!.prerequisite!.facts.hasSize and !openLayout(frame!.prerequisite!.facts)) or
+                 (!left.hasValue and !left.hasSize and frame!.prerequisite!.retainedWork.isEmpty()))
             frame!.retainSource <- !listSource and !scalarExpression and (!supplied!.wrkList.isEmpty() or
                 (supplied!.value!.evalMode!=emLiteral and supplied!.value!.evalMode!=emUnknown) or
                 !frame!.prerequisite!.facts.representable)
@@ -1019,15 +1033,13 @@ struct WorldPOVGraph {
             if(facts.overlay==LST and facts.hasValue){
                 our infonState: body <- job.target!.pItem!.value
                 me bool: existing <- body!.overlayType==LST and body!.evalMode==emLiteral
-                if(!existing and openLayout(facts)){
-                    request!.outcome <- worldUnsupported; request!.detail <- "Copying an open list needs its future member requirements"; return()
-                }
                 if(!existing and !facts.representable){
                     request!.outcome <- worldPartial; request!.detail <- "List result still has unresolved member work"; return()
                 }
                 if(!existing){
                     Allocate(job.newList); body <- job.newList
                     body!.overlayType <- LST; body!.evalMode <- emLiteral
+                    if(job.frame!.listSpecEdge!=NULL){body!.listSpec <- job.frame!.listSpecEdge!.pItem}
                     if(facts.explicitSize){body!.sizeMode <- fromGiven}else{body!.sizeMode <- fromCount}
                 }
                 our POV: targetMember <- body!.items.head
