@@ -169,6 +169,14 @@ struct WorldScalar {
     }
 }
 
+// Persistent requirements for members of an open tail. Each link refers to
+// checked evidence; appending an ancestor requirement never copies the chain.
+struct WorldRequirement {
+    our WorldRequirement: prior
+    our WorldFrame: frame
+    our POV: edge
+}
+
 struct WorldFrame {
     our POV: node
     me WorldScalar: facts
@@ -196,6 +204,8 @@ struct WorldFrame {
     me bool: memberSpecified <- false
     our POV: listSpecEdge
     our WorldFrame: listSpecFrame
+    our WorldRequirement: tailRequirements
+    me List<our WorldRequirement>: memberRequirements
     our POV: nextOperand
     our POV: priorOperand
     me int64: operandsRead <- 0
@@ -239,6 +249,7 @@ struct WorldRequest {
     me uint64: publications <- 0
     me uint64: memberPairs <- 0
     me uint64: templateApplications <- 0
+    me uint64: requirementVisits <- 0
     me uint64: tailMembers <- 0
     me uint64: sequenceVisits <- 0
     me uint64: publishedTextBytes <- 0
@@ -367,6 +378,12 @@ struct WorldPOVGraph {
         frame!.corresponding <- true; frame!.leftMembers.push(frame!.facts.sequence)
         Allocate(frame!.pairedSequence)
         frame!.facts.contentsComplete <- true; frame!.facts.representable <- true
+    }
+    void: retainRequirement(our WorldFrame: target, our WorldFrame: spec, our POV: edge) <- {
+        if(!target!.facts.openTail){return()}
+        our WorldRequirement:: requirement
+        requirement!.prior <- target!.tailRequirements; requirement!.frame <- spec; requirement!.edge <- edge
+        target!.tailRequirements <- requirement
     }
     me bool: checkEmbedded(our WorldFrame: frame) <- {
         me WorldScalar: facts <- frame!.prerequisite!.facts
@@ -838,6 +855,7 @@ struct WorldPOVGraph {
             frame!.facts.outcome <- worldPartial; frame!.facts.detail <- frame!.prerequisite!.facts.detail
         }else if(frame!.sourceIsListSpec){
             frame!.listSpecFrame <- frame!.prerequisite
+            retainRequirement(frame, frame!.prerequisite, frame!.listSpecEdge)
         }else if(memberSequence(frame) and frame!.sourceIsOperand){
             if(frame!.facts.sequence==NULL){Allocate(frame!.facts.sequence)}
             if(!appendMember(frame!.facts.sequence, frame!.prerequisite, frame!.sourceEdge!.isSubItm)){
@@ -1124,6 +1142,7 @@ struct WorldManager {
         pair!.node <- left!.node; pair!.facts <- left!.facts
         pair!.retainedWork <- left!.retainedWork
         pair!.listSpecFrame <- left!.listSpecFrame; pair!.listSpecEdge <- left!.listSpecEdge
+        pair!.tailRequirements <- left!.tailRequirements
         pair!.bodyBounds <- left!.bodyBounds; pair!.bodyHasSize <- left!.bodyHasSize; pair!.bodySize <- left!.bodySize
         pair!.initialized <- true; pair!.projected <- true
         request!.framesCreated <+- 1
@@ -1137,10 +1156,29 @@ struct WorldManager {
         return(pair)
     }
 
+    our WorldFrame: projectListSpec(our WorldRequest: request, our WorldFrame: left,
+                                   our WorldFrame: spec, our POV: edge) <- {
+        our WorldFrame: pair <- projectFrame(request, left)
+        pair!.sourceEdge <- edge; pair!.applyingListSpec <- true; pair!.listSpecFrame <- spec
+        graph.retainRequirement(pair, spec, edge)
+        graph.beginCorrespondence(pair)
+        return(pair)
+    }
+
+    me bool: applyMemberRequirement(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(frame!.memberRequirements.isEmpty() or frame!.pairedMember!.facts.outcome!=worldReady){return(false)}
+        our WorldRequirement: requirement <- frame!.memberRequirements.popLast()
+        frame!.pairedMember <- derivePair(request, frame!.pairedMember, requirement!.frame, requirement!.edge)
+        request!.templateApplications <+- 1; request!.ready.append(frame!.pairedMember)
+        return(true)
+    }
+
     // A pair is a derived strict member relationship, evaluated by the same
     // merge operation. Nested lists return here through the retained stack.
     void: correspond(our WorldRequest: request, our WorldFrame: frame) <- {
         if(frame!.pairedMember!=NULL){
+            if(applyMemberRequirement(request, frame)){return()}
+            frame!.memberRequirements.clear()
             if(frame!.pairedEmbedded and frame!.pairedMember!.facts.outcome==worldPartial){
                 frame!.facts.outcome <- worldPartial; frame!.facts.detail <- frame!.pairedMember!.facts.detail; return()
             }
@@ -1162,10 +1200,12 @@ struct WorldManager {
                 frame!.remaining <- frame!.remaining-1
                 frame!.pairedEmbedded <- false; request!.tailMembers <+- 1
                 frame!.pairedMember <- member
-                if(frame!.listSpecFrame!=NULL){
-                    frame!.pairedMember <- derivePair(request, member, frame!.listSpecFrame, frame!.listSpecEdge)
-                    request!.templateApplications <+- 1; request!.ready.append(frame!.pairedMember)
+                our WorldRequirement: requirement <- frame!.tailRequirements
+                while(requirement!=NULL){
+                    frame!.memberRequirements.append(requirement); request!.requirementVisits <+- 1
+                    requirement <- requirement!.prior
                 }
+                applyMemberRequirement(request, frame)
                 return()
             }
             frame!.extendingTail <- false; frame!.facts.openTail <- false
@@ -1185,15 +1225,15 @@ struct WorldManager {
             our WorldFrame: pair
             if(left.embedded){
                 // Preserve the left wrapper; its leaves continue the same RHS cursor.
-                pair <- projectFrame(request, left.frame)
-                pair!.sourceEdge <- frame!.sourceEdge; pair!.rightMembers <- frame!.rightMembers
-                pair!.applyingListSpec <- frame!.applyingListSpec
-                if(frame!.applyingListSpec){pair!.listSpecFrame <- frame!.listSpecFrame}
-                me FlexNum: extent <- graph.minimumWidth(left.frame!.facts)
-                if(left.frame!.facts.hasSize){extent <- left.frame!.facts.size}
-                else if(graph.freeSpans(left.frame!.facts)>0){extent <+- frame!.gapWidth}
-                graph.beginCorrespondence(pair, extent)
-                if(!frame!.applyingListSpec){
+                if(frame!.applyingListSpec){
+                    pair <- projectListSpec(request, left.frame, frame!.listSpecFrame, frame!.sourceEdge)
+                }else{
+                    pair <- projectFrame(request, left.frame)
+                    pair!.sourceEdge <- frame!.sourceEdge; pair!.rightMembers <- frame!.rightMembers
+                    me FlexNum: extent <- graph.minimumWidth(left.frame!.facts)
+                    if(left.frame!.facts.hasSize){extent <- left.frame!.facts.size}
+                    else if(graph.freeSpans(left.frame!.facts)>0){extent <+- frame!.gapWidth}
+                    graph.beginCorrespondence(pair, extent)
                     frame!.remaining <- frame!.remaining-extent
                     if(pair!.facts.outcome==worldReady){pair!.facts.hasSize <- true; pair!.facts.size <- extent}
                 }
@@ -1233,15 +1273,7 @@ struct WorldManager {
                frame!.listSpecFrame!=NULL and !frame!.memberSpecified and
                frame!.prerequisite!.facts.outcome==worldReady){
                 if(frame!.sourceEdge!.isSubItm){
-                    if(graph.openLayout(frame!.prerequisite!.facts)){
-                        frame!.facts.outcome <- worldUnsupported
-                        frame!.facts.detail <- "Ancestor templates across unresolved spans need retained member requirements"
-                        stopFrame(request, frame); return()
-                    }
-                    frame!.prerequisite <- projectFrame(request, frame!.prerequisite)
-                    frame!.prerequisite!.sourceEdge <- frame!.listSpecEdge
-                    frame!.prerequisite!.applyingListSpec <- true; frame!.prerequisite!.listSpecFrame <- frame!.listSpecFrame
-                    graph.beginCorrespondence(frame!.prerequisite)
+                    frame!.prerequisite <- projectListSpec(request, frame!.prerequisite, frame!.listSpecFrame, frame!.listSpecEdge)
                 }else{
                     frame!.prerequisite <- derivePair(request, frame!.prerequisite, frame!.listSpecFrame, frame!.listSpecEdge)
                     request!.templateApplications <+- 1

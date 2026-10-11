@@ -40,10 +40,10 @@ Scope and tests
 
 The engine supports the scalar/expression cases, closed ordered-list composition,
 finite context-free listSpecs, closed embedded spans, finite open-tail closure,
-uniquely determined embedded span extents and local parser-completion continuation
-listed in the design status. General sparse alignment, definition, intersection,
-temporal and effect semantics remain unsupported. Stream ownership and shutdown use the new
-path; general streamed list propagation and other link arrivals remain later work.
+uniquely determined embedded span extents, retained ancestor listSpecs across open
+embedded spans and local parser-completion continuation listed in the design
+status. General sparse alignment, definition, intersection, temporal and effect
+semantics remain unsupported. Stream ownership and shutdown use the new path; general streamed list propagation and other link arrivals remain later work.
 An unsupported result must never be replaced with output from the old solver.
 
 All 15 protected .tst files and their expected outputs remain unchanged. Keep the

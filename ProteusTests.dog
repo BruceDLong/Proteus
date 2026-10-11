@@ -12,6 +12,7 @@ TestsToRun = `
     unit/worldManager/embeddedLists
     unit/worldManager/openTails
     unit/worldManager/spanExtents
+    unit/worldManager/spanRequirements
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -6804,7 +6805,6 @@ struct GLOBAL {
             {"{1 ... 4} = {1 ... 4}","",worldUnsupported},
             {"({1 ... 3} {4})","",worldUnsupported},
             {"? = {1 ... 3}","",worldUnsupported},
-            {"{5| ... 9} = {5 5 9}","",worldUnsupported}
         };
         for(const auto& c:cases){
             auto root=parse(c.input);if(!root)continue;auto before=toString(root->pItem.get());
@@ -6859,5 +6859,129 @@ struct GLOBAL {
             else check(h->complete() && h->relationshipsRead==edges && h->framesCreated<=frames+4 && toString(target->pItem.get())=="{&{5 5} 9}","span arrival resumes without rescanning relationships");
         }
         core.deInit();std::cout<<"SPAN_EXTENT_CHECKS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_spanRequirements(me string: tname) <- {
+        if(!worldManagerSpanRequirementChecks()){FAIL("Span requirement checks failed")}
+    }
+    me bool: worldManagerSpanRequirementChecks() <- <%{
+        ProteusCore core;core.init("",false);auto& agent=*core.agent;auto& manager=agent.worldManager;
+        int checks=0,failures=0;
+        auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+        auto parse=[&](const std::string& text){auto p=manager.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+        struct Case{std::string input,expected;int outcome;};
+        const Case cases[]={
+            {"{5| &{...}} = {_ _}","{&{5 5}}",worldComplete},
+            {"{5| &{_ ...}} = {_ _ _}","{&{5 5 5}}",worldComplete},
+            {"{*10+_| 1 ... 4} = {1 2 3 4}","{*10+1 &{*10+2 *10+3} *10+4}",worldComplete},
+            {"{*10+_| &{7| ...}} = {_ _}","{&{*10+7 *10+7}}",worldComplete},
+            {"{7| &{*10+_| ...}} = {_ _}","{&{*10+7 *10+7}}",worldComplete},
+            {"{*10+_| &{7| &{...}}} = {_ _}","{&{&{*10+7 *10+7}}}",worldComplete},
+            {"{5| &{...}} = {}","{&{}}",worldComplete},
+            {"{5| &{6| ...}} = {}","{&{}}",worldComplete},
+            {"{5| &{6| ...}} = {_}","",worldRejected},
+            {"{{_ 7}| &{...}} = {{1 _} {2 _}}","{&{{1 7} {2 7}}}",worldComplete},
+            {"{{5 _}| &{...}} = {{_ 7} {_ 8}}","{&{{5 7} {5 8}}}",worldComplete},
+            {"{*10+_| &{7| _ ...} _} = {_ _ 3}","{&{*10+7 *10+7} *10+3}",worldComplete},
+            {"{5| &{| ...}} = {_ _}","{&{5 5}}",worldComplete},
+            {"{5| &*2+{...} 5} = {_ _ _}","{&{5 5} 5}",worldComplete},
+            {"{5| &*1+{...} &*2+{...}} = {_ _ _}","{&{5} &{5 5}}",worldComplete},
+            {"{5| ... ...} = {}","{&{}}",worldComplete},
+            {"{5| ... ...} = {_}","",worldPartial},
+            {"{5| &{_ ...}}","{5| &{5 ... }}",worldPartial},
+            {"{*10+_| &{7| _ ...}}","{*10+_| &{7| *10+7 ... }}",worldPartial},
+            {"{*10+_| &{7| ...}}","{*10+_| &{7|  ... }}",worldPartial},
+            {"{!5| &{*10+_| ...}} = {6 7}","{&{*10+6 *10+7}}",worldComplete},
+            {"{*10+_| &{!5| ...}} = {6 7}","{&{*10+6 *10+7}}",worldComplete},
+            {"{!5| &{*10+_| ...}} = {6 5}","",worldRejected},
+            {"{*10+_| &{!5| ...}} = {5 6}","",worldRejected},
+            {"{7| &{!5| ...}} = {_}","",worldPartial},
+            {"{*10+_| &{*3+_| ...}} = {1}","",worldRejected},
+            {"{5| ... 9} = {5 5 9}","",worldRejected},
+            {"{5| &{_ ...}} = {5 6}","",worldRejected},
+            {"{*10+_| &{7| ...}} = {7 7} = {7 8}","",worldRejected},
+            {"{*10+_| &{7| ...}} = {_ _} = {7 7}","{&{*10+7 *10+7}}",worldComplete},
+            // Existing consolidation retains an unresolved RHS expression even
+            // when its corresponding target members are complete.
+            {"{*10+_| &{7| ...}} = ({_} {_})","{&{*10+7 *10+7}} = ({_} {_})",worldComplete},
+            {"{5| &{...}} = {_ ...}","",worldUnsupported},
+            {"{_ _} = {5| &{...}}","",worldUnsupported},
+            {"? = {5| &{...}}","",worldUnsupported},
+            {"{rot| &{...}} = {_}","",worldUnsupported}
+        };
+        for(const auto& c:cases){
+            auto root=parse(c.input);if(!root)continue;auto before=toString(root->pItem.get());
+            struct Position{std::shared_ptr<POV> node,prev,next;std::shared_ptr<infonView> item;POV* parent;std::shared_ptr<infonState> body;};
+            std::vector<Position> positions;std::vector<std::shared_ptr<POV>> pending{root};
+            std::vector<std::pair<std::shared_ptr<infonView>,std::string>> sources;
+            while(!pending.empty()){
+                auto at=pending.back();pending.pop_back();auto item=at->pItem;
+                if(item->value->listSpec)sources.push_back({item->value->listSpec,toString(item->value->listSpec.get())});
+                for(auto rhs:item->wrkList)sources.push_back({rhs->pItem,toString(rhs->pItem.get())});
+                bool list=getModeBits(item->value->flags,infonState::evalMode)==infonState::emLiteral && getModeBits(item->value->flags,infonState::overlayType)==infonState::LST;
+                positions.push_back({at,at->prev,at->next,item,at->pParent,list?item->value:nullptr});
+                if(list)for(auto m=item->value->items.head;m;m=m->next)pending.push_back(m);
+            }
+            auto h=agent.normalize(root);auto actual=toString(root->pItem.get());
+            check(h->outcome==c.outcome,c.input+" outcome "+std::to_string(h->outcome)+": "+h->detail);
+            check(actual==(c.expected.empty()?before:c.expected),c.input+" output "+actual);
+            bool stable=true;for(const auto& p:positions)stable &= p.node->pItem==p.item && p.node->prev==p.prev && (!p.next || p.node->next==p.next) && p.node->pParent==p.parent && (!p.body || p.node->pItem->value==p.body);
+            check(stable,c.input+" preserves occurrences, wrappers and prefix links");
+            bool untouched=true;for(const auto& src:sources)untouched &= toString(src.first.get())==src.second;
+            check(untouched,c.input+" leaves source and template evidence unchanged");
+            if(c.expected.empty())check(h->publications==0,c.input+" unresolved or rejected requirements publish nothing");
+            if(c.outcome==worldComplete){auto again=agent.normalize(root);check(again->complete() && again->framesCreated==0,c.input+" completed result needs no new work");}
+        }
+        for(int n:{32,64,128}){
+            std::string rhs="{|";for(int i=0;i<n;++i)rhs+=" _";rhs+="}";
+            auto root=parse("{*10+_| &{(2 +3)| _ ...}} = "+rhs);auto prefix=root->pItem->value->items.head->pItem->value->items.head;
+            auto h=agent.normalize(root);
+            check(h->complete() && h->templateApplications==static_cast<unsigned>(2*n) && h->requirementVisits==static_cast<unsigned>(2*(n-1)) && h->memberPairs==1 && h->tailMembers==static_cast<unsigned>(n-1),"each future member gets both requirements once; prefix is not repeated");
+            check(h->relationshipsRead<=static_cast<unsigned>(n+10) && h->framesCreated<=static_cast<unsigned>(3*n+12) && prefix==root->pItem->value->items.head->pItem->value->items.head,"finite fill shares template evaluation and preserves prefix");
+            std::cout<<"SPAN_REQUIREMENTS: "<<n<<" members, "<<h->framesCreated<<" frames, "<<h->relationshipsRead<<" edges, "<<h->requirementVisits<<" retained requirement reads\n";
+            std::string inner="{...}";for(int i=0;i<n;++i)inner="{| &"+inner+"}";
+            auto deep=parse("{(2 +3)| &"+inner+"} = {_ _}");auto d=agent.normalize(deep);
+            check(d->complete() && d->templateApplications==2 && d->requirementVisits==2 && d->framesCreated<=static_cast<unsigned>(3*n+16) && d->relationshipsRead<=static_cast<unsigned>(n+10),"one ancestor crosses deep wrappers without repeated member applications");
+            std::cout<<"DEEP_REQUIREMENT: "<<n<<" wrappers, "<<d->framesCreated<<" frames, "<<d->relationshipsRead<<" edges, "<<d->sequenceVisits<<" sequence visits\n";
+        }
+        // Separate ancestor scopes can share the same checked template value.
+        auto shared=parse("{5| &{5| ...}} = {_ _}");auto inner=shared->pItem->value->items.head->pItem;inner->value->listSpec=shared->pItem->value->listSpec;
+        auto sh=agent.normalize(shared);check(sh->complete() && sh->templateApplications==4 && sh->requirementVisits==4,"shared template value retains both scoped contributions");
+        // Each added ancestor link is constant-size; traversing many required
+        // ancestors charges both their wrapper projections and member checks.
+        for(int depth:{8,16,32}){
+            std::string lhs="{...}";for(int i=0;i<depth;++i)lhs="{5| &"+lhs+"}";
+            auto target=parse(lhs+" = {_ _ _}");auto h=agent.normalize(target);
+            check(h->complete() && h->templateApplications==static_cast<unsigned>(3*depth) && h->requirementVisits==static_cast<unsigned>(3*depth),"all retained ancestors constrain each supplied member once");
+            std::cout<<"MANY_REQUIREMENTS: "<<depth<<" ancestors, "<<h->framesCreated<<" frames, "<<h->sequenceVisits<<" sequence visits\n";
+        }
+        for(const auto& input:{"{*10+_| &*1000000000+{7| ...}}","{*10+_| &*9223372036854775808+{7| ...}}","{*10+_| &{7| _ ...}}"}){
+            auto root=parse(input);auto body=root->pItem->value->items.head->pItem->value;auto h=agent.normalize(root);
+            check(h->outcome==worldPartial && h->tailMembers==0 && h->requirementVisits==0 && h->framesCreated<10 && body->items.size()<=1 && root->pItem->value->listSpec && body->listSpec,"symbolic remainder retains both templates without generating members");
+        }
+        for(bool cancel:{false,true}){
+            auto root=parse("{*10+_| &{7| _ ...}} = {_ _}");auto pending=root->pItem->wrkList[0]->pItem->value->items.tail->pItem;
+            manager.prepareInput(pending);auto h=agent.normalize(root);auto edges=h->relationshipsRead;
+            check(h->outcome==worldWaiting && h->publications==0 && h->templateApplications==2,"wait retains both checked prefix requirements");
+            if(cancel)h->cancel();
+            ProteusParser parser(&core,true,0);parser.initParseFromString("inherited span member","_");parser.doParse(pending);
+            if(cancel)check(h->outcome==worldCancelled && h->publications==0 && root->pItem->value->listSpec,"cancelled inherited span attaches nothing");
+            else check(h->complete() && h->relationshipsRead==edges && h->templateApplications==4 && h->requirementVisits==2 && toString(root->pItem.get())=="{&{*10+7 *10+7}}","arrival applies only the new member requirements");
+        }
+        for(bool outer:{false,true}){
+            auto root=parse("{*10+_| &{7| ...}} = {_ _}");auto spec=outer?root->pItem->value->listSpec:root->pItem->value->items.head->pItem->value->listSpec;
+            manager.prepareInput(spec);auto h=agent.normalize(root);check(h->outcome==worldWaiting && h->publications==0,"template input waits at its own frame");
+            ProteusParser parser(&core,true,0);parser.initParseFromString("span template",outer?"*10+_":"7");parser.doParse(spec);
+            check(h->complete() && h->templateApplications==4 && h->requirementVisits==4 && toString(root->pItem.get())=="{&{*10+7 *10+7}}","local or ancestor template arrival continues existing request");
+        }
+        // Partial publication retains the original scoped constraints for a
+        // separate caller-requested normalization when finite evidence is added.
+        auto partial=parse("{*10+_| &{7| _ ...}}");auto prefix=partial->pItem->value->items.head->pItem->value->items.head;
+        auto first=agent.normalize(partial);check(first->outcome==worldPartial && partial->pItem->value->listSpec && prefix->pItem->value->num==7,"partial result keeps future requirements in their original scopes");
+        partial->pItem->wrkList.push_back(parse("{_ _}"));partial->pItem->noteNormalizationWork();auto second=agent.normalize(partial);
+        check(second->complete() && first->outcome==worldPartial && prefix==partial->pItem->value->items.head->pItem->value->items.head && toString(partial->pItem.get())=="{&{*10+7 *10+7}}","new finite request uses retained scoped constraints without changing old handle");
+        core.deInit();std::cout<<"SPAN_REQUIREMENT_CHECKS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }
