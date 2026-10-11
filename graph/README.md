@@ -471,6 +471,20 @@ auto deeper = normalizer.normalizeToDepth(state, 3);
 deeper.waitForCompletion();
 ```
 
+`GraphNormalizer.normalizeAll(pov)` (also exposed through `Agent`) requests
+all containment levels in one operation. It expands materialized members and
+omitted declared parts recursively, retaining the same sparse/open membership
+rules. Unlike bounded header expansion, this request also normalizes values
+behind equal and selected sources, so a materialized result cannot hide pending
+temporal preservation in its source. Missing facts can still remain symbolic;
+quiescence is not a promise that every scalar has a concrete value.
+
+Slipstream's 3D scene renderer now retains one `normalizeAll` request per scene
+root. Recursive drawing and color/pose field access only read the resulting
+state; they do not create separate cubie, side, or field normalization sessions.
+Other UI widgets retain their existing requests. The document stream retains
+its own normalizer.
+
 Requests for the same POV share a producer and its task table while their handles
 remain alive. Each depth retains its own completion goal. Repeated subgoals reuse
 existing deductions, and increasing depth keeps earlier header/dependency work.
@@ -490,9 +504,9 @@ completed members.
 Implementation: `graph/NormalizationDepth.h` supplies depth goals using the
 existing retained traversal, ordinary header/type goals, and list-count goals.
 `GraphManager.normalizeShared` shares task storage while keeping caller handles
-separate. This entry point is available in the shared library; Slipstream has
-been rebuilt for the new interface, but its display request policy is unchanged.
-No Rubix state-2 rendering fix or speedup is claimed by this increment.
+separate. Both entry points are available in the shared library. Whole-scene requests
+reduce overlapping display sessions; concrete colors and poses still require
+end-to-end validation rather than an inference from request counts.
 
 Validation (2026-10-05):
 
@@ -524,14 +538,29 @@ The existing printer then hides the retained work list. Failed, cancelled,
 cost-limited, or otherwise symbolic goals are not marked. Successful children
 may be marked independently of a symbolic parent.
 
-A new normalization pass clears the target flag. Publications invalidate the
-completion evidence that consumed the changed tokens, including evidence whose
-process handles have been released. Unknown publications retain conservative
-invalidation across the context. Invalidation callbacks hold weak references to
-the model; cached proofs retain dependencies and required proofs, not a second
-model graph. Completion metadata does not itself publish a semantic revision.
-Completed handles remain records of their finished run; call `normalize()`
-again to revalidate a result invalidated by later information.
+Completion is permanent for the exact infonView that earned it. Starting another
+pass or publishing progress elsewhere does not clear `isNormed`. Copied views
+must earn their own completion; a copied flag is insufficient.
+
+A completed normalization request retains a receipt for its full query, including
+its POV, demand, related endpoint, occurrence context, coordinates, and environment.
+Repeating that request reuses the receipt without traversing its members again.
+Receipts keep weak model references and a DAG of constraint subscriptions, so
+releasing a model does not leave it owned by a completion cache.
+
+Ordinary progress subscriptions still wake unfinished work. New obligations have
+a separate notification channel: adding an RHS, identity, declaration, or changing
+an explicit host constraint invalidates affected query receipts. The established
+infon remains done; a new query must check the added obligation and can reject it
+without replacing the known value. Publishers use `noteNormalizationWork()` inside
+the runtime's atomic update boundary. Direct host edits that bypass that boundary
+are not a supported way to amend a completed model. Definitions remain fixed during
+ordinary normalization.
+
+The printer uses the current constraint receipt, independently of the permanent
+done flag, so newly added unchecked work remains visible. Completed handles remain
+records of their finished run; unfinished handles still subscribe, resume, and
+cancel normally. `unit/graphCompletion/` covers these completion and reuse rules.
 
 ## Represented RHS information
 
@@ -779,8 +808,14 @@ again. Transferred data checks survive the producing Set's publication through
 is invalidated. Contextual requirements retain their instance-bound expression
 and completion checks. A transferred certificate does not satisfy additional
 type words on the destination, nor does it set the whole object `isNormed`.
-Witness and destination checks still cost work; inherited data is validated at
-the copy boundary before its successful check is retained.
+An exact meaning already retained by the destination is not transferred again,
+including list and contextual meanings. This does not certify missing child data.
+Operations with a complete pending-write footprint reuse source evidence when
+that footprint does not touch its dependencies. The check follows derived
+proofs too; opaque evidence, unknown writes, and relevant writes retain fresh
+validation. Cached catalogue lookup retains its declaration dependencies,
+including when an earlier lookup happened without object tracking. Instance
+compatibility and new constraints are still checked at the copy boundary.
 
 The catalogue currently admits exact, Unicode-normalized, untagged names.
 Distinct definitions of one name stay ambiguous. Missing names retain

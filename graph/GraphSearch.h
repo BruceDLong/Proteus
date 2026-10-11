@@ -810,7 +810,13 @@ template<class Node> class GraphManager {
             Cost cost = 0;
             const auto existing=s.taskIndex.find(refinement.query);
             if(refinement.withdraw && existing==s.taskIndex.end()) continue;
-            auto child=refinement.withdraw ? existing->second : startTask(c,s,c.access->goal(refinement.query),cost);
+            // Construct only on a query-index miss. Reused children still need
+            // activation; ownership and required/exploratory accounting follow below.
+            std::size_t child;
+            if(existing!=s.taskIndex.end()) {
+                child=existing->second;
+                if(!refinement.withdraw) activate(c,s,child,cost);
+            } else child=startTask(c,s,c.access->goal(refinement.query),cost);
             auto& parent=s.tasks[pending.task];
             auto key=std::make_pair(refinement.owner,child);
             auto old=parent.demands.find(key);

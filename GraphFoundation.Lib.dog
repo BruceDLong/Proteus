@@ -112,6 +112,13 @@ struct GraphNormalizer {
         return runtime.normalizeShared({target,proteus4::normalizationDepth,depth},
                                        {target,proteus4::normalizationDepth});
     }%>
+    // One root demand fills known contained parts at every level. Sparse tails
+    // remain symbolic; this does not invent members or fill shared definitions.
+    me NormalizationHandle: normalizeAll(our POV: target) <- <%{
+        runtime.updateIfChanged([&] { return access->bind(target); });
+        return runtime.normalizeShared({target,proteus4::normalizationDepth,proteus4::allContainedParts},
+                                       {target,proteus4::normalizationDepth});
+    }%>
     me NormalizationHandle: normalizeWithCost(our POV: target, me uint64: maximumRoute) <- <%{
         runtime.updateIfChanged([&] { return access->bind(target); });
         proteus4::CostPolicy policy;
@@ -258,9 +265,21 @@ struct infonView {
     // explicit open choice; a sole proved match is an actionable target.
     me bool: implicitMembershipChoice <- false
     me string: graphParseError
-    // Derived rendering evidence, independent of complete normalization. The
-    // pending work or consolidated registry identities remain searchable.
+    // Permanent completion is distinct from the receipt for checked constraints.
+    // New obligations may invalidate the receipt, without retracting isNormed.
     me GraphCacheEvidence: normalizationEvidence
+    // Identity witness prevents a copied view from inheriting another's done bit.
+    their infonView: normalizationOwner
+    me bool: normalizationCurrent() <- <%{
+        return normalizationOwner==this && normalizationEvidence && normalizationEvidence->valid();
+    }%>
+    void: noteNormalizationWork() <- <%{
+        proteus4::ReadScope::newRequirements({this});
+        if(normalizationOwner!=this) {
+            SetFlagBit(flags,infonView::isNormed,false);
+            normalizationEvidence.reset();normalizationOwner=nullptr;
+        }
+    }%>
     our GraphRHSProof: representedTemplate
     me List<our GraphRHSProof>: representedWork
     me bool: workIsRepresented(our POV: rhs) <- <%{
@@ -551,7 +570,7 @@ struct ProteusGraphAccess {
         owner!.pItem!.value!.items.appendPov(occurrence)
         occurrence!.pParent <- owner
         registry!.recordRepetitionMaterialization(occurrence, occurrence, 0)
-        owner!.workRevision <+- 1; owner!.pItem!.isNormed <- false
+        owner!.workRevision <+- 1; owner!.pItem!.noteNormalizationWork()
         return(occurrence)
     }
     our infonView: memberTemplate(our POV: pov) <- {
@@ -589,7 +608,7 @@ struct ProteusGraphAccess {
         observeRead(pov); observeRead(source);
         if(pov!.pItem!.value!.listSpec!=NULL){return(false)}
         pov!.pItem!.value!.listSpec <- source!.pItem
-        pov!.pItem!.isNormed <- false; pov!.workRevision <+- 1
+        pov!.pItem!.noteNormalizationWork(); pov!.workRevision <+- 1
         return(true)
     }
     me bool: definitionOrderedCandidate(our POV: pov) <- {
@@ -610,7 +629,7 @@ struct ProteusGraphAccess {
         auto item=proteus4::readView(pov);
         item->orderMode=order;
         if(order==uUnordered) invalidateCountedSize(pov);
-        ++pov->workRevision;SetFlagBit(item->flags,infonView::isNormed,false);
+        ++pov->workRevision;item->noteNormalizationWork();
         return true;
     }%>
     me bool: invalidateCountedSize(our POV: pov) <- <%{
@@ -623,7 +642,7 @@ struct ProteusGraphAccess {
         auto previous=item->infSize;item->infSize=std::make_shared<infonState>();
         item->infSize->flags=previous->flags;item->infSize->num=previous->num;
         SetModeBits(item->infSize->flags,infonState::evalMode,infonState::emUnknown);
-        ++pov->workRevision;SetFlagBit(item->flags,infonView::isNormed,false);
+        ++pov->workRevision;item->noteNormalizationWork();
         return true;
     }%>
     me List<our POV>: definitionMembers(our POV: pov) <- {
@@ -646,7 +665,7 @@ struct ProteusGraphAccess {
         pov!.pItem!.value!.overlayType <- LST
         pov!.pItem!.value!.evalMode <- emLiteral
         pov!.pItem!.value!.tailUnfinished <- true
-        pov!.pItem!.isNormed <- false; pov!.workRevision <+- 1
+        pov!.pItem!.noteNormalizationWork(); pov!.workRevision <+- 1
         return(true)
     }
     our POV: appendDefinitionMember(our POV: owner, me string: typeName) <- {
@@ -668,7 +687,7 @@ struct ProteusGraphAccess {
         if(before!=NULL){member <- owner!.pItem!.value!.items.insertBefore(before, item, 913)}
         else{member <- owner!.pItem!.value!.items.append(item, false, 913)}
         member!.pParent <- owner; bind(member)
-        owner!.pItem!.isNormed <- false; owner!.workRevision <+- 1
+        owner!.pItem!.noteNormalizationWork(); owner!.workRevision <+- 1
         return(member)
     }
     me bool: hasTypeRequirements(our POV: pov) <- {
@@ -782,7 +801,7 @@ struct ProteusGraphAccess {
         // Preserve a learned explicit size in normal output. Otherwise, e.g.
         // *16+10 would print as 10 and reparse with a different numeric size.
         if(changed and required.explicitSize){target!.pItem!.value!.sizeMode <- fromGiven}
-        if(changed){target!.workRevision <+- 1; target!.pItem!.isNormed <- false}
+        if(changed){target!.workRevision <+- 1; target!.pItem!.noteNormalizationWork()}
         return(changed)
     }
     me GraphNumericLiteral: planNumericLiteral(our POV: pov) <- {
@@ -811,7 +830,7 @@ struct ProteusGraphAccess {
         pov!.pItem!.value!.num <- plan.number
         pov!.pItem!.value!.inverted <- plan.inverted
         pov!.pItem!.value!.numericExtentApplied <- plan.extentApplied
-        pov!.pItem!.isNormed <- false; pov!.workRevision <+- 1
+        pov!.pItem!.noteNormalizationWork(); pov!.workRevision <+- 1
         return(true)
     }
     me bool: scalar(our POV: pov) <- {
@@ -894,7 +913,7 @@ struct ProteusGraphAccess {
         // contextual reference. Preserve the representation's size mode.
         pov!.pItem!.infSize!.evalMode <- emLiteral
         pov!.pItem!.infSize!.num <- measure.count
-        pov!.pItem!.isNormed <- false
+        pov!.pItem!.noteNormalizationWork()
         pov!.workRevision <+- 1
         return(true)
     }
@@ -909,13 +928,16 @@ struct ProteusGraphAccess {
                 pov!.pItem!.value!.evalMode==emLiteral){mask <+- 2}
         return(mask)
     }
-    // The GoalSpec calls this only at validated completion or invalidation.
+    // Only a fully settled goal establishes permanent completion.
     // The list goal has also checked extent and all required member goals.
     void: setNormed(our POV: pov, me bool: complete) <- {
         observeRead(pov);
         if(pov!=NULL and pov!.pItem!=NULL){
-            pov!.pItem!.isNormed <- complete and (definitionReady(pov) or
-                    ((scalar(pov) or closedPhysicalList(pov)) and known(pov)==3))
+            if(complete and (definitionReady(pov) or
+                    ((scalar(pov) or closedPhysicalList(pov)) and known(pov)==3))){
+                pov!.pItem!.isNormed <- true
+                pov!.pItem!.normalizationOwner <- pov!.pItem
+            }
         }
     }
     // Unsupported semantics stay symbolic. This deliberately does not infer
@@ -1109,7 +1131,7 @@ struct ProteusGraphAccess {
                 target!.pItem!.value!.numericExtentApplied <- combined.numericExtentApplied
             }
             if(explicitSize and target!.pItem!.value!.overlayType==NUM){target!.pItem!.value!.sizeMode <- fromGiven}
-            target!.pItem!.isNormed <- false
+            target!.pItem!.noteNormalizationWork()
             target!.workRevision <+- 1
             return(true)
         }
@@ -1163,7 +1185,7 @@ struct ProteusGraphAccess {
         body!.addPOVToWrkList(source)
         body!.funcArgs <- NULL
         pov!.pItem!.hasInnrOutr <- false
-        pov!.pItem!.isNormed <- false; pov!.workRevision <+- 1
+        pov!.pItem!.noteNormalizationWork(); pov!.workRevision <+- 1
         return(true)
     }
     me bool: hasArgument(our POV: pov) <- {
@@ -1261,7 +1283,7 @@ struct ProteusGraphAccess {
         owner!.pItem!.infSize!.evalMode <- emUnknown
         if(temporalCursor(owner)){owner!.pItem!.temporalValueSource <- selected}
         else if(!hasDirectIdentity(owner, selected)){registry!.recordIdentity(owner, selected, iekAssertion, 0)}
-        owner!.workRevision <+- 1; owner!.pItem!.isNormed <- false
+        owner!.workRevision <+- 1; owner!.pItem!.noteNormalizationWork()
         return(true)
     }
     me bool: selectionAgrees(our POV: owner, our POV: selected) <- {
@@ -1286,7 +1308,7 @@ struct ProteusGraphAccess {
         if(!hasDirectIdentity(owner, selected)){
             registry!.recordIdentity(owner, selected, iekListCorrespondence, 0)
         }
-        owner!.workRevision <+- 1; owner!.pItem!.isNormed <- false
+        owner!.workRevision <+- 1; owner!.pItem!.noteNormalizationWork()
         return(true)
     }
     our infonState: concatSource(our POV: pov, me int: slot) <- {
@@ -1420,7 +1442,7 @@ struct ProteusGraphAccess {
                 owner!.pItem!.infSize!.num <- plan.size; changed <- true
             }
         }
-        if(changed){owner!.workRevision <+- 1; owner!.pItem!.isNormed <- false}
+        if(changed){owner!.workRevision <+- 1; owner!.pItem!.noteNormalizationWork()}
         return(changed)
     }
     me bool: sparse(our POV: pov) <- <%{

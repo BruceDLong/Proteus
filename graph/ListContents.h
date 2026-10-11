@@ -62,7 +62,10 @@ public:
         if(traversal_.ready() || ends_.empty() || !access_->canSetCountedSize(request.node,measure_)) return {};
         auto access=access_;auto target=request.node;auto measure=measure_;
         return {{request,{},0},{{"Set counted list size",[access,target,measure] {
-            return access->applyCountedSize(target,measure);
+            auto view=readView(target);
+            bool changed=access->applyCountedSize(target,measure);
+            return SetResult{changed,changed ? ReadScope::changedObjects({
+                target.get(),view.get(),view->infSize.get()}) : Changes::only({})};
         }}}};
     }
     bool satisfied() const override {

@@ -64,6 +64,37 @@ int main(){
   std::cout<<"batch parts="<<count<<" evaluations="<<visits<<" replay added=0\n";
   initial.cancel();midway.cancel();batch.cancel();repeat.cancel();local.close();
  }
+ // Unbounded filling uses one root, including omitted typed parts. Reads below
+ // must not trigger separate normalizations of the child or its fields.
+ auto all=[&](Node p){auto h=g.normalizeAll(p);h.waitForCompletion();check(!h.status().failed,"full normalization failed");handles.push_back(h);return h;};
+ auto definitionsBefore=defs->stringify();
+ auto complete=parse("box:{child,}");auto full=all(complete);
+ auto completeChild=g.knownField(complete,"child"),completeX=g.knownField(completeChild,"x"),completeSibling=g.knownField(complete,"sibling");
+ check(completeX&&known(completeX)&&completeX->pItem->value->num==9&&completeSibling&&known(completeSibling)&&completeSibling->pItem->value->num==8,"full request missed omitted nested parts");
+ check(defs->stringify()==definitionsBefore,"full request changed shared definitions");
+ auto fullCount=full.deductionStats().evaluations;auto fullAgain=all(complete);
+ check(fullAgain.deductionStats().evaluations==fullCount,"full replay repeated traversal");
+ auto nested=parse("{a:{b:{c:{d:_=11}}}}");all(nested);
+ auto bottom=g.knownField(g.knownField(g.knownField(g.knownField(nested,"a"),"b"),"c"),"d");
+ check(bottom&&known(bottom)&&bottom->pItem->value->num==11,"full request stopped at a depth boundary");
+ auto openAll=parse("{a:_=7, ...}");auto openHandle=all(openAll);
+ auto latePart=parse("b:{c:_=12}");g.withUpdate([&]{openAll->pItem->value->items.appendPov(latePart);latePart->pParent=openAll.get();});
+ openHandle.waitForCompletion();auto lateValue=g.knownField(latePart,"c");
+ check(lateValue&&known(lateValue)&&lateValue->pItem->value->num==12,"full request missed a later subtree");
+ auto sparseAll=parse("*1000000+{_ | ...}");auto sparseCount=sparseAll->pItem->value->items.size();all(sparseAll);
+ check(sparseAll->pItem->value->items.size()==sparseCount,"full request enumerated virtual sparse members");
+ auto selectedAll=parse("*1+{*1+{x:_=6}}@[1]");all(selectedAll);
+ check(selectedAll->stringify().find("x:6")!=std::string::npos,"full request missed selected result");
+ // Full filling must resolve an unchanged sibling through its prior state,
+ // even when the requested result has already materialized its own typed parts.
+ auto temporalDefs=parse("{#part=*3+{label:$,cargo:*100+_,pose:*24+_} #left=part:{label:'left',} #right=part:{label:'right',} #state=*2+{left,right} #known=state:{left:{cargo:7,pose:1},right:{cargo:9,pose:2}} #table={20 10} #catalog={0 1 2 3 4 5 6 7 8 99} #change={T state state:{left:{cargo:%?=%@[1]~part:{label:'right',}.cargo,pose:%?=table@[%@[1]~part:{label:'right',}.pose]},}} #view=*3+{placements,derived=catalog@[%.placements~part:{label:'left',}.pose],unchanged=catalog@[%.placements~part:{label:'right',}.pose]}}");
+ auto hdefs=g.normalize(temporalDefs);hdefs.waitForCompletion();check(!hdefs.status().failed,"temporal definitions failed");handles.push_back(hdefs);
+ auto temporalBefore=temporalDefs->stringify();auto temporal=parse("view:{placements:%?=change:{T known ?}@[2],}");all(temporal);
+ auto changed=g.knownField(temporal,"derived"),unchanged=g.knownField(temporal,"unchanged");
+ check(changed&&known(changed)&&changed->pItem->value->num==99,"full request lost changed part");
+ check(unchanged&&known(unchanged)&&unchanged->pItem->value->num==1,"full request missed preserved sibling");
+ check(temporalDefs->stringify()==temporalBefore,"full temporal request changed declarations");
+ std::cout<<"full subtree, omitted parts, replay, open growth, sparse tail, selection and temporal preservation passed\n";
  bool invalid=false;try{g.normalizeToDepth(root,-1);}catch(const std::invalid_argument&){invalid=true;}check(invalid,"negative depth accepted");
  for(auto& h:handles)h.cancel();core.deInit();proteusGraph_deinitialize();std::cout<<"depth semantics passed\n";
 }

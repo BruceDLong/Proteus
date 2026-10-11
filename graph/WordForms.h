@@ -78,7 +78,7 @@ public:
             SetModeBits(spec->infSize->flags,infonState::evalMode,infonState::emUnknown);
             spec->type=std::make_shared<WordUse>();spec->type->setAsGiven("word");
             item->value->listSpec=spec;
-            SetFlagBit(item->flags,infonView::isNormed,false);++node->workRevision;return true;
+            item->noteNormalizationWork();++node->workRevision;return true;
         },{text.size()+1,words.size()*3+4}}};
     }
 };

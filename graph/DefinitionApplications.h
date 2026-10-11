@@ -73,6 +73,7 @@ private:
     DependencyKey catalogueChanges_ = std::make_shared<Dependency>();
     DependencyKey catalogueKey(const std::string& name) const {
         auto& key=catalogueKeys_[name];if(!key) key=std::make_shared<Dependency>();
+        key->completionRelevant=true;
         ReadScope::observe(key);return key;
     }
     // Read-only declaration compilation survives unrelated instance writes.
@@ -83,22 +84,37 @@ private:
     // Untracked edits and explicit normalization still recheck source snapshots.
     // Scoped publications can retain the existing dependency proof instead.
     std::uint64_t validationReset_=1;
-    struct CatalogueResolution {bool declared=false; POVNode body;};
+    struct CatalogueResolution {
+        bool declared=false, objectsTracked=false;
+        POVNode body;
+        std::set<DependencyKey> reads;
+    };
     mutable std::map<std::string,CatalogueResolution> resolutions_;
     const CatalogueResolution& resolveCatalogue(const std::string& name) const {
         catalogueKey(name); // A cached absence is still an observed name.
         auto found=resolutions_.find(name);
-        if(found!=resolutions_.end()) return found->second;
+        if(found!=resolutions_.end() && (!ReadScope::tracksObjects() || found->second.objectsTracked)) {
+            for(const auto& key:found->second.reads) ReadScope::observe(key);
+            return found->second;
+        }
         CatalogueResolution result;bool ambiguous=false;
-        auto entries=catalogue_.find(name);
-        if(entries!=catalogue_.end()) for(const auto& entry:entries->second) {
-            if(!access_->definitionApplies(entry.declaration)) continue;
-            ambiguous |= result.declared || !access_->definitionSelectable(entry.declaration) ||
-                access_->definitionName(entry.declaration)!=name || !registered(entry.declaration);
-            result.declared=true;result.body=entry.body;
+        {
+            // Cache the declaration reads too, not only the selected body.
+            // A caller's pending footprint must see an unpublished header or
+            // qualifier edit even when name resolution was already cached.
+            ReadScope capture([&](const DependencyKey& key){result.reads.insert(key);});
+            auto entries=catalogue_.find(name);
+            if(entries!=catalogue_.end()) for(const auto& entry:entries->second) {
+                if(!access_->definitionApplies(entry.declaration)) continue;
+                ambiguous |= result.declared || !access_->definitionSelectable(entry.declaration) ||
+                    access_->definitionName(entry.declaration)!=name || !registered(entry.declaration);
+                result.declared=true;result.body=entry.body;
+            }
         }
         if(ambiguous) result.body.reset();
-        return resolutions_.emplace(name,std::move(result)).first->second;
+        result.objectsTracked=ReadScope::tracksObjects();
+        for(const auto& key:result.reads) ReadScope::observe(key);
+        return resolutions_.insert_or_assign(name,std::move(result)).first->second;
     }
     // Complete, context-free checks follow their actual instance reads.
     // A Set receipt has no captured reads and lasts only for its publication.
@@ -652,6 +668,18 @@ public:
         evidence.checkedReset=validationReset_;evidence.objectsTracked=ReadScope::tracksObjects();
         return matches;
     }
+    // An operation with a complete footprint need not re-read unchanged source
+    // meaning merely because its writes have not been published yet. Unknown
+    // writers and direct callers retain the full fresh check.
+    bool currentAfter(const Certificate& proof,const Changes* pending) const {
+        bool fresh=!pending || pending->all || pending->keys.count(modelFacts_);
+        if(!fresh && !pending->empty()) {
+            auto& evidence=*proof->evidence;
+            fresh=!ReadScope::tracksObjects() || !evidence.objectsTracked || !evidence.reads ||
+                evidence.reads->affectedBy(*pending);
+        }
+        return current(proof,fresh);
+    }
     bool covers(const Certificate& proof, const POVNode& node, bool fullMeaning=false) const {
         if (!proof->requirement) return false;
         // Root-local template/occurrence relationships are not captured as a
@@ -765,8 +793,8 @@ public:
         bool changed=remember(node,proof);
         return {changed,Changes::only({evidenceKey(node)})};
     }
-    SetResult applyChanges(const POVNode& node, const Certificate& proof, const std::shared_ptr<ProteusDefinitionPlan>& plan) {
-        if (!current(proof,true) || !covers(proof, node) || !plan->supported) return false;
+    SetResult applyChanges(const POVNode& node, const Certificate& proof, const std::shared_ptr<ProteusDefinitionPlan>& plan, const Changes* pending=nullptr) {
+        if (!currentAfter(proof,pending) || !covers(proof, node) || !plan->supported) return false;
         Changes changes=Changes::only({});
         auto applied=plan->applyChanges();
         if(applied.changed) changes.include(applied.changes.value_or(modelChanges()));
@@ -800,7 +828,8 @@ public:
                 std::map<POVNode,std::int64_t>{},true,true);
             if(!plan->supported || plan->writes.empty()) continue;
             return {{"Apply retained part requirements",[this,node,proof,plan] {
-                return applyChanges(node,proof,plan);
+                const auto pending=Changes::only({});
+                return applyChanges(node,proof,plan,&pending);
             },plan->work}};
         }
         return {};
@@ -808,14 +837,14 @@ public:
     bool apply(const POVNode& node, const Certificate& proof, const std::shared_ptr<ProteusDefinitionPlan>& plan) {
         return applyChanges(node,proof,plan);
     }
-    std::shared_ptr<ProteusDefinitionPlan> reusable(const POVNode& target, const POVNode& source, const Certificate& proof) const {
+    std::shared_ptr<ProteusDefinitionPlan> reusable(const POVNode& target, const POVNode& source, const Certificate& proof, const Changes* pending=nullptr) const {
         // Certificates belong to the infonView: aliases already share them.
         // There is no transfer to plan, including child-certificate replay.
         // This does not certify the data; ordinary type goals still check it.
         // Sharing only value storage is insufficient: headers may differ.
-        if (readView(target) == readView(source)) return {};
+        if (readView(target) == readView(source) || retainsMeaning(target,proof)) return {};
         // Earlier writes in this Set may not have published their changes.
-        if (!current(proof,true)) return {};
+        if (!currentAfter(proof,pending)) return {};
         try {
             // This can run after another write in the same atomic Set; a
             // pre-Set instance check does not describe that intermediate state.
@@ -825,11 +854,14 @@ public:
             return targetPlan->dataSatisfied() ? targetPlan : nullptr;
         } catch (const std::runtime_error&) { return {}; }
     }
-    // Retaining this exact scalar meaning makes another transfer a no-op.
+    // Retaining this exact meaning makes another transfer a no-op.
     // It does not certify instance data or skip ordinary validation goals.
-    bool retainsScalarMeaning(const POVNode& target,const Certificate& proof) const {
+    // List/contextual meanings obey the same rule: child certificates and
+    // bound expressions are established by the ordinary type goals, just as
+    // for two aliases of one view. Re-transfer cannot add a missing meaning.
+    bool retainsMeaning(const POVNode& target,const Certificate& proof) const {
         const auto& requirement=proof->requirement;
-        if(!requirement || requirement->list || requirement->hasExpressions() || !requirement->choices.empty()) return false;
+        if(!requirement) return false;
         evidenceKey(target);
         auto retained=evidence_.find(readView(target));
         return retained!=evidence_.end() && std::any_of(retained->second.begin(),retained->second.end(),
@@ -839,28 +871,32 @@ public:
         evidenceKey(source);
         auto found=evidence_.find(readView(source));
         return found!=evidence_.end() && std::any_of(found->second.begin(),found->second.end(),
-            [&](const Certificate& proof) {return !retainsScalarMeaning(target,proof);});
+            [&](const Certificate& proof) {return !retainsMeaning(target,proof);});
     }
-    bool canInherit(const POVNode& target, const POVNode& source) const {
+    bool canInherit(const POVNode& target, const POVNode& source, const Changes* pending=nullptr) const {
         evidenceKey(source);
         auto found = evidence_.find(readView(source)); if (found == evidence_.end()) return false;
-        for (const auto& proof : found->second) if (reusable(target, source, proof)) return true;
+        for (const auto& proof : found->second) if (reusable(target, source, proof,pending)) return true;
         return false;
     }
-    SetResult inheritChanges(const POVNode& target, const POVNode& source) {
+    SetResult inheritChanges(const POVNode& target, const POVNode& source, const Changes* pending=nullptr) {
         evidenceKey(source);
         auto found = evidence_.find(readView(source)); if (found == evidence_.end()) return false;
         auto certificates = found->second;
+        Changes unpublished=pending ? *pending : Changes{};
         Changes changes=Changes::only({});
         std::vector<std::pair<POVNode,Certificate>> checked;
         for (const auto& proof : certificates) {
-            if(retainsScalarMeaning(target,proof)) continue;
-            auto plan=reusable(target,source,proof);
+            if(retainsMeaning(target,proof)) continue;
+            auto plan=reusable(target,source,proof,&unpublished);
             if(!plan) continue;
             // Only order metadata may remain: required contents already exist.
             bool transferable=!proof->requirement->hasExpressions();
             auto applied=plan->applyChanges();
-            if(applied.changed) changes.include(applied.changes.value_or(modelChanges()));
+            if(applied.changed) {
+                changes.include(applied.changes.value_or(modelChanges()));
+                unpublished.include(applied.changes.value_or(Changes{}));
+            }
             for (const auto& binding : plan->bindings) {
                 auto child = std::make_shared<Proof>();
                 child->evidence = proof->evidence; child->requirement = binding.second;
@@ -981,7 +1017,7 @@ public:
                 for(const auto& type:instance->addedTypes) original->addedTypes.push_back(type);
                 for(const auto& rhs:instance->wrkList) original->addPOVToWrkList(rhs);
                 SetModeBits(original->flags,infonView::viewMode,infonView::vmOverlay);
-                SetFlagBit(original->flags,infonView::isNormed,false);
+                original->noteNormalizationWork();
                 access->applyTypeFacts(target,required);
                 access->bind(target);++target->workRevision;
                 return true;
@@ -1067,7 +1103,10 @@ private:
         auto definitions = definitions_; auto target = request.node;
         return {{certificate->requirement->repeated ? "Apply repeated member requirements" :
             certificate->requirement->list ? "Apply finite list type requirements" : "Apply scalar type requirements",
-            [definitions, target, certificate, plan] { return definitions->applyChanges(target, certificate, plan); }, plan->work}};
+            [definitions, target, certificate, plan] {
+                const auto pending=Changes::only({});
+                return definitions->applyChanges(target, certificate, plan,&pending);
+            }, plan->work}};
     }
 public:
     bool satisfied() const override {

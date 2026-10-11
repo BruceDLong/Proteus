@@ -14,12 +14,19 @@ namespace proteus4 {
 // catalogue binding. Tokens belong to one graph context. Read and publication
 // callbacks run under that context's lock, so observing and subscribing cannot
 // race a producer. They do not hold graph nodes or a second adjacency graph.
+class DependencyProof;
 class Dependency {
 public:
     using Wake = std::function<void()>;
     // A reader of derived evidence retains its producer, even if the cache
     // replaces that certificate before the reader has settled.
     std::weak_ptr<void> evidence;
+    std::weak_ptr<DependencyProof> proof; // typed provenance for pending-write checks
+    // Completed immutable facts ignore ordinary progress notifications. New
+    // obligations have a separate token; derived readers preserve that DAG.
+    std::shared_ptr<Dependency> requirements;
+    bool completionRelevant = false;
+    std::function<std::shared_ptr<DependencyProof>()> completedEvidence;
 private:
     std::vector<std::weak_ptr<Wake>> readers_;
     std::size_t cleanupAt_ = 64;
@@ -81,10 +88,13 @@ public:
         if(found!=keys_.end()) return found->second;
         if(keys_.size()>=cleanupAt_) {
             for(auto it=keys_.begin();it!=keys_.end();)
-                if(it->second.use_count()==1) it=keys_.erase(it);else ++it;
+                if(it->second.use_count()==1 && it->second->requirements.use_count()==1) it=keys_.erase(it);else ++it;
             cleanupAt_=std::max<std::size_t>(256,2*keys_.size());
         }
-        return keys_[object]=std::make_shared<Dependency>();
+        auto key=std::make_shared<Dependency>();
+        key->requirements=std::make_shared<Dependency>();
+        key->requirements->completionRelevant=true;
+        return keys_[object]=std::move(key);
     }
 };
 
@@ -121,6 +131,10 @@ public:
         scope.recent_[scope.recentIndex_++ % 8]=object;
         if(scope.observedObjects_.insert(object).second) observe(objects_->key(object));
     }
+    static void newRequirements(std::initializer_list<const void*> objects) {
+        if(!objects_) return;
+        for(auto object:objects) if(object) objects_->key(object)->requirements->publish();
+    }
     static bool tracksObjects() {return objects_!=nullptr;}
     static Changes changedObjects(std::initializer_list<const void*> objects) {
         if(!objects_) return {}; // callers outside a tracked search stay conservative
@@ -151,12 +165,29 @@ public:
 // remain weak; releasing cached evidence releases this dependency DAG.
 class DependencyProof : public std::enable_shared_from_this<DependencyProof> {
     bool valid_ = true;
+    bool completionOnly_ = false;
+    std::shared_ptr<DependencyProof> completion_;
     DependencyKey changed_ = std::make_shared<Dependency>();
     std::set<DependencyKey> reads_;
     std::shared_ptr<Dependency::Wake> wake_;
     std::vector<std::shared_ptr<DependencyProof>> children_;
     std::vector<std::shared_ptr<void>> evidence_;
+    std::vector<DependencyKey> derived_;
     std::vector<std::function<void()>> invalidators_;
+    void observeCompletion(const DependencyKey& key) {
+        if(key->completionRelevant) {
+            completion_->observe({key});
+            if(key->completedEvidence) if(auto source=key->completedEvidence())
+                if(!source->live()) completion_->invalidate();
+        }
+        else if(key->requirements) completion_->observe({key->requirements});
+        else if(key->completedEvidence) {
+            if(auto source=key->completedEvidence()) {
+                completion_->observe({source->changed_});
+                if(!source->live()) completion_->invalidate();
+            }
+        }
+    }
     void invalidate() {
         if(!valid_) return;
         valid_=false;
@@ -166,8 +197,11 @@ class DependencyProof : public std::enable_shared_from_this<DependencyProof> {
 public:
     using Ptr = std::shared_ptr<DependencyProof>;
     static Ptr make(const std::set<DependencyKey>& reads, std::vector<Ptr> children = {}) {
-        auto proof=Ptr(new DependencyProof());proof->changed_->evidence=proof;
+        auto proof=Ptr(new DependencyProof());proof->changed_->evidence=proof;proof->changed_->proof=proof;
         std::weak_ptr<DependencyProof> weak=proof;
+        proof->changed_->completedEvidence=[weak] {
+            auto source=weak.lock();return source ? source->completion() : Ptr{};
+        };
         proof->wake_=std::make_shared<Dependency::Wake>([weak] {if(auto p=weak.lock()) p->invalidate();});
         proof->children_=std::move(children);proof->observe(reads);
         for(const auto& child:proof->children_) {
@@ -179,12 +213,45 @@ public:
     void observe(const std::set<DependencyKey>& reads) {
         for(const auto& key:reads) if(key!=changed_ && reads_.insert(key).second) {
             key->subscribe(wake_);
-            if(auto evidence=key->evidence.lock()) evidence_.push_back(std::move(evidence));
+            if(completion_) observeCompletion(key);
+            if(auto evidence=key->evidence.lock()) {
+                evidence_.push_back(std::move(evidence));derived_.push_back(key);
+            }
         }
     }
-    // Evidence shared on a model object may have been produced by another
-    // graph context. Reuse can require the current context's token explicitly.
+    // Project a settled proof onto obligations, retaining child proofs rather
+    // than flattening their reads. Broad wakeups and acquired facts are absent.
+    Ptr completion() {
+        if(completionOnly_) return shared_from_this();
+        if(!completion_) {
+            completion_=make({});completion_->completionOnly_=true;
+            completion_->changed_->completionRelevant=true;
+            for(const auto& key:reads_) observeCompletion(key);
+        }
+        return completion_;
+    }
+    // Query an unpublished footprint without invalidating or publishing it.
+    // Opaque derived evidence has no inspectable footprint and stays conservative.
+    bool affectedBy(const Changes& changes) const {
+        if(changes.empty()) return false;
+        if(changes.all) return true;
+        std::vector<const DependencyProof*> pending{this};
+        std::unordered_set<const DependencyProof*> seen;
+        while(!pending.empty()) {
+            auto at=pending.back();pending.pop_back();
+            if(!seen.insert(at).second) continue;
+            for(const auto& key:changes.keys) if(at->reads_.count(key)) return true;
+            for(const auto& key:at->derived_) {
+                auto source=key->proof.lock();
+                if(!source) return true;
+                // The existing evidence_ ownership retains each source proof.
+                pending.push_back(source.get());
+            }
+        }
+        return false;
+    }
     bool observes(const DependencyKey& key) const {return reads_.count(key)!=0;}
+    bool live() const {return valid_;} // Cache maintenance must not record a semantic read.
     bool valid() const {ReadScope::observe(changed_);return valid_;}
     void onInvalidated(std::function<void()> action) {
         if(valid_) invalidators_.push_back(std::move(action));else action();

@@ -95,7 +95,17 @@ private:
     }
 public:
     PersistentTraversal(Q root,std::function<void(const Q&,bool)> contribution)
-        :contribution_(std::move(contribution)) {state_->witness->changed->evidence=state_->witness;activate(entry(root));}
+        :contribution_(std::move(contribution)) {
+        state_->witness->changed->evidence=state_->witness;
+        std::weak_ptr<Witness> weak=state_->witness;
+        state_->witness->changed->completedEvidence=[weak] {
+            std::vector<DependencyProof::Ptr> children;
+            if(auto witness=weak.lock())
+                for(const auto& entry:witness->proofs) children.push_back(entry.second->completion());
+            return DependencyProof::make({},std::move(children))->completion();
+        };
+        activate(entry(root));
+    }
     void connect(std::function<void()> wake,DependencyKey broad,DependencyKey untracked) {
         state_->wake=std::move(wake);broad_=std::move(broad);untracked_=std::move(untracked);
     }

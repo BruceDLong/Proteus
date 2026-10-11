@@ -3,6 +3,8 @@
 // Depth bounds expansion of the requested result. Its header goal can still
 // follow any dependency needed to establish that result. Loaded member links
 // form a retained frontier; a larger request reuses the shared header goals.
+constexpr std::int64_t allContainedParts = -1;
+
 class ProteusDepthGoal : public GoalSpec<POVNode> {
     using Q=Query<POVNode>;
     std::shared_ptr<ProteusGraphAccess> access_;
@@ -16,7 +18,11 @@ class ProteusDepthGoal : public GoalSpec<POVNode> {
             step.destination=next;out.edges.push_back(std::move(step));
         };
         if(q.kind==normalizationDepth) {
-            out.refinements.push_back({{q.node,sizeAndValue,exposeStructure,{},q.context},{0,0},"resolve requested header",false});
+            // A whole-subtree request also settles values behind equal/selected
+            // sources. Header-only access can expose a local copy's parts while
+            // leaving its source's temporal preservation unevaluated.
+            auto extent=q.argument==allContainedParts ? fillImmediateParts : exposeStructure;
+            out.refinements.push_back({{q.node,sizeAndValue,extent,{},q.context},{0,0},"resolve requested header",false});
             if(q.argument==0) return out;
             if(definitions_->required(q.node))
                 out.refinements.push_back({{q.node,typeRequirements,fillImmediateParts,{},q.context},{0,0},"expose requested parts",false});
@@ -37,7 +43,8 @@ class ProteusDepthGoal : public GoalSpec<POVNode> {
         } else if(q.kind==depthMember) {
             POVDescription member(q.node);
             auto context=q.context;context.insert(context.begin(),q.node);
-            auto remaining=q.argument-(member.position().embedded ? 0 : 1);
+            auto remaining=q.argument==allContainedParts ? allContainedParts :
+                q.argument-(member.position().embedded ? 0 : 1);
             out.refinements.push_back({{q.node,normalizationDepth,remaining,{},std::move(context)},
                 {0,0},"expand requested part",false});
             if(auto next=member.adjacent()) {auto onward=q;onward.node=next;edge(std::move(onward));}
@@ -75,6 +82,6 @@ public:
             for(auto member=POVDescription(request.node).member();member;member=POVDescription(member).adjacent())
                 if(!seen.insert(member).second || !getFlagBit(readView(member)->flags,infonView::isNormed)) return;
         } else if(!access_->scalar(request.node) && !access_->definitionReady(request.node)) return;
-        completion_->mark(request.node,evidence);
+        completion_->mark(request,evidence);
     }
 };

@@ -120,23 +120,61 @@ public:
     }
 };
 
-// Completion flags are derived metadata. Keep weak witnesses independently
-// of handles so later information invalidates even a released search result.
-// Their evidence retains subscriptions after the originating handle retires.
+// Completion is a permanent fact about this immutable view. Query receipts
+// additionally track new obligations, independently of ordinary progress wakes.
 class ProteusCompletion {
     std::shared_ptr<ProteusGraphAccess> access_;
     struct Reply { std::uint64_t origin, order, position; POVNode node; };
     std::vector<Reply> effects_;
+    struct Receipt {
+        std::weak_ptr<POV> node,related,world,topic;
+        int kind;std::int64_t argument;
+        std::vector<std::weak_ptr<POV>> context;
+        std::vector<std::int64_t> coordinates;
+        DependencyProof::Ptr proof;
+        static bool same(const std::weak_ptr<POV>& a,const POVNode& b) {
+            return !a.owner_before(b) && !b.owner_before(a);
+        }
+        bool matches(const Query<POVNode>& q,const ProteusGraphAccess& access) const {
+            if(!same(node,q.node) || !same(related,q.related) || kind!=q.kind || argument!=q.argument ||
+               coordinates!=q.coordinates || context.size()!=q.context.size() ||
+               !same(world,access.worldSource) || !same(topic,access.contextSource)) return false;
+            for(std::size_t i=0;i<context.size();++i) if(!same(context[i],q.context[i])) return false;
+            return true;
+        }
+    };
+    using Key=std::weak_ptr<infonView>;
+    std::map<Key,std::vector<Receipt>,std::owner_less<Key>> completed_;
+    std::size_t cleanupAt_=64;
 public:
     explicit ProteusCompletion(std::shared_ptr<ProteusGraphAccess> access)
         : access_(std::move(access)) {}
-    void mark(const POVNode& node, const DependencyProof::Ptr& evidence) {
-        readView(node)->normalizationEvidence=evidence;
-        std::weak_ptr<infonView> weak=readView(node);
-        evidence->onInvalidated([weak] {
-            if(auto view=weak.lock()) SetFlagBit(view->flags,infonView::isNormed,false);
-        });
-        access_->setNormed(node, true);
+    DependencyProof::Ptr reuse(const Query<POVNode>& q) {
+        auto view=readView(q.node);
+        if(view->normalizationOwner!=view.get() || !getFlagBit(view->flags,infonView::isNormed)) return {};
+        auto found=completed_.find(view);if(found==completed_.end()) return {};
+        for(const auto& receipt:found->second)
+            if(receipt.matches(q,*access_) && receipt.proof->live() && receipt.proof->valid()) return receipt.proof;
+        return {};
+    }
+    void mark(const Query<POVNode>& query, const DependencyProof::Ptr& evidence) {
+        auto node=query.node;auto view=readView(node);
+        access_->setNormed(node,true);
+        if(!getFlagBit(view->flags,infonView::isNormed)) return;
+        view->normalizationEvidence=evidence->completion();
+        if(completed_.size()>=cleanupAt_) {
+            for(auto it=completed_.begin();it!=completed_.end();)
+                if(it->first.expired()) it=completed_.erase(it);else ++it;
+            cleanupAt_=std::max<std::size_t>(64,2*completed_.size());
+        }
+        auto& receipts=completed_[view];
+        receipts.erase(std::remove_if(receipts.begin(),receipts.end(),[&](const Receipt& receipt) {
+            return receipt.node.expired() || receipt.matches(query,*access_) || !receipt.proof->live();
+        }),receipts.end());
+        Receipt receipt{query.node,query.related,access_->worldSource,access_->contextSource,
+                        query.kind,query.argument,{},query.coordinates,view->normalizationEvidence};
+        for(const auto& owner:query.context) receipt.context.push_back(owner);
+        receipts.push_back(std::move(receipt));
     }
     void represented(const POVNode& node, const POVNode& rhs, const DependencyProof::Ptr& evidence) {
         RHSRepresentation::remember(node,rhs,evidence);
@@ -189,8 +227,10 @@ public:
         if(plan.complete && readView(request.node)->workListContainsPOV(request.related)) {
             auto access=access_;auto owner=request.node,source=request.related;
             ++plan.work.creations;
-            return {{"Consolidate RHS equality",[this,access,owner,source] {
-                access->bind(owner);access->bind(source);
+            return {{"Consolidate RHS equality",[this,access,owner,source]() -> SetResult {
+                WriteScope identities;
+                bool named=access->bind(owner);named=access->bind(source) || named;
+                auto view=readView(owner);
                 auto relation=access->registry->recordIdentity(owner,source,iekAssertion,0);
                 if(relation) {
                     std::lock_guard<std::mutex> lock(access->registry->registryMutex);
@@ -198,13 +238,18 @@ public:
                     // Reusing a POV after replacing its view must not overwrite
                     // a constraint still owned by the earlier shared view.
                     if(storedOwner && storedOwner!=readView(owner)) {
-                        checked_=represented_=true;return false;
+                        checked_=represented_=true;
+                        return {named,named ? Changes{} : Changes::only({})};
                     }
                     storedOwner=readView(owner);
                 }
                 readView(owner)->discardWrkListPOV(source);
-                ++owner->workRevision;SetFlagBit(readView(owner)->flags,infonView::isNormed,false);
-                return true;
+                ++owner->workRevision;view->noteNormalizationWork();
+                // Consolidated constraints remain owned by this shared view.
+                // New registry edges also publish endpoint/identity-name reads.
+                auto changes=named ? Changes{} : ReadScope::changedObjects({owner.get(),view.get(),source.get()});
+                changes.include(identities.changes());
+                return {true,std::move(changes)};
             },plan.work}};
         }
         return {{"Check RHS representation", [this, represented = plan.represented] {
@@ -262,6 +307,7 @@ class ProteusGoal : public GoalSpec<POVNode> {
     std::function<Expansion<POVNode>(const Query<POVNode>&)> navigate_;
     // A bare word's meaning remains a demand after another route supplies its
     // structure. Materialization must not turn it into a supplied description.
+    DependencyProof::Ptr reused_;
     bool declaredMeaning_ = false;
     bool deferred_ = false, reachedEnd_ = false;
     GraphListMeasure measure_;
@@ -273,15 +319,20 @@ public:
         : GoalSpec<POVNode>(query), access_(std::move(access)),
           completion_(std::move(completion)), evidence_(std::move(evidence)), definitions_(std::move(definitions)), insertion_(std::move(insertion)),navigate_(std::move(navigate)) {}
     void beginPass() override {
+        reused_=completion_->reuse(request);
+        if(reused_) return;
+        // A copied or manually set bit has no completion witness of its own.
+        auto view=readView(request.node);
+        if(view->normalizationOwner!=view.get()) SetFlagBit(view->flags,infonView::isNormed,false);
         if(!declaredMeaning_ && request.kind>=sizeOnly && request.kind<=sizeAndValue &&
            !access_->inputPending(request.node) && access_->hasTypeRequirements(request.node) &&
            !definitions_->describesParts(request.node)) declaredMeaning_=true;
         deferred_ = false;
         reachedEnd_ = false;
         measure_.reset();
-        if (request.kind == sizeAndValue && request.argument!=exposeStructure) access_->setNormed(request.node, false);
     }
     std::optional<Expansion<POVNode>> expand(const Visit<POVNode>& visit) override {
+        if(reused_) return Expansion<POVNode>{};
         auto out=navigate_(visit.query);
         if(declaredMeaning_ && visit.query.node==request.node &&
            visit.query.kind>=sizeOnly && visit.query.kind<=sizeAndValue &&
@@ -294,11 +345,12 @@ public:
         return out;
     }
     void settled(bool fullyResolved, const DependencyProof::Ptr& evidence) override {
-        if (request.kind == sizeAndValue && request.argument!=exposeStructure && fullyResolved && satisfied())
-            completion_->mark(request.node,evidence);
+        if (!reused_ && request.kind == sizeAndValue && request.argument!=exposeStructure && fullyResolved && satisfied())
+            completion_->mark(request,evidence);
         if (request.kind == sizeAndValue) completion_->reply(request.node);
     }
     std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
+        if(reused_) return {};
         if (request.kind == listContents) {
             if(visit.query.kind==listContents) {
                 access_->bind(visit.query.node);
@@ -313,7 +365,10 @@ public:
             auto measure = measure_;
             if(!access->canSetCountedSize(target,measure)) return {};
             return {{"Set counted list size", [access, target, measure] {
-                return access->applyCountedSize(target, measure);
+                auto view=readView(target);
+                bool changed=access->applyCountedSize(target,measure);
+                return SetResult{changed,changed ? ReadScope::changedObjects({
+                    target.get(),view.get(),view->infSize.get()}) : Changes::only({})};
             }}};
         }
         access_->bind(visit.query.node);
@@ -389,7 +444,10 @@ public:
         if (numeric.changed) {
             auto access = access_; auto node = visit.query.node;
             return {{"Set normalized numeric literal", [access, node, numeric] {
-                return access->applyNumericLiteral(node, numeric);
+                auto view=readView(node);
+                bool changed=access->applyNumericLiteral(node,numeric);
+                return SetResult{changed,changed ? ReadScope::changedObjects({
+                    node.get(),view.get(),view->value.get()}) : Changes::only({})};
             }}};
         }
         auto source = visit.query.node;
@@ -399,10 +457,12 @@ public:
         // List values are related by member correspondence, not a shallow
         // overlay copy. That goal also validates shape before copying size.
         if (demand != sizeOnly && access_->literalList(target)) {
-            if (!definitions_->canInherit(target, source)) return {};
+            const auto pending=Changes::only({});
+            if (!definitions_->canInherit(target, source,&pending)) return {};
             auto definitions = definitions_;
             return {{"Reuse checked type requirements", [definitions, target, source] {
-                return definitions->inheritChanges(target, source);
+                const auto pending=Changes::only({});
+                return definitions->inheritChanges(target, source,&pending);
             }}};
         }
         // Work is conjunctive. A route is evidence only if each intermediate
@@ -450,7 +510,7 @@ public:
                     result.changes->include(ReadScope::changedObjects({node.get(),view.get(),
                         view->infSize.get(),view->value.get()}));
                 }
-                auto inherited=definitions->inheritChanges(node,source);
+                auto inherited=definitions->inheritChanges(node,source,&*result.changes);
                 result.changed=changed || inherited.changed || result.changed;
                 if(inherited.changed) result.changes->include(inherited.changes.value_or(Changes{}));
                 if(inherited.retainEvidence) receipts.push_back(std::move(inherited.retainEvidence));
@@ -460,6 +520,7 @@ public:
         },{targets.size()-1,0}}};
     }
     bool satisfied() const override {
+        if(reused_) return reused_->valid();
         if (request.kind == relationshipConstraints) return true;
         if (request.kind == sizeAndValue && access_->isDefinition(request.node))
             return definitions_->registered(request.node);
@@ -469,6 +530,7 @@ public:
         return (access_->known(request.node) & request.kind) == request.kind;
     }
     bool symbolic() const override {
+        if(reused_) return !reused_->valid();
         bool routesOnly=request.kind==valueOnly && request.argument==settleExistingRoutes;
         return deferred_ || (!routesOnly && !satisfied());
     }
@@ -647,34 +709,90 @@ public:
 // A field expression walks its existing operands. The same goal handles the
 // value slot and the size slot, without creating a proxy POV for either field.
 class ProteusConcatGoal : public GoalSpec<POVNode> {
+    using Q=Query<POVNode>;
     std::shared_ptr<ProteusGraphAccess> access_;
-    GraphConcatTerms terms_;
-    bool verified_ = false, reachedEnd_ = false;
+    std::function<Expansion<POVNode>(const Q&)> expand_;
+    std::map<Q,POVNode> members_;
+    std::set<Q> ends_;
+    bool verified_=false;
+    PersistentTraversal<POVNode> traversal_;
+    void contribute(const Q& q,bool active) {
+        if(q.kind==concatMember) {
+            if(active) members_[q]=q.node;else members_.erase(q);
+        }
+        if(q.kind==concatEnd) {
+            if(active) ends_.insert(q);else ends_.erase(q);
+        }
+        verified_=false;
+    }
 public:
-    ProteusConcatGoal(Query<POVNode> query, std::shared_ptr<ProteusGraphAccess> access)
-        : GoalSpec<POVNode>(query), access_(std::move(access)) {}
-    void beginPass() override { terms_.items.clear(); verified_ = reachedEnd_ = false; }
-    std::vector<SetCommand> found(const Visit<POVNode>& visit) override {
-        if (visit.query.kind == concatMember) terms_.items.push_back(visit.query.node);
-        if (visit.query.kind == concatEnd) reachedEnd_ = true;
-        return {};
+    ProteusConcatGoal(Q query,std::shared_ptr<ProteusGraphAccess> access,
+                      std::function<Expansion<POVNode>(const Q&)> expand)
+        :GoalSpec<POVNode>(query),access_(std::move(access)),expand_(std::move(expand)),
+         traversal_(query,[this](const Q& q,bool active){contribute(q,active);}) {}
+    bool persistent() const override {return true;}
+    bool retainPath() const override {return false;}
+    DeductionStats deductionStats() const override {return traversal_.counters();}
+    std::vector<std::pair<Q,std::size_t>> deductionVisits() const override {return traversal_.visits();}
+    void connect(std::function<void()> wake,DependencyKey broad,DependencyKey untracked) override {
+        traversal_.connect(std::move(wake),std::move(broad),std::move(untracked));
+    }
+    std::vector<SetCommand> found(const Visit<POVNode>&) override {return {};}
+    std::optional<Expansion<POVNode>> expand(const Visit<POVNode>&) override {
+        traversal_.advance(expand_);
+        Expansion<POVNode> out;out.refinements=traversal_.takeRequirements();out.deferred=traversal_.deferred();
+        if(traversal_.ready()) {
+            auto q=request;out.edges.push_back({"continue concatenation deduction",{0,0},false,[q]{return q;}});
+        }
+        return out;
     }
     CommandBatch<POVNode> finishPass() override {
-        if (!reachedEnd_) return {};
+        verified_=false;
+        if(traversal_.ready() || ends_.empty() || traversal_.deferred()) return {};
+        // Each occurrence retains its position and owned prerequisites. Ordering
+        // comes from its query coordinate, including after insertion/withdrawal.
+        std::map<std::int64_t,POVNode> ordered;
+        for(const auto& [q,member]:members_) {
+            if(q.coordinates.size()!=1) return {};
+            auto [at,added]=ordered.emplace(q.coordinates.front(),member);
+            if(!added && at->second!=member) return {};
+        }
+        GraphConcatTerms terms;
+        for(const auto& [position,member]:ordered) terms.items.push_back(member);
         // Drain operand discovery before publishing. A known contradiction
         // rejects its required parent before any Set, while an open list can
         // still contribute its available prefix without being fully normalized.
-        auto plan = access_->planConcat(request.node, request.argument, terms_);
+        auto plan = access_->planConcat(request.node, request.argument, terms);
         if (!plan.valid) return {};
         verified_ = true;
         auto access = access_; auto owner = request.node; auto slot = request.argument;
-        auto terms = terms_;
-        return {{request,{},0},{{"Set concatenation result", [access, owner, slot, terms] {
-            return access->applyConcat(owner, slot, terms);
+        return {{request,{},0},{{"Set concatenation result", [access, owner, slot, terms]() -> SetResult {
+            // The adapter revalidates the live operands before any write. Keep
+            // replaced slots alive and publish both bindings, plus an appended
+            // tail's position and every registry relationship created below.
+            auto plan=access->planConcat(owner,slot,terms);
+            if(!plan.valid) return {false,Changes::only({})};
+            WriteScope identities;bool named=false;
+            for(const auto& member:plan.members) named=access->bind(member) || named;
+            auto view=readView(owner);auto size=view->infSize,value=view->value;
+            auto tail=POVDescription(owner).member(true);
+            auto position=tail ? std::optional<POVDescription::PositionFacts>{POVDescription::positionSnapshot(tail)} : std::nullopt;
+            bool changed=access->applyConcat(owner,slot,terms);
+            auto changes=Changes::only({});
+            if(changed) {
+                changes=ReadScope::changedObjects({owner.get(),view.get(),size.get(),value.get(),
+                    view->infSize.get(),view->value.get()});
+                if(tail) POVDescription::includePositionChange(changes,tail,*position);
+            }
+            changes.include(identities.changes());
+            if(named) changes=Changes{};
+            return {changed || named,std::move(changes)};
         }, {plan.visits, plan.creations}}}};
     }
-    bool satisfied() const override { return verified_; }
-    bool symbolic() const override { return !verified_; }
+    bool satisfied() const override {
+        traversal_.observe();return verified_ && !traversal_.ready() && !traversal_.deferred();
+    }
+    bool symbolic() const override {return !satisfied();}
 };
 
 class ProteusSelectionGoal : public GoalSpec<POVNode> {
@@ -920,7 +1038,7 @@ public:
         if (query.kind == listCorrespondence)
             return std::make_shared<ProteusCorrespondenceGoal>(query, access_, evidence_, definitions_);
         if (query.kind == concatField)
-            return std::make_shared<ProteusConcatGoal>(query, access_);
+            return std::make_shared<ProteusConcatGoal>(query,access_,[this](const Query<POVNode>& q){observeTask(q);return expand(q);});
         if (query.kind == selectIntersection)
             return std::make_shared<ProteusSelectionGoal>(query, access_);
         return std::make_shared<ProteusGoal>(query, access_, completion_, evidence_, definitions_, insertion_,
@@ -1091,7 +1209,7 @@ private:
         if (query.kind == concatField) {
             if (!access_->hasConcat(node, query.argument)) { result.deferred = true; return result; }
             result.edges.push_back(sequence(POVDescription::boundary(access_->concatSource(node, query.argument)),
-                {node, concatMember, query.argument, node, query.context}, {node, concatEnd, query.argument, node}));
+                {node, concatMember, query.argument, node, query.context,{0}}, {node, concatEnd, query.argument, node}));
             return result;
         }
         if (query.kind == concatMember) {
@@ -1101,7 +1219,10 @@ private:
             result.refinements.push_back({{node, valueOnly, 0, {}, context}, {0, 0}, "resolve operand value", false});
             if (access_->concatNeedsRadix(node))
                 result.refinements.push_back({{node, sizeOnly, 0, {}, context}, {0, 0}, "resolve numeric radix", false});
-            result.edges.push_back(sequence(description.adjacent(), query,
+            auto next=query;
+            if(next.coordinates.size()!=1) throw std::logic_error("concat operand position required");
+            ++next.coordinates.front();
+            result.edges.push_back(sequence(description.adjacent(),std::move(next),
                 {query.related, concatEnd, query.argument, query.related}));
             return result;
         }
@@ -1264,7 +1385,8 @@ private:
                     if (!access_->prefixList(source)) return;
                 }
                 if (!access_->relationSupported(node, source, demand)) {
-                    if (definitions_->canInherit(origin, source))
+                    const auto pending=Changes::only({});
+                    if (definitions_->canInherit(origin, source,&pending))
                         result.edges.push_back(direct("checked type evidence", {source, demand, 0, origin}));
                     if (access_->canSelect(source))
                         result.refinements.push_back({{source, selectIntersection, 0}, {1, 0}, "find RHS intersection result", false});

@@ -32,7 +32,7 @@ struct SparseOccurrence {
             if(!exposed) return false;
             access->bind(exposed);
             ++source->workRevision;++exposed->workRevision;
-            if(exposed->pParent) {++exposed->pParent->workRevision;SetFlagBit(readView(exposed->pParent)->flags,infonView::isNormed,false);}
+            if(exposed->pParent) {++exposed->pParent->workRevision;readView(exposed->pParent)->noteNormalizationWork();}
             return true;
         },{addCost(proofWork.visits,1),3}}};
     }

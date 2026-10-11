@@ -68,7 +68,7 @@ public:
         // The signed expression is consumed as a coordinate. It must no
         // longer be evaluated as the local list's cardinality.
         body->sizeExpression.reset();body->infSize=number(width);
-        ++owner->workRevision;SetFlagBit(body->flags,infonView::isNormed,false);
+        ++owner->workRevision;body->noteNormalizationWork();
         return true;
     }
 };

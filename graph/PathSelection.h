@@ -1029,7 +1029,7 @@ private:
                 if(state->alternatives) PathExpression::retainChoiceDeclaration(result,state->expression);
                 result->originID=previous->originID;result->infCharPos=previous->infCharPos;result->replyCharPos=previous->replyCharPos;
                 SetFlagBit(result->flags,infonView::doReply,getFlagBit(previous->flags,infonView::doReply));
-                SetFlagBit(result->flags,infonView::isNormed,false);
+                result->noteNormalizationWork();
                 state->result=result_;state->matches=matches;state->pending=pending;
                 state->resultView=readView(result_);state->resultRevision=result_->workRevision;
                 state->locations.clear();
@@ -1041,7 +1041,10 @@ private:
                 if(access->bind(owner)) publication.changes=Changes{};
                 ++owner->workRevision;
                 if(!alternatives) {
-                    auto inherited=definitions_->inheritChanges(owner,result_);
+                    auto pendingChanges=*publication.changes;
+                    for(const auto& previous:positions)
+                        POVDescription::includePositionChange(pendingChanges,previous.first,previous.second);
+                    auto inherited=definitions_->inheritChanges(owner,result_,&pendingChanges);
                     if(inherited.changed) publication.changes->include(inherited.changes.value_or(Changes{}));
                     publication.retainEvidence=std::move(inherited.retainEvidence);
                 }

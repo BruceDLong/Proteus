@@ -199,7 +199,7 @@ public:
         return {{"Set temporal value independence",[node,source]() -> SetResult {
             if(POVDescription(node).independentTemporalValue() || !POVDescription(source).independentTemporalValue()) return false;
             SetFlagBit(readView(node)->flags,infonView::independentTemporalValue,true);
-            SetFlagBit(readView(node)->flags,infonView::isNormed,false);
+            readView(node)->noteNormalizationWork();
             ++node->workRevision;
             return {true,ReadScope::changedObjects({node.get(),readView(node).get()})};
         }}};

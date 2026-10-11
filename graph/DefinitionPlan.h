@@ -390,7 +390,7 @@ private:
                 SetModeBits(readView(rhs)->flags,infonView::copySourceType,infonView::cstDefinition);
                 if(access->bind(rhs)) scopedWrites_=false;
                 readView(target->node)->addPOVToWrkList(rhs);
-                SetFlagBit(readView(target->node)->flags,infonView::isNormed,false);++target->node->workRevision;
+                readView(target->node)->noteNormalizationWork();++target->node->workRevision;
                 return true;
             });
         }
@@ -477,7 +477,7 @@ private:
                         auto combined=std::make_shared<infonView>(*existing);
                         auto rhs=std::make_shared<POV>(923);readView(rhs)=supplied;access->bind(rhs);
                         combined->addPOVToWrkList(rhs);readView(target->node)->value->listSpec=combined;
-                        SetFlagBit(readView(target->node)->flags,infonView::isNormed,false);++target->node->workRevision;
+                        readView(target->node)->noteNormalizationWork();++target->node->workRevision;
                         return true;
                     });
                 }
@@ -699,7 +699,7 @@ private:
            (!target->node || !POVDescription(target->node).independentTemporalValue())) {
             writes.push_back([target] {
                 SetFlagBit(readView(target->node)->flags,infonView::independentTemporalValue,true);
-                SetFlagBit(readView(target->node)->flags,infonView::isNormed,false);
+                readView(target->node)->noteNormalizationWork();
                 ++target->node->workRevision;return true;
             });
         }
@@ -764,7 +764,7 @@ private:
                 auto view=readView(target->node);
                 if(view->value->sizeMode==fromGiven) return false;
                 view->value->sizeMode=fromGiven;
-                SetFlagBit(view->flags,infonView::isNormed,false);++target->node->workRevision;
+                view->noteNormalizationWork();++target->node->workRevision;
                 return true;
             });
         }

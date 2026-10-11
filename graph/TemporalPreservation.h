@@ -32,7 +32,7 @@ class ProteusPreservationGoal : public GoalSpec<POVNode> {
         if(prior==source) return false;
         if(prior) return false; // competing correspondence is not replacement
         prior=source;++target->workRevision;
-        SetFlagBit(readView(target)->flags,infonView::isNormed,false);return true;
+        readView(target)->noteNormalizationWork();return true;
     }
     // An absent optional definition is not evidence that an unresolved word
     // denotes an extra part. Keep that negative correspondence provisional.
@@ -202,7 +202,7 @@ public:
                 auto member=readView(target)->value->items.append(item,false,609);
                 member->pParent=target.get();access->bind(member);changed=true;
             }
-            if(changed) {++target->workRevision;SetFlagBit(readView(target)->flags,infonView::isNormed,false);}
+            if(changed) {++target->workRevision;readView(target)->noteNormalizationWork();}
             return SetResult{changed,changes};
         },work});return out;
     }

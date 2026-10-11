@@ -103,6 +103,6 @@ public:
         if(result.facts.hasSize && getModeBits(item->infSize->flags,infonState::evalMode)==infonState::emUnknown) {
             SetModeBits(item->infSize->flags,infonState::evalMode,infonState::emLiteral);item->infSize->num=result.facts.size;
         }
-        item->value=body;SetFlagBit(item->flags,infonView::isNormed,false);++target->workRevision;return true;
+        item->value=body;item->noteNormalizationWork();++target->workRevision;return true;
     }
 };

@@ -219,11 +219,16 @@ public:
     ScalarMatch match(const POVNode& predicate,const POVNode& candidate,const std::vector<POVNode>& owners) {
         auto firstRefinement=out_.refinements.size();
         auto required=read(predicate,true,{});
-        if(required && !required->list && required->facts.valid && required->facts.overlay<0 &&
+        const bool collection=required && required->facts.overlay==infonState::LST &&
+            WordForms::collectionPredicate(predicate,*definitions_);
+        if(required && !required->list && required->facts.valid && (required->facts.overlay<0 || collection) &&
            !required->facts.hasSize && !required->facts.hasValue && !required->label.empty()) {
             // A bare type selection asks for nominal identity, not the entire
             // value behind that member's outstanding equality constraints.
+            // An inferred plural also requires a list header, not resolved
+            // values for every member of that collection.
             auto kind=matchType(predicate,candidate);
+            if(collection) kind=conjunction(kind,compareScalar(required->facts,definitions_->facts(candidate,false)));
             if(kind!=ScalarMatch::unknown)
                 return getFlagBit(readView(predicate)->flags,infonView::invertMatch) ? complement(kind) : kind;
         }

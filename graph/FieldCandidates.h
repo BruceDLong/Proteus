@@ -75,6 +75,11 @@ public:
             cleanupAt_=std::max<std::size_t>(64,2*answers_.size());
         }
         auto answer=std::make_shared<Answer>();answer->changed->evidence=answer;
+        std::weak_ptr<Answer> weak=answer;
+        answer->changed->completedEvidence=[weak] {
+            auto source=weak.lock();
+            return source && source->evidence ? source->evidence->completion() : DependencyProof::Ptr{};
+        };
         answers_[request]=answer;return answer;
     }
     ScalarMatch match(const POVNode& predicate,const POVNode& candidate,const std::vector<POVNode>& owners,

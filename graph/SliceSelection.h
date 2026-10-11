@@ -85,7 +85,7 @@ public:
         }
         if(changed) {
             ++view->result->workRevision;
-            SetFlagBit(readView(view->result)->flags,infonView::isNormed,false);
+            readView(view->result)->noteNormalizationWork();
         }
         return view->result;
     }

@@ -198,6 +198,26 @@ static bool saw(const NormalizationHandle<Node>& h, const std::string& label) {
 int main() {
     int cases = 0;
     {
+        // Multiple refinements and later passes must reuse the same full query
+        // without constructing discarded goal objects. Reuse still activates it.
+        struct CountingAccess : TrackedAccess {
+            std::atomic<int> goals{0};
+            std::shared_ptr<GoalSpec<Node>> goal(const Query<Node>& q) override {
+                ++goals;return TrackedAccess::goal(q);
+            }
+        };
+        auto a=std::make_shared<CountingAccess>();GraphManager<Node> manager(a);
+        auto root=node(1),left=node(2),right=node(3),child=node();
+        root->required={{left,0},{right,0}};left->required={{child,0}};right->required={{child,0}};
+        auto h=manager.normalize({root,1});h.waitForCompletion();
+        assert(h.status().withSubscribers && a->goals==4);
+        manager.updateIfChanged([&]{left->value=4;return true;},Changes::only({left->facts}));h.waitForCompletion();
+        assert(h.status().withSubscribers && a->goals==4);
+        manager.updateIfChanged([&]{child->value=7;return true;},Changes::only({child->facts}));h.waitForCompletion();
+        assert(!h.status().failed && !h.status().symbolicValues && root->complete && a->goals==4);
+        ++cases;
+    }
+    {
         // An optional route to the same child cannot erase an earlier
         // required demand emitted by a legacy producer in this pass.
         struct Access : TestAccess {
@@ -1146,6 +1166,51 @@ int main() {
         assert(threw && manager.read([&] {return root->size;})==12);
         result.cancel();result.waitForCompletion();manager.close();
         assert(result.status().cancelled);++cases;
+    }
+    {
+        // Completion outlives coarse progress hints, including after the
+        // original search proof has expired. New obligations still propagate
+        // through required proofs, and retained tokens survive address cleanup.
+        ObjectDependencies objects;ReadScope tracked({},&objects);
+        int value=0,other=0;auto hint=std::make_shared<Dependency>();
+        auto leaf=DependencyProof::make({objects.key(&value),hint});
+        auto parent=DependencyProof::make({}, {leaf});
+        auto completed=parent->completion();
+        hint->publish();objects.key(&value)->publish();
+        assert(!parent->valid() && completed->valid());
+        ReadScope::newRequirements({&other});assert(completed->valid());
+        parent.reset();leaf.reset();
+        std::vector<int> addresses(1024);
+        for(auto& address:addresses) objects.key(&address);
+        ReadScope::newRequirements({&value});assert(!completed->valid());++cases;
+    }
+    {
+        // Reads added while settlement records its final evidence must also
+        // reach an already-created completion receipt.
+        ObjectDependencies objects;ReadScope tracked({},&objects);
+        int value=0;auto proof=DependencyProof::make({});auto completed=proof->completion();
+        proof->observe({objects.key(&value)});
+        ReadScope::newRequirements({&value});assert(!completed->valid());++cases;
+    }
+    {
+        // Pending writes inspect transitive provenance without publishing or
+        // waking readers; unknown derived evidence remains conservative.
+        auto a=std::make_shared<Dependency>(),b=std::make_shared<Dependency>();
+        auto leaf=DependencyProof::make({a});
+        auto parent=DependencyProof::make({}, {leaf});
+        assert(parent->affectedBy(Changes::only({a})));
+        assert(!parent->affectedBy(Changes::only({b})));
+        assert(parent->valid() && leaf->valid());
+        assert(parent->affectedBy(Changes{}));
+        auto opaque=std::make_shared<Dependency>();
+        auto owner=std::make_shared<int>(1);opaque->evidence=owner;
+        auto unknown=DependencyProof::make({opaque});
+        assert(unknown->affectedBy(Changes::only({b})));
+        assert(!unknown->affectedBy(Changes::only({})));
+        auto observed=DependencyProof::make({});
+        {ReadScope capture([&](const DependencyKey& key){observed->observe({key});});parent->valid();}
+        assert(observed->affectedBy(Changes::only({a})));
+        assert(!observed->affectedBy(Changes::only({b})));++cases;
     }
     std::cout << "Graph search: " << cases << "/" << cases << " scenarios passed\n";
 }
