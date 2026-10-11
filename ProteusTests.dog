@@ -11,6 +11,7 @@ TestsToRun = `
     unit/worldManager/listSpecs
     unit/worldManager/embeddedLists
     unit/worldManager/openTails
+    unit/worldManager/spanExtents
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -3597,15 +3598,21 @@ struct GLOBAL {
     void: unit_graphFoundation_spans_closeTail(me string: tname) <- {
         if(!worldManagerTailPort(0)){FAIL("Open-tail port failed")}
     }
-    PENDING_ENGINE_TEST(unit/graphFoundation/spans/middleGap)
+    void: unit_graphFoundation_spans_middleGap(me string: tname) <- {
+        if(!worldManagerSpanPort(0)){FAIL("Span extent port failed")}
+    }
     void: unit_graphFoundation_spans_givenTail(me string: tname) <- {
         if(!worldManagerTailPort(1)){FAIL("Open-tail port failed")}
     }
     PENDING_ENGINE_TEST(unit/graphFoundation/spans/reverseTail)
     PENDING_ENGINE_TEST(unit/graphFoundation/spans/openPrefix)
     PENDING_ENGINE_TEST(unit/graphFoundation/spans/ambiguousGaps)
-    PENDING_ENGINE_TEST(unit/graphFoundation/spans/zeroGaps)
-    PENDING_ENGINE_TEST(unit/graphFoundation/spans/sizeConflict)
+    void: unit_graphFoundation_spans_zeroGaps(me string: tname) <- {
+        if(!worldManagerSpanPort(1)){FAIL("Span extent port failed")}
+    }
+    void: unit_graphFoundation_spans_sizeConflict(me string: tname) <- {
+        if(!worldManagerSpanPort(3)){FAIL("Span extent port failed")}
+    }
     void: unit_graphFoundation_spans_embeddedSizeConflict(me string: tname) <- {
         if(!worldManagerEmbeddedPort(5)){FAIL("Embedded-list port failed")}
     }
@@ -3629,7 +3636,9 @@ struct GLOBAL {
     void: unit_graphFoundation_spans_zeroTail(me string: tname) <- {
         if(!worldManagerTailPort(3)){FAIL("Open-tail port failed")}
     }
-    PENDING_ENGINE_TEST(unit/graphFoundation/spans/nestedOpenSpan)
+    void: unit_graphFoundation_spans_nestedOpenSpan(me string: tname) <- {
+        if(!worldManagerSpanPort(2)){FAIL("Span extent port failed")}
+    }
     PENDING_ENGINE_TEST(unit/graphFoundation/overlay/number)
     PENDING_ENGINE_TEST(unit/graphFoundation/overlay/string)
     PENDING_ENGINE_TEST(unit/graphFoundation/overlay/parsedAny)
@@ -6467,7 +6476,6 @@ struct GLOBAL {
             {"{{_}} = {7}","",worldRejected},
             {"{&*2+{_}} = {7}","",worldPartial},
             {"{&*_+{1}}","",worldPartial},
-            {"{&{1 ...}}","",worldUnsupported},
             {"{&'ab'}","",worldUnsupported}
         };
         for(const auto& c:cases){
@@ -6636,8 +6644,6 @@ struct GLOBAL {
             {"{...} = {1 ...}","",worldUnsupported},
             {"{1} = {...}","",worldUnsupported},
             {"? = {1 ...}","",worldUnsupported},
-            {"{1 ... 3} = {1 2 3}","",worldUnsupported},
-            {"{&{1 ...}} = {1 2}","",worldUnsupported},
             {"({1} {2 ...})","",worldUnsupported},
             {"{rot| ...} = {1}","",worldUnsupported},
             {"{...} == {1}","",worldUnsupported},
@@ -6697,7 +6703,7 @@ struct GLOBAL {
             }
         }
         auto constrained=parse("{&{9 ...}} = {1 2}");auto constrainedBefore=toString(constrained->pItem.get());auto constrainedResult=agent.normalize(constrained);
-        check(constrainedResult->outcome==worldUnsupported && constrainedResult->publications==0 && toString(constrained->pItem.get())==constrainedBefore,"unsupported embedded prefix cannot silently vanish into a tail match");
+        check(constrainedResult->outcome==worldRejected && constrainedResult->publications==0 && toString(constrained->pItem.get())==constrainedBefore,"conflicting embedded prefix cannot silently vanish into a tail match");
         auto locallyClosed=parse("{&{...} = {1 2}}");auto local=agent.normalize(locallyClosed);
         check(local->complete() && toString(locallyClosed->pItem.get())=="{&{1 2}}","embedded local work can prove its own finite extent before parent traversal");
         auto nestedSource=parse("{{5 6}| ...} = {{...}}");auto nestedResult=agent.normalize(nestedSource);
@@ -6723,5 +6729,135 @@ struct GLOBAL {
         ProteusParser parser(&core,true,0);parser.initParseFromString("tail template","5");parser.doParse(spec);
         check(wait->complete() && wait->templateApplications==2 && wait->framesCreated==frames+5 && toString(waitSpec->pItem.get())=="{5 5}","template arrival continues the same target frame");
         core.deInit();std::cout<<"OPEN_TAIL_CHECKS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_spanExtents(me string: tname) <- {
+        if(!worldManagerSpanChecks()){FAIL("Span extent checks failed")}
+    }
+    me bool: worldManagerSpanPort(me int: which) <- <%{
+        ProteusCore core;core.init("",false);auto& agent=*core.agent;
+        const char* inputs[]={"{*10+1 ... *10+4} = {*10+1 *10+2 *10+3 *10+4}",
+            "{*10+_ ... ... *10+_} = {*10+1 *10+4}",
+            "{&{*10+1 &{...} *10+4} *10+5} = {*10+1 *10+2 *10+3 *10+4 *10+5}",
+            "*2+{*10+1 ... *10+4} = {*10+1 *10+2 *10+4}"};
+        auto root=agent.worldManager.parse(inputs[which]).target;if(!root){core.deInit();return false;}
+        auto body=root->pItem->value;auto source=root->pItem->wrkList[0]->pItem;auto before=toString(root->pItem.get()),rhs=toString(source.get());
+        auto first=body->items.head;auto gap=which==2?first->pItem->value->items.head->next:first->next;
+        auto h=agent.normalize(root);bool ok=root->pItem->value==body && body->items.head==first && rhs==toString(source.get());
+        if(which==3)ok &= h->outcome==worldPartial && h->publications==0 && before==toString(root->pItem.get()) && getFlagBit(gap->pItem->value->flags,infonState::tailUnfinished);
+        else{
+            ok &= h->complete() && getFlagBit(root->pItem->flags,infonView::isNormed) && getFlagBit(gap->flags,POV::isSubItm) && !getFlagBit(gap->pItem->value->flags,infonState::tailUnfinished);
+            if(which==1)ok &= root->pItem->infSize->num==2 && gap->pItem->value->items.isEmpty() && gap->next->pItem->value->items.isEmpty() &&
+                !getFlagBit(gap->next->pItem->value->flags,infonState::tailUnfinished) && first->pItem->value->num==1 && gap->next->next->pItem->value->num==4;
+            else ok &= gap->pItem->infSize->num==2 && gap->pItem->value->items.size()==2 && gap->pItem->value->items.head->pItem->value->num==2 &&
+                gap->pItem->value->items.tail->pItem->value->num==3 && gap->next->pItem->value->num==4 && root->pItem->infSize->num==(which==2?5:4);
+        }
+        if(!ok)std::cout<<"Span port "<<which<<": "<<h->detail<<" -> "<<toString(root->pItem.get())<<"\n";
+        core.deInit();return ok;
+    }%>
+    me bool: worldManagerSpanChecks() <- <%{
+        ProteusCore core;core.init("",false);auto& agent=*core.agent;auto& manager=agent.worldManager;
+        int checks=0,failures=0;
+        auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+        auto parse=[&](const std::string& text){auto p=manager.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+        struct Case{std::string input,expected;int outcome;};
+        const Case cases[]={
+            {"{1 ... 4} = {1 2 3 4}","{1 &{2 3} 4}",worldComplete},
+            {"{... 3} = {1 2 3}","{&{1 2} 3}",worldComplete},
+            {"{&{1 &{...} 4} 5} = {1 2 3 4 5}","{&{1 &{2 3} 4} 5}",worldComplete},
+            {"{_ ... ... _} = {1 4}","{1 &{} &{} 4}",worldComplete},
+            {"{1 &*2+{...} 4} = {1 2 3 4}","{1 &{2 3} 4}",worldComplete},
+            {"{&*1+{...} 2 &*2+{...}} = {1 2 3 4}","{&{1} 2 &{3 4}}",worldComplete},
+            {"{&*1+{...} 2 ... 5} = {1 2 3 4 5}","{&{1} 2 &{3 4} 5}",worldComplete},
+            {"{1 &{*10+_| ...} 4} = {1 2 3 4}","{1 &{*10+2 *10+3} 4}",worldComplete},
+            {"{&{1 ...} 4} = {1 2 3 4}","{&{1 2 3} 4}",worldComplete},
+            {"{{1 ... 4} 5} = {{1 2 3 4} 5}","{{1 &{2 3} 4} 5}",worldComplete},
+            {"{1 ... 4} = {1 _ 3 4} = {1 2 _ 4}","{1 &{2 3} 4}",worldComplete},
+            {"{1 ... 4} = {1 &{2 3} 4}","{1 &{2 3} 4}",worldComplete},
+            {"{1 ... 3} = {1 2 3}","{1 &{2} 3}",worldComplete},
+            {"{&{1 ...}} = {1 2}","{&{1 2}}",worldComplete},
+            {"{&{...} 3} = {3}","{&{} 3}",worldComplete},
+            {"{&{&{...} &{...}}} = {}","{&{&{} &{}}}",worldComplete},
+            {"{&*2+{...} ...} = {1 2 3 4}","{&{1 2} 3 4}",worldComplete},
+            {"{&{5| ...} 9} = {_ _ 9}","{&{5 5} 9}",worldComplete},
+            {"{&{!5| ...} 9} = {6 7 9}","{&{6 7} 9}",worldComplete},
+            {"{&{{_ 7}| ...} 9} = {{1 _} {2 _} 9}","{&{{1 7} {2 7}} 9}",worldComplete},
+            {"{&*(1 +1)+{...} 3} = {1 2 3}","{&{1 2} 3}",worldComplete},
+            {"{&*_+{...} 3} = {1 2 3}","{&{1 2} 3}",worldComplete},
+            {"{_ ... _}","{_ ... _}",worldPartial},
+            {"{&{1 ...}}","{&{1 ... }}",worldPartial},
+            {"{_ ... _} = {1 _ 3}","{1 &{_} 3}",worldPartial},
+            {"{_ ... ... _} = {1 2 3 4}","",worldPartial},
+            {"{&*2+{... ... 4} 5} = {1 4 5}","",worldPartial},
+            {"{&*2+{...} 4} = {1 4}","",worldPartial},
+            {"{&*0+{1 ...} 4} = {4}","",worldPartial},
+            {"{&*1.5+{...} 4} = {1 2 4}","",worldPartial},
+            {"{&*(-1)+{...} 4} = {4}","",worldPartial},
+            {"{1 ... 3} = *_+{1 2 3}","",worldPartial},
+            {"{1 ... 3} = {1 (2 +_) 3}","",worldPartial},
+            {"{1 ... 3} = {1 2 4}","",worldRejected},
+            {"{&{9 ...}} = {1 2}","",worldRejected},
+            {"{&{5| ...} 3} = {5 6 3}","",worldRejected},
+            {"{1 ... 4} = {1 2 3 4} = {1 9 3 4}","",worldRejected},
+            {"{1 ... 4} = {1 ... 4}","",worldUnsupported},
+            {"({1 ... 3} {4})","",worldUnsupported},
+            {"? = {1 ... 3}","",worldUnsupported},
+            {"{5| ... 9} = {5 5 9}","",worldUnsupported}
+        };
+        for(const auto& c:cases){
+            auto root=parse(c.input);if(!root)continue;auto before=toString(root->pItem.get());
+            struct Position{std::shared_ptr<POV> node,prev,next;std::shared_ptr<infonView> item;POV* parent;std::shared_ptr<infonState> body;};
+            std::vector<Position> positions;std::vector<std::shared_ptr<POV>> pending{root};
+            std::vector<std::pair<std::shared_ptr<infonView>,std::string>> sources;
+            while(!pending.empty()){
+                auto at=pending.back();pending.pop_back();auto item=at->pItem;
+                if(item->value->listSpec)sources.push_back({item->value->listSpec,toString(item->value->listSpec.get())});
+                for(auto rhs:item->wrkList)sources.push_back({rhs->pItem,toString(rhs->pItem.get())});
+                if(getModeBits(item->value->flags,infonState::evalMode)==infonState::emLiteral && getModeBits(item->value->flags,infonState::overlayType)==infonState::LST){
+                    positions.push_back({at,at->prev,at->next,item,at->pParent,item->value});
+                    for(auto m=item->value->items.head;m;m=m->next)pending.push_back(m);
+                }else positions.push_back({at,at->prev,at->next,item,at->pParent,nullptr});
+            }
+            auto h=agent.normalize(root);auto actual=toString(root->pItem.get());
+            check(h->outcome==c.outcome,c.input+" outcome "+std::to_string(h->outcome)+": "+h->detail);
+            check(actual==(c.expected.empty()?before:c.expected),c.input+" output "+actual);
+            bool stable=true;for(const auto& p:positions)stable &= p.node->pItem==p.item && p.node->prev==p.prev && (!p.next || p.node->next==p.next) && p.node->pParent==p.parent && (!p.body || p.node->pItem->value==p.body);
+            check(stable,c.input+" keeps existing occurrences and wrappers");
+            bool untouched=true;for(const auto& src:sources)untouched &= toString(src.first.get())==src.second;
+            check(untouched,c.input+" source and template unchanged");
+            if(c.expected.empty())check(h->publications==0,c.input+" no speculative publication");
+            if(c.outcome==worldComplete){auto again=agent.normalize(root);check(again->complete() && again->framesCreated==0,c.input+" completed result needs no new goal");}
+        }
+        for(int n:{32,64,128}){
+            std::string lhs="{|",rhs="{|";
+            for(int i=0;i<n;++i){lhs+=" &*1+{...}";rhs+=" "+std::to_string(i);}
+            auto target=parse(lhs+"} = "+rhs+"}");auto h=agent.normalize(target);
+            check(h->complete() && h->tailMembers==static_cast<unsigned>(n) && h->relationshipsRead<=static_cast<unsigned>(3*n+2) && h->framesCreated<=static_cast<unsigned>(4*n+3),"fixed-width gaps scale with input and output");
+            std::cout<<"SPAN_WIDE: "<<n<<" gaps, "<<h->framesCreated<<" frames, "<<h->relationshipsRead<<" edges, "<<h->sequenceVisits<<" visits\n";
+            lhs="{...}";for(int i=0;i<n;++i)lhs="{| &"+lhs+" 9}";
+            rhs="{| 7";for(int i=0;i<n;++i)rhs+=" 9";rhs+="}";
+            auto deep=parse(lhs+" = "+rhs);auto d=agent.normalize(deep);
+            check(d->complete() && d->tailMembers==1 && d->memberPairs==static_cast<unsigned>(n) && d->relationshipsRead<=static_cast<unsigned>(3*n+3) && d->framesCreated<=static_cast<unsigned>(5*n+5),"nested gap shares the source cursor across wrappers");
+            std::cout<<"SPAN_DEEP: "<<n<<" wrappers, "<<d->framesCreated<<" frames, "<<d->relationshipsRead<<" edges, "<<d->sequenceVisits<<" visits\n";
+        }
+        for(const auto& input:{"{&*1000000000+{...} 7}","{&*9223372036854775808+{...} 7}","{&*1000000000+{...} 7} = {1 7}"}){
+            auto root=parse(input);auto body=root->pItem->value->items.head->pItem->value;auto h=agent.normalize(root);
+            check(h->outcome==worldPartial && h->tailMembers==0 && h->framesCreated<10 && body->items.isEmpty() && getFlagBit(body->flags,infonState::tailUnfinished),"huge symbolic embedded span stays compressed");
+        }
+        // A conflict found after a gap was checked still prevents every write.
+        auto atomic=parse("{... 4} = {1 2 9}");auto before=toString(atomic->pItem.get());auto gap=atomic->pItem->value->items.head;
+        auto a=agent.normalize(atomic);check(a->outcome==worldRejected && a->publications==0 && gap->pItem->value->items.isEmpty() && before==toString(atomic->pItem.get()),"late sibling conflict leaves gap unchanged");
+        for(bool cancel:{false,true}){
+            auto target=parse("{&{5| ...} 9} = {_ _ 9}");auto source=target->pItem->wrkList[0]->pItem;auto input=source->value->items.tail->pItem;
+            manager.prepareInput(input);auto h=agent.normalize(target);auto edges=h->relationshipsRead,frames=h->framesCreated;
+            check(h->outcome==worldWaiting && h->publications==0,"pending endpoint retains earlier span prerequisites");
+            if(cancel)h->cancel();
+            ProteusParser parser(&core,true,0);parser.initParseFromString("span arrival","9");parser.doParse(input);
+            if(cancel)check(h->outcome==worldCancelled && h->publications==0,"cancelled span wait attaches nothing");
+            else check(h->complete() && h->relationshipsRead==edges && h->framesCreated<=frames+4 && toString(target->pItem.get())=="{&{5 5} 9}","span arrival resumes without rescanning relationships");
+        }
+        core.deInit();std::cout<<"SPAN_EXTENT_CHECKS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }
