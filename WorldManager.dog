@@ -76,8 +76,8 @@ struct WorldTextCursor {
     }
 }
 
-// Closed sequences borrow checked member frames. Joining adds one branch;
-// cursors traverse leaves once, regardless of concatenation nesting.
+// Sequences borrow member frames and summarize pending requirements. Joining
+// adds one branch; cursors visit leaves once despite concatenation nesting.
 struct WorldMember {
     our WorldFrame: frame
     me bool: embedded <- false
@@ -91,6 +91,7 @@ struct WorldList {
     me FlexNum: minimum <- 0
     me int: freeSpans <- 0 // Saturated at two: unique or potentially ambiguous.
     me bool: hasSpans <- false
+    me bool: requirementsPending <- false
 }
 struct WorldListPosition {
     our WorldList: sequence
@@ -169,12 +170,25 @@ struct WorldScalar {
     }
 }
 
-// Persistent requirements for members of an open tail. Each link refers to
-// checked evidence; appending an ancestor requirement never copies the chain.
+// Persistent ordered requirements: joining scopes never copies either side.
 struct WorldRequirement {
-    our WorldRequirement: prior
+    our WorldRequirement: left
+    our WorldRequirement: right
     our WorldFrame: frame
     our POV: edge
+}
+struct WorldRequirementCursor {
+    me List<our WorldRequirement>: pending
+    me uint64: visits <- 0
+    void: push(our WorldRequirement: requirement) <- {if(requirement!=NULL){pending.append(requirement)}}
+    our WorldRequirement: next() <- {
+        while(!pending.isEmpty()){
+            our WorldRequirement: requirement <- pending.popLast(); visits <+- 1
+            if(requirement!.frame!=NULL){return(requirement)}
+            push(requirement!.right); push(requirement!.left)
+        }
+        return(NULL)
+    }
 }
 
 struct WorldFrame {
@@ -205,7 +219,8 @@ struct WorldFrame {
     our POV: listSpecEdge
     our WorldFrame: listSpecFrame
     our WorldRequirement: tailRequirements
-    me List<our WorldRequirement>: memberRequirements
+    our WorldRequirement: pendingRequirements
+    me WorldRequirementCursor: memberRequirements
     our POV: nextOperand
     our POV: priorOperand
     me int64: operandsRead <- 0
@@ -350,6 +365,7 @@ struct WorldPOVGraph {
         result!.minimum <- left!.minimum+right!.minimum
         result!.freeSpans <- min(2, left!.freeSpans+right!.freeSpans)
         result!.hasSpans <- left!.hasSpans or right!.hasSpans
+        result!.requirementsPending <- left!.requirementsPending or right!.requirementsPending
         return(result)
     }
     me bool: appendMember(our WorldList: sequence, our WorldFrame: frame, me bool: embedded <- false) <- {
@@ -358,6 +374,7 @@ struct WorldPOVGraph {
         if(length>9223372036854775807-sequence!.length){return(false)}
         me WorldMember: member; member.frame <- frame; member.embedded <- embedded
         sequence!.members.append(member); sequence!.length <+- length
+        sequence!.requirementsPending <- sequence!.requirementsPending or needsRequirements(frame)
         if(embedded){
             if(frame!.facts.hasSize){sequence!.minimum <+- frame!.facts.size}
             else{
@@ -379,11 +396,24 @@ struct WorldPOVGraph {
         Allocate(frame!.pairedSequence)
         frame!.facts.contentsComplete <- true; frame!.facts.representable <- true
     }
-    void: retainRequirement(our WorldFrame: target, our WorldFrame: spec, our POV: edge) <- {
-        if(!target!.facts.openTail){return()}
-        our WorldRequirement:: requirement
-        requirement!.prior <- target!.tailRequirements; requirement!.frame <- spec; requirement!.edge <- edge
-        target!.tailRequirements <- requirement
+    me bool: needsRequirements(our WorldFrame: frame) <- {
+        return(frame!.facts.outcome==worldReady and (frame!.pendingRequirements!=NULL or
+            (frame!.facts.sequence!=NULL and frame!.facts.sequence!.requirementsPending)))
+    }
+    our WorldRequirement: joinRequirements(our WorldRequirement: left, our WorldRequirement: right) <- {
+        if(left==NULL){return(right)}
+        if(right==NULL){return(left)}
+        our WorldRequirement:: result; result!.left <- left; result!.right <- right
+        return(result)
+    }
+    our WorldRequirement: requirement(our WorldFrame: spec, our POV: edge) <- {
+        our WorldRequirement:: result; result!.frame <- spec; result!.edge <- edge
+        return(result)
+    }
+    void: beginRequirements(our WorldFrame: frame, our WorldRequirement: inherited <- NULL) <- {
+        frame!.pendingRequirements <- joinRequirements(frame!.pendingRequirements, inherited)
+        if(frame!.facts.openTail){frame!.tailRequirements <- joinRequirements(frame!.tailRequirements, frame!.pendingRequirements)}
+        frame!.applyingListSpec <- true; beginCorrespondence(frame)
     }
     me bool: checkEmbedded(our WorldFrame: frame) <- {
         me WorldScalar: facts <- frame!.prerequisite!.facts
@@ -526,6 +556,8 @@ struct WorldPOVGraph {
         }
         frame!.sourceIsOperand <- false
         our infonView: item <- frame!.node!.pItem
+        // Member constraints must be settled before this list's own identities.
+        if(!item!.wrkList.isEmpty() and needsRequirements(frame)){return(NULL)}
         if(frame!.nextWork>=item!.wrkList.size()){return(NULL)}
         our POV: edge <- item!.wrkList[frame!.nextWork]
         frame!.nextWork <+- 1
@@ -855,7 +887,7 @@ struct WorldPOVGraph {
             frame!.facts.outcome <- worldPartial; frame!.facts.detail <- frame!.prerequisite!.facts.detail
         }else if(frame!.sourceIsListSpec){
             frame!.listSpecFrame <- frame!.prerequisite
-            retainRequirement(frame, frame!.prerequisite, frame!.listSpecEdge)
+            if(frame!.facts.openTail){frame!.tailRequirements <- requirement(frame!.prerequisite, frame!.listSpecEdge)}
         }else if(memberSequence(frame) and frame!.sourceIsOperand){
             if(frame!.facts.sequence==NULL){Allocate(frame!.facts.sequence)}
             if(!appendMember(frame!.facts.sequence, frame!.prerequisite, frame!.sourceEdge!.isSubItm)){
@@ -1142,7 +1174,7 @@ struct WorldManager {
         pair!.node <- left!.node; pair!.facts <- left!.facts
         pair!.retainedWork <- left!.retainedWork
         pair!.listSpecFrame <- left!.listSpecFrame; pair!.listSpecEdge <- left!.listSpecEdge
-        pair!.tailRequirements <- left!.tailRequirements
+        pair!.tailRequirements <- left!.tailRequirements; pair!.pendingRequirements <- left!.pendingRequirements
         pair!.bodyBounds <- left!.bodyBounds; pair!.bodyHasSize <- left!.bodyHasSize; pair!.bodySize <- left!.bodySize
         pair!.initialized <- true; pair!.projected <- true
         request!.framesCreated <+- 1
@@ -1159,15 +1191,26 @@ struct WorldManager {
     our WorldFrame: projectListSpec(our WorldRequest: request, our WorldFrame: left,
                                    our WorldFrame: spec, our POV: edge) <- {
         our WorldFrame: pair <- projectFrame(request, left)
-        pair!.sourceEdge <- edge; pair!.applyingListSpec <- true; pair!.listSpecFrame <- spec
-        graph.retainRequirement(pair, spec, edge)
-        graph.beginCorrespondence(pair)
+        pair!.pendingRequirements <- graph.joinRequirements(pair!.pendingRequirements, graph.requirement(spec, edge))
+        pair!.facts.contentsComplete <- false
+        return(pair)
+    }
+
+    // Batch pending ancestor projections through each wrapper. Only semantic
+    // consumers demand this walk; structural containment can carry it onward.
+    our WorldFrame: resolveRequirements(our WorldRequest: request, our WorldFrame: left,
+                                       our WorldRequirement: inherited <- NULL) <- {
+        our WorldFrame: pair <- projectFrame(request, left)
+        graph.beginRequirements(pair, inherited)
         return(pair)
     }
 
     me bool: applyMemberRequirement(our WorldRequest: request, our WorldFrame: frame) <- {
-        if(frame!.memberRequirements.isEmpty() or frame!.pairedMember!.facts.outcome!=worldReady){return(false)}
-        our WorldRequirement: requirement <- frame!.memberRequirements.popLast()
+        if(frame!.pairedMember!.facts.outcome!=worldReady){return(false)}
+        me uint64: before <- frame!.memberRequirements.visits
+        our WorldRequirement: requirement <- frame!.memberRequirements.next()
+        request!.requirementVisits <+- frame!.memberRequirements.visits-before
+        if(requirement==NULL){return(false)}
         frame!.pairedMember <- derivePair(request, frame!.pairedMember, requirement!.frame, requirement!.edge)
         request!.templateApplications <+- 1; request!.ready.append(frame!.pairedMember)
         return(true)
@@ -1178,7 +1221,7 @@ struct WorldManager {
     void: correspond(our WorldRequest: request, our WorldFrame: frame) <- {
         if(frame!.pairedMember!=NULL){
             if(applyMemberRequirement(request, frame)){return()}
-            frame!.memberRequirements.clear()
+            frame!.memberRequirements <- WorldRequirementCursor()
             if(frame!.pairedEmbedded and frame!.pairedMember!.facts.outcome==worldPartial){
                 frame!.facts.outcome <- worldPartial; frame!.facts.detail <- frame!.pairedMember!.facts.detail; return()
             }
@@ -1200,11 +1243,7 @@ struct WorldManager {
                 frame!.remaining <- frame!.remaining-1
                 frame!.pairedEmbedded <- false; request!.tailMembers <+- 1
                 frame!.pairedMember <- member
-                our WorldRequirement: requirement <- frame!.tailRequirements
-                while(requirement!=NULL){
-                    frame!.memberRequirements.append(requirement); request!.requirementVisits <+- 1
-                    requirement <- requirement!.prior
-                }
+                frame!.memberRequirements.push(frame!.tailRequirements)
                 applyMemberRequirement(request, frame)
                 return()
             }
@@ -1212,21 +1251,22 @@ struct WorldManager {
         }
         if(left.frame==NULL){
             frame!.facts.sequence <- frame!.pairedSequence; frame!.pairedSequence <- NULL
+            frame!.pendingRequirements <- NULL
             if(!frame!.applyingListSpec and frame!.remaining!=0){
                 request!.outcome <- worldError; request!.detail <- "Correspondence source ended before its checked extent"; return()
             }
             frame!.facts.dischargeListSpec <- frame!.facts.representable and !graph.openLayout(frame!.facts)
-            if(!frame!.projected and !frame!.facts.representable){frame!.retainedWork.append(frame!.sourceEdge)}
+            if(!frame!.projected and !frame!.applyingListSpec and !frame!.facts.representable){frame!.retainedWork.append(frame!.sourceEdge)}
             request!.sequenceVisits <+- frame!.leftMembers.visits
             if(frame!.ownsRightCursor){request!.sequenceVisits <+- frame!.rightMembers!.visits}
             frame!.leftMembers <- WorldListCursor(); frame!.rightMembers <- NULL; frame!.ownsRightCursor <- false
-            frame!.corresponding <- false
+            frame!.corresponding <- false; frame!.applyingListSpec <- false
         }else{
             our WorldFrame: pair
             if(left.embedded){
                 // Preserve the left wrapper; its leaves continue the same RHS cursor.
                 if(frame!.applyingListSpec){
-                    pair <- projectListSpec(request, left.frame, frame!.listSpecFrame, frame!.sourceEdge)
+                    pair <- resolveRequirements(request, left.frame, frame!.pendingRequirements)
                 }else{
                     pair <- projectFrame(request, left.frame)
                     pair!.sourceEdge <- frame!.sourceEdge; pair!.rightMembers <- frame!.rightMembers
@@ -1238,9 +1278,13 @@ struct WorldManager {
                     if(pair!.facts.outcome==worldReady){pair!.facts.hasSize <- true; pair!.facts.size <- extent}
                 }
             }else{
-                our WorldFrame: right
-                if(frame!.applyingListSpec){right <- frame!.listSpecFrame; request!.templateApplications <+- 1}
-                else{right <- frame!.rightMembers!.next(); frame!.remaining <- frame!.remaining-1; request!.memberPairs <+- 1}
+                if(frame!.applyingListSpec){
+                    frame!.pairedMember <- left.frame; frame!.pairedEmbedded <- false
+                    frame!.memberRequirements.push(frame!.pendingRequirements)
+                    applyMemberRequirement(request, frame); return()
+                }
+                our WorldFrame: right <- frame!.rightMembers!.next()
+                frame!.remaining <- frame!.remaining-1; request!.memberPairs <+- 1
                 pair <- derivePair(request, left.frame, right, frame!.sourceEdge)
             }
             frame!.pairedMember <- pair; frame!.pairedEmbedded <- left.embedded
@@ -1267,6 +1311,11 @@ struct WorldManager {
             stopFrame(request, frame); return()
         }
         if(frame!.prerequisite!=NULL){
+            if(graph.needsRequirements(frame!.prerequisite) and
+               !(frame!.sourceIsOperand and graph.memberSequence(frame) and frame!.sourceEdge!.isSubItm)){
+                frame!.prerequisite <- resolveRequirements(request, frame!.prerequisite)
+                request!.ready.append(frame); request!.ready.append(frame!.prerequisite); return()
+            }
             if(frame!.sourceIsOperand and graph.memberSequence(frame) and frame!.sourceEdge!.isSubItm and
                !graph.checkEmbedded(frame)){stopFrame(request, frame); return()}
             if(frame!.sourceIsOperand and graph.memberSequence(frame) and
@@ -1293,6 +1342,9 @@ struct WorldManager {
         if(frame!.projected){frame!.finished <- true; return()}
         frame!.sourceEdge <- graph.nextRelationship(frame)
         if(frame!.sourceEdge==NULL){
+            if(graph.needsRequirements(frame) and (frame===request!.root or !frame!.node!.pItem!.wrkList.isEmpty())){
+                graph.beginRequirements(frame); request!.ready.append(frame); return()
+            }
             frame!.finished <- true
             if(frame!.facts.outcome!=worldReady){stopFrame(request, frame)}
             return()
