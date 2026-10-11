@@ -535,6 +535,12 @@ Parser readiness and wait registration use the same model lock. Potentially bloc
 
 The old printer consulted solver-specific representation receipts. Removing that dependency makes retained constraints visible; the real language tests expose the remaining consolidation/canonical-printing gaps. Preserve those expectations rather than restoring old receipts or silently accepting the new output. The [implementation status](normalization-design.md#implementation-status-proteus-engine-cutover) records the exact baseline, costs, removed source and unsupported boundaries.
 
+### P02 Retained physical-list and signed-number assertions
+
+**Validation increment, 2026-10-11.** Restore the ten original registrations for nested/embedded lists, inferred nested/embedded counts, lazy billion-member lists, conflicting children, list templates, empty lists, signed parsing, signed replay/copy and expression size modes. Independent clients linked to the generated library first verify that these behaviors already work. The ports retain the original value, size, flag, partial-result and source-preservation assertions; no solver behavior changes.
+
+The obsolete count-Set trace is replaced by checking the inferred literal size after removing the parser's original count evidence. A completed-replay work revision is replaced by zero frames/publications and unchanged payload pointers. The lazy-span work bound counts replacement frames, while still requiring zero materialized members. These checks preserve the observable purpose without recreating old scheduler APIs. General subscriptions, definition-dependent signed values and tests requiring mutation of borrowed sources remain pending rather than weakening their assertions. This applies P02's existing test policy; it introduces no normalization semantic or planning decision.
+
 ## Settled direction and retained constraints
 
 ### G01 Graph semantics and justified optimizations
