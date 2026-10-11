@@ -78,26 +78,45 @@ struct WorldTextCursor {
 
 // Closed sequences borrow checked member frames. Joining adds one branch;
 // cursors traverse leaves once, regardless of concatenation nesting.
+struct WorldMember {
+    our WorldFrame: frame
+    me bool: embedded <- false
+}
 struct WorldList {
     our WorldList: left
     our WorldList: right
-    me List<our WorldFrame>: members
+    me List<WorldMember>: members
     me int64: length <- 0
 }
-struct WorldListCursor {
-    me List<our WorldList>: pending
-    our WorldList: leaf
+struct WorldListPosition {
+    our WorldList: sequence
     me int64: pos <- 0
+}
+struct WorldListCursor {
+    me List<WorldListPosition>: pending
     me uint64: visits <- 0
-    void: push(our WorldList: sequence) <- {if(sequence!=NULL){pending.append(sequence)}}
-    our WorldFrame: next() <- {
-        while(leaf==NULL or pos>=leaf!.members.size()){
-            if(pending.isEmpty()){return(NULL)}
-            leaf <- pending.popLast(); pos <- 0; visits <+- 1
-            if(leaf!.left!=NULL or leaf!.right!=NULL){push(leaf!.right); push(leaf!.left); leaf <- NULL}
-        }
-        our WorldFrame: result <- leaf!.members[pos]; pos <+- 1; return(result)
+    void: push(our WorldList: sequence) <- {
+        if(sequence!=NULL){me WorldListPosition: at; at.sequence <- sequence; pending.append(at)}
     }
+    // Embedding belongs to the occurrence, not the cached member's infonView.
+    me WorldMember: nextMember(me bool: flatten) <- {
+        while(!pending.isEmpty()){
+            me WorldListPosition: at <- pending.popLast()
+            our WorldList: sequence <- at.sequence
+            if(at.pos==0){visits <+- 1}
+            if(flatten and sequence!.length==0){continue()}
+            if(sequence!.left!=NULL or sequence!.right!=NULL){push(sequence!.right); push(sequence!.left)}
+            else if(at.pos<sequence!.members.size()){
+                me WorldMember: member <- sequence!.members[at.pos]
+                at.pos <+- 1
+                if(at.pos<sequence!.members.size()){pending.append(at)}
+                if(flatten and member.embedded){push(member.frame!.facts.sequence)}
+                else{return(member)}
+            }
+        }
+        return(WorldMember())
+    }
+    our WorldFrame: next() <- {return(nextMember(true).frame)}
 }
 
 struct WorldScalar {
@@ -155,7 +174,10 @@ struct WorldFrame {
     me bool: projected <- false
     me bool: corresponding <- false
     me WorldListCursor: leftMembers
-    me WorldListCursor: rightMembers
+    our WorldListCursor: rightMembers
+    me bool: pairedEmbedded <- false
+    me bool: applyingListSpec <- false
+    me bool: ownsRightCursor <- false
     our WorldFrame: pairedMember
     our WorldList: pairedSequence
     their POV: expressionParent
@@ -282,8 +304,28 @@ struct WorldPOVGraph {
         result!.length <- left!.length+right!.length
         return(result)
     }
-    void: appendMember(our WorldList: sequence, our WorldFrame: member) <- {
-        sequence!.members.append(member); sequence!.length <+- 1
+    me bool: appendMember(our WorldList: sequence, our WorldFrame: frame, me bool: embedded <- false) <- {
+        me int64: length <- 1
+        if(embedded){length <- sequenceLength(frame!.facts.sequence)}
+        if(length>9223372036854775807-sequence!.length){return(false)}
+        me WorldMember: member; member.frame <- frame; member.embedded <- embedded
+        sequence!.members.append(member); sequence!.length <+- length
+        return(true)
+    }
+    void: beginCorrespondence(our WorldFrame: frame) <- {
+        frame!.corresponding <- true; frame!.leftMembers.push(frame!.facts.sequence)
+        Allocate(frame!.pairedSequence)
+        frame!.facts.contentsComplete <- true; frame!.facts.representable <- true
+    }
+    me bool: closedEmbedded(our WorldFrame: frame) <- {
+        me WorldScalar: facts <- frame!.prerequisite!.facts
+        if(facts.overlay!=LST or !facts.hasValue){
+            frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Embedded member needs a closed list"; return(false)
+        }
+        if(facts.outcome!=worldReady or !facts.hasSize or facts.size!=FlexNum(sequenceLength(facts.sequence))){
+            frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Embedded list extent is unresolved"; return(false)
+        }
+        return(true)
     }
     me bool: scalarExpression(our infonState: state) <- {
         return(state!.overlayType==LST and state!.evalMode==emConcat and !state!.inverted and
@@ -384,7 +426,7 @@ struct WorldPOVGraph {
                 if(operand!.prev!==frame!.priorOperand){
                     frame!.facts.outcome <- worldError; frame!.facts.detail <- "Broken expression operand chain"; return(NULL)
                 }
-                if(operand!.isSubItm){
+                if(operand!.isSubItm and !memberSequence(frame)){
                     frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Sublist expression operand"; return(NULL)
                 }
                 frame!.priorOperand <- operand; frame!.nextOperand <- operand!.next
@@ -727,11 +769,13 @@ struct WorldPOVGraph {
             frame!.listSpecFrame <- frame!.prerequisite
         }else if(memberSequence(frame) and frame!.sourceIsOperand){
             if(frame!.facts.sequence==NULL){Allocate(frame!.facts.sequence)}
-            appendMember(frame!.facts.sequence, frame!.prerequisite)
+            if(!appendMember(frame!.facts.sequence, frame!.prerequisite, frame!.sourceEdge!.isSubItm)){
+                frame!.facts.outcome <- worldError; frame!.facts.detail <- "List exceeds representable length"; return()
+            }
             frame!.facts.representable <- frame!.facts.representable and frame!.prerequisite!.facts.outcome==worldReady and
                 frame!.prerequisite!.facts.representable
             frame!.facts.contentsComplete <- frame!.facts.contentsComplete and completeFacts(frame!.prerequisite!.facts, false)
-            frame!.operandsRead <+- 1
+            frame!.operandsRead <- sequenceLength(frame!.facts.sequence)
         }else if(frame!.sourceIsOperand){
             if(frame!.operandsRead==0){frame!.expression <- frame!.prerequisite!.facts}
             else{
@@ -745,10 +789,9 @@ struct WorldPOVGraph {
             frame!.facts <- merge(left, frame!.prerequisite!.facts, frame!.sourceEdge)
             if(frame!.facts.outcome==worldReady and left.overlay==LST and left.hasValue and
                frame!.prerequisite!.facts.overlay==LST and frame!.prerequisite!.facts.hasValue){
-                frame!.corresponding <- true
-                frame!.leftMembers.push(left.sequence); frame!.rightMembers.push(frame!.prerequisite!.facts.sequence)
-                Allocate(frame!.pairedSequence)
-                frame!.facts.contentsComplete <- true; frame!.facts.representable <- true
+                beginCorrespondence(frame)
+                Allocate(frame!.rightMembers); frame!.ownsRightCursor <- true
+                frame!.rightMembers!.push(frame!.prerequisite!.facts.sequence)
             }
             our infonView: supplied <- frame!.sourceEdge!.pItem
             // A closed scalar leaf contributes only its checked type, size
@@ -816,19 +859,20 @@ struct WorldPOVGraph {
                 }
                 our POV: targetMember <- body!.items.head
                 me WorldListCursor: members; members.push(facts.sequence)
-                our WorldFrame: member <- members.next()
-                while(member!=NULL){
+                me WorldMember: occurrence <- members.nextMember(false)
+                while(occurrence.frame!=NULL){
+                    our WorldFrame: member <- occurrence.frame
                     if(!existing){
                         our infonView:: item
                         item!.viewMode <- vmAny; item!.itmMode <- mItem; item!.streamState <- parseDone
                         item!.infSize!.overlayType <- NUM; item!.infSize!.evalMode <- emUnknown
                         item!.value!.evalMode <- emUnknown; item!.value!.overlayType <- tUnknown
                         item!.orderMode <- member!.node!.pItem!.orderMode
-                        targetMember <- body!.items.append(item, false, 933); targetMember!.pParent <- job.target
+                        targetMember <- body!.items.append(item, occurrence.embedded, 933); targetMember!.pParent <- job.target
                     }
                     me WorldPublication: child; child.target <- targetMember; child.frame <- member; pending.append(child)
                     if(existing){targetMember <- targetMember!.next}
-                    member <- members.next()
+                    occurrence <- members.nextMember(false)
                 }
                 request!.sequenceVisits <+- members.visits
             }
@@ -983,15 +1027,20 @@ struct WorldManager {
 
     // Correspondence and listSpec projection share the same derived relationship.
     // Source frames stay immutable; each occurrence holds its own combined facts.
-    our WorldFrame: derivePair(our WorldRequest: request, our WorldFrame: left,
-                              our WorldFrame: right, our POV: edge) <- {
+    our WorldFrame: projectFrame(our WorldRequest: request, our WorldFrame: left) <- {
         our WorldFrame:: pair
         pair!.node <- left!.node; pair!.facts <- left!.facts
         pair!.retainedWork <- left!.retainedWork
         pair!.bodyBounds <- left!.bodyBounds; pair!.bodyHasSize <- left!.bodyHasSize; pair!.bodySize <- left!.bodySize
         pair!.initialized <- true; pair!.projected <- true
-        pair!.sourceEdge <- edge; pair!.prerequisite <- right
         request!.framesCreated <+- 1
+        return(pair)
+    }
+
+    our WorldFrame: derivePair(our WorldRequest: request, our WorldFrame: left,
+                              our WorldFrame: right, our POV: edge) <- {
+        our WorldFrame: pair <- projectFrame(request, left)
+        pair!.sourceEdge <- edge; pair!.prerequisite <- right
         return(pair)
     }
 
@@ -999,24 +1048,37 @@ struct WorldManager {
     // merge operation. Nested lists return here through the retained stack.
     void: correspond(our WorldRequest: request, our WorldFrame: frame) <- {
         if(frame!.pairedMember!=NULL){
-            graph.appendMember(frame!.pairedSequence, frame!.pairedMember)
+            if(!graph.appendMember(frame!.pairedSequence, frame!.pairedMember, frame!.pairedEmbedded)){
+                request!.outcome <- worldError; request!.detail <- "List exceeds representable length"; return()
+            }
             frame!.facts.contentsComplete <- frame!.facts.contentsComplete and graph.completeFacts(frame!.pairedMember!.facts, false)
             frame!.facts.representable <- frame!.facts.representable and frame!.pairedMember!.facts.outcome==worldReady and
                 frame!.pairedMember!.facts.representable
             frame!.pairedMember <- NULL
         }
-        our WorldFrame: left <- frame!.leftMembers.next()
-        our WorldFrame: right <- frame!.rightMembers.next()
-        if(left==NULL){
+        me WorldMember: left <- frame!.leftMembers.nextMember(false)
+        if(left.frame==NULL){
             frame!.facts.sequence <- frame!.pairedSequence; frame!.pairedSequence <- NULL
             if(!frame!.projected and !frame!.facts.representable){frame!.retainedWork.append(frame!.sourceEdge)}
-            request!.sequenceVisits <+- frame!.leftMembers.visits+frame!.rightMembers.visits
-            frame!.leftMembers <- WorldListCursor(); frame!.rightMembers <- WorldListCursor()
+            request!.sequenceVisits <+- frame!.leftMembers.visits
+            if(frame!.ownsRightCursor){request!.sequenceVisits <+- frame!.rightMembers!.visits}
+            frame!.leftMembers <- WorldListCursor(); frame!.rightMembers <- NULL; frame!.ownsRightCursor <- false
             frame!.corresponding <- false
         }else{
-            our WorldFrame: pair <- derivePair(request, left, right, frame!.sourceEdge)
-            frame!.pairedMember <- pair
-            request!.memberPairs <+- 1
+            our WorldFrame: pair
+            if(left.embedded){
+                // Preserve the left wrapper; its leaves continue the same RHS cursor.
+                pair <- projectFrame(request, left.frame)
+                pair!.sourceEdge <- frame!.sourceEdge; pair!.rightMembers <- frame!.rightMembers
+                pair!.applyingListSpec <- frame!.applyingListSpec; pair!.listSpecFrame <- frame!.listSpecFrame
+                graph.beginCorrespondence(pair)
+            }else{
+                our WorldFrame: right
+                if(frame!.applyingListSpec){right <- frame!.listSpecFrame; request!.templateApplications <+- 1}
+                else{right <- frame!.rightMembers!.next(); request!.memberPairs <+- 1}
+                pair <- derivePair(request, left.frame, right, frame!.sourceEdge)
+            }
+            frame!.pairedMember <- pair; frame!.pairedEmbedded <- left.embedded
             request!.ready.append(pair)
         }
     }
@@ -1040,11 +1102,21 @@ struct WorldManager {
             stopFrame(request, frame); return()
         }
         if(frame!.prerequisite!=NULL){
+            if(frame!.sourceIsOperand and graph.memberSequence(frame) and frame!.sourceEdge!.isSubItm and
+               !graph.closedEmbedded(frame)){stopFrame(request, frame); return()}
             if(frame!.sourceIsOperand and graph.memberSequence(frame) and
                frame!.listSpecFrame!=NULL and !frame!.memberSpecified and
                frame!.prerequisite!.facts.outcome==worldReady){
-                frame!.prerequisite <- derivePair(request, frame!.prerequisite, frame!.listSpecFrame, frame!.listSpecEdge)
-                frame!.memberSpecified <- true; request!.templateApplications <+- 1
+                if(frame!.sourceEdge!.isSubItm){
+                    frame!.prerequisite <- projectFrame(request, frame!.prerequisite)
+                    frame!.prerequisite!.sourceEdge <- frame!.listSpecEdge
+                    frame!.prerequisite!.applyingListSpec <- true; frame!.prerequisite!.listSpecFrame <- frame!.listSpecFrame
+                    graph.beginCorrespondence(frame!.prerequisite)
+                }else{
+                    frame!.prerequisite <- derivePair(request, frame!.prerequisite, frame!.listSpecFrame, frame!.listSpecEdge)
+                    request!.templateApplications <+- 1
+                }
+                frame!.memberSpecified <- true
                 request!.ready.append(frame); request!.ready.append(frame!.prerequisite); return()
             }
             graph.consumePrerequisite(frame)
