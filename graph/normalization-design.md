@@ -749,3 +749,30 @@ The full retained run reports **1602 failures / 1877 tests**, with **no new fail
 | Total | 275 | 188 | 1407 | 7 | 1877 |
 
 The seven other failures remain the same reference-registry cases. All 1544 prior compiled registrations, 58 original parser/model registrations, 15 protected fixture hashes and the original assertion-source hash are unchanged. The added registration is the traversal regression; no historical case is newly ported. WorldManager adds 82 lines and removes 30 (**net 52**). The unrelated `myTests.tst` is untouched. Logs, comparison fixtures and debugger evidence are in `/tmp/proteus-batched-specs/`.
+
+
+### Pending scalar comparison follow-up, 2026-10-11
+
+D02N allows a member or scalar target to keep an undecided comparison while continuing its remaining supplied evidence. The existing merge marks the two admitted cases: an exclusion against a positive scalar whose facts are incomplete, and a signed numeric equality whose extent is missing. A pending entry borrows the checked source frame and qualified edge through the existing persistent requirement structure. Unknown-to-known type, size or value transitions wake these entries; other edges do not. Resumption calls the same merge and retains only still-undecided checks. No tried wrkList prefix, operand fold or ancestor projection restarts.
+
+For example, `_ = !5 = 7` now becomes `7`, `_ = !5 = 5` rejects, and `9 = -1 = *10+_` becomes `*10+9`. The same mechanism lets `{7| &{!5| ...}} = {_}` become `{&{7}}`, including existing prefixes and later finite correspondence. It does not require a list-specific exclusion rule. Checked sources/templates remain unchanged, and separate occurrences share their evidence without sharing mutable pending state.
+
+Completion requires an empty pending-comparison chain. An unresolved scalar keeps its original body and relationships; containing lists preserve applicable templates and unresolved correspondence work. Detached publication refuses a new member whose checks are unresolved. A contradiction publishes nothing. Grouped RHS prerequisites and expression operands with pending checks remain partial rather than lending unchecked facts to their consumer. Negative targets, negative ranges, inverse expressions, ambiguous alignment and general later-link delivery retain their existing boundaries. Numeric size remains optional when no supplied comparison requires it. The conservative printing of nested RHS work also remains unchanged.
+
+Within an occurrence, each retained comparison is resumed at most once per newly known type, size and value: at most three resumptions in this fragment. Different occurrences pay for their own checks even when their sources are shared. Tests distinguish these attempts from original relationship reads, template applications, frame allocations and sequence visits. Both the initial pending insertion and occurrence inheritance use existing persistent joins. Payload comparison costs and other member/list work are additional. Parser arrival uses the same waiting request and cursor, with no replay of prior relationships; cancelled requests publish nothing.
+
+With 32/64/128 pending exclusions, then the same number of unrelated unknown edges, followed by separate type/size/value arrivals, tests measure **96/192/384 comparison resumptions**, **67/131/259 relationship reads** and **68/132/260 frames**. Without the three fact arrivals there are zero resumptions and no publication. With one exclusion at each of 32/64/128 embedded ancestors, three members and one later positive ancestor value, there are **96/192/384 resumptions**, **269/525/1037 frames** and **102/198/390 sequence visits**. Each scoped requirement still applies exactly once per member; comparison continuation does not repeat the wrapper walk.
+
+The final CodeDog regeneration builds TestProteus in **155.19 seconds**, and the separate shared library builds in **100.47 seconds**. Both generated targets include the same continuation and no GraphManager/GraphNormalizer or legacy namespace dependencies. All **16 WorldManager suites** pass, including **373/373 assertions** in the new pending-comparison suite and all existing span/traversal assertions. Tests cover accepted and excluded values, type and extent arrivals, multiple pending exclusions, every ordering of four supplied scalar assertions, existing/new members, partial tails, independent contexts sharing evidence, parser waits, cancellation, and grouped-source boundaries. The previously partial ancestor-exclusion regression now requires its completed `{&{7}}` result.
+
+All seven focused language examples fail on the saved baseline executable and pass after this change. Of 485 existing projection output captures, 483 are identical. The two changed captures now reject a delayed contradiction without first discharging an inner relationship; tests explicitly require rejection, unchanged target text and zero publications. These deliberately mismatched capture fixtures expose outputs and are not ordinary passing tests.
+
+The full retained run reports **1602 failures / 1878 tests**, with **no new failures or outcome-category regressions**:
+
+| Scope | Pass | Unsupported | Not ported | Other failures | Total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Default language fixtures | 146 | 186 | 0 | 0 | 332 |
+| Compiled registrations | 130 | 2 | 1407 | 7 | 1546 |
+| Total | 276 | 188 | 1407 | 7 | 1878 |
+
+The seven other failures remain the same reference-registry cases. All 1545 prior compiled registrations, all 58 original parser/model registrations, all 15 protected fixture hashes and the original assertion-source hash are preserved. No historical case is newly ported in this increment; the additional passing registration is the new continuation suite. WorldManager adds 52 production lines and removes 11 (**net 41**), reusing the requirement representation, scalar comparison and staged publication. Parser, printer and path-cost policy are unchanged. The unrelated `myTests.tst` is untouched. Logs, probes, baseline executable and comparison scripts are in `/tmp/proteus-pending-comparisons/`.

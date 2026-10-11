@@ -14,6 +14,7 @@ TestsToRun = `
     unit/worldManager/spanExtents
     unit/worldManager/spanRequirements
     unit/worldManager/requirementTraversal
+    unit/worldManager/pendingComparisons
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -6898,7 +6899,7 @@ struct GLOBAL {
             {"{*10+_| &{!5| ...}} = {6 7}","{&{*10+6 *10+7}}",worldComplete},
             {"{!5| &{*10+_| ...}} = {6 5}","",worldRejected},
             {"{*10+_| &{!5| ...}} = {5 6}","",worldRejected},
-            {"{7| &{!5| ...}} = {_}","",worldPartial},
+            {"{7| &{!5| ...}} = {_}","{&{7}}",worldComplete},
             {"{*10+_| &{*3+_| ...}} = {1}","",worldRejected},
             {"{5| ... 9} = {5 5 9}","",worldRejected},
             {"{5| &{_ ...}} = {5 6}","",worldRejected},
@@ -7061,5 +7062,128 @@ struct GLOBAL {
         ProteusParser parser(&core,true,0);parser.initParseFromString("inner identity arrival","{5}");parser.doParse(rhs);
         check(waiting->outcome==worldRejected && waiting->templateApplications==applications+1 && waiting->publications==0 && toString(barrier->pItem.get())==before,"outer requirement runs after the inner identity without replaying the inner requirement");
         core.deInit();std::cout<<"REQUIREMENT_TRAVERSAL_CHECKS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_pendingComparisons(me string: tname) <- {
+        if(!worldManagerPendingComparisonChecks()){FAIL("Pending comparison checks failed")}
+    }
+    me bool: worldManagerPendingComparisonChecks() <- <%{
+        ProteusCore core;core.init("",false);auto& agent=*core.agent;auto& manager=agent.worldManager;
+        int checks=0,failures=0;
+        auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+        auto parse=[&](const std::string& text){auto p=manager.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+        struct Case{std::string input,expected;int outcome;};
+        const Case cases[]={
+            {"_ = !5 = 7","7",worldComplete},
+            {"_ = 7 = !5","7",worldComplete},
+            {"_ = !5 = 5","",worldRejected},
+            {"_ = !5 = 7 = 5","",worldRejected},
+            {"? = !5 = 'ok'","'ok'",worldComplete},
+            {"? = !'ok' = 7","7",worldComplete},
+            {"? = !'ok' = 'no'","'no'",worldComplete},
+            {"? = !'ok' = 'ok'","",worldRejected},
+            {"? = !*10+5 = _ = 5 = *11+_","*11+5",worldComplete},
+            {"? = !*10+5 = _ = 5 = *10+_","",worldRejected},
+            {"? = !*10+5 = _ = 7","7",worldComplete},
+            {"? = !*10+5 = _ = 5","",worldPartial},
+            {"_ = !5 = !6 = _ = 7","7",worldComplete},
+            {"_ = !5 = !6 = _","",worldPartial},
+            {"-1 = 9 = *10+_","*10+9",worldComplete},
+            {"9 = -1 = *10+_","*10+9",worldComplete},
+            {"9 = -1 = *11+_","",worldRejected},
+            {"9 = -1 = _","",worldPartial},
+            {"_ = !-1 = 9 = *10+_","",worldRejected},
+            {"_ = !-1 = 9 = *11+_","*11+9",worldComplete},
+            {"_ = (_ = !5 = 7)","7",worldComplete},
+            {"_ = (_ = !5) = 7","",worldPartial},
+            {"_ == (_ = !5) = 7","",worldPartial},
+            {"!5 = _ = 7","",worldPartial},
+            {"_ == !5 = 7","",worldUnsupported},
+            {"{!5| _} = {7}","{7}",worldComplete},
+            {"{!5| _} = {5}","",worldRejected},
+            {"{!5| &{_ _} = {_ _}} = {5 5}","",worldRejected},
+            {"{!5| &{&{_ _}} = {_ _}} = {5 5}","",worldRejected},
+            {"{7| &{!5| ...}} = {_}","{&{7}}",worldComplete},
+            {"{5| &{!5| ...}} = {_}","",worldRejected},
+            {"{7| &{!5| _}}","{&{7}}",worldComplete},
+            {"{7| &{!5| _ ...}}","{7| &{!5| 7 ... }}",worldPartial},
+            {"{7| &{| _ = !5}}","{&{7}}",worldComplete},
+            {"{7| &{!5| _ ...}} = {_ _}","{&{7 7}}",worldComplete},
+            {"{7| &{!5| ...}} = {_ _} = {7 5}","",worldRejected},
+            {"{*10+_| &{!5| ...}} = {_}","",worldPartial},
+            {"{{!5| _} {7| &{!5| ...}} = {_}}","{{!5| _} {&{7}}}",worldPartial},
+            {"{7| &{!5| ...} &{!6| ...}} = {}","{&{} &{}}",worldComplete}
+        };
+        for(const auto& c:cases){
+            auto root=parse(c.input);if(!root)continue;auto before=toString(root->pItem.get());
+            std::vector<std::pair<std::shared_ptr<infonView>,std::string>> sources;
+            std::vector<std::pair<std::shared_ptr<POV>,std::shared_ptr<infonView>>> positions;
+            std::vector<std::shared_ptr<POV>> pending{root};
+            while(!pending.empty()){
+                auto at=pending.back();pending.pop_back();auto item=at->pItem;positions.push_back({at,item});
+                for(auto rhs:item->wrkList)sources.push_back({rhs->pItem,toString(rhs->pItem.get())});
+                if(item->value->listSpec)sources.push_back({item->value->listSpec,toString(item->value->listSpec.get())});
+                if(getModeBits(item->value->flags,infonState::evalMode)==infonState::emLiteral && getModeBits(item->value->flags,infonState::overlayType)==infonState::LST)
+                    for(auto m=item->value->items.head;m;m=m->next)pending.push_back(m);
+            }
+            auto h=agent.normalize(root);auto actual=toString(root->pItem.get());
+            check(h->outcome==c.outcome,c.input+" outcome "+std::to_string(h->outcome)+": "+h->detail);
+            check(actual==(c.expected.empty()?before:c.expected),c.input+" output "+actual);
+            bool untouched=true;for(const auto& src:sources)untouched &= toString(src.first.get())==src.second;
+            check(untouched,c.input+" leaves sources and templates unchanged");
+            bool stable=true;for(const auto& pos:positions)stable &= pos.first->pItem==pos.second;
+            check(stable,c.input+" preserves target occurrences");
+            if(c.expected.empty())check(h->publications==0,c.input+" unresolved or rejected comparisons publish nothing");
+            if(c.outcome==worldComplete){auto again=agent.normalize(root);check(again->complete() && again->framesCreated==0,c.input+" completed result needs no new work");}
+        }
+        for(int n:{32,64,128}){
+            std::string text="?";for(int i=0;i<n;++i)text+=" = !*1000+"+std::to_string(i);
+            for(int i=0;i<n;++i)text+=" = ?";
+            auto unresolved=parse(text);auto u=agent.normalize(unresolved);
+            check(u->outcome==worldPartial && u->comparisonResumptions==0 && u->publications==0,"unrelated unknown sources do not revisit comparisons");
+            auto root=parse(text+" = _ = *1000+_ = 999");auto h=agent.normalize(root);
+            check(h->complete() && root->pItem->value->num==999 && h->comparisonResumptions==static_cast<unsigned>(3*n),"each pending comparison wakes only for type, size and value arrivals");
+            check(h->relationshipsRead==static_cast<unsigned>(2*n+3) && h->framesCreated==static_cast<unsigned>(2*n+4),"continuation reuses checked sources without new frames or relationship reads");
+            std::string inner="{...}";for(int i=0;i<n;++i)inner="{!5| &"+inner+"}";
+            auto nested=parse("{7| &"+inner+"} = {_ _ _}");auto nh=agent.normalize(nested);
+            check(nh->complete() && nh->comparisonResumptions==static_cast<unsigned>(3*n) && nh->templateApplications==static_cast<unsigned>(3*(n+1)),"one later ancestor value wakes every pending member check once");
+            check(nh->framesCreated<=static_cast<unsigned>(8*n+24) && nh->sequenceVisits<=static_cast<unsigned>(4*n+16),"pending ancestor checks preserve linear wrapper and application work");
+            std::cout<<"PENDING_COMPARISONS: "<<n<<" exclusions, "<<h->comparisonResumptions<<" scalar resumes, "<<nh->framesCreated<<" nested frames, "<<nh->sequenceVisits<<" sequence visits\n";
+        }
+        for(bool cancel:{false,true})for(bool reject:{false,true}){
+            auto root=parse("_ = !5 = ?");auto source=root->pItem->wrkList.back()->pItem;manager.prepareInput(source);
+            auto h=agent.normalize(root);auto edges=h->relationshipsRead,frames=h->framesCreated;
+            check(h->outcome==worldWaiting && h->comparisonResumptions==0 && h->publications==0,"parser wait keeps the pending exclusion at its link");
+            if(cancel)h->cancel();
+            ProteusParser parser(&core,true,0);parser.initParseFromString("comparison value",reject?"5":"7");parser.doParse(source);
+            check(h->outcome==(cancel?worldCancelled:reject?worldRejected:worldComplete) && h->relationshipsRead==edges && h->framesCreated==frames && h->comparisonResumptions==static_cast<unsigned>(cancel?0:1),"arrival continues the same comparison without rereading its edges");
+            if(cancel || reject)check(h->publications==0 && root->pItem->wrkList.size()==2,"cancelled or rejected continuation preserves original target");
+            else check(toString(root->pItem.get())=="7","accepted arrival publishes checked value");
+        }
+        // Reordering supplied assertions cannot bypass an exclusion. Vary
+        // whether type, value or endpoint settles the comparison first.
+        for(int size:{10,11}){
+            std::vector<std::string> terms={"!*10+5","_","5","*"+std::to_string(size)+"+_"};std::sort(terms.begin(),terms.end());
+            do{
+                std::string text="?";for(const auto& term:terms)text+=" = "+term;
+                auto root=parse(text);auto before=toString(root->pItem.get());auto h=agent.normalize(root);
+                check(size==10 ? h->outcome==worldRejected && h->publications==0 && toString(root->pItem.get())==before :
+                    h->complete() && root->pItem->value->num==5 && root->pItem->infSize->num==11,"assertion order preserves value and exclusion semantics: "+text);
+            }while(std::next_permutation(terms.begin(),terms.end()));
+        }
+        auto shared=parse("{{7| &{!5| ...}} = {_} {8| &{!5| ...}} = {_}}");
+        auto a=shared->pItem->value->items.head->pItem,b=shared->pItem->value->items.tail->pItem;
+        auto spec=a->value->items.head->pItem->value->listSpec;b->value->items.head->pItem->value->listSpec=spec;
+        auto source=a->wrkList[0]->pItem->value->items.head->pItem;b->wrkList[0]->pItem->value->items.head->pItem=source;
+        auto sourceText=toString(source.get()),specText=toString(spec.get());auto sh=agent.normalize(shared);
+        check(sh->complete() && sh->comparisonResumptions==2 && toString(shared->pItem.get())=="{{&{7}} {&{8}}}","shared checked evidence keeps each occurrence's pending comparisons independent");
+        check(toString(source.get())==sourceText && toString(spec.get())==specText,"shared sources are not filled by either occurrence");
+        // An unresolved grouped RHS remains a prerequisite. Its consumer does
+        // not borrow a value while silently dropping the group's obligation.
+        auto grouped=parse("_ = (_ = !5) = 7");auto g=agent.normalize(grouped);
+        check(g->outcome==worldPartial && g->publications==0,"unresolved source grouping never lends unchecked facts to its consumer");
+        core.deInit();std::cout<<"PENDING_COMPARISON_CHECKS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }

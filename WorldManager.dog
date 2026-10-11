@@ -135,6 +135,9 @@ struct WorldScalar {
     our WorldText: textSource
     me int64: textLength <- 0
     me bool: negative <- false
+    // A merge can need more facts without terminating the containing goal.
+    me bool: needsEvidence <- false
+    our WorldRequirement: pendingChecks
     me bool: extentApplied <- false
     me bool: explicitSize <- false
     me bool: contentsComplete <- true
@@ -264,6 +267,7 @@ struct WorldRequest {
     me uint64: publications <- 0
     me uint64: memberPairs <- 0
     me uint64: templateApplications <- 0
+    me uint64: comparisonResumptions <- 0
     me uint64: requirementVisits <- 0
     me uint64: tailMembers <- 0
     me uint64: sequenceVisits <- 0
@@ -438,8 +442,11 @@ struct WorldPOVGraph {
         return(frame!.expressionSlot==2 and frame!.facts.overlay==LST and
             frame!.node!.pItem!.value!.evalMode==emLiteral)
     }
+    me bool: representableFacts(me WorldScalar: facts) <- {
+        return(facts.outcome==worldReady and facts.representable and facts.pendingChecks==NULL)
+    }
     me bool: completeFacts(me WorldScalar: facts, me bool: requireSize) <- {
-        return(facts.outcome==worldReady and !facts.negative and !openLayout(facts) and facts.hasValue and facts.contentsComplete and
+        return(facts.outcome==worldReady and facts.pendingChecks==NULL and !facts.negative and !openLayout(facts) and facts.hasValue and facts.contentsComplete and
             ((!requireSize and facts.overlay==NUM) or facts.hasSize) and
             (facts.overlay!=LST or facts.size==FlexNum(sequenceLength(facts.sequence))))
     }
@@ -808,6 +815,7 @@ struct WorldPOVGraph {
     }
 
     me WorldScalar: merge(me WorldScalar: left, me WorldScalar: right, our POV: edge) <- {
+        left.needsEvidence <- false
         if(left.overlay==LST or right.overlay==LST){return(mergeList(left, right, edge))}
         if(edge!.forceID){
             left.outcome <- worldUnsupported
@@ -828,6 +836,7 @@ struct WorldPOVGraph {
             }else if(match==worldReady){
                 left.outcome <- worldRejected; left.detail <- "Scalar excluded by negative constraint"
             }else if(match==worldPartial){
+                left.needsEvidence <- !left.negative
                 left.outcome <- worldPartial; left.detail <- "Negative constraint needs more evidence"
             }
             return(left)
@@ -861,6 +870,7 @@ struct WorldPOVGraph {
             // Missing extent is not proof that this equality is contradictory.
             if(left.overlay==NUM and !left.hasSize and left.number!=right.number and
                ((left.number<0 and !left.extentApplied)!=(right.number<0 and !right.extentApplied))){
+                left.needsEvidence <- true
                 left.outcome <- worldPartial; left.detail <- "Numeric comparison needs an extent"; return(left)
             }
             if((left.overlay==NUM and left.number!=right.number) or
@@ -881,10 +891,40 @@ struct WorldPOVGraph {
         return(left)
     }
 
+    // A pending comparison keeps its checked source and qualified edge. Only
+    // newly known scalar facts wake it; adding unrelated edges does no replay.
+    void: mergeRelationship(our WorldRequest: request, our WorldFrame: frame) <- {
+        me WorldScalar: before <- frame!.facts
+        me WorldScalar: result <- merge(before, frame!.prerequisite!.facts, frame!.sourceEdge)
+        if(result.needsEvidence){
+            result <- before
+            result.pendingChecks <- joinRequirements(before.pendingChecks, requirement(frame!.prerequisite, frame!.sourceEdge))
+        }else if(result.outcome==worldReady and before.pendingChecks!=NULL and
+                 ((before.overlay<0 and result.overlay>=0) or (!before.hasSize and result.hasSize) or
+                  (!before.hasValue and result.hasValue))){
+            me WorldRequirementCursor: checks; checks.push(before.pendingChecks)
+            result.pendingChecks <- NULL
+            our WorldRequirement: check <- checks.next()
+            while(check!=NULL){
+                request!.comparisonResumptions <+- 1
+                me WorldScalar: checked <- merge(result, check!.frame!.facts, check!.edge)
+                if(checked.needsEvidence){result.pendingChecks <- joinRequirements(result.pendingChecks, check)}
+                else{
+                    result <- checked
+                    if(result.outcome!=worldReady){break()}
+                }
+                check <- checks.next()
+            }
+        }
+        frame!.facts <- result
+    }
+
     // Semantic acceptance and work consolidation stay at the graph boundary.
-    void: consumePrerequisite(our WorldFrame: frame) <- {
-        if(frame!.prerequisite!.facts.outcome==worldPartial and !(memberSequence(frame) and frame!.sourceIsOperand)){
+    void: consumePrerequisite(our WorldRequest: request, our WorldFrame: frame) <- {
+        if((frame!.prerequisite!.facts.outcome==worldPartial or frame!.prerequisite!.facts.pendingChecks!=NULL) and
+           !(memberSequence(frame) and frame!.sourceIsOperand)){
             frame!.facts.outcome <- worldPartial; frame!.facts.detail <- frame!.prerequisite!.facts.detail
+            if(frame!.prerequisite!.facts.pendingChecks!=NULL){frame!.facts.detail <- "Source comparison still needs evidence"}
         }else if(frame!.sourceIsListSpec){
             frame!.listSpecFrame <- frame!.prerequisite
             if(frame!.facts.openTail){frame!.tailRequirements <- requirement(frame!.prerequisite, frame!.listSpecEdge)}
@@ -893,8 +933,7 @@ struct WorldPOVGraph {
             if(!appendMember(frame!.facts.sequence, frame!.prerequisite, frame!.sourceEdge!.isSubItm)){
                 frame!.facts.outcome <- worldError; frame!.facts.detail <- "List exceeds representable length"; return()
             }
-            frame!.facts.representable <- frame!.facts.representable and frame!.prerequisite!.facts.outcome==worldReady and
-                frame!.prerequisite!.facts.representable
+            frame!.facts.representable <- frame!.facts.representable and representableFacts(frame!.prerequisite!.facts)
             frame!.facts.contentsComplete <- frame!.facts.contentsComplete and completeFacts(frame!.prerequisite!.facts, false)
             frame!.operandsRead <- sequenceLength(frame!.facts.sequence)
         }else if(frame!.sourceIsOperand){
@@ -907,7 +946,7 @@ struct WorldPOVGraph {
             if(frame!.expression.outcome!=worldReady){frame!.facts <- frame!.expression}
         }else{
             me WorldScalar: left <- frame!.facts
-            frame!.facts <- merge(left, frame!.prerequisite!.facts, frame!.sourceEdge)
+            mergeRelationship(request, frame)
             if(frame!.facts.outcome==worldReady and left.overlay==LST and left.hasValue and
                frame!.prerequisite!.facts.overlay==LST and frame!.prerequisite!.facts.hasValue){
                 beginCorrespondence(frame, FlexNum(sequenceLength(frame!.prerequisite!.facts.sequence)))
@@ -941,6 +980,9 @@ struct WorldPOVGraph {
 
     void: finish(our WorldRequest: request) <- {
         me WorldScalar: facts <- request!.root!.facts
+        if(facts.pendingChecks!=NULL and facts.outcome==worldReady){
+            request!.outcome <- worldPartial; request!.detail <- "Scalar comparison still needs evidence"; return()
+        }
         if(facts.outcome!=worldReady){request!.outcome <- facts.outcome; request!.detail <- facts.detail; return()}
         if(completeFacts(facts, request!.requireSize)){
             request!.outcome <- worldComplete
@@ -957,7 +999,7 @@ struct WorldPOVGraph {
         me WorldPublication: root; root.target <- request!.target; root.frame <- request!.root; pending.append(root)
         while(!pending.isEmpty()){
             me WorldPublication: job <- pending.popLast()
-            if(job.frame!.facts.outcome!=worldReady){continue()}
+            if(job.frame!.facts.outcome!=worldReady or job.frame!.facts.pendingChecks!=NULL){continue()}
             if(seen.containsKey(job.target!.pItem)){
                 if(seen.at(job.target!.pItem)!==job.frame){
                     request!.outcome <- worldUnsupported
@@ -987,7 +1029,7 @@ struct WorldPOVGraph {
                 while(occurrence.frame!=NULL){
                     our WorldFrame: member <- occurrence.frame
                     if(!existing or targetMember==NULL){
-                        if(member!.facts.outcome!=worldReady or !member!.facts.representable){
+                        if(!representableFacts(member!.facts)){
                             request!.outcome <- worldPartial; request!.detail <- "New member still has unresolved work"; return()
                         }
                         our infonState: destination <- body
@@ -1229,8 +1271,7 @@ struct WorldManager {
                 request!.outcome <- worldError; request!.detail <- "List exceeds representable length"; return()
             }
             frame!.facts.contentsComplete <- frame!.facts.contentsComplete and graph.completeFacts(frame!.pairedMember!.facts, false)
-            frame!.facts.representable <- frame!.facts.representable and frame!.pairedMember!.facts.outcome==worldReady and
-                frame!.pairedMember!.facts.representable
+            frame!.facts.representable <- frame!.facts.representable and graph.representableFacts(frame!.pairedMember!.facts)
             frame!.pairedMember <- NULL
         }
         me WorldMember: left <- frame!.leftMembers.nextMember(false)
@@ -1330,7 +1371,7 @@ struct WorldManager {
                 frame!.memberSpecified <- true
                 request!.ready.append(frame); request!.ready.append(frame!.prerequisite); return()
             }
-            graph.consumePrerequisite(frame)
+            graph.consumePrerequisite(request, frame)
             frame!.memberSpecified <- false
             if(frame!.facts.outcome!=worldReady){
                 stopFrame(request, frame); return()
