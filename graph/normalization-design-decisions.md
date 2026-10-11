@@ -407,6 +407,16 @@ Use the existing representability summary, together with a supplied value, known
 
 **Validation:** both CodeDog targets regenerate successfully. All 20 WorldManager suites pass, including 508 bounded-source assertions; the full retained run adds no failures (1582/1882). The 378-case capture corpus changes only 38 previously unsupported results. The implementation adds 23 production lines. Detailed counts, historical-test boundaries and evidence locations are recorded in the consolidated design.
 
+### D03 next evidence: partial correspondence
+
+**Investigation only, 2026-10-11; no new alignment or planning decision.** The D03O implementation exposes three separate remaining problems:
+
+1. `{*10+_ ... ... *10+_} = {*10+1 *10+2 *10+3 *10+4}` returns partial with zero publications. `fitExtent` detects multiple positive width assignments before correspondence starts, so even the forced endpoint members remain unknown. The retained `spans/ambiguousGaps` test requires those endpoint values while preserving both symbolic gaps. Its zero-remainder counterpart already completes through the existing extent proof. The next candidate is retaining unresolved alignment while propagating only bindings that are forced independently of that ambiguity; choosing one gap split is not justified.
+2. `*4+{*10+_ ... *10+_} = {*10+1 ... *10+4}` and `{...} = {*10+1 *10+2 ...}` still report unsupported. The first has a known outer endpoint but two open layouts; the second has a finite incoming prefix without an endpoint. These need separate premises from a represented closed target. Knowing a total size must not enumerate missing members, and knowing a prefix must not close a tail.
+3. `{_ _} = {!5| ...} = {7 8}` stays partial, whereas supplying `{7 8}` first completes. The projected negative source waits on member facts; `consumePrerequisite` then stops at that unresolved source. A future continuation must retain that local obligation and expose later useful evidence without treating its unchecked facts as accepted or reconstructing the original source walk. This is not solved by changing parenthesis syntax or adding a global restart.
+
+The shared-library probes are in `/tmp/proteus-retained-boundaries/next-probe.log`. They establish current behavior and the next examples, not a claim that the missing chart, link-arrival or partial-publication contracts are settled. Strategic planning and path costs remain deferred until definitions and intersections.
+
 ### D03 proposal for the virtual graph
 
 **Proposed, not a final interface.** Expose navigation, assertions, specifications, and transformations through a common operation protocol. A parameterized operation can require several premises and can return facts, a derived relationship, alternatives, or a wait. It need not allocate a persistent edge merely to make it traversable.
@@ -554,6 +564,12 @@ The old printer consulted solver-specific representation receipts. Removing that
 **Validation increment, 2026-10-11.** Restore the ten original registrations for nested/embedded lists, inferred nested/embedded counts, lazy billion-member lists, conflicting children, list templates, empty lists, signed parsing, signed replay/copy and expression size modes. Independent clients linked to the generated library first verify that these behaviors already work. The ports retain the original value, size, flag, partial-result and source-preservation assertions; no solver behavior changes.
 
 The obsolete count-Set trace is replaced by checking the inferred literal size after removing the parser's original count evidence. A completed-replay work revision is replaced by zero frames/publications and unchanged payload pointers. The lazy-span work bound counts replacement frames, while still requiring zero materialized members. These checks preserve the observable purpose without recreating old scheduler APIs. General subscriptions, definition-dependent signed values and tests requiring mutation of borrowed sources remain pending rather than weakening their assertions. This applies P02's existing test policy; it introduces no normalization semantic or planning decision.
+
+### P02 Retained string and extent-boundary assertions
+
+**Validation increment, 2026-10-11.** Restore the original `graphFoundation/string`, `copyPrefix` and `fractionalSpanExtent` registrations. The first checks string acquisition and inferred size, the second directly checks the existing storage helper's prefix and metadata preservation, and the third preserves an unknown parent size when its embedded child supplies a fractional extent. A generated shared-library client confirms all three original assertions before porting. Status checks replace only the old handle API; there are no production changes.
+
+The sibling `invertedSpanExtent` case still reports unsupported where its original test requires partial information, so its assertions remain pending. The seven existing reference-registry failures were also traced to unsupported selection requests, each stopping at the virtual graph reader with one frame, no publication and no recorded selection reference. Their failure counts and original assertions are unchanged. This distinguishes missing semantics from a newly introduced list or registry regression.
 
 ## Settled direction and retained constraints
 
