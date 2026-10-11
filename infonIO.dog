@@ -3,6 +3,7 @@
 struct parseContext:inherits=<mode[pcMainInfn, pcRHS, pcFuncLike, pcPartPaths, pcListSpec, pcDefn]>{}
 
 struct infonView{
+    me string: graphParseError
     me uint64: replyCharPos
     flag: isFunc
     flag: isFuncArg
@@ -54,7 +55,9 @@ struct ProteusParser{
     me int64: errCharPos
     me int64: errorSuppressDepth
 
-    me GraphPublication: publication
+    their WorldManager: worldManager
+    our infonView: documentRoot
+    me bool: finishingDocument
     flag: independentIdentities
     our InfonIdentityScope: localIdentityScope
 
@@ -84,8 +87,17 @@ struct ProteusParser{
     // A closed buffer can return any character or EOF without waiting. Open
     // buffers keep the conservative release around the entire scan, which may
     // need more text than its starting position. Check closure under its lock.
+    // This temporary guard borrows the model mutex. Its deleter reacquires
+    // the lock when an input operation returns or throws; it never deletes it.
+    our WorldModelMutex: pauseInput(me bool: needed) <- <%{
+        if(!worldManager || !needed) return {};
+        auto* mutex=&worldManager->control->mutex;
+        auto guard=std::shared_ptr<std::recursive_mutex>(mutex,[](std::recursive_mutex* m){m->lock();});
+        mutex->unlock();
+        return guard;
+    }%>
     me bool: inputMayBlock() <- <%{
-        if(!publication) return true;
+        if(!worldManager) return true;
         std::lock_guard<std::mutex> lock(text->bufMutex);
         return !text->bufferClosed;
     }%>
@@ -93,82 +105,81 @@ struct ProteusParser{
     // lock so completed siblings can normalize and deliver replies. Closed
     // input reads share bounded publication batches in the graph runtime.
     me char: input_at(me int64: pos) <- <%{
-        proteus4::InputPause<std::shared_ptr<POV>> pause(publication, inputMayBlock());
+        auto pause=pauseInput(inputMayBlock());
         return text->at(pos);
     }%>
     our strBufItr: input_getItrAt(me int64: pos) <- <%{
-        proteus4::InputPause<std::shared_ptr<POV>> pause(publication, inputMayBlock());
+        auto pause=pauseInput(inputMayBlock());
         return text->getItrAt(pos);
     }%>
     their strInnerBuf: input_findInrBufWithPos(me int64: pos) <- <%{
-        proteus4::InputPause<std::shared_ptr<POV>> pause(publication, inputMayBlock());
+        auto pause=pauseInput(inputMayBlock());
         return text->findInrBufWithPos(pos);
     }%>
     me int64: input_chkStr(me int64: pos, me string: token) <- <%{
-        proteus4::InputPause<std::shared_ptr<POV>> pause(publication, inputMayBlock());
+        auto pause=pauseInput(inputMayBlock());
         return text->chkStr(pos, token);
     }%>
     me int64: input_scrapeUTF8Char(me int64: pos, their int32: output) <- <%{
-        proteus4::InputPause<std::shared_ptr<POV>> pause(publication, inputMayBlock());
+        auto pause=pauseInput(inputMayBlock());
         return text->scrapeUTF8Char(pos, output);
     }%>
     me int64: input_scrapeBinNum(me int64: pos) <- <%{
-        proteus4::InputPause<std::shared_ptr<POV>> pause(publication, inputMayBlock());
+        auto pause=pauseInput(inputMayBlock());
         return text->scrapeBinNum(pos);
     }%>
     me int64: input_scrapeCID(me int64: pos) <- <%{
-        proteus4::InputPause<std::shared_ptr<POV>> pause(publication, inputMayBlock());
+        auto pause=pauseInput(inputMayBlock());
         return text->scrapeCID(pos);
     }%>
     me int64: input_scrapeFlexNum(me int64: pos) <- <%{
-        proteus4::InputPause<std::shared_ptr<POV>> pause(publication, inputMayBlock());
+        auto pause=pauseInput(inputMayBlock());
         return text->scrapeFlexNum(pos);
     }%>
     me int64: input_scrapeHexNum(me int64: pos) <- <%{
-        proteus4::InputPause<std::shared_ptr<POV>> pause(publication, inputMayBlock());
+        auto pause=pauseInput(inputMayBlock());
         return text->scrapeHexNum(pos);
     }%>
     me int64: input_scrapeQuotedStr1(me int64: pos) <- <%{
-        proteus4::InputPause<std::shared_ptr<POV>> pause(publication, inputMayBlock());
+        auto pause=pauseInput(inputMayBlock());
         return text->scrapeQuotedStr1(pos);
     }%>
     me int64: input_scrapeQuotedStr2(me int64: pos) <- <%{
-        proteus4::InputPause<std::shared_ptr<POV>> pause(publication, inputMayBlock());
+        auto pause=pauseInput(inputMayBlock());
         return text->scrapeQuotedStr2(pos);
     }%>
     me int64: input_scrapeToEOL(me int64: pos) <- <%{
-        proteus4::InputPause<std::shared_ptr<POV>> pause(publication, inputMayBlock());
+        auto pause=pauseInput(inputMayBlock());
         return text->scrapeToEOL(pos);
     }%>
     me int64: input_scrapeUniID(me int64: pos) <- <%{
-        proteus4::InputPause<std::shared_ptr<POV>> pause(publication, inputMayBlock());
+        auto pause=pauseInput(inputMayBlock());
         return text->scrapeUniID(pos);
     }%>
     me int64: input_scrapeWSC(me int64: pos) <- <%{
-        proteus4::InputPause<std::shared_ptr<POV>> pause(publication, inputMayBlock());
+        auto pause=pauseInput(inputMayBlock());
         return text->scrapeWSC(pos);
     }%>
     void: inputAdvance(our strBufItr: cursor) <- <%{
-        proteus4::InputPause<std::shared_ptr<POV>> pause(publication, inputMayBlock());
+        auto pause=pauseInput(inputMayBlock());
         cursor->goNext();
     }%>
     void: reportSyntaxError(me string: message) <- <%{
-        proteus4::InputPause<std::shared_ptr<POV>> pause(publication);
+        auto pause=pauseInput(true);
         CORE->handleSyntaxError(originID, message);
     }%>
-    void: markPublication() <- <%{ if (publication) publication->changed(); }%>
     // A parse-first connector publishes the finished document. Live sources
     // publish list prefixes, which may be normalized before the stream closes.
     flag: deferPrefix
     void: notifyStreamState(our infonView: infn, me int: stateMrk) <- {
         if(stateMrk==parseListReady and deferPrefix){return()}
+        if(infn===documentRoot and !finishingDocument and stateMrk==parseDone){return()}
         infn!.streamState <- stateMrk
         if(stateMrk==parseDone){infn!.resolveEndRelativeReferences()}
-        markPublication()
+        if(worldManager!=NULL and stateMrk==parseDone){worldManager!.inputReady(infn)}
     }
     void: beginDocument(our infonView: infn) <- {
-        infn!.streamState <- parseStarted; infn!.graphParseError <- ""
-        markPublication()
+        infn!.streamState <- parseStarted
     }
     void: failDocument(our infonView: infn) <- {
         infn!.graphParseError <- "parser terminated unexpectedly"
@@ -270,7 +281,7 @@ struct ProteusParser{
 ///////////////////////////////////  Pre-parse checking
 
     me bool: waitingForBuffer(me int64: pos) <- <%{
-        proteus4::InputPause<std::shared_ptr<POV>> pause(publication, inputMayBlock());
+        auto pause=pauseInput(inputMayBlock());
         std::lock_guard<std::mutex> lock(text->bufMutex);
         return pos >= text->crntStreamSize && !text->bufferClosed;
     }%>
@@ -1198,7 +1209,12 @@ struct ProteusParser{
                 if(chkPeek(cPos, input_at(cPos), ":")){pov!.looseTop <- true}
                 our infonView:: RHS
                 RHS!.originID <- infn!.originID
-                cPos <+- parseInfonView(RHS, cPos, false, isFromDefn, pcRHS)
+                me int64: rhsLen <- parseInfonView(RHS, cPos, false, isFromDefn, pcRHS)
+                if(rhsLen<=0){
+                    if(!errorSet){setError("Expected an infon after the identity operator", cPos)}
+                    return(-1)
+                }
+                cPos <+- rhsLen
                 pov!.pItem <- RHS
                 // `=` work belongs to the expression consuming this result.
                 // Selector construction marks its own work explicitly.
@@ -1514,18 +1530,22 @@ struct ProteusParser{
     }
 
     void: doParse(our infonView: infn) <- <%{
-        if (streamingMode && CORE && CORE->agent) {
-            publication = CORE->agent->graphNormalizer.beginPublication();
-            beginDocument(infn);
+        std::unique_lock<std::recursive_mutex> lock;
+        if (CORE && CORE->agent) {
+            worldManager = &CORE->agent->worldManager;
+            lock=std::unique_lock<std::recursive_mutex>(worldManager->control->mutex);
         }
+        documentRoot=infn; finishingDocument=false;
+        if(streamingMode) beginDocument(infn);
         try {
             parseDocument(infn);
-            if (errorSet) infn->graphParseError = formattedError(true);
-            if (publication) publication->changed();
-            publication.reset();
+            if(errorSet && infn->graphParseError.empty()) infn->graphParseError=formattedError(true);
+            finishingDocument=true;
+            notifyStreamState(infn,infonView::parseDone);
+            documentRoot.reset();worldManager=nullptr;
         } catch (...) {
-            failDocument(infn);
-            publication.reset();
+            finishingDocument=true;failDocument(infn);
+            documentRoot.reset();worldManager=nullptr;
             throw;
         }
     }%>
@@ -1642,14 +1662,6 @@ struct InfonViewPrinter{
         return(S)
     }
 
-    me bool: isNiceList(their infonState: pure, their infonView: parentInfon) <- {
-        if(debugPrint){return(false)}
-        return(parentInfon!.representedTemplate!=NULL and
-                parentInfon!.representedTemplate!.valid and
-                parentInfon!.representedTemplate!.rhs!.pItem===pure!.listSpec and
-                pure!.evalMode==emLiteral and !pure!.tailUnfinished)
-    }
-
     me string: printInfonState(their infonState: pure, their infonState: size, me bool: asInnr, me bool: isSpec, their infonView: parentInfon, our Map<me string,me int>: used, me int: verbosity, their infonView: special, me bool: suppressSizeOp <- false) <- {
         me string: S <- ""
         if(parentInfon!=NULL and pure===parentInfon!.value and parentInfon!.isNull()){
@@ -1722,7 +1734,7 @@ struct InfonViewPrinter{
                 S <+- "~"+printInfonState(size, NULL, false, isSpec, parentInfon, used, verbosity, special, true)
                 showBar<-true
             }
-            if(pure!.listSpec!=NULL and !isNiceList(pure, parentInfon)){
+            if(pure!.listSpec!=NULL){
                 if(showBar){S <+- " "}
                 S <+- printInfonViewActual(pure!.listSpec, used, false, isSpec, verbosity, special)
                 showBar<-true
@@ -1759,9 +1771,8 @@ struct InfonViewPrinter{
             our Map<me string, me int>: used, me bool: isSpec,
             me int: verbosity, their infonView: special) <- {
         me string: S
-        if(i==NULL or i!.normalizationCurrent()){return(S)}
+        if(i==NULL){return(S)}
         withEach WorkItm in i!.wrkList{
-            if(i!.workIsRepresented(WorkItm)){continue()}
             if(WorkItm!.forceID){S <+- " <<"}
             else{S <+- " "}
             if(!WorkItm!.looseMode and !WorkItm!.looseInhtd){S <+- "="}
@@ -1820,11 +1831,7 @@ struct InfonViewPrinter{
     }
 
     me string: printInfonViewActual(their infonView: i, our Map<me string, me int>: used, me bool: isSubItm, me bool: isSpec, me int: verbosity, their infonView: special) <- {
-        if(i!=NULL and i!.pathSelection!=NULL and i!.pathSelection!.result==NULL){
-            me string: pending <- printInfonViewActual(i!.pathSelection!.expression, used, isSubItm, isSpec, verbosity, special)
-            if(i!.doReply){pending <+- ">>"}
-            return(pending)
-        }
+
         me string: S <- ""
         if(i ==  NULL){return("NULL")}
         me bool: resetColor <- false
@@ -1925,7 +1932,7 @@ struct InfonViewPrinter{
                 }
             } else {logFatalError("Invalid viewMode in printInfonViewActual()\n")}
         }
-        if(!i!.normalizationCurrent()){
+        {
             S <+- printWorkList(i, used, isSpec, verbosity, special)
 
             if (i!.argPos != apNoArgs){

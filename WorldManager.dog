@@ -1,0 +1,1088 @@
+// Native lock bindings only; reasoning and continuation remain CodeDog.
+struct WorldModelMutex: wraps=recursive_mutex {}
+struct WorldModelLock: wraps=Nested_Lock_Mutex {}
+
+// Replacement reasoner. Agent owns sessions; WorldManager owns their reasoning.
+// Scalar and closed ordered-list reasoning with local parser completion.
+struct WorldOutcome: inherits=<mode[
+    worldReady, worldComplete, worldPartial, worldWaiting,
+    worldRejected, worldUnsupported, worldCancelled, worldError
+]> {}
+
+// Exact numeric value sets. A point and an empty half-open interval differ.
+struct WorldBounds {
+    me bool: bounded <- false
+    me bool: point <- false
+    me FlexNum: low
+    me FlexNum: high
+    me bool: empty() <- {return(bounded and !point and low>=high)}
+    me bool: contains(me WorldBounds: other) <- {
+        if(other.empty()){return(true)}
+        if(empty()){return(false)}
+        if(!bounded){return(true)}
+        if(!other.bounded){return(false)}
+        if(other.point){return(low<=other.low and ((point and low==other.low) or (!point and other.low<high)))}
+        return(!point and low<=other.low and other.high<=high)
+    }
+    me bool: same(me WorldBounds: other) <- {
+        return(bounded==other.bounded and point==other.point and (!bounded or (low==other.low and high==other.high)))
+    }
+    me WorldBounds: intersect(me WorldBounds: other) <- {
+        me WorldBounds: result <- self
+        if(empty() or !other.bounded){return(result)}
+        if(other.empty() or !bounded){return(other)}
+        if(point){if(other.contains(result)){return(result)}}
+        else if(other.point){if(contains(other)){return(other)}}
+        else{result.low <- max(low, other.low); result.high <- min(high, other.high); return(result)}
+        result.point <- false; result.high <- result.low
+        return(result)
+    }
+}
+
+// A text expression borrows immutable leaves. Concatenation adds one node;
+// each branch retains its represented length, including a borrowed prefix.
+struct WorldText {
+    our infonState: source
+    our WorldText: left
+    our WorldText: right
+    me int64: leftLength <- 0
+}
+struct WorldTextSpan {
+    our WorldText: text
+    me int64: length
+}
+struct WorldTextCursor {
+    me List<WorldTextSpan>: pending
+    our infonState: source
+    me int64: pos <- 0
+    me int64: remaining <- 0
+    me uint64: visits <- 0
+    void: push(our WorldText: text, me int64: length) <- {
+        if(length>0){me WorldTextSpan: span; span.text <- text; span.length <- length; pending.append(span)}
+    }
+    me char: next() <- {
+        while(remaining==0){
+            me WorldTextSpan: span <- pending.popLast()
+            visits <+- 1
+            if(span.text!.source!=NULL){source <- span.text!.source; pos <- 0; remaining <- span.length}
+            else{
+                push(span.text!.right, span.length-span.text!.leftLength)
+                push(span.text!.left, min(span.length, span.text!.leftLength))
+            }
+        }
+        me char: result <- source!.str[pos]
+        pos <+- 1; remaining <- remaining-1
+        return(result)
+    }
+}
+
+// Closed sequences borrow checked member frames. Joining adds one branch;
+// cursors traverse leaves once, regardless of concatenation nesting.
+struct WorldList {
+    our WorldList: left
+    our WorldList: right
+    me List<our WorldFrame>: members
+    me int64: length <- 0
+}
+struct WorldListCursor {
+    me List<our WorldList>: pending
+    our WorldList: leaf
+    me int64: pos <- 0
+    me uint64: visits <- 0
+    void: push(our WorldList: sequence) <- {if(sequence!=NULL){pending.append(sequence)}}
+    our WorldFrame: next() <- {
+        while(leaf==NULL or pos>=leaf!.members.size()){
+            if(pending.isEmpty()){return(NULL)}
+            leaf <- pending.popLast(); pos <- 0; visits <+- 1
+            if(leaf!.left!=NULL or leaf!.right!=NULL){push(leaf!.right); push(leaf!.left); leaf <- NULL}
+        }
+        our WorldFrame: result <- leaf!.members[pos]; pos <+- 1; return(result)
+    }
+}
+
+struct WorldScalar {
+    me WorldOutcome: outcome <- worldReady
+    me string: detail
+    me int: overlay <- -1
+    me bool: hasSize <- false
+    me FlexNum: size
+    me bool: hasValue <- false
+    me FlexNum: number
+    our WorldText: textSource
+    me int64: textLength <- 0
+    me bool: negative <- false
+    me bool: extentApplied <- false
+    me bool: explicitSize <- false
+    me bool: contentsComplete <- true
+    me bool: representable <- true
+    our WorldList: sequence
+    me bool: hasRange <- false
+    me FlexNum: lower
+    me FlexNum: upper
+
+    me WorldBounds: bounds() <- {
+        me WorldBounds: result
+        result.bounded <- hasValue or hasRange or hasSize
+        result.point <- hasValue
+        if(hasValue){result.low <- number; result.high <- number}
+        else if(hasRange){result.low <- lower; result.high <- upper}
+        else if(hasSize){result.high <- size}
+        return(result)
+    }
+    void: useBounds(me WorldBounds: result) <- {
+        hasValue <- result.point
+        hasRange <- result.bounded and !result.point
+        if(hasValue){number <- result.low}
+        else if(hasRange){lower <- result.low; upper <- result.high}
+    }
+
+    void: applyExtent() <- {
+        if(hasValue and overlay==NUM and hasSize and !extentApplied){
+            if(number<0){number <+- size}
+            extentApplied <- true
+        }
+    }
+}
+
+struct WorldFrame {
+    our POV: node
+    me WorldScalar: facts
+    me int64: nextWork <- 0
+    me bool: initialized <- false
+    me bool: finished <- false
+    // Derived correspondence frames combine checked facts, never reread a POV.
+    me bool: projected <- false
+    me bool: corresponding <- false
+    me WorldListCursor: leftMembers
+    me WorldListCursor: rightMembers
+    our WorldFrame: pairedMember
+    our WorldList: pairedSequence
+    their POV: expressionParent
+    // Visit the two stored slots once, then supplied identities.
+    me int: expressionSlot <- 0 // 0=unstarted, 1=size, 2=value, 3=wrkList
+    me bool: sourceIsOperand <- false
+    our POV: nextOperand
+    our POV: priorOperand
+    me int64: operandsRead <- 0
+    me WorldScalar: expression
+    me WorldBounds: bodyBounds
+    me bool: bodyHasSize <- false
+    me FlexNum: bodySize
+    me List<our POV>: retainedWork
+    our POV: sourceEdge
+    our WorldFrame: prerequisite
+}
+
+// The shared control outlives WorldManager when callers retain completed handles.
+struct WorldControl {
+    me WorldModelMutex: mutex
+    me Map<our infonView, our WorldInputWaiters>: inputWaiters
+}
+struct WorldInputWaiters {
+    me List<our WorldRequest>: requests
+}
+struct WorldStatus {
+    me WorldOutcome: outcome
+    me string: detail
+}
+struct WorldPublication {
+    our POV: target
+    our WorldFrame: frame
+    our infonState: newList
+}
+struct WorldRequest {
+    our WorldControl: control
+    our infonView: waitingInput
+    our WorldFrame: waitingFrame
+    our POV: target
+    me bool: requireSize <- false
+    me WorldOutcome: outcome <- worldReady
+    me string: detail
+    me uint64: framesCreated <- 0
+    me uint64: relationshipsRead <- 0
+    me uint64: publications <- 0
+    me uint64: memberPairs <- 0
+    me uint64: sequenceVisits <- 0
+    me uint64: publishedTextBytes <- 0
+    me uint64: publishedTextNodes <- 0
+    me List<our WorldFrame>: ready
+    me Map<our infonView, our WorldFrame>: attempts
+    our WorldFrame: root
+    me WorldStatus: status() <- {
+        me WorldModelLock: lock{control!.mutex}
+        me WorldStatus: result
+        result.outcome <- outcome; result.detail <- detail
+        return(result)
+    }
+    me bool: complete() <- {return(status().outcome==worldComplete)}
+    me bool: failed() <- {
+        me WorldOutcome: state <- status().outcome
+        return(state==worldRejected or state==worldUnsupported or state==worldError)
+    }
+    me string: error() <- {return(status().detail)}
+    our POV: result() <- {return(target)}
+    // Normalization drains runnable work before returning. Taking this lock
+    // also waits for any active publication to finish; Waiting stays visible.
+    void: waitForCompletion() <- {me WorldModelLock: lock{control!.mutex}}
+    void: releaseProgress() <- {
+        ready.clear(); attempts.clear(); root <- NULL; waitingFrame <- NULL
+    }
+    void: cancel() <- {
+        me WorldModelLock: lock{control!.mutex}
+        if(waitingInput!=NULL and control!.inputWaiters.containsKey(waitingInput)){
+            our WorldInputWaiters: waiters <- control!.inputWaiters.at(waitingInput)
+            me List<our WorldRequest>: remaining
+            withEach request in waiters!.requests{
+                if(request!==self){remaining.append(request)}
+            }
+            waiters!.requests <- remaining
+            if(remaining.isEmpty()){control!.inputWaiters.erase(waitingInput)}
+        }
+        waitingInput <- NULL
+        if(outcome==worldReady or outcome==worldWaiting or outcome==worldPartial){outcome <- worldCancelled}
+        releaseProgress()
+    }
+}
+
+struct WorldSession {
+    me uint64: id
+    me bool: closed <- false
+    me List<our WorldRequest>: requests
+}
+
+struct WorldParseResult {
+    our POV: target
+    me string: error
+}
+
+struct infonView {
+    // A copied view must not inherit another occurrence's completion marker.
+    // Stronger requests still inspect their explicitly requested facts.
+    their infonView: worldScalarCompletionOwner
+    // A new supplied constraint needs a new request. Existing handles are not reset.
+    void: noteNormalizationWork() <- {worldScalarCompletionOwner <- NULL; isNormed <- false}
+}
+
+// Virtual access over the existing model; no copied adjacency graph.
+struct WorldPOVGraph {
+    me int64: sequenceLength(our WorldList: sequence) <- {
+        if(sequence==NULL){return(0)}else{return(sequence!.length)}
+    }
+    our WorldList: join(our WorldList: left, our WorldList: right) <- {
+        if(left==NULL){return(right)}
+        if(right==NULL){return(left)}
+        our WorldList:: result
+        result!.left <- left; result!.right <- right
+        result!.length <- left!.length+right!.length
+        return(result)
+    }
+    void: appendMember(our WorldList: sequence, our WorldFrame: member) <- {
+        sequence!.members.append(member); sequence!.length <+- 1
+    }
+    me bool: scalarExpression(our infonState: state) <- {
+        return(state!.overlayType==LST and state!.evalMode==emConcat and !state!.inverted and
+            !state!.undefined and state!.items.head!=NULL and state!.listSpec==NULL and
+            !state!.tailUnfinished and !state!.timelike)
+    }
+    me bool: memberSequence(our WorldFrame: frame) <- {
+        return(frame!.expressionSlot==2 and frame!.facts.overlay==LST and
+            frame!.node!.pItem!.value!.evalMode==emLiteral)
+    }
+    me bool: completeFacts(me WorldScalar: facts, me bool: requireSize) <- {
+        return(facts.outcome==worldReady and !facts.negative and facts.hasValue and facts.contentsComplete and
+            ((!requireSize and facts.overlay==NUM) or facts.hasSize) and
+            (facts.overlay!=LST or facts.size==FlexNum(sequenceLength(facts.sequence))))
+    }
+    me WorldScalar: read(our POV: node, their POV: expressionParent <- NULL) <- {
+        me WorldScalar: facts
+        if(node==NULL or node!.pItem==NULL){
+            facts.outcome <- worldError; facts.detail <- "Missing target POV"; return(facts)
+        }
+        if((node!.pParent!=NULL and node!.pParent!==expressionParent) or node!.viewMap.sourcePov!=NULL or node!.referenceAlias.sourcePov!=NULL){
+            facts.outcome <- worldUnsupported; facts.detail <- "Contextual member access needs list correspondence"; return(facts)
+        }
+        our infonView: item <- node!.pItem
+        if(item!.graphParseError!=""){
+            facts.outcome <- worldError; facts.detail <- item!.graphParseError; return(facts)
+        }
+        if(item!.streamState==parseStarted or item!.streamState==parseListReady){
+            facts.outcome <- worldWaiting; facts.detail <- "Scalar input is still being parsed"; return(facts)
+        }
+        if(item!.value==NULL or item!.infSize==NULL){
+            facts.outcome <- worldError; facts.detail <- "Missing scalar state"; return(facts)
+        }
+        if(item!.type!=NULL or !item!.addedTypes.isEmpty() or item!.viewMode==vmCursor or
+           item!.innr!=NULL or item!.funcArgs!=NULL or
+           !item!.parts.isEmpty() or item!.partRef!=NULL or item!.proxy!=NULL or
+           item!.doReply or (item!.itmMode!=mItem and item!.itmMode!=mNone) or item!.identityName!=NULL or
+           item!.independentTemporalValue or item!.temporalValueSource!=NULL or item!.temporalPredecessor!=NULL){
+            facts.outcome <- worldUnsupported
+            facts.detail <- "This request needs semantics beyond the scalar milestone"; return(facts)
+        }
+        me bool: expression <- item!.value!.evalMode==emConcat
+        if(!expression and item!.value!.overlayType==LST and
+           (item!.value!.evalMode!=emLiteral or item!.value!.listSpec!=NULL or item!.value!.tailUnfinished or
+            item!.value!.timelike or item!.orderMode==uUnordered or item!.invertMatch)){
+            facts.outcome <- worldUnsupported; facts.detail <- "List needs correspondence or template semantics"; return(facts)
+        }
+        if(item!.value!.evalMode==emIntersection or
+           item!.value!.undefined or (item!.value!.inverted and (expression or item!.value!.overlayType!=NUM)) or
+           item!.infSize!.undefined or item!.infSize!.inverted or
+           !((item!.infSize!.overlayType==NUM and
+              (item!.infSize!.evalMode==emUnknown or item!.infSize!.evalMode==emLiteral)) or
+             scalarExpression(item!.infSize))){
+            facts.outcome <- worldUnsupported; facts.detail <- "Nonliteral scalar or size"; return(facts)
+        }
+        facts.hasSize <- item!.infSize!.evalMode==emLiteral
+        facts.size <- item!.infSize!.num
+        facts.explicitSize <- item!.value!.sizeMode==fromGiven
+        if(facts.hasSize and facts.size.getDenominator()==0){
+            facts.outcome <- worldError; facts.detail <- "Numeric size has a zero denominator"; return(facts)
+        }
+        if(facts.hasSize){facts.size.normalize()}
+        if(expression){
+            if(item!.invertMatch or !scalarExpression(item!.value)){
+                facts.outcome <- worldUnsupported; facts.detail <- "Non-scalar expression template"
+            }
+            return(facts)
+        }
+        if(item!.value!.overlayType!=tUnknown){facts.overlay <- item!.value!.overlayType}
+        facts.hasValue <- item!.value!.evalMode==emLiteral
+        if(facts.hasValue and facts.overlay!=NUM and facts.overlay!=STR and facts.overlay!=LST){
+            facts.outcome <- worldUnsupported; facts.detail <- "Non-scalar literal"; return(facts)
+        }
+        facts.number <- item!.value!.num
+        if(item!.value!.inverted){facts.number <- -facts.number}
+        if((facts.hasValue and facts.overlay==NUM and facts.number.getDenominator()==0) or
+           (facts.hasSize and facts.size.getDenominator()==0)){
+            facts.outcome <- worldError; facts.detail <- "Numeric literal has a zero denominator"; return(facts)
+        }
+        if(facts.hasValue and facts.overlay==NUM){facts.number.normalize()}
+        if(facts.hasSize){facts.size.normalize()}
+        if(facts.hasValue and facts.overlay==STR){
+            Allocate(facts.textSource); facts.textSource!.source <- item!.value
+            facts.textLength <- item!.value!.str.size()
+        }
+        facts.negative <- item!.invertMatch
+        facts.extentApplied <- item!.value!.numericExtentApplied
+        facts.applyExtent()
+        return(facts)
+    }
+
+    // The cursor is retained in the frame; ordinary arrival never rewinds it.
+    our POV: nextRelationship(our WorldFrame: frame) <- {
+        while(frame!.expressionSlot<3){
+            if(frame!.nextOperand!=NULL){
+                our POV: operand <- frame!.nextOperand
+                if(operand!.prev!==frame!.priorOperand){
+                    frame!.facts.outcome <- worldError; frame!.facts.detail <- "Broken expression operand chain"; return(NULL)
+                }
+                if(operand!.isSubItm){
+                    frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Sublist expression operand"; return(NULL)
+                }
+                frame!.priorOperand <- operand; frame!.nextOperand <- operand!.next
+                frame!.sourceIsOperand <- true; return(operand)
+            }
+            if(frame!.operandsRead>0 or memberSequence(frame)){finishExpression(frame)}
+            if(frame!.facts.outcome!=worldReady){return(NULL)}
+            frame!.expressionSlot <+- 1
+            frame!.operandsRead <- 0; frame!.priorOperand <- NULL
+            our infonState: slot
+            if(frame!.expressionSlot==1){slot <- frame!.node!.pItem!.infSize}
+            else if(frame!.expressionSlot==2){slot <- frame!.node!.pItem!.value}
+            if(slot!=NULL and (slot!.evalMode==emConcat or memberSequence(frame))){frame!.nextOperand <- slot!.items.head}
+        }
+        frame!.sourceIsOperand <- false
+        our infonView: item <- frame!.node!.pItem
+        if(frame!.nextWork>=item!.wrkList.size()){return(NULL)}
+        our POV: edge <- item!.wrkList[frame!.nextWork]
+        frame!.nextWork <+- 1
+        if(edge==NULL){frame!.facts.outcome <- worldError; frame!.facts.detail <- "Empty relationship"}
+        return(edge)
+    }
+
+    // These are value operations over already resolved operand facts, not
+    // identity links. No operand is copied into or normalized on the model.
+    me WorldScalar: appendNumber(me WorldScalar: left, me WorldScalar: right, me bool: additive) <- {
+        if(left.overlay!=NUM or right.overlay!=NUM or left.negative or right.negative){
+            left.outcome <- worldUnsupported; left.detail <- "Numeric expression needs positive numeric operands"; return(left)
+        }
+        if(!right.hasValue){left.outcome <- worldPartial; left.detail <- "Expression operand value is unknown"; return(left)}
+        if(additive){
+            me WorldBounds: result <- left.bounds()
+            if(!result.bounded){left.outcome <- worldPartial; left.detail <- "Additive input has no finite value bounds"; return(left)}
+            if(result.empty()){left.outcome <- worldRejected; left.detail <- "Empty numeric range"; return(left)}
+            result.low <+- right.number; result.high <+- right.number
+            left.useBounds(result)
+            if(left.hasRange){left.hasSize <- false; left.explicitSize <- false}
+        }else{
+            if(!left.hasValue or !right.hasSize or right.size<0){
+                left.outcome <- worldPartial; left.detail <- "Numeric concatenation needs a value and radix"; return(left)
+            }
+            left.number <- left.number*right.size + right.number
+            if(left.hasSize){left.size <- left.size*right.size}
+        }
+        return(left)
+    }
+
+    me WorldScalar: appendOperand(me WorldScalar: left, me WorldScalar: right, me bool: additive) <- {
+        if(left.overlay<0 or right.overlay<0){
+            left.outcome <- worldPartial; left.detail <- "Expression operand type is unknown"; return(left)
+        }
+        if(left.overlay==NUM and right.overlay==NUM){return(appendNumber(left, right, additive))}
+        if(left.overlay==LST and right.overlay==LST and !left.negative and !right.negative){
+            if((left.hasSize and left.size!=FlexNum(sequenceLength(left.sequence))) or
+               (right.hasSize and right.size!=FlexNum(sequenceLength(right.sequence)))){
+                left.outcome <- worldPartial; left.detail <- "List operand endpoint needs span alignment"; return(left)
+            }
+            if(sequenceLength(right.sequence)>9223372036854775807-sequenceLength(left.sequence)){
+                left.outcome <- worldError; left.detail <- "List expression exceeds representable length"; return(left)
+            }
+            left.sequence <- join(left.sequence, right.sequence)
+            left.contentsComplete <- left.contentsComplete and right.contentsComplete
+            left.representable <- left.representable and right.representable
+            if(left.hasSize and right.hasSize){left.size <+- right.size}else{left.hasSize <- false}
+            return(left)
+        }
+        if(left.overlay!=STR or right.overlay!=STR or left.negative or right.negative){
+            left.outcome <- worldUnsupported; left.detail <- "Mixed or negative expression operands"; return(left)
+        }
+        if(!left.hasValue or !right.hasValue){
+            left.outcome <- worldPartial; left.detail <- "String expression operand value is unknown"; return(left)
+        }
+        if(right.textLength>9223372036854775807-left.textLength){
+            left.outcome <- worldError; left.detail <- "String expression exceeds representable length"; return(left)
+        }
+        our WorldText:: joined
+        joined!.left <- left.textSource; joined!.right <- right.textSource
+        joined!.leftLength <- left.textLength
+        left.textSource <- joined; left.textLength <+- right.textLength
+        return(left)
+    }
+
+    void: finishExpression(our WorldFrame: frame) <- {
+        if(memberSequence(frame)){
+            if(!frame!.facts.hasSize and !frame!.facts.explicitSize){
+                frame!.facts.hasSize <- true; frame!.facts.size <- frame!.operandsRead
+            }
+            return()
+        }
+        me WorldScalar: expression <- frame!.expression
+        if(frame!.expressionSlot==1){
+            // The operand's value supplies the owner's size, not its type,
+            // radix or range width. Unsupported extents remain expressed.
+            if(expression.overlay!=NUM or expression.negative or !expression.hasValue or
+               expression.number<0 or expression.number.getDenominator()!=1){
+                frame!.facts.outcome <- worldPartial
+                frame!.facts.detail <- "Computed size needs a nonnegative whole numeric value"; return()
+            }
+            frame!.facts.hasSize <- true; frame!.facts.size <- expression.number
+            frame!.facts.applyExtent()
+            return()
+        }
+        if(expression.overlay==LST){
+            if(!expression.representable){
+                frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "List expression still has unresolved member work"; return()
+            }
+            expression.explicitSize <- frame!.facts.explicitSize or !expression.hasSize
+        }
+        if(expression.overlay==STR and expression.hasValue and !expression.negative){
+            // The expression counts its represented bytes, independently of
+            // the operands' declared or unknown endpoints.
+            expression.hasSize <- true; expression.size <- expression.textLength
+            expression.explicitSize <- frame!.facts.explicitSize
+        }
+        if(expression.hasRange){
+            // A range's width describes possible values, not its outer size.
+            if(expression.hasSize and frame!.facts.hasSize and expression.size!=frame!.facts.size){
+                frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "Incompatible expression sizes"; return()
+            }
+            if(frame!.facts.hasSize){expression.hasSize <- true; expression.size <- frame!.facts.size}
+            expression.explicitSize <- expression.explicitSize or frame!.facts.explicitSize
+            frame!.facts <- expression; frame!.bodyBounds <- expression.bounds()
+            frame!.bodyHasSize <- expression.hasSize; frame!.bodySize <- expression.size
+        }else{
+            if(frame!.operandsRead>1 and expression.overlay==NUM){
+                expression.extentApplied <- expression.hasSize
+                expression.explicitSize <- expression.hasSize or frame!.facts.explicitSize
+            }
+            frame!.facts <- merge(frame!.facts, expression, frame!.node!.pItem!.value!.items.head)
+        }
+    }
+
+    // Compare the represented text, which can be a prefix borrowed from a
+    // larger source. Intermediate frames never allocate substrings.
+    me bool: sameText(me WorldScalar: left, me WorldScalar: right, me bool: prefix) <- {
+        if(!prefix and left.textLength!=right.textLength){return(false)}
+        me int64: length <- min(left.textLength, right.textLength)
+        me WorldTextCursor: lhs; lhs.push(left.textSource, length)
+        me WorldTextCursor: rhs; rhs.push(right.textSource, length)
+        withEach pos in range 0 .. length{if(lhs.next()!=rhs.next()){return(false)}}
+        return(true)
+    }
+
+    // Prove whether every supplied fact matches a positive scalar template.
+    // Ready=yes, Rejected=no, Partial=not enough evidence. Work only on local
+    // facts: a negative template must not acquire its candidate's size/value.
+    me WorldOutcome: compare(me WorldScalar: required, me WorldScalar: actual) <- {
+        if(required.overlay>=0 and actual.overlay>=0 and required.overlay!=actual.overlay){return(worldRejected)}
+        if(required.hasSize and actual.hasSize and required.size!=actual.size){return(worldRejected)}
+        me bool: covered <- (required.overlay<0 or actual.overlay>=0) and
+            (!required.hasSize or actual.hasSize) and (!required.hasValue or actual.hasValue)
+        if(required.hasValue and actual.hasValue){
+            if(required.overlay==NUM){
+                if(!required.hasSize and !actual.hasSize and required.number!=actual.number and
+                   ((required.number<0 and !required.extentApplied)!=(actual.number<0 and !actual.extentApplied))){return(worldPartial)}
+                if(!required.hasSize and actual.hasSize){required.hasSize <- true; required.size <- actual.size}
+                if(!actual.hasSize and required.hasSize){actual.hasSize <- true; actual.size <- required.size}
+                required.applyExtent(); actual.applyExtent()
+                if(required.number!=actual.number){return(worldRejected)}
+            }else if(!sameText(required, actual, false)){return(worldRejected)}
+        }
+        if(!covered){return(worldPartial)}
+        return(worldReady)
+    }
+
+    me WorldScalar: mergeText(me WorldScalar: left, me WorldScalar: right, me bool: prefix) <- {
+        if(left.hasValue){
+            if(!sameText(left, right, prefix)){
+                left.outcome <- worldRejected; left.detail <- "Incompatible string values"; return(left)
+            }
+        }else{
+            me int64: width <- right.textLength
+            if(left.hasSize){
+                // Bound the exact integer before converting it to an index.
+                if(left.size<0 or left.size.getDenominator()!=1 or left.size>width or
+                   (!prefix and left.size!=width)){
+                    left.outcome <- worldPartial; left.detail <- "String width is not supplied by the available text"; return(left)
+                }
+                width <- left.size.getNumerator().convertToIntVal()
+            }
+            left.hasValue <- true; left.textSource <- right.textSource; left.textLength <- width
+            left.explicitSize <- !(left.hasSize or (!prefix and right.hasSize))
+        }
+        left.overlay <- STR
+        if(!prefix and !left.hasSize and right.hasSize){left.hasSize <- true; left.size <- right.size}
+        return(left)
+    }
+
+    me WorldScalar: mergeRanges(me WorldScalar: left, me WorldScalar: right, our POV: edge) <- {
+        if(!edge!.looseType()){
+            // Strict identity shares an endpoint; comparison may use it locally.
+            if(!left.hasSize and right.hasSize){left.hasSize <- true; left.size <- right.size}
+            if(!right.hasSize and left.hasSize){right.hasSize <- true; right.size <- left.size}
+            left.applyExtent(); right.applyExtent()
+        }
+        me WorldBounds: required <- left.bounds()
+        me WorldBounds: supplied <- right.bounds()
+        me WorldBounds: result <- required.intersect(supplied)
+        if(edge!.looseType() and !right.hasValue and !right.hasRange){result <- required}
+        if(required.empty() or supplied.empty() or result.empty()){
+            left.outcome <- worldRejected; left.detail <- "Disjoint numeric value ranges"; return(left)
+        }
+        if(edge!.looseType()){
+            // A bounded unknown RHS supplies an endpoint, not a known value
+            // set to match. An explicit range expression does supply that set.
+            if(right.hasValue or right.hasRange){
+                if(!required.contains(supplied)){
+                    left.outcome <- worldPartial; left.detail <- "Numeric range match has only partial overlap"; return(left)
+                }
+                result <- supplied; left.explicitSize <- right.explicitSize
+            }else{result <- required}
+        }else{left.explicitSize <- left.explicitSize or right.explicitSize}
+        if(!edge!.looseSize() and !left.hasSize and right.hasSize){
+            left.hasSize <- true; left.size <- right.size
+        }
+        if(!left.hasValue){left.extentApplied <- right.extentApplied}
+        left.overlay <- NUM; left.useBounds(result)
+        if(left.hasValue and left.hasSize){left.extentApplied <- true}
+        return(left)
+    }
+
+    // Strict closed-list identity proves the outer shape before projecting
+    // member identities. An endpoint/shape mismatch is unresolved alignment.
+    me WorldScalar: mergeList(me WorldScalar: left, me WorldScalar: right, our POV: edge) <- {
+        if(edge!.forceID or edge!.looseType() or left.negative or right.negative){
+            left.outcome <- worldUnsupported; left.detail <- "Qualified list relationships need matching semantics"; return(left)
+        }
+        if((left.overlay>=0 and left.overlay!=LST) or (right.overlay>=0 and right.overlay!=LST)){
+            left.outcome <- worldRejected; left.detail <- "Incompatible list types"; return(left)
+        }
+        if((left.hasSize and right.hasSize and left.size!=right.size) or
+           (left.hasValue and left.hasSize and left.size!=FlexNum(sequenceLength(left.sequence))) or
+           (right.hasValue and right.hasSize and right.size!=FlexNum(sequenceLength(right.sequence))) or
+           (left.hasValue and right.hasValue and sequenceLength(left.sequence)!=sequenceLength(right.sequence)) or
+           (!left.hasValue and left.hasSize and right.hasValue and left.size!=FlexNum(sequenceLength(right.sequence)))){
+            left.outcome <- worldPartial; left.detail <- "List endpoints need span alignment"; return(left)
+        }
+        if(!left.hasValue and right.hasValue and !right.representable){
+            left.outcome <- worldPartial; left.detail <- "List source still has unresolved member work"; return(left)
+        }
+        left.overlay <- LST
+        if(!left.hasSize and right.hasSize){left.hasSize <- true; left.size <- right.size}
+        if(!left.hasValue and right.hasValue){
+            left.hasValue <- true; left.sequence <- right.sequence
+            left.explicitSize <- left.explicitSize or right.explicitSize
+            left.contentsComplete <- right.contentsComplete; left.representable <- right.representable
+        }
+        return(left)
+    }
+
+    me WorldScalar: merge(me WorldScalar: left, me WorldScalar: right, our POV: edge) <- {
+        if(left.overlay==LST or right.overlay==LST){return(mergeList(left, right, edge))}
+        if(edge!.forceID){
+            left.outcome <- worldUnsupported
+            left.detail <- "Replacement relationships are not implemented yet"; return(left)
+        }
+        if(left.negative or right.negative){
+            if(edge!.looseType() or left.hasRange or right.hasRange){
+                left.outcome <- worldUnsupported; left.detail <- "Qualified negative matching needs template semantics"; return(left)
+            }
+            me WorldOutcome: match
+            if(left.negative){match <- compare(left, right)}else{match <- compare(right, left)}
+            if(left.negative and right.negative){
+                // Only equivalent exclusions discharge each other. Other
+                // conjunctions stay explicit; neither is positive evidence.
+                if(match!=worldReady or compare(right, left)!=worldReady){
+                    left.outcome <- worldPartial; left.detail <- "Unequal exclusions remain conjoined"
+                }
+            }else if(match==worldReady){
+                left.outcome <- worldRejected; left.detail <- "Scalar excluded by negative constraint"
+            }else if(match==worldPartial){
+                left.outcome <- worldPartial; left.detail <- "Negative constraint needs more evidence"
+            }
+            return(left)
+        }
+        if(edge!.looseType() and !right.hasValue and !right.hasRange and
+           !(right.overlay==NUM and right.hasSize and right.size>0 and !left.hasValue)){
+            left.outcome <- worldPartial; left.detail <- "Qualified scalar source value is unknown"; return(left)
+        }
+        if(left.overlay>=0 and right.overlay>=0 and left.overlay!=right.overlay){
+            left.outcome <- worldRejected; left.detail <- "Incompatible scalar types"; return(left)
+        }
+        if(!edge!.looseSize() and left.hasSize and right.hasSize and left.size!=right.size){
+            left.outcome <- worldRejected; left.detail <- "Incompatible scalar sizes"; return(left)
+        }
+        if(left.hasRange or right.hasRange){return(mergeRanges(left, right, edge))}
+        if(edge!.looseType() and right.overlay==STR){return(mergeText(left, right, edge!.looseSize()))}
+        if(edge!.looseType() and left.overlay==NUM and left.hasSize and !left.hasValue and right.hasValue){
+            if(right.number<0 or right.number>=left.size){
+                left.outcome <- worldRejected; left.detail <- "Value outside numeric range"; return(left)
+            }
+        }
+        if(left.overlay<0){left.overlay <- right.overlay}
+        if(!edge!.looseSize() and !left.hasSize and right.hasSize){
+            left.hasSize <- true; left.size <- right.size
+            left.explicitSize <- left.explicitSize or right.explicitSize
+        }
+        if(!edge!.looseSize() and left.hasSize and !right.hasSize){right.hasSize <- true; right.size <- left.size}
+        left.applyExtent(); right.applyExtent()
+        if(left.hasValue and right.hasValue){
+            // Unsized signed displacements may agree once an extent is known.
+            // Missing extent is not proof that this equality is contradictory.
+            if(left.overlay==NUM and !left.hasSize and left.number!=right.number and
+               ((left.number<0 and !left.extentApplied)!=(right.number<0 and !right.extentApplied))){
+                left.outcome <- worldPartial; left.detail <- "Numeric comparison needs an extent"; return(left)
+            }
+            if((left.overlay==NUM and left.number!=right.number) or
+               (left.overlay==STR and !sameText(left, right, false))){
+                left.outcome <- worldRejected; left.detail <- "Incompatible scalar values"; return(left)
+            }
+        }else if(right.hasValue){
+            // A match uses the candidate's representation after checking the
+            // target's range. Keep the target's actual size evidence separately.
+            // Strict text acquisition copies the source's counted/given form.
+            if(edge!.looseType() or left.overlay==STR){left.explicitSize <- right.explicitSize}
+            else{left.explicitSize <- left.explicitSize or right.explicitSize}
+            if(edge!.looseType() and left.overlay==STR){left.explicitSize <- !left.hasSize}
+            left.hasValue <- true; left.number <- right.number; left.textSource <- right.textSource
+            left.textLength <- right.textLength
+            left.extentApplied <- right.extentApplied
+        }
+        return(left)
+    }
+
+    // Semantic acceptance and work consolidation stay at the graph boundary.
+    void: consumePrerequisite(our WorldFrame: frame) <- {
+        if(frame!.prerequisite!.facts.outcome==worldPartial and !(memberSequence(frame) and frame!.sourceIsOperand)){
+            frame!.facts.outcome <- worldPartial; frame!.facts.detail <- frame!.prerequisite!.facts.detail
+        }else if(memberSequence(frame) and frame!.sourceIsOperand){
+            if(frame!.facts.sequence==NULL){Allocate(frame!.facts.sequence)}
+            appendMember(frame!.facts.sequence, frame!.prerequisite)
+            frame!.facts.representable <- frame!.facts.representable and frame!.prerequisite!.facts.outcome==worldReady and
+                frame!.prerequisite!.facts.representable
+            frame!.facts.contentsComplete <- frame!.facts.contentsComplete and completeFacts(frame!.prerequisite!.facts, false)
+            frame!.operandsRead <+- 1
+        }else if(frame!.sourceIsOperand){
+            if(frame!.operandsRead==0){frame!.expression <- frame!.prerequisite!.facts}
+            else{
+                frame!.expression <- appendOperand(frame!.expression, frame!.prerequisite!.facts,
+                    frame!.sourceEdge!.pItem!.value!.sizeMode==fromContext)
+            }
+            frame!.operandsRead <+- 1
+            if(frame!.expression.outcome!=worldReady){frame!.facts <- frame!.expression}
+        }else{
+            me WorldScalar: left <- frame!.facts
+            frame!.facts <- merge(left, frame!.prerequisite!.facts, frame!.sourceEdge)
+            if(frame!.facts.outcome==worldReady and left.overlay==LST and left.hasValue and
+               frame!.prerequisite!.facts.overlay==LST and frame!.prerequisite!.facts.hasValue){
+                frame!.corresponding <- true
+                frame!.leftMembers.push(left.sequence); frame!.rightMembers.push(frame!.prerequisite!.facts.sequence)
+                Allocate(frame!.pairedSequence)
+                frame!.facts.contentsComplete <- true; frame!.facts.representable <- true
+            }
+            our infonView: supplied <- frame!.sourceEdge!.pItem
+            // A closed scalar leaf contributes only its checked type, size
+            // and value, including the case where its value is unknown. A
+            // successful qualified test adds no identity. Fully checked scalar
+            // expressions supply the same facts; other nested work stays.
+            me bool: scalarExpression <- supplied!.value!.evalMode==emConcat and frame!.prerequisite!.retainedWork.isEmpty() and
+                (frame!.prerequisite!.facts.overlay==NUM or frame!.prerequisite!.facts.overlay==STR) and
+                (frame!.prerequisite!.facts.hasValue or frame!.prerequisite!.facts.hasRange)
+            me bool: listSource <- frame!.prerequisite!.facts.overlay==LST and completeFacts(frame!.prerequisite!.facts, false)
+            if(!frame!.projected and !listSource and !scalarExpression and (!supplied!.wrkList.isEmpty() or
+               (supplied!.value!.evalMode!=emLiteral and supplied!.value!.evalMode!=emUnknown) or
+               !frame!.prerequisite!.facts.representable)){
+                frame!.retainedWork.append(frame!.sourceEdge)
+            }
+        }
+        frame!.prerequisite <- NULL
+    }
+
+    me bool: satisfied(our POV: target, me bool: requireSize) <- {
+        return(target!.pParent==NULL and target!.viewMap.sourcePov==NULL and target!.referenceAlias.sourcePov==NULL and
+           target!.pItem!.streamState!=parseStarted and target!.pItem!.streamState!=parseListReady and
+           target!.pItem!.isNormed and target!.pItem!.worldScalarCompletionOwner===target!.pItem and
+           (!requireSize or target!.pItem!.infSize!.evalMode==emLiteral))
+    }
+
+    void: finish(our WorldRequest: request) <- {
+        me WorldScalar: facts <- request!.root!.facts
+        if(facts.outcome!=worldReady){request!.outcome <- facts.outcome; request!.detail <- facts.detail; return()}
+        if(completeFacts(facts, request!.requireSize)){
+            request!.outcome <- worldComplete
+        }else{request!.outcome <- worldPartial}
+        publish(request)
+    }
+
+    // Prepare destination occurrences before any write. Existing literal lists
+    // keep their POVs; adopted/concatenated lists get independent occurrences.
+    void: publish(our WorldRequest: request) <- {
+        me List<WorldPublication>: pending
+        me List<WorldPublication>: writes
+        me Map<our infonView, our WorldFrame>: seen
+        me WorldPublication: root; root.target <- request!.target; root.frame <- request!.root; pending.append(root)
+        while(!pending.isEmpty()){
+            me WorldPublication: job <- pending.popLast()
+            if(job.frame!.facts.outcome!=worldReady){continue()}
+            if(seen.containsKey(job.target!.pItem)){
+                if(seen.at(job.target!.pItem)!==job.frame){
+                    request!.outcome <- worldUnsupported
+                    request!.detail <- "Shared target views need joint correspondence constraints"; return()
+                }
+                continue()
+            }
+            seen.insert(job.target!.pItem, job.frame)
+            me WorldScalar: facts <- job.frame!.facts
+            if(facts.overlay==LST and facts.hasValue){
+                our infonState: body <- job.target!.pItem!.value
+                me bool: existing <- body!.overlayType==LST and body!.evalMode==emLiteral
+                if(!existing and !facts.representable){
+                    request!.outcome <- worldPartial; request!.detail <- "List result still has unresolved member work"; return()
+                }
+                if(!existing){
+                    Allocate(job.newList); body <- job.newList
+                    body!.overlayType <- LST; body!.evalMode <- emLiteral
+                    if(facts.explicitSize){body!.sizeMode <- fromGiven}else{body!.sizeMode <- fromCount}
+                }
+                our POV: targetMember <- body!.items.head
+                me WorldListCursor: members; members.push(facts.sequence)
+                our WorldFrame: member <- members.next()
+                while(member!=NULL){
+                    if(!existing){
+                        our infonView:: item
+                        item!.viewMode <- vmAny; item!.itmMode <- mItem; item!.streamState <- parseDone
+                        item!.infSize!.overlayType <- NUM; item!.infSize!.evalMode <- emUnknown
+                        item!.value!.evalMode <- emUnknown; item!.value!.overlayType <- tUnknown
+                        item!.orderMode <- member!.node!.pItem!.orderMode
+                        targetMember <- body!.items.append(item, false, 933); targetMember!.pParent <- job.target
+                    }
+                    me WorldPublication: child; child.target <- targetMember; child.frame <- member; pending.append(child)
+                    if(existing){targetMember <- targetMember!.next}
+                    member <- members.next()
+                }
+                request!.sequenceVisits <+- members.visits
+            }
+            writes.append(job)
+        }
+        withEach job in writes{publishFrame(request, job)}
+    }
+
+    void: publishFrame(our WorldRequest: request, me WorldPublication: job) <- {
+        our WorldFrame: frame <- job.frame
+        our infonView: item <- job.target!.pItem
+        me WorldScalar: facts <- frame!.facts
+        if(job.newList!=NULL){item!.value <- job.newList}
+        // An unresolved expression is still the representation of its partial
+        // result. Type evidence alone must not turn its body into 0 or ''.
+        if(item!.value!.evalMode==emConcat and !facts.hasValue and !facts.hasRange){return()}
+        me bool: sameView <- item===frame!.node!.pItem
+        if(sameView and item!.infSize!.evalMode!=emConcat and facts.hasRange and frame!.bodyBounds.same(facts.bounds()) and
+           frame!.bodyHasSize==facts.hasSize and (!facts.hasSize or frame!.bodySize==facts.size)){
+            // The existing expression already represents these facts. Only
+            // discharge work, without allocating an equivalent partial body.
+            if(item!.wrkList.size()!=frame!.retainedWork.size()){
+                item!.wrkList <- frame!.retainedWork; request!.publications <+- 1
+            }
+            return()
+        }
+        // Scalar states may be shared by other views. Publish through fresh
+        // state objects, never overwrite another occurrence's borrowed payload.
+        me bool: changedRange <- facts.hasRange and (!sameView or !frame!.bodyBounds.same(facts.bounds()))
+        if(facts.overlay!=LST){
+            our infonState:: nextValue; nextValue! <- item!.value!; item!.value <- nextValue
+        }
+        our infonState:: nextSize; nextSize! <- item!.infSize!; item!.infSize <- nextSize
+        if(facts.overlay>=0){
+            item!.viewMode <- vmOverlay
+            if(!facts.hasRange and facts.overlay!=LST){item!.value!.overlayType <- facts.overlay}
+        }
+        if(facts.hasSize){
+            item!.infSize!.overlayType <- NUM; item!.infSize!.evalMode <- emLiteral; item!.infSize!.num <- facts.size
+            item!.infSize!.items.clear()
+        }
+        if(facts.hasValue and facts.overlay!=LST){
+            item!.value!.evalMode <- emLiteral
+            item!.value!.items.clear()
+            item!.value!.num <- facts.number
+            if(facts.overlay==STR){
+                me WorldTextCursor: text; text.push(facts.textSource, facts.textLength)
+                item!.value!.str <- ""
+                withEach pos in range 0 .. facts.textLength{item!.value!.str <+- text.next()}
+                request!.publishedTextBytes <+- facts.textLength
+                request!.publishedTextNodes <+- text.visits
+            }
+            item!.value!.inverted <- false
+            item!.value!.numericExtentApplied <- facts.extentApplied
+        }
+        if(changedRange){
+            item!.value!.overlayType <- LST; item!.value!.evalMode <- emConcat
+            item!.value!.items.clear()
+            withEach part in range 0 .. 2{
+                our infonView:: term
+                term!.viewMode <- vmOverlay; term!.itmMode <- mItem; term!.streamState <- parseDone
+                term!.infSize!.overlayType <- NUM; term!.value!.overlayType <- NUM
+                if(part==0){
+                    term!.infSize!.evalMode <- emLiteral; term!.infSize!.num <- facts.upper-facts.lower
+                    term!.value!.evalMode <- emUnknown; term!.value!.sizeMode <- fromGiven
+                }else{
+                    term!.infSize!.evalMode <- emUnknown
+                    term!.value!.evalMode <- emLiteral; term!.value!.num <- facts.lower
+                    term!.value!.sizeMode <- fromContext
+                }
+                our POV: operand <- item!.value!.items.append(term, false, 932)
+                operand!.pParent <- job.target
+            }
+        }
+        if(facts.overlay!=LST){
+            if(facts.explicitSize){item!.value!.sizeMode <- fromGiven}
+            else{item!.value!.sizeMode <- fromCount}
+        }
+        item!.invertMatch <- facts.negative
+        // Discharge represented work even if no value was supplied. Exhausted
+        // unknowns remain partial; removing a tautology does not invent a value.
+        item!.wrkList <- frame!.retainedWork
+        request!.publications <+- 1
+        if(completeFacts(facts, request!.requireSize and job.target===request!.target)){
+            item!.isNormed <- true; item!.worldScalarCompletionOwner <- item
+        }
+    }
+}
+
+struct WorldManager {
+    our WorldControl: control
+    void: INIT() <- {Allocate(control)}
+    me WorldPOVGraph: graph
+
+    // Parser readiness and wait registration use the same model lock.
+    void: prepareInput(our infonView: item) <- {
+        me WorldModelLock: lock{control!.mutex}
+        item!.streamState <- parseStarted; item!.graphParseError <- ""
+    }
+    void: failInput(our infonView: item, me string: message) <- {
+        me WorldModelLock: lock{control!.mutex}
+        item!.graphParseError <- message; item!.streamState <- parseDone
+        inputReady(item)
+    }
+    void: setOrigin(our infonView: item, me uint64: origin) <- {
+        me WorldModelLock: lock{control!.mutex}
+        item!.originID <- origin
+    }
+    void: inputReady(our infonView: item) <- {
+        me WorldModelLock: lock{control!.mutex}
+        if(!control!.inputWaiters.containsKey(item)){return()}
+        our WorldInputWaiters: waiters <- control!.inputWaiters.at(item)
+        control!.inputWaiters.erase(item)
+        withEach request in waiters!.requests{
+            if(request!.outcome==worldWaiting and request!.waitingInput===item){
+                request!.waitingInput <- NULL
+                request!.ready.append(request!.waitingFrame); request!.waitingFrame <- NULL
+                request!.outcome <- worldReady; request!.detail <- ""
+                run(request)
+            }
+        }
+    }
+
+    // Closed parsing uses the existing parser without constructing the old engine.
+    me WorldParseResult: parse(me string: source) <- {
+        me WorldParseResult: result
+        me ProteusParser: parser{NULL, false, 0}
+        parser.initParseFromString("WorldManager", source)
+        our infonView:: item
+        parser.doParse(item)
+        if(parser.doesParseHaveError()){result.error <- parser.formattedError(); return(result)}
+        Allocate(result.target, 930); result.target!.pItem <- item
+        return(result)
+    }
+
+    our WorldFrame: makeFrame(our WorldRequest: request, our POV: node) <- {
+        our WorldFrame:: frame
+        frame!.node <- node
+        request!.attempts.insert(node!.pItem, frame)
+        request!.framesCreated <+- 1
+        return(frame)
+    }
+
+    // Partial prerequisites return to their caller. A containing list can
+    // keep that member partial and continue its other requested members.
+    void: stopFrame(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(frame!.facts.outcome==worldPartial){frame!.finished <- true}
+        else{request!.outcome <- frame!.facts.outcome; request!.detail <- frame!.facts.detail}
+    }
+
+    // A pair is a derived strict member relationship, evaluated by the same
+    // merge operation. Nested lists return here through the retained stack.
+    void: correspond(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(frame!.pairedMember!=NULL){
+            graph.appendMember(frame!.pairedSequence, frame!.pairedMember)
+            frame!.facts.contentsComplete <- frame!.facts.contentsComplete and graph.completeFacts(frame!.pairedMember!.facts, false)
+            frame!.facts.representable <- frame!.facts.representable and frame!.pairedMember!.facts.outcome==worldReady and
+                frame!.pairedMember!.facts.representable
+            frame!.pairedMember <- NULL
+        }
+        our WorldFrame: left <- frame!.leftMembers.next()
+        our WorldFrame: right <- frame!.rightMembers.next()
+        if(left==NULL){
+            frame!.facts.sequence <- frame!.pairedSequence; frame!.pairedSequence <- NULL
+            if(!frame!.projected and !frame!.facts.representable){frame!.retainedWork.append(frame!.sourceEdge)}
+            request!.sequenceVisits <+- frame!.leftMembers.visits+frame!.rightMembers.visits
+            frame!.leftMembers <- WorldListCursor(); frame!.rightMembers <- WorldListCursor()
+            frame!.corresponding <- false
+        }else{
+            our WorldFrame:: pair
+            pair!.node <- left!.node; pair!.facts <- left!.facts
+            pair!.retainedWork <- left!.retainedWork
+            pair!.bodyBounds <- left!.bodyBounds; pair!.bodyHasSize <- left!.bodyHasSize; pair!.bodySize <- left!.bodySize
+            pair!.initialized <- true; pair!.projected <- true
+            pair!.sourceEdge <- frame!.sourceEdge; pair!.prerequisite <- right
+            frame!.pairedMember <- pair
+            request!.framesCreated <+- 1; request!.memberPairs <+- 1
+            request!.ready.append(pair)
+        }
+    }
+
+    // One step either discovers one edge, consumes its result, or finishes a frame.
+    void: step(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(!frame!.initialized){
+            frame!.facts <- graph.read(frame!.node, frame!.expressionParent)
+            // A pending header has not been inspected. Resume this exact read,
+            // preserving all earlier frames and relationship cursors.
+            if(frame!.facts.outcome==worldWaiting){
+                request!.waitingFrame <- frame; request!.waitingInput <- frame!.node!.pItem
+                if(!control!.inputWaiters.containsKey(request!.waitingInput)){
+                    our WorldInputWaiters:: waiters
+                    control!.inputWaiters.insert(request!.waitingInput, waiters)
+                }
+                control!.inputWaiters.at(request!.waitingInput)!.requests.append(request)
+            }else{frame!.initialized <- true}
+        }
+        if(frame!.facts.outcome!=worldReady){
+            stopFrame(request, frame); return()
+        }
+        if(frame!.prerequisite!=NULL){
+            graph.consumePrerequisite(frame)
+            if(frame!.facts.outcome!=worldReady){
+                stopFrame(request, frame); return()
+            }
+        }
+        if(frame!.corresponding){
+            request!.ready.append(frame); correspond(request, frame); return()
+        }
+        if(frame!.projected){frame!.finished <- true; return()}
+        frame!.sourceEdge <- graph.nextRelationship(frame)
+        if(frame!.sourceEdge==NULL){
+            frame!.finished <- true
+            if(frame!.facts.outcome!=worldReady){stopFrame(request, frame)}
+            return()
+        }
+        request!.relationshipsRead <+- 1
+        our POV: source <- frame!.sourceEdge
+        if(source!.pItem==NULL){request!.outcome <- worldError; request!.detail <- "Empty relationship"; return()}
+        if(source!.viewMap.sourcePov!=NULL or source!.referenceAlias.sourcePov!=NULL or
+           (source!.pParent!=NULL and (!frame!.sourceIsOperand or source!.pParent!==frame!.node))){
+            request!.outcome <- worldUnsupported; request!.detail <- "Contextual expression source"; return()
+        }
+        if(request!.attempts.containsKey(source!.pItem)){
+            frame!.prerequisite <- request!.attempts.at(source!.pItem)
+            if(!frame!.prerequisite!.finished){
+                request!.outcome <- worldUnsupported
+                request!.detail <- "Cyclic scalar prerequisites need the continuation stage"
+                frame!.prerequisite <- NULL; return()
+            }
+            request!.ready.append(frame)
+        }else{
+            frame!.prerequisite <- makeFrame(request, source)
+            if(frame!.sourceIsOperand){frame!.prerequisite!.expressionParent <- frame!.node}
+            request!.ready.append(frame)
+            request!.ready.append(frame!.prerequisite)
+        }
+    }
+
+    our WorldRequest: normalize(our WorldSession: session, our POV: target, me bool: requireSize <- false) <- {
+        me WorldModelLock: lock{control!.mutex}
+        our WorldRequest:: request
+        request!.control <- control
+        request!.target <- target; request!.requireSize <- requireSize
+        if(session==NULL or session!.closed){
+            request!.outcome <- worldError; request!.detail <- "An open Agent session is required"; return(request)
+        }
+        session!.requests.append(request)
+        if(target==NULL or target!.pItem==NULL){
+            request!.outcome <- worldError; request!.detail <- "Missing target POV"; return(request)
+        }
+        if(graph.satisfied(target, requireSize)){
+            request!.outcome <- worldComplete; return(request)
+        }
+        request!.root <- makeFrame(request, target)
+        request!.ready.append(request!.root)
+        run(request)
+        return(request)
+    }
+
+    void: run(our WorldRequest: request) <- {
+        while(request!.outcome==worldReady and !request!.ready.isEmpty()){
+            our WorldFrame: frame <- request!.ready.popLast()
+            step(request, frame)
+        }
+        if(request!.outcome==worldReady){graph.finish(request)}
+        if(request!.outcome!=worldWaiting){request!.releaseProgress()}
+    }
+
+    void: cancel(our WorldRequest: request) <- {request!.cancel()}
+    void: closeSession(our WorldSession: session) <- {
+        me WorldModelLock: lock{control!.mutex}
+        if(session!.closed){return()}
+        withEach request in session!.requests{cancel(request)}
+        session!.requests.clear(); session!.closed <- true
+    }
+}

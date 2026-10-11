@@ -15,13 +15,14 @@ Description = "Proteus Engine"
 ProgramOrLibrary = "program"
 TestSpec = "ProteusTests.dog"
 
-featuresNeeded = [Unicode, BigNumbers, Threads, IOBuffer, GraphLogger, Logger, GraphFoundation]
+featuresNeeded = [Unicode, BigNumbers, Threads, IOBuffer, GraphLogger, Logger]
 
 commentsToActivate = [l/PAI/, l/merge_]
 
 LicenseText = `This file is part of the "Proteus Language suite" All Rights Reserved.`
 infonDumpMode='text'
 
+#include WorldManager.dog
 #include infonIO.dog
 #include infonList.dog
 #include Functions.dog
@@ -356,7 +357,7 @@ struct IdentityRegistry{
         }
         // A query wrapper can later denote a different result. The plain
         // source POV created by path lowering owns its persistent name.
-        if(node->pItem->partRef || !node->pItem->parts.empty() || node->pItem->pathSelection) return changed;
+        if(node->pItem->partRef || !node->pItem->parts.empty()) return changed;
         std::shared_ptr<POV> existing;
         bool linked=false;
         {
@@ -1205,21 +1206,6 @@ struct IdentityRegistry{
         }
     }
 
-    // Collect only; the enclosing atomic Set publishes after all writes.
-    void: captureIdentityWrite(our POV: leftPOV, our POV: rightPOV) <- <%{
-        // New identities add constraints even to already completed endpoints.
-        proteus4::ReadScope::newRequirements({leftPOV.get(),rightPOV.get(),
-            leftPOV->pItem.get(),rightPOV->pItem.get(),
-            leftPOV->pItem ? leftPOV->pItem->identityName.get() : nullptr,
-            rightPOV->pItem ? rightPOV->pItem->identityName.get() : nullptr});
-        // Direct readers observe endpoints. Transitive readers also observe
-        // occurrence names, since distinct POVs may share one.
-        proteus4::WriteScope::record(proteus4::ReadScope::changedObjects({
-            leftPOV.get(),rightPOV.get(),
-            leftPOV->pItem ? leftPOV->pItem->identityName.get() : nullptr,
-            rightPOV->pItem ? rightPOV->pItem->identityName.get() : nullptr}));
-    }%>
-
     our IdentityRelation: recordIdentity(our POV: leftPOV,
             our POV: rightPOV, me IdentityEvidenceKind: evidenceKind,
             me uint64: normalizationID) <- {
@@ -1241,7 +1227,6 @@ struct IdentityRegistry{
             identity!.leftPOV <- leftPOV
             identity!.rightPOV <- rightPOV
             identities.append(identity)
-            captureIdentityWrite(leftPOV, rightPOV)
             return(identity)
         }
     }
@@ -1252,21 +1237,13 @@ struct IdentityRegistry{
             return a==b || (a && b && a->pItem && b->pItem && a->pItem->identityName &&
                 a->pItem->identityName==b->pItem->identityName);
         };
-        auto observe=[](const std::shared_ptr<POV>& node) {
-            proteus4::ReadScope::observeObject(node.get());
-            if(node->pItem) {
-                proteus4::ReadScope::observeObject(node->pItem.get());
-                proteus4::ReadScope::observeObject(node->pItem->identityName.get());
-            }
-        };
-        observe(firstPOV);observe(secondPOV);
         if(same(firstPOV,secondPOV)) return true;
         std::vector<std::shared_ptr<POV>> pending{firstPOV},visited;
         std::lock_guard<std::mutex> lock(registryMutex);
         while(!pending.empty()) {
             auto current=pending.back();pending.pop_back();
             if(std::find(visited.begin(),visited.end(),current)!=visited.end()) continue;
-            visited.push_back(current);observe(current);
+            visited.push_back(current);
             for(const auto& identity:identities) {
                 auto neighbor=same(identity->leftPOV,current) ? identity->rightPOV :
                     same(identity->rightPOV,current) ? identity->leftPOV : std::shared_ptr<POV>{};
@@ -2250,7 +2227,6 @@ struct infonView{
         funcArgs   <- NULL
         temporalValueSource <- NULL
         temporalPredecessor <- NULL
-        implicitMembershipChoice <- false
         innr       <- NULL
         type       <- NULL
         appliedListSpecs.clear()
@@ -2412,6 +2388,46 @@ struct GLOBAL{
 //////////////////////////
 // Infon Interface Routines
 struct Agent{
+    // Agent owns interaction lifetimes; WorldManager owns reasoning.
+    me WorldModelMutex: sessionMutex
+    our WorldSession: defaultSession
+    me WorldManager: worldManager
+    me uint64: nextWorldSessionID <- 1
+    me List<our WorldSession>: worldSessions
+
+    our WorldSession: startSession() <- {
+        me WorldModelLock: lock{sessionMutex}
+        our WorldSession:: session
+        session!.id <- nextWorldSessionID; nextWorldSessionID <+- 1
+        worldSessions.append(session)
+        return(session)
+    }
+    our WorldRequest: normalizeInSession(our WorldSession: session, our POV: target, me bool: requireSize <- false) <- {
+        me WorldModelLock: lock{sessionMutex}
+        me bool: owned <- false
+        withEach candidate in worldSessions{if(candidate===session){owned <- true}}
+        if(!owned){
+            our WorldRequest:: result
+            result!.control <- worldManager.control
+            result!.outcome <- worldError; result!.detail <- "Session belongs to another Agent"; return(result)
+        }
+        return(worldManager.normalize(session, target, requireSize))
+    }
+    void: endSession(our WorldSession: session) <- {
+        me WorldModelLock: lock{sessionMutex}
+        me List<our WorldSession>: remaining
+        withEach candidate in worldSessions{
+            if(candidate===session){worldManager.closeSession(candidate)}
+            else{remaining.append(candidate)}
+        }
+        worldSessions <- remaining
+        if(defaultSession===session){defaultSession <- NULL}
+    }
+    void: endWorldSessions() <- {
+        me WorldModelLock: lock{sessionMutex}
+        withEach session in worldSessions{worldManager.closeSession(session)}
+        worldSessions.clear(); defaultSession <- NULL
+    }
     our infonView: kernel
     our infonView: device
     our infonView: user
@@ -2428,41 +2444,21 @@ struct Agent{
         //log("INFON ERROR: " + errorMesg)
        // print("INFON ERROR: " + errorMesg+"\n")
     }
-    // One context per Agent; callers own asynchronous search handles.
-    // Synchronous legacy callers retain unresolved sessions here until close.
-    me Mutex: normalizationMutex
-    me List<NormalizationHandle>: retainedNormalizations
-    me GraphNormalizer: graphNormalizer
-
-    me NormalizationHandle: normalize(our POV: normPov) <- {
-        graphNormalizer.setWorld(world)
-        return(graphNormalizer.normalize(normPov))
+    our WorldRequest: normalize(our POV: normPov) <- {
+        me WorldModelLock: lock{sessionMutex}
+        if(defaultSession==NULL){defaultSession <- startSession()}
+        return(normalizeInSession(defaultSession, normPov))
     }
-    me NormalizationHandle: normalizeAll(our POV: normPov) <- {
-        graphNormalizer.setWorld(world)
-        return(graphNormalizer.normalizeAll(normPov))
-    }
+    // Scalar scope is identical; list scope will be implemented with lists.
+    our WorldRequest: normalizeAll(our POV: normPov) <- {return(normalize(normPov))}
     void: normalizeAndWait(our POV: normPov) <- {
-        me NormalizationHandle: handle <- normalize(normPov)
-        handle.waitForCompletion()
-        protect(normalizationMutex){
-            if(handle.failed()){
-                errorStatus <- 1; errorMesg <- handle.error()
-            }else{errorStatus <- 0; errorMesg <- ""}
-            // A publication may already have woken a previous subscription.
-            // Keep running sessions as well as currently subscribed ones.
-            me List<NormalizationHandle>: pending
-            withEach previous in retainedNormalizations{
-                if(previous.active()){pending.append(previous)}
-            }
-            if(handle.active()){pending.append(handle)}
-            retainedNormalizations <- pending
-        }
+        me WorldModelLock: lock{sessionMutex}
+        our WorldRequest: handle <- normalize(normPov)
+        handle!.waitForCompletion()
+        if(handle!.failed()){errorStatus <- 1; errorMesg <- handle!.error()}
+        else{errorStatus <- 0; errorMesg <- ""}
     }
-    void: close() <- {
-        graphNormalizer.close()
-        protect(normalizationMutex){retainedNormalizations.clear()}
-    }
+    void: close() <- {endWorldSessions()}
     void: appendToWorld(our infonView: newInfon) <- {
         our infonView: dotsAtTheEnd <- world!.value!.items.last()  //TODO: What is this line for?
         world!.value!.items.append(newInfon, false, 26)
@@ -2489,9 +2485,6 @@ struct Agent{
         Allocate(world); world!.setToList()
         context.init(identityRegistry)
         locale <- unicodeMgr.getSystemLocale()
-        graphNormalizer.initWithRegistry(identityRegistry)
-        graphNormalizer.setContext(context.topicHistoryPOV)
-        graphNormalizer.access!.replyCore <- CORE
         errorStatus <- 0
         errorMesg <- ""
     }
@@ -2502,29 +2495,38 @@ struct ThreadedNormalizer: inherits=Threads {
     our infonView: item
     our POV: pov
     their Agent: agent
-    me NormalizationHandle: handle
+    our WorldRequest: handle
+    our WorldSession: session
+    me bool: parseFirst
     their ThreadedInfonParser: parseBeforeNormalize
     me Mutex: lifecycleMutex
     me bool: cancellationRequested
 
     void: init(their Agent: _agent, our infonView: inf) <- {
         item <- inf; agent <- _agent
-        agent!.graphNormalizer.prepareInput(item)
+        agent!.worldManager.prepareInput(item)
+        session <- agent!.startSession()
         Allocate(pov, 700); pov!.pItem <- inf
         cancellationRequested <- false
     }
     void: cancel() <- {
-        protect(lifecycleMutex){cancellationRequested <- true; handle.cancel()}
+        protect(lifecycleMutex){
+            cancellationRequested <- true
+            if(handle!=NULL){handle!.cancel()}
+            agent!.endSession(session)
+        }
     }
     void: run() <- {
-        if(parseBeforeNormalize!=NULL){parseBeforeNormalize!.waitForParseCompletion()}
+        if(parseFirst and parseBeforeNormalize!=NULL){parseBeforeNormalize!.waitForParseCompletion()}
         protect(lifecycleMutex){
-            handle <- agent!.normalize(pov)
-            if(cancellationRequested){handle.cancel()}
+            if(cancellationRequested){return()}
+            handle <- agent!.normalizeInSession(session, pov)
         }
-        agent!.graphNormalizer.waitForInput(handle, pov)
-        if(handle.failed()){
-            agent!.CORE!.handleProteusError(item!.originID, handle.error())
+        // Keep the stream lifetime distinct from the request's current status.
+        if(parseBeforeNormalize!=NULL){parseBeforeNormalize!.waitForParseCompletion()}
+        handle!.waitForCompletion()
+        if(handle!.failed()){
+            agent!.CORE!.handleProteusError(item!.originID, handle!.error())
         }
     }
 }
@@ -2581,8 +2583,8 @@ struct ProteusCore: virtualMethods=[makeInfonConnector, normalizeFromStreamSpecA
                 target, streamLoader!.canonicalFileSpec(filename))
         if(stream==NULL){errorMesg <- "Could not open Proteus asset: "+filename; return(false)}
         stream.waitForCompletion()
-        if(stream.normerThread.handle.failed()){
-            errorMesg <- stream.normerThread.handle.error(); return(false)
+        if(stream.normerThread.handle!.failed()){
+            errorMesg <- stream.normerThread.handle!.error(); return(false)
         }
         return(true)
     }
