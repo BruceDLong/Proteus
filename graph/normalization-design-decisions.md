@@ -239,6 +239,14 @@ Specify exact goal requirements and `isNormed` scope within D02F's numeric compl
 
 **Status: partly accepted, 2026-10-11, from the user's list discussion.** Identity sources, main-level scope, reuse during co-propagation, and deduplication of matching attempts are the design direction below. The proposed graph operations and chart layout remain to be reviewed. Planning remains deferred under D01.
 
+### D02O Both absent overlay markers contribute no type constraint
+
+**Compatibility correction, 2026-10-11.** `tUnset` and `tUnknown` both mean that a nonliteral payload has no known interpretation. Virtual POV access maps either marker to absent type evidence. The ordinary merge can then acquire numeric, string or list facts; neither marker may contradict an otherwise compatible known type merely because its enum value differs. A payload marked literal without a known interpretation remains unsupported.
+
+**Reason and evidence:** the original overlay contract and retained `overlay/unsetOverlay` test explicitly cover both markers. A small client linked to the generated replacement shared library reproduces a mismatch: the same unknown target with a numeric RHS completes with `tUnknown` but rejects with `tUnset`. The reader had excluded only the former enum value when reporting known type evidence. Extending that one condition repairs the representation boundary; merge, comparison, publication and scheduling stay unchanged. No speculative type inference or new semantic rule is introduced.
+
+**Streaming and cost:** parser readiness is checked before facts are read, so neither marker bypasses a parser wait. The existing pending comparison and publication rules still apply. Classification is constant work and does not add a traversal, cache, subscription or restart. Original tests requiring general link subscriptions, registry inference or mutation of intermediate sources remain pending; only assertions supported by the current contract are ported.
+
 ### D03A Sources of member relationships
 
 **Accepted.** A member can acquire applicable relationships from its own wrkList; correspondence through an ident of its parent or a higher ancestor; its type; and its parent's listSpec or an applicable ancestor listSpec. Ancestor projection is central to intersections as well as to locating a given member in a corresponding list.

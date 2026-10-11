@@ -17,6 +17,7 @@ TestsToRun = `
     unit/worldManager/pendingComparisons
     unit/worldManager/listDischarge
     unit/worldManager/openAdoption
+    unit/worldManager/unknownOverlays
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -3644,21 +3645,35 @@ struct GLOBAL {
     void: unit_graphFoundation_spans_nestedOpenSpan(me string: tname) <- {
         if(!worldManagerSpanPort(2)){FAIL("Span extent port failed")}
     }
-    PENDING_ENGINE_TEST(unit/graphFoundation/overlay/number)
-    PENDING_ENGINE_TEST(unit/graphFoundation/overlay/string)
-    PENDING_ENGINE_TEST(unit/graphFoundation/overlay/parsedAny)
+    void: unit_graphFoundation_overlay_number(me string: tname) <- {
+        if(!worldManagerOverlayPort(1)){FAIL("Overlay port failed")}
+    }
+    void: unit_graphFoundation_overlay_string(me string: tname) <- {
+        if(!worldManagerOverlayPort(2)){FAIL("Overlay port failed")}
+    }
+    void: unit_graphFoundation_overlay_parsedAny(me string: tname) <- {
+        if(!worldManagerOverlayPort(3)){FAIL("Overlay port failed")}
+    }
     PENDING_ENGINE_TEST(unit/graphFoundation/overlay/numericTypeOnly)
     PENDING_ENGINE_TEST(unit/graphFoundation/overlay/stringTypeOnly)
-    PENDING_ENGINE_TEST(unit/graphFoundation/overlay/sizeWithoutType)
+    void: unit_graphFoundation_overlay_sizeWithoutType(me string: tname) <- {
+        if(!worldManagerOverlayPort(6)){FAIL("Overlay port failed")}
+    }
     PENDING_ENGINE_TEST(unit/graphFoundation/overlay/throughUnknown)
     PENDING_ENGINE_TEST(unit/graphFoundation/overlay/registry)
-    PENDING_ENGINE_TEST(unit/graphFoundation/overlay/knownTypeRetained)
+    void: unit_graphFoundation_overlay_knownTypeRetained(me string: tname) <- {
+        if(!worldManagerOverlayPort(9)){FAIL("Overlay port failed")}
+    }
     PENDING_ENGINE_TEST(unit/graphFoundation/overlay/noRoute)
     PENDING_ENGINE_TEST(unit/graphFoundation/overlay/cost)
     PENDING_ENGINE_TEST(unit/graphFoundation/overlay/cancel)
-    PENDING_ENGINE_TEST(unit/graphFoundation/overlay/listMember)
+    void: unit_graphFoundation_overlay_listMember(me string: tname) <- {
+        if(!worldManagerOverlayPort(13)){FAIL("Overlay port failed")}
+    }
     PENDING_ENGINE_TEST(unit/graphFoundation/overlay/openTailMember)
-    PENDING_ENGINE_TEST(unit/graphFoundation/overlay/unsetOverlay)
+    void: unit_graphFoundation_overlay_unsetOverlay(me string: tname) <- {
+        if(!worldManagerOverlayPort(15)){FAIL("Overlay port failed")}
+    }
     void: unit_graphFoundation_expressions_computedSize(me string: testName) <- {
         if(!worldManagerComputedSizePort(false)){FAIL("Computed size port failed")}
     }
@@ -7395,5 +7410,111 @@ struct GLOBAL {
                 h->outcome==worldPartial && toString(root->pItem.get())=="{5| 5 ... }" && h->relationshipsRead<=edges+1,"input resumes the same adoption; cancellation publishes nothing");
         }
         core.deInit();std::cout<<"OPEN_ADOPTION_CHECKS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    me bool: worldManagerOverlayPort(me int: caseID) <- <%{
+        ProteusCore core;core.init("",false);auto& agent=*core.agent;auto& manager=agent.worldManager;
+        auto root=manager.parse(caseID==3?"? = 'Hello'":caseID==9?"*5+7":caseID==13?"{?} = {*10+7}":"?").target;
+        auto source=manager.parse(caseID==2 || caseID==9?"'Hello'":caseID==6?"*10+_":"*10+7").target;
+        if(!root || !source){core.deInit();return false;}
+        if(caseID==6)SetBits(source->pItem->value->flags,infonState::overlayTypeMask,infonState::tUnknown);
+        if(caseID==15)SetBits(root->pItem->value->flags,infonState::overlayTypeMask,infonState::tUnset);
+        if(caseID!=3 && caseID!=13)root->pItem->wrkList.push_back(source);
+        else source=root->pItem->wrkList.front();
+        auto before=toString(root->pItem.get()),sourceText=toString(source->pItem.get());
+        auto h=agent.normalize(root);auto item=root->pItem;
+        bool ok=sourceText==toString(source->pItem.get());
+        if(caseID==6){
+            ok &= h->outcome==worldPartial && !getFlagBit(item->flags,infonView::isNormed) &&
+                getModeBits(item->infSize->flags,infonState::evalMode)==infonState::emLiteral && item->infSize->num==10 &&
+                getModeBits(item->value->flags,infonState::overlayType)==infonState::tUnknown &&
+                getModeBits(item->value->flags,infonState::evalMode)==infonState::emUnknown;
+        }else if(caseID==9){
+            ok &= h->outcome==worldRejected && h->publications==0 && !getFlagBit(item->flags,infonView::isNormed) &&
+                getModeBits(item->value->flags,infonState::overlayType)==infonState::NUM && item->value->num==7 &&
+                item->wrkList.size()==1 && toString(item.get())==before;
+        }else if(caseID==13){
+            auto member=item->value->items.head;
+            ok &= h->complete() && getFlagBit(item->flags,infonView::isNormed) && member &&
+                getFlagBit(member->pItem->flags,infonView::isNormed) &&
+                getModeBits(member->pItem->value->flags,infonState::overlayType)==infonState::NUM &&
+                member->pItem->value->num==7 && member->pItem->infSize->num==10;
+        }else{
+            ok &= h->complete() && getFlagBit(item->flags,infonView::isNormed) && h->publications==1 &&
+                getModeBits(item->flags,infonView::viewMode)==infonView::vmOverlay &&
+                getModeBits(item->value->flags,infonState::evalMode)==infonState::emLiteral;
+            if(caseID==1 || caseID==15)ok &= getModeBits(item->value->flags,infonState::overlayType)==infonState::NUM && item->value->num==7 && item->infSize->num==10;
+            else ok &= getModeBits(item->value->flags,infonState::overlayType)==infonState::STR && item->value->str=="Hello" && item->infSize->num==5;
+        }
+        if(!ok)std::cout<<"Overlay port "<<caseID<<": "<<h->detail<<" -> "<<toString(item.get())<<"\n";
+        core.deInit();return ok;
+    }%>
+    void: unit_worldManager_unknownOverlays(me string: tname) <- {
+        if(!worldManagerUnknownOverlayChecks()){FAIL("Unknown overlay checks failed")}
+    }
+    me bool: worldManagerUnknownOverlayChecks() <- <%{
+        ProteusCore core;core.init("",false);auto& agent=*core.agent;auto& manager=agent.worldManager;
+        int checks=0,failures=0;
+        auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+        auto parse=[&](const std::string& text){auto p=manager.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+        auto marker=[](std::shared_ptr<infonView> item,int kind){SetBits(item->value->flags,infonState::overlayTypeMask,kind);};
+        struct Case{std::string input,expected;int outcome;};
+        const Case cases[]={
+            {"? = *10+7","*10+7",worldComplete},
+            {"? = 'Hello'","'Hello'",worldComplete},
+            {"? = {1 2}","{1 2}",worldComplete},
+            {"? = {5| ...}","{5|  ... }",worldPartial},
+            {"? = (*3+_ +2)","(*3+_ +2)",worldPartial},
+            {"? = *10+_","*10+_",worldPartial},
+            {"? = _","_",worldPartial},
+            {"? = !5 = 7","7",worldComplete},
+            {"? = !5 = 5","",worldRejected},
+            {"? = 7 = 'Hello'","",worldRejected}
+        };
+        for(int kind:{infonState::tUnknown,infonState::tUnset}){
+            for(const auto& c:cases){
+                auto root=parse(c.input);if(!root)continue;marker(root->pItem,kind);auto before=toString(root->pItem.get());
+                std::vector<std::pair<std::shared_ptr<POV>,std::string>> sources;
+                for(auto source:root->pItem->wrkList)sources.push_back({source,toString(source->pItem.get())});
+                auto h=agent.normalize(root);auto actual=toString(root->pItem.get());
+                check(h->outcome==c.outcome,c.input+" unknown marker "+std::to_string(kind)+" outcome "+std::to_string(h->outcome)+": "+h->detail);
+                check(actual==(c.expected.empty()?before:c.expected),c.input+" output "+actual);
+                bool untouched=true;for(const auto& src:sources)untouched &= toString(src.first->pItem.get())==src.second;
+                check(untouched,"acquisition does not overwrite any source");
+                if(c.expected.empty())check(h->publications==0,"contradiction publishes no guessed type");
+                if(c.outcome==worldComplete){auto again=agent.normalize(root);check(again->complete() && again->framesCreated==0,"acquired completed type needs no new goals");}
+            }
+            auto root=parse("{? ?} = {7 'a'}");auto first=root->pItem->value->items.head;
+            marker(first->pItem,kind);marker(first->next->pItem,kind);auto h=agent.normalize(root);
+            check(h->complete() && toString(root->pItem.get())=="{7 'a'}","member correspondence acquires either unknown marker");
+            for(const std::string text:{"7","'Hello'","{1 2}"}){
+                auto target=parse(text);auto source=parse("?");marker(source->pItem,kind);target->pItem->wrkList.push_back(source);
+                auto known=agent.normalize(target);
+                check(known->complete() && toString(target->pItem.get())==text && getModeBits(source->pItem->value->flags,infonState::overlayType)==static_cast<unsigned>(kind),"unknown source never contradicts or acquires the target type");
+            }
+            auto target=parse("?");auto source=parse("? = *10+7");marker(source->pItem,kind);target->pItem->wrkList.push_back(source);
+            auto sourceBefore=toString(source->pItem.get());auto h2=agent.normalize(target);
+            check(h2->complete() && getModeBits(target->pItem->value->flags,infonState::overlayType)==infonState::NUM &&
+                target->pItem->value->num==7 && target->pItem->infSize->num==10 &&
+                getModeBits(source->pItem->value->flags,infonState::overlayType)==static_cast<unsigned>(kind) &&
+                source->pItem->wrkList.size()==1 && toString(source->pItem.get())==sourceBefore &&
+                target->pItem->wrkList.size()==1 && target->pItem->wrkList.front()==source,
+                "transitive type acquisition preserves intermediate source and retained nested relationship");
+            auto absent=parse("?");marker(absent->pItem,kind);auto noFacts=agent.normalize(absent);
+            check(noFacts->outcome==worldPartial && getModeBits(absent->pItem->value->flags,infonState::overlayType)==static_cast<unsigned>(kind),"absence of type evidence does not invent an interpretation");
+            auto invalid=parse("7");marker(invalid->pItem,kind);auto invalidResult=agent.normalize(invalid);
+            check(invalidResult->outcome==worldUnsupported && invalidResult->publications==0,"literal payload without a type remains unsupported");
+            for(bool cancel:{false,true}){
+                auto pending=parse("? = ?");marker(pending->pItem,kind);auto rhs=pending->pItem->wrkList[0]->pItem;marker(rhs,kind);
+                manager.prepareInput(rhs);auto wait=agent.normalize(pending);auto edges=wait->relationshipsRead;
+                check(wait->outcome==worldWaiting && wait->publications==0,"type acquisition waits on parser completion");
+                if(cancel)wait->cancel();
+                ProteusParser parser(&core,true,0);parser.initParseFromString("unknown overlay","*10+7");parser.doParse(rhs);
+                check(cancel ? wait->outcome==worldCancelled && wait->publications==0 : wait->complete() && wait->relationshipsRead==edges && toString(pending->pItem.get())=="*10+7","arrival continues without replay; cancelled acquisition stays untouched");
+            }
+        }
+        core.deInit();std::cout<<"UNKNOWN_OVERLAY_CHECKS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }
