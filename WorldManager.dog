@@ -115,6 +115,7 @@ struct WorldScalar {
     me bool: explicitSize <- false
     me bool: contentsComplete <- true
     me bool: representable <- true
+    me bool: dischargeListSpec <- false
     our WorldList: sequence
     me bool: hasRange <- false
     me FlexNum: lower
@@ -161,6 +162,10 @@ struct WorldFrame {
     // Visit the two stored slots once, then supplied identities.
     me int: expressionSlot <- 0 // 0=unstarted, 1=size, 2=value, 3=wrkList
     me bool: sourceIsOperand <- false
+    me bool: sourceIsListSpec <- false
+    me bool: memberSpecified <- false
+    our POV: listSpecEdge
+    our WorldFrame: listSpecFrame
     our POV: nextOperand
     our POV: priorOperand
     me int64: operandsRead <- 0
@@ -202,6 +207,7 @@ struct WorldRequest {
     me uint64: relationshipsRead <- 0
     me uint64: publications <- 0
     me uint64: memberPairs <- 0
+    me uint64: templateApplications <- 0
     me uint64: sequenceVisits <- 0
     me uint64: publishedTextBytes <- 0
     me uint64: publishedTextNodes <- 0
@@ -321,7 +327,7 @@ struct WorldPOVGraph {
         }
         me bool: expression <- item!.value!.evalMode==emConcat
         if(!expression and item!.value!.overlayType==LST and
-           (item!.value!.evalMode!=emLiteral or item!.value!.listSpec!=NULL or item!.value!.tailUnfinished or
+           (item!.value!.evalMode!=emLiteral or item!.value!.tailUnfinished or
             item!.value!.timelike or item!.orderMode==uUnordered or item!.invertMatch)){
             facts.outcome <- worldUnsupported; facts.detail <- "List needs correspondence or template semantics"; return(facts)
         }
@@ -371,6 +377,7 @@ struct WorldPOVGraph {
 
     // The cursor is retained in the frame; ordinary arrival never rewinds it.
     our POV: nextRelationship(our WorldFrame: frame) <- {
+        frame!.sourceIsListSpec <- false
         while(frame!.expressionSlot<3){
             if(frame!.nextOperand!=NULL){
                 our POV: operand <- frame!.nextOperand
@@ -390,7 +397,16 @@ struct WorldPOVGraph {
             our infonState: slot
             if(frame!.expressionSlot==1){slot <- frame!.node!.pItem!.infSize}
             else if(frame!.expressionSlot==2){slot <- frame!.node!.pItem!.value}
-            if(slot!=NULL and (slot!.evalMode==emConcat or memberSequence(frame))){frame!.nextOperand <- slot!.items.head}
+            if(slot!=NULL and (slot!.evalMode==emConcat or memberSequence(frame))){
+                frame!.nextOperand <- slot!.items.head
+                // A finite template is read once, then projected into each member.
+                // Empty closed lists need no template evaluation.
+                if(memberSequence(frame) and slot!.listSpec!=NULL and frame!.nextOperand!=NULL){
+                    Allocate(frame!.listSpecEdge, 934); frame!.listSpecEdge!.pItem <- slot!.listSpec
+                    frame!.sourceIsOperand <- false; frame!.sourceIsListSpec <- true
+                    return(frame!.listSpecEdge)
+                }
+            }
         }
         frame!.sourceIsOperand <- false
         our infonView: item <- frame!.node!.pItem
@@ -465,6 +481,7 @@ struct WorldPOVGraph {
             if(!frame!.facts.hasSize and !frame!.facts.explicitSize){
                 frame!.facts.hasSize <- true; frame!.facts.size <- frame!.operandsRead
             }
+            frame!.facts.dischargeListSpec <- frame!.facts.representable
             return()
         }
         me WorldScalar: expression <- frame!.expression
@@ -706,6 +723,8 @@ struct WorldPOVGraph {
     void: consumePrerequisite(our WorldFrame: frame) <- {
         if(frame!.prerequisite!.facts.outcome==worldPartial and !(memberSequence(frame) and frame!.sourceIsOperand)){
             frame!.facts.outcome <- worldPartial; frame!.facts.detail <- frame!.prerequisite!.facts.detail
+        }else if(frame!.sourceIsListSpec){
+            frame!.listSpecFrame <- frame!.prerequisite
         }else if(memberSequence(frame) and frame!.sourceIsOperand){
             if(frame!.facts.sequence==NULL){Allocate(frame!.facts.sequence)}
             appendMember(frame!.facts.sequence, frame!.prerequisite)
@@ -823,6 +842,8 @@ struct WorldPOVGraph {
         our infonView: item <- job.target!.pItem
         me WorldScalar: facts <- frame!.facts
         if(job.newList!=NULL){item!.value <- job.newList}
+        if(facts.overlay==LST and facts.dischargeListSpec and facts.hasSize and
+           facts.size==FlexNum(sequenceLength(facts.sequence))){item!.value!.listSpec <- NULL}
         // An unresolved expression is still the representation of its partial
         // result. Type evidence alone must not turn its body into 0 or ''.
         if(item!.value!.evalMode==emConcat and !facts.hasValue and !facts.hasRange){return()}
@@ -960,6 +981,20 @@ struct WorldManager {
         else{request!.outcome <- frame!.facts.outcome; request!.detail <- frame!.facts.detail}
     }
 
+    // Correspondence and listSpec projection share the same derived relationship.
+    // Source frames stay immutable; each occurrence holds its own combined facts.
+    our WorldFrame: derivePair(our WorldRequest: request, our WorldFrame: left,
+                              our WorldFrame: right, our POV: edge) <- {
+        our WorldFrame:: pair
+        pair!.node <- left!.node; pair!.facts <- left!.facts
+        pair!.retainedWork <- left!.retainedWork
+        pair!.bodyBounds <- left!.bodyBounds; pair!.bodyHasSize <- left!.bodyHasSize; pair!.bodySize <- left!.bodySize
+        pair!.initialized <- true; pair!.projected <- true
+        pair!.sourceEdge <- edge; pair!.prerequisite <- right
+        request!.framesCreated <+- 1
+        return(pair)
+    }
+
     // A pair is a derived strict member relationship, evaluated by the same
     // merge operation. Nested lists return here through the retained stack.
     void: correspond(our WorldRequest: request, our WorldFrame: frame) <- {
@@ -979,14 +1014,9 @@ struct WorldManager {
             frame!.leftMembers <- WorldListCursor(); frame!.rightMembers <- WorldListCursor()
             frame!.corresponding <- false
         }else{
-            our WorldFrame:: pair
-            pair!.node <- left!.node; pair!.facts <- left!.facts
-            pair!.retainedWork <- left!.retainedWork
-            pair!.bodyBounds <- left!.bodyBounds; pair!.bodyHasSize <- left!.bodyHasSize; pair!.bodySize <- left!.bodySize
-            pair!.initialized <- true; pair!.projected <- true
-            pair!.sourceEdge <- frame!.sourceEdge; pair!.prerequisite <- right
+            our WorldFrame: pair <- derivePair(request, left, right, frame!.sourceEdge)
             frame!.pairedMember <- pair
-            request!.framesCreated <+- 1; request!.memberPairs <+- 1
+            request!.memberPairs <+- 1
             request!.ready.append(pair)
         }
     }
@@ -1010,7 +1040,15 @@ struct WorldManager {
             stopFrame(request, frame); return()
         }
         if(frame!.prerequisite!=NULL){
+            if(frame!.sourceIsOperand and graph.memberSequence(frame) and
+               frame!.listSpecFrame!=NULL and !frame!.memberSpecified and
+               frame!.prerequisite!.facts.outcome==worldReady){
+                frame!.prerequisite <- derivePair(request, frame!.prerequisite, frame!.listSpecFrame, frame!.listSpecEdge)
+                frame!.memberSpecified <- true; request!.templateApplications <+- 1
+                request!.ready.append(frame); request!.ready.append(frame!.prerequisite); return()
+            }
             graph.consumePrerequisite(frame)
+            frame!.memberSpecified <- false
             if(frame!.facts.outcome!=worldReady){
                 stopFrame(request, frame); return()
             }

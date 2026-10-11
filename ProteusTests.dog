@@ -8,6 +8,7 @@ TestsToRun = `
     unit/worldManager/computedSizes
     unit/worldManager/listMembers
     unit/worldManager/listComposition
+    unit/worldManager/listSpecs
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -3845,7 +3846,9 @@ struct GLOBAL {
     PENDING_ENGINE_TEST(unit/graphTemplates/prefixInstance)
     PENDING_ENGINE_TEST(unit/graphTemplates/contextDeferred)
     PENDING_ENGINE_TEST(unit/graphTemplates/unknownExtent)
-    PENDING_ENGINE_TEST(unit/graphTemplates/closedLiteral)
+    void: unit_graphTemplates_closedLiteral(me string: tname) <- {
+        if(!worldManagerListSpecChecks(true)){FAIL("Closed list template assertions failed")}
+    }
     PENDING_ENGINE_TEST(unit/graphTemplates/combinedTemplates)
     PENDING_ENGINE_TEST(unit/graphTemplates/finiteConjunction)
     PENDING_ENGINE_TEST(unit/graphTemplates/zeroExtent)
@@ -6253,5 +6256,127 @@ struct GLOBAL {
         ProteusParser xp(&core,true,0);xp.initParseFromString("cancelled correspondence","3");xp.doParse(last->pItem);
         check(cancel->outcome==worldCancelled && cancel->publications==0 && !cancelled->pItem->wrkList.empty() && manager.control->inputWaiters.empty(),"cancelled correspondence publishes nothing");
         core.deInit();std::cout<<"LIST_COMPOSITION_CHECKS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_listSpecs(me string: tname) <- {
+        if(!worldManagerListSpecChecks(false)){FAIL("Finite listSpec checks failed")}
+    }
+    me bool: worldManagerListSpecChecks(me bool: historicalOnly) <- <%{
+        ProteusCore core;core.init("",false);auto& agent=*core.agent;auto& manager=agent.worldManager;
+        int checks=0,failures=0;
+        auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+        auto parse=[&](const std::string& text){auto p=manager.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+        struct Case{std::string input,expected;int outcome;};
+        const Case cases[]={
+            {"{*10+7| *10+_ *10+_}","{*10+7 *10+7}",worldComplete},
+            {"{*10+_| _ _}","{*10+_ *10+_}",worldPartial},
+            {"{*10+_| 2 3}","{*10+2 *10+3}",worldComplete},
+            {"{{_ 7}| {1 _} {2 _}}","{{1 7} {2 7}}",worldComplete},
+            {"{_ _} = {5| _ _}","{5 5}",worldComplete},
+            {"({3| _} {4| _ _})","{3 4 4}",worldComplete},
+            {"{*10+_| _ _} = {2 3}","{*10+2 *10+3}",worldComplete},
+            {"{(2 +3)| _ _}","{5 5}",worldComplete},
+            {"{'abc'| $ $}","{'abc' 'abc'}",worldComplete},
+            {"{5|}","{}",worldComplete},
+            {"{rot|}","{}",worldComplete},
+            {"{!5| 6 7}","{6 7}",worldComplete},
+            {"{!5| _}","",worldPartial},
+            {"{(*3+_ +2)| _ _}","{(*3+_ +2) (*3+_ +2)}",worldPartial},
+            {"{*10+_| _ = 2 _ = 3}","{*10+2 *10+3}",worldComplete},
+            {"{{*10+_| _ _}| {1 2} {3 4}}","{{*10+1 *10+2} {*10+3 *10+4}}",worldComplete},
+            {"{{5| _}| {_} {_}}","{{5} {5}}",worldComplete},
+            {"? = {5| _ _}","{5 5}",worldComplete},
+            {"{5| _ 6}","",worldRejected},
+            {"{*10+_| 2 *11+3}","",worldRejected},
+            {"{_| 2 'bad'}","",worldRejected},
+            {"{!5| 6 5}","",worldRejected},
+            {"{{_ 7}| {1 8}}","",worldRejected},
+            {"{rot| _ _}","",worldUnsupported},
+            {"{5| _ ...}","",worldUnsupported},
+            {"{5| _ &{_}}","",worldUnsupported},
+            {"{5| _, _}","",worldUnsupported},
+            {"(5| _ _)","",worldUnsupported},
+            {"{(2 +_)| _ _}","",worldPartial},
+            {"{*10+_| _ _} = {2 3} = {2 4}","",worldRejected}
+        };
+        for(size_t index=0;index<(historicalOnly?1:sizeof(cases)/sizeof(cases[0]));++index){
+            const auto& c=cases[index];auto root=parse(c.input);if(!root)continue;
+            auto before=toString(root->pItem.get());auto body=root->pItem->value;
+            struct Position{std::shared_ptr<POV> node,prev,next;POV* parent;std::shared_ptr<infonView> item;};
+            std::vector<Position> positions;std::vector<std::shared_ptr<POV>> pending{root};
+            std::vector<std::pair<std::shared_ptr<infonView>,std::string>> sources;
+            while(!pending.empty()){
+                auto at=pending.back();pending.pop_back();auto item=at->pItem;
+                bool literal=getModeBits(item->value->flags,infonState::overlayType)==infonState::LST &&
+                    getModeBits(item->value->flags,infonState::evalMode)==infonState::emLiteral;
+                if(item->value->listSpec)sources.push_back({item->value->listSpec,toString(item->value->listSpec.get())});
+                for(auto edge:item->wrkList)sources.push_back({edge->pItem,toString(edge->pItem.get())});
+                for(auto m=item->value->items.head;m;m=m->next){
+                    if(literal){positions.push_back({m,m->prev,m->next,m->pParent,m->pItem});pending.push_back(m);}
+                    else sources.push_back({m->pItem,toString(m->pItem.get())});
+                }
+            }
+            auto result=agent.normalize(root);auto actual=toString(root->pItem.get());
+            check(result->outcome==c.outcome,c.input+" outcome: "+result->detail);
+            check(actual==(c.expected.empty()?before:c.expected),c.input+" result: "+actual);
+            bool stable=true;for(const auto& p:positions)stable &= p.node->pItem==p.item && p.node->prev==p.prev && p.node->next==p.next && p.node->pParent==p.parent;
+            check(stable,c.input+" physical occurrences retained");
+            bool unchanged=true;for(const auto& src:sources)unchanged &= toString(src.first.get())==src.second;
+            check(unchanged,c.input+" template and source facts unchanged");
+            if(c.outcome==worldRejected || c.outcome==worldUnsupported)check(result->publications==0,c.input+" failed request publishes nothing");
+            if(c.outcome==worldComplete){auto again=agent.normalize(root);check(again->complete() && again->framesCreated==0,c.input+" repeat does no work");}
+            if(historicalOnly){
+                auto first=body->items.head;auto last=body->items.tail;
+                check(result->complete() && getFlagBit(root->pItem->flags,infonView::isNormed) &&
+                    root->pItem->infSize->num==2 && body->items.size()==2 && first->pItem->value->num==7 && last->pItem->value->num==7,
+                    "retained closedLiteral value, extent, and completion assertions");
+            }
+        }
+        if(!historicalOnly){
+            for(int n:{32,64,128}){
+                std::string text="{(2 +3)|";for(int i=0;i<n;++i)text+=" _";text+="}";
+                auto root=parse(text);auto source=root->pItem->value->listSpec;
+                auto before=toString(source.get());auto result=agent.normalize(root);
+                check(result->complete() && result->templateApplications==static_cast<unsigned>(n) && result->memberPairs==0 &&
+                    result->framesCreated==static_cast<unsigned>(2*n+4) && result->relationshipsRead==static_cast<unsigned>(n+3) &&
+                    result->publications==static_cast<unsigned>(n+1),"one shared template evaluation and one derived merge per member");
+                check(toString(source.get())==before,"computed template remains expressed");
+                std::cout<<"LIST_SPEC: "<<n<<" members, "<<result->relationshipsRead<<" relationships, "<<result->templateApplications<<" projections\n";
+            }
+            // Parent correspondence consumes the already constrained member facts.
+            auto combined=parse("{*10+_| _ _} = {2 3}");auto combinedResult=agent.normalize(combined);
+            check(combinedResult->complete() && combinedResult->templateApplications==2 && combinedResult->memberPairs==2,"parent correspondence does not reapply the listSpec");
+            // Shared source evidence must not acquire one member's value.
+            auto independent=parse("{*10+_| 2 3}");auto spec=independent->pItem->value->listSpec;
+            auto result=agent.normalize(independent);
+            check(result->complete() && getModeBits(spec->value->flags,infonState::evalMode)==infonState::emUnknown &&
+                independent->pItem->value->items.head->pItem!=independent->pItem->value->items.tail->pItem,"independent values do not specialize the shared template");
+            // Each scope receives its own derived facts even when a template is shared.
+            auto scopes=parse("{{_| 2} {_| 'a'}}");auto a=scopes->pItem->value->items.head;auto b=a->next;
+            b->pItem->value->listSpec=a->pItem->value->listSpec;
+            auto scopesBefore=toString(scopes->pItem.get());auto rejected=agent.normalize(scopes);
+            check(rejected->outcome==worldRejected && rejected->publications==0 && toString(scopes->pItem.get())==scopesBefore,"shared template still checks each scope");
+            // Wait at the template, or at a later member, retaining earlier projections.
+            for(bool waitOnTemplate:{false,true}){
+                auto root=parse("{5| _ _ _}");auto spec=root->pItem->value->listSpec;auto last=root->pItem->value->items.tail;
+                auto waiting=waitOnTemplate?spec:last->pItem;manager.prepareInput(waiting);
+                auto handle=agent.normalize(root);auto edges=handle->relationshipsRead;
+                check(handle->outcome==worldWaiting && handle->publications==0 && handle->templateApplications==(waitOnTemplate?0u:2u),"listSpec wait retains earlier projections");
+                ProteusParser parser(&core,true,0);parser.initParseFromString("listSpec arrival",waitOnTemplate?"5":"_");parser.doParse(waiting);
+                check(handle->complete() && handle->templateApplications==3 && handle->relationshipsRead==edges+(waitOnTemplate?3:0) &&
+                    toString(root->pItem.get())=="{5 5 5}","arrival continues at the retained template/member link");
+            }
+            auto cancelRoot=parse("{5| _ _}");auto pending=cancelRoot->pItem->value->items.tail->pItem;
+            manager.prepareInput(pending);auto cancel=agent.normalize(cancelRoot);cancel->cancel();
+            ProteusParser parser(&core,true,0);parser.initParseFromString("cancelled listSpec member","_");parser.doParse(pending);
+            check(cancel->outcome==worldCancelled && cancel->publications==0 && cancelRoot->pItem->value->listSpec && manager.control->inputWaiters.empty(),"cancellation leaves template and earlier members unchanged");
+            // Explicitly unknown list extent does not lose its template obligation.
+            auto unknown=parse("*_+{5| _}");auto retained=unknown->pItem->value->listSpec;auto partial=agent.normalize(unknown);
+            check(partial->outcome==worldPartial && unknown->pItem->value->listSpec==retained && unknown->pItem->value->items.head->pItem->value->num==5 &&
+                getModeBits(unknown->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown,"unknown endpoint preserves listSpec and acquired member facts");
+        }
+        core.deInit();std::cout<<"LIST_SPEC_CHECKS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }

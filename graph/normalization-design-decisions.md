@@ -283,6 +283,16 @@ Publication first prepares destination occurrences and checks the complete write
 
 See the [list composition follow-up](normalization-design.md#list-composition-follow-up-2026-10-11) for retained semantic tests, scope and measured work.
 
+### D03G Finite listSpecs derive ordinary member relationships
+
+**Implementation increment, 2026-10-11.** A context-free listSpec on a closed ordered literal list supplies a strict requirement to each physical immediate member. The retained structural cursor exposes the template once before those members. Its checked facts are shared read-only; each member gets its own derived relationship through the same operation used for list correspondence. Numeric, string, range, exclusion and nested closed-list requirements use the existing merge operations. Later parent correspondence consumes the already constrained member facts without applying the template again. Ordinary nested lists remain single members; ancestor templates across embedded spans are not part of this increment.
+
+**Reason and alternatives:** copying a template and normalizing the copy per member repeats template evaluation and creates model work solely to record progress. A request-local checked template plus occurrence-specific derived facts avoids both, without changing source facts or adding another evaluator. Speculative pair results are not stored in the context-free source cache. A closed empty list needs no template evaluation: there are no members to constrain.
+
+Publication preserves existing member POVs and links. A finite listSpec is discharged only when its contribution is representable in the checked members and the known list endpoint equals their count. Explicit unknown or mismatching endpoints keep their template. An unresolved member/template retains its actual expression or requirement; rejection and unsupported required work publish nothing. No new global applied-template flags, planner or path costs are introduced.
+
+**Continuation and cost:** the template and members use the existing prerequisite stack and parser wait registration. A template wait resumes that template; a later member wait retains the earlier projections. Cancellation publishes nothing. For context-free source views V, relationships E, template/member applications A, correspondence pairs P, output O and retained-constraint copies R, work and storage are O(V + E + A + P + O + R), apart from scalar/payload work and under expected constant-time source lookup. Applying a structured template still charges its required member pairs per occurrence; sharing its evaluation does not eliminate those semantic checks. Sparse/open or embedded spans, expression-level listSpecs, nominal/contextual meaning, qualified list matching and general later-link arrivals remain outside this slice.
+
 ### D03 proposal for the virtual graph
 
 **Proposed, not a final interface.** Expose navigation, assertions, specifications, and transformations through a common operation protocol. A parameterized operation can require several premises and can return facts, a derived relationship, alternatives, or a wait. It need not allocate a persistent edge merely to make it traversable.
