@@ -160,7 +160,7 @@ A projected result carries the source POV or span, occurrence context, applicabl
 
 Ambiguous projection retains correlated candidates. Missing input or placement evidence retains a local continuation; exhaustion and contradiction remain distinct. A selected result must satisfy its branch's required pattern conditions. Known lengths can skip irrelevant embedded spans, but navigation cannot skip semantic prerequisites. A request on one member does not require normalizing or publishing all of either containing list. `align4b`'s exact alternative representation remains deferred.
 
-The implementation currently derives pairs during whole-list correspondence but rejects contextual member entry and qualified list matching. Direct member projection is the next implementation target; this section is the accepted contract, not a claim that those boundaries are already removed.
+The implementation currently derives pairs during whole-list correspondence but rejects contextual member entry and qualified list matching. Direct member projection is the next implementation target; this section is the accepted contract, not a claim that those boundaries are already removed. The existing intersection fixtures in `defaultTests.tst` are the primary acceptance path: `getLastItem/*` for selected occurrences and result constraints, `query/first` and `query/getNth` for positions, and `query/firstStrB/C` for discovering a selected member's RHS through its enclosing pattern/input correspondence. Internal work-count and immutability checks supplement these fixtures; they do not replace them or justify changing their expected results.
 
 ### Main-level normalization
 
