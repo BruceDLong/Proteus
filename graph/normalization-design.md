@@ -146,6 +146,16 @@ A member can use its own wrkList, a corresponding member reached through a paren
 
 The virtual graph therefore exposes more than identities. Structural and parameterized navigation helps discover applicable relationships; semantic operations can then derive new correspondences or facts. Navigation itself grants no identity or write permission. Joins, numeric forming, and other transformations must expose their premises and effects through the same reasoning interface. Temporal correspondence preserves distinct occurrences and its own guards.
 
+### Member goals request enclosing correspondence
+
+Given `A R B`, with `R` one of `=`, `==`, `=:` or `==:`, a goal on `A.m` requests the corresponding part of B as an RHS for that occurrence (D03Q). This is a demand from the member goal, not something available only while the parent is being normalized. An ancestor relationship projects through intervening occurrences. Reuse existing span propagation or advance a targeted correspondence attempt; inspect only the structure and constraints required to establish and accept the route.
+
+A projected result carries the source POV or span, occurrence context, applicable member relation and required premises. Preserve qualification and direction without assuming every parent relation projects to plain equality or the same textual child operator. Feed the justified RHS into ordinary member solving, with its own wrkList, type and scoped listSpec contributions. Whole-list propagation uses the same operation and records contributions already covered; do not rediscover a parent relationship independently for each member.
+
+Ambiguous projection retains correlated candidates. Missing input or placement evidence retains a local continuation; exhaustion and contradiction remain distinct. A selected result must satisfy its branch's required pattern conditions. Known lengths can skip irrelevant embedded spans, but navigation cannot skip semantic prerequisites. A request on one member does not require normalizing or publishing all of either containing list. `align4b`'s exact alternative representation remains deferred.
+
+The implementation currently derives pairs during whole-list correspondence but rejects contextual member entry and qualified list matching. Direct member projection is the next implementation target; this section is the accepted contract, not a claim that those boundaries are already removed.
+
 ### Main-level normalization
 
 When an unordered list is the target, fill its main level as far as reasonably possible. Resolve the requested facts about its members without automatically descending through every contained level to materials or atoms. Member obligations inherit that scope rather than restarting ordinary top-level normalization at each child.
@@ -176,7 +186,7 @@ Deduplication bounds repetition of a particular attempt; it does not bound the n
 
 ## Intersections
 
-**Unresolved: D04.** Specify pattern, input, alternatives, result, and result-constraint relationships using the common solver. Include list and sparse composition, partial publication, and matching costs.
+**Basis accepted: D03Q; remaining details unresolved in D04.** An intersection exposes its selected body occurrence as the normalization target. That member finds RHSs by requesting correspondence through the containing list relationship; the ordinary solver then applies them. Selection, qualification, matching premises and correlated alternatives retain their semantics. This shares the mechanism used for direct member access and whole-list propagation. Specify the remaining pattern, input, result-constraint, sparse, partial-publication and cost contracts; the primitive is not yet implemented for contextual member goals.
 
 ## Definitions
 
@@ -888,4 +898,4 @@ The reference Proteus4 executable passes the corrected fixture (**0/1 failures**
 
 ### Ambiguous alignment representation deferred, 2026-10-11
 
-At the user's request, postpone `merge/dots/align4b`. The proposed `{1 *_+[4 &{4 ... 4}] 5 6}` expresses the intended distinction between a single `4` shared by the two anchors and distinct boundary `4`s around a symbolic span. The current parser/printer round-trips that spelling, but this does not validate normalization or choose it as the canonical form. Other representations remain possible. The existing retained-RHS fixture expectation is provisional; keep the input and registration visible as a pending failure. No new fixture or engine change accompanies this decision. Continue with settled functionality in `defaultTests.tst`; the `getLastItem` group is a concrete next group independent of this representation choice.
+At the user's request, postpone `merge/dots/align4b`. The proposed `{1 *_+[4 &{4 ... 4}] 5 6}` expresses the intended distinction between a single `4` shared by the two anchors and distinct boundary `4`s around a symbolic span. The current parser/printer round-trips that spelling, but this does not validate normalization or choose it as the canonical form. Other representations remain possible. The existing retained-RHS fixture expectation is provisional; keep the input and registration visible as a pending failure. No new fixture or engine change accompanies this decision. Continue with settled functionality in `defaultTests.tst`; D03Q establishes targeted member correspondence as the prerequisite for the `getLastItem` group and other intersections, independently of this alternative representation choice.
