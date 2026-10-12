@@ -31,6 +31,7 @@ TestsToRun = `
     unit/worldManager/structuredParsing
     unit/worldManager/selectedParsing
     unit/worldManager/recordFields
+    unit/worldManager/endRelative
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -8941,6 +8942,78 @@ for(bool cancel:{false,true}){
 }
 
 core.deInit();std::cout<<"RECORD_FIELDS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_endRelative(me string: tname) <- {
+        if(!worldManagerEndRelativeChecks()){FAIL("End-relative correspondence checks failed")}
+    }
+    me bool: worldManagerEndRelativeChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;
+int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+auto parse=[&](const std::string& text){auto p=m.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+auto run=[&](const std::string& text,const std::string& expected){auto p=parse(text);auto h=a.normalize(p);auto out=toString(p->pItem.get());check(h->complete() && out==expected,text+" => "+out+" : "+h->detail);return std::make_pair(p,h);};
+for(int length=1;length<=16;++length)for(int distance=1;distance<=length;++distance){
+ std::string source="{";for(int i=1;i<=length;++i){if(i>1)source+=' ';source+=std::to_string(i);}source+='}';
+ auto text="*(-"+std::to_string(distance)+")+[<_>] <~ "+source;
+ run(text,std::to_string(length-distance+1));run(source+"@[-"+std::to_string(distance)+"]",std::to_string(length-distance+1));
+ std::string span="{";for(int i=length-distance+1;i<=length;++i){if(i>length-distance+1)span+=' ';span+=std::to_string(i);}span+='}';
+ run("*(-"+std::to_string(distance)+")+[<&*"+std::to_string(distance)+"+{...}>] <~ "+source,span);
+}
+run("*(-1)+[<$>]<~{'Cat' 'Hat' 'Bat' 'Dog'}","'Dog'");
+run("*(-2)+[<_> _]<~{1 &{2 3} 4}","3");
+run("*(-2)+[<&{_ _}>]<~{1 &{2 3} 4}","{3 4}");
+run("{1 _ _}@[-2:*2+{...}]={7 8};","{1 7 8}");
+for(auto text:{"*(-1)+[<_>]<~{1 ...}","*(-3)+[<_>]<~{1 2}","*(-1)+[<_>]<~{}"}){
+ auto p=parse(text);auto original=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldPartial && !h->publications && original==toString(p->pItem.get()),"unknown or insufficient endpoint publishes nothing");
+}
+for(bool cancel:{false,true})for(bool header:{false,true}){
+ const std::string text="*(-2)+[<&{_ _}>]<~{1 2 3}";auto sync=run(text,"{2 3}").second;auto p=parse(text);auto source=p->pItem->innr->funcArgs;auto pending=header?source:source->value->items.tail->pItem;
+ auto before=toString(p->pItem.get());m.prepareInput(pending);auto h=a.normalize(p);auto frames=h->framesCreated;
+ check(h->outcome==worldWaiting && h->waitingInput==pending && !h->publications,"end-relative wait at exact endpoint or selected member");
+ if(cancel)m.cancel(h);SetModeBits(pending->flags,infonView::streamState,infonView::parseDone);m.inputReady(pending);
+ check(cancel?h->outcome==worldCancelled && h->framesCreated==frames && !h->publications && before==toString(p->pItem.get()):h->complete() && toString(p->pItem.get())=="{2 3}" && h->framesCreated==sync->framesCreated && h->correspondencePositions==sync->correspondencePositions,"end-relative continuation has no replay or speculative publication");
+}
+for(auto length:{10,1000000000}){
+ auto source="*"+std::to_string(length+2)+"+{&*"+std::to_string(length)+"+{...} 7 8}";
+ auto h=run("*(-1)+[<_>]<~"+source,"8").second;
+ check(h->framesCreated<12 && h->correspondencePositions<25,"end-relative skip is independent of symbolic extent");
+}
+{
+ auto p=parse("*(-1)+[<_>]<~{1 2 3}");auto source=p->pItem->innr->funcArgs;auto original=toString(source.get());auto last=source->value->items.tail;auto h=a.normalize(p);
+ check(h->complete() && source->value->items.tail==last && toString(source.get())==original,"end-relative selection borrows original source occurrences");
+}
+
+{
+ auto declaration=parse("{#borrowedNested={part:{_ _}}}");check(a.normalize(declaration)->complete(),"declare borrowed nested span");auto before=toString(declaration->pItem.get());
+ for(auto index:{"0","-2"}){
+  auto p=parse(std::string("borrowedNested.part@[")+index+":*2+{...}]={7 8};");auto original=toString(p->pItem.get());auto h=a.normalize(p);
+  check(h->outcome==worldUnsupported && !h->publications && toString(p->pItem.get())==original && toString(declaration->pItem.get())==before,"span correspondence retains borrowed source ownership");
+ }
+}
+
+run("*(2)+[1 2 3]","2");
+for(bool cancel:{false,true}){
+ const std::string text="*(-2)+[<_> _]<~{1 2 3}";auto sync=run(text,"2").second;auto p=parse(text);
+ auto pending=p->pItem->innr->infSize->items.head->pItem;auto before=toString(p->pItem.get());m.prepareInput(pending);auto h=a.normalize(p);auto frames=h->framesCreated;
+ check(h->outcome==worldWaiting && h->waitingInput==pending && !h->publications,"computed coordinate uses an ordinary waiting scalar goal");
+ if(cancel)m.cancel(h);SetModeBits(pending->flags,infonView::streamState,infonView::parseDone);m.inputReady(pending);
+ check(cancel?h->outcome==worldCancelled && h->framesCreated==frames && !h->publications && before==toString(p->pItem.get()):h->complete() && h->framesCreated==sync->framesCreated && h->correspondencePositions==sync->correspondencePositions,"coordinate arrival continues without rebuilding selection");
+}
+
+
+{
+ check(a.normalize(parse("{#baseUnit=_ #groupUnit=*3+{baseUnit|...} #container=*2+{groupUnit|...}}"))->complete(),"declare alternate unit layouts");
+ for(auto suffix:{"@[2]","@[-1]","@[-2:*2+{...}]"}){
+  auto p=parse(std::string("container:{baseUnit| 1 2 3 4 5 6}")+suffix);auto original=toString(p->pItem.get());auto h=a.normalize(p);
+  check(h->outcome==worldUnsupported && !h->publications && toString(p->pItem.get())==original,"unproved logical unit layout is not a completed physical index");
+ }
+}
+
+core.deInit();std::cout<<"END_RELATIVE: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
 
     }%>
 }

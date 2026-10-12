@@ -201,6 +201,7 @@ struct WorldWalk {
     }
 }
 struct WorldSelection {
+    our WorldFrame: coordinate
     our WorldWalk: walk
     void: INIT() <- {Allocate(walk)}
     our WorldPosition: selected
@@ -813,7 +814,11 @@ struct WorldPOVGraph {
         if(relation!=NULL){lookup!.memberEdge <- memberRelationship(relation)}
         if(pattern!=NULL){lookup!.left!.push(pattern)}
         lookup!.right!.requireClosedRelations <- true
-        if(relation!=NULL){lookup!.result!.sourceDomain <- position(relation); lookup!.right!.push(lookup!.result!.sourceDomain)}
+        if(relation!=NULL){
+            lookup!.result!.sourceDomain <- position(relation)
+            if(pattern!=NULL and relation===pattern!.input and pattern!.inputContext!=NULL){lookup!.result!.sourceDomain <- pattern!.inputContext}
+            lookup!.right!.push(lookup!.result!.sourceDomain)
+        }
         return(lookup)
     }
     void: beginCorrespondence(our WorldFrame: frame, me FlexNum: extent <- FlexNum()) <- {
@@ -977,6 +982,26 @@ struct WorldPOVGraph {
     our WorldPosition: position(our POV: node, our WorldPosition: parent <- NULL) <- {
         our WorldPosition:: result; result!.node <- node; result!.parent <- parent; result!.occurrence <- node; result!.embedded <- node!.isSubItm; if(parent!=NULL){result!.writable <- parent!.writable} return(result)
     }
+    // Lower a proved source boundary to the same symbolic prefix used by
+    // span correspondence. The borrowed body and marked member stay intact.
+    our WorldPosition: offsetDomain(our WorldPosition: domain, me FlexNum: boundary) <- {
+        our infonView:: prefix
+        prefix!.itmMode <- mItem; prefix!.streamState <- parseDone; prefix!.viewMode <- vmOverlay
+        prefix!.value!.overlayType <- LST; prefix!.value!.evalMode <- emLiteral
+        prefix!.value!.tailUnfinished <- true; prefix!.value!.sizeMode <- fromGiven
+        prefix!.infSize!.overlayType <- NUM; prefix!.infSize!.evalMode <- emLiteral; prefix!.infSize!.num <- boundary
+        our infonView: body <- pathBody(domain!.node!.pItem, false); body!.funcArgs <- NULL
+        Allocate(body!.infSize); body!.infSize!.overlayType <- NUM; body!.infSize!.evalMode <- emUnknown
+        our POV:: wrapper{940}; Allocate(wrapper!.pItem)
+        wrapper!.pItem!.itmMode <- mItem; wrapper!.pItem!.streamState <- parseDone
+        wrapper!.pItem!.value!.overlayType <- LST; wrapper!.pItem!.value!.evalMode <- emLiteral
+        wrapper!.pItem!.infSize!.overlayType <- NUM; wrapper!.pItem!.infSize!.evalMode <- emUnknown
+        wrapper!.pItem!.value!.items.append(prefix, true, 940)
+        wrapper!.pItem!.value!.items.append(body, true, 940)
+        our WorldPosition: result <- position(wrapper)
+        result!.input <- domain!.input; result!.inputContext <- domain!.inputContext
+        return(result)
+    }
     our WorldPosition: occurrencePath(our POV: node) <- {
         our WorldPosition: result <- position(node)
         our WorldPosition: at <- result
@@ -1080,6 +1105,20 @@ struct WorldPOVGraph {
                 expanded!.writable <- false
                 level!.position <- expanded
                 continue()
+            }
+            // A supplied representation is not yet the declared member
+            // layout of a named template (for example, seconds vs minutes).
+            // Indexing it requires that correspondence, not a physical index.
+            if(header.overlay==LST and header.hasValue and !header.meaningApplied and
+               header.nominal!=NULL and header.nominal!.defToUse!=NULL){
+                our infonView: meaning <- header.nominal!.defToUse
+                if(meaning!.streamState==parseStarted or meaning!.streamState==parseListReady){
+                    walk!.outcome <- worldWaiting; walk!.waiting <- meaning
+                    walk!.detail <- "Named list layout is still being parsed"; return(false)
+                }
+                if(meaning!.value!=NULL and meaning!.value!.listSpec!=NULL){
+                    walk!.outcome <- worldUnsupported; walk!.detail <- "Named list layout needs template correspondence"; return(false)
+                }
             }
             level!.concatenated <- scalarExpression(node!.pItem!.value)
             if(!level!.concatenated and header.overlay==LST and header.hasValue){walk!.listTypeProved <- true}
@@ -2458,14 +2497,45 @@ struct WorldManager {
                 Allocate(frame!.facts.alternatives); frame!.selection!.walk!.checkExtents <- true; frame!.selection!.walk!.requireClosedRelations <- true
             }
             else if(item!.innr!.value!.sizeMode==fromGiven){
-                if(item!.innr!.infSize!.evalMode!=emLiteral or item!.innr!.infSize!.num<=0 or item!.innr!.infSize!.num.getDenominator()!=1){
-                    frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Selection needs a positive known position"; stopFrame(request, frame); return()
+                if(item!.innr!.infSize!.evalMode==emLiteral){
+                    if(item!.innr!.infSize!.num==0 or item!.innr!.infSize!.num.getDenominator()!=1){
+                        frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Selection needs a nonzero integer position"; stopFrame(request, frame); return()
+                    }
+                    frame!.selection!.index <- item!.innr!.infSize!.num
+                }else{
+                    our POV:: coordinate{940}; Allocate(coordinate!.pItem)
+                    coordinate!.pItem!.itmMode <- mItem; coordinate!.pItem!.streamState <- parseDone
+                    coordinate!.pItem!.value <- item!.innr!.infSize
+                    coordinate!.pItem!.infSize!.overlayType <- NUM; coordinate!.pItem!.infSize!.evalMode <- emUnknown
+                    frame!.selection!.coordinate <- makeFrame(request, coordinate)
                 }
-                frame!.selection!.index <- item!.innr!.infSize!.num
             }else if(item!.intersectPos==ipGetFirst){frame!.selection!.index <- 1}
         }
         our WorldSelection: selection <- frame!.selection
         if(selection!.oneOf){collectAlternatives(request, frame); return()}
+        if(selection!.coordinate!=NULL){
+            if(!selection!.coordinate!.finished){request!.ready.append(frame); request!.ready.append(selection!.coordinate); return()}
+            me WorldScalar: index <- selection!.coordinate!.facts
+            if(index.outcome!=worldReady){frame!.facts <- index; stopFrame(request, frame); return()}
+            if(index.overlay!=NUM or !index.hasValue or index.number==0 or index.number.getDenominator()!=1){
+                frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Selection needs a known nonzero integer coordinate"; stopFrame(request, frame); return()
+            }
+            selection!.index <- index.number; selection!.coordinate <- NULL
+        }
+        if(selection!.index<0){
+            if(selection!.domain!.input==NULL){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "End-relative pattern needs a source endpoint"; stopFrame(request, frame); return()}
+            our POV: source <- selection!.domain!.input
+            me WorldScalar: endpoint <- graph.read(request, source, source!.pParent)
+            if(endpoint.outcome==worldWaiting){waitAt(request, frame, source!.pItem); return()}
+            if(endpoint.outcome!=worldReady){frame!.facts <- endpoint; stopFrame(request, frame); return()}
+            if(!endpoint.hasSize or endpoint.size<0 or endpoint.size.getDenominator()!=1 or endpoint.size+selection!.index<0){
+                frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "End-relative pattern needs a sufficient known endpoint"; stopFrame(request, frame); return()
+            }
+            selection!.domain <- graph.offsetDomain(selection!.domain, endpoint.size+selection!.index)
+            their POV: marked <- selection!.walk!.stopAt
+            Allocate(selection!.walk); selection!.walk!.push(selection!.domain); selection!.walk!.stopAt <- marked
+            selection!.index <- 0
+        }
         selection!.walk!.stopIndex <- selection!.index
         while(!selection!.located){
             our WorldPosition: at <- graph.nextPosition(request, selection!.walk)
@@ -3567,20 +3637,14 @@ struct WorldManager {
                 }
                 // A slice starts at a zero-based boundary. Scalar item
                 // indices remain one-based; negative coordinates share the end.
-                our infonView:: prefix
-                prefix!.itmMode <- mItem; prefix!.streamState <- parseDone; prefix!.viewMode <- vmOverlay
-                prefix!.value!.overlayType <- LST; prefix!.value!.evalMode <- emLiteral
-                prefix!.value!.tailUnfinished <- true; prefix!.value!.sizeMode <- fromGiven
-                prefix!.infSize!.overlayType <- NUM; prefix!.infSize!.evalMode <- emLiteral
-                prefix!.infSize!.num <- selection!.index
                 our infonView: capture <- graph.pathBody(part!.spec, false)
-                query!.innr!.value!.items.append(prefix, true, 940)
                 query!.intersectMarkedRetPOV <- query!.innr!.value!.items.append(capture, true, 940)
                 query!.intersectPos <- ipGetMarked
                 our POV:: body{940}; body!.pItem <- query!.innr
                 selection!.domain <- graph.position(body)
                 our POV:: input{940}; input! <- source!.node!; input!.pParent <- NULL; input!.looseTop <- true
                 selection!.domain!.input <- input; selection!.domain!.inputContext <- source
+                selection!.domain <- graph.offsetDomain(selection!.domain, selection!.index)
                 Allocate(selection!.walk); selection!.walk!.push(selection!.domain)
                 selection!.walk!.stopAt <- query!.intersectMarkedRetPOV; selection!.index <- 0
             }
