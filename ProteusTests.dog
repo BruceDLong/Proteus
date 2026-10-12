@@ -25,6 +25,7 @@ TestsToRun = `
     unit/worldManager/listPatternMappings
     unit/worldManager/alternatives
     unit/worldManager/openSelection
+    unit/worldManager/namedQueries
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -8455,5 +8456,120 @@ for(const std::string text:{"[&*3+{...} <&*1+{...}>]<~*2+{&*3+{...} 7}",
 }
 core.deInit();std::cout<<"OPEN_SELECTION_CHECKS: "<<checks-failures<<"/"<<checks<<" checks passed; "<<cases<<" window oracle cases\n";return failures==0;
 
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_namedQueries(me string: tname) <- {
+        if(!worldManagerNamedQueryChecks()){FAIL("Named query checks failed")}
+    }
+    me bool: worldManagerNamedQueryChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;
+int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+auto parse=[&](const std::string& text){auto p=m.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+auto run=[&](const std::string& text,const std::string& expected){auto p=parse(text);auto h=a.normalize(p);auto out=toString(p->pItem.get());check(h->complete() && out==expected,text+" => "+out+" ["+h->detail+"]");return p;};
+auto declarations=parse("{#myLst={'Cat' 'Hat' 'Bat' 'Dog'} #wheel='wheel' #chain='chain' #seat='seat' #same='chain'}");
+auto declText=toString(declarations->pItem.get());auto dh=a.normalize(declarations);
+check(dh->complete(),"register declarations without evaluating their bodies: "+dh->detail);
+check(toString(declarations->pItem.get())==declText,"registration preserves declaration syntax");
+run("*3+[&myLst]","'Bat'");
+run("[&{wheel|...} chain]<~{wheel wheel chain seat}","chain:'chain'");
+run("myLst","myLst:{'Cat' 'Hat' 'Bat' 'Dog'}");
+run("chain","chain:'chain'");
+run("{#inline=17 inline}","{#inline = 17 inline:17}");
+for(auto text:{"chain = same","wheel = chain","chain:'wheel'","chain=5"}){
+ auto p=parse(text);auto before=toString(p->pItem.get());auto h=a.normalize(p);
+ check(h->outcome==worldRejected,std::string("reject ")+text+": "+h->detail);
+ check(toString(p->pItem.get())==before,"rejected nominal merge publishes nothing");
+}
+auto lazy=parse("{#lazyList={5 6 missingSuffix} #empty={} #cycle=cycle}");check(a.normalize(lazy)->complete(),"declaration bodies need no normalization");
+run("*2+[&lazyList]","6");
+run("*4+[&{&myLst &myLst}]","'Dog'");
+run("*5+[&{&myLst &myLst}]","'Cat'");
+for(auto text:{"missingSuffix","cycle","*1+[&cycle]"}){auto p=parse(text);auto h=a.normalize(p);check(h->outcome==worldUnsupported,std::string("unsupported ")+text+": "+h->detail);}
+auto held=run("chain","chain:'chain'");auto value=held->pItem->value;auto word=held->pItem->type;
+check(a.normalize(held)->framesCreated==0 && held->pItem->value==value && held->pItem->type==word,"completed bound value does no work");
+auto savedMeaning=word->defToUse;check(toString(savedMeaning.get())=="'chain'","meaning unchanged by uses");
+auto duplicate=parse("{#chain=99}");check(a.normalize(duplicate)->complete(),"second declaration stored without changing a previous binding");
+check(a.normalize(held)->framesCreated==0 && held->pItem->type==word,"previous binding remains stable after overload added");
+auto ambiguous=parse("chain");check(a.normalize(ambiguous)->outcome==worldUnsupported,"unbound overload selection remains explicit");
+auto rollback=parse("{#rolledBack=7 _=1=2}");check(a.normalize(rollback)->outcome==worldRejected,"failed request rejects staged declaration");
+auto absent=parse("rolledBack");check(a.normalize(absent)->outcome==worldUnsupported,"failed declaration request does not alter catalogue");
+check(toString(declarations->pItem.get())==declText,"all named uses preserve shared declarations");
+auto partialDecl=parse("{#partialDecl=8 _}");
+check(a.normalize(partialDecl)->outcome==worldPartial,"partially known declaration list publishes its checked prefix");
+check(a.normalize(partialDecl)->outcome==worldPartial,"renormalize partial declaration list");
+run("partialDecl","partialDecl:8");
+auto nested=parse("{#inner={1 2} #outer={&inner 3}}");check(a.normalize(nested)->complete(),"nested layout definitions register");
+run("*5+[&{&outer &outer}]","2");
+// Concrete meanings compose with expressions and intersections through RHSs.
+auto forms=parse("{#pick=[1 2 3] #turn=*360+_ #sum=(*10+_+5)}");check(a.normalize(forms)->complete(),"declare computed meanings");
+run("pick","pick:3");run("turn:12","turn:*360+12");
+auto ranged=parse("sum");auto rh=a.normalize(ranged);check(rh->outcome==worldPartial && ranged->pItem->type && ranged->pItem->type->asGiven=="sum","partial numeric meaning keeps nominal identity");
+// One declaration body supplies many occurrences without being normalized in place.
+auto manyDecl=parse("{#unit=7}");check(a.normalize(manyDecl)->complete(),"declare reused meaning");
+for(int length:{1,16,128}){
+ std::string input="{";for(int i=0;i<length;++i)input+=" unit";input+="}";
+ auto p=parse(input);auto h=a.normalize(p);check(h->complete() && h->meaningEdges==static_cast<unsigned>(length) && h->framesCreated<=static_cast<unsigned>(length+2),"shared meaning evaluated once per request");
+ auto first=p->pItem->value->items.head;int count=0;for(auto v=first;v;v=v->next){check(v->pItem->type && v->pItem->value->num==7,"typed occurrence value");++count;}
+ check(count==length,"all requested occurrences published");
+ std::cout<<"NAMED_MEANING: uses="<<length<<" edges="<<h->meaningEdges<<" frames="<<h->framesCreated<<"\n";
+}
+for(int length:{8,64,512}){
+ auto name="layout"+std::to_string(length);std::string source="{#"+name+"={";
+ for(int i=0;i<length;++i)source+=" "+std::to_string(i+1);source+=" missingAfter}}";
+ auto d=parse(source);check(a.normalize(d)->complete(),"declare large borrowed layout");
+ auto before=toString(d->pItem.get());auto p=parse("*"+std::to_string(length)+"+[&"+name+"]");auto h=a.normalize(p);
+ check(h->complete() && p->pItem->value->num==length,"select from borrowed layout");
+ check(h->framesCreated<=3 && h->namedLayouts==1 && h->meaningEdges==0,"position lookup does not normalize list or prefix members");
+ check(toString(d->pItem.get())==before,"borrowed layout remains unchanged");
+ std::cout<<"NAMED_LAYOUT: position="<<length<<" frames="<<h->framesCreated<<" inspected="<<h->correspondencePositions<<"\n";
+}
+// Repeated publication cannot register one declaration twice, including parented POVs.
+auto parented=parse("{#parentedDecl=9 _}");parented->pItem->value->items.head->pParent=parented.get();
+check(a.normalize(parented)->outcome==worldPartial && a.normalize(parented)->outcome==worldPartial,"revisit parented partial declaration list");
+run("parentedDecl","parentedDecl:9");
+// Pending meaning input continues at its original frame, without replaying earlier work.
+auto waitDecl=parse("{#pendingMeaning=11}");check(a.normalize(waitDecl)->complete(),"declare pending meaning");
+auto body=waitDecl->pItem->value->items.head->pItem->funcArgs;auto before=toString(body.get());m.prepareInput(body);
+auto waiting=parse("{4 pendingMeaning}");auto waitingText=toString(waiting->pItem.get());auto wh=a.normalize(waiting);
+check(wh->outcome==worldWaiting && wh->meaningEdges==1 && toString(waiting->pItem.get())==waitingText,"wait on the meaning without publishing partial request");
+auto frames=wh->framesCreated;SetModeBits(body->flags,infonView::streamState,infonView::parseDone);m.inputReady(body);
+check(wh->complete() && wh->framesCreated==frames && wh->meaningEdges==1 && toString(waiting->pItem.get())=="{4 pendingMeaning:11}","continue pending meaning without restarting");
+check(toString(body.get())==before,"meaning wait does not normalize shared body in place");
+// Cancellation drops staged declarations; another request cannot see them early.
+auto cancelled=parse("{#cancelledDecl=13 _}");auto pending=cancelled->pItem->value->items.head->next->pItem;m.prepareInput(pending);
+auto ch=a.normalize(cancelled);check(ch->outcome==worldWaiting,"declaration request waits at sibling");
+auto tooEarly=parse("cancelledDecl");check(a.normalize(tooEarly)->outcome==worldUnsupported,"staged declaration is private to its request");
+ch->cancel();SetModeBits(pending->flags,infonView::streamState,infonView::parseDone);m.inputReady(pending);
+check(ch->outcome==worldCancelled && a.normalize(parse("cancelledDecl"))->outcome==worldUnsupported,"cancelled declaration never enters catalogue");
+// Explicit model IDs disambiguate meanings; a bare overload is left unsupported.
+auto overload=parse("{#variant_first=1 #variant_second=2}");check(a.normalize(overload)->complete(),"declare model IDs");
+run("variant_first","variant_first:1");run("variant_second","variant_second:2");
+check(a.normalize(parse("variant"))->outcome==worldUnsupported,"ambiguous meaning does not choose first registration");
+
+auto nominalSearch=parse("{#needle=1 #decoy=1}");check(a.normalize(nominalSearch)->complete(),"declare equal-valued distinct types");
+run("[&{!needle|...} needle]<~{decoy needle}","needle:1");
+for(int length:{4,32,256}){
+ std::string text="[&{decoy|...} needle]<~{";for(int i=0;i<length;++i)text+=" decoy";text+=" needle missingSuffix}";
+ auto p=parse(text);auto h=a.normalize(p);check(h->complete() && toString(p->pItem.get())=="needle:1","typed ordered search");
+ check(h->meaningEdges<=2 && h->framesCreated<20 && h->correspondenceChecks<=static_cast<unsigned>(2*length+4),"type search proves headers without evaluating skipped meanings");
+ std::cout<<"NAMED_SEARCH: skipped="<<length<<" frames="<<h->framesCreated<<" checks="<<h->correspondenceChecks<<" meanings="<<h->meaningEdges<<"\n";
+}
+run("?=myLst","myLst:{'Cat' 'Hat' 'Bat' 'Dog'}");
+auto transfer=parse("?={#transfer=5}");auto transferText=toString(transfer->pItem.get());
+check(a.normalize(transfer)->outcome==worldUnsupported && toString(transfer->pItem.get())==transferText,"declarations cannot be copied as list values");
+check(a.normalize(parse("transfer"))->outcome==worldUnsupported,"failed declaration copy registers nothing");
+auto records=parse("{#record={left:_ right:_}}");check(a.normalize(records)->complete(),"declare nominal record");
+auto record=parse("record:{right:1 left:2}");auto recordText=toString(record->pItem.get());
+check(a.normalize(record)->outcome==worldUnsupported && toString(record->pItem.get())==recordText,"record fields need nominal correspondence, not positional pairing");
+check(a.normalize(parse("(unit unit)"))->outcome==worldUnsupported,"nominal arithmetic is explicit boundary");
+auto inherited=parse("{#base=1 #alias=base}");check(a.normalize(inherited)->complete(),"declare explicit nominal inheritance boundary");
+auto inheritedSearch=parse("[&{!base|...} base]<~{alias base}");auto ih=a.normalize(inheritedSearch);
+check((ih->outcome==worldUnsupported || ih->outcome==worldPartial) && ih->publications==0,"potential subtype is not discarded as a known nominal mismatch");
+auto inheritedMerge=parse("base=alias");check(a.normalize(inheritedMerge)->outcome==worldUnsupported,"nominal inheritance requires its own proof");
+
+core.deInit();std::cout<<"NAMED_QUERIES: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }

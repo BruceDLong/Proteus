@@ -159,6 +159,7 @@ struct WorldPosition {
     me bool: tail <- false
 }
 struct WorldWalkLevel {
+    me List<our infonView>: namedLayouts
     our WorldPosition: position
     our POV: next
     me bool: entered <- false
@@ -282,9 +283,16 @@ struct WorldLookup {
     our WorldMatch: accepted
 }
 
+// The catalogue stores shared declarations, not normalized instances.
+struct WorldDefinitions {
+    me List<our WordDefn>: entries
+}
 struct WorldScalar {
     me WorldOutcome: outcome <- worldReady
     me string: detail
+    our WordUse: nominal
+    our WordDefn: declaration
+    me bool: meaningApplied <- false
     me int: overlay <- -1
     me bool: hasSize <- false
     me FlexNum: size
@@ -357,6 +365,7 @@ struct WorldFrame {
     our POV: node
     me WorldScalar: facts
     me int64: nextWork <- 0
+    me bool: meaningRequested <- false
     me bool: initialized <- false
     me bool: finished <- false
     // Derived correspondence frames combine checked facts, never reread a POV.
@@ -426,6 +435,11 @@ struct WorldPublication {
     our infonView: newAlternatives
 }
 struct WorldRequest {
+    me vocabularySpec: vocabulary
+    me Map<string, our WorldDefinitions>: declarations
+    me Set<our WordDefn>: declarationOrigins
+    me uint64: meaningEdges <- 0
+    me uint64: namedLayouts <- 0
     our WorldControl: control
     our infonView: waitingInput
     our WorldFrame: waitingFrame
@@ -473,7 +487,7 @@ struct WorldRequest {
     // also waits for any active publication to finish; Waiting stays visible.
     void: waitForCompletion() <- {me WorldModelLock: lock{control!.mutex}}
     void: releaseProgress() <- {
-        ready.clear(); attempts.clear(); activeContexts.clear(); root <- NULL; waitingFrame <- NULL
+        ready.clear(); attempts.clear(); activeContexts.clear(); declarations.clear(); declarationOrigins.clear(); root <- NULL; waitingFrame <- NULL
     }
     void: cancel() <- {
         me WorldModelLock: lock{control!.mutex}
@@ -513,6 +527,88 @@ struct infonView {
 
 // Virtual access over the existing model; no copied adjacency graph.
 struct WorldPOVGraph {
+    me Map<string, our WorldDefinitions>: definitions
+    me Set<our WordDefn>: declarationOrigins
+
+    void: addDefinition(their Map<string, our WorldDefinitions>: catalog, our WordDefn: definition) <- {
+        if(!catalog!.containsKey(definition!.defWord)){
+            our WorldDefinitions:: entries; catalog!.insert(definition!.defWord, entries)
+        }
+        catalog!.at(definition!.defWord)!.entries.append(definition)
+    }
+    our WordDefn: stageDefinition(our WorldRequest: request, our infonView: item) <- {
+        if(declarationOrigins.contains(item!.definedWord) or request!.declarationOrigins.contains(item!.definedWord)){return(item!.definedWord)}
+        request!.declarationOrigins.insert(item!.definedWord)
+        our WordDefn:: definition; definition! <- item!.definedWord!
+        definition!.defWord <- unicodeMgr.normalizeStr(definition!.defWord)
+        me int: separator <- findString(definition!.defWord, "_")
+        if(separator!=-1){
+            definition!.modelID <- definition!.defWord.subStr(separator+1, definition!.defWord.size())
+            definition!.defWord <- definition!.defWord.subStr(0, separator)
+        }
+        definition!.meaning <- item!.funcArgs
+        if(definition!.UsageTags.isEmpty()){definition!.langSpecTag <- request!.vocabulary.langSpec}
+        else{definition!.langSpecTag <- unicodeMgr.normalizeStr(definition!.UsageTags[0])}
+        addDefinition(request!.declarations, definition)
+        return(definition)
+    }
+    // An existing binding is stable. A fresh use must have one applicable
+    // declaration; overload search and morphological lookup are later work.
+    me WorldScalar: bind(our WorldRequest: request, me WorldScalar: facts, our WordUse: word) <- {
+        facts.nominal <- word
+        if(word==NULL or word!.baseDefinition!=NULL){return(facts)}
+        our WordUse:: bound; bound! <- word!
+        me int: separator <- findString(bound!.normalType(), "_")
+        if(separator!=-1 and bound!.modelID==""){
+            bound!.modelID <- bound!.normedWord.subStr(separator+1, bound!.normedWord.size())
+            bound!.normedWord <- bound!.normedWord.subStr(0, separator)
+        }
+        me int: count <- 0
+        withEach pass in range 0 .. 2{
+            our WorldDefinitions: candidates
+            if(pass==0 and definitions.containsKey(bound!.normalType())){candidates <- definitions.at(bound!.normalType())}
+            if(pass==1 and request!.declarations.containsKey(bound!.normalType())){candidates <- request!.declarations.at(bound!.normalType())}
+            if(candidates!=NULL){
+                withEach definition in candidates!.entries{
+                    if(modelMngr.wordValidForLang(definition!.langSpecTag, request!.vocabulary) and
+                       (bound!.modelID=="" or bound!.modelID==definition!.modelID)){
+                        bound!.baseDefinition <- definition; bound!.defToUse <- definition!.meaning; count <+- 1
+                    }
+                }
+            }
+        }
+        if(count>1){facts.outcome <- worldUnsupported; facts.detail <- "Named meaning needs overload selection"}
+        if(count==1){bound!.modelID <- bound!.baseDefinition!.modelID}
+        facts.nominal <- bound
+        return(facts)
+    }
+    // A distinct name is a proven mismatch only when no unexamined meaning
+    // can supply an inherited nominal type. More general meanings need that
+    // proof, even if their written names differ.
+    me bool: noInheritedType(our WordUse: word) <- {
+        if(word!.baseDefinition==NULL){return(word!.defToUse==NULL)}
+        our infonView: body <- word!.defToUse
+        return(body!=NULL and body!.streamState==parseDone and body!.type==NULL and body!.addedTypes.isEmpty() and
+            body!.wrkList.isEmpty() and body!.innr==NULL and body!.funcArgs==NULL and body!.proxy==NULL and
+            body!.parts.isEmpty() and body!.partRef==NULL and body!.value!=NULL and
+            (body!.value!.overlayType==NUM or body!.value!.overlayType==STR) and
+            (body!.value!.evalMode==emLiteral or body!.value!.evalMode==emUnknown))
+    }
+    me WorldOutcome: compareNominal(our WordUse: required, our WordUse: actual) <- {
+        if(required==NULL){return(worldReady)}
+        if(actual==NULL){return(worldPartial)}
+        if(required!.baseDefinition!=NULL and actual!.baseDefinition!=NULL){
+            if(required!.baseDefinition===actual!.baseDefinition){return(worldReady)}
+            if(noInheritedType(required) and noInheritedType(actual)){return(worldRejected)}
+            return(worldPartial)
+        }
+        if(required!.typeID()!=actual!.typeID()){
+            if(noInheritedType(required) and noInheritedType(actual)){return(worldRejected)}
+            return(worldPartial)
+        }
+        if(required!.baseDefinition!=NULL or actual!.baseDefinition!=NULL){return(worldPartial)}
+        return(worldReady)
+    }
     me int64: sequenceLength(our WorldList: sequence) <- {
         if(sequence==NULL){return(0)}else{return(sequence!.length)}
     }
@@ -628,11 +724,11 @@ struct WorldPOVGraph {
         return(facts.outcome==worldReady and facts.representable and facts.pendingChecks==NULL)
     }
     me bool: completeFacts(me WorldScalar: facts, me bool: requireSize) <- {
-        return(facts.outcome==worldReady and facts.pendingChecks==NULL and !facts.negative and !openLayout(facts) and facts.hasValue and facts.contentsComplete and
+        return(facts.declaration!=NULL or (facts.outcome==worldReady and facts.pendingChecks==NULL and !facts.negative and !openLayout(facts) and facts.hasValue and facts.contentsComplete and
             ((!requireSize and facts.overlay==NUM) or facts.hasSize) and
-            (facts.overlay!=LST or facts.size==FlexNum(sequenceLength(facts.sequence))))
+            (facts.overlay!=LST or facts.size==FlexNum(sequenceLength(facts.sequence)))))
     }
-    me WorldScalar: read(our POV: node, their POV: expressionParent <- NULL, me bool: bodyInput <- false, me bool: selection <- false) <- {
+    me WorldScalar: read(our WorldRequest: request, our POV: node, their POV: expressionParent <- NULL, me bool: bodyInput <- false, me bool: selection <- false) <- {
         me WorldScalar: facts
         if(node==NULL or node!.pItem==NULL){
             facts.outcome <- worldError; facts.detail <- "Missing target POV"; return(facts)
@@ -650,7 +746,17 @@ struct WorldPOVGraph {
         if(item!.value==NULL or item!.infSize==NULL){
             facts.outcome <- worldError; facts.detail <- "Missing scalar state"; return(facts)
         }
-        if(item!.type!=NULL or !item!.addedTypes.isEmpty() or item!.viewMode==vmCursor or
+        if(item!.itmMode==mWordDefn and item!.definedWord!=NULL and item!.funcArgs!=NULL){
+            // A declaration contributes a meaning; evaluating its body is a
+            // separate demand. Staging makes it visible to subsequent siblings.
+            if(item!.type!=NULL or !item!.wrkList.isEmpty() or !item!.parts.isEmpty() or item!.partRef!=NULL or
+               item!.innr!=NULL or item!.invertMatch or item!.doReply){
+                facts.outcome <- worldUnsupported; facts.detail <- "Declaration has additional obligations"; return(facts)
+            }
+            facts.declaration <- item!.definedWord
+            return(facts)
+        }
+        if(!item!.addedTypes.isEmpty() or item!.viewMode==vmCursor or
            (item!.innr!=NULL and !selection) or (item!.funcArgs!=NULL and !bodyInput) or
            !item!.parts.isEmpty() or item!.partRef!=NULL or item!.proxy!=NULL or
            item!.doReply or (item!.itmMode!=mItem and item!.itmMode!=mNone) or item!.identityName!=NULL or
@@ -658,7 +764,9 @@ struct WorldPOVGraph {
             facts.outcome <- worldUnsupported
             facts.detail <- "This request needs semantics beyond the scalar milestone"; return(facts)
         }
-        if(selection){return(facts)}
+        facts <- bind(request, facts, item!.type)
+        facts.meaningApplied <- item!.wordDerefed
+        if(facts.outcome!=worldReady or selection){return(facts)}
         me bool: expression <- item!.value!.evalMode==emConcat
         if(!expression and item!.value!.overlayType==LST and
            (item!.value!.evalMode!=emLiteral or
@@ -751,7 +859,7 @@ struct WorldPOVGraph {
     }
     me bool: typePredicate(me WorldScalar: facts) <- {
         return(facts.outcome==worldReady and facts.pendingChecks==NULL and !facts.hasValue and
-               !facts.hasSize and !facts.hasRange and facts.overlay>=0)
+               !facts.hasSize and !facts.hasRange and (facts.overlay>=0 or (facts.nominal!=NULL and facts.nominal!.baseDefinition!=NULL)))
     }
     me WorldScalar: matchPosition(me WorldScalar: predicate, me WorldScalar: candidate, our POV: edge, me bool: proof <- false) <- {
         if(predicate.outcome!=worldReady){return(predicate)}
@@ -788,11 +896,27 @@ struct WorldPOVGraph {
             our WorldWalkLevel: level <- walk!.levels.last()
             our POV: node <- level!.position!.node
             if(!level!.entered){
-                me WorldScalar: header <- read(node, node!.pParent, level!.position!.input!=NULL)
+                me WorldScalar: header <- read(request, node, node!.pParent, level!.position!.input!=NULL)
                 if(header.outcome!=worldReady){
                     walk!.outcome <- header.outcome; walk!.detail <- header.detail
                     if(header.outcome==worldWaiting){walk!.waiting <- node!.pItem}
                     return(NULL)
+                }
+                if(header.overlay<0 and !header.hasValue and !header.hasSize and !header.negative and header.nominal!=NULL and
+                   header.nominal!.defToUse!=NULL and node!.pItem!.wrkList.isEmpty()){
+                    our infonView: meaning <- header.nominal!.defToUse
+                    if(walk!.activeLayouts.contains(meaning)){
+                        walk!.outcome <- worldUnsupported; walk!.detail <- "Cyclic named list layout"; return(NULL)
+                    }
+                    walk!.activeLayouts.insert(node!.pItem); level!.namedLayouts.append(node!.pItem)
+                    request!.namedLayouts <+- 1
+                    // Keep the use's occurrence identity and ancestry while
+                    // borrowing the definition's physical member layout.
+                    our POV:: layout{939}; layout!.pItem <- meaning; layout!.isSubItm <- node!.isSubItm
+                    our WorldPosition: expanded <- position(layout, level!.position!.parent)
+                    expanded!.occurrence <- level!.position!.occurrence
+                    level!.position <- expanded
+                    continue()
                 }
                 if(header.overlay!=LST or !header.hasValue){
                     walk!.outcome <- worldUnsupported; walk!.detail <- "Correspondence needs a represented list layout"; return(NULL)
@@ -834,6 +958,7 @@ struct WorldPOVGraph {
                 if(walk!.checkExtents and level!.hasExtent and walk!.position!=level!.end){
                     walk!.outcome <- worldPartial; walk!.detail <- "Source layout does not reach its known endpoint"; return(NULL)
                 }
+                withEach named in level!.namedLayouts{walk!.activeLayouts.erase(named)}
                 walk!.activeLayouts.erase(node!.pItem); walk!.levels.popLast()
             }
         }
@@ -841,8 +966,9 @@ struct WorldPOVGraph {
     }
 
     // The cursor is retained in the frame; ordinary arrival never rewinds it.
-    our POV: nextRelationship(our WorldFrame: frame) <- {
+    our POV: nextRelationship(our WorldRequest: request, our WorldFrame: frame) <- {
         frame!.sourceIsListSpec <- false
+        if(frame!.facts.declaration!=NULL){return(NULL)}
         while(frame!.expressionSlot<3){
             if(frame!.nextOperand!=NULL){
                 our POV: operand <- frame!.nextOperand
@@ -878,7 +1004,21 @@ struct WorldPOVGraph {
         our infonView: item <- frame!.node!.pItem
         // Member constraints must be settled before this list's own identities.
         if(!item!.wrkList.isEmpty() and needsRequirements(frame)){return(NULL)}
-        if(frame!.nextWork>=item!.wrkList.size()){return(NULL)}
+        if(frame!.nextWork>=item!.wrkList.size()){
+            if(frame!.meaningRequested or frame!.facts.nominal==NULL or frame!.facts.meaningApplied or
+               (frame!.predicateOnly and typePredicate(frame!.facts))){return(NULL)}
+            frame!.meaningRequested <- true
+            if(frame!.facts.nominal!.defToUse==NULL){
+                if(!frame!.facts.hasValue){frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Named value has no available definition"}
+                return(NULL)
+            }
+            if(frame!.facts.overlay==LST and frame!.facts.hasValue){
+                frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Named record needs field correspondence"; return(NULL)
+            }
+            request!.meaningEdges <+- 1
+            our POV:: meaning{939}; meaning!.pItem <- frame!.facts.nominal!.defToUse; meaning!.trueByDefinition <- true
+            return(meaning)
+        }
         our POV: edge <- item!.wrkList[frame!.nextWork]
         frame!.nextWork <+- 1
         if(edge==NULL){frame!.facts.outcome <- worldError; frame!.facts.detail <- "Empty relationship"}
@@ -910,6 +1050,9 @@ struct WorldPOVGraph {
     }
 
     me WorldScalar: appendOperand(me WorldScalar: left, me WorldScalar: right, me bool: additive) <- {
+        if(left.nominal!=NULL or right.nominal!=NULL){
+            left.outcome <- worldUnsupported; left.detail <- "Nominal expression needs type rules"; return(left)
+        }
         if(left.overlay<0 or right.overlay<0){
             left.outcome <- worldPartial; left.detail <- "Expression operand type is unknown"; return(left)
         }
@@ -990,6 +1133,7 @@ struct WorldPOVGraph {
             }
             if(frame!.facts.hasSize){expression.hasSize <- true; expression.size <- frame!.facts.size}
             expression.explicitSize <- expression.explicitSize or frame!.facts.explicitSize
+            expression.nominal <- frame!.facts.nominal; expression.meaningApplied <- frame!.facts.meaningApplied
             frame!.facts <- expression; frame!.bodyBounds <- expression.bounds()
             frame!.bodyHasSize <- expression.hasSize; frame!.bodySize <- expression.size
         }else{
@@ -1016,9 +1160,11 @@ struct WorldPOVGraph {
     // Ready=yes, Rejected=no, Partial=not enough evidence. Work only on local
     // facts: a negative template must not acquire its candidate's size/value.
     me WorldOutcome: compare(me WorldScalar: required, me WorldScalar: actual) <- {
+        me WorldOutcome: nominal <- compareNominal(required.nominal, actual.nominal)
+        if(nominal==worldRejected){return(nominal)}
         if(required.overlay>=0 and actual.overlay>=0 and required.overlay!=actual.overlay){return(worldRejected)}
         if(required.hasSize and actual.hasSize and required.size!=actual.size){return(worldRejected)}
-        me bool: covered <- (required.overlay<0 or actual.overlay>=0) and
+        me bool: covered <- nominal==worldReady and (required.overlay<0 or actual.overlay>=0) and
             (!required.hasSize or actual.hasSize) and (!required.hasValue or actual.hasValue)
         if(required.hasValue and actual.hasValue){
             if(required.overlay==NUM){
@@ -1136,6 +1282,21 @@ struct WorldPOVGraph {
             left.outcome <- worldUnsupported; left.detail <- "Alternative comparison needs branch distribution"; return(left)
         }
         left.needsEvidence <- false
+        if(left.declaration!=NULL or right.declaration!=NULL){
+            left.outcome <- worldUnsupported; left.detail <- "Declarations are not value relationships"; return(left)
+        }
+        if(!left.negative and !right.negative){
+            if(edge!.trueByDefinition and right.nominal!=NULL){
+                left.outcome <- worldUnsupported; left.detail <- "Named meaning needs nominal inheritance"; return(left)
+            }
+            if(!edge!.trueByDefinition){
+                if(left.nominal!=NULL and right.nominal!=NULL and compareNominal(left.nominal, right.nominal)!=worldReady){
+                    left.outcome <- compareNominal(left.nominal, right.nominal)
+                    left.detail <- "Nominal types do not have a proved identity"; return(left)
+                }
+                if(left.nominal==NULL){left.nominal <- right.nominal; left.meaningApplied <- right.meaningApplied}
+            }
+        }
         if(left.overlay==LST or right.overlay==LST){return(mergeList(left, right, edge))}
         if(edge!.forceID){
             left.outcome <- worldUnsupported
@@ -1344,13 +1505,14 @@ struct WorldPOVGraph {
                     frame!.rightMembers!.push(frame!.prerequisite!.facts.sequence)
                 }
             }
+            if(frame!.sourceEdge!.trueByDefinition and frame!.facts.outcome==worldReady){frame!.facts.meaningApplied <- true}
             our infonView: supplied <- frame!.sourceEdge!.pItem
             // A closed scalar leaf contributes only its checked type, size
             // and value, including the case where its value is unknown. A
             // successful qualified test adds no identity. Fully checked scalar
             // expressions supply the same facts; other nested work stays.
             me bool: scalarExpression <- (supplied!.value!.evalMode==emConcat or
-                (frame!.prerequisite!.selection!=NULL and frame!.prerequisite!.selection!.oneOf)) and frame!.prerequisite!.retainedWork.isEmpty() and
+                frame!.prerequisite!.selection!=NULL) and frame!.prerequisite!.retainedWork.isEmpty() and
                 (frame!.prerequisite!.facts.overlay==NUM or frame!.prerequisite!.facts.overlay==STR) and
                 (frame!.prerequisite!.facts.hasValue or frame!.prerequisite!.facts.hasRange)
             // Closed correspondence checks the source endpoint. Unconstrained
@@ -1413,6 +1575,9 @@ struct WorldPOVGraph {
             }
             seen.insert(job.target!.pItem, job.frame)
             me WorldScalar: facts <- job.frame!.facts
+            if(facts.declaration!=NULL and job.target!.pItem!==job.frame!.node!.pItem){
+                request!.outcome <- worldUnsupported; request!.detail <- "Declaration cannot be copied as a value"; return()
+            }
             if(facts.alternatives!=NULL){
                 Allocate(job.newAlternatives)
                 job.newAlternatives!.viewMode <- vmOverlay; job.newAlternatives!.itmMode <- mItem
@@ -1473,6 +1638,10 @@ struct WorldPOVGraph {
             }
             writes.append(job)
         }
+        withEach origin in request!.declarationOrigins{declarationOrigins.insert(origin)}
+        withEach entries in request!.declarations{
+            withEach definition in entries!.entries{addDefinition(definitions, definition)}
+        }
         withEach job in writes{publishFrame(request, job)}
     }
 
@@ -1480,6 +1649,12 @@ struct WorldPOVGraph {
         our WorldFrame: frame <- job.frame
         our infonView: item <- job.target!.pItem
         me WorldScalar: facts <- frame!.facts
+        if(facts.declaration!=NULL){
+            item!.isNormed <- true; item!.worldScalarCompletionOwner <- item
+            request!.publications <+- 1; return()
+        }
+        item!.type <- facts.nominal
+        item!.wordDerefed <- facts.meaningApplied
         if(job.newAlternatives!=NULL){
             our infonState:: value; value!.overlayType <- tUnknown; value!.evalMode <- emIntersection
             our infonState:: size; size!.overlayType <- NUM; size!.evalMode <- emUnknown
@@ -1864,7 +2039,7 @@ struct WorldManager {
     void: selectMember(our WorldRequest: request, our WorldFrame: frame) <- {
         our infonView: item <- frame!.node!.pItem
         if(frame!.selection==NULL){
-            me WorldScalar: header <- graph.read(frame!.node, frame!.expressionParent, false, true)
+            me WorldScalar: header <- graph.read(request, frame!.node, frame!.expressionParent, false, true)
             if(header.outcome==worldWaiting){waitAt(request, frame, item); return()}
             if(header.outcome!=worldReady){frame!.facts <- header; stopFrame(request, frame); return()}
             if(item!.innr!=NULL and (item!.innr!.value==NULL or item!.innr!.infSize==NULL)){
@@ -1875,7 +2050,7 @@ struct WorldManager {
                 frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Intersection needs additional selection semantics"; stopFrame(request, frame); return()
             }
             our POV:: body{936}; body!.pItem <- item!.innr
-            me WorldScalar: bodyHeader <- graph.read(body, NULL, item!.hasInnrOutr)
+            me WorldScalar: bodyHeader <- graph.read(request, body, NULL, item!.hasInnrOutr)
             if(bodyHeader.outcome==worldWaiting){waitAt(request, frame, item!.innr); return()}
             if(bodyHeader.outcome!=worldReady){frame!.facts <- bodyHeader; stopFrame(request, frame); return()}
             Allocate(frame!.selection)
@@ -1951,7 +2126,7 @@ struct WorldManager {
         our WorldSelection: selection <- frame!.selection
         if(!selection!.domainChecked){
             our POV: domain <- selection!.domain!.node
-            me WorldScalar: header <- graph.read(domain, domain!.pParent)
+            me WorldScalar: header <- graph.read(request, domain, domain!.pParent)
             if(header.outcome==worldWaiting){waitAt(request, frame, domain!.pItem); return()}
             if(header.outcome!=worldReady){frame!.facts <- header; stopFrame(request, frame); return()}
             if(!domain!.pItem!.wrkList.isEmpty()){
@@ -2164,7 +2339,7 @@ struct WorldManager {
     me bool: correspondenceCandidate(our WorldRequest: request, our WorldFrame: frame,
                                     me WorldScalar: predicate, their WorldScalar: actual) <- {
         our WorldLookup: lookup <- frame!.lookup
-        me bool: headerOnly <- graph.typePredicate(predicate) and lookup!.rhs!.node!.pItem!.wrkList.isEmpty()
+        me bool: headerOnly <- (graph.typePredicate(predicate) or predicate.nominal!=NULL) and lookup!.rhs!.node!.pItem!.wrkList.isEmpty()
         our WorldPosition: parent <- lookup!.rhs!.parent
         while(headerOnly and parent!=NULL){
             if(parent!.node!.pItem!.value!.listSpec!=NULL or !parent!.node!.pItem!.wrkList.isEmpty() or parent!.input!=NULL){headerOnly <- false}
@@ -2172,9 +2347,14 @@ struct WorldManager {
             parent <- parent!.parent
         }
         if(headerOnly){
-            actual! <- graph.read(lookup!.rhs!.node, lookup!.rhs!.node!.pParent)
+            actual! <- graph.read(request, lookup!.rhs!.node, lookup!.rhs!.node!.pParent)
             if(actual!.outcome==worldWaiting){waitAt(request, frame, lookup!.rhs!.node!.pItem); return(false)}
-            if(actual!.outcome==worldReady and actual!.overlay<0){headerOnly <- false}
+            // A different nominal type disproves this candidate even when the
+            // selected pattern also asks for a value. Do not evaluate a known
+            // nonmatch merely to prove the same mismatch again with more facts.
+            if(actual!.outcome==worldReady and graph.compareNominal(predicate.nominal, actual!.nominal)!=worldRejected and
+               (!graph.typePredicate(predicate) or (actual!.overlay<0 and
+                !(predicate.nominal!=NULL and actual!.nominal!=NULL)))){headerOnly <- false}
         }
         if(!headerOnly){
             if(lookup!.candidate==NULL){
@@ -2194,7 +2374,7 @@ struct WorldManager {
         if(lookup!.materializing){supplyListCorrespondence(request, frame); return()}
         if(!lookup!.started){
             if(lookup!.whole){
-                me WorldScalar: header <- graph.read(lookup!.edge)
+                me WorldScalar: header <- graph.read(request, lookup!.edge)
                 if(header.outcome==worldWaiting){waitAt(request, frame, lookup!.edge!.pItem); return()}
                 if(header.outcome!=worldReady){frame!.facts <- header; stopFrame(request, frame); return()}
                 // Arrival can supply relationships as well as the list body.
@@ -2293,8 +2473,8 @@ struct WorldManager {
                         token!.predicate <- makeFrame(request, spec)
                     }else{
                         token!.predicate <- makeFrame(request, token!.position!.node, token!.position)
-                        token!.predicate!.predicateOnly <- true
                     }
+                    token!.predicate!.predicateOnly <- true
                     request!.ready.append(frame); request!.ready.append(token!.predicate); return()
                 }
             }
@@ -2341,7 +2521,7 @@ struct WorldManager {
     void: locateSpanRHS(our WorldRequest: request, our WorldFrame: frame) <- {
         our WorldLookup: lookup <- frame!.lookup
         if(!lookup!.started){
-            me WorldScalar: header <- graph.read(lookup!.edge)
+            me WorldScalar: header <- graph.read(request, lookup!.edge)
             if(header.outcome==worldWaiting){waitAt(request, frame, lookup!.edge!.pItem); return()}
             if(header.outcome!=worldReady){frame!.facts <- header; stopFrame(request, frame); return()}
             if(header.overlay!=LST or !header.hasValue or !lookup!.edge!.pItem!.wrkList.isEmpty()){
@@ -2381,7 +2561,7 @@ struct WorldManager {
                     if(contains){lookup!.left!.push(at); lookup!.lhs <- NULL; continue()}
                     if(at!.tail){frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Selected span crosses an unresolved pattern width"; stopFrame(request, frame); return()}
                     if(at!.node!.isSubItm or lookup!.matching){
-                        me WorldScalar: header <- graph.read(at!.node, at!.node!.pParent)
+                        me WorldScalar: header <- graph.read(request, at!.node, at!.node!.pParent)
                         if(header.outcome==worldWaiting){waitAt(request, frame, at!.node!.pItem); return()}
                         if(header.outcome!=worldReady){frame!.facts <- header; stopFrame(request, frame); return()}
                         our infonView: item <- at!.node!.pItem
@@ -2413,7 +2593,7 @@ struct WorldManager {
                 our WorldPosition: source <- lookup!.rhs
                 if(source==NULL or source!.tail){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Selected span needs more source positions"; stopFrame(request, frame); return()}
                 if(source!.node!.isSubItm){
-                    me WorldScalar: header <- graph.read(source!.node, source!.node!.pParent)
+                    me WorldScalar: header <- graph.read(request, source!.node, source!.node!.pParent)
                     if(header.outcome==worldWaiting){waitAt(request, frame, source!.node!.pItem); return()}
                     if(header.outcome!=worldReady){frame!.facts <- header; stopFrame(request, frame); return()}
                     if(!source!.node!.pItem!.wrkList.isEmpty()){
@@ -2479,7 +2659,7 @@ struct WorldManager {
         while(frame!.parentContext!=NULL){
             our WorldPosition: parent <- frame!.parentContext
             our infonView: item <- parent!.node!.pItem
-            me WorldScalar: parentHeader <- graph.read(parent!.node, parent!.node!.pParent, parent!.input!=NULL)
+            me WorldScalar: parentHeader <- graph.read(request, parent!.node, parent!.node!.pParent, parent!.input!=NULL)
             if(parentHeader.outcome==worldWaiting){waitAt(request, frame, item); return(true)}
             if(parentHeader.outcome!=worldReady){frame!.facts <- parentHeader; stopFrame(request, frame); return(true)}
             if(frame!.context!.node!.isSubItm and item!.value!.listSpec!=NULL){
@@ -2510,7 +2690,7 @@ struct WorldManager {
                 if(relation!.pParent!=NULL){frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Contextual parent RHS needs occurrence projection"; stopFrame(request, frame); return(true)}
                 if(relation!.forceID){frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Replacement correspondence is not implemented"; stopFrame(request, frame); return(true)}
                 me WorldScalar: leftHeader <- parentHeader
-                me WorldScalar: rightHeader <- graph.read(relation, relation!.pParent)
+                me WorldScalar: rightHeader <- graph.read(request, relation, relation!.pParent)
                 if(!input and leftHeader.outcome==worldReady and rightHeader.outcome==worldReady and
                    leftHeader.hasSize and rightHeader.hasSize and
                    ((!relation!.looseSize() and leftHeader.size!=rightHeader.size) or (relation!.looseSize() and leftHeader.size>rightHeader.size))){
@@ -2536,7 +2716,10 @@ struct WorldManager {
     void: step(our WorldRequest: request, our WorldFrame: frame) <- {
         if(!frame!.initialized and frame!.node!.pItem!.value!=NULL and frame!.node!.pItem!.value!.evalMode==emIntersection){selectMember(request, frame); return()}
         if(!frame!.initialized){
-            frame!.facts <- graph.read(frame!.node, frame!.expressionParent)
+            frame!.facts <- graph.read(request, frame!.node, frame!.expressionParent)
+            if(frame!.facts.declaration!=NULL){
+                frame!.facts.declaration <- graph.stageDefinition(request, frame!.node!.pItem)
+            }
             // A pending header has not been inspected. Resume this exact read,
             // preserving all earlier frames and relationship cursors.
             if(frame!.facts.outcome==worldWaiting){
@@ -2623,7 +2806,7 @@ struct WorldManager {
             request!.ready.append(frame); correspond(request, frame); return()
         }
         if(frame!.projected){settleAlternatives(frame); frame!.finished <- true; return()}
-        frame!.sourceEdge <- graph.nextRelationship(frame)
+        frame!.sourceEdge <- graph.nextRelationship(request, frame)
         if(frame!.sourceEdge==NULL){
             if(graph.needsRequirements(frame) and (frame===request!.root or !frame!.node!.pItem!.wrkList.isEmpty())){
                 graph.beginRequirements(frame); request!.ready.append(frame); return()
@@ -2667,10 +2850,10 @@ struct WorldManager {
         }
     }
 
-    our WorldRequest: normalize(our WorldSession: session, our POV: target, me bool: requireSize <- false) <- {
+    our WorldRequest: normalize(our WorldSession: session, our POV: target, me bool: requireSize <- false, me string: language <- "") <- {
         me WorldModelLock: lock{control!.mutex}
         our WorldRequest:: request
-        request!.control <- control
+        request!.control <- control; request!.vocabulary.init(language)
         request!.target <- target; request!.requireSize <- requireSize
         if(session==NULL or session!.closed){
             request!.outcome <- worldError; request!.detail <- "An open Agent session is required"; return(request)
