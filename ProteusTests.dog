@@ -22,6 +22,7 @@ TestsToRun = `
     unit/worldManager/openAlignment
     unit/worldManager/memberCorrespondence
     unit/worldManager/overlappingPatterns
+    unit/worldManager/listPatternMappings
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -6254,7 +6255,7 @@ struct GLOBAL {
             {"{_ _} = {1}","",worldPartial},
             {"{} = {1}","",worldPartial},
             {"{_} == {1}","",worldUnsupported},
-            {"{_} =: {1}","",worldUnsupported},
+            {"{_} =: {1}","{1}",worldComplete},
             {"{_} ==: {1}","",worldUnsupported},
             {"({1} {2 ...})","",worldUnsupported},
             {"{_, _} = {1 2}","",worldUnsupported}
@@ -7663,7 +7664,7 @@ struct GLOBAL {
             {"{...} = {1 ...}","{1 ... }",worldPartial},
             {"*2+{...} = {1 ...}","",worldUnsupported},
             {"{_ _} == {5| ...}","",worldUnsupported},
-            {"{_ _} =: {5| ...}","",worldUnsupported},
+            {"{_ _} =: {5| ...}","",worldPartial},
             {"{_ _} = {rot| ...}","",worldUnsupported},
             {"{_ _} = {!5| ...} = {7 8}","{_ _} = {!5|  ... } = {7 8}",worldPartial},
             {"{_ _} = {7 8} = {!5| ...}","{7 8}",worldComplete},
@@ -8126,5 +8127,137 @@ struct GLOBAL {
             }
         }
         core.deInit();std::cout<<"OVERLAPPING_PATTERNS: "<<checks-failures<<"/"<<checks<<" checks passed; "<<cases<<" oracle cases\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_listPatternMappings(me string: tname) <- {
+        if(!worldManagerListPatternMappingChecks()){FAIL("Whole-list pattern mapping checks failed")}
+    }
+    me bool: worldManagerListPatternMappingChecks() <- <%{
+        ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;
+        int checks=0,failures=0;
+        auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+        auto parse=[&](const std::string& text){auto p=m.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+        for(const auto& c:std::vector<std::pair<std::string,std::string>>{
+            {"{&{_|...} _ $} =: {33 22 11 'hi' 'bye' 66 55}","{&{33 22} 11 'hi'}"},
+            {"{&{_|...} _ $} =: {7 'x' rot}","{&{} 7 'x'}"},
+            {"{&{_|...} _ _ $} =: {1 2 3 'x' rot}","{&{1} 2 3 'x'}"},
+            {"{&{_|...} _ 5 $} =: {1 5 2 5 'x' rot}","{&{1 5} 2 5 'x'}"},
+            {"{&{_|...} _ $ &{_|...} $} =: {1 2 'x' 3 4 'y' rot}","{&{1} 2 'x' &{3 4} 'y'}"},
+            {"{&{_|...} _ _ $} =: {1 (2+3) (1+2) 'x' rot}","{&{1} 5 3 'x'}"},
+            {"{&{_|...} _ $} =: {&{1 2} &{3 'x'} rot}","{&{1 2} 3 'x'}"},
+            {"{&{1 &{_|...}} _ $} =: {1 2 3 'x' rot}","{&{1 &{2}} 3 'x'}"},
+            {"{&{_|...} 5 $} =: {5 'x' rot}","{&{} 5 'x'}"},
+            {"{_ $} =: {2 'x' rot}","{2 'x'}"},
+            {"{} =: {rot}","{}"},
+            {"{_| &{!5|...} 5} =: {1 2 5 'x' rot}","{&{1 2} 5}"},
+            {"{&{_|...} _ $} =: {!5| 1 2 'x' rot}","{&{1} 2 'x'}"},
+            {"{&{_|...} &{_|...} $} =: {'x' rot}","{&{} &{} 'x'}"},
+            {"{_ _} =: {&*2+{1 2} rot}","{1 2}"},
+            {"{_} =: {&*2+{1} rot}","{1}"},
+            {"{&{_|...} _ $} =: {_| 1 2 'x'}","REJECT"}
+        }){
+            auto root=parse(c.first);if(!root)continue;auto rhs=root->pItem->wrkList[0]->pItem;auto snapshot=toString(rhs.get());auto left=root->pItem->value->items.head;
+            auto h=a.normalize(root);
+            if(c.second=="REJECT")check(h->outcome==worldRejected && h->publications==0,"source listSpec is a required premise");
+            else{
+                check(h->complete() && toString(root->pItem.get())==c.second,"mapped list: "+c.first+" => "+toString(root->pItem.get())+" : "+h->detail);
+                check(root->pItem->value->items.head==left && root->pItem->wrkList.empty(),"preserve target occurrences and discharge proven prefix");
+                check(a.normalize(root)->framesCreated==0,"completed list has no new goals");
+            }
+            check(toString(rhs.get())==snapshot,"borrowed source unchanged");
+        }
+        for(const std::string input:{"{&{_|...} &{_|...} _ $} =: {1 2 'x'}",
+            "{&{_|...} _ &{_|...} $} =: {1 2 'x'}", "{1 &{_|...}} =: {1 2}",
+            "{&{_|...} _ $} =: {1 ...}"}){
+            auto root=parse(input);auto before=toString(root->pItem.get());auto h=a.normalize(root);
+            check(h->outcome==worldPartial && h->publications==0 && toString(root->pItem.get())==before,"unresolved full mapping stays atomic: "+input);
+        }
+        for(const std::string input:{"{_ _} =: *1+{1 2}","{_ _} =: {&*1+{1 2} rot}","{_ _} =: {&*2+{1} 2}","{} =: rot","{&{_|...} _ $} =: ({1 2 'x'} = {1 9 'x'})", "*4+{&{_|...} _ $} =: {1 2 3 'x'}"}){
+            auto root=parse(input);auto before=toString(root->pItem.get());auto h=a.normalize(root);
+            check(!h->complete() && h->publications==0 && toString(root->pItem.get())==before,"unproved endpoint/layout obligations remain expressed");
+        }
+        auto wrong=parse("{&{_|...} _ 5 $} =: {1 4 'x'}");auto before=toString(wrong->pItem.get());auto rejected=a.normalize(wrong);
+        check(rejected->outcome==worldRejected && rejected->publications==0 && toString(wrong->pItem.get())==before,"all failed mappings reject atomically");
+        const std::string waitingText="{&{_|...} _ _ $} =: {1 2 3 'x' rot}";
+        auto synchronous=a.normalize(parse(waitingText));
+        for(int which:{0,1,2})for(bool cancel:{false,true}){
+            auto root=parse(waitingText);auto rhs=root->pItem->wrkList[0]->pItem;auto snapshot=toString(rhs.get());
+            if(which==0){rhs=std::make_shared<infonView>();root->pItem->wrkList[0]->pItem=rhs;}
+            auto waiting=which==0?rhs:which==1?rhs->value->items.head->next->next->pItem:root->pItem->value->items.tail->pItem;
+            m.prepareInput(waiting);auto h=a.normalize(root);auto comparisons=h->correspondenceChecks,records=h->correspondenceMappings;
+            check(h->outcome==worldWaiting && h->waitingInput==waiting && h->publications==0,"wait at exact pattern/source header");
+            if(cancel)m.cancel(h);
+            ProteusParser parser(&core,true,0);parser.initParseFromString("mapping arrival",which==0?"{1 2 3 'x' rot}":which==1?"3":"$");parser.doParse(waiting);
+            check(cancel ? h->outcome==worldCancelled && h->publications==0 && h->correspondenceChecks==comparisons && h->correspondenceMappings==records :
+                h->complete() && toString(root->pItem.get())=="{&{1} 2 3 'x'}" && h->correspondenceChecks==synchronous->correspondenceChecks && h->correspondenceMappings==synchronous->correspondenceMappings && h->framesCreated==synchronous->framesCreated,
+                "arrival/cancellation preserves chart and binding progress");
+            check(toString(rhs.get())==snapshot,"continuation does not publish into borrowed source");
+        }
+        auto arrivingRoot=parse("{&{_|...} _ $} =: {}");auto arrivingSource=std::make_shared<infonView>();
+        arrivingRoot->pItem->wrkList[0]->pItem=arrivingSource;m.prepareInput(arrivingSource);
+        auto arrivingRequest=a.normalize(arrivingRoot);
+        check(arrivingRequest->outcome==worldWaiting && arrivingRequest->publications==0,"pending source has not supplied its relationships yet");
+        ProteusParser relationParser(&core,true,0);relationParser.initParseFromString("source relationship arrival","{1 2 'x'} = {1 9 'x'}");relationParser.doParse(arrivingSource);
+        check(arrivingRequest->outcome==worldUnsupported && arrivingRequest->publications==0 && arrivingSource->wrkList.size()==1 && arrivingRoot->pItem->wrkList.size()==1,
+              "relationships supplied by parser arrival remain required and retained");
+        auto choiceRoot=parse("{&{_|...} &{_|...} _ $} =: {1 2 'x'}");
+        auto choiceInput=choiceRoot->pItem->wrkList[0]->pItem->value->items.tail->pItem;m.prepareInput(choiceInput);
+        auto choiceRequest=a.normalize(choiceRoot);bool packed=false;
+        if(choiceRequest->root && choiceRequest->root->lookup){
+            auto lookup=choiceRequest->root->lookup;std::vector<std::shared_ptr<WorldMapping>> pending;
+            if(lookup->branch)pending.push_back(lookup->branch->mapping);
+            for(auto state:lookup->consuming)pending.push_back(state->mapping);
+            std::unordered_set<WorldMapping*> seen;
+            while(!pending.empty()){auto proof=pending.back();pending.pop_back();if(!proof || !seen.insert(proof.get()).second)continue;
+                if(proof->choice){packed=packed || proof->prior!=proof->alternative;pending.push_back(proof->alternative);}pending.push_back(proof->prior);}
+        }
+        check(choiceRequest->outcome==worldWaiting && packed && choiceRequest->publications==0,"live chart retains both span mappings in shared choice records");
+        ProteusParser choiceParser(&core,true,0);choiceParser.initParseFromString("ambiguous arrival","'x'");choiceParser.doParse(choiceInput);
+        check(choiceRequest->outcome==worldPartial && choiceRequest->publications==0,"distinct span assignments remain ambiguous after arrival");
+        for(int length:{32,64,128})for(int width:{1,4,12}){
+            std::string input="{&{_|...}";for(int i=0;i<width;++i)input+=" _";input+=" $} =: {";
+            for(int i=0;i<length;++i)input+=" "+std::to_string(i);input+=" 'x' rot}";
+            auto h=a.normalize(parse(input));
+            check(h->complete() && h->correspondenceChecks<=static_cast<unsigned>((length+1)*(width+2)) && h->correspondencePositions<=static_cast<unsigned>(length+5) && h->correspondenceMappings<=2*h->correspondenceChecks && h->framesCreated<=static_cast<unsigned>(4*length+4*width+20) && h->parentLookups==0,
+                  "one shared source scan, bounded mapping records and value frames");
+            std::cout<<"LIST_MAPPING_SCAN: source="<<length<<" suffix="<<width<<" positions="<<h->correspondencePositions<<" checks="<<h->correspondenceChecks<<" mappings="<<h->correspondenceMappings<<" frames="<<h->framesCreated<<"\n";
+        }
+        // Independent enumeration records every complete assignment of source
+        // positions to pattern slots, including distinct accepted prefix ends.
+        const std::vector<std::vector<int>> patterns={{-1,0,1},{-1,0,0,1},{-1,0,1,0},{-1,0},{0,-1,1},
+            {-1,-1,0,1},{-1,0,-1,1},{-1,4,0,1},{-1,0,1,-1,1},{0,-1},{0,-1,-1},{},{-1}};
+        int cases=0;
+        for(const auto& p:patterns)for(unsigned length=0;length<=5;++length){
+            unsigned total=1;for(unsigned i=0;i<length;++i)total*=3;
+            for(unsigned code=0;code<total;++code){
+                std::vector<int> word;unsigned digits=code;for(unsigned i=0;i<length;++i){word.push_back(digits%3);digits/=3;}
+                std::unordered_map<std::string,std::vector<int>> mappings;std::vector<int> path;
+                auto matches=[](int token,int symbol){return token==1 ? symbol==2 : token==4 ? symbol==1 : symbol!=2;};
+                std::function<void(unsigned,unsigned)> enumerate=[&](unsigned at,unsigned pos){
+                    if(at==p.size()){std::string key;for(int slot:path)key+=std::to_string(slot)+",";mappings[key]=path;return;}
+                    if(p[at]<0){enumerate(at+1,pos);if(pos<word.size() && matches(0,word[pos])){path.push_back(at);enumerate(at,pos+1);path.pop_back();}}
+                    else if(pos<word.size() && matches(p[at],word[pos])){path.push_back(at);enumerate(at+1,pos+1);path.pop_back();}
+                };enumerate(0,0);
+                std::string text="{";for(int token:p)text+=token<0?" &{_|...}":token==0?" _":token==1?" $":" 5";
+                text+="} =: {";for(int symbol:word)text+=symbol==0?" 2":symbol==1?" 5":" 'x'";text+="}";
+                auto root=parse(text);auto before=toString(root->pItem.get());auto h=a.normalize(root);++cases;
+                bool ok;
+                if(mappings.size()==1){
+                    std::string expected="{";const auto& map=mappings.begin()->second;unsigned pos=0;
+                    for(unsigned slot=0;slot<p.size();++slot){
+                        if(slot)expected+=" ";if(p[slot]<0)expected+="&{";bool first=true;
+                        while(pos<map.size() && map[pos]==static_cast<int>(slot)){
+                            if(!first)expected+=" ";expected+=word[pos]==0?"2":word[pos]==1?"5":"'x'";++pos;first=false;
+                        }
+                        if(p[slot]<0)expected+="}";
+                    }expected+="}";
+                    ok=h->complete() && toString(root->pItem.get())==expected;
+                }else ok=h->publications==0 && toString(root->pItem.get())==before && (mappings.empty() ? h->outcome==worldPartial || h->outcome==worldRejected : h->outcome==worldPartial);
+                check(ok,"exhaustive mapping oracle: "+text+" => "+toString(root->pItem.get())+" : "+h->detail);
+            }
+        }
+        core.deInit();std::cout<<"LIST_PATTERN_MAPPINGS: "<<checks-failures<<"/"<<checks<<" checks passed; "<<cases<<" oracle cases\n";return failures==0;
     }%>
 }
