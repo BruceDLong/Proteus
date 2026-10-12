@@ -137,7 +137,7 @@ merge/dots/align2a,    R dots inside L dots,           {{1 ... 5} 6}  = {{_ 2 ..
 merge/dots/align2b,    R dots inside L dots,           {1 ... 5}  = {_ 2 ... 4 _},                                             *_+{1 &{2 ... 4} 5},       norm
 merge/dots/align3,     R dots on left of L,            {1 ... 6}  = {... &{4 5 6}},                                            *_+{1 &{... 4 5} 6},       norm
 merge/dots/align4,     Harder to detect end,           {1 ... 5 _} = {... 4 5 6},                                              *_+{1 &{... 4} 5 6},       norm
-merge/dots/align4b,    Ambiguous situation,            {1  4 ... 5 _} = {... 4 5 6},                                           {1 4 &{4 5 6 ... } 5 6},        norm
+merge/dots/align4b,    Ambiguous situation,            {1  4 ... 5 _} = {... 4 5 6},                                           {1 4 ... 5 6} = {... 4 5 6},        norm
 # merge/dots/align5,    Test 5 of alignment	{1 ... 4 ...} = {... &{4 ...} 7}	{1 ... 4 ... 7}	norm
 EmbeddedLists/LHS,     Test &{} on LHS,                {1 2 &{_ _} _} = {1 2 3 4 5},                                           {1 2 &{3 4} 5},                 norm
 EmbeddedLists/RHS,     Test &{} on RHS,                {1 2 _ _ _} = {1 2 &{3 4} 5},                                           {1 2 3 4 5},                    norm
