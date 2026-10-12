@@ -20,6 +20,7 @@ TestsToRun = `
     unit/worldManager/unknownOverlays
     unit/worldManager/boundedSources
     unit/worldManager/openAlignment
+    unit/worldManager/memberCorrespondence
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -5255,7 +5256,7 @@ struct GLOBAL {
         check(ra->complete() && rb->complete() && a->pItem!=b->pItem,"independent targets reuse a source");
         check(a->pItem->value!=source->pItem->value && b->pItem->value!=source->pItem->value,"publication does not alias mutable payloads");
 
-        for(const std::string input:{"rot", "[1 2]", "5 = %?"}) {
+        for(const std::string input:{"rot", "5 = %?"}) {
             auto target=parse(input);auto before=toString(target->pItem.get());
             auto result=agent.normalizeInSession(session,target,false);
             check(result->outcome==worldUnsupported && result->publications==0,input+" explicitly unsupported: "+result->detail);
@@ -5304,7 +5305,7 @@ struct GLOBAL {
         check(malformedResult->outcome==worldError && malformedResult->publications==0,"malformed relationship is not exhaustion");
         auto member=parse("5");auto parent=parse("{_}");member->pParent=parent.get();
         auto memberResult=agent.normalizeInSession(session,member,false);
-        check(memberResult->outcome==worldUnsupported,"member context is not silently ignored before list support");
+        check(memberResult->outcome==worldUnsupported,"a parent pointer cannot invent membership");
         auto empty=agent.normalizeInSession(session,nullptr,false);
         check(empty->outcome==worldError,"missing target reported as error");
 
@@ -7920,5 +7921,114 @@ ProteusCore core;core.init("",false);auto& a=*core.agent;std::vector<Pattern> pa
   if(!ok){++fails;std::cout<<"FAIL "<<input<<" status="<<h->outcome<<" detail="<<h->detail<<"\n";}
  }
  core.deInit();std::cout<<"PROPERTY pairs="<<pairs.size()<<" accepted="<<accepted<<" rejected="<<rejected<<" unsupported="<<unsupported<<" word comparisons="<<comparisons<<" failures="<<fails<<"\n";return fails==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_memberCorrespondence(me string: tname) <- {
+        if(!worldManagerMemberCorrespondenceChecks()){FAIL("Member correspondence checks failed")}
+    }
+    me bool: worldManagerMemberCorrespondenceChecks() <- <%{
+        ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;
+        int checks=0,failures=0;
+        auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+        auto parse=[&](const std::string& text){auto p=m.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+        auto member=[](const std::shared_ptr<POV>& parent,int index){auto p=parent->pItem->value->items.head;while(p && index-->0)p=p->next;if(p)p->pParent=parent.get();return p;};
+        struct Case{std::string input,expected;};
+        for(const Case c:{Case{"[1 (rot +_) 7]","7"}, {"*1+[5 rot]","5"},
+                         {"[&{_|...} $]<~{2 3 'Cat' 'Hat'}","'Cat'"},
+                         {"[&{!$|...} $]<~{2 {rot} 4 'Cat' 'Hat'}","'Cat'"},
+                         {"[< _ > $]<~{7 'ok' rot}","7"},
+                         {"[5| _ _]","5"}, {"[&{_|...} $]<~{(2 +3) 'x'}","'x'"},
+                         {"[&{!*12+5|...} *12+5]<~{*10+5 *12+4 *12+5}","*12+5"},
+                         {"[&{!*_+5|...} *_+5]<~{(_=6) 5}","*_+5"}}){
+            auto root=parse(c.input);if(!root)continue;auto body=root->pItem->innr;auto before=toString(body.get());
+            auto h=a.normalize(root);
+            check(h->complete() && toString(root->pItem.get())==c.expected,c.input+" result: "+h->detail);
+            check(toString(body.get())==before && h->publications==1,c.input+" leaves body and input borrowed");
+            auto again=a.normalize(root);check(again->complete() && again->framesCreated==0,c.input+" satisfied repeat has no goals");
+        }
+        for(const std::string input:{"{_|[1 2]}","{[1 2]} = {_}"}){
+            auto root=parse(input);auto child=root->pItem->value->items.head;auto originalBody=child->pItem->innr;auto bodyText=toString(originalBody.get());
+            auto selected=a.normalize(root);
+            check(selected->complete() && toString(root->pItem.get())=="{2}" && !child->pItem->innr && toString(originalBody.get())==bodyText,"selection survives listSpec/correspondence projection: "+input);
+            root->pItem->wrkList.push_back(parse("{2}"));root->pItem->noteNormalizationWork();
+            check(a.normalize(root)->complete(),"published member is valid input to a later list goal");
+        }
+        for(const std::string op:{"=","==","=:","==:"}){
+            auto parent=parse("{_ _} "+op+" {rot 7}");auto target=member(parent,1);
+            auto left=parent->pItem->value->items.head;auto source=parent->pItem->wrkList[0];auto text=toString(source->pItem.get());
+            auto h=a.normalize(target);
+            check(h->complete() && toString(target->pItem.get())=="7",op+" parent supplies only requested member: "+h->detail);
+            check(toString(source->pItem.get())==text && toString(left->pItem.get())=="_" && parent->pItem->wrkList.size()==1,op+" parent and siblings retain their work");
+            check(h->parentLookups==1 && h->framesCreated==2,op+" does not normalize parent or siblings");
+            auto qualified=parse("{*10+_} "+op+" {*20+7}");auto q=member(qualified,0);auto result=a.normalize(q);
+            bool loose=op.find("==")==0;
+            check(loose ? result->complete() && toString(q->pItem.get())=="*10+7" : result->outcome==worldRejected,
+                  op+" derives member qualification: "+result->detail);
+        }
+        auto own=parse("{_ = 6} = {rot}");auto h=a.normalize(member(own,0));
+        check(h->complete() && h->parentLookups==0,"own work satisfies member before requesting parent");
+        auto shape=parse("{_ _} = {7}");h=a.normalize(member(shape,0));
+        check(h->outcome==worldPartial && h->publications==0,"incompatible parent endpoints cannot certify correspondence");
+        auto sized=parse("{*_+5} = {*10+5}");auto sizeSession=a.startSession();
+        auto sizeResult=a.normalizeInSession(sizeSession,member(sized,0),true);
+        check(sizeResult->complete() && toString(sized->pItem->value->items.head->pItem.get())=="*10+5","explicit size demand still requests parent evidence");a.endSession(sizeSession);
+        auto shortPrefix=parse("{_ _} =: {7}");h=a.normalize(member(shortPrefix,0));
+        check(h->outcome==worldPartial && h->publications==0,"prefix cannot exceed known source extent");
+        auto malformed=parse("{_}");malformed->pItem->wrkList.push_back(nullptr);h=a.normalize(member(malformed,0));
+        check(h->outcome==worldError && h->publications==0,"malformed parent edge is not exhaustion");
+        auto embedded=parse("{&{_ _}} = {3 7}");auto span=member(embedded,0);h=a.normalize(member(span,1));
+        check(h->complete() && toString(span->pItem->value->items.tail->pItem.get())=="7","embedded ancestor supplies coordinates: "+h->detail);
+        for(const std::string input:{"[&{_|...} _]<~{1 2 3}","[&{_|...} <_> $]<~{1 2 'x'}","*3+[1 2]","[_]", "[{1 2} _]<~{{1 3} 7}", "[&{5|...} 6]<~{_ 6}"}){
+            auto root=parse(input);auto before=toString(root->pItem.get());h=a.normalize(root);
+            check(!h->complete() && h->publications==0 && toString(root->pItem.get())==before,"unproved selection retained: "+input);
+        }
+        auto bad=parse("[<_> 8]<~{7 9}");auto before=toString(bad->pItem.get());h=a.normalize(bad);
+        check(h->outcome==worldRejected && h->publications==0 && toString(bad->pItem.get())==before,"suffix contradiction precedes publication");
+        for(bool cancel:{false,true}){
+            auto root=parse("[&{_|...} $]<~{2 3 ? 'later'}");auto input=root->pItem->innr->funcArgs;
+            auto waiting=input->value->items.head->next->next->pItem;m.prepareInput(waiting);
+            h=a.normalize(root);auto frames=h->framesCreated,positions=h->correspondencePositions;
+            check(h->outcome==worldWaiting && h->waitingInput==waiting && h->publications==0,"wait belongs to current candidate");
+            if(cancel)m.cancel(h);
+            ProteusParser parser(&core,true,0);parser.initParseFromString("member arrival","'Cat'");parser.doParse(waiting);
+            check(cancel ? h->outcome==worldCancelled && h->publications==0 : h->complete() && toString(root->pItem.get())=="'Cat'" && h->correspondencePositions==positions && h->framesCreated<=frames+1,
+                  "candidate arrival continues local cursor; cancellation publishes nothing");
+        }
+        auto pendingParent=parse("{_ = _}");auto pendingMember=member(pendingParent,0);m.prepareInput(pendingParent->pItem);
+        h=a.normalize(pendingMember);auto tried=h->relationshipsRead;
+        check(h->outcome==worldWaiting && h->waitingInput==pendingParent->pItem && h->publications==0,"parent parsing is not exhausted RHS discovery");
+        pendingParent->pItem->wrkList.push_back(parse("{7}"));SetModeBits(pendingParent->pItem->flags,infonView::streamState,infonView::parseDone);m.inputReady(pendingParent->pItem);
+        check(h->complete() && toString(pendingMember->pItem.get())=="7" && h->relationshipsRead==tried+1,"parent arrival continues after already tried member work");
+        auto missingState=parse("_");missingState->pItem->value.reset();h=a.normalize(missingState);
+        check(h->outcome==worldError && h->publications==0,"missing scalar state remains an error at selection dispatch");
+        auto missingBody=parse("[1 2]");missingBody->pItem->innr->value.reset();h=a.normalize(missingBody);
+        check(h->outcome==worldError && h->publications==0,"missing intersection body state is an error");
+        auto cycle=parse("{_} = {_}");auto rhs=cycle->pItem->wrkList[0];rhs->pItem->wrkList.push_back(cycle);
+        h=a.normalize(member(cycle,0));check(h->outcome==worldUnsupported && h->publications==0 && h->framesCreated<6,"contextual cycle has no circular proof");
+        rhs->pItem->wrkList.clear();
+        // Shared source payload does not identify the two target occurrences.
+        auto first=parse("{_} = {7}");auto second=parse("{_} = {8}");
+        auto one=member(first,0),two=member(second,0);two->pItem->value=one->pItem->value;
+        auto firstResult=a.normalize(one),secondResult=a.normalize(two);
+        check(firstResult->complete() && secondResult->complete() && toString(one->pItem.get())=="7" && toString(two->pItem.get())=="8","independent occurrence contexts sharing an unknown payload");
+        for(int count:{32,64,128}){
+            std::string text="[&{!$|...} $]<~{";for(int i=0;i<count;++i)text+=" {rot}";text+=" 'found' rot}";
+            auto root=parse(text);h=a.normalize(root);
+            check(h->complete() && toString(root->pItem.get())=="'found'" && h->framesCreated<=5 && h->correspondencePositions<=static_cast<unsigned>(count+12),"linear positions, constant value frames, no nested normalization");
+            std::cout<<"MEMBER_SCAN: "<<count<<" positions="<<h->correspondencePositions<<" frames="<<h->framesCreated<<"\n";
+        }
+        // Independent finite oracle: a prefix of nonstrings followed by the
+        // first string. Lists are single members; their contents are irrelevant.
+        for(unsigned length=1;length<=5;++length){
+            unsigned total=1;for(unsigned i=0;i<length;++i)total*=3;
+            for(unsigned code=0;code<total;++code){unsigned digits=code;int first=-1;std::string input="[&{!$|...} $]<~{";
+                for(unsigned i=0;i<length;++i){unsigned kind=digits%3;digits/=3;if(kind==0)input+=" 2";else if(kind==1)input+=" {rot}";else{input+=" 's"+std::to_string(i)+"'";if(first<0)first=i;}}input+="}";
+                auto root=parse(input);h=a.normalize(root);
+                check(first<0 ? h->outcome==worldPartial && h->publications==0 : h->complete() && toString(root->pItem.get())=="'s"+std::to_string(first)+"'", "finite correspondence oracle: "+input);
+            }
+        }
+        core.deInit();std::cout<<"MEMBER_CORRESPONDENCE: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }
