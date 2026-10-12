@@ -242,17 +242,29 @@ struct WorldPattern {
     our WorldFrame: owner
     me List<our WorldRequirement>: requirements
 }
-struct WorldLookup {
+// A correspondence request describes semantic coverage, not a traversal algorithm.
+// The relation retains =/==/=: qualifiers. Testing a pattern is distinct from
+// acquiring an asserted member's facts; both return source occurrences.
+struct WorldCorrespondenceQuery {
+    our WorldPosition: target
+    our POV: relation
+    me bool: testPattern <- false
+    me bool: allMembers <- false
+}
+struct WorldCorrespondenceResult {
+    our WorldPosition: position
+    our WorldFrame: facts
+    our WorldMapping: bindings
+    me List<our WorldPosition>: positions
+}
+struct WorldCorrespondence {
     our WorldWalk: left
     our WorldWalk: right
-    void: INIT() <- {Allocate(left); Allocate(right)}
-    our WorldPosition: target
+    our WorldCorrespondenceQuery: query
+    our WorldCorrespondenceResult: result
+    void: INIT() <- {Allocate(left); Allocate(right); Allocate(query); Allocate(result)}
     our WorldPosition: lhs
     our WorldPosition: rhs
-    our WorldPosition: found
-    our POV: edge
-    me bool: matching <- false
-    me bool: whole <- false
     me bool: bounded <- false
     me bool: capturing <- false
     me bool: captured <- false
@@ -265,7 +277,6 @@ struct WorldLookup {
     me int64: predicateIndex <- 0
     our WorldFrame: candidate
     our WorldCapture: capture
-    our WorldFrame: foundFacts
     our POV: memberEdge
     me List<our WorldPattern>: pattern
     me bool: patternDone <- false
@@ -377,7 +388,8 @@ struct WorldFrame {
     me int64: parentWork <- -1
     our WorldSelection: selection
     our WorldChoiceMerge: choiceMerge
-    our WorldLookup: lookup
+    our WorldCorrespondence: lookup
+    our WorldCorrespondenceResult: correspondenceResult
     me bool: selecting <- false
     me bool: predicateOnly <- false
     me bool: demandSize <- false
@@ -2215,11 +2227,12 @@ struct WorldManager {
     }
 
     void: supplyCorrespondence(our WorldRequest: request, our WorldFrame: frame) <- {
-        our WorldLookup: lookup <- frame!.lookup
-        our POV: edge <- graph.memberRelationship(lookup!.edge); edge!.pItem <- lookup!.found!.node!.pItem
+        our WorldCorrespondence: lookup <- frame!.lookup
+        our POV: edge <- graph.memberRelationship(lookup!.query!.relation); edge!.pItem <- lookup!.result!.position!.node!.pItem
         frame!.sourceEdge <- edge; frame!.sourceIsOperand <- false; frame!.sourceIsListSpec <- false
-        frame!.prerequisite <- lookup!.foundFacts
-        if(frame!.prerequisite==NULL){frame!.prerequisite <- makeFrame(request, lookup!.found!.node, lookup!.found)}
+        frame!.prerequisite <- lookup!.result!.facts
+        if(frame!.prerequisite==NULL){frame!.prerequisite <- makeFrame(request, lookup!.result!.position!.node, lookup!.result!.position)}
+        frame!.correspondenceResult <- lookup!.result
         frame!.lookup <- NULL; request!.relationshipsRead <+- 1
         request!.ready.append(frame)
         if(!frame!.prerequisite!.finished){request!.ready.append(frame!.prerequisite)}
@@ -2242,7 +2255,7 @@ struct WorldManager {
     // occurrences get derived frames so their proved extents stay independent,
     // including two occurrences that borrow the same underlying model.
     me bool: prepareListPattern(our WorldRequest: request, our WorldFrame: frame) <- {
-        our WorldLookup: lookup <- frame!.lookup
+        our WorldCorrespondence: lookup <- frame!.lookup
         if(graph.openLayout(frame!.facts) and frame!.facts.hasSize){
             frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Pattern has a constrained open extent"; stopFrame(request, frame); return(false)
         }
@@ -2290,7 +2303,7 @@ struct WorldManager {
     // ordinary list correspondence; its derived pairs and staged publication
     // remain the only way values reach the target.
     void: supplyListCorrespondence(our WorldRequest: request, our WorldFrame: frame) <- {
-        our WorldLookup: lookup <- frame!.lookup
+        our WorldCorrespondence: lookup <- frame!.lookup
         if(!lookup!.materializing){
             our WorldMapping: mapping <- lookup!.accepted!.mapping
             while(mapping!=NULL){
@@ -2311,7 +2324,7 @@ struct WorldManager {
                 }
                 layout!.facts.hasSize <- true; layout!.facts.size <- extent
             }
-            Allocate(lookup!.supplied); lookup!.supplied!.node <- lookup!.edge
+            Allocate(lookup!.supplied); lookup!.supplied!.node <- lookup!.query!.relation
             lookup!.supplied!.initialized <- true; lookup!.supplied!.finished <- true
             lookup!.supplied!.facts.overlay <- LST; lookup!.supplied!.facts.hasValue <- true
             lookup!.supplied!.facts.hasSize <- true; lookup!.supplied!.facts.size <- lookup!.mapped.size()
@@ -2330,6 +2343,8 @@ struct WorldManager {
             lookup!.supplied!.facts.representable <- lookup!.supplied!.facts.representable and graph.representableFacts(capture!.facts!.facts)
             lookup!.mapped.popLast()
         }
+        lookup!.result!.bindings <- lookup!.accepted!.mapping
+        frame!.correspondenceResult <- lookup!.result
         frame!.facts <- lookup!.layout!.facts; frame!.sourceEdge <- lookup!.memberEdge
         frame!.prerequisite <- lookup!.supplied; frame!.lookup <- NULL
         request!.ready.append(frame)
@@ -2338,7 +2353,7 @@ struct WorldManager {
     // its header, including the type of an ordinary list with unknown contents.
     me bool: correspondenceCandidate(our WorldRequest: request, our WorldFrame: frame,
                                     me WorldScalar: predicate, their WorldScalar: actual) <- {
-        our WorldLookup: lookup <- frame!.lookup
+        our WorldCorrespondence: lookup <- frame!.lookup
         me bool: headerOnly <- (graph.typePredicate(predicate) or predicate.nominal!=NULL) and lookup!.rhs!.node!.pItem!.wrkList.isEmpty()
         our WorldPosition: parent <- lookup!.rhs!.parent
         while(headerOnly and parent!=NULL){
@@ -2370,15 +2385,15 @@ struct WorldManager {
     // Each pattern/source pair is checked once; epsilon exits do not consume
     // input. Rejection removes one branch, never a viable sibling branch.
     void: matchCorrespondence(our WorldRequest: request, our WorldFrame: frame) <- {
-        our WorldLookup: lookup <- frame!.lookup
+        our WorldCorrespondence: lookup <- frame!.lookup
         if(lookup!.materializing){supplyListCorrespondence(request, frame); return()}
         if(!lookup!.started){
-            if(lookup!.whole){
-                me WorldScalar: header <- graph.read(request, lookup!.edge)
-                if(header.outcome==worldWaiting){waitAt(request, frame, lookup!.edge!.pItem); return()}
+            if(lookup!.query!.allMembers){
+                me WorldScalar: header <- graph.read(request, lookup!.query!.relation)
+                if(header.outcome==worldWaiting){waitAt(request, frame, lookup!.query!.relation!.pItem); return()}
                 if(header.outcome!=worldReady){frame!.facts <- header; stopFrame(request, frame); return()}
                 // Arrival can supply relationships as well as the list body.
-                if(!lookup!.edge!.pItem!.wrkList.isEmpty()){
+                if(!lookup!.query!.relation!.pItem!.wrkList.isEmpty()){
                     frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Prefix source has unresolved layout relationships"; stopFrame(request, frame); return()
                 }
                 if(header.overlay!=LST or !header.hasValue){
@@ -2405,23 +2420,23 @@ struct WorldManager {
                     // Close zero-width exits before requesting another source.
                     // An accepted capture is final if no live continuation can
                     // select a different occurrence. Optional suffix work ends.
-                    me bool: determined <- !lookup!.whole and lookup!.accepted!=NULL and lookup!.accepted!.capture!=NULL
+                    me bool: determined <- !lookup!.query!.allMembers and lookup!.accepted!=NULL and lookup!.accepted!.capture!=NULL
                     withEach state in lookup!.consuming{
                         if(!determined){break()}
                         if(state!.ambiguous or state!.capture!==lookup!.accepted!.capture){determined <- false}
                     }
                     if(determined or lookup!.consuming.isEmpty() or (lookup!.accepted!=NULL and lookup!.accepted!.ambiguous)){
-                        if(lookup!.accepted==NULL or (!lookup!.whole and lookup!.accepted!.capture==NULL) or lookup!.accepted!.ambiguous){
+                        if(lookup!.accepted==NULL or (!lookup!.query!.allMembers and lookup!.accepted!.capture==NULL) or lookup!.accepted!.ambiguous){
                             frame!.facts.outcome <- worldPartial
                             frame!.facts.detail <- "Pattern leaves the selected correspondence unresolved"
-                            if(lookup!.whole){frame!.facts.detail <- "Pattern leaves several member or span mappings possible"}
+                            if(lookup!.query!.allMembers){frame!.facts.detail <- "Pattern leaves several member or span mappings possible"}
                             if(lookup!.accepted==NULL and !lookup!.sourceDone){
                                 frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "No pattern correspondence matches"
                             }
                             stopFrame(request, frame); return()
                         }
-                        if(lookup!.whole){supplyListCorrespondence(request, frame); return()}
-                        lookup!.found <- lookup!.accepted!.capture!.position; lookup!.foundFacts <- lookup!.accepted!.capture!.facts
+                        if(lookup!.query!.allMembers){supplyListCorrespondence(request, frame); return()}
+                        lookup!.result!.position <- lookup!.accepted!.capture!.position; lookup!.result!.facts <- lookup!.accepted!.capture!.facts
                         supplyCorrespondence(request, frame); return()
                     }
                     lookup!.checking <- true; lookup!.cursor <- 0; continue()
@@ -2464,7 +2479,7 @@ struct WorldManager {
             if(lookup!.rhs!.tail){
                 frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Correspondence needs more source positions"; stopFrame(request, frame); return()
             }
-            me bool: selected <- !repeated and graph.samePosition(token!.position, lookup!.target)
+            me bool: selected <- !repeated and graph.samePosition(token!.position, lookup!.query!.target)
             if(token!.predicate==NULL){
                 if(selected){token!.predicate <- projectFrame(request, frame); token!.predicate!.finished <- true}
                 else{
@@ -2480,7 +2495,7 @@ struct WorldManager {
             }
             our WorldFrame: predicate <- token!.predicate
             our POV: edge <- lookup!.memberEdge
-            if(lookup!.whole and repeated and !token!.requirements.isEmpty()){
+            if(lookup!.query!.allMembers and repeated and !token!.requirements.isEmpty()){
                 predicate <- token!.requirements[lookup!.predicateIndex]!.frame
                 edge <- token!.requirements[lookup!.predicateIndex]!.edge
             }
@@ -2500,12 +2515,12 @@ struct WorldManager {
             me int64: destination <- branch!.slot+1
             if(repeated){destination <- branch!.slot}
             our WorldMatch: next <- advanceMatch(branch, destination)
-            if(selected or lookup!.whole){
+            if(selected or lookup!.query!.allMembers){
                 if(lookup!.capture==NULL){
                     Allocate(lookup!.capture); lookup!.capture!.position <- lookup!.rhs; lookup!.capture!.facts <- lookup!.candidate
                 }
                 if(selected){next!.capture <- lookup!.capture}
-                if(lookup!.whole){
+                if(lookup!.query!.allMembers){
                     our WorldMapping:: mapping; mapping!.prior <- branch!.mapping
                     mapping!.slot <- branch!.slot; mapping!.capture <- lookup!.capture
                     next!.mapping <- mapping; request!.correspondenceMappings <+- 1
@@ -2519,48 +2534,49 @@ struct WorldManager {
     // Fixed coordinates supply a span as one borrowed RHS. The two cursors
     // advance once; a known-width unconstrained prefix needs no virtual items.
     void: locateSpanRHS(our WorldRequest: request, our WorldFrame: frame) <- {
-        our WorldLookup: lookup <- frame!.lookup
+        our WorldCorrespondence: lookup <- frame!.lookup
         if(!lookup!.started){
-            me WorldScalar: header <- graph.read(request, lookup!.edge)
-            if(header.outcome==worldWaiting){waitAt(request, frame, lookup!.edge!.pItem); return()}
+            me WorldScalar: header <- graph.read(request, lookup!.query!.relation)
+            if(header.outcome==worldWaiting){waitAt(request, frame, lookup!.query!.relation!.pItem); return()}
             if(header.outcome!=worldReady){frame!.facts <- header; stopFrame(request, frame); return()}
-            if(header.overlay!=LST or !header.hasValue or !lookup!.edge!.pItem!.wrkList.isEmpty()){
+            if(header.overlay!=LST or !header.hasValue or !lookup!.query!.relation!.pItem!.wrkList.isEmpty()){
                 frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Bounded source needs an established list layout"; stopFrame(request, frame); return()
             }
             lookup!.started <- true
         }
         while(true){
             if(lookup!.lhs==NULL){
-                if(!lookup!.captured or lookup!.matching){lookup!.lhs <- graph.nextPosition(request, lookup!.left)}
+                if(!lookup!.captured or lookup!.query!.testPattern){lookup!.lhs <- graph.nextPosition(request, lookup!.left)}
                 if(!walkReady(request, frame, lookup!.left)){return()}
-                if(lookup!.lhs==NULL or (lookup!.captured and !lookup!.matching)){
+                if(lookup!.lhs==NULL or (lookup!.captured and !lookup!.query!.testPattern)){
                     if(!lookup!.captured){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Selected span has no established coordinates"; stopFrame(request, frame); return()}
                     frame!.sourceEdge <- lookup!.memberEdge; frame!.prerequisite <- lookup!.supplied
-                    frame!.lookup <- NULL; request!.relationshipsRead <+- 1; request!.ready.append(frame); return()
+                    frame!.correspondenceResult <- lookup!.result
+        frame!.lookup <- NULL; request!.relationshipsRead <+- 1; request!.ready.append(frame); return()
                 }
             }
             if(lookup!.remaining==0){
                 our WorldPosition: at <- lookup!.lhs
-                if(graph.samePosition(at, lookup!.target)){
+                if(graph.samePosition(at, lookup!.query!.target)){
                     if(!frame!.facts.hasSize or frame!.facts.size<0 or frame!.facts.size.getDenominator()!=1){
                         frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Selected span needs a known nonnegative extent"; stopFrame(request, frame); return()
                     }
                     lookup!.capturing <- true; lookup!.remaining <- frame!.facts.size
-                    Allocate(lookup!.supplied); lookup!.supplied!.node <- lookup!.edge
+                    Allocate(lookup!.supplied); lookup!.supplied!.node <- lookup!.query!.relation
                     lookup!.supplied!.initialized <- true; lookup!.supplied!.finished <- true
                     lookup!.supplied!.facts.overlay <- LST; lookup!.supplied!.facts.hasValue <- true
                     lookup!.supplied!.facts.hasSize <- true; lookup!.supplied!.facts.size <- frame!.facts.size
                     Allocate(lookup!.supplied!.facts.sequence); request!.framesCreated <+- 1
                 }else{
                     me bool: contains <- false
-                    our WorldPosition: ancestor <- lookup!.target!.parent
+                    our WorldPosition: ancestor <- lookup!.query!.target!.parent
                     while(ancestor!=NULL){
                         if(graph.samePosition(at, ancestor)){contains <- true; break()}
                         ancestor <- ancestor!.parent
                     }
                     if(contains){lookup!.left!.push(at); lookup!.lhs <- NULL; continue()}
                     if(at!.tail){frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Selected span crosses an unresolved pattern width"; stopFrame(request, frame); return()}
-                    if(at!.node!.isSubItm or lookup!.matching){
+                    if(at!.node!.isSubItm or lookup!.query!.testPattern){
                         me WorldScalar: header <- graph.read(request, at!.node, at!.node!.pParent)
                         if(header.outcome==worldWaiting){waitAt(request, frame, at!.node!.pItem); return()}
                         if(header.outcome!=worldReady){frame!.facts <- header; stopFrame(request, frame); return()}
@@ -2569,7 +2585,7 @@ struct WorldManager {
                         if(at!.node!.isSubItm){
                             unconstrained <- unconstrained and header.overlay==LST and header.hasValue and
                                 item!.value!.listSpec==NULL and item!.value!.items.head==NULL and header.openTail
-                            if(!header.hasSize or (lookup!.matching and !unconstrained)){
+                            if(!header.hasSize or (lookup!.query!.testPattern and !unconstrained)){
                                 lookup!.left!.push(at); lookup!.lhs <- NULL; continue()
                             }
                             if(!item!.wrkList.isEmpty() or header.size<0 or header.size.getDenominator()!=1){
@@ -2634,9 +2650,9 @@ struct WorldManager {
     // Return a read-only RHS for this member; neither containing list is a
     // value-normalization prerequisite. The cursors/chart survive local waits.
     void: locateRHS(our WorldRequest: request, our WorldFrame: frame) <- {
-        our WorldLookup: lookup <- frame!.lookup
+        our WorldCorrespondence: lookup <- frame!.lookup
         if(lookup!.bounded){locateSpanRHS(request, frame); return()}
-        if(lookup!.matching){matchCorrespondence(request, frame); return()}
+        if(lookup!.query!.testPattern){matchCorrespondence(request, frame); return()}
         while(true){
             if(lookup!.lhs==NULL){
                 lookup!.lhs <- graph.nextPosition(request, lookup!.left)
@@ -2649,11 +2665,22 @@ struct WorldManager {
                 if(!walkReady(request, frame, lookup!.right)){return()}
             }
             if(lookup!.rhs==NULL or lookup!.rhs!.tail){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Correspondence needs more source positions"; stopFrame(request, frame); return()}
-            if(graph.samePosition(lookup!.lhs, lookup!.target)){
-                lookup!.found <- lookup!.rhs; supplyCorrespondence(request, frame); return()
+            if(graph.samePosition(lookup!.lhs, lookup!.query!.target)){
+                lookup!.result!.position <- lookup!.rhs; supplyCorrespondence(request, frame); return()
             }
             lookup!.lhs <- NULL; lookup!.rhs <- NULL
         }
+    }
+    our WorldCorrespondence: requestCorrespondence(our WorldPosition: pattern, our POV: relation,
+                                                  our WorldPosition: target, me bool: testPattern,
+                                                  me bool: allMembers <- false) <- {
+        our WorldCorrespondence:: lookup
+        lookup!.query!.target <- target; lookup!.query!.relation <- relation
+        lookup!.query!.testPattern <- testPattern; lookup!.query!.allMembers <- allMembers
+        lookup!.memberEdge <- graph.memberRelationship(relation)
+        if(pattern!=NULL){lookup!.left!.push(pattern)}
+        lookup!.right!.push(graph.position(relation))
+        return(lookup)
     }
     me bool: requestParentRHS(our WorldRequest: request, our WorldFrame: frame) <- {
         while(frame!.parentContext!=NULL){
@@ -2696,9 +2723,7 @@ struct WorldManager {
                    ((!relation!.looseSize() and leftHeader.size!=rightHeader.size) or (relation!.looseSize() and leftHeader.size>rightHeader.size))){
                     frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Parent endpoints need span alignment"; stopFrame(request, frame); return(true)
                 }
-                Allocate(frame!.lookup); frame!.lookup!.target <- frame!.context; frame!.lookup!.edge <- relation
-                frame!.lookup!.matching <- input; frame!.lookup!.memberEdge <- graph.memberRelationship(relation)
-                frame!.lookup!.left!.push(parent); frame!.lookup!.right!.push(graph.position(relation))
+                frame!.lookup <- requestCorrespondence(parent, relation, frame!.context, input)
                 if(frame!.context!.node!.isSubItm){
                     frame!.lookup!.bounded <- true
                     frame!.lookup!.left!.shallow <- true; frame!.lookup!.right!.shallow <- true
@@ -2828,9 +2853,8 @@ struct WorldManager {
         if(!frame!.sourceIsOperand and !frame!.sourceIsListSpec and
            source!.looseTop and !source!.looseMode and !source!.looseInhtd and !source!.forceID and
            frame!.facts.overlay==LST and frame!.facts.hasValue and !frame!.facts.negative){
-            Allocate(frame!.lookup); frame!.lookup!.whole <- true; frame!.lookup!.matching <- true
-            frame!.lookup!.edge <- source; frame!.lookup!.memberEdge <- graph.memberRelationship(source)
-            frame!.lookup!.right!.checkExtents <- true; frame!.lookup!.right!.push(graph.position(source))
+            frame!.lookup <- requestCorrespondence(NULL, source, NULL, true, true)
+            frame!.lookup!.right!.checkExtents <- true
             if(graph.needsRequirements(frame)){graph.beginRequirements(frame)}
             request!.ready.append(frame); return()
         }
