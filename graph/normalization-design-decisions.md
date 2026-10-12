@@ -828,3 +828,16 @@ List sources retain the existing positional/pattern correspondence path. Source 
 **Reason.** A list member count and a string byte length are different coordinates; comparing those headers cannot establish a token mapping. Reusing the span chart preserves the same widths, grouping, overlap proofs and local parser continuation used by whole-list parsing. Copying or normalizing the parent would lose the demand boundary and occurrence provenance needed by subsequent path steps.
 
 Selected string projections supply facts, not an editable source occurrence. Text-window writes and chained navigation through synthesized grouped output need an additional projection interface. General selected list regrouping, explicit prefix members with a shared structured listSpec, recursive grammars and unknown-width text terminals remain deferred. Planning and path costs are unchanged.
+
+
+## D05B Nominal record field correspondence (2026-10-12)
+
+**Decision.** A plain field-valued definition supplies nominal field constraints and omitted immediate fields. Index its unique nominal members, then align each supplied occurrence with its corresponding declaration field. Verify nominal identity with the existing comparator and combine facts with the existing derived-pair merge. Preserve supplied field order; insert omitted declaration fields before the next matching supplied field and append remaining omissions. Given total extents remain constraints. Unmatched fields are admissible only through an open declaration remainder.
+
+The index is a candidate lookup, not an inheritance theorem. Duplicate fields or unproved inherited identity remain unsupported. Counted/listSpec definitions continue through list correspondence; field alignment must not erase their extent or repeated constraints. Unrepresented relationships stop publication rather than being discharged with the meaning.
+
+**Demand scope.** Explicit normalization of a supplied named record requests its immediate omitted fields. Its supplied list-valued children are acquired without recursively requesting their omitted fields. Thus returning `spoke` adds `color`, while returning `wheel` leaves its supplied `spoke:{length:123}` intact. A primitive type explicitly supplied in `left:_` or `color:$` is valid partial information even without a separate definition of that field name; a bare unknown name still needs available meaning.
+
+**Publication.** Prepare field order and new occurrences before any mutation, then relink original supplied POVs at publication. Matching payloads do not authorize replacing those occurrences. Borrowed declarations stay unchanged, parser waits retain the current dependency, and rejected/cancelled requests publish neither edits nor new fields.
+
+**Cost and alternatives.** Ordered indexing and two forward passes cost O((N+D) log(N+D)) key work for N supplied and D declaration fields, plus ordinary field reasoning and output. A nested search for every field would add O(ND) comparisons; positional pairing would conflate different nominal fields. No cost planner or new goal restart is introduced. General inheritance, overloaded/duplicate field resolution, unordered records and definition-instance writes remain separate work.

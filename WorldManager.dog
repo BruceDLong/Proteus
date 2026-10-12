@@ -381,6 +381,12 @@ struct WorldCorrespondence {
 struct WorldDefinitions {
     me List<our WordDefn>: entries
 }
+struct WorldFieldMerge {
+    me List<our WorldFrame>: members
+    me int64: next <- 0
+    our WorldList: sequence
+    void: INIT() <- {Allocate(sequence)}
+}
 struct WorldScalar {
     me WorldOutcome: outcome <- worldReady
     me string: detail
@@ -402,6 +408,7 @@ struct WorldScalar {
     me bool: explicitSize <- false
     me bool: contentsComplete <- true
     me bool: representable <- true
+    me bool: fieldLayout <- false
     me bool: dischargeListSpec <- false
     me bool: openTail <- false
     our WorldList: sequence
@@ -467,6 +474,7 @@ struct WorldPath {
 }
 
 struct WorldFrame {
+    our WorldFieldMerge: fields
     me bool: lazyPattern <- false
     our POV: node
     our WorldPath: path
@@ -543,6 +551,8 @@ struct WorldPublication {
     our infonState: newList
     our infonState: appendedList
     our infonView: newAlternatives
+    me bool: reorderFields <- false
+    me List<our POV>: fieldOrder
 }
 struct WorldRequest {
     me vocabularySpec: vocabulary
@@ -1196,11 +1206,8 @@ struct WorldPOVGraph {
                (frame!.predicateOnly and typePredicate(frame!.facts))){return(NULL)}
             frame!.meaningRequested <- true
             if(frame!.facts.nominal!.defToUse==NULL){
-                if(!frame!.facts.hasValue and frame!.context==NULL and !frame!.predicateOnly and !frame!.acquireOnly){frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Named value has no available definition"}
+                if(!frame!.facts.hasValue and frame!.facts.overlay<0 and frame!.context==NULL and !frame!.predicateOnly and !frame!.acquireOnly){frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Named value has no available definition"}
                 return(NULL)
-            }
-            if(frame!.facts.overlay==LST and frame!.facts.hasValue){
-                frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Named record needs field correspondence"; return(NULL)
             }
             request!.meaningEdges <+- 1
             our POV:: meaning{939}; meaning!.pItem <- frame!.facts.nominal!.defToUse; meaning!.trueByDefinition <- true
@@ -1450,6 +1457,16 @@ struct WorldPOVGraph {
         return(left)
     }
 
+    me bool: namedFields(me WorldScalar: facts) <- {
+        if(facts.overlay!=LST or !facts.hasValue or (facts.sequence!=NULL and facts.sequence!.hasSpans)){return(false)}
+        me WorldListCursor: cursor; cursor.push(facts.sequence)
+        me WorldMember: member <- cursor.nextMember(false)
+        while(member.frame!=NULL){
+            if(member.embedded or member.frame!.facts.nominal==NULL){return(false)}
+            member <- cursor.nextMember(false)
+        }
+        return(true)
+    }
     // An unconstrained target adopts represented structure, including symbolic
     // tails. Other list identities prove the shape before pairing members.
     me WorldScalar: mergeList(me WorldScalar: left, me WorldScalar: right, our POV: edge, me bool: alignedOpen <- false) <- {
@@ -1837,11 +1854,19 @@ struct WorldPOVGraph {
                     if(job.frame!.listSpecEdge!=NULL){body!.listSpec <- job.frame!.listSpecEdge!.pItem}
                     if(facts.explicitSize){body!.sizeMode <- fromGiven}else{body!.sizeMode <- fromCount}
                 }
+                job.reorderFields <- existing and facts.fieldLayout
+                me Set<our POV>: originalFields
+                our POV: original <- body!.items.head
+                if(job.reorderFields){while(original!=NULL){originalFields.insert(original); original <- original!.next}}
                 our POV: targetMember <- body!.items.head
                 me WorldListCursor: members; members.push(facts.sequence)
                 me WorldMember: occurrence <- members.nextMember(false)
                 while(occurrence.frame!=NULL){
                     our WorldFrame: member <- occurrence.frame
+                    if(job.reorderFields){
+                        targetMember <- NULL
+                        if(originalFields.contains(member!.node)){targetMember <- member!.node; originalFields.erase(member!.node)}
+                    }
                     if(!existing or targetMember==NULL){
                         if(!representableFacts(member!.facts)){
                             request!.outcome <- worldPartial; request!.detail <- "New member still has unresolved work"; return()
@@ -1859,7 +1884,8 @@ struct WorldPOVGraph {
                         targetMember <- destination!.items.append(item, occurrence.embedded, 933); targetMember!.pParent <- job.target
                     }
                     me WorldPublication: child; child.target <- targetMember; child.frame <- member; pending.append(child)
-                    if(existing){targetMember <- targetMember!.next}
+                    if(job.reorderFields){job.fieldOrder.append(targetMember)}
+                    else if(existing){targetMember <- targetMember!.next}
                     occurrence <- members.nextMember(false)
                 }
                 request!.sequenceVisits <+- members.visits
@@ -1910,7 +1936,10 @@ struct WorldPOVGraph {
         if(job.newList!=NULL){item!.value <- job.newList}
         // Detached suffixes join the target only after every destination has
         // passed publication checks, preserving the original prefix POVs.
-        if(job.appendedList!=NULL){
+        if(job.reorderFields){
+            item!.value!.items.clear()
+            withEach field in job.fieldOrder{item!.value!.items.appendPov(field)}
+        }else if(job.appendedList!=NULL){
             our POV: member <- job.appendedList!.items.head
             while(member!=NULL){
                 our POV: next <- member!.next
@@ -2115,6 +2144,89 @@ struct WorldManager {
         frame!.pairedMember <- derivePair(request, frame!.pairedMember, requirement!.frame, requirement!.edge)
         request!.templateApplications <+- 1; request!.ready.append(frame!.pairedMember)
         return(true)
+    }
+
+    // Nominal field alignment preserves supplied occurrence order. Missing
+    // declaration fields are inserted before the next corresponding field.
+    // The index excludes inheritance ambiguity before any pair is accepted.
+    void: beginFields(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(!graph.representableFacts(frame!.prerequisite!.facts) or !frame!.prerequisite!.retainedWork.isEmpty()){
+            frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Record meaning still has unresolved relationships"; stopFrame(request, frame); return()
+        }
+        our WorldFieldMerge:: fields
+        me List<our WorldFrame>: definitions
+        me List<our WorldFrame>: supplied
+        me Map<string, int64>: byName
+        me Set<string>: present
+        me WorldListCursor: cursor; cursor.push(frame!.prerequisite!.facts.sequence)
+        our WorldFrame: member <- cursor.next()
+        while(member!=NULL){
+            me string: key <- member!.facts.nominal!.typeID()
+            if(byName.containsKey(key) or !graph.noInheritedType(member!.facts.nominal)){
+                frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Record field identity needs additional nominal evidence"; stopFrame(request, frame); return()
+            }
+            byName.insert(key, definitions.size()); definitions.append(member); member <- cursor.next()
+        }
+        request!.sequenceVisits <+- cursor.visits; me WorldListCursor: actuals; cursor <- actuals; cursor.push(frame!.facts.sequence)
+        member <- cursor.next()
+        while(member!=NULL){
+            me string: key <- member!.facts.nominal!.typeID()
+            if(present.contains(key) or !graph.noInheritedType(member!.facts.nominal)){
+                frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Record field identity needs additional nominal evidence"; stopFrame(request, frame); return()
+            }
+            present.insert(key); supplied.append(member); member <- cursor.next()
+        }
+        request!.sequenceVisits <+- cursor.visits
+        our POV: edge <- graph.memberRelationship(frame!.sourceEdge); edge!.trueByDefinition <- false
+        me int64: next <- 0
+        withEach actual in supplied{
+            me string: key <- actual!.facts.nominal!.typeID()
+            if(byName.containsKey(key)){
+                me int64: index <- byName.at(key)
+                while(next<index){
+                    our WorldFrame: omitted <- definitions[next]; next <+- 1
+                    if(!present.contains(omitted!.facts.nominal!.typeID())){fields!.members.append(omitted)}
+                }
+                our WorldFrame: required <- definitions[index]
+                me WorldOutcome: identity <- graph.compareNominal(actual!.facts.nominal, required!.facts.nominal)
+                if(identity!=worldReady){frame!.facts.outcome <- identity; frame!.facts.detail <- "Record fields do not have a proved identity"; stopFrame(request, frame); return()}
+                fields!.members.append(derivePair(request, actual, required, edge)); request!.memberPairs <+- 1
+            }else{
+                if(!frame!.prerequisite!.facts.openTail){
+                    frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Record field lies outside its closed meaning"; stopFrame(request, frame); return()
+                }
+                fields!.members.append(actual)
+            }
+        }
+        while(next<definitions.size()){
+            our WorldFrame: omitted <- definitions[next]; next <+- 1
+            if(!present.contains(omitted!.facts.nominal!.typeID())){fields!.members.append(omitted)}
+        }
+        frame!.fields <- fields
+        frame!.facts.contentsComplete <- true; frame!.facts.representable <- true
+        request!.ready.append(frame)
+    }
+    void: mergeFields(our WorldRequest: request, our WorldFrame: frame) <- {
+        our WorldFieldMerge: fields <- frame!.fields
+        while(fields!.next<fields!.members.size()){
+            our WorldFrame: member <- fields!.members[fields!.next]
+            if(!member!.finished){request!.ready.append(frame); request!.ready.append(member); return()}
+            if(member!.facts.outcome!=worldReady){frame!.facts <- member!.facts; stopFrame(request, frame); return()}
+            if(!member!.retainedWork.isEmpty() or member!.facts.pendingChecks!=NULL){
+                frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Record field still has unresolved relationships"; stopFrame(request, frame); return()
+            }
+            graph.appendMember(fields!.sequence, member)
+            frame!.facts.contentsComplete <- frame!.facts.contentsComplete and graph.completeFacts(member!.facts, false)
+            frame!.facts.representable <- frame!.facts.representable and graph.representableFacts(member!.facts)
+            fields!.next <+- 1
+        }
+        if(frame!.facts.explicitSize and frame!.facts.hasSize and frame!.facts.size!=FlexNum(graph.sequenceLength(fields!.sequence))){
+            frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Record fields do not fit the given extent"; stopFrame(request, frame); return()
+        }
+        frame!.facts.sequence <- fields!.sequence; frame!.facts.hasSize <- !frame!.facts.openTail
+        if(frame!.facts.hasSize){frame!.facts.size <- graph.sequenceLength(fields!.sequence)}
+        frame!.facts.fieldLayout <- true; frame!.facts.meaningApplied <- true
+        frame!.prerequisite <- NULL; frame!.fields <- NULL; request!.ready.append(frame)
     }
 
     // A pair is a derived strict member relationship, evaluated by the same
@@ -3610,6 +3722,7 @@ struct WorldManager {
     }
 
     void: step(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(frame!.fields!=NULL){mergeFields(request, frame); return()}
         if(!frame!.initialized and (frame!.path!=NULL or frame!.node!.pItem!.partRef!=NULL or !frame!.node!.pItem!.parts.isEmpty())){pathStep(request, frame); return()}
         if(!frame!.initialized and frame!.node!.pItem!.value!=NULL and frame!.node!.pItem!.value!.evalMode==emIntersection){selectMember(request, frame); return()}
         if(!frame!.initialized){
@@ -3674,6 +3787,11 @@ struct WorldManager {
                 }
                 frame!.memberSpecified <- true
                 request!.ready.append(frame); request!.ready.append(frame!.prerequisite); return()
+            }
+            if(!frame!.sourceIsOperand and !frame!.sourceIsListSpec and frame!.sourceEdge!.trueByDefinition and
+               !frame!.prerequisite!.facts.explicitSize and frame!.prerequisite!.tailRequirements==NULL and
+               frame!.prerequisite!.listSpecFrame==NULL and graph.namedFields(frame!.facts) and graph.namedFields(frame!.prerequisite!.facts)){
+                beginFields(request, frame); return()
             }
             // A closed target proves the endpoint of a strict open source.
             // Project that source with the same correspondence operation, then
@@ -3761,7 +3879,10 @@ struct WorldManager {
             request!.ready.append(frame)
         }else{
             frame!.prerequisite <- makeFrame(request, source)
-            if(frame!.sourceIsOperand){frame!.prerequisite!.expressionParent <- frame!.node; frame!.prerequisite!.acquireOnly <- frame!.acquireOnly; frame!.prerequisite!.predicateOnly <- frame!.predicateOnly}
+            if(frame!.sourceIsOperand){frame!.prerequisite!.expressionParent <- frame!.node; frame!.prerequisite!.acquireOnly <- frame!.acquireOnly or (graph.memberSequence(frame) and source!.pItem!.value!.overlayType==LST and source!.pItem!.value!.evalMode==emLiteral); frame!.prerequisite!.predicateOnly <- frame!.predicateOnly}
+            if(source!.trueByDefinition and frame!.facts.overlay==LST and frame!.facts.hasValue){
+                frame!.prerequisite!.acquireOnly <- true; frame!.prerequisite!.predicateOnly <- true
+            }
             request!.ready.append(frame)
             request!.ready.append(frame!.prerequisite)
         }

@@ -30,6 +30,7 @@ TestsToRun = `
     unit/worldManager/pathCorrespondence
     unit/worldManager/structuredParsing
     unit/worldManager/selectedParsing
+    unit/worldManager/recordFields
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -8567,7 +8568,7 @@ check(a.normalize(transfer)->outcome==worldUnsupported && toString(transfer->pIt
 check(a.normalize(parse("transfer"))->outcome==worldUnsupported,"failed declaration copy registers nothing");
 auto records=parse("{#record={left:_ right:_}}");check(a.normalize(records)->complete(),"declare nominal record");
 auto record=parse("record:{right:1 left:2}");auto recordText=toString(record->pItem.get());
-check(a.normalize(record)->outcome==worldUnsupported && toString(record->pItem.get())==recordText,"record fields need nominal correspondence, not positional pairing");
+check(a.normalize(record)->complete() && toString(record->pItem.get())==recordText,"record fields use nominal correspondence and preserve supplied order");
 check(a.normalize(parse("(unit unit)"))->outcome==worldUnsupported,"nominal arithmetic is explicit boundary");
 auto inherited=parse("{#base=1 #alias=base}");check(a.normalize(inherited)->complete(),"declare explicit nominal inheritance boundary");
 auto inheritedSearch=parse("[&{!base|...} base]<~{alias base}");auto ih=a.normalize(inheritedSearch);
@@ -8711,7 +8712,7 @@ for(bool cancel:{false,true}){
  check(cancel?h->outcome==worldCancelled && !h->publications && toString(p->pItem.get())==before:h->complete() && toString(p->pItem.get())=="{0 2 3 4}","span write resumes locally or cancels without effects");
 }
 auto partialRecord=parse("shape:{y:_}.y=7;");auto partialRecordText=toString(partialRecord->pItem.get());auto partialRecordWrite=a.normalize(partialRecord);
-check(partialRecordWrite->outcome==worldUnsupported && !partialRecordWrite->publications && toString(partialRecord->pItem.get())==partialRecordText,"returning a record does not discharge an unexamined definition");
+check(partialRecordWrite->outcome==worldPartial && toString(partialRecord->pItem.get())=="shape:{x:_ y:7}","returning a record examines its meaning and retains its omitted unknown field");
 
 for(int n:{8,64,512}){
  std::string input="*2+[&{x:{y:{1 2";for(int i=0;i<n;++i)input+=" (1=2)";input+="}}}.x.y]";
@@ -8872,6 +8873,74 @@ for(auto text:{"[<{'A'|...}> {'A'|...}]<~'AA'","[<*3+$> 'Dog']<~'CatFox'"}){
  check(toString(sibling.get())==before,"asserted unrelated sibling is unchanged");
 }
 core.deInit();std::cout<<"SELECTED_STRUCTURED: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_recordFields(me string: tname) <- {
+        if(!worldManagerRecordFieldChecks()){FAIL("Record field correspondence checks failed")}
+    }
+    me bool: worldManagerRecordFieldChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;
+int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+auto parse=[&](const std::string& text){auto p=m.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+auto normalize=[&](const std::string& text,const std::string& expected){auto p=parse(text);auto h=a.normalize(p);auto out=toString(p->pItem.get());check((h->complete()||h->outcome==worldPartial) && out==expected,text+" => "+out+" : "+h->detail);return std::make_pair(p,h);};
+auto definitions=parse("{#position=_ #torque=_ #pedals={...} #color=$ #length=_ #spoke={color:$ length:_} #wheel={position:_ torque:_ spoke} #record={left:_ right:_} #bounded={left:*10+_ right:_} #fixed={left:3 right:_}}");
+auto before=toString(definitions->pItem.get());check(a.normalize(definitions)->complete(),"stage record definitions");
+normalize("pedals:{position=321 torque:4}","pedals:{position:321 torque:4}");
+normalize("record:{right:1 left:2}","record:{right:1 left:2}");
+normalize("record:{right:1}","record:{left:_ right:1}");
+normalize("{wheel:{position:210 torque:5 spoke:{length:_}}}.wheel.spoke.length=123;","spoke:{color:$ length:123}");
+normalize("{wheel:{position:210 torque:5 spoke:{length:_}}}.wheel.spoke.length=123;;","wheel:{position:210 torque:5 spoke:{length:123}}");
+for(auto text:{"bounded:{left:3 right:4}","record:{right:1}","record:{right:1 left:2}"}){
+ auto p=parse(text);auto original=p->pItem->value->items.head;auto second=original->next;auto field=original->pItem;auto h=a.normalize(p);
+ check(h->outcome==worldPartial||h->complete(),"record accepts compatible supplied fields");
+ bool firstPresent=false,secondPresent=!second;for(auto member=p->pItem->value->items.head;member;member=member->next){firstPresent|=member==original;secondPresent|=member==second;}
+ check(firstPresent && secondPresent && original->pItem==field,"field alignment retains existing POVs and infons");
+ auto again=a.normalize(p);check(again->outcome==worldPartial||again->complete(),"record result can normalize again");
+}
+{
+ auto p=parse("fixed:{left:13 right:4}");auto input=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && input==toString(p->pItem.get()),"field contradiction publishes no reordered or added fields");
+}
+check(toString(definitions->pItem.get())==before,"record instances leave declarations unchanged");
+for(int n:{8,32,128}){
+ std::string definition="{#wide"+std::to_string(n)+"={",instance="wide"+std::to_string(n)+":{";
+ for(int i=0;i<n;++i)definition+=" f"+std::to_string(i)+":_";definition+="}}";
+ for(int i=n-1;i>=0;--i)instance+=" f"+std::to_string(i)+":"+std::to_string(i);instance+='}';
+ check(a.normalize(parse(definition))->complete(),"declare wide record");auto p=parse(instance);auto original=toString(p->pItem.get());auto h=a.normalize(p);
+ check(h->complete() && toString(p->pItem.get())==original,"reversed field order uses nominal correspondence");
+ check(h->memberPairs<=static_cast<unsigned>(n) && h->framesCreated<static_cast<unsigned>(6*n+12),"one merge per supplied field");
+}
+
+for(bool cancel:{false,true}){
+ auto query=std::string("record:{right:1}");auto sync=normalize(query,"record:{left:_ right:1}").second;
+ std::shared_ptr<infonView> meaning;
+ for(auto declaration=definitions->pItem->value->items.head;declaration;declaration=declaration->next)if(declaration->pItem->definedWord && declaration->pItem->definedWord->defWord=="record")meaning=declaration->pItem->funcArgs;
+ auto p=parse(query);auto original=toString(p->pItem.get());auto field=p->pItem->value->items.head;m.prepareInput(meaning);auto h=a.normalize(p);auto frames=h->framesCreated;
+ check(h->outcome==worldWaiting && h->waitingInput==meaning && !h->publications,"record waits at its required meaning");
+ if(cancel)m.cancel(h);SetModeBits(meaning->flags,infonView::streamState,infonView::parseDone);m.inputReady(meaning);
+ check(cancel?h->outcome==worldCancelled && h->framesCreated==frames && !h->publications && toString(p->pItem.get())==original:
+ h->outcome==worldPartial && h->framesCreated==sync->framesCreated && toString(p->pItem.get())=="record:{left:_ right:1}" && p->pItem->value->items.tail==field,"record continuation retains work and original field occurrence");
+}
+{
+ auto p=parse("record:*1+{right:3}");auto original=toString(p->pItem.get());auto h=a.normalize(p);
+ check(h->outcome==worldPartial && !h->publications && toString(p->pItem.get())==original,"omitted fields cannot overwrite a given total extent");
+ auto duplicates=parse("record:{right:1 right:2}");auto text=toString(duplicates->pItem.get());auto result=a.normalize(duplicates);
+ check(!result->complete() && !result->publications && toString(duplicates->pItem.get())==text,"duplicate nominal fields require a correspondence proof");
+}
+
+
+{
+ auto p=parse("record:{extra:7 right:1}");auto before=toString(p->pItem.get());auto h=a.normalize(p);
+ check(h->outcome==worldPartial && !h->publications && toString(p->pItem.get())==before,"closed field meaning cannot silently discard an unmatched supplied field");
+ check(a.normalize(parse("{#counted=*3+{field|...}}"))->complete(),"declare counted list meaning");
+ auto counted=parse("counted:{field:1}");auto result=a.normalize(counted);
+ check(!result->complete(),"counted template is not an unconstrained field record");
+}
+
+core.deInit();std::cout<<"RECORD_FIELDS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
 
     }%>
 }
