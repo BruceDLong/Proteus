@@ -282,11 +282,13 @@ struct WorldPatternProof {
     me bool: ambiguous <- false
 }
 struct WorldPatternResult {
+    our WorldFrame: selected
     me int64: end <- 0
     our WorldFrame: frame
     our WorldPatternProof: proof
 }
 struct WorldPatternState {
+    our WorldFrame: selected
     me int64: slot <- 0
     me int64: end <- 0
     our WorldList: sequence
@@ -313,6 +315,10 @@ struct WorldPatternGoal {
 }
 struct WorldPatternStarts {me Map<int64, our WorldPatternGoal>: goals}
 struct WorldPatternChart {
+    our WorldPosition: patternPosition
+    our WorldFrame: pattern
+    me bool: deterministic <- true
+    me bool: selectedEarly <- false
     me Map<our WorldFrame, our WorldPatternStarts>: memo
     me List<our WorldPatternGoal>: pending
     our WorldPatternGoal: root
@@ -461,6 +467,7 @@ struct WorldPath {
 }
 
 struct WorldFrame {
+    me bool: lazyPattern <- false
     our POV: node
     our WorldPath: path
     me bool: acquireOnly <- false
@@ -1070,7 +1077,7 @@ struct WorldPOVGraph {
                 walk!.outcome <- worldUnsupported; walk!.detail <- "Correspondence needs a list layout"; return(false)
             }
             // A nested layout's own constraints can change its extent.
-            if((walk!.requireClosedRelations or level!.position!.parent!=NULL) and !node!.pItem!.wrkList.isEmpty()){
+            if(walk!.requireClosedRelations and !node!.pItem!.wrkList.isEmpty()){
                 walk!.outcome <- worldUnsupported; walk!.detail <- "Embedded layout has unresolved relationships"; return(false)
             }
             if(walk!.checkExtents and header.hasSize){
@@ -2336,7 +2343,7 @@ struct WorldManager {
                 request!.ready.append(frame); return()
             }
             if(frame!.selection!.oneOf){
-                Allocate(frame!.facts.alternatives); frame!.selection!.walk!.checkExtents <- true
+                Allocate(frame!.facts.alternatives); frame!.selection!.walk!.checkExtents <- true; frame!.selection!.walk!.requireClosedRelations <- true
             }
             else if(item!.innr!.value!.sizeMode==fromGiven){
                 if(item!.innr!.infSize!.evalMode!=emLiteral or item!.innr!.infSize!.num<=0 or item!.innr!.infSize!.num.getDenominator()!=1){
@@ -2952,6 +2959,54 @@ struct WorldManager {
             lookup!.lhs <- NULL
         }
     }
+    // A member request borrows template structure. Its siblings become goals
+    // only when their width or predicate is needed to establish the mapping.
+    our WorldFrame: patternFrame(our WorldRequest: request, our WorldFrame: consumer, our WorldPosition: position) <- {
+        if(graph.samePosition(position, consumer!.lookup!.query!.target)){
+            our WorldFrame: result <- projectFrame(request, consumer); result!.context <- position; result!.finished <- true
+            return(result)
+        }
+        our WorldFrame:: result; result!.node <- position!.node; result!.context <- position
+        result!.expressionParent <- position!.node!.pParent; result!.lazyPattern <- true; result!.predicateOnly <- true
+        request!.framesCreated <+- 1; return(result)
+    }
+    me bool: preparePattern(our WorldRequest: request, our WorldFrame: consumer, our WorldPatternGoal: goal) <- {
+        our WorldFrame: pattern <- goal!.pattern
+        if(!pattern!.lazyPattern){return(true)}
+        me WorldScalar: header <- graph.read(request, pattern!.node, pattern!.expressionParent,
+            pattern!.context!=NULL and pattern!.context!.input!=NULL, false, true)
+        if(header.outcome==worldWaiting){waitAt(request, consumer, pattern!.node!.pItem); return(false)}
+        if(header.outcome!=worldReady){consumer!.facts <- header; stopFrame(request, consumer); return(false)}
+        me bool: root <- goal===consumer!.lookup!.chart!.root
+        our infonView: item <- pattern!.node!.pItem
+        if(header.overlay==LST and header.hasValue and (root or item!.wrkList.isEmpty()) and
+           (root or header.nominal==NULL)){
+            pattern!.facts <- header; pattern!.initialized <- true; pattern!.finished <- true
+            Allocate(pattern!.facts.sequence)
+            our POV: member <- item!.value!.items.head
+            while(member!=NULL){
+                our WorldFrame: child <- patternFrame(request, consumer, graph.position(member, pattern!.context))
+                graph.appendMember(pattern!.facts.sequence, child, member!.isSubItm)
+                member <- member!.next
+            }
+            if(item!.value!.listSpec!=NULL){
+                our POV:: spec{937}; spec!.pItem <- item!.value!.listSpec
+                our WorldFrame: requirement <- patternFrame(request, consumer, graph.position(spec))
+                pattern!.tailRequirements <- graph.requirement(requirement, spec)
+                if(item!.value!.items.head!=NULL){
+                    consumer!.facts.outcome <- worldUnsupported; consumer!.facts.detail <- "Selected structured template needs prefix requirements"
+                    stopFrame(request, consumer); return(false)
+                }
+            }
+        }else if(!consumer!.lookup!.query!.testPattern and header.overlay==STR and (header.hasSize or header.hasValue)){
+            // An asserted predecessor supplies an extent, not a value goal.
+            pattern!.facts <- header; pattern!.initialized <- true; pattern!.finished <- true
+        }else{
+            pattern!.lazyPattern <- false
+            request!.ready.append(consumer); request!.ready.append(pattern); return(false)
+        }
+        pattern!.lazyPattern <- false; return(true)
+    }
     our WorldPatternGoal: patternGoal(our WorldRequest: request, our WorldPatternChart: chart,
                                      our WorldFrame: pattern, me int64: start) <- {
         if(!chart!.memo.containsKey(pattern)){
@@ -3056,7 +3111,10 @@ struct WorldManager {
             actual <- capture!.facts!.facts
             if(actual.outcome!=worldReady){frame!.facts <- actual; stopFrame(request, frame); return(false)}
         }
-        me WorldScalar: matched <- graph.matchPosition(required, actual, lookup!.memberEdge)
+        me WorldScalar: matched <- required
+        if(lookup!.query!.testPattern or graph.samePosition(goal!.pattern!.context, lookup!.query!.target)){
+            matched <- graph.matchPosition(required, actual, lookup!.memberEdge)
+        }
         if(matched.outcome==worldRejected){return(true)}
         if(matched.outcome!=worldReady or matched.needsEvidence or matched.pendingChecks!=NULL){
             frame!.facts <- matched
@@ -3065,7 +3123,9 @@ struct WorldManager {
         }
         our WorldPatternResult:: result; result!.end <- end
         result!.frame <- projectFrame(request, goal!.pattern); result!.frame!.facts <- matched
-        result!.frame!.finished <- true; Allocate(result!.proof); patternResult(goal, result)
+        result!.frame!.finished <- true; Allocate(result!.proof)
+        if(lookup!.query!.target!=NULL and graph.samePosition(goal!.pattern!.context, lookup!.query!.target)){result!.selected <- result!.frame}
+        patternResult(goal, result)
         return(true)
     }
     // Nested grouping, repetition and OR all compose the same span results.
@@ -3085,12 +3145,30 @@ struct WorldManager {
                     // A concatenation's container has no value type. Borrow
                     // its first operand's header to choose list/text access;
                     // the ordinary walker still checks every demanded layout.
+                    if(header.overlay<0 and !header.hasValue and header.nominal!=NULL and
+                       header.nominal!.defToUse!=NULL and chart!.sourceProbe!.pItem!.wrkList.isEmpty()){
+                        if(chart!.sourcePath.contains(chart!.sourceProbe!.pItem)){
+                            frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Cyclic named sequence source"; stopFrame(request, frame); return()
+                        }
+                        chart!.sourcePath.insert(chart!.sourceProbe!.pItem)
+                        our POV:: meaning{939}; meaning!.pItem <- header.nominal!.defToUse; chart!.sourceProbe <- meaning
+                        continue()
+                    }
                     if(!graph.scalarExpression(chart!.sourceProbe!.pItem!.value)){break()}
                     if(chart!.sourcePath.contains(chart!.sourceProbe!.pItem)){
                         frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Cyclic sequence source"; stopFrame(request, frame); return()
                     }
                     chart!.sourcePath.insert(chart!.sourceProbe!.pItem)
                     chart!.sourceProbe <- chart!.sourceProbe!.pItem!.value!.items.head
+                }
+                if(header.overlay==LST and lookup!.query!.target!=NULL){
+                    me WorldScalar: patternHeader <- graph.read(request, chart!.patternPosition!.node, chart!.patternPosition!.node!.pParent, chart!.patternPosition!.input!=NULL)
+                    if(!lookup!.query!.testPattern and patternHeader.hasSize and header.hasSize and
+                       ((!lookup!.query!.relation!.looseSize() and patternHeader.size!=header.size) or
+                        (lookup!.query!.relation!.looseSize() and patternHeader.size>header.size))){
+                        frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Parent endpoints need span alignment"; stopFrame(request, frame); return()
+                    }
+                    lookup!.chart <- NULL; request!.ready.append(frame); return()
                 }
                 if(header.overlay!=LST){
                     chart!.source <- makeFrame(request, lookup!.query!.relation)
@@ -3106,13 +3184,16 @@ struct WorldManager {
                 chart!.text <- source.overlay==STR
                 if(chart!.text){chart!.textCursor.push(source.textSource, source.textLength)}
             }
-            chart!.root <- patternGoal(request, chart, projectFrame(request, frame), 0)
+            if(chart!.patternPosition!=NULL){chart!.pattern <- patternFrame(request, frame, chart!.patternPosition)}
+            if(chart!.pattern==NULL){chart!.pattern <- projectFrame(request, frame)}
+            chart!.root <- patternGoal(request, chart, chart!.pattern, 0)
             chart!.pending.append(chart!.root); chart!.initialized <- true
         }
         while(!chart!.pending.isEmpty()){
             our WorldPatternGoal: goal <- chart!.pending.last()
             our WorldFrame: pattern <- goal!.pattern
             if(!goal!.initialized){
+                if(!preparePattern(request, frame, goal)){return()}
                 if(pattern!.facts.outcome!=worldReady or pattern!.facts.pendingChecks!=NULL or !pattern!.retainedWork.isEmpty()){
                     frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Pattern still has unresolved requirements"; stopFrame(request, frame); return()
                 }
@@ -3141,7 +3222,7 @@ struct WorldManager {
                 goal!.initialized <- true
             }
             if(goal!.repeated!=NULL){
-                if(!goal!.repeated!.finished){request!.ready.append(frame); request!.ready.append(goal!.repeated); return()}
+                if(!goal!.repeated!.finished and !goal!.repeated!.lazyPattern){request!.ready.append(frame); request!.ready.append(goal!.repeated); return()}
                 me uint64: before <- goal!.requirements.visits
                 our WorldRequirement: requirement <- goal!.requirements.next()
                 request!.requirementVisits <+- goal!.requirements.visits-before
@@ -3152,10 +3233,14 @@ struct WorldManager {
             }
             if(goal!.child!=NULL){
                 if(!goal!.child!.finished){chart!.pending.append(goal!.child); continue()}
+                if(goal!.child!.results.size()>1){chart!.deterministic <- false}
                 withEach child in goal!.child!.results{
+                    if(child!.selected!=NULL and !lookup!.query!.testPattern and chart!.deterministic){
+                        chart!.accepted <- child; chart!.selectedEarly <- true; break()
+                    }
                     if(pattern!.facts.alternatives!=NULL){
                         our WorldPatternResult:: result; result!.end <- child!.end; result!.frame <- child!.frame
-                        Allocate(result!.proof); result!.proof!.child <- child!.proof; patternResult(goal, result)
+                        Allocate(result!.proof); result!.proof!.child <- child!.proof; result!.selected <- child!.selected; patternResult(goal, result)
                     }
                     else{
                         me bool: tail <- goal!.state!.slot==goal!.members.size()
@@ -3167,6 +3252,7 @@ struct WorldManager {
                         our WorldList:: one; graph.appendMember(one, child!.frame, embedded)
                         our WorldPatternState:: next; next!.slot <- goal!.state!.slot
                         if(!tail){next!.slot <+- 1}
+                        next!.selected <- goal!.state!.selected; if(child!.selected!=NULL){next!.selected <- child!.selected}
                         next!.end <- child!.end; next!.sequence <- graph.join(goal!.state!.sequence, one)
                         next!.proof!.prior <- goal!.state!.proof; next!.proof!.child <- child!.proof
                         next!.complete <- goal!.state!.complete and graph.completeFacts(child!.frame!.facts, false)
@@ -3174,6 +3260,7 @@ struct WorldManager {
                         if(!pattern!.facts.hasSize or FlexNum(next!.sequence!.length)<=pattern!.facts.size){patternState(request, goal, next)}
                     }
                 }
+                if(chart!.selectedEarly){break()}
                 goal!.child <- NULL; goal!.state <- NULL; goal!.alternative <+- 1
             }
             if(pattern!.facts.alternatives!=NULL){
@@ -3196,6 +3283,8 @@ struct WorldManager {
                     result!.frame!.facts.dischargeListSpec <- true
                     result!.frame!.tailRequirements <- NULL; result!.frame!.pendingRequirements <- NULL
                     result!.frame!.listSpecFrame <- NULL; result!.frame!.listSpecEdge <- NULL
+                    result!.selected <- state!.selected
+                    if(lookup!.query!.target!=NULL and graph.samePosition(pattern!.context, lookup!.query!.target)){result!.selected <- result!.frame}
                     patternResult(goal, result)
                 }
                 our WorldFrame: child
@@ -3207,7 +3296,7 @@ struct WorldManager {
             }
             goal!.finished <- true; chart!.pending.popLast()
         }
-        while(chart!.resultIndex<chart!.root!.results.size()){
+        while(!chart!.selectedEarly and chart!.resultIndex<chart!.root!.results.size()){
             our WorldPatternResult: result <- chart!.root!.results[chart!.resultIndex]
             me bool: accepted <- lookup!.query!.relation!.looseSize()
             if(!accepted){
@@ -3239,8 +3328,14 @@ struct WorldManager {
             }
             proofs.append(proof!.prior); proofs.append(proof!.child)
         }
-        frame!.facts <- chart!.accepted!.frame!.facts
-        graph.adoptListRequirements(frame, chart!.accepted!.frame)
+        our WorldFrame: answer <- chart!.accepted!.frame
+        if(lookup!.query!.target!=NULL){
+            answer <- chart!.accepted!.selected
+            if(answer==NULL){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Structured mapping did not establish the selected member"; stopFrame(request, frame); return()}
+            lookup!.result!.facts <- answer
+        }
+        frame!.facts <- answer!.facts
+        graph.adoptListRequirements(frame, answer)
         frame!.correspondenceResult <- lookup!.result; frame!.lookup <- NULL
         request!.ready.append(frame)
     }
@@ -3290,7 +3385,7 @@ struct WorldManager {
                 if(relation!.forceID){frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Replacement correspondence is not implemented"; stopFrame(request, frame); return(true)}
                 me WorldScalar: leftHeader <- parentHeader
                 me WorldScalar: rightHeader <- graph.read(request, relation, relation!.pParent)
-                if(!input and leftHeader.outcome==worldReady and rightHeader.outcome==worldReady and
+                if(!input and !relation!.looseMode and leftHeader.outcome==worldReady and rightHeader.outcome==worldReady and
                    leftHeader.hasSize and rightHeader.hasSize and
                    ((!relation!.looseSize() and leftHeader.size!=rightHeader.size) or (relation!.looseSize() and leftHeader.size>rightHeader.size))){
                     frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Parent endpoints need span alignment"; stopFrame(request, frame); return(true)
@@ -3299,6 +3394,10 @@ struct WorldManager {
                 // A member is a width-one capture. Fixed member and span
                 // requests share coordinates, predicates and symbolic skips.
                 frame!.lookup!.bounded <- true
+                if(relation!.looseMode or input){
+                    Allocate(frame!.lookup!.chart)
+                    frame!.lookup!.chart!.patternPosition <- parent
+                }
                 frame!.lookup!.left!.shallow <- true; frame!.lookup!.right!.shallow <- true
                 frame!.lookup!.right!.checkExtents <- true
                 request!.parentLookups <+- 1; request!.ready.append(frame); return(true)
