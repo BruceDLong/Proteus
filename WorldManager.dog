@@ -124,6 +124,31 @@ struct WorldListCursor {
     our WorldFrame: next() <- {return(nextMember(true).frame)}
 }
 
+// A single symbolic gap has two anchored sequences. These borrow checked
+// member frames; no model occurrences are allocated to inspect an alignment.
+struct WorldOpenLayout {
+    me List<our WorldFrame>: prefix
+    me List<our WorldFrame>: suffix
+    our WorldFrame: gap
+    me int64: prefixCount <- 0
+    me int64: suffixCount <- 0
+}
+struct WorldOpenScan {
+    our WorldFrame: frame
+    me WorldListCursor: members
+}
+struct WorldOpenAlignment {
+    me int64: leftPrefixCount <- 0
+    me int64: leftSuffixCount <- 0
+    our WorldOpenLayout: right
+    me int64: prefixPosition <- 0
+    me int64: suffixPosition <- 0
+    me int64: addedPrefix <- 0
+    me int64: addedSuffix <- 0
+    me bool: pastGap <- false
+    me bool: remainderAdded <- false
+}
+
 struct WorldScalar {
     me WorldOutcome: outcome <- worldReady
     me string: detail
@@ -203,6 +228,7 @@ struct WorldFrame {
     // Derived correspondence frames combine checked facts, never reread a POV.
     me bool: projected <- false
     me bool: corresponding <- false
+    our WorldOpenAlignment: openAlignment
     me WorldListCursor: leftMembers
     our WorldListCursor: rightMembers
     me bool: pairedEmbedded <- false
@@ -267,6 +293,7 @@ struct WorldRequest {
     me uint64: relationshipsRead <- 0
     me uint64: publications <- 0
     me uint64: memberPairs <- 0
+    me uint64: alignmentChecks <- 0
     me uint64: templateApplications <- 0
     me uint64: comparisonResumptions <- 0
     me uint64: requirementVisits <- 0
@@ -392,9 +419,11 @@ struct WorldPOVGraph {
     }
     void: beginCorrespondence(our WorldFrame: frame, me FlexNum: extent <- FlexNum()) <- {
         if(!frame!.applyingListSpec){
-            frame!.facts <- fitExtent(frame!.facts, extent)
-            if(frame!.facts.outcome!=worldReady){return()}
-            frame!.remaining <- extent; frame!.gapWidth <- extent-minimumWidth(frame!.facts)
+            if(frame!.openAlignment==NULL){
+                frame!.facts <- fitExtent(frame!.facts, extent)
+                if(frame!.facts.outcome!=worldReady){return()}
+                frame!.remaining <- extent; frame!.gapWidth <- extent-minimumWidth(frame!.facts)
+            }
             frame!.extendingTail <- frame!.facts.openTail
         }
         frame!.corresponding <- true; frame!.leftMembers.push(frame!.facts.sequence)
@@ -780,17 +809,17 @@ struct WorldPOVGraph {
 
     // An unconstrained target adopts represented structure, including symbolic
     // tails. Other list identities prove the shape before pairing members.
-    me WorldScalar: mergeList(me WorldScalar: left, me WorldScalar: right, our POV: edge) <- {
+    me WorldScalar: mergeList(me WorldScalar: left, me WorldScalar: right, our POV: edge, me bool: alignedOpen <- false) <- {
         if(edge!.forceID or edge!.looseType() or left.negative or right.negative){
             left.outcome <- worldUnsupported; left.detail <- "Qualified list relationships need matching semantics"; return(left)
         }
         if((left.overlay>=0 and left.overlay!=LST) or (right.overlay>=0 and right.overlay!=LST)){
             left.outcome <- worldRejected; left.detail <- "Incompatible list types"; return(left)
         }
-        if(openLayout(right) and (left.hasValue or left.hasSize)){
+        if(!alignedOpen and openLayout(right) and (left.hasValue or left.hasSize)){
             left.outcome <- worldUnsupported; left.detail <- "Open source correspondence needs span alignment"; return(left)
         }
-        if(openLayout(left) and (!right.hasValue or !right.hasSize)){
+        if(!alignedOpen and openLayout(left) and (!right.hasValue or !right.hasSize)){
             left.outcome <- worldPartial; left.detail <- "Tail closure needs a closed source endpoint"; return(left)
         }
         if((left.hasSize and right.hasSize and left.size!=right.size) or
@@ -798,7 +827,7 @@ struct WorldPOVGraph {
            (!left.hasValue and left.hasSize and right.hasValue and left.size!=FlexNum(sequenceLength(right.sequence)))){
             left.outcome <- worldPartial; left.detail <- "List endpoints need span alignment"; return(left)
         }
-        if(left.hasValue and right.hasValue){
+        if(!alignedOpen and left.hasValue and right.hasValue){
             left <- fitExtent(left, FlexNum(sequenceLength(right.sequence)))
             if(left.outcome!=worldReady){return(left)}
         }
@@ -921,6 +950,62 @@ struct WorldPOVGraph {
         frame!.facts <- result
     }
 
+    // Expose one unbounded gap and its anchored members. Given embedded
+    // endpoints and multiple gaps need a richer alignment, not enumeration.
+    our WorldOpenLayout: openLayoutOf(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(!representableFacts(frame!.facts) or needsRequirements(frame) or !openLayout(frame!.facts) or frame!.facts.hasSize){return(NULL)}
+        our WorldOpenLayout:: layout
+        me List<our WorldOpenScan>: pending
+        our WorldOpenScan:: root; root!.frame <- frame; root!.members.push(frame!.facts.sequence); pending.append(root)
+        while(!pending.isEmpty()){
+            our WorldOpenScan: scan <- pending.last()
+            if(openLayout(scan!.frame!.facts) and (scan!.frame!.facts.hasSize or !scan!.frame!.retainedWork.isEmpty())){return(NULL)}
+            me WorldMember: member <- scan!.members.nextMember(false)
+            if(member.frame==NULL){
+                request!.sequenceVisits <+- scan!.members.visits; pending.popLast()
+                if(scan!.frame!.facts.openTail){
+                    if(layout!.gap!=NULL){return(NULL)}
+                    layout!.gap <- scan!.frame
+                }
+            }else if(member.embedded){
+                if(!openLayout(member.frame!.facts) and sequenceLength(member.frame!.facts.sequence)==0){continue()}
+                our WorldOpenScan:: child; child!.frame <- member.frame
+                child!.members.push(member.frame!.facts.sequence); pending.append(child)
+            }else if(layout!.gap==NULL){layout!.prefix.append(member.frame); layout!.prefixCount <+- 1}
+            else{layout!.suffix.append(member.frame); layout!.suffixCount <+- 1}
+        }
+        if(layout!.gap==NULL){return(NULL)}
+        return(layout)
+    }
+    our WorldOpenAlignment: alignOpen(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(frame!.sourceEdge!.forceID or frame!.sourceEdge!.looseType()){return(NULL)}
+        our WorldOpenLayout: left <- openLayoutOf(request, frame)
+        if(left==NULL){return(NULL)}
+        our WorldOpenLayout: right <- openLayoutOf(request, frame!.prerequisite)
+        if(right==NULL){return(NULL)}
+        // Before joining the longest prefix and suffix, exclude every shorter
+        // overlap. Only an ordinary merge's contradiction is such a proof.
+        our WorldOpenLayout: prefix <- left; our WorldOpenLayout: suffix <- left
+        if(right!.prefixCount>left!.prefixCount){prefix <- right}
+        if(right!.suffixCount>left!.suffixCount){suffix <- right}
+        me int64: minimum <- max(left!.prefixCount+left!.suffixCount, right!.prefixCount+right!.suffixCount)
+        me int64: frontier <- prefix!.prefixCount+suffix!.suffixCount
+        withEach length in range minimum .. frontier{
+            me bool: rejected <- false
+            withEach pos in range length-suffix!.suffixCount .. prefix!.prefixCount{
+                me WorldScalar: overlap <- merge(prefix!.prefix[pos]!.facts,
+                    suffix!.suffix[pos+suffix!.suffixCount-length]!.facts, frame!.sourceEdge)
+                request!.alignmentChecks <+- 1
+                if(overlap.outcome==worldRejected){rejected <- true; break()}
+            }
+            if(!rejected){return(NULL)}
+        }
+        our WorldOpenAlignment:: alignment
+        alignment!.leftPrefixCount <- left!.prefixCount; alignment!.leftSuffixCount <- left!.suffixCount
+        alignment!.right <- right
+        return(alignment)
+    }
+
     // Semantic acceptance and work consolidation stay at the graph boundary.
     void: adoptListRequirements(our WorldFrame: frame, our WorldFrame: source) <- {
         frame!.listSpecFrame <- source!.listSpecFrame; frame!.listSpecEdge <- source!.listSpecEdge
@@ -956,7 +1041,8 @@ struct WorldPOVGraph {
             if(frame!.expression.outcome!=worldReady){frame!.facts <- frame!.expression}
         }else{
             me WorldScalar: left <- frame!.facts
-            mergeRelationship(request, frame)
+            if(frame!.openAlignment!=NULL){frame!.facts <- mergeList(left, frame!.prerequisite!.facts, frame!.sourceEdge, true)}
+            else{mergeRelationship(request, frame)}
             if(frame!.facts.outcome==worldReady and !left.hasValue and frame!.facts.overlay==LST){
                 // Adoption includes the requirements of members not yet present.
                 adoptListRequirements(frame, frame!.prerequisite)
@@ -964,8 +1050,10 @@ struct WorldPOVGraph {
             if(frame!.facts.outcome==worldReady and left.overlay==LST and left.hasValue and
                frame!.prerequisite!.facts.overlay==LST and frame!.prerequisite!.facts.hasValue){
                 beginCorrespondence(frame, FlexNum(sequenceLength(frame!.prerequisite!.facts.sequence)))
-                Allocate(frame!.rightMembers); frame!.ownsRightCursor <- true
-                frame!.rightMembers!.push(frame!.prerequisite!.facts.sequence)
+                if(frame!.openAlignment==NULL){
+                    Allocate(frame!.rightMembers); frame!.ownsRightCursor <- true
+                    frame!.rightMembers!.push(frame!.prerequisite!.facts.sequence)
+                }
             }
             our infonView: supplied <- frame!.sourceEdge!.pItem
             // A closed scalar leaf contributes only its checked type, size
@@ -981,7 +1069,7 @@ struct WorldPOVGraph {
             me bool: listSource <- frame!.prerequisite!.facts.overlay==LST and frame!.prerequisite!.facts.hasValue and
                 representableFacts(frame!.prerequisite!.facts) and
                 ((frame!.prerequisite!.facts.hasSize and !openLayout(frame!.prerequisite!.facts)) or
-                 (!left.hasValue and !left.hasSize and frame!.prerequisite!.retainedWork.isEmpty()))
+                 ((!left.hasValue and !left.hasSize or frame!.openAlignment!=NULL) and frame!.prerequisite!.retainedWork.isEmpty()))
             frame!.retainSource <- !listSource and !scalarExpression and (!supplied!.wrkList.isEmpty() or
                 (supplied!.value!.evalMode!=emLiteral and supplied!.value!.evalMode!=emUnknown) or
                 !frame!.prerequisite!.facts.representable)
@@ -1294,6 +1382,40 @@ struct WorldManager {
             frame!.pairedMember <- NULL
         }
         me WorldMember: left <- frame!.leftMembers.nextMember(false)
+        if(left.frame==NULL and frame!.extendingTail and frame!.openAlignment!=NULL){
+            our WorldOpenAlignment: alignment <- frame!.openAlignment
+            alignment!.pastGap <- true
+            me int64: prefixIndex <- alignment!.leftPrefixCount+alignment!.addedPrefix
+            me int64: extraSuffix <- alignment!.right!.suffixCount-alignment!.leftSuffixCount
+            if(extraSuffix<0){extraSuffix <- 0}
+            our WorldFrame: member
+            frame!.pairedEmbedded <- false
+            if(prefixIndex<alignment!.right!.prefixCount){
+                member <- alignment!.right!.prefix[prefixIndex]; alignment!.addedPrefix <+- 1
+            }else if(extraSuffix>0 and !alignment!.remainderAdded){
+                // An incoming suffix moves the unresolved tail inside this
+                // occurrence. Retain a symbolic span, never invent its width.
+                member <- projectFrame(request, frame)
+                Allocate(member!.facts.sequence); member!.facts.hasSize <- false
+                member!.facts.openTail <- true; member!.facts.contentsComplete <- false
+                member!.retainedWork.clear(); member!.listSpecFrame <- NULL; member!.listSpecEdge <- NULL
+                member!.tailRequirements <- graph.joinRequirements(frame!.tailRequirements, alignment!.right!.gap!.tailRequirements)
+                member!.finished <- true; frame!.pairedEmbedded <- true
+                alignment!.remainderAdded <- true
+            }else if(alignment!.addedSuffix<extraSuffix){
+                member <- alignment!.right!.suffix[alignment!.addedSuffix]; alignment!.addedSuffix <+- 1
+            }
+            if(member!=NULL){
+                frame!.pairedMember <- member
+                if(!frame!.pairedEmbedded){
+                    request!.tailMembers <+- 1; frame!.memberRequirements.push(frame!.tailRequirements)
+                    applyMemberRequirement(request, frame)
+                }
+                return()
+            }
+            frame!.extendingTail <- false; frame!.facts.openTail <- extraSuffix==0
+            if(frame!.facts.openTail){frame!.tailRequirements <- graph.joinRequirements(frame!.tailRequirements, alignment!.right!.gap!.tailRequirements)}
+        }
         if(left.frame==NULL and frame!.extendingTail){
             // The closed source proved the extent. Continue its cursor for
             // the unique remainder; never enumerate from a declared size.
@@ -1312,8 +1434,13 @@ struct WorldManager {
         if(left.frame==NULL){
             frame!.facts.sequence <- frame!.pairedSequence; frame!.pairedSequence <- NULL
             frame!.pendingRequirements <- NULL
-            if(!frame!.applyingListSpec and frame!.remaining!=0){
+            if(!frame!.applyingListSpec and frame!.openAlignment==NULL and frame!.remaining!=0){
                 request!.outcome <- worldError; request!.detail <- "Correspondence source ended before its checked extent"; return()
+            }
+            if(frame!.openAlignment!=NULL and graph.openLayout(frame!.facts) and frame!.openAlignment!.right!.gap!.tailRequirements!=NULL){
+                // Future source requirements still need their containing
+                // relationship in the stored partial result.
+                frame!.facts.representable <- false
             }
             frame!.facts.dischargeListSpec <- frame!.facts.representable and !graph.openLayout(frame!.facts)
             if(!frame!.projected and !frame!.applyingListSpec and (frame!.retainSource or !frame!.facts.representable)){
@@ -1322,7 +1449,7 @@ struct WorldManager {
             request!.sequenceVisits <+- frame!.leftMembers.visits
             if(frame!.ownsRightCursor){request!.sequenceVisits <+- frame!.rightMembers!.visits}
             frame!.leftMembers <- WorldListCursor(); frame!.rightMembers <- NULL; frame!.ownsRightCursor <- false
-            frame!.corresponding <- false; frame!.applyingListSpec <- false
+            frame!.corresponding <- false; frame!.applyingListSpec <- false; frame!.openAlignment <- NULL
         }else{
             our WorldFrame: pair
             if(left.embedded){
@@ -1332,12 +1459,13 @@ struct WorldManager {
                 }else{
                     pair <- projectFrame(request, left.frame)
                     pair!.sourceEdge <- frame!.sourceEdge; pair!.rightMembers <- frame!.rightMembers
+                    pair!.openAlignment <- frame!.openAlignment
                     me FlexNum: extent <- graph.minimumWidth(left.frame!.facts)
                     if(left.frame!.facts.hasSize){extent <- left.frame!.facts.size}
                     else if(graph.freeSpans(left.frame!.facts)>0){extent <+- frame!.gapWidth}
                     graph.beginCorrespondence(pair, extent)
                     frame!.remaining <- frame!.remaining-extent
-                    if(pair!.facts.outcome==worldReady){pair!.facts.hasSize <- true; pair!.facts.size <- extent}
+                    if(pair!.facts.outcome==worldReady and pair!.openAlignment==NULL){pair!.facts.hasSize <- true; pair!.facts.size <- extent}
                 }
             }else{
                 if(frame!.applyingListSpec){
@@ -1345,9 +1473,28 @@ struct WorldManager {
                     frame!.memberRequirements.push(frame!.pendingRequirements)
                     applyMemberRequirement(request, frame); return()
                 }
-                our WorldFrame: right <- frame!.rightMembers!.next()
-                frame!.remaining <- frame!.remaining-1; request!.memberPairs <+- 1
-                pair <- derivePair(request, left.frame, right, frame!.sourceEdge)
+                if(frame!.openAlignment!=NULL){
+                    our WorldOpenAlignment: alignment <- frame!.openAlignment
+                    our WorldFrame: right
+                    if(!alignment!.pastGap){
+                        if(alignment!.prefixPosition<alignment!.right!.prefixCount){right <- alignment!.right!.prefix[alignment!.prefixPosition]}
+                        alignment!.prefixPosition <+- 1
+                    }else{
+                        me int64: index <- alignment!.suffixPosition+alignment!.right!.suffixCount-alignment!.leftSuffixCount
+                        if(index>=0){right <- alignment!.right!.suffix[index]}
+                        alignment!.suffixPosition <+- 1
+                    }
+                    if(right!=NULL){pair <- derivePair(request, left.frame, right, frame!.sourceEdge); request!.memberPairs <+- 1}
+                    else{
+                        frame!.pairedMember <- left.frame; frame!.pairedEmbedded <- false
+                        frame!.memberRequirements.push(alignment!.right!.gap!.tailRequirements)
+                        applyMemberRequirement(request, frame); return()
+                    }
+                }else{
+                    our WorldFrame: right <- frame!.rightMembers!.next()
+                    frame!.remaining <- frame!.remaining-1; request!.memberPairs <+- 1
+                    pair <- derivePair(request, left.frame, right, frame!.sourceEdge)
+                }
             }
             frame!.pairedMember <- pair; frame!.pairedEmbedded <- left.embedded
             request!.ready.append(pair)
@@ -1414,6 +1561,10 @@ struct WorldManager {
                     frame!.prerequisite <- derivePair(request, frame!.prerequisite, endpoint, frame!.sourceEdge)
                     request!.ready.append(frame); request!.ready.append(frame!.prerequisite); return()
                 }
+            }
+            if(!frame!.sourceIsOperand and !frame!.sourceIsListSpec and
+               graph.openLayout(frame!.facts) and graph.openLayout(frame!.prerequisite!.facts)){
+                frame!.openAlignment <- graph.alignOpen(request, frame)
             }
             graph.consumePrerequisite(request, frame)
             frame!.memberSpecified <- false
