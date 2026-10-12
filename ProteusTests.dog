@@ -21,6 +21,7 @@ TestsToRun = `
     unit/worldManager/boundedSources
     unit/worldManager/openAlignment
     unit/worldManager/memberCorrespondence
+    unit/worldManager/overlappingPatterns
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -7980,7 +7981,7 @@ struct GLOBAL {
         check(h->outcome==worldError && h->publications==0,"malformed parent edge is not exhaustion");
         auto embedded=parse("{&{_ _}} = {3 7}");auto span=member(embedded,0);h=a.normalize(member(span,1));
         check(h->complete() && toString(span->pItem->value->items.tail->pItem.get())=="7","embedded ancestor supplies coordinates: "+h->detail);
-        for(const std::string input:{"[&{_|...} _]<~{1 2 3}","[&{_|...} <_> $]<~{1 2 'x'}","*3+[1 2]","[_]", "[{1 2} _]<~{{1 3} 7}", "[&{5|...} 6]<~{_ 6}"}){
+        for(const std::string input:{"[&{_|...} _]<~{1 2 3}","*3+[1 2]","[_]", "[{1 2} _]<~{{1 3} 7}", "[&{5|...} 6]<~{_ 6}"}){
             auto root=parse(input);auto before=toString(root->pItem.get());h=a.normalize(root);
             check(!h->complete() && h->publications==0 && toString(root->pItem.get())==before,"unproved selection retained: "+input);
         }
@@ -8030,5 +8031,100 @@ struct GLOBAL {
             }
         }
         core.deInit();std::cout<<"MEMBER_CORRESPONDENCE: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_overlappingPatterns(me string: tname) <- {
+        if(!worldManagerOverlappingPatternChecks()){FAIL("Overlapping pattern checks failed")}
+    }
+    me bool: worldManagerOverlappingPatternChecks() <- <%{
+        ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;
+        int checks=0,failures=0;
+        auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+        auto parse=[&](const std::string& text){auto p=m.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+        for(const auto& c:std::vector<std::pair<std::string,std::string>>{
+            {"[&{_|...} <_> $]<~{33 22 11 'hi' 'bye' 66 55}","11"},
+            {"[&{_|...} <_> $]<~{7 'x' rot}","7"},
+            {"[&{_|...} <_> $]<~{1 2 'x'}","2"},
+            {"[&{_|...} <_> _ $]<~{1 2 3 'x' rot}","2"},
+            {"[&{_|...} <_> 5 $]<~{1 5 2 5 'x' rot}","2"},
+            {"[&{_|...} &{_|...} <_> $]<~{1 2 'x' rot}","2"},
+            {"[<1> &{_|...} $]<~{1 2 3 'x' rot}","1"},
+            {"[<1> &{_|...}]<~{1 rot}","1"},
+            {"[<1> &{_|...} &{_|...}]<~{1 ...}","1"},
+            {"[&{_|...} <_> $ &{_|...} $]<~{1 2 'x' 3 4 'y' rot}","2"},
+            {"[&{_|...} <_> _ $]<~{1 (2+3) (1+2) 'x' rot}","5"},
+            {"[&{!$|...} <_> $]<~{{rot} 1 2 'x' rot}","2"},
+            {"[&{_|...} <_> $]<~{&{1 2} &{3 'x'} rot}","3"}}){
+            auto root=parse(c.first);if(!root)continue;auto body=root->pItem->innr;auto before=toString(body.get());
+            auto h=a.normalize(root);
+            check(h->complete() && toString(root->pItem.get())==c.second,"unique correspondence: "+c.first+" : "+h->detail);
+            check(toString(body.get())==before && h->publications==1,"borrowed input and pattern remain unchanged");
+            check(a.normalize(root)->framesCreated==0,"completed selection has no new goals");
+        }
+        for(const std::string input:{"[&{_|...} <_>]<~{1 2 3}","[&{_|...} <_> &{_|...} $]<~{1 2 'x'}",
+                                    "[&{_|...} <_> $]<~{1 ...}","[&{5|...} <_> $]<~{_ 5 'x'}"}){
+            auto root=parse(input);auto before=toString(root->pItem.get());auto h=a.normalize(root);
+            check(h->outcome==worldPartial && h->publications==0 && toString(root->pItem.get())==before,"ambiguity or missing evidence retained: "+input);
+        }
+        auto wrong=parse("[&{_|...} <_> 5 $]<~{1 4 'x'}");auto before=toString(wrong->pItem.get());auto rejected=a.normalize(wrong);
+        check(rejected->outcome==worldRejected && rejected->publications==0 && toString(wrong->pItem.get())==before,"all failed lookaheads reject atomically");
+        // Arrival resumes the exact pair, with the same successful work counts
+        // as synchronous input. Earlier captures remain tied to their paths.
+        const std::string waitingText="[&{_|...} <_> _ $]<~{1 2 3 'x' rot}";
+        auto synchronous=a.normalize(parse(waitingText));
+        for(bool cancel:{false,true}){
+            auto root=parse(waitingText);auto body=root->pItem->innr;auto snapshot=toString(body.get());
+            auto input=body->funcArgs;auto waiting=input->value->items.head->next->next->pItem;m.prepareInput(waiting);
+            auto h=a.normalize(root);auto positions=h->correspondencePositions,comparisons=h->correspondenceChecks;
+            check(h->outcome==worldWaiting && h->waitingInput==waiting && h->publications==0,"overlap waits at current candidate");
+            if(cancel)m.cancel(h);
+            ProteusParser parser(&core,true,0);parser.initParseFromString("overlap arrival","3");parser.doParse(waiting);
+            check(cancel ? h->outcome==worldCancelled && h->publications==0 && h->correspondenceChecks==comparisons :
+                h->complete() && toString(root->pItem.get())=="2" && h->correspondenceChecks==synchronous->correspondenceChecks && h->correspondencePositions==synchronous->correspondencePositions,
+                "arrival/cancellation preserves local chart progress");
+            check(toString(body.get())==snapshot && positions<=h->correspondencePositions,"waiting never publishes intermediate input/pattern state");
+        }
+        auto pending=parse(waitingText);auto suffix=pending->pItem->innr->value->items.tail->pItem;m.prepareInput(suffix);
+        auto paused=a.normalize(pending);check(paused->outcome==worldWaiting && paused->waitingInput==suffix,"wait can belong to a suffix predicate");
+        ProteusParser suffixParser(&core,true,0);suffixParser.initParseFromString("suffix arrival","$");suffixParser.doParse(suffix);
+        check(paused->complete() && toString(pending->pItem.get())=="2" && paused->correspondenceChecks==synchronous->correspondenceChecks,"suffix arrival keeps prior candidate comparisons");
+        for(int length:{32,64,128})for(int width:{1,4,12}){
+            std::string input="[&{_|...} <_>";for(int i=1;i<width;++i)input+=" _";input+=" $]<~{";
+            for(int i=0;i<length;++i)input+=" "+std::to_string(i);input+=" 'x' rot}";
+            auto root=parse(input);auto h=a.normalize(root);
+            check(h->complete() && toString(root->pItem.get())==std::to_string(length-width) && h->correspondenceChecks<=static_cast<unsigned>((length+1)*(width+2)) && h->correspondencePositions<=static_cast<unsigned>(length+width+12) && h->framesCreated<=static_cast<unsigned>(width+5),
+                  "one check per pattern/source pair; linear source walk and bounded value frames");
+            std::cout<<"OVERLAP_SCAN: source="<<length<<" suffix="<<width<<" positions="<<h->correspondencePositions<<" checks="<<h->correspondenceChecks<<" frames="<<h->framesCreated<<"\n";
+        }
+        // Independent enumeration of every repetition length and accepting
+        // input prefix. Only unique source occurrences justify publication.
+        struct Pattern{std::vector<int> tokens;int selected;};
+        std::vector<Pattern> patterns={{{-1,0,1},1},{{-1,0,0,1},1},{{-1,0,1,0},1},{{-1,0},1},{{0,-1,1},0},
+            {{-1,-1,0,1},2},{{-1,0,-1,1},1},{{-1,4,0,1},2},{{-1,0,1,-1,1},1},{{0,-1},0},{{0,-1,-1},0},{{-1,0,-1},1},{{-1,0,-1,-1},1}};
+        int cases=0;
+        for(const auto& p:patterns)for(unsigned length=0;length<=5;++length){
+            unsigned total=1;for(unsigned i=0;i<length;++i)total*=3;
+            for(unsigned code=0;code<total;++code){
+                std::vector<int> word;unsigned digits=code;for(unsigned i=0;i<length;++i){word.push_back(digits%3);digits/=3;}
+                std::unordered_set<int> captures;
+                auto matches=[](int token,int symbol){return token==1 ? symbol==2 : token==4 ? symbol==1 : symbol!=2;};
+                std::function<void(unsigned,unsigned,int)> enumerate=[&](unsigned at,unsigned pos,int capture){
+                    if(at==p.tokens.size()){captures.insert(capture);return;}
+                    if(p.tokens[at]<0){enumerate(at+1,pos,capture);if(pos<word.size() && matches(0,word[pos]))enumerate(at,pos+1,capture);}
+                    else if(pos<word.size() && matches(p.tokens[at],word[pos]))enumerate(at+1,pos+1,static_cast<int>(at)==p.selected?pos:capture);
+                };enumerate(0,0,-1);
+                std::string text="[";
+                for(unsigned i=0;i<p.tokens.size();++i){if(static_cast<int>(i)==p.selected)text+=" <";else text+=" ";text+=p.tokens[i]<0?"&{_|...}":p.tokens[i]==0?"_":p.tokens[i]==1?"$":"5";if(static_cast<int>(i)==p.selected)text+=">";}
+                text+="]<~{";for(int symbol:word)text+=symbol==0?" 2":symbol==1?" 5":" 'x'";text+="}";
+                auto root=parse(text);auto h=a.normalize(root);++cases;
+                bool ok;
+                if(captures.size()==1){int pos=*captures.begin();std::string expected=word[pos]==0?"2":word[pos]==1?"5":"'x'";ok=h->complete() && toString(root->pItem.get())==expected;}
+                else ok=h->publications==0 && (captures.empty() ? h->outcome==worldPartial || h->outcome==worldRejected : h->outcome==worldPartial);
+                check(ok,"exhaustive overlap oracle: "+text+" : "+h->detail);
+            }
+        }
+        core.deInit();std::cout<<"OVERLAPPING_PATTERNS: "<<checks-failures<<"/"<<checks<<" checks passed; "<<cases<<" oracle cases\n";return failures==0;
     }%>
 }

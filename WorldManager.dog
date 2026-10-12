@@ -183,6 +183,22 @@ struct WorldSelection {
     me bool: located <- false
     me bool: lastTail <- false
 }
+// A chart position retains only the selected occurrence. Alternatives with
+// the same remaining predicates have identical future tests, so their captures
+// can be packed without enumerating paths or losing an ambiguous selection.
+struct WorldCapture {
+    our WorldPosition: position
+    our WorldFrame: facts
+}
+struct WorldMatch {
+    me int64: slot <- 0
+    our WorldCapture: capture
+    me bool: ambiguous <- false
+}
+struct WorldPattern {
+    our WorldPosition: position
+    our WorldFrame: predicate
+}
 struct WorldLookup {
     our WorldWalk: left
     our WorldWalk: right
@@ -193,14 +209,24 @@ struct WorldLookup {
     our WorldPosition: found
     our POV: edge
     me bool: matching <- false
-    our WorldFrame: predicate
     our WorldFrame: candidate
-    our WorldFrame: repeat
-    our WorldPosition: afterRepeat
-    our WorldFrame: exitPredicate
+    our WorldCapture: capture
     our WorldFrame: foundFacts
     our POV: memberEdge
-    me bool: repeatChecked <- false
+    me List<our WorldPattern>: pattern
+    me bool: patternDone <- false
+    me bool: started <- false
+    me bool: sourceDone <- false
+    // Sorted frontiers: a transition stays at its repeated slot or advances
+    // one slot. Equal destinations are adjacent, requiring no search or map.
+    me List<our WorldMatch>: active
+    me List<our WorldMatch>: following
+    me List<our WorldMatch>: consuming
+    me bool: checking <- false
+    me int64: cursor <- 0
+    our WorldMatch: branch
+    our WorldMatch: epsilon
+    our WorldMatch: accepted
 }
 
 struct WorldScalar {
@@ -1773,122 +1799,191 @@ struct WorldManager {
         request!.ready.append(frame); request!.ready.append(frame!.prerequisite)
     }
 
+    void: supplyCorrespondence(our WorldRequest: request, our WorldFrame: frame) <- {
+        our WorldLookup: lookup <- frame!.lookup
+        our POV: edge <- graph.memberRelationship(lookup!.edge); edge!.pItem <- lookup!.found!.node!.pItem
+        frame!.sourceEdge <- edge; frame!.sourceIsOperand <- false; frame!.sourceIsListSpec <- false
+        frame!.prerequisite <- lookup!.foundFacts
+        if(frame!.prerequisite==NULL){frame!.prerequisite <- makeFrame(request, lookup!.found!.node, lookup!.found)}
+        frame!.lookup <- NULL; request!.relationshipsRead <+- 1
+        request!.ready.append(frame)
+        if(!frame!.prerequisite!.finished){request!.ready.append(frame!.prerequisite)}
+    }
+    our WorldMatch: advanceMatch(our WorldMatch: state, me int64: slot) <- {
+        our WorldMatch:: result; result! <- state!; result!.slot <- slot
+        return(result)
+    }
+    void: joinMatch(our WorldMatch: into, our WorldMatch: from) <- {
+        // Captures made in the same source column share their evidence cell.
+        // Later value work for a competing predicate is therefore reusable.
+        into!.ambiguous <- into!.ambiguous or from!.ambiguous or into!.capture!==from!.capture
+    }
+    // Only this demanded candidate is evaluated. Pure type predicates can use
+    // its header, including the type of an ordinary list with unknown contents.
+    me bool: correspondenceCandidate(our WorldRequest: request, our WorldFrame: frame,
+                                    me WorldScalar: predicate, their WorldScalar: actual) <- {
+        our WorldLookup: lookup <- frame!.lookup
+        me bool: headerOnly <- graph.typePredicate(predicate) and lookup!.rhs!.node!.pItem!.wrkList.isEmpty()
+        our WorldPosition: parent <- lookup!.rhs!.parent
+        while(headerOnly and parent!=NULL){
+            if(parent!.node!.pItem!.value!.listSpec!=NULL or !parent!.node!.pItem!.wrkList.isEmpty() or parent!.input!=NULL){headerOnly <- false}
+            if(!parent!.node!.isSubItm){break()}
+            parent <- parent!.parent
+        }
+        if(headerOnly){
+            actual! <- graph.read(lookup!.rhs!.node, lookup!.rhs!.node!.pParent)
+            if(actual!.outcome==worldWaiting){waitAt(request, frame, lookup!.rhs!.node!.pItem); return(false)}
+            if(actual!.outcome==worldReady and actual!.overlay<0){headerOnly <- false}
+        }
+        if(!headerOnly){
+            if(lookup!.candidate==NULL){
+                lookup!.candidate <- makeFrame(request, lookup!.rhs!.node, lookup!.rhs)
+                if(lookup!.capture!=NULL){lookup!.capture!.facts <- lookup!.candidate}
+                request!.ready.append(frame); request!.ready.append(lookup!.candidate); return(false)
+            }
+            actual! <- lookup!.candidate!.facts
+        }
+        return(true)
+    }
+    // A streaming chart over the same borrowed positions used by assertions.
+    // Each pattern/source pair is checked once; epsilon exits do not consume
+    // input. Rejection removes one branch, never a viable sibling branch.
+    void: matchCorrespondence(our WorldRequest: request, our WorldFrame: frame) <- {
+        our WorldLookup: lookup <- frame!.lookup
+        if(!lookup!.started){Allocate(lookup!.branch); lookup!.started <- true}
+        while(true){
+            if(lookup!.branch==NULL){
+                if(lookup!.checking){
+                    if(lookup!.cursor<lookup!.consuming.size()){
+                        lookup!.branch <- lookup!.consuming[lookup!.cursor]; lookup!.cursor <+- 1
+                    }else{
+                        lookup!.active <- lookup!.following; lookup!.following.clear(); lookup!.consuming.clear()
+                        lookup!.cursor <- 0; lookup!.checking <- false
+                        lookup!.rhs <- NULL; lookup!.candidate <- NULL; lookup!.capture <- NULL; continue()
+                    }
+                }else if(lookup!.epsilon!=NULL){lookup!.branch <- lookup!.epsilon; lookup!.epsilon <- NULL}
+                else if(lookup!.cursor<lookup!.active.size()){
+                    lookup!.branch <- lookup!.active[lookup!.cursor]; lookup!.cursor <+- 1
+                }else{
+                    // Close zero-width exits before requesting another source.
+                    // An accepted capture is final if no live continuation can
+                    // select a different occurrence. Optional suffix work ends.
+                    me bool: determined <- lookup!.accepted!=NULL and lookup!.accepted!.capture!=NULL
+                    withEach state in lookup!.consuming{
+                        if(!determined){break()}
+                        if(state!.ambiguous or state!.capture!==lookup!.accepted!.capture){determined <- false}
+                    }
+                    if(determined or lookup!.consuming.isEmpty() or (lookup!.accepted!=NULL and lookup!.accepted!.ambiguous)){
+                        if(lookup!.accepted==NULL or lookup!.accepted!.capture==NULL or lookup!.accepted!.ambiguous){
+                            frame!.facts.outcome <- worldPartial
+                            frame!.facts.detail <- "Pattern leaves the selected correspondence unresolved"
+                            if(lookup!.accepted==NULL and !lookup!.sourceDone){
+                                frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "No pattern correspondence matches"
+                            }
+                            stopFrame(request, frame); return()
+                        }
+                        lookup!.found <- lookup!.accepted!.capture!.position; lookup!.foundFacts <- lookup!.accepted!.capture!.facts
+                        supplyCorrespondence(request, frame); return()
+                    }
+                    lookup!.checking <- true; lookup!.cursor <- 0; continue()
+                }
+            }
+            our WorldMatch: branch <- lookup!.branch
+            if(!lookup!.checking){
+                if(branch!.slot==lookup!.pattern.size() and !lookup!.patternDone){
+                    our WorldPosition: at <- graph.nextPosition(request, lookup!.left)
+                    if(!walkReady(request, frame, lookup!.left)){return()}
+                    if(at==NULL){lookup!.patternDone <- true}
+                    else{
+                        if(at!.tail and (at!.node!.pItem!.value!.listSpec==NULL or at!.node!.pItem!.value!.sizeMode==fromGiven)){
+                            frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Requested correspondence crosses an unresolved pattern span"; stopFrame(request, frame); return()
+                        }
+                        our WorldPattern:: token; token!.position <- at; lookup!.pattern.append(token)
+                    }
+                }
+                if(branch!.slot==lookup!.pattern.size()){
+                    if(lookup!.accepted==NULL){lookup!.accepted <- branch}
+                    else{joinMatch(lookup!.accepted, branch)}
+                }else{
+                    if(lookup!.pattern[branch!.slot]!.position!.tail){
+                        our WorldMatch: exit <- advanceMatch(branch, branch!.slot+1)
+                        if(lookup!.cursor<lookup!.active.size() and lookup!.active[lookup!.cursor]!.slot==exit!.slot){joinMatch(lookup!.active[lookup!.cursor], exit)}
+                        else{lookup!.epsilon <- exit}
+                    }
+                    lookup!.consuming.append(branch)
+                }
+                lookup!.branch <- NULL; continue()
+            }
+            our WorldPattern: token <- lookup!.pattern[branch!.slot]
+            me bool: repeated <- token!.position!.tail
+            if(lookup!.rhs==NULL and !lookup!.sourceDone){
+                lookup!.rhs <- graph.nextPosition(request, lookup!.right)
+                if(!walkReady(request, frame, lookup!.right)){return()}
+                lookup!.sourceDone <- lookup!.rhs==NULL
+            }
+            if(lookup!.sourceDone){lookup!.branch <- NULL; continue()}
+            if(lookup!.rhs!.tail){
+                frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Correspondence needs more source positions"; stopFrame(request, frame); return()
+            }
+            me bool: selected <- !repeated and graph.samePosition(token!.position, lookup!.target)
+            if(token!.predicate==NULL){
+                if(selected){token!.predicate <- projectFrame(request, frame); token!.predicate!.finished <- true}
+                else{
+                    if(repeated){
+                        our POV:: spec{937}; spec!.pItem <- token!.position!.node!.pItem!.value!.listSpec
+                        token!.predicate <- makeFrame(request, spec)
+                    }else{
+                        token!.predicate <- makeFrame(request, token!.position!.node, token!.position)
+                        token!.predicate!.predicateOnly <- true
+                    }
+                    request!.ready.append(frame); request!.ready.append(token!.predicate); return()
+                }
+            }
+            me WorldScalar: actual
+            if(!correspondenceCandidate(request, frame, token!.predicate!.facts, actual)){return()}
+            request!.correspondenceChecks <+- 1
+            me WorldScalar: matched <- graph.matchPosition(token!.predicate!.facts, actual, lookup!.memberEdge, repeated)
+            if(matched.outcome==worldRejected){lookup!.branch <- NULL; continue()}
+            if(matched.outcome!=worldReady or matched.needsEvidence){
+                frame!.facts.outcome <- matched.outcome; frame!.facts.detail <- matched.detail
+                if(matched.needsEvidence){frame!.facts.outcome <- worldPartial}
+                stopFrame(request, frame); return()
+            }
+            me int64: destination <- branch!.slot+1
+            if(repeated){destination <- branch!.slot}
+            our WorldMatch: next <- advanceMatch(branch, destination)
+            if(selected){
+                if(lookup!.capture==NULL){
+                    Allocate(lookup!.capture); lookup!.capture!.position <- lookup!.rhs; lookup!.capture!.facts <- lookup!.candidate
+                }
+                next!.capture <- lookup!.capture
+            }
+            if(!lookup!.following.isEmpty() and lookup!.following.last()!.slot==destination){joinMatch(lookup!.following.last(), next)}
+            else{lookup!.following.append(next)}
+            lookup!.branch <- NULL
+        }
+    }
     // Return a read-only RHS for this member; neither containing list is a
-    // value-normalization prerequisite. The two cursors survive local waits.
+    // value-normalization prerequisite. The cursors/chart survive local waits.
     void: locateRHS(our WorldRequest: request, our WorldFrame: frame) <- {
         our WorldLookup: lookup <- frame!.lookup
+        if(lookup!.matching){matchCorrespondence(request, frame); return()}
         while(true){
             if(lookup!.lhs==NULL){
                 lookup!.lhs <- graph.nextPosition(request, lookup!.left)
                 if(!walkReady(request, frame, lookup!.left)){return()}
             }
-            if(lookup!.lhs==NULL){
-                if(lookup!.found==NULL){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "No corresponding member established"; stopFrame(request, frame); return()}
-                our POV: edge <- graph.memberRelationship(lookup!.edge); edge!.pItem <- lookup!.found!.node!.pItem
-                frame!.sourceEdge <- edge; frame!.sourceIsOperand <- false; frame!.sourceIsListSpec <- false
-                frame!.prerequisite <- lookup!.foundFacts
-                if(frame!.prerequisite==NULL){frame!.prerequisite <- makeFrame(request, lookup!.found!.node, lookup!.found)}
-                frame!.lookup <- NULL; request!.relationshipsRead <+- 1
-                request!.ready.append(frame)
-                if(!frame!.prerequisite!.finished){request!.ready.append(frame!.prerequisite)}
-                return()
-            }
-            if(lookup!.lhs!.tail){
-                if(!lookup!.matching or lookup!.lhs!.node!.pItem!.value!.listSpec==NULL or
-                   lookup!.lhs!.node!.pItem!.value!.sizeMode==fromGiven){
-                    frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Requested correspondence crosses an unresolved pattern span"; stopFrame(request, frame); return()
-                }
-                if(lookup!.repeat==NULL){
-                    our POV:: spec{937}; spec!.pItem <- lookup!.lhs!.node!.pItem!.value!.listSpec
-                    lookup!.repeat <- makeFrame(request, spec)
-                    request!.ready.append(frame); request!.ready.append(lookup!.repeat); return()
-                }
-                if(lookup!.afterRepeat==NULL){
-                    lookup!.afterRepeat <- graph.nextPosition(request, lookup!.left)
-                    if(!walkReady(request, frame, lookup!.left)){return()}
-                    if(lookup!.afterRepeat==NULL or lookup!.afterRepeat!.tail){
-                        frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Repeated correspondence needs a distinct following predicate"; stopFrame(request, frame); return()
-                    }
-                }
-                if(lookup!.exitPredicate==NULL){
-                    if(graph.samePosition(lookup!.afterRepeat, lookup!.target)){
-                        lookup!.exitPredicate <- projectFrame(request, frame); lookup!.exitPredicate!.finished <- true
-                    }else{
-                        lookup!.exitPredicate <- makeFrame(request, lookup!.afterRepeat!.node, lookup!.afterRepeat)
-                        lookup!.exitPredicate!.predicateOnly <- true
-                        request!.ready.append(frame); request!.ready.append(lookup!.exitPredicate); return()
-                    }
-                }
-                if(!lookup!.repeatChecked){
-                    request!.correspondenceChecks <+- 1
-                    me WorldScalar: overlap <- graph.matchPosition(lookup!.repeat!.facts, lookup!.exitPredicate!.facts, lookup!.memberEdge)
-                    if(overlap.outcome!=worldRejected){
-                        frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Overlapping pattern alternatives need span alignment"; stopFrame(request, frame); return()
-                    }
-                    lookup!.repeatChecked <- true
-                }
-                lookup!.predicate <- lookup!.repeat
-            }
+            if(lookup!.lhs==NULL){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "No corresponding member established"; stopFrame(request, frame); return()}
+            if(lookup!.lhs!.tail){frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Requested correspondence crosses an unresolved pattern span"; stopFrame(request, frame); return()}
             if(lookup!.rhs==NULL){
                 lookup!.rhs <- graph.nextPosition(request, lookup!.right)
                 if(!walkReady(request, frame, lookup!.right)){return()}
             }
-            if(lookup!.rhs==NULL or lookup!.rhs!.tail){
-                frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Correspondence needs more source positions"; stopFrame(request, frame); return()
+            if(lookup!.rhs==NULL or lookup!.rhs!.tail){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Correspondence needs more source positions"; stopFrame(request, frame); return()}
+            if(graph.samePosition(lookup!.lhs, lookup!.target)){
+                lookup!.found <- lookup!.rhs; supplyCorrespondence(request, frame); return()
             }
-            me bool: selected <- graph.samePosition(lookup!.lhs, lookup!.target)
-            if(lookup!.matching){
-                if(lookup!.predicate==NULL){
-                    if(selected){lookup!.predicate <- projectFrame(request, frame); lookup!.predicate!.finished <- true}
-                    else{
-                        lookup!.predicate <- makeFrame(request, lookup!.lhs!.node, lookup!.lhs)
-                        lookup!.predicate!.predicateOnly <- true
-                        request!.ready.append(frame); request!.ready.append(lookup!.predicate); return()
-                    }
-                }
-                me WorldScalar: actual
-                me bool: headerOnly <- graph.typePredicate(lookup!.predicate!.facts) and lookup!.rhs!.node!.pItem!.wrkList.isEmpty()
-                our WorldPosition: parent <- lookup!.rhs!.parent
-                while(headerOnly and parent!=NULL){
-                    if(parent!.node!.pItem!.value!.listSpec!=NULL or !parent!.node!.pItem!.wrkList.isEmpty() or parent!.input!=NULL){headerOnly <- false}
-                    if(!parent!.node!.isSubItm){break()}
-                    parent <- parent!.parent
-                }
-                if(headerOnly){
-                    actual <- graph.read(lookup!.rhs!.node, lookup!.rhs!.node!.pParent)
-                    if(actual.outcome==worldWaiting){waitAt(request, frame, lookup!.rhs!.node!.pItem); return()}
-                    if(actual.outcome==worldReady and actual.overlay<0){headerOnly <- false}
-                }
-                if(!headerOnly){
-                    if(lookup!.candidate==NULL){
-                        lookup!.candidate <- makeFrame(request, lookup!.rhs!.node, lookup!.rhs)
-                        request!.ready.append(frame); request!.ready.append(lookup!.candidate); return()
-                    }
-                    actual <- lookup!.candidate!.facts
-                }
-                request!.correspondenceChecks <+- 1
-                me WorldScalar: matched <- graph.matchPosition(lookup!.predicate!.facts, actual, lookup!.memberEdge, lookup!.lhs!.tail)
-                if(lookup!.lhs!.tail){
-                    if(matched.outcome==worldReady and !matched.needsEvidence){
-                        lookup!.rhs <- NULL; lookup!.candidate <- NULL; continue()
-                    }
-                    if(matched.outcome==worldRejected){
-                        lookup!.lhs <- lookup!.afterRepeat; lookup!.predicate <- lookup!.exitPredicate
-                        lookup!.repeat <- NULL; lookup!.afterRepeat <- NULL; lookup!.exitPredicate <- NULL; lookup!.repeatChecked <- false
-                        continue()
-                    }
-                }
-                if(matched.outcome!=worldReady or matched.needsEvidence){
-                    frame!.facts.outcome <- matched.outcome; frame!.facts.detail <- matched.detail
-                    if(matched.needsEvidence){frame!.facts.outcome <- worldPartial}
-                    stopFrame(request, frame); return()
-                }
-            }
-            if(selected){lookup!.found <- lookup!.rhs; lookup!.foundFacts <- lookup!.candidate}
-            lookup!.lhs <- NULL; lookup!.rhs <- NULL; lookup!.predicate <- NULL; lookup!.candidate <- NULL
-            // An asserted list identity establishes position; no unrelated
-            // value checks are requested. Pattern input still checks its suffix.
-            if(selected and !lookup!.matching){lookup!.left!.levels.clear()}
+            lookup!.lhs <- NULL; lookup!.rhs <- NULL
         }
     }
     me bool: requestParentRHS(our WorldRequest: request, our WorldFrame: frame) <- {
