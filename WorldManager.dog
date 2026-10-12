@@ -46,10 +46,12 @@ struct WorldText {
     our WorldText: left
     our WorldText: right
     me int64: leftLength <- 0
+    me int64: start <- 0 // A borrowed text window, measured in source bytes.
 }
 struct WorldTextSpan {
     our WorldText: text
     me int64: length
+    me int64: start <- 0
 }
 struct WorldTextCursor {
     me List<WorldTextSpan>: pending
@@ -60,16 +62,19 @@ struct WorldTextCursor {
     void: push(our WorldText: text, me int64: length) <- {
         if(length>0){me WorldTextSpan: span; span.text <- text; span.length <- length; pending.append(span)}
     }
-    me char: next() <- {
-        while(remaining==0){
-            me WorldTextSpan: span <- pending.popLast()
-            visits <+- 1
-            if(span.text!.source!=NULL){source <- span.text!.source; pos <- 0; remaining <- span.length}
+    me bool: nextLeaf() <- {
+        while(remaining==0 and !pending.isEmpty()){
+            me WorldTextSpan: span <- pending.popLast(); visits <+- 1
+            if(span.text!.source!=NULL){source <- span.text!.source; pos <- span.text!.start; remaining <- span.length}
             else{
                 push(span.text!.right, span.length-span.text!.leftLength)
                 push(span.text!.left, min(span.length, span.text!.leftLength))
             }
         }
+        return(remaining>0)
+    }
+    me char: next() <- {
+        nextLeaf()
         me char: result <- source!.str[pos]
         pos <+- 1; remaining <- remaining-1
         return(result)
@@ -269,7 +274,64 @@ struct WorldCorrespondenceResult {
     our WorldMapping: bindings
     me List<our WorldPosition>: positions
 }
+// Hierarchical correspondence memoizes a template at a source boundary.
+// Packed proofs share continuations; a later ambiguity never restarts work.
+struct WorldPatternProof {
+    our WorldPatternProof: prior
+    our WorldPatternProof: child
+    me bool: ambiguous <- false
+}
+struct WorldPatternResult {
+    me int64: end <- 0
+    our WorldFrame: frame
+    our WorldPatternProof: proof
+}
+struct WorldPatternState {
+    me int64: slot <- 0
+    me int64: end <- 0
+    our WorldList: sequence
+    me bool: complete <- true
+    me bool: representable <- true
+    our WorldPatternProof: proof
+    void: INIT() <- {Allocate(proof)}
+}
+struct WorldPatternGoal {
+    our WorldFrame: pattern
+    me int64: start <- 0
+    me bool: initialized <- false
+    me bool: finished <- false
+    me List<WorldMember>: members
+    our WorldFrame: repeated
+    me WorldRequirementCursor: requirements
+    me List<our WorldPatternState>: pending
+    me Map<string, our WorldPatternState>: states
+    me List<our WorldPatternResult>: results
+    me Map<int64, our WorldPatternResult>: ends
+    our WorldPatternState: state
+    our WorldPatternGoal: child
+    me int64: alternative <- 0
+}
+struct WorldPatternStarts {me Map<int64, our WorldPatternGoal>: goals}
+struct WorldPatternChart {
+    me Map<our WorldFrame, our WorldPatternStarts>: memo
+    me List<our WorldPatternGoal>: pending
+    our WorldPatternGoal: root
+    me bool: initialized <- false
+    me bool: text <- false
+    me WorldTextCursor: textCursor
+    me List<WorldTextSpan>: textSpans
+    me int64: textIndexed <- 0
+    me int64: textIndex <- 0
+    me bool: ended <- false
+    our WorldFrame: source
+    our POV: sourceProbe
+    me Set<our infonView>: sourcePath
+    me List<our WorldCapture>: input
+    our WorldPatternResult: accepted
+    me int64: resultIndex <- 0
+}
 struct WorldCorrespondence {
+    our WorldPatternChart: chart
     our WorldWalk: left
     our WorldWalk: right
     our WorldCorrespondenceQuery: query
@@ -503,6 +565,8 @@ struct WorldRequest {
     me uint64: requirementVisits <- 0
     me uint64: tailMembers <- 0
     me uint64: sequenceVisits <- 0
+    me uint64: textSourceNodes <- 0
+    me uint64: textWindowNodes <- 0
     me uint64: publishedTextBytes <- 0
     me uint64: publishedTextNodes <- 0
     me List<our WorldFrame>: ready
@@ -1116,7 +1180,10 @@ struct WorldPOVGraph {
         our infonView: item <- frame!.node!.pItem
         // Member constraints must be settled before this list's own identities.
         if(!item!.wrkList.isEmpty() and needsRequirements(frame)){return(NULL)}
-        if(frame!.nextWork>=item!.wrkList.size()){
+        me bool: needsTemplate <- frame!.nextWork<item!.wrkList.size() and
+            item!.wrkList[frame!.nextWork]!=NULL and item!.wrkList[frame!.nextWork]!.looseType() and !frame!.facts.hasValue and
+            frame!.facts.nominal!=NULL and frame!.facts.nominal!.defToUse!=NULL and !frame!.meaningRequested
+        if(needsTemplate or frame!.nextWork>=item!.wrkList.size()){
             if(frame!.referenceOnly or (frame!.acquireOnly and (frame!.facts.hasValue or frame!.parentContext!=NULL))){return(NULL)}
             if(frame!.meaningRequested or frame!.facts.nominal==NULL or frame!.facts.meaningApplied or
                (frame!.predicateOnly and typePredicate(frame!.facts))){return(NULL)}
@@ -2358,6 +2425,12 @@ struct WorldManager {
     // pair survive waits. In particular, later RHSs filter the surviving OR,
     // rather than starting again from the original domain.
     void: mergeAlternatives(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(frame!.sourceEdge!.trueByDefinition and frame!.prerequisite!.facts.alternatives!=NULL and
+           frame!.facts.overlay<0 and !frame!.facts.hasSize and !frame!.facts.hasValue and
+           !frame!.facts.negative and frame!.facts.pendingChecks==NULL){
+            frame!.facts <- frame!.prerequisite!.facts; frame!.prerequisite <- NULL
+            request!.ready.append(frame); return()
+        }
         if(frame!.choiceMerge==NULL){
             Allocate(frame!.choiceMerge)
             our WorldChoiceMerge: merge <- frame!.choiceMerge
@@ -2879,10 +2952,304 @@ struct WorldManager {
             lookup!.lhs <- NULL
         }
     }
+    our WorldPatternGoal: patternGoal(our WorldRequest: request, our WorldPatternChart: chart,
+                                     our WorldFrame: pattern, me int64: start) <- {
+        if(!chart!.memo.containsKey(pattern)){
+            our WorldPatternStarts:: starts; chart!.memo.insert(pattern, starts)
+        }
+        our WorldPatternStarts: starts <- chart!.memo.at(pattern)
+        if(starts!.goals.containsKey(start)){return(starts!.goals.at(start))}
+        our WorldPatternGoal:: goal; goal!.pattern <- pattern; goal!.start <- start
+        starts!.goals.insert(start, goal); request!.correspondenceChecks <+- 1
+        return(goal)
+    }
+    void: patternState(our WorldRequest: request, our WorldPatternGoal: goal, our WorldPatternState: state) <- {
+        me string: key <- toString(state!.slot)+":"+toString(state!.end)
+        // Only a given member count can affect the remaining transitions.
+        if(goal!.pattern!.facts.hasSize){key <+- ":"+toString(graph.sequenceLength(state!.sequence))}
+        if(goal!.states.containsKey(key)){goal!.states.at(key)!.proof!.ambiguous <- true}
+        else{goal!.states.insert(key, state); goal!.pending.append(state); request!.correspondenceMappings <+- 1}
+    }
+    void: patternResult(our WorldPatternGoal: goal, our WorldPatternResult: result) <- {
+        if(goal!.ends.containsKey(result!.end)){goal!.ends.at(result!.end)!.proof!.ambiguous <- true}
+        else{goal!.ends.insert(result!.end, result); goal!.results.append(result)}
+    }
+    // Cache only demanded source positions. Every virtual cursor step and
+    // candidate normalization is shared by all branches at that boundary.
+    me bool: patternInput(our WorldRequest: request, our WorldFrame: frame, me int64: index) <- {
+        our WorldCorrespondence: lookup <- frame!.lookup
+        our WorldPatternChart: chart <- lookup!.chart
+        while(index>=chart!.input.size() and !chart!.ended){
+            our WorldPosition: at <- graph.nextPosition(request, lookup!.right)
+            if(!walkReady(request, frame, lookup!.right)){return(false)}
+            if(at==NULL){chart!.ended <- true}
+            else if(at!.tail){
+                frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Structured pattern needs a bounded source span"; stopFrame(request, frame); return(false)
+            }else{
+                our WorldCapture:: capture; capture!.position <- at; chart!.input.append(capture)
+            }
+        }
+        return(true)
+    }
+    // Index borrowed leaves once, lazily through the demanded endpoint.
+    // Consecutive windows use the cached leaf; a branch that jumps backward
+    // uses binary lookup rather than traversing a rope again from its root.
+    our WorldText: patternText(our WorldRequest: request, our WorldPatternChart: chart, me int64: start, me int64: length) <- {
+        while(chart!.textIndexed<start+length){
+            me uint64: before <- chart!.textCursor.visits
+            chart!.textCursor.nextLeaf(); request!.textSourceNodes <+- chart!.textCursor.visits-before
+            me WorldTextSpan: span; Allocate(span.text); span.text!.source <- chart!.textCursor.source
+            span.text!.start <- chart!.textCursor.pos; span.start <- chart!.textIndexed; span.length <- chart!.textCursor.remaining
+            chart!.textSpans.append(span); chart!.textIndexed <+- span.length; chart!.textCursor.remaining <- 0
+        }
+        if(length==0){return(NULL)}
+        me int64: index <- chart!.textIndex
+        if(chart!.textSpans[index].start+chart!.textSpans[index].length==start and index+1<chart!.textSpans.size()){index <+- 1}
+        if(start<chart!.textSpans[index].start or start>=chart!.textSpans[index].start+chart!.textSpans[index].length){
+            me int64: low <- 0; me int64: high <- chart!.textSpans.size()
+            while(low<high){
+                me int64: middle <- (low+high)/2
+                if(chart!.textSpans[middle].start+chart!.textSpans[middle].length<=start){low <- middle+1}else{high <- middle}
+            }
+            index <- low
+        }
+        our WorldText: result
+        me int64: consumed <- 0
+        while(consumed<length){
+            me WorldTextSpan: span <- chart!.textSpans[index]
+            me int64: offset <- start+consumed-span.start
+            me int64: width <- min(length-consumed, span.length-offset)
+            our WorldText:: part; part!.source <- span.text!.source; part!.start <- span.text!.start+offset
+            if(result==NULL){result <- part}
+            else{our WorldText:: joined; joined!.left <- result; joined!.right <- part; joined!.leftLength <- consumed; result <- joined}
+            consumed <+- width; chart!.textIndex <- index; index <+- 1; request!.textWindowNodes <+- 1
+        }
+        return(result)
+    }
+    me bool: patternLeaf(our WorldRequest: request, our WorldFrame: frame, our WorldPatternGoal: goal) <- {
+        our WorldCorrespondence: lookup <- frame!.lookup
+        our WorldPatternChart: chart <- lookup!.chart
+        me WorldScalar: required <- goal!.pattern!.facts
+        me WorldScalar: actual
+        me int64: end <- goal!.start+1
+        if(chart!.text){
+            me FlexNum: width
+            if(required.hasValue and required.overlay==STR){width <- required.textLength}
+            else if(required.hasSize and required.overlay==STR){width <- required.size}
+            else{
+                frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Text pattern needs an established token width"; stopFrame(request, frame); return(false)
+            }
+            if(width<0 or width.getDenominator()!=1 or width>chart!.source!.facts.textLength-goal!.start){return(true)}
+            me int64: length <- width.getNumerator().convertToIntVal()
+            end <- goal!.start+length
+            actual.overlay <- STR; actual.hasValue <- true; actual.hasSize <- true
+            actual.size <- length; actual.textLength <- length
+            actual.textSource <- patternText(request, chart, goal!.start, length)
+        }else{
+            if(!patternInput(request, frame, goal!.start)){return(false)}
+            if(goal!.start>=chart!.input.size()){return(true)}
+            our WorldCapture: capture <- chart!.input[goal!.start]
+            if(capture!.facts==NULL){
+                capture!.facts <- makeFrame(request, capture!.position!.node, capture!.position)
+                request!.ready.append(frame); request!.ready.append(capture!.facts); return(false)
+            }
+            actual <- capture!.facts!.facts
+            if(actual.outcome!=worldReady){frame!.facts <- actual; stopFrame(request, frame); return(false)}
+        }
+        me WorldScalar: matched <- graph.matchPosition(required, actual, lookup!.memberEdge)
+        if(matched.outcome==worldRejected){return(true)}
+        if(matched.outcome!=worldReady or matched.needsEvidence or matched.pendingChecks!=NULL){
+            frame!.facts <- matched
+            if(matched.needsEvidence or matched.pendingChecks!=NULL){frame!.facts.outcome <- worldPartial}
+            stopFrame(request, frame); return(false)
+        }
+        our WorldPatternResult:: result; result!.end <- end
+        result!.frame <- projectFrame(request, goal!.pattern); result!.frame!.facts <- matched
+        result!.frame!.finished <- true; Allocate(result!.proof); patternResult(goal, result)
+        return(true)
+    }
+    // Nested grouping, repetition and OR all compose the same span results.
+    // A goal/template/source-boundary triple is solved once. States with the
+    // same continuation share a packed proof instead of enumerating paths.
+    void: matchStructuredCorrespondence(our WorldRequest: request, our WorldFrame: frame) <- {
+        our WorldCorrespondence: lookup <- frame!.lookup
+        our WorldPatternChart: chart <- lookup!.chart
+        if(!chart!.initialized){
+            if(chart!.source==NULL){
+                if(chart!.sourceProbe==NULL){chart!.sourceProbe <- lookup!.query!.relation}
+                me WorldScalar: header
+                while(true){
+                    header <- graph.read(request, chart!.sourceProbe, chart!.sourceProbe!.pParent)
+                    if(header.outcome==worldWaiting){waitAt(request, frame, chart!.sourceProbe!.pItem); return()}
+                    if(header.outcome!=worldReady){frame!.facts <- header; stopFrame(request, frame); return()}
+                    // A concatenation's container has no value type. Borrow
+                    // its first operand's header to choose list/text access;
+                    // the ordinary walker still checks every demanded layout.
+                    if(!graph.scalarExpression(chart!.sourceProbe!.pItem!.value)){break()}
+                    if(chart!.sourcePath.contains(chart!.sourceProbe!.pItem)){
+                        frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Cyclic sequence source"; stopFrame(request, frame); return()
+                    }
+                    chart!.sourcePath.insert(chart!.sourceProbe!.pItem)
+                    chart!.sourceProbe <- chart!.sourceProbe!.pItem!.value!.items.head
+                }
+                if(header.overlay!=LST){
+                    chart!.source <- makeFrame(request, lookup!.query!.relation)
+                    request!.ready.append(frame); request!.ready.append(chart!.source); return()
+                }
+            }
+            if(chart!.source!=NULL){
+                me WorldScalar: source <- chart!.source!.facts
+                if(source.outcome!=worldReady){frame!.facts <- source; stopFrame(request, frame); return()}
+                if((source.overlay!=STR and source.overlay!=LST) or !source.hasValue){
+                    frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Structured pattern needs a list or known text source"; stopFrame(request, frame); return()
+                }
+                chart!.text <- source.overlay==STR
+                if(chart!.text){chart!.textCursor.push(source.textSource, source.textLength)}
+            }
+            chart!.root <- patternGoal(request, chart, projectFrame(request, frame), 0)
+            chart!.pending.append(chart!.root); chart!.initialized <- true
+        }
+        while(!chart!.pending.isEmpty()){
+            our WorldPatternGoal: goal <- chart!.pending.last()
+            our WorldFrame: pattern <- goal!.pattern
+            if(!goal!.initialized){
+                if(pattern!.facts.outcome!=worldReady or pattern!.facts.pendingChecks!=NULL or !pattern!.retainedWork.isEmpty()){
+                    frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Pattern still has unresolved requirements"; stopFrame(request, frame); return()
+                }
+                if(pattern!.facts.alternatives==NULL and pattern!.facts.overlay==LST){
+                    if(!pattern!.facts.hasValue or pattern!.facts.negative or
+                       (pattern!.facts.hasSize and (pattern!.facts.size<0 or pattern!.facts.size.getDenominator()!=1))){
+                        frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Pattern needs a positive ordered list layout"; stopFrame(request, frame); return()
+                    }
+                    me WorldListCursor: members; members.push(pattern!.facts.sequence)
+                    me WorldMember: member <- members.nextMember(false)
+                    while(member.frame!=NULL){goal!.members.append(member); member <- members.nextMember(false)}
+                    request!.sequenceVisits <+- members.visits
+                    if(pattern!.facts.openTail){
+                        goal!.requirements.push(pattern!.tailRequirements)
+                        our WorldRequirement: requirement <- goal!.requirements.next()
+                        if(requirement==NULL){
+                            Allocate(goal!.repeated); goal!.repeated!.node <- pattern!.node
+                            goal!.repeated!.initialized <- true; goal!.repeated!.finished <- true
+                        }else{
+                            goal!.repeated <- requirement!.frame
+                        }
+                        request!.requirementVisits <+- goal!.requirements.visits
+                    }
+                    our WorldPatternState:: state; state!.end <- goal!.start; patternState(request, goal, state)
+                }
+                goal!.initialized <- true
+            }
+            if(goal!.repeated!=NULL){
+                if(!goal!.repeated!.finished){request!.ready.append(frame); request!.ready.append(goal!.repeated); return()}
+                me uint64: before <- goal!.requirements.visits
+                our WorldRequirement: requirement <- goal!.requirements.next()
+                request!.requirementVisits <+- goal!.requirements.visits-before
+                if(requirement!=NULL){
+                    goal!.repeated <- derivePair(request, goal!.repeated, requirement!.frame, requirement!.edge)
+                    continue()
+                }
+            }
+            if(goal!.child!=NULL){
+                if(!goal!.child!.finished){chart!.pending.append(goal!.child); continue()}
+                withEach child in goal!.child!.results{
+                    if(pattern!.facts.alternatives!=NULL){
+                        our WorldPatternResult:: result; result!.end <- child!.end; result!.frame <- child!.frame
+                        Allocate(result!.proof); result!.proof!.child <- child!.proof; patternResult(goal, result)
+                    }
+                    else{
+                        me bool: tail <- goal!.state!.slot==goal!.members.size()
+                        if(tail and child!.end==goal!.state!.end and !pattern!.facts.hasSize){
+                            frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Repeated pattern can consume no source positions"; stopFrame(request, frame); return()
+                        }
+                        me bool: embedded <- false
+                        if(!tail){embedded <- goal!.members[goal!.state!.slot].embedded}
+                        our WorldList:: one; graph.appendMember(one, child!.frame, embedded)
+                        our WorldPatternState:: next; next!.slot <- goal!.state!.slot
+                        if(!tail){next!.slot <+- 1}
+                        next!.end <- child!.end; next!.sequence <- graph.join(goal!.state!.sequence, one)
+                        next!.proof!.prior <- goal!.state!.proof; next!.proof!.child <- child!.proof
+                        next!.complete <- goal!.state!.complete and graph.completeFacts(child!.frame!.facts, false)
+                        next!.representable <- goal!.state!.representable and graph.representableFacts(child!.frame!.facts)
+                        if(!pattern!.facts.hasSize or FlexNum(next!.sequence!.length)<=pattern!.facts.size){patternState(request, goal, next)}
+                    }
+                }
+                goal!.child <- NULL; goal!.state <- NULL; goal!.alternative <+- 1
+            }
+            if(pattern!.facts.alternatives!=NULL){
+                if(goal!.alternative<pattern!.facts.alternatives!.members.size()){
+                    goal!.child <- patternGoal(request, chart, pattern!.facts.alternatives!.members[goal!.alternative], goal!.start)
+                    continue()
+                }
+            }else if(pattern!.facts.overlay!=LST){
+                if(!patternLeaf(request, frame, goal)){return()}
+            }else if(!goal!.pending.isEmpty()){
+                goal!.state <- goal!.pending.popLast()
+                our WorldPatternState: state <- goal!.state
+                me int64: count <- graph.sequenceLength(state!.sequence)
+                if(state!.slot==goal!.members.size() and (!pattern!.facts.hasSize or pattern!.facts.size==FlexNum(count))){
+                    our WorldPatternResult:: result; result!.end <- state!.end; result!.proof <- state!.proof
+                    result!.frame <- projectFrame(request, pattern); result!.frame!.finished <- true
+                    result!.frame!.facts.sequence <- state!.sequence
+                    result!.frame!.facts.openTail <- false; result!.frame!.facts.hasSize <- true; result!.frame!.facts.size <- count
+                    result!.frame!.facts.contentsComplete <- state!.complete; result!.frame!.facts.representable <- state!.representable
+                    result!.frame!.facts.dischargeListSpec <- true
+                    result!.frame!.tailRequirements <- NULL; result!.frame!.pendingRequirements <- NULL
+                    result!.frame!.listSpecFrame <- NULL; result!.frame!.listSpecEdge <- NULL
+                    patternResult(goal, result)
+                }
+                our WorldFrame: child
+                if(state!.slot<goal!.members.size()){child <- goal!.members[state!.slot].frame}
+                else if(goal!.repeated!=NULL and (!pattern!.facts.hasSize or FlexNum(count)<pattern!.facts.size)){child <- goal!.repeated}
+                if(child!=NULL){goal!.child <- patternGoal(request, chart, child, state!.end)}
+                else{goal!.state <- NULL}
+                continue()
+            }
+            goal!.finished <- true; chart!.pending.popLast()
+        }
+        while(chart!.resultIndex<chart!.root!.results.size()){
+            our WorldPatternResult: result <- chart!.root!.results[chart!.resultIndex]
+            me bool: accepted <- lookup!.query!.relation!.looseSize()
+            if(!accepted){
+                if(chart!.text){accepted <- result!.end==chart!.source!.facts.textLength}
+                else{
+                    if(!patternInput(request, frame, result!.end)){return()}
+                    accepted <- chart!.ended and result!.end==chart!.input.size()
+                }
+            }
+            if(accepted){
+                if(chart!.accepted!=NULL){
+                    frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Pattern has several accepted span mappings"; stopFrame(request, frame); return()
+                }
+                chart!.accepted <- result
+            }
+            chart!.resultIndex <+- 1
+        }
+        if(chart!.accepted==NULL){
+            frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "No structured correspondence matches"; stopFrame(request, frame); return()
+        }
+        me List<our WorldPatternProof>: proofs; proofs.append(chart!.accepted!.proof)
+        me Set<our WorldPatternProof>: visited
+        while(!proofs.isEmpty()){
+            our WorldPatternProof: proof <- proofs.popLast()
+            if(proof==NULL or visited.contains(proof)){continue()}
+            visited.insert(proof)
+            if(proof!.ambiguous){
+                frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Pattern has several accepted member mappings"; stopFrame(request, frame); return()
+            }
+            proofs.append(proof!.prior); proofs.append(proof!.child)
+        }
+        frame!.facts <- chart!.accepted!.frame!.facts
+        graph.adoptListRequirements(frame, chart!.accepted!.frame)
+        frame!.correspondenceResult <- lookup!.result; frame!.lookup <- NULL
+        request!.ready.append(frame)
+    }
+
     // Return a read-only RHS for this member; neither containing list is a
     // value-normalization prerequisite. The cursors/chart survive local waits.
     void: locateRHS(our WorldRequest: request, our WorldFrame: frame) <- {
         our WorldCorrespondence: lookup <- frame!.lookup
+        if(lookup!.chart!=NULL){matchStructuredCorrespondence(request, frame); return()}
         if(lookup!.normalized){request!.ready.append(frame); correspond(request, frame); return()}
         if(lookup!.bounded){locateSpanRHS(request, frame); return()}
         matchCorrespondence(request, frame)
@@ -3185,10 +3552,10 @@ struct WorldManager {
         if(frame!.prerequisite!=NULL){
             if(frame!.prerequisite!.facts.outcome==worldRejected){frame!.facts <- frame!.prerequisite!.facts; stopFrame(request, frame); return()}
             if(frame!.facts.alternatives!=NULL or frame!.prerequisite!.facts.alternatives!=NULL){
-                if(frame!.sourceIsOperand and !graph.memberSequence(frame) or frame!.sourceIsListSpec){
+                if(frame!.sourceIsOperand and !graph.memberSequence(frame)){
                     frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Alternative operands need expression or template distribution"; stopFrame(request, frame); return()
                 }
-                if(!frame!.sourceIsOperand){mergeAlternatives(request, frame); return()}
+                if(!frame!.sourceIsOperand and !frame!.sourceIsListSpec){mergeAlternatives(request, frame); return()}
             }
             if(graph.needsRequirements(frame!.prerequisite) and
                !(frame!.sourceIsOperand and graph.memberSequence(frame) and frame!.sourceEdge!.isSubItm)){
@@ -3266,6 +3633,12 @@ struct WorldManager {
         if(source!.viewMap.sourcePov!=NULL or source!.referenceAlias.sourcePov!=NULL or
            (source!.pParent!=NULL and (!frame!.sourceIsOperand or source!.pParent!==frame!.node))){
             request!.outcome <- worldUnsupported; request!.detail <- "Contextual expression source"; return()
+        }
+        if(!frame!.sourceIsOperand and !frame!.sourceIsListSpec and source!.looseMode and
+           !source!.forceID and frame!.facts.overlay==LST and frame!.facts.hasValue and !frame!.facts.negative){
+            frame!.lookup <- graph.correspondence(NULL, source, NULL, true, true)
+            Allocate(frame!.lookup!.chart); frame!.lookup!.right!.checkExtents <- true
+            request!.ready.append(frame); return()
         }
         // A top-only prefix relationship asks for a matched span, not the
         // normalized value of the entire source list (including its suffix).

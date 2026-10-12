@@ -28,6 +28,7 @@ TestsToRun = `
     unit/worldManager/namedQueries
     unit/worldManager/correspondenceComposition
     unit/worldManager/pathCorrespondence
+    unit/worldManager/structuredParsing
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -6259,9 +6260,9 @@ struct GLOBAL {
             {"*3+({_} {2})","",worldPartial},
             {"{_ _} = {1}","",worldPartial},
             {"{} = {1}","",worldPartial},
-            {"{_} == {1}","",worldUnsupported},
+            {"{_} == {1}","{1}",worldComplete},
             {"{_} =: {1}","{1}",worldComplete},
-            {"{_} ==: {1}","",worldUnsupported},
+            {"{_} ==: {1}","{1}",worldComplete},
             {"({1} {2 ...})","",worldUnsupported},
             {"{_, _} = {1 2}","",worldUnsupported}
         };
@@ -6718,7 +6719,7 @@ struct GLOBAL {
             {"? = {1 ...}","{1 ... }",worldPartial},
             {"({1} {2 ...})","",worldUnsupported},
             {"{rot| ...} = {1}","",worldUnsupported},
-            {"{...} == {1}","",worldUnsupported},
+            {"{...} == {1}","{1}",worldComplete},
             {"{...} = {{...}}","{{ ... }}",worldPartial}
         };
         for(const auto& c:cases){
@@ -7283,7 +7284,7 @@ struct GLOBAL {
             {"{7} = ({_}) = ({5})","",worldRejected},
             {"{_ _} = ({_})","",worldPartial},
             {"{_} = (*2+{_})","",worldPartial},
-            {"{_} == ({_})","",worldUnsupported},
+            {"{_} == ({_})","",worldPartial},
             {"{_} = ({_ ...})","{_}",worldPartial},
             {"? = ({(2 +_)})","",worldPartial},
             {"{_} = ({_ = !5})","",worldPartial},
@@ -8729,5 +8730,96 @@ for(auto text:{"{begin:7}.begin","{end:7}.end","{1 2 3 4 5}@[3:5]"}){
 run("{first:7 first:8}.first:8","first:8");run("{last:7 last:8}.last:7","last:7");
 run("{begin:7}.begin:7","begin:7");run("{end:7}.end:7","end:7");
 core.deInit();std::cout<<"PATH_CORRESPONDENCE: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_structuredParsing(me string: tname) <- {
+        if(!worldManagerStructuredParsingChecks()){FAIL("Structured parsing checks failed")}
+    }
+    me bool: worldManagerStructuredParsingChecks() <- <%{
+ ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;
+ int checks=0,failures=0;
+ auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+ auto parse=[&](const std::string& text){auto p=m.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+ auto run=[&](const std::string& text,const std::string& expected){auto p=parse(text);auto h=a.normalize(p);auto result=toString(p->pItem.get());check(h->complete() && result==expected,text+" => "+result+" : "+h->detail);check(a.normalize(p)->framesCreated==0,"completed pattern has no replay");return std::make_pair(p,h);};
+ for(auto test:std::vector<std::pair<std::string,std::string>>{
+  {"{*3+$ *4+$} == 'CatDogs'","{'Cat' 'Dogs'}"},
+  {"*4+{*3+$|...} ==: 'catHatDogPig'","{'cat' 'Hat' 'Dog' 'Pig'}"},
+  {"{*3+$|...} == 'CatHatBatDog'","{'Cat' 'Hat' 'Bat' 'Dog'}"},
+  {"{{'A'|...} 'R'} ==: 'AARON'","{{'A' 'A'} 'R'}"},
+  {"{{'A'|...} 'AARON'} == 'AAAARON'","{{'A' 'A'} 'AARON'}"},
+  {"{{_ _}|...} == {1 2 3 4 5 6 7 8}","{{1 2} {3 4} {5 6} {7 8}}"},
+  {"{*2+{...}|...} == {1 2 3 4 5 6 7 8}","{{1 2} {3 4} {5 6} {7 8}}"},
+  {"{{*2+$ *1+$}|...} == 'abcdef'","{{'ab' 'c'} {'de' 'f'}}"},
+  {"{*3+$ *4+$} == ('C' 'atD' 'ogs')","{'Cat' 'Dogs'}"},
+  {"{{_ _}|...} == ({1} {2 3} {4})","{{1 2} {3 4}}"},
+  {"{{_ _}|...} == {&{1} &{2 3} &{4}}","{{1 2} {3 4}}"},
+  {"*2+{*2+$|...} ==: 'abcdef'","{'ab' 'cd'}"},
+  {"{{'ab'|...} 'abc'} == 'abababc'","{{'ab' 'ab'} 'abc'}"},
+  {"{{'ab'|...} 'abc'} == 'abc'","{{} 'abc'}"},
+  {"{{{_ _} {_ _}}|...} == {1 2 3 4 5 6 7 8}","{{{1 2} {3 4}} {{5 6} {7 8}}}"},
+  {"{{_ _}} ==: {1 2 (1=2)}","{{1 2}}"},
+  {"{} == ''","{}"}, {"{'A' '' 'B'} == 'AB'","{'A' '' 'B'}"},
+  {"*2+{''|...} == ''","{'' ''}"},
+  {"{{_ _}} ==: ({1} {2 (1=2)})","{{1 2}}"},
+  {"{*10+_| &{7| ...}} == {7 7}","{&{*10+7 *10+7}}"},
+  {"{*10+_| &{_| &{7| ...}}} == {7 7}","{&{&{*10+7 *10+7}}}"}
+ })run(test.first,test.second);
+ for(auto name:{"Fri","Sat","Sun"}){std::string n=name;check(a.normalize(parse("{#"+n+"='"+n+"'}"))->complete(),"stage terminal definition");}
+ check(a.normalize(parse("{#statement=*_+[Fri Sat Sun]}"))->complete(),"stage named alternative domain");
+ check(a.normalize(parse("{#littleLang={statement|...}}"))->complete(),"stage named grammar");
+ run("littleLang == 'SatFriSunSat'","littleLang:{Sat:'Sat' Fri:'Fri' Sun:'Sun' Sat:'Sat'}");
+ for(auto text:{"{*3+$ *4+$} == 'CatDog'","{'A'} == 'AB'","{'A'} == 'B'","{{_ _}|...} == {1 2 3}","*3+{*2+$|...} == 'abcd'","{*10+_| &{7| ...}} == {7 8}"}){
+  auto p=parse(text);auto before=toString(p->pItem.get());auto h=a.normalize(p);
+  check(h->outcome==worldRejected && !h->publications && before==toString(p->pItem.get()),std::string("reject atomically: ")+text+" : "+h->detail);
+ }
+ for(auto text:{"{{'A'|...} {'A'|...}} == 'AA'","{''|...} == ''","{{_ _}} == {1 _}","{$|...} == 'abc'"}){
+  auto p=parse(text);auto h=a.normalize(p);check(!h->complete(),std::string("do not invent a completed mapping: ")+text);check(!getFlagBit(p->pItem->flags,infonView::isNormed),"partial/unsupported result has no completion flag");
+ }
+ for(auto expression:{"{{_ _}|...} == {1 2 3 4}","{*2+$ *2+$} == 'abcd'"})for(bool cancel:{false,true}){
+  auto sync=a.normalize(parse(expression));auto p=parse(expression);auto source=p->pItem->wrkList[0]->pItem;
+  auto waiting=source;if(source->value->items.head)waiting=source->value->items.tail->pItem;
+  auto before=toString(p->pItem.get());m.prepareInput(waiting);auto h=a.normalize(p);auto frames=h->framesCreated;
+  check(h->outcome==worldWaiting && h->waitingInput==waiting && !h->publications,"wait at the exact requested source");
+  if(cancel)m.cancel(h);SetModeBits(waiting->flags,infonView::streamState,infonView::parseDone);m.inputReady(waiting);
+  if(cancel)check(h->outcome==worldCancelled && !h->publications && h->framesCreated==frames && before==toString(p->pItem.get()),"cancel keeps source and target unchanged");
+  else check(h->complete() && h->framesCreated==sync->framesCreated && h->correspondenceChecks==sync->correspondenceChecks && h->correspondencePositions==sync->correspondencePositions,"resume exact chart and cursor without replay");
+ }
+ {
+  auto p=parse("{*2+$ *2+$} == 'abcd'");auto first=p->pItem->value->items.head;auto last=first->next;auto source=p->pItem->wrkList[0]->pItem;auto value=source->value;
+  auto h=a.normalize(p);check(h->complete() && p->pItem->value->items.head==first && first->next==last,"preserve target occurrences");
+  check(source->value==value && value->str=="abcd" && !getFlagBit(source->flags,infonView::isNormed),"borrow text without modifying source");
+ }
+ {
+  auto p=parse("{{_ _}|...} == {1 2 3 4}");auto source=p->pItem->wrkList[0]->pItem;auto before=toString(source.get());auto value=source->value;
+  auto h=a.normalize(p);check(h->complete() && source->value==value && before==toString(source.get()),"grouping borrows original source members");
+  for(auto member=value->items.head;member;member=member->next)check(!getFlagBit(member->pItem->flags,infonView::isNormed),"source child is not published");
+ }
+ for(int width:{1,2,3,4})for(int count=1;count<=16;++count){
+  std::string input="{*"+std::to_string(width)+"+{...}|...} == {",expected="{";
+  for(int i=0;i<count;++i){if(i)expected+=' ';expected+='{';for(int j=0;j<width;++j){int n=i*width+j+1;if(n>1)input+=' ';input+=std::to_string(n);if(j)expected+=' ';expected+=std::to_string(n);}expected+='}';}input+='}';expected+='}';run(input,expected);
+ }
+ std::vector<std::shared_ptr<WorldRequest>> scale;
+ for(int count:{100,200,400}){
+  std::string input="{*3+$|...} == '",expected="{";
+  for(int i=0;i<count;++i){input+="abc";if(i)expected+=' ';expected+="'abc'";}input+='\'';expected+='}';scale.push_back(run(input,expected).second);
+ }
+ for(size_t i=1;i<scale.size();++i)check(scale[i]->correspondenceChecks<scale[i-1]->correspondenceChecks*2+8 && scale[i]->framesCreated<scale[i-1]->framesCreated*2+16,"deterministic repetition work grows linearly");
+ for(int count:{100,200,400}){
+  std::string input="{*1+$|...} == (",expected="{";
+  for(int i=0;i<count;++i){input+="'a' ";if(i)expected+=' ';expected+="'a'";}input+=')';expected+='}';
+  auto h=run(input,expected).second;
+  check(h->textSourceNodes<=static_cast<unsigned>(2*count) && h->textWindowNodes==static_cast<unsigned>(count) && h->publishedTextNodes==static_cast<unsigned>(count),"fragmented text is indexed once and windows borrow leaves");
+ }
+ {
+  auto h=a.normalize(parse("{{'A'|...} {'A'|...}} == '"+std::string(32,'A')+"'"));
+  check(h->outcome==worldPartial && !h->publications && h->correspondenceChecks<110,"ambiguous partitions share template-boundary work and publish no chosen branch");
+ }
+ run("{*2+$|...} == (('a' 'bc') ('de' 'f'))","{'ab' 'cd' 'ef'}");
+ {
+  auto h=a.normalize(parse("*1000000000+{*3+$|...} == 'abc'"));check(h->outcome==worldRejected && h->correspondenceChecks<10,"given extent does not enumerate absent input");
+ }
+ core.deInit();std::cout<<"STRUCTURED_PARSING: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }
