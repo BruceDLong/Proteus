@@ -24,6 +24,7 @@ TestsToRun = `
     unit/worldManager/overlappingPatterns
     unit/worldManager/listPatternMappings
     unit/worldManager/alternatives
+    unit/worldManager/openSelection
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -7368,7 +7369,7 @@ struct GLOBAL {
             {"? = {(2 +_) ...}","",worldPartial},
             {"{...} = {1 ...}","{1 ... }",worldPartial},
             {"*2+{...} = {1 ...}","",worldUnsupported},
-            {"? == {1 ...}","",worldUnsupported},
+            {"? == {1 ...}","{1 ... }",worldPartial},
             {"_ = {1 ...}","",worldRejected},
             {"? = {1 ...} = {1 ...}","{1 ... }",worldPartial},
             {"? = *2+{1 2 ...}","{1 2}",worldComplete},
@@ -8355,5 +8356,104 @@ struct GLOBAL {
             std::cout<<"ALTERNATIVE_SCAN: candidates="<<length<<" pairs="<<h->alternativePairs<<" frames="<<h->framesCreated<<"\n";
         }
         core.deInit();std::cout<<"ALTERNATIVES: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_openSelection(me string: tname) <- {
+        if(!worldManagerOpenSelectionChecks()){FAIL("Open selection checks failed")}
+    }
+    me bool: worldManagerOpenSelectionChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;
+int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+auto parse=[&](const std::string& text){auto p=m.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+for(const auto& c:std::vector<std::pair<std::string,std::string>>{
+ {"[...] == 'Hello'","'Hello'"},{"[...] = 'Hello'","'Hello'"},{"[...] =: 'Hello'","*_+'Hello'"},
+ {"[...] = {1 2 3}","{1 2 3}"},{"[...] == {1 2 3}","{1 2 3}"},{"[...] ==: {1 2 3}","*_+{1 2 3}"},
+ {"[...] =: {1 2 3}","*_+{1 2 3}"},{"? == {1 2}","{1 2}"},{"? ==: {1 2}","*_+{1 2}"},
+ {"[? <&*1+{...}> ?]<~{2 3 4}","{3}"},
+ {"[...] = 5","5"},{"[...] = {1 ...}","{1 ... }"},
+ {"[& *3+{...} <&*4+{...}>] <~ {3 4 5 6 7 8 9 0}","{6 7 8 9}"},
+ {"[&{1 2} <&{3 4}>]","{3 4}"},
+ {"[&*1+{...} <&*2+{_|...}>]<~{1 2 3}","{2 3}"},
+ {"[&*1+{...} <&*2+{...}>]<~{0 &{1 2} rot}","{1 2}"}
+}){
+ auto root=parse(c.first);if(!root)continue;auto body=root->pItem->innr;auto bodyText=body?toString(body.get()):"";
+ std::vector<std::pair<std::shared_ptr<infonView>,std::string>> sources;
+ for(auto edge:root->pItem->wrkList)sources.push_back({edge->pItem,toString(edge->pItem.get())});
+ auto h=a.normalize(root);auto output=toString(root->pItem.get());
+ bool partial=c.second.find("*_")==0 || c.second.find("...")!=std::string::npos;
+ check((partial?h->outcome==worldPartial:h->complete()) && output==c.second,c.first+" => "+output+" : "+h->detail);
+ check(!body || toString(body.get())==bodyText,"selection body and input stay borrowed");
+ for(auto source:sources)check(toString(source.first.get())==source.second,"supplied RHS remains unchanged");
+ if(!partial)check(a.normalize(root)->framesCreated==0,"completed selection creates no goals");
+}
+int cases=0;
+for(int prefix=0;prefix<10;++prefix)for(int width=0;width<7;++width){
+ std::string input="[&*"+std::to_string(prefix)+"+{...} <&*"+std::to_string(width)+"+{...}>]<~{";
+ std::string expected="{";
+ for(int i=0;i<prefix+width+2;++i){input+=" "+std::to_string(10+i);if(i>=prefix && i<prefix+width)expected+=(i==prefix?"":" ")+std::to_string(10+i);}
+ input+="}";expected+="}";
+ auto root=parse(input);auto body=root->pItem->innr;auto bodyText=toString(body.get());auto h=a.normalize(root);
+ check(h->complete() && toString(root->pItem.get())==expected,"bounded window oracle "+input+" => "+toString(root->pItem.get())+" : "+h->detail);
+ check(toString(body.get())==bodyText,"oracle leaves source layout unchanged");
+ check(h->framesCreated<=static_cast<unsigned>(4*width+8),"only requested window creates value frames");++cases;
+}
+for(const std::string text:{"[...]", "[1 ...] = 3", "[... ] <~ {1 2 3}",
+ "[&*3+{...} <&*4+{...}>]<~{1 2 3 4}","[&{...} <&*2+{...}>]<~{1 2 3}",
+ "[&*1+{...} <&{...}>]<~{1 2 3}","[1 <&*1+{...}>]<~{2 3}",
+ "[<&*1+{...}> 8]<~{1 9}","[5| <&*1+{...}>]<~{1}",
+ "[&*1+{...} <&*1+{...}>]<~*1+{1 2}","[<&*1+{...}>]<~({1}={2})"}){
+ auto root=parse(text);auto before=toString(root->pItem.get());auto h=a.normalize(root);
+ check(!h->complete() && h->publications==0 && toString(root->pItem.get())==before,"unproved selection remains atomic: "+text+" => "+toString(root->pItem.get())+" : "+h->detail);
+}
+for(const std::string text:{"[...] = 1 = 2","[<&*2+{1 2}>]<~{1 3}"}){
+ auto root=parse(text);auto before=toString(root->pItem.get());auto h=a.normalize(root);
+ check(h->outcome==worldRejected && h->publications==0 && toString(root->pItem.get())==before,"required contradiction remains atomic: "+text+" : "+h->detail);
+}
+for(int size:{10,1000000000}){
+ auto n=std::to_string(size);auto root=parse("[&*"+n+"+{...} <&*2+{...}>]<~{&*"+n+"+{...} 8 9 rot}");auto body=root->pItem->innr;
+ auto h=a.normalize(root);
+ check(h->complete() && toString(root->pItem.get())=="{8 9}","known virtual prefix skips to selected span: "+h->detail);
+ check(h->framesCreated<15 && h->correspondencePositions<20,"work is independent of skipped numeric extent");
+ std::cout<<"OPEN_SELECTION_SKIP: "<<n<<" positions, "<<h->framesCreated<<" frames, "<<h->correspondencePositions<<" layout visits\n";
+}
+const std::string text="[&*2+{...} <&*2+{...}>]<~{1 2 3 4 5}";
+auto sync=a.normalize(parse(text));
+for(int which:{0,1,2,3})for(bool cancel:{false,true}){
+ auto root=parse(text);auto body=root->pItem->innr;
+ auto waiting=which==0?body:which==1?body->funcArgs:which==2?body->value->items.head->pItem:body->funcArgs->value->items.head->next->next->pItem;
+ m.prepareInput(waiting);auto h=a.normalize(root);auto visits=h->correspondencePositions;
+ check(h->outcome==worldWaiting && h->waitingInput==waiting && h->publications==0,"span waits at exact body/source/prefix/member");
+ if(cancel)m.cancel(h);
+ SetModeBits(waiting->flags,infonView::streamState,infonView::parseDone);m.inputReady(waiting);
+ check(cancel?h->outcome==worldCancelled && h->publications==0 && h->correspondencePositions==visits:
+ h->complete() && toString(root->pItem.get())=="{3 4}" && h->framesCreated==sync->framesCreated && h->correspondencePositions==sync->correspondencePositions,
+ "arrival/cancellation preserves span cursor progress: "+std::to_string(which)+" : "+h->detail);
+}
+for(const std::string op:{"=","=:"}){
+ auto root=parse("{| rot &*2+{...}} "+op+" {| rot 7 8}");auto target=root->pItem->value->items.tail;target->pParent=root.get();
+ auto source=root->pItem->wrkList[0]->pItem;auto sourceText=toString(source.get());auto h=a.normalize(target);
+ check(h->complete() && target->pItem->value->items.size()==2 && target->pItem->value->items.head->pItem->value->num==7 && target->pItem->value->items.tail->pItem->value->num==8,"direct asserted span correspondence: "+op+" : "+h->detail);
+ check(toString(source.get())==sourceText && toString(root->pItem->value->items.head->pItem.get())=="rot","direct span leaves source and unrelated target sibling unchanged");
+}
+for(const std::string text:{"[&*3+{...} <&*1+{...}>]<~*2+{&*3+{...} 7}",
+ "[&*2+{...} <&*1+{...}>]<~{&*3+{1} 7}", "[<&*1+{...}>]<~{5|3}"}){
+ auto root=parse(text);auto before=toString(root->pItem.get());auto h=a.normalize(root);
+ check(!h->complete() && h->publications==0 && toString(root->pItem.get())==before,"source endpoint/template guards: "+text+" : "+h->detail);
+}
+{
+ auto root=parse("[<&*1+{...}>]<~{7}");auto source=root->pItem->innr->funcArgs;m.prepareInput(source);auto h=a.normalize(root);
+ check(h->outcome==worldWaiting && h->publications==0,"bounded source waits before inspecting arriving relationships");
+ source->wrkList.push_back(parse("{8}"));SetModeBits(source->flags,infonView::streamState,infonView::parseDone);m.inputReady(source);
+ check(h->outcome==worldUnsupported && h->publications==0 && source->wrkList.size()==1,"late layout relationship cannot be dropped");
+}
+{
+ auto root=parse("[&{} <&*1+{...}>]<~{7}");auto body=root->pItem->innr;auto prefix=body->value->items.head;auto saved=prefix->pItem;prefix->pItem=body;
+ auto h=a.normalize(root);check(h->outcome==worldUnsupported && h->publications==0,"marked span traversal rejects cyclic layout");prefix->pItem=saved;
+}
+core.deInit();std::cout<<"OPEN_SELECTION_CHECKS: "<<checks-failures<<"/"<<checks<<" checks passed; "<<cases<<" window oracle cases\n";return failures==0;
+
     }%>
 }
