@@ -27,6 +27,7 @@ TestsToRun = `
     unit/worldManager/openSelection
     unit/worldManager/namedQueries
     unit/worldManager/correspondenceComposition
+    unit/worldManager/pathCorrespondence
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -8622,5 +8623,111 @@ for(bool cancel:{false,true})for(int which:{0,1,2}){
  h->complete() && h->framesCreated==sync->framesCreated && h->correspondencePositions==sync->correspondencePositions,"continue exact cursor without repeating completed work");
 }
 core.deInit();std::cout<<"CORRESPONDENCE_COMPOSITION: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_pathCorrespondence(me string: tname) <- {
+        if(!worldManagerPathCorrespondenceChecks()){FAIL("Path correspondence checks failed")}
+    }
+    me bool: worldManagerPathCorrespondenceChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;
+int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+auto parse=[&](const std::string& text){auto p=m.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+auto run=[&](const std::string& text,const std::string& expected){auto p=parse(text);auto h=a.normalize(p);auto result=toString(p->pItem.get());check(h->complete() && result==expected,text+" => "+result+" : "+h->detail);return std::make_pair(p,h);};
+for(auto source:{"{1 2 3}","({1} {2 3})","{&{1} &{2 3}}"}){
+ auto direct=run(std::string("*2+[&")+source+"]","2");auto path=run(std::string(source)+"@[2]","2");
+ check(path.second->selectedSource() && path.second->selectedSource()->pItem->value->num==2,"indexed read exposes original selected occurrence");
+ check(a.normalize(path.first)->framesCreated==0,"completed path has no repeated search");
+}
+run("{2 3 'Cat' 'Hat'}.$","'Cat'");run("{a:1 b:2}.b","b:2");
+run("{{a:1} {a:2}}@[2].a","a:2");run("{a:{b:3}}.a.b","b:3");
+for(auto text:{"{'A' 'B' 'C'}@[-1]","{'A' 'B' 'C'}.last"})run(text,"'C'");
+for(auto c:std::vector<std::pair<std::string,std::string>>{
+ {"{2 3 $ 'Hat'}.$='Cat';","{2 3 'Cat' 'Hat'}"},
+ {"{'Cat' 'Hat' $ 'Dog'}@[3]='Bat';","{'Cat' 'Hat' 'Bat' 'Dog'}"},
+ {"{$ 'Hat' 'Bat' $}.first='Cat';.last='Dog';","{'Cat' 'Hat' 'Bat' 'Dog'}"},
+ {"{a:{b:_}}.a.b=3","b:3"},{"{a:{b:_}}.a.b=3;","a:{b:3}"},
+ {"{a:{b:_}}.a.b=3;;","{a:{b:3}}"}}){auto result=run(c.first,c.second);check(a.normalize(result.first)->framesCreated==0,"completed update does not replay: "+c.first);}
+for(auto text:{"{a:2}.a=3;","{a:_ b:2}.a=1;.b=3;"}){
+ auto p=parse(text);auto before=toString(p->pItem.get());auto first=p->pItem->value->items.head;auto value=first->pItem->value;auto h=a.normalize(p);
+ check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before && first->pItem->value==value,"all required updates publish atomically");
+}
+for(bool cancel:{false,true}){
+ auto p=parse("{a:_ b:_}.a=1;.b=2;");auto last=p->pItem->value->items.tail->pItem;auto first=p->pItem->value->items.head->pItem;auto value=first->value;
+ m.prepareInput(last);auto h=a.normalize(p);auto inspections=h->correspondencePositions;
+ check(h->outcome==worldWaiting && h->waitingInput==last && !h->publications && first->value==value,"wait before commit leaves earlier staged write invisible");
+ if(cancel)m.cancel(h);SetModeBits(last->flags,infonView::streamState,infonView::parseDone);m.inputReady(last);
+ check(cancel?h->outcome==worldCancelled && !h->publications && first->value==value:
+ h->complete() && toString(p->pItem.get())=="{a:1 b:2}","resume or cancel staged path writes");
+ check(h->correspondencePositions>=inspections,"retained path progress");
+}
+for(int n:{8,64,512}){
+ std::string source="{";for(int i=0;i<n;++i)source+=" 1";source+=" 'found' missing}";
+ auto result=run(source+".$","'found'");check(result.second->framesCreated<12 && result.second->correspondencePositions<static_cast<unsigned>(2*n+20),"field search stays linear and avoids suffix normalization");
+}
+// The same source mapping must survive value refinement and span writes.
+for(auto c:std::vector<std::pair<std::string,std::string>>{{"{0 _ _ 4}","{0 2 3 4}"},{"{0 &{_ _} 4}","{0 &{2 3} 4}"},{"({0 _} {_ 4})","{0 2 3 4}"}}){
+ auto p=parse(c.first+"@[1:*2+{...}]={2 3};");
+ auto h=a.normalize(p);check(h->complete() && toString(p->pItem.get())==c.second,"cross-layout span update: "+toString(p->pItem.get())+" "+h->detail);
+ check(a.normalize(p)->framesCreated==0,"completed span update does not replay");
+}
+for(auto text:{"{0 _ 8 4}@[1:*2+{...}]={2 3};","{a:_ b:2}.a=1;.b=3;"}){
+ auto p=parse(text);auto before=toString(p->pItem.get());auto value=p->pItem->value;auto h=a.normalize(p);
+ check(h->outcome==worldRejected && !h->publications && p->pItem->value==value && toString(p->pItem.get())==before,"span and multi-write rejection preserves the entire input");
+}
+auto readList=parse("{{1 2} {3 4}}@[2]");auto originalList=readList->pItem->value;auto selectedList=originalList->items.tail;
+auto listRead=a.normalize(readList);
+check(listRead->complete() && listRead->selectedSource()==selectedList && toString(readList->pItem.get())=="{3 4}","returned list keeps its selected source identity");
+check(originalList->items.size()==2 && toString(originalList->items.head->pItem.get())=="{1 2}" && toString(selectedList->pItem.get())=="{3 4}","returning a list does not overwrite the source container");
+auto writeLeaf=parse("{a:_ b:_}.b=7");auto original=writeLeaf->pItem->value;auto destination=original->items.tail;
+auto leafWrite=a.normalize(writeLeaf);
+check(leafWrite->complete() && leafWrite->selectedSource()==destination && toString(destination->pItem.get())=="b:7" && toString(original->items.head->pItem.get())=="a:_","leaf write targets the proved occurrence only");
+for(auto text:{"{} =: (1 +2)","{} =: ('a' 'b')","[&*1+{_|...} <_> $]<~{1 2 3 'x'}","{? 'later'}.$","{'a' ...}@[-1]"}){
+ auto p=parse(text);auto before=toString(p->pItem.get());auto h=a.normalize(p);
+ check(!h->complete() && !h->publications && toString(p->pItem.get())==before,"unproved type, bounded predicate, candidate or endpoint is not accepted: "+std::string(text));
+}
+for(auto c:std::vector<std::pair<std::string,std::string>>{
+ {"[{_ _} _]<~{{1 2} 3}","3"},{"[&{{_ _}|...} _]<~{{1 2} 3}","3"},
+ {"{{a:1 b:2} {a:2 b:3}}.{a:2 b:_}","{a:2 b:3}"},
+ {"[&{!{1 2}|...} {1 2}]<~{{3 4} {1 2}}","{1 2}"},
+ {"*2+[&{x:{y:{1 2 3}}}.x.y]","2"}})run(c.first,c.second);
+auto defs=parse("{#catalog={1 2 3} #shape={x:_ y:_} #otherShape={x:_ y:_}}");check(a.normalize(defs)->complete(),"declare borrowed layouts and distinct record types");
+run("catalog@[2]","2");run("{otherShape:{x:1 y:2} shape:{x:3 y:4}}.shape.x","x:3");
+auto borrowed=parse("catalog@[2]=2;");auto borrowedBefore=toString(borrowed->pItem.get());auto borrowedWrite=a.normalize(borrowed);
+check(borrowedWrite->outcome==worldUnsupported && !borrowedWrite->publications && toString(borrowed->pItem.get())==borrowedBefore,"shared definition body is not a writable occurrence");run("catalog@[2]","2");
+for(int n:{10,1000000000}){
+ auto p=parse("{&*"+std::to_string(n)+"+{...} 8}@["+std::to_string(n+1)+"]");auto h=a.normalize(p);
+ check(h->complete() && toString(p->pItem.get())=="8" && h->framesCreated<20 && h->correspondencePositions<20,"path uses symbolic positional skipping");
+}
+for(bool cancel:{false,true}){
+ auto p=parse("{0 _ _ 4}@[1:*2+{...}]={2 3};");auto value=p->pItem->value;auto waiting=value->items.head->next->next->pItem;
+ auto before=toString(p->pItem.get());m.prepareInput(waiting);auto h=a.normalize(p);
+ check(h->outcome==worldWaiting && !h->publications && p->pItem->value==value,"span write waits before any source mutation");
+ if(cancel)m.cancel(h);SetModeBits(waiting->flags,infonView::streamState,infonView::parseDone);m.inputReady(waiting);
+ check(cancel?h->outcome==worldCancelled && !h->publications && toString(p->pItem.get())==before:h->complete() && toString(p->pItem.get())=="{0 2 3 4}","span write resumes locally or cancels without effects");
+}
+auto partialRecord=parse("shape:{y:_}.y=7;");auto partialRecordText=toString(partialRecord->pItem.get());auto partialRecordWrite=a.normalize(partialRecord);
+check(partialRecordWrite->outcome==worldUnsupported && !partialRecordWrite->publications && toString(partialRecord->pItem.get())==partialRecordText,"returning a record does not discharge an unexamined definition");
+
+for(int n:{8,64,512}){
+ std::string input="*2+[&{x:{y:{1 2";for(int i=0;i<n;++i)input+=" (1=2)";input+="}}}.x.y]";
+ auto result=run(input,"2");check(result.second->framesCreated<30 && result.second->correspondencePositions<40,"path layout requests a reference without normalizing unused values");
+}
+auto mixedLayout=parse("[&*3+{...} <_>]<~('abc' {8})");auto mixedText=toString(mixedLayout->pItem.get());auto mixedResult=a.normalize(mixedLayout);
+check(!mixedResult->complete() && !mixedResult->publications && toString(mixedLayout->pItem.get())==mixedText,"a string extent is not a list-member width");
+for(auto text:{"[1 <_>]<~{&{9} 2}","[<_> 1]<~{2 &{9}}"}){
+ auto p=parse(text);auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications,"skipping never bypasses a required prefix or suffix predicate");
+}
+run("{1 2 3 4 5 6 7 8 9 0}@[3:*4+{...}]","{4 5 6 7}");
+run("{1 2 3 4}@[0:*2+{...}]","{1 2}");run("{1 2 3 4}@[-2:*2+{...}]","{3 4}");
+for(auto text:{"{begin:7}.begin","{end:7}.end","{1 2 3 4 5}@[3:5]"}){
+ auto p=parse(text);auto before=toString(p->pItem.get());auto h=a.normalize(p);
+ check(h->outcome==worldUnsupported && !h->publications && toString(p->pItem.get())==before,"unimplemented boundary/scalar-spec semantics are not ordinary field/span lookup");
+}
+run("{first:7 first:8}.first:8","first:8");run("{last:7 last:8}.last:7","last:7");
+run("{begin:7}.begin:7","begin:7");run("{end:7}.end:7","end:7");
+core.deInit();std::cout<<"PATH_CORRESPONDENCE: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }
