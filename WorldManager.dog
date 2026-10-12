@@ -190,6 +190,24 @@ struct WorldSelection {
     me FlexNum: position <- 0
     me bool: located <- false
     me bool: lastTail <- false
+    me bool: oneOf <- false
+    me bool: domainChecked <- false
+    our WorldPosition: domain
+    our WorldFrame: candidate
+}
+// OR records borrow checked branch frames. A relationship distributes over
+// them; it never changes a candidate's model or loses its conjunctions.
+struct WorldAlternatives {
+    me List<our WorldFrame>: members
+}
+struct WorldChoiceMerge {
+    our WorldAlternatives: left
+    our WorldAlternatives: right
+    our WorldAlternatives: result
+    me int64: lhs <- 0
+    me int64: rhs <- 0
+    our WorldFrame: pair
+    our POV: edge
 }
 // A chart position retains only the selected occurrence. Alternatives with
 // the same remaining predicates have identical future tests, so their captures
@@ -277,6 +295,7 @@ struct WorldScalar {
     me bool: dischargeListSpec <- false
     me bool: openTail <- false
     our WorldList: sequence
+    our WorldAlternatives: alternatives
     me bool: hasRange <- false
     me FlexNum: lower
     me FlexNum: upper
@@ -340,6 +359,7 @@ struct WorldFrame {
     our WorldPosition: parentContext
     me int64: parentWork <- -1
     our WorldSelection: selection
+    our WorldChoiceMerge: choiceMerge
     our WorldLookup: lookup
     me bool: selecting <- false
     me bool: predicateOnly <- false
@@ -395,6 +415,7 @@ struct WorldPublication {
     our WorldFrame: frame
     our infonState: newList
     our infonState: appendedList
+    our infonView: newAlternatives
 }
 struct WorldRequest {
     our WorldControl: control
@@ -407,6 +428,7 @@ struct WorldRequest {
     me uint64: framesCreated <- 0
     me uint64: relationshipsRead <- 0
     me uint64: publications <- 0
+    me uint64: alternativePairs <- 0
     me uint64: memberPairs <- 0
     me uint64: alignmentChecks <- 0
     me uint64: correspondencePositions <- 0
@@ -1098,6 +1120,9 @@ struct WorldPOVGraph {
     }
 
     me WorldScalar: merge(me WorldScalar: left, me WorldScalar: right, our POV: edge) <- {
+        if(left.alternatives!=NULL or right.alternatives!=NULL){
+            left.outcome <- worldUnsupported; left.detail <- "Alternative comparison needs branch distribution"; return(left)
+        }
         left.needsEvidence <- false
         if(left.overlay==LST or right.overlay==LST){return(mergeList(left, right, edge))}
         if(edge!.forceID){
@@ -1312,7 +1337,8 @@ struct WorldPOVGraph {
             // and value, including the case where its value is unknown. A
             // successful qualified test adds no identity. Fully checked scalar
             // expressions supply the same facts; other nested work stays.
-            me bool: scalarExpression <- supplied!.value!.evalMode==emConcat and frame!.prerequisite!.retainedWork.isEmpty() and
+            me bool: scalarExpression <- (supplied!.value!.evalMode==emConcat or
+                (frame!.prerequisite!.selection!=NULL and frame!.prerequisite!.selection!.oneOf)) and frame!.prerequisite!.retainedWork.isEmpty() and
                 (frame!.prerequisite!.facts.overlay==NUM or frame!.prerequisite!.facts.overlay==STR) and
                 (frame!.prerequisite!.facts.hasValue or frame!.prerequisite!.facts.hasRange)
             // Closed correspondence checks the source endpoint. Unconstrained
@@ -1348,7 +1374,7 @@ struct WorldPOVGraph {
         if(completeFacts(facts, request!.requireSize)){
             request!.outcome <- worldComplete
         }else{request!.outcome <- worldPartial}
-        if(request!.root!.selection!=NULL and !completeFacts(facts, request!.requireSize)){
+        if(request!.root!.selection!=NULL and !request!.root!.selection!.oneOf and !completeFacts(facts, request!.requireSize)){
             request!.outcome <- worldPartial; request!.detail <- "Selected result still has unresolved work"; return()
         }
         publish(request)
@@ -1373,7 +1399,26 @@ struct WorldPOVGraph {
             }
             seen.insert(job.target!.pItem, job.frame)
             me WorldScalar: facts <- job.frame!.facts
-            if(facts.overlay==LST and facts.hasValue){
+            if(facts.alternatives!=NULL){
+                Allocate(job.newAlternatives)
+                job.newAlternatives!.viewMode <- vmOverlay; job.newAlternatives!.itmMode <- mItem
+                job.newAlternatives!.streamState <- parseDone; job.newAlternatives!.isInnr <- true
+                job.newAlternatives!.infSize!.overlayType <- NUM; job.newAlternatives!.infSize!.evalMode <- emUnknown
+                job.newAlternatives!.value!.overlayType <- LST; job.newAlternatives!.value!.evalMode <- emLiteral
+                job.newAlternatives!.value!.sizeMode <- fromGiven
+                withEach member in facts.alternatives!.members{
+                    if(!representableFacts(member!.facts)){
+                        request!.outcome <- worldPartial; request!.detail <- "Alternative still has unresolved work"; return()
+                    }
+                    our infonView:: item
+                    item!.viewMode <- vmAny; item!.itmMode <- mItem; item!.streamState <- parseDone
+                    item!.infSize!.overlayType <- NUM; item!.infSize!.evalMode <- emUnknown
+                    item!.value!.overlayType <- tUnknown; item!.value!.evalMode <- emUnknown
+                    me WorldPublication: child
+                    child.target <- job.newAlternatives!.value!.items.append(item, false, 938)
+                    child.frame <- member; pending.append(child)
+                }
+            }else if(facts.overlay==LST and facts.hasValue){
                 our infonState: body <- job.target!.pItem!.value
                 me bool: existing <- body!.overlayType==LST and body!.evalMode==emLiteral
                 if(!existing and !facts.representable){
@@ -1421,7 +1466,21 @@ struct WorldPOVGraph {
         our WorldFrame: frame <- job.frame
         our infonView: item <- job.target!.pItem
         me WorldScalar: facts <- frame!.facts
+        if(job.newAlternatives!=NULL){
+            our infonState:: value; value!.overlayType <- tUnknown; value!.evalMode <- emIntersection
+            our infonState:: size; size!.overlayType <- NUM; size!.evalMode <- emUnknown
+            item!.value <- value; item!.infSize <- size; item!.innr <- job.newAlternatives
+            item!.viewMode <- vmOverlay; item!.intersectPos <- ipGetLast
+            item!.hasInnrOutr <- false; item!.intersectMarkedRetPOV <- NULL
+            item!.wrkList <- frame!.retainedWork; item!.isNormed <- false
+            item!.worldScalarCompletionOwner <- NULL; request!.publications <+- 1; return()
+        }
         if(frame!.selection!=NULL){
+            if(frame!.selection!.oneOf){
+                our infonState:: value; value!.overlayType <- tUnknown; value!.evalMode <- emUnknown
+                our infonState:: size; size!.overlayType <- NUM; size!.evalMode <- emUnknown
+                item!.value <- value; item!.infSize <- size; item!.viewMode <- vmAny
+            }
             item!.innr <- NULL; item!.intersectPos <- ipNoIntersect
             item!.hasInnrOutr <- false; item!.intersectMarkedRetPOV <- NULL
         }
@@ -1576,10 +1635,10 @@ struct WorldManager {
         return(frame)
     }
 
-    // Partial prerequisites return to their caller. A containing list can
-    // keep that member partial and continue its other requested members.
+    // Rejection returns through required dependencies. An OR collector alone
+    // can discard it; a contradiction on a required route still rejects.
     void: stopFrame(our WorldRequest: request, our WorldFrame: frame) <- {
-        if(frame!.facts.outcome==worldPartial){frame!.finished <- true}
+        if(frame!.facts.outcome==worldPartial or frame!.facts.outcome==worldRejected){frame!.finished <- true}
         else{request!.outcome <- frame!.facts.outcome; request!.detail <- frame!.facts.detail}
     }
 
@@ -1637,6 +1696,9 @@ struct WorldManager {
     // merge operation. Nested lists return here through the retained stack.
     void: correspond(our WorldRequest: request, our WorldFrame: frame) <- {
         if(frame!.pairedMember!=NULL){
+            if(frame!.pairedMember!.facts.outcome==worldRejected){
+                frame!.facts <- frame!.pairedMember!.facts; stopFrame(request, frame); return()
+            }
             if(applyMemberRequirement(request, frame)){return()}
             frame!.memberRequirements <- WorldRequirementCursor()
             if(frame!.pairedEmbedded and frame!.pairedMember!.facts.outcome==worldPartial){
@@ -1794,18 +1856,34 @@ struct WorldManager {
             if(item!.innr!=NULL and (item!.innr!.value==NULL or item!.innr!.infSize==NULL)){
                 frame!.facts.outcome <- worldError; frame!.facts.detail <- "Missing intersection body state"; stopFrame(request, frame); return()
             }
-            if(item!.innr==NULL or item!.isOrLike() or item!.type!=NULL or !item!.addedTypes.isEmpty() or
+            if(item!.innr==NULL or item!.type!=NULL or !item!.addedTypes.isEmpty() or
                item!.invertMatch or item!.funcArgs!=NULL or item!.argPos!=apNoArgs or item!.partRef!=NULL or !item!.parts.isEmpty()){
                 frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Intersection needs additional selection semantics"; stopFrame(request, frame); return()
             }
-            Allocate(frame!.selection)
             our POV:: body{936}; body!.pItem <- item!.innr
+            me WorldScalar: bodyHeader <- graph.read(body, NULL, item!.hasInnrOutr)
+            if(bodyHeader.outcome==worldWaiting){waitAt(request, frame, item!.innr); return()}
+            if(bodyHeader.outcome!=worldReady){frame!.facts <- bodyHeader; stopFrame(request, frame); return()}
+            Allocate(frame!.selection)
+            frame!.selection!.oneOf <- item!.isOrLike()
             our WorldPosition: root <- graph.position(body)
             if(item!.hasInnrOutr and item!.innr!.funcArgs!=NULL){
                 Allocate(root!.input, 936); root!.input!.pItem <- item!.innr!.funcArgs; root!.input!.looseTop <- true
             }
-            frame!.selection!.walk!.push(root)
-            if(item!.innr!.value!.sizeMode==fromGiven){
+            if(frame!.selection!.oneOf and root!.input!=NULL){
+                // An unconstrained open domain denotes each input alternative.
+                // Patterned domains need correlated template/input matching.
+                if(item!.innr!.value!.items.head!=NULL or !item!.innr!.value!.tailUnfinished or
+                   item!.innr!.value!.listSpec!=NULL or !item!.innr!.wrkList.isEmpty()){
+                    frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "One-of input needs patterned domain matching"; stopFrame(request, frame); return()
+                }
+                root <- graph.position(root!.input)
+            }
+            frame!.selection!.domain <- root; frame!.selection!.walk!.push(root)
+            if(frame!.selection!.oneOf){
+                Allocate(frame!.facts.alternatives); frame!.selection!.walk!.checkExtents <- true
+            }
+            else if(item!.innr!.value!.sizeMode==fromGiven){
                 if(item!.innr!.infSize!.evalMode!=emLiteral or item!.innr!.infSize!.num<=0 or item!.innr!.infSize!.num.getDenominator()!=1){
                     frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Selection needs a positive known position"; stopFrame(request, frame); return()
                 }
@@ -1813,6 +1891,7 @@ struct WorldManager {
             }else if(item!.intersectPos==ipGetFirst){frame!.selection!.index <- 1}
         }
         our WorldSelection: selection <- frame!.selection
+        if(selection!.oneOf){collectAlternatives(request, frame); return()}
         while(!selection!.located){
             our WorldPosition: at <- graph.nextPosition(request, selection!.walk)
             if(!walkReady(request, frame, selection!.walk)){return()}
@@ -1840,6 +1919,100 @@ struct WorldManager {
         frame!.prerequisite!.demandSize <- frame!.demandSize
         frame!.selecting <- true; frame!.initialized <- true; frame!.expressionSlot <- 3
         request!.ready.append(frame); request!.ready.append(frame!.prerequisite)
+    }
+
+    // A finite alternative domain uses the ordinary structural cursor and
+    // scalar frames. Unknown candidates remain candidates, never rejections.
+    void: collectAlternatives(our WorldRequest: request, our WorldFrame: frame) <- {
+        our WorldSelection: selection <- frame!.selection
+        if(!selection!.domainChecked){
+            our POV: domain <- selection!.domain!.node
+            me WorldScalar: header <- graph.read(domain, domain!.pParent)
+            if(header.outcome==worldWaiting){waitAt(request, frame, domain!.pItem); return()}
+            if(header.outcome!=worldReady){frame!.facts <- header; stopFrame(request, frame); return()}
+            if(!domain!.pItem!.wrkList.isEmpty()){
+                frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "One-of domain has unresolved layout relationships"; stopFrame(request, frame); return()
+            }
+            selection!.domainChecked <- true
+        }
+        if(selection!.candidate!=NULL){
+            our WorldFrame: candidate <- selection!.candidate
+            if(candidate!.facts.outcome!=worldRejected){
+                if(candidate!.facts.outcome!=worldReady){frame!.facts <- candidate!.facts; stopFrame(request, frame); return()}
+                if(candidate!.facts.overlay==LST or !candidate!.retainedWork.isEmpty()){
+                    frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "One-of alternatives need structured or retained-work semantics"; stopFrame(request, frame); return()
+                }
+                if(candidate!.facts.alternatives!=NULL){
+                    withEach branch in candidate!.facts.alternatives!.members{frame!.facts.alternatives!.members.append(branch)}
+                }else{frame!.facts.alternatives!.members.append(candidate)}
+            }
+            selection!.candidate <- NULL
+        }
+        our WorldPosition: at <- graph.nextPosition(request, selection!.walk)
+        if(!walkReady(request, frame, selection!.walk)){return()}
+        if(at==NULL){
+            if(frame!.facts.alternatives!.members.isEmpty()){
+                frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "No viable alternative"; stopFrame(request, frame); return()
+            }
+            frame!.initialized <- true; frame!.expressionSlot <- 3; request!.ready.append(frame); return()
+        }
+        if(at!.tail){
+            frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "One-of domain still has an open remainder"; stopFrame(request, frame); return()
+        }
+        selection!.candidate <- makeFrame(request, at!.node, at)
+        request!.ready.append(frame); request!.ready.append(selection!.candidate)
+    }
+
+    // Each pair is the existing merge operation. The two indices and in-flight
+    // pair survive waits. In particular, later RHSs filter the surviving OR,
+    // rather than starting again from the original domain.
+    void: mergeAlternatives(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(frame!.choiceMerge==NULL){
+            Allocate(frame!.choiceMerge)
+            our WorldChoiceMerge: merge <- frame!.choiceMerge
+            merge!.left <- frame!.facts.alternatives; merge!.right <- frame!.prerequisite!.facts.alternatives
+            if(merge!.left==NULL){Allocate(merge!.left); merge!.left!.members.append(projectFrame(request, frame))}
+            if(merge!.right==NULL){Allocate(merge!.right); merge!.right!.members.append(frame!.prerequisite)}
+            Allocate(merge!.result); merge!.edge <- frame!.sourceEdge
+            // Outer constraints descend into a target domain. A source OR
+            // supplies alternative RHS values under the original relationship.
+            if(frame!.facts.alternatives!=NULL){merge!.edge <- graph.memberRelationship(frame!.sourceEdge)}
+        }
+        our WorldChoiceMerge: merge <- frame!.choiceMerge
+        if(merge!.pair!=NULL){
+            if(merge!.pair!.facts.outcome!=worldRejected){
+                if(merge!.pair!.facts.outcome!=worldReady){frame!.facts <- merge!.pair!.facts; stopFrame(request, frame); return()}
+                merge!.result!.members.append(merge!.pair)
+            }
+            merge!.pair <- NULL; merge!.rhs <+- 1
+            if(merge!.rhs==merge!.right!.members.size()){merge!.rhs <- 0; merge!.lhs <+- 1}
+        }
+        if(merge!.lhs==merge!.left!.members.size()){
+            frame!.facts <- WorldScalar(); frame!.facts.alternatives <- merge!.result
+            frame!.prerequisite <- NULL; frame!.choiceMerge <- NULL
+            if(frame!.facts.alternatives!.members.isEmpty()){
+                frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "No alternative satisfies the relationship"; stopFrame(request, frame); return()
+            }
+            request!.ready.append(frame); return()
+        }
+        merge!.pair <- derivePair(request, merge!.left!.members[merge!.lhs], merge!.right!.members[merge!.rhs], merge!.edge)
+        request!.alternativePairs <+- 1
+        request!.ready.append(frame); request!.ready.append(merge!.pair)
+    }
+    // Identical proved scalar results do not represent different answers.
+    // Compare to the first result once; no quadratic duplicate search.
+    void: settleAlternatives(our WorldFrame: frame) <- {
+        if(frame!.facts.alternatives==NULL){return()}
+        our WorldFrame: first <- frame!.facts.alternatives!.members[0]
+        if(frame!.facts.alternatives!.members.size()>1){
+            if((first!.facts.overlay!=NUM and first!.facts.overlay!=STR) or !graph.completeFacts(first!.facts, false)){return()}
+            withEach member in frame!.facts.alternatives!.members{
+                if(!graph.completeFacts(member!.facts, false) or first!.facts.hasSize!=member!.facts.hasSize or
+                   graph.compare(first!.facts, member!.facts)!=worldReady or graph.compare(member!.facts, first!.facts)!=worldReady){return()}
+            }
+        }
+        frame!.facts <- first!.facts; frame!.retainedWork <- first!.retainedWork
+        graph.adoptListRequirements(frame, first)
     }
 
     void: supplyCorrespondence(our WorldRequest: request, our WorldFrame: frame) <- {
@@ -2239,6 +2412,13 @@ struct WorldManager {
             if(frame!.facts.outcome!=worldReady){stopFrame(request, frame); return()}
         }
         if(frame!.prerequisite!=NULL){
+            if(frame!.prerequisite!.facts.outcome==worldRejected){frame!.facts <- frame!.prerequisite!.facts; stopFrame(request, frame); return()}
+            if(frame!.facts.alternatives!=NULL or frame!.prerequisite!.facts.alternatives!=NULL){
+                if(frame!.sourceIsOperand and !graph.memberSequence(frame) or frame!.sourceIsListSpec){
+                    frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Alternative operands need expression or template distribution"; stopFrame(request, frame); return()
+                }
+                if(!frame!.sourceIsOperand){mergeAlternatives(request, frame); return()}
+            }
             if(graph.needsRequirements(frame!.prerequisite) and
                !(frame!.sourceIsOperand and graph.memberSequence(frame) and frame!.sourceEdge!.isSubItm)){
                 frame!.prerequisite <- resolveRequirements(request, frame!.prerequisite)
@@ -2294,14 +2474,14 @@ struct WorldManager {
         if(frame!.corresponding){
             request!.ready.append(frame); correspond(request, frame); return()
         }
-        if(frame!.projected){frame!.finished <- true; return()}
+        if(frame!.projected){settleAlternatives(frame); frame!.finished <- true; return()}
         frame!.sourceEdge <- graph.nextRelationship(frame)
         if(frame!.sourceEdge==NULL){
             if(graph.needsRequirements(frame) and (frame===request!.root or !frame!.node!.pItem!.wrkList.isEmpty())){
                 graph.beginRequirements(frame); request!.ready.append(frame); return()
             }
             if(frame!.facts.outcome==worldReady and requestParentRHS(request, frame)){return()}
-            frame!.finished <- true
+            settleAlternatives(frame); frame!.finished <- true
             if(frame!.facts.outcome!=worldReady){stopFrame(request, frame)}
             return()
         }

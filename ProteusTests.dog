@@ -23,6 +23,7 @@ TestsToRun = `
     unit/worldManager/memberCorrespondence
     unit/worldManager/overlappingPatterns
     unit/worldManager/listPatternMappings
+    unit/worldManager/alternatives
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -8259,5 +8260,100 @@ struct GLOBAL {
             }
         }
         core.deInit();std::cout<<"LIST_PATTERN_MAPPINGS: "<<checks-failures<<"/"<<checks<<" checks passed; "<<cases<<" oracle cases\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_alternatives(me string: tname) <- {
+        if(!worldManagerAlternativeChecks()){FAIL("Finite alternative checks failed")}
+    }
+    me bool: worldManagerAlternativeChecks() <- <%{
+        ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;
+        int checks=0,failures=0;
+        auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+        auto parse=[&](const std::string& text){auto p=m.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+        for(const auto& c:std::vector<std::pair<std::string,std::string>>{
+            {"2 = *_+[1 2 3]","2"}, {"'Beta' = *_+['Alpha' 'Beta']","'Beta'"},
+            {"_ = *_+[5 6 7]","*_+[5 6 7]"}, {"3 = *_+[2 3 4]","3"},
+            {"*_+[...] <~ {'ARON' 'AARON' 'ERIN'} =='AARONDacs'","'AARON'"},
+            {"*_+[1 2 3] = 2","2"}, {"*_+[1 2 3] = *_+[2 3] = 3","3"},
+            {"*_+[1 2 3] = *_+[2 3]","*_+[2 3]"}, {"*_+[1 2 3] = !2","*_+[1 3]"},
+            {"*_+[(1+2) 4] = 3","3"}, {"*_+[1 *_+[2 3]] = 3","3"},
+            {"*_+[(1=2) 3]","3"}, {"3 = *_+[(1=2) 3]","3"},
+            {"*_+[!2|1 2 3]","*_+[1 3]"}, {"*_+[*5+_ 9]","*_+[*5+_ 9]"},
+            {"*_+[*5+_ 9] = 2","*5+2"}, {"*_+[*5+_ 9] == 2","2"}, {"*_+[? 2]","*_+[? 2]"},
+            {"*_+[2 _]","*_+[2 _]"}, {"*_+[_]","_"}, {"*_+[2 _] = 3","3"},
+            {"2 = *_+[2 _]","2"}, {"*_+[2 2]","2"},
+            {"*_+[_ = !5 2] = 3","3"},
+            {"*_+['AA' 'BB'] == 'AAX'","'AA'"},
+            {"'AA' =: *_+['AAX' 'BBX']","'AA'"}, {"'AA' =: *_+['AAX']","'AA'"},
+            {"'AA' == *_+['AA' 'BB']","'AA'"},
+            {"{*_+[1 2] 3}","{*_+[1 2] 3}"}, {"{*_+[1 2] _} = {2 3}","{2 3}"},
+            {"*_+[&{1 2} 3] = 2","2"}, {"*_+[...] <~ {1 2 3} = 2","2"}
+        }){
+            auto root=parse(c.first);if(!root)continue;
+            std::vector<std::pair<std::shared_ptr<infonView>,std::string>> sources;
+            if(root->pItem->innr)sources.push_back({root->pItem->innr,toString(root->pItem->innr.get())});
+            for(auto edge:root->pItem->wrkList)sources.push_back({edge->pItem,toString(edge->pItem.get())});
+            auto h=a.normalize(root);auto output=toString(root->pItem.get());
+            check((h->outcome==worldPartial || h->complete()) && output==c.second,"one-of: "+c.first+" => "+output+" : "+h->detail);
+            if(c.second.find("*_")!=std::string::npos || c.second=="_")check(h->outcome==worldPartial,"multiple/unknown answers remain partial");
+            else check(h->complete() && a.normalize(root)->framesCreated==0,"unique proved result completes without new goals");
+            for(auto source:sources)check(toString(source.first.get())==source.second,"borrowed alternative or constraint remains unchanged");
+            if(root->pItem->isOrLike())check(getModeBits(root->pItem->value->flags,infonState::evalMode)==infonState::emIntersection &&
+                getModeBits(root->pItem->innr->value->flags,infonState::evalMode)==infonState::emLiteral,"published OR retains parser representation");
+        }
+        for(const std::string text:{"*_+[1 2] = 3","*_+[(1=2) (2=3)]","*_+[]","{1=2 3}","(1+(2=3))","{_}={1=2}","'AA' == *_+['AAX' 'BBX']","'AA' == *_+['AAX']"}){
+            auto root=parse(text);auto before=toString(root->pItem.get());auto h=a.normalize(root);
+            check(h->outcome==worldRejected && h->publications==0 && toString(root->pItem.get())==before,"required/all-branch rejection is atomic: "+text+" : "+h->detail);
+        }
+        for(const std::string text:{"*_+[1 ...] = 1","*_+[...]", "*_+[...] <~ {1 ...}",
+             "*_+[{1} {2}]", "(*_+[1 2]+1)", "*_+[...] <~ ({1 2}={1 3})",
+             "[<3> $]<~{*_+[1 2] 'x'}", "3 = *_+[_ = !5 2]", "*_+[_ = !5 2]", "*_+[...] <~ *2+{1}", "*_+[...] <~ *1+{1 2}",
+             "*_+[&*2+{1}]", "*_+[&*1+{1 2}]"}){
+            auto root=parse(text);auto before=toString(root->pItem.get());auto h=a.normalize(root);
+            check((h->outcome==worldPartial || h->outcome==worldUnsupported) && h->publications==0 && toString(root->pItem.get())==before,"unproved domain/distribution remains expressed: "+text);
+        }
+        // An OR published as a partial result remains usable by a later goal.
+        auto partial=parse("_ = *_+[1 2 3]");auto ph=a.normalize(partial);
+        auto identity=std::make_shared<POV>(938);identity->pItem=parse("2")->pItem;partial->pItem->wrkList.push_back(identity);
+        auto closed=a.normalize(partial);check(ph->outcome==worldPartial && closed->complete() && toString(partial->pItem.get())=="2","published alternatives accept later evidence");
+        const std::string streaming="*_+[1 2 3] = 2";
+        auto sync=a.normalize(parse(streaming));
+        for(int which:{0,1,2})for(bool cancel:{false,true}){
+            auto root=parse(streaming);
+            if(which==0)root->pItem->innr=std::make_shared<infonView>();
+            auto waiting=which==0?root->pItem->innr:which==1?root->pItem->innr->value->items.head->next->pItem:root->pItem->wrkList[0]->pItem;
+            m.prepareInput(waiting);auto h=a.normalize(root);auto pairs=h->alternativePairs;
+            check(h->outcome==worldWaiting && h->waitingInput==waiting && h->publications==0,"one-of waits at exact domain/candidate/constraint");
+            if(cancel)m.cancel(h);
+            ProteusParser parser(&core,true,0);parser.initParseFromString("alternative arrival",which==0?"*_+{1 2 3}":"2");parser.doParse(waiting);
+            check(cancel ? h->outcome==worldCancelled && h->publications==0 && h->alternativePairs==pairs :
+                h->complete() && toString(root->pItem.get())=="2" && h->alternativePairs==sync->alternativePairs && h->framesCreated==sync->framesCreated,
+                "arrival/cancellation preserves alternative progress: "+std::to_string(which)+" / "+std::to_string(cancel)+" frames="+std::to_string(h->framesCreated)+" sync="+std::to_string(sync->framesCreated)+" pairs="+std::to_string(h->alternativePairs)+" outcome="+std::to_string(h->outcome)+" : "+h->detail);
+        }
+        auto arriving=parse("*_+[...] <~ {}");auto pending=std::make_shared<infonView>();arriving->pItem->innr->funcArgs=pending;m.prepareInput(pending);
+        auto ah=a.normalize(arriving);check(ah->outcome==worldWaiting,"input domain header waits");
+        ProteusParser parser(&core,true,0);parser.initParseFromString("domain relation arrival","{1 2}={1 3}");parser.doParse(pending);
+        check(ah->outcome==worldUnsupported && ah->publications==0,"arriving domain relationships cannot be dropped");
+        // Finite set intersection is an independent oracle for OR distribution.
+        auto domain=[](unsigned mask){std::string text="*_+[";for(unsigned n=0;n<4;++n)if(mask&(1u<<n))text+=" "+std::to_string(n);return text+"]";};
+        for(unsigned lhs=1;lhs<16;++lhs)for(unsigned rhs=1;rhs<16;++rhs){
+            auto root=parse(domain(lhs)+" = "+domain(rhs));auto h=a.normalize(root);unsigned expected=lhs&rhs,actual=0;
+            if(!expected){check(h->outcome==worldRejected && h->publications==0,"disjoint OR oracle");continue;}
+            auto result=root->pItem;
+            if(result->isOrLike())for(auto node=result->innr->value->items.head;node;node=node->next){
+                for(unsigned n=0;n<4;++n)if(node->pItem->value->num==FlexNum(static_cast<int64_t>(n)))actual|=1u<<n;
+            }else for(unsigned n=0;n<4;++n)if(result->value->num==FlexNum(static_cast<int64_t>(n)))actual|=1u<<n;
+            bool unique=(expected&(expected-1))==0;
+            check(expected==actual && (unique?h->complete():h->outcome==worldPartial),"finite OR conjunction oracle");
+        }
+        for(int length:{16,64,256}){
+            std::string text=std::to_string(length-1)+" = *_+[";for(int n=0;n<length;++n)text+=" "+std::to_string(n);text+="]";
+            auto root=parse(text);auto h=a.normalize(root);
+            check(h->complete() && h->alternativePairs==static_cast<unsigned>(length) && h->framesCreated<=3*length+5,"linear literal filtering work");
+            std::cout<<"ALTERNATIVE_SCAN: candidates="<<length<<" pairs="<<h->alternativePairs<<" frames="<<h->framesCreated<<"\n";
+        }
+        core.deInit();std::cout<<"ALTERNATIVES: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }
