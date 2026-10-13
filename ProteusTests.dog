@@ -54,6 +54,7 @@ TestsToRun = `
     unit/worldManager/pieceComposition
     unit/worldManager/pieceCorrespondence
     unit/worldManager/temporalTemplates
+    unit/worldManager/ancestorRequirements
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
 
@@ -7376,5 +7377,61 @@ for(int mode:{0,1,2}){
  if(mode)check(toString(state1->pItem.get())==source,"state/member demand leaves the previous source state unchanged");if(mode==2)check(toString(state2->pItem->value->items.tail->pItem.get())==untouched && h->framesCreated<20,"leaf temporal correspondence creates no side/color goals");if(spec)check(p->pItem->value->listSpec==spec && toString(spec.get())==specText,"two states keep their original transition template");
 }
 check(toString(defs->pItem.get())==definitions,"temporal requests preserve shared model definitions");core.deInit();std::cout<<"TEMPORAL_TEMPLATES: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_ancestorRequirements(me string: testName) <- {
+        if(!worldManagerAncestorRequirementChecks()){FAIL("Ancestor requirement checks failed")}
+    }
+    me bool: worldManagerAncestorRequirementChecks() <- <%{
+ ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;int checks=0,failures=0;
+ auto check=[&](bool ok,const std::string& msg){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<msg<<"\n";}};
+ auto parse=[&](const std::string& s){auto p=m.parse(s);check(p.target && p.error.empty(),"parse "+s);return p.target;};
+ auto at=[](std::shared_ptr<POV> p,std::initializer_list<int> route){for(int index:route){auto q=p->pItem->value->items.head;while(index-->0)q=q->next;q->pParent=p.get();p=q;}return p;};
+ auto defs=parse("{#z=_ #location={z:_} #shape={location:{z:3},unused:(1=2)} #orderedShape={location:{z:3} extra:_}}");check(a.normalize(defs)->complete(),"register scoped meanings without evaluating bodies");auto source=toString(defs->pItem.get());
+ for(bool named:{false,true})for(int mode:{0,1,2,3}){
+  auto p=parse(named?"shape:{location:{z:_},unused:0}":"{{location:{z:3},unused:(1=2)}|{location:{z:_},unused:0}}");auto leaf=at(p,named?std::initializer_list<int>{0,0}:std::initializer_list<int>{0,0,0});auto item=leaf->pItem;auto before=toString(p->pItem.get());a.world=p->pItem;
+  std::string path=named?"%W.location.z":"%W.first.location.z";auto q=mode==0?leaf:parse(path+(mode==2?"=3":mode==3?"=4":""));auto h=a.normalize(q);
+  if(mode==3)check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before,"conflicting selected assertion is atomic");
+  else{check(h->complete() && q->pItem->value->num==3,"ancestor definition/listSpec supplies the demanded leaf: "+h->detail);if(mode==1)check(toString(p->pItem.get())==before,"read preserves the source");else check(leaf->pItem==item && item->value->num==3,"direct normalization/write preserves occurrence identity");}
+ }
+ {auto p=parse("orderedShape:{location:{z:_}}.location.z");auto h=a.normalize(p);check(h->complete() && p->pItem->value->num==3,"named definition fields correspond despite omitted fields in an ordered representation");}
+ {auto p=parse("{{location:{z:3}}|{location:{z:4}}}.first.location.z");auto before=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before,"ancestor template checks a known conflicting leaf");}
+ // A description of a container can leave its interior unspecified. That
+ // supplies no descendant facts and must not block another established path.
+ {auto d=parse("{#hue=_ #saturation=_ #shade={hue,saturation} #paint=shade #red=shade:{hue:0} #thing={location,orientation} #piece={thing,paint} #state={parts,other} #solved=state:{parts:{pieces:*1+{piece:{paint=red,thing:{location:{z:3}}}}}}}");check(a.normalize(d)->complete(),"register a partially specified record behind a type description");auto before=toString(d->pItem.get());
+  auto p=parse("solved.parts.pieces@[1].thing.location.z");auto h=a.normalize(p);check(h->complete() && p->pItem->value->num==3,"unspecified ancestor container supplies no blocking descendant requirement");check(toString(d->pItem.get())==before,"partial descriptions remain immutable during a known-coordinate read");
+ }
+ // A borrowed definition binds self to the represented occurrence, not its
+ // surrounding query. The same definition can serve different occurrences.
+ {auto d=parse("{#x=_ #seen=x #box=box:{x,seen=%.x}}");check(a.normalize(d)->complete(),"register a context-dependent ancestor meaning");auto before=toString(d->pItem.get());
+  for(int value:{1,2}){auto p=parse("box:{x:"+std::to_string(value)+",seen:_}.seen");auto h=a.normalize(p);check(h->complete() && p->pItem->value->num==value,"ancestor self uses the selected occurrence's supplied field");}
+  {auto p=parse("{box|{x:3,seen:_}}.first.seen");auto h=a.normalize(p);check(h->complete() && p->pItem->value->num==3,"borrowed named template layout retains its definition context");}
+  check(toString(d->pItem.get())==before,"context-dependent meanings stay immutable");
+ }
+ {auto p=parse("{{location:{z:_}}|{location:{z:_}}}.first.location.z");auto h=a.normalize(p);check(h->outcome==worldPartial && getModeBits(p->pItem->value->flags,infonState::evalMode)==infonState::emUnknown && h->framesCreated<20,"exhausted unknown ancestor evidence stays partial without a cycle or subscription");}
+ for(bool named:{false,true})for(bool cancel:{false,true})for(bool pendingLeaf:{false,true}){
+  std::string name="waitShape"+std::to_string(named)+std::to_string(cancel)+std::to_string(pendingLeaf);auto d=parse("{#"+name+"={location:{z:3}}}");check(a.normalize(d)->complete(),"register pending meaning");
+  auto p=parse(named?name+":{location:{z:_}}":"{{location:{z:3}}|{location:{z:_}}}");auto leaf=at(p,named?std::initializer_list<int>{0,0}:std::initializer_list<int>{0,0,0});auto body=named?d->pItem->value->items.head->pItem->funcArgs:p->pItem->value->listSpec;auto pending=pendingLeaf?body->value->items.head->pItem->value->items.head->pItem:body;
+  auto before=toString(p->pItem.get());m.prepareInput(pending);auto h=a.normalize(leaf);auto frames=h->framesCreated,positions=h->correspondencePositions;
+  check(h->outcome==worldWaiting && h->waitingInput==pending && !h->publications,"wait at demanded meaning/template input");auto other=parse("7");m.inputReady(other->pItem);check(h->outcome==worldWaiting && h->framesCreated==frames && h->correspondencePositions==positions,"unrelated arrival does no work");
+  if(cancel)m.cancel(h);SetModeBits(pending->flags,infonView::streamState,infonView::parseDone);m.inputReady(pending);
+  check(cancel?h->outcome==worldCancelled && !h->publications && toString(p->pItem.get())==before:h->complete() && leaf->pItem->value->num==3 && h->framesCreated<frames+8,"continue retained correspondence or cancel atomically");
+ }
+ for(int n:{8,32,128}){
+  std::string spec="{location:{z:3},",body="{location:{z:_},";for(int i=0;i<n;++i){auto name="unused"+std::to_string(i);spec+=name+":(1=2),";body+=name+":0,";}spec.back()='}';body.back()='}';auto p=parse("{"+spec+"|"+body+"}");auto h=a.normalize(at(p,{0,0,0}));
+  check(h->complete() && h->framesCreated<16 && h->correspondencePositions<4*n+20,"width work scans headers without evaluating unrelated values");std::cout<<"ANCESTOR_WIDTH: "<<n<<" frames="<<h->framesCreated<<" positions="<<h->correspondencePositions<<"\n";
+ }
+ for(int depth:{8,32,128}){
+  auto left=parse("z:_"),right=parse("z:3");for(int i=0;i<depth;++i){auto name="level"+std::to_string(i);auto l=parse(name+":{?}"),r=parse(name+":{?}");l->pItem->value->items.head->pItem=left->pItem;r->pItem->value->items.head->pItem=right->pItem;left=l;right=r;}
+  auto p=parse("{_|?}");p->pItem->value->listSpec=right->pItem;p->pItem->value->items.head->pItem=left->pItem;auto leaf=at(p,{0});for(int i=0;i<depth;++i)leaf=at(leaf,{0});auto h=a.normalize(leaf);
+  check(h->complete() && leaf->pItem->value->num==3 && h->ancestrySteps<8*depth+20 && h->correspondencePositions<8*depth+20 && h->framesCreated<5*depth+20,"depth work follows one retained projection route");std::cout<<"ANCESTOR_DEPTH: "<<depth<<" frames="<<h->framesCreated<<" ancestry="<<h->ancestrySteps<<" positions="<<h->correspondencePositions<<"\n";
+ }
+ for(int n:{8,32,128}){
+  std::string text="{{location:{z:3}}|";for(int i=0;i<n;++i)text+="{location:{z:_}} ";text+='}';auto p=parse(text);auto h=a.normalize(p);bool values=true;int count=0;for(auto q=p->pItem->value->items.head;q;q=q->next){++count;values=values && q->pItem->value->items.head->pItem->value->items.head->pItem->value->num==3;}
+  check(h->complete() && values && count==n && h->framesCreated<30*n+20 && !h->parentLookups,"whole-list propagation shares template work rather than rediscovering it for every leaf");check(!a.normalize(p)->framesCreated,"completed whole list creates no new goals");std::cout<<"ANCESTOR_WHOLE: "<<n<<" frames="<<h->framesCreated<<" edges="<<h->relationshipsRead<<"\n";
+ }
+ check(toString(defs->pItem.get())==source,"shared meanings are unchanged");core.deInit();std::cout<<"ANCESTOR_REQUIREMENTS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }

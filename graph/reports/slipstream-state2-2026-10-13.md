@@ -50,3 +50,8 @@ Slipstream's build source and existing executable still target `/home/bruce/devl
 ## Validation
 
 Both CodeDog builds succeed. The independent library client passes the focused named-query, nominal-evidence (111 checks), plural-list-type, scalar-replacement and temporal-template suites. The complete retained runner reports 24 failures / 533 tests, preserving the baseline failure names and diagnostics. Compatible named assertion expectations were updated to the user-approved rule; protected `.tst` files and unrelated user tests are unchanged. Logs: `library-build-final.log`, `test-build-final.log`, `focused-final.log`, and `full-final.log` in the diagnostic directory.
+
+
+## D063 follow-up
+
+The next ancestor-requirement cycle is recorded in `member-requirements-2026-10-13.md`. It extends member requests through containing definitions and structured ancestor listSpecs, with a separate constraint boundary for borrowed sources. The literal Proteus `main` reference does not establish the implicit temporal preservation proposed above; the user gives historical behavior precedence, and no implicit temporal rule is implemented in D063. The earlier phrase “honoring supplied changes” does not grant ordinary supplied values an override under D062's conditional preservation rule.

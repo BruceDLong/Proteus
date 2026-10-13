@@ -157,6 +157,8 @@ struct WorldOpenAlignment {
 // Occurrence paths borrow the model. They are local to a live request, not
 // a persistent record of parent merge progress.
 struct WorldPosition {
+    // Source requirements stop here; navigation still retains its caller context.
+    me bool: constraintRoot <- false
     our POV: owner
     our POV: argumentEdge
     our POV: node
@@ -343,6 +345,7 @@ struct WorldPatternChart {
 }
 struct WorldProjectionRoute {me List<our WorldPosition>: members}
 struct WorldCorrespondence {
+    me bool: parentTemplate <- false
     our WorldProjectionRoute: route
     our WorldFrame: projection
     our WorldPosition: projectedTarget
@@ -621,6 +624,7 @@ struct WorldFrame {
     our WorldOpenAlignment: openAlignment
     our WorldPosition: context
     our WorldPosition: parentContext
+    our WorldPosition: parentMember
     me int64: parentWork <- -1
     our WorldSelection: selection
     our WorldChoiceMerge: choiceMerge
@@ -1487,9 +1491,10 @@ struct WorldPOVGraph {
                 request!.namedLayouts <+- 1
                 // Keep the use's occurrence identity and ancestry while
                 // borrowing the definition's physical member layout.
-                our POV:: layout{939}; layout!.pItem <- meaning; layout!.isSubItm <- node!.isSubItm
+                our POV:: layout{939}; layout!.pItem <- meaning; layout!.isSubItm <- node!.isSubItm; layout!.trueByDefinition <- true
                 our WorldPosition: expanded <- position(layout, level!.position!.parent)
                 expanded!.owner <- level!.position!.owner; expanded!.occurrence <- level!.position!.occurrence; expanded!.embedded <- level!.position!.embedded
+                expanded!.constraintRoot <- level!.position!.constraintRoot
                 expanded!.writable <- false
                 level!.position <- expanded
                 continue()
@@ -4337,7 +4342,8 @@ struct WorldManager {
             if(!graph.enterLayout(request, lookup!.right)){walkReady(request, frame, lookup!.right); return(true)}
             our POV: source <- lookup!.right!.levels.last()!.position!.node
             me WorldScalar: header <- graph.read(request, source, source!.pParent)
-            if(parent.order!=uUnordered and header.order!=uUnordered){return(false)}
+            if(parent.order!=uUnordered and header.order!=uUnordered and
+               !(lookup!.query!.relation!.trueByDefinition and graph.stableRecordLayout(lookup!.query!.target!.parent!.node!.pItem) and graph.stableRecordLayout(source!.pItem))){return(false)}
             me WorldScalar: wanted <- graph.read(request, lookup!.query!.target!.node, lookup!.query!.target!.node!.pParent)
             if(wanted.outcome==worldWaiting){waitAt(request, frame, lookup!.query!.target!.node!.pItem); return(true)}
             lookup!.selectedField <- graph.fieldName(wanted)
@@ -4407,6 +4413,15 @@ struct WorldManager {
         }
         if(lookup!.projection!.facts.outcome!=worldReady){frame!.facts <- lookup!.projection!.facts; stopFrame(request, frame); return(true)}
         our WorldPosition: source <- lookup!.projection!.correspondenceResult!.position
+        // An unspecified corresponding container contributes no descendant
+        // facts. The caller can continue its other retained sources.
+        our infonView: item <- source!.node!.pItem
+        me WorldScalar: header <- graph.read(request, source!.node, source!.node!.pParent)
+        if(header.outcome==worldReady and header.overlay<0 and !header.hasValue and !header.hasSize and !header.negative and
+           (header.nominal==NULL or header.nominal!.defToUse==NULL) and item!.wrkList.isEmpty() and item!.argPos==apNoArgs and
+           item!.viewMode!=vmCursor and item!.partRef==NULL and item!.parts.isEmpty()){
+            frame!.lookup <- NULL; request!.ready.append(frame); return(true)
+        }
         our POV: edge <- graph.memberRelationship(lookup!.query!.relation); edge!.pItem <- source!.node!.pItem
         frame!.lookup <- graph.correspondence(lookup!.projectedTarget, edge, lookup!.query!.target, false)
         frame!.lookup!.route <- lookup!.route
@@ -4427,12 +4442,15 @@ struct WorldManager {
                 if(lookup!.sourceReference==NULL){
                     lookup!.sourceReference <- makeFrame(request, source)
                     lookup!.sourceReference!.navigation <- frame!.navigation
-                    lookup!.sourceReference!.templateContext <- frame!.templateContext
+                    lookup!.sourceReference!.templateContext <- frame!.templateContext or lookup!.parentTemplate
                     if(!lookup!.left!.levels.isEmpty()){lookup!.sourceReference!.navigation <- lookup!.left!.levels[0]!.position}
                     lookup!.sourceReference!.referenceOnly <- true; lookup!.sourceReference!.acquireOnly <- true
                     request!.ready.append(frame); request!.ready.append(lookup!.sourceReference); return()
                 }
                 if(lookup!.sourceReference!.facts.outcome!=worldReady){frame!.facts <- lookup!.sourceReference!.facts; stopFrame(request, frame); return()}
+                if(lookup!.parentTemplate and lookup!.sourceReference!.facts.contextAbsent){
+                    frame!.contextual <- true; frame!.lookup <- NULL; request!.ready.append(frame); return()
+                }
                 if(lookup!.sourceReference!.facts.contextAbsent or lookup!.sourceReference!.facts.contextRequired){
                     frame!.facts <- lookup!.sourceReference!.facts; frame!.contextual <- true; frame!.finished <- true; return()
                 }
@@ -4453,6 +4471,7 @@ struct WorldManager {
         matchCorrespondence(request, frame)
     }
     me bool: requestParentRHS(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(frame!.parentMember==NULL){frame!.parentMember <- frame!.context}
         while(frame!.parentContext!=NULL){
             our WorldPosition: parent <- frame!.parentContext
             our infonView: item <- parent!.node!.pItem
@@ -4462,51 +4481,80 @@ struct WorldManager {
             if(frame!.context!.embedded and item!.value!.listSpec!=NULL){
                 frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Selected span needs enclosing template projection"; stopFrame(request, frame); return(true)
             }
+            our POV: relation
+            our WorldPosition: scope <- parent
+            me bool: parentTemplate <- false
             if(frame!.parentWork<0){
                 frame!.parentWork <- 0
                 // Refinement of the same occurrence retains its checked template
                 // constraints. A replacement's fresh value still requests them.
-                if((parent!.embedded or graph.samePosition(parent, frame!.context!.parent)) and item!.value!.listSpec!=NULL and !(item!.listSpecApplied and frame!.context!.node!.pItem===frame!.node!.pItem)){
+                if(item!.value!.listSpec!=NULL and
+                   !(item!.listSpecApplied and frame!.context!.node!.pItem===frame!.node!.pItem)){
                     our POV:: spec{937}; spec!.pItem <- item!.value!.listSpec
-                    frame!.sourceEdge <- spec; frame!.sourceIsOperand <- false; frame!.sourceIsListSpec <- false; frame!.sourceNameInherited <- true
-                    frame!.prerequisite <- makeFrame(request, spec)
-                    frame!.prerequisite!.expressionParent <- parent!.node
-                    frame!.prerequisite!.navigation <- frame!.navigation; frame!.prerequisite!.templateContext <- true
-                    request!.relationshipsRead <+- 1
-                    request!.ready.append(frame); request!.ready.append(frame!.prerequisite); return(true)
+                    if(!graph.samePosition(frame!.parentMember, frame!.context)){
+                        // Apply a higher template to its member, then project
+                        // only the requested descendant through correspondence.
+                        relation <- spec; scope <- frame!.parentMember; parentTemplate <- true
+                    }else{
+                        frame!.sourceEdge <- spec; frame!.sourceIsOperand <- false; frame!.sourceIsListSpec <- false; frame!.sourceNameInherited <- true
+                        frame!.prerequisite <- makeFrame(request, spec)
+                        frame!.prerequisite!.expressionParent <- parent!.node
+                        frame!.prerequisite!.navigation <- frame!.navigation; frame!.prerequisite!.templateContext <- true
+                        request!.relationshipsRead <+- 1
+                        request!.ready.append(frame); request!.ready.append(frame!.prerequisite); return(true)
+                    }
                 }
             }
-            our POV: relation
             me bool: input <- false
-            if(!frame!.predicateOnly and parent!.input!=NULL and frame!.parentWork==0){relation <- parent!.input; input <- true; frame!.parentWork <+- 1}
-            else{
-                me int64: index <- frame!.parentWork
-                if(parent!.input!=NULL){index <- index-1}
-                if(!frame!.predicateOnly and !graph.completeFacts(frame!.facts, frame!.demandSize) and index<item!.wrkList.size()){
-                    relation <- item!.wrkList[index]; frame!.parentWork <+- 1
-                    if(relation==NULL){frame!.facts.outcome <- worldError; frame!.facts.detail <- "Empty parent relationship"; stopFrame(request, frame); return(true)}
-                }else if(!frame!.predicateOnly and !graph.completeFacts(frame!.facts, frame!.demandSize) and index==item!.wrkList.size()){
-                    if(parent!.argumentEdge==NULL){parent!.argumentEdge <- graph.argumentRelation(item, parentHeader)}
-                    relation <- parent!.argumentEdge; frame!.parentWork <+- 1
+            if(relation==NULL){
+                if(!frame!.predicateOnly and parent!.input!=NULL and frame!.parentWork==0){relation <- parent!.input; input <- true; frame!.parentWork <+- 1}
+                else{
+                    me int64: index <- frame!.parentWork
+                    if(parent!.input!=NULL){index <- index-1}
+                    if(!frame!.predicateOnly and !graph.completeFacts(frame!.facts, frame!.demandSize) and index<item!.wrkList.size()){
+                        relation <- item!.wrkList[index]; frame!.parentWork <+- 1
+                        if(relation==NULL){frame!.facts.outcome <- worldError; frame!.facts.detail <- "Empty parent relationship"; stopFrame(request, frame); return(true)}
+                    }else if(!frame!.predicateOnly and !graph.completeFacts(frame!.facts, frame!.demandSize) and index==item!.wrkList.size()){
+                        if(parent!.argumentEdge==NULL){parent!.argumentEdge <- graph.argumentRelation(item, parentHeader)}
+                        relation <- parent!.argumentEdge; frame!.parentWork <+- 1
+                    }
+                }
+            }
+            // A containing definition is another identity source for this
+            // member. Consume it once after the supplied parent relationships.
+            me int64: afterWork <- item!.wrkList.size()+1
+            if(parent!.input!=NULL){afterWork <+- 1}
+            if(relation==NULL and !frame!.predicateOnly and !graph.completeFacts(frame!.facts, frame!.demandSize) and frame!.parentWork==afterWork){
+                frame!.parentWork <+- 1
+                if(!parentHeader.meaningApplied and parentHeader.nominal!=NULL and parentHeader.nominal!.defToUse!=NULL and parentHeader.nominal!.defToUse!==item){
+                    Allocate(relation, 939); relation!.pItem <- parentHeader.nominal!.defToUse
+                    relation!.trueByDefinition <- true; request!.meaningEdges <+- 1
                 }
             }
             if(relation!=NULL){
                 if(relation!.pParent!=NULL){frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Contextual parent RHS needs occurrence projection"; stopFrame(request, frame); return(true)}
                 if(relation!.forceID){frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Replacement correspondence is not implemented"; stopFrame(request, frame); return(true)}
-                me WorldScalar: leftHeader <- parentHeader
+                me WorldScalar: leftHeader <- graph.read(request, scope!.node, scope!.node!.pParent, scope!.input!=NULL)
                 me WorldScalar: rightHeader <- graph.read(request, relation, relation!.pParent)
-                if(!input and !relation!.looseMode and leftHeader.outcome==worldReady and rightHeader.outcome==worldReady and
+                if(!(relation!.trueByDefinition and graph.stableRecordLayout(scope!.node!.pItem) and graph.stableRecordLayout(relation!.pItem)) and
+                   !input and !relation!.looseMode and leftHeader.outcome==worldReady and rightHeader.outcome==worldReady and
                    leftHeader.hasSize and rightHeader.hasSize and
                    ((!relation!.looseSize() and leftHeader.size!=rightHeader.size) or (relation!.looseSize() and leftHeader.size>rightHeader.size))){
                     frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Parent endpoints need span alignment"; stopFrame(request, frame); return(true)
                 }
-                frame!.lookup <- graph.correspondence(parent, relation, frame!.context, input)
+                frame!.lookup <- graph.correspondence(scope, relation, frame!.context, input)
+                frame!.lookup!.parentTemplate <- parentTemplate
+                if(parentTemplate or relation!.trueByDefinition){
+                    our WorldPosition: source <- frame!.lookup!.result!.sourceDomain
+                    source!.parent <- scope!.parent; source!.owner <- scope!.node; source!.occurrence <- scope!.occurrence; source!.writable <- false
+                    source!.constraintRoot <- true
+                }
                 // A member is a width-one capture. Fixed member and span
                 // requests share coordinates, predicates and symbolic skips.
                 frame!.lookup!.bounded <- true
                 if(relation!.looseMode or input){
                     Allocate(frame!.lookup!.chart)
-                    frame!.lookup!.chart!.patternPosition <- parent
+                    frame!.lookup!.chart!.patternPosition <- scope
                 }
                 frame!.lookup!.left!.shallow <- true; frame!.lookup!.right!.shallow <- true
                 frame!.lookup!.right!.checkExtents <- true
@@ -4514,7 +4562,11 @@ struct WorldManager {
             }
             // Higher identities can supply a corresponding nested member too.
             // The retained correspondence projects through intervening records.
+            // The source's own constraints belong to this route. The caller
+            // will continue its outer relationships after consuming this RHS.
+            if(parent!.constraintRoot){frame!.parentContext <- NULL; return(false)}
             request!.ancestrySteps <+- 1
+            if(!parent!.embedded){frame!.parentMember <- parent}
             frame!.parentContext <- parent!.parent; frame!.parentWork <- -1
         }
         return(false)
