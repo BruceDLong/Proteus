@@ -425,7 +425,7 @@ struct WorldScalar {
     me bool: contentsComplete <- true
     me bool: representable <- true
     me bool: fieldLayout <- false
-    me bool: dischargeListSpec <- false
+    me bool: listSpecApplied <- false
     me bool: openTail <- false
     our WorldList: sequence
     our WorldAlternatives: alternatives
@@ -772,8 +772,10 @@ struct infonView {
     // A copied view must not inherit another occurrence's completion marker.
     // Stronger requests still inspect their explicitly requested facts.
     their infonView: worldScalarCompletionOwner
+    // The template has been applied to this layout; keep its semantic source.
+    me bool: listSpecApplied <- false
     // A new supplied constraint needs a new request. Existing handles are not reset.
-    void: noteNormalizationWork() <- {worldScalarCompletionOwner <- NULL; isNormed <- false}
+    void: noteNormalizationWork() <- {worldScalarCompletionOwner <- NULL; isNormed <- false; listSpecApplied <- false}
 }
 
 // Virtual access over the existing model; no copied adjacency graph.
@@ -1692,7 +1694,7 @@ struct WorldPOVGraph {
             if(!openLayout(frame!.facts) and frame!.facts.order!=uUnordered and !frame!.facts.explicitSize){
                 frame!.facts.hasSize <- true; frame!.facts.size <- frame!.operandsRead
             }
-            frame!.facts.dischargeListSpec <- frame!.facts.representable and !openLayout(frame!.facts)
+            frame!.facts.listSpecApplied <- frame!.facts.representable and !openLayout(frame!.facts)
             return()
         }
         me WorldScalar: expression <- frame!.expression
@@ -1941,7 +1943,7 @@ struct WorldPOVGraph {
         if(!edge!.looseSize() and !left.hasSize and right.hasSize){left.hasSize <- true; left.size <- right.size}
         if(!left.hasValue and right.hasValue){
             left.hasValue <- true; left.sequence <- right.sequence; left.openTail <- right.openTail
-            left.dischargeListSpec <- right.dischargeListSpec
+            left.listSpecApplied <- right.listSpecApplied
             left.explicitSize <- left.explicitSize or right.explicitSize or (!left.hasSize and left.order!=uUnordered)
             left.contentsComplete <- right.contentsComplete; left.representable <- right.representable
         }
@@ -2454,11 +2456,12 @@ struct WorldPOVGraph {
         }
     }
 
-    // A closed containing level need not repeat a type-only requirement
+    // A closed containing level need not print a type-only requirement
     // already represented by every embedded child's own future template.
+    // Deferred projection does not invalidate this same-template coverage proof.
     me bool: coveredListSpec(our WorldFrame: frame) <- {
         if(frame!.facts.openTail or !frame!.facts.representable or
-           (frame!.facts.explicitSize and !frame!.facts.hasSize) or needsRequirements(frame) or frame!.listSpecFrame==NULL){return(false)}
+           (frame!.facts.explicitSize and !frame!.facts.hasSize) or frame!.listSpecFrame==NULL){return(false)}
         me WorldScalar: required <- frame!.listSpecFrame!.facts
         if(!typePredicate(required) or required.negative or !frame!.listSpecFrame!.retainedWork.isEmpty()){return(false)}
         me WorldListCursor: members; members.push(frame!.facts.sequence)
@@ -2541,7 +2544,7 @@ struct WorldPOVGraph {
             item!.hasInnrOutr <- false; item!.intersectMarkedRetPOV <- NULL
         }
         if(job.newList!=NULL){item!.value <- job.newList}
-        if(facts.overlay==LST and facts.openTail and frame!.listSpecEdge!=NULL and item!.value!.listSpec==NULL){
+        if(facts.overlay==LST and frame!.listSpecEdge!=NULL and item!.value!.listSpec==NULL){
             item!.value!.listSpec <- frame!.listSpecEdge!.pItem
         }
         // Detached suffixes join the target only after every destination has
@@ -2560,9 +2563,9 @@ struct WorldPOVGraph {
             item!.value!.tailUnfinished <- facts.openTail; item!.value!.timelike <- facts.timelike
             if(facts.order!=uUnknown){item!.orderMode <- facts.order}
         }
-        if(facts.overlay==LST and item!.value!.listSpec!=NULL and
-           ((!openLayout(facts) and facts.dischargeListSpec and facts.hasSize and facts.size==FlexNum(sequenceLength(facts.sequence))) or
-            coveredListSpec(frame))){item!.value!.listSpec <- NULL}
+        item!.listSpecApplied <- facts.overlay==LST and item!.value!.listSpec!=NULL and
+           ((!openLayout(facts) and facts.listSpecApplied and facts.hasSize and facts.size==FlexNum(sequenceLength(facts.sequence))) or
+            coveredListSpec(frame))
         // An unresolved expression is still the representation of its partial
         // result. Type evidence alone must not turn its body into 0 or ''.
         if(item!.value!.evalMode==emConcat and !facts.hasValue and !facts.hasRange){return()}
@@ -2956,7 +2959,7 @@ struct WorldManager {
                 // relationship in the stored partial result.
                 frame!.facts.representable <- false
             }
-            frame!.facts.dischargeListSpec <- frame!.facts.representable and !graph.openLayout(frame!.facts)
+            frame!.facts.listSpecApplied <- frame!.facts.representable and !graph.openLayout(frame!.facts)
             if(!frame!.projected and !frame!.applyingListSpec and (frame!.retainSource or !frame!.facts.representable)){
                 frame!.retainedWork.append(frame!.sourceEdge)
             }
@@ -4161,7 +4164,7 @@ struct WorldManager {
                     result!.frame!.facts.sequence <- state!.sequence
                     result!.frame!.facts.openTail <- false; result!.frame!.facts.hasSize <- true; result!.frame!.facts.size <- count
                     result!.frame!.facts.contentsComplete <- state!.complete; result!.frame!.facts.representable <- state!.representable
-                    result!.frame!.facts.dischargeListSpec <- true
+                    result!.frame!.facts.listSpecApplied <- true
                     result!.frame!.tailRequirements <- NULL; result!.frame!.pendingRequirements <- NULL
                     result!.frame!.listSpecFrame <- NULL; result!.frame!.listSpecEdge <- NULL
                     result!.selected <- state!.selected
@@ -4218,7 +4221,7 @@ struct WorldManager {
             if(chart!.accepted!=NULL){
                 our WorldFrame: answer <- chart!.accepted!.frame
                 answer!.facts.openTail <- true; answer!.facts.hasSize <- false
-                answer!.facts.dischargeListSpec <- false; answer!.facts.contentsComplete <- false
+                answer!.facts.listSpecApplied <- false; answer!.facts.contentsComplete <- false
                 frame!.retainedWork.append(frame!.inputEdge)
             }
         }
@@ -4288,10 +4291,13 @@ struct WorldManager {
             }
             if(frame!.parentWork<0){
                 frame!.parentWork <- 0
-                if(item!.value!.listSpec!=NULL){
+                // Refinement of the same occurrence retains its checked template
+                // constraints. A replacement's fresh value still requests them.
+                if(item!.value!.listSpec!=NULL and !(item!.listSpecApplied and frame!.context!.node!.pItem===frame!.node!.pItem)){
                     our POV:: spec{937}; spec!.pItem <- item!.value!.listSpec
                     frame!.sourceEdge <- spec; frame!.sourceIsOperand <- false; frame!.sourceIsListSpec <- false; frame!.sourceNameInherited <- true
                     frame!.prerequisite <- makeFrame(request, spec)
+                    frame!.prerequisite!.expressionParent <- parent!.node
                     request!.relationshipsRead <+- 1
                     request!.ready.append(frame); request!.ready.append(frame!.prerequisite); return(true)
                 }

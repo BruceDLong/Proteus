@@ -50,6 +50,7 @@ TestsToRun = `
     unit/worldManager/deferredTemplates
     unit/worldManager/streamInsertion
     unit/worldManager/pluralListTypes
+    unit/worldManager/retainedListSpecs
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -9497,11 +9498,11 @@ for(int count:{32,64,128}){
 
 {
  auto p=parse("{unknownType|1 2}");auto h=a.normalize(p);
- check(h->complete() && !p->pItem->value->listSpec && !p->pItem->value->items.head->pItem->type && p->pItem->value->items.head->pItem->addedTypes.size()==1,"opaque listSpec qualifies supplied values without requiring a definition");
+ check(h->complete() && p->pItem->value->listSpec && p->pItem->listSpecApplied && !p->pItem->value->items.head->pItem->type && p->pItem->value->items.head->pItem->addedTypes.size()==1,"opaque listSpec qualifies supplied values without requiring a definition");
 }
 {
  auto p=parse("{atom| &*8+{atom|...}}");a.normalize(p);
- check(!p->pItem->value->listSpec && p->pItem->value->items.head->pItem->value->listSpec,"redundant containing template discharges while sparse template remains");
+ check(p->pItem->value->listSpec && p->pItem->listSpecApplied && p->pItem->value->items.head->pItem->value->listSpec,"applied containing template is retained while its sparse child still needs it");
  auto again=a.normalize(p);check(!again->failed() && p->pItem->value->items.head->pItem->value->listSpec,"repeated normalization retains future sparse type evidence");
  auto unknown=parse("*_+{atom|1}");a.normalize(unknown);check(unknown->pItem->value->listSpec!=nullptr,"explicit unknown parent extent keeps future type requirement");
  auto uncovered=parse("{atom|&{...}}");a.normalize(uncovered);check(uncovered->pItem->value->listSpec!=nullptr,"parent requirement stays when a child cannot represent it");
@@ -9942,5 +9943,63 @@ for(int n:{16,32,64}){
  check(!h->failed() && count==n && h->framesCreated<4*n+16,"typed member work remains linear in the selected list");
 }
 core.deInit();std::cout<<"PLURAL_LIST_TYPES: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_retainedListSpecs(me string: testName) <- {
+        if(!worldManagerRetainedListSpecChecks()){FAIL("Retained listSpec checks failed")}
+    }
+    me bool: worldManagerRetainedListSpecChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& msg){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<msg<<"\n";}};
+auto parse=[&](const std::string& text){auto p=m.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+for(auto input:{"{5|5 5}","{*10+_|2 3}","{5|}","{*10+_|_ _}","{atom|1,2}"}){
+ auto p=parse(input);auto spec=p->pItem->value->listSpec;auto text=toString(spec.get());auto h=a.normalize(p);
+ check(!h->failed() && p->pItem->value->listSpec==spec && toString(spec.get())==text,"normalization retains the original immutable template: "+std::string(input));
+ check(p->pItem->listSpecApplied && toString(p->pItem.get()).find('|')==std::string::npos,"normal output hides the checked finite template: "+std::string(input));
+ InfonViewPrinter debug;debug.debugPrint=true;auto shown=debug.printInfonView(p->pItem.get(),0,nullptr);
+ check(shown.find('|')!=std::string::npos && p->pItem->value->listSpec==spec,"debug output reveals the retained template without mutation");
+ auto again=a.normalize(p);check(!again->failed() && p->pItem->value->listSpec==spec,"repeated normalization keeps the template");
+ if(h->complete())check(again->complete() && again->framesCreated==0,"completed finite list creates no new goals");
+}
+for(auto input:{"{5|5 ...}","*_+{*10+_|2 3}","{5|6}"}){
+ auto p=parse(input);auto spec=p->pItem->value->listSpec;auto h=a.normalize(p);
+ check(!p->pItem->listSpecApplied && p->pItem->value->listSpec==spec && toString(p->pItem.get()).find('|')!=std::string::npos,"open, unresolved or rejected templates remain visible: "+std::string(input));
+}
+{
+ auto p=parse("?={5|_ _}");auto spec=p->pItem->wrkList.front()->pItem->value->listSpec;auto h=a.normalize(p);
+ check(h->complete() && p->pItem->value->listSpec==spec && toString(p->pItem.get())=="{5 5}","adoption retains the borrowed template while hiding it in normal output");
+}
+{
+ auto w=parse("{5|5 5}");a.world=w->pItem;auto spec=w->pItem->value->listSpec;check(a.normalize(w)->complete(),"normalize persistent typed list");
+ auto before=toString(w->pItem.get());auto p=parse("%W@[1]<<=6");auto h=a.normalize(p);
+ check(h->outcome==worldRejected && !h->publications && toString(w->pItem.get())==before && w->pItem->value->listSpec==spec,"replacement still enforces the hidden parent template atomically");
+ p=parse("%W@[1]<<=5");h=a.normalize(p);check(h->complete() && w->pItem->value->listSpec==spec,"compatible replacement preserves the same template");
+ w->pItem->noteNormalizationWork();check(!w->pItem->listSpecApplied && toString(w->pItem.get()).find('|')!=std::string::npos,"new work invalidates only the compact display proof");
+ check(a.normalize(w)->complete() && w->pItem->value->listSpec==spec && w->pItem->listSpecApplied,"a fresh request rechecks the retained template");
+}
+for(bool cancel:{false,true}){
+ auto p=parse("{5|_ _}");auto spec=p->pItem->value->listSpec;m.prepareInput(spec);auto h=a.normalize(p);
+ check(h->outcome==worldWaiting && h->waitingInput==spec && !h->publications && !p->pItem->listSpecApplied,"pending template retains its exact continuation and visible syntax");
+ if(cancel)m.cancel(h);SetModeBits(spec->flags,infonView::streamState,infonView::parseDone);m.inputReady(spec);
+ check(p->pItem->value->listSpec==spec && (cancel?h->outcome==worldCancelled && !p->pItem->listSpecApplied:h->complete() && p->pItem->listSpecApplied),"arrival or cancellation preserves template ownership");
+}
+for(int n:{16,32,64}){
+ std::string input="{5|";for(int i=0;i<n;++i)input+="_ ";input+="}";auto p=parse(input);auto spec=p->pItem->value->listSpec;auto h=a.normalize(p);
+ check(h->complete() && h->templateApplications==static_cast<unsigned>(n) && h->framesCreated<4*n+16 && p->pItem->value->listSpec==spec,"retention does not multiply member-template work");
+}
+{
+ auto w=parse("{#second=_ secondRun:{second|&*10+{second|...}}}");a.world=w->pItem;check(!a.normalize(w)->failed(),"normalize a named sparse source");
+ auto stored=w->pItem->value->items.tail;auto spec=stored->pItem->value->listSpec;
+ auto p=parse("%W.secondRun");auto h=a.normalize(p);
+ check(h->outcome==worldPartial && p->pItem->value->listSpec==spec && toString(p->pItem.get())=="secondRun:{&seconds:*10+{second|  ... }}","a selected sparse layout retains its outer template and compact display proof");
+ p=parse("%W.secondRun@[1]=80");h=a.normalize(p);check(h->complete() && stored->pItem->value->listSpec==spec,"sparse materialization preserves its containing template");
+ p=parse("%W.secondRun");h=a.normalize(p);
+ check(h->outcome==worldPartial && p->pItem->value->listSpec==spec && toString(p->pItem.get())=="secondRun:{second:80 &seconds:*9+{second|  ... }}","matching future templates prove coverage even with deferred projection work");
+ InfonViewPrinter debug;debug.debugPrint=true;auto shown=debug.printInfonView(p->pItem.get(),0,nullptr);
+ check(std::count(shown.begin(),shown.end(),'|')==2,"debug output exposes both outer and sparse child templates");
+}
+core.deInit();std::cout<<"RETAINED_LIST_SPECS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }

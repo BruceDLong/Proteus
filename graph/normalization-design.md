@@ -1247,7 +1247,7 @@ An insertion node caches one parser-owned child. WorldManager requests it throug
 
 ### Inferred plural list descriptions (D052)
 
-A positive simple listSpec supplies its anonymous list's implied plural name through a read-only ModelManager helper. Ordinary nominal correspondence consumes that evidence. A bare named member without a definition can acquire a positive parent type qualification while retaining its name; bound meanings and primitive values still require compatibility. Closed ordered and unordered lists share the type-only coverage proof for template discharge, while open tails and explicitly unknown extents keep their template. Published primary names do not also occur as redundant added qualifications.
+A positive simple listSpec supplies its anonymous list's implied plural name through a read-only ModelManager helper. Ordinary nominal correspondence consumes that evidence. A bare named member without a definition can acquire a positive parent type qualification while retaining its name; bound meanings and primitive values still require compatibility. Closed ordered and unordered lists share the type-only coverage proof for compact template printing (D054). The template remains stored; open tails and explicitly unknown extents keep it visible. Published primary names do not also occur as redundant added qualifications.
 
 A merge may retain an already applied meaning from a context-free RHS with the same nominal identity. Contextual meanings still require proof at their own occurrence.
 
@@ -1261,3 +1261,10 @@ A template requiring a relative link such as `%prev` or `%next` is inapplicable 
 Keep proven absence separate from information pending at a stream or normalization link. Pending context retains the local continuation; it does not permanently discharge the application. Shared templates retain occurrence-independent metadata, while contextual values and applicability are scoped to their occurrences. No goal restart or repeated prefix traversal is introduced.
 
 The user removed `defaultTests.tst:time/t2` because it predates these semantics. The retirement manifest preserves the removed fixture and authorized hash change. This is a compatibility gap in the replacement: current temporal lookup can still turn absent context into `UNDEFINED` and then reject the dependent merge. D053 specifies template application; direct standalone cursor output and finite-tail materialization are separate concerns.
+
+
+### Retained listSpecs and compact printing (D054)
+
+Applying a listSpec to all represented members does not remove it from the model. Keep the original template reference through finite normalization and adoption, so later reads and writes still have its constraints. Shared template bodies remain unchanged.
+
+Publication records the existing coverage proof as an occurrence-local `listSpecApplied` marker. `InfonViewPrinter.isNiceList` uses that marker to omit redundant listSpec text from an ordinary closed literal list. Debug printing reveals the retained template. Open and unproved applications remain visible; new supplied work clears the display proof through the normal invalidation hook. A same-occurrence refinement reuses the already applied template proof; a replacement value still requests its parent template. Deferred projection work does not invalidate type-only coverage when embedded children retain the same positive future template. Parent-template requests retain their containing context. Earlier references to listSpec discharge mean completed application work, not template deletion.
