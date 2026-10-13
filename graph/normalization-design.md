@@ -1268,3 +1268,56 @@ The user removed `defaultTests.tst:time/t2` because it predates these semantics.
 Applying a listSpec to all represented members does not remove it from the model. Keep the original template reference through finite normalization and adoption, so later reads and writes still have its constraints. Shared template bodies remain unchanged.
 
 Publication records the existing coverage proof as an occurrence-local `listSpecApplied` marker. `InfonViewPrinter.isNiceList` uses that marker to omit redundant listSpec text from an ordinary closed literal list. Debug printing reveals the retained template. Open and unproved applications remain visible; new supplied work clears the display proof through the normal invalidation hook. A same-occurrence refinement reuses the already applied template proof; a replacement value still requests its parent template. Deferred projection work does not invalidate type-only coverage when embedded children retain the same positive future template. Parent-template requests retain their containing context. Earlier references to listSpec discharge mean completed application work, not template deletion.
+
+
+## Remaining default-test classification (2026-10-13)
+
+This is an audit of the replacement at `de34172`, not a change to language semantics or test expectations. The fresh `cd LocalBuild && ./TestProteus -t defaultTests.tst:` run reports **19/331**, with exactly the D054 failure names and messages. The [classification inventory](default-test-classification.json) records every fixture, current failure, main-branch source occurrence, saved reference result, supporting probe and next action.
+
+Thirteen of these test names occur in main at `86321ea`; six were added later. Name continuity does not imply unchanged syntax or expectations: for example, the nested ordinary-write fixture originally expected replacement, which the later explicit forceID decision corrected. Fourteen of the current nineteen also failed in the saved original-Proteus4 comparison at `b52322a`. That is historical baseline evidence, not proof that their current behavior is correct. Main was inspected as source, not rebuilt or rerun for this audit.
+
+| Classification | Count | Interpretation |
+| --- | ---: | --- |
+| Formatting / printed representation | 4 | The reported mismatch does not demonstrate a wrong computed value. |
+| Result representation / normalization demand | 7 | Reference expansion, child normalization or pending/no-match treatment needs review; these are not automatically cosmetic. |
+| World-loading blockers | 6 | The named query has not run; there are three shared prerequisite families. |
+| Fixture issue plus an implementation gap | 1 | Correcting the capture in a temporary probe still exposes unsupported work. |
+| Explicitly deferred | 1 | Ambiguous correspondence and its result representation remain deferred. |
+
+Every row below remains registered and failing. “Previous” means the saved original-Proteus4 comparison, not main execution.
+
+| Test | Classification and finding | Previous | Next action |
+| --- | --- | --- | --- |
+| `merge/dots/align4b` | **Deferred.** Unsupported ambiguous open-span alignment; the current retained-RHS expectation is provisional. | Pass | Revisit with general alternative correspondence, as already agreed. |
+| `write/openNegativeLast` | **Pending-result contract.** Unknown endpoint; current handle is partial and retains the update expression rather than printing only its source. | Pass | Specify the returned view while preserving pending work; do not drop the update to match text. |
+| `name/reference/externalProperty` | **Reference/expansion contract.** Lookup returns the expanded name record instead of the asserted `Morgan` reference. | Fail | Check reference identity and demand; this fixture deliberately distinguishes reference lookup from standalone expansion. |
+| `cube/getLstSpec` | **Display.** Correct temporal list/template shape, with an extra `*_+` unknown-size prefix on the member template. | Fail | Review inferred unknown-size printing; this is not a rendered-cube test. |
+| `rubix/sparseNestedContinuation` | **Load blocker: Rubix.** Missing available named definition before selection. The resource uses undeclared `reel`; supplying it in an isolated copy exposes unsupported unordered correspondence next. | Fail | Resolve the intended declaration/context, then reduce the definition-composition gap before assessing continuation. |
+| `user/getUser3` | **Load blocker: user model.** Shared `user_3.pr` scalar contradiction before title lookup. | Fail | Trace the first conflicting template/member pair and review fixture constraints and demand. |
+| `user/getNth` | **Load blocker: user model.** Same prerequisite; nth-member selection has not run. | Fail | Resolve the shared load failure first. |
+| `user/setNth` | **Load blocker: user model.** Same prerequisite; the force-write has not run. | Fail | Resolve the shared load failure first; do not infer that force-write itself is broken. |
+| `this/lvl1` | **Whitespace.** One extra space after a comma; the red/pink values and nested structure agree. | Fail | Reconcile exact printer spacing; no solver correction indicated. |
+| `search/adj1` | **Reference/expansion contract.** Selects Bob; expands `blue` into hue 4, saturation 5 and unknown brightness. | Fail | Review symbolic-reference preservation versus normalized returned values. |
+| `sparse/implicit/readAfterSparsePrefixInSizedCompositeList` | **Fixture plus gap.** Numeric `<_>` expects a list-valued minute. `<?>` in a temporary probe exposes unsupported counted-template propagation. | Fail | Settle the intended capture, then address general sparse composite demand; preserve minute size 60. |
+| `sparse/guard/nonAligningMinuteDoesNotSkipHalfMinute` | **No-match/result contract.** Does not incorrectly skip the half-minute or return 303; retains a partial out-of-range selection instead of `_`. | Pass | Review proof-of-no-match and result handling for the closed source; keep the guard. |
+| `unit/day/fromMinutes/readFirstHour` | **Normalization depth.** Correct first six seconds, with both minute children closed rather than one residual template/tail. | Fail | Check D03 demand, retained constraints and work before changing the expected representation. |
+| `unit/day/fromMinutes/readSecondHour` | **Normalization depth.** Correct seconds 7–12; expected children retain template/tail syntax. | Fail | Same finite-closure/demand review. |
+| `unit/day/fromMinutes/readLastHourNegative` | **Normalization depth.** Correct last hour; same child-expansion difference. | Fail | Same review; no evidence here of a wrong negative endpoint. |
+| `unit/world/dayFromSeconds/writeNestedSecond` | **Display after correct rejection.** Write rejects and seconds 1–12 remain; normal output hides `second|`. | Pass | Preserve rejection/retention checks; reconcile ordinary printing with D054 when authorized. |
+| `unit/world/dayFromSeconds/writeNestedLastSecondNegative` | **Display after correct rejection.** Same behavior for negative indices. | Pass | Same D054 printer review. |
+| `world/load/kernel` | **Load blocker: symbolic extent.** `world` cannot acquire its list shape through unresolved `*(20000+_)`. | Fail | Preserve symbolic size requirements while acquiring known list shape; retain the initialization check. |
+| `world/load/publicKB` | **Load blocker: kernel prerequisite.** Public loading calls `loadKernel()` first and stops at the same failure. | Fail | Fix/validate that prerequisite, then inspect any later public-model failures. |
+
+### Evidence and limits
+
+The current file-loader run is `/tmp/p4-default-classification-current.log`. The inventory embeds its failure bodies and hashes, so the classification does not depend on temporary logs surviving. Historical results come from `/tmp/p4-checkpoint-remaining.log`; all nineteen names occur in that saved comparison. The isolated current-library diagnostic inputs and outputs are also embedded in the inventory.
+
+The two rejected-write probes report rejection followed by the original twelve values. D054's retained-template checks establish that compact printing does not authorize deleting the listSpec. The three hour probes complete with the same finite values; a subsequent selected second returns 6. Those observations establish value agreement, not that the depth or amount of work is optimal.
+
+The nonaligning sparse probe reports `Selected unit window is outside the source`; an aligned 60-second-prefix control returns 303. The composite-capacity fixture reports `Unit view needs a demanded sparse occurrence`, and its unknown-overlay variant reports `Counted template needs bounded predicate propagation`. Neither case should be fixed by discarding its unresolved expression without a semantic proof.
+
+The Rubix load probe changes from unavailable named definition to `Unordered correspondence needs member matching` when an in-memory copy supplies `#reel=*_+_`. No fixture was edited. The user model contains constant template values 40/90 against supplied 20/100 and empty member names against nonempty names; a reduced screen-position example rejects. The first contradictory pair in the full loader is **not yet traced**, so this observation identifies a constraint/demand question rather than declaring those exact source fields the first cause. Ordinary constants must not silently become overridable defaults.
+
+D051's kernel trace and a fresh minimal `*(20000+_)+{T _|...}` probe identify the symbolic-expression boundary. The latter is partial with `Expression operand value is unknown`. The shared load failure prevents these two fixtures from assessing later PublicKB behavior.
+
+No engine, printer, fixture, registration or harness policy changed. All protected fixture hashes were checked; unrelated `myTests.tst` was preserved. The next implementation work should follow the semantic families above, not a target failure count. D053 relative-context applicability remains a known compatibility gap outside these nineteen; this audit does not claim that their eventual success would establish all normalization semantics.
