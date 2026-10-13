@@ -951,6 +951,8 @@ struct WorldPOVGraph {
             if(compareNominal(required, word)==worldReady){return(worldReady)}
         }
         if(actual.meaningApplied and actual.nominal!=NULL){return(worldRejected)}
+        if(required!=NULL and required!.defToUse==NULL and actual.nominal==NULL and actual.hasValue and
+           (actual.overlay==NUM or actual.overlay==STR)){return(worldRejected)}
         return(match)
     }
     me WorldOutcome: compareNames(me WorldScalar: required, me WorldScalar: actual) <- {
@@ -1325,6 +1327,10 @@ struct WorldPOVGraph {
                 else if(compared==worldRejected){compared <- worldReady}
             }
             me WorldScalar: result <- candidate
+            if(!predicate.negative and predicate.nominal!=NULL and (candidate.nominal==NULL or candidate.inheritedName)){
+                result.nominal <- predicate.nominal; result.inheritedName <- predicate.inheritedName
+                addNominal(result, candidate.nominal)
+            }
             result.outcome <- compared; result.detail <- "Correspondence predicate comparison"
             if(!predicate.negative and predicate.hasSize){result.hasSize <- true; result.size <- predicate.size}
             return(result)
@@ -1530,6 +1536,7 @@ struct WorldPOVGraph {
                 if(!frame!.facts.hasValue and frame!.facts.overlay<0 and frame!.context==NULL and frame!.expressionParent==NULL and !frame!.predicateOnly and !frame!.acquireOnly){frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Named value has no available definition"}
                 return(NULL)
             }
+            if(frame!.facts.nominal!.defToUse===item and frame!.facts.hasValue){frame!.facts.meaningApplied <- true; return(NULL)}
             request!.meaningEdges <+- 1
             our POV:: meaning{939}; meaning!.pItem <- frame!.facts.nominal!.defToUse; meaning!.trueByDefinition <- true
             return(meaning)
@@ -2449,6 +2456,11 @@ struct WorldPOVGraph {
             item!.viewMode <- vmOverlay
             if(!facts.hasRange and facts.overlay!=LST){item!.value!.overlayType <- facts.overlay}
         }
+        // A selected result does not inherit the containing expression's
+        // endpoint. Unknown result size must replace that old view's size.
+        if((frame!.selection!=NULL or frame!.path!=NULL) and !facts.hasSize){
+            item!.infSize!.overlayType <- NUM; item!.infSize!.evalMode <- emUnknown; item!.infSize!.items.clear()
+        }
         if(facts.overlay==LST and facts.order==uUnordered and !facts.explicitSize){item!.infSize!.evalMode <- emUnknown}
         if(facts.hasSize){
             item!.infSize!.overlayType <- NUM; item!.infSize!.evalMode <- emLiteral; item!.infSize!.num <- facts.size
@@ -2645,6 +2657,7 @@ struct WorldManager {
         return(value)
     }
     void: beginFields(our WorldRequest: request, our WorldFrame: frame) <- {
+        frame!.contextual <- frame!.contextual or frame!.prerequisite!.contextual
         if(!graph.representableFacts(frame!.prerequisite!.facts) or !frame!.prerequisite!.retainedWork.isEmpty()){
             frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Record meaning still has unresolved relationships"; stopFrame(request, frame); return()
         }
@@ -2713,6 +2726,7 @@ struct WorldManager {
                 frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Record field still has unresolved relationships"; stopFrame(request, frame); return()
             }
             graph.appendMember(fields!.sequence, member)
+            frame!.contextual <- frame!.contextual or member!.contextual
             frame!.facts.contentsComplete <- frame!.facts.contentsComplete and graph.completeFacts(member!.facts, false)
             frame!.facts.representable <- frame!.facts.representable and graph.representableFacts(member!.facts)
             fields!.next <+- 1
@@ -3136,7 +3150,7 @@ struct WorldManager {
             frame!.finished <- true; return()
         }
         our POV: edge <- graph.memberRelationship(lookup!.query!.relation); edge!.pItem <- lookup!.result!.position!.node!.pItem
-        if(lookup!.query!.testPattern and (frame!.facts.negative or graph.rangePredicate(frame!.facts))){
+        if(lookup!.query!.testPattern and (frame!.facts.negative or graph.rangePredicate(frame!.facts) or graph.typePredicate(frame!.facts))){
             if(lookup!.result!.facts==NULL){
                 lookup!.result!.facts <- makeFrame(request, lookup!.result!.position!.node, lookup!.result!.position)
                 lookup!.result!.facts!.acquireOnly <- frame!.acquireOnly
@@ -3144,6 +3158,8 @@ struct WorldManager {
                 request!.ready.append(frame); request!.ready.append(lookup!.result!.facts); return()
             }
             frame!.facts <- graph.matchPosition(frame!.facts, lookup!.result!.facts!.facts, edge)
+            frame!.contextual <- frame!.contextual or lookup!.result!.facts!.contextual
+            if(frame!.facts.overlay==LST){graph.adoptListRequirements(frame, lookup!.result!.facts)}
             frame!.correspondenceResult <- lookup!.result; frame!.lookup <- NULL
             request!.ready.append(frame); return()
         }
@@ -4456,6 +4472,24 @@ struct WorldManager {
                                  our PartPath: part, our WorldFrame: index) <- {
         our WorldFrame: units <- unitOperation(request, source, part, index)
         if(units!=NULL){return(units)}
+        if(part!.pathMode==idxField and part!.spec!=NULL and part!.spec!.value!.overlayType!=LST){
+            me FlexNum: boundary <- index!.facts.number
+            our PartPath:: search; search!.pathMode <- dotField; search!.path <- part!.spec
+            our WorldFrame: result <- pathSelection(request, source, search, NULL)
+            if(boundary<0){
+                me WorldScalar: header <- graph.read(request, source!.node, source!.node!.pParent)
+                if(header.outcome!=worldReady or !header.hasSize){result!.facts.outcome <- worldPartial; result!.facts.detail <- "Search boundary needs a known endpoint"; result!.initialized <- true; result!.finished <- true; return(result)}
+                boundary <+- header.size
+            }
+            if(boundary<0){result!.facts.outcome <- worldPartial; result!.facts.detail <- "Search boundary is outside the source"; result!.initialized <- true; result!.finished <- true; return(result)}
+            result!.selection!.domain <- graph.offsetDomain(result!.selection!.domain, boundary)
+            Allocate(result!.selection!.walk); result!.selection!.walk!.push(result!.selection!.domain)
+            result!.selection!.walk!.stopAt <- result!.node!.pItem!.intersectMarkedRetPOV
+            result!.node!.pItem!.wrkList.clear()
+            if(part!.continuation!=NULL){result!.node!.pItem!.wrkList <- part!.continuation!.wrkList}
+            result!.acquireOnly <- result!.node!.pItem!.wrkList.isEmpty()
+            return(result)
+        }
         our infonView:: query
         query!.itmMode <- mItem; query!.streamState <- parseDone
         query!.viewMode <- vmOverlay; query!.value!.evalMode <- emIntersection
@@ -4678,6 +4712,11 @@ struct WorldManager {
             if(item!.viewMode==vmCursor){
                 if(item!.cursorMode==cmTPrev or item!.cursorMode==cmTNext){
                     if(!cursorSource(request, frame)){return()}
+                }else if(item!.cursorMode==cmSelf){
+                    our WorldPosition: instance <- frame!.navigation
+                    while(instance!=NULL and !instance!.node!.trueByDefinition){instance <- instance!.parent}
+                    if(instance==NULL){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Self needs a containing definition occurrence"; stopFrame(request, frame); return()}
+                    frame!.path!.source <- graph.position(instance!.owner, instance!.parent)
                 }else if(item!.cursorMode==cmWorld){
                     if(request!.worldSource==NULL){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "World source is not available"; stopFrame(request, frame); return()}
                     if(control!.worldRoot==NULL or control!.worldRoot!.pItem!==request!.worldSource){Allocate(control!.worldRoot, 944); control!.worldRoot!.pItem <- request!.worldSource}
@@ -4712,7 +4751,7 @@ struct WorldManager {
                 if(path!.operation==NULL){
                     // A retained parent is itself the requested value. Its
                     // outstanding meanings remain ordinary normalization work.
-                    path!.operation <- makeFrame(request, path!.source!.node, path!.source)
+                    path!.operation <- makeFrame(request, path!.source!.node, path!.source, frame!.demandSize)
                     path!.operation!.referenceOnly <- frame!.referenceOnly
                     request!.ready.append(frame); request!.ready.append(path!.operation); return()
                 }
@@ -4754,6 +4793,7 @@ struct WorldManager {
                 path!.operation <- makeFrame(request, boundary, position)
                 Allocate(path!.operation!.correspondenceResult); path!.operation!.correspondenceResult!.position <- position
             }else{path!.operation <- pathSelection(request, path!.source, path!.part, path!.index)}
+            path!.operation!.demandSize <- frame!.demandSize
             if(frame!.referenceOnly and path!.operation!.acquireOnly){path!.operation!.referenceOnly <- true}
             request!.ready.append(frame); request!.ready.append(path!.operation); return()
         }
@@ -4770,7 +4810,7 @@ struct WorldManager {
                 if(selected==NULL or selected!.position==NULL){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Chained path needs one source occurrence"; stopFrame(request, frame); return()}
                 our POV:: child{940}; child!.pItem <- graph.pathBody(selected!.position!.node!.pItem, false)
                 child!.pItem!.partRef <- work!.partRef; child!.pItem!.parts <- work!.parts
-                path!.nested <- makeFrame(request, child)
+                path!.nested <- makeFrame(request, child, NULL, frame!.demandSize)
                 path!.nested!.referenceOnly <- frame!.referenceOnly
                 Allocate(path!.nested!.path); path!.nested!.path!.source <- selected!.position
                 request!.ready.append(frame); request!.ready.append(path!.nested); return()
@@ -4835,6 +4875,7 @@ struct WorldManager {
         }
         if(frame!.lookup!=NULL and !frame!.applyingListSpec){locateRHS(request, frame); return()}
         if(frame!.selecting and frame!.prerequisite!=NULL){
+            frame!.contextual <- frame!.contextual or frame!.prerequisite!.contextual
             if(frame!.selection!.domain!.input!=NULL){frame!.correspondenceResult <- frame!.prerequisite!.correspondenceResult}
             else{
                 Allocate(frame!.correspondenceResult); frame!.correspondenceResult!.position <- frame!.selection!.selected
@@ -4971,6 +5012,7 @@ struct WorldManager {
                 position!.owner <- frame!.navigation!.owner; position!.occurrence <- frame!.navigation!.occurrence
             }
         }
+        if(position==NULL and !frame!.sourceIsListSpec){position <- frame!.navigation}
         if(request!.edits.containsKey(source!.pItem)){
             frame!.prerequisite <- request!.edits.at(source!.pItem); request!.ready.append(frame)
         }else if(request!.attempts.containsKey(source!.pItem) and

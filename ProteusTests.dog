@@ -43,6 +43,7 @@ TestsToRun = `
     unit/worldManager/boundaryArguments
     unit/worldManager/temporalOccurrences
     unit/worldManager/nominalEvidence
+    unit/worldManager/selectionProviders
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -8739,7 +8740,7 @@ run("{1 2 3 4 5 6 7 8 9 0}@[3:*4+{...}]","{4 5 6 7}");
 run("{1 2 3 4}@[0:*2+{...}]","{1 2}");run("{1 2 3 4}@[-2:*2+{...}]","{3 4}");
 for(auto text:{"{1 2 3 4 5}@[3:5]"}){
  auto p=parse(text);auto before=toString(p->pItem.get());auto h=a.normalize(p);
- check(h->outcome==worldUnsupported && !h->publications && toString(p->pItem.get())==before,"unimplemented scalar-spec semantics are not ordinary span lookup");
+ check(h->complete() && toString(p->pItem.get())=="5","scalar specification uses predicate search from its boundary");
 }
 for(auto text:{"{begin:7}.begin","{end:7}.end"}){
  auto p=parse(text);auto h=a.normalize(p);check(h->complete() && p->pItem->isNull() && p->pItem->identityName,"bare boundary access returns its null occurrence, not a same-named member");
@@ -9632,7 +9633,7 @@ for(auto expr:{"alias=sibling","hue=saturation","red=blue","color:{hue:0}=blue"}
 }
 {
  auto w=parse("{red blue}");a.world=w->pItem;check(a.normalize(w)->outcome==worldPartial,"publish a record with unknown remaining fields");auto original=toString(w->pItem.get());
- auto q=parse("%W.color");auto h=a.normalize(q);check(h->outcome==worldPartial && q->pItem->type && q->pItem->type->normalType()=="color" && q->pItem->value->items.head,"later request uses persisted inherited type");
+ auto q=parse("%W.color");auto h=a.normalize(q);check(h->outcome==worldPartial && q->pItem->type && q->pItem->type->normalType()=="red" && q->pItem->value->items.head,"later request uses persisted inherited type");
  check(toString(w->pItem.get())==original,"read does not rename source's primary type");
 }
 {
@@ -9653,6 +9654,36 @@ for(bool cancel:{false,true}){
 }
 check(toString(declarations->pItem.get())==unchanged,"all uses preserve shared definition bodies");
 core.deInit();std::cout<<"NOMINAL_EVIDENCE: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_selectionProviders(me string: testName) <- {
+        if(!worldManagerSelectionProviderChecks()){FAIL("Selection provider checks failed")}
+    }
+    me bool: worldManagerSelectionProviderChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& msg){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<msg<<"\n";}};
+auto parse=[&](const std::string& s){auto p=m.parse(s);check(p.target && p.error.empty(),"parse "+s);return p.target;};
+auto run=[&](const std::string& s,const std::string& out){auto p=parse(s);auto h=a.normalize(p);check(!h->failed() && toString(p->pItem.get())==out,s+" => "+toString(p->pItem.get())+" "+h->detail);return std::make_pair(p,h);};
+run("{76543 bruceLong:{1 2 3}}.bruceLong","bruceLong:{1 2 3}");
+run("{'irrelevant' target:8}.target","target:8");
+{auto p=parse("{_ target:8}.target");auto h=a.normalize(p);check(h->outcome==worldPartial && !h->publications,"unknown predecessor is not proof of a missing name");}
+for(int n:{8,32,128}){std::string s="{";for(int i=0;i<n;++i)s+=" 1";s+=" target:8}.target";auto h=run(s,"target:8").second;check(h->correspondenceChecks<=2*n+4 && h->framesCreated<15,"unbound field search uses closed primitive headers");}
+run("{1 2 3 4 5 6 7}@[3:5]","5");run("{1 2 3 4 5 6 7}@[0:5]","5");run("{1 2 3 4 5 6 7}@[-3:5]","5");
+run("{2 5 3 5 6}@[3:5]","5");run("{1 2 3 4 5 6}@[2:*5+_]","3");
+{auto p=parse("{1 2 3 4 5 6}@[5:5]");auto h=a.normalize(p);check(!h->complete() && !h->publications,"search cannot match a value before its boundary");}
+{auto p=parse("{1 2 ...}@[-1:5]");auto h=a.normalize(p);check(h->outcome==worldPartial && !h->publications,"negative search waits for a proved endpoint");}
+{auto p=parse("{1 2 3 4 5 6}@[3:5]");auto input=p->pItem->value->items.head->next->next->next->next->pItem;m.prepareInput(input);auto h=a.normalize(p);check(h->outcome==worldWaiting && h->waitingInput==input && !h->publications,"offset search waits at its demanded candidate");auto frames=h->framesCreated;SetModeBits(input->flags,infonView::streamState,infonView::parseDone);m.inputReady(input);check(h->complete() && toString(p->pItem.get())=="5" && h->framesCreated<=frames+2,"offset search retains its prefix across a wait");}
+{auto w=parse("{*10+_| 5 6}");a.world=w->pItem;auto q=parse("%W@[1]");auto session=a.startSession();auto h=a.normalizeInSession(session,q,true);check(h->complete() && q->pItem->infSize->num==10 && q->pItem->value->num==5,"path forwards a size demand through candidate selection");a.endSession(session);}
+{auto d=parse("{#hue=_ #color={hue} #red=color:{hue:0} #pink=color:{hue:345} #paper=paper:{red,{{%.color}{pink}}}}");check(a.normalize(d)->complete(),"store a finite recursive nominal constructor");auto before=toString(d->pItem.get());run("paper","paper:{red:{hue:0}, {{red:{hue:0}} {pink:{hue:345}}}}");check(toString(d->pItem.get())==before,"self reads borrow the containing definition occurrence");}
+{auto d=parse("{#cycle=cycle}");check(a.normalize(d)->complete(),"store an unresolved recursive alias");auto p=parse("cycle");check(a.normalize(p)->outcome==worldUnsupported,"a recursive alias without a value remains a joint-proof boundary");}
+run("{T 1 _=%tprev}","{T 1 1}");
+{auto d=parse("{#x=_ #seen=x #box=box:{x,seen=%.x} #oneBox=box:{x:1} #twoBox=box:{x:2}}");check(a.normalize(d)->complete(),"register different instances sharing one self-dependent meaning");auto before=toString(d->pItem.get());run("box:{x:1}","box:{x:1, seen:1}");run("box:{x:2}","box:{x:2, seen:2}");run("{oneBox twoBox}","{oneBox:{x:1, seen:1} twoBox:{x:2, seen:2}}");check(toString(d->pItem.get())==before,"instance reads never rewrite the shared meaning");}
+{auto d=parse("{#sack={entry|...}}");check(a.normalize(d)->complete(),"register an open typed collection");auto q=run("{sack}.sack","sack:{entry|  ... }").first;check(q->pItem->value->listSpec && getFlagBit(q->pItem->value->flags,infonState::tailUnfinished),"type selection preserves the source's future member requirement");}
+{auto q=run("{100 2 3}.first","100").first;check(getModeBits(q->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown,"selected scalar does not acquire its old container's size");check(!a.normalize(q)->framesCreated && q->pItem->value->num==100,"repeated scalar read preserves the unbounded value");}
+core.deInit();std::cout<<"REQUESTED_PROVIDERS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
 
     }%>
 }
