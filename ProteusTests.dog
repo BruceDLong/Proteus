@@ -49,6 +49,7 @@ TestsToRun = `
     unit/worldManager/lexicalText
     unit/worldManager/deferredTemplates
     unit/worldManager/streamInsertion
+    unit/worldManager/pluralListTypes
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -9879,5 +9880,67 @@ for(const std::string spec:{"missing:///child","throw:///child","memory:///synta
 check(agent.worldSessions.size()==1,"parser-only insertions leave session ownership with Agent's caller");
 core.deInit();check(agent.worldSessions.empty() && core.streamLoader->pendingConnections.empty(),"shutdown joins startup workers and closes sessions");
 std::cout<<"STREAM_INSERTION: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_pluralListTypes(me string: testName) <- {
+        if(!worldManagerPluralListTypeChecks()){FAIL("Plural list type checks failed")}
+    }
+    me bool: worldManagerPluralListTypeChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& msg){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<msg<<"\n";}};
+auto parse=[&](const std::string& s){auto p=m.parse(s);check(p.target && p.error.empty(),"parse "+s);return p.target;};
+auto run=[&](const std::string& s,const std::string& out){auto p=parse(s);auto h=a.normalize(p);check(!h->failed() && toString(p->pItem.get())==out,s+" => "+toString(p->pItem.get())+" "+h->detail);return std::make_pair(p,h);};
+run("{123, foot, {foot|foot1,foot2}}.feet","feet:{foot1, foot2}");
+run("{{cat|cat1,cat2}}.cats","cats:{cat1, cat2}");
+run("{{box|1,2}}.boxes","boxes:{1, 2}");
+run("{{foot|...}}.feet","feet:{foot|  ... }");
+run("{123, foot, {foot|foot1,foot2}}.foot","foot");
+{
+ auto w=parse("{{foot|foot1,foot2}}");a.world=w->pItem;auto before=toString(w->pItem.get());auto p=run("%W.feet","feet:{foot1, foot2}").first;
+ check(toString(w->pItem.get())==before,"plural selection does not normalize its shared source");
+ auto member=p->pItem->value->items.head;check(member && member->pItem->type->normalType()=="foot1" && member->pItem->addedTypes.size()==1 && member->pItem->addedTypes.front()->normalType()=="foot","member retains its own name and checked parent qualification");
+ auto h=a.normalize(p);check(!h->failed() && toString(p->pItem.get())=="feet:{foot1, foot2}" && !getFlagBit(p->pItem->flags,infonView::isNormed),"repeat normalization retains qualifications without claiming unknown values complete");
+ a.world=p->pItem;run("%W.foot","foot1");run("%W.foot1","foot1");
+}
+{
+ auto w=run("{{foot|foot1,foot2}}","{{foot1, foot2}}").first;a.world=w->pItem;
+ run("%W.feet","feet:{foot1, foot2}");
+}
+for(auto s:{"foot1=foot","{1|2}","{{cat|cat1,cat2}}.dogs","{{!foot|1,2}}.feet"}){
+ auto p=parse(s);auto before=toString(p->pItem.get());auto h=a.normalize(p);check(!h->complete() && toString(p->pItem.get())==before,"unrelated ordinary identities, values and predicates are not accepted: "+std::string(s));
+}
+{
+ auto d=parse("{#base=1 #left=base #right=base}");check(a.normalize(d)->complete(),"register distinct bound siblings");
+ auto p=parse("{left|right}");auto before=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before,"a listSpec cannot identify bound sibling types");
+}
+{
+ auto p=parse("herd:{foot|foot1,foot2}");auto h=a.normalize(p);check(!h->failed() && p->pItem->type && p->pItem->type->normalType()=="herd" && p->pItem->addedTypes.empty(),"an explicit container name is not replaced by an inferred plural");
+}
+for(bool cancel:{false,true}){
+ auto w=parse("{{foot|foot1,foot2}}");a.world=w->pItem;auto spec=w->pItem->value->items.head->pItem->value->listSpec;m.prepareInput(spec);
+ auto p=parse("%W.feet");auto before=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldWaiting && h->waitingInput==spec && !h->publications,"plural acquisition waits for its exact listSpec");auto frames=h->framesCreated;
+ if(cancel)m.cancel(h);SetModeBits(spec->flags,infonView::streamState,infonView::parseDone);m.inputReady(spec);
+ check(cancel?h->outcome==worldCancelled && toString(p->pItem.get())==before:!h->failed() && toString(p->pItem.get())=="feet:{foot1, foot2}" && h->framesCreated<frames+8,"listSpec arrival continues the same request or cancellation preserves the target");
+}
+{
+ auto p=parse("*_+{foot|foot1,foot2}");auto h=a.normalize(p);check(!h->failed() && p->pItem->value->listSpec && getModeBits(p->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown,"an explicitly unknown extent retains its future listSpec");
+}
+{
+ auto w=parse("{#second=_ #minute=*3+{second|...} #hour=*2+{minute|...} #nestedDay=*2+{hour|...} nestedDay:{hour|hour:{minute|minute:{second|1 2 3} minute:{second|4 5 6}} hour:{minute|minute:{second|7 8 9} minute:{second|10 11 12}}}}");
+ a.world=w->pItem;check(a.normalize(w)->complete(),"normalize nested unit descriptions before later selection");auto before=toString(w->pItem.get());
+ for(auto query:{"%W.nestedDay@[-3:*2+{minute|...}]","*(-3)+[<&*2+{minute|...}> *1+{minute|...}] <~ %W.nestedDay"}){
+  run(query,"{minute:{4 5 6} minute:{7 8 9}}");
+  auto p=parse(std::string(query)+" = {minute:{40 50 60} minute:{70 80 90}}");auto h=a.normalize(p);
+  check(h->outcome==worldRejected && !h->publications && toString(w->pItem.get())==before,"projected typed writes preserve a normalized world on conflict");
+ }
+}
+for(int n:{16,32,64}){
+ std::string s="{{cat|";for(int i=0;i<n;++i){if(i)s+=',';s+="cat"+std::to_string(i);}s+="}}.cats";
+ auto p=parse(s);auto h=a.normalize(p);int count=0;for(auto member=p->pItem->value->items.head;member;member=member->next)++count;
+ check(!h->failed() && count==n && h->framesCreated<4*n+16,"typed member work remains linear in the selected list");
+}
+core.deInit();std::cout<<"PLURAL_LIST_TYPES: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }

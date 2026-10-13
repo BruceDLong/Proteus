@@ -1296,6 +1296,7 @@ struct WorldPOVGraph {
         facts.negative <- item!.invertMatch
         facts.extentApplied <- item!.value!.numericExtentApplied
         facts.applyExtent()
+        if(facts.overlay==LST and facts.nominal==NULL){addNominal(facts, modelMngr.inferredListType(item!.value))}
         return(facts)
     }
 
@@ -2059,7 +2060,20 @@ struct WorldPOVGraph {
     // newly known scalar facts wake it; adding unrelated edges does no replay.
     void: mergeRelationship(our WorldRequest: request, our WorldFrame: frame) <- {
         me WorldScalar: before <- frame!.facts
+        // A bare member name has no contrary type/value meaning. Its
+        // parent's type-only assertion qualifies that occurrence, not its name.
+        if(frame!.sourceNameInherited and typePredicate(frame!.prerequisite!.facts) and
+           before.nominal!=NULL and before.nominal!.defToUse==NULL and !before.hasValue and before.overlay<0 and
+           !before.negative and !frame!.prerequisite!.facts.negative){
+            addNominal(before, frame!.prerequisite!.facts.nominal)
+            withEach word in frame!.prerequisite!.facts.qualifications{addNominal(before, word)}
+            before.meaningApplied <- true
+        }
         me WorldScalar: result <- merge(before, frame!.prerequisite!.facts, frame!.sourceEdge)
+        if(result.outcome==worldReady and frame!.prerequisite!.facts.meaningApplied and !frame!.prerequisite!.contextual and
+           result.nominal!=NULL and compareNominal(result.nominal, frame!.prerequisite!.facts.nominal)==worldReady){
+            result.meaningApplied <- true
+        }
         if(result.needsEvidence){
             result <- before
             result.pendingChecks <- joinRequirements(before.pendingChecks, requirement(frame!.prerequisite, frame!.sourceEdge))
@@ -2443,7 +2457,7 @@ struct WorldPOVGraph {
     // A closed containing level need not repeat a type-only requirement
     // already represented by every embedded child's own future template.
     me bool: coveredListSpec(our WorldFrame: frame) <- {
-        if(frame!.facts.openTail or frame!.facts.order==uUnordered or !frame!.facts.representable or
+        if(frame!.facts.openTail or !frame!.facts.representable or
            (frame!.facts.explicitSize and !frame!.facts.hasSize) or needsRequirements(frame) or frame!.listSpecFrame==NULL){return(false)}
         me WorldScalar: required <- frame!.listSpecFrame!.facts
         if(!typePredicate(required) or required.negative or !frame!.listSpecFrame!.retainedWork.isEmpty()){return(false)}
@@ -2499,7 +2513,9 @@ struct WorldPOVGraph {
         item!.addedTypes.clear()
         if(facts.inheritedName and facts.nominal!=NULL){item!.type <- NULL; item!.addedTypes.append(facts.nominal)}
         else{item!.type <- facts.nominal}
-        withEach word in facts.qualifications{item!.addedTypes.append(word)}
+        withEach word in facts.qualifications{
+            if(facts.nominal==NULL or compareNominal(facts.nominal, word)!=worldReady){item!.addedTypes.append(word)}
+        }
         item!.wordDerefed <- facts.meaningApplied
         if(job.newAlternatives!=NULL){
             our infonState:: value; value!.overlayType <- tUnknown; value!.evalMode <- emIntersection

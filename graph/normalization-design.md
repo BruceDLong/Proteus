@@ -1244,3 +1244,9 @@ An empty unbounded named list can acquire its declared temporal/member shape wit
 ### Parser-only stream insertion (D051)
 
 An insertion node caches one parser-owned child. WorldManager requests it through the existing loader and continues its child frame at parser readiness; Agent retains session ownership. Imported declarations and effects share the outer transaction, while source opening occurs on a loader-owned worker outside the graph lock. Publication attaches declaration identities and recomputes only inferred closed-list extents. Given extents and ordinary declaration-copy restrictions remain. General symbolic size expressions, streamed-prefix publication and reply effects are separate requirements.
+
+### Inferred plural list descriptions (D052)
+
+A positive simple listSpec supplies its anonymous list's implied plural name through a read-only ModelManager helper. Ordinary nominal correspondence consumes that evidence. A bare named member without a definition can acquire a positive parent type qualification while retaining its name; bound meanings and primitive values still require compatibility. Closed ordered and unordered lists share the type-only coverage proof for template discharge, while open tails and explicitly unknown extents keep their template. Published primary names do not also occur as redundant added qualifications.
+
+A merge may retain an already applied meaning from a context-free RHS with the same nominal identity. Contextual meanings still require proof at their own occurrence.
