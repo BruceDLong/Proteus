@@ -52,6 +52,7 @@ TestsToRun = `
     unit/worldManager/pluralListTypes
     unit/worldManager/retainedListSpecs
     unit/worldManager/pieceComposition
+    unit/worldManager/pieceCorrespondence
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
 
@@ -7227,5 +7228,68 @@ for(bool cancel:{false,true}){
 }
 check(toString(definitions->pItem.get())==declarationText,"shared declarations remain unchanged");
 core.deInit();std::cout<<"PIECE_COMPOSITION: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_pieceCorrespondence(me string: testName) <- {
+        if(!worldManagerPieceCorrespondenceChecks()){FAIL("Piece correspondence checks failed")}
+    }
+    me bool: worldManagerPieceCorrespondenceChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& msg){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<msg<<"\n";}};
+auto parse=[&](const std::string& s){auto p=m.parse(s);check(p.target && p.error.empty(),"parse "+s);return p.target;};
+auto d=parse("{#rot=*_+_ #xLoc=rot #yLoc=rot #zLoc=rot #xRot=rot #yRot=rot #zRot=rot #location={xLoc,yLoc,zLoc} #orientation={xRot,yRot,zRot} #color=$ #side={color} #piece={location,orientation,*2+{side|...}}}");auto definitions=toString(d->pItem.get());check(a.normalize(d)->complete(),"register the piece model");
+std::string lhs="piece:*3+{location:*3+{xLoc:1,yLoc:2,zLoc:_},orientation:*3+{xRot:0,yRot:0,zRot:0},*2+{side|{color:'red'}{color:'blue'}}}";
+std::string rhs="piece:*3+{*2+{side|{color:'red'}{color:'blue'}},orientation:*3+{zRot:0,yRot:0,xRot:0},location:*3+{zLoc:3,xLoc:1,yLoc:2}}";
+auto leaf=[](std::shared_ptr<POV> p){auto location=p->pItem->value->items.head;location->pParent=p.get();auto z=location->pItem->value->items.tail;z->pParent=location.get();return z;};
+for(int mode:{0,1,2,3,4}){
+ auto p=parse(lhs+"="+rhs);auto z=leaf(p);auto zItem=z->pItem;auto source=p->pItem->wrkList[0]->pItem;auto sourceText=toString(source.get());auto before=toString(p->pItem.get());auto other=p->pItem->value->items.tail;auto otherText=toString(other->pItem.get());a.world=p->pItem;
+ auto q=mode==0?p:mode==1?z:parse(mode==2?"%W.location.zLoc":mode==3?"%W.location.zLoc=3":"%W.location.zLoc=4");auto h=a.normalize(q);
+ if(mode==4)check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before,"conflicting selected write is atomic");
+ else{
+  auto result=mode==0?z:q;check(h->complete() && result->pItem->value->num==3,"one missing coordinate through whole/direct/selected/write demand "+std::to_string(mode)+": "+h->detail);
+  if(mode==2)check(toString(p->pItem.get())==before,"reading the coordinate leaves its source occurrence untouched");
+  else check(z->pItem==zItem && z->pItem->value->num==3,"normalization/write preserves the destination occurrence");
+  if(mode!=0)check(toString(other->pItem.get())==otherText,"a coordinate request leaves colored sides untouched");
+ }
+ check(toString(source.get())==sourceText,"the corresponding RHS remains unchanged");
+}
+for(auto text:{"{location:{zLoc:_}}={location:{zLoc:3}}","{location:{zLoc:_},unused:{1=2}}={unused:{1=2},location:{zLoc:3}}"}){
+ auto p=parse(text);auto z=leaf(p);auto h=a.normalize(z);check(h->complete() && z->pItem->value->num==3,"ancestor projection handles singleton and reordered records without evaluating unrelated contradictions");
+ auto source=parse(text);a.world=source->pItem;auto q=parse("%W.location.zLoc");auto read=a.normalize(q);check(read->complete() && q->pItem->value->num==3,"selection uses the same nested correspondence for singleton and reordered records");
+}
+for(bool cancel:{false,true})for(int where:{0,1,2}){
+ auto p=parse(lhs+"="+rhs);auto z=leaf(p);auto source=p->pItem->wrkList[0]->pItem;auto sourceLocation=source->value->items.tail->pItem;auto pending=where==0?source:where==1?sourceLocation:sourceLocation->value->items.head->pItem;auto before=toString(p->pItem.get());m.prepareInput(pending);auto h=a.normalize(z);auto frames=h->framesCreated;auto positions=h->correspondencePositions;
+ check(h->outcome==worldWaiting && h->waitingInput==pending && !h->publications,"wait on the exact source/ancestor/coordinate header");
+ auto unrelated=parse("7");m.inputReady(unrelated->pItem);check(h->outcome==worldWaiting && h->framesCreated==frames && h->correspondencePositions==positions,"unrelated arrival does not replay correspondence");
+ if(cancel)m.cancel(h);SetModeBits(pending->flags,infonView::streamState,infonView::parseDone);m.inputReady(pending);
+ check(cancel?h->outcome==worldCancelled && toString(p->pItem.get())==before:h->complete() && z->pItem->value->num==3 && h->framesCreated<frames+10,"resume retained correspondence or cancel without publication");
+}
+{
+ auto p=parse(lhs+"="+rhs);auto z=leaf(p);auto untouched=p->pItem->value->items.tail->pItem->value->items.head->pItem;m.prepareInput(untouched);auto before=toString(untouched.get());auto h=a.normalize(z);
+ check(h->complete() && !h->waitingInput && toString(untouched.get())==before && getModeBits(untouched->flags,infonView::streamState)==infonView::parseStarted,"a member demand does not normalize an unrelated unfinished color");
+}
+for(auto text:{"{x:1,zLoc:_}={zLoc:3,zLoc:4}","{zLoc:_,zLoc:_}={zLoc:3,x:1}"}){
+ auto p=parse(text);auto target=p->pItem->value->items.tail;target->pParent=p.get();auto before=toString(p->pItem.get());auto h=a.normalize(target);check(!h->complete() && !h->publications && toString(p->pItem.get())==before,"ambiguous record field correspondence is not a first-match choice");
+}
+for(int n:{8,32,128}){
+ std::string text="{location:{zLoc:_},";for(int i=0;i<n;++i)text+="f"+std::to_string(i)+":{1=2},";text.pop_back();text+="}={";for(int i=0;i<n;++i)text+="f"+std::to_string(i)+":{1=2},";text+="location:{zLoc:3}}";
+ auto p=parse(text);auto z=leaf(p);auto h=a.normalize(z);check(h->complete() && z->pItem->value->num==3 && h->framesCreated<14 && h->correspondencePositions<3*n+24,"member demand reads field headers linearly without creating sibling value goals");
+}
+for(int depth:{8,32,128}){
+ // Build the containment graph directly: this measures solver depth, not parser backtracking.
+ auto left=parse("zLoc:_"),right=parse("zLoc:3");for(int i=0;i<depth;++i){auto name="level"+std::to_string(i);auto l=parse(name+":{?}"),r=parse(name+":{?}");l->pItem->value->items.head->pItem=left->pItem;r->pItem->value->items.head->pItem=right->pItem;left=l;right=r;}
+ auto p=parse("{?}"),source=parse("{?}");p->pItem->value->items.head->pItem=left->pItem;source->pItem->value->items.head->pItem=right->pItem;p->pItem->wrkList.push_back(source);
+ auto z=p;for(int i=0;i<=depth;++i){auto child=z->pItem->value->items.head;child->pParent=z.get();z=child;}
+ auto h=a.normalize(z);check(h->complete() && z->pItem->value->num==3 && h->ancestrySteps<4*depth+8 && h->correspondencePositions<4*depth+8 && h->framesCreated<3*depth+8,"nested member correspondence consumes one retained route with linear ancestry, position and frame bounds");
+}
+for(int n:{4,8,16}){
+ std::string text="{";for(int i=0;i<n;++i)text+=lhs+" ";text+="}={";for(int i=0;i<n;++i)text+=rhs+" ";text+='}';auto p=parse(text);auto h=a.normalize(p);
+ check(h->complete() && h->framesCreated<140*n+40 && h->memberPairs<50*n+20 && !h->parentLookups,"whole lists share ordinary correspondence rather than launching member lookups");
+ auto again=a.normalize(p);check(again->complete() && !again->framesCreated,"completed whole-list correspondence needs no new goals");
+}
+check(toString(d->pItem.get())==definitions,"all correspondence requests preserve definitions");
+core.deInit();std::cout<<"PIECE_CORRESPONDENCE: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }

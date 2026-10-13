@@ -341,7 +341,14 @@ struct WorldPatternChart {
     our WorldPatternResult: accepted
     me int64: resultIndex <- 0
 }
+struct WorldProjectionRoute {me List<our WorldPosition>: members}
 struct WorldCorrespondence {
+    our WorldProjectionRoute: route
+    our WorldFrame: projection
+    our WorldPosition: projectedTarget
+    me int: fieldSide <- 0
+    me Set<string>: fieldNames
+    our WordUse: selectedField
     me bool: sourceResolved <- false
     our WorldFrame: sourceReference
     our WorldPatternChart: chart
@@ -703,6 +710,7 @@ struct WorldRequest {
     me uint64: correspondenceChecks <- 0
     me uint64: correspondenceMappings <- 0
     me uint64: parentLookups <- 0
+    me uint64: ancestrySteps <- 0
     me uint64: templateApplications <- 0
     me uint64: comparisonResumptions <- 0
     me uint64: requirementVisits <- 0
@@ -1420,6 +1428,24 @@ struct WorldPOVGraph {
             header.hasSize and header.size>=0 and header.size.getDenominator()==1 and node!.pItem!.wrkList.isEmpty() and
             (!header.explicitSize or (header.openTail and node!.pItem!.value!.items.head==NULL)))
     }
+    // Strict identities refine these named occurrences without changing their
+    // addressing. Their values and parent constraints are demanded by the
+    // selected member, not by traversal of an unrelated sibling.
+    me bool: stableRecordLayout(our infonView: item) <- {
+        if(item!.value!.overlayType!=LST or item!.value!.evalMode!=emLiteral or
+           item!.value!.tailUnfinished or item!.argPos!=apNoArgs){return(false)}
+        withEach edge in item!.wrkList{if(edge==NULL or edge!.forceID or edge!.looseType()){return(false)}}
+        me Set<string>: names
+        our POV: member <- item!.value!.items.head
+        while(member!=NULL){
+            if(member!.isSubItm or member!.pItem!.invertMatch){return(false)}
+            our WordUse: name <- member!.pItem!.type
+            if(name==NULL){name <- modelMngr.inferredListType(member!.pItem!.value)}
+            if(name==NULL or names.contains(name!.typeID())){return(false)}
+            names.insert(name!.typeID()); member <- member!.next
+        }
+        return(true)
+    }
     me bool: enterLayout(our WorldRequest: request, our WorldWalk: walk) <- {
         walk!.outcome <- worldReady; walk!.waiting <- NULL
         while(!walk!.levels.isEmpty()){
@@ -1473,7 +1499,7 @@ struct WorldPOVGraph {
                 walk!.outcome <- worldUnsupported; walk!.detail <- "Correspondence needs a list layout"; return(false)
             }
             // A nested layout's own constraints can change its extent.
-            if(walk!.requireClosedRelations and (!node!.pItem!.wrkList.isEmpty() or node!.pItem!.argPos!=apNoArgs)){
+            if(walk!.requireClosedRelations and (!node!.pItem!.wrkList.isEmpty() or node!.pItem!.argPos!=apNoArgs) and !stableRecordLayout(node!.pItem)){
                 walk!.outcome <- worldUnsupported; walk!.detail <- "Embedded layout has unresolved relationships"; return(false)
             }
             if(walk!.checkExtents and header.hasSize){
@@ -3752,7 +3778,9 @@ struct WorldManager {
                     }
                     lookup!.candidate <- NULL; lookup!.prefixPredicate <- NULL
                 }
-                if(lookup!.capturing){
+                if(lookup!.capturing and frame!.referenceOnly and !lookup!.query!.target!.embedded){
+                    lookup!.result!.position <- source
+                }else if(lookup!.capturing){
                     if(lookup!.candidate==NULL){
                         lookup!.candidate <- makeFrame(request, source!.node, source)
                         request!.ready.append(frame); request!.ready.append(lookup!.candidate); return()
@@ -4259,6 +4287,99 @@ struct WorldManager {
         request!.ready.append(frame)
     }
 
+    // Unordered member identity uses the same effective field names as whole
+    // record merging. Read headers once, retaining the current header on waits.
+    // Ambiguous names are not positional evidence and do not choose a first hit.
+    me bool: locateFieldRHS(our WorldRequest: request, our WorldFrame: frame) <- {
+        our WorldCorrespondence: lookup <- frame!.lookup
+        if(!lookup!.bounded or lookup!.chart!=NULL or lookup!.query!.testPattern or lookup!.query!.target==NULL or lookup!.query!.target!.embedded){return(false)}
+        if(lookup!.selectedField==NULL){
+            me WorldScalar: parent <- graph.read(request, lookup!.query!.target!.parent!.node, lookup!.query!.target!.parent!.node!.pParent)
+            if(parent.outcome==worldWaiting){waitAt(request, frame, lookup!.query!.target!.parent!.node!.pItem); return(true)}
+            if(parent.outcome!=worldReady){frame!.facts <- parent; stopFrame(request, frame); return(true)}
+            if(!graph.enterLayout(request, lookup!.right)){walkReady(request, frame, lookup!.right); return(true)}
+            our POV: source <- lookup!.right!.levels.last()!.position!.node
+            me WorldScalar: header <- graph.read(request, source, source!.pParent)
+            if(parent.order!=uUnordered and header.order!=uUnordered){return(false)}
+            me WorldScalar: wanted <- graph.read(request, lookup!.query!.target!.node, lookup!.query!.target!.node!.pParent)
+            if(wanted.outcome==worldWaiting){waitAt(request, frame, lookup!.query!.target!.node!.pItem); return(true)}
+            lookup!.selectedField <- graph.fieldName(wanted)
+            if(wanted.outcome!=worldReady or lookup!.selectedField==NULL){
+                frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Unordered member needs a field identity"; stopFrame(request, frame); return(true)
+            }
+        }
+        while(lookup!.fieldSide<2){
+            our WorldWalk: walk <- lookup!.left
+            if(lookup!.fieldSide==1){walk <- lookup!.right}
+            if(lookup!.rhs==NULL){lookup!.rhs <- graph.nextPosition(request, walk)}
+            if(!walkReady(request, frame, walk)){return(true)}
+            our WorldPosition: at <- lookup!.rhs
+            if(at==NULL){lookup!.fieldSide <+- 1; lookup!.fieldNames.clear(); continue()}
+            if(at!.embedded or at!.tail){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Record correspondence needs a represented unique field"; stopFrame(request, frame); return(true)}
+            me WorldScalar: header <- graph.read(request, at!.node, at!.node!.pParent)
+            if(header.outcome==worldWaiting){waitAt(request, frame, at!.node!.pItem); return(true)}
+            if(header.outcome!=worldReady){frame!.facts <- header; stopFrame(request, frame); return(true)}
+            our WordUse: name <- graph.fieldName(header)
+            if(name==NULL or lookup!.fieldNames.contains(name!.typeID())){
+                frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Record field identity needs additional nominal evidence"; stopFrame(request, frame); return(true)
+            }
+            lookup!.fieldNames.insert(name!.typeID())
+            if(lookup!.fieldSide==1 and name!.typeID()==lookup!.selectedField!.typeID()){
+                if(graph.compareNominal(lookup!.selectedField, name)!=worldReady){
+                    frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Record fields do not have a proved identity"; stopFrame(request, frame); return(true)
+                }
+                lookup!.result!.position <- at
+            }
+            lookup!.rhs <- NULL
+        }
+        if(lookup!.result!.position==NULL){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Corresponding record field is not established"; stopFrame(request, frame); return(true)}
+        supplyCorrespondence(request, frame); return(true)
+    }
+
+    // Project an ancestor identity one containment level at a time. Intermediate
+    // projections request correspondence only; no sibling values become goals.
+    me bool: descendCorrespondence(our WorldRequest: request, our WorldFrame: frame) <- {
+        our WorldCorrespondence: lookup <- frame!.lookup
+        if(!lookup!.bounded or lookup!.chart!=NULL or lookup!.query!.testPattern or lookup!.query!.target==NULL or lookup!.left!.levels.isEmpty()){return(false)}
+        if(lookup!.projection==NULL){
+            our WorldPosition: scope <- lookup!.left!.levels[0]!.position
+            if(lookup!.route==NULL){
+                Allocate(lookup!.route)
+                our WorldPosition: at <- lookup!.query!.target!.parent
+                while(at!=NULL and !graph.samePosition(at, scope)){
+                    request!.ancestrySteps <+- 1
+                    if(!at!.embedded){lookup!.route!.members.append(at)}
+                    at <- at!.parent
+                }
+                if(at==NULL){lookup!.route!.members.clear()}
+            }
+            if(lookup!.route!.members.isEmpty()){return(false)}
+            our WorldPosition: child <- lookup!.route!.members.last()
+            lookup!.route!.members.popLast()
+            lookup!.projectedTarget <- child
+            Allocate(lookup!.projection); request!.framesCreated <+- 1
+            our WorldFrame: projection <- lookup!.projection
+            projection!.node <- child!.node; projection!.initialized <- true; projection!.referenceOnly <- true
+            projection!.lookup <- graph.correspondence(scope, lookup!.query!.relation, child, false)
+            projection!.lookup!.bounded <- true
+            projection!.lookup!.left!.shallow <- true; projection!.lookup!.right!.shallow <- true
+            projection!.lookup!.result!.sourceDomain <- lookup!.result!.sourceDomain
+            projection!.lookup!.right!.levels[0]!.position <- lookup!.result!.sourceDomain
+            projection!.lookup!.sourceResolved <- true
+            request!.ready.append(frame); request!.ready.append(projection); return(true)
+        }
+        if(lookup!.projection!.facts.outcome!=worldReady){frame!.facts <- lookup!.projection!.facts; stopFrame(request, frame); return(true)}
+        our WorldPosition: source <- lookup!.projection!.correspondenceResult!.position
+        our POV: edge <- graph.memberRelationship(lookup!.query!.relation); edge!.pItem <- source!.node!.pItem
+        frame!.lookup <- graph.correspondence(lookup!.projectedTarget, edge, lookup!.query!.target, false)
+        frame!.lookup!.route <- lookup!.route
+        frame!.lookup!.bounded <- true; frame!.lookup!.sourceResolved <- true
+        frame!.lookup!.left!.shallow <- true; frame!.lookup!.right!.shallow <- true
+        frame!.lookup!.result!.sourceDomain <- source
+        frame!.lookup!.right!.levels[0]!.position <- source
+        request!.ready.append(frame); return(true)
+    }
+
     // Return a read-only RHS for this member; neither containing list is a
     // value-normalization prerequisite. The cursors/chart survive local waits.
     void: locateRHS(our WorldRequest: request, our WorldFrame: frame) <- {
@@ -4281,6 +4402,8 @@ struct WorldManager {
             }
             lookup!.sourceResolved <- true
         }
+        if(descendCorrespondence(request, frame)){return()}
+        if(locateFieldRHS(request, frame)){return()}
         if(lookup!.chart!=NULL){matchStructuredCorrespondence(request, frame); return()}
         if(lookup!.normalized){request!.ready.append(frame); correspond(request, frame); return()}
         if(lookup!.bounded){locateSpanRHS(request, frame); return()}
@@ -4300,7 +4423,7 @@ struct WorldManager {
                 frame!.parentWork <- 0
                 // Refinement of the same occurrence retains its checked template
                 // constraints. A replacement's fresh value still requests them.
-                if(item!.value!.listSpec!=NULL and !(item!.listSpecApplied and frame!.context!.node!.pItem===frame!.node!.pItem)){
+                if((parent!.embedded or graph.samePosition(parent, frame!.context!.parent)) and item!.value!.listSpec!=NULL and !(item!.listSpecApplied and frame!.context!.node!.pItem===frame!.node!.pItem)){
                     our POV:: spec{937}; spec!.pItem <- item!.value!.listSpec
                     frame!.sourceEdge <- spec; frame!.sourceIsOperand <- false; frame!.sourceIsListSpec <- false; frame!.sourceNameInherited <- true
                     frame!.prerequisite <- makeFrame(request, spec)
@@ -4345,9 +4468,10 @@ struct WorldManager {
                 frame!.lookup!.right!.checkExtents <- true
                 request!.parentLookups <+- 1; request!.ready.append(frame); return(true)
             }
-            // An embedded parent's coordinates belong to the enclosing list.
-            if(parent!.embedded){frame!.parentContext <- parent!.parent; frame!.parentWork <- -1}
-            else{frame!.parentContext <- NULL}
+            // Higher identities can supply a corresponding nested member too.
+            // The retained correspondence projects through intervening records.
+            request!.ancestrySteps <+- 1
+            frame!.parentContext <- parent!.parent; frame!.parentWork <- -1
         }
         return(false)
     }
@@ -5180,7 +5304,7 @@ struct WorldManager {
                 request!.ready.append(frame); request!.ready.append(frame!.prerequisite); return()
             }
             if(!frame!.sourceIsOperand and !frame!.sourceIsListSpec and (frame!.sourceEdge!.trueByDefinition or frame!.facts.order==uUnordered or frame!.prerequisite!.facts.order==uUnordered) and
-               !frame!.prerequisite!.facts.explicitSize and frame!.prerequisite!.tailRequirements==NULL and
+               (!frame!.prerequisite!.facts.explicitSize or (frame!.facts.hasSize and frame!.prerequisite!.facts.hasSize and frame!.facts.size==frame!.prerequisite!.facts.size)) and frame!.prerequisite!.tailRequirements==NULL and
                frame!.prerequisite!.listSpecFrame==NULL and graph.namedFields(frame!.facts) and graph.namedFields(frame!.prerequisite!.facts)){
                 beginFields(request, frame); return()
             }
