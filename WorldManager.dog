@@ -179,6 +179,7 @@ struct WorldWalkLevel {
     me FlexNum: end
 }
 struct WorldWalk {
+    me bool: rawLayout <- false
     // A span request can inspect wrappers instead of flattening them away.
     me bool: shallow <- false
     their POV: stopAt
@@ -392,6 +393,7 @@ struct WorldFieldMerge {
     void: INIT() <- {Allocate(sequence)}
 }
 struct WorldScalar {
+    me bool: inheritedName <- false
     me OrderMode: order <- uUnknown
     me bool: timelike <- false
     me WorldOutcome: outcome <- worldReady
@@ -468,6 +470,53 @@ struct WorldRequirementCursor {
     }
 }
 
+// Definition-derived coordinates. A measure is a finite homogeneous chain;
+// a segment keeps its source occurrence rather than expanding represented gaps.
+struct WorldUnit {
+    our WordUse: word
+    our WordUse: base
+    our WorldUnit: member
+    me FlexNum: count <- FlexNum("1")
+    me FlexNum: width <- FlexNum("1")
+}
+struct WorldUnitSegment {
+    our WorldPosition: source
+    me FlexNum: start
+    me FlexNum: width
+    me bool: gap <- false
+}
+struct WorldUnitLevel {
+    our infonView: source
+    our WorldWalk: walk
+    our WorldUnit: member
+    our WorldPosition: pending
+    me FlexNum: start
+    void: INIT() <- {Allocate(walk); walk!.shallow <- true; walk!.rawLayout <- true; walk!.requireClosedRelations <- true}
+}
+struct WorldUnitOrigin {
+    our WorldPosition: source
+    me List<our POV>: members
+}
+struct WorldUnitSelection {
+    me FlexNum: prefix
+    me FlexNum: suffix
+    me bool: writeThrough <- false
+    our WorldFrame: sourceReference
+    our WorldPosition: source
+    our WorldUnit: unit
+    me FlexNum: coordinate
+    me FlexNum: count <- FlexNum("1")
+    me FlexNum: end <- 0
+    me bool: span <- false
+    me bool: explicitSpec <- false
+    me bool: entered <- false
+    me List<our WorldUnitLevel>: levels
+    me List<WorldUnitSegment>: segments
+    me int64: segment <- 0
+    me Set<our infonView>: active
+    our WorldFrame: result
+}
+
 struct WorldPath {
     our WorldPosition: source
     me int64: next <- 0
@@ -480,6 +529,8 @@ struct WorldPath {
 }
 
 struct WorldFrame {
+    me bool: sourceNameInherited <- false
+    our WorldUnitSelection: unitSelection
     our POV: inputEdge
     our WorldFrame: projectionBody
     our WorldFieldMerge: fields
@@ -563,6 +614,7 @@ struct WorldPublication {
     me List<our POV>: fieldOrder
 }
 struct WorldRequest {
+    me Map<our infonView, our WorldUnitOrigin>: unitOrigins
     our infonView: worldSource
     me vocabularySpec: vocabulary
     me Map<string, our WorldDefinitions>: declarations
@@ -621,7 +673,7 @@ struct WorldRequest {
     // also waits for any active publication to finish; Waiting stays visible.
     void: waitForCompletion() <- {me WorldModelLock: lock{control!.mutex}}
     void: releaseProgress() <- {
-        ready.clear(); attempts.clear(); activeContexts.clear(); edits.clear(); declarations.clear(); declarationOrigins.clear(); root <- NULL; waitingFrame <- NULL
+        unitOrigins.clear(); ready.clear(); attempts.clear(); activeContexts.clear(); edits.clear(); declarations.clear(); declarationOrigins.clear(); root <- NULL; waitingFrame <- NULL
     }
     void: cancel() <- {
         me WorldModelLock: lock{control!.mutex}
@@ -730,6 +782,47 @@ struct WorldPOVGraph {
         facts.nominal <- bound
         return(facts)
     }
+    // Only a proved finite homogeneous definition supplies coordinate units.
+    // Other definitions remain with the ordinary matcher; equal shapes alone
+    // do not establish nominal identity.
+    our WorldUnit: unitMeasure(our WorldRequest: request, our WordUse: word, their Set<our infonView>: seen) <- {
+        if(word==NULL){return(NULL)}
+        me WorldScalar: binding; binding <- bind(request, binding, word)
+        if(binding.outcome!=worldReady or binding.nominal!.defToUse==NULL){return(NULL)}
+        our infonView: body <- binding.nominal!.defToUse
+        if(seen!.contains(body) or body!.streamState!=parseDone or body!.type!=NULL or !body!.addedTypes.isEmpty() or
+           !body!.wrkList.isEmpty() or body!.partRef!=NULL or !body!.parts.isEmpty() or body!.funcArgs!=NULL or
+           body!.innr!=NULL or body!.invertMatch or body!.value!.undefined or body!.value!.inverted){return(NULL)}
+        our WorldUnit:: result; result!.word <- binding.nominal
+        if(body!.value!.overlayType==NUM and body!.value!.evalMode==emUnknown and body!.infSize!.evalMode==emUnknown){result!.base <- result!.word; return(result)}
+        if(body!.value!.overlayType!=LST or body!.value!.evalMode!=emLiteral or body!.orderMode==uUnordered or
+           body!.value!.items.head!=NULL or !body!.value!.tailUnfinished or body!.value!.listSpec==NULL or
+           body!.infSize!.evalMode!=emLiteral or body!.infSize!.num<=0 or body!.infSize!.num.getDenominator()!=1){return(NULL)}
+        our infonView: spec <- body!.value!.listSpec
+        if(pathOperator(spec)==""){return(NULL)}
+        seen!.insert(body)
+        result!.member <- unitMeasure(request, spec!.type, seen)
+        if(result!.member==NULL){return(NULL)}
+        result!.count <- body!.infSize!.num; result!.width <- result!.count*result!.member!.width
+        result!.base <- result!.member!.base
+        return(result)
+    }
+    our WorldUnit: unitType(our WorldRequest: request, our infonView: item) <- {
+        if(item==NULL or pathOperator(item)==""){return(NULL)}
+        me Set<our infonView>: seen
+        return(unitMeasure(request, item!.type, seen))
+    }
+    our WorldUnit: writtenUnit(our WorldRequest: request, our WorldPosition: source, our WorldUnit: fallback) <- {
+        our infonView: body <- source!.node!.pItem
+        if(body!.value!.listSpec!=NULL){return(unitType(request, body!.value!.listSpec))}
+        if(body!.type!=NULL){
+            me Set<our infonView>: seen
+            our WorldUnit: declared <- unitMeasure(request, body!.type, seen)
+            if(declared!=NULL and declared!.member!=NULL){return(declared!.member)}
+        }
+        return(fallback)
+    }
+
     // A distinct name is a proven mismatch only when no unexamined meaning
     // can supply an inherited nominal type. More general meanings need that
     // proof, even if their written names differ.
@@ -925,7 +1018,7 @@ struct WorldPOVGraph {
             facts.declaration <- item!.definedWord
             return(facts)
         }
-        if(!item!.addedTypes.isEmpty() or item!.viewMode==vmCursor or
+        if((!item!.addedTypes.isEmpty() and (item!.type!=NULL or item!.addedTypes.size()!=1)) or item!.viewMode==vmCursor or
            (item!.innr!=NULL and !selection) or (item!.funcArgs!=NULL and !bodyInput) or
            !item!.parts.isEmpty() or item!.partRef!=NULL or item!.proxy!=NULL or
            item!.doReply or (item!.itmMode!=mItem and item!.itmMode!=mNone) or item!.identityName!=NULL or
@@ -934,6 +1027,9 @@ struct WorldPOVGraph {
             facts.detail <- "This request needs semantics beyond the scalar milestone"; return(facts)
         }
         facts <- bind(request, facts, item!.type)
+        if(item!.type==NULL and item!.addedTypes.size()==1){
+            facts <- bind(request, facts, item!.addedTypes[0]); facts.inheritedName <- true
+        }
         facts.meaningApplied <- item!.wordDerefed
         if(facts.outcome!=worldReady or selection){return(facts)}
         me bool: expression <- item!.value!.evalMode==emConcat
@@ -1139,7 +1235,7 @@ struct WorldPOVGraph {
             // A supplied representation is not yet the declared member
             // layout of a named template (for example, seconds vs minutes).
             // Indexing it requires that correspondence, not a physical index.
-            if(header.overlay==LST and header.hasValue and !header.meaningApplied and
+            if(!walk!.rawLayout and header.overlay==LST and header.hasValue and !header.meaningApplied and
                header.nominal!=NULL and header.nominal!.defToUse!=NULL){
                 our infonView: meaning <- header.nominal!.defToUse
                 if(meaning!.streamState==parseStarted or meaning!.streamState==parseListReady){
@@ -1229,7 +1325,7 @@ struct WorldPOVGraph {
 
     // The cursor is retained in the frame; ordinary arrival never rewinds it.
     our POV: nextRelationship(our WorldRequest: request, our WorldFrame: frame) <- {
-        frame!.sourceIsListSpec <- false
+        frame!.sourceIsListSpec <- false; frame!.sourceNameInherited <- false
         if(frame!.facts.declaration!=NULL){return(NULL)}
         while(frame!.expressionSlot<3){
             if(frame!.nextOperand!=NULL){
@@ -1399,7 +1495,7 @@ struct WorldPOVGraph {
             }
             if(frame!.facts.hasSize){expression.hasSize <- true; expression.size <- frame!.facts.size}
             expression.explicitSize <- expression.explicitSize or frame!.facts.explicitSize
-            expression.nominal <- frame!.facts.nominal; expression.meaningApplied <- frame!.facts.meaningApplied
+            expression.nominal <- frame!.facts.nominal; expression.inheritedName <- frame!.facts.inheritedName; expression.meaningApplied <- frame!.facts.meaningApplied
             frame!.facts <- expression; frame!.bodyBounds <- expression.bounds()
             frame!.bodyHasSize <- expression.hasSize; frame!.bodySize <- expression.size
         }else{
@@ -1601,7 +1697,7 @@ struct WorldPOVGraph {
                     if(left.outcome==worldPartial){left.outcome <- worldUnsupported}
                     left.detail <- "Nominal types do not have a proved identity"; return(left)
                 }
-                if(left.nominal==NULL){left.nominal <- right.nominal; left.meaningApplied <- right.meaningApplied}
+                if(left.nominal==NULL){left.nominal <- right.nominal; left.inheritedName <- right.inheritedName; left.meaningApplied <- right.meaningApplied}
             }
         }
         if(left.overlay==LST or right.overlay==LST){return(mergeList(left, right, edge))}
@@ -1703,6 +1799,9 @@ struct WorldPOVGraph {
                 }
                 check <- checks.next()
             }
+        }
+        if(frame!.sourceNameInherited and before.nominal==NULL and result.nominal!=NULL and frame!.prerequisite!.facts.alternatives==NULL and typePredicate(frame!.prerequisite!.facts)){
+            result.inheritedName <- true
         }
         frame!.facts <- result
     }
@@ -1990,7 +2089,9 @@ struct WorldPOVGraph {
             item!.isNormed <- true; item!.worldScalarCompletionOwner <- item
             request!.publications <+- 1; return()
         }
-        item!.type <- facts.nominal
+        item!.addedTypes.clear()
+        if(facts.inheritedName and facts.nominal!=NULL){item!.type <- NULL; item!.addedTypes.append(facts.nominal)}
+        else{item!.type <- facts.nominal}
         item!.wordDerefed <- facts.meaningApplied
         if(job.newAlternatives!=NULL){
             our infonState:: value; value!.overlayType <- tUnknown; value!.evalMode <- emIntersection
@@ -2193,9 +2294,9 @@ struct WorldManager {
     }
 
     our WorldFrame: derivePair(our WorldRequest: request, our WorldFrame: left,
-                              our WorldFrame: right, our POV: edge) <- {
+                              our WorldFrame: right, our POV: edge, me bool: inheritedName <- false) <- {
         our WorldFrame: pair <- projectFrame(request, left)
-        pair!.sourceEdge <- edge; pair!.prerequisite <- right
+        pair!.sourceEdge <- edge; pair!.prerequisite <- right; pair!.sourceNameInherited <- inheritedName
         return(pair)
     }
 
@@ -2222,7 +2323,7 @@ struct WorldManager {
         our WorldRequirement: requirement <- frame!.memberRequirements.next()
         request!.requirementVisits <+- frame!.memberRequirements.visits-before
         if(requirement==NULL){return(false)}
-        frame!.pairedMember <- derivePair(request, frame!.pairedMember, requirement!.frame, requirement!.edge)
+        frame!.pairedMember <- derivePair(request, frame!.pairedMember, requirement!.frame, requirement!.edge, true)
         request!.templateApplications <+- 1; request!.ready.append(frame!.pairedMember)
         return(true)
     }
@@ -2567,6 +2668,7 @@ struct WorldManager {
             }
             selection!.index <- index.number; selection!.coordinate <- NULL
         }
+        if(selectUnitPattern(request, frame)){return()}
         if(selection!.index<0){
             if(selection!.domain!.input==NULL){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "End-relative pattern needs a source endpoint"; stopFrame(request, frame); return()}
             our POV: source <- selection!.domain!.input
@@ -3718,7 +3820,7 @@ struct WorldManager {
                 frame!.parentWork <- 0
                 if(item!.value!.listSpec!=NULL){
                     our POV:: spec{937}; spec!.pItem <- item!.value!.listSpec
-                    frame!.sourceEdge <- spec; frame!.sourceIsOperand <- false; frame!.sourceIsListSpec <- false
+                    frame!.sourceEdge <- spec; frame!.sourceIsOperand <- false; frame!.sourceIsListSpec <- false; frame!.sourceNameInherited <- true
                     frame!.prerequisite <- makeFrame(request, spec)
                     request!.relationshipsRead <+- 1
                     request!.ready.append(frame); request!.ready.append(frame!.prerequisite); return(true)
@@ -3764,9 +3866,233 @@ struct WorldManager {
         return(false)
     }
 
+    // A finite homogeneous pattern has an arithmetic alignment in leaf units.
+    // Grouping changes the returned view, not the identity of its container.
+    me bool: selectUnitPattern(our WorldRequest: request, our WorldFrame: frame) <- {
+        our WorldSelection: selected <- frame!.selection
+        our infonView: body <- selected!.domain!.node!.pItem
+        if(selected!.domain!.input==NULL or selected!.index>0 or body!.orderMode==uUnordered or
+           body!.value!.tailUnfinished or body!.value!.listSpec!=NULL or !body!.wrkList.isEmpty()){return(false)}
+        their POV: target <- frame!.node!.pItem!.intersectMarkedRetPOV
+        if(target==NULL){
+            if(frame!.node!.pItem!.intersectPos==ipGetFirst){target <- body!.value!.items.head}
+            else{target <- body!.value!.items.tail}
+        }
+        our WorldUnitSelection:: units
+        me FlexNum: before
+        me FlexNum: after
+        me bool: found <- false
+        our WordUse: base
+        our POV: at <- body!.value!.items.head
+        while(at!=NULL){
+            our infonView: item <- at!.pItem
+            if(!item!.wrkList.isEmpty() or item!.partRef!=NULL or !item!.parts.isEmpty() or item!.invertMatch){return(false)}
+            our WorldUnit: unit <- graph.unitType(request, item)
+            me FlexNum: count <- FlexNum("1")
+            me bool: span <- false
+            if(unit==NULL and item!.value!.overlayType==LST and item!.value!.evalMode==emLiteral and
+               item!.value!.items.head==NULL and item!.value!.tailUnfinished and item!.infSize!.evalMode==emLiteral and
+               item!.infSize!.num>=0 and item!.infSize!.num.getDenominator()==1 and item!.orderMode!=uUnordered){
+                unit <- graph.unitType(request, item!.value!.listSpec); count <- item!.infSize!.num; span <- true
+            }
+            if(unit==NULL or unit!.member==NULL){return(false)}
+            if(base==NULL){base <- unit!.base}
+            else if(graph.compareNominal(base, unit!.base)!=worldReady){return(false)}
+            if(at===target){units!.unit <- unit; units!.count <- count; units!.span <- span; found <- true}
+            else if(found){after <+- count*unit!.width}
+            else{before <+- count*unit!.width}
+            at <- at!.next
+        }
+        if(!found){return(false)}
+        units!.prefix <- before/units!.unit!.width; units!.suffix <- after/units!.unit!.width
+        if(units!.prefix.getDenominator()!=1 or units!.suffix.getDenominator()!=1){return(false)}
+        units!.coordinate <- selected!.index; units!.explicitSpec <- true
+        units!.source <- graph.position(selected!.domain!.input); units!.writeThrough <- !frame!.node!.pItem!.wrkList.isEmpty()
+        frame!.unitSelection <- units; request!.ready.append(frame)
+        return(true)
+    }
+
+    our WorldFrame: unitOperation(our WorldRequest: request, our WorldPosition: source, our PartPath: part, our WorldFrame: index) <- {
+        if(source!.node!.pItem!.orderMode==uUnordered or !source!.node!.pItem!.wrkList.isEmpty()){return(NULL)}
+        me Set<our infonView>: sourceSeen
+        our WorldUnit: declaredSource <- graph.unitMeasure(request, source!.node!.pItem!.type, sourceSeen)
+        if((declaredSource==NULL or declaredSource!.member==NULL) and graph.unitType(request, source!.node!.pItem!.value!.listSpec)==NULL){return(NULL)}
+        our WorldUnit: unit
+        me FlexNum: count <- FlexNum("1")
+        me bool: span <- false
+        if(part!.pathMode==idxField){
+            if(part!.spec!=NULL){
+                if(part!.spec!.value!.overlayType==LST and part!.spec!.value!.evalMode==emLiteral and
+                   part!.spec!.value!.items.head==NULL and part!.spec!.value!.tailUnfinished and
+                   part!.spec!.infSize!.evalMode==emLiteral and part!.spec!.infSize!.num>=0 and part!.spec!.infSize!.num.getDenominator()==1){
+                    unit <- graph.unitType(request, part!.spec!.value!.listSpec); span <- true; count <- part!.spec!.infSize!.num
+                }else{unit <- graph.unitType(request, part!.spec)}
+            }else{
+                me Set<our infonView>: seen
+                our WorldUnit: parent <- graph.unitMeasure(request, source!.node!.pItem!.type, seen)
+                if(parent!=NULL){unit <- parent!.member}
+                if(unit==NULL){unit <- graph.unitType(request, source!.node!.pItem!.value!.listSpec)}
+            }
+        }else if(part!.pathMode==dotField){unit <- graph.unitType(request, part!.path)}
+        if(unit==NULL or (unit!.member==NULL and part!.pathMode!=idxField)){return(NULL)}
+        our POV:: node{941}; Allocate(node!.pItem)
+        our WorldFrame: result <- makeFrame(request, node)
+        Allocate(result!.unitSelection)
+        result!.unitSelection!.source <- source; result!.unitSelection!.unit <- unit
+        result!.unitSelection!.count <- count; result!.unitSelection!.span <- span
+        result!.unitSelection!.explicitSpec <- part!.spec!=NULL
+        if(index!=NULL){result!.unitSelection!.coordinate <- index!.facts.number}
+        else{result!.unitSelection!.coordinate <- FlexNum("1")}
+        our infonView: work <- part!.path
+        if(part!.pathMode==idxField){work <- part!.continuation}
+        if(work!=NULL){node!.pItem!.wrkList <- work!.wrkList}
+        result!.referenceOnly <- work!=NULL and work!.wrkList.isEmpty() and (work!.partRef!=NULL or !work!.parts.isEmpty())
+        return(result)
+    }
+    me bool: pushUnitLevel(our WorldRequest: request, our WorldFrame: frame, our WorldPosition: source, our WorldUnit: inherited) <- {
+        our WorldUnitSelection: selection <- frame!.unitSelection
+        if(selection!.active.contains(source!.node!.pItem)){
+            frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Cyclic unit representation"; stopFrame(request, frame); return(false)
+        }
+        our WorldUnit: member <- graph.writtenUnit(request, source, inherited)
+        if(member==NULL or graph.compareNominal(selection!.unit!.base, member!.base)!=worldReady){
+            frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Stored list has no compatible homogeneous unit"; stopFrame(request, frame); return(false)
+        }
+        our WorldUnitLevel:: level; level!.source <- source!.node!.pItem; level!.member <- member; level!.start <- selection!.end
+        level!.walk!.push(source); selection!.levels.append(level); selection!.active.insert(source!.node!.pItem)
+        return(true)
+    }
+    // Create only the demanded view. Leaves borrow facts from their original
+    // occurrences; the request records where a later checked write belongs.
+    our POV: unitView(our WorldRequest: request, our WorldUnitSelection: selection, our WorldUnit: unit, me FlexNum: start, me FlexNum: count, me bool: collection) <- {
+        if(unit!.member==NULL and !collection){
+            while(selection!.segment<selection!.segments.size() and
+                  selection!.segments[selection!.segment].start+selection!.segments[selection!.segment].width<=start){selection!.segment <+- 1}
+            if(selection!.segment>=selection!.segments.size()){return(NULL)}
+            me WorldUnitSegment: segment <- selection!.segments[selection!.segment]
+            if(segment.gap){return(NULL)}
+            our POV:: leaf{941}; Allocate(leaf!.pItem); leaf!.pItem! <- segment.source!.node!.pItem!
+            leaf!.pItem!.isNormed <- false; leaf!.pItem!.worldScalarCompletionOwner <- NULL
+            if(leaf!.pItem!.type==NULL and leaf!.pItem!.addedTypes.isEmpty()){leaf!.pItem!.addedTypes.append(unit!.word)}
+            our WorldUnitOrigin:: origin; origin!.source <- segment.source
+            request!.unitOrigins.insert(leaf!.pItem, origin)
+            return(leaf)
+        }
+        our POV:: result{941}; Allocate(result!.pItem)
+        our infonView: body <- result!.pItem
+        body!.itmMode <- mItem; body!.streamState <- parseDone; body!.viewMode <- vmOverlay; body!.orderMode <- uOrdered
+        body!.value!.overlayType <- LST; body!.value!.evalMode <- emLiteral
+        body!.infSize!.overlayType <- NUM; body!.infSize!.evalMode <- emLiteral; body!.value!.sizeMode <- fromCount
+        body!.wordDerefed <- true
+        our WorldUnit: member <- unit
+        if(!collection){body!.type <- unit!.word; body!.value!.timelike <- unit!.word!.defToUse!.value!.timelike; member <- unit!.member; count <- unit!.count}
+        body!.infSize!.num <- count
+        our WorldUnitOrigin:: origin
+        me FlexNum: n
+        while(n<count){
+            our POV: child <- unitView(request, selection, member, start+n*member!.width, FlexNum("1"), false)
+            if(child==NULL){return(NULL)}
+            body!.value!.items.appendPov(child); child!.pParent <- result
+            origin!.members.append(child); n <+- 1
+        }
+        request!.unitOrigins.insert(body, origin)
+        return(result)
+    }
+    void: selectUnit(our WorldRequest: request, our WorldFrame: frame) <- {
+        our WorldUnitSelection: selection <- frame!.unitSelection
+        if(selection!.result!=NULL){
+            if(selection!.result!.facts.outcome!=worldReady){frame!.facts <- selection!.result!.facts; stopFrame(request, frame); return()}
+            frame!.facts <- selection!.result!.facts; frame!.retainedWork <- selection!.result!.retainedWork
+            Allocate(frame!.correspondenceResult); frame!.correspondenceResult!.position <- graph.position(selection!.result!.node)
+            if(selection!.writeThrough and !stageSelection(request, frame)){return()}
+            frame!.initialized <- true; frame!.finished <- true; return()
+        }
+        if(!selection!.entered and (selection!.source!.node!.pItem!.viewMode==vmCursor or
+           selection!.source!.node!.pItem!.partRef!=NULL or !selection!.source!.node!.pItem!.parts.isEmpty())){
+            if(selection!.sourceReference==NULL){
+                selection!.sourceReference <- makeFrame(request, selection!.source!.node, selection!.source)
+                selection!.sourceReference!.referenceOnly <- true
+                request!.ready.append(frame); request!.ready.append(selection!.sourceReference); return()
+            }
+            if(selection!.sourceReference!.facts.outcome!=worldReady){frame!.facts <- selection!.sourceReference!.facts; stopFrame(request, frame); return()}
+            our WorldCorrespondenceResult: source <- selection!.sourceReference!.correspondenceResult
+            if(source==NULL or source!.position==NULL){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Unit correspondence needs one source occurrence"; stopFrame(request, frame); return()}
+            selection!.source <- source!.position
+        }
+        if(!selection!.entered){
+            our WorldUnit: leaf <- selection!.unit
+            while(leaf!.member!=NULL){leaf <- leaf!.member}
+            if(!pushUnitLevel(request, frame, selection!.source, leaf)){return()}
+            selection!.entered <- true
+        }
+        me FlexNum: index <- selection!.coordinate
+        if(index>=0 and !selection!.explicitSpec){index <- index-1}
+        if(selection!.coordinate==0 and !selection!.explicitSpec){
+            frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Selected unit index is outside the source"; stopFrame(request, frame); return()
+        }
+        while(!selection!.levels.isEmpty()){
+            if(index>=0 and selection!.end>=(index+selection!.prefix+selection!.count+selection!.suffix)*selection!.unit!.width){break()}
+            our WorldUnitLevel: level <- selection!.levels.last()
+            if(level!.pending==NULL){level!.pending <- graph.nextPosition(request, level!.walk)}
+            if(!walkReady(request, frame, level!.walk)){return()}
+            our WorldPosition: position <- level!.pending
+            if(position==NULL){
+                // A level's source is retained by its active entry until exit.
+                selection!.active.erase(level!.source); selection!.levels.popLast(); continue()
+            }
+            me WorldScalar: header <- graph.read(request, position!.node, position!.node!.pParent)
+            if(header.outcome==worldWaiting){waitAt(request, frame, position!.node!.pItem); return()}
+            if(header.outcome!=worldReady){frame!.facts <- header; stopFrame(request, frame); return()}
+            if(position!.tail){
+                if(!header.hasSize){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Unit window crosses an unknown endpoint"; stopFrame(request, frame); return()}
+                me FlexNum: width <- header.size*level!.member!.width-(selection!.end-level!.start)
+                if(width<0){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Unit representation exceeds its extent"; stopFrame(request, frame); return()}
+                if(width>0){me WorldUnitSegment: gap; gap.source <- position; gap.start <- selection!.end; gap.width <- width; gap.gap <- true; selection!.segments.append(gap); selection!.end <+- width}
+                level!.pending <- NULL; continue()
+            }
+            if(position!.embedded){
+                if(!pushUnitLevel(request, frame, position, level!.member)){return()}
+                level!.pending <- NULL; continue()
+            }
+            our WorldUnit: actual <- level!.member
+            if(header.nominal!=NULL){
+                me Set<our infonView>: seen
+                actual <- graph.unitMeasure(request, header.nominal, seen)
+            }
+            if(actual==NULL or graph.compareNominal(selection!.unit!.base, actual!.base)!=worldReady){
+                frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Stored member has incompatible unit evidence"; stopFrame(request, frame); return()
+            }
+            if(actual!.member!=NULL){
+                if(!pushUnitLevel(request, frame, position, actual!.member)){return()}
+            }else{
+                if(header.overlay!=NUM and header.overlay>=0){frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "Unit leaf contradicts its numeric definition"; stopFrame(request, frame); return()}
+                me WorldUnitSegment: segment; segment.source <- position; segment.start <- selection!.end; segment.width <- FlexNum("1")
+                selection!.segments.append(segment); selection!.end <+- 1
+            }
+            level!.pending <- NULL
+        }
+        if(index<0){
+            me FlexNum: extent <- selection!.end/selection!.unit!.width
+            if(extent.getDenominator()!=1){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Source endpoint does not align to requested units"; stopFrame(request, frame); return()}
+            index <+- extent
+        }
+        if(index<0 or (index+selection!.prefix+selection!.count+selection!.suffix)*selection!.unit!.width>selection!.end){
+            frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Selected unit window is outside the source"; stopFrame(request, frame); return()
+        }
+        our POV: projected <- unitView(request, selection, selection!.unit, (index+selection!.prefix)*selection!.unit!.width, selection!.count, selection!.span)
+        if(projected==NULL){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Unit view needs a demanded sparse occurrence"; stopFrame(request, frame); return()}
+        projected!.pItem!.wrkList <- frame!.node!.pItem!.wrkList
+        selection!.result <- makeFrame(request, projected)
+        selection!.result!.referenceOnly <- frame!.referenceOnly
+        request!.ready.append(frame); request!.ready.append(selection!.result)
+    }
+
+
     // Paths describe consumers of selection, never a separate search engine.
     our WorldFrame: pathSelection(our WorldRequest: request, our WorldPosition: source,
                                  our PartPath: part, our WorldFrame: index) <- {
+        our WorldFrame: units <- unitOperation(request, source, part, index)
+        if(units!=NULL){return(units)}
         our infonView:: query
         query!.itmMode <- mItem; query!.streamState <- parseDone
         query!.viewMode <- vmOverlay; query!.value!.evalMode <- emIntersection
@@ -3845,6 +4171,16 @@ struct WorldManager {
 
     me bool: stageOccurrence(our WorldRequest: request, our WorldPosition: destination, our WorldFrame: facts) <- {
         if(destination==NULL){request!.outcome <- worldPartial; request!.detail <- "Write needs an established source occurrence"; return(false)}
+        if(request!.unitOrigins.containsKey(destination!.node!.pItem)){
+            our WorldUnitOrigin: origin <- request!.unitOrigins.at(destination!.node!.pItem)
+            if(origin!.source!=NULL){return(stageOccurrence(request, origin!.source, facts))}
+            if(facts!.facts.overlay!=LST or graph.openLayout(facts!.facts) or graph.sequenceLength(facts!.facts.sequence)!=origin!.members.size()){
+                request!.outcome <- worldPartial; request!.detail <- "Unit write needs corresponding member extents"; return(false)
+            }
+            me WorldListCursor: members; members.push(facts!.facts.sequence)
+            withEach member in origin!.members{if(!stageOccurrence(request, graph.position(member), members.next())){return(false)}}
+            return(true)
+        }
         if(!destination!.writable){
             request!.outcome <- worldUnsupported; request!.detail <- "Write needs an instance of the borrowed definition occurrence"; return(false)
         }
@@ -3975,6 +4311,7 @@ struct WorldManager {
     }
 
     void: step(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(frame!.unitSelection!=NULL){selectUnit(request, frame); return()}
         if(frame!.fields!=NULL){mergeFields(request, frame); return()}
         if(!frame!.initialized and (frame!.path!=NULL or frame!.node!.pItem!.viewMode==vmCursor or frame!.node!.pItem!.partRef!=NULL or !frame!.node!.pItem!.parts.isEmpty())){pathStep(request, frame); return()}
         if(!frame!.initialized and frame!.node!.pItem!.value!=NULL and frame!.node!.pItem!.value!.evalMode==emIntersection){selectMember(request, frame); return()}
@@ -4051,7 +4388,7 @@ struct WorldManager {
                 if(frame!.sourceEdge!.isSubItm){
                     frame!.prerequisite <- projectListSpec(request, frame!.prerequisite, frame!.listSpecFrame, frame!.listSpecEdge)
                 }else{
-                    frame!.prerequisite <- derivePair(request, frame!.prerequisite, frame!.listSpecFrame, frame!.listSpecEdge)
+                    frame!.prerequisite <- derivePair(request, frame!.prerequisite, frame!.listSpecFrame, frame!.listSpecEdge, true)
                     request!.templateApplications <+- 1
                 }
                 frame!.memberSpecified <- true

@@ -37,6 +37,8 @@ TestsToRun = `
     unit/worldManager/symbolicRangeFilters
     unit/worldManager/worldSources
     unit/worldManager/literalLayouts
+    unit/worldManager/unitViews
+    unit/worldManager/inheritedTypes
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -9014,7 +9016,8 @@ for(bool cancel:{false,true}){
  check(a.normalize(parse("{#baseUnit=_ #groupUnit=*3+{baseUnit|...} #container=*2+{groupUnit|...}}"))->complete(),"declare alternate unit layouts");
  for(auto suffix:{"@[2]","@[-1]","@[-2:*2+{...}]"}){
   auto p=parse(std::string("container:{baseUnit| 1 2 3 4 5 6}")+suffix);auto original=toString(p->pItem.get());auto h=a.normalize(p);
-  check(h->outcome==worldUnsupported && !h->publications && toString(p->pItem.get())==original,"unproved logical unit layout is not a completed physical index");
+  if(std::string(suffix)=="@[-2:*2+{...}]")check(h->outcome==worldUnsupported && !h->publications && toString(p->pItem.get())==original,"untyped span still requires a unit correspondence proof");
+  else check(h->complete() && toString(p->pItem.get())=="groupUnit:{4 5 6}","proved unit coordinate selects the grouped value");
  }
 }
 
@@ -9277,5 +9280,118 @@ for(bool cancel:{false,true}){
 }
 core.deInit();std::cout<<"LITERAL_LAYOUTS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
 
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_unitViews(me string: testName) <- {
+        if(!worldManagerUnitViewChecks()){FAIL("Unit view checks failed")}
+    }
+    me bool: worldManagerUnitViewChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+auto parse=[&](const std::string& s){auto p=m.parse(s);check(p.target && p.error.empty(),"parse "+s);return p.target;};
+auto run=[&](const std::string& s,const std::string& expected){auto p=parse(s);auto h=a.normalize(p);check(!h->failed() && toString(p->pItem.get())==expected,s+" => "+toString(p->pItem.get())+" : "+h->detail);return std::make_pair(p,h);};
+auto defs=parse("{#atom=_ #pair=*2+{atom|...} #pack=*3+{pair|...} #other=_ #different=*2+{other|...}}");auto beforeDefs=toString(defs->pItem.get());check(a.normalize(defs)->complete(),"homogeneous definitions");
+for(auto suffix:{".pair","@[1]","@[-3]","@[0:pair]","@[-3:pair]"})run(std::string("pack:{atom|1 2 3 4 5 6}")+suffix,"pair:{1 2}");
+run("pack:{atom|1 2 3 4 5 6}@[3]","pair:{5 6}");
+run("pack:{atom|1 2 3 4 5 6}@[-1]","pair:{5 6}");
+run("pack:{atom|1 2 3 4 5 6}@[-1]@[2]","6");
+run("pack:{atom|1 2 3 4 5 6}@[1:*2+{pair|...}]","{pair:{3 4} pair:{5 6}}");
+run("pack:{atom|1 2 3 4 5 6 7 8}@[-3:*2+{pair|...}]","{pair:{3 4} pair:{5 6}}");
+run("pack:{pair|pair:{atom|1 2} pair:{atom|3 4} pair:{atom|5 6}}@[2]","pair:{3 4}");
+run("{pair|pair:{atom|1 2} pair:{atom|3 4}}@[0:*2+{pair|...}]","{pair:{1 2} pair:{3 4}}");
+check(toString(defs->pItem.get())==beforeDefs,"unit meanings remain unchanged");
+for(auto coordinate:{"500000000","-1"}){auto p=parse(std::string("{atom|&*1000000000+{atom|...} 7 8}@[")+coordinate+":pair]");auto h=a.normalize(p);check(h->complete() && toString(p->pItem.get())=="pair:{7 8}" && h->correspondencePositions<10,"unit coordinates skip billion-member gaps arithmetically");}
+
+for(auto coordinate:{"0","-4","4"}){auto p=parse(std::string("pack:{atom|1 2 3 4 5 6}@[")+coordinate+"]");auto before=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldPartial && !h->publications && toString(p->pItem.get())==before,"out-of-range unit coordinate remains unresolved");}
+{
+ auto w=parse("{pack:{atom|1 _ 3 4 5 6}}");a.world=w->pItem;auto container=w->pItem->value->items.head;auto leaf=container->pItem->value->items.head->next;auto original=toString(w->pItem.get());
+ auto query=run("%W.pack@[1]@[2]=20","20");check(leaf->pItem->value->num==20,"chained unit write reaches original leaf");check(container->pItem->value->items.size()==6 && container->pItem->value->listSpec,"unit write retains physical source representation");
+ auto before=toString(w->pItem.get());auto p=parse("%W.pack@[-1:pair]=pair:{50 60}");auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && toString(w->pItem.get())==before,"conflicting unit window rejects atomically");
+ auto read=run("%W.pack@[2]","pair:{3 4}");check(toString(w->pItem.get())==before,"unit read leaves source unchanged");
+}
+for(bool cancel:{false,true}){
+ auto p=parse("pack:{atom|1 2 3 4 5 6}@[2]");auto waiting=p->pItem->value->items.head->next->next;auto before=toString(p->pItem.get());m.prepareInput(waiting->pItem);auto h=a.normalize(p);auto frames=h->framesCreated,positions=h->correspondencePositions;
+ check(h->outcome==worldWaiting && h->waitingInput==waiting->pItem && !h->publications,"unit walk waits at exact needed member");
+ if(cancel)m.cancel(h);SetModeBits(waiting->pItem->flags,infonView::streamState,infonView::parseDone);m.inputReady(waiting->pItem);
+ check(cancel?h->outcome==worldCancelled && h->framesCreated==frames && toString(p->pItem.get())==before:h->complete() && toString(p->pItem.get())=="pair:{3 4}" && h->correspondencePositions==positions+1,"unit walk resumes without replay or cancels unchanged");
+}
+{
+ auto p=parse("pack:{atom|1 2 3 4 5 6}@[1]");auto suffix=p->pItem->value->items.tail;m.prepareInput(suffix->pItem);auto h=a.normalize(p);check(h->complete() && toString(p->pItem.get())=="pair:{1 2}" && m.control->inputWaiters.empty(),"positive unit demand ignores unfinished suffix");SetModeBits(suffix->pItem->flags,infonView::streamState,infonView::parseDone);
+}
+for(int count:{32,64,128}){
+ std::string s="{atom|";for(int i=0;i<count;++i)s+=" "+std::to_string(i);s+="}@[0:*"+std::to_string(count/2)+"+{pair|...}]";
+ auto p=parse(s);auto h=a.normalize(p);check(h->complete() && h->correspondencePositions==unsigned(count+1) && h->framesCreated<unsigned(2*count+10),"unit span visits each supplied member once");
+ std::cout<<"UNIT_SPAN: "<<count<<" leaves, "<<h->correspondencePositions<<" structural visits, "<<h->framesCreated<<" frames\n";
+}
+run("*(-1)+[<pair>] <~ pack:{atom|1 2 3 4 5 6}","pair:{5 6}");
+run("*(-2)+[<&*2+{pair|...}>] <~ pack:{atom|1 2 3 4 5 6}","{pair:{3 4} pair:{5 6}}");
+run("*(-3)+[<&*2+{pair|...}> *1+{pair|...}] <~ pack:{atom|1 2 3 4 5 6}","{pair:{1 2} pair:{3 4}}");
+run("[pair <pair>] <~ pack:{atom|1 2 3 4 5 6}","pair:{3 4}");
+run("*(-1)+[<pair>] <~ {atom|&*1000000000+{atom|...} 7 8}","pair:{7 8}");
+{
+ auto w=parse("{pack:{atom|_ _ 3 4 5 6}}");a.world=w->pItem;auto first=w->pItem->value->items.head->pItem->value->items.head;
+ run("*(-3)+[<pair>] <~ %W.pack = pair:{1 2}","pair:{1 2}");
+ check(first->pItem->value->num==1 && first->next->pItem->value->num==2,"intersection unit write reaches original unknown leaves");
+ auto before=toString(w->pItem.get());auto p=parse("*(-1)+[<pair>] <~ %W.pack = pair:{50 60}");auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && toString(w->pItem.get())==before,"intersection unit conflict is atomic");
+ run("*(-2)+[<&*2+{pair|...}>] <~ %W.pack","{pair:{3 4} pair:{5 6}}");
+}
+run("{#pulsePair=*2+{T atom|...}}","{#pulsePair = *2+{T atom|  ... }}");
+run("{atom|1 2 3 4}@[0:pulsePair]","pulsePair:{T 1 2}");
+{
+ auto p=parse("*(-1)+[<pair>] <~ pack:{atom|1 2 3 4 5 6}");auto last=p->pItem->innr->funcArgs->value->items.tail; m.prepareInput(last->pItem);auto h=a.normalize(p);auto visits=h->correspondencePositions;
+ check(h->outcome==worldWaiting && h->waitingInput==last->pItem,"end-relative unit pattern waits on its required endpoint");
+ SetModeBits(last->pItem->flags,infonView::streamState,infonView::parseDone);m.inputReady(last->pItem);
+ check(h->complete() && toString(p->pItem.get())=="pair:{5 6}" && h->correspondencePositions==visits,"end-relative unit pattern retains its traversed prefix");
+}
+
+
+{
+ auto p=parse("*(-1)+[<pair>] <~ pack:{atom|1 2 3 4 5 6}");auto source=p->pItem->innr->funcArgs;source->wrkList.push_back(parse("{9 9 9 9 9 9}"));auto before=toString(source.get());auto h=a.normalize(p);
+ check(!h->complete() && !h->publications && toString(source.get())==before,"unit pattern retains unresolved source-layout obligations");
+}
+
+core.deInit();std::cout<<"UNIT_VIEWS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_inheritedTypes(me string: testName) <- {
+        if(!worldManagerInheritedTypeChecks()){FAIL("Inherited type checks failed")}
+    }
+    me bool: worldManagerInheritedTypeChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+auto parse=[&](const std::string& s){auto p=m.parse(s);check(p.target && p.error.empty(),"parse "+s);return p.target;};
+auto run=[&](const std::string& s,const std::string& expected){auto p=parse(s);auto h=a.normalize(p);check(!h->failed() && toString(p->pItem.get())==expected,s+" => "+toString(p->pItem.get())+" : "+h->detail);return std::make_pair(p,h);};
+check(a.normalize(parse("{#cell=_ #pair=*2+{cell|...} #letter=$ #fixed=7}"))->complete(),"type declarations");
+for(auto text:{"{cell|1 2}","{cell|&{1} 2}","{cell|1 _=2}"}){
+ auto p=parse(text);auto h=a.normalize(p);check(h->complete(),"type qualifier completes numeric members");
+ auto first=p->pItem->value->items.head;if(getFlagBit(first->flags,POV::isSubItm))first=first->pItem->value->items.head;
+ check(!first->pItem->type && first->pItem->addedTypes.size()==1 && first->pItem->addedTypes[0]->typeID()=="cell","inherited type is retained without a primary name");
+ auto before=toString(p->pItem.get());auto again=a.normalize(p);check(again->complete() && !again->framesCreated && toString(p->pItem.get())==before,"inherited type survives completion cache");
+ a.world=p->pItem;run("%W.cell","cell:1");
+}
+run("{cell|1 2}","{1 2}");
+run("{cell|cell:1 2}","{cell:1 2}");
+run("{_ = cell:7}","{cell:7}");
+run("{fixed|_ _}","{fixed:7 fixed:7}");
+run("{letter|'a' 'b'}","{'a' 'b'}");
+{
+ auto p=parse("{cell|1 _}");auto h=a.normalize(p);auto unknown=p->pItem->value->items.tail;
+ check(h->outcome==worldPartial && !unknown->pItem->type && unknown->pItem->addedTypes.size()==1,"partial member retains its type evidence");
+ a.world=p->pItem;run("%W@[2]=5","5");
+ check(unknown->pItem->value->num==5 && !unknown->pItem->type && unknown->pItem->addedTypes.size()==1,"later write preserves inherited type");
+ auto query=run("%W.cell","cell:1");
+}
+{
+ auto w=parse("{pair:{cell|1 2}}");a.world=w->pItem;check(a.normalize(w)->complete(),"world normalizes inherited leaf types");
+ run("%W.pair@[1]","1");check(toString(w->pItem.get())=="{pair:{1 2}}","unit indexing does not promote inherited names");
+}
+{
+ auto p=parse("{cell|1 'wrong'}");auto before=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before,"type disagreement is atomic");
+}
+core.deInit();std::cout<<"INHERITED_TYPES: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }
