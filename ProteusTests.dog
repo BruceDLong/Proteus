@@ -41,6 +41,7 @@ TestsToRun = `
     unit/worldManager/inheritedTypes
     unit/worldManager/sparseWindows
     unit/worldManager/boundaryArguments
+    unit/worldManager/temporalOccurrences
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -8735,9 +8736,12 @@ for(auto text:{"[1 <_>]<~{&{9} 2}","[<_> 1]<~{2 &{9}}"}){
 }
 run("{1 2 3 4 5 6 7 8 9 0}@[3:*4+{...}]","{4 5 6 7}");
 run("{1 2 3 4}@[0:*2+{...}]","{1 2}");run("{1 2 3 4}@[-2:*2+{...}]","{3 4}");
-for(auto text:{"{begin:7}.begin","{end:7}.end","{1 2 3 4 5}@[3:5]"}){
+for(auto text:{"{1 2 3 4 5}@[3:5]"}){
  auto p=parse(text);auto before=toString(p->pItem.get());auto h=a.normalize(p);
- check(h->outcome==worldUnsupported && !h->publications && toString(p->pItem.get())==before,"unimplemented boundary/scalar-spec semantics are not ordinary field/span lookup");
+ check(h->outcome==worldUnsupported && !h->publications && toString(p->pItem.get())==before,"unimplemented scalar-spec semantics are not ordinary span lookup");
+}
+for(auto text:{"{begin:7}.begin","{end:7}.end"}){
+ auto p=parse(text);auto h=a.normalize(p);check(h->complete() && p->pItem->isNull() && p->pItem->identityName,"bare boundary access returns its null occurrence, not a same-named member");
 }
 run("{first:7 first:8}.first:8","first:8");run("{last:7 last:8}.last:7","last:7");
 run("{begin:7}.begin:7","begin:7");run("{end:7}.end:7","end:7");
@@ -9538,5 +9542,69 @@ for(int count:{32,64,128}){
  std::cout<<"ARGUMENT_WORK: "<<count<<" members, "<<h->framesCreated<<" frames, "<<h->memberPairs<<" pairs\n";
 }
 core.deInit();std::cout<<"BOUNDARY_ARGUMENTS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_temporalOccurrences(me string: testName) <- {
+        if(!worldManagerTemporalOccurrenceChecks()){FAIL("Temporal occurrence checks failed")}
+    }
+    me bool: worldManagerTemporalOccurrenceChecks() <- <%{
+ProteusCore core; core.init("",false); auto& a=*core.agent;auto& m=a.worldManager;int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& msg){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<msg<<"\n";}};
+auto parse=[&](const std::string& s){auto p=m.parse(s);check(p.target && p.error.empty(),"parse "+s);return p.target;};
+auto run=[&](const std::string& s,const std::string& expected){auto p=parse(s);auto h=a.normalize(p);check(h->complete() && toString(p->pItem.get())==expected,s+" => "+toString(p->pItem.get())+" : "+h->detail);return std::make_pair(p,h);};
+run("{T 1 %tprev 3}","{T 1 1 3}");run("{T 1 %tnext 3}","{T 1 3 3}");
+run("{T {T 1 2} {T %tprev 4}}","{T {T 1 2} {T 2 4}}");run("{T {T 1 %tnext} {T 3 4}}","{T {T 1 3} {T 3 4}}");
+run("{1 %tprev 3}","{1 UNDEFINED 3}");run("{T %tprev 1}","{T UNDEFINED 1}");run("{T 1 %tnext}","{T 1 UNDEFINED}");
+run("{T {1 2} %tprev}","{T {1 2} {1 2}}");run("{T {T} 1 %tprev}","{T {T } 1 1}");
+{
+ auto p=parse("{T 1 2}.begin");auto h=a.normalize(p);check(h->complete()&&p->pItem->isNull()&&p->pItem->identityName,"begin is an identified null");check(!a.normalize(p)->framesCreated,"boundary result completes without replay");
+ auto n=p->pItem->identityName;auto q=parse("NULL:"+std::to_string(n->id));check(a.normalize(q)->complete(),"parsed null value normalizes");
+}
+{
+ auto w=parse("{T 1 2}");a.world=w->pItem;auto a1=parse("%W.begin");auto a2=parse("%W.begin");auto b1=parse("%W.end");
+ check(a.normalize(a1)->complete()&&a.normalize(a2)->complete()&&a.normalize(b1)->complete(),"world boundaries resolve");
+ check(a1->pItem->identityName==a2->pItem->identityName&&a1->pItem->identityName!=b1->pItem->identityName,"world boundary identities are stable and distinct");
+ auto b2=parse("%W.end");check(a.normalize(b2)->complete() && b1->pItem->identityName==b2->pItem->identityName,"second endpoint stays canonical after the first was registered");
+ check(toString(w->pItem.get())=="{T 1 2}","boundary access leaves source untouched");
+}
+for(bool cancel:{false,true}){
+ auto p=parse("{T 1 %tprev 3}");auto first=p->pItem->value->items.head;auto before=toString(p->pItem.get());m.prepareInput(first->pItem);auto h=a.normalize(p);
+ check(h->outcome==worldWaiting&&!h->publications,"temporal dependency waits atomically");if(cancel)m.cancel(h);SetModeBits(first->pItem->flags,infonView::streamState,infonView::parseDone);m.inputReady(first->pItem);
+ check(cancel?h->outcome==worldCancelled&&toString(p->pItem.get())==before:h->complete()&&toString(p->pItem.get())=="{T 1 1 3}","temporal dependency resumes or cancels");
+}
+for(bool cancel:{false,true}){
+ auto p=parse("{T 9 %tprev}");auto target=p->pItem->value->items.tail;target->pParent=p.get();auto before=toString(p->pItem.get());auto input=p->pItem->value->items.head->pItem;
+ m.prepareInput(input);auto h=a.normalize(target);check(h->outcome==worldWaiting&&h->waitingInput==input&&!h->publications,"member-only temporal request waits at its neighbour");
+ auto frames=h->framesCreated;if(cancel)m.cancel(h);SetModeBits(input->flags,infonView::streamState,infonView::parseDone);m.inputReady(input);
+ check(cancel?h->outcome==worldCancelled&&h->framesCreated==frames&&toString(p->pItem.get())==before:h->complete()&&toString(target->pItem.get())=="9","member-only temporal continuation is local and atomic");
+}
+for(bool cancel:{false,true}){
+ auto p=parse("{T 1 2}.begin");auto original=p->pItem;auto next=a.identityRegistry->occurrenceScope.nextID;m.prepareInput(original);auto h=a.normalize(p);
+ check(h->outcome==worldWaiting&&h->waitingInput==original&&!h->publications&&a.identityRegistry->occurrenceScope.nextID==next,"boundary waits at original header and allocates no identity early");
+ if(cancel)m.cancel(h);SetModeBits(original->flags,infonView::streamState,infonView::parseDone);m.inputReady(original);
+ check(cancel?h->outcome==worldCancelled&&a.identityRegistry->occurrenceScope.nextID==next:h->complete()&&p->pItem->isNull(),"boundary header resumes or cancels");
+}
+{
+ auto p=parse("{T 1 %tnext ...}");auto before=toString(p->pItem.get());auto target=p->pItem->value->items.tail;target->pParent=p.get();auto h=a.normalize(target);check(h->outcome==worldPartial&&!h->publications&&toString(p->pItem.get())==before,"open future is unresolved, not undefined");
+}
+run("{#tSpan={T 4 5} #atom=6 #alias=atom}","{#tSpan = {T 4 5} #atom = 6 #alias = atom}");
+run("{T tSpan %tprev}","{T tSpan:{T 4 5} 5}");run("{T %tnext tSpan}","{T 4 tSpan:{T 4 5}}");
+run("{T alias %tprev}","{T alias:6 alias:6}");
+auto declaration=run("{#tPart={T %tprev 8}}","{#tPart = {T %tprev 8}}").first;
+auto meaning=declaration->pItem->value->items.head->pItem->funcArgs;auto meaningBefore=toString(meaning.get());
+run("{T 3 tPart 7 tPart}","{T 3 tPart:{T 3 8} 7 tPart:{T 7 8}}");
+run("{T 6 tPart}","{T 6 tPart:{T 6 8}}");
+check(toString(meaning.get())==meaningBefore,"contextual definition stays borrowed across occurrences and requests");
+{
+ auto p=parse("{T %tnext %tprev}");auto before=toString(p->pItem.get());auto h=a.normalize(p);
+ check(h->outcome==worldUnsupported && !h->publications && h->framesCreated<10 && toString(p->pItem.get())==before,"mutual temporal dependencies need a joint proof rather than recursive replay");
+}
+for(int count:{32,64,128}){
+ std::string s="{T 7";for(int i=1;i<count;++i)s+=" %tprev";s+="}";auto p=parse(s);auto h=a.normalize(p);bool values=true;for(auto x=p->pItem->value->items.head;x;x=x->next)values=values&&x->pItem->value->num==7;
+ check(h->complete()&&values&&h->framesCreated<5*count,"temporal chain shares already solved occurrences");std::cout<<"TEMPORAL_WORK: "<<count<<" -> "<<h->framesCreated<<" frames\n";
+}
+core.deInit();std::cout<<"TEMPORAL_OCCURRENCES: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }
