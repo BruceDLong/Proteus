@@ -392,6 +392,8 @@ struct WorldFieldMerge {
     void: INIT() <- {Allocate(sequence)}
 }
 struct WorldScalar {
+    me OrderMode: order <- uUnknown
+    me bool: timelike <- false
     me WorldOutcome: outcome <- worldReady
     me string: detail
     our WordUse: nominal
@@ -937,7 +939,7 @@ struct WorldPOVGraph {
         me bool: expression <- item!.value!.evalMode==emConcat
         if(!expression and item!.value!.overlayType==LST and
            (item!.value!.evalMode!=emLiteral or
-            item!.value!.timelike or item!.orderMode==uUnordered or (item!.invertMatch and !predicate))){
+            (item!.invertMatch and !predicate))){
             facts.outcome <- worldUnsupported; facts.detail <- "List needs correspondence or template semantics"; return(facts)
         }
         if(item!.value!.evalMode==emIntersection or
@@ -978,6 +980,8 @@ struct WorldPOVGraph {
             Allocate(facts.textSource); facts.textSource!.source <- item!.value
             facts.textLength <- item!.value!.str.size()
         }
+        facts.order <- item!.orderMode; facts.timelike <- item!.value!.timelike
+        if(facts.overlay==LST and facts.order==uUnordered and !facts.explicitSize){facts.hasSize <- false}
         facts.openTail <- facts.overlay==LST and item!.value!.tailUnfinished
         facts.negative <- item!.invertMatch
         facts.extentApplied <- item!.value!.numericExtentApplied
@@ -1271,7 +1275,7 @@ struct WorldPOVGraph {
                (frame!.predicateOnly and typePredicate(frame!.facts))){return(NULL)}
             frame!.meaningRequested <- true
             if(frame!.facts.nominal!.defToUse==NULL){
-                if(!frame!.facts.hasValue and frame!.facts.overlay<0 and frame!.context==NULL and !frame!.predicateOnly and !frame!.acquireOnly){frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Named value has no available definition"}
+                if(!frame!.facts.hasValue and frame!.facts.overlay<0 and frame!.context==NULL and frame!.expressionParent==NULL and !frame!.predicateOnly and !frame!.acquireOnly){frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Named value has no available definition"}
                 return(NULL)
             }
             request!.meaningEdges <+- 1
@@ -1351,10 +1355,13 @@ struct WorldPOVGraph {
 
     void: finishExpression(our WorldFrame: frame) <- {
         if(memberSequence(frame)){
+            if(frame!.facts.order==uUnordered and frame!.facts.hasSize and frame!.facts.size<FlexNum(frame!.operandsRead)){
+                frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "Unordered members exceed the given extent"; return()
+            }
             if(frame!.facts.openTail and (frame!.facts.sequence==NULL or !frame!.facts.sequence!.hasSpans) and frame!.facts.hasSize and frame!.facts.size==FlexNum(frame!.operandsRead)){
                 frame!.facts.openTail <- false
             }
-            if(!openLayout(frame!.facts) and !frame!.facts.hasSize and !frame!.facts.explicitSize){
+            if(!openLayout(frame!.facts) and frame!.facts.order!=uUnordered and !frame!.facts.hasSize and !frame!.facts.explicitSize){
                 frame!.facts.hasSize <- true; frame!.facts.size <- frame!.operandsRead
             }
             frame!.facts.dischargeListSpec <- frame!.facts.representable and !openLayout(frame!.facts)
@@ -1567,11 +1574,13 @@ struct WorldPOVGraph {
             left.outcome <- worldPartial; left.detail <- "List source still has unresolved member work"; return(left)
         }
         left.overlay <- LST
+        left.timelike <- left.timelike or right.timelike
+        if(left.order==uUnknown or right.order==uUnordered){left.order <- right.order}
         if(!edge!.looseSize() and !left.hasSize and right.hasSize){left.hasSize <- true; left.size <- right.size}
         if(!left.hasValue and right.hasValue){
             left.hasValue <- true; left.sequence <- right.sequence; left.openTail <- right.openTail
             left.dischargeListSpec <- right.dischargeListSpec
-            left.explicitSize <- left.explicitSize or right.explicitSize or !left.hasSize
+            left.explicitSize <- left.explicitSize or right.explicitSize or (!left.hasSize and left.order!=uUnordered)
             left.contentsComplete <- right.contentsComplete; left.representable <- right.representable
         }
         return(left)
@@ -1586,12 +1595,10 @@ struct WorldPOVGraph {
             left.outcome <- worldUnsupported; left.detail <- "Declarations are not value relationships"; return(left)
         }
         if(!left.negative and !right.negative){
-            if(edge!.trueByDefinition and right.nominal!=NULL){
-                left.outcome <- worldUnsupported; left.detail <- "Named meaning needs nominal inheritance"; return(left)
-            }
             if(!edge!.trueByDefinition){
                 if(left.nominal!=NULL and right.nominal!=NULL and compareNominal(left.nominal, right.nominal)!=worldReady){
                     left.outcome <- compareNominal(left.nominal, right.nominal)
+                    if(left.outcome==worldPartial){left.outcome <- worldUnsupported}
                     left.detail <- "Nominal types do not have a proved identity"; return(left)
                 }
                 if(left.nominal==NULL){left.nominal <- right.nominal; left.meaningApplied <- right.meaningApplied}
@@ -2016,7 +2023,10 @@ struct WorldPOVGraph {
                 item!.value!.items.appendPov(member); member <- next
             }
         }
-        if(facts.overlay==LST){item!.value!.tailUnfinished <- facts.openTail}
+        if(facts.overlay==LST){
+            item!.value!.tailUnfinished <- facts.openTail; item!.value!.timelike <- facts.timelike
+            if(facts.order!=uUnknown){item!.orderMode <- facts.order}
+        }
         if(facts.overlay==LST and !openLayout(facts) and facts.dischargeListSpec and facts.hasSize and
            facts.size==FlexNum(sequenceLength(facts.sequence))){item!.value!.listSpec <- NULL}
         // An unresolved expression is still the representation of its partial
@@ -2043,6 +2053,7 @@ struct WorldPOVGraph {
             item!.viewMode <- vmOverlay
             if(!facts.hasRange and facts.overlay!=LST){item!.value!.overlayType <- facts.overlay}
         }
+        if(facts.overlay==LST and facts.order==uUnordered and !facts.explicitSize){item!.infSize!.evalMode <- emUnknown}
         if(facts.hasSize){
             item!.infSize!.overlayType <- NUM; item!.infSize!.evalMode <- emLiteral; item!.infSize!.num <- facts.size
             item!.infSize!.items.clear()
@@ -2262,7 +2273,7 @@ struct WorldManager {
                 if(identity!=worldReady){frame!.facts.outcome <- identity; frame!.facts.detail <- "Record fields do not have a proved identity"; stopFrame(request, frame); return()}
                 fields!.members.append(derivePair(request, actual, required, edge)); request!.memberPairs <+- 1
             }else{
-                if(!frame!.prerequisite!.facts.openTail){
+                if(!frame!.prerequisite!.facts.openTail and (frame!.prerequisite!.facts.order!=uUnordered or frame!.prerequisite!.facts.hasSize)){
                     frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Record field lies outside its closed meaning"; stopFrame(request, frame); return()
                 }
                 fields!.members.append(actual)
@@ -2293,9 +2304,12 @@ struct WorldManager {
         if(frame!.facts.explicitSize and frame!.facts.hasSize and frame!.facts.size!=FlexNum(graph.sequenceLength(fields!.sequence))){
             frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Record fields do not fit the given extent"; stopFrame(request, frame); return()
         }
-        frame!.facts.sequence <- fields!.sequence; frame!.facts.hasSize <- !frame!.facts.openTail
+        if(frame!.prerequisite!.facts.order==uUnordered){frame!.facts.order <- uUnordered}
+        frame!.facts.sequence <- fields!.sequence; frame!.facts.hasSize <- !frame!.facts.openTail and (frame!.facts.order!=uUnordered or frame!.facts.explicitSize)
         if(frame!.facts.hasSize){frame!.facts.size <- graph.sequenceLength(fields!.sequence)}
-        frame!.facts.fieldLayout <- true; frame!.facts.meaningApplied <- true
+        frame!.facts.fieldLayout <- true
+        frame!.facts.timelike <- frame!.facts.timelike or frame!.prerequisite!.facts.timelike
+        if(frame!.sourceEdge!.trueByDefinition){frame!.facts.meaningApplied <- true}
         frame!.prerequisite <- NULL; frame!.fields <- NULL; request!.ready.append(frame)
     }
 
@@ -4043,10 +4057,16 @@ struct WorldManager {
                 frame!.memberSpecified <- true
                 request!.ready.append(frame); request!.ready.append(frame!.prerequisite); return()
             }
-            if(!frame!.sourceIsOperand and !frame!.sourceIsListSpec and frame!.sourceEdge!.trueByDefinition and
+            if(!frame!.sourceIsOperand and !frame!.sourceIsListSpec and (frame!.sourceEdge!.trueByDefinition or frame!.facts.order==uUnordered or frame!.prerequisite!.facts.order==uUnordered) and
                !frame!.prerequisite!.facts.explicitSize and frame!.prerequisite!.tailRequirements==NULL and
                frame!.prerequisite!.listSpecFrame==NULL and graph.namedFields(frame!.facts) and graph.namedFields(frame!.prerequisite!.facts)){
                 beginFields(request, frame); return()
+            }
+            if(!frame!.sourceIsOperand and !frame!.sourceIsListSpec and
+               frame!.facts.overlay==LST and frame!.facts.hasValue and
+               frame!.prerequisite!.facts.overlay==LST and frame!.prerequisite!.facts.hasValue and
+               (frame!.facts.order==uUnordered or frame!.prerequisite!.facts.order==uUnordered)){
+                frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Unordered correspondence needs member matching"; stopFrame(request, frame); return()
             }
             // A closed target proves the endpoint of a strict open source.
             // Project that source with the same correspondence operation, then

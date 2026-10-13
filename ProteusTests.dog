@@ -36,6 +36,7 @@ TestsToRun = `
     unit/worldManager/rangeFilters
     unit/worldManager/symbolicRangeFilters
     unit/worldManager/worldSources
+    unit/worldManager/literalLayouts
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -6059,10 +6060,10 @@ struct GLOBAL {
             {"{_ = (2 +_) _=6}","{_ = (2 +_) 6}",worldPartial},
             {"{_ = (_ = 7) (2 +3)}","{7 5}",worldComplete},
             {"{_ = 3 _=4=5}","",worldRejected},
-            {"{_ = 3 rot}","",worldUnsupported},
-            {"{1, 2}","",worldUnsupported},
+            {"{_ = 3 rot}","{3 rot}",worldPartial},
+            {"{1, 2}","{1, 2}",worldPartial},
             {"{item| 1 2}","",worldUnsupported},
-            {"{T 1 2}","",worldUnsupported},
+            {"{T 1 2}","{T 1 2}",worldComplete},
         };
         for(const auto& c:cases){
             auto root=parse(c.input);check(bool(root),"parse "+c.input);if(!root)continue;
@@ -6403,7 +6404,7 @@ struct GLOBAL {
             {"{!5| 6 5}","",worldRejected},
             {"{{_ 7}| {1 8}}","",worldRejected},
             {"{rot| _ _}","",worldUnsupported},
-            {"{5| _, _}","",worldUnsupported},
+            {"{5| _, _}","{5| 5, 5}",worldPartial},
             {"(5| _ _)","",worldUnsupported},
             {"{(2 +_)| _ _}","",worldPartial},
             {"{*10+_| _ _} = {2 3} = {2 4}","",worldRejected}
@@ -9231,6 +9232,50 @@ for(bool cancel:{false,true}){
  check(cancel?h->outcome==worldCancelled && h->framesCreated==frames && !h->publications:h->complete() && toString(q->pItem.get())=="target:4","request keeps its original world across a wait");
 }
 core.deInit();std::cout<<"WORLD_SOURCES: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_literalLayouts(me string: tname) <- {
+        if(!worldManagerLiteralLayoutChecks()){FAIL("Literal layout checks failed")}
+    }
+    me bool: worldManagerLiteralLayoutChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+auto parse=[&](const std::string& text){auto p=m.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+auto run=[&](const std::string& text,const std::string& expected){auto p=parse(text);auto h=a.normalize(p);check(!h->failed() && toString(p->pItem.get())==expected,text+" => "+toString(p->pItem.get())+" : "+h->detail);return std::make_pair(p,h);};
+for(auto text:{"{T 1 2}","{1 2}={T 1 2}","{1 2}={T _|...}"}){
+ auto p=parse(text);auto rhs=p->pItem->wrkList.empty()?nullptr:p->pItem->wrkList.front()->pItem;auto before=rhs?toString(rhs.get()):"";auto h=a.normalize(p);
+ check(h->complete() && toString(p->pItem.get())=="{T 1 2}","temporal literal and identity metadata");check(!rhs || toString(rhs.get())==before,"temporal identity does not alter its source");
+ auto again=a.normalize(p);check(again->complete() && !again->framesCreated,"unchanged temporal list has no new goals");
+}
+run("{#timeline={T _|...}}","{#timeline = {T _|  ... }}");run("timeline:{1 2}","timeline:{T 1 2}");
+{
+ auto p=parse("{a:1,b:2}");auto h=a.normalize(p);check(h->outcome==worldPartial && toString(p->pItem.get())=="{a:1, b:2}","implicit unordered remainder retains partial status");
+ check(getModeBits(p->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown,"physical member count is not unordered total size");
+ auto again=a.normalize(p);check(again->outcome==worldPartial && toString(p->pItem.get())=="{a:1, b:2}","unordered partial normalization is stable");
+}
+{
+ auto p=parse("*2+{a:1,b:2}");auto h=a.normalize(p);check(h->complete() && p->pItem->infSize->num==2,"explicit unordered total bounds membership");
+ p=parse("*1+{a:1,b:2}");auto before=toString(p->pItem.get());h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before,"impossible unordered capacity rejects atomically");
+}
+auto defs=parse("{#record={left, middle, right} #title=$ #alias=title}");auto original=toString(defs->pItem.get());check(a.normalize(defs)->complete(),"record and alias declarations");
+run("alias='named'","alias:'named'");
+std::vector<std::string> fields={"left:1","middle:2","right:3"};
+do{std::string text="record:{"+fields[0]+", "+fields[1]+", "+fields[2]+"}";auto p=parse(text);auto h=a.normalize(p);check(h->outcome==worldPartial && toString(p->pItem.get())==text,"record correspondence preserves each supplied field order");}while(std::next_permutation(fields.begin(),fields.end()));
+run("record:{right:3}","record:{left, middle, right:3}");
+run("record:{extra:4,right:3}","record:{extra:4, left, middle, right:3}");
+check(toString(defs->pItem.get())==original,"record meaning remains immutable");
+run("{#spelling=$ #pronunciation=$ #name={spelling, pronunciation} #Morgan <en name>=name:{spelling='Morgan', pronunciation='mor'}}","{#spelling = $ #pronunciation = $ #name = {spelling, pronunciation} #Morgan <en name >= name:{spelling = 'Morgan', pronunciation = 'mor'}}");
+run("Morgan","Morgan:{spelling:'Morgan', pronunciation:'mor'}");
+for(bool cancel:{false,true}){
+ auto p=parse("record:{right:3,left:1,middle:2}");auto pending=p->pItem->value->items.tail->pItem;auto before=toString(p->pItem.get());m.prepareInput(pending);auto h=a.normalize(p);auto frames=h->framesCreated;
+ check(h->outcome==worldWaiting && h->waitingInput==pending && !h->publications,"record waits at exact supplied field");
+ if(cancel)m.cancel(h);SetModeBits(pending->flags,infonView::streamState,infonView::parseDone);m.inputReady(pending);
+ check(cancel?h->outcome==worldCancelled && h->framesCreated==frames && !h->publications:h->outcome==worldPartial && toString(p->pItem.get())==before,"record field wait resumes or cancels without changing ordering");
+}
+core.deInit();std::cout<<"LITERAL_LAYOUTS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
 
     }%>
 }
