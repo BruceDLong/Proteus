@@ -1176,3 +1176,24 @@ For fixed-width states in a flat chain, expected work and storage are linear in 
 **Integration boundary.** This change removes the initial nominal rejection; it does not implement implicit temporal preservation or complete the real cube's inherited field/face selections. The actual model remains an integration probe, not a dependency of permanent tests. Slipstream still needs migration to the replacement WorldManager interface and visible rendering validation after the engine can supply the demanded fields.
 
 **D061 validation.** Both maintained CodeDog targets regenerate successfully (library 136.75 s; executable 193.69 s). The independent library client passes the five focused suites, including all 111 nominal-evidence checks and the unchanged replacement and temporal suites. The full executable reports 24 failures / 533 registrations, with the same failing names and diagnostics as the baseline (apart from the crash-protection engine banner). Assertions formerly rejecting compatible named scalars and listSpec siblings now follow the user-approved semantics. All protected `.tst` inputs and unrelated `myTests.tst` remain unchanged. The real-model probe still reports unresolved inherited layouts and implicit temporal preservation; no Slipstream GUI claim follows from these results.
+
+## D062 Temporal preservation is a constraint; compound independence covers the whole value (2026-10-13)
+
+**User clarification.** In the example with earlier `{x:1, y:2}` and later `{x:9, y:_}`, x:9 causes the whole thing to fail. The user also confirmed that `%?` applies to the whole compound value where it is placed.
+
+**Decision.** An ordinary supplied later value does not authorize overriding preservation. If preservation applies, x:1 and x:9 conflict, and the containing state constraint is rejected. Do not infer an exception merely because the later value is already known or disagrees with the earlier one. Other language-defined change relationships remain a separate semantic question. This corrects the assistant's proposed example that accepted x:9 while inheriting y:2.
+
+`%?` on a compound value withholds implicit preservation throughout that value, including descendant requests reached through ancestor correspondence. An explicit relationship can still supply a component; independence neither provides a value nor asserts inequality. Independence on one component leaves its siblings' preservation intact. Later occurrences remain distinct from earlier ones.
+
+**Semantic examples, not implemented test results.**
+
+| Earlier value | Later constraints and independence scope | Required result |
+| --- | --- | --- |
+| `{x:1, y:2}` | `{x:_, y:_}`, no independence | Preserve x:1 and y:2 |
+| `{x:1, y:2}` | `{x:9, y:_}`, no independence | Reject the whole state constraint |
+| `{x:1, y:2}` | `{x:9, y:_}`, independence on x only | x:9 is permitted; preserve y:2 |
+| `{x:1, y:2}` | `{x:9, y:_}`, independence on the whole record | Keep the supplied x:9; y remains unknown absent another relationship |
+
+**Consequences for the design.** Implicit temporal correspondence must carry the applicable preservation/independence scope into member requests. Known later values still require checking an applicable preservation constraint; preservation cannot be limited to filling unknown holes. Required conflicts reject atomically through ordinary solving. Whole-span work should propagate the same scope with its shared cursor rather than repeat ancestor discovery for every member. These are obligations for the upcoming implementation, not claims that the current engine implements implicit preservation.
+
+**Validation.** Documentation-only clarification; no engine, tests, or fixture expectations changed. Reviewed the examples against the user's two answers and checked the documentation diff. The prior engine validation remains unchanged.

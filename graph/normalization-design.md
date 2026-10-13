@@ -98,9 +98,9 @@ Remaining boundaries include unordered structured matching, fields requiring inh
 
 ### Temporal semantics
 
-T-list adjacency supplies preservation of otherwise unchanged values unless the model implies a change. A later part reference targets the later occurrence and leaves the earlier occurrence intact. Ordinary non-temporal adjacency does not supply this preservation relationship.
+T-list adjacency supplies preservation of otherwise unchanged values unless the model establishes an applicable change relationship. An ordinary later value assertion does not itself establish that exception. With earlier `{x:1, y:2}` and later `{x:9, y:_}`, preservation of x conflicts with x:9 and the whole state constraint fails; the engine must not accept x:9 as an override while preserving only y. A later part reference targets the later occurrence and leaves the earlier occurrence intact. Ordinary non-temporal adjacency does not supply this preservation relationship. See D062.
 
-`%?` withholds default preservation for the later value. It supplies no value, asserts no inequality, and does not prevent explicit constraints from resolving the value. Ordinary `_` and `?` do not themselves declare temporal independence.
+`%?` withholds default preservation for the whole value at its scope. On a compound value, this includes its components: descending to a component must not bypass the containing value's independence. Scoped to x alone, it does not remove preservation for sibling y; scoped to the containing record, it withholds preservation for both. It supplies no value, asserts no inequality, and does not prevent explicit constraints from resolving the value or its components. Ordinary `_` and `?` do not themselves declare temporal independence.
 
 Preservation requires the applicable supplied constraints and transitive prerequisites to be settled. Pending input, ambiguous correspondence, or unresolved containing constraints can withhold it. An unrelated unfinished calculation does not become a prerequisite merely because it shares a session. Commit must use current evidence.
 
