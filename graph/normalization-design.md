@@ -1351,3 +1351,42 @@ The same file-loader trace identifies the Rubix unsupported node as `reel`. This
 Protected fixture hashes, archived assertions and unrelated `myTests.tst` were verified. The original nineteen-case inventory remains a historical snapshot with this follow-up attached. No result here establishes live application-world or Slipstream rendering behavior.
 
 **D056 fixture correction follow-up (2026-10-13).** The corrected committed user fixture now has `xPos:40` in the first CodeDog TaskList. Its first load contradiction advances to `yPos:100` versus the template's `yPos:90`. Rubix uses locally defined `rot = *_+_` in its nine numeric aliases; loading advances from an unavailable numeric definition to unsupported unordered `edgeCube` correspondence. These user-approved corrections preserve constant-listSpec semantics, unknown numeric size and all query expectations. Defaults remain at 16/332 with no new failing names. The classification inventory's `fixture_correction_follow_up` records current evidence; the earlier snapshots above remain historical.
+
+
+## Active regression suite after D057 (2026-10-13)
+
+The user chose fresh behavioral tests as each semantic area is implemented. The old 1,384 `NOT_PORTED` registrations are removed from the active runner; their original locations and registrations remain as `archived_reference` entries in [engine-test-migration.json](engine-test-migration.json). No old assertion body is lost: the inventory preserves the reference checkpoint and source hash. All 198 active compiled registrations, including 52 WorldManager suites, and all 332 defaults remain. The sixteen default failures are deferred. Earlier migration totals and requirements above are historical and are superseded by this policy.
+
+The review grouped all 1,384 retired registrations across 73 original name groups and 79 registration macros. These are registrations, many containing several assertions. The primary-family counts below are a checklist of areas to consider as work proceeds, not a promise to recreate this number of tests:
+
+| Semantic family | Archived registrations |
+| --- | ---: |
+| Scalars, numeric ranges and compatibility | 121 |
+| List correspondence, spans and concatenation | 89 |
+| ListSpecs, grouping, units and normalization depth | 148 |
+| Definitions, scope, projection and word forms | 217 |
+| Record matching, choices and descriptive queries | 163 |
+| Paths, selection, slices and boundary arguments | 220 |
+| Text and grammar recognition | 85 |
+| Writes through selected occurrences | 37 |
+| Context, world and temporal relationships | 171 |
+| Stream insertion, engine entry and replies | 49 |
+| Completion, publication and dependency isolation | 84 |
+| **Total** | **1,384** |
+
+Several families share the same core mechanisms. A member correspondence should serve merging, intersections, selection and writes; a definition or listSpec supplies scoped requirements to that same operation. Test those relationships together when implementing a capability, including their negative and partial cases. Keep tests for requested normalization depth and sparse structure so correctness does not depend on fully expanding an enclosing list or copying every intermediate value.
+
+Representative archived bodies and 21 isolated input-level probes were reviewed. Existing outputs already include scalar/list definitions, pair/triple grouping, fixed-width text parsing, range filtering, selected writes, basic temporal navigation, permuted record fields and an open-span result. These probes do not establish all of the old cases' source-preservation, repeated-request, identity or continuation assertions. In particular, `graphText/firstAmbiguousMatch` and `graphGrammarChoice/ambiguousFirst` choose a first parse in the archive; current probes remain partial with multiple mappings, consistent with the current ambiguity contract. `graphSignedNumber/lateSize` also expects an initial subscription for `-1`; ordinary numeric completion now permits unknown size. Do not reproduce those assertions merely to lower a failure count.
+
+For each implemented capability, add small fixed-fixture checks through the current engine for:
+
+- Its result, applicable constraints and rejection/partial distinctions.
+- The source occurrence and context, including preserving unrelated sources and atomic failure of writes.
+- Its relevant parser or requested-link continuation, cancellation and session ownership, without restarting completed work.
+- Justified work growth and sparse allocation bounds when an optimization is being introduced.
+
+The archive is consulted for overlooked examples. It is not a porting queue, and retired implementation-specific assertions are not runtime requirements. No new cost planner, default coherence pass, cross-session sharing policy or test-generated semantic exception follows from this reset. Test models must remain independent of changing real user/world files; the archived full Rubix palette and transition tests need stable local fixtures before any future regeneration.
+
+The pre-reset full run is **1408/1914**: 1,384 placeholders, sixteen default failures and eight existing compiled failures. That log is `/tmp/p4-step2-full.log`; the input-level review probes are `/tmp/p4-step2-probes.json`. Acceptance of the reset requires the regenerated runner to preserve exactly the latter 24 failure names and messages, while no longer registering the placeholders. The retired-test manifest records the resulting verification.
+
+**Validated result:** the regenerated TestProteus build succeeds in 187.43 seconds. The full isolated run is **24 failures / 530 tests**: defaults **16/332**, compiled cases **8/198**, including **0/52** WorldManager suite failures. Every retained failure name and diagnostic is identical to the pre-reset run. No `NOT_PORTED` placeholders remain active. The protected fixtures, historical registrations, original source and unrelated user work are unchanged. This reduction reports retired placeholders, not newly fixed engine behavior.

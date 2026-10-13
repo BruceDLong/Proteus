@@ -48,12 +48,17 @@ An unsupported result must never be replaced with output from the old solver.
 
 All 15 protected .tst files and their expected outputs remain unchanged. Keep the
 58 historical parser/model cases. The normal TestProteus executable runs through
-WorldManager. `graph/engine-test-migration.json` indexes every retained compiled
-test and its original assertion source. Tests awaiting an API port remain named
-and report NOT_PORTED as a failure. Port useful assertions without restoring old
-solver APIs or changing expectations to match incomplete behavior. Preserve known
-failures and distinguish unsupported features from failures of supported behavior.
-`graph/retired-normalizer-tests.json` records the earlier test pruning and hashes.
+WorldManager. Under D057, the user retired the 1,384 unported placeholder
+registrations and chose fresh behavioral tests as semantics are implemented.
+`graph/engine-test-migration.json` distinguishes active tests from archived
+references to the old assertion source; archived tests are not a porting backlog.
+Keep the default language fixtures, historical parser/model checks, already ported
+behaviors and WorldManager suites. Add focused tests of results, constraints,
+source preservation, occurrence identity, continuation and justified work bounds.
+Consult old tests for missed edge cases without recreating retired solver APIs,
+priced strategy thresholds, cache layouts or exact scheduler traces. Do not change
+expectations to match incomplete behavior. Preserve known active failures and
+record explicit retirements in `graph/retired-normalizer-tests.json`.
 
 Build and verification
 ----------------------

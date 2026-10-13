@@ -27,14 +27,17 @@ parser/stream lifecycle checks live in this suite; there is no separate required
 WorldManager executable. Use `-T 3` when per-case crash/timeout protection is useful.
 Check the printed failure summary: the inherited harness can exit zero on failure.
 
-All language fixtures retain their inputs and expectations. `UNSUPPORTED` and
-`NOT_PORTED` are failures, not successful unchanged outputs or silent skips.
-The [migration inventory](engine-test-migration.json) accounts for every retained
-compiled test name, its original registration and reference location. Historical
-parser/model cases stay active. Newer cases that called old solver internals stay
-selectable and fail explicitly until their behavioral assertions are ported.
-The inventory also records the retired runtime files and standalone native test
-drivers still awaiting migration.
+Language fixtures and active failures are preserved except for explicitly
+recorded user-approved corrections. Under D057, the 1,384 unported placeholder
+registrations are archived rather than run as failures. The
+[migration inventory](engine-test-migration.json) distinguishes 198 active compiled
+registrations from historical assertion references. The 332 default cases,
+historical parser/model checks, already ported behaviors and 52 WorldManager
+suites stay active. Add fresh behavioral tests as each semantic area is developed;
+the archive is a source of edge cases, not a mandatory porting backlog.
+The inventory also preserves retired runtime and standalone native-test references.
+`UNSUPPORTED` results in active tests remain failures; retirement does not establish
+that a previously untested behavior works.
 
 ## Handles and live input
 
