@@ -1254,8 +1254,10 @@ A merge may retain an already applied meaning from a context-free RHS with the s
 
 ### Initial conditions and template applicability (D053)
 
+This preserves existing main-branch semantics, confirmed by the user. The remaining work is to port that behavior into the replacement WorldManager.
+
 A template requiring a relative link such as `%prev` or `%next` is inapplicable at an occurrence where its required neighbor is absent. Record the relative-context requirement on the template and applicability at each occurrence. Thus a predecessor-dependent template can skip the first state, and a successor-dependent template can skip the last. This is neither contradiction nor rejection. Other applicable assertions retain their normal checks; a given value alone does not exempt an occurrence from its template, and a constant template has no initial-state exception.
 
 Keep proven absence separate from information pending at a stream or normalization link. Pending context retains the local continuation; it does not permanently discharge the application. Shared templates retain occurrence-independent metadata, while contextual values and applicability are scoped to their occurrences. No goal restart or repeated prefix traversal is introduced.
 
-The user removed `defaultTests.tst:time/t2` because it predates these semantics. The retirement manifest preserves the removed fixture and authorized hash change. This is an accepted contract awaiting implementation: current temporal lookup can still turn absent context into `UNDEFINED` and then reject the dependent merge. D053 specifies template application; direct standalone cursor output and finite-tail materialization are separate concerns.
+The user removed `defaultTests.tst:time/t2` because it predates these semantics. The retirement manifest preserves the removed fixture and authorized hash change. This is a compatibility gap in the replacement: current temporal lookup can still turn absent context into `UNDEFINED` and then reject the dependent merge. D053 specifies template application; direct standalone cursor output and finite-tail materialization are separate concerns.
