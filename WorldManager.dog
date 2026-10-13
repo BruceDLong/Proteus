@@ -638,6 +638,7 @@ struct WorldFrame {
     me List<our POV>: retainedWork
     me bool: retainSource <- false
     our POV: sourceEdge
+    our POV: preparedReplacement
     our WorldFrame: prerequisite
 }
 
@@ -1897,13 +1898,25 @@ struct WorldPOVGraph {
         if(left.declaration!=NULL or right.declaration!=NULL){
             left.outcome <- worldUnsupported; left.detail <- "Declarations are not value relationships"; return(left)
         }
+        if(edge!.forceID){
+            if(edge!.looseType() or left.negative or right.negative or left.overlay==LST or right.overlay==LST){
+                left.outcome <- worldUnsupported; left.detail <- "Replacement needs a positive scalar relationship"; return(left)
+            }
+            if(!right.hasValue or (right.overlay!=NUM and right.overlay!=STR)){
+                left.outcome <- worldPartial; left.detail <- "Replacement needs an available scalar value"; return(left)
+            }
+            // Replacement discards the previous value/extent evidence. An
+            // anonymous replacement retains the declared destination name,
+            // whose meaning is checked by the ordinary continuation.
+            if(right.nominal==NULL){
+                right.nominal <- left.nominal; right.inheritedName <- left.inheritedName
+                right.meaningApplied <- false
+            }
+            return(right)
+        }
         left <- mergeNames(left, right, edge)
         if(left.outcome!=worldReady){return(left)}
         if(left.overlay==LST or right.overlay==LST){return(mergeList(left, right, edge))}
-        if(edge!.forceID){
-            left.outcome <- worldUnsupported
-            left.detail <- "Replacement relationships are not implemented yet"; return(left)
-        }
         if(left.negative or right.negative){
             if(edge!.looseType() or left.hasRange or right.hasRange){
                 left.outcome <- worldUnsupported; left.detail <- "Qualified negative matching needs template semantics"; return(left)
@@ -2456,9 +2469,9 @@ struct WorldPOVGraph {
             item!.viewMode <- vmOverlay
             if(!facts.hasRange and facts.overlay!=LST){item!.value!.overlayType <- facts.overlay}
         }
-        // A selected result does not inherit the containing expression's
-        // endpoint. Unknown result size must replace that old view's size.
-        if((frame!.selection!=NULL or frame!.path!=NULL) and !facts.hasSize){
+        // Selection and replacement discard the previous view's extent,
+        // including when the new value has no known size.
+        if((frame!.selection!=NULL or frame!.path!=NULL or frame!.preparedReplacement!=NULL) and !facts.hasSize){
             item!.infSize!.overlayType <- NUM; item!.infSize!.evalMode <- emUnknown; item!.infSize!.items.clear()
         }
         if(facts.overlay==LST and facts.order==uUnordered and !facts.explicitSize){item!.infSize!.evalMode <- emUnknown}
@@ -2598,7 +2611,7 @@ struct WorldManager {
         our WorldFrame:: pair
         pair!.node <- left!.node; pair!.facts <- left!.facts; pair!.navigation <- left!.navigation; pair!.contextual <- left!.contextual; pair!.argumentEdge <- left!.argumentEdge
         pair!.selection <- left!.selection; pair!.acquireOnly <- left!.acquireOnly
-        pair!.correspondenceResult <- left!.correspondenceResult
+        pair!.correspondenceResult <- left!.correspondenceResult; pair!.preparedReplacement <- left!.preparedReplacement
         pair!.retainedWork <- left!.retainedWork
         pair!.listSpecFrame <- left!.listSpecFrame; pair!.listSpecEdge <- left!.listSpecEdge
         pair!.tailRequirements <- left!.tailRequirements; pair!.pendingRequirements <- left!.pendingRequirements
@@ -4888,6 +4901,28 @@ struct WorldManager {
             if(frame!.facts.outcome!=worldReady){stopFrame(request, frame); return()}
         }
         if(frame!.prerequisite!=NULL){
+            if(frame!.sourceEdge!=NULL and frame!.sourceEdge!.forceID and frame!.preparedReplacement!==frame!.sourceEdge and
+               !frame!.sourceEdge!.looseType() and !frame!.facts.negative and frame!.facts.overlay!=LST and
+               frame!.prerequisite!.facts.outcome==worldReady and !frame!.prerequisite!.facts.negative and
+               frame!.prerequisite!.facts.hasValue and
+               (frame!.prerequisite!.facts.overlay==NUM or frame!.prerequisite!.facts.overlay==STR)){
+                // A replacement is a new value goal at the same destination.
+                // Its old value's meaning/listSpec proofs cannot be reused.
+                our WorldFrame: replacement <- projectFrame(request, frame!.prerequisite)
+                replacement!.projected <- false; replacement!.acquireOnly <- false; replacement!.expressionSlot <- 3
+                replacement!.nextWork <- replacement!.node!.pItem!.wrkList.size()
+                if(replacement!.facts.nominal==NULL){
+                    replacement!.facts.nominal <- frame!.facts.nominal; replacement!.facts.inheritedName <- frame!.facts.inheritedName
+                    replacement!.facts.meaningApplied <- false
+                }
+                our WorldPosition: destination <- frame!.context
+                if(frame!.correspondenceResult!=NULL){destination <- frame!.correspondenceResult!.position}
+                replacement!.context <- destination
+                replacement!.navigation <- frame!.navigation; replacement!.expressionParent <- frame!.expressionParent
+                if(destination!=NULL){replacement!.parentContext <- destination!.parent; replacement!.navigation <- destination}
+                frame!.preparedReplacement <- frame!.sourceEdge; frame!.prerequisite <- replacement
+                request!.ready.append(frame); request!.ready.append(replacement); return()
+            }
             if(frame!.prerequisite!.facts.outcome==worldRejected){frame!.facts <- frame!.prerequisite!.facts; stopFrame(request, frame); return()}
             if(frame!.facts.alternatives!=NULL or frame!.prerequisite!.facts.alternatives!=NULL){
                 if(frame!.sourceIsOperand and !graph.memberSequence(frame)){

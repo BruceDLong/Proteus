@@ -44,6 +44,7 @@ TestsToRun = `
     unit/worldManager/temporalOccurrences
     unit/worldManager/nominalEvidence
     unit/worldManager/selectionProviders
+    unit/worldManager/scalarReplacement
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -9684,6 +9685,30 @@ run("{T 1 _=%tprev}","{T 1 1}");
 {auto d=parse("{#sack={entry|...}}");check(a.normalize(d)->complete(),"register an open typed collection");auto q=run("{sack}.sack","sack:{entry|  ... }").first;check(q->pItem->value->listSpec && getFlagBit(q->pItem->value->flags,infonState::tailUnfinished),"type selection preserves the source's future member requirement");}
 {auto q=run("{100 2 3}.first","100").first;check(getModeBits(q->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown,"selected scalar does not acquire its old container's size");check(!a.normalize(q)->framesCreated && q->pItem->value->num==100,"repeated scalar read preserves the unbounded value");}
 core.deInit();std::cout<<"REQUESTED_PROVIDERS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_scalarReplacement(me string: testName) <- {
+        if(!worldManagerScalarReplacementChecks()){FAIL("Scalar replacement checks failed")}
+    }
+    me bool: worldManagerScalarReplacementChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& msg){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<msg<<"\n";}};
+auto parse=[&](const std::string& s){auto p=m.parse(s);check(p.target && p.error.empty(),"parse "+s);return p.target;};
+auto run=[&](const std::string& s,const std::string& out){auto p=parse(s);auto h=a.normalize(p);check(h->complete() && toString(p->pItem.get())==out,s+" => "+toString(p->pItem.get())+" "+h->detail);return std::make_pair(p,h);};
+run("123<<=456","456");run("*10+3<<=20","20");run("3<<='abc'","'abc'");run("'abcd'<<='q'","'q'");run("slot:3<<='abc'","slot:'abc'");
+{auto d=parse("{#cap=*10+_ #thing=1 #other=2}");check(a.normalize(d)->complete(),"register replacement meanings");auto before=toString(d->pItem.get());run("(cap==5) <<=20","cap:*10+20");run("thing<<=other","other:2");run("(cap==5)<<=-1","cap:*10+9");run("((slot:3<<=4)<<=5)","slot:5");check(toString(d->pItem.get())==before,"replacement never changes shared meanings");}
+{auto w=parse("{slot:*10+3 spare:8}");a.world=w->pItem;auto first=w->pItem->value->items.head;auto item=first->pItem;auto second=first->next;run("%W.slot<<=20","slot:20");check(first==w->pItem->value->items.head && first->pItem==item && second==first->next && second->pItem->value->num==8,"replacement preserves source occurrences and unrelated fields");check(getModeBits(item->infSize->flags,infonState::evalMode)==infonState::emUnknown && item->value->num==20,"forced unknown size replaces the old source extent");auto q=run("%W.slot","slot:20").first;check(!a.normalize(q)->framesCreated,"completed replacement read creates no new goals");}
+{auto w=parse("{*10+_|3}");a.world=w->pItem;run("%W@[1]<<=20","*10+20");check(w->pItem->value->items.head->pItem->value->num==20 && w->pItem->value->items.head->pItem->infSize->num==10,"replacement checks the destination parent listSpec");}
+for(auto source:{"{7|7}","{slot:3}"}){auto w=parse(source);a.world=w->pItem;auto before=toString(w->pItem.get());auto p=parse(source[1]=='7'?"%W@[1]<<=8":"%W.slot=8");auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && toString(w->pItem.get())==before,"required parent value and ordinary identity still reject atomically");}
+for(auto rhs:{"_","(1=2)"}){auto w=parse("{slot:3}");a.world=w->pItem;auto before=toString(w->pItem.get());auto p=parse(std::string("%W.slot<<=")+rhs);auto h=a.normalize(p);check(!h->complete() && !h->publications && toString(w->pItem.get())==before,"unknown or rejected replacement cannot change the source");}
+for(bool cancel:{false,true}){auto w=parse("{slot:3}");a.world=w->pItem;auto original=toString(w->pItem.get());auto p=parse("%W.slot<<=8");auto rhs=p->pItem->partRef->path->wrkList.front()->pItem;m.prepareInput(rhs);auto h=a.normalize(p);auto frames=h->framesCreated;check(h->outcome==worldWaiting && h->waitingInput==rhs && !h->publications && toString(w->pItem.get())==original,"replacement waits on its RHS without writing");if(cancel)m.cancel(h);SetModeBits(rhs->flags,infonView::streamState,infonView::parseDone);m.inputReady(rhs);check(cancel?h->outcome==worldCancelled && toString(w->pItem.get())==original:h->complete() && w->pItem->value->items.head->pItem->value->num==8 && h->framesCreated<=frames+2,"replacement continues its exact wait or cancels atomically");}
+{auto p=parse("{1 2}<<={3 4}");auto before=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldUnsupported && !h->publications && toString(p->pItem.get())==before,"list replacement retains its explicit boundary");}
+{auto d=parse("{#fixed=7}");check(a.normalize(d)->complete(),"register a fixed destination meaning");auto p=parse("fixed:7<<=8");auto before=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before,"new value must satisfy the retained destination meaning");}
+for(bool cancel:{false,true}){std::string name=cancel?"forceCancel":"forceWait";auto d=parse("{#"+name+"=*10+_}");check(a.normalize(d)->complete(),"register pending replacement type");auto body=d->pItem->value->items.head->pItem->funcArgs;m.prepareInput(body);auto p=parse(name+":3<<=-1");auto before=toString(p->pItem.get());auto h=a.normalize(p);auto frames=h->framesCreated;check(h->outcome==worldWaiting && h->waitingInput==body && !h->publications,"new replacement waits on the retained type meaning");if(cancel)m.cancel(h);SetModeBits(body->flags,infonView::streamState,infonView::parseDone);m.inputReady(body);check(cancel?h->outcome==worldCancelled && toString(p->pItem.get())==before:h->complete() && p->pItem->value->num==9 && p->pItem->infSize->num==10 && h->framesCreated==frames,"replacement type continuation keeps its frames or cancels atomically");}
+core.deInit();std::cout<<"SCALAR_REPLACEMENT: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
 
     }%>
 }
