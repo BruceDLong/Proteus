@@ -1250,3 +1250,12 @@ An insertion node caches one parser-owned child. WorldManager requests it throug
 A positive simple listSpec supplies its anonymous list's implied plural name through a read-only ModelManager helper. Ordinary nominal correspondence consumes that evidence. A bare named member without a definition can acquire a positive parent type qualification while retaining its name; bound meanings and primitive values still require compatibility. Closed ordered and unordered lists share the type-only coverage proof for template discharge, while open tails and explicitly unknown extents keep their template. Published primary names do not also occur as redundant added qualifications.
 
 A merge may retain an already applied meaning from a context-free RHS with the same nominal identity. Contextual meanings still require proof at their own occurrence.
+
+
+### Initial conditions and template applicability (D053)
+
+A template requiring a relative link such as `%prev` or `%next` is inapplicable at an occurrence where its required neighbor is absent. Record the relative-context requirement on the template and applicability at each occurrence. Thus a predecessor-dependent template can skip the first state, and a successor-dependent template can skip the last. This is neither contradiction nor rejection. Other applicable assertions retain their normal checks; a given value alone does not exempt an occurrence from its template, and a constant template has no initial-state exception.
+
+Keep proven absence separate from information pending at a stream or normalization link. Pending context retains the local continuation; it does not permanently discharge the application. Shared templates retain occurrence-independent metadata, while contextual values and applicability are scoped to their occurrences. No goal restart or repeated prefix traversal is introduced.
+
+The user removed `defaultTests.tst:time/t2` because it predates these semantics. The retirement manifest preserves the removed fixture and authorized hash change. This is an accepted contract awaiting implementation: current temporal lookup can still turn absent context into `UNDEFINED` and then reject the dependent merge. D053 specifies template application; direct standalone cursor output and finite-tail materialization are separate concerns.

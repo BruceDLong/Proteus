@@ -263,7 +263,6 @@ slice/simpleSugar,     Select with a simple bracketed spec, {1 2 3 4 5 6 7}@[3:5
 slice/sugar,           Select sugar,                   {1 2 3 4 5 6 7 8 9 0}@[3:*4+{ ... }],                                   {4 5 6 7},                      norm
 lang/splitText,        Split English text,             {english-text:"Whoever says they can't is right"},                      {english-phrase:{Whoever says they can't is right}}, norm
 temp/t1,               Merge many idents,              _=_=321,                                                                321,                            norm
-time/t2,               Simple T-infon,                 *5+{T *256+_ = (*256+3) | 1 ...},                                       {T 1 *256+3 *256+3 *256+3 *256+3}, norm
 temporal/beginBoundary, Identity-bearing null at the T-list beginning, {T 1 2}.begin, NULL:1, norm
 temporal/endBoundary, Identity-bearing null at the eventual T-list end, {T 1 2}.end, NULL:1, norm
 temporal/namedBoundaries, Named infon boundaries exist without resolving its definition, {#timeline={T 1 2}}\ntimeline.begin//:NULL:1\ntimeline.end//:NULL:2, -, multi
