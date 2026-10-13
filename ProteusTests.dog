@@ -46,6 +46,7 @@ TestsToRun = `
     unit/worldManager/selectionProviders
     unit/worldManager/scalarReplacement
     unit/worldManager/externalAssociations
+    unit/worldManager/lexicalText
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -9737,6 +9738,28 @@ for(auto& ref:a.identityRegistry->externalAssociationReferences){check(!a.identi
 for(bool cancel:{false,true}){auto p=parse("{a:1 b:2}^b=9;~b");auto first=p->pItem->value->items.head->pItem;m.prepareInput(first);auto n=a.identityRegistry->externalAssociationReferences.size();auto h=a.normalize(p);check(h->outcome==worldWaiting && h->waitingInput==first && !h->publications && a.identityRegistry->externalAssociationReferences.size()==n,"pending direct candidate blocks external fallback");auto frames=h->framesCreated;if(cancel)m.cancel(h);SetModeBits(first->flags,infonView::streamState,infonView::parseDone);m.inputReady(first);check(cancel?h->outcome==worldCancelled && a.identityRegistry->externalAssociationReferences.size()==n:h->complete() && toString(p->pItem.get())=="b:2" && h->framesCreated<=frames+3,"direct candidate continuation keeps direct precedence");}
 {auto p=run("{a:1}^badge=7;","{a:1}").first;a.world=p->pItem;auto value=parse("badge:8");a.identityRegistry->recordExternalAssociation(p,value,value,nullptr,"badge",0);auto q=parse("%W^badge");auto h=a.normalize(q);check(h->outcome==worldPartial && !h->publications,"several external references stay unresolved instead of choosing one arbitrarily");}
 core.deInit();std::cout<<"EXTERNAL_ASSOCIATIONS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_lexicalText(me string: testName) <- {
+        if(!worldManagerLexicalTextChecks()){FAIL("Lexical text checks failed")}
+    }
+    me bool: worldManagerLexicalTextChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& msg){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<msg<<"\n";}};
+auto parse=[&](const std::string& s){auto p=m.parse(s);check(p.target && p.error.empty(),"parse "+s);return p.target;};
+auto run=[&](const std::string& s,const std::string& out){auto p=parse(s);auto h=a.normalize(p);check(!h->failed() && toString(p->pItem.get())==out,s+" => "+toString(p->pItem.get())+" "+h->detail);return std::make_pair(p,h);};
+run("{english-text:\"Whoever says they can't is right\"}","{english-phrase:{Whoever says they can't is right}}");
+run("english-text:'  one  two '","english-phrase:{one two}");run("english-text:''","english-phrase:{}");run("english-text:'   '","english-phrase:{}");run("english-text:('one' ' two')","english-phrase:{one two}");
+run("english-text:'Élan café'","english-phrase:{Élan café}");run("'one two'","'one two'");
+{auto d=parse("{#one=99 #two='dictionary'}");check(a.normalize(d)->complete(),"register meanings that share token spellings");auto before=toString(d->pItem.get());auto p=run("english-text:'one two'","english-phrase:{one two}").first;check(p->pItem->value->items.head->pItem->addedTypes.size()==1 && p->pItem->value->items.head->pItem->addedTypes.front()->normalType()=="word","tokens retain their lexical class");check(!a.normalize(p)->failed() && toString(p->pItem.get())=="english-phrase:{one two}","repeated normalization keeps lexical words distinct from dictionary meanings");check(toString(d->pItem.get())==before,"lexical conversion never changes dictionary declarations");}
+for(int n:{32,64,128}){std::string input="english-text:'",out="english-phrase:{";for(int i=0;i<n;++i){if(i){input+=' ';out+=' ';}input+="token";out+="token";}input+='\'';out+='}';auto result=run(input,out);check(result.first->pItem->infSize->num==n && result.second->framesCreated<=static_cast<unsigned>(n+2) && result.second->textSourceNodes<=1,"lexical conversion is one scan with one frame per token");}
+for(bool cancel:{false,true}){auto p=parse("english-text:'one two'");m.prepareInput(p->pItem);auto before=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldWaiting && !h->publications,"lexical transform waits for its parser-owned text");if(cancel)m.cancel(h);SetModeBits(p->pItem->flags,infonView::streamState,infonView::parseDone);m.inputReady(p->pItem);check(cancel?h->outcome==worldCancelled && toString(p->pItem.get())==before:!h->failed() && toString(p->pItem.get())=="english-phrase:{one two}" && h->framesCreated==3,"text readiness continues the same frame or cancels atomically");}
+{auto p=parse("english-text:*_+'one two'");auto h=a.normalize(p);check(h->outcome==worldPartial && getModeBits(p->pItem->value->flags,infonState::overlayType)==infonState::STR && getModeBits(p->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown,"unknown string endpoint does not become a closed word sequence");}
+{auto d=parse("{#phraseSource=english-text:'one two'}");check(a.normalize(d)->complete(),"register a shared literal text meaning");auto before=toString(d->pItem.get());run("phraseSource","phraseSource:{one two}");check(toString(d->pItem.get())==before,"lexical conversion borrows shared source text");}
+core.deInit();std::cout<<"LEXICAL_TEXT: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
 
     }%>
 }

@@ -1145,6 +1145,43 @@ struct WorldPOVGraph {
     me bool: representableFacts(me WorldScalar: facts) <- {
         return(facts.outcome==worldReady and facts.representable and facts.pendingChecks==NULL)
     }
+    // The existing English-text primitive yields lexical word occurrences.
+    // Token spellings are data, not requests to evaluate dictionary meanings.
+    void: expandLexicalText(our WorldRequest: request, our WorldFrame: frame) <- {
+        me WorldScalar: source <- frame!.facts
+        if(source.outcome!=worldReady or source.nominal==NULL or source.nominal!.normalType()!="english-text" or
+           source.overlay!=STR or !source.hasValue or !source.hasSize or source.size!=FlexNum(source.textLength) or
+           source.negative or source.pendingChecks!=NULL or
+           !frame!.retainedWork.isEmpty()){return()}
+        me WorldScalar: phrase
+        phrase.overlay <- LST; phrase.hasValue <- true; phrase.hasSize <- true
+        phrase.order <- uOrdered; phrase.meaningApplied <- true; Allocate(phrase.sequence)
+        Allocate(phrase.nominal); phrase.nominal!.setAsGiven("english-phrase")
+        our WordUse:: wordType; wordType!.setAsGiven("word")
+        me WorldTextCursor: text; text.push(source.textSource, source.textLength)
+        me string: word
+        me int64: end <- source.textLength+1
+        withEach pos in range 0 .. end{
+            me char: character <- " "
+            if(pos<source.textLength){character <- text.next()}
+            if(character!=" "){word <+- character}
+            else if(word!=""){
+                our WorldFrame:: member; Allocate(member!.node, 946); Allocate(member!.node!.pItem)
+                member!.node!.pItem!.itmMode <- mItem; member!.node!.pItem!.streamState <- parseDone
+                member!.node!.pItem!.viewMode <- vmAny
+                member!.node!.pItem!.infSize!.evalMode <- emUnknown; member!.node!.pItem!.value!.evalMode <- emUnknown
+                Allocate(member!.facts.nominal); member!.facts.nominal!.setAsGiven(word)
+                member!.facts.qualifications.append(wordType); member!.facts.meaningApplied <- true
+                member!.initialized <- true; member!.projected <- true; member!.finished <- true
+                member!.node!.pItem!.type <- member!.facts.nominal
+                appendMember(phrase.sequence, member); request!.framesCreated <+- 1
+                phrase.size <+- 1; phrase.contentsComplete <- false; word <- ""
+            }
+        }
+        request!.textSourceNodes <+- text.visits
+        frame!.facts <- phrase
+    }
+
     me bool: completeFacts(me WorldScalar: facts, me bool: requireSize) <- {
         return(facts.declaration!=NULL or (facts.terminalValue!=0 and facts.outcome==worldReady) or (facts.outcome==worldReady and facts.pendingChecks==NULL and !facts.negative and !openLayout(facts) and facts.hasValue and facts.contentsComplete and
             ((!requireSize and facts.overlay==NUM) or facts.hasSize) and
@@ -5102,6 +5139,7 @@ struct WorldManager {
                frame!.facts.nominal!.defToUse!=NULL and !frame!.facts.meaningApplied and !frame!.meaningRequested and !frame!.predicateOnly){
                 request!.ready.append(frame); return()
             }
+            graph.expandLexicalText(request, frame)
             settleAlternatives(frame); frame!.finished <- true
             if(frame!.facts.outcome!=worldReady){stopFrame(request, frame)}
             return()
