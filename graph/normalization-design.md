@@ -1390,3 +1390,11 @@ The archive is consulted for overlooked examples. It is not a porting queue, and
 The pre-reset full run is **1408/1914**: 1,384 placeholders, sixteen default failures and eight existing compiled failures. That log is `/tmp/p4-step2-full.log`; the input-level review probes are `/tmp/p4-step2-probes.json`. Acceptance of the reset requires the regenerated runner to preserve exactly the latter 24 failure names and messages, while no longer registering the placeholders. The retired-test manifest records the resulting verification.
 
 **Validated result:** the regenerated TestProteus build succeeds in 187.43 seconds. The full isolated run is **24 failures / 530 tests**: defaults **16/332**, compiled cases **8/198**, including **0/52** WorldManager suite failures. Every retained failure name and diagnostic is identical to the pre-reset run. No `NOT_PORTED` placeholders remain active. The protected fixtures, historical registrations, original source and unrelated user work are unchanged. This reduction reports retired placeholders, not newly fixed engine behavior.
+
+## Anonymous described fields (D058, 2026-10-13)
+
+Record merging and comparison share an effective field identity: the primary name, or a sole positive nominal qualification when no primary name exists. Thus an anonymous typed list can correspond by its inferred plural description alongside named fields. Duplicate/ambiguous identities remain unresolved; bound identity checks and source preservation still apply. No positional pairing is inferred for unordered fields.
+
+The fresh piece-composition suite uses only synthetic definitions and explicitly finite unordered records. It checks position/orientation, colored sides, numeric values of unknown size, source and occurrence preservation, ambiguity, parser continuation/cancellation, repeated completion and linear work over many fixed-width pieces. Implicit unordered extents retain their partial status.
+
+**D058 validation.** Both CodeDog targets regenerate successfully. All 53 WorldManager suites pass; the new suite passes 87 checks in both the executable and an independent shared-library client. Full validation is 24/531 failures with no new failing names. The Rubix fixture now loads past the former unordered-field blocker and stops later at an unsupported request. Protected test inputs and unrelated work are unchanged.

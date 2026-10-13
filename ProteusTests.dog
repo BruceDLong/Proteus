@@ -51,6 +51,7 @@ TestsToRun = `
     unit/worldManager/streamInsertion
     unit/worldManager/pluralListTypes
     unit/worldManager/retainedListSpecs
+    unit/worldManager/pieceComposition
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
 
@@ -7174,5 +7175,57 @@ for(int n:{16,32,64}){
  check(std::count(shown.begin(),shown.end(),'|')==2,"debug output exposes both outer and sparse child templates");
 }
 core.deInit();std::cout<<"RETAINED_LIST_SPECS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_pieceComposition(me string: testName) <- {
+        if(!worldManagerPieceCompositionChecks()){FAIL("Piece composition checks failed")}
+    }
+    me bool: worldManagerPieceCompositionChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& msg){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<msg<<"\n";}};
+auto parse=[&](const std::string& s){auto p=m.parse(s);check(p.target && p.error.empty(),"parse "+s);return p.target;};
+auto definitions=parse("{#rot=*_+_ #xLoc=rot #yLoc=rot #zLoc=rot #xRot=rot #yRot=rot #zRot=rot #location={xLoc,yLoc,zLoc} #orientation={xRot,yRot,zRot} #color=$ #side={color} #piece={location,orientation,*2+{side|...}}}");
+auto declarationText=toString(definitions->pItem.get());check(a.normalize(definitions)->complete(),"register the small piece model");
+std::string body="piece:*3+{location:*3+{xLoc:1,yLoc:2,zLoc:3},orientation:*3+{xRot:0,yRot:0,zRot:0},*2+{side|{color:'red'}{color:'blue'}}}";
+std::string expected="piece:*3+{location:*3+{xLoc:1, yLoc:2, zLoc:3}, orientation:*3+{xRot:0, yRot:0, zRot:0}, {side:{color:'red'} side:{color:'blue'}}}";
+{
+ auto p=parse(body);auto location=p->pItem->value->items.head;auto identity=location->pItem;
+ auto sides=p->pItem->value->items.tail;auto spec=sides->pItem->value->listSpec;auto h=a.normalize(p);
+ check(h->complete() && toString(p->pItem.get())==expected,"compose position, orientation and anonymous typed sides: "+h->detail+" "+toString(p->pItem.get()));
+ check(p->pItem->value->items.head==location && location->pItem==identity,"composition preserves the supplied location occurrence");
+ check(sides->pItem->value->listSpec==spec,"composition retains the original side template");
+ for(auto coordinate=location->pItem->value->items.head;coordinate;coordinate=coordinate->next)
+  check(getModeBits(coordinate->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown,"known rot value completes without inventing a size");
+ auto again=a.normalize(p);check(again->complete() && !again->framesCreated && !again->relationshipsRead,"a completed piece creates no repeated solving work");
+}
+{
+ auto p=parse("piece:*3+{*2+{side|{color:'red'}{color:'blue'}},orientation:*3+{zRot:0,xRot:0,yRot:0},location:*3+{yLoc:2,zLoc:3,xLoc:1}}");auto h=a.normalize(p);
+ check(h->complete() && toString(p->pItem.get())=="piece:*3+{{side:{color:'red'} side:{color:'blue'}}, orientation:*3+{zRot:0, xRot:0, yRot:0}, location:*3+{yLoc:2, zLoc:3, xLoc:1}}","field correspondence follows identity while preserving supplied order");
+}
+{
+ auto p=parse(body+".sides@[2].color");auto h=a.normalize(p);
+ check(h->complete() && toString(p->pItem.get())=="color:'blue'","the same plural evidence supports selection");
+}
+{
+ auto defs=parse("{#ambiguous={location,*2+{side|...},*2+{side|...}}}");check(a.normalize(defs)->complete(),"register duplicate typed fields");
+ auto p=parse("ambiguous:{location:{xLoc:1,yLoc:2,zLoc:3},*2+{side|{color:'red'}{color:'blue'}},*2+{side|{color:'red'}{color:'blue'}}}");auto before=toString(p->pItem.get());auto h=a.normalize(p);
+ check(!h->complete() && !h->publications && toString(p->pItem.get())==before,"duplicate field descriptions are not paired arbitrarily");
+}
+for(int n:{8,16,32}){
+ std::string text="{";for(int i=0;i<n;++i){if(i)text+=' ';text+=body;}text+='}';
+ auto p=parse(text);auto h=a.normalize(p);int count=0;for(auto q=p->pItem->value->items.head;q;q=q->next){++count;check(toString(q->pItem.get())==expected,"each piece retains its own complete result");}
+ check(h->complete() && count==n && h->framesCreated<80*n+40 && h->memberPairs<30*n+20,"fixed-width piece composition has linear frame and pair bounds");
+}
+for(bool cancel:{false,true}){
+ auto p=parse(body);auto color=p->pItem->value->items.tail->pItem->value->items.tail->pItem->value->items.head->pItem;m.prepareInput(color);
+ auto before=toString(p->pItem.get());auto h=a.normalize(p);auto frames=h->framesCreated;
+ check(h->outcome==worldWaiting && h->waitingInput==color && !h->publications,"piece waits on the exact unfinished color");
+ if(cancel)m.cancel(h);SetModeBits(color->flags,infonView::streamState,infonView::parseDone);m.inputReady(color);
+ check(cancel?h->outcome==worldCancelled && toString(p->pItem.get())==before:h->complete() && toString(p->pItem.get())==expected && h->framesCreated<frames+50,"color arrival continues the piece or honors cancellation");
+}
+check(toString(definitions->pItem.get())==declarationText,"shared declarations remain unchanged");
+core.deInit();std::cout<<"PIECE_COMPOSITION: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }

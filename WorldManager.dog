@@ -1789,7 +1789,7 @@ struct WorldPOVGraph {
                     me WorldListCursor: supplied; supplied.push(actual.sequence)
                     our WorldFrame: member <- supplied.next()
                     while(member!=NULL){
-                        me string: key <- member!.facts.nominal!.typeID()
+                        me string: key <- fieldName(member!.facts)!.typeID()
                         if(fields.containsKey(key)){return(worldPartial)}
                         fields.insert(key, member); member <- supplied.next()
                     }
@@ -1797,7 +1797,7 @@ struct WorldPOVGraph {
                     member <- wanted.next()
                     me Set<string>: seen
                     while(member!=NULL){
-                        me string: key <- member!.facts.nominal!.typeID()
+                        me string: key <- fieldName(member!.facts)!.typeID()
                         if(seen.contains(key) or !fields.containsKey(key)){return(worldPartial)}
                         seen.insert(key)
                         me WorldOutcome: match <- compare(member!.facts, fields.at(key)!.facts)
@@ -1897,12 +1897,19 @@ struct WorldPOVGraph {
         return(left)
     }
 
+    // A positive anonymous description is field identity evidence too. Keep
+    // the written primary name; multiple qualifications need further proof.
+    our WordUse: fieldName(me WorldScalar: facts) <- {
+        if(facts.nominal!=NULL){return(facts.nominal)}
+        if(!facts.negative and facts.qualifications.size()==1){return(facts.qualifications[0])}
+        return(NULL)
+    }
     me bool: namedFields(me WorldScalar: facts) <- {
         if(facts.overlay!=LST or !facts.hasValue or (facts.sequence!=NULL and facts.sequence!.hasSpans)){return(false)}
         me WorldListCursor: cursor; cursor.push(facts.sequence)
         me WorldMember: member <- cursor.nextMember(false)
         while(member.frame!=NULL){
-            if(member.embedded or member.frame!.facts.nominal==NULL){return(false)}
+            if(member.embedded or fieldName(member.frame!.facts)==NULL){return(false)}
             member <- cursor.nextMember(false)
         }
         return(true)
@@ -2807,7 +2814,7 @@ struct WorldManager {
         me WorldListCursor: cursor; cursor.push(frame!.prerequisite!.facts.sequence)
         our WorldFrame: member <- cursor.next()
         while(member!=NULL){
-            me string: key <- member!.facts.nominal!.typeID()
+            me string: key <- graph.fieldName(member!.facts)!.typeID()
             if(byName.containsKey(key)){
                 frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Record field identity needs additional nominal evidence"; stopFrame(request, frame); return()
             }
@@ -2816,7 +2823,7 @@ struct WorldManager {
         request!.sequenceVisits <+- cursor.visits; me WorldListCursor: actuals; cursor <- actuals; cursor.push(frame!.facts.sequence)
         member <- cursor.next()
         while(member!=NULL){
-            me string: key <- member!.facts.nominal!.typeID()
+            me string: key <- graph.fieldName(member!.facts)!.typeID()
             if(present.contains(key)){
                 frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Record field identity needs additional nominal evidence"; stopFrame(request, frame); return()
             }
@@ -2826,15 +2833,15 @@ struct WorldManager {
         our POV: edge <- graph.memberRelationship(frame!.sourceEdge); edge!.trueByDefinition <- false
         me int64: next <- 0
         withEach actual in supplied{
-            me string: key <- actual!.facts.nominal!.typeID()
+            me string: key <- graph.fieldName(actual!.facts)!.typeID()
             if(byName.containsKey(key)){
                 me int64: index <- byName.at(key)
                 while(next<index){
                     our WorldFrame: omitted <- definitions[next]; next <+- 1
-                    if(!present.contains(omitted!.facts.nominal!.typeID())){fields!.members.append(fieldValue(request, omitted, frame))}
+                    if(!present.contains(graph.fieldName(omitted!.facts)!.typeID())){fields!.members.append(fieldValue(request, omitted, frame))}
                 }
                 our WorldFrame: required <- definitions[index]
-                me WorldOutcome: identity <- graph.compareNominal(actual!.facts.nominal, required!.facts.nominal)
+                me WorldOutcome: identity <- graph.compareNominal(graph.fieldName(actual!.facts), graph.fieldName(required!.facts))
                 if(identity!=worldReady){frame!.facts.outcome <- identity; frame!.facts.detail <- "Record fields do not have a proved identity"; stopFrame(request, frame); return()}
                 fields!.members.append(derivePair(request, actual, required, edge)); request!.memberPairs <+- 1
             }else{
@@ -2846,7 +2853,7 @@ struct WorldManager {
         }
         while(next<definitions.size()){
             our WorldFrame: omitted <- definitions[next]; next <+- 1
-            if(!present.contains(omitted!.facts.nominal!.typeID())){fields!.members.append(fieldValue(request, omitted, frame))}
+            if(!present.contains(graph.fieldName(omitted!.facts)!.typeID())){fields!.members.append(fieldValue(request, omitted, frame))}
         }
         frame!.fields <- fields
         frame!.facts.contentsComplete <- true; frame!.facts.representable <- true
