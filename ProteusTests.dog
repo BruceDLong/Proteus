@@ -53,6 +53,7 @@ TestsToRun = `
     unit/worldManager/retainedListSpecs
     unit/worldManager/pieceComposition
     unit/worldManager/pieceCorrespondence
+    unit/worldManager/temporalTemplates
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
 
@@ -7278,7 +7279,7 @@ for(int n:{8,32,128}){
  auto p=parse(text);auto z=leaf(p);auto h=a.normalize(z);check(h->complete() && z->pItem->value->num==3 && h->framesCreated<14 && h->correspondencePositions<3*n+24,"member demand reads field headers linearly without creating sibling value goals");
 }
 for(int depth:{8,32,128}){
- // Build the containment graph directly: this measures solver depth, not parser backtracking.
+ // Build the containment graph directly: this measures solver depth independently of parser cost.
  auto left=parse("zLoc:_"),right=parse("zLoc:3");for(int i=0;i<depth;++i){auto name="level"+std::to_string(i);auto l=parse(name+":{?}"),r=parse(name+":{?}");l->pItem->value->items.head->pItem=left->pItem;r->pItem->value->items.head->pItem=right->pItem;left=l;right=r;}
  auto p=parse("{?}"),source=parse("{?}");p->pItem->value->items.head->pItem=left->pItem;source->pItem->value->items.head->pItem=right->pItem;p->pItem->wrkList.push_back(source);
  auto z=p;for(int i=0;i<=depth;++i){auto child=z->pItem->value->items.head;child->pParent=z.get();z=child;}
@@ -7291,5 +7292,52 @@ for(int n:{4,8,16}){
 }
 check(toString(d->pItem.get())==definitions,"all correspondence requests preserve definitions");
 core.deInit();std::cout<<"PIECE_CORRESPONDENCE: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_temporalTemplates(me string: testName) <- {
+        if(!worldManagerTemporalTemplateChecks()){FAIL("Temporal template checks failed")}
+    }
+    me bool: worldManagerTemporalTemplateChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& msg){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<msg<<"\n";}};
+auto parse=[&](const std::string& s){auto p=m.parse(s);check(p.target && p.error.empty(),"parse "+s);return p.target;};
+auto run=[&](const std::string& text,const std::string& expected){auto p=parse(text);auto spec=p->pItem->value->listSpec;auto saved=spec?toString(spec.get()):"";auto h=a.normalize(p);check(h->complete() && toString(p->pItem.get())==expected,"temporal template "+text+": "+h->detail+" -> "+toString(p->pItem.get()));if(spec)check(p->pItem->value->listSpec==spec && toString(spec.get())==saved,"retain the immutable template");auto again=a.normalize(p);check(again->complete() && !again->framesCreated && !again->relationshipsRead,"completed temporal result needs no new goals");};
+run("%tprev","UNDEFINED");
+run("{T _=%tprev|1 _ _}","{T 1 1 1}");run("{T _=%tnext|_ _ 7}","{T 7 7 7}");
+run("{_=%prev|1 _ _}","{1 1 1}");run("{_=%next|_ _ 7}","{7 7 7}");
+run("{T _=(%tprev+1)|1 _ _}","{T 1 2 3}");run("{_=(%prev+1)|1 _ _}","{1 2 3}");
+run("{T *10+_=%tprev|1 _}","{T 1 *10+1}");
+run("{T {location:{zLoc:_}}=%tprev|{location:{zLoc:3}} {location:{zLoc:_}}}","{T {location:{zLoc:3}} {location:{zLoc:3}}}");
+run("{T {*5+_ %tprev}|{1 2}}","{T {1 2}}");
+for(auto text:{"{T _=%tprev|1 2}","{_=%next|2 1}","{T {location:{zLoc:_}}=%tprev|{location:{zLoc:3}} {location:{zLoc:4}}}"}){
+ auto p=parse(text);auto before=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before,"an applicable conflicting template still rejects atomically");
+}
+for(auto text:{"{T _=%tnext|1 ...}","{_=%next|1 ...}"}){
+ auto p=parse(text);auto spec=p->pItem->value->listSpec;auto h=a.normalize(p);check(h->outcome==worldPartial && p->pItem->value->listSpec==spec && !getFlagBit(p->pItem->flags,infonView::isNormed),"open future remains unresolved rather than inapplicable");
+}
+for(bool cancel:{false,true})for(bool forward:{false,true}){
+ auto p=parse(forward?"{T _=%tnext|_ 7}":"{T _=%tprev|7 _}");auto target=forward?p->pItem->value->items.head:p->pItem->value->items.tail;target->pParent=p.get();auto pending=forward?p->pItem->value->items.tail->pItem:p->pItem->value->items.head->pItem;auto before=toString(p->pItem.get());m.prepareInput(pending);auto h=a.normalize(target);auto frames=h->framesCreated,edges=h->relationshipsRead;
+ check(h->outcome==worldWaiting && h->waitingInput==pending && !h->publications,"template waits at the exact pending neighbour");auto unrelated=parse("9");m.inputReady(unrelated->pItem);check(h->outcome==worldWaiting && h->framesCreated==frames && h->relationshipsRead==edges,"unrelated arrival does not replay temporal work");
+ if(cancel)m.cancel(h);SetModeBits(pending->flags,infonView::streamState,infonView::parseDone);m.inputReady(pending);
+ check(cancel?h->outcome==worldCancelled && !h->publications && toString(p->pItem.get())==before:h->complete() && target->pItem->value->num==7 && h->framesCreated<frames+8,"neighbour arrival resumes the local request or honors cancellation");
+}
+{
+ auto p=parse("{T _=%tprev|1 _}");auto target=p->pItem->value->items.head;target->pParent=p.get();m.prepareInput(p->pItem);auto h=a.normalize(target);check(h->outcome==worldWaiting && h->waitingInput==p->pItem,"an unfinished containing list is not a proved boundary");SetModeBits(p->pItem->flags,infonView::streamState,infonView::parseDone);m.inputReady(p->pItem);check(h->complete() && target->pItem->value->num==1,"closing the boundary makes the initial template inapplicable");
+}
+for(int n:{8,32,128})for(bool forward:{false,true}){
+ std::string text=forward?"{T _=%tnext|":"{T _=%tprev|";for(int i=0;i<n;++i)text+=(i==(forward?n-1:0)?"7 ":"_ ");text+='}';auto p=parse(text);auto spec=p->pItem->value->listSpec;auto saved=toString(spec.get());auto h=a.normalize(p);bool values=true;for(auto q=p->pItem->value->items.head;q;q=q->next)values=values && q->pItem->value->num==7 && q->pItem->wrkList.empty();
+ check(h->complete() && values && h->framesCreated<8*n+8 && h->relationshipsRead<8*n+8 && h->templateApplications<4*n+4,"both temporal directions share occurrence results with linear frame, relationship and application bounds");check(p->pItem->value->listSpec==spec && toString(spec.get())==saved,"chain evaluation preserves its source template");auto again=a.normalize(p);check(again->complete() && !again->framesCreated,"completed chain has no repeated goals");std::cout<<"TEMPLATE_CHAIN: "<<n<<(forward?" forward":" backward")<<", "<<h->framesCreated<<" frames, "<<h->relationshipsRead<<" relationships\n";
+}
+auto defs=parse("{#rot=*_+_ #xLoc=rot #yLoc=rot #zLoc=rot #xRot=rot #yRot=rot #zRot=rot #location={xLoc,yLoc,zLoc} #orientation={xRot,yRot,zRot} #color=$ #side={color} #piece={location,orientation,*2+{side|...}}}");auto definitions=toString(defs->pItem.get());check(a.normalize(defs)->complete(),"register the synthetic temporal piece model");
+std::string first="piece:*3+{location:*3+{xLoc:1,yLoc:2,zLoc:3},orientation:*3+{xRot:0,yRot:0,zRot:0},*2+{side|{color:'red'}{color:'blue'}}}";
+std::string second="piece:*3+{location:*3+{xLoc:1,yLoc:2,zLoc:_},orientation:*3+{xRot:0,yRot:0,zRot:0},*2+{side|{color:'red'}{color:'blue'}}}";
+for(int mode:{0,1,2}){
+ auto p=parse(mode==2?"{T "+first+" "+second+"=%tprev}":"{T piece=%tprev|"+first+" "+second+"}");auto state1=p->pItem->value->items.head;auto state2=p->pItem->value->items.tail;state2->pParent=p.get();auto location=state2->pItem->value->items.head;location->pParent=state2.get();auto z=location->pItem->value->items.tail;z->pParent=location.get();auto id=z->pItem;auto source=toString(state1->pItem.get());auto untouched=toString(state2->pItem->value->items.tail->pItem.get());auto spec=p->pItem->value->listSpec;auto specText=spec?toString(spec.get()):"";
+ auto h=a.normalize(mode==0?p:mode==1?state2:z);check(h->complete() && z->pItem==id && z->pItem->value->num==3,"two states supply one missing coordinate through whole list, state or leaf correspondence: "+h->detail);
+ if(mode)check(toString(state1->pItem.get())==source,"state/member demand leaves the previous source state unchanged");if(mode==2)check(toString(state2->pItem->value->items.tail->pItem.get())==untouched && h->framesCreated<20,"leaf temporal correspondence creates no side/color goals");if(spec)check(p->pItem->value->listSpec==spec && toString(spec.get())==specText,"two states keep their original transition template");
+}
+check(toString(defs->pItem.get())==definitions,"temporal requests preserve shared model definitions");core.deInit();std::cout<<"TEMPORAL_TEMPLATES: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }
