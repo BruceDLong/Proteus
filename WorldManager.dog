@@ -299,6 +299,7 @@ struct WorldPatternState {
     void: INIT() <- {Allocate(proof)}
 }
 struct WorldPatternGoal {
+    me bool: projectedPrefix <- false
     our WorldFrame: pattern
     me int64: start <- 0
     me bool: initialized <- false
@@ -475,6 +476,8 @@ struct WorldPath {
 }
 
 struct WorldFrame {
+    our POV: inputEdge
+    our WorldFrame: projectionBody
     our WorldFieldMerge: fields
     me bool: lazyPattern <- false
     our POV: node
@@ -1042,6 +1045,9 @@ struct WorldPOVGraph {
         return(facts.outcome==worldReady and facts.pendingChecks==NULL and !facts.hasValue and
                !facts.hasSize and !facts.hasRange and (facts.overlay>=0 or (facts.nominal!=NULL)))
     }
+    me bool: projectionTemplate(our infonView: item) <- {
+        return(item!=NULL and item!.value!=NULL and item!.innr!=NULL and item!.value!.evalMode==emIntersection and !item!.isOrLike())
+    }
     me bool: rangePredicate(me WorldScalar: facts) <- {
         return(facts.overlay==NUM and (facts.hasRange or (!facts.hasValue and facts.hasSize)))
     }
@@ -1057,7 +1063,7 @@ struct WorldPOVGraph {
         // Selection tests a value domain, independently of its representation's
         // endpoint. A proved exclusion supplies the candidate, not its negation.
         if(!proof and !edge!.looseType() and !candidate.negative and
-           (predicate.negative or rangePredicate(predicate))){
+           (predicate.negative or rangePredicate(predicate) or typePredicate(predicate))){
             me WorldOutcome: compared <- compare(predicate, candidate)
             if(predicate.negative){
                 if(compared==worldReady){compared <- worldRejected}
@@ -1962,6 +1968,7 @@ struct WorldPOVGraph {
         our WorldFrame: frame <- job.frame
         our infonView: item <- job.target!.pItem
         me WorldScalar: facts <- frame!.facts
+        if(frame!.inputEdge!=NULL){item!.funcArgs <- NULL; item!.hasInnrOutr <- false}
         if(frame!.path!=NULL){
             item!.partRef <- NULL; item!.parts.clear()
             if(frame!.correspondenceResult!=NULL and frame!.correspondenceResult!.position!=NULL){
@@ -2695,8 +2702,13 @@ struct WorldManager {
             frame!.finished <- true; return()
         }
         our POV: edge <- graph.memberRelationship(lookup!.query!.relation); edge!.pItem <- lookup!.result!.position!.node!.pItem
-        if(lookup!.query!.testPattern and lookup!.result!.facts!=NULL and
-           (frame!.facts.negative or graph.rangePredicate(frame!.facts))){
+        if(lookup!.query!.testPattern and (frame!.facts.negative or graph.rangePredicate(frame!.facts))){
+            if(lookup!.result!.facts==NULL){
+                lookup!.result!.facts <- makeFrame(request, lookup!.result!.position!.node, lookup!.result!.position)
+                lookup!.result!.facts!.acquireOnly <- frame!.acquireOnly
+                if(lookup!.accepted!=NULL and lookup!.accepted!.capture!=NULL){lookup!.accepted!.capture!.facts <- lookup!.result!.facts}
+                request!.ready.append(frame); request!.ready.append(lookup!.result!.facts); return()
+            }
             frame!.facts <- graph.matchPosition(frame!.facts, lookup!.result!.facts!.facts, edge)
             frame!.correspondenceResult <- lookup!.result; frame!.lookup <- NULL
             request!.ready.append(frame); return()
@@ -3181,12 +3193,38 @@ struct WorldManager {
     me bool: preparePattern(our WorldRequest: request, our WorldFrame: consumer, our WorldPatternGoal: goal) <- {
         our WorldFrame: pattern <- goal!.pattern
         if(!pattern!.lazyPattern){return(true)}
+        our infonView: item <- pattern!.node!.pItem
+        if(graph.projectionTemplate(item)){
+            me WorldScalar: header <- graph.read(request, pattern!.node, pattern!.expressionParent, false, true, true)
+            if(header.outcome==worldWaiting){waitAt(request, consumer, item); return(false)}
+            if(header.outcome!=worldReady){consumer!.facts <- header; stopFrame(request, consumer); return(false)}
+            if(item!.type!=NULL or item!.invertMatch or item!.funcArgs!=NULL or item!.innr!.funcArgs!=NULL or !item!.wrkList.isEmpty()){
+                consumer!.facts.outcome <- worldUnsupported; consumer!.facts.detail <- "Projected pattern has additional obligations"; stopFrame(request, consumer); return(false)
+            }
+            our POV:: body{941}; body!.pItem <- item!.innr
+            me WorldScalar: bodyHeader <- graph.read(request, body, NULL, false, false, true)
+            if(bodyHeader.outcome==worldWaiting){waitAt(request, consumer, item!.innr); return(false)}
+            if(bodyHeader.outcome!=worldReady){consumer!.facts <- bodyHeader; stopFrame(request, consumer); return(false)}
+            if(item!.innr!.value!.sizeMode==fromGiven and
+               (item!.innr!.infSize!.evalMode!=emLiteral or item!.innr!.infSize!.num<=0 or item!.innr!.infSize!.num.getDenominator()!=1)){
+                consumer!.facts.outcome <- worldUnsupported; consumer!.facts.detail <- "Projected pattern needs an established position"; stopFrame(request, consumer); return(false)
+            }
+            // A pure repeated body needs only the indexed prefix. Explicit
+            // body members retain their own layout independently of the index.
+            if(item!.innr!.value!.sizeMode==fromGiven and
+               (item!.innr!.value!.items.head!=NULL or !item!.innr!.value!.tailUnfinished)){
+                body!.pItem <- graph.pathBody(item!.innr, false)
+                Allocate(body!.pItem!.infSize); body!.pItem!.infSize!.overlayType <- NUM; body!.pItem!.infSize!.evalMode <- emUnknown
+            }
+            pattern!.projectionBody <- patternFrame(request, consumer, graph.position(body))
+            pattern!.facts <- header; pattern!.initialized <- true; pattern!.finished <- true; pattern!.lazyPattern <- false
+            return(true)
+        }
         me WorldScalar: header <- graph.read(request, pattern!.node, pattern!.expressionParent,
             pattern!.context!=NULL and pattern!.context!.input!=NULL, false, true)
         if(header.outcome==worldWaiting){waitAt(request, consumer, pattern!.node!.pItem); return(false)}
         if(header.outcome!=worldReady){consumer!.facts <- header; stopFrame(request, consumer); return(false)}
         me bool: root <- goal===consumer!.lookup!.chart!.root
-        our infonView: item <- pattern!.node!.pItem
         if(header.overlay==LST and header.hasValue and (root or item!.wrkList.isEmpty()) and
            (root or header.nominal==NULL)){
             pattern!.facts <- header; pattern!.initialized <- true; pattern!.finished <- true
@@ -3201,7 +3239,7 @@ struct WorldManager {
                 our POV:: spec{937}; spec!.pItem <- item!.value!.listSpec
                 our WorldFrame: requirement <- patternFrame(request, consumer, graph.position(spec))
                 pattern!.tailRequirements <- graph.requirement(requirement, spec)
-                if(item!.value!.items.head!=NULL){
+                if(item!.value!.items.head!=NULL and !(root and consumer!.inputEdge!=NULL and graph.projectionTemplate(item!.value!.listSpec))){
                     consumer!.facts.outcome <- worldUnsupported; consumer!.facts.detail <- "Selected structured template needs prefix requirements"
                     stopFrame(request, consumer); return(false)
                 }
@@ -3336,6 +3374,30 @@ struct WorldManager {
         patternResult(goal, result)
         return(true)
     }
+    // A projected pattern consumes its body's span and returns one of its
+    // proved members. Embedded captures keep their own list result.
+    our WorldFrame: projectPatternResult(our WorldRequest: request, our WorldFrame: pattern, our WorldFrame: body) <- {
+        our infonView: item <- pattern!.node!.pItem
+        me WorldListCursor: members; members.push(body!.facts.sequence)
+        me WorldMember: occurrence <- members.nextMember(false)
+        our WorldFrame: selected
+        me int64: index <- 0
+        me bool: indexed <- item!.innr!.value!.sizeMode==fromGiven
+        while(occurrence.frame!=NULL){
+            our WorldFrame: member <- occurrence.frame
+            if(!indexed and item!.intersectPos==ipGetMarked and
+               (member!.node===item!.intersectMarkedRetPOV or member!.node===item!.innr!.intersectMarkedRetPOV)){selected <- member; break()}
+            if(occurrence.embedded){members.push(member!.facts.sequence)}
+            else{
+                index <+- 1
+                if((indexed and item!.innr!.infSize!.num==FlexNum(index)) or
+                   (!indexed and (item!.intersectPos==ipGetLast or (item!.intersectPos==ipGetFirst and index==1)))){selected <- member}
+            }
+            occurrence <- members.nextMember(false)
+        }
+        request!.sequenceVisits <+- members.visits
+        return(selected)
+    }
     // Nested grouping, repetition and OR all compose the same span results.
     // A goal/template/source-boundary triple is solved once. States with the
     // same continuation share a packed proof instead of enumerating paths.
@@ -3405,11 +3467,13 @@ struct WorldManager {
                 if(pattern!.facts.outcome!=worldReady or pattern!.facts.pendingChecks!=NULL or !pattern!.retainedWork.isEmpty()){
                     frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Pattern still has unresolved requirements"; stopFrame(request, frame); return()
                 }
+                if(pattern!.projectionBody!=NULL){goal!.child <- patternGoal(request, chart, pattern!.projectionBody, goal!.start)}
                 if(pattern!.facts.alternatives==NULL and pattern!.facts.overlay==LST){
                     if(!pattern!.facts.hasValue or pattern!.facts.negative or
                        (pattern!.facts.hasSize and (pattern!.facts.size<0 or pattern!.facts.size.getDenominator()!=1))){
                         frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Pattern needs a positive ordered list layout"; stopFrame(request, frame); return()
                     }
+                    goal!.projectedPrefix <- goal===chart!.root and frame!.inputEdge!=NULL and graph.projectionTemplate(pattern!.node!.pItem!.value!.listSpec)
                     me WorldListCursor: members; members.push(pattern!.facts.sequence)
                     me WorldMember: member <- members.nextMember(false)
                     while(member.frame!=NULL){goal!.members.append(member); member <- members.nextMember(false)}
@@ -3446,7 +3510,15 @@ struct WorldManager {
                     if(child!.selected!=NULL and !lookup!.query!.testPattern and chart!.deterministic){
                         chart!.accepted <- child; chart!.selectedEarly <- true; break()
                     }
-                    if(pattern!.facts.alternatives!=NULL){
+                    if(pattern!.projectionBody!=NULL){
+                        our WorldFrame: selected <- projectPatternResult(request, pattern, child!.frame)
+                        if(selected!=NULL){
+                            our WorldPatternResult:: result; result!.end <- child!.end; result!.frame <- selected; result!.proof <- child!.proof
+                            result!.selected <- child!.selected
+                            if(lookup!.query!.target!=NULL and graph.samePosition(pattern!.context, lookup!.query!.target)){result!.selected <- selected}
+                            patternResult(goal, result)
+                        }
+                    }else if(pattern!.facts.alternatives!=NULL){
                         our WorldPatternResult:: result; result!.end <- child!.end; result!.frame <- child!.frame
                         Allocate(result!.proof); result!.proof!.child <- child!.proof; result!.selected <- child!.selected; patternResult(goal, result)
                     }
@@ -3454,6 +3526,17 @@ struct WorldManager {
                         me bool: tail <- goal!.state!.slot==goal!.members.size()
                         if(tail and child!.end==goal!.state!.end and !pattern!.facts.hasSize){
                             frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Repeated pattern can consume no source positions"; stopFrame(request, frame); return()
+                        }
+                        if(goal!.projectedPrefix and !tail){
+                            our WorldFrame: required <- goal!.members[goal!.state!.slot].frame
+                            me WorldScalar: matched <- graph.matchPosition(required!.facts, child!.frame!.facts, lookup!.memberEdge)
+                            if(matched.outcome==worldRejected){continue()}
+                            if(matched.outcome!=worldReady or matched.needsEvidence or matched.pendingChecks!=NULL){
+                                frame!.facts <- matched; if(matched.needsEvidence or matched.pendingChecks!=NULL){frame!.facts.outcome <- worldPartial}
+                                stopFrame(request, frame); return()
+                            }
+                            our WorldPatternResult:: refined; refined! <- child!
+                            refined!.frame <- projectFrame(request, child!.frame); refined!.frame!.facts <- matched; child <- refined
                         }
                         me bool: embedded <- false
                         if(!tail){embedded <- goal!.members[goal!.state!.slot].embedded}
@@ -3471,15 +3554,16 @@ struct WorldManager {
                 if(chart!.selectedEarly){break()}
                 goal!.child <- NULL; goal!.state <- NULL; goal!.alternative <+- 1
             }
-            if(pattern!.facts.alternatives!=NULL){
+            if(pattern!.projectionBody!=NULL){}
+            else if(pattern!.facts.alternatives!=NULL){
                 if(goal!.alternative<pattern!.facts.alternatives!.members.size()){
                     goal!.child <- patternGoal(request, chart, pattern!.facts.alternatives!.members[goal!.alternative], goal!.start)
                     continue()
                 }
             }else if(pattern!.facts.overlay!=LST){
                 if(!patternLeaf(request, frame, goal)){return()}
-            }else if(!goal!.pending.isEmpty()){
-                goal!.state <- goal!.pending.popLast()
+            }else if(!goal!.pending.isEmpty() or goal!.state!=NULL){
+                if(goal!.state==NULL){goal!.state <- goal!.pending.popLast()}
                 our WorldPatternState: state <- goal!.state
                 me int64: count <- graph.sequenceLength(state!.sequence)
                 if(state!.slot==goal!.members.size() and (!pattern!.facts.hasSize or pattern!.facts.size==FlexNum(count))){
@@ -3495,8 +3579,21 @@ struct WorldManager {
                     if(lookup!.query!.target!=NULL and graph.samePosition(pattern!.context, lookup!.query!.target)){result!.selected <- result!.frame}
                     patternResult(goal, result)
                 }
+                if(goal!.projectedPrefix and state!.slot<goal!.members.size()){
+                    our WorldFrame: constraint <- goal!.members[state!.slot].frame
+                    // These are already supplied output constraints. The
+                    // generating listSpec is not another requirement on them.
+                    if(constraint!.lazyPattern){constraint!.lazyPattern <- false; constraint!.context <- NULL; constraint!.parentContext <- NULL}
+                    if(!constraint!.finished){request!.ready.append(frame); request!.ready.append(constraint); return()}
+                    if(constraint!.facts.outcome!=worldReady or constraint!.facts.pendingChecks!=NULL){
+                        frame!.facts <- constraint!.facts; if(constraint!.facts.pendingChecks!=NULL){frame!.facts.outcome <- worldPartial}
+                        stopFrame(request, frame); return()
+                    }
+                }
                 our WorldFrame: child
-                if(state!.slot<goal!.members.size()){child <- goal!.members[state!.slot].frame}
+                if(state!.slot<goal!.members.size()){
+                    if(goal!.projectedPrefix){child <- goal!.repeated}else{child <- goal!.members[state!.slot].frame}
+                }
                 else if(goal!.repeated!=NULL and (!pattern!.facts.hasSize or FlexNum(count)<pattern!.facts.size)){child <- goal!.repeated}
                 if(child!=NULL){goal!.child <- patternGoal(request, chart, child, state!.end)}
                 else{goal!.state <- NULL}
@@ -3521,6 +3618,20 @@ struct WorldManager {
                 chart!.accepted <- result
             }
             chart!.resultIndex <+- 1
+        }
+        if(chart!.accepted==NULL and frame!.inputEdge!=NULL and (chart!.text or chart!.ended) and
+           !chart!.root!.pattern!.facts.hasSize and chart!.root!.pattern!.facts.openTail and chart!.root!.repeated!=NULL and chart!.root!.repeated!.projectionBody!=NULL){
+            // No complete next projection: keep the longest proved output
+            // prefix and the original relation that still constrains its tail.
+            withEach result in chart!.root!.results{
+                if(chart!.accepted==NULL or result!.end>chart!.accepted!.end){chart!.accepted <- result}
+            }
+            if(chart!.accepted!=NULL){
+                our WorldFrame: answer <- chart!.accepted!.frame
+                answer!.facts.openTail <- true; answer!.facts.hasSize <- false
+                answer!.facts.dischargeListSpec <- false; answer!.facts.contentsComplete <- false
+                frame!.retainedWork.append(frame!.inputEdge)
+            }
         }
         if(chart!.accepted==NULL){
             frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "No structured correspondence matches"; stopFrame(request, frame); return()
@@ -3816,7 +3927,23 @@ struct WorldManager {
         if(!frame!.initialized and (frame!.path!=NULL or frame!.node!.pItem!.partRef!=NULL or !frame!.node!.pItem!.parts.isEmpty())){pathStep(request, frame); return()}
         if(!frame!.initialized and frame!.node!.pItem!.value!=NULL and frame!.node!.pItem!.value!.evalMode==emIntersection){selectMember(request, frame); return()}
         if(!frame!.initialized){
-            frame!.facts <- graph.read(request, frame!.node, frame!.expressionParent, false, false, frame!.predicateOnly)
+            our infonView: input <- frame!.node!.pItem
+            me bool: suppliedProjection <- input!.value!=NULL and graph.projectionTemplate(input!.value!.listSpec) and !input!.wrkList.isEmpty() and
+                input!.wrkList[0]!.looseMode and !input!.wrkList[0]!.forceID
+            me bool: hasInput <- input!.value!=NULL and ((input!.hasInnrOutr and input!.funcArgs!=NULL) or suppliedProjection) and
+                input!.value!.evalMode==emLiteral and input!.value!.overlayType==LST
+            frame!.facts <- graph.read(request, frame!.node, frame!.expressionParent, hasInput, false, frame!.predicateOnly)
+            if(hasInput and frame!.facts.outcome==worldReady){
+                Allocate(frame!.inputEdge, 941); frame!.inputEdge!.pItem <- input!.funcArgs; frame!.inputEdge!.looseMode <- true
+                if(input!.funcArgs==NULL){frame!.inputEdge <- input!.wrkList[0]; frame!.nextWork <- 1}
+                frame!.lookup <- graph.correspondence(NULL, frame!.inputEdge, NULL, true, true)
+                // Input feeds a pattern; each projected body's predicates use
+                // ordinary membership proof rather than endpoint unification.
+                Allocate(frame!.lookup!.memberEdge, 941); frame!.lookup!.memberEdge!.pItem <- frame!.inputEdge!.pItem
+                Allocate(frame!.lookup!.chart)
+                our WorldPosition: position <- graph.position(frame!.node); position!.input <- frame!.inputEdge
+                frame!.lookup!.chart!.patternPosition <- position; frame!.expressionSlot <- 3
+            }
             if(frame!.facts.declaration!=NULL){
                 frame!.facts.declaration <- graph.stageDefinition(request, frame!.node!.pItem)
             }

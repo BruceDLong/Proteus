@@ -33,6 +33,8 @@ TestsToRun = `
     unit/worldManager/recordFields
     unit/worldManager/endRelative
     unit/worldManager/rangePredicates
+    unit/worldManager/rangeFilters
+    unit/worldManager/symbolicRangeFilters
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -9062,6 +9064,131 @@ for(int n:{16,64,256}){
  check(h->framesCreated<=n+12 && h->correspondenceChecks<=2*(n+1) && h->correspondencePositions<=n+15,"range search work is linear in visited source members");
 }
 core.deInit();std::cout<<"RANGE_PREDICATES: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_rangeFilters(me string: tname) <- {
+        if(!worldManagerRangeFilterChecks()){FAIL("Range filter checks failed")}
+    }
+    me bool: worldManagerRangeFilterChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;
+int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+auto parse=[&](const std::string& text){auto p=m.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+auto run=[&](const std::string& text,const std::string& expected,bool complete=true){auto p=parse(text);auto h=a.normalize(p);auto out=toString(p->pItem.get());check(h->outcome==(complete?worldComplete:worldPartial) && out==expected,text+" => "+out+" : "+h->detail);return std::make_pair(p,h);};
+for(int low=0;low<=3;++low)for(int width=1;width<=4;++width)for(int n:{0,1,8,32}){
+ std::string source="{",expected="{";bool first=true;
+ for(int i=0;i<n;++i){int v=(i*7+3)%11;source+=std::to_string(v)+" ";if(v>=low && v<low+width){if(!first)expected+=' ';first=false;expected+=std::to_string(v);}}
+ source+=std::to_string(low)+"}";if(!first)expected+=' ';expected+=std::to_string(low)+"}";
+ auto predicate="(*"+std::to_string(width)+"+_ +"+std::to_string(low)+")";
+ auto text="{[&{!"+predicate+"|...} "+predicate+"]|...}<~"+source;
+ auto p=parse(text);auto input=p->pItem->funcArgs;auto before=toString(input.get());auto firstInput=input->value->items.head;auto h=a.normalize(p);
+ check(h->complete() && toString(p->pItem.get())==expected,"finite independent filter oracle");
+ check(toString(input.get())==before && input->value->items.head==firstInput && p->pItem->value->items.head!=firstInput,"filter borrows source and creates independent output occurrences");
+}
+run("{[&{!*4+_|...} *4+_]|...}<~{1 2 0 3 444 555 666 777 2}","{1 2 0 3 2}");
+run("{[&{!$|...} $]|...}<~{1 'a' 2 'b'}","{'a' 'b'}");
+run("{[<_> _]|...}<~{1 2 3 4}","{1 3}");
+run("{[_ _]|...}<~{1 2 3 4}","{2 4}");
+run("{*2+[...]|...}<~{1 2 3 4}","{2 4}");
+run("{1 'a'}.!$","1");
+run("{'a' 1}.!_","'a'");
+for(auto text:{"*1+{[_ _]|...}<~{1 2 3 4}","*1+{[_ _]|...}<~{1 2 3}"}){
+ auto p=parse(text);auto before=toString(p->pItem.get());auto h=a.normalize(p);
+ check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before,"a given output extent cannot be discarded to publish a partial prefix");
+}
+run("{*2+[_ _ _]|...}<~{1 2 3 4 5 6}","{2 5}");
+run("{[<&*2+{...}>]|...}<~{1 2 3 4}","{{1 2} {3 4}}");
+run("{[&{!*4+_|...} *4+_]|1 2 ...}=={1 2 0 3 9 2}","{1 2 0 3 2}");
+{
+ auto p=parse("{[&{!*4+_|...} *4+_]|2 ...}=={1 2 3}");auto before=toString(p->pItem.get());auto h=a.normalize(p);
+ check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before,"incompatible supplied output prefix rejects atomically");
+}
+{
+ const std::string text="{[&{!(*4+_ +2)|...} (*4+_ +2)]|...}<~{1 2 0 3 4 5 6 7}";
+ const std::string expected="{[&{!(*4+_ +2)|  ... } (*4+_ +2)]| 2 3 4 5 ... } == {1 2 0 3 4 5 6 7}";
+ auto p=parse(text);auto input=p->pItem->funcArgs;auto pattern=p->pItem->value->listSpec;auto inputText=toString(input.get());auto patternText=toString(pattern.get());auto h=a.normalize(p);
+ check(h->outcome==worldPartial && toString(p->pItem.get())==expected && p->pItem->wrkList.size()==1 && p->pItem->wrkList.front()->pItem==input,"unmatched suffix retains the original input relation and proved output prefix");
+ auto body=p->pItem->value;auto first=body->items.head;auto again=a.normalize(p);
+ check(again->outcome==worldPartial && toString(p->pItem.get())==expected && p->pItem->value==body && body->items.head==first,"partial projection remains stable on another normalize");
+ check(toString(input.get())==inputText && toString(pattern.get())==patternText,"partial projection leaves source and shared template unchanged");
+}
+for(auto text:{"{[&{!*4+_|...} *4+_]|...}<~{1 (*4+_ +3) 2}","{[&{!*4+_|...} *4+_]|...}<~{_ 2}","{[&{_|...} _]|...}<~{1 2}","{[<*0+{}>]|...}<~{}"}){
+ auto p=parse(text);auto before=toString(p->pItem.get());auto input=p->pItem->funcArgs;auto inputText=toString(input.get());auto h=a.normalize(p);
+ check(h->outcome==worldPartial && !h->publications && toString(p->pItem.get())==before && toString(input.get())==inputText,"unproved or ambiguous projection publishes nothing");
+}
+for(bool cancel:{false,true})for(int site=0;site<4;++site){
+ const std::string text="{[&{!(*4+_ +2)|...} (*4+_ +2)]|...}<~{1 2 0 3 4 5}";auto sync=run(text,"{2 3 4 5}").second;auto p=parse(text);auto input=p->pItem->funcArgs;auto spec=p->pItem->value->listSpec;
+ auto pending=site==0?input:site==1?input->value->items.head->next->pItem:site==2?spec->innr:spec->innr->value->items.tail->pItem->value->items.tail->pItem;
+ auto before=toString(p->pItem.get());auto sourceBefore=toString(input.get());m.prepareInput(pending);auto h=a.normalize(p);auto frames=h->framesCreated;
+ check(h->outcome==worldWaiting && h->waitingInput==pending && !h->publications,"projection waits at its exact source or template dependency");
+ if(cancel)m.cancel(h);SetModeBits(pending->flags,infonView::streamState,infonView::parseDone);m.inputReady(pending);
+ check(cancel?h->outcome==worldCancelled && h->framesCreated==frames && !h->publications && before==toString(p->pItem.get()):h->complete() && toString(p->pItem.get())=="{2 3 4 5}" && h->framesCreated==sync->framesCreated && h->correspondenceChecks==sync->correspondenceChecks,"projection continuation has no template replay");
+ check(toString(input.get())==sourceBefore,"parser continuation borrows source members");
+}
+{
+ const std::string text="{[&{!*4+_|...} *4+_]|1 2 ...}=={1 2 0 3 9 2}";auto sync=run(text,"{1 2 0 3 2}").second;auto p=parse(text);auto pending=p->pItem->value->items.head->pItem;m.prepareInput(pending);auto h=a.normalize(p);
+ check(h->outcome==worldWaiting && h->waitingInput==pending && !h->publications,"supplied output constraint waits locally");
+ SetModeBits(pending->flags,infonView::streamState,infonView::parseDone);m.inputReady(pending);
+ check(h->complete() && toString(p->pItem.get())=="{1 2 0 3 2}" && h->framesCreated==sync->framesCreated && h->correspondenceChecks==sync->correspondenceChecks,"output-prefix continuation keeps the current chart state");
+}
+for(int n:{16,64,256}){
+ std::string source="{";for(int i=0;i<n;++i)source+=(i%2?"8 ":"1 ");source+="2}";auto p=parse("{[&{!*4+_|...} *4+_]|...}<~"+source);auto h=a.normalize(p);
+ check(h->complete() && h->correspondencePositions==n+2 && h->framesCreated<=10*(n+1)+30 && h->correspondenceChecks<=8*(n+1)+20,"repeated filtering scans each source member once with linear chart work");
+ std::cout<<"FILTER_WORK "<<n+1<<" frames="<<h->framesCreated<<" checks="<<h->correspondenceChecks<<" positions="<<h->correspondencePositions<<"\n";
+}
+core.deInit();std::cout<<"RANGE_FILTERS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_symbolicRangeFilters(me string: tname) <- {
+        if(!worldManagerSymbolicRangeFilterChecks()){FAIL("Symbolic range filter checks failed")}
+    }
+    me bool: worldManagerSymbolicRangeFilterChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;
+int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+auto parse=[&](const std::string& text){auto p=m.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+const std::string filter="{[&{!(*4+_ +2)|...} (*4+_ +2)]|...}<~";
+for(int low=0;low<8;++low)for(int width=1;width<=4;++width){
+ std::string candidate="*10+(*"+std::to_string(width)+"+_ +"+std::to_string(low)+")";
+ auto p=parse(filter+"{"+candidate+" 3}");auto before=toString(p->pItem.get());auto input=p->pItem->funcArgs;auto sourceText=toString(input.get());auto h=a.normalize(p);
+ bool contained=low>=2 && low+width<=6;bool disjoint=low+width<=2 || low>=6;
+ if(contained){
+  check(h->outcome==worldPartial && p->pItem->value->items.size()==2,"contained unknown interval is retained as a possible selected value");
+  auto output=p->pItem->value->items.head;auto supplied=input->value->items.head;
+  check(output!=supplied && output->pItem!=supplied->pItem && toString(output->pItem.get())==toString(supplied->pItem.get()),"contained interval preserves its actual bounds without aliasing source");
+ }else if(disjoint)check(h->complete() && toString(p->pItem.get())=="{3}","proved disjoint interval is skipped");
+ else check(h->outcome==worldPartial && !h->publications && toString(p->pItem.get())==before,"partial overlap cannot be converted into a match or an exclusion");
+ check(toString(input.get())==sourceText,"symbolic filtering leaves all source ranges unchanged");
+}
+{
+ const std::string text="{[&{!*4+_|...} *4+_]|...}<~{1 *3+_ 5 *4+(*2+_ +1) *4+_}";
+ const std::string expected="{1 *4+_ *4+(*2+_ +1) *4+_}";
+ auto p=parse(text);auto source=p->pItem->funcArgs;auto sourceText=toString(source.get());auto templateItem=p->pItem->value->listSpec;auto templateText=toString(templateItem.get());auto h=a.normalize(p);
+ check(h->outcome==worldPartial && toString(p->pItem.get())==expected,"original symbolic range fixture");
+ auto member=p->pItem->value->items.head->next;auto original=source->value->items.head->next;
+ check(member!=original && member->pItem!=original->pItem && member->pItem->infSize->num==4 && original->pItem->infSize->num==3,"output endpoint and source endpoint remain independent");
+ auto body=p->pItem->value;auto again=a.normalize(p);
+ check(again->outcome==worldPartial && toString(p->pItem.get())==expected && p->pItem->value==body && body->items.head->next==member,"symbolic output stays stable on another request");
+ auto value=parse("*4+2");member->pItem->wrkList.push_back(value);auto refined=a.normalize(member);
+ check(refined->complete() && toString(member->pItem.get())=="*4+2" && toString(source.get())==sourceText,"a new output constraint refines only the selected output occurrence");
+ check(toString(templateItem.get())==templateText,"shared projection template is immutable");
+}
+for(bool cancel:{false,true}){
+ const std::string text="{[&{!*4+_|...} *4+_]|...}<~{1 *3+_ 5 *4+(*2+_ +1) *4+_}";
+ auto sync=parse(text);auto syncHandle=a.normalize(sync);auto p=parse(text);auto source=p->pItem->funcArgs;auto pending=source->value->items.head->next->next->next->pItem->value->items.tail->pItem;
+ auto before=toString(p->pItem.get());auto inputBefore=toString(source.get());m.prepareInput(pending);auto h=a.normalize(p);auto frames=h->framesCreated;
+ check(h->outcome==worldWaiting && h->waitingInput==pending && !h->publications,"symbolic member expression waits on its exact operand");
+ if(cancel)m.cancel(h);SetModeBits(pending->flags,infonView::streamState,infonView::parseDone);m.inputReady(pending);
+ check(cancel?h->outcome==worldCancelled && !h->publications && h->framesCreated==frames && toString(p->pItem.get())==before:h->outcome==worldPartial && toString(p->pItem.get())==toString(sync->pItem.get()) && h->framesCreated==syncHandle->framesCreated && h->correspondenceChecks==syncHandle->correspondenceChecks,"symbolic continuation preserves earlier chart work");
+ check(toString(source.get())==inputBefore,"symbolic continuation leaves source expressions intact");
+}
+core.deInit();std::cout<<"SYMBOLIC_RANGE_FILTERS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
 
     }%>
 }
