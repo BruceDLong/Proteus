@@ -1586,7 +1586,10 @@ struct WorldPOVGraph {
             if(frame!.argumentEdge!=NULL){return(frame!.argumentEdge)}
         }
         if(needsTemplate or frame!.nextWork>=item!.wrkList.size()){
-            if(frame!.referenceOnly or (frame!.acquireOnly and (frame!.facts.hasValue or frame!.parentContext!=NULL))){return(NULL)}
+            // An unbounded empty body does not supply its named member shape.
+            // Request that meaning once; the future template itself stays lazy.
+            if(frame!.referenceOnly or (frame!.acquireOnly and (frame!.facts.hasValue or frame!.parentContext!=NULL) and
+               !(frame!.facts.openTail and !frame!.facts.hasSize and sequenceLength(frame!.facts.sequence)==0 and frame!.listSpecEdge==NULL))){return(NULL)}
             if(frame!.meaningRequested or frame!.facts.nominal==NULL or frame!.facts.meaningApplied or
                (frame!.predicateOnly and typePredicate(frame!.facts))){return(NULL)}
             frame!.meaningRequested <- true
@@ -2168,6 +2171,15 @@ struct WorldPOVGraph {
             if(frame!.expression.outcome!=worldReady){frame!.facts <- frame!.expression}
         }else{
             me WorldScalar: left <- frame!.facts
+            // Two sole unknown tails need no positional alignment. A bare
+            // target can adopt the source's future member requirements.
+            if(left.overlay==LST and left.openTail and !left.hasSize and sequenceLength(left.sequence)==0 and
+               frame!.listSpecEdge==NULL and frame!.tailRequirements==NULL and !needsRequirements(frame) and frame!.retainedWork.isEmpty() and
+               !left.negative and !frame!.sourceEdge!.forceID and !frame!.sourceEdge!.looseType() and
+               frame!.prerequisite!.facts.overlay==LST and frame!.prerequisite!.facts.hasValue and frame!.prerequisite!.facts.openTail and
+               !frame!.prerequisite!.facts.hasSize and sequenceLength(frame!.prerequisite!.facts.sequence)==0 and representableFacts(frame!.prerequisite!.facts)){
+                left.hasValue <- false; left.openTail <- false; frame!.facts <- left; frame!.openAlignment <- NULL
+            }
             if(frame!.openAlignment!=NULL){frame!.facts <- mergeList(left, frame!.prerequisite!.facts, frame!.sourceEdge, true)}
             else{mergeRelationship(request, frame)}
             if(frame!.facts.outcome==worldReady and !left.hasValue and frame!.facts.overlay==LST){
@@ -2493,6 +2505,9 @@ struct WorldPOVGraph {
             item!.hasInnrOutr <- false; item!.intersectMarkedRetPOV <- NULL
         }
         if(job.newList!=NULL){item!.value <- job.newList}
+        if(facts.overlay==LST and facts.openTail and frame!.listSpecEdge!=NULL and item!.value!.listSpec==NULL){
+            item!.value!.listSpec <- frame!.listSpecEdge!.pItem
+        }
         // Detached suffixes join the target only after every destination has
         // passed publication checks, preserving the original prefix POVs.
         if(job.reorderFields){
@@ -5014,6 +5029,10 @@ struct WorldManager {
             frame!.prerequisite <- NULL; frame!.selecting <- false
             if(frame!.facts.outcome!=worldReady){stopFrame(request, frame); return()}
         }
+        // A retained future template becomes work only when a member needs it.
+        if(frame!.prerequisite!=NULL and !frame!.prerequisite!.finished){
+            request!.ready.append(frame); request!.ready.append(frame!.prerequisite); return()
+        }
         if(frame!.prerequisite!=NULL){
             if(!frame!.sourceIsOperand and !frame!.sourceIsListSpec and frame!.sourceEdge!=NULL and
                !frame!.sourceEdge!.forceID and !frame!.sourceEdge!.trueByDefinition and
@@ -5146,6 +5165,15 @@ struct WorldManager {
         }
         request!.relationshipsRead <+- 1
         our POV: source <- frame!.sourceEdge
+        if(frame!.sourceIsListSpec and frame!.nextOperand==NULL and frame!.facts.openTail and !frame!.facts.hasSize and frame!.node!.pItem!.wrkList.isEmpty()){
+            frame!.listSpecFrame <- makeFrame(request, source)
+            frame!.listSpecFrame!.expressionParent <- frame!.node; frame!.listSpecFrame!.lazyPattern <- true
+            // Pattern memoization may inspect the header before demanding its
+            // body. Keep that type evidence without claiming a completed proof.
+            frame!.listSpecFrame!.facts <- graph.read(request, source, frame!.node)
+            frame!.tailRequirements <- graph.requirement(frame!.listSpecFrame, source)
+            request!.ready.append(frame); return()
+        }
         if(source!.pItem==NULL){request!.outcome <- worldError; request!.detail <- "Empty relationship"; return()}
         if(source!.viewMap.sourcePov!=NULL or source!.referenceAlias.sourcePov!=NULL or
            (source!.pParent!=NULL and (!frame!.sourceIsOperand or source!.pParent!==frame!.node))){

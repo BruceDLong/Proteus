@@ -47,6 +47,7 @@ TestsToRun = `
     unit/worldManager/scalarReplacement
     unit/worldManager/externalAssociations
     unit/worldManager/lexicalText
+    unit/worldManager/deferredTemplates
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -7838,9 +7839,9 @@ struct GLOBAL {
             {"{5| ...} = {5 5 ...}","{5| 5 5 ... }",worldPartial},
             {"{*10+_| ...} = {7| 7 ...}","{*10+_| *10+7 ... } = {7| 7 ... }",worldPartial},
             {"{5| ...} = {6 ...}","",worldRejected},
-            {"{{...}} = {{5| ...}}","{{ ... }} = {{5|  ... }}",worldPartial},
+            {"{{...}} = {{5| ...}}","{{5|  ... }}",worldPartial},
             {"{...} = {1 ...} = {1 2}","{1 2}",worldComplete},
-            {"{...} = {5| ...} = {_ _}","{5 5} = {5|  ... }",worldComplete},
+            {"{...} = {5| ...} = {_ _}","{5 5}",worldComplete},
             {"{1 ... 6} = {... 4 5 6} = {1 2 3 4 5 6}","{1 &{&{2 3} 4 5} 6}",worldComplete},
             {"{1 ... 6} = ({... 4 5 6})","*_+{1 &{... 4 5} 6}",worldPartial},
             {"{...} = {&{1 ...}}","{1 ... }",worldPartial},
@@ -7888,7 +7889,7 @@ struct GLOBAL {
         // A partial stored result must retain source obligations for a new goal.
         for(bool conflicting:{false,true}){
             auto root=parse("{...} = {5| ...}");auto source=root->pItem->wrkList[0];auto sourceText=toString(source->pItem.get());auto initial=agent.normalize(root);
-            check(initial->outcome==worldPartial && root->pItem->wrkList.size()==1,"future source template remains represented");
+            check(initial->outcome==worldPartial && root->pItem->wrkList.empty() && root->pItem->value->listSpec==source->pItem->value->listSpec,"future source template remains represented directly on the adopted list");
             root->pItem->wrkList.push_back(parse(conflicting?"{_ 6}":"{_ _}"));root->pItem->noteNormalizationWork();auto h=agent.normalize(root);
             check(conflicting?h->outcome==worldRejected && h->publications==0:h->complete()&&root->pItem->value->items.size()==2&&root->pItem->value->items.head->pItem->value->num==5&&root->pItem->value->items.tail->pItem->value->num==5,"later endpoint checks the retained source template");
             check(toString(source->pItem.get())==sourceText && initial->outcome==worldPartial,"new goal leaves source and old handle unchanged");
@@ -9761,5 +9762,59 @@ for(bool cancel:{false,true}){auto p=parse("english-text:'one two'");m.prepareIn
 {auto d=parse("{#phraseSource=english-text:'one two'}");check(a.normalize(d)->complete(),"register a shared literal text meaning");auto before=toString(d->pItem.get());run("phraseSource","phraseSource:{one two}");check(toString(d->pItem.get())==before,"lexical conversion borrows shared source text");}
 core.deInit();std::cout<<"LEXICAL_TEXT: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
 
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_deferredTemplates(me string: testName) <- {
+        if(!worldManagerDeferredTemplateChecks()){FAIL("Deferred member template checks failed")}
+    }
+    me bool: worldManagerDeferredTemplateChecks() <- <%{
+ProteusCore core; core.init("",false);
+auto& agent=*core.agent; auto& manager=agent.worldManager;
+int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& message){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<message<<"\n";}};
+auto parse=[&](const std::string& text){auto parsed=manager.parse(text);check(parsed.target && parsed.error.empty(),"parse "+text);return parsed.target;};
+{
+    auto declarations=parse("{#thing={...} #box={T {&thing}|...}}");
+    check(agent.normalize(declarations)->complete(),"register an open structured member template");
+    auto before=toString(declarations->pItem.get());
+    auto root=parse("box:{...}"); auto handle=agent.normalize(root);
+    check(handle->outcome==worldPartial && root->pItem->value->listSpec && getFlagBit(root->pItem->value->flags,infonState::timelike),"an empty named list acquires its future member shape");
+    check(root->pItem->wrkList.empty() && !root->pItem->value->items.head && handle->templateApplications==0 && handle->framesCreated==3,"shape acquisition retains a template without generating or evaluating a member");
+    auto spec=root->pItem->value->listSpec; auto text=toString(root->pItem.get());
+    auto again=agent.normalize(root);
+    check(again->outcome==worldPartial && root->pItem->value->listSpec==spec && toString(root->pItem.get())==text && again->templateApplications==0,"repeated acquisition preserves the symbolic shape");
+    check(toString(declarations->pItem.get())==before,"shared declaration remains unchanged");
+    agent.world=parse("{stuff:{box:{...}}}")->pItem;
+    auto query=parse("%W.stuff.box"); auto selected=agent.normalize(query);
+    check(selected->outcome==worldPartial && query->pItem->value->listSpec && getFlagBit(query->pItem->value->flags,infonState::timelike),"ordinary correspondence returns the declared open shape");
+}
+for(bool cancel:{false,true}){
+    auto root=parse("{...}={5|...}"); auto source=root->pItem->wrkList.front(); auto spec=source->pItem->value->listSpec;
+    manager.prepareInput(spec); auto initial=agent.normalize(root);
+    check(initial->outcome==worldPartial && !initial->waitingInput && root->pItem->value->listSpec==spec && root->pItem->wrkList.empty(),"a future-only template does not create an input subscription");
+    root->pItem->wrkList.push_back(parse("{_ _}"));root->pItem->noteNormalizationWork();
+    auto waiting=agent.normalize(root); auto frames=waiting->framesCreated;auto edges=waiting->relationshipsRead;
+    auto before=toString(root->pItem.get());
+    check(waiting->outcome==worldWaiting && waiting->waitingInput==spec && !waiting->publications,"a later finite demand waits on that exact template");
+    if(cancel)waiting->cancel();
+    ProteusParser parser(&core,true,0);parser.initParseFromString("template arrival","5");parser.doParse(spec);
+    check(cancel ? waiting->outcome==worldCancelled && !waiting->publications && toString(root->pItem.get())==before : waiting->complete() && toString(root->pItem.get())=="{5 5}","template continuation or cancellation preserves the original demand");
+    if(!cancel)check(waiting->framesCreated>=frames && waiting->relationshipsRead>=edges && initial->outcome==worldPartial,"a new finite goal leaves its earlier partial handle unchanged");
+}
+for(int n:{32,64,128}){
+    auto root=parse("{...}={7|...}"); auto initial=agent.normalize(root);
+    std::string values="{";for(int i=0;i<n;++i)values+="_ ";values+='}';
+    root->pItem->wrkList.push_back(parse(values));root->pItem->noteNormalizationWork();auto handle=agent.normalize(root);
+    check(initial->outcome==worldPartial && handle->complete() && root->pItem->value->items.size()==static_cast<unsigned>(n),"a retained template supplies every subsequently requested member");
+    bool correct=true;for(auto member=root->pItem->value->items.head;member;member=member->next)correct &= member->pItem->value->num==7;
+    check(correct && handle->templateApplications==static_cast<unsigned>(n) && handle->framesCreated<=static_cast<unsigned>(3*n+8),"finite materialization uses one template proof and linear member work");
+}
+for(const std::string input:{"{5|...}={6}","{...}={5|...}={6}"}){
+    auto root=parse(input);auto before=toString(root->pItem.get());auto handle=agent.normalize(root);
+    check(handle->outcome==worldRejected && !handle->publications && toString(root->pItem.get())==before,"adoption never discards an existing template constraint");
+}
+core.deInit();std::cout<<"DEFERRED_TEMPLATES: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }

@@ -1235,3 +1235,8 @@ An external association connects an exact bearer occurrence, descriptor and inde
 ### English lexical text (D049)
 
 The existing `english-text` primitive maps a settled finite string to an ordered `english-phrase` of space-delimited lexical word occurrences. It preserves spelling, attaches checked word-class evidence and keeps token spellings separate from dictionary evaluation. The normal text cursor reads borrowed leaves once; ordinary publication writes the requested phrase. Unknown string endpoints are not closed by this operation, and partial lexical tokens remain partial. Parser waits and source ownership follow the normal frame lifecycle.
+
+
+### Deferred future member templates (D050)
+
+An empty unbounded named list can acquire its declared temporal/member shape without evaluating a nonexistent member. Keep its future listSpec as a deferred frame with header evidence; demand the body through the existing prerequisite continuation when a member is requested. A bare sole-tail list can adopt another sole-tail list's shape and future requirements directly. Publication preserves that template on the target, so later finite goals still enforce it without retaining a redundant identity RHS. Existing bounds, members and constraints keep ordinary correspondence. The cube shape now resolves; its historical printer spelling remains a separate difference.
