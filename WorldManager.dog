@@ -561,6 +561,8 @@ struct WorldUnitSelection {
 }
 
 struct WorldPath {
+    me bool: externalTier <- false
+    our POV: associationAnchor
     our WorldWalk: cursorLayout
     our WorldPosition: cursor
     me bool: descending <- false
@@ -575,6 +577,10 @@ struct WorldPath {
 }
 
 struct WorldFrame {
+    me bool: noMatch <- false
+    our POV: associationAnchor
+    our POV: associationProjectionEdge
+    our ExternalAssociationReference: createdAssociation
     our WorldPosition: navigation
     me bool: contextual <- false
     our POV: argumentEdge
@@ -666,6 +672,7 @@ struct WorldPublication {
     me List<our POV>: fieldOrder
 }
 struct WorldRequest {
+    me List<our ExternalAssociationReference>: associations
     me Map<our POV, our WorldFrame>: completedOccurrences
     our IdentityRegistry: identities
     me Map<our POV, our BoundaryReference>: boundaries
@@ -729,7 +736,7 @@ struct WorldRequest {
     // also waits for any active publication to finish; Waiting stays visible.
     void: waitForCompletion() <- {me WorldModelLock: lock{control!.mutex}}
     void: releaseProgress() <- {
-        completedOccurrences.clear(); boundaries.clear(); sparseEdits.clear(); unitOrigins.clear(); ready.clear(); attempts.clear(); activeContexts.clear(); edits.clear(); declarations.clear(); declarationOrigins.clear(); root <- NULL; waitingFrame <- NULL
+        associations.clear(); completedOccurrences.clear(); boundaries.clear(); sparseEdits.clear(); unitOrigins.clear(); ready.clear(); attempts.clear(); activeContexts.clear(); edits.clear(); declarations.clear(); declarationOrigins.clear(); root <- NULL; waitingFrame <- NULL
     }
     void: cancel() <- {
         me WorldModelLock: lock{control!.mutex}
@@ -814,6 +821,19 @@ struct WorldPOVGraph {
         if(item!.type!=NULL and item!.viewMode==vmAny and !item!.invertMatch and item!.addedTypes.isEmpty() and
            item!.innr==NULL and item!.funcArgs==NULL and item!.value!.evalMode==emUnknown and item!.infSize!.evalMode==emUnknown){return(item!.type!.typeID())}
         return("")
+    }
+    our POV: associationAnchor(our WorldPosition: source) <- {
+        if(source!.owner!=NULL and source!.owner!.pItem!.partRef==NULL and source!.owner!.pItem!.parts.isEmpty()){return(source!.owner)}
+        return(source!.node)
+    }
+    me List<our ExternalAssociationReference>: associations(our WorldRequest: request, our POV: anchor, me string: relation) <- {
+        me List<our ExternalAssociationReference>: result
+        request!.identities!.collectExternalAssociationsForAnchor(anchor, relation, result)
+        withEach reference in request!.associations{
+            if(reference!.relationTypeID==relation and (reference!.anchorPOV===anchor or
+               reference!.anchorPOV!.pItem===anchor!.pItem or request!.identities!.areIdentical(reference!.anchorPOV, anchor))){result.append(reference)}
+        }
+        return(result)
     }
     our infonView: pathBody(our infonView: source, me bool: stripWork) <- {
         our infonView:: body; body! <- source!
@@ -2125,6 +2145,7 @@ struct WorldPOVGraph {
                     frame!.rightMembers!.push(frame!.prerequisite!.facts.sequence)
                 }
             }
+            if(frame!.facts.outcome==worldReady){frame!.associationAnchor <- frame!.prerequisite!.associationAnchor}
             if(frame!.sourceEdge!.trueByDefinition and frame!.facts.outcome==worldReady){frame!.facts.meaningApplied <- true}
             our infonView: supplied <- frame!.sourceEdge!.pItem
             // A closed scalar leaf contributes only its checked type, size
@@ -2326,6 +2347,15 @@ struct WorldPOVGraph {
             }else{request!.identities!.boundaries.insert(staged!.source, staged)}
         }
         withEach job in writes{publishFrame(request, job)}
+        withEach reference in request!.associations{
+            request!.identities!.recordExternalAssociation(reference!.anchorPOV, reference!.predicatePOV,
+                reference!.valuePOV, reference!.witnessPOV, reference!.relationTypeID, 0)
+        }
+        withEach job in writes{
+            if(job.frame!.associationAnchor!=NULL and job.target!.pItem!==job.frame!.associationAnchor!.pItem){
+                request!.identities!.recordIdentity(job.target, job.frame!.associationAnchor, iekAssertion, 0)
+            }
+        }
         withEach batch in request!.sparseEdits{
             our POV: source <- batch!.source!.node
             our POV: parent <- source
@@ -2609,6 +2639,7 @@ struct WorldManager {
     // Source frames stay immutable; each occurrence holds its own combined facts.
     our WorldFrame: projectFrame(our WorldRequest: request, our WorldFrame: left) <- {
         our WorldFrame:: pair
+        pair!.associationAnchor <- left!.associationAnchor
         pair!.node <- left!.node; pair!.facts <- left!.facts; pair!.navigation <- left!.navigation; pair!.contextual <- left!.contextual; pair!.argumentEdge <- left!.argumentEdge
         pair!.selection <- left!.selection; pair!.acquireOnly <- left!.acquireOnly
         pair!.correspondenceResult <- left!.correspondenceResult; pair!.preparedReplacement <- left!.preparedReplacement
@@ -3370,6 +3401,7 @@ struct WorldManager {
                             frame!.facts.outcome <- worldPartial
                             frame!.facts.detail <- "Pattern leaves the selected correspondence unresolved"
                             if(lookup!.query!.allMembers){frame!.facts.detail <- "Pattern leaves several member or span mappings possible"}
+                            frame!.noMatch <- lookup!.accepted==NULL
                             if(lookup!.accepted==NULL and !lookup!.sourceDone){
                                 frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "No pattern correspondence matches"
                             }
@@ -4102,6 +4134,7 @@ struct WorldManager {
             }
         }
         if(chart!.accepted==NULL){
+            frame!.noMatch <- true
             frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "No structured correspondence matches"; stopFrame(request, frame); return()
         }
         me List<our WorldPatternProof>: proofs; proofs.append(chart!.accepted!.proof)
@@ -4519,7 +4552,7 @@ struct WorldManager {
         if(work!=NULL){query!.wrkList <- work!.wrkList}
         me string: primitive <- graph.pathOperator(part!.path)
         if(part!.pathMode==idxField or
-           (source!.node!.pItem!.orderMode!=uUnordered and (primitive=="first" or primitive=="last"))){
+           (part!.pathMode==dotField and source!.node!.pItem!.orderMode!=uUnordered and (primitive=="first" or primitive=="last"))){
             selection!.domain <- source; selection!.walk!.push(source)
             if(part!.pathMode==idxField){selection!.index <- index!.facts.number}
             else if(primitive=="first"){selection!.index <+- 1}
@@ -4714,6 +4747,37 @@ struct WorldManager {
         return(true)
     }
 
+    our WorldFrame: externalSelection(our WorldRequest: request, our POV: anchor, our PartPath: part, me bool: create) <- {
+        our POV:: pending{945}; Allocate(pending!.pItem)
+        our WorldFrame: result <- makeFrame(request, pending)
+        if(part!.path!.type==NULL){
+            result!.initialized <- true; result!.finished <- true; result!.facts.outcome <- worldUnsupported
+            result!.facts.detail <- "External property needs a named descriptor"; return(result)
+        }
+        me List<our ExternalAssociationReference>: references <- graph.associations(request, anchor, part!.path!.type!.typeID())
+        if(references.isEmpty() and create and !part!.path!.wrkList.isEmpty()){
+            pending!.pItem <- graph.pathBody(part!.path, false)
+            Allocate(result!.createdAssociation)
+            our ExternalAssociationReference: reference <- result!.createdAssociation
+            reference!.anchorPOV <- anchor; reference!.valuePOV <- pending
+            Allocate(reference!.predicatePOV, 945); reference!.predicatePOV!.pItem <- graph.pathBody(part!.path, true)
+            reference!.relationTypeID <- part!.path!.type!.typeID()
+            Allocate(result!.correspondenceResult); result!.correspondenceResult!.position <- graph.position(pending)
+            return(result)
+        }
+        if(references.size()!=1){
+            result!.initialized <- true; result!.finished <- true; result!.facts.outcome <- worldPartial
+            result!.facts.detail <- "External property needs one established association"; return(result)
+        }
+        // The ordinary selection predicate checks the registry-supplied value.
+        our POV:: source{945}; Allocate(source!.pItem)
+        source!.pItem!.itmMode <- mItem; source!.pItem!.streamState <- parseDone; source!.pItem!.viewMode <- vmOverlay
+        source!.pItem!.value!.overlayType <- LST; source!.pItem!.value!.evalMode <- emLiteral
+        source!.pItem!.infSize!.overlayType <- NUM; source!.pItem!.infSize!.evalMode <- emLiteral; source!.pItem!.infSize!.num <+- 1
+        source!.pItem!.value!.items.append(references[0]!.valuePOV!.pItem, false, 945)
+        return(pathSelection(request, graph.position(source), part, NULL))
+    }
+
     void: pathStep(our WorldRequest: request, our WorldFrame: frame) <- {
         frame!.contextual <- true
         if(frame!.node!.pItem!.streamState==parseStarted or frame!.node!.pItem!.streamState==parseListReady){waitAt(request, frame, frame!.node!.pItem); return()}
@@ -4738,10 +4802,11 @@ struct WorldManager {
             }else{
                 base!.pItem <- graph.pathBody(item, false)
                 frame!.path!.source <- graph.position(base); frame!.path!.source!.owner <- frame!.node; frame!.path!.source!.occurrence <- frame!.node
-                if(frame!.context!=NULL){
-                    frame!.path!.source!.parent <- frame!.context!.parent
-                    frame!.path!.source!.owner <- frame!.context!.owner; frame!.path!.source!.occurrence <- frame!.context!.occurrence
-                    frame!.path!.source!.writable <- frame!.context!.writable
+                our WorldPosition: context <- frame!.context; if(context==NULL){context <- frame!.navigation}
+                if(context!=NULL){
+                    frame!.path!.source!.parent <- context!.parent
+                    frame!.path!.source!.owner <- context!.owner; frame!.path!.source!.occurrence <- context!.occurrence
+                    frame!.path!.source!.writable <- context!.writable
                 }
             }
         }
@@ -4769,6 +4834,7 @@ struct WorldManager {
                     request!.ready.append(frame); request!.ready.append(path!.operation); return()
                 }
                 frame!.facts <- path!.operation!.facts; frame!.retainedWork <- path!.operation!.retainedWork
+                frame!.associationAnchor <- path!.associationAnchor
                 graph.adoptListRequirements(frame, path!.operation)
                 Allocate(frame!.correspondenceResult); frame!.correspondenceResult!.position <- path!.source
                 frame!.initialized <- true; frame!.finished <- true
@@ -4779,7 +4845,8 @@ struct WorldManager {
             if(path!.part!.pathMode==dotField and (primitive=="cut" or primitive=="astlist")){
                 frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Path needs a boundary occurrence provider"; stopFrame(request, frame); return()
             }
-            if(path!.part!.pathMode!=dotField and path!.part!.pathMode!=idxField){
+            if(path!.part!.pathMode!=dotField and path!.part!.pathMode!=idxField and
+               path!.part!.pathMode!=upField and path!.part!.pathMode!=resolutionField){
                 frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Path needs an additional relation provider"; stopFrame(request, frame); return()
             }
         }
@@ -4794,7 +4861,10 @@ struct WorldManager {
                path!.index!.facts.overlay!=NUM or path!.index!.facts.number.getDenominator()!=1)){
                 frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Index needs an integer value"; stopFrame(request, frame); return()
             }
-            if(path!.part!.pathMode==dotField and (primitive=="begin" or primitive=="end")){
+            if(path!.part!.pathMode==upField or path!.externalTier){
+                path!.associationAnchor <- graph.associationAnchor(path!.source)
+                path!.operation <- externalSelection(request, path!.associationAnchor, path!.part, path!.part!.pathMode==upField)
+            }else if(path!.part!.pathMode==dotField and (primitive=="begin" or primitive=="end")){
                 if(!path!.part!.path!.wrkList.isEmpty()){
                     frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Boundary constraints need occurrence identity proof"; stopFrame(request, frame); return()
                 }
@@ -4810,11 +4880,18 @@ struct WorldManager {
             if(frame!.referenceOnly and path!.operation!.acquireOnly){path!.operation!.referenceOnly <- true}
             request!.ready.append(frame); request!.ready.append(path!.operation); return()
         }
+        if(path!.part!.pathMode==resolutionField and !path!.externalTier and path!.operation!.noMatch){
+            path!.externalTier <- true; path!.operation <- NULL; request!.ready.append(frame); return()
+        }
         if(path!.operation!.facts.outcome!=worldReady){frame!.facts <- path!.operation!.facts; stopFrame(request, frame); return()}
         our infonView: work <- path!.part!.path
         if(path!.part!.pathMode==idxField){work <- path!.part!.continuation}
         if(!path!.applied){
-            if(work!=NULL and !work!.wrkList.isEmpty() and !stageSelection(request, path!.operation)){return()}
+            if(path!.operation!.createdAssociation!=NULL){
+                our ExternalAssociationReference: reference <- path!.operation!.createdAssociation
+                if(!stageOccurrence(request, graph.position(reference!.valuePOV), path!.operation)){return()}
+                request!.associations.append(reference)
+            }else if(work!=NULL and !work!.wrkList.isEmpty() and !stageSelection(request, path!.operation)){return()}
             path!.applied <- true
         }
         if(work!=NULL and (work!.partRef!=NULL or !work!.parts.isEmpty())){
@@ -4838,7 +4915,7 @@ struct WorldManager {
             frame!.correspondenceResult <- result!.correspondenceResult
             frame!.initialized <- true; frame!.finished <- true; return()
         }
-        path!.operation <- NULL; path!.nested <- NULL; path!.index <- NULL; path!.part <- NULL; path!.applied <- false
+        path!.operation <- NULL; path!.nested <- NULL; path!.index <- NULL; path!.part <- NULL; path!.applied <- false; path!.externalTier <- false
         request!.ready.append(frame)
     }
 
@@ -4894,13 +4971,31 @@ struct WorldManager {
                 Allocate(frame!.correspondenceResult); frame!.correspondenceResult!.position <- frame!.selection!.selected
                 frame!.correspondenceResult!.facts <- frame!.prerequisite
             }
-            frame!.facts <- frame!.prerequisite!.facts
+            frame!.facts <- frame!.prerequisite!.facts; frame!.noMatch <- frame!.prerequisite!.noMatch
             frame!.retainedWork <- frame!.prerequisite!.retainedWork
             graph.adoptListRequirements(frame, frame!.prerequisite)
             frame!.prerequisite <- NULL; frame!.selecting <- false
             if(frame!.facts.outcome!=worldReady){stopFrame(request, frame); return()}
         }
         if(frame!.prerequisite!=NULL){
+            if(!frame!.sourceIsOperand and !frame!.sourceIsListSpec and frame!.sourceEdge!=NULL and
+               !frame!.sourceEdge!.forceID and !frame!.sourceEdge!.trueByDefinition and
+               !frame!.facts.negative and !frame!.prerequisite!.facts.negative and frame!.associationProjectionEdge!==frame!.sourceEdge and
+               frame!.facts.nominal!=NULL and frame!.prerequisite!.facts.outcome==worldReady and
+               graph.compareNames(frame!.facts, frame!.prerequisite!.facts)!=worldReady){
+                frame!.associationProjectionEdge <- frame!.sourceEdge
+                our POV: anchor <- frame!.prerequisite!.associationAnchor
+                if(anchor==NULL){anchor <- frame!.prerequisite!.node}
+                me List<our ExternalAssociationReference>: references <- graph.associations(request, anchor, frame!.facts.nominal!.typeID())
+                if(!references.isEmpty()){
+                    our PartPath:: property; property!.pathMode <- upField; Allocate(property!.path)
+                    property!.path!.type <- frame!.facts.nominal
+                    property!.path!.viewMode <- vmAny; property!.path!.itmMode <- mItem; property!.path!.streamState <- parseDone
+                    property!.path!.infSize!.evalMode <- emUnknown; property!.path!.value!.evalMode <- emUnknown
+                    frame!.prerequisite <- externalSelection(request, anchor, property, false)
+                    request!.ready.append(frame); request!.ready.append(frame!.prerequisite); return()
+                }
+            }
             if(frame!.sourceEdge!=NULL and frame!.sourceEdge!.forceID and frame!.preparedReplacement!==frame!.sourceEdge and
                !frame!.sourceEdge!.looseType() and !frame!.facts.negative and frame!.facts.overlay!=LST and
                frame!.prerequisite!.facts.outcome==worldReady and !frame!.prerequisite!.facts.negative and

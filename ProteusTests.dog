@@ -45,6 +45,7 @@ TestsToRun = `
     unit/worldManager/nominalEvidence
     unit/worldManager/selectionProviders
     unit/worldManager/scalarReplacement
+    unit/worldManager/externalAssociations
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -9709,6 +9710,33 @@ for(bool cancel:{false,true}){auto w=parse("{slot:3}");a.world=w->pItem;auto ori
 {auto d=parse("{#fixed=7}");check(a.normalize(d)->complete(),"register a fixed destination meaning");auto p=parse("fixed:7<<=8");auto before=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before,"new value must satisfy the retained destination meaning");}
 for(bool cancel:{false,true}){std::string name=cancel?"forceCancel":"forceWait";auto d=parse("{#"+name+"=*10+_}");check(a.normalize(d)->complete(),"register pending replacement type");auto body=d->pItem->value->items.head->pItem->funcArgs;m.prepareInput(body);auto p=parse(name+":3<<=-1");auto before=toString(p->pItem.get());auto h=a.normalize(p);auto frames=h->framesCreated;check(h->outcome==worldWaiting && h->waitingInput==body && !h->publications,"new replacement waits on the retained type meaning");if(cancel)m.cancel(h);SetModeBits(body->flags,infonView::streamState,infonView::parseDone);m.inputReady(body);check(cancel?h->outcome==worldCancelled && toString(p->pItem.get())==before:h->complete() && p->pItem->value->num==9 && p->pItem->infSize->num==10 && h->framesCreated==frames,"replacement type continuation keeps its frames or cancels atomically");}
 core.deInit();std::cout<<"SCALAR_REPLACEMENT: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_externalAssociations(me string: testName) <- {
+        if(!worldManagerExternalAssociationChecks()){FAIL("External association checks failed")}
+    }
+    me bool: worldManagerExternalAssociationChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& msg){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<msg<<"\n";}};
+auto parse=[&](const std::string& s){auto p=m.parse(s);check(p.target && p.error.empty(),"parse "+s);return p.target;};
+auto run=[&](const std::string& s,const std::string& out){auto p=parse(s);auto h=a.normalize(p);check(!h->failed() && toString(p->pItem.get())==out,s+" => "+toString(p->pItem.get())+" "+h->detail);return std::make_pair(p,h);};
+run("{a:1 b:2}~b","b:2");run("{a:1 first:2}~first","first:2");run("{a:1 end:2}~end","end:2");run("{b:1 b:2}~b","b:1");run("{a:1}^badge=7;~badge","badge:7");run("{name:'local'}^name='external';~name","name:'local'");
+{auto p=run("{a:1}^badge=7;~badge","badge:7").first;auto n=a.identityRegistry->externalAssociationReferences.size();check(!a.normalize(p)->framesCreated && a.identityRegistry->externalAssociationReferences.size()==n,"completed query creates no duplicate association");}
+{auto p=parse("{_ b:2}^b=9;~b");auto n=a.identityRegistry->externalAssociationReferences.size();auto h=a.normalize(p);check(h->outcome==worldPartial && !h->publications && a.identityRegistry->externalAssociationReferences.size()==n,"uncertain direct member blocks fallback and publication");}
+{auto p=parse("{b:2}^b=9;~b=9");auto n=a.identityRegistry->externalAssociationReferences.size();auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && a.identityRegistry->externalAssociationReferences.size()==n,"conflicting direct result cannot fall back to a matching external value");}
+{auto p=parse("{a:1}^badge");auto n=a.identityRegistry->externalAssociationReferences.size();auto h=a.normalize(p);check(h->outcome==worldPartial && !h->publications && a.identityRegistry->externalAssociationReferences.size()==n,"an absent property read never asserts a property");}
+{auto p=run("{a:1}^badge=7;","{a:1}").first;a.world=p->pItem;run("%W~badge","badge:7");auto clone=parse("{a:1}");a.world=clone->pItem;auto q=parse("%W~badge");check(!a.normalize(q)->complete(),"equal descriptions do not share external properties");a.world=p->pItem;auto count=a.identityRegistry->externalAssociationReferences.size();run("%W^badge<<=8;~badge","badge:8");check(a.identityRegistry->externalAssociationReferences.size()==count,"updating an existing property does not assert another association");}
+{auto d=parse("{#marker=_ #badge=_ #human={marker} #value=_ #measure={value} #thing={} #Holder=thing:{}^measure={value:7}}");check(a.normalize(d)->complete(),"register association meanings");auto before=toString(d->pItem.get());run("human:{marker=1}^badge=badge:7;~badge","badge:7");run("measure=Holder","measure:{value:7}");check(toString(d->pItem.get())==before,"association instances do not change shared meanings");}
+for(bool cancel:{false,true}){auto baseline=run("{a:1}^badge=7;~badge","badge:7").second->framesCreated;auto p=parse("{a:1}^badge=7;~badge");auto rhs=p->pItem->parts.front()->path->wrkList.front()->pItem;m.prepareInput(rhs);auto before=toString(p->pItem.get());auto n=a.identityRegistry->externalAssociationReferences.size();auto h=a.normalize(p);auto frames=h->framesCreated;check(h->outcome==worldWaiting && h->waitingInput==rhs && !h->publications && a.identityRegistry->externalAssociationReferences.size()==n,"association assertion waits without external effects");if(cancel)m.cancel(h);SetModeBits(rhs->flags,infonView::streamState,infonView::parseDone);m.inputReady(rhs);check(cancel?h->outcome==worldCancelled && toString(p->pItem.get())==before && a.identityRegistry->externalAssociationReferences.size()==n:h->complete() && toString(p->pItem.get())=="badge:7" && a.identityRegistry->externalAssociationReferences.size()==n+1 && h->framesCreated==baseline,"association continues exact RHS wait or cancels atomically");}
+{auto count=a.identityRegistry->externalAssociationReferences.size();run("{Holder Holder}","{Holder:{} Holder:{}}");check(a.identityRegistry->externalAssociationReferences.size()==count+2,"shared definition creates independent instance associations");auto first=a.identityRegistry->externalAssociationReferences.at(count),second=a.identityRegistry->externalAssociationReferences.at(count+1);check(first->anchorPOV!=second->anchorPOV && first->valuePOV!=second->valuePOV,"association endpoints retain their actual instance occurrences");}
+for(auto& ref:a.identityRegistry->externalAssociationReferences){check(!a.identityRegistry->areIdentical(ref->anchorPOV,ref->valuePOV),"an association never identifies its bearer with the property value");}
+{auto p=run("{a:1}^badge=7;","{a:1}").first;a.world=p->pItem;auto n=a.identityRegistry->externalAssociationReferences.size();auto q=parse("%W^badge=8");auto h=a.normalize(q);check(h->outcome==worldRejected && !h->publications && a.identityRegistry->externalAssociationReferences.size()==n,"conflicting association update is atomic");run("%W~badge","badge:7");}
+for(bool cancel:{false,true}){auto p=parse("{a:1 b:2}^b=9;~b");auto first=p->pItem->value->items.head->pItem;m.prepareInput(first);auto n=a.identityRegistry->externalAssociationReferences.size();auto h=a.normalize(p);check(h->outcome==worldWaiting && h->waitingInput==first && !h->publications && a.identityRegistry->externalAssociationReferences.size()==n,"pending direct candidate blocks external fallback");auto frames=h->framesCreated;if(cancel)m.cancel(h);SetModeBits(first->flags,infonView::streamState,infonView::parseDone);m.inputReady(first);check(cancel?h->outcome==worldCancelled && a.identityRegistry->externalAssociationReferences.size()==n:h->complete() && toString(p->pItem.get())=="b:2" && h->framesCreated<=frames+3,"direct candidate continuation keeps direct precedence");}
+{auto p=run("{a:1}^badge=7;","{a:1}").first;a.world=p->pItem;auto value=parse("badge:8");a.identityRegistry->recordExternalAssociation(p,value,value,nullptr,"badge",0);auto q=parse("%W^badge");auto h=a.normalize(q);check(h->outcome==worldPartial && !h->publications,"several external references stay unresolved instead of choosing one arbitrarily");}
+core.deInit();std::cout<<"EXTERNAL_ASSOCIATIONS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
 
     }%>
 }
