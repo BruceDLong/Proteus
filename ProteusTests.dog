@@ -40,6 +40,7 @@ TestsToRun = `
     unit/worldManager/unitViews
     unit/worldManager/inheritedTypes
     unit/worldManager/sparseWindows
+    unit/worldManager/boundaryArguments
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -9495,5 +9496,47 @@ for(int count:{32,64,128}){
 }
 core.deInit();std::cout<<"SPARSE_WINDOWS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
 
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_boundaryArguments(me string: testName) <- {
+        if(!worldManagerBoundaryArgumentChecks()){FAIL("Boundary argument checks failed")}
+    }
+    me bool: worldManagerBoundaryArgumentChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+auto parse=[&](const std::string& s){auto p=m.parse(s);check(p.target && p.error.empty(),"parse "+s);return p.target;};
+auto run=[&](const std::string& s,const std::string& expected){auto p=parse(s);auto h=a.normalize(p);check(!h->failed() && toString(p->pItem.get())==expected,s+" => "+toString(p->pItem.get())+" : "+h->detail);return std::make_pair(p,h);};
+for(auto op:{std::string("{_ 6 _}<:5"),std::string("5:>{_ 6 _}")})run(op,"{5 6 _}");
+for(auto op:{std::string("{_ 6 _}<!7"),std::string("7!>{_ 6 _}")})run(op,"{_ 6 7}");
+run("{&{_ _} 3}<:9","{&{9 _} 3}");run("{1 &{_ _}}<!9","{1 &{_ 9}}");
+run("{...}<:9","{9 ... }");run("{...}<!9","{... 9}");
+run("[_ 456 789] <: +123","789");run("[<_> 456 789] <: 123","123");run("[1 2 <_>] <! 7","7");
+run("[{_ _} 456 789] <: +123","789");
+run("{#argPair={_ _}}","{#argPair = {_ _}}");run("argPair <: 9","argPair:{9 _}");run("argPair <! 8","argPair:{_ 8}");run("argPair","argPair:{_ _}");
+for(auto expr:{"{1 _}<:9","{_ 2}<!9"}){auto p=parse(expr);auto before=toString(p->pItem.get());auto arg=p->pItem->funcArgs;auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before && p->pItem->funcArgs==arg,"conflicting argument is atomic");}
+{
+ auto p=parse("{_ 2}<:1");auto head=p->pItem->value->items.head;auto arg=p->pItem->funcArgs;auto h=a.normalize(p);
+ check(h->complete() && p->pItem->value->items.head==head && !p->pItem->funcArgs && getModeBits(p->pItem->flags,infonView::argPos)==infonView::apNoArgs,"successful argument keeps occurrences and discharges syntax");
+ check(toString(arg.get())=="1","argument source remains borrowed");auto again=a.normalize(p);check(again->complete() && !again->framesCreated,"completed argument needs no new goals");
+}
+for(bool cancel:{false,true}){
+ auto p=parse("{_ 2}<:1");auto arg=p->pItem->funcArgs;auto before=toString(p->pItem.get());m.prepareInput(arg);auto h=a.normalize(p);auto frames=h->framesCreated;
+ check(h->outcome==worldWaiting && h->waitingInput==arg && !h->publications && toString(p->pItem.get())==before,"argument waits at original parser-owned value");
+ if(cancel)m.cancel(h);SetModeBits(arg->flags,infonView::streamState,infonView::parseDone);m.inputReady(arg);
+ check(cancel?h->outcome==worldCancelled && h->framesCreated==frames && toString(p->pItem.get())==before:h->complete() && toString(p->pItem.get())=="{1 2}","argument resumes or cancels without speculative model change");
+}
+{
+ auto p=parse("[_ 2 3]<:1");auto arg=p->pItem->innr->funcArgs;m.prepareInput(arg);auto h=a.normalize(p);
+ check(h->complete() && toString(p->pItem.get())=="3" && m.control->inputWaiters.empty(),"known selected value does not wait for an unused first argument");SetModeBits(arg->flags,infonView::streamState,infonView::parseDone);
+}
+for(auto expr:{"5<:6","'a'<!'b'"}){auto p=parse(expr);auto before=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldUnsupported && !h->publications && toString(p->pItem.get())==before,"non-list argument semantics remain explicit");}
+for(int count:{32,64,128}){
+ std::string list="{";for(int n=1;n<count;++n)list+=std::to_string(n)+" ";list+="_}<!"+std::to_string(count);
+ auto p=parse(list);auto h=a.normalize(p);check(h->complete() && h->framesCreated<5*count+20,"whole-list argument uses linear correspondence work");
+ std::cout<<"ARGUMENT_WORK: "<<count<<" members, "<<h->framesCreated<<" frames, "<<h->memberPairs<<" pairs\n";
+}
+core.deInit();std::cout<<"BOUNDARY_ARGUMENTS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }

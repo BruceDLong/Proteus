@@ -157,6 +157,7 @@ struct WorldOpenAlignment {
 // Occurrence paths borrow the model. They are local to a live request, not
 // a persistent record of parent merge progress.
 struct WorldPosition {
+    our POV: argumentEdge
     our POV: node
     our WorldPosition: parent
     our POV: input
@@ -356,6 +357,7 @@ struct WorldCorrespondence {
     our WorldFrame: prefixPredicate
     me bool: captured <- false
     me FlexNum: remaining <- 0
+    me FlexNum: sourceOffset <- 0
     our WorldFrame: layout
     me List<our WorldFrame>: layouts
     me List<our WorldMapping>: mapped
@@ -564,6 +566,7 @@ struct WorldPath {
 }
 
 struct WorldFrame {
+    our POV: argumentEdge
     me bool: sourceNameInherited <- false
     our WorldUnitSelection: unitSelection
     our POV: inputEdge
@@ -749,6 +752,26 @@ struct infonView {
 
 // Virtual access over the existing model; no copied adjacency graph.
 struct WorldPOVGraph {
+    // A boundary argument is an ordinary identity with an unconstrained
+    // remainder. Member and whole-list consumers use the same correspondence.
+    our POV: argumentRelation(our infonView: item, me WorldScalar: header) <- {
+        if(item!.funcArgs==NULL or item!.argPos==apNoArgs){return(NULL)}
+        our POV:: edge{943}; Allocate(edge!.pItem)
+        our infonView: body <- edge!.pItem
+        body!.itmMode <- mItem; body!.streamState <- parseDone; body!.viewMode <- vmOverlay; body!.orderMode <- uOrdered
+        body!.value!.overlayType <- LST; body!.value!.evalMode <- emLiteral
+        body!.infSize!.overlayType <- NUM; body!.infSize!.evalMode <- emUnknown
+        if(item!.argPos==apArgIsLastItem){
+            our infonView:: gap; gap!.itmMode <- mItem; gap!.streamState <- parseDone; gap!.viewMode <- vmOverlay
+            gap!.value!.overlayType <- LST; gap!.value!.evalMode <- emLiteral; gap!.value!.tailUnfinished <- true
+            gap!.infSize!.overlayType <- NUM; gap!.infSize!.evalMode <- emUnknown
+            if(header.hasSize and header.size>=1){gap!.infSize!.evalMode <- emLiteral; gap!.infSize!.num <- header.size-1; gap!.value!.sizeMode <- fromGiven}
+            body!.value!.items.append(gap, true, 943)
+        }else{body!.value!.tailUnfinished <- true}
+        body!.value!.items.append(item!.funcArgs, false, 943)
+        return(edge)
+    }
+
     // Navigation words are bare predicates. A supplied value/shape remains
     // an ordinary matching constraint even when it uses the same name.
     me string: pathOperator(our infonView: item) <- {
@@ -1055,7 +1078,9 @@ struct WorldPOVGraph {
             return(facts)
         }
         if((!item!.addedTypes.isEmpty() and (item!.type!=NULL or item!.addedTypes.size()!=1)) or item!.viewMode==vmCursor or
-           (item!.innr!=NULL and !selection) or (item!.funcArgs!=NULL and !bodyInput) or
+           (item!.innr!=NULL and !selection) or (item!.funcArgs!=NULL and !bodyInput and (item!.argPos==apNoArgs or
+            !((item!.value!.overlayType==LST and item!.value!.evalMode==emLiteral) or
+              (item!.type!=NULL and item!.value!.evalMode==emUnknown)))) or
            !item!.parts.isEmpty() or item!.partRef!=NULL or item!.proxy!=NULL or
            item!.doReply or (item!.itmMode!=mItem and item!.itmMode!=mNone) or item!.identityName!=NULL or
            item!.independentTemporalValue or item!.temporalValueSource!=NULL or item!.temporalPredecessor!=NULL){
@@ -1288,7 +1313,7 @@ struct WorldPOVGraph {
                 walk!.outcome <- worldUnsupported; walk!.detail <- "Correspondence needs a list layout"; return(false)
             }
             // A nested layout's own constraints can change its extent.
-            if(walk!.requireClosedRelations and !node!.pItem!.wrkList.isEmpty()){
+            if(walk!.requireClosedRelations and (!node!.pItem!.wrkList.isEmpty() or node!.pItem!.argPos!=apNoArgs)){
                 walk!.outcome <- worldUnsupported; walk!.detail <- "Embedded layout has unresolved relationships"; return(false)
             }
             if(walk!.checkExtents and header.hasSize){
@@ -1397,10 +1422,14 @@ struct WorldPOVGraph {
         frame!.sourceIsOperand <- false
         our infonView: item <- frame!.node!.pItem
         // Member constraints must be settled before this list's own identities.
-        if(!item!.wrkList.isEmpty() and needsRequirements(frame)){return(NULL)}
-        me bool: needsTemplate <- frame!.nextWork<item!.wrkList.size() and
-            item!.wrkList[frame!.nextWork]!=NULL and item!.wrkList[frame!.nextWork]!.looseType() and !frame!.facts.hasValue and
+        if((!item!.wrkList.isEmpty() or item!.argPos!=apNoArgs) and needsRequirements(frame)){return(NULL)}
+        me bool: needsTemplate <- ((frame!.nextWork<item!.wrkList.size() and
+            item!.wrkList[frame!.nextWork]!=NULL and item!.wrkList[frame!.nextWork]!.looseType()) or item!.argPos!=apNoArgs) and !frame!.facts.hasValue and
             frame!.facts.nominal!=NULL and frame!.facts.nominal!.defToUse!=NULL and !frame!.meaningRequested
+        if(!needsTemplate and frame!.nextWork>=item!.wrkList.size() and frame!.argumentEdge==NULL){
+            frame!.argumentEdge <- argumentRelation(item, frame!.facts)
+            if(frame!.argumentEdge!=NULL){return(frame!.argumentEdge)}
+        }
         if(needsTemplate or frame!.nextWork>=item!.wrkList.size()){
             if(frame!.referenceOnly or (frame!.acquireOnly and (frame!.facts.hasValue or frame!.parentContext!=NULL))){return(NULL)}
             if(frame!.meaningRequested or frame!.facts.nominal==NULL or frame!.facts.meaningApplied or
@@ -2181,6 +2210,7 @@ struct WorldPOVGraph {
         our infonView: item <- job.target!.pItem
         me WorldScalar: facts <- frame!.facts
         if(frame!.inputEdge!=NULL){item!.funcArgs <- NULL; item!.hasInnrOutr <- false}
+        if(frame!.argumentEdge!=NULL){item!.funcArgs <- NULL; item!.argPos <- apNoArgs}
         if(frame!.path!=NULL){
             item!.partRef <- NULL; item!.parts.clear()
             if(frame!.correspondenceResult!=NULL and frame!.correspondenceResult!.position!=NULL){
@@ -2390,7 +2420,7 @@ struct WorldManager {
     // Source frames stay immutable; each occurrence holds its own combined facts.
     our WorldFrame: projectFrame(our WorldRequest: request, our WorldFrame: left) <- {
         our WorldFrame:: pair
-        pair!.node <- left!.node; pair!.facts <- left!.facts
+        pair!.node <- left!.node; pair!.facts <- left!.facts; pair!.argumentEdge <- left!.argumentEdge
         pair!.selection <- left!.selection; pair!.acquireOnly <- left!.acquireOnly
         pair!.correspondenceResult <- left!.correspondenceResult
         pair!.retainedWork <- left!.retainedWork
@@ -2725,7 +2755,7 @@ struct WorldManager {
             Allocate(frame!.selection)
             frame!.selection!.oneOf <- item!.isOrLike()
             our WorldPosition: root <- graph.position(body)
-            if(item!.hasInnrOutr and item!.innr!.funcArgs!=NULL){
+            if(item!.hasInnrOutr and item!.innr!.funcArgs!=NULL and item!.innr!.argPos==apNoArgs){
                 Allocate(root!.input, 936); root!.input!.pItem <- item!.innr!.funcArgs; root!.input!.looseTop <- true
             }
             if(frame!.selection!.oneOf and root!.input!=NULL){
@@ -3361,12 +3391,17 @@ struct WorldManager {
                     }
                     // A counted closed layout or an empty given open span
                     // proves a skippable width without inspecting its values.
-                    if(!lookup!.capturing and lookup!.prefixPredicate==NULL and graph.skippableWidth(header, source!.node) and header.size<=lookup!.remaining){
+                    if(!lookup!.capturing and lookup!.prefixPredicate==NULL and graph.skippableWidth(header, source!.node) and
+                       (header.size<=lookup!.remaining or (header.openTail and source!.node!.pItem!.value!.items.head==NULL and source!.node!.pItem!.value!.listSpec==NULL))){
+                        me FlexNum: width <- header.size-lookup!.sourceOffset
+                        if(width>lookup!.remaining){width <- lookup!.remaining}
                         our WorldWalkLevel: level <- lookup!.right!.levels.last()
-                        if(level!.hasLimit and lookup!.right!.position+header.size>level!.limit){
+                        if(level!.hasLimit and lookup!.right!.position+width>level!.limit){
                             frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Correspondence exceeds a known source endpoint"; stopFrame(request, frame); return()
                         }
-                        lookup!.remaining <- lookup!.remaining-header.size; lookup!.right!.position <+- header.size
+                        lookup!.remaining <- lookup!.remaining-width; lookup!.right!.position <+- width; lookup!.sourceOffset <+- width
+                        if(lookup!.sourceOffset<header.size){continue()}
+                        lookup!.sourceOffset <- 0
                     }else{lookup!.right!.push(source)}
                     lookup!.rhs <- NULL; continue()
                 }
@@ -3944,6 +3979,9 @@ struct WorldManager {
                 if(!frame!.predicateOnly and !graph.completeFacts(frame!.facts, frame!.demandSize) and index<item!.wrkList.size()){
                     relation <- item!.wrkList[index]; frame!.parentWork <+- 1
                     if(relation==NULL){frame!.facts.outcome <- worldError; frame!.facts.detail <- "Empty parent relationship"; stopFrame(request, frame); return(true)}
+                }else if(!frame!.predicateOnly and !graph.completeFacts(frame!.facts, frame!.demandSize) and index==item!.wrkList.size()){
+                    if(parent!.argumentEdge==NULL){parent!.argumentEdge <- graph.argumentRelation(item, parentHeader)}
+                    relation <- parent!.argumentEdge; frame!.parentWork <+- 1
                 }
             }
             if(relation!=NULL){
@@ -4033,7 +4071,7 @@ struct WorldManager {
     }
 
     our WorldFrame: unitOperation(our WorldRequest: request, our WorldPosition: source, our PartPath: part, our WorldFrame: index) <- {
-        if(source!.node!.pItem!.orderMode==uUnordered or !source!.node!.pItem!.wrkList.isEmpty()){return(NULL)}
+        if(source!.node!.pItem!.orderMode==uUnordered or !source!.node!.pItem!.wrkList.isEmpty() or source!.node!.pItem!.argPos!=apNoArgs){return(NULL)}
         me Set<our infonView>: sourceSeen
         our WorldUnit: declaredSource <- graph.unitMeasure(request, source!.node!.pItem!.type, sourceSeen)
         if((declaredSource==NULL or declaredSource!.member==NULL) and graph.unitType(request, source!.node!.pItem!.value!.listSpec)==NULL){return(NULL)}
@@ -4515,7 +4553,7 @@ struct WorldManager {
             our infonView: input <- frame!.node!.pItem
             me bool: suppliedProjection <- input!.value!=NULL and graph.projectionTemplate(input!.value!.listSpec) and !input!.wrkList.isEmpty() and
                 input!.wrkList[0]!.looseMode and !input!.wrkList[0]!.forceID
-            me bool: hasInput <- input!.value!=NULL and ((input!.hasInnrOutr and input!.funcArgs!=NULL) or suppliedProjection) and
+            me bool: hasInput <- input!.value!=NULL and input!.argPos==apNoArgs and ((input!.hasInnrOutr and input!.funcArgs!=NULL) or suppliedProjection) and
                 input!.value!.evalMode==emLiteral and input!.value!.overlayType==LST
             frame!.facts <- graph.read(request, frame!.node, frame!.expressionParent, hasInput, false, frame!.predicateOnly)
             if(hasInput and frame!.facts.outcome==worldReady){
@@ -4640,7 +4678,7 @@ struct WorldManager {
         if(frame!.projected){settleAlternatives(frame); frame!.finished <- true; return()}
         frame!.sourceEdge <- graph.nextRelationship(request, frame)
         if(frame!.sourceEdge==NULL){
-            if(graph.needsRequirements(frame) and (frame===request!.root or !frame!.node!.pItem!.wrkList.isEmpty())){
+            if(graph.needsRequirements(frame) and (frame===request!.root or !frame!.node!.pItem!.wrkList.isEmpty() or frame!.node!.pItem!.argPos!=apNoArgs)){
                 graph.beginRequirements(frame); request!.ready.append(frame); return()
             }
             if(frame!.facts.outcome==worldReady and requestParentRHS(request, frame)){return()}
