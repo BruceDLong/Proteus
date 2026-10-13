@@ -42,6 +42,7 @@ TestsToRun = `
     unit/worldManager/sparseWindows
     unit/worldManager/boundaryArguments
     unit/worldManager/temporalOccurrences
+    unit/worldManager/nominalEvidence
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -8583,8 +8584,8 @@ check(a.normalize(record)->complete() && toString(record->pItem.get())==recordTe
 check(a.normalize(parse("(unit unit)"))->outcome==worldUnsupported,"nominal arithmetic is explicit boundary");
 auto inherited=parse("{#base=1 #alias=base}");check(a.normalize(inherited)->complete(),"declare explicit nominal inheritance boundary");
 auto inheritedSearch=parse("[&{!base|...} base]<~{alias base}");auto ih=a.normalize(inheritedSearch);
-check((ih->outcome==worldUnsupported || ih->outcome==worldPartial) && ih->publications==0,"potential subtype is not discarded as a known nominal mismatch");
-auto inheritedMerge=parse("base=alias");check(a.normalize(inheritedMerge)->outcome==worldUnsupported,"nominal inheritance requires its own proof");
+check(ih->complete() && inheritedSearch->pItem->value->num==1,"checked inherited type supplies the first matching candidate");
+auto inheritedMerge=parse("base=alias");check(a.normalize(inheritedMerge)->complete() && inheritedMerge->pItem->value->num==1,"ordinary meaning application proves nominal inheritance");
 
 core.deInit();std::cout<<"NAMED_QUERIES: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
@@ -9606,5 +9607,52 @@ for(int count:{32,64,128}){
  check(h->complete()&&values&&h->framesCreated<5*count,"temporal chain shares already solved occurrences");std::cout<<"TEMPORAL_WORK: "<<count<<" -> "<<h->framesCreated<<" frames\n";
 }
 core.deInit();std::cout<<"TEMPORAL_OCCURRENCES: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_nominalEvidence(me string: testName) <- {
+        if(!worldManagerNominalEvidenceChecks()){FAIL("Nominal evidence checks failed")}
+    }
+    me bool: worldManagerNominalEvidenceChecks() <- <%{
+ProteusCore core; core.init("",false); auto& a=*core.agent;auto& m=a.worldManager;int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& msg){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<msg<<"\n";}};
+auto parse=[&](const std::string& s){auto p=m.parse(s);check(p.target && p.error.empty(),"parse "+s);return p.target;};
+auto declarations=parse("{#reel=*_+_ #hue=reel #saturation=reel #brightness=reel #color={hue,saturation:5,brightness} #red=color:{hue:0} #blue=color:{hue:4} #base=1 #alias=base #descendant=alias #sibling=base}");
+check(a.normalize(declarations)->complete(),"declarations store without eager inheritance traversal");auto unchanged=toString(declarations->pItem.get());
+for(auto expr:{"red","color=red","color:{hue:0}","{red blue}.color"}){
+ auto p=parse(expr);auto h=a.normalize(p);check(h->outcome==worldPartial && p->pItem->value->items.head,"inherited record supplies partial checked fields: "+std::string(expr)+" "+h->detail);
+ if(p->pItem->value->items.head){auto first=p->pItem->value->items.head;check(first->pItem->type->normalType()=="hue" && first->pItem->value->num==0,"exact inherited field keeps its value");}
+}
+for(auto expr:{"base=alias","alias=base","base=descendant","descendant=base","[&{!base|...} base]<~{alias base}"}){
+ auto p=parse(expr);auto h=a.normalize(p);check(h->complete() && p->pItem->value->num==1,"checked ancestry supplies identity: "+std::string(expr)+" "+h->detail);
+}
+for(auto expr:{"alias=sibling","hue=saturation","red=blue","color:{hue:0}=blue"}){
+ auto p=parse(expr);auto before=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before,"different sibling declarations or values reject atomically: "+std::string(expr)+" "+h->detail);
+}
+{
+ auto w=parse("{red blue}");a.world=w->pItem;check(a.normalize(w)->outcome==worldPartial,"publish a record with unknown remaining fields");auto original=toString(w->pItem.get());
+ auto q=parse("%W.color");auto h=a.normalize(q);check(h->outcome==worldPartial && q->pItem->type && q->pItem->type->normalType()=="color" && q->pItem->value->items.head,"later request uses persisted inherited type");
+ check(toString(w->pItem.get())==original,"read does not rename source's primary type");
+}
+{
+ auto p=parse("descendant");check(a.normalize(p)->complete(),"complete descendant");check(!a.normalize(p)->framesCreated,"completed inherited scalar creates no goals");
+ auto world=parse("{_}");world->pItem->value->items.head->pItem=p->pItem;a.world=world->pItem;
+ auto q=parse("%W.base");check(a.normalize(q)->complete() && q->pItem->value->num==1,"persisted transitive ancestry is available to another request");
+}
+for(bool cancel:{false,true}){
+ std::string base=cancel?"cancelBase":"pendingBase",child=cancel?"cancelChild":"pendingChild";
+ auto d=parse("{#"+base+"=7 #"+child+"="+base+"}");check(a.normalize(d)->complete(),"register streaming parent");auto body=d->pItem->value->items.head->pItem->funcArgs;m.prepareInput(body);
+ auto p=parse(base+"="+child);auto h=a.normalize(p);auto original=toString(p->pItem.get());check(h->outcome==worldWaiting && h->waitingInput==body && !h->publications,"wait at exact inherited meaning");auto frames=h->framesCreated;
+ if(cancel)m.cancel(h);SetModeBits(body->flags,infonView::streamState,infonView::parseDone);m.inputReady(body);
+ check(cancel?h->outcome==worldCancelled && toString(p->pItem.get())==original:h->complete() && h->framesCreated<=frames+1 && p->pItem->value->num==7,"resume inheritance proof without restart or cancel atomically");
+}
+{
+ auto world=parse("{T 1 2}");a.world=world->pItem;m.prepareInput(world->pItem);auto p=parse("%W.end");auto h=a.normalize(p);check(h->outcome==worldWaiting && !h->publications,"external boundary waits for source parser");
+ m.failInput(world->pItem,"test source parse failure");check(h->outcome==worldError && !h->publications && !p->pItem->identityName,"source parser failure creates no boundary result");
+}
+check(toString(declarations->pItem.get())==unchanged,"all uses preserve shared definition bodies");
+core.deInit();std::cout<<"NOMINAL_EVIDENCE: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+
     }%>
 }

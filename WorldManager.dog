@@ -406,6 +406,7 @@ struct WorldScalar {
     me WorldOutcome: outcome <- worldReady
     me string: detail
     our WordUse: nominal
+    me List<our WordUse>: qualifications // Checked types supplied by applied meanings.
     our WordDefn: declaration
     me bool: meaningApplied <- false
     me int: overlay <- -1
@@ -943,6 +944,50 @@ struct WorldPOVGraph {
         if(required!.baseDefinition!=NULL or actual!.baseDefinition!=NULL){return(worldPartial)}
         return(worldReady)
     }
+    me WorldOutcome: hasNominal(me WorldScalar: actual, our WordUse: required) <- {
+        me WorldOutcome: match <- compareNominal(required, actual.nominal)
+        if(match==worldReady){return(match)}
+        withEach word in actual.qualifications{
+            if(compareNominal(required, word)==worldReady){return(worldReady)}
+        }
+        if(actual.meaningApplied and actual.nominal!=NULL){return(worldRejected)}
+        return(match)
+    }
+    me WorldOutcome: compareNames(me WorldScalar: required, me WorldScalar: actual) <- {
+        me WorldOutcome: result <- hasNominal(actual, required.nominal)
+        if(result==worldRejected){return(result)}
+        withEach word in required.qualifications{
+            me WorldOutcome: match <- hasNominal(actual, word)
+            if(match==worldRejected){return(match)}
+            if(match!=worldReady){result <- match}
+        }
+        return(result)
+    }
+    void: addNominal(their WorldScalar: facts, our WordUse: word) <- {
+        if(word!=NULL and hasNominal(facts!, word)!=worldReady){facts!.qualifications.append(word)}
+    }
+    // An applied meaning proves its positive nominal qualifications. Identity
+    // can carry those facts in either direction; predicate comparison remains
+    // directional. Equal primitive values do not equate sibling declarations.
+    me WorldScalar: mergeNames(me WorldScalar: left, me WorldScalar: right, our POV: edge) <- {
+        if(left.negative or right.negative){return(left)}
+        if(!edge!.trueByDefinition and left.nominal!=NULL and right.nominal!=NULL){
+            me WorldOutcome: forward <- compareNames(left, right)
+            me WorldOutcome: backward <- compareNames(right, left)
+            if(forward!=worldReady and backward!=worldReady){
+                left.outcome <- worldUnsupported
+                if(forward==worldRejected and backward==worldRejected){left.outcome <- worldRejected}
+                if(left.outcome!=worldRejected and !left.meaningApplied and left.nominal!.defToUse!=NULL){left.outcome <- worldPartial; left.needsEvidence <- true}
+                left.detail <- "Nominal types do not have a proved identity"; return(left)
+            }
+        }
+        if(!edge!.trueByDefinition and left.nominal==NULL){
+            left.nominal <- right.nominal; left.inheritedName <- right.inheritedName; left.meaningApplied <- right.meaningApplied
+        }else{addNominal(left, right.nominal)}
+        withEach word in right.qualifications{addNominal(left, word)}
+        if(edge!.trueByDefinition){left.meaningApplied <- true}
+        return(left)
+    }
     me int64: sequenceLength(our WorldList: sequence) <- {
         if(sequence==NULL){return(0)}else{return(sequence!.length)}
     }
@@ -1111,7 +1156,7 @@ struct WorldPOVGraph {
             facts.declaration <- item!.definedWord
             return(facts)
         }
-        if((!item!.addedTypes.isEmpty() and (item!.type!=NULL or item!.addedTypes.size()!=1)) or item!.viewMode==vmCursor or
+        if((!item!.wordDerefed and !item!.addedTypes.isEmpty() and (item!.type!=NULL or item!.addedTypes.size()!=1)) or item!.viewMode==vmCursor or
            (item!.innr!=NULL and !selection) or (item!.funcArgs!=NULL and !bodyInput and (item!.argPos==apNoArgs or
             !((item!.value!.overlayType==LST and item!.value!.evalMode==emLiteral) or
               (item!.type!=NULL and item!.value!.evalMode==emUnknown)))) or
@@ -1122,8 +1167,13 @@ struct WorldPOVGraph {
             facts.detail <- "This request needs semantics beyond the scalar milestone"; return(facts)
         }
         facts <- bind(request, facts, item!.type)
-        if(item!.type==NULL and item!.addedTypes.size()==1){
+        if(item!.type==NULL and !item!.addedTypes.isEmpty()){
             facts <- bind(request, facts, item!.addedTypes[0]); facts.inheritedName <- true
+        }
+        withEach word in item!.addedTypes{
+            me WorldScalar: binding; binding <- bind(request, binding, word)
+            if(binding.outcome!=worldReady){return(binding)}
+            addNominal(facts, binding.nominal)
         }
         facts.meaningApplied <- item!.wordDerefed
         if(facts.outcome!=worldReady or selection){return(facts)}
@@ -1601,6 +1651,7 @@ struct WorldPOVGraph {
             }
             if(frame!.facts.hasSize){expression.hasSize <- true; expression.size <- frame!.facts.size}
             expression.explicitSize <- expression.explicitSize or frame!.facts.explicitSize
+            expression.qualifications <- frame!.facts.qualifications
             expression.nominal <- frame!.facts.nominal; expression.inheritedName <- frame!.facts.inheritedName; expression.meaningApplied <- frame!.facts.meaningApplied
             frame!.facts <- expression; frame!.bodyBounds <- expression.bounds()
             frame!.bodyHasSize <- expression.hasSize; frame!.bodySize <- expression.size
@@ -1640,7 +1691,7 @@ struct WorldPOVGraph {
             return(worldReady)
         }
         if(actual.declaration!=NULL){return(worldRejected)}
-        me WorldOutcome: nominal <- compareNominal(required.nominal, actual.nominal)
+        me WorldOutcome: nominal <- compareNames(required, actual)
         if(nominal==worldRejected){return(nominal)}
         if(required.overlay>=0 and actual.overlay>=0 and required.overlay!=actual.overlay){return(worldRejected)}
         if(rangePredicate(required)){
@@ -1655,6 +1706,30 @@ struct WorldPOVGraph {
             (!required.hasSize or actual.hasSize) and (!required.hasValue or actual.hasValue)
         if(required.hasValue and actual.hasValue){
             if(required.overlay==LST){
+                if((required.order==uUnordered or actual.order==uUnordered) and namedFields(required) and namedFields(actual)){
+                    me Map<string, our WorldFrame>: fields
+                    me WorldListCursor: supplied; supplied.push(actual.sequence)
+                    our WorldFrame: member <- supplied.next()
+                    while(member!=NULL){
+                        me string: key <- member!.facts.nominal!.typeID()
+                        if(fields.containsKey(key)){return(worldPartial)}
+                        fields.insert(key, member); member <- supplied.next()
+                    }
+                    me WorldListCursor: wanted; wanted.push(required.sequence)
+                    member <- wanted.next()
+                    me Set<string>: seen
+                    while(member!=NULL){
+                        me string: key <- member!.facts.nominal!.typeID()
+                        if(seen.contains(key) or !fields.containsKey(key)){return(worldPartial)}
+                        seen.insert(key)
+                        me WorldOutcome: match <- compare(member!.facts, fields.at(key)!.facts)
+                        if(match==worldRejected){return(match)}
+                        if(match!=worldReady){covered <- false}
+                        member <- wanted.next()
+                    }
+                    if(required.hasSize and fields.size()!=seen.size()){return(worldRejected)}
+                    if(covered){return(worldReady)}else{return(worldPartial)}
+                }
                 if(openLayout(required) or openLayout(actual)){return(worldPartial)}
                 me WorldListCursor: left; left.push(required.sequence)
                 me WorldListCursor: right; right.push(actual.sequence)
@@ -1815,16 +1890,8 @@ struct WorldPOVGraph {
         if(left.declaration!=NULL or right.declaration!=NULL){
             left.outcome <- worldUnsupported; left.detail <- "Declarations are not value relationships"; return(left)
         }
-        if(!left.negative and !right.negative){
-            if(!edge!.trueByDefinition){
-                if(left.nominal!=NULL and right.nominal!=NULL and compareNominal(left.nominal, right.nominal)!=worldReady){
-                    left.outcome <- compareNominal(left.nominal, right.nominal)
-                    if(left.outcome==worldPartial){left.outcome <- worldUnsupported}
-                    left.detail <- "Nominal types do not have a proved identity"; return(left)
-                }
-                if(left.nominal==NULL){left.nominal <- right.nominal; left.inheritedName <- right.inheritedName; left.meaningApplied <- right.meaningApplied}
-            }
-        }
+        left <- mergeNames(left, right, edge)
+        if(left.outcome!=worldReady){return(left)}
         if(left.overlay==LST or right.overlay==LST){return(mergeList(left, right, edge))}
         if(edge!.forceID){
             left.outcome <- worldUnsupported
@@ -1868,6 +1935,7 @@ struct WorldPOVGraph {
             }
         }
         if(left.overlay<0){left.overlay <- right.overlay}
+        if(!edge!.looseSize() and left.overlay==NUM and !left.hasSize and !right.hasSize){left.explicitSize <- left.explicitSize or right.explicitSize}
         if(!edge!.looseSize() and !left.hasSize and right.hasSize){
             left.hasSize <- true; left.size <- right.size
             left.explicitSize <- left.explicitSize or right.explicitSize
@@ -1910,7 +1978,7 @@ struct WorldPOVGraph {
             result.pendingChecks <- joinRequirements(before.pendingChecks, requirement(frame!.prerequisite, frame!.sourceEdge))
         }else if(result.outcome==worldReady and before.pendingChecks!=NULL and
                  ((before.overlay<0 and result.overlay>=0) or (!before.hasSize and result.hasSize) or
-                  (!before.hasValue and result.hasValue))){
+                  (!before.hasValue and result.hasValue) or result.qualifications.size()!=before.qualifications.size() or frame!.sourceEdge!.trueByDefinition)){
             me WorldRequirementCursor: checks; checks.push(before.pendingChecks)
             result.pendingChecks <- NULL
             our WorldRequirement: check <- checks.next()
@@ -2312,6 +2380,7 @@ struct WorldPOVGraph {
         item!.addedTypes.clear()
         if(facts.inheritedName and facts.nominal!=NULL){item!.type <- NULL; item!.addedTypes.append(facts.nominal)}
         else{item!.type <- facts.nominal}
+        withEach word in facts.qualifications{item!.addedTypes.append(word)}
         item!.wordDerefed <- facts.meaningApplied
         if(job.newAlternatives!=NULL){
             our infonState:: value; value!.overlayType <- tUnknown; value!.evalMode <- emIntersection
@@ -2480,14 +2549,14 @@ struct WorldManager {
         return(result)
     }
 
-    our WorldFrame: makeFrame(our WorldRequest: request, our POV: node, our WorldPosition: context <- NULL) <- {
+    our WorldFrame: makeFrame(our WorldRequest: request, our POV: node, our WorldPosition: context <- NULL, me bool: requireSize <- false) <- {
         if(request!.edits.containsKey(node!.pItem)){return(request!.edits.at(node!.pItem))}
         if(context!=NULL and request!.completedOccurrences.containsKey(node)){
             our WorldFrame: prior <- request!.completedOccurrences.at(node)
-            if(graph.samePosition(prior!.navigation, context)){return(prior)}
+            if(graph.samePosition(prior!.navigation, context) and graph.completeFacts(prior!.facts, requireSize)){return(prior)}
         }
         our WorldFrame:: frame
-        frame!.node <- node
+        frame!.node <- node; frame!.demandSize <- requireSize
         frame!.context <- context; frame!.navigation <- context
         if(context!=NULL){
             frame!.expressionParent <- node!.pParent; frame!.parentContext <- context!.parent
@@ -2565,10 +2634,22 @@ struct WorldManager {
     // Nominal field alignment preserves supplied occurrence order. Missing
     // declaration fields are inserted before the next corresponding field.
     // The index excludes inheritance ambiguity before any pair is accepted.
+    // A stronger demand continues the saved cursor; it does not reread the
+    // member's expressions or identities. Predicate frames remain reusable.
+    our WorldFrame: fieldValue(our WorldRequest: request, our WorldFrame: member, our WorldFrame: owner) <- {
+        if(owner!.acquireOnly or owner!.predicateOnly or member!.facts.meaningApplied or
+           !(member!.acquireOnly or member!.predicateOnly)){return(member)}
+        our WorldFrame:: value; value! <- member!
+        value!.finished <- false; value!.acquireOnly <- false; value!.predicateOnly <- false
+        request!.framesCreated <+- 1
+        return(value)
+    }
     void: beginFields(our WorldRequest: request, our WorldFrame: frame) <- {
         if(!graph.representableFacts(frame!.prerequisite!.facts) or !frame!.prerequisite!.retainedWork.isEmpty()){
             frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Record meaning still has unresolved relationships"; stopFrame(request, frame); return()
         }
+        frame!.facts <- graph.mergeNames(frame!.facts, frame!.prerequisite!.facts, frame!.sourceEdge)
+        if(frame!.facts.outcome!=worldReady){stopFrame(request, frame); return()}
         our WorldFieldMerge:: fields
         me List<our WorldFrame>: definitions
         me List<our WorldFrame>: supplied
@@ -2578,7 +2659,7 @@ struct WorldManager {
         our WorldFrame: member <- cursor.next()
         while(member!=NULL){
             me string: key <- member!.facts.nominal!.typeID()
-            if(byName.containsKey(key) or !graph.noInheritedType(member!.facts.nominal)){
+            if(byName.containsKey(key)){
                 frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Record field identity needs additional nominal evidence"; stopFrame(request, frame); return()
             }
             byName.insert(key, definitions.size()); definitions.append(member); member <- cursor.next()
@@ -2587,7 +2668,7 @@ struct WorldManager {
         member <- cursor.next()
         while(member!=NULL){
             me string: key <- member!.facts.nominal!.typeID()
-            if(present.contains(key) or !graph.noInheritedType(member!.facts.nominal)){
+            if(present.contains(key)){
                 frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Record field identity needs additional nominal evidence"; stopFrame(request, frame); return()
             }
             present.insert(key); supplied.append(member); member <- cursor.next()
@@ -2601,7 +2682,7 @@ struct WorldManager {
                 me int64: index <- byName.at(key)
                 while(next<index){
                     our WorldFrame: omitted <- definitions[next]; next <+- 1
-                    if(!present.contains(omitted!.facts.nominal!.typeID())){fields!.members.append(omitted)}
+                    if(!present.contains(omitted!.facts.nominal!.typeID())){fields!.members.append(fieldValue(request, omitted, frame))}
                 }
                 our WorldFrame: required <- definitions[index]
                 me WorldOutcome: identity <- graph.compareNominal(actual!.facts.nominal, required!.facts.nominal)
@@ -2616,7 +2697,7 @@ struct WorldManager {
         }
         while(next<definitions.size()){
             our WorldFrame: omitted <- definitions[next]; next <+- 1
-            if(!present.contains(omitted!.facts.nominal!.typeID())){fields!.members.append(omitted)}
+            if(!present.contains(omitted!.facts.nominal!.typeID())){fields!.members.append(fieldValue(request, omitted, frame))}
         }
         frame!.fields <- fields
         frame!.facts.contentsComplete <- true; frame!.facts.representable <- true
@@ -2941,8 +3022,7 @@ struct WorldManager {
                 if(selection!.position==selection!.index){selection!.selected <- at; selection!.located <- true}
             }else{selection!.selected <- at}
         }
-        frame!.prerequisite <- makeFrame(request, selection!.selected!.node, selection!.selected)
-        frame!.prerequisite!.demandSize <- frame!.demandSize
+        frame!.prerequisite <- makeFrame(request, selection!.selected!.node, selection!.selected, frame!.demandSize)
         frame!.prerequisite!.acquireOnly <- frame!.acquireOnly
         frame!.prerequisite!.referenceOnly <- frame!.referenceOnly
         frame!.selecting <- true; frame!.initialized <- true; frame!.expressionSlot <- 3
@@ -3206,9 +3286,9 @@ struct WorldManager {
             // A different nominal type disproves this candidate even when the
             // selected pattern also asks for a value. Do not evaluate a known
             // nonmatch merely to prove the same mismatch again with more facts.
-            if(actual!.outcome==worldReady and graph.compareNominal(predicate.nominal, actual!.nominal)!=worldRejected and
-               (!graph.typePredicate(predicate) or (actual!.overlay<0 and
-                !(predicate.nominal!=NULL and actual!.nominal!=NULL)))){headerOnly <- false}
+            if(actual!.outcome==worldReady and graph.compareNames(predicate, actual!)!=worldRejected and
+               (!graph.typePredicate(predicate) or graph.compareNames(predicate, actual!)!=worldReady or
+                (actual!.overlay<0 and !(predicate.nominal!=NULL and actual!.nominal!=NULL)))){headerOnly <- false}
         }
         if(!headerOnly){
             if(lookup!.candidate==NULL){
@@ -4667,6 +4747,7 @@ struct WorldManager {
                     frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Boundary constraints need occurrence identity proof"; stopFrame(request, frame); return()
                 }
                 our infonView: source <- path!.source!.node!.pItem
+                if(source!.graphParseError!=""){frame!.facts.outcome <- worldError; frame!.facts.detail <- source!.graphParseError; stopFrame(request, frame); return()}
                 if(source!.streamState==parseStarted or source!.streamState==parseListReady){waitAt(request, frame, source); return()}
                 our POV: boundary <- graph.boundaryOf(request, path!.source, primitive=="end")
                 our WorldPosition: position <- graph.position(boundary)
@@ -4847,7 +4928,7 @@ struct WorldManager {
             }
             if(frame!.facts.outcome==worldReady and requestParentRHS(request, frame)){return()}
             if(frame!.acquireOnly and !frame!.facts.hasValue and frame!.facts.nominal!=NULL and
-               frame!.facts.nominal!.defToUse!=NULL and !frame!.meaningRequested and !frame!.predicateOnly){
+               frame!.facts.nominal!.defToUse!=NULL and !frame!.facts.meaningApplied and !frame!.meaningRequested and !frame!.predicateOnly){
                 request!.ready.append(frame); return()
             }
             settleAlternatives(frame); frame!.finished <- true
@@ -4936,7 +5017,7 @@ struct WorldManager {
             context <- graph.occurrencePath(target)
             if(context==NULL){request!.outcome <- worldUnsupported; request!.detail <- "Invalid or cyclic occurrence path"; return(request)}
         }
-        request!.root <- makeFrame(request, target, context); request!.root!.demandSize <- requireSize
+        request!.root <- makeFrame(request, target, context, requireSize)
         request!.ready.append(request!.root)
         run(request)
         return(request)
