@@ -339,6 +339,8 @@ struct WorldPatternChart {
     me int64: resultIndex <- 0
 }
 struct WorldCorrespondence {
+    me bool: sourceResolved <- false
+    our WorldFrame: sourceReference
     our WorldPatternChart: chart
     our WorldWalk: left
     our WorldWalk: right
@@ -559,6 +561,7 @@ struct WorldPublication {
     me List<our POV>: fieldOrder
 }
 struct WorldRequest {
+    our infonView: worldSource
     me vocabularySpec: vocabulary
     me Map<string, our WorldDefinitions>: declarations
     me Set<our WordDefn>: declarationOrigins
@@ -1102,7 +1105,7 @@ struct WorldPOVGraph {
             our WorldWalkLevel: level <- walk!.levels.last()
             if(level!.entered){return(true)}
             our POV: node <- level!.position!.node
-            if(node!.pItem!.partRef!=NULL or !node!.pItem!.parts.isEmpty()){
+            if(node!.pItem!.viewMode==vmCursor or node!.pItem!.partRef!=NULL or !node!.pItem!.parts.isEmpty()){
                 walk!.requestedLayout <- level!.position
                 walk!.outcome <- worldPartial; walk!.detail <- "List layout needs the selected path occurrence"; return(false)
             }
@@ -1418,6 +1421,7 @@ struct WorldPOVGraph {
     // Ready=yes, Rejected=no, Partial=not enough evidence. Work only on local
     // facts: a negative template must not acquire its candidate's size/value.
     me WorldOutcome: compare(me WorldScalar: required, me WorldScalar: actual) <- {
+        if(actual.declaration!=NULL){return(worldRejected)}
         me WorldOutcome: nominal <- compareNominal(required.nominal, actual.nominal)
         if(nominal==worldRejected){return(nominal)}
         if(required.overlay>=0 and actual.overlay>=0 and required.overlay!=actual.overlay){return(worldRejected)}
@@ -3406,7 +3410,7 @@ struct WorldManager {
         our WorldPatternChart: chart <- lookup!.chart
         if(!chart!.initialized){
             if(chart!.source==NULL){
-                if(chart!.sourceProbe==NULL){chart!.sourceProbe <- lookup!.query!.relation}
+                if(chart!.sourceProbe==NULL){chart!.sourceProbe <- lookup!.result!.sourceDomain!.node}
                 me WorldScalar: header
                 while(true){
                     header <- graph.read(request, chart!.sourceProbe, chart!.sourceProbe!.pParent)
@@ -3663,6 +3667,24 @@ struct WorldManager {
     // value-normalization prerequisite. The cursors/chart survive local waits.
     void: locateRHS(our WorldRequest: request, our WorldFrame: frame) <- {
         our WorldCorrespondence: lookup <- frame!.lookup
+        if(!lookup!.sourceResolved){
+            our POV: source <- lookup!.query!.relation
+            if(source!.pItem!.viewMode==vmCursor or source!.pItem!.partRef!=NULL or !source!.pItem!.parts.isEmpty()){
+                if(lookup!.sourceReference==NULL){
+                    lookup!.sourceReference <- makeFrame(request, source)
+                    lookup!.sourceReference!.referenceOnly <- true; lookup!.sourceReference!.acquireOnly <- true
+                    request!.ready.append(frame); request!.ready.append(lookup!.sourceReference); return()
+                }
+                if(lookup!.sourceReference!.facts.outcome!=worldReady){frame!.facts <- lookup!.sourceReference!.facts; stopFrame(request, frame); return()}
+                our WorldCorrespondenceResult: result <- lookup!.sourceReference!.correspondenceResult
+                if(result==NULL or result!.position==NULL){
+                    frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Correspondence source needs one occurrence"; stopFrame(request, frame); return()
+                }
+                lookup!.result!.sourceDomain <- result!.position
+                lookup!.right!.levels.last()!.position <- result!.position
+            }
+            lookup!.sourceResolved <- true
+        }
         if(lookup!.chart!=NULL){matchStructuredCorrespondence(request, frame); return()}
         if(lookup!.normalized){request!.ready.append(frame); correspond(request, frame); return()}
         if(lookup!.bounded){locateSpanRHS(request, frame); return()}
@@ -3840,7 +3862,15 @@ struct WorldManager {
         if(frame!.path==NULL){
             Allocate(frame!.path)
             our POV:: base{940}; base! <- frame!.node!
-            base!.pItem <- graph.pathBody(frame!.node!.pItem, false)
+            if(frame!.node!.pItem!.viewMode==vmCursor){
+                if(frame!.node!.pItem!.cursorMode!=cmWorld){
+                    frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Cursor needs an occurrence provider"; stopFrame(request, frame); return()
+                }
+                if(request!.worldSource==NULL){
+                    frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "World source is not available"; stopFrame(request, frame); return()
+                }
+                base!.pItem <- request!.worldSource; base!.pParent <- NULL
+            }else{base!.pItem <- graph.pathBody(frame!.node!.pItem, false)}
             frame!.path!.source <- graph.position(base)
             if(frame!.context!=NULL){
                 frame!.path!.source!.parent <- frame!.context!.parent
@@ -3856,6 +3886,14 @@ struct WorldManager {
             }else if(!path!.returned and instructions!.partRef!=NULL){
                 path!.part <- instructions!.partRef; path!.returned <- true
             }else{
+                if(frame!.referenceOnly){
+                    frame!.facts <- graph.read(request, path!.source!.node, path!.source!.node!.pParent)
+                    if(frame!.facts.outcome==worldWaiting){waitAt(request, frame, path!.source!.node!.pItem); return()}
+                    Allocate(frame!.correspondenceResult); frame!.correspondenceResult!.position <- path!.source
+                    frame!.initialized <- true; frame!.finished <- true
+                    if(frame!.facts.outcome!=worldReady){stopFrame(request, frame)}
+                    return()
+                }
                 if(path!.operation==NULL){
                     // A retained parent is itself the requested value. Its
                     // outstanding meanings remain ordinary normalization work.
@@ -3924,7 +3962,7 @@ struct WorldManager {
 
     void: step(our WorldRequest: request, our WorldFrame: frame) <- {
         if(frame!.fields!=NULL){mergeFields(request, frame); return()}
-        if(!frame!.initialized and (frame!.path!=NULL or frame!.node!.pItem!.partRef!=NULL or !frame!.node!.pItem!.parts.isEmpty())){pathStep(request, frame); return()}
+        if(!frame!.initialized and (frame!.path!=NULL or frame!.node!.pItem!.viewMode==vmCursor or frame!.node!.pItem!.partRef!=NULL or !frame!.node!.pItem!.parts.isEmpty())){pathStep(request, frame); return()}
         if(!frame!.initialized and frame!.node!.pItem!.value!=NULL and frame!.node!.pItem!.value!.evalMode==emIntersection){selectMember(request, frame); return()}
         if(!frame!.initialized){
             our infonView: input <- frame!.node!.pItem
@@ -4105,10 +4143,10 @@ struct WorldManager {
         }
     }
 
-    our WorldRequest: normalize(our WorldSession: session, our POV: target, me bool: requireSize <- false, me string: language <- "") <- {
+    our WorldRequest: normalize(our WorldSession: session, our POV: target, me bool: requireSize <- false, me string: language <- "", our infonView: worldSource <- NULL) <- {
         me WorldModelLock: lock{control!.mutex}
         our WorldRequest:: request
-        request!.control <- control; request!.vocabulary.init(language)
+        request!.control <- control; request!.vocabulary.init(language); request!.worldSource <- worldSource
         request!.target <- target; request!.requireSize <- requireSize
         if(session==NULL or session!.closed){
             request!.outcome <- worldError; request!.detail <- "An open Agent session is required"; return(request)

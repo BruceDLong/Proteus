@@ -35,6 +35,7 @@ TestsToRun = `
     unit/worldManager/rangePredicates
     unit/worldManager/rangeFilters
     unit/worldManager/symbolicRangeFilters
+    unit/worldManager/worldSources
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -9189,6 +9190,47 @@ for(bool cancel:{false,true}){
  check(toString(source.get())==inputBefore,"symbolic continuation leaves source expressions intact");
 }
 core.deInit();std::cout<<"SYMBOLIC_RANGE_FILTERS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_worldSources(me string: tname) <- {
+        if(!worldManagerWorldSourceChecks()){FAIL("World source checks failed")}
+    }
+    me bool: worldManagerWorldSourceChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;
+int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+auto parse=[&](const std::string& text){auto p=m.parse(text);check(p.target && p.error.empty(),"parse "+text);return p.target;};
+{
+ auto p=parse("%W.item");auto h=a.normalize(p);check(h->outcome==worldPartial && !h->publications,"missing world stays pending");
+}
+auto w=parse("{#left=_ #right=_ left:1 right:_}");a.world=w->pItem;auto wh=a.normalize(w);check(!wh->failed(),"world declarations load");
+auto before=toString(w->pItem.get());
+{
+ auto q=parse("%W.left");auto h=a.normalize(q);check(h->complete() && toString(q->pItem.get())=="left:1","world field uses shared first-match lookup");
+ check(h->selectedSource()==w->pItem->value->items.head->next->next,"world field retains exact occurrence");
+ check(toString(w->pItem.get())==before,"world read does not change source");
+}
+{
+ auto q=parse("%W.right=7");auto h=a.normalize(q);check(h->complete() && toString(q->pItem.get())=="right:7","world write supplies unknown member");
+ auto r=parse("%W.right");auto rh=a.normalize(r);check(rh->complete() && toString(r->pItem.get())=="right:7","later world read finds written occurrence");
+ before=toString(w->pItem.get());q=parse("%W.right=9");h=a.normalize(q);check(h->outcome==worldRejected && !h->publications && toString(w->pItem.get())==before,"conflicting world write is atomic");
+}
+{
+ auto other=parse("{one:{1 2 3} ignored:_}");a.world=other->pItem;auto q=parse("[&*1+{...} <_>] <~ %W.one");auto h=a.normalize(q);
+ check(h->complete() && toString(q->pItem.get())=="2","intersection borrows a world-selected list");
+}
+for(bool cancel:{false,true}){
+ auto world=parse("{target:4 suffix:_}");a.world=world->pItem;auto pending=world->pItem->value->items.tail->pItem;m.prepareInput(pending);
+ auto q=parse("%W.target");auto h=a.normalize(q);check(h->complete() && toString(q->pItem.get())=="target:4","unused unfinished suffix is not a dependency");
+ pending=world->pItem->value->items.head->pItem;m.prepareInput(pending);q=parse("%W.target");h=a.normalize(q);auto frames=h->framesCreated;
+ check(h->outcome==worldWaiting && h->waitingInput==pending && !h->publications,"world selection waits at exact candidate");
+ a.world=parse("{target:99}")->pItem;if(cancel)m.cancel(h);SetModeBits(pending->flags,infonView::streamState,infonView::parseDone);m.inputReady(pending);
+ check(cancel?h->outcome==worldCancelled && h->framesCreated==frames && !h->publications:h->complete() && toString(q->pItem.get())=="target:4","request keeps its original world across a wait");
+}
+core.deInit();std::cout<<"WORLD_SOURCES: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
 
     }%>
 }
