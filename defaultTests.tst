@@ -302,7 +302,7 @@ user/getUser,          getUser,                        %W.bruceLong//:bruceLong:
 user/getUser3,         getUser,                        %W.bruceLong.projects.properties.title//:title:'Slipstream Projects',   -,                              world, user_3.pr
 user/getNth,           getNth,                         *2 + [& %W.bruceLong.projects.data.boardElement.data.TaskList.data].properties.member//:member:'Tiffany', -, world, user_3.pr
 user/setNth,           setNth,                         *2 + [& %W.bruceLong.projects.data.boardElement.data.TaskList.data].properties.member <<= 'KTiffany'\n*2 + [& %W.bruceLong.projects.data.boardElement.data.TaskList.data].properties.member//:member:'KTiffany', -, world, user_3.pr
-this/lvl1,             this lvl1,                      {#hue=_ #color={hue}  #red=color:{hue:0} #pink=color:{hue:345} #paper = paper:{red\, {{%.color}{pink}}}}\npaper//:paper:{red:{hue:0}\,{{red:{hue:0}} {pink:{hue:345}}}}, -, multi
+this/lvl1,             this lvl1,                      {#hue=_ #color={hue}  #red=color:{hue:0} #pink=color:{hue:345} #paper = paper:{red\, {{%.color}{pink}}}}\npaper//:paper:{red:{hue:0}\, {{red:{hue:0}} {pink:{hue:345}}}}, -, multi
 word/setColor,         setColor,                       color=red//:color:{hue:*_+0\, saturation:*_+5\, brightness:*_+_},                  -,                              world, bike.pr
 search/adj1,           Search by adjective,            {{color=red\, ...} { name='Bob'\, color=blue\, ...} {color=green\, ...} {name='Wally'\, color=blue\, ...}}.{color=blue\, ...}//:{name:'Bob'\, color = blue\, ... }, -, world, bike.pr
 

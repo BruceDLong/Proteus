@@ -1272,6 +1272,8 @@ Publication records the existing coverage proof as an occurrence-local `listSpec
 
 ## Remaining default-test classification (2026-10-13)
 
+**Historical nineteen-case snapshot.** The D056 follow-up below resolves three display expectations and replaces the external world dependencies with synthetic fixtures; the current default result is 16/332.
+
 This is an audit of the replacement at `de34172`, not a change to language semantics or test expectations. The fresh `cd LocalBuild && ./TestProteus -t defaultTests.tst:` run reports **19/331**, with exactly the D054 failure names and messages. The [classification inventory](default-test-classification.json) records every fixture, current failure, main-branch source occurrence, saved reference result, supporting probe and next action.
 
 Thirteen of these test names occur in main at `86321ea`; six were added later. Name continuity does not imply unchanged syntax or expectations: for example, the nested ordinary-write fixture originally expected replacement, which the later explicit forceID decision corrected. Fourteen of the current nineteen also failed in the saved original-Proteus4 comparison at `b52322a`. That is historical baseline evidence, not proof that their current behavior is correct. Main was inspected as source, not rebuilt or rerun for this audit.
@@ -1321,3 +1323,29 @@ The Rubix load probe changes from unavailable named definition to `Unordered cor
 D051's kernel trace and a fresh minimal `*(20000+_)+{T _|...}` probe identify the symbolic-expression boundary. The latter is partial with `Expression operand value is unknown`. The shared load failure prevents these two fixtures from assessing later PublicKB behavior.
 
 No engine, printer, fixture, registration or harness policy changed. All protected fixture hashes were checked; unrelated `myTests.tst` was preserved. The next implementation work should follow the semantic families above, not a target failure count. D053 relative-context applicability remains a known compatibility gap outside these nineteen; this audit does not claim that their eventual success would establish all normalization semantics.
+
+
+## Agreed output corrections and independent world fixtures (D056)
+
+The user approved the three straightforward expectation corrections: comma spacing in `this/lvl1`, and compact retained-listSpec printing in the two nested rejected-write tests. Their inputs, rejection assertions and preserved numeric values are unchanged. `cube/getLstSpec`, symbolic-reference output, child normalization depth, sparse-result policy and deferred alignment are not included in this approval. Each fixture edit and hash transition is recorded in the retirement manifest.
+
+Default regressions must not depend on mutable application user/world models. The user chose small synthetic fixtures for the two world-loading cases. `Resources/TestFiles/world-load/symbolic/` retains the unresolved `*(20000+_)` shape-acquisition regression, using a small imported unit declaration. The original `world/load/kernel` and `world/load/publicKB` names remain, and both still fail at world initialization. `finite/` adds one positive control, `world/load/finitePublic`, checking `%W@[2]` and a public declaration dependent on an imported kernel declaration. Both kernel and public imports are resolved relative to their fixture origins.
+
+`TestProteusCore.loadKernel` now accepts the requested filename. Public-fixture initialization resolves `KernelKB.pr` beside that fixture instead of opening the application's `public/KernelKB.pr`. No application loader, WorldManager, printer or shared-library interface changed. Committed `user_3.pr`, `userKB.pr` and Rubix files remain regression data; tests do not refresh them from live user models. Actual application-world compatibility is separate integration work.
+
+### Shared loading diagnoses
+
+The first contradictory merge for `user_3.pr` is now traced through the generated test core's real file-loader path: the first CodeDog TaskList supplies `screenPos.xPos:20` while its containing data listSpec requires `xPos:40` (`Resources/user_3.pr:14,16`). The result propagates to world loading before any of the three named queries runs. This is concrete constraint conflict, not evidence of three independently broken query/write operations. The fixture's intended template constraints still need review; ordinary constants must not become implicit defaults. No user-model resource was edited.
+
+The same file-loader trace identifies the Rubix unsupported node as `reel`. This standalone fixture declares no such numeric meaning. The earlier isolated probe supplying it then reaches unsupported unordered correspondence, so declaring it would expose rather than solve the next composition gap. The synthetic symbolic kernel independently reproduces `Expression operand value is unknown`, without reading any external model.
+
+### Validation
+
+`codeDog Proteus.Lib.dog` regenerated the executable from the maintained test harness. Verification ran from an isolated directory with only tracked/proposed test assets and no `assets/public` tree. All 11 distinct default world roots and 15 transitive fixture documents resolve within those assets.
+
+- Defaults: **16/332**. Exactly the three approved display failures recover; all sixteen remaining failure names/messages match the prior run. The extra case is the passing finite-world control.
+- World-loading fixtures: **2/3** fail, both preserving the known symbolic-size limitation; the finite bootstrap/import control passes.
+- WorldManager suites: **0/52** failures.
+- Full retained inventory: **1408/1914** failures, comprising 1,384 unported assertions, eight historical compiled failures and sixteen defaults.
+
+Protected fixture hashes, archived assertions and unrelated `myTests.tst` were verified. The original nineteen-case inventory remains a historical snapshot with this follow-up attached. No result here establishes live application-world or Slipstream rendering behavior.
