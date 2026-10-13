@@ -589,6 +589,8 @@ struct WorldPath {
 }
 
 struct WorldFrame {
+    our WorldRequirement: deferredIdentity
+    me bool: deferredNameInherited <- false
     me bool: templateContext <- false
     our WorldFrame: insertedFrame
     me bool: noMatch <- false
@@ -1009,13 +1011,16 @@ struct WorldPOVGraph {
     }
     // An applied meaning proves its positive nominal qualifications. Identity
     // can carry those facts in either direction; predicate comparison remains
-    // directional. Equal primitive values do not equate sibling declarations.
+    // directional. An assertion may combine different checked meanings, but
+    // the ordinary value/list merge must still prove their constraints compatible.
     me WorldScalar: mergeNames(me WorldScalar: left, me WorldScalar: right, our POV: edge) <- {
         if(left.negative or right.negative){return(left)}
         if(!edge!.trueByDefinition and left.nominal!=NULL and right.nominal!=NULL){
             me WorldOutcome: forward <- compareNames(left, right)
             me WorldOutcome: backward <- compareNames(right, left)
-            if(forward!=worldReady and backward!=worldReady){
+            me bool: checkedMeanings <- left.meaningApplied and right.meaningApplied and
+                left.nominal!.defToUse!=NULL and right.nominal!.defToUse!=NULL
+            if(forward!=worldReady and backward!=worldReady and !checkedMeanings){
                 left.outcome <- worldUnsupported
                 if(forward==worldRejected and backward==worldRejected){left.outcome <- worldRejected}
                 if(left.outcome!=worldRejected and !left.meaningApplied and left.nominal!.defToUse!=NULL){left.outcome <- worldPartial; left.needsEvidence <- true}
@@ -1580,6 +1585,12 @@ struct WorldPOVGraph {
         return(NULL)
     }
 
+    our POV: requestMeaning(our WorldRequest: request, our WorldFrame: frame) <- {
+        frame!.meaningRequested <- true; request!.meaningEdges <+- 1
+        our POV:: meaning{939}; meaning!.pItem <- frame!.facts.nominal!.defToUse; meaning!.trueByDefinition <- true
+        return(meaning)
+    }
+
     // The cursor is retained in the frame; ordinary arrival never rewinds it.
     our POV: nextRelationship(our WorldRequest: request, our WorldFrame: frame) <- {
         frame!.sourceIsListSpec <- false; frame!.sourceNameInherited <- false
@@ -1639,9 +1650,7 @@ struct WorldPOVGraph {
                 return(NULL)
             }
             if(frame!.facts.nominal!.defToUse===item and frame!.facts.hasValue){frame!.facts.meaningApplied <- true; return(NULL)}
-            request!.meaningEdges <+- 1
-            our POV:: meaning{939}; meaning!.pItem <- frame!.facts.nominal!.defToUse; meaning!.trueByDefinition <- true
-            return(meaning)
+            return(requestMeaning(request, frame))
         }
         our POV: edge <- item!.wrkList[frame!.nextWork]
         frame!.nextWork <+- 1
@@ -5316,6 +5325,21 @@ struct WorldManager {
                     request!.ready.append(frame); request!.ready.append(frame!.prerequisite); return()
                 }
             }
+            // Different asserted names need both meanings checked. Retain the
+            // resolved RHS while acquiring this prerequisite, then use ordinary
+            // scalar/list correspondence; scalar pending checks cannot merge fields.
+            if(!frame!.sourceIsOperand and !frame!.sourceIsListSpec and frame!.sourceEdge!=NULL and
+               !frame!.sourceEdge!.trueByDefinition and !frame!.sourceEdge!.forceID and
+               !frame!.meaningRequested and !frame!.facts.meaningApplied and !frame!.facts.negative and
+               frame!.facts.nominal!=NULL and frame!.facts.nominal!.defToUse!=NULL and
+               frame!.prerequisite!.facts.outcome==worldReady and !frame!.prerequisite!.facts.negative and
+               frame!.prerequisite!.facts.nominal!=NULL and
+               graph.compareNames(frame!.facts, frame!.prerequisite!.facts)!=worldReady and
+               graph.compareNames(frame!.prerequisite!.facts, frame!.facts)!=worldReady){
+                frame!.deferredIdentity <- graph.requirement(frame!.prerequisite, frame!.sourceEdge)
+                frame!.deferredNameInherited <- frame!.sourceNameInherited
+                frame!.prerequisite <- NULL; request!.ready.append(frame); return()
+            }
             if(frame!.sourceEdge!=NULL and frame!.sourceEdge!.forceID and frame!.preparedReplacement!==frame!.sourceEdge and
                !frame!.sourceEdge!.looseType() and !frame!.facts.negative and frame!.facts.overlay!=LST and
                frame!.prerequisite!.facts.outcome==worldReady and !frame!.prerequisite!.facts.negative and
@@ -5411,8 +5435,16 @@ struct WorldManager {
         if(frame!.corresponding){
             request!.ready.append(frame); correspond(request, frame); return()
         }
-        if(frame!.projected){settleAlternatives(frame); frame!.finished <- true; return()}
-        frame!.sourceEdge <- graph.nextRelationship(request, frame)
+        if(frame!.projected and frame!.deferredIdentity==NULL){settleAlternatives(frame); frame!.finished <- true; return()}
+        if(frame!.deferredIdentity!=NULL){
+            if(!frame!.meaningRequested){
+                frame!.sourceEdge <- graph.requestMeaning(request, frame); frame!.sourceNameInherited <- false
+            }else{
+                frame!.sourceEdge <- frame!.deferredIdentity!.edge; frame!.prerequisite <- frame!.deferredIdentity!.frame
+                frame!.sourceNameInherited <- frame!.deferredNameInherited; frame!.deferredIdentity <- NULL
+                request!.ready.append(frame); return()
+            }
+        }else{frame!.sourceEdge <- graph.nextRelationship(request, frame)}
         if(frame!.sourceEdge==NULL){
             if(graph.needsRequirements(frame) and (frame===request!.root or !frame!.node!.pItem!.wrkList.isEmpty() or frame!.node!.pItem!.argPos!=apNoArgs)){
                 graph.beginRequirements(frame); request!.ready.append(frame); return()

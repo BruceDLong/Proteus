@@ -5679,7 +5679,8 @@ run("[&{wheel|...} chain]<~{wheel wheel chain seat}","chain:'chain'");
 run("myLst","myLst:{'Cat' 'Hat' 'Bat' 'Dog'}");
 run("chain","chain:'chain'");
 run("{#inline=17 inline}","{#inline = 17 inline:17}");
-for(auto text:{"chain = same","wheel = chain","chain:'wheel'","chain=5"}){
+run("chain = same","chain:'chain'");
+for(auto text:{"wheel = chain","chain:'wheel'","chain=5"}){
  auto p=parse(text);auto before=toString(p->pItem.get());auto h=a.normalize(p);
  check(h->outcome==worldRejected,std::string("reject ")+text+": "+h->detail);
  check(toString(p->pItem.get())==before,"rejected nominal merge publishes nothing");
@@ -6808,11 +6809,35 @@ for(auto expr:{"red","color=red","color:{hue:0}","{red blue}.color"}){
  auto p=parse(expr);auto h=a.normalize(p);check(h->outcome==worldPartial && p->pItem->value->items.head,"inherited record supplies partial checked fields: "+std::string(expr)+" "+h->detail);
  if(p->pItem->value->items.head){auto first=p->pItem->value->items.head;check(first->pItem->type->normalType()=="hue" && first->pItem->value->num==0,"exact inherited field keeps its value");}
 }
-for(auto expr:{"base=alias","alias=base","base=descendant","descendant=base","[&{!base|...} base]<~{alias base}"}){
+for(auto expr:{"base=alias","alias=base","base=descendant","descendant=base","alias=sibling","[&{!base|...} base]<~{alias base}"}){
  auto p=parse(expr);auto h=a.normalize(p);check(h->complete() && p->pItem->value->num==1,"checked ancestry supplies identity: "+std::string(expr)+" "+h->detail);
 }
-for(auto expr:{"alias=sibling","hue=saturation","red=blue","color:{hue:0}=blue"}){
- auto p=parse(expr);auto before=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before,"different sibling declarations or values reject atomically: "+std::string(expr)+" "+h->detail);
+{
+ auto p=parse("hue=saturation");auto h=a.normalize(p);check(h->outcome==worldPartial && getModeBits(p->pItem->value->flags,infonState::evalMode)==infonState::emUnknown,"compatible unknown meanings combine without inventing a value");
+}
+{
+ auto d=parse("{#front-color=color #same-red=color:{hue:0} #one=1 #also-one=1 #two=2 #small=*10+_ #large=*20+_ #left-record={x:0,y:1} #right-record={x:0,y:2}}");check(a.normalize(d)->complete(),"register synthetic compatible and conflicting named meanings");auto source=toString(d->pItem.get());
+ for(auto expr:{"front-color=red","red=front-color","front-color=red=same-red","red=same-red"}){
+  auto p=parse(expr);auto h=a.normalize(p);auto hue=p->pItem->value->items.head;
+  check(h->outcome==worldPartial && hue && hue->pItem->type->normalType()=="hue" && getModeBits(hue->pItem->value->flags,infonState::evalMode)==infonState::emLiteral && hue->pItem->value->num==0,"asserted compatible meanings retain the source hue: "+std::string(expr)+" "+h->detail);
+ }
+ auto equal=parse("one=also-one");check(a.normalize(equal)->complete() && equal->pItem->value->num==1,"separate compatible scalar definitions can be asserted equal");
+ for(auto expr:{"front-color=red=blue","one=two","small=large","left-record=right-record","unknown-left:1=unknown-right:1"}){
+  auto p=parse(expr);auto before=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before,"incompatible or unproved named assertions reject atomically: "+std::string(expr));
+ }
+ check(toString(d->pItem.get())==source,"assertion checks preserve definition sources");
+}
+{
+ auto p=parse("{alias sibling}.sibling");auto h=a.normalize(p);check(h->complete() && p->pItem->type->normalType()=="sibling","type-only search still selects the declared sibling, not the equal-valued alias");
+}
+for(int n:{8,32,128}){
+ std::string text="{";for(int i=0;i<n;++i)text+="front-color=red ";text+="}";auto p=parse(text);auto h=a.normalize(p);bool values=true;
+ for(auto q=p->pItem->value->items.head;q;q=q->next){auto hue=q->pItem->value->items.head;values=values && hue && getModeBits(hue->pItem->value->flags,infonState::evalMode)==infonState::emLiteral && hue->pItem->value->num==0;}
+ check(h->outcome==worldPartial && values && h->framesCreated<40*n+10 && h->relationshipsRead<40*n+10,"fixed-width asserted definition work remains linear");
+ std::cout<<"NAMED_ASSERTIONS: "<<n<<" -> "<<h->framesCreated<<" frames, "<<h->relationshipsRead<<" relationships\n";
+}
+for(auto expr:{"red=blue","color:{hue:0}=blue"}){
+ auto p=parse(expr);auto before=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before,"conflicting definition values reject atomically: "+std::string(expr)+" "+h->detail);
 }
 {
  auto w=parse("{red blue}");a.world=w->pItem;check(a.normalize(w)->outcome==worldPartial,"publish a record with unknown remaining fields");auto original=toString(w->pItem.get());
@@ -6827,9 +6852,21 @@ for(auto expr:{"alias=sibling","hue=saturation","red=blue","color:{hue:0}=blue"}
 for(bool cancel:{false,true}){
  std::string base=cancel?"cancelBase":"pendingBase",child=cancel?"cancelChild":"pendingChild";
  auto d=parse("{#"+base+"=7 #"+child+"="+base+"}");check(a.normalize(d)->complete(),"register streaming parent");auto body=d->pItem->value->items.head->pItem->funcArgs;m.prepareInput(body);
- auto p=parse(base+"="+child);auto h=a.normalize(p);auto original=toString(p->pItem.get());check(h->outcome==worldWaiting && h->waitingInput==body && !h->publications,"wait at exact inherited meaning");auto frames=h->framesCreated;
+ auto p=parse(base+"="+child);auto h=a.normalize(p);auto original=toString(p->pItem.get());check(h->outcome==worldWaiting && h->waitingInput==body && !h->publications,"wait at exact inherited meaning");auto frames=h->framesCreated,edges=h->relationshipsRead;
+ auto unrelated=parse("9");m.inputReady(unrelated->pItem);check(h->outcome==worldWaiting && h->framesCreated==frames && h->relationshipsRead==edges,"unrelated input does not replay named meaning work");
  if(cancel)m.cancel(h);SetModeBits(body->flags,infonView::streamState,infonView::parseDone);m.inputReady(body);
  check(cancel?h->outcome==worldCancelled && toString(p->pItem.get())==original:h->complete() && h->framesCreated<=frames+1 && p->pItem->value->num==7,"resume inheritance proof without restart or cancel atomically");
+}
+for(bool cancel:{false,true}){
+ std::string left=cancel?"cancelLeft":"pendingLeft",right=cancel?"cancelRight":"pendingRight";
+ auto d=parse("{#"+left+"=7 #"+right+"=7}");check(a.normalize(d)->complete(),"register distinct compatible streaming meanings");
+ auto baseline=a.normalize(parse(left+"="+right));check(baseline->complete(),"complete compatible assertion without a parser wait");
+ auto body=d->pItem->value->items.head->pItem->funcArgs;m.prepareInput(body);
+ auto p=parse(left+"="+right);auto before=toString(p->pItem.get());auto h=a.normalize(p);auto frames=h->framesCreated,edges=h->relationshipsRead;
+ check(h->outcome==worldWaiting && h->waitingInput==body && !h->publications,"resolved RHS waits for the required target meaning");
+ auto unrelated=parse("9");m.inputReady(unrelated->pItem);check(h->outcome==worldWaiting && h->framesCreated==frames && h->relationshipsRead==edges,"unrelated arrival leaves the suspended assertion alone");
+ if(cancel)m.cancel(h);SetModeBits(body->flags,infonView::streamState,infonView::parseDone);m.inputReady(body);
+ check(cancel?h->outcome==worldCancelled && !h->publications && toString(p->pItem.get())==before:h->complete() && p->pItem->value->num==7 && h->framesCreated==baseline->framesCreated && h->relationshipsRead==baseline->relationshipsRead,"continue the saved assertion with the same work as an uninterrupted request or cancel atomically");
 }
 {
  auto world=parse("{T 1 2}");a.world=world->pItem;m.prepareInput(world->pItem);auto p=parse("%W.end");auto h=a.normalize(p);check(h->outcome==worldWaiting && !h->publications,"external boundary waits for source parser");
@@ -7090,7 +7127,7 @@ for(auto s:{"foot1=foot","{1|2}","{{cat|cat1,cat2}}.dogs","{{!foot|1,2}}.feet"})
 }
 {
  auto d=parse("{#base=1 #left=base #right=base}");check(a.normalize(d)->complete(),"register distinct bound siblings");
- auto p=parse("{left|right}");auto before=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before,"a listSpec cannot identify bound sibling types");
+ auto p=parse("{left|right}");auto h=a.normalize(p);check(h->complete() && p->pItem->value->items.head->pItem->value->num==1,"an asserted listSpec combines compatible checked sibling meanings");
 }
 {
  auto p=parse("herd:{foot|foot1,foot2}");auto h=a.normalize(p);check(!h->failed() && p->pItem->type && p->pItem->type->normalType()=="herd" && p->pItem->addedTypes.empty(),"an explicit container name is not replaced by an inferred plural");
