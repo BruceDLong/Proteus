@@ -214,6 +214,7 @@ struct ThreadedStreamInput: inherits=Threads {
 }
 
 struct InfonStream{ // InfonConnector -> Parse -> Extract -> Normalize
+    me bool: parseOnly <- false
     me string: name
     our InfonConnector: source
     me uint64: originID
@@ -265,12 +266,15 @@ struct InfonStream{ // InfonConnector -> Parse -> Extract -> Normalize
 
     void: start(me string: Name) <- {
         name <- Name
-        normerThread.init(parentAgent, toFill)
+        if(parseOnly){parentAgent!.worldManager.prepareInput(toFill)}
+        else{normerThread.init(parentAgent, toFill)}
         parser!.deferPrefix <- !source.allowStreamingNormalize
         parserThread.initAndStart(parser, source.inputBuf, toFill, name+"_PnE")
-        normerThread.parseBeforeNormalize <- parserThread
-        normerThread.parseFirst <- !source.allowStreamingNormalize
-        normerThread.start(name+"_NRM")
+        if(!parseOnly){
+            normerThread.parseBeforeNormalize <- parserThread
+            normerThread.parseFirst <- !source.allowStreamingNormalize
+            normerThread.start(name+"_NRM")
+        }
         inputThread.source <- source
         inputThread.start(name+"_IN")
     }
@@ -280,7 +284,7 @@ struct InfonStream{ // InfonConnector -> Parse -> Extract -> Normalize
             if(completionWaited){return()}
             inputThread.waitForExit()
             parserThread.waitForExit()
-            normerThread.waitForExit()
+            if(!parseOnly){normerThread.waitForExit()}
             completionWaited <- true
         }
     }
@@ -295,7 +299,7 @@ struct InfonStream{ // InfonConnector -> Parse -> Extract -> Normalize
     void: requestFinish() <- {
         if(source!=NULL){
             source.shutdownRequested <- true
-            normerThread.cancel()
+            if(!parseOnly){normerThread.cancel()}
             closeInput()
         }
     }
@@ -304,7 +308,29 @@ struct InfonStream{ // InfonConnector -> Parse -> Extract -> Normalize
 // Shared stream lifecycle.  A non-NULL return means that the core accepted and
 // started the request.  Parsing and normalization can still report errors
 // asynchronously through the connector callbacks.
+// Connection policy may block. The loader owns this startup worker so graph
+// callbacks only enqueue a read; shutdown joins it before releasing the host.
+struct ThreadedStreamOpen: inherits=Threads {
+    their InfonStreamLoader: loader
+    our infonView: target
+    me string: spec
+    me uint64: parentOrigin
+    void: run() <- <%{
+        struct Starting {
+            InfonStreamLoader* loader;
+            ~Starting(){std::lock_guard<std::mutex> lock(loader->connMgrMtx);--loader->connectionsStarting;}
+        } starting{loader};
+        try {
+            if(!loader->startConnection(target,spec,parentOrigin,true))
+                loader->agent->worldManager.failInput(target,"Could not insert stream: "+spec);
+        } catch(const std::exception& error) {
+            loader->agent->worldManager.failInput(target,"Could not insert stream: "+spec+": "+error.what());
+        }
+    }%>
+}
+
 struct InfonStreamLoader{
+    me List<our ThreadedStreamOpen>: pendingConnections
     their Agent: agent
     their ProteusCore: core
     me int: numFilesLoaded <- 0
@@ -368,8 +394,24 @@ struct InfonStreamLoader{
         return(canonicalFileSpec(specString))
     }
 
+    // A parsed dependency belongs to its caller's normalization transaction.
+    // It creates no separate Agent session or normalizer thread.
+    me bool: requestParsedInput(our infonView: target, me string: spec, me uint64: parentOrigin) <- <%{
+        auto job=std::make_shared<ThreadedStreamOpen>();
+        job->loader=this;job->target=target;job->spec=spec;job->parentOrigin=parentOrigin;
+        std::lock_guard<std::mutex> lock(connMgrMtx);
+        if(stopping) return false;
+        ++connectionsStarting;pendingConnections.push_back(job);
+        try {job->start("InsertConnection");}
+        catch(...) {--connectionsStarting;pendingConnections.pop_back();throw;}
+        return true;
+    }%>
     our InfonStream: startNewConnection(our infonView: toFill,
-            me string: specString, me uint64: parentOriginID <- 0) <- <%{
+            me string: specString, me uint64: parentOriginID <- 0) <- {
+        return(startConnection(toFill, specString, parentOriginID, false))
+    }
+    our InfonStream: startConnection(our infonView: toFill,
+            me string: specString, me uint64: parentOriginID, me bool: parseOnly) <- <%{
         auto parent=parentDirForOrigin(parentOriginID ? parentOriginID : (toFill ? toFill->originID : 0));
         auto resolved=resolveStreamSpec(specString,parent);
         int number;
@@ -388,7 +430,7 @@ struct InfonStreamLoader{
         if(!connector) return {};
         uint64_t origin;
         {std::lock_guard<std::mutex> lock(connMgrMtx);origin=++lastOriginID;}
-        auto stream=std::make_shared<InfonStream>();
+        auto stream=std::make_shared<InfonStream>();stream->parseOnly=parseOnly;
         auto parser=std::make_shared<ProteusParser>(core,true,origin);
         stream->init(connector,agent,parser,toFill,origin);
         {std::lock_guard<std::mutex> lock(connMgrMtx);infonSourceRecords[origin]=stream;}
@@ -490,5 +532,7 @@ struct InfonStreamLoader{
         withEach stream in streamsToStop{
             if(stream!=NULL){stream.waitForCompletion()}
         }
+        withEach job in pendingConnections{job.waitForExit()}
+        pendingConnections.clear()
     }
 }

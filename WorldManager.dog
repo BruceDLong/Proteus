@@ -577,6 +577,7 @@ struct WorldPath {
 }
 
 struct WorldFrame {
+    our WorldFrame: insertedFrame
     me bool: noMatch <- false
     our POV: associationAnchor
     our POV: associationProjectionEdge
@@ -663,6 +664,7 @@ struct WorldStatus {
     me string: detail
 }
 struct WorldPublication {
+    me bool: parsedInput <- false
     our POV: target
     our WorldFrame: frame
     our infonState: newList
@@ -1675,13 +1677,18 @@ struct WorldPOVGraph {
 
     void: finishExpression(our WorldFrame: frame) <- {
         if(memberSequence(frame)){
+            // An invalid existing span extent is not an inferred item count.
+            // Preserve it for correspondence rather than replacing it with a count.
+            if(frame!.facts.hasSize and (frame!.facts.size<0 or frame!.facts.size.getDenominator()!=1)){
+                frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "List extent needs nonnegative integral correspondence"; return()
+            }
             if(frame!.facts.order==uUnordered and frame!.facts.hasSize and frame!.facts.size<FlexNum(frame!.operandsRead)){
                 frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "Unordered members exceed the given extent"; return()
             }
             if(frame!.facts.openTail and (frame!.facts.sequence==NULL or !frame!.facts.sequence!.hasSpans) and frame!.facts.hasSize and frame!.facts.size==FlexNum(frame!.operandsRead)){
                 frame!.facts.openTail <- false
             }
-            if(!openLayout(frame!.facts) and frame!.facts.order!=uUnordered and !frame!.facts.hasSize and !frame!.facts.explicitSize){
+            if(!openLayout(frame!.facts) and frame!.facts.order!=uUnordered and !frame!.facts.explicitSize){
                 frame!.facts.hasSize <- true; frame!.facts.size <- frame!.operandsRead
             }
             frame!.facts.dischargeListSpec <- frame!.facts.representable and !openLayout(frame!.facts)
@@ -2268,6 +2275,7 @@ struct WorldPOVGraph {
                 if(pending.isEmpty()){break()}
             }
             me WorldPublication: job <- pending.popLast()
+            job.parsedInput <- job.parsedInput or job.frame!.insertedFrame!=NULL
             if(job.frame!.facts.outcome!=worldReady or job.frame!.facts.pendingChecks!=NULL){continue()}
             if(seen.containsKey(job.target!.pItem)){
                 if(seen.at(job.target!.pItem)!==job.frame){
@@ -2340,9 +2348,12 @@ struct WorldPOVGraph {
                         item!.infSize!.overlayType <- NUM; item!.infSize!.evalMode <- emUnknown
                         item!.value!.evalMode <- emUnknown; item!.value!.overlayType <- tUnknown
                         item!.orderMode <- member!.node!.pItem!.orderMode
+                        // A declaration in imported input is attached as that
+                        // same declaration, never copied as a value assertion.
+                        if(job.parsedInput and member!.facts.declaration!=NULL){item <- member!.node!.pItem}
                         targetMember <- destination!.items.append(item, occurrence.embedded, 933); targetMember!.pParent <- job.target
                     }
-                    me WorldPublication: child; child.target <- targetMember; child.frame <- member; pending.append(child)
+                    me WorldPublication: child; child.target <- targetMember; child.frame <- member; child.parsedInput <- job.parsedInput; pending.append(child)
                     if(job.reorderFields){job.fieldOrder.append(targetMember)}
                     else if(existing){targetMember <- targetMember!.next}
                     occurrence <- members.nextMember(false)
@@ -2454,6 +2465,15 @@ struct WorldPOVGraph {
         our WorldFrame: frame <- job.frame
         our infonView: item <- job.target!.pItem
         me WorldScalar: facts <- frame!.facts
+        if(frame!.insertedFrame!=NULL){
+            item!.itmMode <- mItem
+            item!.originID <- frame!.insertedFrame!.node!.pItem!.originID
+            if(facts.declaration!=NULL){
+                item!.itmMode <- mWordDefn
+                item!.definedWord <- frame!.insertedFrame!.node!.pItem!.definedWord
+                item!.funcArgs <- frame!.insertedFrame!.node!.pItem!.funcArgs
+            }
+        }
         if(frame!.inputEdge!=NULL){item!.funcArgs <- NULL; item!.hasInnrOutr <- false}
         if(frame!.argumentEdge!=NULL){item!.funcArgs <- NULL; item!.argPos <- apNoArgs}
         if(frame!.path!=NULL){
@@ -2611,6 +2631,7 @@ struct WorldPOVGraph {
 }
 
 struct WorldManager {
+    their ProteusCore: inputHost
     our WorldControl: control
     void: INIT() <- {Allocate(control)}
     me WorldPOVGraph: graph
@@ -4971,7 +4992,36 @@ struct WorldManager {
         request!.ready.append(frame)
     }
 
+    // %INSERT supplies a parser-owned RHS. Its declarations and writes use
+    // this request's ordinary staging; the input stream never normalizes alone.
+    void: insertStep(our WorldRequest: request, our WorldFrame: frame) <- {
+        our infonView: item <- frame!.node!.pItem
+        if(item!.graphParseError!=""){
+            frame!.facts.outcome <- worldError; frame!.facts.detail <- item!.graphParseError; stopFrame(request, frame); return()
+        }
+        if(frame!.insertedFrame==NULL){
+            if(item!.includeInfn==NULL){
+                if(inputHost==NULL or inputHost!.streamLoader==NULL){
+                    frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Stream insertion needs an input host"; stopFrame(request, frame); return()
+                }
+                Allocate(item!.includeInfn); prepareInput(item!.includeInfn)
+                if(!inputHost!.streamLoader!.requestParsedInput(item!.includeInfn, item!.includeSpec, inputHost!.streamSourceOriginID(frame!.node))){
+                    failInput(item!.includeInfn, "Could not insert stream: "+item!.includeSpec)
+                }
+            }
+            our POV:: input{942}; input!.pItem <- item!.includeInfn
+            frame!.insertedFrame <- makeFrame(request, input)
+            frame!.insertedFrame!.navigation <- frame!.navigation
+            request!.ready.append(frame); request!.ready.append(frame!.insertedFrame); return()
+        }
+        frame!.facts <- frame!.insertedFrame!.facts; frame!.retainedWork <- frame!.insertedFrame!.retainedWork
+        graph.adoptListRequirements(frame, frame!.insertedFrame)
+        frame!.initialized <- true; frame!.finished <- true
+        if(frame!.facts.outcome!=worldReady){stopFrame(request, frame)}
+    }
+
     void: step(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(!frame!.initialized and frame!.node!.pItem!.itmMode==mIncludeStream and frame!.node!.pItem!.streamState==parseDone){insertStep(request, frame); return()}
         if(frame!.unitSelection!=NULL){selectUnit(request, frame); return()}
         if(frame!.fields!=NULL){mergeFields(request, frame); return()}
         if(!frame!.initialized and (frame!.path!=NULL or frame!.node!.pItem!.viewMode==vmCursor or frame!.node!.pItem!.partRef!=NULL or !frame!.node!.pItem!.parts.isEmpty())){pathStep(request, frame); return()}

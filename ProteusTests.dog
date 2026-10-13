@@ -48,6 +48,7 @@ TestsToRun = `
     unit/worldManager/externalAssociations
     unit/worldManager/lexicalText
     unit/worldManager/deferredTemplates
+    unit/worldManager/streamInsertion
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -9816,5 +9817,67 @@ for(const std::string input:{"{5|...}={6}","{...}={5|...}={6}"}){
     check(handle->outcome==worldRejected && !handle->publications && toString(root->pItem.get())==before,"adoption never discards an existing template constraint");
 }
 core.deInit();std::cout<<"DEFERRED_TEMPLATES: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_streamInsertion(me string: testName) <- {
+        if(!worldManagerStreamInsertionChecks()){FAIL("Stream insertion checks failed")}
+    }
+    me bool: worldManagerStreamInsertionChecks() <- <%{
+InsertTestCore core;core.init("",false);auto& agent=*core.agent;auto& manager=agent.worldManager;
+int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& message){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<message<<"\n";}};
+auto parse=[&](const std::string& text){auto parsed=manager.parse(text);check(parsed.target && parsed.error.empty(),"parse "+text);return parsed.target;};
+core.scripts["memory:///value"]="5";
+{
+ auto target=parse("{%INSERT memory:///value\n}");auto handle=agent.normalize(target);core.streamLoader->waitForAllStreams();
+ check(handle->complete() && toString(target->pItem.get())=="{5}","inserted scalar supplies the original request");
+ check(core.starts==1 && agent.worldSessions.size()==1,"an inserted input creates no independent normalization session");
+ check(agent.normalize(target)->framesCreated==0 && core.starts==1,"completed insertion does not reconnect");
+}
+for(const std::string size:{"*1+","*2+","*_+"}){
+ auto target=parse(size+"{%INSERT memory:///value\n}");auto handle=agent.normalize(target);core.streamLoader->waitForAllStreams();
+ if(size=="*1+")check(handle->complete() && target->pItem->infSize->num==1,"matching explicit extent completes after input arrival");
+ else if(size=="*2+")check(!handle->complete() && target->pItem->infSize->num==2,"input arrival preserves a different given extent");
+ else check(handle->outcome==worldPartial && getModeBits(target->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown,"input arrival preserves an explicitly unknown extent");
+}
+core.scripts["memory:///folder/root"]="{%INSERT /child\n supplied}";
+core.scripts["memory:///folder/child"]="{#supplied=9}";
+{
+ auto target=parse("{%INSERT memory:///folder/root\n}");auto handle=agent.normalize(target);core.streamLoader->waitForAllStreams();
+ check(handle->complete(),"nested relative insertion completes: "+handle->detail);
+ check(core.opened.count("memory:///folder/child")==1 && handle->complete(),"nested declarations feed following siblings in the same transaction");
+ auto value=parse("supplied");check(agent.normalize(value)->complete() && value->pItem->value->num==9,"completed insertion publishes its declarations");
+}
+core.scripts["memory:///staged"]="{#uncommitted=19}";
+{
+ auto target=parse("{%INSERT memory:///staged\n 1=2}");auto before=toString(target->pItem.get());auto handle=agent.normalize(target);core.streamLoader->waitForAllStreams();
+ check(handle->outcome==worldRejected && !handle->publications && toString(target->pItem.get())==before,"failed outer work does not publish inserted values");
+ auto value=parse("uncommitted");check(agent.normalize(value)->outcome==worldUnsupported,"failed outer work does not publish inserted declarations");
+}
+for(const std::string spec:{"missing:///child","throw:///child","memory:///syntax"}){
+ core.scripts["memory:///syntax"]="*+";
+ auto target=parse("{%INSERT "+spec+"\n}");auto before=toString(target->pItem.get());auto handle=agent.normalize(target);core.streamLoader->waitForAllStreams();
+ check(handle->outcome==worldError && !handle->publications && toString(target->pItem.get())==before,"connection or parse failure propagates without publication: "+spec);
+ check(core.streamLoader->connectionsStarting==0,"failed start releases the shutdown barrier");
+}
+{
+ auto target=parse("{%INSERT memory:///live\n}");auto before=toString(target->pItem.get());auto handle=agent.normalize(target);
+ std::shared_ptr<InsertTestConnector> connector;
+ for(int i=0;i<200 && !connector;++i){
+  {std::lock_guard<std::mutex> lock(core.observedMutex);auto found=core.opened.find("memory:///live");if(found!=core.opened.end())connector=found->second;}
+  if(!connector)std::this_thread::sleep_for(std::chrono::milliseconds(5));
+ }
+ check(bool(connector) && handle->status().outcome==worldWaiting && handle->waitingInput==target->pItem->value->items.head->pItem->includeInfn,"a live insertion waits at its exact parser-owned child");
+ auto frames=handle->framesCreated,edges=handle->relationshipsRead;
+ auto unrelated=parse("3");manager.inputReady(unrelated->pItem);
+ check(handle->framesCreated==frames && handle->relationshipsRead==edges && handle->outcome==worldWaiting,"unrelated input does not restart insertion work");
+ if(connector){handle->cancel();connector->inputBuf.putStr("8");connector->inputBuf.close();core.streamLoader->waitForAllStreams();}
+ check(handle->outcome==worldCancelled && !handle->publications && toString(target->pItem.get())==before,"cancelled insertion ignores later parser arrival");
+}
+check(agent.worldSessions.size()==1,"parser-only insertions leave session ownership with Agent's caller");
+core.deInit();check(agent.worldSessions.empty() && core.streamLoader->pendingConnections.empty(),"shutdown joins startup workers and closes sessions");
+std::cout<<"STREAM_INSERTION: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }

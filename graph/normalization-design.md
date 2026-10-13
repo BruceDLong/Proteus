@@ -1240,3 +1240,7 @@ The existing `english-text` primitive maps a settled finite string to an ordered
 ### Deferred future member templates (D050)
 
 An empty unbounded named list can acquire its declared temporal/member shape without evaluating a nonexistent member. Keep its future listSpec as a deferred frame with header evidence; demand the body through the existing prerequisite continuation when a member is requested. A bare sole-tail list can adopt another sole-tail list's shape and future requirements directly. Publication preserves that template on the target, so later finite goals still enforce it without retaining a redundant identity RHS. Existing bounds, members and constraints keep ordinary correspondence. The cube shape now resolves; its historical printer spelling remains a separate difference.
+
+### Parser-only stream insertion (D051)
+
+An insertion node caches one parser-owned child. WorldManager requests it through the existing loader and continues its child frame at parser readiness; Agent retains session ownership. Imported declarations and effects share the outer transaction, while source opening occurs on a loader-owned worker outside the graph lock. Publication attaches declaration identities and recomputes only inferred closed-list extents. Given extents and ordinary declaration-copy restrictions remain. General symbolic size expressions, streamed-prefix publication and reply effects are separate requirements.
