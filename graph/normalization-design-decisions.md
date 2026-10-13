@@ -854,3 +854,12 @@ The index is a candidate lookup, not an inheritance theorem. Duplicate fields or
 **Streaming and cost.** Coordinate and endpoint waits continue at their exact dependencies. The offset lowering adds constant structure; traversal costs the visited represented spans and selected output, not the magnitude of a symbolic prefix. Cancellation, unknown endpoints and failed ownership checks publish nothing. No backwards scan, planner, path cost, persistent parent-progress cache or goal restart is introduced.
 
 **Layout precondition.** A supplied representation of a named list is not proof of its declared logical member layout. For example, selecting the second minute from an hour stored as seconds must not return the second stored second. If the named meaning supplies an unapplied listSpec, traversal reports that template correspondence is still required; an unfinished meaning waits at that meaning. This guard applies to positive and negative coordinates and spans. It neither converts units nor matches particular type names.
+
+
+## D03W Numeric domains as correspondence predicates (2026-10-12)
+
+**Decision.** Evaluate a scalar expression through its ordinary frame, then apply its outer predicate negation. Numeric predicate comparison asks whether the supplied value domain is contained, disjoint or unresolved relative to the required domain. Domain membership does not equate representation endpoints; strict identity retains its separate endpoint checks. Complement only a proved match or nonmatch. A partial overlap never permits skipping an earlier candidate.
+
+**Selection.** A proved negative predicate supplies the selected candidate, not the exclusion itself. Positive range selection keeps the checked target endpoint and the candidate's displayed form; it does not mutate or identify the source occurrence. Dot paths and intersections obtain these facts at the same correspondence boundary. The existing matcher, scalar queue and interval arithmetic supply the operation; no range-specific search loop is added.
+
+**Cost and streaming.** A simple first-match search inspects each visited candidate once and retains its predicate/candidate frames on parser waits. The finite search oracle, rational endpoints, source occurrence identity, cancellation and 16/64/256-member work checks validate that path. General ambiguous patterns and later semantic link arrival remain separate contracts.

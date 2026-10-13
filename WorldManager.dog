@@ -950,7 +950,7 @@ struct WorldPOVGraph {
         }
         if(facts.hasSize){facts.size.normalize()}
         if(expression){
-            if(item!.invertMatch or !scalarExpression(item!.value)){
+            if(!scalarExpression(item!.value)){
                 facts.outcome <- worldUnsupported; facts.detail <- "Non-scalar expression template"
             }
             return(facts)
@@ -1042,6 +1042,9 @@ struct WorldPOVGraph {
         return(facts.outcome==worldReady and facts.pendingChecks==NULL and !facts.hasValue and
                !facts.hasSize and !facts.hasRange and (facts.overlay>=0 or (facts.nominal!=NULL)))
     }
+    me bool: rangePredicate(me WorldScalar: facts) <- {
+        return(facts.overlay==NUM and (facts.hasRange or (!facts.hasValue and facts.hasSize)))
+    }
     me WorldScalar: matchPosition(me WorldScalar: predicate, me WorldScalar: candidate, our POV: edge, me bool: proof <- false) <- {
         if(predicate.outcome!=worldReady){return(predicate)}
         if(candidate.outcome!=worldReady){return(candidate)}
@@ -1050,6 +1053,20 @@ struct WorldPOVGraph {
         }
         if(proof and (candidate.negative or edge!.looseType())){
             predicate.outcome <- worldUnsupported; predicate.detail <- "Repeated predicate needs additional comparison semantics"; return(predicate)
+        }
+        // Selection tests a value domain, independently of its representation's
+        // endpoint. A proved exclusion supplies the candidate, not its negation.
+        if(!proof and !edge!.looseType() and !candidate.negative and
+           (predicate.negative or rangePredicate(predicate))){
+            me WorldOutcome: compared <- compare(predicate, candidate)
+            if(predicate.negative){
+                if(compared==worldReady){compared <- worldRejected}
+                else if(compared==worldRejected){compared <- worldReady}
+            }
+            me WorldScalar: result <- candidate
+            result.outcome <- compared; result.detail <- "Correspondence predicate comparison"
+            if(!predicate.negative and predicate.hasSize){result.hasSize <- true; result.size <- predicate.size}
+            return(result)
         }
         // A repeated predicate requires proof, not a compatible substitution.
         // A type predicate needs only the candidate's type. In particular,
@@ -1376,6 +1393,8 @@ struct WorldPOVGraph {
             }
             frame!.facts <- merge(frame!.facts, expression, frame!.node!.pItem!.value!.items.head)
         }
+        // Negation applies to the computed predicate, not to its operands.
+        frame!.facts.negative <- frame!.node!.pItem!.invertMatch
     }
 
     // Compare the represented text, which can be a prefix borrowed from a
@@ -1396,15 +1415,16 @@ struct WorldPOVGraph {
         me WorldOutcome: nominal <- compareNominal(required.nominal, actual.nominal)
         if(nominal==worldRejected){return(nominal)}
         if(required.overlay>=0 and actual.overlay>=0 and required.overlay!=actual.overlay){return(worldRejected)}
+        if(rangePredicate(required)){
+            if(actual.overlay!=NUM){return(worldPartial)}
+            me WorldBounds: expected <- required.bounds(); me WorldBounds: supplied <- actual.bounds()
+            if(expected.empty() or supplied.empty() or expected.intersect(supplied).empty()){return(worldRejected)}
+            if(expected.contains(supplied)){return(nominal)}
+            return(worldPartial)
+        }
         if(required.hasSize and actual.hasSize and required.size!=actual.size){return(worldRejected)}
         me bool: covered <- nominal==worldReady and (required.overlay<0 or actual.overlay>=0) and
             (!required.hasSize or actual.hasSize) and (!required.hasValue or actual.hasValue)
-        if(required.hasRange){
-            me WorldBounds: expected <- required.bounds(); me WorldBounds: supplied <- actual.bounds()
-            me WorldBounds: overlap <- expected.intersect(supplied)
-            if(overlap.empty()){return(worldRejected)}
-            if(!expected.contains(supplied)){return(worldPartial)}
-        }
         if(required.hasValue and actual.hasValue){
             if(required.overlay==LST){
                 if(openLayout(required) or openLayout(actual)){return(worldPartial)}
@@ -2675,6 +2695,12 @@ struct WorldManager {
             frame!.finished <- true; return()
         }
         our POV: edge <- graph.memberRelationship(lookup!.query!.relation); edge!.pItem <- lookup!.result!.position!.node!.pItem
+        if(lookup!.query!.testPattern and lookup!.result!.facts!=NULL and
+           (frame!.facts.negative or graph.rangePredicate(frame!.facts))){
+            frame!.facts <- graph.matchPosition(frame!.facts, lookup!.result!.facts!.facts, edge)
+            frame!.correspondenceResult <- lookup!.result; frame!.lookup <- NULL
+            request!.ready.append(frame); return()
+        }
         frame!.sourceEdge <- edge; frame!.sourceIsOperand <- false; frame!.sourceIsListSpec <- false
         frame!.prerequisite <- lookup!.result!.facts
         if(frame!.prerequisite==NULL){frame!.prerequisite <- makeFrame(request, lookup!.result!.position!.node, lookup!.result!.position)}
