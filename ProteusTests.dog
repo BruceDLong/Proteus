@@ -39,6 +39,7 @@ TestsToRun = `
     unit/worldManager/literalLayouts
     unit/worldManager/unitViews
     unit/worldManager/inheritedTypes
+    unit/worldManager/sparseWindows
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
     unit/graphCandidateSubscriptions/onePending
@@ -6064,7 +6065,7 @@ struct GLOBAL {
             {"{_ = 3 _=4=5}","",worldRejected},
             {"{_ = 3 rot}","{3 rot}",worldPartial},
             {"{1, 2}","{1, 2}",worldPartial},
-            {"{item| 1 2}","",worldUnsupported},
+            {"{item| 1 2}","{1 2}",worldComplete},
             {"{T 1 2}","{T 1 2}",worldComplete},
         };
         for(const auto& c:cases){
@@ -6405,7 +6406,7 @@ struct GLOBAL {
             {"{_| 2 'bad'}","",worldRejected},
             {"{!5| 6 5}","",worldRejected},
             {"{{_ 7}| {1 8}}","",worldRejected},
-            {"{rot| _ _}","",worldUnsupported},
+            {"{rot| _ _}","{_ _}",worldPartial},
             {"{5| _, _}","{5| 5, 5}",worldPartial},
             {"(5| _ _)","",worldUnsupported},
             {"{(2 +_)| _ _}","",worldPartial},
@@ -6728,7 +6729,7 @@ struct GLOBAL {
             {"{1} = {...}","{1}",worldComplete},
             {"? = {1 ...}","{1 ... }",worldPartial},
             {"({1} {2 ...})","",worldUnsupported},
-            {"{rot| ...} = {1}","",worldUnsupported},
+            {"{rot| ...} = {1}","{1}",worldComplete},
             {"{...} == {1}","{1}",worldComplete},
             {"{...} = {{...}}","{{ ... }}",worldPartial}
         };
@@ -6990,7 +6991,7 @@ struct GLOBAL {
             {"{5| &{...}} = {_ ...}","{5| &{5 ... }}",worldPartial},
             {"{_ _} = {5| &{...}}","{5 5}",worldComplete},
             {"? = {5| &{...}}","{5| ...}",worldPartial},
-            {"{rot| &{...}} = {_}","",worldUnsupported}
+            {"{rot| &{...}} = {_}","{&{_}}",worldPartial}
         };
         for(const auto& c:cases){
             auto root=parse(c.input);if(!root)continue;auto before=toString(root->pItem.get());
@@ -7681,7 +7682,7 @@ struct GLOBAL {
             {"*2+{...} = {1 ...}","",worldUnsupported},
             {"{_ _} == {5| ...}","",worldUnsupported},
             {"{_ _} =: {5| ...}","",worldPartial},
-            {"{_ _} = {rot| ...}","",worldUnsupported},
+            {"{_ _} = {rot| ...}","{_ _}",worldPartial},
             {"{_ _} = {!5| ...} = {7 8}","{_ _} = {!5|  ... } = {7 8}",worldPartial},
             {"{_ _} = {7 8} = {!5| ...}","{7 8}",worldComplete},
             {"{(2 +_) _} = {5| ...}","{(2 +_) 5} = {5|  ... }",worldPartial},
@@ -9393,5 +9394,106 @@ run("{letter|'a' 'b'}","{'a' 'b'}");
  auto p=parse("{cell|1 'wrong'}");auto before=toString(p->pItem.get());auto h=a.normalize(p);check(h->outcome==worldRejected && !h->publications && toString(p->pItem.get())==before,"type disagreement is atomic");
 }
 core.deInit();std::cout<<"INHERITED_TYPES: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_sparseWindows(me string: testName) <- {
+        if(!worldManagerSparseWindowChecks()){FAIL("Sparse window checks failed")}
+    }
+    me bool: worldManagerSparseWindowChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& label){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<label<<"\n";}};
+auto parse=[&](const std::string& s){auto p=m.parse(s);check(p.target && p.error.empty(),"parse "+s);return p.target;};
+auto run=[&](const std::string& s,const std::string& expected){auto p=parse(s);auto h=a.normalize(p);check(!h->failed() && toString(p->pItem.get())==expected,s+" => "+toString(p->pItem.get())+" : "+h->detail);return std::make_pair(p,h);};
+check(a.normalize(parse("{#atom=_ #pair=*2+{atom|...}}"))->complete(),"unit declarations");
+for(int64_t size:{4LL,1000000000LL}){
+ for(int64_t index:std::vector<int64_t>{0,1,size-1}){
+  auto w=parse("{atom|&*"+std::to_string(size)+"+{atom|...} 777}");a.world=w->pItem;
+  auto span=w->pItem->value->items.head;auto marker=w->pItem->value->items.tail;auto before=toString(w->pItem.get());
+  auto q=run("[&*"+std::to_string(index)+"+{atom|...} <_>] <~ %W = 80","atom:80");
+  check(q.second->complete() && q.second->correspondencePositions<5,"sparse write work independent of virtual extent");
+  check(w->pItem->value->items.tail==marker && marker->pItem->value->num==777,"sparse split preserves concrete marker identity");
+  check(w->pItem->value->items.size()<=4,"only demanded position is exposed");
+  run("[&*"+std::to_string(index)+"+{atom|...} <_>] <~ %W","atom:80");
+  run("[&*"+std::to_string(size)+"+{atom|...} <_>] <~ %W","777");
+  auto b=toString(w->pItem.get());auto bad=parse("[&*"+std::to_string(index)+"+{atom|...} <_>] <~ %W=81");auto rejected=a.normalize(bad);
+  check(rejected->outcome==worldRejected && !rejected->publications && toString(w->pItem.get())==b,"repeated conflicting sparse write is atomic");
+ }
+}
+{
+ auto w=parse("{atom|&*4+{atom|...} 777 &*4+{atom|...} 888}");a.world=w->pItem;auto before=toString(w->pItem.get());
+ auto p=parse("[&*3+{atom|...} <&*3+{atom|...}> &*3+{atom|...} _] <~ %W={10 20 30}");auto h=a.normalize(p);
+ check(h->outcome==worldRejected && !h->publications && toString(w->pItem.get())==before,"crossing sparse-concrete-sparse conflict changes no source");
+}
+{
+ auto w=parse("{atom|&*8+{atom|...} 777}");a.world=w->pItem;
+ run("[&*2+{atom|...} <&*3+{atom|...}>] <~ %W={10 20 30}","{10 20 30}");
+ run("[&*2+{atom|...} <&*3+{atom|...}>] <~ %W","{10 20 30}");
+ run("[&*8+{atom|...} <_>] <~ %W","777");
+}
+for(bool cancel:{false,true}){
+ auto w=parse("{atom|&*8+{atom|...} 777}");a.world=w->pItem;auto before=toString(w->pItem.get());
+ auto p=parse("[&*2+{atom|...} <_>] <~ %W=80");auto rhs=p->pItem->wrkList[0]->pItem;m.prepareInput(rhs);auto h=a.normalize(p);auto positions=h->correspondencePositions;
+ check(h->outcome==worldWaiting && h->waitingInput==rhs && !h->publications && toString(w->pItem.get())==before,"sparse value wait publishes no split");
+ if(cancel)m.cancel(h);SetModeBits(rhs->flags,infonView::streamState,infonView::parseDone);m.inputReady(rhs);
+ check(cancel?h->outcome==worldCancelled && toString(w->pItem.get())==before:h->complete() && h->correspondencePositions==positions,"sparse continuation resumes at pending value or cancels unchanged");
+}
+
+{
+ auto w=parse("{atom|&*1000000000+{atom|...} 777}");a.world=w->pItem;auto before=toString(w->pItem.get());
+ auto p=parse("%W@[0:*1000000000+{atom|...}]");auto h=a.normalize(p);
+ check(!h->failed() && getFlagBit(p->pItem->value->flags,infonState::tailUnfinished) && p->pItem->value->listSpec && p->pItem->value->items.size()==0 && h->framesCreated<20,"billion-position read remains one typed compressed view");
+ check(toString(w->pItem.get())==before,"compressed view read does not materialize source");
+ run("%W@[0:*1000000000+{atom|...}]@[500000000]=19","atom:19");
+ run("[&*499999999+{atom|...} <_>] <~ %W","atom:19");
+ run("%W@[0:pair]@[2]=27","atom:27");run("[&*1+{atom|...} <_>] <~ %W","atom:27");
+}
+{
+ auto w=parse("{atom|&*8+{atom|...} 777}");a.world=w->pItem;auto span=w->pItem->value->items.head;
+ span->bindIdentityRegistry(a.identityRegistry.get());auto reference=span->getOrCreateImplicitItemPOV(3);
+ run("[&*3+{atom|...} <_>] <~ %W=18","atom:18");
+ auto material=reference->repetitionOccurrence->materializedPOV;
+ check(material && material->pItem->value->num==18 && a.identityRegistry->areIdentical(reference,material),"sparse write preserves a previously retained occurrence identity");
+}
+{
+ auto w=parse("{atom|&*8+{atom|...} 777}");a.world=w->pItem;
+ auto p=parse("[&*2+{atom|...} <_>] <~ %W=80");auto rhs=p->pItem->wrkList[0]->pItem;m.prepareInput(rhs);auto h=a.normalize(p);
+ run("[&*1+{atom|...} <_>] <~ %W=90","atom:90");auto after=toString(w->pItem.get());
+ SetModeBits(rhs->flags,infonView::streamState,infonView::parseDone);m.inputReady(rhs);
+ check(h->outcome==worldUnsupported && !h->publications && toString(w->pItem.get())==after,"changed source span cannot publish stale coordinates after a wait");
+}
+{
+ auto w=parse("*9223372036854775808+{atom|...}");a.world=w->pItem;auto before=toString(w->pItem.get());
+ auto p=parse("%W@[1]=7");auto h=a.normalize(p);check(h->outcome==worldUnsupported && !h->publications && toString(w->pItem.get())==before,"model edit bounds are checked without narrowing or materialization");
+ run("%W@[-1]","atom");
+}
+
+{
+ auto w=parse("{atom|&*8+{atom|...}}");a.world=w->pItem;run("%W@[0:*0+{atom|...}]","{}");
+}
+for(int count:{32,64,128}){
+ auto w=parse("{atom|&*1000000000+{atom|...} 777}");a.world=w->pItem;
+ std::string values="{";for(int n=1;n<=count;++n)values+=std::to_string(n)+" ";values+="}";
+ auto p=parse("[<&*"+std::to_string(count)+"+{atom|...}>] <~ %W="+values);auto h=a.normalize(p);
+ check(h->complete() && h->correspondencePositions<6 && h->framesCreated<30*count,"sparse batch work follows demanded values rather than represented extent");
+ check(w->pItem->value->items.size()==count+2 && w->pItem->value->items.tail->pItem->value->num==777,"batch materializes exactly demanded values and preserves the tail");
+ auto first=w->pItem->value->items.head;check(!first->pItem->type && first->pItem->addedTypes.size()==1,"supplied span values retain inherited unit evidence without renaming");
+ std::cout<<"SPARSE_BATCH: "<<count<<" edits, "<<h->framesCreated<<" frames, "<<h->correspondencePositions<<" structural visits\n";
+}
+
+{
+ auto p=parse("{unknownType|1 2}");auto h=a.normalize(p);
+ check(h->complete() && !p->pItem->value->listSpec && !p->pItem->value->items.head->pItem->type && p->pItem->value->items.head->pItem->addedTypes.size()==1,"opaque listSpec qualifies supplied values without requiring a definition");
+}
+{
+ auto p=parse("{atom| &*8+{atom|...}}");a.normalize(p);
+ check(!p->pItem->value->listSpec && p->pItem->value->items.head->pItem->value->listSpec,"redundant containing template discharges while sparse template remains");
+ auto again=a.normalize(p);check(!again->failed() && p->pItem->value->items.head->pItem->value->listSpec,"repeated normalization retains future sparse type evidence");
+ auto unknown=parse("*_+{atom|1}");a.normalize(unknown);check(unknown->pItem->value->listSpec!=nullptr,"explicit unknown parent extent keeps future type requirement");
+ auto uncovered=parse("{atom|&{...}}");a.normalize(uncovered);check(uncovered->pItem->value->listSpec!=nullptr,"parent requirement stays when a child cannot represent it");
+}
+core.deInit();std::cout<<"SPARSE_WINDOWS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+
     }%>
 }

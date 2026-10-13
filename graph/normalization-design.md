@@ -1185,3 +1185,9 @@ Projected leaves retain their original source occurrences. Reads preserve the so
 ## Inherited type qualifiers (2026-10-12)
 
 D041 preserves the distinction between a member's primary name and a type-only qualifier inherited from its listSpec. A previously unnamed member stores the latter in `addedTypes`; subsequent reads expose it as checked nominal evidence. Explicit primary names and value-producing named templates remain primary. Thus `{second|1 2}` can publish `{1 2}` while retaining each member's second-type evidence for later queries and writes. The printer is unchanged. The current supported representation has one inherited nominal without a primary type; general nominal conjunction remains separate work.
+
+### Demanded sparse windows (D042)
+
+Homogeneous fixed prefixes, numeric captures and suffixes can share the unit cursor across compressed runs. A selected base-unit position borrows its recipe and retains its original coordinate. A fully unknown selected window remains a counted listSpec; later selections compose through its stored source offset. Returning a partial path or unit result also transfers its list requirements.
+
+Writes first pass ordinary comparisons and then stage original source positions. Publication validates the destinations and model integer bounds, coalesces duplicate constraints, orders the demanded positions, and uses existing sparse split/expose operations with explicit virtual parent context. It materializes only demanded values. Rejection, waiting and cancellation leave the source intact; existing repetition identities survive materialization. Traversal is independent of virtual extent, with O(K log K) ordering and O(K) staged storage for K actual writes. Unproved sparse alignment and native composite-gap edits remain unsupported.
