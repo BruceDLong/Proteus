@@ -55,6 +55,7 @@ TestsToRun = `
     unit/worldManager/pieceCorrespondence
     unit/worldManager/temporalTemplates
     unit/worldManager/ancestorRequirements
+    unit/worldManager/tCursor
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
 
@@ -2463,12 +2464,24 @@ struct GLOBAL {
         check(ra->complete() && rb->complete() && a->pItem!=b->pItem,"independent targets reuse a source");
         check(a->pItem->value!=source->pItem->value && b->pItem->value!=source->pItem->value,"publication does not alias mutable payloads");
 
-        for(const std::string input:{"rot", "5 = %?"}) {
+        for(const std::string input:{"rot"}) {
             auto target=parse(input);auto before=toString(target->pItem.get());
             auto result=agent.normalizeInSession(session,target,false);
             check(result->outcome==worldUnsupported && result->publications==0,input+" explicitly unsupported: "+result->detail);
             check(toString(target->pItem.get())==before,input+" unsupported request leaves model unchanged");
         }
+        auto independent=parse("5 = %?");
+        auto independenceSource=independent->pItem->wrkList.front()->pItem;
+        auto independenceBefore=toString(independenceSource.get());
+        auto independenceResult=agent.normalizeInSession(session,independent,false);
+        check(independenceResult->complete() && independent->pItem->value->num==5 &&
+              getFlagBit(independent->pItem->flags,infonView::independentTemporalValue),
+              "scalar identity preserves the supplied independence marker");
+        check(toString(independenceSource.get())==independenceBefore,"independence source remains unchanged");
+        auto repeatedIndependence=agent.normalizeInSession(session,independent,false);
+        check(repeatedIndependence->complete() && repeatedIndependence->framesCreated==0 &&
+              getFlagBit(independent->pItem->flags,infonView::independentTemporalValue),
+              "completed scalar retains independence without replay");
         auto unresolved=parse("_ = _");
         auto partial=agent.normalizeInSession(session,unresolved,false);
         check(partial->outcome==worldPartial && !getFlagBit(unresolved->pItem->flags,infonView::isNormed),"unknown value remains partial");
@@ -7433,5 +7446,77 @@ struct GLOBAL {
   check(h->complete() && values && count==n && h->framesCreated<30*n+20 && !h->parentLookups,"whole-list propagation shares template work rather than rediscovering it for every leaf");check(!a.normalize(p)->framesCreated,"completed whole list creates no new goals");std::cout<<"ANCESTOR_WHOLE: "<<n<<" frames="<<h->framesCreated<<" edges="<<h->relationshipsRead<<"\n";
  }
  check(toString(defs->pItem.get())==source,"shared meanings are unchanged");core.deInit();std::cout<<"ANCESTOR_REQUIREMENTS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_tCursor(me string: testName) <- {
+        if(!worldManagerTCursorChecks()){FAIL("TCursor checks failed")}
+    }
+    me bool: worldManagerTCursorChecks() <- <%{
+ProteusCore core; core.init("",false); auto& a=*core.agent; auto& m=a.worldManager; int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& msg){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<msg<<"\n";}};
+auto parse=[&](const std::string& s){auto p=m.parse(s);check(p.target&&!p.error.size(),"parse "+s);return p.target;};
+auto at=[](std::shared_ptr<POV> p,int index){auto q=p->pItem->value->items.head;while(index-->0&&q)q=q->next;if(q)q->pParent=p.get();return q;};
+auto attach=[&](TCursor& c){c.attach(&m,a.startSession(),a.getLocaleBaseName(),a.world,a.identityRegistry);};
+auto field=[](std::shared_ptr<POV> p,const std::string& name){return p->pItem->fetchField(name);};
+{
+ auto p=parse("{T {x:1,y:2,z:3,material:{bad:(1=2)}} {x:_,y:_}}"); TCursor c(at(p,0));attach(c);auto storage=c.current->pItem;
+ check(c.refresh(),"initialize given state without evaluating unrelated material");
+ auto oldx=field(c.current,"x"),oldy=field(c.current,"y");auto material=field(c.current,"material")->pItem->value;
+ // These RHSs are ordinary value references, as a supplied transition rule can provide.
+ for(auto pair:{std::make_pair(field(at(p,1),"x"),oldy),std::make_pair(field(at(p,1),"y"),oldx)}){
+   auto rhs=std::make_shared<POV>(946);rhs->pItem=std::make_shared<infonView>(*pair.second->pItem);rhs->pItem->type=nullptr;pair.first->pItem->wrkList.push_back(rhs);
+ }
+ auto before=toString(p->pItem.get());check(c.goNext(),"apply both work-list contributions: "+c.status().detail);
+ check(c.current->pItem==storage&&field(c.current,"x")->pItem->value->num==2&&field(c.current,"y")->pItem->value->num==1,"permutation reads the same previous value and reuses cursor storage");
+ check(field(c.current,"z")->pItem->value->num==3&&field(c.current,"material")->pItem->value==material,"unaffected scalar and subtree payload are retained");
+ check(toString(p->pItem.get())==before,"movement does not normalize or rewrite source states");
+ auto written=c.writeBack();check(written&&written->publications>0&&!written->failed(),"explicit write-back stores the available view");auto saved=toString(at(p,1)->pItem.get());check(field(at(p,1),"x")->pParent==at(p,1).get(),"written field belongs to the stored occurrence");
+ check(c.goPrev()&&field(c.current,"x")->pItem->value->num==1,"backward step reads the saved prior value");
+ check(toString(at(p,1)->pItem.get())==saved,"written state does not change with cursor storage");check(!c.goPrev()&&c.atBoundary,"proved initial boundary");
+}
+{
+ auto d=parse("{#cursorIncrement=_=(%prev+1) #cursorKeep=_=%prev}");check(a.normalize(d)->complete(),"register a rule definition");auto definition=toString(d->pItem.get());
+ {auto p=parse("{T 1 cursorIncrement}");TCursor c(at(p,0));attach(c);check(c.refresh()&&c.goNext()&&c.current->pItem->value->num==2,"a definition supplies a computed transition");}
+ for(bool gaps:{false,true})for(bool named:{false,true})for(int n:{8,32,128}){
+   std::string text="{T 1";for(int i=1;i<n;i++)text+=(gaps&&i%2==0)?" _":(named?" cursorKeep":" (_=(%prev+1))");text+='}';auto p=parse(text);auto before=toString(p->pItem.get());TCursor c(at(p,0));attach(c);check(c.refresh(),"initialize numeric cursor");uint64_t frames=0,edges=0;bool values=true;
+   for(int i=1;i<n;i++){if(!c.goNext()){values=false;break;}values=values&&c.status().outcome==worldComplete&&c.current->pItem->value->num==(named?1:gaps?(i+1)/2+1:i+1)&&getModeBits(c.current->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown;frames+=c.request->framesCreated;edges+=c.request->relationshipsRead;}
+   check(values,"ordinary normalization computes each direct/defined transition with unknown numeric size");check(frames<12*n&&edges<12*n,"forward stepping does not replay temporal history");check(c.session->requests.size()==1,"cursor session does not retain a history of completed internal requests");check(toString(p->pItem.get())==before,"numeric source rules remain unchanged");
+   auto prior=c.request;check(c.refresh()&&c.request==prior,"refresh does not enqueue the same work again");std::cout<<"TCURSOR_CHAIN: "<<gaps<<" "<<named<<" "<<n<<" frames="<<frames<<" relationships="<<edges<<"\n";
+ }
+ check(toString(d->pItem.get())==definition,"definition is immutable across cursor uses");
+}
+for(bool header:{false,true})for(bool cancel:{false,true}){
+ auto p=parse("{T {x:1,y:2} {x:_}}");auto next=at(p,1);auto rhs=parse("4");field(next,"x")->pItem->wrkList.push_back(rhs);TCursor c(at(p,0));attach(c);check(c.refresh(),"initialize pending-step baseline");auto before=toString(c.current->pItem.get());auto original=toString(p->pItem.get());auto input=header?next->pItem:rhs->pItem;m.prepareInput(input);
+ check(!c.goNext()&&c.status().outcome==worldWaiting&&toString(c.current->pItem.get())==before,"pending header/RHS leaves the visible value intact");auto pending=c.request;auto frames=pending->framesCreated,edges=pending->relationshipsRead;
+ auto unrelated=parse("8");m.inputReady(unrelated->pItem);check(!c.goNext()&&c.request==pending&&pending->framesCreated==frames&&pending->relationshipsRead==edges,"waiting continues at its exact link without replay");
+ if(cancel)a.endSession(c.session);SetModeBits(input->flags,infonView::streamState,infonView::parseDone);m.inputReady(input);
+ if(cancel)check(!c.refresh()&&c.status().outcome==worldCancelled&&toString(c.current->pItem.get())==before,"Agent cancellation prevents publication");
+ else check(c.refresh()&&c.request==pending&&field(c.current,"x")->pItem->value->num==4&&field(c.current,"y")->pItem->value->num==2,"same request resumes and carries untouched facts");
+ check(toString(p->pItem.get())==original,"continuation leaves the source model intact");
+}
+{
+ auto p=parse("{T {x:1,y:2} {x:(4=5)}}");TCursor c(at(p,0));attach(c);check(c.refresh(),"rejection baseline");auto before=toString(c.current->pItem.get());auto source=toString(p->pItem.get());check(!c.goNext()&&c.status().outcome==worldRejected&&!c.request->publications&&toString(c.current->pItem.get())==before&&toString(p->pItem.get())==source,"ordinary conflicting constraints reject the entire step atomically");
+}
+{
+ auto p=parse("{T {location:{x:1,y:2},material:{bad:(1=2)}} {location:{x:(_=4)}}}");TCursor c(at(p,0));attach(c);check(c.refresh()&&c.goNext(),"nested contribution follows ordinary normalization");auto location=field(c.current,"location");check(location&&field(location,"x")->pItem->value->num==4&&field(location,"y")->pItem->value->num==2,"nested update retains the untouched sibling");
+}
+{
+ auto p=parse("{T {1 2 3} {(_=9) _ _}}");TCursor c(at(p,0));attach(c);auto source=toString(p->pItem.get());check(c.refresh()&&c.goNext(),"ordered correspondence carries unchanged positions");
+ check(toString(c.current->pItem.get())=="{9 2 3}"&&toString(p->pItem.get())==source,"ordered change preserves the other positions and its source");
+}
+{
+ auto p=parse("{T {x:1,y:2} ({x:(_=4)}=:{x:4})}");TCursor c(at(p,0));attach(c);check(c.refresh()&&c.goNext()&&field(c.current,"x")->pItem->value->num==4&&field(c.current,"y")->pItem->value->num==2,"partial-match qualification composes with ordinary solving and retention");
+}
+for(int scope:{0,1,2}){
+ auto p=parse(scope==0?"{T {x:1,y:2} {x:_}}":scope==1?"{T {x:1,y:2} {x:%?}}":"{T {x:1,y:2} (%?={x:9})}");TCursor c(at(p,0));attach(c);check(c.refresh()&&c.goNext(),"apply retained/independent facts");auto x=field(c.current,"x");auto y=field(c.current,"y");
+ check(x&&(scope==0?x->pItem->value->num==1:scope==1?getModeBits(x->pItem->value->flags,infonState::evalMode)==infonState::emUnknown:x->pItem->value->num==9),"unknown inherits unless the given value is independent");check(scope==2?!y:y&&y->pItem->value->num==2,"compound independence covers the whole record; field independence leaves siblings intact");
+}
+for(int n:{8,32,128}){
+ std::string subtree="{bad:(1=2)";for(int i=0;i<n;i++)subtree+=",unused"+std::to_string(i)+":(4=5)";subtree+='}';auto p=parse("{T {x:1,material:"+subtree+"} {x:(_=7)}}");TCursor c(at(p,0));attach(c);check(c.refresh()&&c.goNext(),"unused descendant work remains untouched");check(c.request->framesCreated<15&&field(c.current,"x")->pItem->value->num==7,"descendant width does not increase transition solving work");std::cout<<"TCURSOR_DESCENDANTS: "<<n<<" frames="<<c.request->framesCreated<<" relationships="<<c.request->relationshipsRead<<"\n";
+ std::string record="{";for(int i=0;i<n;i++)record+="f"+std::to_string(i)+":"+std::to_string(i)+",";record.back()='}';p=parse("{T "+record+" {f0:(_=9)}}");TCursor wide(at(p,0));attach(wide);check(wide.refresh()&&wide.goNext(),"retain a wider current record");check(wide.current->pItem->value->items.size()==n&&wide.request->framesCreated<2*n+12,"shared field correspondence is linear in the inspected level");std::cout<<"TCURSOR_WIDTH: "<<n<<" frames="<<wide.request->framesCreated<<" relationships="<<wide.request->relationshipsRead<<"\n";
+}
+core.deInit();std::cout<<"TCURSOR: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }
