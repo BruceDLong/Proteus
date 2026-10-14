@@ -7517,6 +7517,47 @@ for(int n:{8,32,128}){
  std::string subtree="{bad:(1=2)";for(int i=0;i<n;i++)subtree+=",unused"+std::to_string(i)+":(4=5)";subtree+='}';auto p=parse("{T {x:1,material:"+subtree+"} {x:(_=7)}}");TCursor c(at(p,0));attach(c);check(c.refresh()&&c.goNext(),"unused descendant work remains untouched");check(c.request->framesCreated<15&&field(c.current,"x")->pItem->value->num==7,"descendant width does not increase transition solving work");std::cout<<"TCURSOR_DESCENDANTS: "<<n<<" frames="<<c.request->framesCreated<<" relationships="<<c.request->relationshipsRead<<"\n";
  std::string record="{";for(int i=0;i<n;i++)record+="f"+std::to_string(i)+":"+std::to_string(i)+",";record.back()='}';p=parse("{T "+record+" {f0:(_=9)}}");TCursor wide(at(p,0));attach(wide);check(wide.refresh()&&wide.goNext(),"retain a wider current record");check(wide.current->pItem->value->items.size()==n&&wide.request->framesCreated<2*n+12,"shared field correspondence is linear in the inspected level");std::cout<<"TCURSOR_WIDTH: "<<n<<" frames="<<wide.request->framesCreated<<" relationships="<<wide.request->relationshipsRead<<"\n";
 }
+{
+ auto d=parse("{#cursorPaint={tone} #cursorHot=cursorPaint:{tone:7} #cursorInk=cursorPaint #cursorPlain=cursorPaint:{tone:2} #cursorSurface={cursorPaint} #cursorPiece={cursorInk,cursorPlain,*2+{cursorSurface| {%.cursorPlain} {%.cursorInk}}} #cursorState={thing,parts,metadata} #cursorBase={child:{x:5,y:_}} #cursorDerived=cursorBase:{child:{x:_,y:6}}}");
+ check(a.normalize(d)->complete(),"register lazy shape and scoped field definitions");auto definitions=toString(d->pItem.get());
+ auto materialize=[&](std::shared_ptr<POV> source){
+   auto target=std::make_shared<POV>(950);target->pItem=std::make_shared<infonView>();
+   auto h=m.materialize(a.startSession(),source,target,a.getLocaleBaseName(),a.world,a.identityRegistry,true);
+   check(h->publications>0&&!h->failed(),"materialize supplied field: "+h->detail);
+   target->worldContext=m.graph.occurrencePath(source);return target;
+ };
+ for(int n:{8,32,128}){
+   std::string name="cursorSolved"+std::to_string(n),metadata="{bad:(1=2)";
+   for(int i=0;i<n;i++)metadata+=",unused"+std::to_string(i)+":(4=5)";metadata+='}';
+   auto definition=parse("{#"+name+"=cursorState:{parts:*2+{cursorPiece:{cursorInk=cursorHot} cursorPiece:{cursorInk=cursorPaint:{tone:9}}},metadata:"+metadata+"}}");
+   check(a.normalize(definition)->complete(),"register a state with undemanded metadata");auto definitionBefore=toString(definition->pItem.get());
+   auto p=parse("{T "+name+":{thing:{z:3.5}} "+name+":{thing:{z:_}}}");auto before=toString(p->pItem.get());TCursor c(at(p,0));attach(c);auto storage=c.current->pItem;
+   bool initialized=c.refresh();check(initialized,"initialize inherited state shape: "+c.status().detail);if(!initialized)continue;
+   auto unused=field(c.current,"metadata");check(unused&&field(c.current,"parts"),"definition contributes deferred fields");
+   check(c.request->framesCreated<30,"unused definition descendants do not increase initialization work");
+   std::cout<<"TCURSOR_DEFINITION: "<<n<<" frames="<<c.request->framesCreated<<" relationships="<<c.request->relationshipsRead<<"\n";
+   auto parts=materialize(field(c.current,"parts"));int pieces=0;
+   for(auto member=parts->pItem->value->items.head;member;member=member->next){
+     auto piece=materialize(member);auto sides=materialize(piece->pItem->value->items.tail);int count=0;
+     for(auto side=sides->pItem->value->items.head;side;side=side->next){
+       auto paint=field(side,"cursorpaint");auto tone=paint?field(paint,"tone"):nullptr;
+       check(tone&&getModeBits(tone->pItem->value->flags,infonState::evalMode)==infonState::emLiteral&&tone->pItem->value->num==(count==0?2:pieces==0?7:9),"self selection uses this instance's supplied and inherited fields");++count;
+     }
+     check(count==2,"ordered repeated surface types remain distinct positions");++pieces;
+   }
+   check(pieces==2,"ordered repeated piece types are not duplicate record keys");
+   auto rejected=std::make_shared<POV>(950);rejected->pItem=std::make_shared<infonView>();
+   auto h=m.materialize(a.startSession(),unused,rejected,a.getLocaleBaseName(),a.world,a.identityRegistry,true);
+   check(h->outcome==worldRejected&&!h->publications,"explicitly demanding contradictory metadata rejects atomically");
+   check(c.goNext()&&c.current->pItem==storage&&field(field(c.current,"thing"),"z")->pItem->value->num==FlexNum(3.5),"state two keeps an unspecified coordinate in stable cursor storage");
+   check(toString(p->pItem.get())==before&&toString(definition->pItem.get())==definitionBefore,"materialization and stepping preserve model definitions and source states");
+ }
+ auto refined=parse("cursorDerived:{child:{x:_,y:_}}");auto h=a.normalize(refined);auto child=field(refined,"child");
+ check(!h->failed()&&child&&field(child,"x")->pItem->value->num==5&&field(child,"y")->pItem->value->num==6,"inherited composite constraints remain active when demanded");
+ auto conflict=parse("cursorDerived:{child:{x:4,y:_}}");auto before=toString(conflict->pItem.get());h=a.normalize(conflict);
+ check(h->outcome==worldRejected&&!h->publications&&toString(conflict->pItem.get())==before,"deferred composite definition still rejects a conflicting field");
+ check(toString(d->pItem.get())==definitions,"shared definitions stay immutable across materialized instances");
+}
 core.deInit();std::cout<<"TCURSOR: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }
