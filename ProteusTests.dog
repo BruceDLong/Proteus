@@ -7558,6 +7558,47 @@ for(int n:{8,32,128}){
  check(h->outcome==worldRejected&&!h->publications&&toString(conflict->pItem.get())==before,"deferred composite definition still rejects a conflicting field");
  check(toString(d->pItem.get())==definitions,"shared definitions stay immutable across materialized instances");
 }
+{
+ auto growth=parse("{T {x:1} {x:_,y:2}}");TCursor growing(at(growth,0));attach(growing);
+ check(growing.refresh()&&growing.goNext()&&field(growing.current,"x")->pItem->value->num==1&&field(growing.current,"y")->pItem->value->num==2,"a closed previous record does not prohibit newly supplied fields");
+ auto d=parse("{#cursorFrameMap={2 3 1} #cursorTurn={left:{value=cursorFrameMap@[%tprev.right.value]},right:{value=%tprev.left.value}}}");
+ check(a.normalize(d)->complete(),"register nested state-change definitions");auto definitions=toString(d->pItem.get());
+ for(int n:{8,32,128}){
+   std::string text="{T {left:{value:1},right:{value:2},untouched:{bad:(1=2)}}";
+   for(int i=0;i<n;++i)text+=" cursorTurn";text+='}';auto p=parse(text);auto original=toString(p->pItem.get());
+   TCursor c(at(p,0));attach(c);check(c.refresh(),"initialize nested transition sequence");auto unused=field(c.current,"untouched")->pItem->value;
+   int left=1,right=2;uint64_t frames=0;bool values=true;
+   for(int i=0;i<n;++i){int nextLeft=right%3+1;right=left;left=nextLeft;
+     if(!c.goNext()){values=false;break;}
+     values=values&&field(field(c.current,"left"),"value")->pItem->value->num==left&&field(field(c.current,"right"),"value")->pItem->value->num==right;
+     frames+=c.request->framesCreated;
+   }
+   check(values,"nested temporal references and contextual indices read one preceding snapshot");
+   check(frames<100*n&&c.session->requests.size()==1,"nested transitions have bounded work per step and no request history");
+   check(field(c.current,"untouched")->pItem->value==unused&&toString(p->pItem.get())==original,"a verb leaves unrelated structure and source states untouched");
+   std::cout<<"TCURSOR_VERBS: "<<n<<" frames="<<frames<<"\n";
+ }
+ check(toString(d->pItem.get())==definitions,"state-change definitions stay immutable");
+ auto types=parse("{#cursorPigment={shade} #cursorScarlet=cursorPigment:{shade:7} #cursorProjectionInk=cursorPigment #cursorProjectionPiece={cursorProjectionInk} #cursorProjection={colors:{cursorProjectionInk=cursorScarlet},parts:{cursorProjectionPiece:{cursorProjectionInk=%.colors.cursorProjectionInk}}} #cursorSelfIndex={index:2,answer={7 9}@[%.index]}}");
+ check(a.normalize(types)->complete(),"register contextual self-index and qualified projection");
+ auto p=parse("cursorSelfIndex");auto h=a.normalize(p);auto answer=field(p,"answer");
+ check(!h->failed()&&answer&&answer->pItem->value->num==9,"self index shares its enclosing definition occurrence");
+ auto temporal=parse("{T cursorProjection}");TCursor c(at(temporal,0));attach(c);bool initialized=c.refresh();check(initialized,"initialize a defined projection: "+c.status().detail);
+ auto materialize=[&](std::shared_ptr<POV> source){
+   auto target=std::make_shared<POV>(951);target->pItem=std::make_shared<infonView>();
+   auto h=m.materialize(a.startSession(),source,target,a.getLocaleBaseName(),a.world,a.identityRegistry,true);
+   check(h->publications>0&&!h->failed(),"repeated projection reads published nominal evidence: "+h->detail);
+   target->worldContext=m.graph.occurrencePath(source);return target;
+ };
+ if(initialized){
+ auto parts=materialize(field(c.current,"parts"));
+ if(parts->pItem->value->items.head){
+   auto piece=materialize(parts->pItem->value->items.head);auto ink=field(piece,"cursorprojectionink");
+   if(ink){auto color=materialize(ink);auto shade=field(color,"shade");check(shade&&shade->pItem->value->num==7,"qualified projected value survives repeated reads");}
+   else check(false,"projected piece keeps its color");
+ }else check(false,"projection has a member");
+ }
+}
 core.deInit();std::cout<<"TCURSOR: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }
