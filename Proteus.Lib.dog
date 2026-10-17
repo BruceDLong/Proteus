@@ -290,32 +290,41 @@ struct InfonIdentityScope {
     me Map<me uint64, our InfonIdentity>: identities
     me Map<our InfonIdentity, our InfonIdentity>: imports
     me Mutex: scopeMutex
-    our InfonIdentity: claim(me uint64: id) <- <%{
-        std::lock_guard<std::mutex> lock(scopeMutex);
-        if (!id || id>INT64_MAX) throw std::invalid_argument("identity ID must be positive int64");
-        auto& token=identities[id];
-        if(!token) {token=std::make_shared<InfonIdentity>();token->id=id;}
-        nextID=std::max(nextID,id+1);
-        return token;
-    }%>
-    our InfonIdentity: freshIdentity() <- <%{
-        std::lock_guard<std::mutex> lock(scopeMutex);
-        if(nextID>INT64_MAX) throw std::overflow_error("identity ID space exhausted");
-        auto token=std::make_shared<InfonIdentity>();token->id=nextID++;
-        identities.emplace(token->id,token);return token;
-    }%>
-    our InfonIdentity: importIdentity(our InfonIdentity: source) <- <%{
-        if(!source) return {};
-        std::lock_guard<std::mutex> lock(scopeMutex);
-        auto local=identities.find(source->id);
-        if(local!=identities.end() && local->second==source) return source;
-        auto prior=imports.find(source);
-        if(prior!=imports.end()) return prior->second;
-        if(!source->id || source->id>INT64_MAX) throw std::invalid_argument("invalid imported identity ID");
-        if(nextID>INT64_MAX) throw std::overflow_error("identity ID space exhausted");
-        auto token=std::make_shared<InfonIdentity>();token->id=nextID++;
-        identities.emplace(token->id,token);imports.emplace(source,token);return token;
-    }%>
+    our InfonIdentity: claim(me uint64: id) <- {
+        protect(scopeMutex){
+            if(id==0 or id>INT64_MAX){throwInvalidArgument("identity ID must be positive int64")}
+            if(!identities.containsKey(id)){identities.insert(id, NULL)}
+            our InfonIdentity: token <- identities.at(id)
+            if(token==NULL){
+                Allocate(token); token!.id <- id
+                identities.at(id) <- token
+            }
+            if(id>=nextID){nextID <- id+1}
+            return(token)
+        }
+    }
+    // Both callers hold scopeMutex; do not acquire the nonrecursive lock again.
+    our InfonIdentity: freshIdentityLocked() <- {
+        if(nextID>INT64_MAX){throwOverflowError("identity ID space exhausted")}
+        our InfonIdentity:: token
+        token!.id <- nextID; nextID <+- 1
+        identities.insert(token!.id, token)
+        return(token)
+    }
+    our InfonIdentity: freshIdentity() <- {
+        protect(scopeMutex){return(freshIdentityLocked())}
+    }
+    our InfonIdentity: importIdentity(our InfonIdentity: source) <- {
+        if(source==NULL){return(NULL)}
+        protect(scopeMutex){
+            if(identities.containsKey(source!.id) and identities.at(source!.id)===source){return(source)}
+            if(imports.containsKey(source)){return(imports.at(source))}
+            if(source!.id==0 or source!.id>INT64_MAX){throwInvalidArgument("invalid imported identity ID")}
+            our InfonIdentity: token <- freshIdentityLocked()
+            imports.insert(source, token)
+            return(token)
+        }
+    }
 }
 struct BoundaryReference {
     our POV: source

@@ -1819,3 +1819,58 @@ three identity operations and five stream-loading operations. No maintained
 Proteus tests or .tst fixtures changed. `git diff --check` passes. Full Proteus,
 shared-library, and Slipstream rebuilds remain deferred under D077; the isolated
 checks do not establish full engine or consumer integration.
+
+
+## D080 Convert identity scopes and use standard file open modes (2026-10-17)
+
+**Decision.** Convert `InfonIdentityScope.claim`, `freshIdentity`, and
+`importIdentity` together to ordinary CodeDog. Keep positive-int64 validation,
+identity registration, token-based independent-import remapping, null imports,
+reuse of local/imported tokens, and exhaustion exceptions. `protect(scopeMutex)`
+retains locking and release on exceptions. Both allocation paths share
+`freshIdentityLocked`; its callers already hold the nonrecursive mutex, so it
+must not acquire that mutex again. Keep the existing order of checks: reusing a
+known identity remains possible after new-ID capacity is exhausted.
+
+CodeDog exposes `throwInvalidArgument` and `throwOverflowError` through its public
+runtime API, with C++ bindings to the existing standard exception types. Preserve
+the messages and stack unwinding instead of changing these methods to return NULL
+or terminate on errors. This does not introduce general CodeDog try/catch syntax.
+The isolated compile also exposed the missing `<climits>` include required by
+CodeDog's existing `INT64_MAX` binding; its C++ runtime now includes that header.
+
+**File streams.** Add the standard mode-string overload `FileStream.open(path,
+openMode)`, with C++ support for `r`, `w`, `a`, their `+` variants, and binary `b`
+modifiers in either order. Read mode requires an existing file without requiring
+write access; write mode creates/truncates; append mode writes at the end. Invalid
+mode strings set stream failure without opening or truncating the file. Keep
+one-argument open, openNew, and openAppend behavior unchanged. The non-C++
+backends explicitly reject the new overload as unsupported while retaining their
+existing methods; this pass does not implement their incomplete file I/O APIs.
+
+Replace AssetFileConnector's native `openForReading` wrapper with the direct
+CodeDog call `dataFile.open(filePath, "r")`. Normal file-open failures continue
+through the connector's existing failure/status handling.
+
+**Validation.** Twenty ordinary-CodeDog checks pass against the extracted exact
+identity scope: claims, fresh allocation, local and independent imports, colliding
+numeric IDs from different scopes, consistent remapping, empty slots, and the
+last usable ID. A small native caller of the generated methods checks ten error
+and concurrency outcomes, including exception types/messages, unchanged state
+on validation/exhaustion failures, lock release, and four concurrent workers
+claiming/importing/allocating without duplicates or lost registrations. No native
+assertion body was added to a .dog test.
+
+Fourteen focused CodeDog tests pass (stream modes, existing stream writes,
+standard-error bindings, and library API visibility). The file program exercises
+all fifteen supported mode spellings, missing and read-only files, invalid modes,
+content preservation/truncation/append, reopening after EOF, and single evaluation
+of arguments. The exception test passed on its focused rerun after correcting a
+test-only C++ field/type name collision. Evidence: `/tmp/identity-scope-check.py`,
+`/tmp/proteus-identity-scope-check/`, `/tmp/codedog-identity-file-tests.log`, and
+`/tmp/codedog-standard-errors-test.log`.
+
+Four native blocks remain, all in InfonStreamLoader.dog: the input worker, open
+worker, requestParsedInput, and startConnection. No maintained Proteus test or
+language fixture changed. `git diff --check` passes. Full Proteus, shared-library,
+and Slipstream rebuilds and integration validation remain deferred under D077.
