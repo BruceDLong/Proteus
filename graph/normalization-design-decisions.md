@@ -1607,3 +1607,42 @@ matches all 71 compiled registrations. `ldd -r` resolves Slipstream to the rebui
 redesign library without missing dependencies or undefined symbols. GUI behavior
 was not retested. Evidence is in `/tmp/proteus-identity-parser-review/`, including
 `history.json`, the focused logs, `full.log`, `validation.json` and build logs.
+
+## D075 Simplify parser entry and permit later input (2026-10-17)
+
+**Decision.** The user does not require a migration diagnostic for the retired
+`#` indexing spelling. Parsing one infon must permit later input, including input
+from a stream; it must not require the entire buffer to be exhausted. Remove the
+trailing-input check entirely, with no replacement end-of-document validation.
+`@[...]` remains the indexing syntax, and `#` still introduces list definitions.
+
+Remove `parseDocument` and its redundant streaming `parseDone` notification.
+Its two remaining calls, `clearError` and `parseInfonView`, run directly inside
+`doParse`'s existing try block. The native call supplies the same parse context
+and notification arguments previously supplied by CodeDog's default-argument
+expansion. `doParse` retains responsibility for publishing success or failure
+and final completion.
+This supersedes D074's recommendation to retain the separate helper and its
+trailing-validation rationale. The lock, actual parse-error publication and
+exception responsibilities still apply.
+
+Replace the dedicated legacy-index test with ordinary CodeDog checks that later
+input is accepted and the parsed infon completes in both parser modes. Change
+D074's waiting-request test to use an incomplete RHS (`1 =`), an actual syntax
+error within the infon. The compiled test count remains 71. Existing .tst fixtures
+and expectations are unchanged.
+
+**Validation.** Regenerated and compiled the final sources with
+`codeDog Proteus.Lib.dog` (148.68 s) and `codeDog BuildProteusGraph.dog` (141.58 s).
+All 26 focused parsing, input-lock, identity and completion checks pass. The full
+suite reports 24 failures out of 403 tests, with every failing name and diagnostic
+identical to the prior baseline. All 16 tracked .tst fixtures retain their hashes,
+and the inventory matches all 71 compiled registrations. Removing the exported
+helper changes the library interface fingerprint. Regenerated and relinked
+Slipstream with `codeDog Slipstream.dog` (92.98 s); `ldd -r` then reports no
+missing dependencies or undefined symbols.
+GUI behavior was not retested. Final evidence is in
+`/tmp/proteus-document-syntax-cleanup/`: `build-tests.log`, `build-shared.log`,
+`parse.log`, `lifecycle.log`, `input.log`, `identity.log`, `full.log`, and
+`validation.json`, `build-slipstream.log` and `linked-library.log`. Superseded
+build logs there are not validation of this change.

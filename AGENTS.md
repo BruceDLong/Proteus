@@ -48,9 +48,10 @@ semantics remain unsupported. Stream ownership and shutdown use the new path; ge
 An unsupported result must never be replaced with output from the old solver.
 
 Keep the existing .tst language fixtures and their expectations. The 71 compiled
-checks use ordinary CodeDog: the 58 historical parser/model checks, five string
+checks use ordinary CodeDog: the 57 historical parser/model checks, five string
 behavior checks, incomplete-RHS parsing, four parser input-lock regressions,
-two identity-range checks and one parser-completion ordering check.
+two identity-range checks, one parser-completion ordering check and one
+parser-prefix check.
 D072 retires all verbatim C++ test
 bodies and the standalone drivers for the failed graph engine, including the
 later WorldManager C++ suites. Do not restore them or add native C++ assertions
