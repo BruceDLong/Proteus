@@ -1504,3 +1504,62 @@ read adapter holds Nested_Lock_Mutex over the same recursive mutex; standalone
 streaming behavior was not rerun. After deleting the failed checkout, `ldd -r`
 on Slipstream resolves the redesign shared library without missing dependencies
 or undefined symbols. No GUI runtime claim is made by this test-only cleanup.
+
+## D073 Suspend the parser lock at the actual input wait (2026-10-17)
+
+**Request.** Remove the failed fork's per-operation input wrappers while retaining
+safe streaming. The user approved a shared input-wait facility, correct lock
+ordering on wake, and explicit progress opportunities during buffered parsing.
+
+**Decision.** The parser owns a scoped `InputLock` supplied by CodeDog's C++ thread
+runtime (CodeDog commit `e3dec0e` or later). All 15 input adapters now call the ordinary buffer/iterator methods
+directly; `pauseInput` and `inputMayBlock` are removed. The one actual blocking
+buffer loop uses `waitForInput`. The buffer knows nothing about WorldManager.
+A thread-local scope chain identifies owned locks, including nested registered
+recursive acquisitions. Other readers cannot release this parser's lock.
+
+The wait suspends the registered model locks while retaining the buffer lock
+until the condition-variable wait atomically releases it. On wake it releases
+the buffer lock, restores model ownership, then retakes the buffer lock and
+rechecks the predicate. Exception unwinding releases the buffer before restoring
+the model lock too. This prevents inversion against model-then-buffer users.
+All recursive acquisitions spanning input waits must use InputLock; arbitrary
+raw/protect acquisitions cannot be discovered or fully released by a scope.
+
+`waitingForBuffer` only inspects state, so it uses ordinary CodeDog `protect` and
+never suspends model ownership. Host syntax-error callbacks use a lexical
+`InputPause` with exception-safe restoration. The existing native `doParse`
+exception/lifetime boundary remains; unrelated verbatim blocks are outside this
+change. The recursive-mutex support in `protect` alone cannot substitute for
+suspending an owned outer lock during a condition-variable wait.
+
+After an item or list prefix is consistently published, the parser calls
+`yieldInputLock`. After at least five milliseconds since the previous yield, the runtime suspends the
+registered locks for one millisecond, providing a scheduling opportunity without
+per-character unlock/relock. This is cooperative progress at safe boundaries,
+not a real-time bound for a single large token or solver computation. Deferred
+prefix publication retains its existing semantics.
+
+**Tests.** Four new ordinary CodeDog tests cover another query completing before
+EOF, another query completing before a 10,000-item buffered parse finishes,
+a syntax-error callback waiting for another model-using thread, and the real
+InfonStream cancellation-before-close shutdown sequence. The progress tests use
+nested registered acquisitions. CodeDog's native runtime tests separately force
+a model/buffer wake-up race and verify exception restoration, nested callbacks,
+and ordinary waits without registration. No native assertion bodies were added
+to the Proteus tests. Existing language fixtures remain unchanged.
+
+**Validation.** Regenerated and compiled `codeDog Proteus.Lib.dog` (156.16 s),
+`codeDog BuildProteusGraph.dog` (142.23 s), and linked `codeDog Slipstream.dog`
+(104.43 s). The four new tests pass, including ten consecutive scheduling runs.
+The full retained suite reports 24 failures out of 400 tests; all failing names
+and diagnostics exactly match the 24/396 cleanup baseline. All ten print-mode
+fixtures pass. All 16 tracked .tst fixtures and untracked myTests.tst retain their
+pre-cleanup hashes. The CodeDog runtime checks report nine passes and one skipped
+toolchain test, including a generated ordinary CodeDog producer/consumer test
+that releases nested scopes through strBuf. Its library-manager test also passes.
+`ldd -r` resolves the rebuilt Slipstream to the redesign shared library without
+missing dependencies or undefined symbols. No GUI behavior was changed or
+visually retested. Evidence is in `/tmp/proteus-input-lock-fix/`, including the
+build logs, focused and repeated concurrency runs, `full.log`, `print-modes.log`,
+`runtime-all.log`, `runtime-generated.log` and `validation.json`.

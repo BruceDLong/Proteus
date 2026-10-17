@@ -1,6 +1,10 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/parserInput/openWait
+    unit/parserInput/bufferedProgress
+    unit/parserInput/syntaxCallback
+    unit/parserInput/shutdown
     unit/worldManager/incompleteRHS
     unit/graphText/identityInSource
     unit/graphText/unknownString
@@ -1909,5 +1913,145 @@ struct GLOBAL {
 
     void: unit_worldManager_incompleteRHS(me string: testName) <- {
         testParseError(testName, "_ = ", "Expected a number", 1, 1)
+    }
+}
+
+// Ordinary CodeDog regressions for the parser's input-lock boundary.
+struct ParserInputQuery: inherits=Threads {
+    their ProteusCore: core
+    our infonView: watched
+    me bool: observedParsing
+    me string: answer
+    me Mutex: stateMutex
+    me bool: done
+    me bool: isDone() <- {protect(stateMutex){return(done)}}
+    void: run() <- {
+        if(watched!=NULL){
+            protect(core!.agent!.worldManager.control!.mutex){
+                observedParsing <- watched!.streamState!=parseDone
+            }
+        }
+        our infonView: result <- core!.query("_ = 7", false)
+        if(result!=NULL){answer <- toString(result)}
+        protect(stateMutex){done <- true}
+    }
+}
+
+struct ParserInputWorker: inherits=Threads {
+    their ProteusCore: core
+    our ProteusParser: parser
+    our infonView: root
+    me Semaphore: entered
+    void: run() <- {
+        // Signal only after owning the model lock. A second registered scope
+        // also checks recursive release through the real generated buffer path.
+        me InputLock: lock{core!.agent!.worldManager.control!.mutex}
+        entered.post()
+        parser!.doParse(root)
+    }
+}
+
+struct ParserCallbackCore: inherits=ProteusCore {
+    me bool: callbackRan
+    me string: callbackAnswer
+    void: handleSyntaxError(me uint64: originID, me string: message) <- {
+        me ParserInputQuery: query
+        query.core <- self
+        query.start()
+        query.waitForExit()
+        callbackAnswer <- query.answer
+        callbackRan <- true
+    }
+}
+
+struct ParserInputConnector: inherits=InfonConnector {
+    me bool: pumpOutputBuf(me string: message) <- {return(true)}
+}
+
+struct ParserStreamShutdown: inherits=Threads {
+    their InfonStream: stream
+    me Mutex: stateMutex
+    me bool: done
+    me bool: isDone() <- {protect(stateMutex){return(done)}}
+    void: run() <- {
+        stream!.requestFinish()
+        protect(stateMutex){done <- true}
+    }
+}
+
+struct GLOBAL {
+    void: testParserInputProgress(me string: testName, me bool: buffered) <- {
+        me ProteusCore: core; core.init("")
+        me strBuf: input; input.init("parser-input-test")
+        me string: source <- "123"
+        if(buffered){
+            source <- "{"
+            withEach item in range 0 .. 10000{source <+- "1 "}
+            source <+- "}"
+        }
+        input.putStr(source)
+        if(buffered){input.close()}
+        our ProteusParser:: parser{core, true, 0}
+        parser!.initParseFromStream(input)
+        our infonView:: root
+        me ParserInputWorker: reader
+        reader.core <- core; reader.parser <- parser; reader.root <- root
+        // Semaphore starts with one permit; consume it before the worker signals.
+        reader.entered.wait(); reader.start(); reader.entered.wait()
+        me ParserInputQuery: query
+        query.core <- core; query.watched <- root; query.start()
+        me int: elapsed
+        while(!query.isDone() and elapsed<2000){sleep(5); elapsed <+- 5}
+        me bool: progressed <- query.isDone()
+        input.close()
+        reader.waitForExit(); query.waitForExit()
+        me bool: parsed <- !parser!.doesParseHaveError()
+        core.deInit(); modelMngr.clear()
+        me string: expected <- toString(true)
+        INFO("Progress="+toString(progressed)+", while parsing="+toString(query.observedParsing)+", parsed="+toString(parsed)+", answer="+query.answer)
+        me string: actual <- toString(progressed); REQUIRE(actual==expected)
+        actual <- toString(query.observedParsing); REQUIRE(actual==expected)
+        actual <- toString(parsed); REQUIRE(actual==expected)
+        actual <- query.answer; expected <- "7"; REQUIRE(actual==expected)
+    }
+    void: unit_parserInput_openWait(me string: testName) <- {testParserInputProgress(testName, false)}
+    void: unit_parserInput_bufferedProgress(me string: testName) <- {testParserInputProgress(testName, true)}
+
+    void: unit_parserInput_syntaxCallback(me string: testName) <- {
+        me ParserCallbackCore: core; core.init("")
+        our infonView: result <- core.parseAndExtractString("_ = ", "callback-test")
+        core.deInit(); modelMngr.clear()
+        me string: expected <- toString(true)
+        me string: actual <- toString(result==NULL); REQUIRE(actual==expected)
+        actual <- toString(core.callbackRan); REQUIRE(actual==expected)
+        actual <- core.callbackAnswer; expected <- "7"; REQUIRE(actual==expected)
+    }
+
+    void: unit_parserInput_shutdown(me string: testName) <- {
+        me ProteusCore: core; core.init("")
+        our ParserInputConnector:: connector
+        Allocate(connector!.streamSpec)
+        connector!.streamSpec!.spec <- "parser-shutdown-test"
+        connector!.allowStreamingNormalize <- true
+        our ProteusParser:: parser{core, true, 0}
+        our infonView:: root
+        me InfonStream: stream
+        stream.init(connector, core.agent, parser, root, 0)
+        stream.start("INPUT_TEST")
+        stream.pushParserInputBuf("123")
+        sleep(50)
+        me ParserStreamShutdown: shutdown
+        shutdown.stream <- stream; shutdown.start()
+        me int: elapsed
+        while(!shutdown.isDone() and elapsed<2000){sleep(5); elapsed <+- 5}
+        me bool: stopped <- shutdown.isDone()
+        // Close independently on failure so the test can report and join.
+        connector!.inputBuf.close()
+        shutdown.waitForExit(); stream.waitForCompletion()
+        me bool: cancelled <- stream.normerThread.handle!=NULL and stream.normerThread.handle!.status().outcome==worldCancelled
+        core.deInit(); modelMngr.clear()
+        me string: expected <- toString(true)
+        me string: actual <- toString(stopped); REQUIRE(actual==expected)
+        actual <- toString(cancelled); REQUIRE(actual==expected)
     }
 }
