@@ -528,6 +528,7 @@ struct GLOBAL {
     me Map<me string, me string>: dynamicTestInput
     me Map<me string, me string>: dynamicTestExpected
     me Map<me string, me string>: dynamicTestMode
+    me Map<me string, me InfonPrintMode>: dynamicTestPrintMode
     me Map<me string, me string>: dynamicTestWorldFile
     me Map<me string, me string>: dynamicTestIncludedFiles
 
@@ -574,6 +575,7 @@ struct GLOBAL {
         dynamicTestInput.clear()
         dynamicTestExpected.clear()
         dynamicTestMode.clear()
+        dynamicTestPrintMode.clear()
         dynamicTestWorldFile.clear()
         dynamicTestIncludedFiles.clear()
     }
@@ -624,6 +626,19 @@ struct GLOBAL {
             print("Dynamic test parse warning in ", fileName, ":", lineNum, " invalid mode '", testMode, "'. Using 'norm'.\n")
             testMode <- "norm"
         }
+
+        // Optional seventh column selects result printing independently of
+        // parse/norm/multi/world/graph. Existing fixtures default to compressed.
+        me InfonPrintMode: printMode <- ipmCompressed
+        if(columns.size()>=7){
+            me string: printModeName <- trimWS(columns[6])
+            if(printModeName=="debug"){printMode <- ipmDebug}
+            else if(printModeName=="expanded"){printMode <- ipmExpanded}
+            else if(printModeName!="" and printModeName!="compressed"){
+                print("Dynamic test parse warning in ", fileName, ":", lineNum, " invalid print mode '", printModeName, "'. Using 'compressed'.\n")
+            }
+        }
+        dynamicTestPrintMode[testName] <- printMode
 
         dynamicTestNames.append(testName)
         dynamicTestDisplay[testName] <- decodeTestFileEscapes(trimTestFileLeadingPadding(columns[1]))
@@ -720,26 +735,27 @@ struct GLOBAL {
         if(!hasDynamicTest(testName)){Tstat <- "?"; return()}
         me string: testMode <- "norm"
         if(dynamicTestMode.containsKey(testName)){testMode <- dynamicTestMode[testName]}
+        me InfonPrintMode: printMode <- dynamicTestPrintMode[testName]
         me string: testInput <- dynamicTestInput[testName]
         me string: testExpected <- dynamicTestExpected[testName]
         if((testMode=="multi" or testMode=="world") and testExpected!="" and testExpected!="-" and findString(testInput, "//:")==-1){
             testInput <+- "//:"+testExpected
         }
         if(testMode=="graph"){
-            testGraphLanguage(testName, testInput, testExpected)
+            testGraphLanguage(testName, testInput, testExpected, printMode)
             return()
         }
         if(testMode=="multi"){
-            multiNorm(testName, testInput, "")
+            multiNorm(testName, testInput, "", printMode)
             return()
         }
         if(testMode=="world"){
-            multiNorm(testName, testInput, dynamicTestWorldFile[testName])
+            multiNorm(testName, testInput, dynamicTestWorldFile[testName], printMode)
             return()
         }
         me bool: doNorm <- true
         if(testMode=="parse"){doNorm <- false}
-        initAndTest(testName, testInput, testExpected, doNorm)
+        initAndTest(testName, testInput, testExpected, doNorm, printMode)
     }
 
     our infonView: parseAndExtract(me string: testName, me string: data) <- {
@@ -767,7 +783,7 @@ struct GLOBAL {
         if(locPos == -1){FAIL("Formatted parser error did not include the expected location")}
         return()
     }
-    me void: testLine(me string: testName, our Agent: agent, me string: in, me string: expected, me bool: doNorm) <- {
+    me void: testLine(me string: testName, our Agent: agent, me string: in, me string: expected, me bool: doNorm, me InfonPrintMode: printMode<-ipmCompressed) <- {
         our infonView: testInfon <- parseAndExtract(testName, in)
         if(testInfon==NULL){FAIL("Syntax Error in input: "+in)}
         our POV:: testPov{501}; testPov!.pItem <- testInfon
@@ -785,17 +801,17 @@ struct GLOBAL {
                 return()
             }
         }
-        me string: result <- toString(testPov!.pItem)
+        me string: result <- toString(testPov!.pItem, printMode)
         if(expected!=""){REQUIRE(result==expected)}
     }
     // Historical graph-mode language fixtures use the same engine entry point.
-    me void: testGraphLanguage(me string: testName, me string: input, me string: expected) <- {
-        initAndTest(testName, input, expected, true)
+    me void: testGraphLanguage(me string: testName, me string: input, me string: expected, me InfonPrintMode: printMode<-ipmCompressed) <- {
+        initAndTest(testName, input, expected, true, printMode)
     }
-    me void: initAndTest(me string: testName, me string: in, me string: expected, me bool: doNorm) <- {
+    me void: initAndTest(me string: testName, me string: in, me string: expected, me bool: doNorm, me InfonPrintMode: printMode<-ipmCompressed) <- {
         me ProteusCore: CORE
         CORE.init("", false)
-        testLine(testName, CORE.agent, in, expected, doNorm)
+        testLine(testName, CORE.agent, in, expected, doNorm, printMode)
         CORE.deInit()
         return()
     }
@@ -2036,7 +2052,7 @@ struct GLOBAL {
         REQUIRE(actual==expected)
         return()
     }
-    me void: processTestLine(me string: testName, our Agent: agent, me string: line) <- {
+    me void: processTestLine(me string: testName, our Agent: agent, me string: line, me InfonPrintMode: printMode<-ipmCompressed) <- {
         me int: pos           <- findString(line, "//:")
         me string: testInput
         me string: expected
@@ -2048,9 +2064,9 @@ struct GLOBAL {
             expected <- line.subStr(pos+3,line.size())
         }
         log("IN:<"+testInput+">  EXPECTED:<"+expected+">")
-        testLine(testName, agent, testInput, expected, true)
+        testLine(testName, agent, testInput, expected, true, printMode)
     }
-    me void: multiNorm(me string: testName, me string: in, me string: worldFileName) <- {
+    me void: multiNorm(me string: testName, me string: in, me string: worldFileName, me InfonPrintMode: printMode<-ipmCompressed) <- {
         infonViewPrinter.debugSublistPrint <- true
         me TestProteusCore: CORE
         me bool: loaded <- CORE.initForWorldTest(worldFileName)
@@ -2066,11 +2082,11 @@ struct GLOBAL {
         me string: line <- ""
         withEach charPos in range 0 .. in.size(){
             if(in[charPos]=="\n"){
-                processTestLine(testName, CORE.agent, line)
+                processTestLine(testName, CORE.agent, line, printMode)
                 line <- ""
             }else{line <+- in[charPos]}
         }
-        if(line!=""){processTestLine(testName, CORE.agent, line)}
+        if(line!=""){processTestLine(testName, CORE.agent, line, printMode)}
         CORE.deInit()
         modelMngr.clear()
     }
@@ -7185,7 +7201,7 @@ for(auto input:{"{5|5 5}","{*10+_|2 3}","{5|}","{*10+_|_ _}","{atom|1,2}"}){
  auto p=parse(input);auto spec=p->pItem->value->listSpec;auto text=toString(spec.get());auto h=a.normalize(p);
  check(!h->failed() && p->pItem->value->listSpec==spec && toString(spec.get())==text,"normalization retains the original immutable template: "+std::string(input));
  check(p->pItem->listSpecApplied && toString(p->pItem.get()).find('|')==std::string::npos,"normal output hides the checked finite template: "+std::string(input));
- InfonViewPrinter debug;debug.debugPrint=true;auto shown=debug.printInfonView(p->pItem.get(),0,nullptr);
+ InfonViewPrinter debug;auto shown=debug.printInfonView(p->pItem.get(),0,nullptr,ipmDebug);
  check(shown.find('|')!=std::string::npos && p->pItem->value->listSpec==spec,"debug output reveals the retained template without mutation");
  auto again=a.normalize(p);check(!again->failed() && p->pItem->value->listSpec==spec,"repeated normalization keeps the template");
  if(h->complete())check(again->complete() && again->framesCreated==0,"completed finite list creates no new goals");
@@ -7224,7 +7240,7 @@ for(int n:{16,32,64}){
  p=parse("%W.secondRun@[1]=80");h=a.normalize(p);check(h->complete() && stored->pItem->value->listSpec==spec,"sparse materialization preserves its containing template");
  p=parse("%W.secondRun");h=a.normalize(p);
  check(h->outcome==worldPartial && p->pItem->value->listSpec==spec && toString(p->pItem.get())=="secondRun:{second:80 &seconds:*9+{second|  ... }}","matching future templates prove coverage even with deferred projection work");
- InfonViewPrinter debug;debug.debugPrint=true;auto shown=debug.printInfonView(p->pItem.get(),0,nullptr);
+ InfonViewPrinter debug;auto shown=debug.printInfonView(p->pItem.get(),0,nullptr,ipmDebug);
  check(std::count(shown.begin(),shown.end(),'|')==2,"debug output exposes both outer and sparse child templates");
 }
 core.deInit();std::cout<<"RETAINED_LIST_SPECS: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;

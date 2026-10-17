@@ -39,6 +39,30 @@ The inventory also preserves retired runtime and standalone native-test referenc
 `UNSUPPORTED` results in active tests remain failures; retirement does not establish
 that a previously untested behavior works.
 
+## Printer modes
+
+`toString(infon)` keeps the current compressed output. Select a mode with
+`toString(infon, ipmCompressed)`, `ipmExpanded`, or `ipmDebug`.
+`toStringColor` and `InfonViewPrinter.printInfonView` also accept a final mode
+parameter, defaulting to compressed. Debug includes the existing size and
+retained-template diagnostics. Expanded currently uses compressed output; cursor
+expansion will be implemented separately. Printing does not normalize the model.
+
+Dynamic `.tst` rows accept an optional seventh column:
+
+```text
+name, display, input, expected, execution-mode, world-file, print-mode
+```
+
+`print-mode` is `compressed`, `expanded`, or `debug`. Omitted or blank means
+compressed. It applies to parse, norm, multi, world, and graph result checks;
+leave the sixth column empty when no world file is needed. Existing fixtures
+and expectations remain unchanged. Run the focused fixtures from `LocalBuild`:
+
+```sh
+./TestProteus -t ../graph/print-mode-tests.tst:
+```
+
 ## Handles and live input
 
 `Agent.normalize()` uses its default session; callers can also create explicit

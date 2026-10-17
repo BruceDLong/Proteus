@@ -1307,3 +1307,77 @@ This narrows D062 for the cursor execution mode: its old-versus-new equality int
 **Alternatives and costs.** The older two-state turn relations remain available; they are not the verb API and their locally edited files are untouched. The new model uses named-field correspondence rather than repeated unstructured occupant searches for each destination. Each step has 26 inventory entries, nine supplied moves, and a bounded 24-entry orientation lookup. Model tests measure constant frame count per step over 8, 32 and 128 mixed turns, with one cursor request retained. This is linear in steps for this fixed-size cube, not a claim of constant work for arbitrary-width models. Renderer projection costs are separate and checked explicitly. Planning, path-cost calculation, ancestor temporal listSpec transitions, parameterized verbs and general backward reconstruction remain deferred.
 
 **Validation.** See `reports/rubix-verbs-2026-10-14.md` for regenerated-engine, geometry, regression and GUI evidence. Core tests use small synthetic definitions; model integration tests deliberately validate the public model and do not become engine fixtures.
+
+## D070 Pragmatic normal form, explicit print modes, and cursor follow-up (2026-10-17)
+
+**User decision.** Keep the current normal form until a concrete problem requires
+changing it; generally this is the compressed stored representation. Storage and
+printing are separate choices. Do not deepen template evaluation, expand large
+listSpecs, or change wrkList merging as part of preparing the printer. Normalizing
+templates before application is a possible optimization, and multiple or nested
+templates should compose by ordinary wrkList merging; neither is implemented by
+this printer change.
+
+**Printer step.** Add `InfonPrintMode` with compressed as the default, expanded,
+and debug. Pass the choice through recursive printing, including nested values,
+work and paths. Debug retains the printer's existing size and retained-template
+diagnostics. Expanded intentionally uses compressed output until cursor-based
+expansion is ready. Keep the one-argument `toString` overload because CodeDog's
+overload resolution needs that exact signature; the overload supplies compressed.
+A seventh `.tst` column selects the print mode independently of execution mode.
+No existing fixture expectations change. The two native retained-listSpec checks
+now request debug explicitly instead of setting the removed mutable debug flag.
+
+**Cursor audit of this checkout.** `TCursor` in `WorldManager.dog` already stages
+ordinary solver work, preserves unaffected shallow values, keeps the visible
+value intact during a wait or rejection, and implements explicit `writeBack()`
+through `solve()`. `settle()` copies each result into its reusable `current` POV;
+it does not return an existing materialized source directly. Movement follows
+physical prev/next members and requires a temporal parent. Immediate backward
+movement can reuse the saved previous value; general backward history
+reconstruction, virtual sparse positions and a general S-list cursor are not
+implemented by this class. `WorldWalk`, `WorldListCursor` and correspondence are
+existing structural traversal machinery to reuse, rather than duplicating list
+interpretation for printing.
+
+The live request already retains its continuation when a particular parser input
+is unfinished, and `inputReady()` resumes it. That is narrower than a general
+wait-for-member facility: a missing successor returns partial, and the cursor has
+no subscription for that successor's eventual insertion. There is no member-load
+priority API. `WorldRequest.waitForCompletion()` waits for active work under the
+model lock; it can return with the request still waiting. No list-backed automatic
+cursor cache or cache-clear policy is implemented here.
+
+**Updated direction.** This revises D066's requirement that the reusable working
+infon always be the exposed result. When a materialized occurrence exists, return
+that occurrence directly; otherwise use the cursor's working infon. Cache values
+by publishing into the list through ordinary inference, with explicit provenance
+identifying entries that may be cleared. Explicit `writeBack()` makes that item
+persistent. Clearing must preserve supplied or subsequently asserted facts,
+constraints and occurrence identity. Start with a simple explicit clearing policy;
+no eviction budget is chosen yet.
+
+**Suggested sequence.** First implement returning existing occurrences together
+with list-backed cache ownership, reversible clearing and writeBack promotion.
+Verify multiple forward/backward steps, independent occurrences, asserted facts,
+and cancellation. Then expose member readiness using the existing request and
+continuation machinery, including missing members, and let demanded fields carry
+priority when a loader can honor it. Next unify virtual T-list/S-list navigation
+through structural traversal before enabling bounded expanded printing. Measure
+template pre-normalization only when repeated application supplies a concrete
+optimization case; occurrence-dependent expressions must keep their context.
+These are follow-up steps, not changes to the normalizer in this commit.
+
+**Alternatives.** A detached value cache would bypass normal inference and require
+separate validity rules. Eagerly materializing a whole repeated list would defeat
+compressed storage. Requiring the same returned address forever would prevent
+using an existing stored occurrence directly. Those approaches are not adopted.
+
+**Validation.** Regenerated with `codeDog Proteus.Lib.dog`; build successful.
+The ten new print-mode fixtures pass in one process, including a default-mode
+case after debug output. All 57 WorldManager suites pass, including all 273
+TCursor checks and the retained-listSpec checks. Default fixtures remain at
+16 failures out of 332; the full active suite remains at 24 failures out of 535.
+WorldManager, cursor, default and full-suite logs are byte-identical before and
+after the change. All 15 protected fixture files and the user's `myTests.tst`
+are byte-for-byte unchanged. No cursor behavior or GUI behavior was changed.

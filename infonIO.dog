@@ -1583,6 +1583,10 @@ struct ProteusParser{
 
 }
 
+// Expanded is reserved for cursor-based printing. Until that traversal is
+// available it uses the compressed representation, without materializing items.
+struct InfonPrintMode: inherits=<mode[ipmCompressed, ipmExpanded, ipmDebug]> {}
+
 ///////////////////////////////// Infon to string
 struct GLOBAL{
     me InfonViewPrinter: infonViewPrinter
@@ -1630,17 +1634,21 @@ struct GLOBAL{
         }
         return(S)
     }
-    me string: toStringColor(their infonView: i, me int: verbosity<-0, their infonView: special<-NULL) <- {
-        return(infonViewPrinter.printInfonView(i, verbosity, special))
+    me string: toStringColor(their infonView: i, me int: verbosity<-0, their infonView: special<-NULL, me InfonPrintMode: printMode<-ipmCompressed) <- {
+        return(infonViewPrinter.printInfonView(i, verbosity, special, printMode))
     }
+    // Keep the exact one-argument overload for CodeDog resolution and native
+    // callers; it supplies the default without changing their call sites.
     me string: toString(their infonView: i) <- {
-        return(infonViewPrinter.printInfonView(i, 0, NULL))
+        return(infonViewPrinter.printInfonView(i, 0, NULL, ipmCompressed))
+    }
+    me string: toString(their infonView: i, me InfonPrintMode: printMode) <- {
+        return(infonViewPrinter.printInfonView(i, 0, NULL, printMode))
     }
 }
 struct InfonViewPrinter{
     me Mutex: infPrintMtx
     me bool: debugSublistPrint <- true
-    me bool: debugPrint <- false
     me bool: isListWithDots(their infonState: pure) <- {
         if(pure!.overlayType!=LST){ return(false)}
         if(pure!.evalMode==emLiteral or pure!.evalMode==emIntersection){
@@ -1668,12 +1676,12 @@ struct InfonViewPrinter{
 
     // Hide an applied template in normal output without deleting its constraints.
     // Debug output exposes it, and unproved/open applications keep it visible.
-    me bool: isNiceList(their infonState: pure, their infonView: parentInfon) <- {
-        return(!debugPrint and parentInfon!=NULL and parentInfon!.listSpecApplied and
+    me bool: isNiceList(their infonState: pure, their infonView: parentInfon, me InfonPrintMode: printMode) <- {
+        return(printMode!=ipmDebug and parentInfon!=NULL and parentInfon!.listSpecApplied and
             pure!.evalMode==emLiteral and !pure!.tailUnfinished)
     }
 
-    me string: printInfonState(their infonState: pure, their infonState: size, me bool: asInnr, me bool: isSpec, their infonView: parentInfon, our Map<me string,me int>: used, me int: verbosity, their infonView: special, me bool: suppressSizeOp <- false) <- {
+    me string: printInfonState(their infonState: pure, their infonState: size, me bool: asInnr, me bool: isSpec, their infonView: parentInfon, our Map<me string,me int>: used, me int: verbosity, their infonView: special, me InfonPrintMode: printMode, me bool: suppressSizeOp <- false) <- {
         me string: S <- ""
         if(parentInfon!=NULL and pure===parentInfon!.value and parentInfon!.isNull()){
             S <- "NULL:"
@@ -1702,14 +1710,14 @@ struct InfonViewPrinter{
             isSpec and size!.num>0
             )
         )
-        if(debugPrint){showSize <- size!=NULL and size!.num>0}
+        if(printMode==ipmDebug){showSize <- size!=NULL and size!.num>0}
         if(showSize){
             if(size!.overlayType==NUM and size!.evalMode==emLiteral and size!.num<0){
                 // A normalized signed size must remain parseable while the
                 // grammar still requires parentheses around negative sizes.
                 S <+- "*("+size!.num.stringify()+")"
             }else{
-                S <+- printInfonState(size, NULL, false, isSpec, parentInfon, used, verbosity, special)
+                S <+- printInfonState(size, NULL, false, isSpec, parentInfon, used, verbosity, special, printMode)
             }
         }
         if(pure!.inverted){
@@ -1742,12 +1750,12 @@ struct InfonViewPrinter{
             S <+- strtBrkt
             if(pure!.timelike){S <+- "T "}
             if(size!=NULL and pure!.sizeWasInner and pure!.evalMode==emLiteral){
-                S <+- "~"+printInfonState(size, NULL, false, isSpec, parentInfon, used, verbosity, special, true)
+                S <+- "~"+printInfonState(size, NULL, false, isSpec, parentInfon, used, verbosity, special, printMode, true)
                 showBar<-true
             }
-            if(pure!.listSpec!=NULL and !isNiceList(pure, parentInfon)){
+            if(pure!.listSpec!=NULL and !isNiceList(pure, parentInfon, printMode)){
                 if(showBar){S <+- " "}
-                S <+- printInfonViewActual(pure!.listSpec, used, false, isSpec, verbosity, special)
+                S <+- printInfonViewActual(pure!.listSpec, used, false, isSpec, verbosity, special, printMode)
                 showBar<-true
             }
             if(showBar){S <+- "| "}
@@ -1759,7 +1767,7 @@ struct InfonViewPrinter{
                     else{S <+- " "}
                 } else {firstTime <- false}
                 me string: itmStr
-                itmStr <- printInfonViewActual(itemItr!.pItem, used, itemItr!.isSubItm, isSpec, verbosity, special)
+                itmStr <- printInfonViewActual(itemItr!.pItem, used, itemItr!.isSubItm, isSpec, verbosity, special, printMode)
                 if(parentInfon!.intersectPos == ipGetMarked and parentInfon!.intersectMarkedRetPOV===itemItr){
                     itmStr <- "<"+itmStr+">"
                 }
@@ -1780,7 +1788,7 @@ struct InfonViewPrinter{
 
     me string: printWorkList(their infonView: i,
             our Map<me string, me int>: used, me bool: isSpec,
-            me int: verbosity, their infonView: special) <- {
+            me int: verbosity, their infonView: special, me InfonPrintMode: printMode) <- {
         me string: S
         if(i==NULL){return(S)}
         withEach WorkItm in i!.wrkList{
@@ -1791,14 +1799,14 @@ struct InfonViewPrinter{
             if(WorkItm!.looseTop){S <+- ":"}
             S <+- " "
             S <+- printInfonViewActual(WorkItm!.pItem, used, false,
-                    isSpec, verbosity, special)
+                    isSpec, verbosity, special, printMode)
         }
         return(S)
     }
 
     me string: printPartPath(their PartPath: part,
             our Map<me string, me int>: used, me bool: isSpec,
-            me int: verbosity, their infonView: special) <- {
+            me int: verbosity, their infonView: special, me InfonPrintMode: printMode) <- {
         me string: S
         if(part==NULL){return(S)}
         if(part!.pathMode==dotField or part!.pathMode==asTListField){S <+- "."}
@@ -1807,19 +1815,19 @@ struct InfonViewPrinter{
         else if(part!.pathMode==idxField){S <+- "@["}
         else if(part!.pathMode==colonField){S <+- ":"}
         S <+- printInfonViewActual(part!.path, used, false,
-                isSpec, verbosity, special)
+                isSpec, verbosity, special, printMode)
         if(part!.pathMode==idxField){
             if(part!.spec!=NULL){
                 S <+- ":"+printInfonViewActual(part!.spec, used, false,
-                        true, verbosity, special)
+                        true, verbosity, special, printMode)
             }
             S <+- "]"
         }
         if(part!.continuation!=NULL){
             S <+- printWorkList(part!.continuation, used, isSpec,
-                    verbosity, special)
+                    verbosity, special, printMode)
             S <+- printPathSuffix(part!.continuation, used, isSpec,
-                    verbosity, special)
+                    verbosity, special, printMode)
         }
         if(part!.hasSemiColon){S <+- "; "}
         return(S)
@@ -1827,21 +1835,21 @@ struct InfonViewPrinter{
 
     me string: printPathSuffix(their infonView: i,
             our Map<me string, me int>: used, me bool: isSpec,
-            me int: verbosity, their infonView: special) <- {
+            me int: verbosity, their infonView: special, me InfonPrintMode: printMode) <- {
         me string: S
         if(i==NULL){return(S)}
         withEach part in i!.parts{
             if(!part!.wasTransfered){
-                S <+- printPartPath(part, used, isSpec, verbosity, special)
+                S <+- printPartPath(part, used, isSpec, verbosity, special, printMode)
             }
         }
         if(i!.partRef!=NULL){
-            S <+- printPartPath(i!.partRef, used, isSpec, verbosity, special)
+            S <+- printPartPath(i!.partRef, used, isSpec, verbosity, special, printMode)
         }
         return(S)
     }
 
-    me string: printInfonViewActual(their infonView: i, our Map<me string, me int>: used, me bool: isSubItm, me bool: isSpec, me int: verbosity, their infonView: special) <- {
+    me string: printInfonViewActual(their infonView: i, our Map<me string, me int>: used, me bool: isSubItm, me bool: isSpec, me int: verbosity, their infonView: special, me InfonPrintMode: printMode) <- {
 
         me string: S <- ""
         if(i ==  NULL){return("NULL")}
@@ -1877,7 +1885,7 @@ struct InfonViewPrinter{
                         me bool: firstTime <- true
                         while(itemItr!=NULL){
                             if(!firstTime){S <+- " "} else {firstTime <- false}
-                            S <+- printInfonViewActual(itemItr!.pItem, used, false, isSpec, verbosity, special)
+                            S <+- printInfonViewActual(itemItr!.pItem, used, false, isSpec, verbosity, special, printMode)
                             itemItr <- itemItr!.next
                         }
                         if(i!.value!.tailUnfinished){S <+- " ... "}
@@ -1893,7 +1901,7 @@ struct InfonViewPrinter{
                 S <+- usageTag+" "
             }
             if(! i!.definedWord!.UsageTags.isEmpty()){S<+-">"}
-            S<+-"= "+printInfonViewActual(i!.funcArgs, used, false, isSpec, verbosity, special)
+            S<+-"= "+printInfonViewActual(i!.funcArgs, used, false, isSpec, verbosity, special, printMode)
             if(i!.doReply){S <+- ">>"}
             if(resetColor){S<+-tam.popColor();}
             return(S)
@@ -1934,24 +1942,24 @@ struct InfonViewPrinter{
                 }
             } else if(i!.viewMode==vmOverlay){
                 if(i!.intersectPos == ipNoIntersect){
-                    S <+- printInfonState(i!.value, i!.infSize, false, isSpec, i, used, verbosity, special)
+                    S <+- printInfonState(i!.value, i!.infSize, false, isSpec, i, used, verbosity, special, printMode)
                 } else {
-                    S <+- printInfonState(i!.innr!.value, i!.innr!.infSize, true, isSpec, i, used, verbosity, special)
+                    S <+- printInfonState(i!.innr!.value, i!.innr!.infSize, true, isSpec, i, used, verbosity, special, printMode)
                     if (i!.innr!.argPos != apNoArgs){
-                        S <- addFuncArgs(S, printInfonViewActual(i!.innr!.funcArgs, used, false, isSpec, verbosity, special), i!.innr!.argsOnLeft, i!.innr!.argPos, "")
+                        S <- addFuncArgs(S, printInfonViewActual(i!.innr!.funcArgs, used, false, isSpec, verbosity, special, printMode), i!.innr!.argsOnLeft, i!.innr!.argPos, "")
                     }
                 }
             } else {logFatalError("Invalid viewMode in printInfonViewActual()\n")}
         }
         {
-            S <+- printWorkList(i, used, isSpec, verbosity, special)
+            S <+- printWorkList(i, used, isSpec, verbosity, special, printMode)
 
             if (i!.argPos != apNoArgs){
-                S <- addFuncArgs(S, printInfonViewActual(i!.funcArgs, used, false, isSpec, verbosity, special), i!.argsOnLeft, i!.argPos, "")
+                S <- addFuncArgs(S, printInfonViewActual(i!.funcArgs, used, false, isSpec, verbosity, special, printMode), i!.argsOnLeft, i!.argPos, "")
             }
         }
 
-        S <+- printPathSuffix(i, used, isSpec, verbosity, special)
+        S <+- printPathSuffix(i, used, isSpec, verbosity, special, printMode)
 if(i!.doReply){S <+- ">>"}
 //S <- "("+S+")"
 if(resetColor){
@@ -1960,11 +1968,11 @@ if(resetColor){
 }
         return(S)
     }
-    me string: printInfonView(their infonView: i, me int: verbosity, their infonView: special) <- {
+    me string: printInfonView(their infonView: i, me int: verbosity, their infonView: special, me InfonPrintMode: printMode<-ipmCompressed) <- {
         me string: retVal
         our Map<me string, me int>:: used
         protect(infPrintMtx){
-            retVal <- printInfonViewActual(i, used, false, false, verbosity, special)
+            retVal <- printInfonViewActual(i, used, false, false, verbosity, special, printMode)
         }
         return(retVal)
     }
