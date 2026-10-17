@@ -16,22 +16,43 @@ are in [the decision log](<Design Docs/normalization-design-decisions.md>).
 
 ## Build and verify
 
-From `/home/bruce/devl/Proteus`:
+Use CodeDog commit `e0dae8e` or later. From the repository root:
 
 ```sh
 codeDog Proteus.Lib.dog
 cd LocalBuild
 ./TestProteus -T 3
-./TestProteus -t defaultTests.tst:
 ```
+
+The first command generates `LocalBuild/TestProteus`; `-T 3` enables per-case
+crash/timeout protection. From `LocalBuild`, select a fixture or a fixture group
+with the suffix after the colon:
+
+```sh
+./TestProteus -t defaultTests.tst:parser/list/simple -T 3
+./TestProteus -t defaultTests.tst:parser/list -T 3
+```
+
+Use `./TestProteus -t defaultTests.tst:` for all default language fixtures.
+For a generated-C++ experiment, `codeDog -b TestProteus` rebuilds from
+`LocalBuild`; finish maintained changes by regenerating from CodeDog source.
+
+Build the shared engine separately with `codeDog BuildProteusGraph.dog` from the
+repository root. See [shared-library.md](shared-library.md) for consumer rebuild
+requirements and [Resources/README.md](../Resources/README.md) for optional
+application-world setup. Default tests use tracked assets.
 
 The executable identifies WorldManager at startup. Check the printed failure
 summary: the inherited harness can exit zero on test failures.
 
 The active suite contains 72 compiled CodeDog checks and 332 default language
 cases. All 16 tracked `.tst` files, including print-mode fixtures, are preserved.
-Expected outputs were not adjusted to match current failures. The D083 baseline
-is 380 passes and 24 failures, with ten additional print-mode fixtures passing.
+Expected outputs were not adjusted to match current failures. The last full
+validation, on 2026-10-17 during the canonical-checkout migration
+([D084](<Design Docs/normalization-design-decisions.md#d084-promote-the-redesign-to-canonical-proteus-main-2026-10-17>)),
+reported **380 passes and 24 failures out of 404 tests**, with ten additional
+print-mode fixtures passing. The failure names and diagnostics matched the
+previous full run. Documentation cleanup has not rerun that suite.
 
 Under D072, 140 registrations backed by verbatim C++ and 14 standalone drivers
 for the retired Proteus4 engine were removed. This includes the newer
@@ -94,8 +115,8 @@ list prefixes remain later work. Sharing deductions across sessions is deferred.
 
 Proteus3 remains on branch `proteus3b`. The imported redesign checkpoint remains
 on `codex/normalizer-redesign`; `main` contains its history and canonical-path
-integration. This checkout owns its Git data and does not depend on either fork's
-former checkout directory.
+integration. The annotated `Proteus4` tag records that promotion. This checkout
+owns its Git data and does not depend on either fork's former checkout directory.
 The old solver and tests remain available in ancestor commit `b52322a`:
 
 ```sh
@@ -103,7 +124,7 @@ git show b52322a:ProteusTests.dog
 git show b52322a:AGENTS.md
 ```
 
-The redesign immediately before test cleanup is commit `bd7078b`. Reports
-elsewhere in this folder describe historical checkpoints unless they explicitly
-identify the current replacement. Old implementation paths and pass counts in
-those reports are historical evidence, not current build or test instructions.
+The redesign immediately before test cleanup is commit `bd7078b`. Dated reports
+are in [Historical](<Design Docs/Historical/README.md>). Their implementation
+paths and pass counts describe those checkpoints; use this guide and the latest
+decisions for current build and test instructions.

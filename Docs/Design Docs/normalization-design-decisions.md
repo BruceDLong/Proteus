@@ -2097,3 +2097,26 @@ four old documentation links. The remaining 23 broken links refer to historical
 source or evidence. Engine, fixture and unrelated tracked-file hashes are
 unchanged, and the user's earlier cleanup deletions remain intact. This
 documentation-only change does not require engine or Slipstream rebuilds.
+
+
+## D086 Refresh README guidance for the current engine (2026-10-17)
+
+**Decision.** Following the documentation moves, update the root README to
+describe the maintained WorldManager implementation, Agent sessions and request
+handles. Replace obsolete agenda-engine claims, unsupported application promises,
+missing-file entries and the old Tic-tac-toe example with a current project map
+and links to the design references. Preserve authorship and license information.
+
+Keep build and test details in Docs/README.md, with a short getting-started path
+in the root README. Document separate test/shared-library builds, focused fixture
+selection and the printed-failure-count requirement. Date the D084 full-suite
+baseline instead of presenting it as a newly run result. Point historical report
+references to their new folder and identify Proteus4 as the promotion Git tag.
+
+**Validation.** Checked local links and heading anchors in all five README files
+and verified every path in the root project table. The documented focused command,
+`./TestProteus -t defaultTests.tst:parser/list/simple -T 3`, passes 1/1 with the
+existing executable. The previously recorded full run remains 380 passes and
+24 known failures out of 404 tests. No full suite or engine/Slipstream rebuild was
+needed for these documentation edits. Tracked-file hashes confirm source and
+fixtures are unchanged; earlier user cleanup edits remain separate.
