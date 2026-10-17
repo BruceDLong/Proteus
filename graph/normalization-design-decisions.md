@@ -1563,3 +1563,47 @@ missing dependencies or undefined symbols. No GUI behavior was changed or
 visually retested. Evidence is in `/tmp/proteus-input-lock-fix/`, including the
 build logs, focused and repeated concurrency runs, `full.log`, `print-modes.log`,
 `runtime-all.log`, `runtime-generated.log` and `validation.json`.
+
+## D074 Use UInt64Parser for null identities and review document completion (2026-10-17)
+
+**Decision.** `parseNullIdentity` now uses CodeDog's `UInt64Parser` in ordinary
+CodeDog. Keep the identity scope's positive int64 domain, including its exact
+range errors and source positions. Unlabelled `NULL:` remains valid; leading
+zeros are accepted. Values above INT64_MAX are rejected even when UInt64Parser
+can represent them. Conversion overflow is reported as a parser error.
+
+**History and lifecycle review.** Commit `d4f3bf487` introduced the native
+`doParse` wrapper and renamed its previous body to `parseDocument`. That body
+is still identical to both its pre-wrapper version and the original Proteus
+checkout's `doParse`. The current WorldManager ownership, root-completion guard
+and error-before-completion ordering came from redesign commit `82378ee1`.
+The old GraphPublication mechanism is gone.
+
+Keep the parsing body in CodeDog and retain the current lock and exception
+boundary. WorldManager resumes waiting requests synchronously in `inputReady`,
+so a root must not complete before trailing syntax checks and error publication.
+The old bare parsing body cannot replace that lifecycle. CodeDog currently has
+no try/catch action syntax, so exception notification still needs a native
+boundary. D073 supplies lock suspension and restoration at actual input waits.
+
+The current split is useful, but its bookkeeping can be simplified in a later
+cleanup: `parseDocument`'s final streaming `parseDone` notification is suppressed
+by the root guard and is redundant. Success/failure completion and context cleanup
+could be consolidated into ordinary CodeDog helpers while keeping a small native
+exception boundary. No production lifecycle behavior is changed by this review.
+
+**Tests.** Two ordinary CodeDog tests exercise accepted identities (including
+INT64_MAX and leading zeros), zero/negative IDs, values above INT64_MAX, uint64
+overflow, and unchanged error locations. A third test starts a waiting normalize
+request, parses `1#3`, and verifies that the request receives the trailing syntax
+error when the root completes. The four D073 input-lock regressions also pass.
+
+**Validation.** `codeDog Proteus.Lib.dog` regenerated and compiled successfully
+(140.45 s), as did `codeDog BuildProteusGraph.dog` (132.54 s). All seven focused
+parser checks pass. The complete suite reports 24 failures out of 403 tests;
+every failure name and diagnostic matches the prior 24/400 baseline. All 16
+tracked .tst fixtures retain their protected hashes, and the active inventory
+matches all 71 compiled registrations. `ldd -r` resolves Slipstream to the rebuilt
+redesign library without missing dependencies or undefined symbols. GUI behavior
+was not retested. Evidence is in `/tmp/proteus-identity-parser-review/`, including
+`history.json`, the focused logs, `full.log`, `validation.json` and build logs.

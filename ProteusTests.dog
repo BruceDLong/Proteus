@@ -1,6 +1,9 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/parserIdentity/validRange
+    unit/parserIdentity/rejectedRange
+    unit/parserLifecycle/errorBeforeCompletion
     unit/parserInput/openWait
     unit/parserInput/bufferedProgress
     unit/parserInput/syntaxCallback
@@ -2053,5 +2056,64 @@ struct GLOBAL {
         me string: expected <- toString(true)
         me string: actual <- toString(stopped); REQUIRE(actual==expected)
         actual <- toString(cancelled); REQUIRE(actual==expected)
+    }
+}
+
+// Null identity syntax retains the positive-int64 domain of identity scopes.
+struct GLOBAL {
+    void: checkParsedNullIdentity(me string: testName, me string: digits, me string: expected) <- {
+        me ProteusParser: parser{NULL, false, 0}
+        parser.initParseFromString(testName, "NULL:"+digits)
+        our infonView:: root
+        parser.doParse(root)
+        if(parser.doesParseHaveError()){FAIL(parser.formattedError())}
+        if(!root!.isNull()){FAIL("Expected a null infon")}
+        me string: actual <- "unlabelled"
+        if(root!.identityName!=NULL){actual <- toString(root!.identityName!.id)}
+        REQUIRE(actual==expected)
+    }
+    void: unit_parserIdentity_validRange(me string: testName) <- {
+        checkParsedNullIdentity(testName, "", "unlabelled")
+        checkParsedNullIdentity(testName, "1", "1")
+        checkParsedNullIdentity(testName, "00042", "42")
+        checkParsedNullIdentity(testName, "9223372036854775807", "9223372036854775807")
+        checkParsedNullIdentity(testName, "0000000000000000000000009223372036854775807", "9223372036854775807")
+    }
+    void: unit_parserIdentity_rejectedRange(me string: testName) <- {
+        me List<string>: inputs <- ["0", "000", "-1", "9223372036854775808", "18446744073709551615", "18446744073709551616", "99999999999999999999999999999999999999"]
+        withEach idx in range 0 .. inputs.size(){
+            me ProteusParser: parser{NULL, false, 0}
+            parser.initParseFromString(testName, "NULL:"+inputs[idx])
+            our infonView:: root
+            parser.doParse(root)
+            if(!parser.doesParseHaveError()){FAIL("Accepted invalid identity: "+inputs[idx])}
+            if(root!.identityName!=NULL){FAIL("An invalid identity was registered")}
+            me string: actual <- parser.errorMesg
+            me string: expected <- "Null identity ID exceeds positive int64"
+            if(idx<3){expected <- "Null identity ID must be positive"}
+            REQUIRE(actual==expected)
+            actual <- toString(parser.errLineNum)+":"+toString(parser.errCharPos)
+            expected <- "1:6"; REQUIRE(actual==expected)
+        }
+    }
+    void: unit_parserLifecycle_errorBeforeCompletion(me string: testName) <- {
+        me ProteusCore: core; core.init("")
+        our infonView:: root
+        core.agent!.worldManager.prepareInput(root)
+        our POV:: target{977}; target!.pItem <- root
+        our WorldRequest: request <- core.agent!.normalize(target)
+        me bool: waited <- request!.status().outcome==worldWaiting
+        me ProteusParser: parser{core, false, 0}
+        parser.initParseFromString(testName, "1#3")
+        parser.doParse(root)
+        me bool: errorPublished <- parser.doesParseHaveError() and request!.status().outcome==worldError
+        me bool: sameError <- request!.error()==parser.formattedError()
+        me bool: completed <- root!.streamState==parseDone
+        core.deInit(); modelMngr.clear()
+        me string: expected <- toString(true)
+        me string: actual <- toString(waited); REQUIRE(actual==expected)
+        actual <- toString(errorPublished); REQUIRE(actual==expected)
+        actual <- toString(sameError); REQUIRE(actual==expected)
+        actual <- toString(completed); REQUIRE(actual==expected)
     }
 }
