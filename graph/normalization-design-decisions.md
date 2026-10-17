@@ -1978,3 +1978,43 @@ Evidence: `/tmp/proteus-parser-exception-check.py` and
 The small stand-ins do not establish full parser/reasoner or consumer integration.
 No maintained Proteus tests or .tst fixtures changed. Full Proteus, shared-library,
 and Slipstream rebuilds remain deferred under D077.
+
+
+## D083 Complete full validation after native-block cleanup (2026-10-17)
+
+**Decision.** The user authorized the previously deferred large builds and tests,
+lifting the D077 validation boundary. Retain CodeDog's `_strm_open` helper and
+`dataFile.open(filePath, "r")`: the helper translates string modes to C++ stream
+flags and remains necessary independently of try/catch. No further production
+changes were needed. The maintained Proteus .dog files contain only CodeDog macro
+uses of the verbatim delimiters, with no native C++ function bodies remaining.
+
+**Validation.** Regenerated and built `codeDog Proteus.Lib.dog` (155.53 s),
+`codeDog BuildProteusGraph.dog` (139.05 s), and linked
+`codeDog Slipstream.dog` (101.42 s). All three report Build Successful. The full
+active Proteus suite with per-case crash protection reports 24 failures / 404
+tests: 380 pass, and all 24 failure names and diagnostics exactly match D076's
+last full-build baseline. All ten print-mode fixtures pass. The full discovered
+CodeDog Python suite passes all 110 tests, including native C++, Java, Kotlin and
+Swift runtime checks for the relevant compiler features, with no skipped tests.
+Existing compiler warnings remain; no new failure required a source change.
+
+`ldd -r` reports no missing dependencies or undefined symbols for either the
+shared library or Slipstream. Slipstream resolves the rebuilt redesign library.
+A 20-second startup smoke test on a private Xvfb display runs until the deliberate
+timeout. Its log includes the same two existing normalization errors (semantics
+beyond the scalar milestone and open-source correspondence needing span alignment),
+with no syntax or system errors. This is startup validation, not renewed visual
+rendering, navigation or graceful-shutdown validation.
+
+Hashes of all tracked source files and existing nonignored untracked user files
+remain unchanged across all three repositories before adding this decision.
+All 16 tracked .tst fixtures are unchanged, and the test inventory still matches
+all 72 compiled registrations. Existing CodeDog and Slipstream working-tree edits
+were preserved and included as they stood in these builds.
+
+Evidence: `/tmp/proteus-cleanup-full-validation/` contains per-stage logs and
+timings, the source snapshot, exact baseline comparison in `validation.json`,
+linkage output, and the bounded startup log. The comparison baseline is
+`/tmp/proteus-codedog-parser/full.log`. No maintained tests or expectations were
+modified, and the known unsupported semantic cases remain visible as failures.
