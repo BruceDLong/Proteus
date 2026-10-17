@@ -1440,9 +1440,17 @@ Parser waits retain the exact source and correspondence cursor; unrelated input 
 **D063 validation.** Both maintained CodeDog targets regenerate successfully (library 139.12 s; executable 199.16 s). The independent regenerated-library client passes all 470 ancestor-requirement checks. The full executable passes all 56 WorldManager suites and reports 24 failures / 534 registrations: the same sixteen default and eight existing compiled failures, with identical names and diagnostics. The known cube coordinate still returns zLoc:1.1; state 2 and the hue/layout probes retain the documented incomplete boundaries. All 15 protected language fixtures and unrelated `myTests.tst` are unchanged. No Slipstream source or live world resource was modified.
 
 
-## TCursor and supplied temporal work (D064–D067, 2026-10-14)
+## TCursor and supplied temporal work (D064–D071, updated 2026-10-17)
 
-`TCursor` starts from a POV and keeps one reusable `current` infon separate from the real occurrence, a stable previous-value snapshot and the staged destination. Its address and `mySymbol()` do not establish identity. Constructing it needs no Agent; applying queued work requires `attach()` with a WorldManager and an Agent-owned session. `refresh()` initializes or settles pending work; `goNext()` and `goPrev()` move between represented temporal neighbours; `status()` and the current WorldRequest expose the result. `writeBack()` explicitly stores the available current description at the represented occurrence.
+`TCursor` starts from a POV. `current` denotes the real list occurrence when a
+materialized value is available, including a cursor cache entry. A reusable
+`working` infon remains the fallback for read-only traversal. Callers must read
+`current` after movement rather than assuming a stable returned address. Constructing
+a cursor needs no Agent; applying queued work requires `attach()` with a
+WorldManager and an Agent-owned session. `refresh()` initializes or settles pending
+work; `goNext()` and `goPrev()` move between represented temporal neighbours;
+`status()` exposes the result. `request` is null on a cache hit. `writeBack()` applies
+supplied work and makes the selected item permanent, even when no value changed.
 
 The regular solver computes the new values. The cursor adds retention of unaffected previous values. After the next item's given work drains, an internal retention relationship combines its result with the stable previous value using existing field/span correspondence. Known new values remain new; unknown corresponding values can borrow the previous description. This relationship is neither an identity assertion that old equals new nor a new authorization rule for transitions. Explicit contradictory new constraints still reject through ordinary solving. `:` retains its existing partial-match-from-the-start meaning; it does not authorize replacement. `%?` withholds retention for its whole scope, including descendants of a compound; field independence leaves sibling retention intact.
 
@@ -1450,15 +1458,40 @@ Work includes the item's wrkList, its definitions and the prerequisites needed t
 
 WorldManager's shared `solve()` entry point accepts source, destination and occurrence context separately. Ordinary `normalize()` uses the same source and destination; cursor execution uses a detached staging destination and the existing queue, dependency continuations, correspondence and transaction. Retention is enqueued once after the given work, in that same loop. The cursor never calls public normalize or starts a second solver. Ordinary relative-reference lookup shares the cursor's adjacent-position operation. A `%prev` read of the previous cursor occurrence uses its frozen value, so permutations and multiple rules all see the same inputs without rewiring model parent/prev/next links.
 
-A waiting step retains its handle and exact waiting link. Calling movement again while it is pending settles that step rather than advancing twice. Unrelated input does no work; rejection and cancellation leave the visible cursor and source model unchanged. Accepted publication copies the staged description into the same current infon and owns the immediate list wrappers; immutable descendant payloads remain shared. `writeBack()` uses the same checked publication and returns a request handle. Later cursor movement cannot mutate that written result through its reusable buffer.
+A waiting step retains its handle and exact waiting link. Calling movement again
+while it is pending settles that step rather than advancing twice. Unrelated input
+does no work; rejection and cancellation leave the visible cursor unchanged. A
+successful step publishes into its real occurrence after ordinary checked solving.
+Its saved original description permits later clearing. Immediate list wrappers are
+owned by the new occurrence; immutable descendant descriptions remain shared.
+Ordinary assertions into a cached descendant copy the selected shared branch before
+publication, preserving earlier states and marking the containing cached value
+permanent. Conflicting writes attach no branch. Publication uses the real occurrence
+for parent links and identity witnesses.
 
-Backward movement can reuse the immediately saved previous value. Otherwise it uses the destination's supplied evidence and available predecessor description. It does not invent inverse transitions or reconstruct arbitrary accumulated history. Missing neighbours distinguish a proved boundary from an unavailable future; this first version does not subscribe to creation of an entirely new neighbour. Parser waits on existing supplied headers/RHSs do subscribe normally. Returned partial results may still contain unknowns and deferred descriptions.
+`clearCache()` explicitly clears unused disposable entries in the containing
+represented list by restoring their exact original descriptions. It preserves
+supplied seeds, written values, entries with new normalization work, and the current
+entry held by any live cursor. Destroying a cursor releases that hold. There is no
+automatic eviction budget. Keeping a returned POV outside a cursor does not itself
+pin its cached value; use `writeBack()` when it must persist.
 
-Successive steps retire the previous internal handle when it is last in the dedicated cursor session, so pure movement retains one internal request. Explicit write-back and other session requests remain Agent-tracked; callers may retain handles explicitly. Agent still owns session lifetime and cancellation. A completed, occurrence-owned scalar proof can be reused when reading the frozen previous value, avoiding replay of its transition recipe. No shared-session deduction cache or goal reset is added.
+Backward movement returns an existing cached occurrence without solving. When that
+entry was cleared, the cursor finds the nearest retained predecessor and replays
+forward once to the requested destination. Successful intermediate results are
+cached; the visible current changes only when the requested destination is ready.
+A later wait or rejection may therefore leave a successful disposable replay prefix.
+This reconstructs supplied history without inventing inverse transitions. Missing
+neighbours distinguish a proved boundary from an unavailable future; creation of an
+entirely new neighbour still has no subscription. Parser waits on existing supplied
+headers/RHSs subscribe normally. Partial results can still contain unknowns and
+deferred descriptions.
+
+Successive steps retire the previous internal handle when it is last in the dedicated cursor session, so pure movement retains one internal request. Explicit write-back and other session requests remain Agent-tracked; callers may retain handles explicitly. Agent still owns session lifetime and cancellation. A completed, occurrence-owned scalar proof can be reused when reading the frozen previous value, avoiding replay of its transition recipe. List-backed values can be reused by another cursor on the same occurrence. There is no separate cross-session deduction cache or goal reset.
 
 Fixed-width stepping is linear in the number of steps in the measured families. A changed record level is scanned once through existing field correspondence and immediate output construction. Unchanged nested descriptions are not recursively traversed; there is no general constant-time claim for wide output, definition solving, ambiguous alignment or changing list shape. Ordinary named-value arithmetic, general sparse correspondence, ancestor listSpec integration retain their existing boundaries. D068 adds the Slipstream cube materialization path. TSpan, SCursor and detailed materialization controls remain future work.
 
-Validation and measured work for this milestone are recorded with D067 and in `reports/tcursor-work-2026-10-14.md`.
+Original stepping measurements are recorded with D067 and in `reports/tcursor-work-2026-10-14.md`. D071 records the direct-occurrence cache and backward replay validation.
 
 ### Deferred definition views and Slipstream (D068, 2026-10-14)
 
@@ -1466,7 +1499,7 @@ Composite definition layout acquisition retains literal composite fields as defe
 
 Explicit selection input is supplied work even when additional ancestor discovery is disabled. The same retained correspondence and solver handle execute it. Ordered members with repeated type names are not record keys. `materialize` supports the supplied-work option without a second solver.
 
-Slipstream's TimeView now uses TCursor, with separate scene-owned materializations for renderer demands. Cursor stepping retains unknown unchanged values; source temporal states and definitions are not rewritten. Scene sessions and request handles provide pending continuation and once-per-state display work. Ancestor temporal listSpec transitions and general inverse movement remain deferred. See `reports/tcursor-viewer-2026-10-14.md` for the exact verified boundary.
+Slipstream's TimeView now uses TCursor, with separate scene-owned materializations for renderer demands. Cursor stepping retains unknown unchanged values. D071 now stores disposable materializations in the temporal list while preserving their source descriptions; shared definitions remain unchanged. Scene sessions and request handles provide pending continuation and once-per-state display work. Ancestor temporal listSpec transitions and general inverse movement remain deferred. See `reports/tcursor-viewer-2026-10-14.md` for the exact verified boundary.
 
 ### Fixed state-change verbs (D069, 2026-10-14)
 

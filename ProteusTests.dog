@@ -56,6 +56,7 @@ TestsToRun = `
     unit/worldManager/temporalTemplates
     unit/worldManager/ancestorRequirements
     unit/worldManager/tCursor
+    unit/worldManager/tCursorCache
     unit/worldManager/inputLifecycle
     unit/worldManager/incompleteRHS
 
@@ -7476,18 +7477,29 @@ auto parse=[&](const std::string& s){auto p=m.parse(s);check(p.target&&!p.error.
 auto at=[](std::shared_ptr<POV> p,int index){auto q=p->pItem->value->items.head;while(index-->0&&q)q=q->next;if(q)q->pParent=p.get();return q;};
 auto attach=[&](TCursor& c){c.attach(&m,a.startSession(),a.getLocaleBaseName(),a.world,a.identityRegistry);};
 auto field=[](std::shared_ptr<POV> p,const std::string& name){return p->pItem->fetchField(name);};
+// Cached results are visible in the list. Compare their saved source recipes,
+// while the separate cache suite verifies restoration and persistent writes.
+auto sourceText=[](std::shared_ptr<POV> p){
+ auto copy=std::make_shared<POV>(946);copy->pItem=std::make_shared<infonView>(*p->pItem);
+ copy->pItem->value=std::make_shared<infonState>();*copy->pItem->value=*p->pItem->value;copy->pItem->value->items.clear();
+ for(auto q=p->pItem->value->items.head;q;q=q->next){auto member=std::make_shared<POV>(*q);
+  if(q->cursorValue&&q->cursorValue->owner==q.get()&&q->cursorValue->original)member->pItem=q->cursorValue->original;
+  copy->pItem->value->items.appendPov(member);
+ }
+ return toString(copy->pItem.get());
+};
 {
- auto p=parse("{T {x:1,y:2,z:3,material:{bad:(1=2)}} {x:_,y:_}}"); TCursor c(at(p,0));attach(c);auto storage=c.current->pItem;
+ auto p=parse("{T {x:1,y:2,z:3,material:{bad:(1=2)}} {x:_,y:_}}"); TCursor c(at(p,0));attach(c);auto storage=c.working->pItem;
  check(c.refresh(),"initialize given state without evaluating unrelated material");
  auto oldx=field(c.current,"x"),oldy=field(c.current,"y");auto material=field(c.current,"material")->pItem->value;
  // These RHSs are ordinary value references, as a supplied transition rule can provide.
  for(auto pair:{std::make_pair(field(at(p,1),"x"),oldy),std::make_pair(field(at(p,1),"y"),oldx)}){
    auto rhs=std::make_shared<POV>(946);rhs->pItem=std::make_shared<infonView>(*pair.second->pItem);rhs->pItem->type=nullptr;pair.first->pItem->wrkList.push_back(rhs);
  }
- auto before=toString(p->pItem.get());check(c.goNext(),"apply both work-list contributions: "+c.status().detail);
- check(c.current->pItem==storage&&field(c.current,"x")->pItem->value->num==2&&field(c.current,"y")->pItem->value->num==1,"permutation reads the same previous value and reuses cursor storage");
+ auto before=sourceText(p);check(c.goNext(),"apply both work-list contributions: "+c.status().detail);
+ check(c.current->pItem!=storage&&c.current==at(p,1)&&field(c.current,"x")->pItem->value->num==2&&field(c.current,"y")->pItem->value->num==1,"permutation reads the same previous value and returns the stored occurrence");
  check(field(c.current,"z")->pItem->value->num==3&&field(c.current,"material")->pItem->value==material,"unaffected scalar and subtree payload are retained");
- check(toString(p->pItem.get())==before,"movement does not normalize or rewrite source states");
+ check(sourceText(p)==before,"movement retains the original state descriptions");
  auto written=c.writeBack();check(written&&written->publications>0&&!written->failed(),"explicit write-back stores the available view");auto saved=toString(at(p,1)->pItem.get());check(field(at(p,1),"x")->pParent==at(p,1).get(),"written field belongs to the stored occurrence");
  check(c.goPrev()&&field(c.current,"x")->pItem->value->num==1,"backward step reads the saved prior value");
  check(toString(at(p,1)->pItem.get())==saved,"written state does not change with cursor storage");check(!c.goPrev()&&c.atBoundary,"proved initial boundary");
@@ -7496,31 +7508,31 @@ auto field=[](std::shared_ptr<POV> p,const std::string& name){return p->pItem->f
  auto d=parse("{#cursorIncrement=_=(%prev+1) #cursorKeep=_=%prev}");check(a.normalize(d)->complete(),"register a rule definition");auto definition=toString(d->pItem.get());
  {auto p=parse("{T 1 cursorIncrement}");TCursor c(at(p,0));attach(c);check(c.refresh()&&c.goNext()&&c.current->pItem->value->num==2,"a definition supplies a computed transition");}
  for(bool gaps:{false,true})for(bool named:{false,true})for(int n:{8,32,128}){
-   std::string text="{T 1";for(int i=1;i<n;i++)text+=(gaps&&i%2==0)?" _":(named?" cursorKeep":" (_=(%prev+1))");text+='}';auto p=parse(text);auto before=toString(p->pItem.get());TCursor c(at(p,0));attach(c);check(c.refresh(),"initialize numeric cursor");uint64_t frames=0,edges=0;bool values=true;
+   std::string text="{T 1";for(int i=1;i<n;i++)text+=(gaps&&i%2==0)?" _":(named?" cursorKeep":" (_=(%prev+1))");text+='}';auto p=parse(text);auto before=sourceText(p);TCursor c(at(p,0));attach(c);check(c.refresh(),"initialize numeric cursor");uint64_t frames=0,edges=0;bool values=true;
    for(int i=1;i<n;i++){if(!c.goNext()){values=false;break;}values=values&&c.status().outcome==worldComplete&&c.current->pItem->value->num==(named?1:gaps?(i+1)/2+1:i+1)&&getModeBits(c.current->pItem->infSize->flags,infonState::evalMode)==infonState::emUnknown;frames+=c.request->framesCreated;edges+=c.request->relationshipsRead;}
-   check(values,"ordinary normalization computes each direct/defined transition with unknown numeric size");check(frames<12*n&&edges<12*n,"forward stepping does not replay temporal history");check(c.session->requests.size()==1,"cursor session does not retain a history of completed internal requests");check(toString(p->pItem.get())==before,"numeric source rules remain unchanged");
+   check(values,"ordinary normalization computes each direct/defined transition with unknown numeric size");check(frames<12*n&&edges<12*n,"forward stepping does not replay temporal history");check(c.session->requests.size()==1,"cursor session does not retain a history of completed internal requests");check(sourceText(p)==before,"numeric source rules remain available for clearing");
    auto prior=c.request;check(c.refresh()&&c.request==prior,"refresh does not enqueue the same work again");std::cout<<"TCURSOR_CHAIN: "<<gaps<<" "<<named<<" "<<n<<" frames="<<frames<<" relationships="<<edges<<"\n";
  }
  check(toString(d->pItem.get())==definition,"definition is immutable across cursor uses");
 }
 for(bool header:{false,true})for(bool cancel:{false,true}){
- auto p=parse("{T {x:1,y:2} {x:_}}");auto next=at(p,1);auto rhs=parse("4");field(next,"x")->pItem->wrkList.push_back(rhs);TCursor c(at(p,0));attach(c);check(c.refresh(),"initialize pending-step baseline");auto before=toString(c.current->pItem.get());auto original=toString(p->pItem.get());auto input=header?next->pItem:rhs->pItem;m.prepareInput(input);
+ auto p=parse("{T {x:1,y:2} {x:_}}");auto next=at(p,1);auto rhs=parse("4");field(next,"x")->pItem->wrkList.push_back(rhs);TCursor c(at(p,0));attach(c);check(c.refresh(),"initialize pending-step baseline");auto before=toString(c.current->pItem.get());auto original=sourceText(p);auto input=header?next->pItem:rhs->pItem;m.prepareInput(input);
  check(!c.goNext()&&c.status().outcome==worldWaiting&&toString(c.current->pItem.get())==before,"pending header/RHS leaves the visible value intact");auto pending=c.request;auto frames=pending->framesCreated,edges=pending->relationshipsRead;
  auto unrelated=parse("8");m.inputReady(unrelated->pItem);check(!c.goNext()&&c.request==pending&&pending->framesCreated==frames&&pending->relationshipsRead==edges,"waiting continues at its exact link without replay");
  if(cancel)a.endSession(c.session);SetModeBits(input->flags,infonView::streamState,infonView::parseDone);m.inputReady(input);
  if(cancel)check(!c.refresh()&&c.status().outcome==worldCancelled&&toString(c.current->pItem.get())==before,"Agent cancellation prevents publication");
  else check(c.refresh()&&c.request==pending&&field(c.current,"x")->pItem->value->num==4&&field(c.current,"y")->pItem->value->num==2,"same request resumes and carries untouched facts");
- check(toString(p->pItem.get())==original,"continuation leaves the source model intact");
+ check(sourceText(p)==original,"continuation preserves the original source descriptions");
 }
 {
- auto p=parse("{T {x:1,y:2} {x:(4=5)}}");TCursor c(at(p,0));attach(c);check(c.refresh(),"rejection baseline");auto before=toString(c.current->pItem.get());auto source=toString(p->pItem.get());check(!c.goNext()&&c.status().outcome==worldRejected&&!c.request->publications&&toString(c.current->pItem.get())==before&&toString(p->pItem.get())==source,"ordinary conflicting constraints reject the entire step atomically");
+ auto p=parse("{T {x:1,y:2} {x:(4=5)}}");TCursor c(at(p,0));attach(c);check(c.refresh(),"rejection baseline");auto before=toString(c.current->pItem.get());auto source=sourceText(p);check(!c.goNext()&&c.status().outcome==worldRejected&&!c.request->publications&&toString(c.current->pItem.get())==before&&sourceText(p)==source,"ordinary conflicting constraints reject the entire step atomically");
 }
 {
  auto p=parse("{T {location:{x:1,y:2},material:{bad:(1=2)}} {location:{x:(_=4)}}}");TCursor c(at(p,0));attach(c);check(c.refresh()&&c.goNext(),"nested contribution follows ordinary normalization");auto location=field(c.current,"location");check(location&&field(location,"x")->pItem->value->num==4&&field(location,"y")->pItem->value->num==2,"nested update retains the untouched sibling");
 }
 {
- auto p=parse("{T {1 2 3} {(_=9) _ _}}");TCursor c(at(p,0));attach(c);auto source=toString(p->pItem.get());check(c.refresh()&&c.goNext(),"ordered correspondence carries unchanged positions");
- check(toString(c.current->pItem.get())=="{9 2 3}"&&toString(p->pItem.get())==source,"ordered change preserves the other positions and its source");
+ auto p=parse("{T {1 2 3} {(_=9) _ _}}");TCursor c(at(p,0));attach(c);auto source=sourceText(p);check(c.refresh()&&c.goNext(),"ordered correspondence carries unchanged positions");
+ check(toString(c.current->pItem.get())=="{9 2 3}"&&sourceText(p)==source,"ordered change preserves the other positions and original description");
 }
 {
  auto p=parse("{T {x:1,y:2} ({x:(_=4)}=:{x:4})}");TCursor c(at(p,0));attach(c);check(c.refresh()&&c.goNext()&&field(c.current,"x")->pItem->value->num==4&&field(c.current,"y")->pItem->value->num==2,"partial-match qualification composes with ordinary solving and retention");
@@ -7547,7 +7559,7 @@ for(int n:{8,32,128}){
    for(int i=0;i<n;i++)metadata+=",unused"+std::to_string(i)+":(4=5)";metadata+='}';
    auto definition=parse("{#"+name+"=cursorState:{parts:*2+{cursorPiece:{cursorInk=cursorHot} cursorPiece:{cursorInk=cursorPaint:{tone:9}}},metadata:"+metadata+"}}");
    check(a.normalize(definition)->complete(),"register a state with undemanded metadata");auto definitionBefore=toString(definition->pItem.get());
-   auto p=parse("{T "+name+":{thing:{z:3.5}} "+name+":{thing:{z:_}}}");auto before=toString(p->pItem.get());TCursor c(at(p,0));attach(c);auto storage=c.current->pItem;
+   auto p=parse("{T "+name+":{thing:{z:3.5}} "+name+":{thing:{z:_}}}");auto before=sourceText(p);TCursor c(at(p,0));attach(c);auto storage=c.working->pItem;
    bool initialized=c.refresh();check(initialized,"initialize inherited state shape: "+c.status().detail);if(!initialized)continue;
    auto unused=field(c.current,"metadata");check(unused&&field(c.current,"parts"),"definition contributes deferred fields");
    check(c.request->framesCreated<30,"unused definition descendants do not increase initialization work");
@@ -7565,8 +7577,8 @@ for(int n:{8,32,128}){
    auto rejected=std::make_shared<POV>(950);rejected->pItem=std::make_shared<infonView>();
    auto h=m.materialize(a.startSession(),unused,rejected,a.getLocaleBaseName(),a.world,a.identityRegistry,true);
    check(h->outcome==worldRejected&&!h->publications,"explicitly demanding contradictory metadata rejects atomically");
-   check(c.goNext()&&c.current->pItem==storage&&field(field(c.current,"thing"),"z")->pItem->value->num==FlexNum(3.5),"state two keeps an unspecified coordinate in stable cursor storage");
-   check(toString(p->pItem.get())==before&&toString(definition->pItem.get())==definitionBefore,"materialization and stepping preserve model definitions and source states");
+   check(c.goNext()&&c.current->pItem!=storage&&c.current==at(p,1)&&field(field(c.current,"thing"),"z")->pItem->value->num==FlexNum(3.5),"state two keeps an unspecified coordinate in its own stored occurrence");
+   check(sourceText(p)==before&&toString(definition->pItem.get())==definitionBefore,"materialization and stepping preserve definitions and original descriptions");
  }
  auto refined=parse("cursorDerived:{child:{x:_,y:_}}");auto h=a.normalize(refined);auto child=field(refined,"child");
  check(!h->failed()&&child&&field(child,"x")->pItem->value->num==5&&field(child,"y")->pItem->value->num==6,"inherited composite constraints remain active when demanded");
@@ -7581,7 +7593,7 @@ for(int n:{8,32,128}){
  check(a.normalize(d)->complete(),"register nested state-change definitions");auto definitions=toString(d->pItem.get());
  for(int n:{8,32,128}){
    std::string text="{T {left:{value:1},right:{value:2},untouched:{bad:(1=2)}}";
-   for(int i=0;i<n;++i)text+=" cursorTurn";text+='}';auto p=parse(text);auto original=toString(p->pItem.get());
+   for(int i=0;i<n;++i)text+=" cursorTurn";text+='}';auto p=parse(text);auto original=sourceText(p);
    TCursor c(at(p,0));attach(c);check(c.refresh(),"initialize nested transition sequence");auto unused=field(c.current,"untouched")->pItem->value;
    int left=1,right=2;uint64_t frames=0;bool values=true;
    for(int i=0;i<n;++i){int nextLeft=right%3+1;right=left;left=nextLeft;
@@ -7591,7 +7603,7 @@ for(int n:{8,32,128}){
    }
    check(values,"nested temporal references and contextual indices read one preceding snapshot");
    check(frames<100*n&&c.session->requests.size()==1,"nested transitions have bounded work per step and no request history");
-   check(field(c.current,"untouched")->pItem->value==unused&&toString(p->pItem.get())==original,"a verb leaves unrelated structure and source states untouched");
+   check(field(c.current,"untouched")->pItem->value==unused&&sourceText(p)==original,"a verb retains unrelated structure and original state descriptions");
    std::cout<<"TCURSOR_VERBS: "<<n<<" frames="<<frames<<"\n";
  }
  check(toString(d->pItem.get())==definitions,"state-change definitions stay immutable");
@@ -7616,5 +7628,141 @@ for(int n:{8,32,128}){
  }
 }
 core.deInit();std::cout<<"TCURSOR: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
+    }%>
+}
+
+struct GLOBAL {
+    void: unit_worldManager_tCursorCache(me string: testName) <- {
+        if(!worldManagerTCursorCacheChecks()){FAIL("TCursor cache checks failed")}
+    }
+    me bool: worldManagerTCursorCacheChecks() <- <%{
+ProteusCore core;core.init("",false);auto& a=*core.agent;auto& m=a.worldManager;int checks=0,failures=0;
+auto check=[&](bool ok,const std::string& msg){++checks;if(!ok){++failures;std::cout<<"FAIL: "<<msg<<"\n";}};
+auto parse=[&](const std::string& s){auto r=m.parse(s);check(r.target&&r.error.empty(),"parse "+s);return r.target;};
+auto at=[](std::shared_ptr<POV> p,int i){auto q=p->pItem->value->items.head;while(i-->0&&q)q=q->next;if(q)q->pParent=p.get();return q;};
+auto attach=[&](TCursor& c){c.attach(&m,a.startSession(),a.getLocaleBaseName(),a.world,a.identityRegistry);};
+auto chain=[&](int n){std::string s="{T 1";for(int i=1;i<n;++i)s+=" (_=(%prev+1))";return parse(s+"}");};
+auto number=[](TCursor& c,int n){return c.current&&c.current->pItem->value->num==n;};
+{
+ auto p=chain(6);std::vector<std::shared_ptr<infonView>> recipes,values;
+ for(int i=0;i<6;++i)recipes.push_back(at(p,i)->pItem);
+ TCursor c(at(p,0));attach(c);check(c.refresh()&&c.current==at(p,0),"initial supplied value is returned directly");
+ values.push_back(c.current->pItem);auto working=c.working->pItem;
+ for(int i=1;i<6;++i){
+  check(c.goNext()&&number(c,i+1)&&c.current==at(p,i),"forward result is the list occurrence");
+  check(at(p,i)->cursorValue&&at(p,i)->cursorValue->original==recipes[i],"cache preserves the exact original description");
+  values.push_back(c.current->pItem);
+ }
+ check(values[1]->value->num==2&&c.working->pItem==working,"later movement does not overwrite an earlier returned value");
+ for(int round=0;round<3;++round){
+  for(int i=4;i>=0;--i)check(c.goPrev()&&number(c,i+1)&&c.current==at(p,i)&&c.current->pItem==values[i]&&!c.request,"backward cache hit returns the same item without a solve");
+  for(int i=1;i<6;++i)check(c.goNext()&&number(c,i+1)&&c.current->pItem==values[i]&&!c.request,"forward cache hit reuses the materialized item");
+ }
+ check(c.goPrev()&&c.goPrev()&&c.goPrev()&&number(c,3),"select a value to keep permanently");
+ auto written=c.writeBack();check(written&&!written->failed()&&at(p,2)->cursorValue->permanent,"writeBack promotes an unchanged cached value");
+ auto permanent=at(p,2)->pItem;
+ {
+  TCursor other(at(p,3));attach(other);check(other.refresh()&&other.current==at(p,3)&&!other.request,"second cursor reuses the same stored value");
+  check(c.goNext()&&c.goNext()&&c.goNext(),"return to the last value");
+  check(c.clearCache()==2,"clear only unused disposable values");
+  check(at(p,1)->pItem==recipes[1]&&at(p,4)->pItem==recipes[4],"clearing restores original source objects");
+  check(other.current->pItem==values[3]&&at(p,2)->pItem==permanent,"another cursor and permanent write survive clearing");
+  check(c.goPrev()&&number(c,5),"rebuild a missing value from the nearest retained predecessor");
+ }
+ check(c.clearCache()==2,"destroying a cursor releases its current cache entry");
+ check(at(p,2)->pItem==permanent,"permanent item survives later clearing");
+}
+for(int n:{8,32,128}){
+ auto p=chain(n);TCursor c(at(p,0));attach(c);check(c.refresh(),"initialize replay sequence");
+ for(int i=1;i<n;++i)check(c.goNext()&&number(c,i+1),"build forward sequence");
+ auto last=c.current->pItem;check(c.clearCache()==n-2,"clear all unused intermediate values");
+ check(c.goPrev()&&number(c,n-1)&&c.current==at(p,n-2),"reconstruct a cleared prefix in forward order");
+ check(at(p,n-1)->pItem==last,"reconstruction does not rewrite the later state");
+ for(int i=n-3;i>=0;--i)check(c.goPrev()&&number(c,i+1)&&!c.request,"rebuilt prefix supports repeated backward hits");
+}
+{
+ auto p=parse("{T {x:1,y:_} {x:_,y:_} {x:_}}");TCursor c(at(p,0));attach(c);check(c.refresh()&&c.goNext(),"initialize writable record cache");
+ auto supplied=parse("{x:_,y:7}");c.current->pItem->addPOVToWrkList(supplied);
+ auto written=c.writeBack();auto field=at(p,1)->pItem->fetchField("y");
+ check(written&&!written->failed()&&field&&field->pItem->value->num==7,"writeBack applies new supplied work through the solver");
+ check(field->pParent==at(p,1).get(),"writeBack child parent stays attached to the real occurrence");
+ check(c.goNext()&&c.clearCache()==0&&at(p,1)->pItem->fetchField("y")->pItem->value->num==7,"new information is permanent after writeBack");
+}
+{
+ auto p=parse("{T {x:1,y:_} {x:_,y:_} {x:_}}");a.world=p->pItem;TCursor c(at(p,0));attach(c);
+ check(c.refresh()&&c.goNext()&&c.goNext(),"initialize ordinary assertion destination");
+ auto query=parse("%W@[2].y=7");auto h=a.normalize(query);
+ check(!h->failed()&&at(p,1)->pItem->fetchField("y")->pItem->value->num==7,"ordinary path assertion reaches a cached member");
+ check(c.clearCache()==0&&at(p,1)->cursorValue->permanent,"a descendant assertion protects its containing cached state");
+ a.world=nullptr;
+}
+{
+ auto p=chain(4);TCursor c(at(p,0));attach(c);check(c.refresh()&&c.goNext()&&c.goNext(),"initialize conservative clearing");
+ auto middle=at(p,1);middle->pItem->addPOVToWrkList(parse("2"));
+ check(c.clearCache()==0&&!middle->pItem->wrkList.empty(),"unprocessed explicit work is not discarded");
+}
+for(bool cancel:{false,true}){
+ auto p=chain(5);TCursor c(at(p,0));attach(c);check(c.refresh(),"initialize suspended replay");
+ for(int i=1;i<5;++i)check(c.goNext(),"prepare suspended replay states");
+ auto visible=c.current;auto value=visible->pItem;check(c.clearCache()==3,"remove replay prefix");
+ auto input=at(p,2)->pItem;m.prepareInput(input);
+ check(!c.goPrev()&&c.status().outcome==worldWaiting&&c.current==visible&&c.current->pItem==value,"replay waits without changing the visible cursor");
+ auto pending=c.request;check(!c.refresh()&&c.request==pending,"replay keeps the same waiting request");
+ if(cancel)a.endSession(c.session);SetModeBits(input->flags,infonView::streamState,infonView::parseDone);m.inputReady(input);
+ if(cancel)check(!c.refresh()&&c.current==visible&&c.status().outcome==worldCancelled,"cancelled replay preserves visible value");
+ else check(c.refresh()&&number(c,4)&&c.current==at(p,3),"arrival completes the replay and exposes only the requested destination");
+}
+{
+ auto p=parse("{T {x:1,y:2} {x:(4=5)}}");TCursor c(at(p,0));attach(c);check(c.refresh(),"initialize rejecting step");
+ auto source=at(p,1)->pItem;auto current=c.current;
+ check(!c.goNext()&&c.status().outcome==worldRejected&&at(p,1)->pItem==source&&!at(p,1)->cursorValue&&c.current==current,"rejection creates no cache and leaves current unchanged");
+}
+{
+ auto p=chain(3);TCursor c(at(p,0));attach(c);c.position->writable=false;
+ auto source=toString(p->pItem.get());check(c.refresh()&&c.goNext()&&number(c,2)&&c.current==c.working,"read-only occurrences use the working buffer");
+ check(!c.writeBack()&&toString(p->pItem.get())==source,"read-only traversal never caches into the source");
+}
+{
+ auto first=parse("{T 1 (_=(%prev+1))}");auto second=parse("{T 10 _}");auto recipe=at(first,1)->pItem;auto description=toString(recipe.get());at(second,1)->pItem=recipe;
+ TCursor left(at(first,0)),right(at(second,0));attach(left);attach(right);
+ check(left.refresh()&&left.goNext()&&number(left,2)&&right.refresh()&&right.goNext()&&number(right,11),"shared recipe evaluates in each occurrence's temporal context");
+ check(left.current->pItem!=right.current->pItem&&toString(recipe.get())==description,"equal source addresses do not identify cached occurrences");
+ check(left.goPrev()&&left.clearCache()==1&&number(right,11),"clearing one list leaves the other occurrence intact");
+}
+{
+ auto p=parse("{T {nested:{x:_,y:2},tag:0} {tag:_} {tag:_}}");a.world=p->pItem;TCursor c(at(p,0));attach(c);
+ check(c.refresh()&&c.goNext()&&c.goNext(),"initialize nested cached descriptions: "+c.status().detail);
+ auto original=toString(at(p,0)->pItem.get());auto query=parse("%W@[2].nested.x=7");auto h=a.normalize(query);
+ auto nested=at(p,1)->pItem->fetchField("nested");
+ check(!h->failed()&&nested->pItem->fetchField("x")->pItem->value->num==7,"nested assertion reaches the requested cached occurrence: "+h->detail);
+ check(toString(at(p,0)->pItem.get())==original,"writing a cached descendant does not mutate the earlier state");
+ check(c.clearCache()==0,"nested assertion survives cache clearing");a.world=nullptr;
+}
+{
+ auto p=parse("{T {x:_,y:2} {y:_} {y:_}}");a.world=p->pItem;TCursor c(at(p,0));attach(c);
+ check(c.refresh()&&c.goNext()&&c.goNext(),"initialize borrowed scalar write");
+ auto original=toString(at(p,0)->pItem.get());auto q=parse("%W@[2].x=7");auto h=a.normalize(q);
+ check(!h->failed()&&at(p,1)->pItem->fetchField("x")->pItem->value->num==7&&toString(at(p,0)->pItem.get())==original,"writing a borrowed scalar keeps earlier header unchanged");
+ check(c.clearCache()==0,"borrowed scalar assertion is permanent");a.world=nullptr;
+}
+{
+ auto p=parse("{T {nested:{x:_,y:2},tag:0} {tag:_} {tag:_}}");a.world=p->pItem;TCursor c(at(p,0));attach(c);
+ check(c.refresh()&&c.goNext()&&c.goNext(),"initialize conflicting cached write");
+ auto original=toString(p->pItem.get());auto cached=at(p,1)->pItem;
+ auto q=parse("%W@[2].nested={x:7,y:3}");auto h=a.normalize(q);
+ check(h->status().outcome==worldRejected&&toString(p->pItem.get())==original&&at(p,1)->pItem==cached,"conflicting nested assertion publishes no partial branch");
+ check(c.clearCache()==1,"rejected assertion does not promote disposable cache");a.world=nullptr;
+}
+{
+ auto p=parse("{T {nested:{x:_,y:2},tag:0} {tag:_} {tag:_}}");a.world=p->pItem;TCursor c(at(p,0));attach(c);
+ check(c.refresh()&&c.goNext()&&c.goNext(),"initialize composite cached write");
+ auto original=toString(at(p,0)->pItem.get());auto q=parse("%W@[2].nested={x:7,y:2}");auto h=a.normalize(q);
+ auto nested=at(p,1)->pItem->fetchField("nested");auto x=nested->pItem->fetchField("x");
+ check(!h->failed()&&x->pItem->value->num==7&&toString(at(p,0)->pItem.get())==original,"composite assertion preserves the earlier retained subtree");
+ check(x->pParent==nested.get()&&nested->pParent==at(p,1).get(),"committed child parents name live model occurrences");
+ auto read=parse("%W@[2].nested.x");auto result=a.normalize(read);
+ check(!result->failed()&&read->pItem->value->num==7,"later path navigation reads the committed composite");a.world=nullptr;
+}
+core.deInit();std::cout<<"TCURSOR_CACHE: "<<checks-failures<<"/"<<checks<<" checks passed\n";return failures==0;
     }%>
 }

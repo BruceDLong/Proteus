@@ -1381,3 +1381,80 @@ TCursor checks and the retained-listSpec checks. Default fixtures remain at
 WorldManager, cursor, default and full-suite logs are byte-identical before and
 after the change. All 15 protected fixture files and the user's `myTests.tst`
 are byte-for-byte unchanged. No cursor behavior or GUI behavior was changed.
+
+
+## D071 Return stored cursor occurrences, clear disposable values, replay history (2026-10-17)
+
+**User decision.** Implement the first three cursor follow-ups in Proteus4-redesign:
+return materialized occurrences directly, cache in the list with explicit permanent
+write-back, and support repeated backward movement. Keep the pragmatic stored normal
+form and existing printer modes. General member waiting/priority, virtual sparse
+T/S navigation and expanded printing remain subsequent work.
+
+**Storage and lifetime.** `current` is the represented list POV on a hit or successful
+writable step. `working` is the read-only fallback. A cache record belongs to that
+occurrence, points to its current infon/revision, and retains its original description
+for clearing. Computed values live only in the list. A shared use token protects each
+live cursor's current entry; destruction releases it without retaining the cursor.
+`clearCache()` restores unused disposable descriptions. Explicit `writeBack()`, a
+successful ordinary assertion into the value, or new unprocessed work makes it
+permanent. Dirty or unrecognized changes are conservatively retained. No automatic
+eviction or size budget is introduced.
+
+**Inference and sharing.** Cache misses use the existing solver and publication.
+An unchanged writeBack still performs checked publication and promotes the item.
+Ordinary selected writes into a borrowed nested value prepare private headers and
+copy only the represented lists on that write path. Untouched descendants stay
+shared. All validation precedes attaching the private branch. Publishing against
+the real destination keeps parent links and identity witnesses valid. This is
+necessary because shallow retention deliberately shares infon headers and child
+storage; merely marking the root cache permanent would allow a nested assertion to
+mutate an earlier state. Rejected writes neither change that state nor pin the cache.
+
+**Navigation.** Cache hits expose the existing POV and require no request. A miss
+scans backward to the nearest retained state and replays forward once, caching the
+successful prefix. Suspended replay retains its current request and keeps the old
+visible value until the destination is ready. No inverse transition is inferred.
+Forward and backward cached movement no longer depends on a single saved predecessor.
+Slipstream's scene index now follows the returned occurrence when its timeline moves.
+
+**Costs and boundaries.** Clearing and locating a missing predecessor each scan the
+represented list/prefix once. Replay uses ordinary per-step inference; fixed-width
+prefixes are checked through 128 steps. Writing a shared branch copies each demanded
+containing level once per transaction, rather than expanding unrelated descendants.
+Physical temporal neighbours remain the navigation boundary. This does not implement
+virtual positions in compressed listSpecs, a general S-list cursor, general missing-
+member subscriptions, loader priorities or automatic invalidation of every derived
+fact when arbitrary external storage is changed. Mutations must use normal inference
+and normalization-work tracking. Existing unsupported sparse/ambiguous correspondence
+remains unsupported; no fallback solver is introduced.
+
+**Validation.** Regenerated `codeDog Proteus.Lib.dog` (215.82 s),
+`codeDog BuildProteusGraph.dog` (142.17 s), and the linked
+`codeDog Slipstream.dog` (108.28 s) successfully. All 58 WorldManager suites pass,
+including the 273 existing cursor checks and 464 cache checks. The latter cover
+shared cursors, unchanged and changed write-back, exact source restoration,
+borrowed scalar/nested/composite writes, parent links, rejection, read-only views,
+independent occurrences, pending/cancelled replay and cleared prefixes through 128
+states. All ten print-mode fixtures pass. The full active suite reports 24 failures
+out of 536 registrations; all failing names and diagnostics exactly match the
+24/535 baseline. The 15 protected fixtures, print-mode fixture and user's
+`myTests.tst` are unchanged.
+
+The maintained World Rubix driver now checks this stored-occurrence contract in
+place of its obsolete reusable-address/source-list expectations. The independent
+geometry oracle is unchanged: all 12 verbs, 206 turns, inverse/four-turn identities,
+78 projected cubies and 468 surfaces pass. Each of its 16 sequences also verifies
+backward/forward cache hits and a full reconstructed state after clearing the
+prefix. Mixed sequences of 8, 32 and 128 turns retain the same 536–554 frames per
+new step; hits create no request. Shared definitions and original recipes remain
+unchanged. No World or Slipstream model resource was edited.
+
+On a private Xvfb display, the rebuilt Slipstream renders a colored cube and accepts
+three Next clicks followed by three Previous clicks. Every move succeeds; backward
+steps return the earlier occurrence pointers with a null request. Screenshots
+confirm that the cube remains rendered. Existing preview rotation remains active,
+so pixel equality across wall-clock times is not a state oracle. The two existing
+world-loading NRMERR messages remain; no DISPLAY failure occurs. Evidence is in
+`/tmp/proteus4-cursor-cache/` (`world-final.log`, `full-final.log`,
+`model-final.log`, build logs and `gui/`).

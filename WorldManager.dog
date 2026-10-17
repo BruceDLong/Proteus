@@ -696,7 +696,15 @@ struct WorldPublication {
     me bool: reorderFields <- false
     me List<our POV>: fieldOrder
 }
+// A detached branch is attached only after every write has been checked.
+struct WorldCursorWrite {
+    our POV: target
+    our POV: staged
+    me Map<our POV, our POV>: members
+}
 struct WorldRequest {
+    me Map<our POV, our WorldCursorWrite>: cursorWrites
+    me Map<our POV, our POV>: cursorWriteTargets
     // Supplied work drains its given relationships; it does not discover
     // additional enclosing obligations after they have been exhausted.
     me bool: suppliedWork <- false
@@ -768,7 +776,7 @@ struct WorldRequest {
     // also waits for any active publication to finish; Waiting stays visible.
     void: waitForCompletion() <- {me WorldModelLock: lock{control!.mutex}}
     void: releaseProgress() <- {
-        associations.clear(); completedOccurrences.clear(); boundaries.clear(); sparseEdits.clear(); unitOrigins.clear(); ready.clear(); attempts.clear(); activeContexts.clear(); edits.clear(); declarations.clear(); declarationOrigins.clear(); root <- NULL; waitingFrame <- NULL
+        cursorWrites.clear(); cursorWriteTargets.clear(); associations.clear(); completedOccurrences.clear(); boundaries.clear(); sparseEdits.clear(); unitOrigins.clear(); ready.clear(); attempts.clear(); activeContexts.clear(); edits.clear(); declarations.clear(); declarationOrigins.clear(); root <- NULL; waitingFrame <- NULL
     }
     void: cancel() <- {
         me WorldModelLock: lock{control!.mutex}
@@ -798,7 +806,24 @@ struct WorldParseResult {
     me string: error
 }
 
+// A use token protects the currently displayed value without owning a cursor.
+// Its shared ownership also releases the protection when a cursor is destroyed.
+struct WorldCursorUse {}
+struct WorldCursorValue {
+    their POV: owner
+    their infonView: value
+    our infonView: original
+    our WorldCursorUse: use
+    me uint64: revision
+    me WorldOutcome: outcome
+    me bool: ready <- false
+    me bool: permanent <- false
+    void: INIT() <- {Allocate(use)}
+    me bool: inUse() <- <%{return use.use_count()>1;}%>
+}
+
 struct POV {
+    our WorldCursorValue: cursorValue
     // A working view keeps source context without identifying its reusable storage.
     our WorldPosition: worldContext
     // Internal value-retention relation; never a parsed identity qualifier.
@@ -812,7 +837,8 @@ struct infonView {
     // The template has been applied to this layout; keep its semantic source.
     me bool: listSpecApplied <- false
     // A new supplied constraint needs a new request. Existing handles are not reset.
-    void: noteNormalizationWork() <- {worldScalarCompletionOwner <- NULL; isNormed <- false; listSpecApplied <- false}
+    me uint64: cursorRevision <- 0
+    void: noteNormalizationWork() <- {cursorRevision <+- 1; worldScalarCompletionOwner <- NULL; isNormed <- false; listSpecApplied <- false}
 }
 
 // Virtual access over the existing model; no copied adjacency graph.
@@ -2379,7 +2405,11 @@ struct WorldPOVGraph {
         me List<WorldPublication>: pending
         me List<WorldPublication>: writes
         me Map<our infonView, our WorldFrame>: seen
-        me WorldPublication: root; root.target <- request!.target; root.frame <- request!.root; pending.append(root)
+        me WorldPublication: root; root.target <- request!.target; root.frame <- request!.root
+        if(root.target!.cursorValue!=NULL and root.target!.cursorValue!.owner===root.target){
+            root.target <- cursorWriteTarget(request, position(root.target))
+        }
+        pending.append(root)
         me bool: editsQueued <- false
         while(!pending.isEmpty() or !editsQueued){
             if(pending.isEmpty()){
@@ -2388,7 +2418,10 @@ struct WorldPOVGraph {
                 // Only edits outside that result need another destination job.
                 withEach update in request!.edits{
                     if(!seen.containsKey(update!.node!.pItem)){
-                        me WorldPublication: edit; edit.target <- update!.node; edit.frame <- update; pending.append(edit)
+                        me WorldPublication: edit; edit.target <- update!.node
+                        if(update!.context!=NULL){edit.target <- cursorWriteTarget(request, update!.context)}
+                        if(edit.target==NULL){return()}
+                        edit.frame <- update; pending.append(edit)
                     }
                 }
                 if(pending.isEmpty()){break()}
@@ -2527,12 +2560,28 @@ struct WorldPOVGraph {
                 request!.identities!.boundaries.at(staged!.source) <- staged
             }else{request!.identities!.boundaries.insert(staged!.source, staged)}
         }
-        withEach job in writes{publishFrame(request, job)}
+        // Commit private headers only after validation. Publish against the
+        // real occurrences so parent links and identity witnesses stay valid.
+        withEach branch in request!.cursorWrites{
+            preserveCursorValue(branch!.target)
+            branch!.target!.pItem <- branch!.staged!.pItem
+        }
+        withEach job in writes{
+            if(request!.cursorWriteTargets.containsKey(job.target)){
+                job.target <- request!.cursorWriteTargets.at(job.target)
+                if(job.newList!=NULL){
+                    our POV: child <- job.newList!.items.head
+                    while(child!=NULL){child!.pParent <- job.target; child <- child!.next}
+                }
+            }
+            preserveCursorValue(job.target); publishFrame(request, job)
+        }
         withEach reference in request!.associations{
             request!.identities!.recordExternalAssociation(reference!.anchorPOV, reference!.predicatePOV,
                 reference!.valuePOV, reference!.witnessPOV, reference!.relationTypeID, 0)
         }
         withEach job in writes{
+            if(request!.cursorWriteTargets.containsKey(job.target)){job.target <- request!.cursorWriteTargets.at(job.target)}
             if(job.frame!.associationAnchor!=NULL and job.target!.pItem!==job.frame!.associationAnchor!.pItem){
                 request!.identities!.recordIdentity(job.target, job.frame!.associationAnchor, iekAssertion, 0)
             }
@@ -2581,6 +2630,104 @@ struct WorldPOVGraph {
             member <- members.nextMember(false)
         }
         return(true)
+    }
+
+    // A retained subtree can share its immutable payload with an earlier state.
+    // Fork only the represented levels on a selected write path. Each level is
+    // copied once per transaction; reads and cursor movement stay shallow.
+    our POV: cursorWriteTarget(our WorldRequest: request, our WorldPosition: destination) <- {
+        if(destination==NULL){request!.outcome <- worldUnsupported; request!.detail <- "Write has no occurrence context"; return(NULL)}
+        me List<our WorldPosition>: path
+        our WorldPosition: at <- destination
+        while(at!=NULL){
+            if(at!.node!.cursorValue!=NULL and at!.node!.cursorValue!.owner===at!.node){break()}
+            path.append(at); at <- at!.parent
+        }
+        if(at==NULL){return(destination!.node)}
+        our POV: parent <- at!.node
+        while(!path.isEmpty()){
+            our WorldPosition: child <- path.popLast()
+            if(request!.cursorWrites.containsKey(parent) or child!.node!.pParent!==parent){
+                if(!request!.cursorWrites.containsKey(parent)){
+                    if(parent!.pItem!.value!.overlayType!=LST or parent!.pItem!.value!.evalMode!=emLiteral){
+                        request!.outcome <- worldUnsupported; request!.detail <- "Cached write path needs a represented list"; return(NULL)
+                    }
+                    our WorldCursorWrite:: branch; branch!.target <- parent
+                    Allocate(branch!.staged, 946); Allocate(branch!.staged!.pItem)
+                    copyDescription(branch!.staged, parent!.pItem, true)
+                    our POV: original <- parent!.pItem!.value!.items.head
+                    our POV: copied <- branch!.staged!.pItem!.value!.items.head
+                    while(original!=NULL){
+                        copied!.pParent <- parent
+                        branch!.members.insert(original, copied); branch!.members.insert(copied, copied)
+                        original <- original!.next; copied <- copied!.next
+                    }
+                    request!.cursorWrites.insert(parent, branch)
+                    request!.cursorWriteTargets.insert(branch!.staged, parent)
+                }
+                our WorldCursorWrite: branch <- request!.cursorWrites.at(parent)
+                if(!branch!.members.containsKey(child!.node)){
+                    request!.outcome <- worldUnsupported; request!.detail <- "Cached write path no longer names a member"; return(NULL)
+                }
+                parent <- branch!.members.at(child!.node)
+                child!.node <- parent; child!.owner <- parent; child!.occurrence <- parent
+            }else{parent <- child!.node}
+        }
+        // The selected POV keeps its identity. Its infon header must be private
+        // even when an unchanged value was borrowed from another occurrence.
+        if(!request!.cursorWrites.containsKey(parent)){
+            our WorldCursorWrite:: leaf; leaf!.target <- parent
+            Allocate(leaf!.staged, 946); Allocate(leaf!.staged!.pItem)
+            copyDescription(leaf!.staged, parent!.pItem, false)
+            leaf!.staged!.pParent <- parent!.pParent
+            Allocate(leaf!.staged!.pItem!.value)
+            leaf!.staged!.pItem!.value!.overlayType <- tUnknown
+            leaf!.staged!.pItem!.value!.evalMode <- emUnknown
+            request!.cursorWrites.insert(parent, leaf)
+            request!.cursorWriteTargets.insert(leaf!.staged, parent)
+        }
+        return(request!.cursorWrites.at(parent)!.staged)
+    }
+
+    me bool: cursorValueReady(our POV: node) <- {
+        our WorldCursorValue: stored <- node!.cursorValue
+        return(stored!=NULL and stored!.owner===node and stored!.ready and
+            stored!.value===node!.pItem and stored!.revision==node!.pItem!.cursorRevision)
+    }
+    void: rememberCursorValue(our POV: node, our infonView: original, me WorldOutcome: outcome, me bool: permanent) <- {
+        if(node!.cursorValue==NULL or node!.cursorValue!.owner!==node){Allocate(node!.cursorValue)}
+        our WorldCursorValue: stored <- node!.cursorValue
+        stored!.owner <- node; stored!.value <- node!.pItem; stored!.original <- original
+        stored!.revision <- node!.pItem!.cursorRevision; stored!.outcome <- outcome
+        stored!.permanent <- permanent; stored!.ready <- true
+    }
+    // The solver has already checked and published this staged description.
+    // Retain the source recipe, not a second cache of computed values.
+    void: storeCursorValue(our POV: node, our infonView: description, me WorldOutcome: outcome) <- {
+        our infonView: original <- node!.pItem
+        me bool: permanent <- false
+        if(node!.cursorValue!=NULL and node!.cursorValue!.owner===node){
+            permanent <- node!.cursorValue!.permanent or !cursorValueReady(node)
+            if(node!.cursorValue!.original!=NULL){original <- node!.cursorValue!.original}
+        }
+        if(permanent){original <- NULL}
+        Allocate(node!.pItem)
+        copyDescription(node, description, true)
+        rememberCursorValue(node, original, outcome, permanent)
+    }
+    // A successful ordinary publication is persistent, including assertions
+    // into a descendant of a cached state. Rejected transactions never get here.
+    void: preserveCursorValue(our POV: target) <- {
+        their POV: at <- target
+        me Set<their POV>: seen
+        while(at!=NULL and !seen.contains(at)){
+            seen.insert(at)
+            if(at!.cursorValue!=NULL and at!.cursorValue!.value===at!.pItem){
+                at!.cursorValue!.original <- NULL; at!.cursorValue!.permanent <- true
+                if(at===target){at!.cursorValue!.ready <- false}
+            }
+            at <- at!.pParent
+        }
     }
 
     // A published root owns its immediate occurrence wrappers. Retained
@@ -5823,6 +5970,26 @@ struct WorldManager {
         if(request!.outcome!=worldWaiting){request!.releaseProgress()}
     }
 
+    // Clearing never removes supplied facts or an entry held by a live cursor.
+    // New tracked work or a replaced header makes the materialization permanent.
+    me int: clearCursorCache(our POV: list) <- {
+        me WorldModelLock: lock{control!.mutex}
+        me int: cleared <- 0
+        our POV: member <- list!.pItem!.value!.items.head
+        while(member!=NULL){
+            our WorldCursorValue: stored <- member!.cursorValue
+            if(stored!=NULL and stored!.owner===member and !stored!.permanent){
+                if(!graph.cursorValueReady(member)){
+                    stored!.original <- NULL; stored!.permanent <- true
+                }else if(stored!.original!=NULL and !stored!.inUse()){
+                    member!.pItem <- stored!.original; member!.cursorValue <- NULL; cleared <+- 1
+                }
+            }
+            member <- member!.next
+        }
+        return(cleared)
+    }
+
     void: cancel(our WorldRequest: request) <- {request!.cancel()}
     void: closeSession(our WorldSession: session) <- {
         me WorldModelLock: lock{control!.mutex}
@@ -5832,12 +5999,17 @@ struct WorldManager {
     }
 }
 
-// One working value; source occurrence, previous value and output stay distinct.
+// The working buffer is only a fallback; current normally denotes the stored
+// occurrence. Cached values and permanent values use the same list and solver.
 struct TCursor {
     our POV: initial
     our POV: current
+    our POV: working
+    our WorldCursorUse: activeValue
     our WorldPosition: position
     our WorldPosition: pendingPosition
+    our WorldPosition: previousValue
+    me List<our WorldPosition>: replay
     their WorldManager: manager
     our WorldSession: session
     our infonView: worldSource
@@ -5849,7 +6021,7 @@ struct TCursor {
     me WorldStatus: movement
 
     void: INIT() <- {
-        Allocate(current, 946); Allocate(current!.pItem)
+        Allocate(working, 946); Allocate(working!.pItem); current <- working
         if(initial!=NULL){me WorldPOVGraph: paths; position <- paths.occurrencePath(initial)}
     }
     void: attach(their WorldManager: engine, our WorldSession: workSession,
@@ -5867,54 +6039,98 @@ struct TCursor {
         return(result)
     }
     // Sharing immutable payloads freezes a value without copying descendants.
-    our WorldPosition: snapshot() <- {
-        our POV:: view{946}; Allocate(view!.pItem); view!.pItem! <- current!.pItem!
-        if(current!.pItem!.worldScalarCompletionOwner===current!.pItem){view!.pItem!.worldScalarCompletionOwner <- view!.pItem}
-        our WorldPosition:: result; result! <- position!; result!.node <- view
+    our WorldPosition: snapshotOf(our POV: source, our WorldPosition: at) <- {
+        our POV:: view{946}; Allocate(view!.pItem); view!.pItem! <- source!.pItem!
+        if(source!.pItem!.worldScalarCompletionOwner===source!.pItem){view!.pItem!.worldScalarCompletionOwner <- view!.pItem}
+        our WorldPosition:: result; result! <- at!; result!.node <- view
         result!.constraintRoot <- true; result!.writable <- false
         return(result)
+    }
+    our WorldPosition: snapshot() <- {return(snapshotOf(current, position))}
+    void: retireRequest() <- {
+        if(request!=NULL and !session!.requests.isEmpty() and session!.requests.last()===request){session!.requests.popLast()}
+        request <- NULL
+    }
+    me bool: available(our WorldPosition: at) <- {
+        if(at==NULL){return(false)}
+        our POV: node <- at!.node
+        if(manager!.graph.cursorValueReady(node)){return(true)}
+        // Only a first literal is a seed. A later partial record still needs
+        // ordinary retention of the preceding state before it can be reused.
+        our infonView: item <- node!.pItem
+        if(adjacent(at, true)!=NULL or item!.streamState!=parseDone or
+           item!.viewMode!=vmOverlay or item!.value!.evalMode!=emLiteral or
+           item!.type!=NULL or !item!.wrkList.isEmpty() or item!.value!.listSpec!=NULL){return(false)}
+        if(at!.writable){manager!.graph.rememberCursorValue(node, NULL, worldPartial, true)}
+        return(true)
+    }
+    void: selectValue(our WorldPosition: at, our POV: value) <- {
+        position <- at; current <- value; activeValue <- NULL
+        if(manager!.graph.cursorValueReady(value)){
+            activeValue <- value!.cursorValue!.use
+            movement.outcome <- value!.cursorValue!.outcome; movement.detail <- ""
+        }
+        hasValue <- true; atBoundary <- false
+    }
+    void: startStep(our WorldPosition: at) <- {
+        retireRequest()
+        our POV:: staged{946}; Allocate(staged!.pItem)
+        pendingPosition <- at
+        request <- manager!.solve(session, at!.node, staged, false, language, worldSource, identities,
+            at, previousValue, true, false)
     }
     me bool: settle() <- {
         if(request==NULL or pendingPosition==NULL){return(false)}
         me WorldModelLock: lock{manager!.control!.mutex}
-        movement <- request!.status()
-        if(movement.outcome==worldWaiting or movement.outcome==worldReady){return(false)}
-        if(request!.publications>0 and (movement.outcome==worldComplete or movement.outcome==worldPartial)){
-            our infonView: result <- request!.target!.pItem
-            manager!.graph.copyDescription(current, result, true)
-            position <- pendingPosition; current!.worldContext <- position; pendingPosition <- NULL
-            hasValue <- true; return(true)
+        while(pendingPosition!=NULL){
+            movement <- request!.status()
+            if(movement.outcome==worldWaiting or movement.outcome==worldReady){return(false)}
+            if(request!.publications==0 or (movement.outcome!=worldComplete and movement.outcome!=worldPartial)){
+                pendingPosition <- NULL; replay.clear(); previousValue <- NULL; return(false)
+            }
+            our WorldPosition: at <- pendingPosition
+            our POV: value <- working
+            if(at!.writable){
+                value <- at!.node
+                if(at!.parent!=NULL){value!.pParent <- at!.parent!.occurrence}
+                manager!.graph.storeCursorValue(value, request!.target!.pItem, movement.outcome)
+            }else{
+                manager!.graph.copyDescription(working, request!.target!.pItem, true)
+                working!.worldContext <- at
+            }
+            pendingPosition <- NULL
+            if(replay.isEmpty()){
+                selectValue(at, value); previousValue <- NULL; return(true)
+            }
+            previousValue <- snapshotOf(value, at)
+            our WorldPosition: nextStep <- replay.popLast(); startStep(nextStep)
         }
-        pendingPosition <- NULL; return(false)
+        return(false)
     }
     me bool: fill(our WorldPosition: destination, me bool: forward <- true) <- {
-        if(manager==NULL or session==NULL){movement.outcome <- worldPartial; movement.detail <- "Applying cursor work needs an execution context"; return(false)}
+        if(manager==NULL or session==NULL or session!.closed){movement.outcome <- worldError; movement.detail <- "Applying cursor work needs an open execution context"; return(false)}
         if(destination==NULL){movement.outcome <- worldError; movement.detail <- "Cursor needs a valid occurrence"; return(false)}
         me WorldModelLock: lock{manager!.control!.mutex}
-        our WorldPosition: previous
-        if(hasValue and forward){previous <- snapshot()}
-        else if(hasValue){previous <- adjacent(destination, true)}
-        our POV: source <- destination!.node
-        me bool: borrow <- !hasValue and source!.pItem!.streamState==parseDone and
-            source!.pItem!.value!.overlayType==LST and source!.pItem!.value!.evalMode==emLiteral and
-            source!.pItem!.type==NULL and source!.pItem!.wrkList.isEmpty() and source!.pItem!.value!.listSpec==NULL
-        // An immediately preceding value is already available; no inverse rule
-        // or reevaluation is needed to step back to it.
-        if(!forward and request!=NULL and request!.previousValue!=NULL and manager!.graph.samePosition(destination, request!.previousValue)){
-            source <- request!.previousValue!.node; previous <- NULL; borrow <- true
+        replay.clear(); previousValue <- NULL; atBoundary <- false
+        if(available(destination)){
+            retireRequest(); selectValue(destination, destination!.node); return(true)
         }
-        our POV:: staged{946}; Allocate(staged!.pItem)
-        pendingPosition <- destination; atBoundary <- false
-        // The caller may retain a completed handle; the cursor's dedicated
-        // session does not accumulate one internal request per time step.
-        if(request!=NULL and !session!.requests.isEmpty() and session!.requests.last()===request){session!.requests.popLast()}
-        request <- manager!.solve(session, source, staged, false, language, worldSource, identities, destination, previous, true, borrow)
+        if(hasValue and forward and manager!.graph.samePosition(adjacent(position, false), destination)){
+            previousValue <- snapshot(); replay.append(destination)
+        }else{
+            // Find the nearest retained value once, then replay forward once.
+            // The visible current stays unchanged throughout a suspended replay.
+            our WorldPosition: at <- destination
+            while(at!=NULL and !available(at)){replay.append(at); at <- adjacent(at, true)}
+            if(at!=NULL){previousValue <- snapshotOf(at!.node, at)}
+        }
+        our WorldPosition: nextStep <- replay.popLast(); startStep(nextStep)
         return(settle())
     }
     me bool: refresh() <- {
         if(pendingPosition!=NULL){return(settle())}
-        if(request!=NULL){return(hasValue)}
-        return(fill(position))
+        if(hasValue and (current===working or manager!.graph.cursorValueReady(current))){return(true)}
+        return(fill(position, false))
     }
     me bool: move(me bool: previous) <- {
         if(pendingPosition!=NULL){return(settle())}
@@ -5934,10 +6150,23 @@ struct TCursor {
     me bool: goNext() <- {return(move(false))}
     me bool: goPrev() <- {return(move(true))}
     our WorldRequest: writeBack() <- {
-        if(manager==NULL or !hasValue or position==NULL or pendingPosition!=NULL){return(NULL)}
+        if(manager==NULL or !hasValue or position==NULL or pendingPosition!=NULL or !position!.writable){return(NULL)}
         me WorldModelLock: lock{manager!.control!.mutex}
         our WorldPosition: saved <- snapshot()
-        return(manager!.solve(session, saved!.node, position!.node, false, language, worldSource, identities, saved, NULL, true, true))
+        me bool: unchanged <- manager!.graph.cursorValueReady(current)
+        our WorldRequest: written <- manager!.solve(session, saved!.node, position!.node, false,
+            language, worldSource, identities, saved, NULL, true, unchanged)
+        if(written!.publications>0 and !written!.failed()){
+            manager!.graph.rememberCursorValue(position!.node, NULL, written!.status().outcome, true)
+            current <- position!.node; activeValue <- current!.cursorValue!.use
+        }
+        return(written)
+    }
+    // Explicit policy: clear unused cache entries in this represented list.
+    // Every live cursor holds its current entry, so another cursor cannot clear it.
+    me int: clearCache() <- {
+        if(manager==NULL or position==NULL or !position!.writable or position!.parent==NULL){return(0)}
+        return(manager!.clearCursorCache(position!.parent!.node))
     }
     me WorldStatus: status() <- {
         if(request!=NULL and pendingPosition!=NULL){return(request!.status())}
