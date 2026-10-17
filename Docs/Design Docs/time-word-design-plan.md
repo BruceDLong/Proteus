@@ -1,7 +1,7 @@
 # Time and words: agreed foundation and next discussion
 
 The null/boundary foundation below was approved and implemented; see
-[boundary-results.md](Historical/boundary-results.md). The remaining time and word rules
+`Historical/boundary-results.md` (Git history). The remaining time and word rules
 still require discussion.
 Use a small set of semantic relationships and shared graph operations. A test
 should demonstrate a language construct or a composition of constructs, not
@@ -143,7 +143,7 @@ the existing POV graph rather than requiring separate classes of graph nodes.
 General supported role/schema mapping remains a later implementation step.
 
 The initial graph implementation is described in
-[temporal-context-results.md](Historical/temporal-context-results.md). It implements
+`Historical/temporal-context-results.md` (Git history). It implements
 explicit temporal value reads, symbolic support references, and interior cuts.
 It does not change word/context binding or infer persistence from omitted parts.
 

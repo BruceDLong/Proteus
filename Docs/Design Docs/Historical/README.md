@@ -1,25 +1,32 @@
-# Historical design and implementation records
+# Historical design notes
 
-These documents record the engine and models at their stated checkpoint. Many
-describe the abandoned native graph engine or the earlier AItem normalizer.
-Others document milestones of the current CodeDog WorldManager. Their APIs,
-test counts, performance measurements and remaining-work lists are historical.
+These four documents came from theory/ and remain as earlier design references:
+
+- [Negative-index time design](negative-index-time-design.md).
+- [Negative-index implementation guide](negative-index-time-implementation-guide.md).
+- [Infon operation catalog](infon-operation-catalog.md).
+- [Normalization mutation matrix](normalization-mutation-matrix.md).
 
 Use [the current design](../normalization-design.md) and
-[later decisions](../normalization-design-decisions.md) for the maintained
-contract. Original commands, commit references and temporary evidence paths are
-retained for historical interpretation; retired source files are available in
-Git history, not necessarily in the current checkout. Moving a report here does
-not invalidate its semantic examples or require restoring its old implementation.
+[the decision log](../normalization-design-decisions.md) for the maintained
+contract. Older APIs, syntax and implementation details describe their original
+checkpoint.
 
-Useful recent records include:
+## Recover removed graph records
 
-- [Ancestor member requirements](member-requirements-2026-10-13.md).
-- [TCursor supplied work](tcursor-work-2026-10-14.md); D071 later changes cache
-  ownership and backward movement.
-- [Viewer materialization](tcursor-viewer-2026-10-14.md).
-- [Rubix verbs and viewer integration](rubix-verbs-2026-10-14.md).
+The graph/ directory and the 78 Markdown reports moved from it into this folder
+were removed from the checkout at the user's request. They are preserved in
+commit `5dbbe10`, immediately before that cleanup. References marked as Git
+history in the remaining design documents refer to these saved files.
 
-Machine-readable inventories, language fixtures, audit scripts and captured
-diagnostic assets remain in [graph/](../../../graph/). Their locations have not
-changed.
+From the repository root, list the saved files or read one without restoring it:
+
+```sh
+git ls-tree -r --name-only 5dbbe10 -- graph 'Docs/Design Docs/Historical'
+git show 5dbbe10:graph/engine-test-migration.json
+git show '5dbbe10:Docs/Design Docs/Historical/normalization-framework-audit.md'
+```
+
+For a reference written as `Historical/<name>.md` in a design document, use
+`Docs/Design Docs/Historical/<name>.md` as the path after the commit's colon.
+The active language fixtures remain in Tests/; their contents were not removed.

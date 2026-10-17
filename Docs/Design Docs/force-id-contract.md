@@ -93,6 +93,6 @@ codeDog Proteus.Lib.dog
 ```
 
 The current bounded language audit is in
-[language-compatibility-status.json](../../graph/language-compatibility-status.json).
-[sparse-unit-status.json](../../graph/sparse-unit-status.json) retains the earlier `646672a`
+`graph/language-compatibility-status.json` (Git history).
+`graph/sparse-unit-status.json` (Git history) retains the earlier `646672a`
 snapshot, before these expectation corrections.

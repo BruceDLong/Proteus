@@ -60,9 +60,11 @@ to ordinary CodeDog and remain supported.
 
 Add focused tests in .tst fixtures or ordinary CodeDog as behavior is developed.
 Do not change expectations to match incomplete behavior. Preserve known active
-failures. `graph/engine-test-migration.json` inventories the active compiled tests;
-`graph/retired-normalizer-tests.json` records retirements and recovery commits.
-The former archived inventory is available in Git, not a porting backlog.
+failures. ProteusTests.dog lists the active compiled tests. The graph inventories
+and retirement records were removed from the checkout under D088; recover them
+from commit 5dbbe10, for example with
+`git show 5dbbe10:graph/retired-normalizer-tests.json`.
+Historical inventories are not a porting backlog.
 Production native bindings were not changed in the test cleanup.
 
 Build and verification

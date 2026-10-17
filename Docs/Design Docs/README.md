@@ -26,10 +26,11 @@ reconciliation with those later decisions.
 
 ## Historical evidence
 
-[Historical](Historical/README.md) holds dated implementation reports, experiments,
-performance measurements and superseded plans. This includes milestone reports
-for the current engine when later changes have superseded their status or storage
-details. Keep their examples and evidence distinct from current implementation
-instructions.
+[Historical](Historical/README.md) holds four earlier design documents from
+theory/. Reports originally kept in graph/, together with its inventories and
+diagnostic assets, were removed from the checkout and remain in Git history.
+The Historical index explains how to recover them. References to these removed
+records in the design notes are marked as Git history; their examples and
+measurements describe the recorded checkpoints.
 
 Build, test and integration instructions are in [Docs/README.md](../README.md).

@@ -161,8 +161,8 @@ above; others should follow existing Proteus semantics and tests. A failing old
 test is evidence to investigate, not automatically a new language-design question.
 
 See [field-selection-contract.md](field-selection-contract.md),
-[unordered-field-results.md](Historical/unordered-field-results.md), and
-[language-compatibility-status.json](../../graph/language-compatibility-status.json).
+`Historical/unordered-field-results.md` (Git history), and
+`graph/language-compatibility-status.json` (Git history).
 
 ## Boundary names and typed fields
 
@@ -182,7 +182,7 @@ not erase a known value, assert inequality, or suppress explicit relationships.
 `% ?` remains two infons. The user does not request new `!%` functionality.
 
 Scalar and finite unambiguous part preservation now use guarded graph routes;
-see [temporal-context-results.md](Historical/temporal-context-results.md). Pending supplied
+see `Historical/temporal-context-results.md` (Git history). Pending supplied
 constraints prevent a default Set. Evidence arriving after a value has been
 committed, general causal closure, membership changes, and sparse correspondence
 remain separate implementation/design boundaries.

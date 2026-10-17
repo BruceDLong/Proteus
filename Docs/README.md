@@ -2,9 +2,9 @@
 
 This is the build and testing guide. See [Design Docs](<Design Docs/README.md>)
 for architecture and semantic notes, [Historical](<Design Docs/Historical/README.md>)
-for checkpoint evidence, [shared-library.md](shared-library.md) for Slipstream
-integration, and [test-ambiguities.md](test-ambiguities.md) for the audit helper's
-fixture exceptions.
+for earlier design notes and recovery of removed reports, [shared-library.md](shared-library.md)
+for Slipstream integration, and [test-ambiguities.md](test-ambiguities.md) for
+unresolved fixture questions recorded by the retired audit helper.
 
 The Proteus Engine on `main` routes Agent normalization
 and TestProteus through `WorldManager.dog`. Agent owns sessions; normalize returns
@@ -66,10 +66,17 @@ WorldManager C++ test suites. The remaining `<% ... %>` delimiters in
 Subsequent cleanup converted the remaining production native function bodies to
 CodeDog. Future tests belong in ordinary CodeDog or `.tst` fixtures.
 
-The [active inventory](../graph/engine-test-migration.json) lists all 72 compiled checks.
-The [retirement manifest](../graph/retired-normalizer-tests.json) records removed names,
-files, fixture hashes and recovery commits. The previous large archived inventory
-is available with `git show bd7078b:graph/engine-test-migration.json`.
+ProteusTests.dog lists all 72 compiled checks. The graph inventories, audit scripts
+and diagnostic assets were removed from the checkout after the fixtures moved
+to Tests. The last inventory and retirement manifest remain available with:
+
+```sh
+git show 5dbbe10:graph/engine-test-migration.json
+git show 5dbbe10:graph/retired-normalizer-tests.json
+```
+
+The previous large archived inventory is available with
+`git show bd7078b:graph/engine-test-migration.json`.
 Retired checks are not a mandatory porting backlog, and their removal does not
 establish that the behaviors they covered work.
 
@@ -130,6 +137,7 @@ git show b52322a:AGENTS.md
 ```
 
 The redesign immediately before test cleanup is commit `bd7078b`. Dated reports
-are in [Historical](<Design Docs/Historical/README.md>). Their implementation
-paths and pass counts describe those checkpoints; use this guide and the latest
-decisions for current build and test instructions.
+from graph/ are retained in Git history; the
+[Historical index](<Design Docs/Historical/README.md>) gives recovery commands.
+Their implementation paths and pass counts describe those checkpoints; use this
+guide and the latest decisions for current build and test instructions.

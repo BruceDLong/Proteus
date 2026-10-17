@@ -2,7 +2,7 @@
 
 The design discussion proceeds from the meaning of normalize and its solving loop through lists, intersections, definitions, and rules. Each choice must explain its streaming behavior, computational cost, alternatives, and justification. Semantics should be expressed through graph relationships, with optimizations justified by theorems.
 
-This is the issue agenda and decision history. The companion [consolidated design](normalization-design.md) contains the resulting contract. The [framework audit](Historical/normalization-framework-audit.md) supplies implementation evidence and proposals; its recommendations are not automatically accepted decisions.
+This is the issue agenda and decision history. The companion [consolidated design](normalization-design.md) contains the resulting contract. The framework audit (`Historical/normalization-framework-audit.md` in Git history) supplies implementation evidence and proposals; its recommendations are not automatically accepted decisions.
 
 Created 2026-10-10; updated 2026-10-11. Current issue: **D04, intersections and finite alternative domains**. D02 establishes directed acquisition, completion, and continuation without restart. Exact leaf and list interfaces remain under discussion, followed by intersections and definitions. D01 planning design is deferred until intersections and definitions have been considered. Develop the request contract alongside those examples. “T-rules” covers both theorem/transformation rules and temporal/T-list rules, as clarified in this discussion.
 
@@ -113,7 +113,7 @@ The graph manager has no semantic operation for clearing and restarting a goal. 
 
 **Clarified 2026-10-11:** parentheses usually do not change the result of ordinary `A=B=C` versus `A=(B=C)`. Do not impose a separate solving strategy merely because the parser represents a group. The important distinction is a type-changing relationship such as `A==(B=C)`: C may have a different type from A, so its type cannot be applied directly to A by flattening the chain. Preserve the qualifications and prerequisites that govern the transformation. The existing `unit/graphText/identityInSource` case in [ProteusTests.dog](../../ProteusTests.dog) exercises `{*3+$ *4+$} == ($ = 'CatDogs')`, expecting `{'Cat' 'Dogs'}`. It currently uses the checkpoint engine and must be ported with the real tests; it is not evidence that the scalar replacement already supports this case.
 
-Stopping A's search and proving a work entry removable are distinct decisions. A completed scalar goal does not by itself erase a nested or qualified relationship that still carries meaning. The interface may discard fully represented pending work while retaining any identity or context still needed by other uses. Removal from one wrkList is not deletion of a source infon used elsewhere. Exact consolidation criteria for each relationship belong with the leaf, list, intersection, and definition rules. Current [RHS consolidation](Historical/rhs-consolidation-results.md) is implementation evidence, not the chosen limit of the new design.
+Stopping A's search and proving a work entry removable are distinct decisions. A completed scalar goal does not by itself erase a nested or qualified relationship that still carries meaning. The interface may discard fully represented pending work while retaining any identity or context still needed by other uses. Removal from one wrkList is not deletion of a source infon used elsewhere. Exact consolidation criteria for each relationship belong with the leaf, list, intersection, and definition rules. Current RHS consolidation (`Historical/rhs-consolidation-results.md` in Git history) is implementation evidence, not the chosen limit of the new design.
 
 ### D02E Partial answers and print reload
 
@@ -1084,7 +1084,7 @@ A checked RHS with the same nominal identity can carry its meaning-applied proof
 
 ## D055 Audit the nineteen remaining default failures before further implementation (2026-10-13)
 
-**Scope.** The user requested classification of the nineteen default failures. This entry records evidence and prioritization, not a new normalization rule, fixture retirement or permission to replace expectations with current output. The [consolidated classification](normalization-design.md#remaining-default-test-classification-2026-10-13) and [per-fixture inventory](../../graph/default-test-classification.json) contain the findings.
+**Scope.** The user requested classification of the nineteen default failures. This entry records evidence and prioritization, not a new normalization rule, fixture retirement or permission to replace expectations with current output. The [consolidated classification](normalization-design.md#remaining-default-test-classification-2026-10-13) and per-fixture inventory (`graph/default-test-classification.json` in Git history) contain the findings.
 
 **Finding and rationale.** The fresh default run is unchanged at 19/331. Four are formatting/printed-representation mismatches; seven concern reference expansion, normalization depth or pending/no-match result handling; six stop during world loading in three prerequisite families; one combines a numeric-capture fixture problem with unsupported sparse composite work; one is explicitly deferred. Thirteen names exist in the inspected main snapshot, and fourteen fail in the saved original-Proteus4 comparison. Historical status, fixture validity and present semantic correctness are separate questions. Do not treat nineteen failures as nineteen independent engine defects or accept a historical pass as a semantic oracle.
 
@@ -2161,3 +2161,31 @@ All 16 moved fixture hashes match their originals. Current documentation links
 resolve, and existing user cleanup edits remain separate. This test-loader change
 does not require a shared-library or Slipstream rebuild. Evidence, before/after
 logs and the loader probes are in /tmp/proteus-tests-folder/.
+
+
+## D088 Remove graph artifacts and their historical reports (2026-10-17)
+
+**Decision.** The user requested removing graph/ and the Markdown files moved
+from it into Historical, provided the files were already stored in Git. All 61
+remaining graph files are tracked and unchanged, with no untracked or ignored
+contents. Commit 3c5e4cc records the 78 report moves from graph/ into
+Docs/Design Docs/Historical/. Remove those 139 files from the checkout; retain
+their complete history at the pre-cleanup commit 5dbbe10.
+
+Keep all 16 active .tst files in Tests/, the current design documents and guides,
+and the four historical documents that came from theory/. Remove the graph audit
+helpers and inventories along with its diagnostic assets, as requested. Update
+navigation and current instructions so they no longer depend on graph/. Preserve
+citations in semantic notes as explicit Git-history paths, with recovery commands
+in the Historical index. The fixture-ambiguity notes remain as historical
+semantic questions; the ordinary TestProteus run does not apply the retired
+audit helper's skips.
+
+**Validation.** Verified that all 139 removed files are recoverable from 5dbbe10.
+All remaining engine, test-loader and fixture hashes are unchanged. The full
+existing executable run reports the same 24 failures / 404 tests, with output
+identical to the pre-cleanup run. Checked surviving documentation links and
+introduced no new broken targets. No engine or Slipstream rebuild was needed.
+The user's earlier cleanup edits remain separate. The exact removal lists,
+source snapshot, link validation and test output are in
+/tmp/proteus-graph-cleanup/.

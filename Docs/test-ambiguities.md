@@ -1,11 +1,14 @@
-# Ambiguous existing tests
+# Recorded fixture ambiguities
 
-The user authorized recording and skipping tests whose intended semantics are
-ambiguous while completing the remaining compatibility work. Skipped tests are
-reported separately from passes. Missing implementations are not a reason to skip.
-Inputs and expected outputs remain unchanged. The audit checks each skipped
-fixture's hash so a later test edit cannot silently inherit an obsolete exception.
-Use `--include-ambiguous` to run these tests too.
+These notes record semantic questions identified by the former graph audit
+helper. That helper and its exception manifest were removed under D088 and can
+be recovered from commit 5dbbe10. The ordinary TestProteus suite does not apply
+those skips; its fixtures and expected outputs remain unchanged.
+
+The user had authorized the audit helper to report ambiguous cases separately
+from passes. Missing implementations were not a reason to skip. The helper
+checked each exception's fixture hash and accepted `--include-ambiguous` to run
+the skipped cases too. The descriptions below retain that historical context.
 
 ## `defaultTests.tst:merge/dots/align4b`
 

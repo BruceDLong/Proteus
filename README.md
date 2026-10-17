@@ -79,7 +79,6 @@ are looked up in `../Tests` first; explicit file paths are used as supplied.
 | `BuildProteusGraph.dog` | Shared-library and exported-interface build |
 | `clip.dog` | Command-line interface source |
 | `Resources/` | Tracked model/test assets and optional public-world link |
-| `graph/` | Test inventories and diagnostic tooling/data |
 | `Docs/` | Build guides, current design references and historical reports |
 | `Examples/`, `theory/` | Older examples and research material; check against current syntax and semantics |
 
@@ -87,7 +86,7 @@ are looked up in `../Tests` first; explicit file paths are used as supplied.
 
 - [Build, testing and request lifecycle](Docs/README.md)
 - [Design references and working notes](<Docs/Design Docs/README.md>)
-- [Historical reports and superseded plans](<Docs/Design Docs/Historical/README.md>)
+- [Historical design notes and Git recovery](<Docs/Design Docs/Historical/README.md>)
 - [Shared-library integration](Docs/shared-library.md)
 - [Resources and test fixtures](Resources/README.md)
 
