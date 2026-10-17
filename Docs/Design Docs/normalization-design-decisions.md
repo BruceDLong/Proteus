@@ -2267,3 +2267,79 @@ contains the tiny pink fallback or blank transition seen in the baseline.
 Build/test logs, screenshots and frame measurements are in /tmp/cursor-readiness/.
 Existing unsupported startup normalization notices and the 24 baseline failures
 remain outside this change.
+
+
+## D090 Prepare contained Things in the cursor before publishing (2026-10-17)
+
+**Decision and reason.** After D089 the cube stayed correctly positioned, but
+preparing child poses through successive display demands still froze the retained
+mesh briefly. The user requested trying built-in Thing preparation in the cursor.
+When a state has represented `thing` or `parts` fields and no explicit caller
+requirements, TCursor now prepares the finite containment tree before selecting
+that state. `thing` means its location and orientation coordinates. An explicit
+`parts` collection supplies children; structural collections preserve member
+occurrence order, including repeated types. A Thing leaf's other fields and an
+assembly's reference/metadata fields remain optional. This follows containment,
+not all references reachable from a model, and adds no Rubix-specific type names.
+Explicit `requireField` callers retain their selected requirements; ordinary
+nonspatial states retain shallow cursor behavior.
+
+**Progress and publication.** Preparation uses the existing staged field path,
+solver, original contexts and atomic list-backed publication. The previous cursor
+occurrence remains selected while every contained Thing is acquired, so Slipstream
+continues drawing and animating it. On completion, the renderer reads the prepared
+parts and poses directly; colors still arrive progressively. Slipstream no longer
+registers six root-only paths or discovers the cublet poses over successive redraws.
+The renderer also starts at most sixteen optional display demands per pass, so
+color refinement cannot drain the whole pending collection inside one draw.
+
+Readiness metadata lives on the existing stored cursor value and identifies its
+prepared headers. A valid cache hit reuses those facts without re-solving derived
+parts or allocating another value tree. Replacing the value or publishing into any of
+its descendants invalidates that readiness metadata. This is not a second cache
+of computed values.
+
+WorldManager can yield an ordinary runnable request after a queue-step budget;
+the same frames and ready queue resume later. Default requests still drain
+synchronously. Cursor preparation defaults to 4096 queue steps per refresh; zero
+permits synchronous draining. Budget exhaustion is `worldReady`, creates no input
+subscription and does not publish an incomplete field. Parser arrivals keep their
+request's budget; real input waits keep their existing subscription. This bounds
+queue work per preparation call, not the elapsed duration of an individual solver
+step. No worker thread, reset/restart path or second solver is introduced.
+
+**Boundaries and alternatives.** Unknown poses or containment stop partial without
+presenting zero coordinates. Open/embedded containment remains unsupported;
+repeated source headers along a containment ancestry reject cycles. Shared sibling
+instances remain distinct. Eagerly normalizing colors, metadata and the complete
+model would add unnecessary work. Keeping child acquisition in rendering retains
+the extra discovery/redraw cycles. An unbounded synchronous preparation batch could
+freeze the GUI. None of those alternatives is used.
+
+**Validation.** Seven new ordinary CodeDog checks cover recursive/repeated Thing
+occurrences, parser waits, unknown poses, read-only navigation, cooperative
+continuation, containment boundaries and scaling. They also check cache reuse,
+readiness invalidation after descendant publication, and optional fields staying
+unprepared. All seven and the eleven D089 checks pass. The full regenerated suite
+reports 398 passes and 24 failures out of 422; the failure names and diagnostics
+exactly match D089. Default language fixtures retain 16 failures out of 332, with
+no fixture or expectation changes.
+
+Widths 8, 32 and 128 take respectively 641, 2561 and 10241 queue steps;
+relationships are 280, 1120 and 4480, and preparation header allocations are
+82, 322 and 1282. These measurements cover finite fixed-depth containment, not
+arbitrary inference. Revisiting a valid prepared state starts no field requests.
+Yielding introduces no parser subscriptions or accumulating request handles.
+
+`codeDog BuildProteusGraph.dog`, `codeDog Proteus.Lib.dog` and
+`codeDog Slipstream.dog` regenerate and build successfully. The consumer resolves
+this checkout's shared library, and `ldd -r` reports no missing dependencies or
+undefined symbols. Four private Xvfb recordings at 60 fps exercise two new states,
+backward navigation and cached forward navigation. The longest unchanged cube
+image drops from 25-26 frames (0.417-0.433 seconds) under D089 to 5-6 frames
+(0.083-0.100 seconds). This measures visible animation pauses in these captures,
+not a general latency bound. All 960 final frames contain visible cube geometry;
+none contains the tiny pink fallback or a blank transition. Colors fill more
+gradually while the correctly placed pink cube keeps rotating. Existing unsupported
+startup notices remain. Build/test logs, screenshots and frame measurements are in
+`/tmp/cursor-things/`; comparison captures are in `/tmp/cursor-readiness/`.
