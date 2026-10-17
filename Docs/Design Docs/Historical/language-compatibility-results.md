@@ -77,11 +77,11 @@ summaries. The 58 retained helper checks report **50 pass / 8 existing fail**;
 every retained status is unchanged. The cleanup retired 67 registrations that
 directly tested the deleted engine (52 previously passed, 15 failed), plus one
 unregistered declaration. These are recorded in
-[retired-aitem-tests.json](retired-aitem-tests.json), not counted as semantic
+[retired-aitem-tests.json](../../../graph/retired-aitem-tests.json), not counted as semantic
 recoveries. The R1 file records an experimental contract and excludes itself
 from the default tests. Helper passing counts do not establish graph coverage.
 Focused checks include some language fixtures, so the counts must not be added.
-Exact current helper results are in [legacy-helper-status.json](legacy-helper-status.json).
+Exact current helper results are in [legacy-helper-status.json](../../../graph/legacy-helper-status.json).
 
 The standalone streaming build also passed, with **33/33 checks** across the
 supported `-f 1`, `2`, `4`, `5`, `6`, and `8` selections. Cases 3 and 7 remain
@@ -162,7 +162,7 @@ until its behavior works or its contract is explicitly revised.
 See [choice-constraint-results.md](choice-constraint-results.md),
 [open-span-correspondence-results.md](open-span-correspondence-results.md), and
 [partial-type-results.md](partial-type-results.md). Earlier checkpoints remain
-in the per-feature reports linked from [README.md](README.md).
+in the per-feature reports linked from [README.md](../../README.md).
 
 `merge/directRange/endReject` rejects the endpoint and retains the RHS; its
 expectation was updated at the previous checkpoint. This is separate from
@@ -173,7 +173,7 @@ A passing printed assertion alone does not prove all normalization obligations
 resolved: unknown numeric sizes and subscribed open tails remain symbolic.
 
 The complete fixture status and input hashes are recorded in
-[language-compatibility-status.json](language-compatibility-status.json).
+[language-compatibility-status.json](../../../graph/language-compatibility-status.json).
 Current language and compiled logs are in `/tmp/p4-parts-final`.
 The preceding definition results are in `/tmp/p4-definition-final`.
 The preceding results are in `/tmp/p4-temporal-language-final` and
@@ -187,13 +187,13 @@ contextual parent requirements remain beyond scalar field projection. Contextual
 type meaning, unordered structural predicates and ambiguous correspondence, recursive grammars, fuller stream
 publication, and temporal operations retain their documented boundaries.
 Ambiguous writes also need the semantic decision tracked in
-[open-questions.md](open-questions.md).
+[open-questions.md](../open-questions.md).
 
 Use each failing fixture as evidence to investigate. Do not add a rule for its
 name or relax its expected output to improve the count. Typed fields remain
 nominal members: equal structure does not make `.pedal` match `.wheel`, and
 space-separated typed fields do not become unordered merely because selection
-uses a type word. See [field-selection-contract.md](field-selection-contract.md).
+uses a type word. See [field-selection-contract.md](../field-selection-contract.md).
 
 ## Reproduce
 
@@ -214,7 +214,7 @@ can exit zero even when assertions fail.
 
 The auditor reports exact, hash-checked ambiguity skips separately. Use
 `--include-ambiguous` to run those fixtures as well. The skip manifest is
-[test-ambiguities.json](test-ambiguities.json).
+[test-ambiguities.json](../../../graph/test-ambiguities.json).
 
 The auditor now also accepts `--compiled` to read registered names from
 `ProteusTests.dog`; `--exclude` can omit a name prefix. Compiled checks use exact

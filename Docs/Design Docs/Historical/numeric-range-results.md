@@ -70,7 +70,7 @@ existing Proteus executable and Proteus4 leave `*4+4` as `*4+4`.
   [repetition-prefix-results.md](repetition-prefix-results.md).
 - `merge/directRange/endReject` rejects correctly but keeps the RHS visible.
   The old expected text assumes rejected work is removed. The existing graph
-  conflict/diagnostic policy is unchanged; see `numeric-literal-results.md`.
+  conflict/diagnostic policy is unchanged; see `Docs/Design Docs/Historical/numeric-literal-results.md`.
 - Contextual/relational range operands, arbitrary radix range algebra, and
   symbolic union/difference output remain deferred. Missing evidence never
   counts as a proved mismatch.

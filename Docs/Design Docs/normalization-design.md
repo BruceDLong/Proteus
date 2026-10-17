@@ -2,7 +2,7 @@
 
 Proteus4 represents semantics through graph relationships and justifies semantic optimizations through theorems. This specification consolidates settled choices for normalization. The [issues and decision log](normalization-design-decisions.md) holds alternatives, reasons, evidence, and unresolved questions.
 
-Status on 2026-10-12: the WorldManager and virtual graph boundaries, CodeDog policy, core D02 lifecycle, and D03 list principles below are settled. Goals acquire requested facts, stop when satisfied, and continue at waiting links without restart. Member, span, whole-list, intersection and dot/index consumers now share correspondence requests, logical layouts and predicate comparison. Selected text parsing, nominal record-field meaning application and known-endpoint selection are supported as specified below. General definition, sparse-pattern and rule composition remain open. Planning design stays deferred until intersections and definitions have been considered. The [architecture audit](normalization-framework-audit.md) remains supporting evidence and a source of proposals.
+Status on 2026-10-12: the WorldManager and virtual graph boundaries, CodeDog policy, core D02 lifecycle, and D03 list principles below are settled. Goals acquire requested facts, stop when satisfied, and continue at waiting links without restart. Member, span, whole-list, intersection and dot/index consumers now share correspondence requests, logical layouts and predicate comparison. Selected text parsing, nominal record-field meaning application and known-endpoint selection are supported as specified below. General definition, sparse-pattern and rule composition remain open. Planning design stays deferred until intersections and definitions have been considered. The [architecture audit](Historical/normalization-framework-audit.md) remains supporting evidence and a source of proposals.
 
 ## Design objective
 
@@ -291,7 +291,7 @@ The replacement runs on `main` in `/home/bruce/devl/Proteus`. Read the compariso
 
 ### 0. Preserve the reference and test inventory — done
 
-The checkpoint and test-pruning manifest already preserve the reference. The pruned existing engine reproduced the same outcomes on 332 language cases and 75 selected compiled cases: 40 existing failures in total. These results validate test preservation, not the replacement. See the [test-selection record](README.md#test-selection-for-the-normalizer-redesign) and [retirement manifest](retired-normalizer-tests.json).
+The checkpoint and test-pruning manifest already preserve the reference. The pruned existing engine reproduced the same outcomes on 332 language cases and 75 selected compiled cases: 40 existing failures in total. These results validate test preservation, not the replacement. See the [test-selection record](../README.md#test-selection-for-the-normalizer-redesign) and [retirement manifest](../../graph/retired-normalizer-tests.json).
 
 As coverage moves, record which feature a case exercises, whether it has been ported, and its replacement result. Separate an unimplemented feature, an existing implementation failure, an ambiguous expectation, and a deliberate semantic change. An unsupported case with clear semantics remains a failure, rather than being relabeled as ambiguity or silently excluded from totals.
 
@@ -396,7 +396,7 @@ Do not require the entire old suite to pass before the scalar increment is usefu
 
 ## Implementation status: Proteus Engine cutover
 
-On 2026-10-11, the normal Proteus Engine and TestProteus moved to [WorldManager.dog](../WorldManager.dog). Agent's `normalize`, `normalizeAll`, `normalizeAndWait`, explicit sessions, parser publication and input-stream lifetime use this path. There is no old-solver fallback. The initial standalone TestWorldManager harness has moved into TestProteus and its source has been removed. Slipstream remains a separate migration; no rendering result is claimed.
+On 2026-10-11, the normal Proteus Engine and TestProteus moved to [WorldManager.dog](../../WorldManager.dog). Agent's `normalize`, `normalizeAll`, `normalizeAndWait`, explicit sessions, parser publication and input-stream lifetime use this path. There is no old-solver fallback. The initial standalone TestWorldManager harness has moved into TestProteus and its source has been removed. Slipstream remains a separate migration; no rendering result is claimed.
 
 ### Interface and ownership
 
@@ -455,7 +455,7 @@ The 11 compiled output/assertion failures comprise four `unit/graphText` string-
 
 The separate shared-library build (`codeDog BuildProteusGraph.dog`) also succeeded, in **88.52 seconds**, producing `SharedBuild/libproteusGraph.so`. Its generated source/interface and exported binary contain no old solver symbols. Generated TestProteus source and binary contain no old GraphNormalizer, GraphManager or proteus4 runtime symbols. These results establish the engine cutover and the supported fragment; they do not establish full language, stream-reply or application parity.
 
-All 15 protected `.tst` files keep their original hashes. All 1,530 previously retained compiled registrations remain selectable and are indexed with their original assertion locations in [engine-test-migration.json](engine-test-migration.json). Of these, 63 use the engine/parser/model path and 1,467 report `NOT_PORTED` until their useful assertions are adapted from the reference source. The three new WorldManager cases add scalar/session, input-lifecycle and malformed-RHS coverage. The inventory also records 14 standalone native test drivers awaiting migration; they are not compiled into this engine. The separate streamReplyTest suite has API changes but has not been validated for reply behavior; effects remain unsupported.
+All 15 protected `.tst` files keep their original hashes. All 1,530 previously retained compiled registrations remain selectable and are indexed with their original assertion locations in [engine-test-migration.json](../../graph/engine-test-migration.json). Of these, 63 use the engine/parser/model path and 1,467 report `NOT_PORTED` until their useful assertions are adapted from the reference source. The three new WorldManager cases add scalar/session, input-lifecycle and malformed-RHS coverage. The inventory also records 14 standalone native test drivers awaiting migration; they are not compiled into this engine. The separate streamReplyTest suite has API changes but has not been validated for reply behavior; effects remain unsupported.
 
 The initial default language suite's 19 non-unsupported failures were all new relative to the reference binary. They cover these existing fixture names (under `defaultTests.tst:`):
 
@@ -1276,7 +1276,7 @@ Publication records the existing coverage proof as an occurrence-local `listSpec
 
 **Historical nineteen-case snapshot.** The D056 follow-up below resolves three display expectations and replaces the external world dependencies with synthetic fixtures; the current default result is 16/332.
 
-This is an audit of the replacement at `de34172`, not a change to language semantics or test expectations. The fresh `cd LocalBuild && ./TestProteus -t defaultTests.tst:` run reports **19/331**, with exactly the D054 failure names and messages. The [classification inventory](default-test-classification.json) records every fixture, current failure, main-branch source occurrence, saved reference result, supporting probe and next action.
+This is an audit of the replacement at `de34172`, not a change to language semantics or test expectations. The fresh `cd LocalBuild && ./TestProteus -t defaultTests.tst:` run reports **19/331**, with exactly the D054 failure names and messages. The [classification inventory](../../graph/default-test-classification.json) records every fixture, current failure, main-branch source occurrence, saved reference result, supporting probe and next action.
 
 Thirteen of these test names occur in main at `86321ea`; six were added later. Name continuity does not imply unchanged syntax or expectations: for example, the nested ordinary-write fixture originally expected replacement, which the later explicit forceID decision corrected. Fourteen of the current nineteen also failed in the saved original-Proteus4 comparison at `b52322a`. That is historical baseline evidence, not proof that their current behavior is correct. Main was inspected as source, not rebuilt or rerun for this audit.
 
@@ -1357,7 +1357,7 @@ Protected fixture hashes, archived assertions and unrelated `myTests.tst` were v
 
 ## Active regression suite after D057 (2026-10-13)
 
-The user chose fresh behavioral tests as each semantic area is implemented. The old 1,384 `NOT_PORTED` registrations are removed from the active runner; their original locations and registrations remain as `archived_reference` entries in [engine-test-migration.json](engine-test-migration.json). No old assertion body is lost: the inventory preserves the reference checkpoint and source hash. All 198 active compiled registrations, including 52 WorldManager suites, and all 332 defaults remain. The sixteen default failures are deferred. Earlier migration totals and requirements above are historical and are superseded by this policy.
+The user chose fresh behavioral tests as each semantic area is implemented. The old 1,384 `NOT_PORTED` registrations are removed from the active runner; their original locations and registrations remain as `archived_reference` entries in [engine-test-migration.json](../../graph/engine-test-migration.json). No old assertion body is lost: the inventory preserves the reference checkpoint and source hash. All 198 active compiled registrations, including 52 WorldManager suites, and all 332 defaults remain. The sixteen default failures are deferred. Earlier migration totals and requirements above are historical and are superseded by this policy.
 
 The review grouped all 1,384 retired registrations across 73 original name groups and 79 registration macros. These are registrations, many containing several assertions. The primary-family counts below are a checklist of areas to consider as work proceeds, not a promise to recreate this number of tests:
 
@@ -1435,7 +1435,7 @@ A demanded descendant can use an unchecked ancestor definition or an ancestor me
 
 Borrowed sources retain occurrence/navigation context but stop discovering enclosing requirements at their own constraint boundary. An unspecified corresponding container contributes no descendant facts, so its route exhausts without blocking other evidence. The caller continues its remaining sources after consuming the result. `%` binds to the represented containing object; named layout borrowing records its definition boundary. This prevents false cycles and query re-entry without normalizing unrelated sibling values or mutating shared definitions.
 
-Parser waits retain the exact source and correspondence cursor; unrelated input does no work. Cancellation and conflicting selected writes publish nothing. Unknown exhausted evidence remains partial without a subscription. Fixed-layout depth/width probes and whole-list propagation are linear through 128 levels/members. Ambiguous layouts, source expressions requiring layout proof, implicit temporal preservation and definition-instance creation remain separate work. See `reports/member-requirements-2026-10-13.md` for traces and validation.
+Parser waits retain the exact source and correspondence cursor; unrelated input does no work. Cancellation and conflicting selected writes publish nothing. Unknown exhausted evidence remains partial without a subscription. Fixed-layout depth/width probes and whole-list propagation are linear through 128 levels/members. Ambiguous layouts, source expressions requiring layout proof, implicit temporal preservation and definition-instance creation remain separate work. See `Docs/Design Docs/Historical/member-requirements-2026-10-13.md` for traces and validation.
 
 **D063 validation.** Both maintained CodeDog targets regenerate successfully (library 139.12 s; executable 199.16 s). The independent regenerated-library client passes all 470 ancestor-requirement checks. The full executable passes all 56 WorldManager suites and reports 24 failures / 534 registrations: the same sixteen default and eight existing compiled failures, with identical names and diagnostics. The known cube coordinate still returns zLoc:1.1; state 2 and the hue/layout probes retain the documented incomplete boundaries. All 15 protected language fixtures and unrelated `myTests.tst` are unchanged. No Slipstream source or live world resource was modified.
 
@@ -1491,7 +1491,7 @@ Successive steps retire the previous internal handle when it is last in the dedi
 
 Fixed-width stepping is linear in the number of steps in the measured families. A changed record level is scanned once through existing field correspondence and immediate output construction. Unchanged nested descriptions are not recursively traversed; there is no general constant-time claim for wide output, definition solving, ambiguous alignment or changing list shape. Ordinary named-value arithmetic, general sparse correspondence, ancestor listSpec integration retain their existing boundaries. D068 adds the Slipstream cube materialization path. TSpan, SCursor and detailed materialization controls remain future work.
 
-Original stepping measurements are recorded with D067 and in `reports/tcursor-work-2026-10-14.md`. D071 records the direct-occurrence cache and backward replay validation.
+Original stepping measurements are recorded with D067 and in `Docs/Design Docs/Historical/tcursor-work-2026-10-14.md`. D071 records the direct-occurrence cache and backward replay validation.
 
 ### Deferred definition views and Slipstream (D068, 2026-10-14)
 
@@ -1499,7 +1499,7 @@ Composite definition layout acquisition retains literal composite fields as defe
 
 Explicit selection input is supplied work even when additional ancestor discovery is disabled. The same retained correspondence and solver handle execute it. Ordered members with repeated type names are not record keys. `materialize` supports the supplied-work option without a second solver.
 
-Slipstream's TimeView now uses TCursor, with separate scene-owned materializations for renderer demands. Cursor stepping retains unknown unchanged values. D071 now stores disposable materializations in the temporal list while preserving their source descriptions; shared definitions remain unchanged. Scene sessions and request handles provide pending continuation and once-per-state display work. Ancestor temporal listSpec transitions and general inverse movement remain deferred. See `reports/tcursor-viewer-2026-10-14.md` for the exact verified boundary.
+Slipstream's TimeView now uses TCursor, with separate scene-owned materializations for renderer demands. Cursor stepping retains unknown unchanged values. D071 now stores disposable materializations in the temporal list while preserving their source descriptions; shared definitions remain unchanged. Scene sessions and request handles provide pending continuation and once-per-state display work. Ancestor temporal listSpec transitions and general inverse movement remain deferred. See `Docs/Design Docs/Historical/tcursor-viewer-2026-10-14.md` for the exact verified boundary.
 
 ### Fixed state-change verbs (D069, 2026-10-14)
 

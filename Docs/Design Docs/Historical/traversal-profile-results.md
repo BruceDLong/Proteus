@@ -168,7 +168,7 @@ have pending work, so wake counts and eventual reset counts differ.
 
 Tracing adds overhead and can change scheduling. The timings from these runs
 are not optimization benchmarks. The previous uninstrumented comparison remains
-in `definition-validation-results.md`. Engine source and the regular Slipstream
+in `Docs/Design Docs/Historical/definition-validation-results.md`. Engine source and the regular Slipstream
 executable were unchanged by this investigation; regression suites were not
 rerun for diagnostic instrumentation.
 

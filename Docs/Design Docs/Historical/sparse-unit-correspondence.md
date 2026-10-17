@@ -2,7 +2,7 @@
 
 The validation below records commit `646672a`. The subsequent 2026-09-29
 assignment clarification and corrected rejection checks are in
-[force-id-contract.md](force-id-contract.md).
+[force-id-contract.md](../force-id-contract.md).
 
 A list's size still counts its own members. A four-cell list can supply a view
 of two pairs without becoming identical to that two-member container. Unit
@@ -107,9 +107,9 @@ codeDog streamReplyTest.dog
 ```
 
 All fixture names, remaining assertion details, recovered failures, and the
-other language-suite counts are retained in [sparse-unit-status.json](sparse-unit-status.json).
+other language-suite counts are retained in [sparse-unit-status.json](../../../graph/sparse-unit-status.json).
 The bounded language audit is also recorded in
-[language-compatibility-status.json](language-compatibility-status.json).
+[language-compatibility-status.json](../../../graph/language-compatibility-status.json).
 
 ## Remaining sparse/unit fixtures
 
@@ -141,7 +141,7 @@ clarification says those ordinary assignments are contradictions:
 
 Writes that supply unknown values are covered and preserve source identities.
 Replacement requires explicit `forceID`, regardless of units or temporal
-meaning. This is now a settled decision in [open-questions.md](open-questions.md).
+meaning. This is now a settled decision in [open-questions.md](../open-questions.md).
 
 ## Supported boundary
 

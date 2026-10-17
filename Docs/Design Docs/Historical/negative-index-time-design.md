@@ -4,7 +4,7 @@ Status: semantic draft for review. This document does not authorize an engine
 implementation yet.
 
 Companion implementation draft:
-`theory/negative-index-time-implementation-guide.md`.
+`Docs/Design Docs/Historical/negative-index-time-implementation-guide.md`.
 
 Source basis: local branch `proteus3b` at
 `bce565d3c7ba042cf615457f155ea508271b875a`, including the uncommitted

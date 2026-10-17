@@ -4,7 +4,7 @@ Proteus4 should add semantics through graph relationships and use proved relatio
 
 The recommended replacement is **one shared lifecycle for deductions and their premises, with request expansion expressed as additional obligations**. Keep the existing definition compiler, correspondence algorithms, and checked writes where they implement valid semantic rules. Replace the machinery that repeatedly reconstructs the same work around them. Do not add another cache or faster global rescan as the architectural solution.
 
-This audit describes the working tree inspected on 2026-10-10, including its pre-existing changes. It changes no normalization semantics. The [source manifest](framework-audit-2026-10-10/source-manifest.json) identifies that tree; the [small traces](framework-audit-2026-10-10/results.json) make the worked example reproducible.
+This audit describes the working tree inspected on 2026-10-10, including its pre-existing changes. It changes no normalization semantics. The [source manifest](../../../graph/framework-audit-2026-10-10/source-manifest.json) identifies that tree; the [small traces](../../../graph/framework-audit-2026-10-10/results.json) make the worked example reproducible.
 
 ## What the measurements establish
 
@@ -26,7 +26,7 @@ The detailed baseline is [state1-normalization-cost/findings.txt](/home/bruce/de
 | Completion | Required constraints, child proofs, and relevant membership/closure evidence | `settle` rebuilds the required dependency DAG; `ProteusCompletion` records exact-query receipts; several goals maintain their own verified/done flags. |
 | Temporal preservation | Corresponding earlier occurrence, compatible value, and exhausted supplied constraints without `%?` | A guarded goal waits for the session frontier to drain before the scheduler examines its prerequisite closure. |
 
-The duplication is concrete. [GraphSearch.h](GraphSearch.h) owns `Task` activation, dependencies, demands, invalidation, and a queue. [PersistentTraversal.h](PersistentTraversal.h) owns another set of entries, activation/support relations, proofs, and a queue. A changed retained deduction wakes its enclosing task, which can trigger `reconcileTasks` over the session. The path implementation can additionally abandon retained traversal through `NonPersistentNavigation` and resume the restart lifecycle.
+The duplication is concrete. [GraphSearch.h](../../../graph/GraphSearch.h) owns `Task` activation, dependencies, demands, invalidation, and a queue. [PersistentTraversal.h](../../../graph/PersistentTraversal.h) owns another set of entries, activation/support relations, proofs, and a queue. A changed retained deduction wakes its enclosing task, which can trigger `reconcileTasks` over the session. The path implementation can additionally abandon retained traversal through `NonPersistentNavigation` and resume the restart lifecycle.
 
 These structures do not all represent the same information. A proof dependency, a requested result, and an algorithm's cursor are different things. The consolidation must give each one a clear owner, rather than mechanically combining their structs or deleting required support information.
 

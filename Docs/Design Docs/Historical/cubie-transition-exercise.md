@@ -382,7 +382,7 @@ baseline `e26d4ff`, the eleven-observation transition batch took
 all eleven observations, including the changed orientation, preserved parts,
 neighbor, sticker color, and unchanged original state. This is one sequential
 timing pair; no live Slipstream performance claim is made. All 1,404 graph tests
-also pass. See `graph/traversal-profile-results.md` for the scaling probes and
+also pass. See `Docs/Design Docs/Historical/traversal-profile-results.md` for the scaling probes and
 validation limits; raw cube results are in `/tmp/p4-definition-sharing-cube/`.
 
 

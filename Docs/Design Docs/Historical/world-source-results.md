@@ -29,4 +29,4 @@ fail and are not classified as ambiguity skips.
 
 The ambiguity manifest records one unresolved span placement and four user-world
 lookups past a known untyped value. Its fixture hashes prevent future changes from
-silently inheriting an old exemption. See [test-ambiguities.md](test-ambiguities.md).
+silently inheriting an old exemption. See [test-ambiguities.md](../../test-ambiguities.md).

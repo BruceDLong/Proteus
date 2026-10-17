@@ -1,12 +1,18 @@
 # Proteus normalization
 
+This is the build and testing guide. See [Design Docs](<Design Docs/README.md>)
+for architecture and semantic notes, [Historical](<Design Docs/Historical/README.md>)
+for checkpoint evidence, [shared-library.md](shared-library.md) for Slipstream
+integration, and [test-ambiguities.md](test-ambiguities.md) for the audit helper's
+fixture exceptions.
+
 The Proteus Engine on `main` routes Agent normalization
 and TestProteus through `WorldManager.dog`. Agent owns sessions; normalize returns
 a `WorldRequest` handle. The old GraphNormalizer is not linked into this engine.
 
 The maintained solver is CodeDog. The accepted contract and implementation limits
-are in [the consolidated design](normalization-design.md); choices and reasons
-are in [the decision log](normalization-design-decisions.md).
+are in [the consolidated design](<Design Docs/normalization-design.md>); choices and reasons
+are in [the decision log](<Design Docs/normalization-design-decisions.md>).
 
 ## Build and verify
 
@@ -34,8 +40,8 @@ WorldManager C++ test suites. The remaining `<% ... %>` delimiters in
 Subsequent cleanup converted the remaining production native function bodies to
 CodeDog. Future tests belong in ordinary CodeDog or `.tst` fixtures.
 
-The [active inventory](engine-test-migration.json) lists all 72 compiled checks.
-The [retirement manifest](retired-normalizer-tests.json) records removed names,
+The [active inventory](../graph/engine-test-migration.json) lists all 72 compiled checks.
+The [retirement manifest](../graph/retired-normalizer-tests.json) records removed names,
 files, fixture hashes and recovery commits. The previous large archived inventory
 is available with `git show bd7078b:graph/engine-test-migration.json`.
 Retired checks are not a mandatory porting backlog, and their removal does not

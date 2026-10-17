@@ -192,7 +192,7 @@ of the first. It does not test a future implementation that preserves additional
 kinds of intermediate list results.
 
 The exact small patch is saved as
-[experiments/preserve-with-broad-invalidation.patch](experiments/preserve-with-broad-invalidation.patch).
+[experiments/preserve-with-broad-invalidation.patch](../../../graph/experiments/preserve-with-broad-invalidation.patch).
 It applies to the earlier baseline, not the current branch. The working engine
 continues to contain both accepted optimizations; this experiment used isolated
 builds under `/tmp`.

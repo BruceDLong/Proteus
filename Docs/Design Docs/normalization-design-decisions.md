@@ -2,7 +2,7 @@
 
 The design discussion proceeds from the meaning of normalize and its solving loop through lists, intersections, definitions, and rules. Each choice must explain its streaming behavior, computational cost, alternatives, and justification. Semantics should be expressed through graph relationships, with optimizations justified by theorems.
 
-This is the issue agenda and decision history. The companion [consolidated design](normalization-design.md) contains the resulting contract. The [framework audit](/home/bruce/devl/Proteus4/graph/normalization-framework-audit.md) supplies implementation evidence and proposals; its recommendations are not automatically accepted decisions.
+This is the issue agenda and decision history. The companion [consolidated design](normalization-design.md) contains the resulting contract. The [framework audit](Historical/normalization-framework-audit.md) supplies implementation evidence and proposals; its recommendations are not automatically accepted decisions.
 
 Created 2026-10-10; updated 2026-10-11. Current issue: **D04, intersections and finite alternative domains**. D02 establishes directed acquisition, completion, and continuation without restart. Exact leaf and list interfaces remain under discussion, followed by intersections and definitions. D01 planning design is deferred until intersections and definitions have been considered. Develop the request contract alongside those examples. “T-rules” covers both theorem/transformation rules and temporal/T-list rules, as clarified in this discussion.
 
@@ -37,7 +37,7 @@ Each completed entry records:
 - Justification: semantic premises, proof argument or counterexample, and tests or measurements. A passing example is not a proof of general equivalence or complexity.
 - Consequences for the consolidated specification, existing behavior, and code that becomes unnecessary.
 
-When a decision changes, update the specification and this history together. Distinguish a changed semantic choice from an implementation that has not yet met the choice. Existing unresolved topics in [open-questions.md](/home/bruce/devl/Proteus4/graph/open-questions.md) remain open unless explicitly resolved here; do not create contradictory resolutions in the two documents.
+When a decision changes, update the specification and this history together. Distinguish a changed semantic choice from an implementation that has not yet met the choice. Existing unresolved topics in [open-questions.md](open-questions.md) remain open unless explicitly resolved here; do not create contradictory resolutions in the two documents.
 
 ## Common evaluation questions
 
@@ -111,9 +111,9 @@ The graph manager has no semantic operation for clearing and restarting a goal. 
 
 **Accepted.** The POV interface exposes the semantic virtual graph and controls removal of fully merged RHS work. In the user's flat asserted `A=B=C` case, if B supplies everything A needs and the interface establishes that the remaining RHSs add nothing useful to A, A can complete and those redundant work entries can be removed. No intermediate copy is required just to justify taking the route.
 
-**Clarified 2026-10-11:** parentheses usually do not change the result of ordinary `A=B=C` versus `A=(B=C)`. Do not impose a separate solving strategy merely because the parser represents a group. The important distinction is a type-changing relationship such as `A==(B=C)`: C may have a different type from A, so its type cannot be applied directly to A by flattening the chain. Preserve the qualifications and prerequisites that govern the transformation. The existing `unit/graphText/identityInSource` case in [ProteusTests.dog](../ProteusTests.dog) exercises `{*3+$ *4+$} == ($ = 'CatDogs')`, expecting `{'Cat' 'Dogs'}`. It currently uses the checkpoint engine and must be ported with the real tests; it is not evidence that the scalar replacement already supports this case.
+**Clarified 2026-10-11:** parentheses usually do not change the result of ordinary `A=B=C` versus `A=(B=C)`. Do not impose a separate solving strategy merely because the parser represents a group. The important distinction is a type-changing relationship such as `A==(B=C)`: C may have a different type from A, so its type cannot be applied directly to A by flattening the chain. Preserve the qualifications and prerequisites that govern the transformation. The existing `unit/graphText/identityInSource` case in [ProteusTests.dog](../../ProteusTests.dog) exercises `{*3+$ *4+$} == ($ = 'CatDogs')`, expecting `{'Cat' 'Dogs'}`. It currently uses the checkpoint engine and must be ported with the real tests; it is not evidence that the scalar replacement already supports this case.
 
-Stopping A's search and proving a work entry removable are distinct decisions. A completed scalar goal does not by itself erase a nested or qualified relationship that still carries meaning. The interface may discard fully represented pending work while retaining any identity or context still needed by other uses. Removal from one wrkList is not deletion of a source infon used elsewhere. Exact consolidation criteria for each relationship belong with the leaf, list, intersection, and definition rules. Current [RHS consolidation](/home/bruce/devl/Proteus4/graph/rhs-consolidation-results.md) is implementation evidence, not the chosen limit of the new design.
+Stopping A's search and proving a work entry removable are distinct decisions. A completed scalar goal does not by itself erase a nested or qualified relationship that still carries meaning. The interface may discard fully represented pending work while retaining any identity or context still needed by other uses. Removal from one wrkList is not deletion of a source infon used elsewhere. Exact consolidation criteria for each relationship belong with the leaf, list, intersection, and definition rules. Current [RHS consolidation](Historical/rhs-consolidation-results.md) is implementation evidence, not the chosen limit of the new design.
 
 ### D02E Partial answers and print reload
 
@@ -765,7 +765,7 @@ Two development options remain available: improve CodeDog or its build workflow 
 
 ### B01 Existing semantic constraints
 
-**Retained baseline, not newly decided by this agenda.** Current [AGENTS.md](/home/bruce/devl/Proteus4/AGENTS.md) and the recorded clarifications in [open-questions.md](/home/bruce/devl/Proteus4/graph/open-questions.md) constrain the starting examples. They include nominal typed fields, distinct occurrences and contexts, sparse/open safety, partial definitions, selection precedence, and guarded temporal preservation with `%?`.
+**Retained baseline, not newly decided by this agenda.** Current [AGENTS.md](/home/bruce/devl/Proteus4/AGENTS.md) and the recorded clarifications in [open-questions.md](open-questions.md) constrain the starting examples. They include nominal typed fields, distinct occurrences and contexts, sparse/open safety, partial definitions, selection precedence, and guarded temporal preservation with `%?`.
 
 The consolidated design records these constraints and their sources. The later D02 decisions govern default stopping and the lifecycle of ordinary information arrival; older descriptions of automatic goal restart do not carry forward. Other baseline constraints can be reconsidered explicitly during design; an architectural convenience or existing implementation gap does not silently change them. Current source is evidence of what the engine does, not by itself a justification of what it should do.
 
@@ -1084,7 +1084,7 @@ A checked RHS with the same nominal identity can carry its meaning-applied proof
 
 ## D055 Audit the nineteen remaining default failures before further implementation (2026-10-13)
 
-**Scope.** The user requested classification of the nineteen default failures. This entry records evidence and prioritization, not a new normalization rule, fixture retirement or permission to replace expectations with current output. The [consolidated classification](normalization-design.md#remaining-default-test-classification-2026-10-13) and [per-fixture inventory](default-test-classification.json) contain the findings.
+**Scope.** The user requested classification of the nineteen default failures. This entry records evidence and prioritization, not a new normalization rule, fixture retirement or permission to replace expectations with current output. The [consolidated classification](normalization-design.md#remaining-default-test-classification-2026-10-13) and [per-fixture inventory](../../graph/default-test-classification.json) contain the findings.
 
 **Finding and rationale.** The fresh default run is unchanged at 19/331. Four are formatting/printed-representation mismatches; seven concern reference expansion, normalization depth or pending/no-match result handling; six stop during world loading in three prerequisite families; one combines a numeric-capture fixture problem with unsupported sparse composite work; one is explicitly deferred. Thirteen names exist in the inspected main snapshot, and fourteen fail in the saved original-Proteus4 comparison. Historical status, fixture validity and present semantic correctness are separate questions. Do not treat nineteen failures as nineteen independent engine defects or accept a historical pass as a semantic oracle.
 
@@ -1213,7 +1213,7 @@ An unspecified corresponding container contributes no descendant facts; exhaust 
 
 **Reference precedence.** The user requested main-branch behavior over conflicting recent semantic suggestions. A clean snapshot of `/home/bruce/devl/Proteus`'s literal `main`, commit `86321ea75fbdbfa3cfd8cf356eb3eb2495b4efc8`, was built and probed. `{T 1 _}` remains unknown; `{T 1 9}` succeeds; the compound changed-value example remains unchanged; `%?` is parsed as two items. This reference therefore does not establish implicit preservation or whole-compound temporal independence. D062 describes the proposed behavior if preservation applies; it is not evidence that this main branch implements it. No implicit temporal or `%?` rule is added in this cycle. The user has been asked which historical implementation should supply that later comparison. The independent ancestor-correspondence work proceeds without assuming an answer.
 
-**Short-cycle evidence.** The specification, representative traces, scaling counts, remaining boundaries and final validation are consolidated in `reports/member-requirements-2026-10-13.md`. New permanent tests use synthetic models, not mutable world resources.
+**Short-cycle evidence.** The specification, representative traces, scaling counts, remaining boundaries and final validation are consolidated in `Docs/Design Docs/Historical/member-requirements-2026-10-13.md`. New permanent tests use synthetic models, not mutable world resources.
 
 **D063 validation.** Both maintained CodeDog targets regenerate successfully (library 139.12 s; executable 199.16 s). The independent regenerated-library client passes all 470 ancestor-requirement checks. The full executable passes all 56 WorldManager suites and reports 24 failures / 534 registrations: the same sixteen default and eight existing compiled failures, with identical names and diagnostics. The known cube coordinate still returns zLoc:1.1; state 2 and the hue/layout probes retain the documented incomplete boundaries. All 15 protected language fixtures and unrelated `myTests.tst` are unchanged. No Slipstream source or live world resource was modified.
 
@@ -1280,7 +1280,7 @@ This narrows D062 for the cursor execution mode: its old-versus-new equality int
 
 **Alternatives discarded.** A fixed depth limit hid work required by nested rules. A special transition-authorization flag duplicated semantics already handled by normal solving. Interpreting `=:` as replacement changed language meaning. Copying previous values into the new constraints would assert unwanted equality and make permutations order-dependent. Re-running normalize for the whole prior history would violate the intended work bound. These alternatives are absent from the maintained implementation.
 
-**Validation.** See `reports/tcursor-work-2026-10-14.md` for regenerated builds, behavioral checks, scaling measurements and remaining boundaries. Slipstream rendering requires separate visible validation; engine checks do not establish that the real cube is rendered.
+**Validation.** See `Docs/Design Docs/Historical/tcursor-work-2026-10-14.md` for regenerated builds, behavioral checks, scaling measurements and remaining boundaries. Slipstream rendering requires separate visible validation; engine checks do not establish that the real cube is rendered.
 
 ## D068 Materialize deferred definition fields in their occurrence (2026-10-14)
 
@@ -1294,7 +1294,7 @@ This narrows D062 for the cursor execution mode: its old-versus-new equality int
 
 **Cost and alternatives.** Borrowing does not visit composite descendants. Binding copies a position and parent wrapper on demand, not a containing subtree. Field uniqueness and correspondence scan their immediate lists. Retaining the same deferred value payload adds no information and returns the incoming description immediately. Fixed layout work remains proportional to inspected fields; explicit selection can still scan the relevant source and context depth. This makes no general linear claim for arbitrary patterns or repeated independent queries. Eagerly normalizing all definition descendants was rejected because unrelated metadata could prevent a valid view and multiply work. Dropping definition context or replacing unknown fields with renderer-specific facts was rejected because it loses supplied constraints.
 
-**Validation.** Synthetic tests cover two differently colored instances, inherited defaults, repeated ordered types, deferred contradictory metadata, explicit rejection when that metadata is demanded, inherited composite conflicts, source preservation and state 2 retaining its coordinate. Final build and runtime evidence is recorded in `reports/tcursor-viewer-2026-10-14.md`.
+**Validation.** Synthetic tests cover two differently colored instances, inherited defaults, repeated ordered types, deferred contradictory metadata, explicit rejection when that metadata is demanded, inherited composite conflicts, source preservation and state 2 retaining its coordinate. Final build and runtime evidence is recorded in `Docs/Design Docs/Historical/tcursor-viewer-2026-10-14.md`.
 
 ## D069 Fixed cube verbs are ordinary state-change definitions (2026-10-14)
 
@@ -1306,7 +1306,7 @@ This narrows D062 for the cursor execution mode: its old-versus-new equality int
 
 **Alternatives and costs.** The older two-state turn relations remain available; they are not the verb API and their locally edited files are untouched. The new model uses named-field correspondence rather than repeated unstructured occupant searches for each destination. Each step has 26 inventory entries, nine supplied moves, and a bounded 24-entry orientation lookup. Model tests measure constant frame count per step over 8, 32 and 128 mixed turns, with one cursor request retained. This is linear in steps for this fixed-size cube, not a claim of constant work for arbitrary-width models. Renderer projection costs are separate and checked explicitly. Planning, path-cost calculation, ancestor temporal listSpec transitions, parameterized verbs and general backward reconstruction remain deferred.
 
-**Validation.** See `reports/rubix-verbs-2026-10-14.md` for regenerated-engine, geometry, regression and GUI evidence. Core tests use small synthetic definitions; model integration tests deliberately validate the public model and do not become engine fixtures.
+**Validation.** See `Docs/Design Docs/Historical/rubix-verbs-2026-10-14.md` for regenerated-engine, geometry, regression and GUI evidence. Core tests use small synthetic definitions; model integration tests deliberately validate the public model and do not become engine fixtures.
 
 ## D070 Pragmatic normal form, explicit print modes, and cursor follow-up (2026-10-17)
 
@@ -2070,3 +2070,30 @@ The canonical repository retains the imported history independently. Evidence:
 `/tmp/proteus-main-migration/` contains build/test logs, timings, source and local-
 work checks, linkage/startup output and the retirement record. The publication
 checkpoint retains the documented unsupported semantics and known failures.
+
+
+## D085 Organize documentation under Docs (2026-10-17)
+
+**Decision.** The user requested moving Markdown documents into `Docs`,
+`Docs/Design Docs`, and `Docs/Design Docs/Historical`. Move the build, shared-library
+and test-ambiguity guides into Docs. Keep the main design, decision log, semantic
+contracts and working temporal/identity notes in Design Docs. Place dated
+checkpoint reports and superseded implementation plans in Historical, including
+reports for the current engine whose later milestones changed their details.
+
+Move 95 existing documents without changing their semantic content. Preserve the
+six previously untracked research documents in the documentation commit. Keep
+the root README, AGENTS.md and Resources/README.md in their conventional locations.
+Add navigation indexes and update documentation references, including links to
+unchanged graph fixtures and diagnostic assets. Historical Git commands and
+source/evidence references retain their original meaning. Existing user cleanup
+deletions and the Archive ignore rule remain separate from this organization.
+
+**Validation.** Verified all 95 moved documents against the original contents,
+allowing path updates, the documented navigation additions, and three Markdown
+hard breaks rewritten without trailing spaces. All 127 previously
+valid local links still resolve; the move introduces no broken links and repairs
+four old documentation links. The remaining 23 broken links refer to historical
+source or evidence. Engine, fixture and unrelated tracked-file hashes are
+unchanged, and the user's earlier cleanup deletions remain intact. This
+documentation-only change does not require engine or Slipstream rebuilds.

@@ -106,5 +106,5 @@ or adding redundant type RHSs.
 Final logs: `/tmp/p4-field-final-regenerated-build.log`,
 `/tmp/p4-field-verified-focused.json`, and
 `/tmp/p4-field-verified-default/results.json`. The portable compatibility
-inventory is [language-compatibility-status.json](language-compatibility-status.json).
+inventory is [language-compatibility-status.json](../../../graph/language-compatibility-status.json).
 No full legacy-unit, sanitizer, or GUI pass is claimed.

@@ -1,7 +1,7 @@
 # Negative indexing and time-span implementation guide
 
 Status: implementation draft under revision. It is subordinate to
-`theory/negative-index-time-design.md` and to the intersection-first review in
+`Docs/Design Docs/Historical/negative-index-time-design.md` and to the intersection-first review in
 `theory/end-relative-intersection-plan.md`. Do not implement this guide's
 separate coordinate-planner path; end-relative selection must first be
 represented and proven as a low-level intersection operation.

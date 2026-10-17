@@ -9,8 +9,8 @@ were removed after cleanup; checkpoint `b52322a867d2be2c1fda186929b05dc0c70e8be4
 remains in this branch's history. Use `git show <commit>:<path>` for historical
 behavior; do not restore an old solver fallback.
 
-Read the accepted contract in `graph/normalization-design.md`. Record choices,
-reasons and alternatives in `graph/normalization-design-decisions.md`. The older
+Read the accepted contract in `Docs/Design Docs/normalization-design.md`. Record choices,
+reasons and alternatives in `Docs/Design Docs/normalization-design-decisions.md`. The older
 reports describe reference behavior unless they explicitly name the replacement.
 Old APIs, scheduler counters, cache epochs and implementation details are not
 requirements on the new engine.

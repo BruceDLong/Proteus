@@ -56,7 +56,7 @@ Unordered structural correspondence, writes/retained-parent paths, and
 contextual descriptions remain later work. The user chose a closed empty oneOf
 for a completed field search with no matches. An incomplete search retains an
 open choice. This is not yet a temporal assertion that a part was removed;
-absence, omission, and disassembly are tracked in [open-questions.md](open-questions.md).
+absence, omission, and disassembly are tracked in [open-questions.md](../open-questions.md).
 Invalid size/member combinations are not accepted as completed field results.
 
 ## Validation

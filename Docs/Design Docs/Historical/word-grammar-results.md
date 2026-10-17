@@ -45,7 +45,7 @@ Open unordered collections retain their template.
 
 The old `word/findPlural` input conflicts with the current open-unordered
 contract. It remains unchanged and is explicitly skipped pending a fixture
-choice; see `test-ambiguities.md`. A separate bounded lookup verifies the
+choice; see `Docs/test-ambiguities.md`. A separate bounded lookup verifies the
 restored functionality. `word/pluralize` and `lang/splitText` retain their
 original inputs and expectations.
 
@@ -77,5 +77,5 @@ Logs: `/tmp/p4-word-grammar-accepted-build.log`,
 `/tmp/p4-removed-arithmetic.log`. Legacy helper tests and sanitizers were not
 rerun for this change.
 
-The proposed next discussion is in `time-word-design-plan.md`; none of its
+The proposed next discussion is in `Docs/Design Docs/time-word-design-plan.md`; none of its
 remaining time/name/context work has been implemented by this change.

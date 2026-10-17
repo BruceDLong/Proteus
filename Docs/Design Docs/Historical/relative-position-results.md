@@ -80,4 +80,4 @@ No full legacy-suite or sanitizer pass is claimed for this checkpoint.
 
 The arithmetic-relative tests, including both `prev/plus1` and `tprev/plus1`,
 were removed in the word/grammar checkpoint at the user's request. Direct
-structural navigation remains supported. See `word-grammar-results.md`.
+structural navigation remains supported. See `Docs/Design Docs/Historical/word-grammar-results.md`.

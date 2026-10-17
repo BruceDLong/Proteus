@@ -16,7 +16,7 @@ matching still uses its existing successful-continuation walk.
 
 The missing behavior was reproduced against Proteus3's `mergeLooseStrings`
 and `shouldCopySize` rules in `Reasoner.dog`. All seven examples in
-[qualified-text-tests.tst](qualified-text-tests.tst) passed on the reference
+[qualified-text-tests.tst](../../../graph/qualified-text-tests.tst) passed on the reference
 executable and failed before this change in Proteus4. They now pass in Proteus4.
 
 ## Implementation
@@ -61,7 +61,7 @@ Replay reuses the existing state rather than adding redundant work or identities
 
 Logs: `/tmp/p4-qualified-final-build.log`, `/tmp/p4-qualified-focused.log`, and
 `/tmp/p4-qualified-audit-*`. Exact older fixture statuses remain in
-[language-compatibility-status.json](language-compatibility-status.json).
+[language-compatibility-status.json](../../../graph/language-compatibility-status.json).
 
 ## Boundaries
 
