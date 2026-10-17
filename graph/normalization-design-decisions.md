@@ -1874,3 +1874,58 @@ Four native blocks remain, all in InfonStreamLoader.dog: the input worker, open
 worker, requestParsedInput, and startConnection. No maintained Proteus test or
 language fixture changed. `git diff --check` passes. Full Proteus, shared-library,
 and Slipstream rebuilds and integration validation remain deferred under D077.
+
+
+## D081 Express stream exception cleanup in CodeDog (2026-10-17)
+
+**Decision.** Use the new CodeDog try/catch support for the four remaining native
+function bodies: `ThreadedStreamInput.run`, `ThreadedStreamOpen.run`,
+`InfonStreamLoader.requestParsedInput`, and `startConnection`. The requested
+read-only file open was already inline as `dataFile.open(filePath, "r")` under
+D080; no additional wrapper remains there.
+
+Keep both startup counts (queued open worker and connection creation), origin
+allocation, relative path resolution, parse-only mode, registration order, and
+cleanup of partially started streams. Release each startup count after success,
+rejection, or an exception, including exceptions raised during cleanup or error
+reporting. Connector/parser/stream locals unwind before releasing the connection
+startup count. Keep the manager mutex out of connector creation and stream
+startup. Register a pending job before incrementing the startup count so an
+allocation failure cannot leave shutdown waiting on a nonexistent worker.
+
+Add `rethrow()` to CodeDog because cleanup must preserve the original exception,
+not swallow it or replace it with a message-only error. It is a standalone action
+with no arguments, valid only within a catch block. C++ uses native rethrow;
+Java, Kotlin, and Swift throw the original hidden exception binding. Nested
+handlers retain their own bindings, and changing the visible message does not
+change the exception. Native binding names remain collision-free. Document and
+test the operation rather than retaining native cleanup wrappers in Proteus.
+
+CodeDog's general catch also handles nonstandard C++ exceptions. Consequently,
+the input and open workers now report these through their existing error paths
+with `Unknown native exception`, whereas their former std::exception-only
+handlers let them escape. Existing standard exception messages and cleanup
+ordering remain intact. Typed catches and finally remain unsupported.
+
+**Validation.** Thirteen focused CodeDog tests pass, including compiling and
+running the portable exception/rethrow program on C++, Java, Kotlin, and Swift.
+They cover nested and unnamed handlers, catch scope and invalid arguments,
+message mutation, original C++ exception object/type preservation, nonstandard
+thrown values, and exception-safe lock release. The tightened C++ object-identity
+check also passes separately. Evidence: `/tmp/codedog-rethrow-tests-final.log`
+and `/tmp/codedog-rethrow-identity-test.log`.
+
+Thirty-six ordinary-CodeDog checks pass using the exact four production method
+bodies in an isolated program, with deterministic stand-ins for thread start,
+connectors, parser, and stream lifecycle. They cover successful and rejected
+starts, parent origins, parse-only mode, nested startup counts, failed connector
+creation/init/start, finish/join exceptions, failed job registration, exceptions
+from error reporting, and input-pump errors. Evidence:
+`/tmp/proteus-stream-exceptions-check.py` and
+`/tmp/proteus-stream-exceptions-check/{streamExceptionsProbe.dog,build.log,run.log}`.
+These checks do not establish real worker scheduling or full engine integration.
+
+No native C++ function bodies remain in the maintained Proteus .dog sources;
+CodeDog macro definitions still use the same delimiters. No maintained Proteus
+test or .tst fixture changed. Full Proteus, shared-library, and Slipstream
+rebuilds and integration validation remain deferred under D077.

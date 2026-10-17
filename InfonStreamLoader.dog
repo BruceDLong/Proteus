@@ -201,14 +201,14 @@ struct ThreadedInfonParser: inherits=Threads{
 // Push-based connectors return immediately and publish input later.
 struct ThreadedStreamInput: inherits=Threads {
     our InfonConnector: source
-    void: run() <- <%{
-        try {source->pumpInputBuff();}
-        catch (const std::exception& error) {
-            source->iStreamParent->parentAgent->worldManager.failInput(source->iStreamParent->toFill,error.what());
-            source->handleSystemError(error.what());
-            source->inputBuf.close();
+    void: run() <- {
+        try {source.pumpInputBuff()}
+        catch(error) {
+            source.iStreamParent.parentAgent.worldManager.failInput(source.iStreamParent.toFill, error)
+            source.handleSystemError(error)
+            source.inputBuf.close()
         }
-    }%>
+    }
 }
 
 struct InfonStream{ // InfonConnector -> Parse -> Extract -> Normalize
@@ -309,18 +309,22 @@ struct ThreadedStreamOpen: inherits=Threads {
     our infonView: target
     me string: spec
     me uint64: parentOrigin
-    void: run() <- <%{
-        struct Starting {
-            InfonStreamLoader* loader;
-            ~Starting(){std::lock_guard<std::mutex> lock(loader->connMgrMtx);--loader->connectionsStarting;}
-        } starting{loader};
+    void: run() <- {
+        // Keep this worker in the shutdown barrier until error reporting ends.
         try {
-            if(!loader->startConnection(target,spec,parentOrigin,true))
-                loader->agent->worldManager.failInput(target,"Could not insert stream: "+spec);
-        } catch(const std::exception& error) {
-            loader->agent->worldManager.failInput(target,"Could not insert stream: "+spec+": "+error.what());
+            try {
+                if(loader.startConnection(target, spec, parentOrigin, true)==NULL){
+                    loader.agent.worldManager.failInput(target, "Could not insert stream: "+spec)
+                }
+            } catch(error) {
+                loader.agent.worldManager.failInput(target, "Could not insert stream: "+spec+": "+error)
+            }
+        } catch {
+            protect(loader.connMgrMtx){loader.connectionsStarting <-- 1}
+            rethrow()
         }
-    }%>
+        protect(loader.connMgrMtx){loader.connectionsStarting <-- 1}
+    }
 }
 
 struct InfonStreamLoader{
@@ -390,48 +394,73 @@ struct InfonStreamLoader{
 
     // A parsed dependency belongs to its caller's normalization transaction.
     // It creates no separate Agent session or normalizer thread.
-    me bool: requestParsedInput(our infonView: target, me string: spec, me uint64: parentOrigin) <- <%{
-        auto job=std::make_shared<ThreadedStreamOpen>();
-        job->loader=this;job->target=target;job->spec=spec;job->parentOrigin=parentOrigin;
-        std::lock_guard<std::mutex> lock(connMgrMtx);
-        if(stopping) return false;
-        ++connectionsStarting;pendingConnections.push_back(job);
-        try {job->start("InsertConnection");}
-        catch(...) {--connectionsStarting;pendingConnections.pop_back();throw;}
-        return true;
-    }%>
+    me bool: requestParsedInput(our infonView: target, me string: spec, me uint64: parentOrigin) <- {
+        our ThreadedStreamOpen:: job
+        job.loader <- self
+        job.target <- target
+        job.spec <- spec
+        job.parentOrigin <- parentOrigin
+        protect(connMgrMtx){
+            if(stopping){return(false)}
+            // Register before counting so an allocation failure leaves no start pending.
+            pendingConnections.append(job)
+            connectionsStarting <+- 1
+            try {job.start("InsertConnection")}
+            catch {
+                connectionsStarting <-- 1
+                pendingConnections.popLast()
+                rethrow()
+            }
+        }
+        return(true)
+    }
     our InfonStream: startNewConnection(our infonView: toFill,
             me string: specString, me uint64: parentOriginID <- 0) <- {
         return(startConnection(toFill, specString, parentOriginID, false))
     }
     our InfonStream: startConnection(our infonView: toFill,
-            me string: specString, me uint64: parentOriginID, me bool: parseOnly) <- <%{
-        auto parent=parentDirForOrigin(parentOriginID ? parentOriginID : (toFill ? toFill->originID : 0));
-        auto resolved=resolveStreamSpec(specString,parent);
-        int number;
-        {
-            std::lock_guard<std::mutex> lock(connMgrMtx);
-            if(stopping) return {};
-            number=++numFilesLoaded;++connectionsStarting;
+            me string: specString, me uint64: parentOriginID, me bool: parseOnly) <- {
+        me uint64: parentOrigin <- parentOriginID
+        if(parentOrigin==0 and toFill!=NULL){parentOrigin <- toFill.originID}
+        me string: parent <- parentDirForOrigin(parentOrigin)
+        me string: resolved <- resolveStreamSpec(specString, parent)
+        me int: number
+        protect(connMgrMtx){
+            if(stopping){return(NULL)}
+            numFilesLoaded <+- 1
+            number <- numFilesLoaded
+            connectionsStarting <+- 1
         }
-        // Connector creation may reject or throw. Every accepted start must
-        // release the shutdown barrier on all paths, including exceptions.
-        struct Starting {
-            InfonStreamLoader& loader;
-            ~Starting() {std::lock_guard<std::mutex> lock(loader.connMgrMtx);--loader.connectionsStarting;}
-        } starting{*this};
-        auto connector=core->makeInfonConnector(resolved,number);
-        if(!connector) return {};
-        uint64_t origin;
-        {std::lock_guard<std::mutex> lock(connMgrMtx);origin=++lastOriginID;}
-        auto stream=std::make_shared<InfonStream>();stream->parseOnly=parseOnly;
-        auto parser=std::make_shared<ProteusParser>(core,true,origin);
-        stream->init(connector,agent,parser,toFill,origin);
-        {std::lock_guard<std::mutex> lock(connMgrMtx);infonSourceRecords[origin]=stream;}
-        try {stream->start("IS"+std::to_string(number));}
-        catch (...) {stream->requestFinish();stream->waitForCompletion();throw;}
-        return stream;
-    }%>
+        // Release the shutdown barrier on rejection, success, and every exception.
+        our InfonStream: result
+        try {
+            our InfonConnector: connector <- core.makeInfonConnector(resolved, number)
+            if(connector!=NULL){
+                me uint64: origin
+                protect(connMgrMtx){
+                    lastOriginID <+- 1
+                    origin <- lastOriginID
+                }
+                our InfonStream:: stream
+                stream.parseOnly <- parseOnly
+                our ProteusParser:: parser{core, true, origin}
+                stream.init(connector, agent, parser, toFill, origin)
+                protect(connMgrMtx){infonSourceRecords[origin] <- stream}
+                try {stream.start("IS"+toString(number))}
+                catch {
+                    stream.requestFinish()
+                    stream.waitForCompletion()
+                    rethrow()
+                }
+                result <- stream
+            }
+        } catch {
+            protect(connMgrMtx){connectionsStarting <-- 1}
+            rethrow()
+        }
+        protect(connMgrMtx){connectionsStarting <-- 1}
+        return(result)
+    }
 
     // Explicit finite-batch helper for tests and command-line file loading.
     // Live application startup must not use this as a readiness barrier.
