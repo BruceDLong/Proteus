@@ -1777,3 +1777,45 @@ shared-library or Slipstream rebuild was run; integration and full runtime check
 remain deferred under D077. Evidence and the repeatable extraction/build check
 are in `/tmp/proteus-identity-cleanup/verify.py`, `identityProbe.dog`, `build.log`
 and `run.log`. Test assertions in that probe are ordinary CodeDog.
+
+
+## D079 Express the cursor shared-use check through CodeDog (2026-10-17)
+
+**Decision.** Retain the cursor-cache protection accepted in D071 and replace
+`WorldCursorValue.inUse` with ordinary CodeDog:
+`return(sharedUseCount(use)>1)`. A cache entry owns one use token reference;
+current cursors own additional references. Moving or destroying a cursor releases
+its reference automatically. Keep the existing model lock, token ownership,
+cache clearing rules, and permanent-value policy unchanged.
+
+Add `sharedUseCount(value)` as a CodeDog ownership operation. It requires one
+`our` argument and returns `int64`. The C++ backend inspects the pointer directly
+with `use_count()`, without copying it or adding an inspection reference. The
+expression is evaluated once at runtime. Empty typed pointers return zero;
+other ownership types, bare NULL, and unsupported backends are rejected during
+CodeDog generation. Reference counts do not replace the model lock. Do not add
+manual counters and cursor destruction hooks just to remove a native expression.
+
+The user also chose to retain `independentIdentities=true` and its consistent
+remapping for independent inputs. Its current lack of callers does not authorize
+removing that feature. No identity parser or remapping code changes in this pass.
+
+**Validation.** All 27 focused CodeDog shared-ownership and explicit-dereference
+unit tests pass, including a generated ordinary-CodeDog program with 14 lifetime
+checks. These cover empty pointers, aliases, nested fields, container elements,
+holder destruction, scope exit, and evaluating an argument once. Diagnostics
+cover argument count, ownership types, and unsupported backends.
+
+A second small program extracts the exact production `WorldCursorValue` type,
+`cursorValueReady`, `selectValue`, and `clearCursorCache` methods into minimal
+containing types. Its 15 ordinary-CodeDog checks pass for multiple live cursors,
+movement, destruction, scope exit, restoring original descriptions, and retaining
+permanent or changed values. Evidence: `/tmp/proteus-cursor-use-check.py` and
+`/tmp/proteus-cursor-use-check/{cursorUseProbe.dog,build.log,run.log}`; CodeDog test
+output is `/tmp/codedog-shared-use-tests.log`.
+
+No native function bodies remain in WorldManager.dog. Eight remain elsewhere:
+three identity operations and five stream-loading operations. No maintained
+Proteus tests or .tst fixtures changed. `git diff --check` passes. Full Proteus,
+shared-library, and Slipstream rebuilds remain deferred under D077; the isolated
+checks do not establish full engine or consumer integration.
