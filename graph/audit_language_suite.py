@@ -19,7 +19,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     source = parser.add_mutually_exclusive_group()
-    source.add_argument('--suite', type=Path, default=root/'defaultTests.tst')
+    source.add_argument('--suite', type=Path, default=root/'Tests/defaultTests.tst')
     source.add_argument('--compiled', action='store_true', help='Read registered tests from ProteusTests.dog')
     parser.add_argument('--timeout', type=float, default=5)
     parser.add_argument('--select', default='')

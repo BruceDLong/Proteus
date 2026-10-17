@@ -2120,3 +2120,44 @@ existing executable. The previously recorded full run remains 380 passes and
 24 known failures out of 404 tests. No full suite or engine/Slipstream rebuild was
 needed for these documentation edits. Tracked-file hashes confirm source and
 fixtures are unchanged; earlier user cleanup edits remain separate.
+
+
+## D087 Centralize language fixtures in Tests (2026-10-17)
+
+**Decision.** Move all 16 retained `.tst` suites from the repository root and
+graph/ into Tests/. These remain runnable fixtures, including separate suites
+for unresolved semantics. Preserve their exact contents and expected outputs.
+Generated copies in ignored build directories are not maintained fixture sources.
+
+For a bare filename, ProteusTests.dog now reads ../Tests first, then retains the
+working-directory and parent-directory fallbacks. This applies to the default
+suite, command-line selections and @include names, with optional .tst extension.
+Explicit relative and absolute paths keep their existing meaning. Prefer Tests
+over a stale build-directory copy without introducing a legacy-path alias map.
+
+Update both Python audit helpers, current build guidance and the moved fixture's
+Markdown link. Historical result inventories and recorded commands retain their
+checkpoint paths. While verifying run_language_baseline.py, its selected cases
+passed but it rejected the run because it still expected GRAPH_CASE lines from
+the retired implementation. Remove that obsolete marker check; retain the exit
+status, failure summary and exact selected-test-count checks.
+
+**Validation.** Regenerated TestProteus from CodeDog successfully in 149.29 s.
+The full run remains 24 failures / 404 tests. The twelve separate suites add
+117 cases with 41 existing failures. All 521 case results and diagnostics match
+the pre-move runs exactly after normalizing file qualifiers. No fixture input,
+expected output, compiled registration or engine source changed.
+
+Eight temporary loader probes pass: preferred-directory precedence over a stale
+local copy, extensionless selection, explicit relative and absolute paths,
+current-directory and parent-directory fallbacks, repeated includes, and the
+existing empty-file fallback. The crash-protected runner requires ./TestProteus
+in its working directory; the isolated probe directory supplies a symlink to
+the rebuilt executable. The regular audit helper passes its selected parser
+fixture. The baseline helper passes ten numeric fixtures and still returns a
+failure for the known failing merge/dots/align4b fixture.
+
+All 16 moved fixture hashes match their originals. Current documentation links
+resolve, and existing user cleanup edits remain separate. This test-loader change
+does not require a shared-library or Slipstream rebuild. Evidence, before/after
+logs and the loader probes are in /tmp/proteus-tests-folder/.

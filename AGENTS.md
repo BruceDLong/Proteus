@@ -47,7 +47,7 @@ status. General sparse alignment, definition, intersection, temporal and effect
 semantics remain unsupported. Stream ownership and shutdown use the new path; general streamed list propagation and other link arrivals remain later work.
 An unsupported result must never be replaced with output from the old solver.
 
-Keep the existing .tst language fixtures and their expectations. The 72 compiled
+Keep the existing .tst language fixtures in Tests/ and their expectations. The 72 compiled
 checks use ordinary CodeDog: the 57 historical parser/model checks, five string
 behavior checks, incomplete-RHS parsing, four parser input-lock regressions,
 two identity-range checks, one parser-completion ordering check and one
@@ -72,6 +72,9 @@ Build with `codeDog Proteus.Lib.dog`. Run from LocalBuild:
 
     ./TestProteus
     ./TestProteus -t defaultTests.tst:
+
+Bare fixture names and @include names are looked up in ../Tests first, then the
+working directory and its parent. Explicit file paths are used as supplied.
 
 The startup banner identifies the engine. Check the printed failure count; the
 inherited harness can exit zero on test failures. Add `-T 3` for per-case timeout

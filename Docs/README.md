@@ -34,6 +34,11 @@ with the suffix after the colon:
 ```
 
 Use `./TestProteus -t defaultTests.tst:` for all default language fixtures.
+The retained `.tst` suites live in `Tests/`. Bare filenames, including `@include`
+names, are searched in `../Tests` first, then the working directory, then its
+parent. Explicit relative and absolute paths are used as supplied. The `.tst`
+extension may be omitted.
+
 For a generated-C++ experiment, `codeDog -b TestProteus` rebuilds from
 `LocalBuild`; finish maintained changes by regenerating from CodeDog source.
 
@@ -48,11 +53,11 @@ summary: the inherited harness can exit zero on test failures.
 The active suite contains 72 compiled CodeDog checks and 332 default language
 cases. All 16 tracked `.tst` files, including print-mode fixtures, are preserved.
 Expected outputs were not adjusted to match current failures. The last full
-validation, on 2026-10-17 during the canonical-checkout migration
-([D084](<Design Docs/normalization-design-decisions.md#d084-promote-the-redesign-to-canonical-proteus-main-2026-10-17>)),
+validation, on 2026-10-17 after moving fixtures into Tests
+([D087](<Design Docs/normalization-design-decisions.md#d087-centralize-language-fixtures-in-tests-2026-10-17>)),
 reported **380 passes and 24 failures out of 404 tests**, with ten additional
 print-mode fixtures passing. The failure names and diagnostics matched the
-previous full run. Documentation cleanup has not rerun that suite.
+pre-move run. The separate fixture suites also retained their results.
 
 Under D072, 140 registrations backed by verbatim C++ and 14 standalone drivers
 for the retired Proteus4 engine were removed. This includes the newer
@@ -89,7 +94,7 @@ leave the sixth column empty when no world file is needed. Existing fixtures
 and expectations remain unchanged. Run the focused fixtures from `LocalBuild`:
 
 ```sh
-./TestProteus -t ../graph/print-mode-tests.tst:
+./TestProteus -t print-mode-tests.tst:
 ```
 
 ## Handles and live input

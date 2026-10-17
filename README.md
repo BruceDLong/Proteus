@@ -59,7 +59,8 @@ cd LocalBuild
 Check the printed failure summary: the inherited harness can exit zero even
 when tests fail. The [testing guide](Docs/README.md) records known failures,
 additional fixture suites and printer-mode checks. Tests belong in ordinary
-CodeDog or `.tst` fixtures.
+CodeDog or `.tst` fixtures in `Tests/`. From `LocalBuild`, bare fixture names
+are looked up in `../Tests` first; explicit file paths are used as supplied.
 
 ## Project structure
 
@@ -73,11 +74,12 @@ CodeDog or `.tst` fixtures.
 | `ModelManager.dog`, `WordRules.dog` | Vocabulary lookup and word forms |
 | `Functions.dog` | Built-in function support |
 | `xlators/` | Language-specific vocabulary and inflection support |
-| `ProteusTests.dog`, `defaultTests.tst` | Compiled CodeDog checks and default language fixtures |
+| `ProteusTests.dog` | Compiled CodeDog checks and language-fixture loader |
+| `Tests/` | Default and additional `.tst` language fixtures |
 | `BuildProteusGraph.dog` | Shared-library and exported-interface build |
 | `clip.dog` | Command-line interface source |
 | `Resources/` | Tracked model/test assets and optional public-world link |
-| `graph/` | Additional language fixtures, test inventories and diagnostic tooling/data |
+| `graph/` | Test inventories and diagnostic tooling/data |
 | `Docs/` | Build guides, current design references and historical reports |
 | `Examples/`, `theory/` | Older examples and research material; check against current syntax and semantics |
 

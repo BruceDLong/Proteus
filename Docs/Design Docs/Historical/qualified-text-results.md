@@ -16,7 +16,7 @@ matching still uses its existing successful-continuation walk.
 
 The missing behavior was reproduced against Proteus3's `mergeLooseStrings`
 and `shouldCopySize` rules in `Reasoner.dog`. All seven examples in
-[qualified-text-tests.tst](../../../graph/qualified-text-tests.tst) passed on the reference
+[qualified-text-tests.tst](../../../Tests/qualified-text-tests.tst) passed on the reference
 executable and failed before this change in Proteus4. They now pass in Proteus4.
 
 ## Implementation
