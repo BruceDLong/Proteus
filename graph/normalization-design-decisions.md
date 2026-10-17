@@ -2018,3 +2018,55 @@ timings, the source snapshot, exact baseline comparison in `validation.json`,
 linkage output, and the bounded startup log. The comparison baseline is
 `/tmp/proteus-codedog-parser/full.log`. No maintained tests or expectations were
 modified, and the known unsupported semantic cases remain visible as failures.
+
+
+## D084 Promote the redesign to canonical Proteus main (2026-10-17)
+
+**Decision.** The user approved importing and publishing the cleaned redesign
+as `Proteus:main`, then requested an annotated Git tag named `Proteus4` on the
+final integration commit. The label is a Git tag; runtime and language version
+labels are unchanged. Remote main at `86321ea` is an ancestor of redesign
+checkpoint `d49e557`, with 325 incoming commits and no main-only commits.
+Fast-forward main to that checkpoint, then add the canonical-path documentation.
+Preserve the full history, `proteus3b` at `73752c4`, and the imported
+`codex/normalizer-redesign` checkpoint. No force push or history rewrite is needed.
+
+Develop in `/home/bruce/devl/Proteus`. Update current repository instructions,
+build documentation and the design's working-location references; historical
+reports retain their original evidence paths. Slipstream's proxy and exported
+interface both select `../Proteus`, with its generated RUNPATH pointing to the
+canonical SharedBuild directory. `Resources/public` still resolves to the
+sibling World repository. Solver code and all language fixtures remain identical
+to the validated redesign.
+
+Coordinate publication with CodeDog `e0dae8e`, including the nine compiler
+commits ahead of its previous remote main, and Slipstream's existing
+`codex/proteus4-insert-compat` branch. Stage only Slipstream's two build-path
+changes and canonical build instructions. Preserve its broader local README
+additions, model edits and untracked files, plus CodeDog's local ReactGUI edit.
+The original Proteus untracked research files remain in place. Recovery copies
+and hashes of existing local work are in `/tmp/proteus-main-migration/`.
+
+**Validation.** Rebuilt from the canonical checkout using a clean checkout of
+committed CodeDog `e0dae8e`, so publication does not rely on its local ReactGUI
+edit: test executable 160.86 s, shared library
+140.15 s, Slipstream 107.54 s.
+All three builds succeed. All 110 discovered CodeDog tests and all ten print-mode
+fixtures pass. The full Proteus run has 380 passes and the same 24 failures out
+of 404 tests; failure names and diagnostics exactly match D083. All 16 tracked
+.tst files and 72 compiled registrations are unchanged.
+
+Both shared-library and Slipstream `ldd -r` checks report no missing dependencies
+or undefined symbols; Slipstream resolves the canonical engine library. Its
+20-second private-Xvfb startup run reaches the deliberate timeout, reporting only
+the two existing normalization errors and no syntax/system errors. This run uses
+the existing local application/world resources; it does not revalidate visual
+rendering, navigation or graceful shutdown. Existing local edits are preserved.
+
+Retire the unused standalone checkout by moving it intact, including its Git
+metadata and ignored files, to
+`/home/bruce/devl/.retired/Proteus4-redesign-2026-10-17-d49e557`.
+The canonical repository retains the imported history independently. Evidence:
+`/tmp/proteus-main-migration/` contains build/test logs, timings, source and local-
+work checks, linkage/startup output and the retirement record. The publication
+checkpoint retains the documented unsupported semantics and known failures.

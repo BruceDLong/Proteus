@@ -1,10 +1,10 @@
-Proteus4 normalizer replacement
-------------------------------
+Proteus normalizer
+------------------
 
-Work in `/home/bruce/devl/Proteus4-redesign`, branch `codex/normalizer-redesign`.
-The user approved replacing the solver and moving it into the normal Proteus
-Engine early. This is now a standalone repository. Proteus3 remains in
-`/home/bruce/devl/Proteus`. The failed Proteus4 checkout and its local branch
+Work in `/home/bruce/devl/Proteus`, branch `main`. The cleaned normalizer redesign
+has been promoted into the canonical Proteus repository with its history intact.
+The previous engine remains on `proteus3b`; the imported redesign checkpoint is
+`codex/normalizer-redesign`. The failed Proteus4 checkout and its local branch
 were removed after cleanup; checkpoint `b52322a867d2be2c1fda186929b05dc0c70e8be4`
 remains in this branch's history. Use `git show <commit>:<path>` for historical
 behavior; do not restore an old solver fallback.
@@ -83,8 +83,9 @@ attempts, queue work, allocations and subscriptions, not merely trace messages.
 For fixed-width list work, avoid repeated lookup from the start for each member.
 Arbitrary inference/ambiguity has no assumed linear bound. Remove obsolete
 dependencies as callers migrate. Preserve unrelated work and explain changes,
-validation and unsupported boundaries clearly. Slipstream still requires its
-own migration and visible rendering validation; engine tests alone do not prove it.
+validation and unsupported boundaries clearly. Slipstream links this checkout's
+shared library and requires separate consumer and visible rendering validation;
+engine tests alone do not prove it.
 
 Commit completed major changes after the relevant checks, without waiting for
 a separate commit request. Keep commits scoped to the completed work, leave

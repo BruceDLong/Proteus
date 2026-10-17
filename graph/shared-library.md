@@ -1,9 +1,11 @@
 # Slipstream shared engine
 
-Build the engine from the standalone redesign checkout:
+Use CodeDog commit `e0dae8e` or later, which includes the shared-interface,
+input-lock, checked-parser, file-mode, shared-ownership, and exception bindings.
+Build the engine from the canonical Proteus checkout:
 
 ```sh
-cd /home/bruce/devl/Proteus4-redesign
+cd /home/bruce/devl/Proteus
 codeDog BuildProteusGraph.dog
 ```
 

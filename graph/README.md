@@ -1,6 +1,6 @@
-# Proteus4 normalization replacement
+# Proteus normalization
 
-The Proteus Engine on `codex/normalizer-redesign` now routes Agent normalization
+The Proteus Engine on `main` routes Agent normalization
 and TestProteus through `WorldManager.dog`. Agent owns sessions; normalize returns
 a `WorldRequest` handle. The old GraphNormalizer is not linked into this engine.
 
@@ -10,7 +10,7 @@ are in [the decision log](normalization-design-decisions.md).
 
 ## Build and verify
 
-From `/home/bruce/devl/Proteus4-redesign`:
+From `/home/bruce/devl/Proteus`:
 
 ```sh
 codeDog Proteus.Lib.dog
@@ -22,19 +22,19 @@ cd LocalBuild
 The executable identifies WorldManager at startup. Check the printed failure
 summary: the inherited harness can exit zero on test failures.
 
-The active suite contains 64 compiled CodeDog checks and 332 default language
+The active suite contains 72 compiled CodeDog checks and 332 default language
 cases. All 16 tracked `.tst` files, including print-mode fixtures, are preserved.
-The user's untracked `myTests.tst` is preserved separately. Expected outputs were
-not adjusted to match current failures.
+Expected outputs were not adjusted to match current failures. The D083 baseline
+is 380 passes and 24 failures, with ten additional print-mode fixtures passing.
 
 Under D072, 140 registrations backed by verbatim C++ and 14 standalone drivers
 for the retired Proteus4 engine were removed. This includes the newer
 WorldManager C++ test suites. The remaining `<% ... %>` delimiters in
 `ProteusTests.dog` quote CodeDog macro expansions, not native implementations.
-Production native bindings are unchanged. Future tests belong in ordinary
-CodeDog or `.tst` fixtures.
+Subsequent cleanup converted the remaining production native function bodies to
+CodeDog. Future tests belong in ordinary CodeDog or `.tst` fixtures.
 
-The [active inventory](engine-test-migration.json) lists all 64 compiled checks.
+The [active inventory](engine-test-migration.json) lists all 72 compiled checks.
 The [retirement manifest](retired-normalizer-tests.json) records removed names,
 files, fixture hashes and recovery commits. The previous large archived inventory
 is available with `git show bd7078b:graph/engine-test-migration.json`.
@@ -86,8 +86,10 @@ list prefixes remain later work. Sharing deductions across sessions is deferred.
 
 ## Reference implementations
 
-Proteus3 remains in `/home/bruce/devl/Proteus`. This checkout owns its Git data;
-it no longer depends on the removed `/home/bruce/devl/Proteus4` folder.
+Proteus3 remains on branch `proteus3b`. The imported redesign checkpoint remains
+on `codex/normalizer-redesign`; `main` contains its history and canonical-path
+integration. This checkout owns its Git data and does not depend on either fork's
+former checkout directory.
 The old solver and tests remain available in ancestor commit `b52322a`:
 
 ```sh

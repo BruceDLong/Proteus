@@ -12,7 +12,7 @@ Streaming behavior and computational cost are part of every operation's contract
 
 ## Replacement development
 
-Develop the new solver on `codex/normalizer-redesign` in the standalone repository `/home/bruce/devl/Proteus4-redesign`. The failed Proteus4 checkout and branch were removed under D072. Checkpoint `b52322a867d2be2c1fda186929b05dc0c70e8be4` remains an ancestor for implementation and diagnostic reference through `git show`. See G06 for the original setup and D072 for its cleanup.
+Develop the solver on `main` in `/home/bruce/devl/Proteus`. D084 promotes the cleaned redesign with its history intact; `proteus3b` retains the previous engine and `codex/normalizer-redesign` retains the imported redesign checkpoint. The failed Proteus4 checkout and branch were removed under D072. Checkpoint `b52322a867d2be2c1fda186929b05dc0c70e8be4` remains an ancestor for implementation and diagnostic reference through `git show`. See G06 for the original setup and D072 for its cleanup.
 
 Build the replacement behind WorldManager in CodeDog. Reuse the parser, POV storage, printing, and semantic tests where their contracts fit; assess solver internals individually. The branch started from that checkpoint and now runs the replacement through the normal Proteus Engine and TestProteus path. Unsupported features are reported explicitly; the old solver is not linked as a fallback. Build outputs are separate; public-world resources remain an external shared input.
 
@@ -287,7 +287,7 @@ As each issue is settled, replace its unresolved section with the chosen contrac
 
 **Begun on 2026-10-11; updated by P02 to make the normal Proteus Engine/test cutover the next milestone.** This is a sequence of reviewable working increments, not a decision on the open semantics above. See P01 in the [decision log](normalization-design-decisions.md#p01-implementation-sequence). Before implementing an unresolved construct, work through its examples and record the chosen meaning in both documents. The implementation plan does not lift the deferral of a strategic planner.
 
-The replacement runs in `/home/bruce/devl/Proteus4-redesign`. The checkpoint remains the comparison implementation in `/home/bruce/devl/Proteus4`. A replacement test must identify its engine and run entirely through WorldManager; unsupported features are reported explicitly, never supplied by an old-engine fallback. Keep the original language fixtures intact. Port useful newer behavior assertions through the new interface, without reproducing their old cache or scheduler APIs.
+The replacement runs on `main` in `/home/bruce/devl/Proteus`. Read the comparison implementation from checkpoint `b52322a` through Git; its former checkout was removed. A replacement test must identify its engine and run entirely through WorldManager; unsupported features are reported explicitly, never supplied by an old-engine fallback. Keep the original language fixtures intact. Port useful newer behavior assertions through the new interface, without reproducing their old cache or scheduler APIs.
 
 ### 0. Preserve the reference and test inventory — done
 
