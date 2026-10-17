@@ -2189,3 +2189,81 @@ introduced no new broken targets. No engine or Slipstream rebuild was needed.
 The user's earlier cleanup edits remain separate. The exact removal lists,
 source snapshot, link validation and test output are in
 /tmp/proteus-graph-cleanup/.
+
+
+## D089 Require selected cursor fields before presenting a temporal state (2026-10-17)
+
+**Problem and decision.** The user accepts pink progressive cube colors but wants
+to remove the initial incorrect placement during navigation. They explicitly
+identified this as a cursor change as well as a Slipstream change and approved
+caller-selected readiness requirements. Add `TCursor.requireField(path)` before
+initialization. Slipstream requests the six location/orientation coordinates for
+3D timelines; other cursors retain their existing shallow behavior. Acquire those
+requirements before optional scene/color demands, and retain the old visible
+cursor occurrence until all of them have known values. Priority reduces delay;
+readiness prevents presenting invented zero coordinates.
+
+**Implementation.** Compile canonical represented field paths into a shared-prefix
+tree. Acquire each demanded parent/field through the ordinary WorldManager solver
+with the original occurrence/definition context. Index each acquired parent's
+represented members once and reuse explicit contexts for its children, rather
+than locating every sibling from the parent again. Frozen source views and owned
+output branches remain separate. The virtual graph stores checked required facts
+in the selected cursor occurrence after the whole requirement set succeeds;
+read-only traversal transfers the same result to `working`. Owned staged members
+are transferred with valid parent pointers. No second value cache, solver,
+recursive whole-state normalization or restart API is added.
+
+`preparedView()` recognizes headers already acquired for the current occurrence.
+Slipstream's scene reset consumes these values directly. Renderable child objects
+also wait for all their represented pose coordinates before contributing geometry,
+so pending cublets do not accumulate at the origin. Their colors remain pink until
+available. Slipstream retains the last rendered object while the new parts acquire
+their poses, avoiding a blank interval between states. Structural grouping nodes
+retain their identity transform. Timeline
+initialization records that its first demand was attempted, so an exhausted unknown
+cannot become an idle-loop retry.
+
+**Waiting, failure and scope.** A parser dependency retains its WorldRequest and
+subscription; repeated refresh and unrelated input do not recreate the request.
+Cancellation, rejection, a missing/ambiguous field or an exhausted unknown does not
+advance the visible cursor or expose partially prepared axes. Numeric readiness
+requires a value, without demanding size. A cache hit must still satisfy this
+cursor's field requirements. This increment covers represented named record paths;
+embedded/sparse field layouts and general later member arrivals remain explicit
+boundaries. Registration order supplies priority within preparation, before
+Slipstream's optional requests. It does not add loader priorities or preempt a
+solver operation already executing.
+
+**Alternatives.** Reordering color and location reads alone still exposes missing
+coordinates across redraws. Blocking the GUI thread would prevent useful progress.
+Waiting for the complete cube would discard the desired progressive colors.
+Keeping acquired values only in detached cursor views would conflict with D071's
+list-backed cache policy. Hard-coding Rubix fields into the engine would couple the
+cursor to one renderer. These alternatives are not used.
+
+**Validation.** Regenerated successfully with `codeDog Proteus.Lib.dog`,
+`codeDog BuildProteusGraph.dog` and `codeDog Slipstream.dog`. Eleven ordinary
+CodeDog readiness checks pass, covering shared prefixes, zero/unknown values,
+retained parser waits, cancellation/rejection, missing fields, cache hits,
+navigation, atomic publication, read-only traversal and unchanged shallow cursors.
+For 8/32/128 represented sibling fields, requests, frames, queue steps and members
+scanned each equal the width; relationship attempts remain zero. The full
+`./TestProteus -T 3` run reports 391 passes / 415 tests, with the same 24 failure
+names and diagnostics as the pre-change 380/404 run. The explicit
+`./TestProteus -t defaultTests.tst: -T 3` run retains 16 failures / 332 cases.
+No fixture expectations changed.
+
+The regenerated consumer resolves `libproteusGraph.so` from this checkout;
+`ldd -r` finds no missing dependencies or undefined symbols for the library or app.
+A private Xvfb display reproduced the tiny pink cube before the change. The stale
+generated baseline had an obsolete first-field-only presenter predicate; that
+predicate was aligned with the existing maintained CodeDog source for the visual
+reproduction. The final consumer was fully regenerated, with no dependency-source
+edits. Four final 60 fps recordings (two new states, backward and cached forward)
+show correctly placed progressive pink geometry and retain the old object while
+the new poses load. All 960 captured frames contain visible cube geometry; none
+contains the tiny pink fallback or blank transition seen in the baseline.
+Build/test logs, screenshots and frame measurements are in /tmp/cursor-readiness/.
+Existing unsupported startup normalization notices and the 24 baseline failures
+remain outside this change.

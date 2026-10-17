@@ -1,6 +1,17 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/cursorReadiness/requiredValues
+    unit/cursorReadiness/waitAndResume
+    unit/cursorReadiness/unknown
+    unit/cursorReadiness/missing
+    unit/cursorReadiness/rejected
+    unit/cursorReadiness/cancelled
+    unit/cursorReadiness/navigation
+    unit/cursorReadiness/legacy
+    unit/cursorReadiness/atomicFields
+    unit/cursorReadiness/readOnly
+    unit/cursorReadiness/scaling
     unit/parserIdentity/validRange
     unit/parserIdentity/rejectedRange
     unit/parserLifecycle/errorBeforeCompletion
@@ -2160,5 +2171,185 @@ struct GLOBAL {
         }
         testParseError(testName, "1/0", "Invalid decimal number", 1, 1)
         testParseError(testName, "0/0", "Invalid decimal number", 1, 1)
+    }
+}
+
+// Required display facts use ordinary CodeDog and the production cursor API.
+struct GLOBAL {
+    our POV: cursorPreparedField(our TCursor: cursor, our POV: parent, me string: field) <- {
+        our POV: value <- cursor!.preparedView(parent)
+        if(value==NULL){return(NULL)}
+        return(cursor!.preparedView(value!.pItem!.fetchField(field)))
+    }
+    void: unit_cursorReadiness_requiredValues(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse(
+            "{T {thing:{location:{xLoc:0 yLoc:2 zLoc:(3 +4)}} color:_}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our POV: first <- parsed.target!.pItem!.value!.items.head; first!.pParent <- parsed.target
+        our infonView: sourceDescription <- first!.pItem
+        me string: original <- toString(sourceDescription)
+        our TCursor: cursor; Allocate(cursor, first); cursor!.attach(agent.worldManager, agent.startSession())
+        me bool: registered <- cursor!.requireField("thing.location.xloc") and
+            cursor!.requireField("thing.location.yloc") and cursor!.requireField("thing.location.zloc")
+        if(!registered or !cursor!.refresh()){FAIL("Required fields did not become ready: "+cursor!.status().detail)}
+        our POV: thing <- cursorPreparedField(cursor, cursor!.current, "thing")
+        our POV: location <- cursorPreparedField(cursor, thing, "location")
+        our POV: x <- cursorPreparedField(cursor, location, "xloc")
+        our POV: z <- cursorPreparedField(cursor, location, "zloc")
+        if(x==NULL or z==NULL){FAIL("Prepared coordinates are unavailable")}
+        me string: actual <- toString(x!.pItem!.fetchInt())+":"+toString(z!.pItem!.fetchInt())
+        me string: expected <- "0:7"; REQUIRE(actual==expected)
+        actual <- toString(cursor!.requiredRequests); expected <- "5"; REQUIRE(actual==expected)
+        actual <- toString(sourceDescription); expected <- original; REQUIRE(actual==expected)
+        our POV: storedZ <- cursor!.current!.pItem!.fetchField("thing")!.pItem!.fetchField("location")!.pItem!.fetchField("zloc")
+        if(storedZ==NULL or storedZ!.pItem!.fetchInt()!=7){FAIL("Required facts were not stored in the cursor occurrence")}
+        if(cursor!.preparedView(first!.pItem!.fetchField("color"))!=NULL){FAIL("Optional color was demanded")}
+        me uint64: frames <- cursor!.requiredFrames
+        if(!cursor!.refresh() or cursor!.requiredFrames!=frames or cursor!.requiredRequests!=5){FAIL("Refresh repeated completed field work")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+    // Pending input is the original parser-owned header. Repeated refresh and
+    // unrelated arrivals must retain the exact request and old displayed value.
+    void: testCursorRequiredFailure(me string: testName, me int: scenario) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me string: leaf <- "4"
+        if(scenario==1){leaf <- "_"}
+        if(scenario==3){leaf <- "4=5"}
+        me WorldParseResult: parsed <- agent.worldManager.parse(
+            "{T {pose:{x:1}} {pose:{x:"+leaf+"}}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our POV: first <- parsed.target!.pItem!.value!.items.head; first!.pParent <- parsed.target
+        our POV: second <- first!.next; second!.pParent <- parsed.target
+        our TCursor: seed; Allocate(seed, first); seed!.attach(agent.worldManager, agent.startSession())
+        if(!seed!.refresh()){FAIL("Initial cursor seed failed")}
+        // Mark the literal destination as an available shallow state. Its
+        // nested field must still be acquired by a cursor with requirements.
+        agent.worldManager.graph.rememberCursorValue(second, NULL, worldPartial, true)
+        our POV: pose <- second!.pItem!.fetchField("pose")
+        our POV: field <- pose!.pItem!.fetchField("x")
+        if(scenario==0 or scenario==4){agent.worldManager.prepareInput(field!.pItem)}
+        if(scenario==2){pose!.pItem!.value!.items.clear()}
+        our TCursor: cursor; Allocate(cursor, first); cursor!.attach(agent.worldManager, agent.startSession())
+        cursor!.requireField("pose.x")
+        if(!cursor!.refresh()){FAIL("Initial required field failed: "+cursor!.status().detail)}
+        our POV: previous <- cursor!.current
+        if(cursor!.goNext()){FAIL("Unready destination was presented")}
+        if(cursor!.current!==previous or cursor!.position!.node!==first){FAIL("Unready movement changed the displayed occurrence")}
+        if(scenario==0 or scenario==4){
+            if(cursor!.status().outcome!=worldWaiting){FAIL("Parser dependency did not wait: "+cursor!.status().detail)}
+            if(agent.worldManager.control!.inputWaiters.size()!=1){FAIL("Required input did not retain one subscription")}
+            our WorldRequest: waiting <- cursor!.request
+            me uint64: count <- cursor!.requiredRequests
+            if(cursor!.refresh() or cursor!.request!==waiting or cursor!.requiredRequests!=count){FAIL("Waiting demand restarted")}
+            our infonView:: unrelated; agent.worldManager.inputReady(unrelated)
+            if(cursor!.request!==waiting or waiting!.status().outcome!=worldWaiting){FAIL("Unrelated arrival changed the demand")}
+            if(scenario==4){
+                waiting!.cancel()
+                if(cursor!.refresh() or cursor!.status().outcome!=worldCancelled or cursor!.current!==previous){FAIL("Cancellation changed the displayed value")}
+            }else{
+                field!.pItem!.streamState <- parseDone; agent.worldManager.inputReady(field!.pItem)
+                if(!cursor!.refresh() or cursor!.current!==second){FAIL("Required parser arrival did not finish the move: "+cursor!.status().detail)}
+                our POV: result <- cursorPreparedField(cursor, cursorPreparedField(cursor, cursor!.current, "pose"), "x")
+                if(result==NULL or result!.pItem!.fetchInt()!=4){FAIL("Resumed field has the wrong value")}
+            }
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Finished readiness retained a subscription")}
+        }else{
+            me WorldOutcome: expectedOutcome <- worldPartial
+            if(scenario==3){expectedOutcome <- worldRejected}
+            if(cursor!.pendingPosition!=NULL or cursor!.status().outcome!=expectedOutcome){FAIL("Exhausted readiness has wrong status: "+cursor!.status().detail)}
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+    void: unit_cursorReadiness_waitAndResume(me string: testName) <- {testCursorRequiredFailure(testName, 0)}
+    void: unit_cursorReadiness_unknown(me string: testName) <- {testCursorRequiredFailure(testName, 1)}
+    void: unit_cursorReadiness_missing(me string: testName) <- {testCursorRequiredFailure(testName, 2)}
+    void: unit_cursorReadiness_rejected(me string: testName) <- {testCursorRequiredFailure(testName, 3)}
+    void: unit_cursorReadiness_cancelled(me string: testName) <- {testCursorRequiredFailure(testName, 4)}
+    void: unit_cursorReadiness_navigation(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T {pose:{x:1} color:_} {pose:{x:(2 +3)} color:_} {pose:{x:(6 +1)} color:_}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our POV: first <- parsed.target!.pItem!.value!.items.head; first!.pParent <- parsed.target
+        our TCursor: cursor; Allocate(cursor, first); cursor!.attach(agent.worldManager, agent.startSession())
+        cursor!.requireField("pose.x")
+        if(!cursor!.refresh() or !cursor!.goNext() or !cursor!.goNext()){FAIL("Forward readiness failed: "+cursor!.status().detail)}
+        if(!cursor!.goPrev()){FAIL("Cached backward readiness failed: "+cursor!.status().detail)}
+        our POV: x <- cursorPreparedField(cursor, cursorPreparedField(cursor, cursor!.current, "pose"), "x")
+        if(x==NULL or x!.pItem!.fetchInt()!=5 or cursor!.current!==first!.next){FAIL("Prepared values belong to the wrong occurrence")}
+        if(!cursor!.goPrev() or cursor!.current!==first){FAIL("Repeated backward movement failed")}
+        if(cursor!.session!.requests.size()>1){FAIL("Completed readiness requests accumulated")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+    void: unit_cursorReadiness_legacy(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T {pose:{x:_}} {pose:{x:2}}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our POV: first <- parsed.target!.pItem!.value!.items.head; first!.pParent <- parsed.target
+        our TCursor: cursor; Allocate(cursor, first); cursor!.attach(agent.worldManager, agent.startSession())
+        if(!cursor!.refresh() or cursor!.requiredRequests!=0 or !cursor!.goNext()){FAIL("Default shallow cursor behavior changed")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+}
+
+struct GLOBAL {
+    void: unit_cursorReadiness_atomicFields(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T {pose:{x:1 y:2}} {pose:{x:(3 +4) y:_}}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our POV: first <- parsed.target!.pItem!.value!.items.head; first!.pParent <- parsed.target
+        our POV: second <- first!.next; second!.pParent <- parsed.target
+        agent.worldManager.graph.rememberCursorValue(second, NULL, worldPartial, true)
+        me string: before <- toString(second!.pItem)
+        our TCursor: cursor; Allocate(cursor, first); cursor!.attach(agent.worldManager, agent.startSession())
+        cursor!.requireField("pose.x"); cursor!.requireField("pose.y")
+        if(!cursor!.refresh()){FAIL("Initial pose was not ready")}
+        our POV: oldX <- cursorPreparedField(cursor, cursorPreparedField(cursor, cursor!.current, "pose"), "x")
+        if(cursor!.goNext() or cursor!.status().outcome!=worldPartial){FAIL("Unknown required axis was presented")}
+        if(cursor!.current!==first or oldX!.pItem!.fetchInt()!=1){FAIL("Partial preparation changed the old view")}
+        me string: actual <- toString(second!.pItem); me string: expected <- before; REQUIRE(actual==expected)
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+    void: unit_cursorReadiness_readOnly(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T {pose:{x:1}} {pose:{x:4}}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our POV: first <- parsed.target!.pItem!.value!.items.head; first!.pParent <- parsed.target
+        our POV: second <- first!.next; second!.pParent <- parsed.target
+        our POV: input <- second!.pItem!.fetchField("pose")!.pItem!.fetchField("x")
+        me string: before <- toString(parsed.target!.pItem)
+        our TCursor: cursor; Allocate(cursor, first); cursor!.attach(agent.worldManager, agent.startSession())
+        cursor!.position!.writable <- false; cursor!.requireField("pose.x")
+        if(!cursor!.refresh()){FAIL("Read-only initial pose failed")}
+        our POV: displayed <- cursor!.current
+        me string: oldValue <- toString(displayed!.pItem)
+        agent.worldManager.prepareInput(input!.pItem)
+        if(cursor!.goNext() or cursor!.status().outcome!=worldWaiting){FAIL("Read-only destination did not wait")}
+        me string: actual <- toString(displayed!.pItem); me string: expected <- oldValue; REQUIRE(actual==expected)
+        input!.pItem!.streamState <- parseDone; agent.worldManager.inputReady(input!.pItem)
+        if(!cursor!.refresh() or cursor!.current!==displayed){FAIL("Read-only cursor did not reuse its working value")}
+        our POV: result <- cursorPreparedField(cursor, cursorPreparedField(cursor, cursor!.current, "pose"), "x")
+        if(result==NULL or result!.pItem!.fetchInt()!=4){FAIL("Read-only prepared field is wrong")}
+        actual <- toString(parsed.target!.pItem); expected <- before; REQUIRE(actual==expected)
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+    void: unit_cursorReadiness_scaling(me string: testName) <- {
+        me int: width <- 8
+        while(width<=128){
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me string: text <- "{T {"
+            withEach idx in range 0 .. width{text <+- "field"+toString(idx)+":"+toString(idx)+" "}
+            text <+- "}}"
+            me WorldParseResult: parsed <- agent.worldManager.parse(text)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our POV: first <- parsed.target!.pItem!.value!.items.head; first!.pParent <- parsed.target
+            our TCursor: cursor; Allocate(cursor, first); cursor!.attach(agent.worldManager, agent.startSession())
+            withEach idx in range 0 .. width{cursor!.requireField("field"+toString(idx))}
+            if(!cursor!.refresh()){FAIL("Wide readiness failed: "+cursor!.status().detail)}
+            if(cursor!.requiredRequests!=width or cursor!.requiredMembersScanned!=width or cursor!.requiredFrames>width*3){FAIL("Required siblings repeated their parent scan")}
+            print("READINESS width=",width," requests=",cursor!.requiredRequests," frames=",cursor!.requiredFrames,
+                " queue=",cursor!.requiredQueueSteps," relationships=",cursor!.requiredRelationships," members=",cursor!.requiredMembersScanned,"\n")
+            agent.endWorldSessions(); modelMngr.clear(); width <*- 4
+        }
     }
 }

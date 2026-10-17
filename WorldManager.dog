@@ -731,6 +731,7 @@ struct WorldRequest {
     me WorldOutcome: outcome <- worldReady
     me string: detail
     me uint64: framesCreated <- 0
+    me uint64: queueSteps <- 0
     me uint64: relationshipsRead <- 0
     me uint64: publications <- 0
     me uint64: alternativePairs <- 0
@@ -2703,7 +2704,7 @@ struct WorldPOVGraph {
     }
     // The solver has already checked and published this staged description.
     // Retain the source recipe, not a second cache of computed values.
-    void: storeCursorValue(our POV: node, our infonView: description, me WorldOutcome: outcome) <- {
+    void: storeCursorValue(our POV: node, our infonView: description, me WorldOutcome: outcome, me bool: ownsMembers <- false) <- {
         our infonView: original <- node!.pItem
         me bool: permanent <- false
         if(node!.cursorValue!=NULL and node!.cursorValue!.owner===node){
@@ -2712,8 +2713,15 @@ struct WorldPOVGraph {
         }
         if(permanent){original <- NULL}
         Allocate(node!.pItem)
-        copyDescription(node, description, true)
+        copyDescription(node, description, !ownsMembers)
+        if(ownsMembers){reparentMembers(node)}
         rememberCursorValue(node, original, outcome, permanent)
+    }
+    // Transfer a detached, owned member list without leaving parent pointers
+    // into its discarded staging wrapper. Descendant parents remain stable.
+    void: reparentMembers(our POV: node) <- {
+        our POV: member <- node!.pItem!.value!.items.head
+        while(member!=NULL){member!.pParent <- node; member <- member!.next}
     }
     // A successful ordinary publication is persistent, including assertions
     // into a descendant of a cached state. Rejected transactions never get here.
@@ -5958,6 +5966,7 @@ struct WorldManager {
                 request!.ready.append(request!.root)
             }
             our WorldFrame: frame <- request!.ready.popLast()
+            request!.queueSteps <+- 1
             step(request, frame)
             if(frame!.finished and frame!.navigation!=NULL and graph.completeFacts(frame!.facts, false)){
                 if(request!.completedOccurrences.containsKey(frame!.node)){request!.completedOccurrences.at(frame!.node) <- frame}
@@ -5999,6 +6008,23 @@ struct WorldManager {
     }
 }
 
+// Readiness paths name represented record fields, using their canonical type IDs.
+// Common prefixes share one demand; they do not request unrelated descendants.
+struct WorldRequiredField {
+    me string: name
+    me string: path
+    me bool: requireValue <- false
+    me List<our WorldRequiredField>: children
+    me Map<string, our WorldRequiredField>: named
+}
+struct WorldFieldDemand {
+    our WorldRequiredField: requirement
+    our POV: source
+    our POV: value
+    our POV: destination
+    our WorldPosition: context
+}
+
 // The working buffer is only a fallback; current normally denotes the stored
 // occurrence. Cached values and permanent values use the same list and solver.
 struct TCursor {
@@ -6019,6 +6045,163 @@ struct TCursor {
     me bool: hasValue <- false
     me bool: atBoundary <- false
     me WorldStatus: movement
+    our WorldRequiredField: requiredFields
+    our POV: pendingValue
+    our WorldCursorUse: pendingUse
+    our POV: pendingFieldsValue
+    me WorldStatus: pendingMovement
+    me List<our WorldFieldDemand>: fieldWork
+    me Set<our infonView>: preparingViews
+    me Set<our infonView>: preparedViews
+    me uint64: requiredRequests <- 0
+    me uint64: requiredFrames <- 0
+    me uint64: requiredQueueSteps <- 0
+    me uint64: requiredRelationships <- 0
+    me uint64: requiredMembersScanned <- 0
+
+    // Configure before initialization. A requirement is a known value, not a
+    // demand for size or for recursive completion of the entire state.
+    me bool: requireField(me string: path) <- {
+        if(hasValue or pendingPosition!=NULL or path==""){return(false)}
+        me List<string>: names
+        me string: remaining <- path
+        while(remaining!=""){
+            me int: dot <- findString(remaining, ".")
+            if(dot==0){return(false)}
+            if(dot<0){names.append(remaining); remaining <- ""}
+            else{
+                names.append(remaining.subStr(0, dot)); remaining <- remaining.subStr(dot+1)
+                if(remaining==""){return(false)}
+            }
+        }
+        if(requiredFields==NULL){Allocate(requiredFields)}
+        our WorldRequiredField: parent <- requiredFields
+        withEach name in names{
+            if(!parent!.named.containsKey(name)){
+                our WorldRequiredField:: child; child!.name <- name
+                child!.path <- name; if(parent!.path!=""){child!.path <- parent!.path+"."+name}
+                parent!.named.insert(name, child); parent!.children.append(child)
+            }
+            parent <- parent!.named.at(name)
+        }
+        parent!.requireValue <- true
+        return(true)
+    }
+    // Only the committed position's views are exposed, including during a wait.
+    our POV: preparedView(our POV: source) <- {
+        if(source!=NULL and preparedViews.contains(source!.pItem)){return(source)}
+        return(NULL)
+    }
+    me bool: stopFields(me WorldOutcome: outcome, me string: detail) <- {
+        movement.outcome <- outcome; movement.detail <- detail
+        pendingPosition <- NULL; pendingValue <- NULL; pendingUse <- NULL; pendingFieldsValue <- NULL
+        fieldWork.clear(); preparingViews.clear(); previousValue <- NULL
+        return(false)
+    }
+    me bool: settleFields() <- {
+        while(!fieldWork.isEmpty()){
+            our WorldFieldDemand: demand <- fieldWork.last()
+            if(demand!.value==NULL){
+                if(request==NULL){
+                    our POV:: staged{946}; Allocate(staged!.pItem)
+                    request <- manager!.solve(session, demand!.source, staged, false, language, worldSource, identities,
+                        demand!.context, NULL, true)
+                    requiredRequests <+- 1
+                }
+                me WorldStatus: state <- request!.status()
+                movement <- state
+                if(state.outcome==worldWaiting or state.outcome==worldReady){return(false)}
+                requiredFrames <+- request!.framesCreated; requiredRelationships <+- request!.relationshipsRead
+                requiredQueueSteps <+- request!.queueSteps
+                if(request!.publications==0 or (state.outcome!=worldComplete and state.outcome!=worldPartial)){
+                    return(stopFields(state.outcome, "Required field "+demand!.requirement!.path+": "+state.detail))
+                }
+                if(demand!.requirement!.requireValue and state.outcome!=worldComplete){
+                    return(stopFields(worldPartial, "Required field has no established value: "+demand!.requirement!.path))
+                }
+                // Source views remain frozen. Only destination wrappers belong
+                // to the private branch that will be stored in the list.
+                demand!.value <- request!.result()
+                demand!.value!.worldContext <- demand!.context
+                Allocate(demand!.destination!.pItem)
+                manager!.graph.copyDescription(demand!.destination, demand!.value!.pItem, true)
+                preparingViews.insert(demand!.destination!.pItem)
+                retireRequest()
+            }
+            fieldWork.popLast()
+            if(!demand!.requirement!.children.isEmpty()){
+                // Index each acquired parent once, preserving the same exact
+                // names/added types as fetchField. Ambiguous fields cannot
+                // establish a single required value.
+                me Map<string, our POV>: members
+                me Map<our POV, our POV>: destinations
+                me Set<string>: ambiguous
+                me bool: embedded <- false
+                our POV: member <- demand!.value!.pItem!.value!.items.head
+                our POV: destination <- demand!.destination!.pItem!.value!.items.head
+                while(member!=NULL){
+                    destinations.insert(member, destination)
+                    requiredMembersScanned <+- 1
+                    if(member!.isSubItm){embedded <- true}
+                    else if(!member!.pItem!.invertMatch){
+                        me List<string>: names
+                        if(member!.pItem!.type!=NULL){names.append(member!.pItem!.type!.typeID())}
+                        withEach type in member!.pItem!.addedTypes{names.append(type!.typeID())}
+                        withEach name in names{
+                            if(!members.containsKey(name)){members.insert(name, member)}
+                            else if(members.at(name)!==member){ambiguous.insert(name)}
+                        }
+                    }
+                    member <- member!.next; destination <- destination!.next
+                }
+                if(embedded){return(stopFields(worldUnsupported, "Required fields need represented record members: "+demand!.requirement!.path))}
+                our WorldPosition:: acquired; acquired! <- demand!.context!
+                acquired!.node <- demand!.value; acquired!.owner <- demand!.value
+                me List<our WorldFieldDemand>: children
+                withEach child in demand!.requirement!.children{
+                    if(ambiguous.contains(child!.name)){return(stopFields(worldPartial, "Required field is ambiguous: "+child!.path))}
+                    if(!members.containsKey(child!.name)){return(stopFields(worldPartial, "Required field is unavailable: "+child!.path))}
+                    our WorldFieldDemand:: next; next!.requirement <- child; next!.source <- members.at(child!.name)
+                    next!.destination <- destinations.at(next!.source)
+                    if(next!.source!.worldContext!=NULL){next!.context <- manager!.graph.occurrencePath(next!.source)}
+                    else{next!.context <- manager!.graph.position(next!.source, acquired)}
+                    children.append(next)
+                }
+                // The stack visits requirements in registration order.
+                while(!children.isEmpty()){our WorldFieldDemand: child <- children.popLast(); fieldWork.append(child)}
+            }
+        }
+        our WorldPosition: at <- pendingPosition
+        our POV: value <- pendingValue
+        if(at!.writable){manager!.graph.storeCursorValue(value, pendingFieldsValue!.pItem, pendingMovement.outcome, true)}
+        else{
+            value <- working
+            manager!.graph.copyDescription(value, pendingFieldsValue!.pItem, false)
+            manager!.graph.reparentMembers(value); value!.worldContext <- at
+        }
+        preparedViews <- preparingViews; preparedViews.insert(value!.pItem); preparingViews.clear()
+        pendingPosition <- NULL; pendingValue <- NULL; pendingFieldsValue <- NULL
+        selectValue(at, value); movement <- pendingMovement
+        pendingUse <- NULL; previousValue <- NULL
+        return(true)
+    }
+    me bool: prepareValue(our WorldPosition: at, our POV: value) <- {
+        if(requiredFields==NULL){pendingPosition <- NULL; selectValue(at, value); previousValue <- NULL; return(true)}
+        retireRequest()
+        pendingPosition <- at; pendingValue <- value; pendingMovement <- movement
+        if(manager!.graph.cursorValueReady(value)){pendingUse <- value!.cursorValue!.use; pendingMovement.outcome <- value!.cursorValue!.outcome; pendingMovement.detail <- ""}
+        else if(pendingMovement.outcome==worldReady){pendingMovement.outcome <- worldPartial}
+        requiredRequests <- 0; requiredFrames <- 0; requiredQueueSteps <- 0; requiredRelationships <- 0; requiredMembersScanned <- 0
+        preparingViews.clear(); fieldWork.clear()
+        Allocate(pendingFieldsValue, 946); Allocate(pendingFieldsValue!.pItem)
+        manager!.graph.copyDescription(pendingFieldsValue, value!.pItem, true)
+        our WorldFieldDemand:: root; root!.requirement <- requiredFields
+        root!.destination <- pendingFieldsValue
+        root!.context <- snapshotOf(value, at); root!.context!.owner <- root!.context!.node
+        root!.context!.writable <- false; root!.source <- root!.context!.node; root!.value <- root!.source
+        fieldWork.append(root)
+        return(settleFields())
+    }
 
     void: INIT() <- {
         Allocate(working, 946); Allocate(working!.pItem); current <- working
@@ -6080,8 +6263,10 @@ struct TCursor {
             at, previousValue, true, false)
     }
     me bool: settle() <- {
-        if(request==NULL or pendingPosition==NULL){return(false)}
+        if(pendingPosition==NULL){return(false)}
         me WorldModelLock: lock{manager!.control!.mutex}
+        if(pendingValue!=NULL){return(settleFields())}
+        if(request==NULL){return(false)}
         while(pendingPosition!=NULL){
             movement <- request!.status()
             if(movement.outcome==worldWaiting or movement.outcome==worldReady){return(false)}
@@ -6094,14 +6279,14 @@ struct TCursor {
                 value <- at!.node
                 if(at!.parent!=NULL){value!.pParent <- at!.parent!.occurrence}
                 manager!.graph.storeCursorValue(value, request!.target!.pItem, movement.outcome)
+            }else if(replay.isEmpty() and requiredFields!=NULL){
+                value <- request!.target; value!.worldContext <- at
             }else{
                 manager!.graph.copyDescription(working, request!.target!.pItem, true)
                 working!.worldContext <- at
             }
+            if(replay.isEmpty()){return(prepareValue(at, value))}
             pendingPosition <- NULL
-            if(replay.isEmpty()){
-                selectValue(at, value); previousValue <- NULL; return(true)
-            }
             previousValue <- snapshotOf(value, at)
             our WorldPosition: nextStep <- replay.popLast(); startStep(nextStep)
         }
@@ -6113,7 +6298,7 @@ struct TCursor {
         me WorldModelLock: lock{manager!.control!.mutex}
         replay.clear(); previousValue <- NULL; atBoundary <- false
         if(available(destination)){
-            retireRequest(); selectValue(destination, destination!.node); return(true)
+            retireRequest(); return(prepareValue(destination, destination!.node))
         }
         if(hasValue and forward and manager!.graph.samePosition(adjacent(position, false), destination)){
             previousValue <- snapshot(); replay.append(destination)

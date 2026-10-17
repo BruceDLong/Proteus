@@ -50,14 +50,15 @@ application-world setup. Default tests use tracked assets.
 The executable identifies WorldManager at startup. Check the printed failure
 summary: the inherited harness can exit zero on test failures.
 
-The active suite contains 72 compiled CodeDog checks and 332 default language
+The active suite contains 83 compiled CodeDog checks and 332 default language
 cases. All 16 tracked `.tst` files, including print-mode fixtures, are preserved.
 Expected outputs were not adjusted to match current failures. The last full
-validation, on 2026-10-17 after moving fixtures into Tests
-([D087](<Design Docs/normalization-design-decisions.md#d087-centralize-language-fixtures-in-tests-2026-10-17>)),
-reported **380 passes and 24 failures out of 404 tests**, with ten additional
-print-mode fixtures passing. The failure names and diagnostics matched the
-pre-move run. The separate fixture suites also retained their results.
+validation, on 2026-10-17 after adding cursor readiness
+([D089](<Design Docs/normalization-design-decisions.md#d089-require-selected-cursor-fields-before-presenting-a-temporal-state-2026-10-17>)),
+reported **391 passes and 24 failures out of 415 tests**. All eleven new checks
+passed; the failure names and diagnostics matched the 24/404 pre-change run.
+The earlier D087 validation also passed ten print-mode fixtures and retained
+the separate fixture suites' results.
 
 Under D072, 140 registrations backed by verbatim C++ and 14 standalone drivers
 for the retired Proteus4 engine were removed. This includes the newer
@@ -66,7 +67,8 @@ WorldManager C++ test suites. The remaining `<% ... %>` delimiters in
 Subsequent cleanup converted the remaining production native function bodies to
 CodeDog. Future tests belong in ordinary CodeDog or `.tst` fixtures.
 
-ProteusTests.dog lists all 72 compiled checks. The graph inventories, audit scripts
+ProteusTests.dog lists all 83 compiled checks, including eleven cursor-readiness
+checks. The graph inventories, audit scripts
 and diagnostic assets were removed from the checkout after the fixtures moved
 to Tests. The last inventory and retirement manifest remain available with:
 

@@ -1469,6 +1469,25 @@ publication, preserving earlier states and marking the containing cached value
 permanent. Conflicting writes attach no branch. Publication uses the real occurrence
 for parent links and identity witnesses.
 
+A caller may register canonical represented field paths with `requireField()` before
+initialization. These are value requirements for movement, not a request for an
+entire recursively normalized state or for numeric size. The default remains
+shallow. Required paths share their common prefixes, use ordinary WorldManager
+requests, and retain the exact parser wait instead of retrying completed work.
+Missing, ambiguous or exhausted unknown fields report partial; embedded field
+layouts remain unsupported. A missing field alone does not create a subscription.
+
+The cursor keeps its previous visible occurrence and prepared facts until every
+required path succeeds. Shared prefixes are acquired once, with sibling requirements
+visited in registration order and staged with private headers/member wrappers. Frozen input contexts remain separate
+from that staged output. Checked facts are then stored in the selected occurrence
+through the virtual graph, preserving the existing cache/write-back policy and
+read-only working fallback. `preparedView(source)` identifies acquired fields in
+that current stored value; it does not return a separate cache of field values.
+Slipstream uses this to consume location/orientation immediately while optional
+colors are still acquired progressively. Priority here is demand order before
+optional display work; no general loader-priority API is introduced.
+
 `clearCache()` explicitly clears unused disposable entries in the containing
 represented list by restoring their exact original descriptions. It preserves
 supplied seeds, written values, entries with new normalization work, and the current
