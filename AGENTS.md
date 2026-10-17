@@ -47,11 +47,11 @@ status. General sparse alignment, definition, intersection, temporal and effect
 semantics remain unsupported. Stream ownership and shutdown use the new path; general streamed list propagation and other link arrivals remain later work.
 An unsupported result must never be replaced with output from the old solver.
 
-Keep the existing .tst language fixtures and their expectations. The 71 compiled
+Keep the existing .tst language fixtures and their expectations. The 72 compiled
 checks use ordinary CodeDog: the 57 historical parser/model checks, five string
 behavior checks, incomplete-RHS parsing, four parser input-lock regressions,
 two identity-range checks, one parser-completion ordering check and one
-parser-prefix check.
+parser-prefix check and one decimal-input check.
 D072 retires all verbatim C++ test
 bodies and the standalone drivers for the failed graph engine, including the
 later WorldManager C++ suites. Do not restore them or add native C++ assertions

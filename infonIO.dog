@@ -109,10 +109,6 @@ struct ProteusParser{
     void: beginDocument(our infonView: infn) <- {
         infn!.streamState <- parseStarted
     }
-    void: failDocument(our infonView: infn) <- {
-        infn!.graphParseError <- "parser terminated unexpectedly"
-        notifyStreamState(infn, parseDone)
-    }
 
     void: setErrorPos(me int64: errPos) <- {
         errAbsPos  <- errPos
@@ -999,7 +995,10 @@ struct ProteusParser{
                 }
                 if(numNotLoaded){
                     if(chk(text!.scrapeFlexNum(cPos), cPos,len)){
-                        pureInfn!.num <- makeStr(cPos-len, cPos)
+                        if(!pureInfn!.num.parseDecimal(makeStr(cPos-len, cPos))){
+                            setError("Invalid decimal number", cPos-len)
+                            return(-1)
+                        }
                         pureInfn!.evalMode <- emLiteral
                         pureInfn!.numBase <- bDec
                     }
@@ -1461,25 +1460,26 @@ struct ProteusParser{
         return(cPos-pos)
     }
 
-    void: doParse(our infonView: infn) <- <%{
-        worldManager = (CORE && CORE->agent) ? &CORE->agent->worldManager : nullptr;
-        // Register the owned lock for the buffer's actual wait and host callbacks.
-        CodeDogInputLock lock(worldManager ? &worldManager->control->mutex : nullptr);
-        documentRoot=infn; finishingDocument=false;
-        if(streamingMode) beginDocument(infn);
-        try {
-            clearError();
-            parseInfonView(infn, 0, true, false, pcMainInfn, true);
-            if(errorSet && infn->graphParseError.empty()) infn->graphParseError=formattedError(true);
-            finishingDocument=true;
-            notifyStreamState(infn,infonView::parseDone);
-            documentRoot.reset();worldManager=nullptr;
-        } catch (...) {
-            finishingDocument=true;failDocument(infn);
-            documentRoot.reset();worldManager=nullptr;
-            throw;
+    void: doParse(our infonView: infn) <- {
+        worldManager <- NULL
+        their WorldModelMutex: modelMutex <- NULL
+        if(CORE!=NULL and CORE!.agent!=NULL){
+            worldManager <- CORE!.agent!.worldManager
+            modelMutex <- worldManager!.control!.mutex
         }
-    }%>
+        // Register the owned lock for the buffer's actual wait and host callbacks.
+        me InputLock: lock{modelMutex}
+        documentRoot <- infn
+        finishingDocument <- false
+        if(streamingMode){beginDocument(infn)}
+        clearError()
+        parseInfonView(infn, 0, true, false)
+        if(errorSet and infn!.graphParseError==""){infn!.graphParseError <- formattedError()}
+        finishingDocument <- true
+        notifyStreamState(infn, parseDone)
+        documentRoot <- NULL
+        worldManager <- NULL
+    }
 
     me bool: doesParseHaveError() <- {return(errorSet)}
 

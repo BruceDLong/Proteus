@@ -1646,3 +1646,56 @@ GUI behavior was not retested. Final evidence is in
 `parse.log`, `lifecycle.log`, `input.log`, `identity.log`, `full.log`, and
 `validation.json`, `build-slipstream.log` and `linked-library.log`. Superseded
 build logs there are not validation of this change.
+
+## D076 Checked decimal input and ordinary CodeDog parser entry (2026-10-17)
+
+**Evidence.** Before removing the native catch, parsing `1/` reproduced
+`std::invalid_argument` from GMP's `mpq_set_str`; the same input followed by a
+newline parsed the valid prefix `1`. `strBuf.scrapeFlexNum` removed an unfinished
+separator at a delimiter but retained it at EOF. The string assignment also
+used auto-base conversion: `08` and `08/09` threw, and `010` parsed as `8`.
+These are numeric parser defects, not reasons to retain the exception wrapper.
+
+**Decision.** The user chose to fix the throwing numeric path before converting
+`doParse`. CodeDog's numeric scanner now leaves a trailing dot or slash outside
+the numeric prefix at EOF, matching its existing delimiter behavior. Add
+`FlexNum.parseDecimal`, an ordinary CodeDog checked base-10 conversion using the
+existing nonthrowing BigFrac conversion. It accepts signed integers, fractions
+and decimals, rejects invalid tokens and zero denominators, and preserves the
+previous value on failure. Existing `fromString` behavior for other clients is
+unchanged. Proteus uses the checked conversion for decimal tokens and reports
+failure through `setError` at the token's start; binary/hexadecimal parsing and
+null identity ranges are unchanged.
+
+Convert `doParse` to ordinary CodeDog with a nullable `InputLock`. Preserve the
+root-completion guard, prefix acceptance, error publication before final
+completion, and scoped lock release. Remove the unused `failDocument` helper
+and the catch that marked an unexpected exception then rethrew it. This
+supersedes D074/D075's retained exception-boundary recommendation. Unexpected
+native failures still propagate; there is no generic failure publication on
+that path. The lock's destructor still releases ownership. Explicit identity
+scope exhaustion and runtime/callback failures are not claimed impossible.
+
+Add ordinary CodeDog checks for the reproduced numeric cases, valid arbitrary
+precision and zero-denominator syntax errors; extend prefix checks with `1/`
+at EOF and before a newline. CodeDog's generated runtime regression covers the
+conversion's failure contract and numeric prefix lengths. No native test
+assertions or tracked .tst fixture changes are introduced. The inventory now
+contains 72 compiled checks. Only three macro definitions in infonIO.dog still
+use `<% ... %>`; they expand to ordinary CodeDog.
+
+**Validation.** CodeDog dependency commit `2a6c20e` contains the numeric scanner,
+checked conversion and generated CodeDog regression. Its runtime suite passes
+10 tests with one unavailable-toolchain skip. Regenerated and compiled
+`codeDog Proteus.Lib.dog` (154.94 s) and `codeDog BuildProteusGraph.dog`
+(143.73 s). All 27 focused parser, input-lock, identity and completion checks
+pass. The full suite reports 24 failures out of 404 tests; every failing name
+and diagnostic matches the prior 24/403 baseline. All 16 tracked .tst fixtures
+retain their hashes and the inventory matches all 72 compiled registrations.
+Regenerated and relinked Slipstream (99.41 s) for the changed exported interface;
+`ldd -r` resolves the rebuilt redesign library without missing dependencies or
+undefined symbols. GUI behavior was not retested. Evidence is in
+`/tmp/proteus-codedog-parser/`: the pre-fix exception and decimal probe logs,
+`runtime-decimal.log`, `runtime-all.log`, all three build logs, `parse.log`,
+`lifecycle.log`, `input.log`, `identity.log`, `full.log`, `validation.json` and
+`linked-library.log`.
