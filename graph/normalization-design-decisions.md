@@ -1699,3 +1699,40 @@ undefined symbols. GUI behavior was not retested. Evidence is in
 `runtime-decimal.log`, `runtime-all.log`, all three build logs, `parse.log`,
 `lifecycle.log`, `input.log`, `identity.log`, `full.log`, `validation.json` and
 `linked-library.log`.
+
+## D077 Remove obsolete native identity helpers and inline origin publication (2026-10-17)
+
+**Decision.** After reviewing the 15 remaining native C++ uses outside infonIO,
+the user approved cleaning up the obvious remnants first and reviewing the rest.
+Defer large Proteus and shared-library builds, and any Slipstream rebuild, until
+this native-block cleanup is finished.
+
+Remove `IdentityRegistry.bindOccurrenceName` and its otherwise unused
+`namedOccurrences` map. The only former production caller was in the retired
+GraphFoundation; neither the replacement nor Slipstream calls the function.
+Remove `infonView.hasRHS`, replacing its three callers with the existing
+`workListContainsInfonView` check. Its extra registry scan only consulted
+`IdentityRelation.leftWorkOwner`/`rightWorkOwner`; the replacement never assigns
+those fields. Remove the fields and their obsolete consolidation comment too.
+Ordinary identity relationships and current work-list duplicate checks remain.
+
+Inline `parentAgent!.worldManager.setOrigin(toFill, originID)` in stream
+initialization and remove the C++ `publishOrigin` wrapper. Preserve its position
+before worker startup and the WorldManager lock; do not replace it with an
+unprotected field assignment or rely on later parser initialization.
+
+Twelve native uses remain: five identity operations, five stream-loading
+operations, the POV self-identity comparison, and the cursor shared-use check.
+Independent identity imports remain an optional parse feature with no current
+callers enabling it; retiring that option is separate from removing unreachable
+binding code. The stream workers and cursor cache lifetime behavior serve the
+replacement engine and are not discarded because they use native code.
+
+**Validation for this pass.** The CodeDog parser accepted Proteus.Lib.dog and all
+its included sources (49.98 s), with no code generation or compilation. Source
+checks confirm that all six retired names are absent from tracked .dog files,
+12 native uses remain, and the unchanged inventory matches all 72 compiled test
+registrations. `git diff --check` passes. No tests or language fixtures changed.
+Runtime tests and export/consumer regeneration are deferred with the large builds
+at the user's request; existing binaries do not validate this source revision.
+Evidence: `/tmp/proteus-native-cleanup/syntax-check.log`.
