@@ -2343,3 +2343,35 @@ none contains the tiny pink fallback or a blank transition. Colors fill more
 gradually while the correctly placed pink cube keeps rotating. Existing unsupported
 startup notices remain. Build/test logs, screenshots and frame measurements are in
 `/tmp/cursor-things/`; comparison captures are in `/tmp/cursor-readiness/`.
+
+
+## D091 Restore display-driven child materialization (2026-10-17)
+
+**User decision.** The user found D090 substantially slower overall and requested
+returning to the preceding method, accepting its animation stutter. Revert the
+paired engine change `1f86d87` and Slipstream change `523b82f`. D089 remains active:
+explicit root pose requirements and the last rendered geometry preserve placement
+while renderer demands acquire child fields.
+
+**Restored behavior.** Remove automatic recursive Thing preparation, its readiness
+metadata and cooperative solver budgets. Ordinary requests drain synchronously.
+Slipstream again registers the six root pose fields for 3D timelines and processes
+all pending scene demands in each pass. Keep the canonical engine linkage,
+stored cursor occurrences, CodeDog portability fixes and existing SceneModel.
+
+**Evidence boundary.** D090's recorded reduction in frozen animation frames did
+not establish faster state presentation or color completion. The user's observed
+latency takes precedence over that narrower metric. Future performance work must
+measure time from navigation to a usable complete view as well as animation pauses.
+The D090 record above is historical; its implementation and seven feature-specific
+checks are reverted. The eleven D089 cursor-readiness checks remain active.
+
+**Rollback validation.** The shared engine, TestProteus and Slipstream regenerate
+and build successfully. The full suite reports 391 passes and the same 24 failures
+out of 415 tests, with identical failure names and diagnostics to D089. The eleven
+cursor-readiness checks remain covered. Slipstream resolves the canonical shared
+library without missing symbols. Private Xvfb next/previous navigation captures
+480 frames with visible cube geometry throughout and no tiny pink fallback;
+the retained animation stutter and brief progressive pink coloring remain. The
+application exits with status zero after normal window closure. Evidence is in
+`/tmp/slipstream-d090-rollback/` and `/tmp/proteus-d090-rollback-*.log`.

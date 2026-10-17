@@ -732,7 +732,6 @@ struct WorldRequest {
     me string: detail
     me uint64: framesCreated <- 0
     me uint64: queueSteps <- 0
-    me uint64: runBudget <- 0
     me uint64: relationshipsRead <- 0
     me uint64: publications <- 0
     me uint64: alternativePairs <- 0
@@ -820,8 +819,6 @@ struct WorldCursorValue {
     me WorldOutcome: outcome
     me bool: ready <- false
     me bool: permanent <- false
-    me bool: thingsPrepared <- false
-    me Set<our infonView>: preparedThings
     void: INIT() <- {Allocate(use)}
     me bool: inUse() <- {return(sharedUseCount(use)>1)}
 }
@@ -2704,7 +2701,6 @@ struct WorldPOVGraph {
         stored!.owner <- node; stored!.value <- node!.pItem; stored!.original <- original
         stored!.revision <- node!.pItem!.cursorRevision; stored!.outcome <- outcome
         stored!.permanent <- permanent; stored!.ready <- true
-        stored!.thingsPrepared <- false; stored!.preparedThings.clear()
     }
     // The solver has already checked and published this staged description.
     // Retain the source recipe, not a second cache of computed values.
@@ -2736,7 +2732,6 @@ struct WorldPOVGraph {
             seen.insert(at)
             if(at!.cursorValue!=NULL and at!.cursorValue!.value===at!.pItem){
                 at!.cursorValue!.original <- NULL; at!.cursorValue!.permanent <- true
-                at!.cursorValue!.thingsPrepared <- false; at!.cursorValue!.preparedThings.clear()
                 if(at===target){at!.cursorValue!.ready <- false}
             }
             at <- at!.pParent
@@ -2973,7 +2968,7 @@ struct WorldManager {
                 request!.waitingInput <- NULL
                 request!.ready.append(request!.waitingFrame); request!.waitingFrame <- NULL
                 request!.outcome <- worldReady; request!.detail <- ""
-                run(request, request!.runBudget)
+                run(request)
             }
         }
     }
@@ -5929,7 +5924,7 @@ struct WorldManager {
         return(solve(session, target, target, requireSize, language, worldSource, identities))
     }
 
-    our WorldRequest: solve(our WorldSession: session, our POV: source, our POV: target, me bool: requireSize <- false, me string: language <- "", our infonView: worldSource <- NULL, our IdentityRegistry: identities <- NULL, our WorldPosition: context <- NULL, our WorldPosition: previous <- NULL, me bool: suppliedWork <- false, me bool: borrowInput <- false, me uint64: stepBudget <- 0) <- {
+    our WorldRequest: solve(our WorldSession: session, our POV: source, our POV: target, me bool: requireSize <- false, me string: language <- "", our infonView: worldSource <- NULL, our IdentityRegistry: identities <- NULL, our WorldPosition: context <- NULL, our WorldPosition: previous <- NULL, me bool: suppliedWork <- false, me bool: borrowInput <- false) <- {
         me WorldModelLock: lock{control!.mutex}
         our WorldRequest:: request
         request!.control <- control; request!.vocabulary.init(language); request!.worldSource <- worldSource
@@ -5957,15 +5952,12 @@ struct WorldManager {
             request!.root <- borrowValue(request, supplied)
         }else{request!.root <- makeFrame(request, source, context, requireSize)}
         request!.ready.append(request!.root)
-        request!.runBudget <- stepBudget
-        run(request, stepBudget)
+        run(request)
         return(request)
     }
 
-    void: run(our WorldRequest: request, me uint64: stepBudget <- 0) <- {
-        me uint64: startSteps <- request!.queueSteps
+    void: run(our WorldRequest: request) <- {
         while(request!.outcome==worldReady){
-            if(stepBudget>0 and request!.queueSteps-startSteps>=stepBudget){return()}
             if(request!.ready.isEmpty()){
                 if(request!.previousValue==NULL or request!.carryApplied or request!.root!.facts.outcome!=worldReady){break()}
                 request!.carryApplied <- true
@@ -6022,33 +6014,8 @@ struct WorldRequiredField {
     me string: name
     me string: path
     me bool: requireValue <- false
-    me bool: scanThings <- false
     me List<our WorldRequiredField>: children
     me Map<string, our WorldRequiredField>: named
-    me bool: addPath(me string: path) <- {
-        me List<string>: names
-        me string: remaining <- path
-        while(remaining!=""){
-            me int: dot <- findString(remaining, ".")
-            if(dot==0){return(false)}
-            if(dot<0){names.append(remaining); remaining <- ""}
-            else{
-                names.append(remaining.subStr(0, dot)); remaining <- remaining.subStr(dot+1)
-                if(remaining==""){return(false)}
-            }
-        }
-        their WorldRequiredField: parent <- self
-        withEach name in names{
-            if(!parent!.named.containsKey(name)){
-                our WorldRequiredField:: child; child!.name <- name
-                child!.path <- name; if(parent!.path!=""){child!.path <- parent!.path+"."+name}
-                parent!.named.insert(name, child); parent!.children.append(child)
-            }
-            parent <- parent!.named.at(name)
-        }
-        parent!.requireValue <- true
-        return(true)
-    }
 }
 struct WorldFieldDemand {
     our WorldRequiredField: requirement
@@ -6056,7 +6023,6 @@ struct WorldFieldDemand {
     our POV: value
     our POV: destination
     our WorldPosition: context
-    our WorldFieldDemand: ancestor
 }
 
 // The working buffer is only a fallback; current normally denotes the stored
@@ -6080,11 +6046,6 @@ struct TCursor {
     me bool: atBoundary <- false
     me WorldStatus: movement
     our WorldRequiredField: requiredFields
-    our WorldRequiredField: thingFields
-    me bool: preparingThings
-    // Zero drains synchronously; GUI callers use bounded ordinary queue work.
-    me uint64: preparationBudget <- 4096
-    me uint64: preparationYields <- 0
     our POV: pendingValue
     our WorldCursorUse: pendingUse
     our POV: pendingFieldsValue
@@ -6097,25 +6058,37 @@ struct TCursor {
     me uint64: requiredQueueSteps <- 0
     me uint64: requiredRelationships <- 0
     me uint64: requiredMembersScanned <- 0
-    me uint64: requiredHeaders <- 0
 
     // Configure before initialization. A requirement is a known value, not a
     // demand for size or for recursive completion of the entire state.
     me bool: requireField(me string: path) <- {
         if(hasValue or pendingPosition!=NULL or path==""){return(false)}
-        our WorldRequiredField: fields <- requiredFields
-        if(fields==NULL){Allocate(fields)}
-        if(!fields!.addPath(path)){return(false)}
-        requiredFields <- fields; return(true)
+        me List<string>: names
+        me string: remaining <- path
+        while(remaining!=""){
+            me int: dot <- findString(remaining, ".")
+            if(dot==0){return(false)}
+            if(dot<0){names.append(remaining); remaining <- ""}
+            else{
+                names.append(remaining.subStr(0, dot)); remaining <- remaining.subStr(dot+1)
+                if(remaining==""){return(false)}
+            }
+        }
+        if(requiredFields==NULL){Allocate(requiredFields)}
+        our WorldRequiredField: parent <- requiredFields
+        withEach name in names{
+            if(!parent!.named.containsKey(name)){
+                our WorldRequiredField:: child; child!.name <- name
+                child!.path <- name; if(parent!.path!=""){child!.path <- parent!.path+"."+name}
+                parent!.named.insert(name, child); parent!.children.append(child)
+            }
+            parent <- parent!.named.at(name)
+        }
+        parent!.requireValue <- true
+        return(true)
     }
     // Only the committed position's views are exposed, including during a wait.
     our POV: preparedView(our POV: source) <- {
-        if(source==NULL){return(NULL)}
-        if(requiredFields==NULL and hasValue and current!==working and current!.cursorValue!=NULL){
-            if(manager!.graph.cursorValueReady(current) and current!.cursorValue!.thingsPrepared and
-               current!.cursorValue!.preparedThings.contains(source!.pItem)){return(source)}
-            return(NULL)
-        }
         if(source!=NULL and preparedViews.contains(source!.pItem)){return(source)}
         return(NULL)
     }
@@ -6125,53 +6098,19 @@ struct TCursor {
         fieldWork.clear(); preparingViews.clear(); previousValue <- NULL
         return(false)
     }
-    our WorldFieldDemand: childDemand(our WorldRequiredField: requirement, our POV: source,
-            our POV: destination, our WorldPosition: parent, our WorldFieldDemand: ancestor) <- {
-        our WorldFieldDemand:: child; child!.requirement <- requirement; child!.source <- source
-        child!.destination <- destination; child!.ancestor <- ancestor
-        if(source!.worldContext!=NULL){child!.context <- manager!.graph.occurrencePath(source)}
-        else{child!.context <- manager!.graph.position(source, parent)}
-        return(child)
-    }
     me bool: settleFields() <- {
-        me uint64: usedSteps <- 0
         while(!fieldWork.isEmpty()){
-            if(preparationBudget>0 and usedSteps>=preparationBudget){
-                movement.outcome <- worldReady; movement.detail <- "Preparing thing fields"
-                preparationYields <+- 1; return(false)
-            }
             our WorldFieldDemand: demand <- fieldWork.last()
             if(demand!.value==NULL){
-                if(demand!.requirement!.scanThings){
-                    our WorldFieldDemand: ancestor <- demand!.ancestor
-                    while(ancestor!=NULL){
-                        if(ancestor!.source!.pItem===demand!.source!.pItem){
-                            return(stopFields(worldUnsupported, "Cyclic Thing containment"))
-                        }
-                        ancestor <- ancestor!.ancestor
-                    }
-                }
-                me uint64: budget <- 0
-                if(preparationBudget>0){budget <- preparationBudget-usedSteps}
-                me uint64: beforeSteps <- 0
                 if(request==NULL){
                     our POV:: staged{946}; Allocate(staged!.pItem)
                     request <- manager!.solve(session, demand!.source, staged, false, language, worldSource, identities,
-                        demand!.context, NULL, true, false, budget)
+                        demand!.context, NULL, true)
                     requiredRequests <+- 1
-                }else{
-                    beforeSteps <- request!.queueSteps
-                    if(request!.status().outcome==worldReady){
-                        request!.runBudget <- budget; manager!.run(request, budget)
-                    }
                 }
-                usedSteps <+- request!.queueSteps-beforeSteps
                 me WorldStatus: state <- request!.status()
                 movement <- state
-                if(state.outcome==worldWaiting or state.outcome==worldReady){
-                    if(state.outcome==worldReady){preparationYields <+- 1}
-                    return(false)
-                }
+                if(state.outcome==worldWaiting or state.outcome==worldReady){return(false)}
                 requiredFrames <+- request!.framesCreated; requiredRelationships <+- request!.relationshipsRead
                 requiredQueueSteps <+- request!.queueSteps
                 if(request!.publications==0 or (state.outcome!=worldComplete and state.outcome!=worldPartial)){
@@ -6184,20 +6123,13 @@ struct TCursor {
                 // to the private branch that will be stored in the list.
                 demand!.value <- request!.result()
                 demand!.value!.worldContext <- demand!.context
-                Allocate(demand!.destination!.pItem); requiredHeaders <+- 1
+                Allocate(demand!.destination!.pItem)
                 manager!.graph.copyDescription(demand!.destination, demand!.value!.pItem, true)
                 preparingViews.insert(demand!.destination!.pItem)
                 retireRequest()
             }
             fieldWork.popLast()
-            if(demand!.requirement!.scanThings or !demand!.requirement!.children.isEmpty()){
-                if(demand!.requirement!.scanThings and demand!.value!.pItem!.value!.evalMode!=emLiteral){
-                    return(stopFields(worldPartial, "Thing containment has no established value"))
-                }
-                if(demand!.requirement!.scanThings and demand!.value!.pItem!.value!.overlayType!=LST){continue()}
-                if(demand!.requirement!.scanThings and demand!.value!.pItem!.value!.tailUnfinished){
-                    return(stopFields(worldUnsupported, "Thing preparation needs finite represented parts"))
-                }
+            if(!demand!.requirement!.children.isEmpty()){
                 // Index each acquired parent once, preserving the same exact
                 // names/added types as fetchField. Ambiguous fields cannot
                 // establish a single required value.
@@ -6226,32 +6158,14 @@ struct TCursor {
                 our WorldPosition:: acquired; acquired! <- demand!.context!
                 acquired!.node <- demand!.value; acquired!.owner <- demand!.value
                 me List<our WorldFieldDemand>: children
-                our WorldRequiredField: requirements <- demand!.requirement
-                if(requirements!.scanThings){
-                    Allocate(requirements)
-                    if(members.containsKey("thing")){requirements!.children.append(thingFields)}
-                    if(members.containsKey("parts")){
-                        our WorldRequiredField:: parts; parts!.name <- "parts"; parts!.path <- "parts"; parts!.scanThings <- true
-                        requirements!.children.append(parts)
-                    }else if(!members.containsKey("thing")){
-                        // Structural collections preserve occurrence order, including
-                        // repeated types. A Thing leaf's other fields are optional.
-                        member <- demand!.value!.pItem!.value!.items.head
-                        while(member!=NULL){
-                            if(!member!.pItem!.invertMatch){
-                                our POV: childTarget <- destinations.at(member)
-                                children.append(childDemand(demand!.requirement, member, childTarget, acquired, demand))
-                            }
-                            member <- member!.next
-                        }
-                    }
-                }
-                withEach child in requirements!.children{
+                withEach child in demand!.requirement!.children{
                     if(ambiguous.contains(child!.name)){return(stopFields(worldPartial, "Required field is ambiguous: "+child!.path))}
                     if(!members.containsKey(child!.name)){return(stopFields(worldPartial, "Required field is unavailable: "+child!.path))}
-                    our POV: source <- members.at(child!.name)
-                    our POV: childTarget <- destinations.at(source)
-                    children.append(childDemand(child, source, childTarget, acquired, demand))
+                    our WorldFieldDemand:: next; next!.requirement <- child; next!.source <- members.at(child!.name)
+                    next!.destination <- destinations.at(next!.source)
+                    if(next!.source!.worldContext!=NULL){next!.context <- manager!.graph.occurrencePath(next!.source)}
+                    else{next!.context <- manager!.graph.position(next!.source, acquired)}
+                    children.append(next)
                 }
                 // The stack visits requirements in registration order.
                 while(!children.isEmpty()){our WorldFieldDemand: child <- children.popLast(); fieldWork.append(child)}
@@ -6266,46 +6180,22 @@ struct TCursor {
             manager!.graph.reparentMembers(value); value!.worldContext <- at
         }
         preparedViews <- preparingViews; preparedViews.insert(value!.pItem); preparingViews.clear()
-        if(preparingThings and at!.writable){
-            value!.cursorValue!.thingsPrepared <- true; value!.cursorValue!.preparedThings <- preparedViews
-        }
         pendingPosition <- NULL; pendingValue <- NULL; pendingFieldsValue <- NULL
         selectValue(at, value); movement <- pendingMovement
         pendingUse <- NULL; previousValue <- NULL
         return(true)
     }
     me bool: prepareValue(our WorldPosition: at, our POV: value) <- {
-        if(requiredFields==NULL and manager!.graph.cursorValueReady(value) and value!.cursorValue!.thingsPrepared){
-            preparedViews <- value!.cursorValue!.preparedThings
-            requiredRequests <- 0; requiredFrames <- 0; requiredQueueSteps <- 0; requiredRelationships <- 0
-            requiredMembersScanned <- 0; requiredHeaders <- 0; preparationYields <- 0
-            pendingPosition <- NULL; selectValue(at, value); previousValue <- NULL; return(true)
-        }
-        our WorldRequiredField: requirements <- requiredFields
-        if(requirements==NULL and (value!.pItem!.fetchField("thing")!=NULL or value!.pItem!.fetchField("parts")!=NULL)){
-            Allocate(requirements); requirements!.scanThings <- true
-            if(thingFields==NULL){
-                Allocate(thingFields); thingFields!.name <- "thing"; thingFields!.path <- "thing"
-                thingFields!.addPath("location.xloc"); thingFields!.addPath("location.yloc"); thingFields!.addPath("location.zloc")
-                thingFields!.addPath("orientation.xrot"); thingFields!.addPath("orientation.yrot"); thingFields!.addPath("orientation.zrot")
-            }
-        }
-        if(requirements==NULL){
-            if(!at!.writable and value!==working and value!==at!.node){
-                manager!.graph.copyDescription(working, value!.pItem, true); working!.worldContext <- at; value <- working
-            }
-            pendingPosition <- NULL; selectValue(at, value); previousValue <- NULL; return(true)
-        }
+        if(requiredFields==NULL){pendingPosition <- NULL; selectValue(at, value); previousValue <- NULL; return(true)}
         retireRequest()
-        preparingThings <- requirements!.scanThings
         pendingPosition <- at; pendingValue <- value; pendingMovement <- movement
         if(manager!.graph.cursorValueReady(value)){pendingUse <- value!.cursorValue!.use; pendingMovement.outcome <- value!.cursorValue!.outcome; pendingMovement.detail <- ""}
         else if(pendingMovement.outcome==worldReady){pendingMovement.outcome <- worldPartial}
         requiredRequests <- 0; requiredFrames <- 0; requiredQueueSteps <- 0; requiredRelationships <- 0; requiredMembersScanned <- 0
-        preparingViews.clear(); fieldWork.clear(); requiredHeaders <- 1; preparationYields <- 0
+        preparingViews.clear(); fieldWork.clear()
         Allocate(pendingFieldsValue, 946); Allocate(pendingFieldsValue!.pItem)
         manager!.graph.copyDescription(pendingFieldsValue, value!.pItem, true)
-        our WorldFieldDemand:: root; root!.requirement <- requirements
+        our WorldFieldDemand:: root; root!.requirement <- requiredFields
         root!.destination <- pendingFieldsValue
         root!.context <- snapshotOf(value, at); root!.context!.owner <- root!.context!.node
         root!.context!.writable <- false; root!.source <- root!.context!.node; root!.value <- root!.source
@@ -6389,7 +6279,7 @@ struct TCursor {
                 value <- at!.node
                 if(at!.parent!=NULL){value!.pParent <- at!.parent!.occurrence}
                 manager!.graph.storeCursorValue(value, request!.target!.pItem, movement.outcome)
-            }else if(replay.isEmpty()){
+            }else if(replay.isEmpty() and requiredFields!=NULL){
                 value <- request!.target; value!.worldContext <- at
             }else{
                 manager!.graph.copyDescription(working, request!.target!.pItem, true)

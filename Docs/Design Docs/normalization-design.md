@@ -1471,7 +1471,8 @@ for parent links and identity witnesses.
 
 A caller may register canonical represented field paths with `requireField()` before
 initialization. These are value requirements for movement, not a request for an
-entire recursively normalized state or for numeric size. Explicit required paths share their common prefixes, use ordinary WorldManager
+entire recursively normalized state or for numeric size. The default remains
+shallow. Required paths share their common prefixes, use ordinary WorldManager
 requests, and retain the exact parser wait instead of retrying completed work.
 Missing, ambiguous or exhausted unknown fields report partial; embedded field
 layouts remain unsupported. A missing field alone does not create a subscription.
@@ -1486,15 +1487,6 @@ that current stored value; it does not return a separate cache of field values.
 Slipstream uses this to consume location/orientation immediately while optional
 colors are still acquired progressively. Priority here is demand order before
 optional display work; no general loader-priority API is introduced.
-
-Without explicit caller paths, a state with represented `thing` or `parts` fields
-uses built-in recursive Thing preparation (D090). It follows finite `parts`
-containment and structural collections, preparing location/orientation for every
-Thing before publishing. It does not traverse an assembly's metadata/references or
-a Thing leaf's optional fields. Nonspatial states remain shallow. A runnable
-preparation can yield after its queue-step budget and resume the same request;
-`worldReady` distinguishes that work from a subscribed parser wait. The old cursor
-occurrence stays selected and can continue animating until preparation completes.
 
 `clearCache()` explicitly clears unused disposable entries in the containing
 represented list by restoring their exact original descriptions. It preserves
