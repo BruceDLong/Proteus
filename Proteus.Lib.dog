@@ -298,13 +298,12 @@ struct InfonIdentityScope {
         nextID=std::max(nextID,id+1);
         return token;
     }%>
-    our InfonIdentity: allocate() <- <%{
+    our InfonIdentity: freshIdentity() <- <%{
         std::lock_guard<std::mutex> lock(scopeMutex);
         if(nextID>INT64_MAX) throw std::overflow_error("identity ID space exhausted");
         auto token=std::make_shared<InfonIdentity>();token->id=nextID++;
         identities.emplace(token->id,token);return token;
     }%>
-    our InfonIdentity: freshIdentity() <- <%{return allocate();}%>
     our InfonIdentity: importIdentity(our InfonIdentity: source) <- <%{
         if(!source) return {};
         std::lock_guard<std::mutex> lock(scopeMutex);
@@ -1206,29 +1205,44 @@ struct IdentityRegistry{
         }
     }
 
-    me bool: areIdentical(our POV: firstPOV, our POV: secondPOV) <- <%{
-        if(!firstPOV || !secondPOV) return false;
-        auto same=[](const std::shared_ptr<POV>& a,const std::shared_ptr<POV>& b) {
-            return a==b || (a && b && a->pItem && b->pItem && a->pItem->identityName &&
-                a->pItem->identityName==b->pItem->identityName);
-        };
-        if(same(firstPOV,secondPOV)) return true;
-        std::vector<std::shared_ptr<POV>> pending{firstPOV},visited;
-        std::lock_guard<std::mutex> lock(registryMutex);
-        while(!pending.empty()) {
-            auto current=pending.back();pending.pop_back();
-            if(std::find(visited.begin(),visited.end(),current)!=visited.end()) continue;
-            visited.push_back(current);
-            for(const auto& identity:identities) {
-                auto neighbor=same(identity->leftPOV,current) ? identity->rightPOV :
-                    same(identity->rightPOV,current) ? identity->leftPOV : std::shared_ptr<POV>{};
-                if(!neighbor) continue;
-                if(same(neighbor,secondPOV)) return true;
-                pending.push_back(neighbor);
+    // Direct occurrence identity also includes a shared scoped name token.
+    me bool: sameOccurrenceIdentity(our POV: firstPOV, our POV: secondPOV) <- {
+        return(firstPOV===secondPOV or
+            (firstPOV!=NULL and secondPOV!=NULL and
+             firstPOV!.pItem!=NULL and secondPOV!.pItem!=NULL and
+             firstPOV!.pItem!.identityName!=NULL and
+             firstPOV!.pItem!.identityName===secondPOV!.pItem!.identityName))
+    }
+    me bool: areIdentical(our POV: firstPOV, our POV: secondPOV) <- {
+        if(firstPOV==NULL or secondPOV==NULL){return(false)}
+        if(sameOccurrenceIdentity(firstPOV, secondPOV)){return(true)}
+        me List<our POV>: pending
+        pending.append(firstPOV)
+        me List<our POV>: visited
+        protect(registryMutex){
+            while(!pending.isEmpty()){
+                our POV: current <- pending.popLast()
+                me bool: seen <- false
+                withEach previous in visited{
+                    if(previous===current){seen <- true; break()}
+                }
+                if(seen){continue()}
+                visited.append(current)
+                withEach identity in identities{
+                    our POV: neighbor
+                    if(sameOccurrenceIdentity(identity!.leftPOV, current)){
+                        neighbor <- identity!.rightPOV
+                    }else if(sameOccurrenceIdentity(identity!.rightPOV, current)){
+                        neighbor <- identity!.leftPOV
+                    }
+                    if(neighbor==NULL){continue()}
+                    if(sameOccurrenceIdentity(neighbor, secondPOV)){return(true)}
+                    pending.append(neighbor)
+                }
             }
         }
-        return false;
-    }%>
+        return(false)
+    }
 
     void: recordRepetitionMaterialization(our POV: occurrenceReferencePOV,
             our POV: materializedPOV, me uint64: normalizationID) <- {

@@ -1736,3 +1736,44 @@ registrations. `git diff --check` passes. No tests or language fixtures changed.
 Runtime tests and export/consumer regeneration are deferred with the large builds
 at the user's request; existing binaries do not validate this source revision.
 Evidence: `/tmp/proteus-native-cleanup/syntax-check.log`.
+
+## D078 Convert identity comparisons and consolidate the identity allocator (2026-10-17)
+
+**Decision.** Implement the three follow-ups approved after D077. Express
+`POV.isThisPOV` with ordinary CodeDog pointer identity. Convert
+`IdentityRegistry.areIdentical` to ordinary CodeDog, extracting its existing
+local equality predicate into `sameOccurrenceIdentity`. Keep direct POV identity
+and shared scoped token identity distinct from equal numeric IDs or equal values.
+Preserve null rejection at the public query, traversal of identity edges in both
+directions, the pending stack, pointer-based visited list, and the registry lock.
+No graph traversal or matching semantics are changed intentionally.
+
+Move the unchanged native allocation body into `freshIdentity` and remove
+`allocate`. The forwarding wrapper existed because CodeDog rejects a call named
+`allocate`; there is now one entry point. Keep the scope lock, ID allocation and
+registration, and exhaustion exception exactly as before. This step does not
+change identity error policy or the optional independent-import feature.
+
+Nine native uses remain: `claim`, `freshIdentity`, `importIdentity`, the five
+stream-loading operations, and the cursor shared-use check. Large builds and
+Slipstream regeneration remain deferred until the full native-block review is
+finished, as requested under D077.
+
+**Validation for this pass.** A small standalone CodeDog program extracts the
+exact edited methods plus their identity types and dependencies into minimal
+containing types. It generates and compiles successfully and passes 24 ordinary
+CodeDog checks: null handling, self comparison, shared tokens versus distinct
+tokens with equal IDs, symmetric/transitive edges, token aliases through edges,
+cycle termination, repeated calls after traversal, and allocation/registration
+around claimed IDs. The renamed allocator body is byte-for-byte identical to
+`allocate` in `e5fc512`, including its overflow behavior. Generated code confirms
+pointer comparison and scoped mutex ownership. The first isolated compile caught
+a pointer-list literal generation limitation; initialization now uses the normal
+append operation. No generator change was needed.
+
+`git diff --check` passes and the source inventory confirms nine native uses.
+No maintained test registrations or language fixtures changed. No full engine,
+shared-library or Slipstream rebuild was run; integration and full runtime checks
+remain deferred under D077. Evidence and the repeatable extraction/build check
+are in `/tmp/proteus-identity-cleanup/verify.py`, `identityProbe.dog`, `build.log`
+and `run.log`. Test assertions in that probe are ordinary CodeDog.
