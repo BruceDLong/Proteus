@@ -3,10 +3,11 @@ Proteus4 normalizer replacement
 
 Work in `/home/bruce/devl/Proteus4-redesign`, branch `codex/normalizer-redesign`.
 The user approved replacing the solver and moving it into the normal Proteus
-Engine early. Proteus3 is in `/home/bruce/devl/Proteus`; the original Proteus4
-checkout at `/home/bruce/devl/Proteus4` and checkpoint
-`b52322a867d2be2c1fda186929b05dc0c70e8be4` preserve the previous implementation.
-Use those folders for historical behavior; do not restore an old solver fallback.
+Engine early. This is now a standalone repository. Proteus3 remains in
+`/home/bruce/devl/Proteus`. The failed Proteus4 checkout and its local branch
+were removed after cleanup; checkpoint `b52322a867d2be2c1fda186929b05dc0c70e8be4`
+remains in this branch's history. Use `git show <commit>:<path>` for historical
+behavior; do not restore an old solver fallback.
 
 Read the accepted contract in `graph/normalization-design.md`. Record choices,
 reasons and alternatives in `graph/normalization-design-decisions.md`. The older
@@ -46,32 +47,33 @@ status. General sparse alignment, definition, intersection, temporal and effect
 semantics remain unsupported. Stream ownership and shutdown use the new path; general streamed list propagation and other link arrivals remain later work.
 An unsupported result must never be replaced with output from the old solver.
 
-All 15 protected .tst files and their expected outputs remain unchanged. Keep the
-58 historical parser/model cases. The normal TestProteus executable runs through
-WorldManager. Under D057, the user retired the 1,384 unported placeholder
-registrations and chose fresh behavioral tests as semantics are implemented.
-`graph/engine-test-migration.json` distinguishes active tests from archived
-references to the old assertion source; archived tests are not a porting backlog.
-Keep the default language fixtures, historical parser/model checks, already ported
-behaviors and WorldManager suites. Add focused tests of results, constraints,
-source preservation, occurrence identity, continuation and justified work bounds.
-Consult old tests for missed edge cases without recreating retired solver APIs,
-priced strategy thresholds, cache layouts or exact scheduler traces. Do not change
-expectations to match incomplete behavior. Preserve known active failures and
-record explicit retirements in `graph/retired-normalizer-tests.json`.
+Keep the existing .tst language fixtures and their expectations. The 64 compiled
+checks use ordinary CodeDog: the 58 historical parser/model checks, five string
+behavior checks and incomplete-RHS parsing. D072 retires all verbatim C++ test
+bodies and the standalone drivers for the failed graph engine, including the
+later WorldManager C++ suites. Do not restore them or add native C++ assertions
+inside `<% ... %>` blocks. CodeDog macro bodies use that delimiter too, but expand
+to ordinary CodeDog and remain supported.
+
+Add focused tests in .tst fixtures or ordinary CodeDog as behavior is developed.
+Do not change expectations to match incomplete behavior. Preserve known active
+failures. `graph/engine-test-migration.json` inventories the active compiled tests;
+`graph/retired-normalizer-tests.json` records retirements and recovery commits.
+The former archived inventory is available in Git, not a porting backlog.
+Production native bindings were not changed in the test cleanup.
 
 Build and verification
 ----------------------
 
 Build with `codeDog Proteus.Lib.dog`. Run from LocalBuild:
 
-    ./TestProteus -t unit/worldManager/
+    ./TestProteus
     ./TestProteus -t defaultTests.tst:
 
 The startup banner identifies the engine. Check the printed failure count; the
 inherited harness can exit zero on test failures. Add `-T 3` for per-case timeout
 protection. Generated C++ can be rebuilt with `codeDog -b TestProteus`, but finish
-with a CodeDog regeneration. The scalar harness has moved into TestProteus.
+with a CodeDog regeneration. Native scalar/session suites were retired under D072.
 
 Use focused behavioral checks and real language fixtures. Measure relationship
 attempts, queue work, allocations and subscriptions, not merely trace messages.

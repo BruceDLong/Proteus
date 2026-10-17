@@ -1458,3 +1458,49 @@ so pixel equality across wall-clock times is not a state oracle. The two existin
 world-loading NRMERR messages remain; no DISPLAY failure occurs. Evidence is in
 `/tmp/proteus4-cursor-cache/` (`world-final.log`, `full-final.log`,
 `model-final.log`, build logs and `gui/`).
+
+## D072 Retire native test scaffolding and remove the failed checkout (2026-10-17)
+
+**Request and scope.** The user retired the failed Proteus4 fork and requested
+cleanup of Proteus4-redesign, especially verbatim test implementations. The scope
+is tests; production native bindings are reserved for a later review.
+
+**Decision.** Remove all native C++ test bodies from ProteusTests.dog, their 140
+compiled registrations, and the 14 standalone drivers for the removed graph
+engine. This includes 57 WorldManager suites and 83 graph compatibility wrappers.
+Retain 64 ordinary CodeDog checks: the 58 historical parser/model checks, five
+plain string assertions and incomplete-RHS parsing. CodeDog macro expansions
+remain CodeDog even though their quoting syntax also uses `<% ... %>`.
+All 16 tracked .tst files and the user's untracked myTests.tst are unchanged.
+Future tests use ordinary CodeDog or language fixtures. This supersedes earlier
+instructions to retain the native suites or migrate their implementation APIs.
+Retirement reduces test coverage; it is not evidence that those behaviors pass.
+
+**Provenance.** The active inventory lists current registrations only. The
+retirement manifest records removed names, files and protected fixture hashes.
+The full pre-cleanup source and inventory remain at `bd7078b`; the failed engine
+remains at ancestor `b52322a`. Historical reports are retained as evidence, not
+current build instructions. No engine or language implementation was changed. The standalone streaming
+test retains its checks; its one native lock adapter now uses the existing
+WorldModelLock binding from ordinary CodeDog.
+
+**Repository cleanup.** Proteus4-redesign formerly used Git metadata stored in
+Proteus4/.git. Copy and verify that metadata as an independent repository before
+removing the failed checkout and merged codex/proteus4 branch. Preserve the
+redesign branch, other refs, untracked myTests.tst and the external World resource
+symlink. The original Proteus repository remains untouched. Remove Slipstream's
+unused GraphFoundation proxy into the deleted checkout; its current engine
+interface already targets Proteus4-redesign.
+
+**Validation.** `codeDog Proteus.Lib.dog` regenerated and compiled successfully.
+The complete retained suite reports 24 failures out of 396 registrations versus
+24/536 before cleanup. Every failure name and diagnostic is identical. All ten
+print-mode fixtures pass. All 16 tracked .tst files and untracked myTests.tst
+retain their pre-cleanup hashes; implementation source is unchanged. Git fsck
+passes in the independent repository after removing the failed checkout and
+merged branch. The obsolete WorldManagerBuild outputs were also removed.
+`codeDog streamReplyTest.dog` also regenerated and compiled successfully. Its
+read adapter holds Nested_Lock_Mutex over the same recursive mutex; standalone
+streaming behavior was not rerun. After deleting the failed checkout, `ldd -r`
+on Slipstream resolves the redesign shared library without missing dependencies
+or undefined symbols. No GUI runtime claim is made by this test-only cleanup.

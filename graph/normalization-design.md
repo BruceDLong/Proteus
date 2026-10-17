@@ -2,7 +2,7 @@
 
 Proteus4 represents semantics through graph relationships and justifies semantic optimizations through theorems. This specification consolidates settled choices for normalization. The [issues and decision log](normalization-design-decisions.md) holds alternatives, reasons, evidence, and unresolved questions.
 
-Status on 2026-10-12: the WorldManager and virtual graph boundaries, CodeDog policy, core D02 lifecycle, and D03 list principles below are settled. Goals acquire requested facts, stop when satisfied, and continue at waiting links without restart. Member, span, whole-list, intersection and dot/index consumers now share correspondence requests, logical layouts and predicate comparison. Selected text parsing, nominal record-field meaning application and known-endpoint selection are supported as specified below. General definition, sparse-pattern and rule composition remain open. Planning design stays deferred until intersections and definitions have been considered. The [architecture audit](/home/bruce/devl/Proteus4/graph/normalization-framework-audit.md) remains supporting evidence and a source of proposals.
+Status on 2026-10-12: the WorldManager and virtual graph boundaries, CodeDog policy, core D02 lifecycle, and D03 list principles below are settled. Goals acquire requested facts, stop when satisfied, and continue at waiting links without restart. Member, span, whole-list, intersection and dot/index consumers now share correspondence requests, logical layouts and predicate comparison. Selected text parsing, nominal record-field meaning application and known-endpoint selection are supported as specified below. General definition, sparse-pattern and rule composition remain open. Planning design stays deferred until intersections and definitions have been considered. The [architecture audit](normalization-framework-audit.md) remains supporting evidence and a source of proposals.
 
 ## Design objective
 
@@ -12,7 +12,7 @@ Streaming behavior and computational cost are part of every operation's contract
 
 ## Replacement development
 
-Develop the new solver on `codex/normalizer-redesign` in `/home/bruce/devl/Proteus4-redesign`, within the Proteus4 repository. The original checkout at `/home/bruce/devl/Proteus4` retains checkpoint `b52322a867d2be2c1fda186929b05dc0c70e8be4` on `codex/proteus4` as the implementation and diagnostic reference. See G06.
+Develop the new solver on `codex/normalizer-redesign` in the standalone repository `/home/bruce/devl/Proteus4-redesign`. The failed Proteus4 checkout and branch were removed under D072. Checkpoint `b52322a867d2be2c1fda186929b05dc0c70e8be4` remains an ancestor for implementation and diagnostic reference through `git show`. See G06 for the original setup and D072 for its cleanup.
 
 Build the replacement behind WorldManager in CodeDog. Reuse the parser, POV storage, printing, and semantic tests where their contracts fit; assess solver internals individually. The branch started from that checkpoint and now runs the replacement through the normal Proteus Engine and TestProteus path. Unsupported features are reported explicitly; the old solver is not linked as a fallback. Build outputs are separate; public-world resources remain an external shared input.
 
@@ -38,7 +38,7 @@ Track build time separately from normalization time and memory. Generated-code e
 
 ## Existing semantic constraints
 
-These constraints are carried forward from the current [repository instructions](/home/bruce/devl/Proteus4/AGENTS.md), including the recorded user clarifications. They establish the starting semantic contract. The newer D02 decisions govern default completion and continuation instead of inherited restart behavior, including D02F's explicit permission for numeric completion with unknown size; D03 specifies list expansion scope and shared propagation. Other changes require an explicit decision in the log.
+These constraints are carried forward from the historical repository instructions (`git show b52322a:AGENTS.md`), including the recorded user clarifications. They establish the starting semantic contract. The newer D02 decisions govern default completion and continuation instead of inherited restart behavior, including D02F's explicit permission for numeric completion with unknown size; D03 specifies list expansion scope and shared propagation. Other changes require an explicit decision in the log.
 
 ### Occurrences and relationships
 

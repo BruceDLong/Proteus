@@ -4,12 +4,9 @@ The Proteus Engine on `codex/normalizer-redesign` now routes Agent normalization
 and TestProteus through `WorldManager.dog`. Agent owns sessions; normalize returns
 a `WorldRequest` handle. The old GraphNormalizer is not linked into this engine.
 
-The maintained solver is CodeDog. It supports context-free scalar acquisition,
-the documented scalar matching cases, and continuation when a particular parser
-input finishes. Lists, definitions, general expressions, temporal rules and
-effects report unsupported. The accepted contract and implementation limits are
-in [the consolidated design](normalization-design.md); choices and reasons are in
-[the decision log](normalization-design-decisions.md).
+The maintained solver is CodeDog. The accepted contract and implementation limits
+are in [the consolidated design](normalization-design.md); choices and reasons
+are in [the decision log](normalization-design-decisions.md).
 
 ## Build and verify
 
@@ -18,26 +15,31 @@ From `/home/bruce/devl/Proteus4-redesign`:
 ```sh
 codeDog Proteus.Lib.dog
 cd LocalBuild
-./TestProteus -t unit/worldManager/
+./TestProteus -T 3
 ./TestProteus -t defaultTests.tst:
 ```
 
-The normal executable identifies WorldManager at startup. Scalar/session and
-parser/stream lifecycle checks live in this suite; there is no separate required
-WorldManager executable. Use `-T 3` when per-case crash/timeout protection is useful.
-Check the printed failure summary: the inherited harness can exit zero on failure.
+The executable identifies WorldManager at startup. Check the printed failure
+summary: the inherited harness can exit zero on test failures.
 
-Language fixtures and active failures are preserved except for explicitly
-recorded user-approved corrections. Under D057, the 1,384 unported placeholder
-registrations are archived rather than run as failures. The
-[migration inventory](engine-test-migration.json) distinguishes 198 active compiled
-registrations from historical assertion references. The 332 default cases,
-historical parser/model checks, already ported behaviors and 52 WorldManager
-suites stay active. Add fresh behavioral tests as each semantic area is developed;
-the archive is a source of edge cases, not a mandatory porting backlog.
-The inventory also preserves retired runtime and standalone native-test references.
-`UNSUPPORTED` results in active tests remain failures; retirement does not establish
-that a previously untested behavior works.
+The active suite contains 64 compiled CodeDog checks and 332 default language
+cases. All 16 tracked `.tst` files, including print-mode fixtures, are preserved.
+The user's untracked `myTests.tst` is preserved separately. Expected outputs were
+not adjusted to match current failures.
+
+Under D072, 140 registrations backed by verbatim C++ and 14 standalone drivers
+for the retired Proteus4 engine were removed. This includes the newer
+WorldManager C++ test suites. The remaining `<% ... %>` delimiters in
+`ProteusTests.dog` quote CodeDog macro expansions, not native implementations.
+Production native bindings are unchanged. Future tests belong in ordinary
+CodeDog or `.tst` fixtures.
+
+The [active inventory](engine-test-migration.json) lists all 64 compiled checks.
+The [retirement manifest](retired-normalizer-tests.json) records removed names,
+files, fixture hashes and recovery commits. The previous large archived inventory
+is available with `git show bd7078b:graph/engine-test-migration.json`.
+Retired checks are not a mandatory porting backlog, and their removal does not
+establish that the behaviors they covered work.
 
 ## Printer modes
 
@@ -84,51 +86,16 @@ list prefixes remain later work. Sharing deductions across sessions is deferred.
 
 ## Reference implementations
 
-Proteus3 remains in `/home/bruce/devl/Proteus`. The original Proteus4 checkout in
-`/home/bruce/devl/Proteus4` and commit `b52322a` retain the previous solver and test
-assertions. Use them for historical comparisons. Reports elsewhere in this folder
-describe that checkpoint unless they explicitly identify the replacement; their
-old implementation paths and pass counts do not describe this engine.
+Proteus3 remains in `/home/bruce/devl/Proteus`. This checkout owns its Git data;
+it no longer depends on the removed `/home/bruce/devl/Proteus4` folder.
+The old solver and tests remain available in ancestor commit `b52322a`:
 
-## Test selection for the normalizer redesign
+```sh
+git show b52322a:ProteusTests.dog
+git show b52322a:AGENTS.md
+```
 
-This section records pruning before the engine cutover; current execution coverage is described above.
-
-The language fixtures are the protected baseline. All 15 `.tst` files remain
-byte-for-byte unchanged: `defaultTests.tst` contains 271 direct cases and includes
-61 more from the sparse, temporal, and world suites. The first approximately
-200 original cases are therefore preserved without an arbitrary numeric cutoff.
-All 58 compiled cases still present from before the graph experiment are retained.
-
-On 2026-10-11, 76 implementation-specific compiled cases and three standalone
-scheduler drivers were retired. That pruning left 1,530 compiled cases before the engine cutover.
-The [retirement manifest](retired-normalizer-tests.json) records every removed
-name, its reason, protected fixture hashes, and the recovery checkpoint.
-Retired tests and native drivers remain recoverable from commit `b52322a`.
-Their source files are removed, rather than merely disabled in the test list.
-
-The removed checks prescribe cache epochs, proof identity, internal requirement
-DAG layouts, validation-cache calls, or the old beginPass/found/SetCommand and
-GraphManager/PersistentTraversal protocols. Useful branches of mixed groups are
-retained: contextual and sparse aliases, independent instances, late meanings,
-contradictory new assertions, completion, and released-handle lifetime.
-Language, list/span, numeric-range, parser, streaming/reply, temporal preservation,
-and integration assertions remain available for migration. Performance properties such as bounded sparse
-access and avoiding repeated work still matter; old scheduler counters and cache
-layouts are not requirements on the replacement.
-
-The remaining graph-facing tests are semantic regression material, not a promise
-that their current helper API or every status assertion will survive the redesign.
-Port useful checks through WorldManager as its interface is defined. In particular,
-D02F permits unknown numeric size at completion and D03 limits list expansion;
-older status/depth expectations must not silently override those decisions.
-Preserve failures with clear semantics; do not delete them just to improve pass counts.
-Historical validation reports may mention retired files or earlier counts.
-
-Validation after pruning: CodeDog generation and the C++ build succeeded. The
-332-case default language run retained exactly the same 32 failure names as the
-reference binary. The 75 selected compiled cases retained the same eight failures;
-all 17 surviving cases from the edited mixed groups passed. All 15 language
-fixture hashes and the retained registrations/case IDs were checked unchanged.
-Other retained compiled and standalone suites were not rerun. No engine source
-was changed, and no failing language expectation was weakened.
+The redesign immediately before test cleanup is commit `bd7078b`. Reports
+elsewhere in this folder describe historical checkpoints unless they explicitly
+identify the current replacement. Old implementation paths and pass counts in
+those reports are historical evidence, not current build or test instructions.
