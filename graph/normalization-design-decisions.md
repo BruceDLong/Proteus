@@ -1929,3 +1929,52 @@ No native C++ function bodies remain in the maintained Proteus .dog sources;
 CodeDog macro definitions still use the same delimiters. No maintained Proteus
 test or .tst fixture changed. Full Proteus, shared-library, and Slipstream
 rebuilds and integration validation remain deferred under D077.
+
+
+## D082 Finish parser failure and thread completion in CodeDog (2026-10-17)
+
+**Decision.** Restore an unexpected-exception boundary in `doParse`, using
+CodeDog try/catch and rethrow. D076 fixed ordinary decimal input failures but did
+not make identity imports, callbacks, allocations, or publication nonthrowing.
+The user approved cleanup and failure publication at the parser boundary, plus
+containment at the native parser-thread entry point. This supersedes D076's
+choice to propagate unexpected failures without document failure publication.
+
+`doParse` retains the registered InputLock across parsing and failure publication.
+On an exception, set finishingDocument, clear documentRoot/worldManager, mark
+the document parseDone with its graphParseError, and notify inputReady when a
+manager exists. Do not invoke successful-parse completion on this path: that
+would also resolve end-relative references, which can itself have failed. Do not
+synthesize a syntax error or invoke syntax-error callbacks. A secondary failure
+while resuming input waiters is contained so rethrow preserves the original
+exception. That notification is an attempt, not a guarantee of recovery from a
+failing continuation. An empty exception message gets a nonempty document error
+(`Unexpected parser exception`), since an empty graphParseError denotes no error;
+the original rethrown exception is unchanged.
+
+`ThreadedInfonParser.run` catches runtime failures and reports a system error
+through its connector after the parser's model-lock scope has unwound. Contain
+exceptions from that report as well: they must not escape the native thread or
+skip completion signaling. The original document error remains available even
+if the host cannot accept the report. Set parseCompleted and notifyAll under
+chkParseDone once, after either outcome. Preserve the normal syntax-error path;
+multiple completion waiters can now all finish. No new native bodies or wrapper
+functions are introduced.
+
+**Validation.** Before editing, an isolated probe using the exact production
+doParse/notification methods reproduced missing terminal state, retained parser
+references, missing runtime error text, and skipped failure publication after
+injected exceptions. The final probe passes 157 ordinary-CodeDog checks. It uses
+the exact ThreadedInfonParser implementation and actual CodeDog/C++ thread,
+condition-variable, and input-lock bindings, with small parser/host/model stand-ins
+for deterministic faults. Cases cover success, ordinary syntax-error status,
+parse/host-callback/completion/publication exceptions, empty exception messages,
+preserving the original error when failure publication also throws, clearing
+temporary state, parser reuse, and model-lock release. Real parser threads with
+two waiting callers finish even when syntax or system error reporting throws.
+
+Evidence: `/tmp/proteus-parser-exception-check.py` and
+`/tmp/proteus-parser-exception-check/{parserExceptionProbe.dog,build.log,before.log,after.log}`.
+The small stand-ins do not establish full parser/reasoner or consumer integration.
+No maintained Proteus tests or .tst fixtures changed. Full Proteus, shared-library,
+and Slipstream rebuilds remain deferred under D077.
