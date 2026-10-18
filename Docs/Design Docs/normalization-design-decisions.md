@@ -2420,6 +2420,27 @@ evidence as a mismatch. Remaining interpretations must stay separate. The search
 strategy, ambiguity representation, role inventory, argument rules, and concrete
 syntax remain open; this does not accept a planner or add a separate evaluator.
 
+**Follow-up proposals.** The user suggested requiring the opening parenthesis to
+immediately follow the word, distinguishing `gave(...)` from `gave (...)` without
+consulting declarations. Whitespace/comment treatment and compatibility with
+existing adjacent word/expression forms still need specification and checking.
+The user also proposed `turn(%ctx.rubix-cube.red-face, clockwise)` (using the
+existing `%ctx` spelling). This motivates definition-specific parameter names,
+such as `item, direction`, beyond participant conventions such as `actor, item,
+object`. Direction is itself a supplied description; it need not be an actor or
+another physical participant. A possible header is `#turn: item, direction = ...`,
+with body references `%item` and `%direction`. These remain syntax proposals.
+
+**Cube example obligations.** The argument's context path must retain the caller's
+context and the selected face's occurrence/containing-cube relationship when used
+inside the body. Clockwise needs a viewing convention, and direction alone does
+not specify an angular amount. D069's fixed cube verbs use the view from outside
+the named center color; a parameterized model must state its own corresponding
+convention and turn extent. Supplying a face does not limit the changed facts to
+that face; the model describes the affected layer and related cube positions.
+No general overload selection or parameterized cube implementation is accepted
+by this example.
+
 **Validation boundary.** Documentation only, based on the current parser source
 and the accepted definition/context contract. No parser, engine, fixture, or
 test expectation is changed, and no runtime support is claimed.
