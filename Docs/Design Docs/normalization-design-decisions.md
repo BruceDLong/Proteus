@@ -2375,3 +2375,51 @@ library without missing symbols. Private Xvfb next/previous navigation captures
 the retained animation stutter and brief progressive pink coloring remain. The
 application exits with status zero after normal window closure. Evidence is in
 `/tmp/slipstream-d090-rollback/` and `/tmp/proteus-d090-rollback-*.log`.
+
+## D092 Optional definition roles; binding and application syntax open (2026-10-18)
+
+**Accepted direction.** Word definitions may expose optional role names as an
+interface to participants already described by their meaning. A role header is
+not required on every definition. The user chose named roles over requiring a
+narrow model type for each parameter. The meaning still supplies its actual
+constraints; moving a restriction from a header into the body does not remove it.
+No parameter syntax or engine behavior is implemented by this decision record.
+
+**User proposals, not settled syntax.** A body could refer to roles with `%item`,
+`%actor`, and similar references. Verbs might conventionally expose `actor`,
+`item`, and `object`; whether this is a fixed inventory remains open. Explicit
+application could use positional `gave(Bruce, the box, Arthur)` or named
+`gave(actor::Bruce, item::the box, object::Arthur)` bindings. A natural-language
+form such as `Bruce gave Arthur the box` could acquire its bindings by examining
+alternative interpretations. These examples are schematic: phrase boundaries,
+entity resolution, and meaning selection need their own contracts.
+
+**Binding questions.** Specify which application owns each role reference,
+how nested definitions and forwarding preserve that scope, and how a binding
+refers to the model participant without mutating the shared declaration.
+Distinguish an omitted header, an omitted argument, an unknown participant, and
+a participant that does not exist. State-change roles must retain the distinction
+between the participant and its earlier/later occurrences. Positional application
+needs a declared order; natural-language word order need not match that order.
+
+**Grammar evidence and alternatives.** `infonIO.dog` currently recognizes a fixed
+set of percent references, including `%self` and `%args`; it rejects arbitrary
+role tags. Parentheses introduce `emConcat` expressions, and commas are currently
+restricted to brace lists, where they select unordered correspondence. A bare
+name has no parenthesized call suffix. A role call therefore needs an explicit
+grammar rule, with a decision between a new postfix-parentheses production and
+a distinct application marker. Named binding punctuation must also be checked
+against existing colon qualification and boundary operators. Grammar must not
+silently change according to whichever definitions are currently loaded.
+
+**Proposed composition.** Named, positional, and interpreted applications should
+produce the same occurrence-specific role relationships and use ordinary meaning
+application. Natural-language constructions can propose correlated bindings;
+model constraints can reject proved contradictions without treating missing
+evidence as a mismatch. Remaining interpretations must stay separate. The search
+strategy, ambiguity representation, role inventory, argument rules, and concrete
+syntax remain open; this does not accept a planner or add a separate evaluator.
+
+**Validation boundary.** Documentation only, based on the current parser source
+and the accepted definition/context contract. No parser, engine, fixture, or
+test expectation is changed, and no runtime support is claimed.
