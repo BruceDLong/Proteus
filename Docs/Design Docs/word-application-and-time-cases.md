@@ -87,9 +87,10 @@ claims in older notes do not establish current engine coverage.
 
 The user leaves the final meanings of `%`, `%self` and related references open
 until substantial temporal models show which semantics are useful and complete.
-For now `%` and `%self` mean the same thing. The rough rule is to ascend the parent
-chain to an item originating from a definition or listSpec. Levels of being,
-such as cube, material and lattice, may affect the appropriate subject.
+They currently mean the same thing; the latest proposal below distinguishes
+them. The existing rough rule is to ascend the parent chain to an item originating
+from a definition or listSpec. Levels of being, such as cube, material and lattice,
+may affect the appropriate subject.
 
 `%ctx` has session scope and currently holds recently accessed noun-like model
 references; its contents can expand later. It is separate from the model subject
@@ -98,7 +99,7 @@ as an ordered S-list, not merely in whatever list happens to contain self. They
 have no meaning for unordered self. `%tprev` operates in self's T-list. These are
 user-stated semantics, not a claim that all current providers implement them.
 
-**Proposal for discussion.** Define `%self` as the subject occurrence bound by
+**Earlier assistant proposal.** Define `%self` as the subject occurrence bound by
 the enclosing definition/listSpec application context of the expression, viewed
 at that application's model level and temporal context. `%` remains its alias.
 An application context belongs to the expression's model provenance, not the
@@ -126,8 +127,40 @@ does a listSpec application make its described member the subject, or retain the
 containing model as subject while supplying a current member position? Distinguish
 a template that constrains a member from a model application that introduces a
 new subject scope. The user's current description does not fully settle that
-choice. Test both against the walk's nested cycles and cube/material views before
-adopting a final rule. No new level-selection syntax or engine change is proposed.
+choice. The subsequent proposal separates those two roles instead of requiring
+one reference to serve both. No new level-selection syntax or engine change is
+proposed.
+
+**Latest user proposal: `%` names the described member.** Give `%` a more local
+meaning: the member being defined, between `%prev` and `%next` in an ordered
+list. This would distinguish it from `%self`, rather than leave the two as
+aliases. The user presents this as a possibility to explore, not a final contract.
+
+The corresponding interpretation for discussion is:
+
+- `%self` retains the enclosing model subject/scope.
+- `%` denotes the particular member described by the current application.
+- `%prev` and `%next` denote its neighbours within the ordered scope. An unordered
+  scope can still have a current member denoted by `%`, without supplying these
+  neighbours.
+- `%ctx` remains session-scoped. `%tprev` retains the separate temporal anchor
+  discussed above; the structural `%prev`, `%`, `%next` relationship alone does
+  not settle temporal navigation at every nested level.
+
+For a listSpec applied across members of one ordered model, each application can
+bind `%` to its own member while retaining the same `%self`. This distinguishes
+the template, its described member, and its containing model. In a temporal
+state-result application, `%` would identify the state being described; a prior
+input still needs its predecessor reference. The current occurrence can exist
+before all its properties are known.
+
+Bind `%` through the application context, not to every syntax node visited during
+evaluation. For example, `%.location` selects a field of the bound member without
+rebinding `%` halfway through the path. Entering a nested model or listSpec may
+establish a different local member; exactly which applications do so remains
+to be worked out. In the walk, distinguish `%` for an outer cycle from `%` for
+an inner phase. The containing subject and the model level must remain explicit
+enough that ordinary grouping or a lookup cannot accidentally change them.
 
 ## Dimensions of coverage
 
@@ -544,9 +577,10 @@ and constraints of those compositions, rather than reopening that distinction.
 
 1. **Participant and relative-reference binding.** How do the nested calls identify
    the same stepper, its feet and the relevant preceding state? The provisional
-   context section records the user's alias, session and navigation distinctions.
-   Test where definition/listSpec applications establish self scope, its level
-   of being, and its current structural/temporal positions. Which omitted-role
+   context section records the current alias and the proposed member-versus-self
+   distinction, along with session and navigation semantics. Test where model
+   applications establish each binding, its level of being, and its structural
+   or temporal position. Which omitted-role
    or default rules are permitted? Explicit named roles remain the starting point.
 2. **Bindings across time.** How does a model distinguish a supplied location
    value from a reference to an entity whose location changes? Walking to a

@@ -2637,3 +2637,29 @@ member, participant argument and temporal predecessor, or finalize new syntax.
 the current occurrence, definition-context and temporal notes; the parser fixture
 also records `%self` printing as `%`. Checked the documentation diff. No runtime
 tests were run and no engine behavior or existing fixture expectation changed.
+
+## D096 Explore `%` as the member being described (2026-10-19)
+
+**User proposal, provisional.** `%` could denote a lower-level self: the member
+being defined, lying between `%prev` and `%next`. This would distinguish `%`
+from `%self`; D095's alias description records the current behavior rather than
+settling the eventual design.
+
+**Interpretation for discussion.** Keep `%self` as the enclosing model subject
+and bind `%` to the member described by the current application. A listSpec can
+then use a different `%` for each member with the same enclosing `%self`.
+Structural neighbours are relative to that member within the ordered scope.
+The local member can still exist in an unordered scope, where `%prev` and `%next`
+have no meaning. `%ctx` remains session-scoped, and the temporal anchor of
+`%tprev` remains distinct from this structural triple.
+
+**Reasons and open boundaries.** Separating the described member from its
+enclosing model addresses the two competing roles identified in D095. Bindings
+must survive ordinary expression traversal, projection and delayed evaluation;
+`%.location` must not change its subject while traversing the path. Determine
+which nested definition/listSpec applications establish a new local member or
+enclosing self, using walk cycles/phases and cube/material models. A local member
+is not automatically a prior-state snapshot or a different physical model level.
+
+**Validation.** Documentation only; checked the diff. No parser, engine, tests or
+expectations changed, and the proposed distinction is not claimed implemented.
