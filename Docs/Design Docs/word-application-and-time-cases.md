@@ -48,14 +48,16 @@ claims in older notes do not establish current engine coverage.
    overwrite a contradictory fact at that same occurrence. In a T-step the
    target is the state being described, so a new value need not equal the old
    value. Outside temporal context, equality does not create a successor.
-6. Relative references must have one specified anchor. In the user's direct
-   T-member example, `%prev` denotes the preceding member at the call site.
-   `%prev` remains structural; `%tprev` is used when crossing ordinary structure
-   to a temporal ancestor. Proposed rule: an explicit reference is not shifted
-   again merely because the call is on an identity RHS. The implicit relative
-   assignment context must compose with this rule; examples must catch a double
-   predecessor shift. Until this is settled, explicit references to named source
-   and destination occurrences are the comparison form.
+6. Relative references must have one specified anchor. The user's 2026-10-19
+   clarification places `%prev` and `%next` within `%self` as an ordered S-list;
+   they have no meaning when `%self` is unordered. `%tprev` works in `%self`'s
+   T-list. The direct T-member examples therefore require an appropriate self
+   binding and current position; nearby syntax alone does not establish them.
+   Proposed rule: an explicit reference is not shifted again merely because
+   the call is on an identity RHS. The implicit relative assignment context
+   must compose with this rule; examples must catch a double predecessor shift.
+   Until the bindings are settled, explicit references to named source and
+   destination occurrences are the comparison form.
 7. T-step work computes the described new facts; D067 retention supplies
    unaffected previous descriptions. Direct and model-implied changes must both
    be accounted for. Ordinary unknowns do not assert independence; `%?` withholds
@@ -80,6 +82,52 @@ claims in older notes do not establish current engine coverage.
    remain separate. Embedded temporal lists retain those distinctions; ordinary
    list-valued descriptions do not silently embed themselves in their surrounding
    history.
+
+## Provisional context semantics
+
+The user leaves the final meanings of `%`, `%self` and related references open
+until substantial temporal models show which semantics are useful and complete.
+For now `%` and `%self` mean the same thing. The rough rule is to ascend the parent
+chain to an item originating from a definition or listSpec. Levels of being,
+such as cube, material and lattice, may affect the appropriate subject.
+
+`%ctx` has session scope and currently holds recently accessed noun-like model
+references; its contents can expand later. It is separate from the model subject
+and its local or temporal navigation. `%prev` and `%next` operate within `%self`
+as an ordered S-list, not merely in whatever list happens to contain self. They
+have no meaning for unordered self. `%tprev` operates in self's T-list. These are
+user-stated semantics, not a claim that all current providers implement them.
+
+**Proposal for discussion.** Define `%self` as the subject occurrence bound by
+the enclosing definition/listSpec application context of the expression, viewed
+at that application's model level and temporal context. `%` remains its alias.
+An application context belongs to the expression's model provenance, not the
+current evaluator call stack. Parent traversal locates that binding; raw physical
+ancestry does not independently choose a new subject after copying, projection,
+embedding or delayed evaluation.
+
+Keep the subject distinct from the current structural and temporal navigation
+positions. Knowing self's identity alone does not identify a previous member.
+Its ordered-list position supports `%prev`/`%next`; its established temporal
+position supports `%tprev`. An unordered cube-state subject can therefore lack
+structural neighbours while having a preceding cube state in its history.
+Multiple possible histories or model levels require a specified correspondence
+or remain unresolved; do not select whichever ancestor is easiest to reach.
+
+A cube-level rule retains its cube subject while reading material properties.
+A rule applied in the material or lattice model has the subject/view established
+by that application. A lookup alone does not change the scope of the original
+rule. Two views may concern the same physical thing without being interchangeable
+model occurrences. Keep named parameter bindings separate from self: the thing a
+word describes need not be its actor or first argument, as with `sqrt` or `walk`.
+
+This proposal still requires concrete scope-boundary examples. In particular,
+does a listSpec application make its described member the subject, or retain the
+containing model as subject while supplying a current member position? Distinguish
+a template that constrains a member from a model application that introduces a
+new subject scope. The user's current description does not fully settle that
+choice. Test both against the walk's nested cycles and cube/material views before
+adopting a final rule. No new level-selection syntax or engine change is proposed.
 
 ## Dimensions of coverage
 
@@ -495,10 +543,11 @@ and constraints of those compositions, rather than reopening that distinction.
 ## Decisions to settle first
 
 1. **Participant and relative-reference binding.** How do the nested calls identify
-   the same stepper, its feet and the relevant preceding state? Specify the anchors
-   for `%prev`, `%tprev`, `%self` and `%ctx` in direct T-members, identity RHSs,
-   nested records and embedded sequences. Which omitted-role/default rules are
-   permitted? Explicit named roles remain the starting point.
+   the same stepper, its feet and the relevant preceding state? The provisional
+   context section records the user's alias, session and navigation distinctions.
+   Test where definition/listSpec applications establish self scope, its level
+   of being, and its current structural/temporal positions. Which omitted-role
+   or default rules are permitted? Explicit named roles remain the starting point.
 2. **Bindings across time.** How does a model distinguish a supplied location
    value from a reference to an entity whose location changes? Walking to a
    person's initial location and following their current location require

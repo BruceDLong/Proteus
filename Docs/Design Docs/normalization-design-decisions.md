@@ -2596,3 +2596,44 @@ not newly accepted rules for truncation, first-match termination or route planni
 occurrence/listSpec and nested T-boundary contracts and checked the documentation
 diff. No parser, engine, fixture or test expectation changed; no runtime support
 for this model is claimed.
+
+## D095 Context references remain provisional pending temporal models (2026-10-19)
+
+**User clarification.** `%` and `%self` currently mean the same thing. Their
+rough interpretation is to ascend the parent chain until reaching an item from
+a definition or listSpec. Their final useful and complete semantics should be
+revisited after good temporal systems have been modeled. Self may need to account
+for levels of being, such as a Rubix cube, its material, or its lattice.
+
+`%ctx` has session scope and holds recently accessed noun-like model references;
+later it can hold other things. `%prev` and `%next` work within `%self` as an
+ordered S-list and have no meaning when self is unordered. `%tprev` works in
+self's T-list. Preserve these distinctions rather than treating any nearby
+ordered or temporal ancestor as sufficient. This records the user's intended
+semantics; historical provider implementations are not proof of a final contract.
+
+**Assistant proposal, not yet accepted.** Give each expression a subject binding
+through its enclosing definition/listSpec application context. `%self` denotes
+that subject occurrence at the application's model level and temporal context;
+`%` remains an alias. Parent traversal discovers the binding, rather than allowing
+physical layout or evaluation order to redefine it. Retain the expression's
+application provenance across embedding, projection and delayed evaluation.
+
+Keep subject identity separate from the structural and temporal positions needed
+for neighbour lookup. Cube-level rules keep their cube subject when reading
+material properties; rules applied within a material/lattice model use the
+subject/view established there. Session context and named role bindings remain
+separate. This fits the existing occurrence/context preservation principles while
+leaving the practical scope boundaries open for examples.
+
+**Unsettled choice and reason.** A listSpec may constrain a member while retaining
+an enclosing model subject, or introduce a subject scope at that member. The
+current clarification does not resolve every such case. Determine which model
+applications establish a new self binding using ordered-list, unordered-state,
+nested walk and cube/material examples. Do not silently identify subject, current
+member, participant argument and temporal predecessor, or finalize new syntax.
+
+**Validation.** Documentation only. Compared the clarification and proposal with
+the current occurrence, definition-context and temporal notes; the parser fixture
+also records `%self` printing as `%`. Checked the documentation diff. No runtime
+tests were run and no engine behavior or existing fixture expectation changed.
