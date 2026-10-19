@@ -2682,3 +2682,38 @@ new spelling or default relationship for a list position is inferred.
 
 **Validation.** Documentation only; checked the diff. No parser, engine or fixture
 changes, and no implementation claim about these operators follows from this note.
+
+## D098 Definition confinement and proposed scope inheritance for embedded lists (2026-10-19)
+
+**User requirement.** Scope rules must prevent a definition from escaping and
+modifying things outside itself. Record this independently of the existing rule
+that shared declarations remain read-only during application.
+
+**User proposal, provisional.** An embedded list may share the scope of the parent
+it is embedded in. In particular, the listSpec in `&{ LS | ... }` should be able
+to refer to that parent. The user explicitly wants the most useful practical
+rule established through examples, rather than treating this guess as final.
+
+**Interpretation for discussion.** Separate visible context, the occurrences
+described by a listSpec, and the scope a definition may modify. A fragment can
+inherit its parent's `%self` while `%` denotes the current embedded member.
+Its own LS still applies to its embedded members; parent visibility does not
+extend LS to the parent's other members. Applicable ancestor requirements retain
+their ordinary projection into the fragment.
+
+References through parameters, aliases, `%ctx`, member selection or external
+relationships must not automatically extend the definition's effect boundary.
+The same issue occurs in constraint propagation: a walk cannot satisfy arrival
+by modifying an outside destination, nor rewrite its prior input state. The exact
+boundary and treatment of derived external facts still need specifying. Parent
+visibility is not a blanket grant to modify everything reachable from the parent.
+
+**Open cases and alternatives.** Compare literal and named embedded lists with
+explicit context/destination correspondence. Determine the inherited scope for
+`&word(...)` without making embedding a way around a definition boundary. Check
+structural/temporal neighbour behavior at embedded edges separately from LS
+coverage. Keep both the user's scope guess and these mechanisms provisional;
+the no-escape requirement is the settled constraint they must satisfy.
+
+**Validation.** Documentation only; checked against the occurrence and definition
+contract and checked the diff. No engine changes or runtime enforcement claims.

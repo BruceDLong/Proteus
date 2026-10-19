@@ -64,6 +64,12 @@ Definitions are optional sources of meaning. Compiling meaning does not prove in
 
 Shared declarations remain read-only during application. An unchanged completed infon returns from ordinary normalization without creating goals. A semantic event requiring reconsideration, including a relevant meaning change, must explicitly request a new goal. D05 will specify the declaration/context triggers; later information does not restart every completed query.
 
+Definition applications must not escape their own scope and modify outside
+occurrences (D098). This is distinct from preserving the shared declaration.
+The scope rules must account for aliases, referenced models and embedded lists;
+the precise boundaries and enforcement remain design work. The proposed parent
+scope for embedded listSpecs is recorded separately from this firm requirement.
+
 ### Finite scalar alternative domains
 
 Under D04A, `*_+[...]` denotes the remaining scalar alternatives, not a request to choose the last list member. Borrow each finite candidate and normalize its own conjunctive work through an ordinary frame. An unpatterned open body supplied by `<~` enumerates the finite input domain. Reuse derived relationship pairs to filter candidates; an RHS OR preserves the original operator, while an outer constraint on a target OR uses member qualification. Only a proved contradiction removes a branch. A contradiction in an ordinary required dependency still rejects that dependent goal.

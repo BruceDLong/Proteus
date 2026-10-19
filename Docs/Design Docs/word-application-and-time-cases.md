@@ -175,6 +175,40 @@ deeper-search alternative is `%~location`. Choosing `%` versus `%self` chooses
 the starting subject, while `.`, `^` and `~` retain their respective meanings.
 This clarification does not settle new relationship names for list positions.
 
+**User requirement: definitions cannot modify outside their scope.** Applying a
+definition must not let it escape and modify outside model occurrences. Reading
+a reference, including through `%ctx`, a parameter, an alias, or `.`, `^` and `~`,
+must not by itself authorize changes to the referenced occurrence. This applies
+to constraint propagation as well as to explicit assignment-like statements.
+The precise boundary is still being designed; no enforcement is claimed here.
+
+**Provisional embedded scope.** The user proposes that an embedded list shares
+the scope of its parent, so in `&{ LS | ... }` the listSpec can refer to that
+parent. One interpretation to test keeps the parent's `%self` binding while
+binding `%` to each described embedded member. Scope inheritance and listSpec
+coverage remain different: in `{ before &{ LS | a b } after }`, LS applies to
+`a` and `b`; access to the parent does not automatically impose LS on `before`
+or `after`. Applicable parent requirements still project into embedded members
+through their existing relationships.
+
+**Proposed effect boundary.** Keep the context available to an expression separate
+from the occurrences its definition application may change. An embedded fragment
+inside a definition can see its parent within that definition's scope. Inheriting
+context does not remove an enclosing definition boundary or make every object
+reachable from the parent writable. For example, a walk can use the destination's
+modeled location while describing its own result; it cannot move that outside
+destination to make arrival true. A reference to a prior state likewise does not
+allow a new-state description to rewrite that prior occurrence. Local constraints
+can retain relationships to outside facts without publishing changes to those
+outside occurrences merely to satisfy the application.
+
+Test the same constraints directly and through aliases, parameters and `%ctx`.
+Compare literal embedding with `&word(...)` under explicit context and destination
+correspondence. Exactly which scope a named embedded application inherits remains
+open; `&` must not silently broaden the definition's permitted effects. Also test
+the first and last embedded members' neighbour references against the inline
+form, keeping scope inheritance separate from the remaining navigation rules.
+
 ## Dimensions of coverage
 
 | Dimension | Cases to distinguish |
@@ -567,6 +601,10 @@ string equality:
   established; equal ordinal positions alone must fail this equivalence test.
 - Same-state conjunction independent of evaluation order, with conflicting
   conjunctions rejected and unknown prerequisites kept unresolved.
+- Definition effects remain within their scope when an outside occurrence is
+  reached directly, through an alias or parameter, or from `%ctx`. Embedded
+  listSpecs can use the proposed parent context without extending their member
+  coverage or erasing the enclosing definition's effect boundary.
 
 For each example record the selected source and destination occurrences, argument
 bindings and call-site context, temporal support, requested result, expected facts,
