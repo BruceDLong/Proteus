@@ -155,12 +155,25 @@ input still needs its predecessor reference. The current occurrence can exist
 before all its properties are known.
 
 Bind `%` through the application context, not to every syntax node visited during
-evaluation. For example, `%.location` selects a field of the bound member without
-rebinding `%` halfway through the path. Entering a nested model or listSpec may
+evaluation. For example, `%.thing.location` first selects a member fitting `thing`,
+then a member fitting `location` within it. The selected path target advances;
+the original `%` binding does not change. Entering a nested model or listSpec may
 establish a different local member; exactly which applications do so remains
 to be worked out. In the walk, distinguish `%` for an outer cycle from `%` for
 an inner phase. The containing subject and the model level must remain explicit
 enough that ordinary grouping or a lookup cannot accidentally change them.
+
+**User clarification: member selection and external relationships.** In `x.y`,
+the dot finds a member fitting the description `y`; it is not a special accessor
+for implementation properties or list-position metadata. An external relationship
+uses `x^y`; for example, `x^size` could refer to an item's size. The spatial
+location and orientation under discussion are fields of `thing`, distinct from
+an occurrence's position in a list. The location path is `x.thing.location`, or
+`x~location` for a deeper search. Accordingly the earlier assistant example
+`%.location` was imprecise for the intended model and is corrected above; the
+deeper-search alternative is `%~location`. Choosing `%` versus `%self` chooses
+the starting subject, while `.`, `^` and `~` retain their respective meanings.
+This clarification does not settle new relationship names for list positions.
 
 ## Dimensions of coverage
 

@@ -2656,10 +2656,29 @@ have no meaning. `%ctx` remains session-scoped, and the temporal anchor of
 **Reasons and open boundaries.** Separating the described member from its
 enclosing model addresses the two competing roles identified in D095. Bindings
 must survive ordinary expression traversal, projection and delayed evaluation;
-`%.location` must not change its subject while traversing the path. Determine
+`%.thing.location` must retain its original `%` binding while advancing the path
+target (the path is corrected under D097). Determine
 which nested definition/listSpec applications establish a new local member or
 enclosing self, using walk cycles/phases and cube/material models. A local member
 is not automatically a prior-state snapshot or a different physical model level.
 
 **Validation.** Documentation only; checked the diff. No parser, engine, tests or
 expectations changed, and the proposed distinction is not claimed implemented.
+
+## D097 Distinguish modeled location from list position and external relationships (2026-10-19)
+
+**User clarification.** `x.y` finds a member fitting description `y`. An external
+relationship uses `x^y`, such as `x^size` potentially referring to an item's size.
+Location and orientation are fields of `thing`; location is reached through
+`x.thing.location`, or `x~location` using deeper search. These modeled spatial
+properties are distinct from an item's position in a list.
+
+**Correction.** The assistant's `%.location` example intended the modeled spatial
+location, not list-position metadata, but omitted the `thing` selection. Replace
+it with `%.thing.location` or `%~location`. The path may advance through selected
+members without rebinding its original `%` reference. `%` versus `%self` selects
+the starting subject; it does not alter the meanings of `.`, `^` or `~`. No
+new spelling or default relationship for a list position is inferred.
+
+**Validation.** Documentation only; checked the diff. No parser, engine or fixture
+changes, and no implementation claim about these operators follows from this note.
