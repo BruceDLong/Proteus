@@ -2515,9 +2515,27 @@ describe objects and their changes through T-lists and other notation, covering
 whole systems and individual parts at instants and over intervals. The starting
 example is `cube-face:{T| state1 state2 turn(item::%prev, direction::clockwise) &move-sequence ...}`.
 During the discussion the user clarified that `&` before a verb describes a
-sequence of state changes. Add paired ordinary-result and `&`-sequence examples;
-the representation within the verb model, intermediate temporal supports and
-inclusion/exclusion of its input state still need specifying.
+sequence of state changes. The subsequent walking example below clarifies that
+this uses ordinary list embedding, not a separate verb-expansion operation.
+
+**User clarification: sequence-valued definitions.** A verb that implies many
+steps can itself describe a T-list: `#walk: destination = *_+{T takeStep | ...}`.
+Each member describes the resulting state of taking a step. Applying
+`&walk(destination::door)` fills a span in the containing T-list with those
+members, using the existing meaning of `&{...}`. The meaning of `walk(...)`
+remains that list; omitting `&` does not select its endpoint. The definition
+determines what the list contains. Embedding does not invent steps, drop or add
+an initial state, establish a duration, or decide when the destination is reached.
+
+**Correction and reason.** The first assistant draft introduced a paired
+ordinary-result/`&`-sequence interpretation using `turn`, with a proposed law
+equating the ordinary result to the sequence's endpoint. That interpretation was
+not established by the user and is withdrawn. Ordinary application plus existing
+embedding is sufficient: the definition determines whether its value describes
+one state or a sequence. E09 now uses walking to test per-step listSpec context,
+entry and exit relationships, destination binding, and unknown span extent. The
+actual step, support and completion relationships still need specifying; the
+schematic header alone does not supply them.
 
 **Discussion basis.** [Word application and temporal description coverage](word-application-and-time-cases.md)
 uses explicit named roles throughout and records nineteen example families,

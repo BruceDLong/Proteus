@@ -2,8 +2,9 @@
 
 This draft gives a basis of examples for specifying systems through words,
 parameterized definitions, part selection and T-lists. The user has limited the
-first design to unambiguous application syntax, and clarified that `&` before a
-verb describes a sequence of state changes. Role inference, receiver calls
+first design to unambiguous application syntax, and clarified that a verb such as
+`walk` can describe a T-list of successive step results. `&walk(...)` embeds that
+list using the existing meaning of `&{...}`. Role inference, receiver calls
 and natural-language argument assignment remain deferred. The proposed rules and
 unsettled temporal cases below need discussion before implementation.
 
@@ -64,21 +65,21 @@ claims in older notes do not establish current engine coverage.
    serialization of evaluation must not create an unintended ordering of changes.
    Interacting changes need their joint relationship or remain conflicting or
    unresolved; arbitrary ordering is not a resolution mechanism.
-9. The user's `&verb(...)` form describes the verb's sequence of state changes.
-   Compare it with the ordinary resulting-state use of `verb(...)`. Proposed
-   consistency law: for a finite completed change sequence, its terminal state
-   agrees with the ordinary resulting-state description for the same inputs.
-   The model must supply the intermediate relationships; `&` does not invent a
-   path, sample rate, duration, or extra states from a known endpoint alone.
-   How the endpoint and sequence views are exposed by one verb model remains to
-   be specified. This is not a general rule collapsing ordinary list-valued
-   words to their last member.
+9. A list-valued word application describes its list. Prefixing it with `&`
+   embeds that list's logical members in the enclosing list, just as `&{...}`
+   does for a literal. Thus `walk(...)` can describe a temporal span containing
+   many step results, and `&walk(...)` contributes those results to the enclosing
+   history. Without `&`, the list remains an ordinary contained value; it does
+   not become its final state. `&` neither converts a single-state definition
+   into a history nor supplies additional steps, a path, or a stopping rule.
+   The definition determines the listed states, including whether it explicitly
+   includes an initial state. Embedding preserves their context and relationships.
 10. A T-member's temporal support comes from the model. Neither one member nor one
    verb application implies a duration, a zero-duration event, or one second.
    Member ordinals, boundary identities, duration, coordinate origin, and units
-   remain separate. The sequence form must compose with existing embedded-span
-   semantics; ordinary list-valued descriptions do not silently splice themselves
-   into their surrounding history.
+   remain separate. Embedded temporal lists retain those distinctions; ordinary
+   list-valued descriptions do not silently embed themselves in their surrounding
+   history.
 
 ## Dimensions of coverage
 
@@ -202,46 +203,49 @@ b; place `%?` on the whole record. Verify the scope of retained facts. Then use 
 bicycle example where pedaling changes the chain and wheel through the model:
 those effects cannot be frozen merely because they were not written explicitly.
 
-### E09 Verb expansion and parameterized sequence composition
+### E09 Walking as an embedded, parameterized temporal list
 
-Compare the resulting-state and sequence forms with identical bound inputs:
-
-```text
-cube-face:{T| initial-state turn(item::%prev, direction::clockwise)}
-cube-face:{T| initial-state &turn(item::%prev, direction::clockwise)}
-```
-
-The second exposes the state changes described by the verb. For a finite
-completed sequence, require agreement of its endpoint with the first form while
-retaining its own intermediate temporal occurrences. An endpoint-only meaning
-does not justify inventing the intermediate changes. The `item::%prev` binding
-belongs to the outer call site and must not be recaptured at every expanded step.
-
-Also compose an explicitly described sequence:
+Use the user's schematic definition and an explicitly named argument:
 
 ```text
-#two-turns: item = {T|
-    turn(item::%item, direction::clockwise)
-    turn(item::%prev, direction::clockwise)
-}
+#walk: destination = *_+{T takeStep | ...}
 
-cube-face:{T|
+walker:{T|
     initial-state
-    &two-turns(item::%prev)
-    ...
+    &walk(destination::door)
+    following-state
 }
 ```
 
-This proposed sequence returns the two resulting states, excluding its input
-seed. Compare it with writing both turns inline. Preserve caller bindings,
-sequence entry context, final result and temporal boundaries. Embedding must not
-duplicate the seed, invent an extra transition, or conflate equal states. Compare
-with a nested, unembedded sequence to specify whether it is a compound span or
-an ordinary contained value. Do not assume `%prev` and `%tprev` are interchangeable
-across that boundary. Seed exclusion is a proposed convention to settle, not an
-accepted consequence of the `&` notation. Cover an empty expansion, a one-change
-expansion, nested expansions, and an open sequence with no established terminal
-state. A plain verb's endpoint need not be available just because a prefix exists.
+The definition describes a T-list of unspecified extent. Its `takeStep` listSpec
+supplies the description of each successive state as the result of taking a step.
+The members are state occurrences, not commands queued for external execution.
+`&walk(...)` embeds those members into the surrounding history through ordinary
+list embedding. Compare it with embedding the corresponding literal model with
+the same bindings and context. Without `&`, the application describes a contained
+list, not the last state of that list.
+
+The ellipsis stands for the remaining model, including how `%destination` relates
+to the steps and the completion condition. The header alone does not establish
+that the walk reaches the door or where the span ends. This specimen declares
+only `destination`; the walker and starting state must be established by its
+surrounding model and occurrence context, not inferred as unnamed arguments.
+Specifying those context relationships is part of completing the example.
+
+Test the first step's relationship to initial-state, each later step's relationship
+to its predecessor, and following-state's relationship to the completed span.
+The destination binding stays associated with this application while the
+step-relative context varies by member. Do not assume `%prev` and `%tprev` are
+interchangeable across the embedding boundary. The input state precedes the span
+in this example; `&` does not insert or remove an initial state on its own.
+
+Cover zero steps when the model permits an already-satisfied destination, one
+step, several steps, nested embedded walks, and an unknown/open extent. Preserve
+distinct occurrences even when positions happen to be equal. A known prefix
+does not prove completion or allow following-state to be placed at a guessed
+endpoint. An unreachable or underspecified destination must not fabricate a
+successful terminal state. Route choice, progress and termination require model
+relationships; embedding itself is independent of those reasoning questions.
 
 ### E10 Whole and part histories
 
@@ -273,18 +277,19 @@ These are semantic examples. They deliberately do not invent `at`/`during`
 surface syntax before the quantification, boundaries and supports are settled.
 At least one interior-time query must distinguish each description from the others.
 
-### E12 Turning as an endpoint result or a process
+### E12 Step results and motion within each step
 
-Compare a quarter-turn's resulting orientation with a process that rotates from
-0 to 90 degrees over two seconds. Query the midpoint. The endpoint result alone
-must not imply a 45-degree midpoint. A model with an explicit uniform angular
-rate can establish it; a nonuniform process can have the same endpoints.
+Compare a walk described by its successive foot-placement states with a model
+that also describes the motion during each step. Query a time between two known
+placements. The endpoint positions alone must not imply a straight path, uniform
+speed, or a particular position at the midpoint. Those require relationships in
+the step model; different motions can have the same endpoint states.
 
-Use `&turn(...)` to describe the modeled change sequence. Its members may need
-interval-valued process descriptions rather than a fabricated series of instant
-snapshots. Specify how a state is projected from those descriptions and how that
-projection relates to the ordinary turn result. The `&` distinction does not
-itself settle duration, trajectory or boundary-value conventions.
+Members may describe intervals with internal motion rather than only sampled
+instants. Specify how a state is projected at a requested time within a member's
+support. Embedding the walk preserves whatever temporal description its model
+supplies. Neither the number of steps nor `&` establishes elapsed time,
+trajectory, or boundary-value conventions.
 
 ### E13 Boundaries and overlapping spans
 
@@ -355,6 +360,11 @@ Test an accepted state, a contradictory state and a member with unknown evidence
 Also test an occurrence-dependent template at the first history member, where
 its preceding-state prerequisite is unavailable.
 
+Repeat with E09's walk embedded in a history that has its own listSpec. The
+walk's `takeStep` requirement and applicable outer requirements must both reach
+the step occurrences through their respective contexts; neither replaces the
+other. The shared template must not identify distinct step occurrences.
+
 A requirement on each sampled instant does not establish an invariant at every
 intermediate instant. If the member descriptions cover whole intervals, the
 required temporal quantification must be preserved through their projection.
@@ -387,8 +397,8 @@ string equality:
 - Permuting named bindings without changing their roles.
 - Explicit source occurrence versus the corresponding relative temporal reference.
 - Inline changes versus an embedded sequence with explicit entry binding.
-- A verb's ordinary resulting-state description versus the endpoint of its finite
-  completed `&` expansion, preserving intermediate occurrences in the latter.
+- An embedded literal temporal model versus `&walk(...)` supplying the same
+  model with preserved bindings, listSpecs, member occurrences and span boundaries.
 - Whole-system description projected to a part versus that part's description at
   the same temporal support; recombination needs explicit correspondence and all
   relevant coupling relationships, not a blind union of independent histories.
@@ -409,10 +419,11 @@ and known failures remain intact.
 
 ## Decisions to settle first
 
-1. How does one verb model expose its resulting-state and `&` sequence views?
-   Does the resulting state describe a cut or a following span, and can sequence
-   members describe continuous processes? Which support comes from context, and
-   which from the definition? Does an expansion include its input state?
+1. How does the walk model connect its walker, starting state, repeated `takeStep`
+   requirement, destination and completion condition? Which temporal support
+   comes from context, and which from the definition? Can each step describe an
+   interval of motion? Ordinary embedding is already the basis for `&walk(...)`;
+   no separate endpoint-versus-sequence interpretation of an application is needed.
 2. What is the exact call-site anchor for `%prev`, `%tprev`, `%self` and `%ctx` in
    direct T-members, identity RHSs, nested records and embedded sequences?
 3. How does explicit whole/part correspondence transport temporal support,
