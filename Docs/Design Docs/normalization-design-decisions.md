@@ -2506,3 +2506,36 @@ parameter binding does not authorize replacing it with a separate name matcher.
 **Validation boundary.** Documentation only, based on the current parser source
 and the accepted definition/context contract. No parser, engine, fixture, or
 test expectation is changed, and no runtime support is claimed.
+
+## D093 Unambiguous applications and temporal coverage cases (2026-10-18)
+
+**User decision.** Start with only unambiguous application syntax. Defer role
+inference discussed in D092. Work out how ordinary and parameterized words
+describe objects and their changes through T-lists and other notation, covering
+whole systems and individual parts at instants and over intervals. The starting
+example is `cube-face:{T| state1 state2 turn(item::%prev, direction::clockwise) &move-sequence ...}`.
+During the discussion the user clarified that `&` before a verb describes a
+sequence of state changes. Add paired ordinary-result and `&`-sequence examples;
+the representation within the verb model, intermediate temporal supports and
+inclusion/exclusion of its input state still need specifying.
+
+**Discussion basis.** [Word application and temporal description coverage](word-application-and-time-cases.md)
+uses explicit named roles throughout and records nineteen example families,
+cross-cutting dimensions and equivalence checks. Its new grammar and semantic
+rules are proposals, not blanket acceptance or implementation claims. Fully
+supplied positional calls, deterministic defaults and missing-role policy are
+separate questions; none of its examples depends on them. The earlier D092
+receiver and role-inference alternatives remain historical proposals.
+
+**Reasons and boundaries.** A finite list cannot enumerate arbitrary compositions.
+Cross whole/part scope with instant/interval/history scope, then vary description
+source, constraints, context, occurrence identity and information completeness.
+Use explicit source/destination references as the comparison form for relative
+ones. Preserve the agreed relative assignment, boundary, duration/count and D067
+retention distinctions. In particular, check that an explicit predecessor
+reference is not shifted twice on an identity RHS, and that a state result does
+not silently establish an interval trajectory or a physical effect.
+
+**Validation.** Documentation only. Checked the draft against current design
+notes, TCursor's accepted contract and existing temporal fixtures; checked the
+documentation diff. No source, test body, expectation or runtime behavior changed.
