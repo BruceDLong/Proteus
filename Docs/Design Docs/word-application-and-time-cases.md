@@ -247,6 +247,71 @@ endpoint. An unreachable or underspecified destination must not fabricate a
 successful terminal state. Route choice, progress and termination require model
 relationships; embedding itself is independent of those reasoning questions.
 
+#### Refinement: alternating steps with reorientation
+
+The user's next, explicitly suggestive model is:
+
+```text
+*_+{T
+    {T
+        {step(left-foot) reorient(direction)}
+        {step(right-foot) reorient(direction)}
+    }
+  | ... location=destination
+}
+```
+
+The intended behavior is successive stepping-while-reorienting until arrival.
+`step` changes the stepper's location field. The sketch introduces three levels:
+the walk, repeated left/right cycles, and the two phases within each cycle. Each
+phase combines a step with reorientation of the same stepper. The two phases
+are temporally ordered; stepping and reorientation belong to their common phase.
+The exact syntax for making the two descriptions constrain that same occurrence
+remains to be specified. Ordinary list grouping alone does not establish shared
+targets or a temporal ordering between those descriptions.
+
+This quoted sketch does not settle positional argument syntax. For explicitly
+declared roles named `foot` and `direction`, the corresponding calls would be
+`step(foot::left-foot)` and `reorient(direction::direction)`. The latter RHS is
+the sketch's direction expression; its source and relationship to the stepper
+still need defining. In the proposed definition body, the destination role would
+be referenced as `%destination`. The concrete foot references and shared stepper
+context also require binding; no participant is supplied by guessing a role.
+
+The nested T-list is a cycle description applied through the outer listSpec.
+Each cycle has distinct phase occurrences and preserves its temporal structure.
+Embedding `&walk(...)` embeds the walk's outer members; it does not recursively
+erase the nested cycles. Compare this representation with an explicitly aligned
+history of individual steps, preserving both the fine and coarse temporal views.
+Entry, left-to-right, right-to-next-left, and final exit relationships must all
+compose through the nested boundaries.
+
+The final `location=destination` is intended to constrain the stepper's location
+at completion. Its eventual spelling must identify that location in the final
+phase, or its projection at the walk's end. A field on a cycle description is
+not automatically the field of its final stepper state. Since the listSpec also
+applies to explicit body members, check how the final assertion combines with
+the final cycle without introducing an extra arrival step or overriding a
+location that the step model does not justify.
+
+This refinement adds the following coverage cases:
+
+- Arrival after a left step versus after a right step. Requiring a complete
+  two-phase cycle restricts possible endings; allowing a final partial cycle or
+  describing alternation at individual-step level are alternatives to discuss.
+- Arrival at the final state versus stopping on the first arrival. An endpoint
+  assertion alone does not exclude an earlier arrival followed by more walking.
+  The intended force of "until" needs that separate decision.
+- A step that cannot satisfy its model. A successful walk must satisfy every
+  required phase; the final assertion cannot bypass a conflicting step. Missing
+  evidence remains distinct from a proved failure.
+- A direction related to the current phase's location and destination versus
+  a direction fixed for the whole walk. The sketch does not yet choose this
+  relationship; occurrence-relative work must retain the appropriate context.
+- Stepping and reorientation that impose compatible or conflicting requirements
+  on one phase. Combining them must preserve both sets of constraints without
+  silently executing one after the other.
+
 ### E10 Whole and part histories
 
 Represent a system as a T-list of whole-system descriptions. Separately represent
@@ -419,11 +484,12 @@ and known failures remain intact.
 
 ## Decisions to settle first
 
-1. How does the walk model connect its walker, starting state, repeated `takeStep`
-   requirement, destination and completion condition? Which temporal support
-   comes from context, and which from the definition? Can each step describe an
-   interval of motion? Ordinary embedding is already the basis for `&walk(...)`;
-   no separate endpoint-versus-sequence interpretation of an application is needed.
+1. How does the walk model connect its walker, starting state, alternating phases,
+   step/reorientation requirements, destination and completion condition? Can it
+   end after either foot, and does "until" require first arrival? Which temporal
+   support comes from context, and which from the definition? Can each step
+   describe an interval of motion? Ordinary embedding is already the basis for
+   `&walk(...)`; no separate endpoint-versus-sequence interpretation is needed.
 2. What is the exact call-site anchor for `%prev`, `%tprev`, `%self` and `%ctx` in
    direct T-members, identity RHSs, nested records and embedded sequences?
 3. How does explicit whole/part correspondence transport temporal support,

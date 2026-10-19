@@ -2538,12 +2538,13 @@ actual step, support and completion relationships still need specifying; the
 schematic header alone does not supply them.
 
 **Discussion basis.** [Word application and temporal description coverage](word-application-and-time-cases.md)
-uses explicit named roles throughout and records nineteen example families,
+uses explicit named roles for worked applications and records nineteen example families,
 cross-cutting dimensions and equivalence checks. Its new grammar and semantic
 rules are proposals, not blanket acceptance or implementation claims. Fully
 supplied positional calls, deterministic defaults and missing-role policy are
 separate questions; none of its examples depends on them. The earlier D092
 receiver and role-inference alternatives remain historical proposals.
+The later E09 refinement preserves D094's suggestive user sketch separately.
 
 **Reasons and boundaries.** A finite list cannot enumerate arbitrary compositions.
 Cross whole/part scope with instant/interval/history scope, then vary description
@@ -2557,3 +2558,34 @@ not silently establish an interval trajectory or a physical effect.
 **Validation.** Documentation only. Checked the draft against current design
 notes, TCursor's accepted contract and existing temporal fixtures; checked the
 documentation diff. No source, test body, expectation or runtime behavior changed.
+
+## D094 Walk cycles combine stepping and reorientation (2026-10-18)
+
+**User refinement, suggestive syntax.** The walk's repeated model can be
+`*_+{T {T {step(left-foot) reorient(direction)} {step(right-foot) reorient(direction)} }| ... location=destination}`.
+`step` changes the stepper's location. Walking consists of successive successful
+steps with reorientation until arrival. This is an incremental model, not a
+complete physical account or acceptance of the sketch as exact grammar.
+
+**Interpretation for discussion.** The model combines ordered left/right phases,
+step and reorientation requirements within a phase, repetition of the cycle,
+and a final destination constraint. Each phase concerns the same stepper, with
+distinct temporal occurrences. Preserve nested cycle structure when embedding
+the walk; `&` embeds one list level and does not erase all nested temporal lists.
+The body and contextual relationships must connect the final location assertion
+to the stepper at completion. Merely asserting the destination cannot repair an
+incompatible required step. The updated E09 preserves the user's sketch and
+shows how its calls could use explicitly declared named roles.
+
+**Open choices and alternatives.** Exact conjunction/shared-target notation,
+foot and stepper references, direction's relationship to each phase, and terminal
+location projection remain open. A repeated complete pair ends after a right
+step; a final partial cycle or alternation at individual-step level can allow
+arrival after a left step. An endpoint constraint alone does not specify stopping
+at the first arrival. These are coverage questions revealed by the example,
+not newly accepted rules for truncation, first-match termination or route planning.
+
+**Validation.** Documentation only. Compared the interpretation with the accepted
+occurrence/listSpec and nested T-boundary contracts and checked the documentation
+diff. No parser, engine, fixture or test expectation changed; no runtime support
+for this model is claimed.
