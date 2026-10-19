@@ -2717,3 +2717,106 @@ the no-escape requirement is the settled constraint they must satisfy.
 
 **Validation.** Documentation only; checked against the occurrence and definition
 contract and checked the diff. No engine changes or runtime enforcement claims.
+
+## D099 Consolidated participant scope, time-slice and session context (2026-10-19)
+
+**Accepted checkpoint.** The user clarified ordinary nested scope, approved
+caller-side argument resolution, specified common time-slice semantics and
+reserved parameter names, then accepted the initial `%ctx` proposal and requested
+one consolidated documentation commit. This entry resolves the corresponding
+open alternatives in D095–D098. The `%`-as-member versus `%self`-as-model-scope
+distinction remains a working proposal to revisit after substantial temporal
+models, rather than a claim that the current aliases have been changed in code.
+
+**Ordinary nested scope.** In `{ A {b c} E }`, call the nested list B. The outer
+list sees A, B and E; an outer listSpec's type requirement applies to B at that
+level. Within B, b has no local predecessor. The outer listSpec can relate `B.b`
+to `A.b`, but that relationship cannot be asserted from inside B through implicit
+parent lookup. A must instead be an explicit argument or supplied global
+reference. Definitions have class/function-style scope and cannot depend on which
+data structures will contain them.
+
+**Embedding.** In `{ A &{ B C D } E }`, B's `%prev` is A, D's `%next` is E, and E's
+`%prev` is D. Neighbours follow the enclosing logical sequence across embedded
+boundaries. The wrapper is not an additional neighbour-visible item. A named
+`&word(...)` gets its primary explicit outside connections through arguments and
+retains the surrounding list context supplied by embedding. Embedded listSpecs
+can refer to the parent context without applying their own constraints to the
+parent's other members. Ordinary nested lists retain their separate scope.
+
+**Arguments, parameters and explicit context.** Resolve argument expressions in
+the caller's scope, then use the definition body's own context. Selecting an
+LHS does not silently rebind `%` inside a supplied argument to that selected
+destination. Parameter names cannot be reserved words. Parameters belong to
+their own definition and do not capture same-named parameters by searching lists
+above it; forward outer arguments explicitly. Outside connections may be passed
+or use supplied percent-prefixed global/context references. Those references
+retain their own meanings; the prefix is not arbitrary data-structure-parent
+access and does not place every parameter in one global namespace.
+
+**Time and level.** Unless another time-slot or T-span is explicitly referenced,
+references including `%`, `%self`, `%prev`, `%next`, participant arguments and
+selected model references describe states at the current time-slice. Everything
+in an S-list shares that slice. In a T-list, L-values refer to the next state,
+consistent with `LHS[n+1] = RHS[n]`. An explicit temporal reference such as
+`%tprev` selects its stated occurrence without a second implicit shift. Stable
+caller binding preserves a referent and explicit temporal qualification; it does
+not automatically freeze the referent's state at entry. To obtain intermediate
+or parallel states at a different level, convert the S-list into a T-span at the
+desired level. `%self` follows these same rules. Conversion notation and detailed
+correspondence remain open.
+
+**Initial `%ctx` contract.** Use a session-scoped, recency-ordered collection of
+model references established through explicit agent interactions:
+
+- Ordinary assertion lists can use it; T-lists are not required. Source order
+  establishes contextual bindings without advancing modeled time.
+- References explicitly addressed or supplied in assertions and queries become
+  available, including referents on both sides. Definition-internal searches
+  do not silently populate the session context.
+- Selection uses ordinary model matching. `%ctx.planet` selects the most recently
+  established reference fitting `planet`; no type is inferred from the spelling
+  of `favoritePlanet` and no separate name matcher is introduced.
+- Each assertion resolves references against the context available before it,
+  then contributes its resolved referents for subsequent assertions. A resolved
+  reference is not redirected when context changes, and is not a frozen state
+  copy merely because its binding is stable.
+- Context lasts for the session, not just one list. An unordered collection
+  cannot obtain recency from evaluator scheduling; use an established context
+  or explicit bindings.
+
+The user's interaction example is:
+
+```text
+{
+    %U.bike.color=red
+    %U.favoritePlanet=Mars
+    %ctx.planet.color = %ctx.bike.color
+}
+```
+
+The first assertion establishes a red bike and makes that bike available. The
+second establishes the user's favorite planet and makes the Mars referent
+available. The third relates that planet's color to that bike's color, hence red
+for the planet when the models support the selections. All facts concern one
+time-slice. After contextual binding, the list's information is a conjunction of
+assertions, not a temporal sequence of physical changes. Later session activity
+must not change which bike or planet the third assertion describes.
+
+**Reasons and remaining boundaries.** Keeping caller binding, current time-slice
+and interaction recency separate avoids accidental entry-time snapshots, implicit
+temporal succession in an S-list and evaluation-order-dependent reference lookup.
+Embedded neighbour access no longer needs a special first-member workaround.
+The no-escape requirement remains, but visibility of explicit external references
+does not yet settle whether they may be modification targets inside definitions,
+including reverse constraint propagation. An agent interaction's assertion scope
+does not automatically establish the same permissions for a word definition.
+Missing-argument/default policy, concrete temporal conversion, richer `%ctx`
+organization/reset/failure behavior and final `%`/`%self` ergonomics remain open.
+
+**Documentation and validation.** Consolidated the current account in
+[word-application-and-time-cases.md](word-application-and-time-cases.md), aligned
+the accepted contract and time/word plan, and removed resolved questions from the
+active open-issue list. Checked documentation whitespace, structure and local
+links. No parser, engine, fixture or expectation changes; no runtime tests run
+or new implementation coverage claimed.

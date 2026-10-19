@@ -5,8 +5,10 @@ parameterized definitions, part selection and T-lists. The user has limited the
 first design to unambiguous application syntax, and clarified that a verb such as
 `walk` can describe a T-list of successive step results. `&walk(...)` embeds that
 list using the existing meaning of `&{...}`. Role inference, receiver calls
-and natural-language argument assignment remain deferred. The proposed rules and
-unsettled temporal cases below need discussion before implementation.
+and natural-language argument assignment remain deferred. D099 records the
+scope, time-slice and session-context baseline accepted on 2026-10-19. Remaining
+syntax proposals and temporal cases are marked separately; this document does
+not claim that the new design is implemented.
 
 There are arbitrarily many compositions, so a finite case list cannot enumerate
 every program. Coverage comes from independent semantic dimensions, examples at
@@ -20,7 +22,7 @@ current cursor retention; the earlier D062 old-versus-new equality interpretatio
 must not be reapplied to a computed transition result. Historical implementation
 claims in older notes do not establish current engine coverage.
 
-## Proposed application rules for the first examples
+## Application rules for the first examples
 
 1. Use explicit named bindings, for example
    `turn(item::%prev, direction::clockwise)`. The examples require no positional
@@ -28,7 +30,8 @@ claims in older notes do not establish current engine coverage.
    supplied positional syntax can be discussed separately without introducing
    role inference. A missing binding stays missing; required results cannot be
    claimed if they depend on it. This does not yet settle optional-argument or
-   default syntax.
+   default syntax. Parameter names cannot be reserved words; parameter scope is
+   local to the definition, following class/function-style scope rules.
 2. An attached opening parenthesis marks application: `turn(...)`. A separated
    `turn (...)` retains the non-call interpretation. Inside the argument list,
    ordinary whitespace is allowed. Named binding order does not affect meaning;
@@ -39,32 +42,34 @@ claims in older notes do not establish current engine coverage.
    may be a scalar, an object description, a state, a process/span, or a sequence.
    The result is not automatically the first argument, and evaluating the
    description does not by itself execute an external action.
-4. Argument expressions retain their call-site occurrence and context. A body
-   reference such as `%item` refers to that application's binding; nested calls
-   forward it explicitly. Shared declarations remain unchanged. Binding a role
-   need not fully normalize the participant or copy it into the declaration.
+4. Argument expressions resolve in the caller's scope; the definition body uses
+   its own application scope. A body reference such as `%item` refers to that
+   application's parameter; outer parameters are forwarded explicitly. A stable
+   reference binding does not freeze the participant's state at call entry: the
+   common time-slice rule below applies unless another time or span is explicit.
+   Shared declarations remain unchanged; binding need not fully normalize or copy
+   the participant.
 5. Distinguish the selected destination, a participant, its prior state, and the
    resulting occurrence. Ordinary equality constrains its target; it does not
    overwrite a contradictory fact at that same occurrence. In a T-step the
    target is the state being described, so a new value need not equal the old
    value. Outside temporal context, equality does not create a successor.
-6. Relative references must have one specified anchor. The user's 2026-10-19
-   clarification places `%prev` and `%next` within `%self` as an ordered S-list;
-   they have no meaning when `%self` is unordered. `%tprev` works in `%self`'s
-   T-list. The direct T-member examples therefore require an appropriate self
-   binding and current position; nearby syntax alone does not establish them.
-   Proposed rule: an explicit reference is not shifted again merely because
-   the call is on an identity RHS. The implicit relative assignment context
-   must compose with this rule; examples must catch a double predecessor shift.
-   Until the bindings are settled, explicit references to named source and
-   destination occurrences are the comparison form.
+6. `%prev` and `%next` are neighbours of the current member in the local ordered
+   scope, crossing embedded-list boundaries but not ordinary nested-list scope.
+   They have no meaning in an unordered scope. Structural selection does not
+   itself request another time-slice. `%tprev` uses the model's T-list; temporal
+   references or another explicit time/span override the ordinary common-slice
+   interpretation. In a T-list, L-values address the next state. An explicit
+   temporal choice must not be shifted again by that relative convention. Use
+   named source/destination occurrences to check the relative forms.
 7. T-step work computes the described new facts; D067 retention supplies
    unaffected previous descriptions. Direct and model-implied changes must both
    be accounted for. Ordinary unknowns do not assert independence; `%?` withholds
    retention at its scope. These do not exempt explicit contradictory constraints.
 8. Describe simultaneous requirements in one state and ordered changes in
-   successive states. Same-step computations read the same prior occurrence;
-   serialization of evaluation must not create an unintended ordering of changes.
+   successive states. Computations using the prior state in one T-step read the
+   same prior occurrence; serialization of evaluation must not create an
+   unintended ordering of changes.
    Interacting changes need their joint relationship or remain conflicting or
    unresolved; arbitrary ordering is not a resolution mechanism.
 9. A list-valued word application describes its list. Prefixing it with `&`
@@ -83,131 +88,166 @@ claims in older notes do not establish current engine coverage.
    list-valued descriptions do not silently embed themselves in their surrounding
    history.
 
-## Provisional context semantics
+## Participant and context references
 
-The user leaves the final meanings of `%`, `%self` and related references open
-until substantial temporal models show which semantics are useful and complete.
-They currently mean the same thing; the latest proposal below distinguishes
-them. The existing rough rule is to ascend the parent chain to an item originating
-from a definition or listSpec. Levels of being, such as cube, material and lattice,
-may affect the appropriate subject.
+This section consolidates the working design accepted in D099. D095–D098 retain
+the earlier discussion and alternatives. The proposed distinction between `%`
+and `%self` is the working basis for these examples, not an implementation claim;
+the user still intends to revisit their ergonomics after substantial temporal
+models exist. In particular, levels of being such as cube, material and lattice
+need concrete models, not a new hard-coded ancestor search.
 
-`%ctx` has session scope and currently holds recently accessed noun-like model
-references; its contents can expand later. It is separate from the model subject
-and its local or temporal navigation. `%prev` and `%next` operate within `%self`
-as an ordered S-list, not merely in whatever list happens to contain self. They
-have no meaning for unordered self. `%tprev` operates in self's T-list. These are
-user-stated semantics, not a claim that all current providers implement them.
+| Reference | Working meaning |
+| --- | --- |
+| `%` | The member being described by the current application |
+| `%self` | The model subject/scope in which that member is described |
+| `%prev`, `%next` | The current member's neighbours in its ordered scope, including across embedded spans |
+| `%tprev` and other temporal references | An explicit temporal occurrence/span in the model's T-list |
+| `%item`, `%actor`, other declared roles | Parameters bound in this definition application |
+| `%ctx` | Session interaction context containing recent model references |
+| Other supplied global references, such as `%U` | Explicit external context governed by that reference's own meaning |
 
-**Earlier assistant proposal.** Define `%self` as the subject occurrence bound by
-the enclosing definition/listSpec application context of the expression, viewed
-at that application's model level and temporal context. `%` remains its alias.
-An application context belongs to the expression's model provenance, not the
-current evaluator call stack. Parent traversal locates that binding; raw physical
-ancestry does not independently choose a new subject after copying, projection,
-embedding or delayed evaluation.
+The percent prefix supplies explicit context references with their respective
+scope rules. A declared parameter is not thereby placed in a shared global
+parameter namespace. An unordered scope can have a current member and `%self`,
+but does not supply structural `%prev` or `%next`.
 
-Keep the subject distinct from the current structural and temporal navigation
-positions. Knowing self's identity alone does not identify a previous member.
-Its ordered-list position supports `%prev`/`%next`; its established temporal
-position supports `%tprev`. An unordered cube-state subject can therefore lack
-structural neighbours while having a preceding cube state in its history.
-Multiple possible histories or model levels require a specified correspondence
-or remain unresolved; do not select whichever ancestor is easiest to reach.
+### Ordinary nesting and embedding
 
-A cube-level rule retains its cube subject while reading material properties.
-A rule applied in the material or lattice model has the subject/view established
-by that application. A lookup alone does not change the scope of the original
-rule. Two views may concern the same physical thing without being interchangeable
-model occurrences. Keep named parameter bindings separate from self: the thing a
-word describes need not be its actor or first argument, as with `sqrt` or `walk`.
+Consider `{ A {b c} E }`, calling the ordinary nested list `{b c}` B. The outer
+list has A, B and E as members. If its listSpec constrains their type, B receives
+that same requirement; b and c do not replace B at the outer level. Inside B,
+b has no local predecessor and c's predecessor is b. B's own outer predecessor
+is A, but its internal definition cannot discover A by climbing its data-structure
+parent. The outer listSpec may relate `B.b` to `A.b`. A relationship authored
+inside B needs A supplied as an argument or through an explicit global reference.
 
-This proposal still requires concrete scope-boundary examples. In particular,
-does a listSpec application make its described member the subject, or retain the
-containing model as subject while supplying a current member position? Distinguish
-a template that constrains a member from a model application that introduces a
-new subject scope. The user's current description does not fully settle that
-choice. The subsequent proposal separates those two roles instead of requiring
-one reference to serve both. No new level-selection syntax or engine change is
-proposed.
+An embedded list shares the surrounding list context:
 
-**Latest user proposal: `%` names the described member.** Give `%` a more local
-meaning: the member being defined, between `%prev` and `%next` in an ordered
-list. This would distinguish it from `%self`, rather than leave the two as
-aliases. The user presents this as a possibility to explore, not a final contract.
+```text
+{ A &{ B C D } E }
+```
 
-The corresponding interpretation for discussion is:
+Its logical neighbour sequence is A, B, C, D, E. B's `%prev` is A, D's `%next` is E,
+and E's `%prev` is D. The wrapper is not a neighbour-visible member. Grouping
+consecutive members into an embedded list preserves these neighbour relationships.
+This does not recursively flatten ordinary lists nested inside those members.
 
-- `%self` retains the enclosing model subject/scope.
-- `%` denotes the particular member described by the current application.
-- `%prev` and `%next` denote its neighbours within the ordered scope. An unordered
-  scope can still have a current member denoted by `%`, without supplying these
-  neighbours.
-- `%ctx` remains session-scoped. `%tprev` retains the separate temporal anchor
-  discussed above; the structural `%prev`, `%`, `%next` relationship alone does
-  not settle temporal navigation at every nested level.
+`&word(...)` gets its primary explicit external bindings through arguments, while
+embedding supplies its surrounding list context. It does not hide `%self` or
+the neighbours of its first and last logical members. In `&{ LS | ... }`, LS can
+refer to the parent context while describing each embedded member. Scope and
+coverage remain distinct: in `{ before &{ LS | a b } after }`, LS applies to a
+and b, not automatically to before and after. Applicable ancestor requirements
+still project into the embedded members through ordinary relationships.
 
-For a listSpec applied across members of one ordered model, each application can
-bind `%` to its own member while retaining the same `%self`. This distinguishes
-the template, its described member, and its containing model. In a temporal
-state-result application, `%` would identify the state being described; a prior
-input still needs its predecessor reference. The current occurrence can exist
-before all its properties are known.
+### Definitions, arguments and paths
 
-Bind `%` through the application context, not to every syntax node visited during
-evaluation. For example, `%.thing.location` first selects a member fitting `thing`,
-then a member fitting `location` within it. The selected path target advances;
-the original `%` binding does not change. Entering a nested model or listSpec may
-establish a different local member; exactly which applications do so remains
-to be worked out. In the walk, distinguish `%` for an outer cycle from `%` for
-an inner phase. The containing subject and the model level must remain explicit
-enough that ordinary grouping or a lookup cannot accidentally change them.
+A definition has class/function-style scope. It cannot refer implicitly to a
+data-structure parent whose identity and structure depend on where it is used.
+Explicit arguments and supplied global/context references provide external
+connections. Parameter names cannot be reserved words. Each definition owns its
+parameter bindings; nested definitions do not search containing lists for an
+outer parameter of the same name. Forward such arguments explicitly.
 
-**User clarification: member selection and external relationships.** In `x.y`,
-the dot finds a member fitting the description `y`; it is not a special accessor
-for implementation properties or list-position metadata. An external relationship
-uses `x^y`; for example, `x^size` could refer to an item's size. The spatial
-location and orientation under discussion are fields of `thing`, distinct from
-an occurrence's position in a list. The location path is `x.thing.location`, or
-`x~location` for a deeper search. Accordingly the earlier assistant example
-`%.location` was imprecise for the intended model and is corrected above; the
-deeper-search alternative is `%~location`. Choosing `%` versus `%self` chooses
-the starting subject, while `.`, `^` and `~` retain their respective meanings.
-This clarification does not settle new relationship names for list positions.
+Argument expressions resolve in the caller's scope before the definition body's
+own context is established. For example, in the schematic assertion
+`%.thing.location = f(item::%)`, the argument `%` has the caller's binding; selecting
+the LHS does not silently rebind it to the selected location. Likewise an argument
+`item::%prev` to an embedded word identifies the predecessor at that application
+site, rather than being recaptured at every generated member. Body-relative
+references still use their respective member contexts.
 
-**User requirement: definitions cannot modify outside their scope.** Applying a
-definition must not let it escape and modify outside model occurrences. Reading
-a reference, including through `%ctx`, a parameter, an alias, or `.`, `^` and `~`,
-must not by itself authorize changes to the referenced occurrence. This applies
-to constraint propagation as well as to explicit assignment-like statements.
-The precise boundary is still being designed; no enforcement is claimed here.
+Bindings retain their application provenance across projection, embedding and
+delayed evaluation; ordinary expression traversal does not create a new subject
+binding. In `x.y`, the dot finds a member fitting description y. `x^y` follows an
+external relationship, such as `x^size`. Modeled spatial location and orientation
+are fields of `thing`, distinct from list positions. `x.thing.location` selects
+the location through thing; `x~location` searches deeper. In `%.thing.location`
+the selected path target advances without changing the original `%` binding.
 
-**Provisional embedded scope.** The user proposes that an embedded list shares
-the scope of its parent, so in `&{ LS | ... }` the listSpec can refer to that
-parent. One interpretation to test keeps the parent's `%self` binding while
-binding `%` to each described embedded member. Scope inheritance and listSpec
-coverage remain different: in `{ before &{ LS | a b } after }`, LS applies to
-`a` and `b`; access to the parent does not automatically impose LS on `before`
-or `after`. Applicable parent requirements still project into embedded members
-through their existing relationships.
+### Time-slice and model level
 
-**Proposed effect boundary.** Keep the context available to an expression separate
-from the occurrences its definition application may change. An embedded fragment
-inside a definition can see its parent within that definition's scope. Inheriting
-context does not remove an enclosing definition boundary or make every object
-reachable from the parent writable. For example, a walk can use the destination's
-modeled location while describing its own result; it cannot move that outside
-destination to make arrival true. A reference to a prior state likewise does not
-allow a new-state description to rewrite that prior occurrence. Local constraints
-can retain relationships to outside facts without publishing changes to those
-outside occurrences merely to satisfy the application.
+Unless another time-slot or T-span is explicitly referenced, references describe
+states at the current time-slice. This includes `%`, `%self`, `%prev`, `%next`,
+parameter referents and selected model references. Everything in an S-list is
+described at the same time-slice. Structural neighbours do not themselves mean
+earlier or later states of the same thing.
 
-Test the same constraints directly and through aliases, parameters and `%ctx`.
-Compare literal embedding with `&word(...)` under explicit context and destination
-correspondence. Exactly which scope a named embedded application inherits remains
-open; `&` must not silently broaden the definition's permitted effects. Also test
-the first and last embedded members' neighbour references against the inline
-form, keeping scope inheritance separate from the remaining navigation rules.
+In a T-list, L-values refer to the next state, retaining the agreed relative
+reading `LHS[n+1] = RHS[n]`. Explicit temporal references such as `%tprev` or an
+explicit time-slot/span select their stated temporal occurrence instead of
+receiving a second implicit shift. Binding a referent in the caller's scope is
+not the same as freezing its state at call entry. A referenced entity's state
+follows the applicable time-slice unless another time is explicit.
+
+To obtain intermediate or parallel states at a different level, convert the
+S-list into a T-span at the desired level. `%self` follows these same time and
+level rules; it does not silently choose a deeper material or lattice history.
+The spelling and detailed correspondence for that conversion remain open.
+Neither list-member count nor a contextual lookup supplies duration or an
+interior trajectory by itself.
+
+### Session interaction context
+
+The initial `%ctx` contract is a session-scoped, recency-ordered collection of
+model references established through the agent's explicit interactions:
+
+1. It works in ordinary assertion lists as well as T-lists. Source order governs
+   contextual reference resolution; that order does not advance modeled time.
+2. References explicitly addressed or supplied in an assertion or query become
+   available, including referents on either side of an assertion. Internal
+   searches performed while evaluating definitions do not silently populate the
+   session context.
+3. Selection uses ordinary model matching. `%ctx.planet` finds the most recently
+   established reference fitting `planet`. Mars fits through its model; no rule
+   extracts a type from the spelling `favoritePlanet` or invents a new name lookup.
+4. Each assertion resolves its `%ctx` references against the context available
+   before that assertion, then contributes its resolved referents for subsequent
+   assertions. Once resolved, a reference stays bound when session context later
+   changes. The binding preserves a reference, not a frozen copy of its state.
+5. Context lasts for the session; another assertion list does not automatically
+   clear it. An unordered assertion collection cannot establish recency through
+   evaluator scheduling: use an already established context or explicit bindings.
+
+The user's example is an agent interaction containing three assertions:
+
+```text
+{
+    %U.bike.color=red
+    %U.favoritePlanet=Mars
+    %ctx.planet.color = %ctx.bike.color
+}
+```
+
+| Assertion | Information and context contribution |
+| --- | --- |
+| `%U.bike.color=red` | The user's bike is red; that bike becomes available in context. |
+| `%U.favoritePlanet=Mars` | The user's favorite planet is Mars; the planet referent becomes available. |
+| `%ctx.planet.color = %ctx.bike.color` | That planet and that bike have the same color; with the earlier assertion, red follows for the planet. |
+
+These readings assume the models support the stated selections and identify
+Mars as a planet. All three assertions describe one time-slice. Source order
+resolves the contextual references; the bound information is a conjunction of
+assertions, not a sequence of physical changes. Later references to another
+planet or bike cannot redirect the already-bound third assertion.
+
+### Confinement and remaining boundary
+
+Definitions must not escape their scope and modify outside occurrences. D099
+clarifies permitted references: arguments and explicit global/context references
+can reach outside, while arbitrary data-structure-parent traversal is unavailable.
+An embedded fragment can read its inherited parent context and neighbours.
+The class/function analogy establishes visibility; it does not by itself settle
+whether a passed or global reference is also a permitted modification target
+inside a definition, including effects of reverse constraint propagation.
+
+Keep this distinction open rather than imposing either unrestricted external
+writes or a blanket ban on explicit external relationships. The agent assertion
+list above has its own scope and is not evidence that a word definition has
+identical modification permissions. A prior occurrence must not be rewritten
+merely to make a new-state description succeed. Shared declarations remain
+read-only during application.
 
 ## Dimensions of coverage
 
@@ -272,6 +312,8 @@ face occurrence; state2 is unchanged. The model must account for affected cube
 parts as well as the selected face. The ellipsis leaves later work unspecified;
 it does not assert a final extent. Whether state1/state2 represent instants or
 intervals, and what duration the turn represents, require separate support facts.
+The input/output reading here comes from the established T-list context; an
+S-list `%prev` does not independently request another time-slice.
 
 ### E04 The same change through an explicit selected destination
 
@@ -356,9 +398,10 @@ list, not the last state of that list.
 The ellipsis stands for the remaining model, including how `%destination` relates
 to the steps and the completion condition. The header alone does not establish
 that the walk reaches the door or where the span ends. This specimen declares
-only `destination`; the walker and starting state must be established by its
-surrounding model and occurrence context, not inferred as unnamed arguments.
-Specifying those context relationships is part of completing the example.
+only `destination`; the walker and starting state must be established through
+permitted embedding context, explicit arguments or supplied global references,
+not inferred as unnamed arguments or found by arbitrary parent traversal.
+Specifying those relationships is part of completing the example.
 
 Test the first step's relationship to initial-state, each later step's relationship
 to its predecessor, and following-state's relationship to the completed span.
@@ -413,6 +456,11 @@ erase the nested cycles. Compare this representation with an explicitly aligned
 history of individual steps, preserving both the fine and coarse temporal views.
 Entry, left-to-right, right-to-next-left, and final exit relationships must all
 compose through the nested boundaries.
+Inside an ordinary nested cycle, its first phase has no local structural
+predecessor. A relation to the preceding cycle's phase must be supplied from the
+outer model or an explicit argument/context reference, not an implicit lookup
+above the cycle's scope. Converting an S-list view to the required T-span level
+is explicit; it is not a consequence of using an ordinary structural neighbour.
 
 The final `location=destination` is intended to constrain the stepper's location
 at completion. Its eventual spelling must identify that location in the final
@@ -447,6 +495,9 @@ histories of its motor, switch and temperature, with explicit support alignment.
 The two representations should yield the same facts where they describe the same
 occurrences. A component can have a boundary where the containing description
 does not, and a cut in the parent can fall inside a constant component span.
+Obtaining these histories from an S-list at one time-slice requires conversion
+to T-spans at the chosen model levels. Merely selecting a component or `%self`
+does not introduce a different temporal level.
 
 Repeat with one part sampled more often than another. Equal item indices do not
 establish simultaneity; align by temporal relationships, coordinates and units.
@@ -590,6 +641,9 @@ string equality:
 - Permuting named bindings without changing their roles.
 - Explicit source occurrence versus the corresponding relative temporal reference.
 - Inline changes versus an embedded sequence with explicit entry binding.
+- `{ A &{ B C D } E }` versus the corresponding inline sequence: B's predecessor
+  is A, D's successor is E, and E's predecessor is D. In `{ A {b c} E }`, b has no
+  local predecessor; outer relations require an outer assertion or explicit input.
 - An embedded literal temporal model versus `&walk(...)` supplying the same
   model with preserved bindings, listSpecs, member occurrences and span boundaries.
 - Whole-system description projected to a part versus that part's description at
@@ -601,10 +655,21 @@ string equality:
   established; equal ordinal positions alone must fail this equivalence test.
 - Same-state conjunction independent of evaluation order, with conflicting
   conjunctions rejected and unknown prerequisites kept unresolved.
-- Definition effects remain within their scope when an outside occurrence is
-  reached directly, through an alias or parameter, or from `%ctx`. Embedded
-  listSpecs can use the proposed parent context without extending their member
-  coverage or erasing the enclosing definition's effect boundary.
+- Argument names resolve in the caller's scope; body parameters are local and
+  cannot use reserved words. Refactoring a definition must not capture an outer
+  parameter merely because it has the same name.
+- Ordinary S-list references share a time-slice; an explicit time/span selects
+  the stated occurrence. Stable argument and `%ctx` bindings must not silently
+  freeze state values or be redirected by later session interactions.
+- The bike/planet assertion list resolves references in source order, then
+  combines the bound facts independently of solver scheduling. Internal reads
+  do not populate `%ctx`, and an unordered collection does not obtain recency
+  from whichever assertion happens to be evaluated first.
+- Ordinary definition scope cannot be escaped through aliases. Embedded fragments
+  inherit the specified surrounding context, and their listSpecs retain their
+  own member coverage. Test allowed external modifications once their still-open
+  boundary is specified; access to an external reference alone is not that
+  specification.
 
 For each example record the selected source and destination occurrences, argument
 bindings and call-site context, temporal support, requested result, expected facts,
@@ -621,28 +686,26 @@ simultaneous processes and a sequence: a phase combines stepping and reorientati
 while its containing T-list orders the left and right phases. Nested T-lists
 describe an activity at several levels, and `&walk(...)` uses ordinary embedding.
 These choices do not require a separate verb-expansion or sequencing operator.
-The remaining questions concern the participants, contexts, temporal supports
-and constraints of those compositions, rather than reopening that distinction.
+The scope, default time-slice and initial session-context rules are now recorded
+above. The remaining questions concern concrete model relationships and the
+boundaries listed below, rather than reopening these composition rules.
 
-## Decisions to settle first
+## Remaining decisions
 
-1. **Participant and relative-reference binding.** How do the nested calls identify
-   the same stepper, its feet and the relevant preceding state? The provisional
-   context section records the current alias and the proposed member-versus-self
-   distinction, along with session and navigation semantics. Test where model
-   applications establish each binding, its level of being, and its structural
-   or temporal position. Which omitted-role
-   or default rules are permitted? Explicit named roles remain the starting point.
-2. **Bindings across time.** How does a model distinguish a supplied location
-   value from a reference to an entity whose location changes? Walking to a
-   person's initial location and following their current location require
-   different descriptions. Preserve the application's binding; define temporal
-   reads through it without silently rebinding the argument at each step.
-3. **States within a span.** How does a caller select the participant's state at
-   entry, completion or an interior time? In particular, connect the final
-   `location=destination` assertion to the final stepper state when the outer
-   member is a nested cycle. Boundary identity is already agreed; acquiring a
-   state at that boundary still needs the model's temporal-value relationships.
+1. **Model-level conversion and self ergonomics.** Specify the S-list-to-T-span
+   conversion at a chosen level and the correspondence for interior-time reads.
+   Use concrete cube/material and walk/phase models to revisit the proposed
+   `%`/`%self` distinction. The ordinary nested-scope and embedded-neighbour rules
+   above are no longer open alternatives.
+2. **External modification boundary.** Decide whether, and under which conditions,
+   explicit parameter/global references may be assertion targets inside a
+   definition, including constraints that infer facts about outside unknowns.
+   Keep definition scope separate from the scope of agent interaction assertions.
+3. **Omitted roles and complete models.** Define missing-argument and default
+   policy without role inference. Complete the walk's explicit participant, foot,
+   direction and terminal-location relationships. Reserved names, parameter
+   scope and caller-side argument binding are settled; supplied references are
+   not implicitly frozen to entry-time states.
 4. **Completion and repetition.** Can a walk end after either foot, and does
    "until" require first arrival? Include an initially satisfied destination,
    an unfinished walk, and an impossible required step. These distinctions may
@@ -658,7 +721,12 @@ and constraints of those compositions, rather than reopening that distinction.
    positions. Use the accepted occurrence and projection principles to specify
    the concrete notation and test cases.
 
-Start with E01–E06, E09 and E19 to settle application and context. Then
-E10–E13 determine whether the same rules cover time spans and whole/part views.
+The initial `%ctx` contract can later be refined for explicit reset, context
+organization and incomplete or rejected interactions. No such refinement is
+permission to use solver scheduling as discourse order or to redirect an already
+resolved reference.
+
+Use E01–E06, E09 and E19 to exercise the accepted application/context rules. Then
+E10–E13 develop temporal conversion, interval constraints and whole/part views.
 E07/E08 and E14–E18 test interactions and boundaries without requiring every
 broader capability to be implemented in the first milestone.

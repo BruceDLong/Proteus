@@ -66,9 +66,48 @@ Shared declarations remain read-only during application. An unchanged completed 
 
 Definition applications must not escape their own scope and modify outside
 occurrences (D098). This is distinct from preserving the shared declaration.
-The scope rules must account for aliases, referenced models and embedded lists;
-the precise boundaries and enforcement remain design work. The proposed parent
-scope for embedded listSpecs is recorded separately from this firm requirement.
+D099 establishes explicit external references and embedded parent context. Whether
+passed or global references may also be modification targets inside a definition
+remains open; the assertion scope of an agent interaction does not automatically
+establish identical modification permissions for a word definition.
+
+### Participant, time-slice and session context (D099)
+
+The following is an accepted design baseline, not an implementation-status claim.
+Definitions have class/function-style scope: no implicit access to their
+data-structure parent, while parameters and explicit supplied global/context
+references provide outside connections. Parameter names cannot be reserved words.
+Arguments resolve in the caller's scope; the definition body uses its own local
+parameter bindings. A stable referent does not imply a state frozen at call entry.
+
+In `{ A {b c} E }`, b has no local predecessor; an outer listSpec may relate the
+nested member's b to A's b, or the nested definition may use an explicit argument
+or supplied global reference. Embedded lists inherit surrounding list context:
+in `{ A &{ B C D } E }`, B's predecessor is A and E's predecessor is D. The same
+logical-neighbour rule applies to named embedded words. An embedded listSpec can
+refer to its parent without extending its own coverage to the parent's other
+members. `%prev`/`%next` remain unavailable in unordered scope.
+
+Ordinary references, including `%`, `%self`, `%prev`, `%next` and parameter
+referents, describe states at the common S-list time-slice unless another time
+or span is explicit. T-list L-values address the next state under the existing
+relative assignment convention. Obtaining intermediate or parallel histories
+at a different level requires converting the S-list to a T-span at that level;
+the conversion notation and detailed correspondence remain open.
+
+`%ctx` is initially a session-scoped, recency-ordered collection of model references
+established by explicit agent interactions. It works in ordinary assertion lists
+as well as T-lists. Assertions resolve references in source order and contribute
+their resolved referents for subsequent assertions; this order does not advance
+modeled time. Selection uses ordinary model matching. Definition-internal reads
+do not populate the session context. Resolved references stay bound when context
+changes, without freezing their state values. Another list does not clear the
+session; unordered assertions cannot derive recency from evaluator scheduling.
+
+The `%`-as-current-member versus `%self`-as-model-scope distinction remains the
+working proposal to revisit with substantial temporal models. Concrete examples,
+the bike/planet assertion list and remaining boundaries are maintained in
+[word-application-and-time-cases.md](word-application-and-time-cases.md).
 
 ### Finite scalar alternative domains
 

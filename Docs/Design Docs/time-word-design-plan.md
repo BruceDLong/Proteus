@@ -1,8 +1,9 @@
 # Time and words: agreed foundation and next discussion
 
 The null/boundary foundation below was approved and implemented; see
-`Historical/boundary-results.md` (Git history). The remaining time and word rules
-still require discussion.
+`Historical/boundary-results.md` (Git history). D099 adds the accepted scope,
+time-slice and initial session-context design recorded below; it makes no new
+implementation claim. The remaining time and word rules still require discussion.
 Use a small set of semantic relationships and shared graph operations. A test
 should demonstrate a language construct or a composition of constructs, not
 introduce another dispatch exception.
@@ -13,7 +14,10 @@ introduce another dispatch exception.
   separate facts. Preserve sparse membership and streaming access.
 - `%prev` and `%next` identify structural neighbors. Their use inside arithmetic
   has been removed, including the old `+1` recurrence examples. Do not reintroduce
-  it as part of temporal navigation without an explicit design decision.
+  it as part of temporal navigation without an explicit design decision. D099
+  makes embedded spans transparent to logical neighbours: in `{ A &{ B C D } E }`,
+  B's previous member is A and E's previous member is D. Ordinary nested-list
+  scope is different: in `{ A {b c} E }`, b has no local predecessor.
 - Normalization can settle symbolic and subscribed; a missing temporal relation
   is not an excuse to fall back to an ordinary structural neighbor.
 - Typed fields require the relevant word or an explicit alias. Shape alone does
@@ -134,6 +138,27 @@ An unchanged S-value can be reached from both sides of an interior cut. Those
 are two routes to the same value; the cut does not require copied states or a
 new transition. Equal values at different temporal occurrences still have
 distinct supports.
+
+**D099 clarification, 2026-10-19.** Unless another time-slot or T-span is explicit,
+references describe states at the same time-slice. This includes `%`, `%self`,
+`%prev`, `%next`, argument referents and selected model references. Everything
+in an S-list shares that time-slice; structural adjacency does not itself request
+a previous or next state. T-list L-values address the next state as above. An
+explicit temporal reference such as `%tprev` selects its stated occurrence rather
+than receiving a second implicit time shift.
+
+Arguments resolve in the caller's scope, but keeping a reference bound does not
+freeze its state at entry. To obtain intermediate or parallel states at a different
+level, convert the S-list into a T-span at that desired level. `%self` follows
+the same time/level rules. Exact conversion notation and interior correspondence
+still need specifying.
+
+`%ctx` is session interaction context and is not restricted to T-lists. An ordered
+list of assertions can establish contextual referents in source order while all
+its facts concern the same time-slice. That discourse order is separate from
+modeled temporal succession and solver scheduling. See the accepted initial
+contract and bike/planet example in
+[word-application-and-time-cases.md](word-application-and-time-cases.md).
 
 The September 28 design note also distinguishes an instance lifetime from a
 state occurrence's support and a part-role interval. A part's lifetime may
