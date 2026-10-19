@@ -2463,6 +2463,26 @@ to change the next path's base or update an argument. Current parser syntax uses
 `%ctx` parses but WorldManager's cursor path still requires an occurrence provider
 for it. No exploratory-interface implementation is accepted by this record.
 
+**Application on a temporal identity RHS.** The user proposed
+`%ctx.rubixCube.next = turn(direction::clockwise)`, possibly supplying
+`item::%self`, then observed that the assignment-like use of identity in a T-list
+could make `.next` unnecessary. Continue examining
+`%ctx.rubixCube = turn(...)` as a description of the destination state selected
+by the enclosing temporal step. This is not a general rule that `=` outside that
+context advances time, nor an assertion that the preceding and resulting values
+are equal. D067 already separates given new-state work from retention of
+unaffected previous values.
+
+The remaining binding choice is whether `item` denotes the participant whose
+temporal states the body relates, or a particular input-state description. The
+prior input and resulting occurrence must remain distinct. `%self` currently
+refers to a containing definition occurrence; selecting an arbitrary LHS does
+not by itself rebind it. Explicit `item::%self` therefore requires an established
+caller scope, and omitting `item` requires a specified default or contextual
+binding relationship. Neither convenience is implemented or accepted as an
+automatic rule for all applications. A cube face turn also needs its face/layer
+identified; naming the cube and a direction alone does not select the red face.
+
 **Validation boundary.** Documentation only, based on the current parser source
 and the accepted definition/context contract. No parser, engine, fixture, or
 test expectation is changed, and no runtime support is claimed.
