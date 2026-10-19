@@ -2483,6 +2483,26 @@ binding relationship. Neither convenience is implemented or accepted as an
 automatic rule for all applications. A cube face turn also needs its face/layer
 identified; naming the cube and a direction alone does not select the red face.
 
+**User clarification: selected face and an unnamed direction.** Applying the
+example to `rubixCube` means turning the whole cube. For a face turn the user
+instead intends `rubix-cube.red-face = turn(clockwise)`, with the more realistic
+LHS `rubix-cube.faces~red`. The intended participant comes from the selected face,
+and `clockwise` supplies the direction role. This does not establish a universal
+rule binding every definition's first argument to its result destination.
+
+The user expects the model to recognize that `clockwise` fits `direction`.
+Distinguish two possible mechanisms: context first supplies `item`, leaving
+`direction` as the sole remaining role; or an unnamed argument is matched to
+candidate roles through their model relationships. The latter extends the earlier
+purely positional-call proposal. Named `direction::clockwise` remains explicit.
+Role compatibility must be justified by the meaning and context, not a special
+case for the token `clockwise` or an inferred global parameter type. Unknown
+compatibility is not rejection, and multiple viable assignments remain correlated
+alternatives rather than being selected merely by evaluation order. The general
+rules for mixing positional, named, contextual and inferred bindings remain open.
+The face selector retains its existing correspondence/occurrence semantics;
+parameter binding does not authorize replacing it with a separate name matcher.
+
 **Validation boundary.** Documentation only, based on the current parser source
 and the accepted definition/context contract. No parser, engine, fixture, or
 test expectation is changed, and no runtime support is claimed.
