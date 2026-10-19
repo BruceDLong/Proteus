@@ -66,10 +66,13 @@ Shared declarations remain read-only during application. An unchanged completed 
 
 Definition applications must not escape their own scope and modify outside
 occurrences (D098). This is distinct from preserving the shared declaration.
-D099 establishes explicit external references and embedded parent context. Whether
-passed or global references may also be modification targets inside a definition
-remains open; the assertion scope of an agent interaction does not automatically
-establish identical modification permissions for a word definition.
+D099 establishes explicit external references and embedded parent context. D100
+clarifies application as template expansion: constraints are applied through
+ordinary normalization, including deductions through explicitly supplied
+relationships. Scope restricts implicit references and preserves occurrence
+identity; it does not prohibit learning facts about an unknown argument. A
+contradiction cannot be repaired by rewriting a known prior state or a shared
+declaration. Physical execution and explicit replacement remain separate.
 
 ### Participant, time-slice and session context (D099)
 
@@ -92,8 +95,11 @@ Ordinary references, including `%`, `%self`, `%prev`, `%next` and parameter
 referents, describe states at the common S-list time-slice unless another time
 or span is explicit. T-list L-values address the next state under the existing
 relative assignment convention. Obtaining intermediate or parallel histories
-at a different level requires converting the S-list to a T-span at that level;
-the conversion notation and detailed correspondence remain open.
+at a different level uses the selected subject's `^T` view under D100. Selecting
+a temporal member and taking its `^S` view preserves subject and support:
+`tItem@[1]^S` selects the first member using one-based item indexing. The span's
+temporal parent is that object's lifetime T-list. These semantic relationships
+are independent of the storage level; detailed examples remain in development.
 
 `%ctx` is initially a session-scoped, recency-ordered collection of model references
 established by explicit agent interactions. It works in ordinary assertion lists
@@ -108,6 +114,23 @@ The `%`-as-current-member versus `%self`-as-model-scope distinction remains the
 working proposal to revisit with substantial temporal models. Concrete examples,
 the bike/planet assertion list and remaining boundaries are maintained in
 [word-application-and-time-cases.md](word-application-and-time-cases.md).
+
+### Template application and temporal completion (D100)
+
+Definitions can describe members and evolution, constrain existing situations,
+select spans or produce independent values. Noun-like, verb-like and modifying
+uses share template application and may be combined in one model. Missing
+arguments permit normalization as far as the available information allows;
+models should work with partial information. First-argument autofill is deferred.
+
+Model constraints and ordinary sequence correspondence determine span extent,
+including a constraint identifying the final member or a proved nonmatching
+continuation. For the simple completed walk, all earlier states fail the goal
+and the final state satisfies it. This is a model condition, not a universal
+verb rule. Differently partitioned interval descriptions combine through
+qualified correspondence. The coverage document prioritizes discrete models;
+realistic walking and continuous constraints are later work. These are accepted
+design rules, not new parser or temporal-engine implementation claims.
 
 ### Finite scalar alternative domains
 

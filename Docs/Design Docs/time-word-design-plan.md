@@ -149,9 +149,22 @@ than receiving a second implicit time shift.
 
 Arguments resolve in the caller's scope, but keeping a reference bound does not
 freeze its state at entry. To obtain intermediate or parallel states at a different
-level, convert the S-list into a T-span at that desired level. `%self` follows
-the same time/level rules. Exact conversion notation and interior correspondence
-still need specifying.
+level, select the subject and use its `^T` view (D100). `%self^T` and `%^T` retain
+their respective subjects; a selected part's `^T` provides the lower-level view.
+The span's temporal parent is the object's lifetime T-list. `tItem@[1]^S` selects
+the first temporal member and gives its S-view with the same subject and support.
+Item indices are one-based. These semantic views are independent of storage
+placement; concrete whole/part correspondence examples remain in development.
+
+**D100 clarification, 2026-10-19.** Definitions expand constraint templates.
+Missing parameters permit partial normalization. Terminal constraints and proved
+nonmatching continuations determine sequence boundaries through ordinary matching.
+The simple completed walk requires the goal only at its final state and its
+negation at every preceding walk state. The interval example combines this
+description with differently partitioned constraints under their original `=`
+and `==` qualifications. Use discrete models first; realistic walking and
+continuous motion are deferred. The coverage document records the accepted
+`^T` / `^S` syntax, span-selection proposal and provisional asynchronous example.
 
 `%ctx` is session interaction context and is not restricted to T-lists. An ordered
 list of assertions can establish contextual referents in source order while all

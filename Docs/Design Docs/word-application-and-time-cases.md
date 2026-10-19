@@ -1,14 +1,18 @@
 # Word application and temporal description coverage
 
-This draft gives a basis of examples for specifying systems through words,
-parameterized definitions, part selection and T-lists. The user has limited the
-first design to unambiguous application syntax, and clarified that a verb such as
-`walk` can describe a T-list of successive step results. `&walk(...)` embeds that
-list using the existing meaning of `&{...}`. Role inference, receiver calls
-and natural-language argument assignment remain deferred. D099 records the
-scope, time-slice and session-context baseline accepted on 2026-10-19. Remaining
-syntax proposals and temporal cases are marked separately; this document does
-not claim that the new design is implemented.
+This document organizes the agreed design and coverage examples for word
+applications, part selection and temporal descriptions. Definitions expand
+templates whose constraints participate in ordinary normalization. The first
+examples use explicit named arguments and discrete models. Realistic walking,
+continuous models, role inference and natural-language argument assignment are
+later work.
+
+**Design checkpoint, 2026-10-19.** D099 records participant scope, time-slice and
+session context. D100 records template application, missing parameters,
+model-defined sequence completion and the accepted `^T` / `^S` view notation.
+The sections below state that baseline, followed by examples, verification
+properties and the remaining work. Suggestive grammar and provisional examples
+are identified where they occur. This is not a claim of parser or engine support.
 
 There are arbitrarily many compositions, so a finite case list cannot enumerate
 every program. Coverage comes from independent semantic dimensions, examples at
@@ -22,71 +26,93 @@ current cursor retention; the earlier D062 old-versus-new equality interpretatio
 must not be reapplied to a computed transition result. Historical implementation
 claims in older notes do not establish current engine coverage.
 
-## Application rules for the first examples
+## Definition application
 
-1. Use explicit named bindings, for example
-   `turn(item::%prev, direction::clockwise)`. The examples require no positional
-   binding, inferred roles, receiver sugar, or implicit LHS argument. Fully
-   supplied positional syntax can be discussed separately without introducing
-   role inference. A missing binding stays missing; required results cannot be
-   claimed if they depend on it. This does not yet settle optional-argument or
-   default syntax. Parameter names cannot be reserved words; parameter scope is
-   local to the definition, following class/function-style scope rules.
-2. An attached opening parenthesis marks application: `turn(...)`. A separated
-   `turn (...)` retains the non-call interpretation. Inside the argument list,
-   ordinary whitespace is allowed. Named binding order does not affect meaning;
-   duplicate and undeclared role labels should be diagnosed rather than assigned
-   an implicit precedence. The attachment rule and these diagnostics are proposed
-   grammar, not implemented syntax.
-3. A word or an application contributes its definition's description. The result
-   may be a scalar, an object description, a state, a process/span, or a sequence.
-   The result is not automatically the first argument, and evaluating the
-   description does not by itself execute an external action.
-4. Argument expressions resolve in the caller's scope; the definition body uses
-   its own application scope. A body reference such as `%item` refers to that
-   application's parameter; outer parameters are forwarded explicitly. A stable
-   reference binding does not freeze the participant's state at call entry: the
-   common time-slice rule below applies unless another time or span is explicit.
-   Shared declarations remain unchanged; binding need not fully normalize or copy
-   the participant.
-5. Distinguish the selected destination, a participant, its prior state, and the
-   resulting occurrence. Ordinary equality constrains its target; it does not
-   overwrite a contradictory fact at that same occurrence. In a T-step the
-   target is the state being described, so a new value need not equal the old
-   value. Outside temporal context, equality does not create a successor.
-6. `%prev` and `%next` are neighbours of the current member in the local ordered
-   scope, crossing embedded-list boundaries but not ordinary nested-list scope.
-   They have no meaning in an unordered scope. Structural selection does not
-   itself request another time-slice. `%tprev` uses the model's T-list; temporal
-   references or another explicit time/span override the ordinary common-slice
-   interpretation. In a T-list, L-values address the next state. An explicit
-   temporal choice must not be shifted again by that relative convention. Use
-   named source/destination occurrences to check the relative forms.
-7. T-step work computes the described new facts; D067 retention supplies
-   unaffected previous descriptions. Direct and model-implied changes must both
-   be accounted for. Ordinary unknowns do not assert independence; `%?` withholds
-   retention at its scope. These do not exempt explicit contradictory constraints.
-8. Describe simultaneous requirements in one state and ordered changes in
-   successive states. Computations using the prior state in one T-step read the
-   same prior occurrence; serialization of evaluation must not create an
-   unintended ordering of changes.
-   Interacting changes need their joint relationship or remain conflicting or
-   unresolved; arbitrary ordering is not a resolution mechanism.
-9. A list-valued word application describes its list. Prefixing it with `&`
-   embeds that list's logical members in the enclosing list, just as `&{...}`
-   does for a literal. Thus `walk(...)` can describe a temporal span containing
-   many step results, and `&walk(...)` contributes those results to the enclosing
-   history. Without `&`, the list remains an ordinary contained value; it does
-   not become its final state. `&` neither converts a single-state definition
-   into a history nor supplies additional steps, a path, or a stopping rule.
-   The definition determines the listed states, including whether it explicitly
-   includes an initial state. Embedding preserves their context and relationships.
-10. A T-member's temporal support comes from the model. Neither one member nor one
-   verb application implies a duration, a zero-duration event, or one second.
-   Member ordinals, boundary identities, duration, coordinate origin, and units
-   remain separate. Embedded temporal lists retain those distinctions; ordinary
-   list-valued descriptions do not silently embed themselves in their surrounding
-   history.
+### Template meaning and uses
+
+A definition supplies a template. Applying it contributes constraints at the
+application site using the bound references and ordinary normalization rules.
+The same mechanism supports several uses, and one model may combine them:
+
+| Use | What the model can describe |
+| --- | --- |
+| Noun-like | Members, allowed values, evolution and allowed transitions |
+| Verb-like | One or more states or constraints in a T-context, related to current or previous aspects of a situation |
+| Adjective-like | Constraints on an existing object in an S-list |
+| Adverb-like | Constraints on an activity in a T-list |
+| Function word or selector | A related occurrence or span, such as before an event or during an epoch |
+| Independent value | A result such as `sqrt(value::144)` |
+
+These are uses of templates, not exclusive definition kinds. A word's model
+determines its description; there is no universal first-argument/result identity.
+Describing a change does not itself execute a physical action.
+
+For example, the World color definitions include:
+
+```text
+#color <en> = {hue, saturation, brightness}
+#red <en> = color:{hue:0}
+
+object.color = red
+```
+
+The assertion applies the red description to the selected color occurrence.
+There is no need for a separate `isRed(object)` mechanism. Constraints can supply
+missing information and propagate through the model's relationships. They cannot
+overwrite a contradictory known fact at the same occurrence. In a T-context,
+constraints on a later occurrence can describe values different from the earlier
+occurrence while preserving both. Outside a temporal context, ordinary equality
+does not create a successor.
+
+### Explicit bindings and partial information
+
+Use named bindings such as `turn(item::%prev, direction::clockwise)`. Definitions
+may expose role names without imposing narrow model types merely to declare those
+roles. Any actual type/value constraints belong to the model. Parameter names
+cannot be reserved words, and bindings have the definition's local scope.
+
+Argument expressions resolve in the caller's scope; the body uses its own bound
+parameters, such as `%item`. Forward outer parameters explicitly. Binding a
+reference need not fully normalize or copy its referent, and does not freeze its
+state at call entry. Shared declarations remain unchanged.
+
+**Missing arguments permit partial normalization.** Normalize as far as available
+information and model constraints allow. Independent facts can resolve while
+facts depending on missing parts remain unresolved; constraints may also determine
+an omitted value. Authors should write models that work correctly with missing
+parts. Omission alone is not an invalid call or a request to guess an argument.
+Automatically filling the first parameter is deferred, along with role inference,
+receiver sugar and natural-language application. No general default mechanism is
+required for these examples.
+
+The proposed call grammar uses an attached opening parenthesis: `turn(...)`.
+A separated `turn (...)` retains its non-call interpretation; ordinary whitespace
+is allowed inside the argument list. Named binding order does not affect meaning.
+Duplicate and undeclared labels should be diagnosed rather than given implicit
+precedence. These grammar details still need parser validation. Fully supplied
+positional calls can be considered later without introducing role inference.
+
+### Temporal composition and embedding
+
+Describe simultaneous requirements in one state and ordered changes in successive
+states. Computations reading the prior state in one T-step read the same prior
+occurrence. Interacting constraints combine through their model relationships;
+evaluation order must not impose an unintended sequence or resolve a conflict.
+D067 retention supplies unaffected previous descriptions after the new facts are
+computed. Model-implied changes count as changes. `%?` withholds retention at its
+scope; ordinary unknowns do not assert independence.
+
+A list-valued application describes its list. `&walk(...)` embeds its logical
+members exactly as `&{...}` does for a literal. Without `&`, that list remains a
+contained value; the application does not select its final state. The definition
+supplies the states, their relationships, completion constraints and whether an
+initial state is included. Embedding preserves that model and does not recursively
+flatten ordinary nested lists.
+
+A T-member's temporal support comes from the model. Member count, boundaries,
+duration, coordinates and units are distinct. One member or verb application does
+not imply one second or an instantaneous event. The first development cases are
+discrete; continuous trajectories and realistic activities are later work.
 
 ## Participant and context references
 
@@ -181,10 +207,9 @@ receiving a second implicit shift. Binding a referent in the caller's scope is
 not the same as freezing its state at call entry. A referenced entity's state
 follows the applicable time-slice unless another time is explicit.
 
-To obtain intermediate or parallel states at a different level, convert the
-S-list into a T-span at the desired level. `%self` follows these same time and
-level rules; it does not silently choose a deeper material or lattice history.
-The spelling and detailed correspondence for that conversion remain open.
+To obtain intermediate or parallel states at a different level, select the
+subject and use its `^T` view as described below. `%self` follows these same time
+and level rules; it does not silently choose a deeper material or lattice history.
 Neither list-member count nor a contextual lookup supplies duration or an
 interior trajectory by itself.
 
@@ -232,22 +257,121 @@ resolves the contextual references; the bound information is a conjunction of
 assertions, not a sequence of physical changes. Later references to another
 planet or bike cannot redirect the already-bound third assertion.
 
-### Confinement and remaining boundary
+### Scope of applied constraints
 
-Definitions must not escape their scope and modify outside occurrences. D099
-clarifies permitted references: arguments and explicit global/context references
-can reach outside, while arbitrary data-structure-parent traversal is unavailable.
-An embedded fragment can read its inherited parent context and neighbours.
-The class/function analogy establishes visibility; it does not by itself settle
-whether a passed or global reference is also a permitted modification target
-inside a definition, including effects of reverse constraint propagation.
+D100 clarifies the earlier question about external modification in D099:
+definitions expand templates, and their constraints are applied through ordinary
+normalization. Explicit parameters and supplied global/context references can
+connect those constraints to other occurrences. Deductions through those
+relationships, including facts about unknown arguments, are part of normalization.
 
-Keep this distinction open rather than imposing either unrestricted external
-writes or a blanket ban on explicit external relationships. The agent assertion
-list above has its own scope and is not evidence that a word definition has
-identical modification permissions. A prior occurrence must not be rewritten
-merely to make a new-state description succeed. Shared declarations remain
-read-only during application.
+The no-escape rule continues to restrict implicit references: a definition cannot
+discover its data-structure parent or capture arbitrary outside occurrences.
+Embedded context and explicit relationships provide the connections described
+above. Constraint application preserves qualifications and occurrence identity;
+it does not rewrite a known prior state to make a new-state description succeed.
+Shared declarations remain read-only. Physical execution and explicit replacement
+of erroneous facts retain their separate contracts.
+
+## Temporal views and selection
+
+The accepted short forms are `^T` and `^S`, corresponding to the previously
+suggested `^asTSpan` and `^asSList`. They use the existing external-relationship
+operator. These are semantic views of the selected subject and support.
+
+| Expression | View |
+| --- | --- |
+| `rubixCube^T` | The cube's T-span corresponding to the selected cube state |
+| `rubixCube.part^T` | The selected part's T-span, giving access at that lower level |
+| `%self^T` | The temporal view of the enclosing model subject |
+| `%^T` | The temporal view of the current member |
+| `tItem@[1]^S` | The S-item view of the first selected temporal member |
+
+For a T-span obtained from an object state, its temporal parent evaluates to that
+object's lifetime T-list. This is an explicit semantic relationship supplied by
+the view, not an implicit climb through storage containers. The selected span
+and the full lifetime retain their distinct supports. A part's lifetime can
+extend beyond the period when it belongs to the selected whole.
+
+Selecting a subpart before taking `^T` provides a handle into a lower model level;
+selecting `%self` instead of `%` can provide the enclosing level under their
+working scope meanings. Storage may place or share state descriptions at whichever
+level minimizes space. Storage placement must preserve semantic subjects, supports,
+boundaries and references, and must not redefine `%self` or erase distinct demanded
+occurrences.
+
+T-list subspans use the same selection mechanisms as S-lists:
+
+- `tItem@[n]` selects a temporal member using one-based item indices.
+- `tItem@[start, end-desc]` is the proposed simple span-selection sugar. Preserve
+  the end description as a selection constraint; its full grammar still needs
+  validation alongside existing slice notation.
+- Intersection-based selection handles starts and ends constrained by position,
+  description, internal pattern, duration or combinations of these.
+
+In `tItem@[1]^S`, selection happens first; `^S` gives that occurrence's S-view,
+preserving its subject and temporal support. This is the agreed basic operation
+for obtaining an S-item from a multi-state span. Applying `^S` directly to an
+unselected span containing several different states is not yet specified; it
+must not silently choose a member or discard temporal distinctions. View rules
+remain open to pragmatic refinement through examples.
+
+## Completion and interval constraints
+
+Sequence extent is established through model constraints and ordinary list
+correspondence. A constraint applicable only at the terminal member can identify
+that member. A proved nonmatching continuation can end a repeated pattern.
+Missing information remains unresolved, rather than proving a nonmatch. This
+uses the Earley-like correspondence approach already present in normalization;
+it does not introduce a separate loop or goal-termination operator. General
+temporal applications still need their own implementation validation.
+
+For the simple completed walk, let G describe satisfaction of the destination:
+the final state satisfies G, and every preceding state of that walk fails G.
+This is the agreed first-arrival condition for this example, not a requirement
+on every verb. The model determines whether it includes an initial state, how
+an initially satisfied goal is represented, and which transitions are allowed.
+`&` does not insert an extra arrival state or decide these matters.
+
+`location=destination` is sufficient for a core example. A realistic destination
+can constrain a range of acceptable locations, such as being at a store or in
+L.A.; it need not be a single coordinate. The completion condition is unchanged
+when G becomes a richer constraint. Realistic destination models, resting,
+tripping, traffic lights and finishing on either leg are deferred until walking
+itself is being modeled. Well-written models are an assumption for these examples;
+model repair and recovery are separate work.
+
+The user's interval sketch combines several descriptions of the activity:
+
+```text
+walking:{
+    &{ ! location=atStore | ... }
+    location=atStore
+}
+= { <Another set of constraints or changes that may not align with the location description> }
+== { <A third set of constraints that is not in terms of steps> }
+```
+
+This is suggestive notation: the angle-bracketed prose is a placeholder, not a
+selection marker, and `location` stands for the model's actual location path.
+Read the negation as applying to the whole location constraint in the walking
+T-context. Every member of the embedded prefix must fail `atStore`; the final
+member must satisfy it. The prefix's listSpec covers only its embedded members.
+
+The other descriptions may use different partitions and need not be expressed
+in steps. Their constraints combine through established correspondence over the
+activity. Preserve the existing qualifications of `=` and `==`; they are not
+interchangeable spellings or permission to zip unequal histories by ordinal.
+A cut needed in one view need not be a state change in another. E10 supplies a
+small discrete sketch; the user's fuller asynchronous example is forthcoming.
+
+An activity can also be bounded without achieving a destination. In "walking at
+6:00, studying by 8:00," models that make those activities incompatible prevent
+walking from extending into studying. An intervening `&{...}` accommodates the
+unspecified history. Those facts alone do not fix the exact walking endpoint or
+prove arrival. A domain model can further constrain feasible continuations, for
+example through a human's sleep/wake cycle. No special walking logic is required
+in the application syntax.
 
 ## Dimensions of coverage
 
@@ -256,6 +380,7 @@ read-only during application.
 | Structural scope | Whole system; one part; several parts; nested part; overlapping views; membership and part identity |
 | Temporal scope | Instant/cut; one state support; interval; transition boundary; finite history; open history; nested or embedded span |
 | Description source | Literal; unparameterized word; explicit application; identity/constraint; selected description; shared listSpec |
+| Temporal view | Selected state to `^T`; part versus enclosing subject; span to lifetime parent; selected temporal member to `^S` |
 | Interval meaning | At both endpoints; throughout; at some time; trajectory over the interval; event occurring within it; aggregate over it |
 | Composition | Same-state conjunction; ordered transitions; embedded sequence; whole/part projection; aligned or overlapping histories |
 | Knowledge | Known; explicitly unknown; missing source; conflicting; ambiguous selection; pending parser/link information |
@@ -264,6 +389,18 @@ read-only during application.
 For every case, specify what is requested. A selected fact, a whole state, a
 history, a proof that a condition holds throughout an interval, and a query
 following future states impose different obligations.
+
+### Coverage index and development order
+
+Example identifiers remain stable so later fixtures and design discussions can
+refer to them. Work on core discrete examples before the deferred models.
+
+| Group | Examples | Purpose |
+| --- | --- | --- |
+| Core application | E01–E06, E09, E19 | Literal/template equivalence, explicit bindings, changes, composition, embedding and partial models |
+| Next discrete temporal cases | E10, E11, E13 | Whole/part views, asynchronous and implied changes, interval constraints and boundaries |
+| Interaction and knowledge checks | E07, E08, E14, E15, E18 | Conflicts, retention, changing membership, partial histories and shared listSpecs |
+| Later capabilities/models | E12, E16, E17 | Continuous motion, general inverse reasoning and physical execution |
 
 ## Concrete examples
 
@@ -283,6 +420,11 @@ must not make them one occurrence or mutate the shared meaning.
 
 Also describe only one face at that instant. It must remain a partial description
 of the system, not evidence that the other faces are absent.
+
+Use `object.color=red` as the smallest constraint-template case. Compare it with
+the corresponding explicit color description, retaining the model's nominal
+qualifications and the selected occurrence. Applying the definition contributes
+ordinary constraints without changing the shared declaration.
 
 ### E02 An application with an independent result
 
@@ -388,39 +530,28 @@ walker:{T|
 ```
 
 The definition describes a T-list of unspecified extent. Its `takeStep` listSpec
-supplies the description of each successive state as the result of taking a step.
-The members are state occurrences, not commands queued for external execution.
-`&walk(...)` embeds those members into the surrounding history through ordinary
-list embedding. Compare it with embedding the corresponding literal model with
-the same bindings and context. Without `&`, the application describes a contained
-list, not the last state of that list.
+supplies each successive state as the result of a step. `&walk(...)` embeds those
+members in the surrounding history. Compare it with the corresponding embedded
+literal using the same bindings and context. The input state precedes the span
+in this example; embedding does not insert or remove it.
 
-The ellipsis stands for the remaining model, including how `%destination` relates
-to the steps and the completion condition. The header alone does not establish
-that the walk reaches the door or where the span ends. This specimen declares
-only `destination`; the walker and starting state must be established through
-permitted embedding context, explicit arguments or supplied global references,
-not inferred as unnamed arguments or found by arbitrary parent traversal.
-Specifying those relationships is part of completing the example.
+The ellipsis stands for the remaining model. Bind the walker and starting state
+through permitted embedding context, explicit arguments or supplied globals.
+Relate the destination to the stepper's modeled location. The header alone does
+not establish arrival. Completion uses the first-arrival constraints described
+above: all earlier walk states fail the goal, and the final state satisfies it.
+That final occurrence remains a valid result of the step model.
 
-Test the first step's relationship to initial-state, each later step's relationship
-to its predecessor, and following-state's relationship to the completed span.
-The destination binding stays associated with this application while the
-step-relative context varies by member. Do not assume `%prev` and `%tprev` are
-interchangeable across the embedding boundary. The input state precedes the span
-in this example; `&` does not insert or remove an initial state on its own.
+Check the first member's relationship to initial-state, later members' relations
+to their predecessors, and following-state's relationship to the completed span.
+The destination remains bound to this application while body-relative references
+vary by member. Structural and temporal references retain their distinct rules.
+A missing destination permits partial normalization; an unknown span endpoint
+must not be guessed merely to place following-state.
 
-Cover zero steps when the model permits an already-satisfied destination, one
-step, several steps, nested embedded walks, and an unknown/open extent. Preserve
-distinct occurrences even when positions happen to be equal. A known prefix
-does not prove completion or allow following-state to be placed at a guessed
-endpoint. An unreachable or underspecified destination must not fabricate a
-successful terminal state. Route choice, progress and termination require model
-relationships; embedding itself is independent of those reasoning questions.
+#### Optional refinement: alternating steps with reorientation
 
-#### Refinement: alternating steps with reorientation
-
-The user's next, explicitly suggestive model is:
+The user's suggestive sketch illustrates simultaneous and sequential composition:
 
 ```text
 *_+{T
@@ -432,96 +563,89 @@ The user's next, explicitly suggestive model is:
 }
 ```
 
-The intended behavior is successive stepping-while-reorienting until arrival.
-`step` changes the stepper's location field. The sketch introduces three levels:
-the walk, repeated left/right cycles, and the two phases within each cycle. Each
-phase combines a step with reorientation of the same stepper. The two phases
-are temporally ordered; stepping and reorientation belong to their common phase.
-The exact syntax for making the two descriptions constrain that same occurrence
-remains to be specified. Ordinary list grouping alone does not establish shared
-targets or a temporal ordering between those descriptions.
+Each phase combines step and reorientation constraints on the same stepper;
+left and right phases are sequential, and cycles repeat. `step` relates the
+stepper's earlier and later location fields. The quoted positional calls and
+abbreviated location path are illustrative. Concrete applications use explicit
+role bindings, for example `step(foot::left-foot)`, with the shared stepper and
+other required relationships supplied by the model.
 
-This quoted sketch does not settle positional argument syntax. For explicitly
-declared roles named `foot` and `direction`, the corresponding calls would be
-`step(foot::left-foot)` and `reorient(direction::direction)`. The latter RHS is
-the sketch's direction expression; its source and relationship to the stepper
-still need defining. In the proposed definition body, the destination role would
-be referenced as `%destination`. The concrete foot references and shared stepper
-context also require binding; no participant is supplied by guessing a role.
+`&walk(...)` embeds the outer cycles without flattening their ordinary nested
+T-lists. Inside a nested cycle, its first phase has no local structural predecessor.
+An outer relationship or explicit argument/context connection supplies its
+relation to the preceding cycle. A final location constraint must refer to the
+appropriate final stepper occurrence or its projection, not an unrelated field
+on the cycle description.
 
-The nested T-list is a cycle description applied through the outer listSpec.
-Each cycle has distinct phase occurrences and preserves its temporal structure.
-Embedding `&walk(...)` embeds the walk's outer members; it does not recursively
-erase the nested cycles. Compare this representation with an explicitly aligned
-history of individual steps, preserving both the fine and coarse temporal views.
-Entry, left-to-right, right-to-next-left, and final exit relationships must all
-compose through the nested boundaries.
-Inside an ordinary nested cycle, its first phase has no local structural
-predecessor. A relation to the preceding cycle's phase must be supplied from the
-outer model or an explicit argument/context reference, not an implicit lookup
-above the cycle's scope. Converting an S-list view to the required T-span level
-is explicit; it is not a consequence of using an ordinary structural neighbour.
+The sketch's final positive constraint alone does not express first arrival;
+combine it with the earlier-state negative constraint from the completion model.
+The simple example need not yet handle either leg finishing, resting, tripping,
+traffic lights or realistic route selection. Those are walking-model refinements,
+not prerequisites for the language composition rules.
 
-The final `location=destination` is intended to constrain the stepper's location
-at completion. Its eventual spelling must identify that location in the final
-phase, or its projection at the walk's end. A field on a cycle description is
-not automatically the field of its final stepper state. Since the listSpec also
-applies to explicit body members, check how the final assertion combines with
-the final cycle without introducing an extra arrival step or overriding a
-location that the step model does not justify.
+### E10 Whole and part histories with asynchronous changes
 
-This refinement adds the following coverage cases:
+Select a system's temporal view with `system^T` and a part's with `system.part^T`.
+For a selected temporal member, `tItem@[1]^S` gives its S-view. The corresponding
+whole and part views must agree wherever they describe the same occurrences and
+supports, even when their state-change boundaries differ.
 
-- Arrival after a left step versus after a right step. Requiring a complete
-  two-phase cycle restricts possible endings; allowing a final partial cycle or
-  describing alternation at individual-step level are alternatives to discuss.
-- Arrival at the final state versus stopping on the first arrival. An endpoint
-  assertion alone does not exclude an earlier arrival followed by more walking.
-  The intended force of "until" needs that separate decision.
-- A step that cannot satisfy its model. A successful walk must satisfy every
-  required phase; the final assertion cannot bypass a conflicting step. Missing
-  evidence remains distinct from a proved failure.
-- A direction related to the current phase's location and destination versus
-  a direction fixed for the whole walk. The sketch does not yet choose this
-  relationship; occurrence-relative work must retain the appropriate context.
-- Stepping and reorientation that impose compatible or conflicting requirements
-  on one phase. Combining them must preserve both sets of constraints without
-  silently executing one after the other.
+**Provisional discrete sketch.** This table illustrates the consequences of the
+agreed rules; the user will supply a fuller synchronous/asynchronous and implied
+change example. S0 through S3 are successive whole-system states, not time units.
+The table gives the complete four-state history for this sketch. A and B are
+independently changing binary parts. The model also requires C's value to equal
+A's at every state, so changes to C are implied by that constraint.
 
-### E10 Whole and part histories
+| Whole-system state | A | B | C | Change from the preceding state |
+| --- | --- | --- | --- | --- |
+| S0 | 0 | 0 | 0 | Initial description |
+| S1 | 1 | 0 | 1 | A changes; C follows through the model |
+| S2 | 1 | 1 | 1 | B changes |
+| S3 | 0 | 1 | 0 | A changes; C follows through the model |
 
-Represent a system as a T-list of whole-system descriptions. Separately represent
-histories of its motor, switch and temperature, with explicit support alignment.
-The two representations should yield the same facts where they describe the same
-occurrences. A component can have a boundary where the containing description
-does not, and a cut in the parent can fall inside a constant component span.
-Obtaining these histories from an S-list at one time-slice requires conversion
-to T-spans at the chosen model levels. Merely selecting a component or `%self`
-does not introduce a different temporal level.
+A's constant span covers S1 and S2; B's covers S0/S1 and S2/S3. The whole-system
+cut between S1 and S2 remains accessible in A's temporal view without inventing
+an A transition. C's values and changes follow from the model rather than an
+extra scheduled operation. The equality of A's and C's values does not identify
+their occurrences or entities.
 
-Repeat with one part sampled more often than another. Equal item indices do not
-establish simultaneity; align by temporal relationships, coordinates and units.
-Unknown alignment remains unknown instead of zipping the histories by position.
-For example, motor observations at times 0, 1 and 2 and temperature observations
-at times 0 and 2 do not have simultaneous second entries. Also compare seconds
-with tenths of a second, and equal numeric coordinates with different origins.
+Check the same facts through whole-system states, part T-spans and their selected
+S-views. Preserve source occurrence and temporal support when projecting or
+recombining them. Compact representation of constant spans must retain every
+requested cut and occurrence distinction. Unknown alignment remains unknown;
+equal member indices in two differently partitioned histories do not prove
+simultaneity. Concrete model syntax and the full correspondence cases will be
+refined with the user's example.
 
-### E11 One instant and an interval are different obligations
+### E11 Discrete interval constraints and different partitions
 
-For a heater, distinguish all of the following over the same interval I:
+Use the walking interval sketch above as the first case. Combine its not-at-store
+prefix and final at-store member with a second description of changes and a
+third description using a different partition. Require the same selected facts
+where the descriptions overlap, while preserving each relationship's qualifiers.
 
-- Temperature is 20 at I.begin and 30 at I.end; the interior is unspecified.
-- Temperature is 20 throughout I.
-- Temperature reaches 30 at some time within I.
-- Temperature follows a specified trajectory throughout I.
-- One heating event occurs within I, with its own start and finish.
-- Average temperature over I is 25; this does not establish each instant's value.
+For a smaller discrete case, describe an indicator over an interval I and compare:
 
-These are semantic examples. They deliberately do not invent `at`/`during`
-surface syntax before the quantification, boundaries and supports are settled.
-At least one interior-time query must distinguish each description from the others.
+- It is on at both endpoints; interior states are unspecified.
+- It is on at every state in the selected discrete span.
+- It is on at some state within the span.
+- One on-to-off change occurs within the span.
+
+An interior selection must distinguish these descriptions. A constraint on every
+member covers what those members describe; samples alone do not establish a fact
+at all omitted intermediate states. Combine a constant indicator span with a
+second part that changes inside it, using E10's correspondence principles.
+
+Definitions used as function words may select spans, such as before an event or
+during an epoch. Express their models through view relationships and ordinary
+intersection-based selection; no dedicated activity/interval controller is
+assumed. Duration constraints can use explicit model coordinates and units.
+Continuous trajectories, rates and averages remain later cases.
 
 ### E12 Step results and motion within each step
+
+**Deferred continuous-model case.** Complete the discrete examples first.
 
 Compare a walk described by its successive foot-placement states with a model
 that also describes the motion during each step. Query a time between two known
@@ -547,6 +671,9 @@ Compatible constraints on overlapping supports combine. Incompatible ones at the
 same occurrence/support conflict; disagreement on disjoint supports is allowed.
 The meaning of open/closed endpoints and claims exactly at a discontinuity still
 needs a temporal-value contract. Counted list slices alone do not supply it.
+For the discrete cases, express the same boundary in different model units or
+origins and require their established coordinate relationship; equal numeric
+coordinates alone do not identify boundaries.
 
 ### E14 Parts that move, appear, disappear or change roles
 
@@ -568,6 +695,11 @@ Compare learning an omitted fact about S0 with adding a genuinely later S1, and
 with explicitly replacing a mistaken stored fact. They are not the same temporal
 operation. Completed queries and subscriptions retain their accepted lifecycle;
 this example does not introduce automatic restart or general belief revision.
+
+Also omit a declared argument from an application. Facts independent of that
+argument should still normalize; dependent facts remain partial unless other
+constraints determine them. Distinguish a missing argument from a contradictory
+supplied value, without introducing automatic argument selection.
 
 ### E16 Missing causes and nonunique answers
 
@@ -632,6 +764,11 @@ available reasoning, not role inference. A conflicting area must reject the
 required conjunction. Reusing one declaration with different arguments must keep
 each application's bindings and contextual occurrences independent.
 
+Then use `rectangle(height::4)` with width omitted. Normalize the available
+description, and resolve width if the model and other supplied constraints
+determine it. There is no requirement to reject an application solely because
+one role was omitted.
+
 ## Equivalence and failure checks
 
 For the supported fragment, use these as semantic checks rather than printer
@@ -639,6 +776,8 @@ string equality:
 
 - Literal meaning versus a word versus explicit parameterized application.
 - Permuting named bindings without changing their roles.
+- Omitted arguments versus explicitly unknown arguments where the model gives
+  them the same constraints; independent facts normalize in both cases.
 - Explicit source occurrence versus the corresponding relative temporal reference.
 - Inline changes versus an embedded sequence with explicit entry binding.
 - `{ A &{ B C D } E }` versus the corresponding inline sequence: B's predecessor
@@ -649,6 +788,18 @@ string equality:
 - Whole-system description projected to a part versus that part's description at
   the same temporal support; recombination needs explicit correspondence and all
   relevant coupling relationships, not a blind union of independent histories.
+- `^T` views reached from the whole and a selected part preserve their respective
+  subjects and supports; each span's temporal parent is its subject's lifetime
+  T-list. Storage-level changes must preserve these observable relationships.
+- `tItem@[1]^S` selects the first temporal member before obtaining its S-view.
+  Check the subject, occurrence and support against an explicitly selected state.
+- The simple completed walk rejects earlier goal states and satisfies the goal
+  at its final state. The embedded prefix's negative listSpec excludes that final
+  member. Unknown goal evidence is not proof of non-arrival.
+- Differently partitioned interval descriptions retain their constraints and
+  operator qualifications after correspondence. A cut in one view need not be a
+  transition in another. Repeat with a proved nonmatching continuation and with
+  one whose compatibility is unresolved.
 - Splitting an interval at a cut versus the unsplit description when the same
   support facts and constraints are preserved.
 - Equivalent coordinates in different units/origins after their relationship is
@@ -667,9 +818,10 @@ string equality:
   from whichever assertion happens to be evaluated first.
 - Ordinary definition scope cannot be escaped through aliases. Embedded fragments
   inherit the specified surrounding context, and their listSpecs retain their
-  own member coverage. Test allowed external modifications once their still-open
-  boundary is specified; access to an external reference alone is not that
-  specification.
+  own member coverage. Explicit bindings connect applied template constraints to
+  their referents through ordinary normalization, preserving occurrence identity
+  and qualifications. A contradiction cannot be repaired by rewriting a prior
+  state or the shared declaration.
 
 For each example record the selected source and destination occurrences, argument
 bindings and call-site context, temporal support, requested result, expected facts,
@@ -679,54 +831,45 @@ input arrival where meaningful. These cases become ordinary CodeDog or `.tst`
 checks only as their semantics are accepted and implemented; existing expectations
 and known failures remain intact.
 
-## Composition questions answered by the walk example
+## Development order and remaining work
 
-The user confirms that the walk example answers the basic distinction between
-simultaneous processes and a sequence: a phase combines stepping and reorientation,
-while its containing T-list orders the left and right phases. Nested T-lists
-describe an activity at several levels, and `&walk(...)` uses ordinary embedding.
-These choices do not require a separate verb-expansion or sequencing operator.
-The scope, default time-slice and initial session-context rules are now recorded
-above. The remaining questions concern concrete model relationships and the
-boundaries listed below, rather than reopening these composition rules.
+The settled baseline covers template application, partial normalization with
+missing arguments, ordinary list embedding, participant/context scope, common
+time-slice references, model-defined sequence termination, the simple walk's
+first-arrival condition, and `^T` / `^S` with one-based `@[...]` item selection.
+These are no longer open alternatives in the core design.
 
-## Remaining decisions
+### Next discrete examples
 
-1. **Model-level conversion and self ergonomics.** Specify the S-list-to-T-span
-   conversion at a chosen level and the correspondence for interior-time reads.
-   Use concrete cube/material and walk/phase models to revisit the proposed
-   `%`/`%self` distinction. The ordinary nested-scope and embedded-neighbour rules
-   above are no longer open alternatives.
-2. **External modification boundary.** Decide whether, and under which conditions,
-   explicit parameter/global references may be assertion targets inside a
-   definition, including constraints that infer facts about outside unknowns.
-   Keep definition scope separate from the scope of agent interaction assertions.
-3. **Omitted roles and complete models.** Define missing-argument and default
-   policy without role inference. Complete the walk's explicit participant, foot,
-   direction and terminal-location relationships. Reserved names, parameter
-   scope and caller-side argument binding are settled; supplied references are
-   not implicitly frozen to entry-time states.
-4. **Completion and repetition.** Can a walk end after either foot, and does
-   "until" require first arrival? Include an initially satisfied destination,
-   an unfinished walk, and an impossible required step. These distinctions may
-   be expressed in word models; they do not imply a new built-in loop or planner.
-5. **Temporal support and interval constraints.** Express duration, partial overlap
-   and alignment of processes with different boundaries. Distinguish a condition
-   at sampled step states, throughout the walk, and at some time within it.
-   Grouping processes in one phase answers the composition question without
-   specifying every internal temporal relationship or continuous trajectory.
-6. **Whole/part correspondence.** Make foot, walker and whole-scene descriptions
-   agree on shared occurrences and temporal support, including indirect changes.
-   Histories with different boundaries need correspondence, not equal ordinal
-   positions. Use the accepted occurrence and projection principles to specify
-   the concrete notation and test cases.
+1. Refine E10 with the user's synchronous/asynchronous and implied-change model.
+   Establish explicit whole/part correspondence and repeat its queries through
+   temporal and S-views. Use the small table as a provisional check, not a final
+   definition of the user's intended example.
+2. Make E11's differently partitioned descriptions concrete. Exercise a terminal
+   constraint and a proved incompatible continuation using ordinary matching.
+   Preserve unknown alternatives and the distinctions between `=`, `==` and
+   prefix-qualified relationships.
+3. Validate the proposed application and span-selector grammar. The view names
+   `^T` and `^S`, `tItem@[1]^S`, and one-based item indexing are agreed; call-header
+   details and `@[start, end-desc]` sugar still need concrete parser examples.
+4. Exercise initial-goal, zero-new-step, open-span and missing-part cases through
+   simple models. Their outcomes follow those models; they do not require a
+   universal walking policy or a new normalizer termination mechanism.
 
-The initial `%ctx` contract can later be refined for explicit reset, context
-organization and incomplete or rejected interactions. No such refinement is
-permission to use solver scheduling as discourse order or to redirect an already
-resolved reference.
+### Deferred refinements
 
-Use E01–E06, E09 and E19 to exercise the accepted application/context rules. Then
-E10–E13 develop temporal conversion, interval constraints and whole/part views.
-E07/E08 and E14–E18 test interactions and boundaries without requiring every
-broader capability to be implemented in the first milestone.
+- Direct `^S` on an unselected span containing different states, and the eventual
+  spelling of the temporal-parent relationship to an object's lifetime T-list.
+- Final `%` versus `%self` ergonomics after substantial temporal models exist.
+- First-argument autofill, positional conveniences, receiver calls and natural
+  language role inference.
+- Realistic walking, complex destination/location constraints, and continuous
+  models such as E12. Continuous trajectories and exact discontinuity conventions
+  are not prerequisites for the discrete examples.
+- Richer `%ctx` organization, reset and incomplete/rejected interaction behavior.
+  Existing bindings remain stable and evaluation scheduling cannot set recency.
+- General inverse planning, physical execution and model-repair/recovery policies.
+
+Use the development groups in the coverage index to stage implementation and
+verification. Design acceptance does not change the engine's supported-feature
+boundary; each implemented increment needs focused behavioral evidence.

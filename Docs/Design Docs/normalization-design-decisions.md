@@ -2820,3 +2820,92 @@ the accepted contract and time/word plan, and removed resolved questions from th
 active open-issue list. Checked documentation whitespace, structure and local
 links. No parser, engine, fixture or expectation changes; no runtime tests run
 or new implementation coverage claimed.
+
+## D100 Template application, model-defined completion and temporal views (2026-10-19)
+
+**Accepted clarification and documentation checkpoint.** The user clarified
+template application, missing parameters and sequence completion, chose `^T`
+and `^S`, confirmed `tItem@[1]^S`, and requested an organized update of the word
+application and time cases. This resolves the corresponding open questions in
+D099. The first development cases remain discrete and deliberately simple.
+
+**Definitions contribute constraints.** Noun-like models may describe members,
+allowed values and evolution; verb-like models contribute states or constraints
+in a T-context. Adjective-like and adverb-like uses constrain existing situations,
+and function words may select spans. These uses share template expansion and
+may be combined in one model. For example, World defines red as a constrained
+color, so `object.color=red` applies that description at the selected occurrence.
+No separate `isRed(object)` mutation mechanism is needed.
+
+The no-escape requirement concerns reference scope and the occurrences to which
+constraints apply. Parameters, supplied global references and inherited embedded
+context provide the established connections. Ordinary constraint propagation
+through explicit relationships may determine unknown facts. It preserves
+qualifications, known prior states and shared declarations; it does not provide
+arbitrary data-parent access or force-replace conflicting facts. This clarifies
+the earlier external-modification question through ordinary template semantics.
+Physical execution remains a separate contract.
+
+**Missing parameters.** Normalize as far as available information permits.
+Independent facts can resolve while dependent facts remain partial, and other
+constraints may determine an omitted value. Authors should write models that
+work with missing parts. Omission alone does not reject a call. First-parameter
+autofill is a later convenience; no general defaults or role inference are
+required for the initial examples.
+
+**Completion is model-defined.** A constraint applying only at the final member
+can identify that member; proved nonmatching continuation can end repetition.
+The existing Earley-like correspondence approach supplies the mechanism. A
+separate loop/termination operator is unnecessary, and missing information is
+not proof of a nonmatch. For the simple completed walk, the final state satisfies
+the destination constraint and all preceding walk states fail it. A destination
+may later describe a region or other range of acceptable values without changing
+this condition. Initial-goal and zero-new-step cases follow the chosen model.
+
+Later incompatible activity can bound an earlier activity without a successful
+goal state: walking at 6:00 and studying by 8:00, under models establishing their
+incompatibility, prevents walking from continuing into studying. An intervening
+`&{...}` leaves the intermediate history unspecified. It does not establish an
+exact endpoint or arrival. Well-written domain models can constrain further
+continuations; model debugging and recovery are separate work.
+
+**Temporal views.** `x^T` is the short spelling for the suggested `x^asTSpan`:
+select the T-span corresponding to the chosen object's state. Selecting a part
+first provides its lower-level view; `%self^T` and `%^T` retain their respective
+subjects under the working scope rules. The span's temporal parent evaluates to
+that object's lifetime T-list. This semantic relationship is independent of
+the physical storage hierarchy and does not authorize implicit parent traversal.
+
+`tItem@[1]^S` selects the first temporal member, then gives its S-item view while
+preserving subject and support. The user explicitly confirmed `@[1]`: item
+indices are one-based. `^S` abbreviates the suggested `^asSList`. T-list selection
+uses the same mechanisms as S-list selection, including the proposed
+`@[start, end-desc]` sugar and intersection-based selection by position,
+description, pattern and duration. The longer span-selector grammar and direct
+`^S` on an unselected multi-state span still need examples. Storage may choose
+an economical level while preserving subjects, supports, cuts and occurrence
+distinctions. The view design remains amenable to pragmatic refinement.
+
+**Interval composition and scope.** The user's walking sketch has an embedded
+prefix with a not-at-store listSpec followed by an at-store member. The prefix
+requirement excludes the final member. Additional descriptions using different
+partitions combine through qualified correspondence under `=` and `==`; they
+need not all be step-based or share change boundaries. No ordinal zipping or
+replacement of operator qualifications is implied. The reorganized coverage
+file includes a provisional binary-part example of asynchronous and implied
+changes; the user will supply a fuller example.
+
+**Reasons, alternatives and limits.** Template constraints compose existing
+normalization relationships across word uses. Partial normalization avoids an
+unnecessary all-arguments-required rule. Model-defined completion avoids a
+special walking controller. `^T` / `^S` retain the external-relationship operator
+and shorten the verbose view names. Keep realistic walking, complex locations,
+continuous trajectories, final self ergonomics and richer session context as
+later work. Grammar proposals and examples do not establish engine coverage.
+
+**Documentation and validation.** Reorganized
+[word-application-and-time-cases.md](word-application-and-time-cases.md), preserved
+E01–E19 identifiers, separated the next discrete cases from deferred models, and
+aligned the brief design-contract and time-plan summaries. Checked the diff,
+Markdown structure and local links. No runtime, parser, fixture or expectation
+changes; no runtime tests or new implementation claims.
