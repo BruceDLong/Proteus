@@ -2441,6 +2441,28 @@ that face; the model describes the affected layer and related cube positions.
 No general overload selection or parameterized cube implementation is accepted
 by this example.
 
+**Current scope: explicit application first.** The user considered receiver syntax
+such as `%ctx.rubix-cube.red-face.turn(clockwise)`, then deferred it because of
+the additional result/receiver questions. Continue with `turn(...)`. A definition
+may also evaluate to an independent value, as in the proposed `sqrt(9)` example;
+application must not universally identify its result with an argument or presume
+that the result becomes the next receiver. This does not claim an implemented
+`sqrt` definition or settle the result of `turn`.
+
+**Exploratory composition example.** The user supplied the schematic sequence
+`%ctx.file.paragraphs[1]~; paragraphs[3]~; 'primary font'=Ariel; paragraphs[2].sentences[2]~`.
+Use it to examine how calls compose with selection, reads, assertions and retained
+path bases. Keep the exploratory base, selected source occurrence, definition
+bindings, and resulting value distinct. The later relative paths appear intended
+to remain relative to the file; that interpretation is not yet a specified scope
+rule. Questions remain about how that base is established, whether argument
+expressions use it, how a call result is selected or queried, and how a described
+state change is applied. A call returning a scalar is not by itself authorization
+to change the next path's base or update an argument. Current parser syntax uses
+`@[...]` for indices and `>>` for replies; the example is not a runnable fixture.
+`%ctx` parses but WorldManager's cursor path still requires an occurrence provider
+for it. No exploratory-interface implementation is accepted by this record.
+
 **Validation boundary.** Documentation only, based on the current parser source
 and the accepted definition/context contract. No parser, engine, fixture, or
 test expectation is changed, and no runtime support is claimed.
