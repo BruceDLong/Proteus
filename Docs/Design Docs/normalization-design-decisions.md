@@ -2577,7 +2577,14 @@ to the stepper at completion. Merely asserting the destination cannot repair an
 incompatible required step. The updated E09 preserves the user's sketch and
 shows how its calls could use explicitly declared named roles.
 
-**Open choices and alternatives.** Exact conjunction/shared-target notation,
+**User confirmation.** The walk example answers the basic simultaneous-process
+versus sequence question: stepping and reorientation combine within a phase;
+the T-list orders the phases. Keep that composition distinction settled while
+working out participant binding, temporal support and state references. The
+coverage document now separates these answered questions from its remaining
+language decisions and the details supplied by individual word models.
+
+**Open choices and alternatives.** Exact shared-target references,
 foot and stepper references, direction's relationship to each phase, and terminal
 location projection remain open. A repeated complete pair ends after a right
 step; a final partial cycle or alternation at individual-step level can allow

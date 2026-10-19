@@ -482,24 +482,49 @@ input arrival where meaningful. These cases become ordinary CodeDog or `.tst`
 checks only as their semantics are accepted and implemented; existing expectations
 and known failures remain intact.
 
+## Composition questions answered by the walk example
+
+The user confirms that the walk example answers the basic distinction between
+simultaneous processes and a sequence: a phase combines stepping and reorientation,
+while its containing T-list orders the left and right phases. Nested T-lists
+describe an activity at several levels, and `&walk(...)` uses ordinary embedding.
+These choices do not require a separate verb-expansion or sequencing operator.
+The remaining questions concern the participants, contexts, temporal supports
+and constraints of those compositions, rather than reopening that distinction.
+
 ## Decisions to settle first
 
-1. How does the walk model connect its walker, starting state, alternating phases,
-   step/reorientation requirements, destination and completion condition? Can it
-   end after either foot, and does "until" require first arrival? Which temporal
-   support comes from context, and which from the definition? Can each step
-   describe an interval of motion? Ordinary embedding is already the basis for
-   `&walk(...)`; no separate endpoint-versus-sequence interpretation is needed.
-2. What is the exact call-site anchor for `%prev`, `%tprev`, `%self` and `%ctx` in
-   direct T-members, identity RHSs, nested records and embedded sequences?
-3. How does explicit whole/part correspondence transport temporal support,
-   membership and indirect effects without equating different occurrences?
-4. How are instant selection, interval selection and throughout/sometime
-   requirements expressed using the existing relationships and qualifiers?
-5. Which missing-role/default rules belong in the first explicit application
-   subset? Until decided, the examples supply every role they use by name.
+1. **Participant and relative-reference binding.** How do the nested calls identify
+   the same stepper, its feet and the relevant preceding state? Specify the anchors
+   for `%prev`, `%tprev`, `%self` and `%ctx` in direct T-members, identity RHSs,
+   nested records and embedded sequences. Which omitted-role/default rules are
+   permitted? Explicit named roles remain the starting point.
+2. **Bindings across time.** How does a model distinguish a supplied location
+   value from a reference to an entity whose location changes? Walking to a
+   person's initial location and following their current location require
+   different descriptions. Preserve the application's binding; define temporal
+   reads through it without silently rebinding the argument at each step.
+3. **States within a span.** How does a caller select the participant's state at
+   entry, completion or an interior time? In particular, connect the final
+   `location=destination` assertion to the final stepper state when the outer
+   member is a nested cycle. Boundary identity is already agreed; acquiring a
+   state at that boundary still needs the model's temporal-value relationships.
+4. **Completion and repetition.** Can a walk end after either foot, and does
+   "until" require first arrival? Include an initially satisfied destination,
+   an unfinished walk, and an impossible required step. These distinctions may
+   be expressed in word models; they do not imply a new built-in loop or planner.
+5. **Temporal support and interval constraints.** Express duration, partial overlap
+   and alignment of processes with different boundaries. Distinguish a condition
+   at sampled step states, throughout the walk, and at some time within it.
+   Grouping processes in one phase answers the composition question without
+   specifying every internal temporal relationship or continuous trajectory.
+6. **Whole/part correspondence.** Make foot, walker and whole-scene descriptions
+   agree on shared occurrences and temporal support, including indirect changes.
+   Histories with different boundaries need correspondence, not equal ordinal
+   positions. Use the accepted occurrence and projection principles to specify
+   the concrete notation and test cases.
 
-Start with E01–E06, E09 and E19 to settle application, context and composition. Then
+Start with E01–E06, E09 and E19 to settle application and context. Then
 E10–E13 determine whether the same rules cover time spans and whole/part views.
 E07/E08 and E14–E18 test interactions and boundaries without requiring every
 broader capability to be implemented in the first milestone.
