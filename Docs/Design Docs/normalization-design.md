@@ -1711,8 +1711,44 @@ Represented finite histories and closed embedded spans are covered. Introducing
 new temporal occurrences through open-tail correspondence or adoption of an
 unacquired temporal constraint source remains unsupported:
 those occurrences require target contexts before applying contextual state rules.
-Likewise, a T context established only after member evaluation cannot yet acquire
-states that need retention; it reports unsupported. Known scalar type inheritance
-remains supported.
+Likewise, a T context established only after member evaluation cannot acquire
+states that need retention; it reports unsupported. D106 establishes the context
+before member evaluation for the named layouts described below. Other late
+context changes retain this boundary. Known scalar type inheritance remains supported.
 Non-temporal finite-tail closure is unchanged. D105 records the design choices,
 performance evidence and exact validation boundary.
+
+## Named occurrence layout before acquisition (D106, 2026-10-21)
+
+The common normalizer can establish the layout of a supplied named list before
+acquiring its members. A pure open repetition contributes its S/T header and
+one template obligation per represented occurrence. Named aliases and explicit
+parameter bindings retain their lexical scope; argument expressions keep their
+caller context. The proof reads declaration headers and template shape, without
+evaluating contextual values, expanding the tail or marking the meaning applied.
+Whole-list normalization, selection, temporal references, occurrence demands and
+expanded output consume this same layout proof.
+
+Supported templates have a proved scalar, wildcard or closed unordered record
+shape and the supplied list has ordered occurrence coordinates. Root qualifications,
+dynamic structural arguments, represented definition prefixes, finite declared
+extents and unordered supplied layouts need general correspondence instead. Named
+units also require their coordinate provider: a scalar base unit can be supplied
+in larger stored groups, so scalar shape does not prove identical member indexes.
+The existing finite homogeneous unit provider remains available; implicit indexing
+cannot use written storage units as a substitute for unproved declared units.
+Ordinary closed non-temporal definitions retain their existing correspondence
+path only when the declaration chain proves that this fallback is appropriate.
+
+Layout readiness does not prove value validity. Selected members still acquire
+the exact enclosing templates, including when a supplied scalar is already known.
+Higher templates project through ordinary descendant correspondence. Whole-list
+normalization still checks its containing definitions and endpoints. Contradictions,
+waits and cancellation retain the existing publication boundary.
+
+Demands acquire the containing semantic header before choosing retention or
+using a cached value. A parser wait retains that header request and its destination;
+completion resumes the same movement. Layout records are request-local and released
+with progress. Fixed-context sequential traversal reads a bounded declaration
+chain per demand and does not scan the parent prefix for each state. This adds
+neither a cursor-owned normalizer nor a general dependency invalidation service.

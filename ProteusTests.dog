@@ -1,6 +1,24 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/namedListLayout/represented
+    unit/namedListLayout/selection
+    unit/namedListLayout/demand
+    unit/namedListLayout/inheritedContext
+    unit/namedListLayout/inheritedRecurrence
+    unit/namedListLayout/parameters
+    unit/namedListLayout/callerContext
+    unit/namedListLayout/descendantBinding
+    unit/namedListLayout/dynamicHeaderBoundary
+    unit/namedListLayout/unorderedBoundary
+    unit/namedListLayout/conflict
+    unit/namedListLayout/groupingSafety
+    unit/namedListLayout/reciprocalGroupingSafety
+    unit/namedListLayout/unitDefinitionWait
+    unit/namedListLayout/definitionWait
+    unit/namedListLayout/demandHeaderWait
+    unit/namedListLayout/lazySuffix
+    unit/namedListLayout/scaling
     unit/temporalNormalization/lateContext
     unit/temporalNormalization/introducedBoundary
     unit/temporalSharing/payloadCost
@@ -162,6 +180,7 @@ runCode=`
     RUN_SELECTED_TESTS()
 `
 FileName = "TestProteus"
+
 
 do ManageCmdLine(cmd)
 
@@ -4650,14 +4669,23 @@ struct GLOBAL {
         our WorldRequest: installed <- agent.normalize(declaration.target)
         if(!installed!.complete()){FAIL("Temporal definition did not install")}
         me List<string>: inputs <- ["timeline:{1 _ _}", "timeline:{{x:1 y:2} {x:3}}"]
+        me int: scenario <- 0
         withEach input in inputs{
             me WorldParseResult: parsed <- agent.worldManager.parse(input)
             if(parsed.target==NULL){FAIL(parsed.error)}
-            me string: original <- toString(parsed.target!.pItem)
             our WorldRequest: request <- agent.normalize(parsed.target)
-            if(request!.status().outcome!=worldUnsupported or request!.publications!=0 or toString(parsed.target!.pItem)!=original){
-                FAIL("Late temporal context silently skipped member acquisition: "+input+": "+request!.error())
+            if(!request!.complete() or !parsed.target!.pItem!.value!.timelike){
+                FAIL("Named T context was not acquired before its members: "+input+": "+request!.error())
             }
+            if(scenario==0){
+                if(!namedLayoutValues(parsed.target,[1,1,1])){FAIL("Named T context lost scalar retention")}
+            }else{
+                our POV: last <- parsed.target!.pItem!.value!.items.tail
+                if(!temporalNormalizationNumber(last,"x",3) or !temporalNormalizationNumber(last,"y",2)){
+                    FAIL("Named T context lost retained record fields")
+                }
+            }
+            scenario <+- 1
         }
         me WorldParseResult: known <- agent.worldManager.parse("timeline:{1 2}")
         if(known.target==NULL){FAIL(known.error)}
@@ -4712,6 +4740,624 @@ struct GLOBAL {
             }
             scenario <+- 1
             agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+}
+
+// Named layouts must be proved in the ordinary normalization path before
+// member acquisition. These tests exercise public requests and demands;
+// there is no second test-only normalizer or cursor producer.
+struct GLOBAL {
+    me bool: namedLayoutValues(our POV: list, me List<int>: values) <- {
+        if(list==NULL or list!.pItem!.value!.overlayType!=LST){return(false)}
+        our POV: member <- list!.pItem!.value!.items.head
+        withEach expected in values{
+            if(member==NULL or member!.pItem!.value!.evalMode!=emLiteral or member!.pItem!.fetchInt()!=expected){return(false)}
+            member <- member!.next
+        }
+        return(member==NULL)
+    }
+
+    void: unit_namedListLayout_represented(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#series={T _| ...}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our infonView: meaning <- declaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL("Named list definition did not install: "+installed!.error())}
+        me string: definitionBefore <- toString(meaning)
+        me List<string>: inputs <- ["series:{T 1 2 3}", "series:{T 1 _ 3}"]
+        me int: scenario <- 0
+        withEach input in inputs{
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our POV: first <- parsed.target!.pItem!.value!.items.head
+            our POV: second <- first!.next; our POV: third <- second!.next
+            our WorldRequest: request <- agent.normalize(parsed.target)
+            if(!request!.complete()){FAIL("Represented named T-list did not acquire its layout: "+request!.error())}
+            me List<int>: expected <- [1,2,3]; if(scenario==1){expected <- [1,1,3]}
+            if(!namedLayoutValues(parsed.target,expected) or parsed.target!.pItem!.value!.items.head!==first or
+               first!.next!==second or second!.next!==third){FAIL("Named list normalization lost values or occurrence identity")}
+            request <- agent.normalize(parsed.target)
+            if(!request!.complete() or !namedLayoutValues(parsed.target,expected) or first!.next!==second){
+                FAIL("Repeated normalization changed a completed named layout")
+            }
+            if(toString(meaning)!=definitionBefore){FAIL("Named instance normalization mutated its definition")}
+            scenario <+- 1
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_namedListLayout_selection(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#series={_| ...}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me WorldParseResult: parsed <- agent.worldManager.parse("series:{1 2 3}@[2]")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our WorldRequest: request <- agent.normalize(parsed.target)
+        if(!request!.complete() or parsed.target!.pItem!.fetchInt()!=2){
+            FAIL("Ordinary selection did not use the declared named-list layout: "+request!.error())
+        }
+        me WorldParseResult: source <- agent.worldManager.parse("series:{1 2 3}")
+        if(source.target==NULL){FAIL(source.error)}
+        cursorDemandLinkMembers(source.target)
+        our POV: second <- source.target!.pItem!.value!.items.head!.next
+        me string: original <- toString(source.target!.pItem)
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),source.target,
+            agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        demand!.inList()
+        if(!demand!.seek(FlexNum("2")) or demand!.current!.pItem!.fetchInt()!=2 or demand!.position!.node!==second){
+            FAIL("Named list demand selected the wrong occurrence: "+demand!.status().detail)
+        }
+        if(toString(source.target!.pItem)!=original){FAIL("A value-ready named selection changed the supplying list")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_namedListLayout_demand(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#series={T _| ...}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me WorldParseResult: parsed <- agent.worldManager.parse("series:{T 1 _ 3}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our POV: second <- first!.next; our POV: third <- second!.next
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),parsed.target,
+            agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        demand!.inList()
+        if(!demand!.seek(FlexNum("1")) or demand!.position!.node!==first or demand!.current!.pItem!.fetchInt()!=1){
+            FAIL("Initial named temporal demand failed: "+demand!.status().detail)
+        }
+        if(!demand!.goNext() or demand!.position!.node!==second or demand!.current!.pItem!.fetchInt()!=1 or
+           !demand!.goNext() or demand!.position!.node!==third or demand!.current!.pItem!.fetchInt()!=3){
+            FAIL("Named temporal traversal lost retention or occurrence identity: "+demand!.status().detail)
+        }
+        if(demand!.goNext() or !demand!.atBoundary or !demand!.goPrev() or demand!.position!.node!==second or
+           demand!.current!.pItem!.fetchInt()!=1){FAIL("Named temporal backward traversal or endpoint is wrong")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_namedListLayout_inheritedContext(me string: testName) <- {
+        me List<string>: definitions <- ["{#series={T ?| ...}}", "{#series={T ...}}", "{#base={T ?| ...} #series=base}"]
+        withEach text in definitions{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: declaration <- agent.worldManager.parse(text)
+            if(declaration.target==NULL){FAIL(declaration.error)}
+            our WorldRequest: installed <- agent.normalize(declaration.target)
+            if(!installed!.complete()){FAIL(installed!.error())}
+            me WorldParseResult: parsed <- agent.worldManager.parse("series:{1 _ _}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our WorldRequest: request <- agent.normalize(parsed.target)
+            if(!request!.complete() or !parsed.target!.pItem!.value!.timelike or !namedLayoutValues(parsed.target,[1,1,1])){
+                FAIL("Inherited T context was not ready before member retention: "+text+": "+request!.error())
+            }
+            me WorldParseResult: selected <- agent.worldManager.parse("series:{1 _ _}")
+            if(selected.target==NULL){FAIL(selected.error)}
+            cursorDemandLinkMembers(selected.target)
+            our POV: selectedLast <- selected.target!.pItem!.value!.items.tail
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),selected.target,
+                agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+            demand!.inList()
+            if(!demand!.seek(FlexNum("3")) or demand!.position!.node!==selectedLast or demand!.current!.pItem!.fetchInt()!=1){
+                FAIL("Seek-last did not acquire inherited T context before predecessor reconstruction: "+demand!.status().detail)
+            }
+            me WorldParseResult: displayed <- agent.worldManager.parse("series:{1 _ _}")
+            if(displayed.target==NULL){FAIL(displayed.error)}
+            cursorDemandLinkMembers(displayed.target)
+            our infonView: displayedRoot <- displayed.target!.pItem
+            me string: displayedOriginal <- toString(displayedRoot)
+            our WorldExpandedPrint: printed <- agent.worldManager.printExpanded(agent.startSession(),displayed.target,8,
+                agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+            if(!printed!.finished or printed!.status().outcome!=worldComplete or printed!.truncated or printed!.emitted!=3 or
+               printed!.text!="series:{T 1 1 1}" or printed!.headerRequest!.publications!=0){
+                FAIL("Expanded output lost inherited temporal context or retained values: "+printed!.text+"; "+printed!.status().detail)
+            }
+            if(displayed.target!.pItem!==displayedRoot or displayedRoot!.value!.timelike){FAIL("Expanded output published its inferred temporal header")}
+            // Expanded output may retain ordinary disposable demand values.
+            // Releasing the display and clearing them restores the exact recipe.
+            printed <- NULL; agent.worldManager.clearCursorCache(displayed.target)
+            if(toString(displayed.target!.pItem)!=displayedOriginal){FAIL("Expanded output permanently changed the supplied history")}
+            parsed <- agent.worldManager.parse("series:{{x:1 y:2} {x:3}}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            request <- agent.normalize(parsed.target)
+            our POV: last <- parsed.target!.pItem!.value!.items.tail
+            if(!request!.complete() or !temporalNormalizationNumber(last,"x",3) or !temporalNormalizationNumber(last,"y",2)){
+                FAIL("Inherited T context did not retain omitted record fields: "+request!.error())
+            }
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_namedListLayout_inheritedRecurrence(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#series={T (%tprev +1)| ...}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me WorldParseResult: whole <- agent.worldManager.parse("series:{0 _ _}")
+        me WorldParseResult: selected <- agent.worldManager.parse("series:{0 _ _}")
+        if(whole.target==NULL or selected.target==NULL){FAIL("Inherited temporal recurrence did not parse")}
+        our WorldRequest: request <- agent.normalize(whole.target)
+        if(!request!.complete() or !namedLayoutValues(whole.target,[0,1,2])){
+            FAIL("Inherited temporal recurrence evaluated before its T context: "+request!.error())
+        }
+        cursorDemandLinkMembers(selected.target)
+        our POV: last <- selected.target!.pItem!.value!.items.tail
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),selected.target,
+            agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        demand!.inList()
+        if(!demand!.seek(FlexNum("3")) or demand!.position!.node!==last or demand!.current!.pItem!.fetchInt()!=2){
+            FAIL("Seek-last evaluated its recurrence in the wrong temporal context: "+demand!.status().detail)
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_namedListLayout_parameters(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#series(seed)={T (%seed)| ...}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our infonView: meaning <- declaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me string: original <- toString(meaning)
+        me WorldParseResult: first <- agent.worldManager.parse("series(seed::7):{T _ _ _}")
+        me WorldParseResult: second <- agent.worldManager.parse("series(9):{T _ _ _}")
+        if(first.target==NULL or second.target==NULL){FAIL("Parameterized named histories did not parse")}
+        our WorldRequest: left <- agent.normalize(first.target)
+        our WorldRequest: right <- agent.normalize(second.target)
+        if(!left!.complete() or !right!.complete() or !namedLayoutValues(first.target,[7,7,7]) or
+           !namedLayoutValues(second.target,[9,9,9])){
+            FAIL("Named layout lost caller bindings or shared them between instances: "+left!.error()+"; "+right!.error())
+        }
+        me WorldParseResult: selected <- agent.worldManager.parse("series(seed::11):{T _ _}")
+        if(selected.target==NULL){FAIL(selected.error)}
+        cursorDemandLinkMembers(selected.target)
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),selected.target,
+            agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        demand!.inList()
+        if(!demand!.seek(FlexNum("2")) or demand!.current!.pItem!.fetchInt()!=11){
+            FAIL("Selected occurrence lost its parameterized parent layout: "+demand!.status().detail)
+        }
+        if(toString(meaning)!=original or !namedLayoutValues(first.target,[7,7,7])){FAIL("Caller arguments contaminated a shared definition or prior instance")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_namedListLayout_callerContext(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#series(seed)={T (%seed +0)| ...}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our infonView: meaning <- declaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me string: original <- toString(meaning)
+        me string: input <- "{11 series(seed::%prev):{T _ _}}"
+        me WorldParseResult: parsed <- agent.worldManager.parse(input)
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our POV: callerValue <- parsed.target!.pItem!.value!.items.head
+        our POV: history <- callerValue!.next
+        our WorldRequest: request <- agent.normalize(parsed.target)
+        if(!request!.complete() or callerValue!.pItem!.fetchInt()!=11 or !namedLayoutValues(history,[11,11])){
+            FAIL("Bound argument was evaluated in the template instead of the caller context: "+request!.error())
+        }
+        parsed <- agent.worldManager.parse(input)
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        callerValue <- parsed.target!.pItem!.value!.items.head; history <- callerValue!.next
+        our POV: last <- history!.pItem!.value!.items.tail
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),history,
+            agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        demand!.inList()
+        if(!demand!.seek(FlexNum("2")) or demand!.current!.pItem!.fetchInt()!=11 or demand!.position!.node!==last){
+            FAIL("Occurrence demand lost the argument's external caller context: "+demand!.status().detail)
+        }
+        if(toString(meaning)!=original or callerValue!.pItem!.fetchInt()!=11){FAIL("Named layout acquisition mutated caller evidence or the definition")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_namedListLayout_descendantBinding(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#series(seed)={T {payload:{leaf:(%seed)}, marker:1}| ...}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me string: input <- "series(seed::7):{T {payload:{leaf:_}, marker:1}}"
+        me WorldParseResult: selected <- agent.worldManager.parse(input)
+        if(selected.target==NULL){FAIL(selected.error)}
+        cursorDemandLinkMembers(selected.target)
+        our POV: state <- selected.target!.pItem!.value!.items.head
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),state,
+            agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        if(!demand!.requireField("payload.leaf") or !demand!.refresh() or
+           !temporalNormalizationNumber(temporalNormalizationField(demand!.current,"payload"),"leaf",7)){
+            FAIL("Required descendant lost its parent template bindings: "+demand!.status().detail)
+        }
+        selected <- agent.worldManager.parse(input)
+        if(selected.target==NULL){FAIL(selected.error)}
+        cursorDemandLinkMembers(selected.target)
+        state <- selected.target!.pItem!.value!.items.head
+        our POV: leaf <- temporalNormalizationField(temporalNormalizationField(state,"payload"),"leaf")
+        if(leaf==NULL){FAIL("Descendant binding source was not represented")}
+        demand <- agent.worldManager.demand(agent.startSession(),leaf,
+            agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        if(!demand!.refresh() or demand!.current!.pItem!.fetchInt()!=7 or demand!.position!.node!==leaf){
+            FAIL("Direct descendant acquisition lost lexical bindings during parent-template projection: "+demand!.status().detail)
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_namedListLayout_dynamicHeaderBoundary(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#series(seed)=%seed}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me string: input <- "series(seed::{T ...}):{1 _ _}"
+        me WorldParseResult: source <- agent.worldManager.parse(input)
+        if(source.target==NULL){FAIL(source.error)}
+        cursorDemandLinkMembers(source.target)
+        me string: original <- toString(source.target!.pItem)
+        our WorldRequest: header <- agent.worldManager.acquireHeader(agent.startSession(),agent.worldManager.graph.position(source.target),
+            agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        if(header!.status().outcome!=worldUnsupported or header!.publications!=0 or toString(source.target!.pItem)!=original){
+            FAIL("Dynamic named meaning silently used the supplied S header: "+header!.error())
+        }
+        our POV: last <- source.target!.pItem!.value!.items.tail
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),last,
+            agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        if(demand!.refresh() or demand!.status().outcome!=worldUnsupported or toString(source.target!.pItem)!=original or last!.cursorValue!=NULL){
+            FAIL("Demand chose S semantics before proving a dynamic named meaning: "+demand!.status().detail)
+        }
+        me WorldParseResult: selected <- agent.worldManager.parse(input+"@[2]")
+        if(selected.target==NULL){FAIL(selected.error)}
+        original <- toString(selected.target!.pItem)
+        our WorldRequest: selection <- agent.normalize(selected.target)
+        if(selection!.status().outcome!=worldUnsupported or selection!.publications!=0 or toString(selected.target!.pItem)!=original){
+            FAIL("Selection bypassed dynamic named-layout readiness: "+selection!.error())
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_namedListLayout_unorderedBoundary(me string: testName) <- {
+        me List<string>: definitions <- ["{#series={T ?| ...}}", "{#series={?| ...}}"]
+        withEach definition in definitions{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: declaration <- agent.worldManager.parse(definition)
+            if(declaration.target==NULL){FAIL(declaration.error)}
+            our WorldRequest: installed <- agent.normalize(declaration.target)
+            if(!installed!.complete()){FAIL(installed!.error())}
+            me WorldParseResult: parsed <- agent.worldManager.parse("series:{x:1, y:2}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            if(parsed.target!.pItem!.orderMode!=uUnordered){FAIL("Unordered named-layout control did not parse as unordered")}
+            cursorDemandLinkMembers(parsed.target)
+            me string: original <- toString(parsed.target!.pItem)
+            our WorldRequest: header <- agent.worldManager.acquireHeader(agent.startSession(),agent.worldManager.graph.position(parsed.target),
+                agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+            if(header!.status().outcome!=worldUnsupported or header!.publications!=0 or toString(parsed.target!.pItem)!=original){
+                FAIL("Pure ordered repetition silently accepted an unordered supplied header: "+header!.error())
+            }
+            our POV: first <- parsed.target!.pItem!.value!.items.head
+            our infonView: recipe <- first!.pItem
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),first,
+                agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+            if(demand!.refresh() or demand!.status().outcome!=worldUnsupported or first!.cursorValue!=NULL or
+               first!.pItem!==recipe or toString(parsed.target!.pItem)!=original){
+                FAIL("Direct member demand bypassed unresolved ordered versus unordered correspondence: "+demand!.status().detail)
+            }
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_namedListLayout_conflict(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#series={T 7| ...} #ordinary={7| ...}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me WorldParseResult: parsed <- agent.worldManager.parse("series:{T 7 8}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        me string: original <- toString(parsed.target!.pItem)
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our POV: second <- first!.next; our infonView: secondRecipe <- second!.pItem
+        our WorldRequest: request <- agent.normalize(parsed.target)
+        if(request!.status().outcome!=worldRejected or request!.publications!=0 or toString(parsed.target!.pItem)!=original or
+           first!.next!==second or second!.pItem!==secondRecipe){
+            FAIL("Named layout readiness skipped a member constraint or published a rejected history: "+request!.error())
+        }
+        parsed <- agent.worldManager.parse("ordinary:{7 8}@[2]")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        original <- toString(parsed.target!.pItem)
+        request <- agent.normalize(parsed.target)
+        if(request!.status().outcome!=worldRejected or request!.publications!=0 or toString(parsed.target!.pItem)!=original){
+            FAIL("Indexed known value bypassed its containing named listSpec: "+request!.error())
+        }
+        parsed <- agent.worldManager.parse("ordinary:{7 8}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        second <- parsed.target!.pItem!.value!.items.tail; secondRecipe <- second!.pItem
+        original <- toString(parsed.target!.pItem)
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),second,
+            agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        if(demand!.refresh() or demand!.status().outcome!=worldRejected or second!.pItem!==secondRecipe or
+           toString(parsed.target!.pItem)!=original or second!.cursorValue!=NULL){
+            FAIL("Demanded known value bypassed its containing named listSpec: "+demand!.status().detail)
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_namedListLayout_groupingSafety(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#second=_ #minute=*3+{second| ...} #hour=*2+{minute| ...} #series={minute| ...}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        // The fixed-hour case exercises the established homogeneous unit
+        // provider. An unbounded named series must prove its declared minute
+        // grouping with or without a separately written source unit.
+        me List<string>: inputs <- ["hour:{second| 1 2 3 4 5 6}@[2]", "series:{1 2 3 4 5 6}@[2]",
+            "series:{second| 1 2 3 4 5 6}@[2]"]
+        me int: scenario <- 0
+        withEach input in inputs{
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            me string: original <- toString(parsed.target!.pItem)
+            our WorldRequest: request <- agent.normalize(parsed.target)
+            // General unit regrouping may remain unsupported in this milestone.
+            // Neither a fixed group nor pure unbounded repetition may succeed
+            // by returning the second physical second.
+            if(scenario==0 and !request!.complete()){FAIL("Established homogeneous unit selection regressed: "+request!.error())}
+            if(request!.complete()){
+                if(parsed.target!.pItem!.type==NULL or parsed.target!.pItem!.type!.typeID()!="minute" or
+                   !namedLayoutValues(parsed.target,[4,5,6])){FAIL("Named layout used physical indexes instead of declared units: "+input)}
+            }else if(request!.status().outcome!=worldUnsupported or request!.publications!=0 or toString(parsed.target!.pItem)!=original){
+                FAIL("Unproved grouping did not preserve its nonpublishing boundary: "+request!.error())
+            }
+            scenario <+- 1
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_namedListLayout_reciprocalGroupingSafety(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#second=_ #minute=*3+{second| ...} #series={second| ...}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me List<string>: inputs <- ["series:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6}}@[2]",
+            "series:{minute:{second| 1 2 3} minute:{second| 4 5 6}}@[2]", "series:{second| 1 2 3}@[2]"]
+        withEach input in inputs{
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            me string: original <- toString(parsed.target!.pItem)
+            our WorldRequest: request <- agent.normalize(parsed.target)
+            if(request!.complete()){
+                if(parsed.target!.pItem!.value!.overlayType!=NUM or parsed.target!.pItem!.value!.evalMode!=emLiteral or
+                   parsed.target!.pItem!.fetchInt()!=2){FAIL("Named second layout indexed supplied minute occurrences: "+input)}
+            }else if(request!.status().outcome!=worldUnsupported or request!.publications!=0 or toString(parsed.target!.pItem)!=original){
+                FAIL("Unproved reciprocal grouping changed the supplied representation: "+request!.error())
+            }
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_namedListLayout_unitDefinitionWait(me string: testName) <- {
+        me List<string>: names <- ["second", "alias"]
+        withEach name in names{
+            withEach indexed in range 0 .. 2{
+                me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+                me WorldParseResult: declaration <- agent.worldManager.parse("{#second=_ #alias=second #series={"+name+"| ...}}")
+                if(declaration.target==NULL){FAIL(declaration.error)}
+                our infonView: meaning <- declaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
+                our WorldRequest: installed <- agent.normalize(declaration.target)
+                if(!installed!.complete()){FAIL(installed!.error())}
+                me string: input <- "series:{1 2}"; if(indexed==1){input <+- "@[2]"}
+                me WorldParseResult: parsed <- agent.worldManager.parse(input)
+                if(parsed.target==NULL){FAIL(parsed.error)}
+                me string: original <- toString(parsed.target!.pItem)
+                agent.worldManager.prepareInput(meaning)
+                our WorldRequest: request
+                if(indexed==1){request <- agent.normalize(parsed.target)}
+                else{
+                    request <- agent.worldManager.acquireHeader(agent.startSession(),agent.worldManager.graph.position(parsed.target),
+                        agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+                }
+                if(request!.status().outcome!=worldWaiting or request!.publications!=0 or
+                   agent.worldManager.control!.inputWaiters.size()!=1 or toString(parsed.target!.pItem)!=original){
+                    FAIL("Pending unit meaning did not suspend named-layout classification: "+request!.error())
+                }
+                me uint64: frames <- request!.framesCreated; me uint64: queue <- request!.queueSteps
+                me uint64: headers <- request!.listLayoutHeaders
+                our infonView:: unrelated; agent.worldManager.inputReady(unrelated)
+                if(request!.framesCreated!=frames or request!.queueSteps!=queue or request!.listLayoutHeaders!=headers){
+                    FAIL("Unrelated input restarted pending unit classification")
+                }
+                meaning!.streamState <- parseDone; agent.worldManager.inputReady(meaning)
+                if(request!.status().outcome!=worldUnsupported or request!.publications!=0 or toString(parsed.target!.pItem)!=original){
+                    FAIL("Resumed named unit was mistaken for an anonymous scalar layout: "+name+": "+request!.error())
+                }
+                if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Completed unit classification retained its parser subscription")}
+                agent.endWorldSessions(); modelMngr.clear()
+            }
+        }
+    }
+
+    void: unit_namedListLayout_definitionWait(me string: testName) <- {
+        withEach cancelled in range 0 .. 2{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: declaration <- agent.worldManager.parse("{#series={T _| ...}}")
+            if(declaration.target==NULL){FAIL(declaration.error)}
+            our infonView: meaning <- declaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
+            our WorldRequest: installed <- agent.normalize(declaration.target)
+            if(!installed!.complete()){FAIL(installed!.error())}
+            me WorldParseResult: parsed <- agent.worldManager.parse("series:{T 1 _ 3}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            me string: original <- toString(parsed.target!.pItem)
+            agent.worldManager.prepareInput(meaning)
+            our WorldRequest: request <- agent.normalize(parsed.target)
+            if(request!.status().outcome!=worldWaiting or request!.publications!=0 or
+               agent.worldManager.control!.inputWaiters.size()!=1 or toString(parsed.target!.pItem)!=original){
+                FAIL("Named layout did not retain a single definition-header wait: "+request!.error())
+            }
+            me uint64: frames <- request!.framesCreated; me uint64: queue <- request!.queueSteps
+            our infonView:: unrelated; agent.worldManager.inputReady(unrelated)
+            if(request!.framesCreated!=frames or request!.queueSteps!=queue){FAIL("Unrelated input restarted named layout acquisition")}
+            if(cancelled==1){request!.cancel()}
+            meaning!.streamState <- parseDone; agent.worldManager.inputReady(meaning)
+            if(cancelled==1){
+                if(request!.status().outcome!=worldCancelled or request!.publications!=0 or toString(parsed.target!.pItem)!=original){
+                    FAIL("Cancelled named-layout acquisition resumed or published")
+                }
+            }else if(!request!.complete() or !namedLayoutValues(parsed.target,[1,1,3])){
+                FAIL("Named layout did not continue after its definition became ready: "+request!.error())
+            }
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Named layout completion retained an input subscription")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_namedListLayout_demandHeaderWait(me string: testName) <- {
+        withEach cancelled in range 0 .. 2{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: declaration <- agent.worldManager.parse("{#series={T ...}}")
+            if(declaration.target==NULL){FAIL(declaration.error)}
+            our infonView: meaning <- declaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
+            our WorldRequest: installed <- agent.normalize(declaration.target)
+            if(!installed!.complete()){FAIL(installed!.error())}
+            me WorldParseResult: parsed <- agent.worldManager.parse("series:{1 _ _}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            cursorDemandLinkMembers(parsed.target)
+            our POV: last <- parsed.target!.pItem!.value!.items.tail
+            me string: original <- toString(parsed.target!.pItem)
+            our WorldSession: session <- agent.startSession()
+            our WorldDemand: demand <- agent.worldManager.demand(session,last,
+                agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+            agent.worldManager.prepareInput(meaning)
+            if(demand!.refresh() or demand!.status().outcome!=worldWaiting or demand!.layoutRequest==NULL or
+               agent.worldManager.control!.inputWaiters.size()!=1 or toString(parsed.target!.pItem)!=original){
+                FAIL("Demand did not suspend before choosing retention in its pending semantic header: "+demand!.status().detail)
+            }
+            our WorldRequest: pending <- demand!.layoutRequest
+            me uint64: frames <- pending!.framesCreated; me uint64: queue <- pending!.queueSteps
+            our infonView:: unrelated; agent.worldManager.inputReady(unrelated)
+            if(pending!.framesCreated!=frames or pending!.queueSteps!=queue){FAIL("Unrelated arrival restarted a semantic-header demand")}
+            if(cancelled==1){agent.worldManager.closeSession(session)}
+            meaning!.streamState <- parseDone; agent.worldManager.inputReady(meaning)
+            if(cancelled==1){
+                if(demand!.refresh() or demand!.status().outcome!=worldCancelled or pending!.publications!=0 or
+                   toString(parsed.target!.pItem)!=original){FAIL("Cancelled semantic-header demand resumed or published")}
+            }else{
+                if(!demand!.refresh() or demand!.position!.node!==last or demand!.current!.pItem!.fetchInt()!=1){
+                    FAIL("Resumed semantic-header demand did not reconstruct the inherited T history: "+demand!.status().detail)
+                }
+                if(pending!.publications!=0){FAIL("Semantic-header acquisition published member values")}
+            }
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Finished semantic-header demand retained a subscription")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_namedListLayout_lazySuffix(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#series={T _| ...}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me WorldParseResult: parsed <- agent.worldManager.parse("series:{T 7 unavailable^T}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our POV: suffix <- first!.next; our infonView: recipe <- suffix!.pItem
+        me string: original <- toString(recipe)
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),parsed.target,
+            agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        demand!.inList()
+        if(!demand!.seek(FlexNum("1")) or demand!.current!.pItem!.fetchInt()!=7 or demand!.position!.node!==first){
+            FAIL("Named layout readiness evaluated an unrequested suffix: "+demand!.status().detail)
+        }
+        if(suffix!.pItem!==recipe or suffix!.cursorValue!=NULL or toString(recipe)!=original or
+           !agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("A layout proof acquired an unrelated suffix value")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_namedListLayout_scaling(me string: testName) <- {
+        withEach form in range 0 .. 2{
+            me uint64: priorFrames <- 0; me uint64: priorRelations <- 0; me uint64: priorPositions <- 0; me uint64: priorQueue <- 0; me uint64: priorHeaders <- 0
+            me int: width <- 16
+            while(width<=64){
+                me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+                me WorldParseResult: declaration <- agent.worldManager.parse("{#series={T (%tprev +1)| ...}}")
+                if(declaration.target==NULL){FAIL(declaration.error)}
+                our WorldRequest: installed <- agent.normalize(declaration.target)
+                if(!installed!.complete()){FAIL(installed!.error())}
+                me string: text <- "series:{T 0"
+                withEach idx in range 1 .. width{text <+- " _"}
+                text <+- "}"
+                me WorldParseResult: parsed <- agent.worldManager.parse(text)
+                if(parsed.target==NULL){FAIL(parsed.error)}
+                me uint64: frames <- 0; me uint64: relations <- 0; me uint64: positions <- 0; me uint64: queue <- 0; me uint64: headers <- 0
+                if(form==0){
+                    our WorldRequest: request <- agent.normalize(parsed.target)
+                    if(!request!.complete()){FAIL("Named recurrence did not normalize: "+request!.error())}
+                    our POV: member <- parsed.target!.pItem!.value!.items.head
+                    withEach ordinal in range 0 .. width{
+                        if(member==NULL or member!.pItem!.value!.evalMode!=emLiteral or member!.pItem!.fetchInt()!=ordinal){
+                            FAIL("Named recurrence skipped or misapplied its contextual template")
+                        }
+                        member <- member!.next
+                    }
+                    if(member!=NULL){FAIL("Named recurrence changed the represented extent")}
+                    frames <- request!.framesCreated; relations <- request!.relationshipsRead
+                    positions <- request!.correspondencePositions; queue <- request!.queueSteps; headers <- request!.listLayoutHeaders
+                }else{
+                    cursorDemandLinkMembers(parsed.target)
+                    our WorldSession: session <- agent.startSession()
+                    our WorldDemand: demand <- agent.worldManager.demand(session,parsed.target,
+                        agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+                    demand!.inList()
+                    if(!demand!.seek(FlexNum("1")) or demand!.current!.pItem!.fetchInt()!=0){FAIL("Named recurrence demand seed failed: "+demand!.status().detail)}
+                    withEach ordinal in range 1 .. width{
+                        if(!demand!.goNext() or demand!.current!.pItem!.fetchInt()!=ordinal){FAIL("Named recurrence demand lost its parent rule: "+demand!.status().detail)}
+                        if(session!.requests.size()>1){FAIL("Named demand retained completed per-member requests")}
+                    }
+                    frames <- demand!.framesCreated; relations <- demand!.relationshipsRead
+                    positions <- demand!.positionsVisited; queue <- demand!.queueSteps; headers <- demand!.listLayoutHeaders
+                    if(demand!.request!=NULL){
+                        frames <+- demand!.request!.framesCreated; relations <+- demand!.request!.relationshipsRead
+                        positions <+- demand!.request!.correspondencePositions; queue <+- demand!.request!.queueSteps; headers <+- demand!.request!.listLayoutHeaders
+                    }
+                }
+                print("Named layout form=",form," width=",width," frames=",frames," relationships=",relations," positions=",positions," queue=",queue," headers=",headers,"\n")
+                if(frames>width*256 or relations>width*128 or positions>width*128 or queue>width*1024 or headers>width*128){FAIL("Named recurrence exceeded bounded per-state work")}
+                if(width>16 and (frames>priorFrames*3+32 or relations>priorRelations*3+32 or positions>priorPositions*3+32 or queue>priorQueue*3+32 or headers>priorHeaders*3+32)){
+                    FAIL("Named layout acquisition repeatedly scanned an already processed prefix")
+                }
+                if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Closed named history retained an input subscription")}
+                priorFrames <- frames; priorRelations <- relations; priorPositions <- positions; priorQueue <- queue; priorHeaders <- headers
+                agent.endWorldSessions(); modelMngr.clear(); width <*- 2
+            }
         }
     }
 }

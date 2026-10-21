@@ -3411,3 +3411,108 @@ All prior fixture expectations were preserved. Validation covers successful and 
 writes through both ordinary publication and cursor-selected states, plus
 wait/cancel atomicity and explicit unsupported boundaries. Slipstream consumer
 and visible rendering validation were not performed.
+
+## D106 — Named layout readiness and retained template obligations (2026-10-21)
+
+**Problem.** Acquiring a represented state requires its containing definition's
+constraints. Applying that definition previously required traversing the members,
+but traversal rejected supplied named lists with unapplied listSpecs. Slipstream's
+Rubix timeline reached this cycle as `Named list layout needs template correspondence`.
+A related ordering issue let demands decide retention from the written S/T header
+before an inherited definition established the semantic T context.
+
+**Decision.** Add a request-local structural proof to the common virtual graph.
+For a pure open repetition, each template must have a proved single-occurrence
+scalar, wildcard or closed unordered record shape. The declaration contributes
+its S/T header and retains the exact template obligations and lexical bindings.
+Aliases are followed within their definition scope; supplied arguments are
+inspected in their caller scope. Scalar expressions need scalar shape evidence,
+not an evaluated contextual value. No prefix, boundary or new occurrence is
+introduced by this proof. Shared definitions and represented occurrence wrappers
+remain unchanged.
+
+The proof establishes addressing and context, not value validity. Member
+acquisition applies the retained templates through ordinary frames. Descendants
+use existing correspondence to project the higher template. Known selected
+scalars still check these obligations; a known value is not evidence that its
+enclosing definition holds. Whole-list normalization retains its final definition
+and endpoint checks. Layout acquisition never marks a meaning applied.
+
+Header consumers, logical traversal, temporal reference ascent/descent, ordinary
+member acquisition and demand readers use the same proof. Before cache or
+predecessor-retention decisions, a demand acquires its containing semantic header
+through WorldManager. Waiting preserves the exact request and movement destination;
+completion continues that movement. Expanded output uses the acquired temporal
+header. Request release removes layout records and their execution references.
+
+**Scope of the proof.** Root refinements or dynamic structural arguments, finite
+definition extents, represented prefixes and general regrouping need their normal
+correspondence proof. An unordered supplied layout cannot borrow ordered repetition
+coordinates; a direct member demand must retain the same member-matching boundary
+as whole-list normalization. Closed ordinary non-temporal definitions retain the existing
+record/positional path only after their declaration chain establishes that the
+fallback is appropriate. An existing but unexamined, pending, ambiguous or
+dynamically evaluated meaning cannot authorize a raw S context. An absent
+applicable definition remains an opaque nominal constraint under the existing
+rules; it contributes no structural equation in this request.
+
+Named units require coordinate correspondence even when their definition is a
+scalar base: the supplied representation can contain larger groups. They are not
+accepted by the single-occurrence theorem. The existing finite homogeneous unit
+provider remains supported. For implicit indexing, an unapplied named meaning
+without proved declared units cannot fall back to the written storage units.
+Explicit unit requests retain their existing provider and boundaries. Template
+classification waits at a pending nominal definition and rechecks that nominal
+after completion, so parse timing cannot bypass the unit rule.
+
+**Alternatives rejected.** Bypassing the named-layout guard would confuse stored
+slots with declared members. Normalizing the parent before each state creates a
+dependency cycle and repeated prefix work. A general value-normalization frame
+with a layout-only flag could evaluate `%tprev` or other contextual values before
+their target context exists. Marking a definition applied after header inspection
+would discard its constraints. A cursor-specific expansion path would duplicate
+the normalizer. Instead, this narrow structural theorem leaves unsupported layouts
+with their correspondence providers and retains ordinary acquisition obligations.
+
+**Cost.** A request memoizes declaration layout by qualified occurrence, and
+template classification retains its position across waits. Direct repeated
+templates are projected without replaying the containing prefix. Separate demand
+requests may inspect the fixed declaration chain again; they do not retain
+completed normalization requests to obtain cross-request caching. Work includes
+declaration depth and template shape; no bound is asserted for arbitrary inference.
+
+For named temporal recurrence histories of **16 / 32 / 64** represented states:
+
+| Consumer | Frames | Relationships acquired | Correspondence positions | Queue steps | Layout header checks |
+| --- | --- | --- | --- | --- | --- |
+| Whole-list normalization | 132 / 260 / 516 | 96 / 192 / 384 | 0 / 0 / 0 | 325 / 645 / 1285 | 3 / 3 / 3 |
+| Sequential demand | 127 / 255 / 511 | 47 / 95 / 191 | 32 / 64 / 128 | 177 / 353 / 705 | 144 / 288 / 576 |
+
+The demand check retains at most one member request after each step. Neither
+consumer leaves input subscriptions on these closed histories. The tests also
+check untouched suffix recipes, stable occurrence identity, distinct argument
+instances, caller-relative expressions, descendant parameter projection, and
+transactional rejection of conflicting known values.
+
+**Validation.** `codeDog Proteus.Lib.dog` regenerated and built the final executable;
+all **18** new ordinary CodeDog checks pass. The full timeout-protected run reports
+**24/608** failures/tests, with exactly the same failure names as the **24/590**
+baseline. The separate print-mode fixtures pass **23/23**. No existing language
+fixture expectation changed. Checks include header/member waits, cancellation,
+parse-order-independent unit classification, both directions of grouped unit
+storage, the existing fixed-hour selection, unordered-layout boundaries and
+inherited-T expanded output. `codeDog BuildProteusGraph.dog` separately regenerated
+and built the shared library.
+
+Slipstream was fully regenerated against the new shared interface; its generated
+ABI agrees with the library manifest and its runtime path points to the canonical
+Proteus shared build. In an isolated GUI run, the initially empty timeline panel
+now visibly renders the Rubix cube and the original named-layout diagnostic is
+absent. Next/Previous were exercised; navigation still reaches
+`Corresponding record field is not established`. A read-only trace identifies
+`rubix-positions` in a derived `rubix-turn-state`: projection of the inherited
+`rubix-state` constraint cannot establish that added field from the base record's
+`thing`, `parts` and `faces` fields. This inherited-record projection boundary is
+the next consumer issue; successful state navigation is not claimed.
+The existing startup normalization diagnostics remain.
+The app closed successfully and no maintained Slipstream source changed.

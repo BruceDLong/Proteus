@@ -5,9 +5,11 @@ struct WorldModelLock: wraps=Nested_Lock_Mutex {}
 #include WorldDemandSelection.dog
 #include WorldDemandCache.dog
 #include WorldDemandRetention.dog
+#include WorldDemandLayout.dog
 #include WorldExpandedPrint.dog
 #include WorldTemporalAcquisition.dog
 #include WorldCheckedViews.dog
+#include WorldListLayout.dog
 
 // Replacement reasoner. Agent owns sessions; WorldManager owns their reasoning.
 // Scalar and closed ordered-list reasoning with local parser completion.
@@ -895,7 +897,7 @@ struct WorldRequest {
         }
         parameterBindings.clear()
         previousValue <- NULL; releaseCheckedViews()
-        stableLayoutProofs.clear(); stableOrderedLayoutProofs.clear()
+        stableLayoutProofs.clear(); stableOrderedLayoutProofs.clear(); listLayouts.clear()
         cursorWrites.clear(); cursorWriteTargets.clear(); associations.clear(); completedOccurrences.clear(); boundaries.clear(); sparseEdits.clear(); unitOrigins.clear(); ready.clear(); attempts.clear(); activeContexts.clear(); edits.clear(); declarations.clear(); declarationOrigins.clear(); root <- NULL; waitingFrame <- NULL
     }
     void: cancel() <- {
@@ -1845,9 +1847,11 @@ struct WorldPOVGraph {
                     walk!.outcome <- worldWaiting; walk!.waiting <- meaning
                     walk!.detail <- "Named list layout is still being parsed"; return(false)
                 }
-                if(meaning!.value!=NULL and meaning!.value!.listSpec!=NULL){
-                    walk!.outcome <- worldUnsupported; walk!.detail <- "Named list layout needs template correspondence"; return(false)
+                our WorldListLayout: layout <- listLayout(request, level!.position)
+                if(layout!.outcome==worldWaiting or (layout!.outcome!=worldReady and layout!.layoutRequired)){
+                    walk!.outcome <- layout!.outcome; walk!.detail <- layout!.detail; walk!.waiting <- layout!.waiting; return(false)
                 }
+                if(layout!.outcome==worldReady){header <- layout!.header}
             }
             level!.concatenated <- scalarExpression(node!.pItem!.value)
             if(!level!.concatenated and header.overlay==LST and header.hasValue){walk!.listTypeProved <- true}
@@ -5395,6 +5399,7 @@ struct WorldManager {
                 if(lookup!.sourceReference==NULL){
                     lookup!.sourceReference <- makeFrame(request, source)
                     lookup!.sourceReference!.navigation <- frame!.navigation
+                    lookup!.sourceReference!.lexicalParameters <- source!.definitionParameters
                     lookup!.sourceReference!.templateContext <- frame!.templateContext or lookup!.parentTemplate
                     if(!lookup!.left!.levels.isEmpty()){lookup!.sourceReference!.navigation <- lookup!.left!.levels[0]!.position}
                     lookup!.sourceReference!.referenceOnly <- true; lookup!.sourceReference!.acquireOnly <- true
@@ -5441,6 +5446,14 @@ struct WorldManager {
         while(frame!.parentContext!=NULL){
             our WorldPosition: parent <- frame!.parentContext
             our infonView: item <- parent!.node!.pItem
+            // A layout obtained from a named template retains its obligations
+            // even when a selected supplied scalar already has a known value.
+            me bool: scopeRequired <- required
+            if(request!.listLayouts.containsKey(parent!.owner)){
+                our WorldListLayout: proved <- request!.listLayouts.at(parent!.owner)
+                scopeRequired <- scopeRequired or (proved!.outcome==worldReady and
+                    graph.samePosition(proved!.position, parent) and !proved!.templates.isEmpty())
+            }
             me WorldScalar: parentHeader <- graph.read(request, parent!.node, parent!.node!.pParent, parent!.input!=NULL)
             if(parentHeader.outcome==worldWaiting){waitAt(request, frame, item); return(true)}
             if(parentHeader.outcome!=worldReady){frame!.facts <- parentHeader; stopFrame(request, frame); return(true)}
@@ -5455,7 +5468,7 @@ struct WorldManager {
                 // Refinement of the same occurrence retains its checked template
                 // constraints. A replacement's fresh value still requests them.
                 if(item!.value!.listSpec!=NULL and
-                   (required or !(item!.listSpecApplied and frame!.context!.node!.pItem===frame!.node!.pItem))){
+                   (scopeRequired or !(item!.listSpecApplied and frame!.context!.node!.pItem===frame!.node!.pItem))){
                     our POV:: spec{937}; spec!.pItem <- item!.value!.listSpec
                     if(!graph.samePosition(frame!.parentMember, frame!.context)){
                         // Apply a higher template to its member, then project
@@ -5478,10 +5491,10 @@ struct WorldManager {
                 else{
                     me int64: index <- frame!.parentWork
                     if(parent!.input!=NULL){index <- index-1}
-                    if(!frame!.predicateOnly and (required or !graph.completeFacts(frame!.facts, frame!.demandSize)) and index<item!.wrkList.size()){
+                    if(!frame!.predicateOnly and (scopeRequired or !graph.completeFacts(frame!.facts, frame!.demandSize)) and index<item!.wrkList.size()){
                         relation <- item!.wrkList[index]; frame!.parentWork <+- 1
                         if(relation==NULL){frame!.facts.outcome <- worldError; frame!.facts.detail <- "Empty parent relationship"; stopFrame(request, frame); return(true)}
-                    }else if(!frame!.predicateOnly and (required or !graph.completeFacts(frame!.facts, frame!.demandSize)) and index==item!.wrkList.size()){
+                    }else if(!frame!.predicateOnly and (scopeRequired or !graph.completeFacts(frame!.facts, frame!.demandSize)) and index==item!.wrkList.size()){
                         if(parent!.argumentEdge==NULL){parent!.argumentEdge <- graph.argumentRelation(item, parentHeader)}
                         relation <- parent!.argumentEdge; frame!.parentWork <+- 1
                     }
@@ -5491,12 +5504,34 @@ struct WorldManager {
             // member. Consume it once after the supplied parent relationships.
             me int64: afterWork <- item!.wrkList.size()+1
             if(parent!.input!=NULL){afterWork <+- 1}
-            if(relation==NULL and !frame!.predicateOnly and (required or !graph.completeFacts(frame!.facts, frame!.demandSize)) and frame!.parentWork==afterWork){
-                frame!.parentWork <+- 1
+            if(relation==NULL and !frame!.predicateOnly and (scopeRequired or !graph.completeFacts(frame!.facts, frame!.demandSize)) and frame!.parentWork==afterWork){
                 if(!parentHeader.meaningApplied and parentHeader.nominal!=NULL and parentHeader.nominal!.defToUse!=NULL and parentHeader.nominal!.defToUse!==item){
-                    Allocate(relation, 939); relation!.pItem <- parentHeader.nominal!.defToUse
-                    relation!.trueByDefinition <- true; request!.meaningEdges <+- 1
-                }
+                    our WorldListLayout: layout <- graph.listLayout(request, parent)
+                    if(layout!.outcome==worldWaiting){waitAt(request, frame, layout!.waiting); return(true)}
+                    if(layout!.outcome==worldReady){
+                        if(frame!.parentLayoutTemplate<layout!.templates.size()){
+                            our POV: spec <- layout!.templates[frame!.parentLayoutTemplate]
+                            frame!.parentLayoutTemplate <+- 1
+                            if(!graph.samePosition(frame!.parentMember, frame!.context)){
+                                relation <- spec; scope <- frame!.parentMember; parentTemplate <- true
+                            }else{
+                                frame!.sourceEdge <- spec; frame!.sourceIsOperand <- false; frame!.sourceIsListSpec <- false; frame!.sourceNameInherited <- true
+                                frame!.prerequisite <- makeFrame(request, spec)
+                                frame!.prerequisite!.expressionParent <- parent!.node
+                                frame!.prerequisite!.navigation <- frame!.navigation; frame!.prerequisite!.templateContext <- true
+                                frame!.prerequisite!.lexicalParameters <- spec!.definitionParameters
+                                frame!.prerequisite!.constraintSource <- true
+                                request!.relationshipsRead <+- 1; request!.templateApplications <+- 1
+                                request!.ready.append(frame); request!.ready.append(frame!.prerequisite); return(true)
+                            }
+                        }else{frame!.parentWork <+- 1}
+                    }else{
+                        frame!.parentWork <+- 1
+                        Allocate(relation, 939); relation!.pItem <- parentHeader.nominal!.defToUse
+                        relation!.trueByDefinition <- true; request!.meaningEdges <+- 1
+                        relation!.definitionParameters <- graph.bindArguments(request, parentHeader.nominal, item, parent)
+                    }
+                }else{frame!.parentWork <+- 1}
             }
             if(relation!=NULL){
                 if(relation!.pParent!=NULL){frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Contextual parent RHS needs occurrence projection"; stopFrame(request, frame); return(true)}
@@ -5523,6 +5558,7 @@ struct WorldManager {
                 if(parentTemplate or relation!.trueByDefinition){
                     our WorldPosition: source <- frame!.lookup!.result!.sourceDomain
                     source!.parent <- scope!.parent; source!.owner <- scope!.node; source!.occurrence <- scope!.occurrence; source!.writable <- false
+                    source!.parameters <- relation!.definitionParameters
                     source!.constraintRoot <- true
                 }
                 // A member is a width-one capture. Fixed member and span
@@ -5546,7 +5582,7 @@ struct WorldManager {
             if(parent!.constraintRoot){frame!.parentContext <- NULL; return(false)}
             request!.ancestrySteps <+- 1
             if(!parent!.embedded){frame!.parentMember <- parent}
-            frame!.parentContext <- parent!.parent; frame!.parentWork <- -1
+            frame!.parentContext <- parent!.parent; frame!.parentWork <- -1; frame!.parentLayoutTemplate <- 0
         }
         return(false)
     }
@@ -5624,10 +5660,16 @@ struct WorldManager {
                     unit <- graph.unitType(request, part!.spec!.value!.listSpec); span <- true; count <- part!.spec!.infSize!.num
                 }else{unit <- graph.unitType(request, part!.spec)}
             }else{
-                me Set<our infonView>: seen
-                our WorldUnit: parent <- graph.unitMeasure(request, source!.node!.pItem!.type, seen)
-                if(parent!=NULL){unit <- parent!.member}
-                if(unit==NULL){unit <- graph.unitType(request, source!.node!.pItem!.value!.listSpec)}
+                if(declaredSource!=NULL){unit <- declaredSource!.member}
+                if(unit==NULL){
+                    // Written units describe storage, not the implicit index
+                    // of an unapplied named meaning. Unproved named layouts
+                    // must return to common correspondence instead of silently
+                    // indexing seconds where the definition declares minutes.
+                    me WorldScalar: header <- graph.read(request, source!.node, source!.node!.pParent, source!.input!=NULL)
+                    if(!header.meaningApplied and header.nominal!=NULL and header.nominal!.defToUse!=NULL){return(NULL)}
+                    unit <- graph.unitType(request, source!.node!.pItem!.value!.listSpec)
+                }
             }
         }else if(part!.pathMode==dotField){unit <- graph.unitType(request, part!.path)}
         if(unit==NULL or (unit!.member==NULL and part!.pathMode!=idxField)){return(NULL)}
@@ -6058,6 +6100,14 @@ struct WorldManager {
                     }
                     path!.cursor <- path!.cursorLayout!.levels.last()!.position; path!.cursorLayout <- NULL; continue()
                 }
+                if(header.overlay==LST and header.hasValue and !header.meaningApplied and header.nominal!=NULL and header.nominal!.defToUse!=NULL){
+                    our WorldListLayout: layout <- graph.listLayout(request, at)
+                    if(layout!.outcome==worldWaiting){waitAt(request, frame, layout!.waiting); return(false)}
+                    if(layout!.outcome!=worldReady and layout!.layoutRequired){
+                        frame!.facts.outcome <- layout!.outcome; frame!.facts.detail <- layout!.detail; stopFrame(request, frame); return(false)
+                    }
+                    if(layout!.outcome==worldReady){header <- layout!.header}
+                }
                 if(header.overlay!=LST or (temporal and !header.timelike) or header.order==uUnordered){path!.source <- at; return(true)}
                 if(previous and header.openTail){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Temporal neighbour needs the preceding endpoint"; stopFrame(request, frame); return(false)}
                 our POV: member <- at!.node!.pItem!.value!.items.head
@@ -6071,6 +6121,14 @@ struct WorldManager {
             me WorldScalar: header <- graph.read(request, parent!.node, parent!.node!.pParent)
             if(header.outcome==worldWaiting){waitAt(request, frame, parent!.node!.pItem); return(false)}
             if(header.outcome!=worldReady){frame!.facts <- header; stopFrame(request, frame); return(false)}
+            if(header.overlay==LST and header.hasValue and !header.meaningApplied and header.nominal!=NULL and header.nominal!.defToUse!=NULL){
+                our WorldListLayout: layout <- graph.listLayout(request, parent)
+                if(layout!.outcome==worldWaiting){waitAt(request, frame, layout!.waiting); return(false)}
+                if(layout!.outcome!=worldReady and layout!.layoutRequired){
+                    frame!.facts.outcome <- layout!.outcome; frame!.facts.detail <- layout!.detail; stopFrame(request, frame); return(false)
+                }
+                if(layout!.outcome==worldReady){header <- layout!.header}
+            }
             // Structural records are not temporal boundaries. Find the
             // nearest enclosing T-level before asking for its neighbour.
             if(temporal and !header.timelike){path!.cursor <- parent; continue()}
@@ -6420,8 +6478,17 @@ struct WorldManager {
         // Header consumers share parser waits without evaluating a recipe,
         // applying relationships or requesting any list members.
         if(frame!.headerOnly){
-            frame!.facts <- graph.read(request, frame!.node, frame!.node!.pParent)
+            frame!.facts <- graph.read(request, frame!.node, frame!.node!.pParent, frame!.navigation!=NULL and frame!.navigation!.input!=NULL)
             if(frame!.facts.outcome==worldWaiting){waitAt(request, frame, frame!.node!.pItem); return()}
+            if(frame!.facts.outcome==worldReady and frame!.facts.overlay==LST and frame!.facts.hasValue and
+               !frame!.facts.meaningApplied and frame!.facts.nominal!=NULL and frame!.facts.nominal!.defToUse!=NULL){
+                our WorldPosition: at <- frame!.navigation
+                if(at==NULL){at <- graph.position(frame!.node)}
+                our WorldListLayout: layout <- graph.listLayout(request, at)
+                if(layout!.outcome==worldWaiting){waitAt(request, frame, layout!.waiting); return()}
+                if(layout!.outcome!=worldReady and layout!.layoutRequired){frame!.facts.outcome <- layout!.outcome; frame!.facts.detail <- layout!.detail}
+                else if(layout!.outcome==worldReady){frame!.facts <- layout!.header}
+            }
             request!.acquiredHeader <- frame!.facts
             frame!.initialized <- true; frame!.finished <- true
             if(frame!.facts.outcome!=worldReady){stopFrame(request, frame)}
@@ -6473,6 +6540,20 @@ struct WorldManager {
         }
         if(frame!.facts.outcome!=worldReady){
             stopFrame(request, frame); return()
+        }
+        if(!frame!.layoutPrepared and !frame!.projected and frame!.facts.overlay==LST and frame!.facts.hasValue and
+           !frame!.facts.meaningApplied and frame!.facts.nominal!=NULL and frame!.facts.nominal!.defToUse!=NULL){
+            our WorldPosition: at <- frame!.navigation
+            if(at==NULL){at <- graph.position(frame!.node)}
+            our WorldListLayout: layout <- graph.listLayout(request, at)
+            if(layout!.outcome==worldWaiting){waitAt(request, frame, layout!.waiting); return()}
+            // Other meanings retain the general normalization path. A layout
+            // consumer cannot use them until that path proves correspondence.
+            if(layout!.outcome==worldReady){
+                frame!.facts.timelike <- layout!.header.timelike
+                frame!.facts.order <- layout!.header.order
+            }
+            frame!.layoutPrepared <- true
         }
         if(frame!.temporalMembers==NULL and !frame!.constraintSource and !frame!.projected and
            frame!.facts.overlay==LST and frame!.facts.hasValue and frame!.facts.timelike and
@@ -7003,7 +7084,7 @@ struct WorldDemand {
     // Configure before initialization. A requirement is a known value, not a
     // demand for size or for recursive completion of the entire state.
     me bool: requireField(me string: path) <- {
-        if(hasValue or pendingPosition!=NULL or path==""){return(false)}
+        if(hasValue or pendingPosition!=NULL or layoutRequest!=NULL or path==""){return(false)}
         me List<string>: names
         me string: remaining <- path
         while(remaining!=""){
@@ -7158,18 +7239,15 @@ struct WorldDemand {
         if(position!=NULL){list <- logicalList(position)}
     }
     // A list anchor is useful before its first occurrence has been produced.
-    void: inList() <- {if(!hasValue and pendingPosition==NULL and selectionRequest==NULL){list <- position}}
+    void: inList() <- {if(!hasValue and pendingPosition==NULL and selectionRequest==NULL and layoutRequest==NULL){list <- position}}
     our WorldPosition: logicalList(our WorldPosition: at) <- {
         our WorldPosition: scope <- at!.parent
         while(scope!=NULL and scope!.embedded){scope <- scope!.parent}
         return(scope)
     }
-    me bool: temporal(our WorldPosition: at) <- {
-        our WorldPosition: scope <- logicalList(at)
-        return(scope!=NULL and scope!.node!.pItem!.value!.timelike)
-    }
     void: retireSelection() <- {
         if(selectionRequest==NULL){return()}
+        listLayoutHeaders <+- selectionRequest!.listLayoutHeaders
         navigationFrames <+- selectionRequest!.framesCreated
         framesCreated <+- selectionRequest!.framesCreated; relationshipsRead <+- selectionRequest!.relationshipsRead
         queueSteps <+- selectionRequest!.queueSteps; positionsVisited <+- selectionRequest!.correspondencePositions
@@ -7221,6 +7299,7 @@ struct WorldDemand {
     our WorldPosition: snapshot() <- {return(snapshotOf(current, position))}
     void: retireRequest() <- {
         if(request!=NULL){
+            listLayoutHeaders <+- request!.listLayoutHeaders
             framesCreated <+- request!.framesCreated; relationshipsRead <+- request!.relationshipsRead
             queueSteps <+- request!.queueSteps; positionsVisited <+- request!.correspondencePositions
             manager!.release(session, request)
@@ -7330,40 +7409,24 @@ struct WorldDemand {
         return(settle())
     }
     me bool: fill(our WorldPosition: destination, me bool: forward <- true) <- {
+        if(layoutRequest!=NULL){return(settleLayoutRequest())}
         if(manager==NULL or session==NULL or session!.closed){movement.outcome <- worldError; movement.detail <- "Applying demand work needs an open execution context"; return(false)}
         if(destination==NULL){movement.outcome <- worldError; movement.detail <- "Demand needs a valid occurrence"; return(false)}
         me WorldModelLock: lock{manager!.control!.mutex}
         destination <- refreshDemandAncestors(destination)
         if(destination==NULL){movement.outcome <- worldPartial; movement.detail <- "Source occurrence is no longer established in its enclosing context"; return(false)}
         clearReplay(); previousValue <- NULL; atBoundary <- false
-        if(available(destination)){
-            retireRequest(); return(prepareValue(destination, destination!.node))
-        }
-        our WorldPosition: input <- demandInput(destination)
-        // An explicitly preserved produced state has already received its
-        // temporal carry. Its enclosing constraints and requested fields still
-        // run, but reapplying carry would fill intentionally unknown members.
-        if(destination!.node!.cursorValue!=NULL and destination!.node!.cursorValue!.owner===destination!.node and
-           destination!.node!.cursorValue!.permanent){
-            startStep(destination); return(settle())
-        }
-        if(!temporal(destination) or !manager!.needsRetainedInput(input!.node!.pItem)){
-            startStep(destination); return(settle())
-        }
-        // Forward is asserted only by the normalizer's neighbour selection.
-        if(hasValue and forward and (available(position) or workingAvailable(position))){
-            previousValue <- snapshot(); startStep(destination); return(settle())
-        }
-        filling <- true; replayCursor <- destination; replayDestination <- destination; noteReplayPositions()
-        return(continueFill())
+        return(requestDemandLayout(destination, forward))
     }
     me bool: refresh() <- {
+        if(layoutRequest!=NULL){return(settleLayoutRequest())}
         if(selectionRequest!=NULL){return(settleSelection())}
         if(pendingPosition!=NULL){return(settle())}
         if(hasValue and (available(position) or workingAvailable(position))){return(true)}
         return(fill(position, false))
     }
     me bool: move(me bool: previous) <- {
+        if(layoutRequest!=NULL){return(settleLayoutRequest())}
         if(selectionRequest!=NULL){return(settleSelection())}
         if(pendingPosition!=NULL){return(settle())}
         if(!hasValue and !refresh()){return(false)}
@@ -7375,6 +7438,7 @@ struct WorldDemand {
         return(settleSelection())
     }
     me bool: select(our PartPath: part) <- {
+        if(layoutRequest!=NULL){return(settleLayoutRequest())}
         if(selectionRequest!=NULL){return(settleSelection())}
         if(pendingPosition!=NULL){return(settle())}
         if(manager==NULL or session==NULL or session!.closed or list==NULL){movement.outcome <- worldError; movement.detail <- "Selection needs an open list context"; return(false)}
@@ -7395,7 +7459,7 @@ struct WorldDemand {
     me bool: goNext() <- {return(move(false))}
     me bool: goPrev() <- {return(move(true))}
     our WorldRequest: writeBack() <- {
-        if(manager==NULL or !hasValue or position==NULL or pendingPosition!=NULL or !position!.writable){return(NULL)}
+        if(manager==NULL or !hasValue or position==NULL or pendingPosition!=NULL or layoutRequest!=NULL or !position!.writable){return(NULL)}
         me WorldModelLock: lock{manager!.control!.mutex}
         our WorldPosition: saved <- snapshot()
         me bool: unchanged <- manager!.graph.cursorValueReady(current)
@@ -7415,6 +7479,7 @@ struct WorldDemand {
         return(manager!.clearCursorCache(logicalList(position)!.node))
     }
     me WorldStatus: status() <- {
+        if(layoutRequest!=NULL){return(layoutRequest!.status())}
         if(selectionRequest!=NULL){return(selectionRequest!.status())}
         if(request!=NULL and pendingPosition!=NULL){return(request!.status())}
         return(movement)
@@ -7447,6 +7512,7 @@ struct TCursor {
         // Existing consumers use pendingPosition as a waiting flag. A reference
         // may still be selecting the destination, so retain its starting scope.
         if(demand!.selectionRequest!=NULL){pendingPosition <- demand!.position; request <- demand!.selectionRequest}
+        if(demand!.layoutRequest!=NULL){pendingPosition <- demand!.layoutDestination; request <- demand!.layoutRequest}
         requiredRequests <- demand!.requiredRequests; requiredFrames <- demand!.requiredFrames
         requiredQueueSteps <- demand!.requiredQueueSteps; requiredRelationships <- demand!.requiredRelationships
         requiredMembersScanned <- demand!.requiredMembersScanned
