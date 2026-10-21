@@ -806,6 +806,44 @@ struct ProteusParser{
         }
         return(-1)
     }
+    me int64: parseWordArguments(our infonView: infn, me int64: pos, me bool: isFromDefn) <- {
+        Allocate(infn!.wordArguments)
+        me int64: cPos <- pos+1
+        cPos <+- text!.scrapeWSC(cPos)
+        if(text!.at(cPos)==")"){return(cPos+1-pos)}
+        me Set<string>: labels
+        me int: bindingMode <- 0
+        while(true){
+            me WordArgument: argument
+            me int64: labelLen <- text!.scrapeCID(cPos)
+            me int64: afterLabel <- cPos
+            if(labelLen>0){afterLabel <+- labelLen}
+            afterLabel <+- text!.scrapeWSC(afterLabel)
+            if(labelLen>0 and text!.chkStr(afterLabel, "::")==2){
+                argument.name <- makeStr(cPos, cPos+labelLen)
+                if(labels.contains(argument.name)){setError("Duplicate argument label '"+argument.name+"'", cPos); return(-1)}
+                labels.insert(argument.name)
+                if(bindingMode==1){setError("Cannot mix positional and named arguments", cPos); return(-1)}
+                bindingMode <- 2; cPos <- afterLabel+2
+                cPos <+- text!.scrapeWSC(cPos)
+            }else{
+                if(bindingMode==2){setError("Cannot mix positional and named arguments", cPos); return(-1)}
+                bindingMode <- 1
+            }
+            Allocate(argument.value)
+            me int64: valueLen <- parseInfonView(argument.value, cPos, true, isFromDefn)
+            if(valueLen<=0){if(!errorSet){setError("Expected an argument value", cPos)} return(-1)}
+            cPos <+- valueLen
+            infn!.wordArguments!.values.append(argument)
+            cPos <+- text!.scrapeWSC(cPos)
+            me char: separator <- text!.at(cPos)
+            if(separator==")"){return(cPos+1-pos)}
+            if(separator!=","){setError("Expected ',' or ')' after argument", cPos); return(-1)}
+            cPos <+- 1; cPos <+- text!.scrapeWSC(cPos)
+            if(text!.at(cPos)==")"){setError("Expected an argument after ','", cPos); return(-1)}
+        }
+        return(-1)
+    }
     me int64: parseWordDefn(our infonView: infn, me int64: pos) <- {
         me int64: cPos <- pos
         me int64: len
@@ -1453,6 +1491,12 @@ struct ProteusParser{
             our WordUse:: type
             type!.setAsGiven(makeStr(cPos-len, cPos)) // Set word type
             infn!.type <- type
+            // Attachment distinguishes a call from the next parenthesized item.
+            if(text!.at(cPos)=="("){
+                me int64: callLen <- parseWordArguments(infn, cPos, isFromDefn)
+                if(callLen<0){return(-1)}
+                cPos <+- callLen
+            }
             if(chkStrWSC(cPos, ":")){
                 wordsFound <- false
                 if(text!.chkStr(cPos, "NULL:")!=5){wordsFound <- chk(text!.scrapeUniID(cPos), cPos,len)}
@@ -1878,6 +1922,17 @@ struct InfonViewPrinter{
             me string: wordSysString <- i!.type!.asGiven
             if(wordSysString==""){wordSysString<-"ERROR: NULL-TAG"}
             S <+- wordSysString
+            if(i!.wordArguments!=NULL){
+                S <+- "("
+                me bool: firstArgument <- true
+                withEach argument in i!.wordArguments!.values{
+                    if(!firstArgument){S <+- ", "}
+                    if(argument.name!=""){S <+- argument.name+"::"}
+                    S <+- printInfonViewActual(argument.value, used, false, isSpec, verbosity, special, printMode)
+                    firstArgument <- false
+                }
+                S <+- ")"
+            }
             if(i!.viewMode != vmAny or i!.independentTemporalValue){S <+- ":"}
         }
         me bool: isMDots

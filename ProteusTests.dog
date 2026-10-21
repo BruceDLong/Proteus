@@ -1,6 +1,9 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/wordArguments/isolation
+    unit/wordArguments/invalidCalls
+    unit/wordArguments/partial
     unit/parserWords/parameters
     unit/parserWords/invalidParameters
     unit/parserWords/nestedScope
@@ -2209,7 +2212,7 @@ struct GLOBAL {
         our infonView: use <- parseAndExtract(testName, "give")
         our POV:: target{501}; target!.pItem <- use
         request <- agent.normalize(target)
-        if(request!.status().outcome!=worldUnsupported or request!.error()!="Definition parameter binding is not implemented"){FAIL("Parameter evaluation did not report its implementation boundary")}
+        if(request!.failed()){FAIL("Omitted parameters should permit partial normalization: "+request!.error())}
         agent.endWorldSessions(); modelMngr.clear()
     }
     void: unit_parserWords_invalidParameters(me string: testName) <- {
@@ -2246,8 +2249,8 @@ struct GLOBAL {
         if(parsed!.value!.items.head!.next!.pItem!.definedWord!.hasParameterList){FAIL("Signature leaked to the next declaration")}
     }
     void: unit_parserWords_streamedSyntax(me string: testName) <- {
-        me string: source <- "{#give(actor, item) = %item^T@[1]^S}"
-        me List<int>: cuts <- [7, 10, 13, 24, 26, 29, 32]
+        me string: source <- "{#give(actor, item) = %item^T@[1]^S give(actor::3, item::4)}"
+        me List<int>: cuts <- [7, 10, 13, 24, 26, 29, 32, 40, 47, 56, 58]
         withEach cut in cuts{
             me ProteusCore: core; core.init("")
             me strBuf: input; input.init(testName); input.putStr(source.subStr(0, cut))
@@ -2298,6 +2301,116 @@ struct GLOBAL {
             agent.endWorldSessions(); modelMngr.clear()
             if(!unsupported or detail!="Temporal view conversion is not implemented"){FAIL("Unimplemented view was treated as an external association")}
         }
+    }
+}
+
+// Calls use the production parser, request lifecycle and shared declarations.
+struct GLOBAL {
+    void: unit_wordArguments_isolation(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declarations <- agent.worldManager.parse("{#ident(item)=%item #outer(item)=ident(item::%item) #constant(item)=5}")
+        if(declarations.target==NULL){FAIL(declarations.error)}
+        me string: before <- toString(declarations.target!.pItem)
+        our WorldRequest: request <- agent.normalize(declarations.target)
+        if(request!.failed()){FAIL(request!.error())}
+        me List<string>: calls <- ["ident(item::3)", "ident(item::8)", "outer(item::9)", "constant(item::unavailable)"]
+        me List<int>: expectedValues <- [3, 8, 9, 5]
+        withEach idx in range 0 .. calls.size(){
+            me WorldParseResult: call <- agent.worldManager.parse(calls[idx])
+            if(call.target==NULL){FAIL(call.error)}
+            request <- agent.normalize(call.target)
+            if(request!.failed() or call.target!.pItem!.fetchInt()!=expectedValues[idx]){FAIL("Application failed: "+calls[idx]+": "+request!.error())}
+            our WordUse: binding <- call.target!.pItem!.type
+            request <- agent.normalize(call.target)
+            if(request!.failed() or call.target!.pItem!.type!.baseDefinition!==binding!.baseDefinition){FAIL("Application rebound on repeated normalization")}
+            if(request!.framesCreated!=0 or request!.queueSteps!=0){FAIL("Completed application repeated normalization work")}
+        }
+        me List<int>: widths <- [16, 32, 64]
+        withEach width in widths{
+            me string: input <- "{"
+            withEach idx in range 0 .. width{input <+- "ident("+toString(idx)+") "}
+            input <+- "}"
+            me WorldParseResult: batch <- agent.worldManager.parse(input)
+            request <- agent.normalize(batch.target)
+            if(!request!.complete()){FAIL("Independent call batch did not complete: "+request!.error())}
+            our POV: member <- batch.target!.pItem!.value!.items.head
+            withEach idx in range 0 .. width{
+                if(member==NULL or member!.pItem!.fetchInt()!=idx){FAIL("Batch application mixed argument values")}
+                member <- member!.next
+            }
+            print("Word arguments ", width, ": frames=", request!.framesCreated,
+                " relationships=", request!.relationshipsRead, " queue=", request!.queueSteps,
+                " sequenceVisits=", request!.sequenceVisits, "\n")
+        }
+        me string: after <- toString(declarations.target!.pItem)
+        agent.endWorldSessions(); modelMngr.clear()
+        REQUIRE(after==before)
+    }
+    void: unit_wordArguments_invalidCalls(me string: testName) <- {
+        me List<string>: malformed <- ["ident(item::1,item::2)", "ident(item::)", "ident(1,)", "ident(1 item::2)", "ident(1,item::2)", "ident(item::1,2)", "ident(item::1"]
+        withEach input in malformed{
+            me ProteusParser: parser{NULL, false, 0}; parser.initParseFromString(testName, input)
+            our infonView:: value; parser.doParse(value)
+            if(!parser.doesParseHaveError()){FAIL("Invalid call parsed: "+input)}
+        }
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declarations <- agent.worldManager.parse("{#ident(item)=%item #plain=7}")
+        our WorldRequest: request <- agent.normalize(declarations.target)
+        me List<string>: invalid <- ["ident(other::1)", "ident(1,2)", "plain(item::1)", "plain(1)"]
+        withEach input in invalid{
+            me WorldParseResult: call <- agent.worldManager.parse(input)
+            if(call.target==NULL){FAIL(call.error)}
+            me string: before <- toString(call.target!.pItem)
+            request <- agent.normalize(call.target)
+            if(request!.status().outcome!=worldRejected or toString(call.target!.pItem)!=before){FAIL("Invalid binding did not reject atomically: "+input)}
+        }
+        me WorldParseResult: recursive <- agent.worldManager.parse("{#repeat(item)=repeat(item::%item)}")
+        request <- agent.normalize(recursive.target)
+        recursive <- agent.worldManager.parse("repeat(1)")
+        request <- agent.normalize(recursive.target)
+        if(request!.status().outcome!=worldUnsupported){FAIL("Unbounded recursive application was not diagnosed")}
+        me WorldParseResult: shared <- agent.worldManager.parse("{#change(item)=%item.x=7; #holder=change(item::{x:_})}")
+        request <- agent.normalize(shared.target)
+        me string: before <- toString(shared.target!.pItem)
+        me WorldParseResult: call <- agent.worldManager.parse("holder")
+        request <- agent.normalize(call.target)
+        if(request!.status().outcome!=worldUnsupported or toString(shared.target!.pItem)!=before){FAIL("Borrowed argument literal was modified or lost its scope")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+    void: unit_wordArguments_partial(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declarations <- agent.worldManager.parse("{#ident(item)=%item #fixed(item)=%item=7 #same(item)={%item %item} #grouped(item)={(%item) (%item)}}")
+        our WorldRequest: request <- agent.normalize(declarations.target)
+        me WorldParseResult: missing <- agent.worldManager.parse("ident()")
+        request <- agent.normalize(missing.target)
+        if(request!.status().outcome!=worldPartial){FAIL("Missing argument was not left partial: "+request!.error())}
+        me WorldParseResult: constrained <- agent.worldManager.parse("fixed()")
+        request <- agent.normalize(constrained.target)
+        if(request!.failed() or constrained.target!.pItem!.fetchInt()!=7){FAIL("Model did not constrain the omitted argument: "+request!.error())}
+        me WorldParseResult: conflict <- agent.worldManager.parse("fixed(8)")
+        request <- agent.normalize(conflict.target)
+        if(request!.status().outcome!=worldRejected){FAIL("Argument conflict was not rejected")}
+        me WorldParseResult: caller <- agent.worldManager.parse("{_ fixed(item::%prev)}")
+        request <- agent.normalize(caller.target)
+        if(!request!.complete() or caller.target!.pItem!.value!.items.head!.pItem!.fetchInt()!=7){FAIL("Argument deduction did not reach the caller's returned occurrence: "+request!.error())}
+        me List<string>: inverse <- ["same():{7 8}", "grouped():{7 8}", "same(_):{7 8}", "ident()=7"]
+        withEach input in inverse{
+            me WorldParseResult: call <- agent.worldManager.parse(input)
+            request <- agent.normalize(call.target)
+            if(request!.status().outcome!=worldUnsupported){FAIL("Unproved inverse binding was accepted: "+input+": "+request!.error())}
+        }
+        conflict <- agent.worldManager.parse("same(7):{7 8}")
+        request <- agent.normalize(conflict.target)
+        if(request!.status().outcome!=worldRejected){FAIL("Repeated known argument conflict was not rejected")}
+        missing <- agent.worldManager.parse("ident()")
+        request <- agent.normalize(missing.target)
+        if(!missing.target!.pItem!.parameterBindingRequired){FAIL("Partial argument lost its binding obligation")}
+        me WorldParseResult: extraValue <- agent.worldManager.parse("7")
+        our POV: extra <- extraValue.target
+        missing.target!.pItem!.wrkList.append(extra); missing.target!.pItem!.noteNormalizationWork()
+        request <- agent.normalize(missing.target)
+        if(request!.status().outcome!=worldUnsupported){FAIL("Published unknown argument became an independent wildcard")}
+        agent.endWorldSessions(); modelMngr.clear()
     }
 }
 

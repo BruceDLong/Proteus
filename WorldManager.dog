@@ -156,7 +156,22 @@ struct WorldOpenAlignment {
 
 // Occurrence paths borrow the model. They are local to a live request, not
 // a persistent record of parent merge progress.
+struct WorldArgumentBinding {
+    our POV: expression
+    our WorldPosition: caller
+    me bool: omitted <- false
+    me bool: borrowed <- false
+    // Direct reads of an omitted scalar slot can receive a later checked
+    // constraint in this application, without replaying normalization.
+    me List<our WorldFrame>: unresolvedReads
+}
+struct WorldBindings {
+    our WordDefn: definition
+    our WorldPosition: caller
+    me Map<string, our WorldArgumentBinding>: arguments
+}
 struct WorldPosition {
+    our WorldBindings: parameters
     // Source requirements stop here; navigation still retains its caller context.
     me bool: constraintRoot <- false
     our POV: owner
@@ -407,6 +422,7 @@ struct WorldFieldMerge {
 }
 struct WorldScalar {
     me bool: independent <- false
+    me bool: parameterBindingRequired <- false
     // An unbound contextual recipe differs from a proved absent neighbour.
     me bool: contextRequired <- false
     me bool: contextAbsent <- false
@@ -594,6 +610,12 @@ struct WorldPath {
 }
 
 struct WorldFrame {
+    // Lexical parameters survive listSpec projection to a new navigation site.
+    our WorldBindings: lexicalParameters
+    our WorldFrame: parameterValue
+    our WorldArgumentBinding: parameterBinding
+    our WorldFrame: parameterConstraints
+    me bool: parameterMerged <- false
     our infonView: deferredValue
     our WorldFrame: deferredInput
     our WorldRequirement: deferredIdentity
@@ -776,7 +798,12 @@ struct WorldRequest {
     // Normalization drains runnable work before returning. Taking this lock
     // also waits for any active publication to finish; Waiting stays visible.
     void: waitForCompletion() <- {me WorldModelLock: lock{control!.mutex}}
+    me List<our WorldBindings>: parameterBindings
     void: releaseProgress() <- {
+        withEach bindings in parameterBindings{
+            withEach argument in bindings!.arguments{argument!.unresolvedReads.clear()}
+        }
+        parameterBindings.clear()
         cursorWrites.clear(); cursorWriteTargets.clear(); associations.clear(); completedOccurrences.clear(); boundaries.clear(); sparseEdits.clear(); unitOrigins.clear(); ready.clear(); attempts.clear(); activeContexts.clear(); edits.clear(); declarations.clear(); declarationOrigins.clear(); root <- NULL; waitingFrame <- NULL
     }
     void: cancel() <- {
@@ -824,6 +851,8 @@ struct WorldCursorValue {
 }
 
 struct POV {
+    // Lexical scope carried by a definition-application relationship.
+    our WorldBindings: definitionParameters
     our WorldCursorValue: cursorValue
     // A working view keeps source context without identifying its reusable storage.
     our WorldPosition: worldContext
@@ -887,7 +916,7 @@ struct WorldPOVGraph {
     // an ordinary matching constraint even when it uses the same name.
     me string: pathOperator(our infonView: item) <- {
         if(item!.type!=NULL and item!.viewMode==vmAny and !item!.invertMatch and item!.addedTypes.isEmpty() and
-           item!.innr==NULL and item!.funcArgs==NULL and item!.value!.evalMode==emUnknown and item!.infSize!.evalMode==emUnknown){return(item!.type!.typeID())}
+           item!.innr==NULL and item!.funcArgs==NULL and item!.wordArguments==NULL and item!.value!.evalMode==emUnknown and item!.infSize!.evalMode==emUnknown){return(item!.type!.typeID())}
         return("")
     }
     our POV: associationAnchor(our WorldPosition: source) <- {
@@ -934,6 +963,69 @@ struct WorldPOVGraph {
         else{definition!.langSpecTag <- unicodeMgr.normalizeStr(definition!.UsageTags[0])}
         addDefinition(request!.declarations, definition)
         return(definition)
+    }
+    me string: checkArguments(our infonView: item, our WordUse: word) <- {
+        if(item!.wordArguments==NULL){return("")}
+        if(word==NULL or word!.baseDefinition==NULL){return("Call needs an available definition")}
+        our WordDefn: definition <- word!.baseDefinition
+        me int64: index <- 0
+        withEach argument in item!.wordArguments!.values{
+            if(argument.name!=""){
+                if(!definition!.hasParameter(argument.name)){return("Unknown argument label '"+argument.name+"'")}
+            }else if(index>=definition!.parameterNames.size()){return("Too many positional arguments")}
+            index <+- 1
+        }
+        return("")
+    }
+    our WorldBindings: bindArguments(our WorldRequest: request, our WordUse: word, our infonView: item, our WorldPosition: caller) <- {
+        if(word==NULL or word!.baseDefinition==NULL or word!.baseDefinition!.parameterNames.isEmpty()){return(NULL)}
+        our WorldBindings: ancestor <- parameterScope(caller)
+        while(ancestor!=NULL){
+            if(ancestor!.definition===word!.baseDefinition){
+                request!.outcome <- worldUnsupported; request!.detail <- "Recursive parameterized application needs a recursive proof"; return(NULL)
+            }
+            ancestor <- parameterScope(ancestor!.caller)
+        }
+        our WorldBindings:: bindings
+        bindings!.definition <- word!.baseDefinition; bindings!.caller <- caller
+        request!.parameterBindings.append(bindings)
+        withEach name in word!.baseDefinition!.parameterNames{
+            our WorldArgumentBinding:: binding
+            Allocate(binding!.expression, 947); Allocate(binding!.expression!.pItem)
+            binding!.expression!.pItem!.itmMode <- mItem; binding!.expression!.pItem!.streamState <- parseDone
+            binding!.expression!.pItem!.viewMode <- vmAny
+            binding!.expression!.pItem!.value!.evalMode <- emUnknown
+            binding!.expression!.pItem!.infSize!.evalMode <- emUnknown
+            binding!.omitted <- true
+            bindings!.arguments.insert(name, binding)
+        }
+        if(item!.wordArguments!=NULL){
+            me int64: index <- 0
+            withEach argument in item!.wordArguments!.values{
+                me string: name <- argument.name
+                if(name==""){name <- word!.baseDefinition!.parameterNames[index]}
+                our WorldArgumentBinding: binding <- bindings!.arguments.at(name)
+                // The expression header belongs to this application; its
+                // payload and caller occurrence remain borrowed.
+                binding!.expression!.pItem! <- argument.value!
+                binding!.caller <- caller; binding!.omitted <- false
+                our WorldPosition: scope <- caller
+                while(scope!=NULL){
+                    if(scope!.node!.trueByDefinition){binding!.borrowed <- true; break()}
+                    scope <- scope!.parent
+                }
+                index <+- 1
+            }
+        }
+        return(bindings)
+    }
+    our WorldBindings: parameterScope(our WorldPosition: at) <- {
+        while(at!=NULL){
+            if(at!.parameters!=NULL){return(at!.parameters)}
+            if(at!.node!.trueByDefinition){return(NULL)}
+            at <- at!.parent
+        }
+        return(NULL)
     }
     // An existing binding is stable. A fresh use must have one applicable
     // declaration; overload search and morphological lookup are later work.
@@ -1274,6 +1366,7 @@ struct WorldPOVGraph {
         }
         our infonView: item <- node!.pItem
         facts.independent <- item!.independentTemporalValue
+        facts.parameterBindingRequired <- item!.parameterBindingRequired
         if(request!.edits.containsKey(item)){return(request!.edits.at(item)!.facts)}
         if(item!.graphParseError!=""){
             facts.outcome <- worldError; facts.detail <- item!.graphParseError; return(facts)
@@ -1308,6 +1401,14 @@ struct WorldPOVGraph {
             facts.detail <- "This request needs semantics beyond the scalar milestone"; return(facts)
         }
         facts <- bind(request, facts, item!.type)
+        if(facts.outcome==worldReady){
+            me string: argumentError <- checkArguments(item, facts.nominal)
+            if(argumentError!=""){
+                facts.outcome <- worldRejected
+                if(facts.nominal==NULL or facts.nominal!.baseDefinition==NULL){facts.outcome <- worldUnsupported}
+                facts.detail <- argumentError; return(facts)
+            }
+        }
         if(item!.type==NULL and !item!.addedTypes.isEmpty()){
             facts <- bind(request, facts, item!.addedTypes[0]); facts.inheritedName <- true
         }
@@ -1442,7 +1543,7 @@ struct WorldPOVGraph {
     me bool: samePosition(our WorldPosition: left, our WorldPosition: right) <- {
         while(left!=NULL and right!=NULL){
             if(left===right){return(true)}
-            if(left!.occurrence!==right!.occurrence){return(false)}
+            if(left!.occurrence!==right!.occurrence or left!.parameters!==right!.parameters){return(false)}
             left <- left!.parent; right <- right!.parent
         }
         return(left==NULL and right==NULL)
@@ -1561,6 +1662,7 @@ struct WorldPOVGraph {
                 expanded!.owner <- level!.position!.owner; expanded!.occurrence <- level!.position!.occurrence; expanded!.embedded <- level!.position!.embedded
                 expanded!.constraintRoot <- level!.position!.constraintRoot
                 expanded!.writable <- false
+                expanded!.parameters <- bindArguments(request, header.nominal, node!.pItem, level!.position)
                 level!.position <- expanded
                 continue()
             }
@@ -1658,6 +1760,13 @@ struct WorldPOVGraph {
     our POV: requestMeaning(our WorldRequest: request, our WorldFrame: frame) <- {
         frame!.meaningRequested <- true; request!.meaningEdges <+- 1
         our POV:: meaning{939}; meaning!.pItem <- frame!.facts.nominal!.defToUse; meaning!.trueByDefinition <- true
+        our WorldPosition: caller <- frame!.navigation
+        if(frame!.lexicalParameters!=NULL and parameterScope(caller)!==frame!.lexicalParameters){
+            our WorldPosition: lexical <- position(frame!.node)
+            if(caller!=NULL){lexical! <- caller!}
+            lexical!.parameters <- frame!.lexicalParameters; caller <- lexical
+        }
+        meaning!.definitionParameters <- bindArguments(request, frame!.facts.nominal, frame!.node!.pItem, caller)
         return(meaning)
     }
 
@@ -1677,7 +1786,7 @@ struct WorldPOVGraph {
                 frame!.priorOperand <- operand; frame!.nextOperand <- operand!.next
                 frame!.sourceIsOperand <- true; return(operand)
             }
-            if(frame!.operandsRead>0 or memberSequence(frame)){finishExpression(frame)}
+            if(frame!.operandsRead>0 or memberSequence(frame)){finishExpression(request, frame)}
             if(frame!.facts.outcome!=worldReady){return(NULL)}
             frame!.expressionSlot <+- 1
             frame!.operandsRead <- 0; frame!.priorOperand <- NULL
@@ -1793,8 +1902,18 @@ struct WorldPOVGraph {
         return(left)
     }
 
-    void: finishExpression(our WorldFrame: frame) <- {
+    void: finishExpression(our WorldRequest: request, our WorldFrame: frame) <- {
         if(memberSequence(frame)){
+            if(parameterScope(frame!.navigation)!=NULL and frame!.facts.sequence!=NULL){
+                me WorldListCursor: members; members.push(frame!.facts.sequence)
+                our WorldFrame: member <- members.next()
+                frame!.facts.contentsComplete <- true
+                while(member!=NULL){
+                    frame!.facts.contentsComplete <- frame!.facts.contentsComplete and completeFacts(member!.facts, false)
+                    member <- members.next()
+                }
+                request!.sequenceVisits <+- members.visits
+            }
             // An invalid existing span extent is not an inferred item count.
             // Preserve it for correspondence rather than replacing it with a count.
             if(frame!.facts.hasSize and (frame!.facts.size<0 or frame!.facts.size.getDenominator()!=1)){
@@ -1874,6 +1993,7 @@ struct WorldPOVGraph {
     // Ready=yes, Rejected=no, Partial=not enough evidence. Work only on local
     // facts: a negative template must not acquire its candidate's size/value.
     me WorldOutcome: compare(me WorldScalar: required, me WorldScalar: actual) <- {
+        if(required.parameterBindingRequired or actual.parameterBindingRequired){return(worldPartial)}
         if(required.terminalValue!=0 or actual.terminalValue!=0){
             if(required.terminalValue!=actual.terminalValue){
                 if(required.hasValue or required.overlay>=0 or (required.hasSize and required.size!=0)){return(worldRejected)}
@@ -2077,6 +2197,13 @@ struct WorldPOVGraph {
     }
 
     me WorldScalar: merge(me WorldScalar: left, me WorldScalar: right, our POV: edge) <- {
+        // Correspondence must not independently fill each use of one unknown
+        // argument. This needs a binding proof, including speculative routes.
+        if((left.parameterBindingRequired and (right.hasValue or right.hasRange or right.terminalValue!=0)) or
+           (right.parameterBindingRequired and (left.hasValue or left.hasRange or left.terminalValue!=0))){
+            left.outcome <- worldUnsupported; left.detail <- "Parameter correspondence needs a binding proof"; return(left)
+        }
+        left.parameterBindingRequired <- left.parameterBindingRequired or right.parameterBindingRequired
         if(left.terminalValue!=0 or right.terminalValue!=0){
             if(left.negative or right.negative or edge!.forceID or edge!.looseType()){
                 left.outcome <- worldUnsupported; left.detail <- "Qualified terminal-value relationship needs proof"; return(left)
@@ -2355,7 +2482,7 @@ struct WorldPOVGraph {
             // successful qualified test adds no identity. Fully checked scalar
             // expressions supply the same facts; other nested work stays.
             me bool: scalarExpression <- (supplied!.value!.evalMode==emConcat or
-                frame!.prerequisite!.selection!=NULL or frame!.sourceNameInherited) and frame!.prerequisite!.retainedWork.isEmpty() and
+                frame!.prerequisite!.selection!=NULL or frame!.prerequisite!.parameterBinding!=NULL or frame!.sourceNameInherited) and frame!.prerequisite!.retainedWork.isEmpty() and
                 (frame!.prerequisite!.facts.overlay==NUM or frame!.prerequisite!.facts.overlay==STR) and
                 (frame!.prerequisite!.facts.hasValue or frame!.prerequisite!.facts.hasRange)
             // Closed correspondence checks the source endpoint. Unconstrained
@@ -2382,7 +2509,50 @@ struct WorldPOVGraph {
            (!requireSize or target!.pItem!.infSize!.evalMode==emLiteral))
     }
 
+    // Parameter constraints can refine an occurrence already present in this
+    // request's result. Refresh only produced frames and their list summaries;
+    // this applies checked facts, never reruns an expression or a list producer.
+    void: refreshArgumentFacts(our WorldRequest: request) <- {
+        if(request!.parameterBindings.isEmpty() or request!.edits.isEmpty()){return()}
+        me List<our WorldFrame>: pending; pending.append(request!.root)
+        me Set<our WorldFrame>: entered
+        me Set<our WorldFrame>: finished
+        while(!pending.isEmpty()){
+            our WorldFrame: frame <- pending.last()
+            if(finished.contains(frame)){pending.popLast(); continue()}
+            if(!entered.contains(frame)){
+                entered.insert(frame)
+                if(request!.edits.containsKey(frame!.node!.pItem)){frame!.facts <- request!.edits.at(frame!.node!.pItem)!.facts}
+                if(frame!.facts.overlay==LST and frame!.facts.hasValue){
+                    me WorldListCursor: members; members.push(frame!.facts.sequence)
+                    me WorldMember: member <- members.nextMember(false)
+                    while(member.frame!=NULL){
+                        if(entered.contains(member.frame) and !finished.contains(member.frame)){
+                            request!.outcome <- worldUnsupported; request!.detail <- "Cyclic parameter result needs a joint proof"; return()
+                        }
+                        if(!finished.contains(member.frame)){pending.append(member.frame)}
+                        member <- members.nextMember(false)
+                    }
+                    request!.sequenceVisits <+- members.visits
+                }
+                continue()
+            }
+            pending.popLast(); finished.insert(frame)
+            if(frame!.facts.overlay==LST and frame!.facts.hasValue and frame!.deferredValue==NULL){
+                me WorldListCursor: members; members.push(frame!.facts.sequence)
+                me WorldMember: member <- members.nextMember(false)
+                frame!.facts.contentsComplete <- true
+                while(member.frame!=NULL){
+                    frame!.facts.contentsComplete <- frame!.facts.contentsComplete and completeFacts(member.frame!.facts, false)
+                    member <- members.nextMember(false)
+                }
+                request!.sequenceVisits <+- members.visits
+            }
+        }
+    }
     void: finish(our WorldRequest: request) <- {
+        refreshArgumentFacts(request)
+        if(request!.outcome!=worldReady){return()}
         me WorldScalar: facts <- request!.root!.facts
         if(facts.pendingChecks!=NULL and facts.outcome==worldReady){
             request!.outcome <- worldPartial; request!.detail <- "Scalar comparison still needs evidence"; return()
@@ -2428,6 +2598,9 @@ struct WorldPOVGraph {
                 if(pending.isEmpty()){break()}
             }
             me WorldPublication: job <- pending.popLast()
+            // A returned parent must expose the same checked occurrence facts
+            // as a write reached through an explicit parameter reference.
+            if(request!.edits.containsKey(job.target!.pItem)){job.frame <- request!.edits.at(job.target!.pItem)}
             job.parsedInput <- job.parsedInput or job.frame!.insertedFrame!=NULL
             if(job.frame!.facts.outcome!=worldReady or job.frame!.facts.pendingChecks!=NULL){continue()}
             if(seen.containsKey(job.target!.pItem)){
@@ -2783,6 +2956,7 @@ struct WorldPOVGraph {
         if(frame!.argumentEdge!=NULL){item!.funcArgs <- NULL; item!.argPos <- apNoArgs}
         if(frame!.path!=NULL){
             item!.partRef <- NULL; item!.parts.clear()
+            item!.wordArguments <- NULL
             if(frame!.correspondenceResult!=NULL and frame!.correspondenceResult!.position!=NULL){
                 item!.orderMode <- frame!.correspondenceResult!.position!.node!.pItem!.orderMode
             }
@@ -2802,6 +2976,7 @@ struct WorldPOVGraph {
             item!.isNormed <- true; item!.worldScalarCompletionOwner <- item; request!.publications <+- 1; return()
         }
         item!.independentTemporalValue <- facts.independent
+        item!.parameterBindingRequired <- facts.parameterBindingRequired
         item!.addedTypes.clear()
         if(facts.inheritedName and facts.nominal!=NULL){item!.type <- NULL; item!.addedTypes.append(facts.nominal)}
         else{item!.type <- facts.nominal}
@@ -2824,6 +2999,7 @@ struct WorldPOVGraph {
             item!.value <- value; item!.infSize <- size; item!.viewMode <- vmAny
         }
         if(frame!.selection!=NULL){
+            item!.wordArguments <- NULL
             if(frame!.selection!.oneOf or frame!.selection!.openResult){
                 our infonState:: value; value!.overlayType <- tUnknown; value!.evalMode <- emUnknown
                 our infonState:: size; size!.overlayType <- NUM; size!.evalMode <- emUnknown
@@ -2994,6 +3170,7 @@ struct WorldManager {
         our WorldFrame:: frame
         frame!.node <- node; frame!.demandSize <- requireSize
         frame!.context <- context; frame!.navigation <- context
+        frame!.lexicalParameters <- graph.parameterScope(context)
         if(context!=NULL){
             frame!.expressionParent <- node!.pParent; frame!.parentContext <- context!.parent
             if(request!.activeContexts.containsKey(node!.pItem)){
@@ -3022,6 +3199,7 @@ struct WorldManager {
         our WorldFrame:: pair
         pair!.deferredValue <- left!.deferredValue
         pair!.templateContext <- left!.templateContext
+        pair!.lexicalParameters <- left!.lexicalParameters
         pair!.associationAnchor <- left!.associationAnchor
         pair!.node <- left!.node; pair!.facts <- left!.facts; pair!.navigation <- left!.navigation; pair!.contextual <- left!.contextual; pair!.argumentEdge <- left!.argumentEdge
         pair!.selection <- left!.selection; pair!.acquireOnly <- left!.acquireOnly
@@ -3039,6 +3217,7 @@ struct WorldManager {
     // untouched child retains its description, including any unresolved work.
     our WorldFrame: borrowValue(our WorldRequest: request, our WorldPosition: at, me bool: expand <- false) <- {
         our WorldFrame:: frame; frame!.node <- at!.node; frame!.navigation <- at
+        frame!.lexicalParameters <- graph.parameterScope(at)
         our infonView: item <- at!.node!.pItem
         frame!.facts.nominal <- item!.type
         if(frame!.facts.nominal==NULL and !item!.addedTypes.isEmpty()){frame!.facts.nominal <- item!.addedTypes[0]}
@@ -3076,6 +3255,7 @@ struct WorldManager {
         if(!edge!.cursorCarry and right!.deferredValue!=NULL){
             our WorldFrame: input <- makeFrame(request, right!.node)
             input!.navigation <- right!.navigation; input!.acquireOnly <- true; input!.predicateOnly <- true
+            input!.lexicalParameters <- right!.lexicalParameters
             right <- input
         }
         if(edge!.cursorCarry){
@@ -3098,12 +3278,14 @@ struct WorldManager {
                 // different goal. Context-free finished proofs remain reusable.
                 our WorldFrame: instance <- makeFrame(request, right!.node)
                 instance!.templateContext <- true; instance!.expressionParent <- right!.expressionParent
-                instance!.navigation <- left!.navigation; right <- instance
+                instance!.navigation <- left!.navigation
+                instance!.lexicalParameters <- right!.lexicalParameters; right <- instance
             }
         }
         if(!edge!.cursorCarry and left!.deferredValue!=NULL){
             pair!.deferredInput <- makeFrame(request, left!.node)
             pair!.deferredInput!.navigation <- left!.navigation
+            pair!.deferredInput!.lexicalParameters <- left!.lexicalParameters
             pair!.deferredInput!.acquireOnly <- true; pair!.deferredInput!.predicateOnly <- true
         }
         pair!.sourceEdge <- edge; pair!.prerequisite <- right; pair!.sourceNameInherited <- inheritedName
@@ -5425,7 +5607,74 @@ struct WorldManager {
                 if(item!.cursorMode==cmTPrev or item!.cursorMode==cmTNext or item!.cursorMode==cmPrev or item!.cursorMode==cmNext){
                     if(!cursorSource(request, frame)){return()}
                 }else if(item!.cursorMode==cmParameter){
-                    frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Definition parameter binding is not implemented"; stopFrame(request, frame); return()
+                    if(frame!.parameterValue==NULL){
+                        our WorldBindings: scope <- frame!.lexicalParameters
+                        if(scope==NULL){scope <- graph.parameterScope(frame!.navigation)}
+                        if(scope==NULL or !scope!.arguments.containsKey(item!.parameterName)){
+                            frame!.facts.outcome <- worldError; frame!.facts.detail <- "Parameter '"+item!.parameterName+"' has no application scope"; stopFrame(request, frame); return()
+                        }
+                        frame!.parameterBinding <- scope!.arguments.at(item!.parameterName)
+                        frame!.parameterValue <- makeFrame(request, frame!.parameterBinding!.expression)
+                        frame!.parameterValue!.navigation <- frame!.parameterBinding!.caller
+                        frame!.parameterValue!.expressionParent <- frame!.node
+                        frame!.parameterValue!.lexicalParameters <- graph.parameterScope(frame!.parameterBinding!.caller)
+                        our infonView: argument <- frame!.parameterBinding!.expression!.pItem
+                        if(argument!.value!.overlayType==LST and argument!.value!.evalMode==emLiteral){
+                            frame!.parameterValue!.navigation <- graph.position(frame!.parameterBinding!.expression)
+                            frame!.parameterValue!.navigation!.parameters <- graph.parameterScope(frame!.parameterBinding!.caller)
+                            frame!.parameterValue!.navigation!.writable <- !frame!.parameterBinding!.borrowed
+                        }
+                        frame!.parameterValue!.referenceOnly <- item!.wrkList.isEmpty() and
+                            (frame!.referenceOnly or item!.partRef!=NULL or !item!.parts.isEmpty())
+                        frame!.parameterValue!.contextual <- true
+                        request!.ready.append(frame); request!.ready.append(frame!.parameterValue); return()
+                    }
+                    if(frame!.parameterValue!.facts.outcome!=worldReady){frame!.facts <- frame!.parameterValue!.facts; stopFrame(request, frame); return()}
+                    if(!frame!.parameterMerged and (!item!.wrkList.isEmpty() or item!.type!=NULL)){
+                        if(frame!.parameterConstraints==NULL){
+                            our POV:: constraints{947}; constraints!.pItem <- graph.pathBody(item, false)
+                            constraints!.pItem!.viewMode <- vmAny; constraints!.pItem!.cursorMode <- cmNone
+                            constraints!.pItem!.parameterName <- ""
+                            frame!.parameterConstraints <- makeFrame(request, constraints)
+                            frame!.parameterConstraints!.navigation <- frame!.navigation
+                            frame!.parameterConstraints!.lexicalParameters <- frame!.lexicalParameters
+                            request!.ready.append(frame); request!.ready.append(frame!.parameterConstraints); return()
+                        }
+                        our POV:: relation{947}; relation!.pItem <- frame!.parameterConstraints!.node!.pItem
+                        frame!.parameterValue <- derivePair(request, frame!.parameterValue, frame!.parameterConstraints, relation)
+                        frame!.parameterMerged <- true
+                        request!.ready.append(frame); request!.ready.append(frame!.parameterValue); return()
+                    }
+                    if(frame!.parameterMerged){
+                        our WorldPosition: destination <- graph.position(frame!.parameterBinding!.expression)
+                        if(frame!.parameterValue!.correspondenceResult!=NULL and frame!.parameterValue!.correspondenceResult!.position!=NULL){destination <- frame!.parameterValue!.correspondenceResult!.position}
+                        if(!stageOccurrence(request, destination, frame!.parameterValue)){return()}
+                        if(frame!.parameterBinding!.omitted and frame!.parameterValue!.facts.hasValue and
+                           (frame!.parameterValue!.facts.overlay==NUM or frame!.parameterValue!.facts.overlay==STR)){
+                            withEach reader in frame!.parameterBinding!.unresolvedReads{
+                                reader!.facts <- frame!.parameterValue!.facts
+                            }
+                            frame!.parameterBinding!.unresolvedReads.clear()
+                        }
+                    }
+                    if(frame!.parameterValue!.correspondenceResult!=NULL and frame!.parameterValue!.correspondenceResult!.position!=NULL){
+                        frame!.path!.source <- frame!.parameterValue!.correspondenceResult!.position
+                    }else{
+                        frame!.path!.source <- graph.position(frame!.parameterBinding!.expression)
+                        frame!.path!.source!.parameters <- graph.parameterScope(frame!.parameterBinding!.caller)
+                        frame!.path!.source!.writable <- !frame!.parameterBinding!.borrowed
+                    }
+                    if(item!.partRef==NULL and item!.parts.isEmpty()){
+                        frame!.facts <- frame!.parameterValue!.facts
+                        if(!frame!.facts.hasValue or !frame!.facts.contentsComplete){frame!.facts.parameterBindingRequired <- true}
+                        graph.adoptListRequirements(frame, frame!.parameterValue)
+                        frame!.retainedWork <- frame!.parameterValue!.retainedWork
+                        frame!.correspondenceResult <- frame!.parameterValue!.correspondenceResult
+                        if(frame!.parameterBinding!.omitted and !frame!.facts.hasValue and item!.wrkList.isEmpty() and item!.type==NULL){
+                            frame!.parameterBinding!.unresolvedReads.append(frame)
+                        }
+                        frame!.initialized <- true; frame!.finished <- true; return()
+                    }
                 }else if(item!.cursorMode==cmSelf){
                     our WorldPosition: instance <- frame!.navigation
                     while(instance!=NULL and !instance!.node!.trueByDefinition){instance <- instance!.parent}
@@ -5444,7 +5693,9 @@ struct WorldManager {
                     frame!.path!.source!.parent <- context!.parent
                     frame!.path!.source!.owner <- context!.owner; frame!.path!.source!.occurrence <- context!.occurrence
                     frame!.path!.source!.writable <- context!.writable
+                    frame!.path!.source!.parameters <- context!.parameters
                 }
+                if(frame!.lexicalParameters!=NULL){frame!.path!.source!.parameters <- frame!.lexicalParameters}
             }
         }
         if(frame!.path!.contextAbsent or frame!.path!.contextRequired){
@@ -5503,6 +5754,7 @@ struct WorldManager {
             path!.index <- makeFrame(request, index)
             path!.index!.navigation <- frame!.navigation
             path!.index!.templateContext <- frame!.templateContext
+            path!.index!.lexicalParameters <- frame!.lexicalParameters
             request!.ready.append(frame); request!.ready.append(path!.index); return()
         }
         if(path!.operation==NULL){
@@ -5526,6 +5778,7 @@ struct WorldManager {
                 Allocate(path!.operation!.correspondenceResult); path!.operation!.correspondenceResult!.position <- position
             }else{path!.operation <- pathSelection(request, path!.source, path!.part, path!.index)}
             path!.operation!.demandSize <- frame!.demandSize
+            path!.operation!.lexicalParameters <- frame!.lexicalParameters
             if(frame!.referenceOnly and path!.operation!.acquireOnly){path!.operation!.referenceOnly <- true}
             request!.ready.append(frame); request!.ready.append(path!.operation); return()
         }
@@ -5550,6 +5803,7 @@ struct WorldManager {
                 our POV:: child{940}; child!.pItem <- graph.pathBody(selected!.position!.node!.pItem, false)
                 child!.pItem!.partRef <- work!.partRef; child!.pItem!.parts <- work!.parts
                 path!.nested <- makeFrame(request, child, NULL, frame!.demandSize)
+                path!.nested!.lexicalParameters <- frame!.lexicalParameters
                 path!.nested!.referenceOnly <- frame!.referenceOnly
                 Allocate(path!.nested!.path); path!.nested!.path!.source <- selected!.position
                 request!.ready.append(frame); request!.ready.append(path!.nested); return()
@@ -5839,6 +6093,8 @@ struct WorldManager {
         our POV: source <- frame!.sourceEdge
         if(frame!.sourceIsListSpec and frame!.nextOperand==NULL and frame!.facts.openTail and !frame!.facts.hasSize and frame!.node!.pItem!.wrkList.isEmpty()){
             frame!.listSpecFrame <- makeFrame(request, source)
+            frame!.listSpecFrame!.lexicalParameters <- frame!.lexicalParameters
+            if(frame!.listSpecFrame!.lexicalParameters==NULL){frame!.listSpecFrame!.lexicalParameters <- graph.parameterScope(frame!.navigation)}
             frame!.listSpecFrame!.expressionParent <- frame!.node; frame!.listSpecFrame!.lazyPattern <- true
             // Pattern memoization may inspect the header before demanding its
             // body. Keep that type evidence without claiming a completed proof.
@@ -5874,6 +6130,7 @@ struct WorldManager {
             position <- graph.position(source, parent)
         }else if(source!.trueByDefinition){
             position <- graph.position(source)
+            position!.parameters <- source!.definitionParameters
             position!.owner <- frame!.node; position!.occurrence <- frame!.node
             if(frame!.navigation!=NULL){
                 position!.parent <- frame!.navigation!.parent
@@ -5881,6 +6138,9 @@ struct WorldManager {
             }
         }
         if(position==NULL and !frame!.sourceIsListSpec){position <- frame!.navigation}
+        our WorldBindings: lexical <- frame!.lexicalParameters
+        if(source!.trueByDefinition){lexical <- graph.parameterScope(position)}
+        else if(lexical==NULL){lexical <- graph.parameterScope(frame!.navigation)}
         // Reading a definition's record layout does not demand the interiors
         // of its composite fields. Keep their immutable descriptions until a
         // field correspondence or explicit materialization requests them.
@@ -5892,10 +6152,12 @@ struct WorldManager {
         }else if(request!.edits.containsKey(source!.pItem)){
             frame!.prerequisite <- request!.edits.at(source!.pItem); request!.ready.append(frame)
         }else if(position!=NULL and request!.completedOccurrences.containsKey(source) and
+                 request!.completedOccurrences.at(source)!.lexicalParameters===lexical and
                  graph.samePosition(request!.completedOccurrences.at(source)!.navigation, position) and
                  graph.completeFacts(request!.completedOccurrences.at(source)!.facts, false)){
             frame!.prerequisite <- request!.completedOccurrences.at(source); request!.ready.append(frame)
         }else if(request!.attempts.containsKey(source!.pItem) and
+                 request!.attempts.at(source!.pItem)!.lexicalParameters===lexical and
                  (!request!.attempts.at(source!.pItem)!.contextual or
                   graph.samePosition(request!.attempts.at(source!.pItem)!.navigation, position))){
             frame!.prerequisite <- request!.attempts.at(source!.pItem)
@@ -5908,6 +6170,8 @@ struct WorldManager {
         }else{
             frame!.prerequisite <- makeFrame(request, source)
             frame!.prerequisite!.navigation <- position
+            frame!.prerequisite!.lexicalParameters <- lexical
+            if(lexical!=NULL){frame!.prerequisite!.contextual <- true}
             frame!.prerequisite!.templateContext <- frame!.templateContext or frame!.sourceIsListSpec
             if(frame!.sourceIsListSpec){frame!.prerequisite!.expressionParent <- frame!.node}
             if(frame!.sourceIsOperand){frame!.prerequisite!.expressionParent <- frame!.node; frame!.prerequisite!.acquireOnly <- frame!.acquireOnly or (graph.memberSequence(frame) and source!.pItem!.value!.overlayType==LST and source!.pItem!.value!.evalMode==emLiteral); frame!.prerequisite!.predicateOnly <- frame!.predicateOnly}

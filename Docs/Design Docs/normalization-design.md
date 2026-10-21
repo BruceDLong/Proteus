@@ -145,14 +145,38 @@ parenthesized signature precedes usage tags, preserves declaration order, and
 contains distinct, nonreserved names. `%item` is a local parameter reference;
 nested definitions do not capture an outer signature. Existing declarations
 without a signature remain valid. The coverage document specifies header
-whitespace, identifier and diagnostic rules. Call-site binding remains deferred.
+whitespace, identifier and diagnostic rules. D102 implements explicit call-site binding.
 
 The exact uppercase postfix tokens `^T` and `^S` have dedicated syntax nodes,
 distinct from ordinary external properties. Subsequent selections and work
 operate on the converted result: `item^T@[1]^S.location`. The parser and printer
-preserve this structure; normalization reports unsupported until the view and
-parameter-binding providers are implemented. The legacy `.asTList` syntax is
+preserve this structure; normalization reports unsupported until the temporal
+conversion provider is implemented. The legacy `.asTList` syntax is
 preserved without adding runtime conversion support.
+
+### Explicit parameterized applications (D102)
+
+Attached calls such as `increment(item::4)` and `increment(4)` apply the shared
+definition through ordinary meaning relationships. Named arguments may appear
+in any order; positional arguments use declaration order. Mixing the two,
+duplicate labels, unknown labels and excess positional arguments are rejected.
+Separated parentheses retain their existing meaning. Unused arguments are not
+evaluated, and selecting a parameter's field need not evaluate other fields.
+
+Each application owns its bindings. Argument expressions use caller scope;
+body references use definition-local scope, retained separately from the member
+position when a listSpec is projected. Shared declarations remain unchanged.
+Omitted arguments are unknown slots, permitting partial results and model
+constraints that determine a slot. Checked deductions through explicit references
+are staged and published with the returned occurrences; conflicts publish nothing.
+
+Finite scalar, record, embedded-list and tested temporal/listSpec cases are
+covered. Inverse argument binding through correspondence reports unsupported;
+repeated uses of an unknown argument cannot be filled independently. General
+joint inference through already partial expressions, recursive
+parameterized proofs, writes requiring instantiation of borrowed definition
+literals, overload selection and temporal retiming/conversion remain later work.
+This adds no cursor production or scheduling mechanism.
 
 ### Finite scalar alternative domains
 

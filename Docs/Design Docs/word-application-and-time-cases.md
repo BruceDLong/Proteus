@@ -17,7 +17,8 @@ are identified where they occur. This is not a claim of parser or engine support
 **Parser checkpoint, 2026-10-21 (D101).** Declaration headers now use
 `#give(actor, item, object) = ...`, with local `%actor`/`%item`/`%object`
 references. The parser also recognizes `^T` and `^S` as distinct view operations.
-Call-site argument binding and temporal conversion remain unimplemented.
+Call-site argument binding is implemented in D102; temporal conversion remains
+unimplemented.
 
 There are arbitrarily many compositions, so a finite case list cannot enumerate
 every program. Coverage comes from independent semantic dimensions, examples at
@@ -111,12 +112,32 @@ Automatically filling the first parameter is deferred, along with role inference
 receiver sugar and natural-language application. No general default mechanism is
 required for these examples.
 
-The proposed call grammar uses an attached opening parenthesis: `turn(...)`.
+The call grammar uses an attached opening parenthesis: `turn(...)`.
 A separated `turn (...)` retains its non-call interpretation; ordinary whitespace
 is allowed inside the argument list. Named binding order does not affect meaning.
-Duplicate and undeclared labels should be diagnosed rather than given implicit
-precedence. These grammar details still need parser validation. Fully supplied
-positional calls can be considered later without introducing role inference.
+Duplicate and undeclared labels are diagnosed rather than given implicit
+precedence. Positional calls bind in declaration order, including an omitted
+suffix; named and positional bindings cannot be mixed. This introduces no role
+inference. Empty `()` and a bare word leave all declared parameters unknown.
+
+The D102 implementation uses an application-local binding scope and the ordinary
+meaning, path, correspondence and staged-publication machinery. It keeps lexical
+bindings when a listSpec is projected to another member position. Unused arguments
+remain undemanded, and a field read through a parameter can skip unrelated fields.
+For example:
+
+```text
+#increment(item) = (%item +1)
+increment(item::4)  // normalized value 5
+increment(4)       // same binding by declaration order
+```
+
+Tests cover explicit caller references, nested forwarding, independent calls,
+partial applications, constraints on missing arguments, embedding and finite
+temporal/listSpec examples. Inverse argument binding through correspondence,
+recursive proofs, joint inference requiring an
+already partial expression to continue, instantiating borrowed definition literals
+for writes, and general temporal retiming remain implementation boundaries.
 
 ### Temporal composition and embedding
 

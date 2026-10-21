@@ -315,3 +315,4 @@ merge/lookahead,       Merge lookahead,                 {&{_|...} _ $} =: {33 22
 @include timeTests.tst
 @include worldLoadTests.tst
 @include wordSyntaxTests.tst
+@include wordArgumentTests.tst

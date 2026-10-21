@@ -2969,3 +2969,90 @@ failure names as the pre-change baselines (24/415 and 16/332). Existing fixture
 expectations are unchanged. Separately regenerated and built the shared library
 with `codeDog BuildProteusGraph.dog`. Consumer and visible-rendering validation
 remain outside this parser checkpoint.
+
+## D102 Explicit parameterized word applications (2026-10-21)
+
+**Request.** Implement parameterized words after D101's declaration/parser
+checkpoint. Preserve template expansion, partial information, caller argument
+scope and definition-local references. Cursor integration and temporal view
+conversion are separate work.
+
+**Calls.** An attached `(` introduces arguments: `word(item::value)` or
+`word(value)`. Named arguments may be reordered; positional arguments use the
+declaration's order. Both are unambiguous, without inferring roles from types.
+Reject mixed forms, duplicate labels, trailing commas, unknown labels and excess
+positional arguments. Whitespace/comments are permitted inside calls. Separated
+`word (...)` retains its existing interpretation. `word()` and a bare use leave
+all parameters unknown; a positional prefix leaves the remaining slots unknown.
+Call metadata is separate from the older function-like list operators.
+
+**Application scope.** The shared declaration is borrowed through the ordinary
+meaning relationship. Each application supplies a name-to-argument scope with
+private expression headers and unknown slots for omissions. Resolve demanded
+arguments in their caller context and `%parameter` references in lexical scope.
+Retain that lexical scope separately when listSpec correspondence projects a
+template to another member position. Include the binding scope in contextual
+reuse checks. This avoids shared-definition substitution and prevents one
+application from using another's argument values. Nested calls forward outer
+parameters explicitly; nested declarations still cannot capture them.
+
+Unused arguments are not evaluated. A path through a parameter first acquires
+its reference, so selecting a field does not evaluate unrelated fields. A literal
+argument's members have their own structural list context while retaining caller
+parameter scope; the argument is not inserted as a member of the caller's list.
+Bindings and pending direct reads belong to the request's lifecycle, including
+parser waits and cleanup.
+
+**Constraints and publication.** Parameter constraints use ordinary frame
+composition and staged occurrence writes. Known conflicts reject the request
+without publication. A missing scalar slot can be determined by a model
+constraint, and earlier direct reads of that slot receive the checked fact.
+Returned parents must use the same staged facts as their referenced children.
+The final argument-result pass refreshes only already produced frames and their
+list completeness summaries; it neither produces members nor restarts an
+expression. Its visits contribute to the existing sequence-visit counter.
+
+Signature validation uses the existing name scan; argument slots allocate in
+proportion to the declared signature. Expressions and structured payloads remain
+borrowed until demanded. Normalizing body work uses the existing frame,
+relationship and queue accounting. No general inference complexity claim or new
+cursor-owned producer is introduced.
+
+For 16/32/64 independent scalar applications, measured work is 49/97/193
+frames, 32/64/128 relationship reads and 97/193/385 queue steps, with one
+sequence-node visit per batch. Re-normalizing each completed application creates
+zero frames and performs zero queue steps. These measurements cover independent
+calls with known scalar arguments, not arbitrary inference or ambiguity.
+
+**Boundaries.** This implements the tested finite scalar, structural-read,
+embedded-list and temporal/listSpec applications. It does not add recursive
+parameterized proofs, overload selection, role inference, temporal conversion or
+retiming, or general joint inference through an already partial expression.
+Inverse binding through correspondence also remains unsupported: matching
+`same():{7 8}` against `#same(item)={%item %item}` must not treat the two uses
+as independent wildcards. Unresolved argument facts retain a binding obligation
+through grouping and partial publication; acquiring supplied values through
+that route requires a binding proof. Known arguments and direct local model
+constraints use the supported paths above.
+Recursive applications report unsupported. Writes into literals borrowed from
+another shared definition still require instance construction and report
+unsupported rather than altering that definition. Broader retention and
+continuation of partial contextual applications remain part of the unfinished
+general definition/relationship semantics, not a new rebinding policy.
+
+**Tests.** Added ordinary CodeDog checks for application isolation, invalid
+bindings and partial/constraint behavior, expanded streamed parser coverage to
+split calls and labels, and added a language fixture covering call syntax and
+normalization. The D101 parser check now expects omitted parameters to normalize
+partially instead of reporting the retired binding-provider boundary. Existing
+language expectations are unchanged. Record-result and field-selection cases
+also verify that selecting a member removes the original call's argument metadata.
+
+**Validation.** `codeDog Proteus.Lib.dog` and the separate
+`codeDog BuildProteusGraph.dog` both report `Marker: Build Successful`.
+The 40 new language fixtures and three new compiled tests pass. The full
+`./TestProteus -T 3` run reports **24/488 failures/tests**, compared with
+**24/445** before this change; `./TestProteus -T 3 -t defaultTests.tst:` reports
+**16/396**, compared with **16/356**. Both failure-name sets exactly match the
+baseline. No old fixture expectation was changed. Consumer and visible-rendering
+validation remain separate from this engine implementation.
