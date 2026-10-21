@@ -47,11 +47,12 @@ status. General sparse alignment, definition, intersection, temporal and effect
 semantics remain unsupported. Stream ownership and shutdown use the new path; general streamed list propagation and other link arrivals remain later work.
 An unsupported result must never be replaced with output from the old solver.
 
-Keep the existing .tst language fixtures in Tests/ and their expectations. The 83 compiled
+Keep the existing .tst language fixtures in Tests/ and their expectations. The 89 compiled
 checks use ordinary CodeDog: the 57 historical parser/model checks, five string
 behavior checks, incomplete-RHS parsing, four parser input-lock regressions,
 two identity-range checks, one parser-completion ordering check and one
-parser-prefix check and one decimal-input check, plus eleven cursor-readiness checks.
+parser-prefix check and one decimal-input check, plus eleven cursor-readiness checks
+and six word-parameter/temporal-view parser checks.
 D072 retires all verbatim C++ test
 bodies and the standalone drivers for the failed graph engine, including the
 later WorldManager C++ suites. Do not restore them or add native C++ assertions
@@ -103,3 +104,7 @@ Definitions use #, for example `#minute = *60+{second| ...}`. @ is reserved for
 bracketed postfix selection: `items@[3]`, `items@[3:*5+{ ... }]`. The old items#3
 syntax is not supported. A reply marker requests normalized output to the caller;
 implement its effect through the engine when that milestone is reached.
+
+Parameter headers use `#give(actor, item, object) = ...`, with local `%actor`
+references. The parser also recognizes postfix `^T` and `^S`, including
+`item^T@[1]^S`. Call-site binding and temporal conversion remain unimplemented.

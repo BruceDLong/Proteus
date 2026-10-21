@@ -26,6 +26,12 @@ Normalize returns a handle whose status and result the caller can inspect. The i
 
 The interface must cover the chosen normalization and streaming behavior, including the necessary input publication, result, subscription, and request-lifetime operations. It does not dictate a planning architecture or restore the old engine's internal mechanisms. The implementation must demonstrate replaceability; it is not assumed from the class name alone.
 
+**Cursor direction, 2026-10-21 (D101).** The normalizer owns production and
+ordering of list members. A cursor should observe the history being produced,
+without duplicating normalization or necessarily stopping it at the cursor's
+position. The current supplied-work cursor execution is not the final design.
+Discuss the interaction before changing it; this checkpoint changes only syntax.
+
 ## Virtual graph access
 
 Inside WorldManager, the solver accesses POVs through a virtual graph interface for reads and writes. It exposes semantic relationships, their qualifications and contexts, and links waiting for information. It also owns semantic publication and removal of fully merged POV RHS entries from wrkLists. This separates traversal from storage and allows useful routes without copying every intermediate value. See G05 and D02D.
@@ -131,6 +137,22 @@ verb rule. Differently partitioned interval descriptions combine through
 qualified correspondence. The coverage document prioritizes discrete models;
 realistic walking and continuous constraints are later work. These are accepted
 design rules, not new parser or temporal-engine implementation claims.
+
+### Parameter declaration and view syntax (D101)
+
+Definitions accept `#give(actor, item, object) <en verb> = ...`. The optional
+parenthesized signature precedes usage tags, preserves declaration order, and
+contains distinct, nonreserved names. `%item` is a local parameter reference;
+nested definitions do not capture an outer signature. Existing declarations
+without a signature remain valid. The coverage document specifies header
+whitespace, identifier and diagnostic rules. Call-site binding remains deferred.
+
+The exact uppercase postfix tokens `^T` and `^S` have dedicated syntax nodes,
+distinct from ordinary external properties. Subsequent selections and work
+operate on the converted result: `item^T@[1]^S.location`. The parser and printer
+preserve this structure; normalization reports unsupported until the view and
+parameter-binding providers are implemented. The legacy `.asTList` syntax is
+preserved without adding runtime conversion support.
 
 ### Finite scalar alternative domains
 

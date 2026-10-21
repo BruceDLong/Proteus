@@ -2909,3 +2909,63 @@ E01–E19 identifiers, separated the next discrete cases from deferred models, a
 aligned the brief design-contract and time-plan summaries. Checked the diff,
 Markdown structure and local links. No runtime, parser, fixture or expectation
 changes; no runtime tests or new implementation claims.
+
+## D101 Parameter declarations and temporal-view parser syntax (2026-10-21)
+
+**Request and scope.** The user chose call-shaped parameter declarations such
+as `#give(actor, item, object) = ...` and requested parser support for `^T` and
+`^S`. This checkpoint implements their syntax and preserves the information
+needed for later template binding and temporal conversion. It does not implement
+call-site arguments, conversion semantics or the cursor integration redesign.
+
+**Declaration grammar.** An optional parenthesized list follows the defined
+word and precedes existing usage tags: `#give(actor, item) <en verb> = ...`.
+Names are comma-separated, case-sensitive identifiers using the existing
+`%name` identifier grammar. Whitespace and comments are accepted in the header.
+Omitted signatures remain valid; explicit `()` is accepted and retained by the
+printer. Preserve names in declaration order, without adding parameter types,
+defaults or inference. Reject duplicate names, trailing commas and reserved
+context/syntax names. The former suggestive colon header is superseded.
+
+The reserved names are `self`, `W`, `U`, `ctx`, `args`, `vars`, `prev`, `next`,
+`tprev`, `tnext`, `INSERT`, `PROTEUS`, `NULL`, `T` and `S`. Local `%actor` and
+`%item` references carry their parameter names separately from reserved context
+references. Ordinary nested lists retain the current definition's scope. Every
+nested definition introduces its own scope, even without a signature, and cannot
+capture the enclosing definition's parameters. Undeclared references are syntax
+errors. These rules implement the agreed function/class scope boundary while
+leaving runtime argument binding for later work.
+
+**Temporal postfix operations.** Exact uppercase `^T` and `^S` have dedicated
+path modes. They consume just their view token, so later selection, paths and
+identity constraints apply to the result: `cube^T@[1]^S.location` and
+`cube^T = {T ...}`. The printer preserves the chain. Other names, including
+`^size`, `^Timeline`, `^State`, `^t` and `^s`, remain ordinary external-property
+paths. Existing `.asTList` parsing is preserved. Retaining dedicated operations
+avoids treating the new views as arbitrary user properties or attaching their
+following work to a descriptor named `T` or `S`.
+
+**Implementation boundary.** The parser/model retain signatures and local
+references through printing and copying. Demanding a local parameter reference
+without an implemented binding provider reports unsupported, as does demanding
+a temporal view conversion. This is an implementation boundary, not a new
+semantic rule requiring every parameter: D100's partial-normalization contract
+remains the intended behavior. No fallback engine supplies either operation.
+
+**Cursor direction.** The user clarified that cursors should "surf" lists being
+produced by the main normalizer. The normalizer owns member production and
+normalization order; a cursor must not duplicate that work, and need not stop
+normalization at its own position. The supplied-work cursor path is not the
+final integration design. Discuss that interaction before implementing it.
+No cursor production, scheduling or readiness behavior changes in this commit.
+
+**Validation.** Regenerated the maintained CodeDog test target with
+`codeDog Proteus.Lib.dog`. Added six ordinary CodeDog checks for metadata, local
+scope, invalid/reserved names, streamed parser input, postfix structure and
+explicit unsupported runtime results, plus 24 parse/print language fixtures.
+All 30 additions pass. With `-T 3`, the full suite reports 24 failures in 445
+tests and `defaultTests.tst:` reports 16 in 356; both have exactly the same
+failure names as the pre-change baselines (24/415 and 16/332). Existing fixture
+expectations are unchanged. Separately regenerated and built the shared library
+with `codeDog BuildProteusGraph.dog`. Consumer and visible-rendering validation
+remain outside this parser checkpoint.

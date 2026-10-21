@@ -1,6 +1,12 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/parserWords/parameters
+    unit/parserWords/invalidParameters
+    unit/parserWords/nestedScope
+    unit/parserWords/streamedSyntax
+    unit/parserViews/structure
+    unit/parserViews/unsupported
     unit/cursorReadiness/requiredValues
     unit/cursorReadiness/waitAndResume
     unit/cursorReadiness/unknown
@@ -2171,6 +2177,127 @@ struct GLOBAL {
         }
         testParseError(testName, "1/0", "Invalid decimal number", 1, 1)
         testParseError(testName, "0/0", "Invalid decimal number", 1, 1)
+    }
+}
+
+// Parser metadata matters independently of a successful textual round trip.
+struct GLOBAL {
+    void: unit_parserWords_parameters(me string: testName) <- {
+        our infonView: parsed <- parseAndExtract(testName, "{#give(actor, item, object) <en verb> = {%actor %item %object}}")
+        if(parsed==NULL){FAIL("Parameterized definition did not parse")}
+        our infonView: declaration <- parsed!.value!.items.head!.pItem
+        our WordDefn: definition <- declaration!.definedWord
+        if(definition==NULL or !definition!.hasParameterList or definition!.parameterNames.size()!=3){FAIL("Parameter signature was lost")}
+        if(definition!.parameterNames[0]!="actor" or definition!.parameterNames[1]!="item" or definition!.parameterNames[2]!="object"){FAIL("Parameter declaration order changed")}
+        if(!definition!.tagExists("en") or !definition!.tagExists("verb")){FAIL("Usage tags were lost")}
+        our POV: reference <- declaration!.funcArgs!.value!.items.head
+        withEach name in definition!.parameterNames{
+            if(reference==NULL or reference!.pItem!.viewMode!=vmCursor or reference!.pItem!.cursorMode!=cmParameter or reference!.pItem!.parameterName!=name){FAIL("Body parameter was parsed as a context cursor")}
+            our infonView:: copied
+            reference!.pItem!.copyAsTypeTo(copied, true, true)
+            if(copied!.cursorMode!=cmParameter or copied!.parameterName!=name){FAIL("Copy lost the parameter reference")}
+            reference <- reference!.next
+        }
+        me string: printed <- toString(parsed)
+        our infonView: again <- parseAndExtract(testName, printed)
+        if(again==NULL or again!.value!.items.head!.pItem!.definedWord!.parameterNames.size()!=3){FAIL("Signature did not round trip")}
+        // Registering a declaration must preserve its signature too.
+        me Agent: agent
+        our POV:: input{501}; input!.pItem <- parsed
+        our WorldRequest: request <- agent.normalize(input)
+        if(request!.failed()){FAIL("Could not register the declaration")}
+        our infonView: use <- parseAndExtract(testName, "give")
+        our POV:: target{501}; target!.pItem <- use
+        request <- agent.normalize(target)
+        if(request!.status().outcome!=worldUnsupported or request!.error()!="Definition parameter binding is not implemented"){FAIL("Parameter evaluation did not report its implementation boundary")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+    void: unit_parserWords_invalidParameters(me string: testName) <- {
+        me List<string>: inputs <- [
+            "{#give(item, item)=_}", "{#give(item,)=_}", "{#give(,item)=_}",
+            "{#give(item actor)=_}", "{#give(item=_)=_}", "{#give(7)=_}",
+            "{#give(item = _}", "{#give(item)=%other}",
+            "{#outer(item)={#inner=%item}}", "{#outer(item)={#inner(other)=%item}}",
+            "{#give(item)=%item %item}", "{#give: item = _}"
+        ]
+        withEach input in inputs{
+            me ProteusParser: parser{NULL, false, 0}
+            parser.initParseFromString(testName, input)
+            our infonView:: result; parser.doParse(result)
+            if(!parser.doesParseHaveError()){FAIL("Invalid declaration was accepted: "+input)}
+        }
+        me List<string>: reserved <- ["self", "W", "U", "ctx", "args", "vars", "prev", "next", "tprev", "tnext", "INSERT", "PROTEUS", "NULL", "T", "S"]
+        withEach name in reserved{
+            me ProteusParser: parser{NULL, false, 0}
+            parser.initParseFromString(testName, "{#give("+name+")=_}")
+            our infonView:: result; parser.doParse(result)
+            if(!parser.doesParseHaveError() or findString(parser.errorMesg, "Reserved parameter name")<0){FAIL("Reserved parameter name was not diagnosed: "+name)}
+        }
+    }
+    void: unit_parserWords_nestedScope(me string: testName) <- {
+        // Ordinary nested lists retain the body scope; definitions replace it.
+        our infonView: parsed <- parseAndExtract(testName, "{#outer(item)={#inner(other)=%other {%item}} #plain=7}")
+        if(parsed==NULL){FAIL("Nested local scopes did not parse")}
+        our infonView: outer <- parsed!.value!.items.head!.pItem
+        our infonView: inner <- outer!.funcArgs!.value!.items.head!.pItem
+        if(inner!.definedWord!.parameterNames[0]!="other" or inner!.funcArgs!.parameterName!="other"){FAIL("Nested signature lost its own scope")}
+        our infonView: after <- outer!.funcArgs!.value!.items.head!.next!.pItem
+        if(after!.value!.items.head!.pItem!.parameterName!="item"){FAIL("Outer scope was not restored")}
+        if(parsed!.value!.items.head!.next!.pItem!.definedWord!.hasParameterList){FAIL("Signature leaked to the next declaration")}
+    }
+    void: unit_parserWords_streamedSyntax(me string: testName) <- {
+        me string: source <- "{#give(actor, item) = %item^T@[1]^S}"
+        me List<int>: cuts <- [7, 10, 13, 24, 26, 29, 32]
+        withEach cut in cuts{
+            me ProteusCore: core; core.init("")
+            me strBuf: input; input.init(testName); input.putStr(source.subStr(0, cut))
+            our ProteusParser:: parser{core, true, 0}; parser!.initParseFromStream(input)
+            our infonView:: root
+            me ParserInputWorker: reader; reader.core <- core; reader.parser <- parser; reader.root <- root
+            reader.entered.wait(); reader.start(); reader.entered.wait()
+            me ParserInputQuery: query; query.core <- core; query.watched <- root; query.start()
+            me int: elapsed
+            while(!query.isDone() and elapsed<2000){sleep(5); elapsed <+- 5}
+            me bool: progressed <- query.isDone()
+            input.putStr(source.subStr(cut)); input.close()
+            reader.waitForExit(); query.waitForExit()
+            me bool: parsed <- !parser!.doesParseHaveError()
+            me string: actual <- toString(root)
+            core.deInit(); modelMngr.clear()
+            if(!progressed or !parsed){FAIL("Split syntax did not resume at offset "+toString(cut))}
+            me string: expected <- source; REQUIRE(actual==expected)
+        }
+    }
+    void: unit_parserViews_structure(me string: testName) <- {
+        our infonView: parsed <- parseAndExtract(testName, "cube^T@[1]^S.location")
+        if(parsed==NULL or parsed!.partRef==NULL or parsed!.partRef!.pathMode!=asTSpanField){FAIL("^T became an external property")}
+        our PartPath: temporal <- parsed!.partRef
+        if(temporal!.path!.partRef!=NULL or temporal!.continuation==NULL){FAIL("Selection was swallowed into the view descriptor")}
+        our PartPath: index <- temporal!.continuation!.partRef
+        if(index==NULL or index!.pathMode!=idxField or index!.continuation==NULL){FAIL("Temporal member selection was lost")}
+        our PartPath: state <- index!.continuation!.partRef
+        if(state==NULL or state!.pathMode!=asSListField or state!.continuation==NULL){FAIL("^S was lost after the index")}
+        if(state!.continuation!.partRef==NULL or state!.continuation!.partRef!.pathMode!=dotField){FAIL("Selected S-state field was lost")}
+        our infonView: identity <- parseAndExtract(testName, "cube^T = {T 1 2}")
+        if(identity==NULL or identity!.partRef!.continuation==NULL or identity!.partRef!.continuation!.wrkList.size()!=1 or !identity!.partRef!.path!.wrkList.isEmpty()){FAIL("Identity was attached to the view descriptor instead of its result")}
+        me List<string>: properties <- ["cube^size", "cube^Timeline", "cube^State", "cube^t", "cube^s"]
+        withEach text in properties{
+            our infonView: property <- parseAndExtract(testName, text)
+            if(property==NULL or property!.partRef!.pathMode!=upField){FAIL("Ordinary external property was captured as a view")}
+        }
+    }
+    void: unit_parserViews_unsupported(me string: testName) <- {
+        me List<string>: inputs <- ["{x:1}^T", "{T {x:1} {x:2}}@[1]^S"]
+        withEach input in inputs{
+            me Agent: agent
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our WorldRequest: request <- agent.normalize(parsed.target)
+            me bool: unsupported <- request!.status().outcome==worldUnsupported
+            me string: detail <- request!.error()
+            agent.endWorldSessions(); modelMngr.clear()
+            if(!unsupported or detail!="Temporal view conversion is not implemented"){FAIL("Unimplemented view was treated as an external association")}
+        }
     }
 }
 

@@ -14,6 +14,11 @@ The sections below state that baseline, followed by examples, verification
 properties and the remaining work. Suggestive grammar and provisional examples
 are identified where they occur. This is not a claim of parser or engine support.
 
+**Parser checkpoint, 2026-10-21 (D101).** Declaration headers now use
+`#give(actor, item, object) = ...`, with local `%actor`/`%item`/`%object`
+references. The parser also recognizes `^T` and `^S` as distinct view operations.
+Call-site argument binding and temporal conversion remain unimplemented.
+
 There are arbitrarily many compositions, so a finite case list cannot enumerate
 every program. Coverage comes from independent semantic dimensions, examples at
 their intersections, and equivalence laws that must survive composition.
@@ -66,6 +71,27 @@ does not create a successor.
 
 ### Explicit bindings and partial information
 
+Declare optional role names after the word, before any usage tags:
+
+```text
+#give(actor, item, object) <en verb> = { %actor %item %object }
+#walk(destination) = *_+{T takeStep | ...}
+```
+
+The first body is only a syntax illustration. Parameters are comma-separated,
+case-sensitive identifiers using the existing `%name` identifier syntax. Empty
+`()` and omitted parameter lists are accepted; whitespace and comments are
+allowed in the header. Duplicate names, trailing commas and reserved names are
+rejected. Reserved names are the context tags (`self`, `W`, `U`, `ctx`, `args`,
+`vars`, `prev`, `next`, `tprev`, `tnext`) and syntax names `INSERT`, `PROTEUS`,
+`NULL`, `T`, `S`. Parameters do not declare types or defaults in this syntax.
+Usage tags follow the closing parenthesis. The former suggestive `#walk:
+destination = ...` spelling is superseded.
+
+Body references must name a parameter in that definition or a reserved context
+reference. Ordinary nested lists retain the definition's scope; nested
+definitions introduce their own scope and do not capture outer parameters.
+
 Use named bindings such as `turn(item::%prev, direction::clockwise)`. Definitions
 may expose role names without imposing narrow model types merely to declare those
 roles. Any actual type/value constraints belong to the model. Parameter names
@@ -93,6 +119,12 @@ precedence. These grammar details still need parser validation. Fully supplied
 positional calls can be considered later without introducing role inference.
 
 ### Temporal composition and embedding
+
+The normalizer owns production and ordering of the history. Cursors should
+observe ("surf") that history rather than duplicate its normalization or require
+normalization to stop at the cursor's position. The detailed cursor integration
+will be discussed before implementation; the current TCursor is not evidence
+that this direction has already been implemented (D101).
 
 Describe simultaneous requirements in one state and ordered changes in successive
 states. Computations reading the prior state in one T-step read the same prior
@@ -277,7 +309,12 @@ of erroneous facts retain their separate contracts.
 
 The accepted short forms are `^T` and `^S`, corresponding to the previously
 suggested `^asTSpan` and `^asSList`. They use the existing external-relationship
-operator. These are semantic views of the selected subject and support.
+notation, with dedicated parser operations for the exact uppercase tokens.
+These are semantic views of the selected subject and support. Other names such
+as `^size`, `^Timeline`, `^t` and `^s` remain ordinary external-property paths.
+Selections, paths and identities after a view apply to its result, as in
+`cube^T@[1]^S.location` and `cube^T = {T ...}`. Parsing these forms does not yet
+implement their normalization; a demanded conversion reports unsupported.
 
 | Expression | View |
 | --- | --- |
@@ -520,7 +557,7 @@ those effects cannot be frozen merely because they were not written explicitly.
 Use the user's schematic definition and an explicitly named argument:
 
 ```text
-#walk: destination = *_+{T takeStep | ...}
+#walk(destination) = *_+{T takeStep | ...}
 
 walker:{T|
     initial-state

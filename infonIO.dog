@@ -54,6 +54,8 @@ struct ProteusParser{
     me int64: errLineNum
     me int64: errCharPos
     me int64: errorSuppressDepth
+    // Replaced at every definition boundary, including unparameterized ones.
+    our WordDefn: parameterScope
 
     their WorldManager: worldManager
     our infonView: documentRoot
@@ -462,6 +464,23 @@ struct ProteusParser{
         if(statusOK(checkUniID(cPos), status)){
             me string: tag <- makeStr(pos!, cPos)
             WCHK_PEEK(cPos,valid_notDone)
+            if(peek=="("){
+                cPos <+- 1
+                WCHK_PEEK(cPos,valid_notDone)
+                if(peek!=")"){
+                    while(true){
+                        status <- checkUniID(cPos)
+                        if(status!=valid_done){return(status)}
+                        WCHK_PEEK(cPos,valid_notDone)
+                        if(peek==")"){break()}
+                        if(peek!=","){return(syntax_error)}
+                        cPos <+- 1
+                        WCHK_PEEK(cPos,valid_notDone)
+                    }
+                }
+                cPos <+- 1
+                WCHK_PEEK(cPos,valid_notDone)
+            }
             if(peek=="<"){
                 cPos <+- 1
                 WCHK_PEEK(cPos,valid_notDone)
@@ -628,18 +647,12 @@ struct ProteusParser{
         else if(chkPeek(cPos, peek, "%"))    {
             CHK_PEEK(cPos,valid_notDone)
             if(chkPeek(cPos, peek, "?")){pos! <- cPos; return(valid_done)}
-            if(cPos==pos!){return(valid_notDone)}
-            me string: tag <- makeStr(pos!+1, cPos+1)
-            me string: firstCH <- tag.subStr(0,1)
-            switch(firstCH){
-                case "s":{if(statusOK(preChkStr(cPos, "self"), status)) {pos! <- cPos; return(status)}}
-                case "W":{if(statusOK(preChkStr(cPos, "W"), status))    {return(status)}}
-                case "U":{if(statusOK(preChkStr(cPos, "U"), status))    {return(status)}}
-                case "c":{if(statusOK(preChkStr(cPos, "ctx"), status))  {return(status)}}
-                case "a":{if(statusOK(preChkStr(cPos, "args"), status)) {return(status)}}
-                case "v":{if(statusOK(preChkStr(cPos, "vars"), status)) {return(status)}}
-                default:{setError("Invalid %tag '%"+tag+"'", pos!); return(syntax_error)}
-            }
+            // This pass checks shape; the real parser checks reserved tags and
+            // the current definition's parameter names.
+            me int64: namePos <- cPos
+            status <- checkUniID(namePos)
+            if(status==syntax_error){pos! <- cPos; return(valid_done)}
+            pos! <- namePos; return(status)
         } else { //*_+...
             me bool: requirePlusMinusSign <- false
             if(peek=="*" or peek=="/"){
@@ -764,6 +777,35 @@ struct ProteusParser{
         }
         return(-1)
     }
+    me bool: reservedParameterName(me string: name) <- {
+        return(name=="self" or name=="W" or name=="U" or name=="ctx" or
+               name=="args" or name=="vars" or name=="prev" or name=="next" or
+               name=="tprev" or name=="tnext" or name=="INSERT" or name=="PROTEUS" or
+               name=="NULL" or name=="T" or name=="S")
+    }
+    me int64: parseDefinitionParameters(our WordDefn: definition, me int64: pos) <- {
+        me int64: cPos <- pos+1
+        definition!.hasParameterList <- true
+        cPos <+- text!.scrapeWSC(cPos)
+        if(text!.at(cPos)==")"){return(cPos+1-pos)}
+        while(true){
+            me int64: namePos <- cPos
+            me int64: len <- text!.scrapeCID(cPos)
+            if(len<=0){setError("Expected a parameter name", namePos); return(-1)}
+            cPos <+- len
+            me string: name <- makeStr(namePos, cPos)
+            if(reservedParameterName(name)){setError("Reserved parameter name '"+name+"'", namePos); return(-1)}
+            if(definition!.hasParameter(name)){setError("Duplicate parameter name '"+name+"'", namePos); return(-1)}
+            definition!.parameterNames.append(name)
+            cPos <+- text!.scrapeWSC(cPos)
+            me char: separator <- text!.at(cPos)
+            if(separator==")"){return(cPos+1-pos)}
+            if(separator!=","){setError("Expected ',' or ')' after parameter name", cPos); return(-1)}
+            cPos <+- 1
+            cPos <+- text!.scrapeWSC(cPos)
+        }
+        return(-1)
+    }
     me int64: parseWordDefn(our infonView: infn, me int64: pos) <- {
         me int64: cPos <- pos
         me int64: len
@@ -771,6 +813,12 @@ struct ProteusParser{
         if(chk(text!.scrapeUniID(cPos), cPos,len)){
             Allocate(infn!.definedWord)
             infn!.definedWord!.defWord <- makeStr(cPos-len, cPos)
+            cPos <+- text!.scrapeWSC(cPos)
+            if(text!.at(cPos)=="("){
+                me int64: parameterLen <- parseDefinitionParameters(infn!.definedWord, cPos)
+                if(parameterLen<0){return(-1)}
+                cPos <+- parameterLen
+            }
             if(peekWSC(cPos)=="<"){
                 cPos <+- 1
                 while(peekWSC(cPos) != ">"){
@@ -789,7 +837,10 @@ struct ProteusParser{
                 cPos <- eqPos + 1
                 our infonView:: defMeaning
                 defMeaning!.originID <- infn!.originID
+                our WordDefn: outerScope <- parameterScope
+                parameterScope <- infn!.definedWord
                 cPos <+- parseInfonView(defMeaning, cPos, true, true, pcDefn)
+                parameterScope <- outerScope
                 infn!.funcArgs <- defMeaning
             }
         } else{setError("Expected a word name after '#'", cPos)}
@@ -1172,7 +1223,22 @@ struct ProteusParser{
             else if(isBracketedIndex){part!.pathMode <- idxField}
             our infonView:: pathSeg
             pathSeg!.originID <- infn!.originID
-            cPos <+- parseInfonView(pathSeg, cPos, allowIDs, isFromDefn, pcPartPaths)
+            me bool: isView <- false
+            if(part!.pathMode==upField){
+                me int64: viewPos <- cPos+text!.scrapeWSC(cPos)
+                me int64: viewLen <- text!.scrapeUniID(viewPos)
+                me string: viewName <- makeStr(viewPos, viewPos+viewLen)
+                if(viewLen==1 and (viewName=="T" or viewName=="S")){
+                    isView <- true
+                    if(viewName=="T"){part!.pathMode <- asTSpanField}
+                    else{part!.pathMode <- asSListField}
+                    Allocate(pathSeg!.type); pathSeg!.type!.setAsGiven(viewName)
+                    pathSeg!.itmMode <- mItem; pathSeg!.streamState <- parseDone
+                    pathSeg!.infSize!.evalMode <- emUnknown; pathSeg!.value!.evalMode <- emUnknown
+                    cPos <- viewPos+viewLen
+                }
+            }
+            if(!isView){cPos <+- parseInfonView(pathSeg, cPos, allowIDs, isFromDefn, pcPartPaths)}
             part!.path <- pathSeg
             if(part!.pathMode==dotField and pathSeg!.type!=NULL and
                     pathSeg!.type!.typeID()=="astlist"){
@@ -1196,6 +1262,10 @@ struct ProteusParser{
                     setError("Expected ']' to close the index", cPos)
                     return(-1)
                 }
+            }
+            // A view is a postfix operation. Later selections/identities act
+            // on its result, rather than becoming part of its descriptor.
+            if(isBracketedIndex or isView){
                 our infonView:: continuation
                 continuation!.originID <- infn!.originID
                 me int64: continuationLen <- parseFuncParts(
@@ -1269,7 +1339,11 @@ struct ProteusParser{
                     case "next":{infn!.cursorMode <- cmNext}
                     case "tprev":{infn!.cursorMode <- cmTPrev}
                     case "tnext":{infn!.cursorMode <- cmTNext}
-                    default:{setError("Invalid %tag '%"+tag+"'", cPos-len-1)}
+                    default:{
+                        if(parameterScope!=NULL and parameterScope!.hasParameter(tag)){
+                            infn!.cursorMode <- cmParameter; infn!.parameterName <- tag
+                        }else{setError("Invalid %tag '%"+tag+"'", cPos-len-1)}
+                    }
                 }
             } else {infn!.cursorMode <- cmSelf}
         } else {
@@ -1474,6 +1548,7 @@ struct ProteusParser{
         try {
             if(streamingMode){beginDocument(infn)}
             clearError()
+            parameterScope <- NULL
             parseInfonView(infn, 0, true, false)
             if(errorSet and infn!.graphParseError==""){infn!.graphParseError <- formattedError()}
             finishingDocument <- true
@@ -1483,6 +1558,7 @@ struct ProteusParser{
             their WorldManager: failureManager <- worldManager
             documentRoot <- NULL
             worldManager <- NULL
+            parameterScope <- NULL
             if(error==""){error <- "Unexpected parser exception"}
             // Publish a terminal failure under the input lock, without invoking
             // successful-parse completion or converting it into a syntax error.
@@ -1497,6 +1573,7 @@ struct ProteusParser{
         }
         documentRoot <- NULL
         worldManager <- NULL
+        parameterScope <- NULL
     }
 
     me bool: doesParseHaveError() <- {return(errorSet)}
@@ -1742,7 +1819,7 @@ struct InfonViewPrinter{
         me string: S
         if(part==NULL){return(S)}
         if(part!.pathMode==dotField or part!.pathMode==asTListField){S <+- "."}
-        else if(part!.pathMode==upField){S <+- "^"}
+        else if(part!.pathMode==upField or part!.pathMode==asTSpanField or part!.pathMode==asSListField){S <+- "^"}
         else if(part!.pathMode==resolutionField){S <+- "~"}
         else if(part!.pathMode==idxField){S <+- "@["}
         else if(part!.pathMode==colonField){S <+- ":"}
@@ -1827,7 +1904,17 @@ struct InfonViewPrinter{
             }
         }
         else if(i!.itmMode==mWordDefn){
-            S<+-"#"+i!.definedWord!.defWord +" "
+            S<+-"#"+i!.definedWord!.defWord
+            if(i!.definedWord!.hasParameterList){
+                S <+- "("
+                me bool: firstParameter <- true
+                withEach parameter in i!.definedWord!.parameterNames{
+                    if(!firstParameter){S <+- ", "}
+                    S <+- parameter; firstParameter <- false
+                }
+                S <+- ")"
+            }
+            S <+- " "
             if(! i!.definedWord!.UsageTags.isEmpty()){S<+-"<"}
             withEach usageTag in i!.definedWord!.UsageTags{
                 S <+- usageTag+" "
@@ -1870,6 +1957,7 @@ struct InfonViewPrinter{
                         case cmNext:   {S <+- "next"}
                         case cmTPrev:  {S <+- "tprev"}
                         case cmTNext:  {S <+- "tnext"}
+                        case cmParameter:{S <+- i!.parameterName}
                     }
                 }
             } else if(i!.viewMode==vmOverlay){
