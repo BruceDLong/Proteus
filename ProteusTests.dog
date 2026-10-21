@@ -1,6 +1,10 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/embeddedNeighbours/boundaries
+    unit/embeddedNeighbours/waiting
+    unit/embeddedNeighbours/scaling
+    unit/embeddedNeighbours/sharedEmpty
     unit/wordArguments/isolation
     unit/wordArguments/invalidCalls
     unit/wordArguments/partial
@@ -2590,6 +2594,168 @@ struct GLOBAL {
             print("READINESS width=",width," requests=",cursor!.requiredRequests," frames=",cursor!.requiredFrames,
                 " queue=",cursor!.requiredQueueSteps," relationships=",cursor!.requiredRelationships," members=",cursor!.requiredMembersScanned,"\n")
             agent.endWorldSessions(); modelMngr.clear(); width <*- 4
+        }
+    }
+}
+
+
+struct GLOBAL {
+    void: unit_embeddedNeighbours_boundaries(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me List<string>: inputs <- ["{1 &{2 ...} %prev}", "{%next &{...} 3}", "{1 &*1000000000+{_|...} %prev}", "{1 &*5+{2 3} %prev}"]
+        withEach input in inputs{
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            our POV: target <- parsed.target!.pItem!.value!.items.tail
+            if(parsed.target!.pItem!.value!.items.head!.pItem!.cursorMode==cmNext){target <- parsed.target!.pItem!.value!.items.head}
+            target!.pParent <- parsed.target
+            our WorldRequest: request <- agent.normalize(target)
+            if(request!.status().outcome!=worldPartial){FAIL("Unknown boundary was treated as an endpoint: "+input+": "+request!.error())}
+            if(request!.correspondencePositions>100 or request!.framesCreated>100){FAIL("Unknown span was enumerated")}
+        }
+        me WorldParseResult: parsed <- agent.worldManager.parse("{&{7} &{7} %prev}")
+        our POV: target <- parsed.target!.pItem!.value!.items.tail; target!.pParent <- parsed.target
+        our POV: expectedSource <- target!.prev!.pItem!.value!.items.head
+        our WorldRequest: request <- agent.normalize(target)
+        if(!request!.complete() or target!.pItem!.fetchInt()!=7 or request!.selectedSource()!==expectedSource){FAIL("Neighbour lost its occurrence identity")}
+        parsed <- agent.worldManager.parse("{#loop={&loop}}")
+        request <- agent.normalize(parsed.target)
+        parsed <- agent.worldManager.parse("{%next &loop}@[1]")
+        request <- agent.normalize(parsed.target)
+        if(request!.status().outcome!=worldUnsupported or request!.namedLayouts>10){FAIL("Recursive layout did not stop at a finite boundary")}
+        parsed <- agent.worldManager.parse("{#local={_ %prev=7}}")
+        request <- agent.normalize(parsed.target)
+        me string: before <- toString(parsed.target!.pItem)
+        me WorldParseResult: call <- agent.worldManager.parse("local")
+        request <- agent.normalize(call.target)
+        if(request!.status().outcome!=worldUnsupported or toString(parsed.target!.pItem)!=before){FAIL("Neighbour constraint modified a shared declaration")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+    void: unit_embeddedNeighbours_waiting(me string: testName) <- {
+        withEach scenario in range 0 .. 3{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me string: source <- "{&{7} %prev}"
+            if(scenario==1){source <- "{%next &{7}}"}
+            me WorldParseResult: parsed <- agent.worldManager.parse(source)
+            our POV: target <- parsed.target!.pItem!.value!.items.tail
+            our POV: pending <- parsed.target!.pItem!.value!.items.head
+            if(scenario==1){target <- pending; pending <- parsed.target!.pItem!.value!.items.tail}
+            target!.pParent <- parsed.target
+            agent.worldManager.prepareInput(pending!.pItem)
+            our WorldRequest: request <- agent.normalize(target)
+            if(request!.status().outcome!=worldWaiting or agent.worldManager.control!.inputWaiters.size()!=1){FAIL("Neighbour did not retain one parser wait")}
+            me uint64: frames <- request!.framesCreated
+            me uint64: queue <- request!.queueSteps
+            me uint64: ancestors <- request!.neighbourAncestors
+            me WorldParseResult: unrelated <- agent.worldManager.parse("9")
+            agent.worldManager.inputReady(unrelated.target!.pItem)
+            if(request!.framesCreated!=frames or request!.queueSteps!=queue){FAIL("Unrelated arrival repeated neighbour work")}
+            if(scenario==2){request!.cancel()}
+            pending!.pItem!.streamState <- parseDone; agent.worldManager.inputReady(pending!.pItem)
+            if(scenario==2){
+                if(request!.status().outcome!=worldCancelled or target!.pItem!.viewMode!=vmCursor){FAIL("Cancelled neighbour published")}
+            }else if(!request!.complete() or target!.pItem!.fetchInt()!=7 or request!.neighbourAncestors!=ancestors){FAIL("Neighbour did not continue at its retained boundary: "+request!.error())}
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Finished neighbour retained a subscription")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+    void: unit_embeddedNeighbours_scaling(me string: testName) <- {
+        me List<int>: widths <- [16, 32, 64]
+        withEach forward in range 0 .. 2{
+            withEach width in widths{
+                me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+                me string: input <- "{0 "
+                if(forward==1){input <- "{"}
+                withEach idx in range 0 .. width{
+                    if(forward==1){input <+- "&{(%next +1)} "}else{input <+- "&{(%prev +1)} "}
+                }
+                if(forward==1){input <+- "0"}
+                input <+- "}"
+                me WorldParseResult: parsed <- agent.worldManager.parse(input)
+                our WorldRequest: request <- agent.normalize(parsed.target)
+                if(!request!.complete()){FAIL("Embedded recurrence did not complete: "+request!.error())}
+                our POV: edge <- parsed.target!.pItem!.value!.items.tail
+                if(forward==1){edge <- parsed.target!.pItem!.value!.items.head}
+                if(edge!.pItem!.value!.items.head!.pItem!.fetchInt()!=width){FAIL("Embedded recurrence produced the wrong endpoint")}
+                print("Neighbours width ", width, " direction ", forward, ": frames=", request!.framesCreated,
+                    " relationships=", request!.relationshipsRead, " queue=", request!.queueSteps,
+                    " positions=", request!.correspondencePositions, " ancestors=", request!.neighbourAncestors,
+                    " levels=", request!.neighbourLevelsCreated, " peak=", request!.neighbourPeakLevels, "\n")
+                if(request!.framesCreated>20*width+20 or request!.queueSteps>100*width+100 or
+                   request!.correspondencePositions>20*width+20 or request!.neighbourAncestors>5*width+5){FAIL("Fixed-width neighbour work exceeded a linear bound")}
+                agent.endWorldSessions(); modelMngr.clear()
+            }
+        }
+        withEach depth in widths{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: nested <- agent.worldManager.parse("{%prev}")
+            withEach level in range 0 .. depth{
+                me WorldParseResult: wrapper <- agent.worldManager.parse("{&{}}")
+                wrapper.target!.pItem!.value!.items.head!.pItem <- nested.target!.pItem
+                wrapper.target!.pItem!.infSize!.evalMode <- emUnknown
+                nested <- wrapper
+            }
+            me WorldParseResult: root <- agent.worldManager.parse("{7 &{}}")
+            root.target!.pItem!.value!.items.tail!.pItem <- nested.target!.pItem
+            root.target!.pItem!.infSize!.evalMode <- emUnknown
+            our WorldRequest: request <- agent.normalize(root.target)
+            if(!request!.complete()){FAIL("Deep embedded neighbour failed: "+request!.error())}
+            our POV: value <- root.target!.pItem!.value!.items.tail
+            withEach level in range 0 .. depth+1{value <- value!.pItem!.value!.items.head}
+            if(value!.pItem!.fetchInt()!=7){FAIL("Deep neighbour reached the wrong scope")}
+            print("Neighbours depth ", depth, ": frames=", request!.framesCreated, " relationships=", request!.relationshipsRead,
+                " queue=", request!.queueSteps, " positions=", request!.correspondencePositions, " ancestors=", request!.neighbourAncestors,
+                    " levels=", request!.neighbourLevelsCreated, " peak=", request!.neighbourPeakLevels, "\n")
+            if(request!.framesCreated>20*depth+40 or request!.correspondencePositions>20*depth+40 or request!.neighbourAncestors>depth+3){FAIL("Deep neighbour expanded unrelated structure")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+        // Local neighbours under many embedded ancestors must not seed or
+        // retain an entire ancestor stack for every member.
+        me Agent: localAgent; Allocate(localAgent.identityRegistry); localAgent.worldManager.control!.identities <- localAgent.identityRegistry
+        me string: localInput <- "{0 "
+        withEach idx in range 0 .. 64{localInput <+- "(%prev +1) "}
+        localInput <+- "}"
+        me WorldParseResult: local <- localAgent.worldManager.parse(localInput)
+        withEach level in range 0 .. 64{
+            me WorldParseResult: wrapper <- localAgent.worldManager.parse("{&{}}")
+            wrapper.target!.pItem!.value!.items.head!.pItem <- local.target!.pItem
+            wrapper.target!.pItem!.infSize!.evalMode <- emUnknown; local <- wrapper
+        }
+        our WorldRequest: localRequest <- localAgent.normalize(local.target)
+        if(!localRequest!.complete() or localRequest!.neighbourAncestors!=64 or localRequest!.neighbourLevelsCreated!=64 or
+           localRequest!.neighbourPeakLevels!=1){FAIL("Local adjacency walked or retained unrelated ancestor levels")}
+        our POV: localValue <- local.target
+        withEach level in range 0 .. 64{localValue <- localValue!.pItem!.value!.items.head}
+        if(localValue!.pItem!.value!.items.tail!.pItem!.fetchInt()!=64){FAIL("Deep local recurrence changed its values")}
+        localAgent.endWorldSessions(); modelMngr.clear()
+    }
+    void: unit_embeddedNeighbours_sharedEmpty(me string: testName) <- {
+        me List<int>: depths <- [16, 32, 64]
+        withEach form in range 0 .. 2{
+        withEach depth in depths{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me string: leaf <- "{}"
+            if(form==1){leaf <- "*0+{_|...}"}
+            me WorldParseResult: nested <- agent.worldManager.parse(leaf)
+            if(form==0){nested.target!.pItem!.infSize!.evalMode <- emUnknown}
+            withEach level in range 0 .. depth{
+                me WorldParseResult: pair <- agent.worldManager.parse("{&{} &{}}")
+                pair.target!.pItem!.value!.items.head!.pItem <- nested.target!.pItem
+                pair.target!.pItem!.value!.items.tail!.pItem <- nested.target!.pItem
+                pair.target!.pItem!.infSize!.evalMode <- emUnknown
+                nested <- pair
+            }
+            me WorldParseResult: root <- agent.worldManager.parse("{7 &{} %prev}")
+            root.target!.pItem!.value!.items.head!.next!.pItem <- nested.target!.pItem
+            our POV: target <- root.target!.pItem!.value!.items.tail; target!.pParent <- root.target
+            our WorldRequest: request <- agent.normalize(target)
+            if(!request!.complete() or target!.pItem!.fetchInt()!=7){FAIL("Shared empty layout changed the neighbour: "+request!.error())}
+            print("Neighbours shared-empty form ", form, " depth ", depth, ": frames=", request!.framesCreated,
+                " queue=", request!.queueSteps, " positions=", request!.correspondencePositions,
+                " emptyHits=", request!.emptyLayoutHits, " levels=", request!.neighbourLevelsCreated, " peak=", request!.neighbourPeakLevels, "\n")
+            if(request!.correspondencePositions>20*depth+20 or request!.neighbourLevelsCreated>4*depth+10 or
+               request!.neighbourPeakLevels>depth+3){FAIL("Shared empty layout unfolded exponentially")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
         }
     }
 }

@@ -212,6 +212,11 @@ and E's `%prev` is D. The wrapper is not a neighbour-visible member. Grouping
 consecutive members into an embedded list preserves these neighbour relationships.
 This does not recursively flatten ordinary lists nested inside those members.
 
+D103 implements these structural-neighbour rules through the common occurrence
+layout walker, including named embedded words and closed empty spans. Unknown
+endpoints remain partial; arbitrary dynamic layout and temporal conversion
+boundaries are unchanged. This does not implement the planned cursor integration.
+
 `&word(...)` gets its primary explicit external bindings through arguments, while
 embedding supplies its surrounding list context. It does not hide `%self` or
 the neighbours of its first and last logical members. In `&{ LS | ... }`, LS can

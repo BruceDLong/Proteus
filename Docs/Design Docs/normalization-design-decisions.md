@@ -3056,3 +3056,106 @@ The 40 new language fixtures and three new compiled tests pass. The full
 **16/396**, compared with **16/356**. Both failure-name sets exactly match the
 baseline. No old fixture expectation was changed. Consumer and visible-rendering
 validation remain separate from this engine implementation.
+
+## D103 Logical structural neighbours across embedded scopes (2026-10-21)
+
+**Request and evidence.** Fix the audit's “Embedded structural neighbours violate
+the newer scope rule” without a syntax-specific workaround, repeated prefix
+scans or unbounded expansion. D099 supersedes D060's physical-sibling policy
+for `%prev` and `%next`. The three audit cases reproduce before this change:
+`{1 &{%prev 2} 3}@[2]` yields UNDEFINED instead of 1;
+`{1 &{2 3} %prev}@[4]` yields the wrapper instead of 3;
+`{1 &{2 %next} 4}@[3]` yields UNDEFINED instead of 4.
+
+**Common occurrence traversal.** Extend the same `WorldWalk` used by indexing
+and correspondence to walk in either direction and start after a known
+occurrence. Structural neighbours use that walker. It borrows member links,
+named layouts and occurrence ancestry; it neither flattens/copies the source
+nor invokes an execution cursor. A lookup begins in its immediate ordered
+scope. Only exhausting an embedded scope requests an outer continuation.
+Ordinary nested lists remain individual members and close their internal
+scope. No ancestor stack is built before a local sibling can be used.
+
+Borrowing a definition's representation preserves its application owner,
+occurrence, embedding, parent and supplied relationships. The shared definition
+body remains read-only. The selected occurrence then enters ordinary
+normalization, including the applicable scoped listSpecs. Neighbour visibility
+does not extend a listSpec's coverage or establish new occurrence identities.
+Literal, grouped and named embedded layouts use the same route. The execution
+cursor retains its existing supplied-work behavior; its integration with
+normalizer-owned production remains separate work.
+
+**Unknown boundaries and lifecycle.** Reverse traversal encounters an open suffix
+before the last stored member. It does not substitute that stored member for
+an unknown logical endpoint. An explicit positive extent also needs a proved
+endpoint: reuse an ordinary completed occurrence when available, otherwise
+remain partial. A zero-width open span can be skipped when the existing width
+predicate establishes it. Unordered and negative layouts do not establish an
+ordered positive neighbour. Ordinary local unordered references retain their
+unavailable-neighbour behavior.
+
+Parser waits retain the exact walker and application context, with one input
+subscription. Unrelated arrivals do no work. Cancellation releases the wait
+and publishes nothing. Once a neighbour is found, release the walk's levels
+and proof tables; retain only the selected occurrence needed by normalization.
+There is no persistent flattened sequence or new producer/cache epoch.
+
+**Empty-layout proof and bounds.** A direct adversarial test exposed exponential
+traversal in the first implementation: a shared binary graph of empty layouts
+took 64 layout visits at depth 4 and 1,024 at depth 8. A walk now reuses a proved
+empty layout only after traversing its entire closed structure, or establishing
+its zero extent. Anchored suffix scans, unresolved work, negative descriptions,
+contextual path layouts and unproved open tails cannot establish that proof.
+Child dependence propagates to the containing proof. Unused parameter bindings
+alone do not make a literal empty structure contextual; reading a parameter or
+another path to establish its layout does. The proof retains no argument value
+or occurrence substitution.
+
+These empty proofs are local to one walk. They bound shared empty DAG traversal
+by the distinct structural layouts/edges inspected instead of the number of
+syntactic expansions. The existing closed-record shape predicate also retains
+its positive syntax proof for the current request, avoiding repeated member
+scans when multiple lookups inspect the same qualified layout. Writes are
+staged until publication, and this request-local table is released with progress.
+Shape-member visits, neighbour scope visits, allocated walk levels and peak
+walk depth are counted alongside existing frames, relationships and queue work.
+No general linear bound is claimed for arbitrary inference or ambiguous layouts.
+
+**Preserve cursor assertions.** A conflict check uncovered an existing independent
+loss of work: `%prev=2` read the selected value but discarded its own constraint.
+Cursor-local work now uses ordinary constraint frames, qualified relationship
+composition and staged occurrence writes. Known conflicts reject atomically;
+unknown caller facts can be learned without modifying a shared declaration.
+The existing final refresh of produced occurrence facts now covers all staged
+writes, rather than being gated on a parameterized application. It does not
+produce members or replay normalization.
+
+**Validation.** Final regeneration with `codeDog Proteus.Lib.dog` and the separate
+`codeDog BuildProteusGraph.dog` both report `Marker: Build Successful`.
+The 41 new language cases and four ordinary CodeDog checks pass. All 17 original
+audit cases pass, compared with three failures before this change.
+`./TestProteus -T 3` reports **24/533 failures/tests**, compared with **24/488**
+at baseline. `./TestProteus -T 3 -t defaultTests.tst:` reports **16/437**, compared
+with **16/396**. Both failure-name sets match the baseline exactly; no existing
+fixture expectation changed. The remaining failures are the existing reference
+registry/index-lowering, sparse alignment, external-property, cube/Rubix, user,
+search, unit/day and world-loading cases.
+
+Measured work for sizes/depths **16 / 32 / 64**:
+
+| Workload | Frames | Relationships | Queue steps | Layout visits | Walk levels allocated | Peak walk levels |
+| --- | --- | --- | --- | --- | --- | --- |
+| Backward embedded recurrence | 66 / 130 / 258 | 65 / 129 / 257 | 163 / 323 / 643 | 78 / 158 / 318 | 47 / 95 / 191 | 2 / 2 / 2 |
+| Forward embedded recurrence | 66 / 130 / 258 | 65 / 129 / 257 | 147 / 291 / 579 | 78 / 158 / 318 | 47 / 95 / 191 | 2 / 2 / 2 |
+| One predecessor across nested embedded scopes | 20 / 36 / 68 | 19 / 35 / 67 | 41 / 73 / 137 | 19 / 35 / 67 | 18 / 34 / 66 | 1 / 1 / 1 |
+| Shared binary empty graph, closed or proved zero-width open leaves | 2 / 2 / 2 | — | 3 / 3 / 3 | 68 / 132 / 260 | 34 / 66 / 130 | 18 / 34 / 66 |
+
+A separate 64-member local recurrence inside 64 embedded ancestors uses exactly
+64 scope visits and 64 walk levels, with one level live at a time. Waiting tests
+verify one subscription, no work on unrelated arrivals, continuation without
+rebuilding the scope walk, and cancellation without publication. A billion-wide
+unknown span stays partial with bounded work rather than allocating its extent.
+
+These checks establish the stated structural and lifecycle cases, not arbitrary
+dynamic-layout, temporal-conversion or general inference support. Consumer and
+visible-rendering validation remain separate from the engine builds.

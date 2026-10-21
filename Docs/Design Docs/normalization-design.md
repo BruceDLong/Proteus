@@ -97,6 +97,22 @@ logical-neighbour rule applies to named embedded words. An embedded listSpec can
 refer to its parent without extending its own coverage to the parent's other
 members. `%prev`/`%next` remain unavailable in unordered scope.
 
+**Implemented structural traversal (D103).** Structural neighbours use the same
+borrowed occurrence-layout walker as indexing, in either direction. Traversal
+starts after the known occurrence and climbs outward only when an embedded
+scope is exhausted. Ordinary nested lists remain visible members and boundaries.
+Definition expansion preserves the application's occurrence and embedding while
+keeping the shared body read-only. Applicable listSpecs retain their own coverage.
+
+Unknown suffixes and unproved declared endpoints remain partial. A reverse
+lookup may reuse an endpoint already established by normal normalization; it
+does not enumerate a sparse span to manufacture one. Walk-local empty-layout
+proofs avoid unfolding shared empty graphs exponentially. Only full closed,
+context-independent structural proofs or established zero extents qualify,
+never an anchored partial scan.
+Traversal state is released after selection and retained across parser waits.
+Neighbour selection does not create an execution cursor or produce states.
+
 Ordinary references, including `%`, `%self`, `%prev`, `%next` and parameter
 referents, describe states at the common S-list time-slice unless another time
 or span is explicit. T-list L-values address the next state under the existing
