@@ -1,0 +1,148 @@
+// Optional retention policy for values already acquired by ordinary demand
+// work. No policy operation invents occurrences or evaluates a transition.
+struct WorldCursorValue {
+    me bool: evictWhenUnused <- false
+}
+
+struct WorldRetentionEntry {
+    our POV: node
+    our WorldCursorUse: use
+}
+
+struct WorldManager {
+    // Reclaim one known cache entry, without searching its containing list.
+    // Every live value/checkpoint lease protects the entry. A later release
+    // retries the deferred request; durable assertions are never discarded.
+    me bool: evictDemandValue(our POV: node) <- {
+        if(node==NULL){return(false)}
+        me WorldModelLock: lock{control!.mutex}
+        our WorldCursorValue: stored <- node!.cursorValue
+        if(stored==NULL or stored!.owner!==node){return(false)}
+        if(stored!.permanent){stored!.evictWhenUnused <- false; return(false)}
+        if(!graph.cursorValueReady(node)){
+            stored!.original <- NULL; stored!.permanent <- true; stored!.evictWhenUnused <- false; return(false)
+        }
+        if(stored!.original==NULL){stored!.evictWhenUnused <- false; return(false)}
+        if(stored!.inUse()){stored!.evictWhenUnused <- true; return(false)}
+        node!.pItem <- stored!.original; node!.cursorValue <- NULL
+        return(true)
+    }
+}
+
+struct WorldDemand {
+    me bool: retentionEnabled <- false
+    me int: retentionRecentLimit <- 0
+    me int: retentionStride <- 0
+    me int: retentionCheckpointLimit <- 0
+    me int: retentionRecentSlot <- 0
+    me int: retentionCheckpointSlot <- 0
+    me int: retentionUntilCheckpoint <- 0
+    me List<our WorldRetentionEntry>: retentionRecent
+    me List<our WorldRetentionEntry>: retentionCheckpoints
+    me uint64: retentionRecorded <- 0
+    me uint64: retentionEvictionAttempts <- 0
+    me uint64: retentionEvicted <- 0
+    me uint64: retentionPeakSlots <- 0
+    me bool: preprocessing <- false
+    me int64: preprocessLimit <- 0
+    me int64: preprocessed <- 0
+    me int: preprocessStage <- 0
+
+    // Configure before the first value demand. Zero stride/checkpoints disables
+    // checkpoints; zero recent entries keeps only active and checkpoint leases.
+    // Unconfigured demands retain the existing explicit-clear behavior.
+    me bool: configureRetention(me int: recent, me int: stride, me int: maxCheckpoints) <- {
+        if(hasValue or pendingPosition!=NULL or selectionRequest!=NULL or preprocessing or
+           recent<0 or stride<0 or maxCheckpoints<0 or
+           (stride==0 and maxCheckpoints!=0) or (stride!=0 and maxCheckpoints==0)){return(false)}
+        retentionEnabled <- true; retentionRecentLimit <- recent
+        retentionStride <- stride; retentionCheckpointLimit <- maxCheckpoints
+        return(true)
+    }
+    void: evictRetainedValue(our POV: node) <- {
+        if(manager==NULL or node==NULL){return()}
+        retentionEvictionAttempts <+- 1
+        if(manager!.evictDemandValue(node)){retentionEvicted <+- 1}
+    }
+    // Call after releasing the former current-value lease. This also services
+    // another demand's deferred eviction without scanning its history.
+    void: releaseRetainedValue(our POV: node) <- {
+        if(node!=NULL and node!.cursorValue!=NULL and node!.cursorValue!.evictWhenUnused){evictRetainedValue(node)}
+    }
+    void: releaseRetentionEntry(our WorldRetentionEntry: entry) <- {
+        if(entry==NULL){return()}
+        entry!.use <- NULL
+        evictRetainedValue(entry!.node)
+    }
+    // Checkpoint stride counts acquired visits, including replayed occurrences.
+    // It never assumes a virtual ordinal or discovers one by scanning a prefix.
+    // Checkpoints retain values for the supported predecessor replay mechanism;
+    // they are not a claim that arbitrary inference frontiers fit in one value.
+    void: recordRetainedValue(our WorldPosition: at, our POV: value) <- {
+        if(!retentionEnabled or manager==NULL or at==NULL or !at!.writable or
+           value==NULL or value!==at!.node or !manager!.graph.cursorValueReady(value)){return()}
+        me WorldModelLock: lock{manager!.control!.mutex}
+        retentionRecorded <+- 1
+        me bool: checkpoint <- retentionCheckpointLimit>0 and retentionUntilCheckpoint==0
+        if(retentionCheckpointLimit>0){
+            if(checkpoint){retentionUntilCheckpoint <- retentionStride}
+            retentionUntilCheckpoint <- retentionUntilCheckpoint-1
+        }
+        if(value!.cursorValue!.permanent){return()}
+        if(retentionRecentLimit>0){
+            our WorldRetentionEntry:: entry; entry!.node <- value; entry!.use <- value!.cursorValue!.use
+            if(retentionRecent.size()<retentionRecentLimit){retentionRecent.append(entry)}
+            else{
+                our WorldRetentionEntry: expired <- retentionRecent[retentionRecentSlot]
+                retentionRecent[retentionRecentSlot] <- entry
+                retentionRecentSlot <+- 1; if(retentionRecentSlot==retentionRecentLimit){retentionRecentSlot <- 0}
+                releaseRetentionEntry(expired)
+            }
+        }
+        if(checkpoint){
+            our WorldRetentionEntry:: entry; entry!.node <- value; entry!.use <- value!.cursorValue!.use
+            if(retentionCheckpoints.size()<retentionCheckpointLimit){retentionCheckpoints.append(entry)}
+            else{
+                our WorldRetentionEntry: expired <- retentionCheckpoints[retentionCheckpointSlot]
+                retentionCheckpoints[retentionCheckpointSlot] <- entry
+                retentionCheckpointSlot <+- 1; if(retentionCheckpointSlot==retentionCheckpointLimit){retentionCheckpointSlot <- 0}
+                releaseRetentionEntry(expired)
+            }
+        }
+        me uint64: slots <- retentionRecent.size()+retentionCheckpoints.size()
+        if(slots>retentionPeakSlots){retentionPeakSlots <- slots}
+        // An active display or replay snapshot has already been acquired by
+        // the caller. If neither policy queue keeps this occurrence, request
+        // its eviction now or when that display's lease is released.
+        if(retentionRecentLimit==0 and !checkpoint){evictRetainedValue(value)}
+    }
+
+    // Prepare at most maxItems existing logical occurrences from the list's
+    // beginning. true means that bound or a proved endpoint was reached;
+    // preprocessed reports how many values satisfied this demand's level.
+    // A wait returns false and the next call with the same bound resumes it.
+    // This is an explicit finite request, never automatic open-tail expansion.
+    me bool: preprocess(me int64: maxItems) <- {
+        if(maxItems<0){return(false)}
+        if(preprocessing and preprocessLimit!=maxItems){return(false)}
+        if(!preprocessing){
+            if(pendingPosition!=NULL or selectionRequest!=NULL){return(false)}
+            preprocessLimit <- maxItems; preprocessed <- 0; preprocessStage <- 0; preprocessing <- true
+        }
+        while(preprocessed<preprocessLimit){
+            me bool: ready <- false
+            if(preprocessStage==0){preprocessStage <- 1; ready <- seek(FlexNum("1"))}
+            else if(preprocessStage==2){preprocessStage <- 3; ready <- goNext()}
+            else{ready <- refresh()}
+            if(!ready){
+                me WorldStatus: state <- status()
+                if(state.outcome==worldWaiting or state.outcome==worldReady){return(false)}
+                preprocessing <- false
+                return(atBoundary)
+            }
+            preprocessed <+- 1; preprocessStage <- 2
+        }
+        preprocessing <- false
+        return(true)
+    }
+}

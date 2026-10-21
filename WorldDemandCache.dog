@@ -1,0 +1,310 @@
+// Demand cache proofs describe the occurrence and enclosing source context.
+// Scope nodes are shared; a cached value does not copy its ancestor chain.
+struct WorldDemandSessionIdentity {}
+struct WorldDemandHeaderIdentity {}
+struct WorldSession {
+    our WorldDemandSessionIdentity:: demandIdentity
+}
+struct infonView {
+    our WorldDemandHeaderIdentity: demandIdentity
+    their infonView: demandIdentityOwner
+}
+struct WorldDemandSite {
+    their POV: node
+    their POV: owner
+    their POV: occurrence
+    their POV: argumentEdge
+    their WorldBindings: parameters
+    their POV: input
+    their WorldPosition: inputContext
+    me bool: constraintRoot <- false
+    me bool: embedded <- false
+    me bool: tail <- false
+    me bool: writable <- true
+}
+struct WorldDemandScopeProof {
+    our WorldDemandSite: site
+    their infonView: description
+    our WorldDemandHeaderIdentity: headerIdentity
+    me uint64: revision
+    // occurrencePath borrows a parent's POV header. The represented header
+    // and the live occurrence header must both still describe this scope.
+    their infonView: occurrenceDescription
+    our WorldDemandHeaderIdentity: occurrenceIdentity
+    me uint64: occurrenceRevision <- 0
+    our WorldDemandScopeProof: parent
+}
+struct WorldDemandValueProof {
+    our WorldDemandSite: site
+    their infonView: description
+    our WorldDemandHeaderIdentity: headerIdentity
+    me uint64: revision <- 0
+    their infonView: occurrenceDescription
+    our WorldDemandHeaderIdentity: occurrenceIdentity
+    me uint64: occurrenceRevision <- 0
+    our WorldDemandScopeProof: scope
+    their WorldSession: session
+    our WorldDemandSessionIdentity: sessionIdentity
+    their infonView: worldSource
+    our WorldDemandHeaderIdentity: worldIdentity
+    me uint64: worldRevision <- 0
+    their IdentityRegistry: identities
+    me string: language
+}
+struct WorldCursorValue {
+    our WorldDemandValueProof: demandProof
+}
+
+struct WorldPOVGraph {
+    // Allocate identity only for headers used by a cache proof. A shallow
+    // copied header retains the old owner marker and receives its own token.
+    // The token is pure metadata and never refers back to the model.
+    our WorldDemandHeaderIdentity: demandHeaderIdentity(our infonView: description) <- {
+        if(description==NULL){return(NULL)}
+        if(description!.demandIdentity==NULL or description!.demandIdentityOwner!==description){
+            Allocate(description!.demandIdentity); description!.demandIdentityOwner <- description
+        }
+        return(description!.demandIdentity)
+    }
+    // Proof metadata must not own the model: a POV owns its cached value and
+    // would otherwise acquire a reference cycle through its context proof.
+    our WorldDemandSite: demandSite(our WorldPosition: at) <- {
+        if(at==NULL){return(NULL)}
+        our WorldDemandSite:: site
+        site!.node <- at!.node; site!.owner <- at!.owner; site!.occurrence <- at!.occurrence
+        site!.argumentEdge <- at!.argumentEdge
+        site!.parameters <- at!.parameters; site!.input <- at!.input; site!.inputContext <- at!.inputContext
+        site!.constraintRoot <- at!.constraintRoot; site!.embedded <- at!.embedded
+        site!.tail <- at!.tail; site!.writable <- at!.writable
+        return(site)
+    }
+    me bool: sameDemandSite(our WorldDemandSite: site, our WorldPosition: at) <- {
+        if(site==NULL or at==NULL){return(site==NULL and at==NULL)}
+        return(site!.node===at!.node and site!.owner===at!.owner and
+            site!.occurrence===at!.occurrence and site!.argumentEdge===at!.argumentEdge and site!.parameters===at!.parameters and
+            site!.input===at!.input and site!.inputContext===at!.inputContext and
+            site!.constraintRoot==at!.constraintRoot and site!.embedded==at!.embedded and
+            site!.tail==at!.tail and site!.writable==at!.writable)
+    }
+}
+
+struct WorldDemand {
+    // Only the current scope frontier is indexed. Older cached values may
+    // retain their own shared proof, but traversal does not grow this index.
+    me Map<our POV, our WorldDemandScopeProof>: demandScopes
+    me uint64: demandScopeNodes <- 0
+    me uint64: demandScopeChecks <- 0
+    me uint64: demandContextMisses <- 0
+    our WorldDemandValueProof: workingProof
+    their infonView: workingDescription
+    our WorldDemandHeaderIdentity: workingIdentity
+    me uint64: workingRevision <- 0
+
+    our WorldDemandScopeProof: demandScope(our WorldPosition: at) <- {
+        me List<our WorldPosition>: pending
+        me Set<our WorldPosition>: visited
+        while(at!=NULL){
+            if(visited.contains(at) or at!.node==NULL or at!.node!.pItem==NULL or
+               at!.node!.pItem!.streamState!=parseDone){return(NULL)}
+            visited.insert(at); pending.append(at)
+            if(at!.constraintRoot){break()}
+            at <- at!.parent
+        }
+        our WorldDemandScopeProof: parent
+        me Map<our POV, our WorldDemandScopeProof>: frontier
+        while(!pending.isEmpty()){
+            our WorldPosition: scope <- pending.popLast()
+            our infonView: occurrenceDescription
+            if(scope!.occurrence!=NULL){occurrenceDescription <- scope!.occurrence!.pItem}
+            our WorldDemandScopeProof: proof
+            if(demandScopes.containsKey(scope!.owner)){proof <- demandScopes.at(scope!.owner)}
+            if(proof==NULL or proof!.parent!==parent or
+               !manager!.graph.sameDemandSite(proof!.site, scope) or
+               proof!.description!==scope!.node!.pItem or proof!.revision!=scope!.node!.pItem!.cursorRevision or
+               proof!.headerIdentity!==manager!.graph.demandHeaderIdentity(scope!.node!.pItem) or
+               proof!.occurrenceDescription!==occurrenceDescription or
+               proof!.occurrenceIdentity!==manager!.graph.demandHeaderIdentity(occurrenceDescription) or
+               (occurrenceDescription!=NULL and proof!.occurrenceRevision!=occurrenceDescription!.cursorRevision)){
+                Allocate(proof); proof!.site <- manager!.graph.demandSite(scope)
+                proof!.description <- scope!.node!.pItem; proof!.revision <- scope!.node!.pItem!.cursorRevision
+                proof!.headerIdentity <- manager!.graph.demandHeaderIdentity(scope!.node!.pItem)
+                proof!.occurrenceDescription <- occurrenceDescription
+                proof!.occurrenceIdentity <- manager!.graph.demandHeaderIdentity(occurrenceDescription)
+                if(occurrenceDescription!=NULL){proof!.occurrenceRevision <- occurrenceDescription!.cursorRevision}
+                proof!.parent <- parent; demandScopeNodes <+- 1
+            }
+            if(frontier.containsKey(scope!.owner)){frontier.at(scope!.owner) <- proof}
+            else{frontier.insert(scope!.owner, proof)}
+            parent <- proof
+        }
+        demandScopes <- frontier
+        return(parent)
+    }
+
+    me bool: contextAvailable(our WorldDemandValueProof: proof, our WorldPosition: at) <- {
+        if(manager==NULL or at==NULL or at!.node==NULL or at!.node!.pItem==NULL){return(false)}
+        our infonView: occurrenceDescription
+        if(at!.occurrence!=NULL){occurrenceDescription <- at!.occurrence!.pItem}
+        our IdentityRegistry: registry <- identities
+        if(registry==NULL){registry <- manager!.control!.identities}
+        if(proof==NULL or session==NULL or session!.closed or proof!.session!==session or
+           proof!.description!==at!.node!.pItem or proof!.revision!=at!.node!.pItem!.cursorRevision or
+           proof!.headerIdentity!==manager!.graph.demandHeaderIdentity(at!.node!.pItem) or
+           proof!.occurrenceDescription!==occurrenceDescription or
+           proof!.occurrenceIdentity!==manager!.graph.demandHeaderIdentity(occurrenceDescription) or
+           (occurrenceDescription!=NULL and proof!.occurrenceRevision!=occurrenceDescription!.cursorRevision) or
+           proof!.sessionIdentity!==session!.demandIdentity or proof!.worldSource!==worldSource or
+           proof!.worldIdentity!==manager!.graph.demandHeaderIdentity(worldSource) or
+           (worldSource!=NULL and proof!.worldRevision!=worldSource!.cursorRevision) or
+           proof!.identities!==registry or proof!.language!=language or
+           !manager!.graph.sameDemandSite(proof!.site, at)){
+            demandContextMisses <+- 1; return(false)
+        }
+        our WorldDemandScopeProof: scope <- proof!.scope
+        our WorldPosition: parent <- at!.parent
+        while(scope!=NULL and parent!=NULL){
+            demandScopeChecks <+- 1
+            our infonView: occurrenceDescription
+            if(parent!.occurrence!=NULL){occurrenceDescription <- parent!.occurrence!.pItem}
+            if(!manager!.graph.sameDemandSite(scope!.site, parent) or
+               scope!.description!==parent!.node!.pItem or scope!.revision!=parent!.node!.pItem!.cursorRevision or
+               scope!.headerIdentity!==manager!.graph.demandHeaderIdentity(parent!.node!.pItem) or
+               scope!.occurrenceDescription!==occurrenceDescription or
+               scope!.occurrenceIdentity!==manager!.graph.demandHeaderIdentity(occurrenceDescription) or
+               (occurrenceDescription!=NULL and scope!.occurrenceRevision!=occurrenceDescription!.cursorRevision) or
+               parent!.node!.pItem!.streamState!=parseDone){demandContextMisses <+- 1; return(false)}
+            scope <- scope!.parent
+            if(parent!.constraintRoot){parent <- NULL}else{parent <- parent!.parent}
+        }
+        if(scope!=NULL or parent!=NULL){demandContextMisses <+- 1; return(false)}
+        return(true)
+    }
+    me bool: cacheAvailable(our WorldPosition: at) <- {
+        if(manager==NULL or at==NULL or !manager!.graph.cursorValueReady(at!.node)){return(false)}
+        return(contextAvailable(at!.node!.cursorValue!.demandProof, at))
+    }
+    our WorldDemandValueProof: captureDemandContext(our WorldPosition: at) <- {
+        if(manager==NULL or at==NULL or session==NULL or session!.closed){return(NULL)}
+        our WorldDemandScopeProof: scope <- demandScope(at!.parent)
+        if(at!.parent!=NULL and scope==NULL){return(NULL)}
+        our WorldDemandValueProof:: proof
+        proof!.site <- manager!.graph.demandSite(at); proof!.scope <- scope
+        proof!.description <- at!.node!.pItem; proof!.revision <- at!.node!.pItem!.cursorRevision
+        proof!.headerIdentity <- manager!.graph.demandHeaderIdentity(at!.node!.pItem)
+        if(at!.occurrence!=NULL){
+            proof!.occurrenceDescription <- at!.occurrence!.pItem
+            proof!.occurrenceIdentity <- manager!.graph.demandHeaderIdentity(at!.occurrence!.pItem)
+            proof!.occurrenceRevision <- at!.occurrence!.pItem!.cursorRevision
+        }
+        proof!.session <- session; proof!.sessionIdentity <- session!.demandIdentity
+        proof!.worldSource <- worldSource; proof!.identities <- identities; proof!.language <- language
+        if(proof!.identities==NULL){proof!.identities <- manager!.control!.identities}
+        proof!.worldIdentity <- manager!.graph.demandHeaderIdentity(worldSource)
+        if(worldSource!=NULL){proof!.worldRevision <- worldSource!.cursorRevision}
+        return(proof)
+    }
+    void: rememberDemandContext(our WorldPosition: at) <- {
+        if(manager==NULL or at==NULL or !manager!.graph.cursorValueReady(at!.node)){return()}
+        at!.node!.cursorValue!.demandProof <- captureDemandContext(at)
+    }
+    void: rememberWorkingContext(our WorldPosition: at) <- {
+        workingProof <- captureDemandContext(at)
+        workingDescription <- working!.pItem; workingRevision <- working!.pItem!.cursorRevision
+        workingIdentity <- manager!.graph.demandHeaderIdentity(working!.pItem)
+    }
+    me bool: workingAvailable(our WorldPosition: at) <- {
+        if(!hasValue or current!==working or workingProof==NULL or
+           workingDescription!==working!.pItem or workingRevision!=working!.pItem!.cursorRevision or
+           workingIdentity!==manager!.graph.demandHeaderIdentity(working!.pItem)){return(false)}
+        return(contextAvailable(workingProof, at))
+    }
+
+    // A physical parent is borrowed by occurrencePath. Refresh only that
+    // proven raw representation when its owning occurrence replaces a header;
+    // definition bodies and other deliberately represented contexts stay put.
+    // New positions belong to this demand, leaving published contexts frozen.
+    our WorldPosition: refreshDemandAncestors(our WorldPosition: at) <- {
+        if(at==NULL){return(NULL)}
+        // A failed movement may have advanced the demand's latest frontier.
+        // The still-displayed value retains its own shared historical proof.
+        our WorldDemandValueProof: suppliedProof
+        if(at!.node!=NULL and at!.node!.cursorValue!=NULL){suppliedProof <- at!.node!.cursorValue!.demandProof}
+        if(suppliedProof==NULL or !manager!.graph.sameDemandSite(suppliedProof!.site, at)){
+            suppliedProof <- workingProof
+            if(suppliedProof!=NULL and !manager!.graph.sameDemandSite(suppliedProof!.site, at)){suppliedProof <- NULL}
+        }
+        me Map<their POV, our WorldDemandScopeProof>: priorScopes
+        if(suppliedProof!=NULL){
+            our WorldDemandScopeProof: prior <- suppliedProof!.scope
+            while(prior!=NULL){priorScopes.insert(prior!.site!.owner, prior); prior <- prior!.parent}
+        }
+        me List<our WorldPosition>: pending
+        me Set<our WorldPosition>: seen
+        our WorldPosition: scan <- at
+        me bool: changed <- false
+        while(scan!=NULL){
+            if(seen.contains(scan)){return(NULL)}
+            seen.insert(scan)
+            pending.append(scan)
+            if(scan!.constraintRoot){break()}
+            scan <- scan!.parent
+        }
+        our WorldPosition: parent
+        while(!pending.isEmpty()){
+            our WorldPosition: old <- pending.popLast()
+            our WorldPosition: updated <- old
+            if(old!.parent!==parent and !old!.constraintRoot){Allocate(updated); updated! <- old!; updated!.parent <- parent}
+            our WorldDemandScopeProof: known
+            their POV: priorOwner <- old!.owner
+            if(priorScopes.containsKey(priorOwner)){known <- priorScopes.at(priorOwner)}
+            else if(demandScopes.containsKey(old!.owner)){known <- demandScopes.at(old!.owner)}
+            if(known!=NULL){
+                if(old!.occurrence!=NULL and old!.node!==old!.occurrence and !old!.node!.trueByDefinition and
+                   known!.site!.node===old!.node and known!.description===known!.occurrenceDescription and
+                   old!.node!.pItem===known!.description and old!.occurrence!.pItem!==known!.occurrenceDescription){
+                    if(!pending.isEmpty()){
+                        our WorldPosition: child <- pending.last()
+                        our POV: member <- old!.occurrence!.pItem!.value!.items.head
+                        while(member!=NULL and member!==child!.occurrence){member <- member!.next}
+                        if(member==NULL){return(NULL)}
+                    }
+                    our POV:: borrowed{948}; borrowed! <- old!.node!; borrowed!.pItem <- old!.occurrence!.pItem
+                    if(updated===old){Allocate(updated); updated! <- old!}
+                    updated!.node <- borrowed
+                    if(old!.owner===old!.node){updated!.owner <- borrowed}
+                    changed <- true
+                }
+            }
+            parent <- updated
+        }
+        if(changed){return(parent)}
+        return(at)
+    }
+    // A selection anchor follows the same occurrence in a refreshed private
+    // path. Selecting elsewhere does not redefine the caller's list anchor.
+    void: refreshDemandList(our WorldPosition: at) <- {
+        while(at!=NULL){
+            if(manager!.graph.samePosition(at, list)){list <- at; return()}
+            if(at!.constraintRoot){return()}
+            at <- at!.parent
+        }
+    }
+
+    // A stale disposable materialization cannot become the new supplied
+    // recipe. Read its saved description through the same occurrence/context.
+    // Permanent assertions have no disposable original and remain facts.
+    our WorldPosition: demandInput(our WorldPosition: at) <- {
+        if(at==NULL or at!.node==NULL or at!.node!.cursorValue==NULL){return(at)}
+        our WorldCursorValue: stored <- at!.node!.cursorValue
+        if(stored!.original==NULL or stored!.permanent or cacheAvailable(at)){return(at)}
+        if(stored!.value!==at!.node!.pItem or stored!.revision!=at!.node!.pItem!.cursorRevision){return(at)}
+        our POV:: source{948}; source!.pItem <- stored!.original
+        source!.isSubItm <- at!.node!.isSubItm
+        return(manager!.graph.representedPosition(source, at))
+    }
+    our POV: demandSource(our WorldPosition: at) <- {
+        our WorldPosition: input <- demandInput(at)
+        if(input==NULL){return(NULL)}
+        return(input!.node)
+    }
+}

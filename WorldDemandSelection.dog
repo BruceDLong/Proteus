@@ -1,0 +1,80 @@
+// Reference demands use the normalizer's occurrence providers and selection
+// frames. They preserve the supplied virtual context rather than reconstructing
+// it from the physical POV, and never supply a second traversal or matcher.
+struct WorldManager {
+    // Callers hold the model lock while preparing and scheduling a request.
+    // A shared initializer keeps session ownership identical for value and
+    // reference demands; construction itself does not run normalization.
+    our WorldRequest: newRequest(our WorldSession: session, our POV: target,
+                                me string: language <- "", our infonView: worldSource <- NULL,
+                                our IdentityRegistry: identities <- NULL) <- {
+        our WorldRequest:: request
+        request!.control <- control; request!.vocabulary.init(language); request!.worldSource <- worldSource
+        request!.identities <- identities; if(identities==NULL){request!.identities <- control!.identities}
+        request!.target <- target
+        if(session==NULL or session!.closed){
+            request!.outcome <- worldError; request!.detail <- "An open Agent session is required"; return(request)
+        }
+        request!.registeredSession <- session!.demandIdentity
+        request!.sessionSlot <- session!.requests.size()
+        session!.requests.append(request)
+        return(request)
+    }
+
+    // Structural adjacency uses cursorSource's shared logical-layout walk.
+    // The expression is a query at `from`, not another list occurrence.
+    our WorldRequest: reference(our WorldSession: session, our WorldPosition: from, me bool: previous,
+                               me string: language <- "", our infonView: worldSource <- NULL,
+                               our IdentityRegistry: identities <- NULL) <- {
+        me WorldModelLock: lock{control!.mutex}
+        our POV:: destination{949}; Allocate(destination!.pItem)
+        if(from==NULL or from!.node==NULL or from!.node!.pItem==NULL){
+            our WorldRequest: invalid <- newRequest(session, destination, language, worldSource, identities)
+            if(invalid!.outcome==worldReady){invalid!.outcome <- worldError; invalid!.detail <- "Reference needs an occurrence context"}
+            return(invalid)
+        }
+        our POV:: query{949}; Allocate(query!.pItem)
+        query!.pItem!.itmMode <- mItem; query!.pItem!.streamState <- parseDone
+        query!.pItem!.viewMode <- vmCursor; query!.pItem!.cursorMode <- cmNext
+        if(previous){query!.pItem!.cursorMode <- cmPrev}
+        query!.pItem!.infSize!.overlayType <- NUM; query!.pItem!.infSize!.evalMode <- emUnknown
+        query!.pItem!.value!.overlayType <- tUnknown; query!.pItem!.value!.evalMode <- emUnknown
+        return(solve(session, query, destination, false, language, worldSource, identities,
+            from, NULL, false, false, NULL, false, true))
+    }
+
+    // One ordinary selector, with the full source occurrence path retained.
+    // A caller may chain another demand from the returned provenance. Index
+    // expressions, patterns and waits execute through pathStep/pathSelection.
+    our WorldRequest: select(our WorldSession: session, our WorldPosition: source, our PartPath: part,
+                            me string: language <- "", our infonView: worldSource <- NULL,
+                            our IdentityRegistry: identities <- NULL) <- {
+        me WorldModelLock: lock{control!.mutex}
+        our POV:: destination{949}; Allocate(destination!.pItem)
+        our WorldRequest: request <- newRequest(session, destination, language, worldSource, identities)
+        if(request!.outcome!=worldReady){return(request)}
+        if(source==NULL or source!.node==NULL or source!.node!.pItem==NULL or part==NULL or part!.path==NULL){
+            request!.outcome <- worldError; request!.detail <- "Selection needs a source occurrence and selector"; return(request)
+        }
+        if(part!.pathMode!=idxField and part!.pathMode!=dotField and part!.pathMode!=resolutionField){
+            request!.outcome <- worldUnsupported; request!.detail <- "Reference selection needs an index or member descriptor"; return(request)
+        }
+        our infonView: continuation <- part!.path
+        if(part!.pathMode==idxField){continuation <- part!.continuation}
+        if(continuation!=NULL and (!continuation!.wrkList.isEmpty() or continuation!.partRef!=NULL or !continuation!.parts.isEmpty())){
+            request!.outcome <- worldUnsupported; request!.detail <- "Reference selection accepts one selector without assertions or chained paths"; return(request)
+        }
+        our POV:: query{949}; Allocate(query!.pItem)
+        query!.pItem!.itmMode <- mItem; query!.pItem!.streamState <- parseDone
+        query!.pItem!.viewMode <- vmAny; query!.pItem!.partRef <- part
+        query!.pItem!.infSize!.overlayType <- NUM; query!.pItem!.infSize!.evalMode <- emUnknown
+        query!.pItem!.value!.overlayType <- tUnknown; query!.pItem!.value!.evalMode <- emUnknown
+        request!.replaceTarget <- true
+        request!.root <- makeFrame(request, query, source)
+        request!.root!.referenceOnly <- true
+        Allocate(request!.root!.path); request!.root!.path!.source <- source
+        request!.ready.append(request!.root)
+        run(request)
+        return(request)
+    }
+}

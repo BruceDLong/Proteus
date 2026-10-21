@@ -1,0 +1,149 @@
+// Expanded output is a bounded consumer of normalizer-owned occurrences.
+// The context-free formatter remains pure and formats each acquired member.
+struct WorldExpandedPrint {
+    our WorldDemand: demand
+    our WorldRequest: headerRequest
+    our POV: source
+    me int: itemLimit <- 64
+    me int: emitted <- 0
+    me string: text
+    me string: prefix
+    me bool: started <- false
+    me bool: finished <- false
+    me bool: truncated <- false
+    me bool: awaitingItem <- false
+    me bool: temporalHeader <- false
+    me bool: headerRetired <- false
+    me bool: tailClosed <- false
+    me bool: partialValues <- false
+    me string: partialDetail
+    me WorldStatus: movement
+
+    void: updateText() <- {
+        text <- prefix
+        if(!tailClosed){
+            if(emitted>0 or temporalHeader){text <+- " "}
+            text <+- "..."
+        }
+        text <+- "}"
+    }
+    void: retireHeader() <- {
+        if(headerRequest==NULL or headerRetired or demand==NULL or demand!.session==NULL){return()}
+        headerRetired <- demand!.manager!.release(demand!.session, headerRequest)
+    }
+    me bool: stopAtDemand() <- {
+        movement <- demand!.status()
+        if(demand!.atBoundary){
+            tailClosed <- true; finished <- true
+            movement.outcome <- worldComplete; movement.detail <- ""
+            if(partialValues){movement.outcome <- worldPartial; movement.detail <- partialDetail}
+        }
+        else if(movement.outcome!=worldWaiting and movement.outcome!=worldReady){finished <- true}
+        updateText()
+        return(finished)
+    }
+    // A wait retains the exact demand and its printed prefix. Resuming never
+    // seeks back to the beginning or repeats already emitted members.
+    me bool: refresh() <- {
+        if(finished){return(true)}
+        if(!started){
+            if(source==NULL or source!.pItem==NULL or demand==NULL){
+                movement.outcome <- worldError; movement.detail <- "Expanded printing needs an occurrence and session"; finished <- true; return(true)
+            }
+            if(itemLimit<=0){movement.outcome <- worldError; movement.detail <- "Expanded printing needs a positive item limit"; finished <- true; return(true)}
+            if(headerRequest==NULL){
+                headerRequest <- demand!.manager!.acquireHeader(demand!.session, demand!.position,
+                    demand!.language, demand!.worldSource, demand!.identities)
+            }
+            movement <- headerRequest!.status()
+            if(movement.outcome==worldWaiting or movement.outcome==worldReady){text <- "..."; return(false)}
+            retireHeader()
+            if(movement.outcome!=worldComplete){text <- toString(source!.pItem); finished <- true; return(true)}
+            started <- true
+            if(source!.pItem!.value!.overlayType!=LST){
+                text <- toString(source!.pItem); movement.outcome <- worldComplete
+                me WorldScalar: header <- headerRequest!.acquiredHeader
+                if(!demand!.manager!.graph.completeFacts(header, false) or !source!.pItem!.wrkList.isEmpty() or
+                   (header.nominal!=NULL and header.nominal!.defToUse!=NULL and !header.meaningApplied)){
+                    movement.outcome <- worldPartial; movement.detail <- "Represented value still has unresolved work"
+                }
+                finished <- true; return(true)
+            }
+            if(source!.pItem!.value!.evalMode!=emLiteral or source!.pItem!.orderMode==uUnordered){
+                text <- toString(source!.pItem); movement.outcome <- worldUnsupported
+                movement.detail <- "Expanded printing needs a represented ordered list header"; finished <- true; return(true)
+            }
+            if(source!.pItem!.type!=NULL){prefix <- source!.pItem!.type!.asGiven+":"}
+            prefix <+- "{"
+            temporalHeader <- source!.pItem!.value!.timelike
+            if(temporalHeader){prefix <+- "T"}
+            demand!.inList(); awaitingItem <- true
+            if(!demand!.seek(FlexNum("1"))){return(stopAtDemand())}
+        }else if(awaitingItem and !demand!.refresh()){return(stopAtDemand())}
+        while(!finished){
+            awaitingItem <- false
+            me WorldStatus: acquired <- demand!.status()
+            if(acquired.outcome!=worldComplete){
+                partialValues <- true
+                if(partialDetail==""){
+                    partialDetail <- acquired.detail
+                    if(partialDetail==""){partialDetail <- "An expanded member still has unresolved work"}
+                }
+            }
+            if(emitted>0 or temporalHeader){prefix <+- " "}
+            // Nested values are intentionally compressed. A later recursive
+            // display can share this total budget without another producer.
+            prefix <+- toString(demand!.current!.pItem)
+            emitted <+- 1
+            if(emitted>=itemLimit){
+                truncated <- true; finished <- true; movement.outcome <- worldPartial
+                movement.detail <- "Expanded item limit reached"; updateText(); return(true)
+            }
+            awaitingItem <- true
+            if(!demand!.goNext()){return(stopAtDemand())}
+        }
+        return(true)
+    }
+    me WorldStatus: status() <- {return(movement)}
+    void: cancel() <- {
+        if(finished){return()}
+        if(headerRequest!=NULL){headerRequest!.cancel(); retireHeader()}
+        if(demand!=NULL){
+            if(demand!.selectionRequest!=NULL){demand!.selectionRequest!.cancel()}
+            if(demand!.request!=NULL){demand!.request!.cancel()}
+        }
+        movement.outcome <- worldCancelled; movement.detail <- "Expanded printing cancelled"; finished <- true
+        if(started and prefix!=""){updateText()}
+    }
+}
+
+struct WorldManager {
+    // A represented header is a separate demand from its value or members.
+    // Parser completion resumes this exact frame through ordinary input waits.
+    our WorldRequest: acquireHeader(our WorldSession: session, our WorldPosition: source,
+            me string: language <- "", our infonView: worldSource <- NULL, our IdentityRegistry: identities <- NULL) <- {
+        me WorldModelLock: lock{control!.mutex}
+        our POV:: destination{949}; Allocate(destination!.pItem)
+        our WorldRequest: request <- newRequest(session, destination, language, worldSource, identities)
+        if(request!.outcome!=worldReady){return(request)}
+        if(source==NULL or source!.node==NULL or source!.node!.pItem==NULL){
+            request!.outcome <- worldError; request!.detail <- "Header acquisition needs an occurrence"; return(request)
+        }
+        request!.root <- makeFrame(request, source!.node, source)
+        request!.root!.headerOnly <- true; request!.root!.referenceOnly <- true
+        Allocate(request!.root!.correspondenceResult); request!.root!.correspondenceResult!.position <- source
+        request!.ready.append(request!.root); run(request)
+        return(request)
+    }
+    // The caller owns the Agent session and may resume the returned handle.
+    // maxItems bounds this display's requested prefix; it never requests one
+    // extra state merely to decide whether a capped display is the endpoint.
+    our WorldExpandedPrint: printExpanded(our WorldSession: session, our POV: source, me int: maxItems <- 64,
+            me string: language <- "", our infonView: worldSource <- NULL, our IdentityRegistry: identities <- NULL) <- {
+        our WorldExpandedPrint:: result
+        result!.source <- source; result!.itemLimit <- maxItems
+        if(source!=NULL){result!.demand <- demand(session, source, language, worldSource, identities)}
+        result!.refresh()
+        return(result)
+    }
+}

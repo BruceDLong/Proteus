@@ -3159,3 +3159,143 @@ unknown span stays partial with bounded work rather than allocating its extent.
 These checks establish the stated structural and lifecycle cases, not arbitrary
 dynamic-layout, temporal-conversion or general inference support. Consumer and
 visible-rendering validation remain separate from the engine builds.
+
+## D104 Normalizer-owned occurrence demands and retention (2026-10-21)
+
+**Recovery point.** Before implementation, atomically pushed `main` at
+`6dbd49ad52200ad4a0680edc01300d121f70f200` and the annotated tag
+`checkpoint/pre-cursor-demand-integration-2026-10-21`. The remote branch and
+peeled tag were verified. This preserves the preceding implementation without
+requiring a destructive reset of subsequent work.
+
+**Ownership and demand.** WorldManager creates a `WorldDemand` from a POV or an
+existing qualified `WorldPosition`, with the same caller-supplied locale, world
+and identity context used for normalization. It owns selection, state acquisition,
+required-field work, replay and checked publication. `TCursor` is a compatibility
+adapter exposing this handle's position and value. Direct demands, cursors and
+expanded printing use the same queue, parent relationship discovery, listSpec
+application and correspondence. Moving these responsibilities does not introduce
+a second matcher, substitute solver or mutable semantic cursor occurrence.
+
+A demand has a source occurrence/context, a selection and required facts.
+`inList()` anchors selection in a list; `seek()` uses one-based bracket-index
+semantics, `select()` accepts an existing supported PartPath, and next/previous
+use the shared logical-neighbour walker. Reference selection returns provenance
+without evaluating the selected recipe. An established absence differs from an
+unknown endpoint. A closed ordered primary layout can establish coordinates
+without evaluating member recipes when its direct extent is proved and no
+replacement, argument or unresolved type conversion can change that layout.
+That structural proof does not certify the members against parent constraints.
+Existing unsupported selection/alignment cases remain explicit.
+
+Demanding a state makes its enclosing requirements required, including a known
+literal's listSpec and overlay. This differs from opportunistic ancestor search
+on an unrelated scalar prerequisite: it does not make every ancestor or sibling
+an eager goal. Immediate composite descriptions remain borrowed; correspondence
+or an explicit required field acquires their interiors when needed. Required
+field completion is distinct from occurrence existence and shallow value
+availability. The visible value changes only after the requested facts are ready.
+
+**Temporal production and progress.** Given work and retention of unchanged
+values use the ordinary normalization loop. A known non-list supplied value or
+explicitly independent state cannot receive information through retention; its
+own explicit prerequisites still run. An already-produced permanent shallow
+value is checked against enclosing requirements without executing its temporal
+carry again. Unknown/composite state reconstruction uses retained predecessor
+values and normal reference traversal. This remains the supported discrete
+predecessor-retention model, not a general inverse-transition solver.
+
+Completed step requests are retired through validated session slots, using
+constant registry work even when callers retain unrelated request handles.
+Retiring a request leaves its result and status accessible. A demand retains
+bounded reusable correspondence progress rather
+than completed proof frames for its entire prefix. Suspended selection, field
+work and replay retain their exact normalizer requests across parser waits.
+Cancellation publishes no pending result. Backward reconstruction retains its
+destination and a few traversal anchors, then walks forward; it does not store a
+vector of all missing states or retain a request per historical state.
+
+**Cache proof and lifetime.** A stored value's validity is separate from its
+retention priority. Proofs identify the occurrence, bindings, enclosing source
+headers/revisions, session, world source, effective registry and locale. Ancestor
+proof metadata is shared across states, with only the current frontier indexed
+by the demand. Opaque lifetime identities distinguish replaced headers/sessions
+without owning the model or creating POV/cache ownership cycles. Read-only
+working values have demand-owned proofs and preserve read-only permission on
+navigation. Tracked enclosing changes require reacquisition from the saved
+recipe; new supplied work and accepted writes remain durable facts.
+
+These checks are not a general dependency invalidation service for arbitrary
+mutation of earlier states or external references. Validation reads the
+qualified ancestry, so its cost includes depth. Cross-session deduction sharing,
+arbitrary later semantic link propagation and global consistency checking remain
+outside this milestone.
+
+**Optional retention and preparation.** `configureRetention(recent, stride,
+maxCheckpoints)` enables fixed-capacity recent/checkpoint rings. Unconfigured
+handles retain the existing explicit-clear policy. Keyframes are retained
+materializations of existing occurrences; they never add states to the model.
+The stride counts acquired visits rather than claiming an inferred global time
+coordinate. Checkpoints support the implemented predecessor reconstruction; an
+arbitrary temporal proof may require a larger dependency frontier.
+
+Policy eviction addresses a known entry directly, without scanning a growing
+prefix. Current-value and checkpoint leases protect entries; deferred eviction
+is retried when a demand moves off its displayed value. Explicit cache clearing
+can also reclaim unleased entries after readers are dropped. Ordinary accepted writes,
+including writes into descendants, survive eviction. `preprocess(maxItems)` is
+an explicit bounded prefix demand through the same acquisition path and resumes
+across waits. It is not a second expansion pass or an unbounded tail request.
+
+**Expanded output.** `WorldManager.printExpanded` returns a bounded, resumable
+display handle with text, status and truncation information. Header readiness and
+member acquisition use normalizer requests. It expands one logical ordered list
+level; nested values use the compressed formatter. A member cap bounds demanded
+occurrences, not bytes in an already stored scalar/nested value. It does not
+request an extra state merely to prove the endpoint after reaching the cap.
+Partial members, unresolved endpoints and parser waits remain distinguishable.
+Context-free `toString` stays pure because it has no Agent session or qualified
+occurrence; its expanded mode remains compressed. The language-fixture path
+with an Agent uses the context-bearing expanded API.
+
+**Alternatives rejected.** Keeping a cursor-owned producer would preserve the
+parent-requirement bug and duplicate inference. Normalizing the entire parent
+before every step would eagerly demand unrelated work. Keeping all completed
+requests or replay positions would defeat bounded value retention. Treating a
+cache entry or literal value as proof of its parent constraints would hide new
+contradictions. Automatically using inverse transitions would add semantics not
+provided by the model.
+
+**Validation.** `codeDog Proteus.Lib.dog` regenerated and built the maintained
+source. All **40** new ordinary CodeDog checks pass. The full timeout-protected
+run reports **24/573** failures/tests, with exactly the same failure names as the
+pre-change **24/533** baseline. `defaultTests.tst:` remains **16/437**; the separate
+`print-mode-tests.tst:` run passes **13/13**, including three new expanded-output
+fixtures. No existing expected result changed. The remaining failures are the
+known reference-registry/index-lowering, sparse alignment, external-property,
+cube/Rubix, user, search, unit/day and world-loading cases.
+
+Measured sequential work at widths **16 / 32 / 64**:
+
+| Parent requirements | Frames | Relationships acquired | Correspondence positions | Queue steps | Retained step requests |
+| --- | --- | --- | --- | --- | --- |
+| Temporal recurrence listSpec | 108 / 220 / 444 | 47 / 95 / 191 | 30 / 62 / 126 | 171 / 347 / 699 | 1 / 1 / 1 |
+| Positional overlay | 63 / 127 / 255 | 16 / 32 / 64 | 65 / 129 / 257 | 112 / 224 / 448 | 1 / 1 / 1 |
+
+For histories with **32 / 64 / 128** transitions, configured retention holds **5** policy slots
+at every size, and cold reconstruction holds **3** traversal anchors while
+producing **33 / 65 / 129** states. Increasing an untouched descendant record
+from **16** to **64** fields leaves state acquisition at **17** value frames and
+**4** relationships. Retiring the same interleaved demand work among **16** or
+**64** unrelated historical requests takes **19** registry reads in either case.
+Scope-proof sharing is checked separately across ancestry depths. These are
+fixed-width, fixed-context traversal bounds; work may depend on depth and active
+relationships, and arbitrary inference has no asserted linear bound.
+
+Coverage includes parent contradictions and waits, exact continuation and
+cancellation, embedded neighbours, read-only values, required descendant work,
+named-definition scope, tracked parent replacement, durable descendant writes,
+cache leases, known-prefix versus unresolved-endpoint selection, and bounded
+printing. `codeDog BuildProteusGraph.dog` also regenerated and built the shared
+library successfully. Slipstream consumer and visible rendering validation were
+not performed.

@@ -30,7 +30,8 @@ The interface must cover the chosen normalization and streaming behavior, includ
 ordering of list members. A cursor should observe the history being produced,
 without duplicating normalization or necessarily stopping it at the cursor's
 position. The current supplied-work cursor execution is not the final design.
-Discuss the interaction before changing it; this checkpoint changes only syntax.
+This checkpoint changed only syntax. D104 below records the implemented
+normalizer-owned demand interface that supersedes this staging point.
 
 ## Virtual graph access
 
@@ -1657,3 +1658,34 @@ A fixed verb can be an ordinary definition of the changed fields of the next tem
 Published `addedTypes` are checked nominal evidence and remain readable independently of whether this occurrence's own meaning has been demanded. Reading binds that evidence without prematurely marking the own meaning applied.
 
 The public `rubixVerbs.pr` model implements both directions for all six faces, with clockwise viewed from outside the named center color. Its 26 named positions carry color descriptions and exact orientation catalogue indices. Nine positions change per turn; remaining positions and the overall pose are retained. `solved-rubix-turn-state` supplies the initial inventory. The ordinary renderer-facing parts and faces are deferred views of that inventory. The engine contains no cube-specific dispatch or geometry. This milestone covers fixed explicit verbs, not ancestor temporal listSpec execution or general inverse navigation.
+
+## Normalizer-owned occurrence demands (D104, 2026-10-21)
+
+D104 supersedes the supplied-work cursor ownership described in D064–D071 and
+the pending cursor-integration note in D103. `WorldManager.demand` accepts a POV;
+`demandAt` preserves an existing qualified occurrence. The returned handle owns
+normalization progress, selection, required fields, temporal reconstruction and
+retention. `TCursor` delegates to it. Parent listSpecs and overlays are required
+for a demanded state even when its own scalar value is known. This does not
+require normalizing unrelated siblings or every nested value.
+
+Occurrence selection is separate from value readiness. `inList`, one-based
+`seek`, supported PartPath `select`, and logical next/previous share normalizer
+selection. Unknown endpoints are not absence. Required fields and parser waits
+retain their exact requests while the previous visible value remains available.
+
+Optional bounded recent/checkpoint retention and `preprocess(maxItems)` retain
+existing occurrences without adding semantic states. Writes survive eviction;
+active leases protect displayed values. Backward reconstruction uses ordinary
+forward production from retained evidence, with bounded traversal anchors rather
+than a stored replay prefix. Shared context proofs validate tracked enclosing
+requirements independently of retention priority.
+
+`printExpanded` is the context-bearing bounded display API. It uses the same
+normalizer demands, expands one ordered list level and leaves nested formatting
+compressed. It reports partial values, pending input and truncation explicitly.
+The context-free formatter performs no normalization.
+
+The decision log records the exact supported boundary and validation. General
+sparse/ambiguous alignment, continuous time, inverse transitions, arbitrary
+external-change invalidation and cross-session deduction sharing remain deferred.

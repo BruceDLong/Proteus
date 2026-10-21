@@ -1,6 +1,46 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/demandScope/sessionRegistry
+    unit/demandScope/forwardContext
+    unit/demandScope/boundaryWait
+    unit/demandScope/layoutCoordinates
+    unit/demandScope/namedShallow
+    unit/demandRetention/replaySpace
+    unit/expandedPrint/partialValues
+    unit/expandedPrint/headerWait
+    unit/demandScope/shallow
+    unit/demandScope/requiredDescendant
+    unit/demandScope/descendantCost
+    unit/demandScope/independentSeek
+    unit/demandScope/untouchedSuffix
+    unit/demandCache/parentRevision
+    unit/demandCache/contextIdentity
+    unit/demandCache/scopeSharing
+    unit/demandCache/pendingWrite
+    unit/cursorDemand/seekAndSelect
+    unit/cursorDemand/seekRecurrence
+    unit/expandedPrint/parentRules
+    unit/expandedPrint/nestedCompressed
+    unit/expandedPrint/bound
+    unit/expandedPrint/waiting
+    unit/expandedPrint/emptyAndUnsupported
+    unit/demandRetention/bounds
+    unit/demandRetention/leasesAndWrites
+    unit/demandRetention/preprocessWait
+    unit/demandSelection/recipes
+    unit/demandSelection/boundaries
+    unit/demandSelection/waiting
+    unit/cursorDemand/parentRules
+    unit/cursorDemand/parentConflicts
+    unit/cursorDemand/retainedFields
+    unit/cursorDemand/cacheAndWrite
+    unit/cursorDemand/durableDescendant
+    unit/cursorDemand/parentWait
+    unit/cursorDemand/embeddedMovement
+    unit/cursorDemand/directParity
+    unit/cursorDemand/interleaved
+    unit/cursorDemand/scaling
     unit/embeddedNeighbours/boundaries
     unit/embeddedNeighbours/waiting
     unit/embeddedNeighbours/scaling
@@ -648,7 +688,13 @@ struct GLOBAL {
                 return()
             }
         }
-        me string: result <- toString(testPov!.pItem, printMode)
+        me string: result
+        if(printMode==ipmExpanded){
+            our WorldExpandedPrint: printed <- agent!.worldManager.printExpanded(agent!.startSession(), testPov, 64,
+                agent!.getLocaleBaseName(), agent!.world, agent!.identityRegistry)
+            if(!printed!.finished or printed!.status().outcome!=worldComplete){FAIL("Expanded display did not finish: "+printed!.status().detail)}
+            result <- printed!.text
+        }else{result <- toString(testPov!.pItem, printMode)}
         if(expected!=""){REQUIRE(result==expected)}
     }
     // Historical graph-mode language fixtures use the same engine entry point.
@@ -2756,6 +2802,1268 @@ struct GLOBAL {
                request!.neighbourPeakLevels>depth+3){FAIL("Shared empty layout unfolded exponentially")}
             agent.endWorldSessions(); modelMngr.clear()
         }
+        }
+    }
+}
+
+// Ordinary CodeDog coverage for normalizer-owned cursor demands.
+struct GLOBAL {
+    // The parser does not install all physical parent pointers until a model
+    // consumer acquires the list. These fixtures start at a parsed occurrence.
+    void: cursorDemandLinkMembers(our POV: root) <- {
+        me List<our POV>: pending; pending.append(root)
+        while(!pending.isEmpty()){
+            our POV: parent <- pending.popLast()
+            if(parent!.pItem!.value!.overlayType==LST and parent!.pItem!.value!.evalMode==emLiteral){
+                our POV: member <- parent!.pItem!.value!.items.head
+                while(member!=NULL){
+                    member!.pParent <- parent; pending.append(member); member <- member!.next
+                }
+            }
+        }
+    }
+
+    void: unit_cursorDemand_parentRules(me string: testName) <- {
+        me List<string>: inputs <- ["{T (%tprev +1)| 0 _ _}", "{T _ _ _} == {T 1 2 3}"]
+        withEach input in inputs{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: ordinary <- agent.worldManager.parse(input)
+            if(ordinary.target==NULL){FAIL(ordinary.error)}
+            our WorldRequest: normalized <- agent.normalize(ordinary.target)
+            if(!normalized!.complete()){FAIL("Ordinary history did not finish: "+normalized!.error())}
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            cursorDemandLinkMembers(parsed.target)
+            our POV: first <- parsed.target!.pItem!.value!.items.head
+            our TCursor: cursor; Allocate(cursor, first); cursor!.attach(agent.worldManager, agent.startSession())
+            if(!cursor!.refresh()){FAIL("Initial parent demand failed: "+cursor!.status().detail)}
+            our POV: expected <- ordinary.target!.pItem!.value!.items.head
+            while(expected!=NULL){
+                if(cursor!.current!.pItem!.fetchInt()!=expected!.pItem!.fetchInt()){
+                    FAIL("Cursor skipped a parent listSpec or overlay: "+input)
+                }
+                expected <- expected!.next
+                if(expected!=NULL and !cursor!.goNext()){FAIL("Parent-constrained successor was unavailable: "+cursor!.status().detail)}
+            }
+            if(cursor!.goNext() or !cursor!.atBoundary){FAIL("Closed history did not retain its boundary")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_cursorDemand_parentConflicts(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: firstConflict <- agent.worldManager.parse("{T 2| 1 _}")
+        if(firstConflict.target==NULL){FAIL(firstConflict.error)}
+        cursorDemandLinkMembers(firstConflict.target)
+        me string: original <- toString(firstConflict.target!.pItem)
+        our TCursor: rejected; Allocate(rejected, firstConflict.target!.pItem!.value!.items.head)
+        rejected!.attach(agent.worldManager, agent.startSession())
+        if(rejected!.refresh() or rejected!.status().outcome!=worldRejected or rejected!.hasValue){
+            FAIL("A literal seed bypassed its conflicting parent listSpec")
+        }
+        if(toString(firstConflict.target!.pItem)!=original){FAIL("Rejected seed changed its source history")}
+        me WorldParseResult: laterConflict <- agent.worldManager.parse("{T 0 1} == {T 0 9}")
+        if(laterConflict.target==NULL){FAIL(laterConflict.error)}
+        cursorDemandLinkMembers(laterConflict.target)
+        our POV: first <- laterConflict.target!.pItem!.value!.items.head
+        our POV: second <- first!.next
+        our infonView: secondRecipe <- second!.pItem
+        our TCursor: cursor; Allocate(cursor, first); cursor!.attach(agent.worldManager, agent.startSession())
+        if(!cursor!.refresh() or cursor!.current!.pItem!.fetchInt()!=0){FAIL("Valid first position was blocked by unrelated later work")}
+        our POV: displayed <- cursor!.current
+        if(cursor!.goNext() or cursor!.status().outcome!=worldRejected){FAIL("Known state bypassed its conflicting parent overlay")}
+        if(cursor!.current!==displayed or cursor!.position!.node!==first or second!.pItem!==secondRecipe){
+            FAIL("Rejected movement changed the visible position or published the destination")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_cursorDemand_retainedFields(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse(
+            "{T {pose:{x:1 y:2} keep:{a:7 b:8}} {pose:{x:3}} {pose:{x:4}}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our TCursor: cursor; Allocate(cursor, first); cursor!.attach(agent.worldManager, agent.startSession())
+        if(!cursor!.refresh()){FAIL("Initial record demand failed")}
+        our infonState: unchanged <- cursor!.current!.pItem!.fetchField("keep")!.pItem!.value
+        if(!cursor!.goNext()){FAIL("Changed record demand failed: "+cursor!.status().detail)}
+        our POV: pose <- cursor!.current!.pItem!.fetchField("pose")
+        our POV: keep <- cursor!.current!.pItem!.fetchField("keep")
+        if(pose==NULL or keep==NULL or pose!.pItem!.fetchField("x")!.pItem!.fetchInt()!=3 or
+           pose!.pItem!.fetchField("y")!.pItem!.fetchInt()!=2){FAIL("Nested change lost an unaffected field")}
+        if(keep!.pItem!.value!==unchanged){FAIL("Unchanged subtree was rebuilt instead of shared")}
+        if(!cursor!.goNext() or cursor!.current!.pItem!.fetchField("pose")!.pItem!.fetchField("x")!.pItem!.fetchInt()!=4){
+            FAIL("Subsequent record change failed")
+        }
+        if(first!.pItem!.fetchField("pose")!.pItem!.fetchField("x")!.pItem!.fetchInt()!=1 or
+           cursor!.current!.pItem!.fetchField("keep")!.pItem!.value!==unchanged){FAIL("Later movement altered a previous state or copied its unchanged subtree")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_cursorDemand_cacheAndWrite(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T 0 (%tprev +1) (%tprev +1)}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our POV: second <- first!.next; our POV: third <- second!.next
+        our infonView: thirdRecipe <- third!.pItem
+        our TCursor: cursor; Allocate(cursor, first); cursor!.attach(agent.worldManager, agent.startSession())
+        if(!cursor!.refresh() or !cursor!.goNext() or cursor!.current!.pItem!.fetchInt()!=1){FAIL("Could not produce the writable state")}
+        our WorldRequest: written <- cursor!.writeBack()
+        if(written==NULL or written!.failed() or written!.publications==0){FAIL("Explicit write-back failed")}
+        if(!cursor!.goNext() or cursor!.current!.pItem!.fetchInt()!=2 or !cursor!.goPrev() or !cursor!.goPrev()){
+            FAIL("Cached forward/backward traversal failed")
+        }
+        if(cursor!.clearCache()<1){FAIL("Disposable state was retained permanently")}
+        if(second!.pItem!.fetchInt()!=1 or third!.pItem!==thirdRecipe){FAIL("Clearing lost a write or did not restore the inferable recipe")}
+        if(!cursor!.goNext() or cursor!.current!.pItem!.fetchInt()!=1 or !cursor!.goNext() or cursor!.current!.pItem!.fetchInt()!=2){
+            FAIL("Cleared state did not reconstruct from retained history")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_cursorDemand_durableDescendant(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T {keep:{z:_}} {} {}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our POV: second <- first!.next
+        our TCursor: cursor; Allocate(cursor, first); cursor!.attach(agent.worldManager, agent.startSession())
+        if(!cursor!.refresh() or !cursor!.goNext()){FAIL("Could not acquire the retained unknown subtree")}
+        me string: before <- toString(first!.pItem)
+        me WorldParseResult: assertion <- agent.worldManager.parse("{keep:{z:9}}")
+        if(assertion.target==NULL){FAIL(assertion.error)}
+        second!.pItem!.wrkList.append(assertion.target); second!.pItem!.noteNormalizationWork()
+        our WorldRequest: written <- agent.normalize(second)
+        if(written!.failed() or second!.pItem!.fetchField("keep")!.pItem!.fetchField("z")!.pItem!.fetchInt()!=9){
+            FAIL("Ordinary assertion did not reach the cached descendant")
+        }
+        if(toString(first!.pItem)!=before){FAIL("Writing a shared descendant mutated the prior temporal state")}
+        if(!cursor!.refresh() or !cursor!.goNext() or !cursor!.goPrev() or !cursor!.goPrev()){
+            FAIL("Ordinary publication broke subsequent cursor navigation")
+        }
+        cursor!.clearCache()
+        if(second!.pItem!.fetchField("keep")!.pItem!.fetchField("z")!.pItem!.fetchInt()!=9 or toString(first!.pItem)!=before){
+            FAIL("Cache clearing lost the ordinary write or changed its source state")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_cursorDemand_parentWait(me string: testName) <- {
+        withEach scenario in range 0 .. 2{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: parsed <- agent.worldManager.parse("{T _ _} == {T 0 7}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            cursorDemandLinkMembers(parsed.target)
+            our POV: first <- parsed.target!.pItem!.value!.items.head
+            our POV: second <- first!.next
+            our POV: supplied <- parsed.target!.pItem!.wrkList[0]
+            our infonView: input <- supplied!.pItem!.value!.items.head!.next!.pItem
+            our TCursor: cursor; Allocate(cursor, first); cursor!.attach(agent.worldManager, agent.startSession())
+            if(!cursor!.refresh() or cursor!.current!.pItem!.fetchInt()!=0){FAIL("Initial overlay value failed")}
+            our POV: displayed <- cursor!.current
+            our infonView: original <- second!.pItem
+            agent.worldManager.prepareInput(input)
+            if(cursor!.goNext() or cursor!.status().outcome!=worldWaiting){FAIL("Pending parent evidence did not suspend movement")}
+            if(cursor!.current!==displayed or second!.pItem!==original){FAIL("Waiting movement published a partial destination")}
+            our WorldRequest: waiting <- cursor!.request
+            if(waiting==NULL or agent.worldManager.control!.inputWaiters.size()!=1){FAIL("Parent demand did not retain exactly one wait")}
+            me uint64: frames <- waiting!.framesCreated; me uint64: queue <- waiting!.queueSteps
+            if(cursor!.refresh() or cursor!.request!==waiting){FAIL("Refresh restarted a waiting parent demand")}
+            our infonView:: unrelated; agent.worldManager.inputReady(unrelated)
+            if(waiting!.framesCreated!=frames or waiting!.queueSteps!=queue){FAIL("Unrelated input repeated parent work")}
+            if(scenario==0){
+                input!.streamState <- parseDone; agent.worldManager.inputReady(input)
+                if(!cursor!.refresh() or cursor!.current!.pItem!.fetchInt()!=7){FAIL("Parent input did not resume its retained demand")}
+            }else{
+                waiting!.cancel()
+                if(cursor!.refresh() or cursor!.status().outcome!=worldCancelled or cursor!.current!==displayed or second!.pItem!==original){
+                    FAIL("Cancelled parent demand changed the visible state")
+                }
+            }
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Completed or cancelled demand retained its subscription")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_cursorDemand_embeddedMovement(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T 0 &{T 1 &{T 2} &{T} 3} 4}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our TCursor: cursor; Allocate(cursor, first); cursor!.attach(agent.worldManager, agent.startSession())
+        if(!cursor!.refresh()){FAIL("Initial logical position failed")}
+        withEach nextValue in range 1 .. 5{
+            if(!cursor!.goNext() or cursor!.current!.pItem!.fetchInt()!=nextValue){FAIL("Forward cursor exposed an embedded storage boundary")}
+        }
+        if(cursor!.goNext() or !cursor!.atBoundary){FAIL("Logical end was not recognized")}
+        me int: previousValue <- 3
+        while(previousValue>=0){
+            if(!cursor!.goPrev() or cursor!.current!.pItem!.fetchInt()!=previousValue){FAIL("Backward cursor exposed an embedded storage boundary")}
+            previousValue <- previousValue-1
+        }
+        if(cursor!.goPrev() or !cursor!.atBoundary or cursor!.position!.node!==first){FAIL("Logical beginning was not retained")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_cursorDemand_directParity(me string: testName) <- {
+        me List<string>: inputs <- ["{T (%tprev +1)| 0 _ _}", "{T _ _ _} == {T 1 2 3}"]
+        withEach input in inputs{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: directSource <- agent.worldManager.parse(input)
+            me WorldParseResult: cursorSource <- agent.worldManager.parse(input)
+            if(directSource.target==NULL or cursorSource.target==NULL){FAIL("Parity input did not parse")}
+            cursorDemandLinkMembers(directSource.target); cursorDemandLinkMembers(cursorSource.target)
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), directSource.target!.pItem!.value!.items.head)
+            our TCursor: cursor; Allocate(cursor, cursorSource.target!.pItem!.value!.items.head)
+            cursor!.attach(agent.worldManager, agent.startSession())
+            if(!demand!.refresh() or !cursor!.refresh()){FAIL("Initial direct demand and cursor did not both become available")}
+            withEach position in range 0 .. 3{
+                if(toString(demand!.current!.pItem)!=toString(cursor!.current!.pItem) or
+                   demand!.status().outcome!=cursor!.status().outcome){FAIL("Direct demand and iterator have different semantics")}
+                if(position<2 and (!demand!.goNext() or !cursor!.goNext())){FAIL("Parity traversal did not reach the next state")}
+            }
+            if(demand!.goNext() or cursor!.goNext() or !demand!.atBoundary or !cursor!.atBoundary){FAIL("Direct and iterator endpoints differ")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_cursorDemand_interleaved(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me string: leftText <- "{T (%tprev +1)| 0"
+        me string: rightText <- "{T (%tprev +1)| 100"
+        withEach idx in range 1 .. 32{leftText <+- " _"; rightText <+- " _"}
+        leftText <+- "}"; rightText <+- "}"
+        me WorldParseResult: leftSource <- agent.worldManager.parse(leftText)
+        me WorldParseResult: rightSource <- agent.worldManager.parse(rightText)
+        if(leftSource.target==NULL or rightSource.target==NULL){FAIL("Interleaved input did not parse")}
+        cursorDemandLinkMembers(leftSource.target); cursorDemandLinkMembers(rightSource.target)
+        our WorldSession: session <- agent.startSession()
+        our WorldDemand: left <- agent.worldManager.demand(session, leftSource.target!.pItem!.value!.items.head)
+        our WorldDemand: right <- agent.worldManager.demand(session, rightSource.target!.pItem!.value!.items.head)
+        if(!left!.refresh() or !right!.refresh()){FAIL("Interleaved initial demands failed")}
+        withEach idx in range 1 .. 32{
+            if(!left!.goNext() or !right!.goNext() or left!.current!.pItem!.fetchInt()!=idx or right!.current!.pItem!.fetchInt()!=idx+100){
+                FAIL("Interleaved demand values crossed histories")
+            }
+            if(session!.requests.size()>2){FAIL("Retired interleaved requests accumulated in the session")}
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_cursorDemand_scaling(me string: testName) <- {
+        withEach form in range 0 .. 2{
+            me uint64: previousFrames <- 0; me uint64: previousRelationships <- 0; me uint64: previousPositions <- 0
+            me int: width <- 16
+            while(width<=64){
+                me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+                me string: text <- "{T (%tprev +1)| 0"
+                if(form==1){text <- "{T _"}
+                withEach idx in range 1 .. width{text <+- " _"}
+                text <+- "}"
+                if(form==1){
+                    text <+- " == {T"
+                    withEach idx in range 0 .. width{text <+- " "+toString(idx)}
+                    text <+- "}"
+                }
+                me WorldParseResult: parsed <- agent.worldManager.parse(text)
+                if(parsed.target==NULL){FAIL(parsed.error)}
+                cursorDemandLinkMembers(parsed.target)
+                our WorldSession: session <- agent.startSession()
+                our WorldDemand: demand <- agent.worldManager.demand(session, parsed.target!.pItem!.value!.items.head)
+                if(!demand!.refresh() or demand!.current!.pItem!.fetchInt()!=0){FAIL("Scaling seed failed: "+demand!.status().detail)}
+                withEach idx in range 1 .. width{
+                    if(!demand!.goNext() or demand!.current!.pItem!.fetchInt()!=idx){FAIL("Scaling traversal produced the wrong value: "+demand!.status().detail)}
+                    if(session!.requests.size()>1){FAIL("Sequential demand retained completed step requests")}
+                }
+                me uint64: frames <- demand!.framesCreated; me uint64: relationships <- demand!.relationshipsRead
+                me uint64: positions <- demand!.positionsVisited; me uint64: queue <- demand!.queueSteps
+                if(demand!.request!=NULL){
+                    frames <+- demand!.request!.framesCreated; relationships <+- demand!.request!.relationshipsRead
+                    positions <+- demand!.request!.correspondencePositions; queue <+- demand!.request!.queueSteps
+                }
+                print("Cursor demand form=",form," width=",width," frames=",frames," relationships=",relationships,
+                    " positions=",positions," queue=",queue," requests=",session!.requests.size(),"\n")
+                if(frames>width*128 or relationships>width*64 or positions>width*64 or queue>width*512){
+                    FAIL("Fixed-width temporal demand exceeded its bounded per-state work")
+                }
+                if(width>16 and (frames>previousFrames*3+16 or relationships>previousRelationships*3+16 or positions>previousPositions*3+16)){
+                    FAIL("Sequential demand repeatedly searched the already traversed prefix")
+                }
+                previousFrames <- frames; previousRelationships <- relationships; previousPositions <- positions
+                me uint64: valueFrames <- frames-demand!.navigationFrames
+                if(!demand!.goPrev() or !demand!.goNext()){FAIL("Cached return failed")}
+                me uint64: cachedFrames <- demand!.framesCreated
+                if(demand!.request!=NULL){cachedFrames <+- demand!.request!.framesCreated}
+                if(cachedFrames-demand!.navigationFrames!=valueFrames){FAIL("Returning to retained states repeated value normalization")}
+                agent.endWorldSessions(); modelMngr.clear(); width <*- 2
+            }
+        }
+    }
+
+    void: unit_cursorDemand_seekAndSelect(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T 0 &{T 10 20} 30}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: embedded <- parsed.target!.pItem!.value!.items.head!.next
+        our POV: second <- embedded!.pItem!.value!.items.head
+        our POV: third <- second!.next
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), parsed.target)
+        demand!.inList()
+        if(!demand!.seek(FlexNum("3")) or demand!.current!.pItem!.fetchInt()!=20 or demand!.position!.node!==third){
+            FAIL("One-based seek did not retain the logical embedded occurrence: "+demand!.status().detail)
+        }
+        if(!demand!.goPrev() or demand!.current!.pItem!.fetchInt()!=10 or demand!.position!.node!==second){FAIL("Seek did not establish a usable iterator position")}
+        if(!demand!.seek(FlexNum("4")) or demand!.current!.pItem!.fetchInt()!=30){FAIL("Seek did not cross the embedded endpoint")}
+        me WorldParseResult: coordinate <- agent.worldManager.parse("2")
+        our PartPath:: part; part!.pathMode <- idxField; part!.path <- coordinate.target!.pItem
+        if(!demand!.select(part) or demand!.position!.node!==second or demand!.current!.pItem!.fetchInt()!=10){FAIL("Explicit selection and seek disagree")}
+        our TCursor: cursor; Allocate(cursor, parsed.target); cursor!.attach(agent.worldManager, agent.startSession()); cursor!.inList()
+        if(!cursor!.seek(FlexNum("3")) or cursor!.position!.node!==third or !cursor!.select(part) or cursor!.position!.node!==second){
+            FAIL("Cursor selection did not delegate the demand's logical position")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_cursorDemand_seekRecurrence(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T (%tprev +1)| 0 _ _ _}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), parsed.target)
+        demand!.inList()
+        if(!demand!.seek(FlexNum("4")) or demand!.current!.pItem!.fetchInt()!=3){FAIL("Random demand did not acquire its temporal prerequisites")}
+        if(!demand!.seek(FlexNum("2")) or demand!.current!.pItem!.fetchInt()!=1){FAIL("Backward seek did not recover the earlier occurrence")}
+        demand!.clearCache()
+        if(!demand!.seek(FlexNum("4")) or demand!.current!.pItem!.fetchInt()!=3){FAIL("Seek after purge lost the recurrence's evidence")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+}
+
+// Reference demands identify occurrences without executing their recipes.
+struct GLOBAL {
+    void: unit_demandSelection_recipes(me string: testName) <- {
+        me List<string>: inputs <- ["{0 unavailable^T 2}", "{0 (%prev +1) 2}", "{0 %prev 2}"]
+        withEach input in inputs{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our POV: first <- parsed.target!.pItem!.value!.items.head
+            our POV: selected <- first!.next; our POV: last <- selected!.next
+            first!.pParent <- parsed.target; selected!.pParent <- parsed.target; last!.pParent <- parsed.target
+            our infonView: recipe <- selected!.pItem
+            me string: original <- toString(parsed.target!.pItem)
+            our WorldPosition: parent <- agent.worldManager.graph.position(parsed.target)
+            our WorldSession: session <- agent.startSession()
+            our WorldRequest: next <- agent.worldManager.reference(session, agent.worldManager.graph.position(first, parent), false)
+            if(!next!.complete() or next!.selectedSource()!==selected or next!.referenceAbsent or next!.publications!=0){
+                FAIL("Next reference evaluated or lost its occurrence: "+input+": "+next!.error())
+            }
+            our WorldRequest: previous <- agent.worldManager.reference(session, agent.worldManager.graph.position(last, parent), true)
+            if(!previous!.complete() or previous!.selectedSource()!==selected or previous!.referenceAbsent or previous!.publications!=0){
+                FAIL("Previous reference evaluated or lost its occurrence: "+input+": "+previous!.error())
+            }
+            me WorldParseResult: coordinate <- agent.worldManager.parse("2")
+            our PartPath:: part; part!.pathMode <- idxField; part!.path <- coordinate.target!.pItem
+            our WorldRequest: indexed <- agent.worldManager.select(session, parent, part)
+            if(!indexed!.complete() or indexed!.selectedSource()!==selected or indexed!.referenceAbsent or indexed!.publications!=0){
+                FAIL("Indexed reference evaluated or lost its occurrence: "+input+": "+indexed!.error())
+            }
+            if(next!.relationshipsRead!=0 or previous!.relationshipsRead!=0 or indexed!.relationshipsRead!=0 or
+               selected!.pItem!==recipe or toString(parsed.target!.pItem)!=original){
+                FAIL("Occurrence-only navigation executed or changed a selected recipe")
+            }
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_demandSelection_boundaries(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        our WorldSession: session <- agent.startSession()
+        me WorldParseResult: closed <- agent.worldManager.parse("{1}")
+        if(closed.target==NULL){FAIL(closed.error)}
+        our POV: only <- closed.target!.pItem!.value!.items.head; only!.pParent <- closed.target
+        our WorldPosition: position <- agent.worldManager.graph.position(only, agent.worldManager.graph.position(closed.target))
+        our WorldRequest: absent <- agent.worldManager.reference(session, position, false)
+        if(!absent!.complete() or !absent!.referenceAbsent or absent!.selectedSource()!=NULL or absent!.publications!=0){
+            FAIL("Closed successor absence was not established")
+        }
+        absent <- agent.worldManager.reference(session, position, true)
+        if(!absent!.complete() or !absent!.referenceAbsent or absent!.selectedSource()!=NULL){FAIL("Closed predecessor absence was not established")}
+        me WorldParseResult: open <- agent.worldManager.parse("{1 ...}")
+        if(open.target==NULL){FAIL(open.error)}
+        only <- open.target!.pItem!.value!.items.head; only!.pParent <- open.target
+        position <- agent.worldManager.graph.position(only, agent.worldManager.graph.position(open.target))
+        our WorldRequest: unknown <- agent.worldManager.reference(session, position, false)
+        if(unknown!.status().outcome!=worldPartial or unknown!.referenceAbsent or unknown!.selectedSource()!=NULL or unknown!.publications!=0){
+            FAIL("Unresolved successor was reported as an absent occurrence")
+        }
+        me WorldParseResult: record <- agent.worldManager.parse("{left:1 right:2}")
+        me WorldParseResult: name <- agent.worldManager.parse("right")
+        if(record.target==NULL or name.target==NULL){FAIL("Could not parse member-selector control")}
+        our PartPath:: member; member!.pathMode <- dotField; member!.path <- name.target!.pItem
+        our WorldRequest: named <- agent.worldManager.select(session, agent.worldManager.graph.position(record.target), member)
+        if(!named!.complete() or named!.selectedSource()!==record.target!.pItem!.value!.items.tail or named!.publications!=0){
+            FAIL("Member reference did not use ordinary correspondence: "+named!.error())
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_demandSelection_waiting(me string: testName) <- {
+        withEach cancelled in range 0 .. 2{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: parsed <- agent.worldManager.parse("{0 &{unavailable^T} 2}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our POV: first <- parsed.target!.pItem!.value!.items.head; first!.pParent <- parsed.target
+            our POV: span <- first!.next; span!.pParent <- parsed.target
+            our POV: selected <- span!.pItem!.value!.items.head; selected!.pParent <- span
+            agent.worldManager.prepareInput(span!.pItem)
+            our WorldPosition: from <- agent.worldManager.graph.position(first, agent.worldManager.graph.position(parsed.target))
+            our WorldRequest: request <- agent.worldManager.reference(agent.startSession(), from, false)
+            if(request!.status().outcome!=worldWaiting or agent.worldManager.control!.inputWaiters.size()!=1){FAIL("Reference did not retain its layout wait")}
+            me uint64: ancestors <- request!.neighbourAncestors
+            me uint64: frames <- request!.framesCreated; me uint64: queue <- request!.queueSteps
+            me WorldParseResult: unrelated <- agent.worldManager.parse("7")
+            agent.worldManager.inputReady(unrelated.target!.pItem)
+            if(request!.framesCreated!=frames or request!.queueSteps!=queue){FAIL("Unrelated arrival repeated a reference demand")}
+            if(cancelled==1){request!.cancel()}
+            span!.pItem!.streamState <- parseDone; agent.worldManager.inputReady(span!.pItem)
+            if(cancelled==1){
+                if(request!.status().outcome!=worldCancelled or request!.selectedSource()!=NULL){FAIL("Cancelled reference resumed")}
+            }else if(!request!.complete() or request!.selectedSource()!==selected or request!.neighbourAncestors!=ancestors){
+                FAIL("Reference did not resume at its retained logical boundary: "+request!.error())
+            }
+            if(request!.publications!=0 or !agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Reference published a value or leaked its subscription")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+}
+
+// Bounded expanded display uses the same occurrence demands as cursors.
+struct GLOBAL {
+    void: unit_expandedPrint_parentRules(me string: testName) <- {
+        me List<string>: inputs <- ["{T (%tprev +1)| 0 _ _}", "{T _ _ _} == {T 1 2 3}"]
+        me int: form <- 0
+        withEach input in inputs{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            cursorDemandLinkMembers(parsed.target)
+            our WorldExpandedPrint: printed <- agent.worldManager.printExpanded(agent.startSession(), parsed.target, 8)
+            me string: expected <- "{T 0 1 2}"; if(form==1){expected <- "{T 1 2 3}"}
+            if(!printed!.finished or printed!.status().outcome!=worldComplete or printed!.text!=expected or printed!.emitted!=3 or printed!.truncated){
+                FAIL("Expanded printing skipped parent requirements: "+printed!.text+"; "+printed!.status().detail)
+            }
+            agent.endWorldSessions(); modelMngr.clear(); form <+- 1
+        }
+    }
+
+    void: unit_expandedPrint_nestedCompressed(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("*2+{1 *1+{2}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our WorldExpandedPrint: printed <- agent.worldManager.printExpanded(agent.startSession(), parsed.target, 8)
+        if(!printed!.finished or printed!.status().outcome!=worldComplete or printed!.text!="{1 {2}}" or printed!.emitted!=2){
+            FAIL("Expanded outer traversal changed nested compressed formatting: "+printed!.text+"; "+printed!.status().detail)
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_expandedPrint_bound(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T (%tprev +1)| 0 _ _ _}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: third <- parsed.target!.pItem!.value!.items.head!.next!.next
+        our infonView: original <- third!.pItem
+        our WorldExpandedPrint: printed <- agent.worldManager.printExpanded(agent.startSession(), parsed.target, 2)
+        if(!printed!.finished or !printed!.truncated or printed!.status().outcome!=worldPartial or printed!.emitted!=2 or printed!.text!="{T 0 1 ...}"){
+            FAIL("Expanded display did not expose its requested item bound: "+printed!.text)
+        }
+        if(third!.pItem!==original or third!.cursorValue!=NULL){FAIL("Printing requested a state beyond its output bound")}
+        our WorldRequest: request <- printed!.demand!.request
+        me uint64: frames <- printed!.demand!.framesCreated
+        if(!printed!.refresh() or printed!.demand!.request!==request or printed!.demand!.framesCreated!=frames){FAIL("Refreshing a finished bounded print repeated work")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_expandedPrint_waiting(me string: testName) <- {
+        withEach scenario in range 0 .. 2{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: parsed <- agent.worldManager.parse("{T 0 7}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            cursorDemandLinkMembers(parsed.target)
+            our infonView: input <- parsed.target!.pItem!.value!.items.head!.next!.pItem
+            agent.worldManager.prepareInput(input)
+            our WorldExpandedPrint: printed <- agent.worldManager.printExpanded(agent.startSession(), parsed.target, 8)
+            if(printed!.finished or printed!.status().outcome!=worldWaiting or printed!.emitted!=1 or printed!.text!="{T 0 ...}"){
+                FAIL("Expanded printing did not retain the prefix while waiting: "+printed!.text+"; "+printed!.status().detail)
+            }
+            our WorldRequest: waiting <- printed!.demand!.selectionRequest
+            if(waiting==NULL){waiting <- printed!.demand!.request}
+            if(waiting==NULL or agent.worldManager.control!.inputWaiters.size()!=1){FAIL("Expanded print has no retained input wait")}
+            me uint64: frames <- waiting!.framesCreated; me uint64: queue <- waiting!.queueSteps
+            if(printed!.refresh() or printed!.emitted!=1 or printed!.text!="{T 0 ...}"){FAIL("Refreshing a waiting print repeated its prefix")}
+            our infonView:: unrelated; agent.worldManager.inputReady(unrelated)
+            if(waiting!.framesCreated!=frames or waiting!.queueSteps!=queue){FAIL("Unrelated input repeated print demand work")}
+            if(scenario==0){
+                input!.streamState <- parseDone; agent.worldManager.inputReady(input)
+                if(!printed!.refresh() or printed!.status().outcome!=worldComplete or printed!.emitted!=2 or printed!.text!="{T 0 7}"){
+                    FAIL("Expanded print did not resume its original demand: "+printed!.text)
+                }
+            }else{
+                printed!.cancel()
+                if(!printed!.finished or printed!.status().outcome!=worldCancelled or printed!.emitted!=1 or printed!.text!="{T 0 ...}"){
+                    FAIL("Cancelling a print changed its established prefix")
+                }
+            }
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Finished print retained an input subscription")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_expandedPrint_emptyAndUnsupported(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: empty <- agent.worldManager.parse("{}")
+        if(empty.target==NULL){FAIL(empty.error)}
+        our WorldExpandedPrint: printed <- agent.worldManager.printExpanded(agent.startSession(), empty.target, 8)
+        if(!printed!.finished or printed!.status().outcome!=worldComplete or printed!.emitted!=0 or printed!.text!="{}"){
+            FAIL("An empty list was not distinguished from an unavailable first occurrence")
+        }
+        me WorldParseResult: unordered <- agent.worldManager.parse("{1, 2}")
+        if(unordered.target==NULL){FAIL(unordered.error)}
+        printed <- agent.worldManager.printExpanded(agent.startSession(), unordered.target, 8)
+        if(!printed!.finished or printed!.status().outcome!=worldUnsupported or printed!.text!=toString(unordered.target!.pItem)){
+            FAIL("Unordered display claimed an ordered expansion")
+        }
+        me WorldParseResult: sparse <- agent.worldManager.parse("*2+{}")
+        if(sparse.target==NULL){FAIL(sparse.error)}
+        printed <- agent.worldManager.printExpanded(agent.startSession(), sparse.target, 8)
+        if(printed!.status().outcome==worldComplete or printed!.demand!.atBoundary or printed!.text=="{}"){
+            FAIL("An unrepresented declared extent was treated as a proved empty list")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_expandedPrint_partialValues(me string: testName) <- {
+        me List<string>: inputs <- ["{_}", "{_ 2}", "_"]
+        me List<string>: expected <- ["{_}", "{_ 2}", "_"]
+        me int: index <- 0
+        withEach input in inputs{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            cursorDemandLinkMembers(parsed.target)
+            our WorldExpandedPrint: printed <- agent.worldManager.printExpanded(agent.startSession(), parsed.target, 8)
+            if(!printed!.finished or printed!.status().outcome!=worldPartial or printed!.text!=expected[index] or printed!.truncated){
+                FAIL("A closed display concealed its unresolved value: "+printed!.text+"; "+printed!.status().detail)
+            }
+            if(index<2 and !printed!.tailClosed){FAIL("An incomplete value was confused with an unknown list endpoint")}
+            agent.endWorldSessions(); modelMngr.clear(); index <+- 1
+        }
+    }
+
+    void: unit_expandedPrint_headerWait(me string: testName) <- {
+        withEach scenario in range 0 .. 3{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            // The unfinished source still looks scalar before its list header
+            // arrives. It must not be classified or formatted as complete.
+            me WorldParseResult: parsed <- agent.worldManager.parse("0")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our infonView: input <- parsed.target!.pItem
+            agent.worldManager.prepareInput(input)
+            our WorldSession: session <- agent.startSession()
+            our WorldExpandedPrint: printed <- agent.worldManager.printExpanded(session, parsed.target, 8)
+            if(printed!.finished or printed!.status().outcome!=worldWaiting or printed!.emitted!=0 or printed!.text!="..."){
+                FAIL("An unfinished scalar-looking header was printed as a completed value")
+            }
+            our WorldRequest: waiting <- printed!.headerRequest
+            if(waiting==NULL or agent.worldManager.control!.inputWaiters.size()!=1){FAIL("Header acquisition did not retain one ordinary parser wait")}
+            me uint64: frames <- waiting!.framesCreated; me uint64: queue <- waiting!.queueSteps
+            if(printed!.refresh() or printed!.emitted!=0){FAIL("Refreshing an unfinished header emitted a value")}
+            our infonView:: unrelated; agent.worldManager.inputReady(unrelated)
+            if(waiting!.framesCreated!=frames or waiting!.queueSteps!=queue){FAIL("Unrelated input repeated header acquisition")}
+            if(scenario<2){
+                me string: text <- "{T 0 7}"; if(scenario==1){text <- "7"}
+                me WorldParseResult: completed <- agent.worldManager.parse(text)
+                if(completed.target==NULL){FAIL(completed.error)}
+                input! <- completed.target!.pItem!
+                cursorDemandLinkMembers(parsed.target)
+                agent.worldManager.inputReady(input)
+                if(!printed!.refresh() or printed!.status().outcome!=worldComplete or printed!.text!=text){
+                    FAIL("The original header wait did not resume into its completed representation: "+printed!.text+"; "+printed!.status().detail)
+                }
+            }else{
+                printed!.cancel()
+                if(!printed!.finished or printed!.status().outcome!=worldCancelled or waiting!.status().outcome!=worldCancelled or printed!.text!="..."){
+                    FAIL("Cancelling an unfinished header did not cancel its retained request")
+                }
+            }
+            if(waiting!.publications!=0 or !agent.worldManager.control!.inputWaiters.isEmpty()){
+                FAIL("Header acquisition published a value or retained a completed subscription")
+            }
+            withEach request in session!.requests{if(request===waiting){FAIL("Expanded printing retained its settled header request in the session")}}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+}
+
+// Ordinary CodeDog checks for optional, bounded demand-value retention.
+struct GLOBAL {
+    void: unit_demandRetention_replaySpace(me string: testName) <- {
+        me List<int>: lengths <- [32, 64, 128]
+        withEach length in lengths{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me string: input <- "{T 0 "
+            withEach idx in range 0 .. length{input <+- "(%tprev +1) "}
+            input <+- "}"
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            cursorDemandLinkMembers(parsed.target)
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), parsed.target)
+            demand!.inList()
+            if(!demand!.configureRetention(1, 0, 0) or !demand!.seek(FlexNum(toString(length+1))) or
+               demand!.current!.pItem!.fetchInt()!=length){FAIL("Cold seek did not reconstruct the requested value: "+demand!.status().detail)}
+            if(demand!.replayPeakPositions>3 or demand!.replayScannedPositions!=length+1 or
+               demand!.replayProducedPositions!=length+1 or demandRetentionCachedCount(parsed.target)>1){
+                FAIL("Cold seek retained its skipped prefix instead of bounded replay anchors")
+            }
+            if(demand!.replayCursor!=NULL or demand!.replayFirst!=NULL or demand!.replayDestination!=NULL or demand!.replaying){
+                FAIL("Completed reconstruction retained replay progress")
+            }
+            print("Cold seek length ", length, ": replayAnchors=", demand!.replayPeakPositions,
+                " scanned=", demand!.replayScannedPositions, " produced=", demand!.replayProducedPositions, "\n")
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+        withEach cancelled in range 0 .. 2{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: parsed <- agent.worldManager.parse("{T 0 (%tprev +1) (%tprev +1)}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            cursorDemandLinkMembers(parsed.target)
+            our POV: first <- parsed.target!.pItem!.value!.items.head
+            our POV: pending <- first!.next
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), first)
+            demand!.position!.writable <- false; demand!.list!.writable <- false
+            if(!demand!.refresh()){FAIL("Could not acquire the readonly visible seed")}
+            our POV: displayed <- demand!.current
+            agent.worldManager.prepareInput(pending!.pItem)
+            if(demand!.seek(FlexNum("3")) or demand!.status().outcome!=worldWaiting or
+               demand!.current!==displayed or demand!.current!.pItem!.fetchInt()!=0){
+                FAIL("Readonly reconstruction replaced the displayed value before its destination was ready")
+            }
+            me uint64: scanned <- demand!.replayScannedPositions
+            if(cancelled==1){demand!.request!.cancel()}
+            pending!.pItem!.streamState <- parseDone; agent.worldManager.inputReady(pending!.pItem)
+            me bool: ready <- demand!.refresh()
+            if(cancelled==1){
+                if(ready or demand!.status().outcome!=worldCancelled or demand!.current!.pItem!.fetchInt()!=0){FAIL("Cancelled replay replaced the display")}
+            }else if(!ready or demand!.current!.pItem!.fetchInt()!=2 or demand!.replayScannedPositions!=scanned){
+                FAIL("Readonly replay restarted its scanned prefix after a wait")
+            }
+            if(demand!.replayCursor!=NULL or demand!.replayFirst!=NULL or demand!.replayDestination!=NULL or demand!.replaying){FAIL("Finished replay retained its anchors")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+    me int: demandRetentionCachedCount(our POV: list) <- {
+        me int: count <- 0
+        our POV: member <- list!.pItem!.value!.items.head
+        while(member!=NULL){if(member!.cursorValue!=NULL){count <+- 1} member <- member!.next}
+        return(count)
+    }
+    void: unit_demandRetention_bounds(me string: testName) <- {
+        me List<int>: lengths <- [32, 64, 128]
+        withEach length in lengths{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me string: input <- "{T 0 "
+            withEach idx in range 0 .. length{input <+- "(%tprev +1) "}
+            input <+- "}"
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            cursorDemandLinkMembers(parsed.target)
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), parsed.target)
+            demand!.inList()
+            if(!demand!.configureRetention(3, 8, 2)){FAIL("Could not configure bounded retention")}
+            if(!demand!.preprocess(length+1) or demand!.preprocessed!=length+1 or demand!.current!.pItem!.fetchInt()!=length){
+                FAIL("Finite preprocessing did not acquire the requested prefix: "+demand!.status().detail)
+            }
+            me int: retained <- demandRetentionCachedCount(parsed.target)
+            if(retained>5 or demand!.retentionPeakSlots>5 or demand!.retentionRecent.size()>3 or
+               demand!.retentionCheckpoints.size()>2 or demand!.retentionEvictionAttempts>3*(length+1)){
+                FAIL("Retention exceeded its configured queues or inspected unrelated entries")
+            }
+            if(!demand!.goPrev() or demand!.current!.pItem!.fetchInt()!=length-1){FAIL("Recent predecessor was not retained")}
+            if(!demand!.seek(FlexNum("2")) or demand!.current!.pItem!.fetchInt()!=1){
+                FAIL("Evicted prefix could not be reconstructed by ordinary demand work: "+demand!.status().detail)
+            }
+            if(demandRetentionCachedCount(parsed.target)>5){FAIL("Replay left an uncatalogued cached prefix")}
+            print("Retention length ", length, ": slots=", demand!.retentionPeakSlots,
+                " evictionAttempts=", demand!.retentionEvictionAttempts, " evicted=", demand!.retentionEvicted, "\n")
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+        // Without an explicit retention policy, preserve the established
+        // cache behavior rather than evicting values as a side effect.
+        me Agent: ordinary; Allocate(ordinary.identityRegistry); ordinary.worldManager.control!.identities <- ordinary.identityRegistry
+        me WorldParseResult: parsed <- ordinary.worldManager.parse("{T 0 (%tprev +1) (%tprev +1)}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our WorldDemand: unconfigured <- ordinary.worldManager.demand(ordinary.startSession(), parsed.target)
+        unconfigured!.inList()
+        if(!unconfigured!.preprocess(3) or demandRetentionCachedCount(parsed.target)!=3){FAIL("Default demand unexpectedly evicted cached values")}
+        ordinary.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_demandRetention_leasesAndWrites(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T 0 (%tprev +1) (%tprev +1) (%tprev +1)}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), first)
+        if(!demand!.configureRetention(1, 0, 0) or !demand!.refresh()){FAIL("Could not prepare leased history")}
+        our WorldDemand: observer <- agent.worldManager.demand(agent.startSession(), first)
+        if(!observer!.refresh()){FAIL("Observer could not acquire a cached value")}
+        if(!demand!.goNext()){FAIL("Could not advance bounded demand")}
+        if(first!.cursorValue==NULL or !first!.cursorValue!.evictWhenUnused or observer!.current!.pItem!.fetchInt()!=0){
+            FAIL("Retention discarded another demand's displayed value")
+        }
+        if(!observer!.goNext() or first!.cursorValue!=NULL){FAIL("Releasing the last display lease did not service deferred eviction")}
+        our POV: written <- demand!.current
+        our WorldRequest: write <- demand!.writeBack()
+        if(write==NULL or write!.failed() or written!.cursorValue==NULL or !written!.cursorValue!.permanent){FAIL("Write-back did not create durable retention")}
+        if(!demand!.goNext() or !demand!.goNext()){FAIL("Could not move beyond the retained write")}
+        if(written!.cursorValue==NULL or !written!.cursorValue!.permanent or written!.pItem!.fetchInt()!=1){FAIL("Retention purged a written occurrence")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_demandRetention_preprocessWait(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T 0 &{(%tprev +1)} 2}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: span <- parsed.target!.pItem!.value!.items.head!.next
+        agent.worldManager.prepareInput(span!.pItem)
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), parsed.target)
+        demand!.inList()
+        if(!demand!.configureRetention(0, 0, 0)){FAIL("Could not configure current-value-only retention")}
+        if(demand!.preprocess(3) or demand!.status().outcome!=worldWaiting or demand!.preprocessed!=1){FAIL("Preprocessing did not preserve its partial prefix at a wait")}
+        me uint64: visits <- demand!.retentionRecorded
+        if(demand!.preprocess(3) or demand!.retentionRecorded!=visits){FAIL("Repeated preprocessing replayed a pending prefix")}
+        span!.pItem!.streamState <- parseDone; agent.worldManager.inputReady(span!.pItem)
+        if(!demand!.preprocess(3) or demand!.preprocessed!=3 or demand!.current!.pItem!.fetchInt()!=2){
+            FAIL("Preprocessing did not resume the same finite request: "+demand!.status().detail)
+        }
+        if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Completed preprocessing retained a subscription")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+}
+
+struct GLOBAL {
+    void: unit_demandCache_parentRevision(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T _ _} == {T 1 2}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our infonView: recipe <- first!.pItem
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), first)
+        if(!demand!.refresh() or first!.pItem!.fetchInt()!=1 or !demand!.cacheAvailable(demand!.position)){
+            FAIL("Initial demand did not record its enclosing context")
+        }
+        our POV: displayed <- demand!.current
+        me WorldParseResult: conflict <- agent.worldManager.parse("{T 9 2}")
+        if(conflict.target==NULL){FAIL(conflict.error)}
+        parsed.target!.pItem!.wrkList.append(conflict.target); parsed.target!.pItem!.noteNormalizationWork()
+        if(demand!.cacheAvailable(demand!.position)){FAIL("Tracked parent work reused a stale cached result")}
+        our WorldPosition: input <- demand!.demandInput(demand!.position)
+        if(input!.node!.pItem!==recipe or input!.occurrence!==demand!.position!.occurrence or
+           input!.parent!==demand!.position!.parent){FAIL("Reacquisition lost the recipe or its occurrence context")}
+        if(demand!.refresh() or demand!.status().outcome!=worldRejected or demand!.current!==displayed){
+            FAIL("Added parent contradiction was bypassed or changed the displayed value")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_demandCache_contextIdentity(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T 1 2}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), first)
+        if(!demand!.refresh()){FAIL("Initial context demand failed")}
+        our WorldPosition:: altered; altered! <- demand!.position!
+        Allocate(altered!.parameters)
+        if(demand!.cacheAvailable(altered)){FAIL("Cache ignored a different local parameter binding")}
+        altered! <- demand!.position!
+        me WorldParseResult: other <- agent.worldManager.parse("{T 1 2}")
+        if(other.target==NULL){FAIL(other.error)}
+        altered!.parent <- agent.worldManager.graph.position(other.target)
+        if(demand!.cacheAvailable(altered)){FAIL("Equal-valued enclosing lists identified different occurrence contexts")}
+        if(!demand!.cacheAvailable(demand!.position)){FAIL("A mismatched lookup invalidated the original context")}
+        our WorldSession: originalSession <- demand!.session
+        demand!.session <- agent.startSession()
+        if(demand!.cacheAvailable(demand!.position)){FAIL("Cache deduction escaped its Agent session")}
+        demand!.session <- originalSession
+        demand!.worldSource <- other.target!.pItem
+        if(demand!.cacheAvailable(demand!.position)){FAIL("Cache ignored a different world context")}
+        demand!.worldSource <- NULL
+        our IdentityRegistry: originalRegistry <- demand!.identities
+        Allocate(demand!.identities)
+        if(demand!.cacheAvailable(demand!.position)){FAIL("Cache ignored a different identity registry")}
+        demand!.identities <- originalRegistry
+        demand!.language <- "different"
+        if(demand!.cacheAvailable(demand!.position)){FAIL("Cache ignored a different locale")}
+        demand!.language <- ""
+        if(!demand!.cacheAvailable(demand!.position)){FAIL("Restoring the acquisition context did not recover the cache proof")}
+        our infonView: originalHeader <- parsed.target!.pItem
+        our WorldDemandHeaderIdentity: headerIdentity <- agent.worldManager.graph.demandHeaderIdentity(originalHeader)
+        our infonView:: clone; clone! <- originalHeader!
+        if(agent.worldManager.graph.demandHeaderIdentity(clone)===headerIdentity){FAIL("Cloned header inherited its source identity token")}
+        parsed.target!.pItem <- clone
+        if(demand!.cacheAvailable(demand!.position)){FAIL("A replaced ancestor header reused its predecessor's proof")}
+        our WorldPosition: refreshed <- demand!.refreshDemandAncestors(demand!.position)
+        if(refreshed!.parent!.node!.pItem!==clone or demand!.position!.parent!.node!.pItem!==originalHeader or
+           !agent.worldManager.graph.samePosition(refreshed, demand!.position)){
+            FAIL("Replaced ancestor was not refreshed in a private equivalent occurrence path")
+        }
+        parsed.target!.pItem <- originalHeader
+        me uint64: owners <- sharedUseCount(first)
+        me uint64: sessionOwners <- sharedUseCount(originalSession)
+        demand!.rememberDemandContext(demand!.position)
+        if(sharedUseCount(first)!=owners){FAIL("Cache proof acquired ownership of its own model occurrence")}
+        if(sharedUseCount(originalSession)!=sessionOwners){FAIL("Cache proof retained the owning session")}
+        our WorldDemand: reader <- agent.worldManager.demand(originalSession, first)
+        reader!.position!.writable <- false
+        if(!reader!.refresh() or !reader!.workingAvailable(reader!.position)){FAIL("Read-only demand did not retain its context proof")}
+        parsed.target!.pItem!.noteNormalizationWork()
+        if(reader!.workingAvailable(reader!.position)){FAIL("Read-only working value ignored a tracked ancestor revision")}
+        me WorldParseResult: origin <- agent.worldManager.parse("{T {x:1}}")
+        me WorldParseResult: unavailable <- agent.worldManager.parse("{T {x:_}}")
+        cursorDemandLinkMembers(origin.target); cursorDemandLinkMembers(unavailable.target)
+        our WorldDemand: moving <- agent.worldManager.demand(originalSession, origin.target!.pItem!.value!.items.head)
+        moving!.requireField("x")
+        if(!moving!.refresh()){FAIL("Could not establish the replacement-scope display")}
+        our POV: visible <- moving!.current
+        if(moving!.fill(agent.worldManager.graph.occurrencePath(unavailable.target!.pItem!.value!.items.head), false) or
+           moving!.current!==visible){FAIL("Unavailable destination changed the replacement-scope display")}
+        our infonView:: replacement; replacement! <- origin.target!.pItem!
+        Allocate(replacement!.value); replacement!.value! <- origin.target!.pItem!.value!
+        Allocate(replacement!.infSize); replacement!.infSize! <- origin.target!.pItem!.infSize!
+        replacement!.infSize!.num <- FlexNum("2")
+        me WorldParseResult: appended <- agent.worldManager.parse("{x:7}")
+        replacement!.value!.items.appendPov(appended.target); appended.target!.pParent <- origin.target
+        origin.target!.pItem <- replacement
+        if(!moving!.seek(FlexNum("2")) or moving!.current!.pItem!.fetchField("x")!.pItem!.fetchInt()!=7 or
+           moving!.list!.node!.pItem!==replacement){FAIL("Failed move lost the proof needed to refresh a replaced selection scope")}
+        if(!moving!.goPrev() or moving!.current!.pItem!.fetchField("x")!.pItem!.fetchInt()!=1){
+            FAIL("Neighbour navigation did not preserve the refreshed selection scope")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_demandCache_scopeSharing(me string: testName) <- {
+        me List<int>: depths <- [8, 16, 32]
+        withEach depth in depths{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me string: text <- "{T "
+            withEach expected in range 0 .. 32{text <+- toString(expected)+" "}
+            text <+- "}"
+            me WorldParseResult: parsed <- agent.worldManager.parse(text)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our POV: first <- parsed.target!.pItem!.value!.items.head
+            our POV: root <- parsed.target
+            withEach level in range 0 .. depth{
+                me WorldParseResult: wrapper <- agent.worldManager.parse("{T}")
+                if(wrapper.target==NULL){FAIL(wrapper.error)}
+                wrapper.target!.pItem!.value!.items.appendPov(root)
+                wrapper.target!.pItem!.infSize!.num <- FlexNum("1")
+                root!.pParent <- wrapper.target; root <- wrapper.target
+            }
+            cursorDemandLinkMembers(root)
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), first)
+            if(!demand!.refresh()){FAIL("Deep initial demand failed: "+demand!.status().detail)}
+            our WorldDemandScopeProof: shared <- first!.cursorValue!.demandProof!.scope
+            withEach expected in range 1 .. 32{
+                if(!demand!.goNext() or demand!.current!.pItem!.fetchInt()!=expected){FAIL("Sequential cache-context demand failed")}
+                if(demand!.current!.cursorValue!.demandProof!.scope!==shared){FAIL("Each cached value copied its ancestor proof")}
+            }
+            if(demand!.demandScopeNodes!=depth+1 or demand!.demandScopes.size()!=depth+1){
+                FAIL("Scope proof allocation grew with the number of cached states")
+            }
+            root!.pItem!.noteNormalizationWork()
+            if(demand!.cacheAvailable(demand!.position)){FAIL("A distant tracked ancestor change escaped validation")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_demandCache_pendingWrite(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T {keep:{z:_}} {} {}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our POV: second <- first!.next
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), first)
+        if(!demand!.refresh() or !demand!.goNext()){FAIL("Could not prepare the shared descendant")}
+        me string: prior <- toString(first!.pItem)
+        me WorldParseResult: assertion <- agent.worldManager.parse("{keep:{z:9}}")
+        if(assertion.target==NULL){FAIL(assertion.error)}
+        second!.pItem!.wrkList.append(assertion.target); second!.pItem!.noteNormalizationWork()
+        if(demand!.demandInput(demand!.position)!.node!==second){FAIL("Reacquisition discarded newly supplied write work")}
+        our WorldRequest: written <- agent.normalize(second)
+        if(written!.failed() or !demand!.refresh() or second!.pItem!.fetchField("keep")!.pItem!.fetchField("z")!.pItem!.fetchInt()!=9){
+            FAIL("Tracked descendant assertion was not retained")
+        }
+        if(!second!.cursorValue!.permanent or second!.cursorValue!.original!=NULL){FAIL("Ordinary write remained a disposable cache")}
+        if(!demand!.goNext()){FAIL("Could not leave the written occurrence")}
+        demand!.clearCache()
+        if(second!.pItem!.fetchField("keep")!.pItem!.fetchField("z")!.pItem!.fetchInt()!=9 or toString(first!.pItem)!=prior){
+            FAIL("Eviction lost the durable descendant or modified an earlier state")
+        }
+        me WorldParseResult: direct <- agent.worldManager.parse("{T {z:_}}")
+        cursorDemandLinkMembers(direct.target)
+        our WorldDemand: observer <- agent.worldManager.demand(agent.startSession(), direct.target!.pItem!.value!.items.head)
+        if(!observer!.refresh()){FAIL("Could not acquire the direct-write observer")}
+        our POV: leaf <- observer!.current!.pItem!.fetchField("z")
+        me WorldParseResult: nine <- agent.worldManager.parse("9")
+        leaf!.pItem!.wrkList.append(nine.target); leaf!.pItem!.noteNormalizationWork()
+        our WorldRequest: leafWrite <- agent.normalize(leaf)
+        if(leafWrite!.failed() or leaf!.pItem!.fetchInt()!=9 or observer!.cacheAvailable(observer!.position)){
+            FAIL("Direct descendant publication left the acquired ancestor marked ready")
+        }
+        if(!observer!.refresh() or !observer!.current!.cursorValue!.permanent or
+           observer!.current!.pItem!.fetchField("z")!.pItem!.fetchInt()!=9){FAIL("Durable ancestor did not refresh after a descendant write")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+}
+
+// Scope is established by demanded facts, not by recursively normalizing every
+// stored descendant or every temporal predecessor.
+struct GLOBAL {
+    void: unit_demandScope_sessionRegistry(me string: testName) <- {
+        me uint64: previousReads <- 0
+        me List<int>: widths <- [16, 64]
+        withEach width in widths{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            our WorldSession: session <- agent.startSession()
+            me List<our WorldRequest>: history
+            withEach idx in range 0 .. width{
+                me WorldParseResult: parsed <- agent.worldManager.parse(toString(idx))
+                if(parsed.target==NULL){FAIL(parsed.error)}
+                our WorldRequest: request <- agent.worldManager.normalize(session, parsed.target)
+                if(!request!.complete()){FAIL("Historical request did not complete")}
+                history.append(request)
+            }
+            me WorldParseResult: input <- agent.worldManager.parse("7")
+            agent.worldManager.prepareInput(input.target!.pItem)
+            our WorldRequest: waiting <- agent.worldManager.normalize(session, input.target)
+            if(waiting!.status().outcome!=worldWaiting or agent.worldManager.release(session, waiting)){
+                FAIL("Live waiting work was detached from session cancellation")
+            }
+            me WorldParseResult: first <- agent.worldManager.parse("{T 0 1 2 3}")
+            me WorldParseResult: second <- agent.worldManager.parse("{T 10 11 12 13}")
+            if(first.target==NULL or second.target==NULL){FAIL("Could not parse interleaved histories")}
+            cursorDemandLinkMembers(first.target); cursorDemandLinkMembers(second.target)
+            our WorldDemand: a <- agent.worldManager.demand(session, first.target!.pItem!.value!.items.head)
+            our WorldDemand: b <- agent.worldManager.demand(session, second.target!.pItem!.value!.items.head)
+            if(!a!.refresh() or !b!.refresh()){FAIL("Interleaved demands did not acquire their seeds")}
+            if(!agent.worldManager.release(session, history[0]) or agent.worldManager.release(session, history[0]) or
+               agent.worldManager.release(agent.startSession(), history[1])){FAIL("Request registry did not validate session membership")}
+            withEach step in range 0 .. 3{
+                if(!a!.goNext() or !b!.goNext()){FAIL("Retirement lost a relocated interleaved request")}
+                if(session!.requests.size()>width+2){FAIL("Interleaved retirement accumulated transient requests")}
+            }
+            if(a!.current!.pItem!.fetchInt()!=3 or b!.current!.pItem!.fetchInt()!=13){FAIL("Request retirement changed a demand result")}
+            withEach request in session!.requests{
+                if(request!.sessionSlot<0 or session!.requests[request!.sessionSlot]!==request or
+                   request!.registeredSession!==session!.demandIdentity){FAIL("A live request lost its registry slot")}
+            }
+            if(session!.requestRegistryReads>session!.requestReleases*2 or
+               (width>16 and session!.requestRegistryReads>previousReads+2)){
+                FAIL("Retirement work grew with unrelated historical requests")
+            }
+            previousReads <- session!.requestRegistryReads
+            print("Session history=",width," registryReads=",session!.requestRegistryReads,
+                " moves=",session!.requestRegistryMoves," releases=",session!.requestReleases,"\n")
+            agent.worldManager.closeSession(session)
+            if(!session!.requests.isEmpty() or waiting!.status().outcome!=worldCancelled or
+               waiting!.sessionSlot!=-1 or !agent.worldManager.control!.inputWaiters.isEmpty()){
+                FAIL("Closing the session lost pending cancellation or retained registry membership")
+            }
+            me int: expected <- 0
+            withEach request in history{
+                if(!request!.complete() or request!.result()!.pItem!.fetchInt()!=expected or request!.sessionSlot!=-1){
+                    FAIL("Session retirement changed an externally held completed request")
+                }
+                expected <+- 1
+            }
+            input.target!.pItem!.streamState <- parseDone; agent.worldManager.inputReady(input.target!.pItem)
+            if(waiting!.status().outcome!=worldCancelled){FAIL("A released session's input resumed cancelled work")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+
+    void: unit_demandScope_layoutCoordinates(me string: testName) <- {
+        me List<string>: inputs <- ["{T (unavailable^T) _} == {T 1 2}", "*4+{1 2} == {1 2 3 4}",
+            "{&{1 ...} 2} == {1 2}", "!{1 2} == {1 2}"]
+        me int: scenario <- 0
+        withEach input in inputs{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            cursorDemandLinkMembers(parsed.target)
+            me string: original <- toString(parsed.target!.pItem)
+            me WorldParseResult: coordinate <- agent.worldManager.parse("1")
+            our PartPath:: selector; selector!.pathMode <- idxField; selector!.path <- coordinate.target!.pItem
+            our WorldRequest: selected <- agent.worldManager.select(agent.startSession(), agent.worldManager.graph.position(parsed.target), selector)
+            if(scenario<3){
+                our POV: expected <- parsed.target!.pItem!.value!.items.head
+                if(scenario==2){expected <- expected!.pItem!.value!.items.head}
+                // A known prefix occurrence does not require a proof of the
+                // complete layout or of an unresolved later span's width.
+                if(!selected!.complete() or selected!.selectedSource()!==expected or selected!.referenceAbsent){
+                    FAIL("A represented prefix occurrence was blocked by its unresolved suffix: "+selected!.error())
+                }
+                if(scenario==0 and selected!.layoutShapeMembers>5){FAIL("One indexed request repeatedly checked its fixed primary layout")}
+            }else if(selected!.complete() or selected!.referenceAbsent or selected!.selectedSource()!=NULL){
+                FAIL("A negative layout supplied a positive occurrence: "+input)
+            }
+            if(selected!.publications!=0 or toString(parsed.target!.pItem)!=original){FAIL("A layout proof evaluated or changed a member value")}
+            if(scenario==1 or scenario==2){
+                // Ask beyond the represented prefix: the declared third item
+                // is not stored, and the second embedded coordinate crosses
+                // an unknown span. Neither case proves an absent occurrence.
+                me string: nextIndex <- "3"; if(scenario==2){nextIndex <- "2"}
+                coordinate <- agent.worldManager.parse(nextIndex)
+                our PartPath:: uncertain; uncertain!.pathMode <- idxField; uncertain!.path <- coordinate.target!.pItem
+                selected <- agent.worldManager.select(agent.startSession(), agent.worldManager.graph.position(parsed.target), uncertain)
+                if(selected!.complete() or selected!.referenceAbsent or selected!.selectedSource()!=NULL){
+                    FAIL("An unresolved coordinate or endpoint was treated as established: "+input)
+                }
+                if(selected!.publications!=0 or toString(parsed.target!.pItem)!=original){FAIL("Unresolved selection changed its source layout")}
+            }
+            agent.endWorldSessions(); modelMngr.clear(); scenario <+- 1
+        }
+    }
+
+    void: unit_demandScope_shallow(me string: testName) <- {
+        withEach scenario in range 0 .. 2{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me string: leaf <- "(unavailable^T)"; if(scenario==1){leaf <- "7"}
+            me WorldParseResult: parsed <- agent.worldManager.parse(
+                "{T {changed:0 untouched:{blocked:"+leaf+"}} {changed:1} {changed:2}}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            cursorDemandLinkMembers(parsed.target)
+            our POV: first <- parsed.target!.pItem!.value!.items.head
+            our POV: untouched <- first!.pItem!.fetchField("untouched")
+            our POV: blocked <- untouched!.pItem!.fetchField("blocked")
+            our infonView: recipe <- blocked!.pItem
+            our infonState: payload <- untouched!.pItem!.value
+            if(scenario==1){agent.worldManager.prepareInput(recipe)}
+            me string: original <- toString(recipe)
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), first)
+            if(!demand!.refresh() or !demand!.goNext() or !demand!.goNext()){
+                FAIL("Unrelated composite interior blocked shallow state acquisition: "+demand!.status().detail)
+            }
+            if(demand!.current!.pItem!.fetchField("changed")!.pItem!.fetchInt()!=2 or
+               demand!.current!.pItem!.fetchField("untouched")!.pItem!.value!==payload){
+                FAIL("A changing scalar rebuilt or lost the untouched composite")
+            }
+            if(blocked!.pItem!==recipe or toString(recipe)!=original or !agent.worldManager.control!.inputWaiters.isEmpty()){
+                FAIL("Shallow acquisition evaluated or subscribed to an unrelated descendant")
+            }
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_demandScope_requiredDescendant(me string: testName) <- {
+        withEach scenario in range 0 .. 2{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me string: leaf <- "(unavailable^T)"; if(scenario==1){leaf <- "7"}
+            me WorldParseResult: parsed <- agent.worldManager.parse("{T {untouched:{blocked:"+leaf+"}}}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            cursorDemandLinkMembers(parsed.target)
+            our POV: first <- parsed.target!.pItem!.value!.items.head
+            our infonView: recipe <- first!.pItem!.fetchField("untouched")!.pItem!.fetchField("blocked")!.pItem
+            if(scenario==1){agent.worldManager.prepareInput(recipe)}
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), first)
+            if(!demand!.requireField("untouched.blocked")){FAIL("Could not register the stronger field demand")}
+            if(demand!.refresh()){FAIL("A required unsupported or pending descendant was reported ready")}
+            if(scenario==0){
+                if(demand!.status().outcome!=worldUnsupported){FAIL("Explicit field acquisition hid the unsupported operation")}
+            }else{
+                if(demand!.status().outcome!=worldWaiting or agent.worldManager.control!.inputWaiters.size()!=1){FAIL("Explicit field acquisition did not wait for its input")}
+                recipe!.streamState <- parseDone; agent.worldManager.inputReady(recipe)
+                if(!demand!.refresh() or demand!.current!.pItem!.fetchField("untouched")!.pItem!.fetchField("blocked")!.pItem!.fetchInt()!=7){
+                    FAIL("Required descendant did not resume through the ordinary demand")
+                }
+            }
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Completed field demand retained a subscription")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_demandScope_descendantCost(me string: testName) <- {
+        me uint64: previousFrames <- 0; me uint64: previousRelationships <- 0
+        me List<int>: widths <- [16, 32, 64]
+        withEach width in widths{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me string: text <- "{T {changed:0 untouched:{"
+            withEach idx in range 0 .. width{text <+- "field"+toString(idx)+":("+toString(idx)+" +1) "}
+            text <+- "}} {changed:1} {changed:2}}"
+            me WorldParseResult: parsed <- agent.worldManager.parse(text)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            cursorDemandLinkMembers(parsed.target)
+            our POV: first <- parsed.target!.pItem!.value!.items.head
+            our POV: untouched <- first!.pItem!.fetchField("untouched")
+            our infonState: payload <- untouched!.pItem!.value
+            me string: original <- toString(untouched!.pItem)
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), first)
+            if(!demand!.refresh() or !demand!.goNext() or !demand!.goNext()){FAIL("Fixed-width state traversal failed: "+demand!.status().detail)}
+            me uint64: frames <- demand!.framesCreated-demand!.navigationFrames
+            me uint64: relationships <- demand!.relationshipsRead
+            if(demand!.request!=NULL){frames <+- demand!.request!.framesCreated; relationships <+- demand!.request!.relationshipsRead}
+            print("Demand untouched width=",width," valueFrames=",frames," relationships=",relationships,"\n")
+            if(width>16 and (frames>previousFrames+4 or relationships>previousRelationships+4)){
+                FAIL("Fixed-width state work grew with the untouched descendant subtree")
+            }
+            if(demand!.current!.pItem!.fetchField("untouched")!.pItem!.value!==payload or toString(untouched!.pItem)!=original){
+                FAIL("Unrequested descendant expressions were normalized during retention")
+            }
+            previousFrames <- frames; previousRelationships <- relationships
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_demandScope_independentSeek(me string: testName) <- {
+        me List<string>: expressions <- ["(%? =7)", "((%? =7))", "(7)"]
+        withEach expression in expressions{
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me string: text <- "{T unavailable^T "+expression+"}"
+        me WorldParseResult: ordinary <- agent.worldManager.parse(text)
+        if(ordinary.target==NULL){FAIL(ordinary.error)}
+        cursorDemandLinkMembers(ordinary.target)
+        our WorldRequest: control <- agent.normalize(ordinary.target!.pItem!.value!.items.head!.next)
+        if(!control!.complete() or ordinary.target!.pItem!.value!.items.head!.next!.pItem!.fetchInt()!=7){FAIL("Independent state control did not normalize")}
+        me WorldParseResult: parsed <- agent.worldManager.parse(text)
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: predecessor <- parsed.target!.pItem!.value!.items.head
+        our infonView: recipe <- predecessor!.pItem
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), parsed.target); demand!.inList()
+        if(!demand!.seek(FlexNum("2")) or demand!.current!.pItem!.fetchInt()!=7){FAIL("Independent seek demanded an irrelevant predecessor: "+demand!.status().detail)}
+        if(predecessor!.pItem!==recipe or predecessor!.cursorValue!=NULL){FAIL("Independent seek materialized an unused predecessor")}
+        agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_demandScope_untouchedSuffix(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T 7 unavailable^T}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: suffix <- parsed.target!.pItem!.value!.items.head!.next
+        our infonView: recipe <- suffix!.pItem
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), parsed.target); demand!.inList()
+        if(!demand!.seek(FlexNum("1")) or demand!.current!.pItem!.fetchInt()!=7){FAIL("A selected prefix demanded an unrelated suffix")}
+        if(suffix!.pItem!==recipe or suffix!.cursorValue!=NULL){FAIL("Random access materialized the unrequested suffix")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+}
+
+// Acquiring a named state expands its immediate definition shape, while
+// untouched composite descendants remain borrowed descriptions.
+struct GLOBAL {
+    void: unit_demandScope_boundaryWait(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T 0 1}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), parsed.target!.pItem!.value!.items.head)
+        if(!demand!.refresh() or !demand!.goNext() or demand!.goNext() or !demand!.atBoundary){FAIL("Could not establish the closed history boundary")}
+        our POV: displayed <- demand!.current
+        agent.worldManager.prepareInput(parsed.target!.pItem)
+        if(demand!.goPrev() or demand!.status().outcome!=worldWaiting or demand!.atBoundary or demand!.current!==displayed){
+            FAIL("A new waiting movement retained a stale boundary result")
+        }
+        parsed.target!.pItem!.streamState <- parseDone; agent.worldManager.inputReady(parsed.target!.pItem)
+        if(!demand!.refresh() or demand!.current!.pItem!.fetchInt()!=0 or demand!.atBoundary or !agent.worldManager.control!.inputWaiters.isEmpty()){
+            FAIL("Movement from a former boundary did not resume its retained reference")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_demandScope_forwardContext(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T _ _} == {T 0 _}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our POV: second <- first!.next
+        our infonView: secondRecipe <- second!.pItem
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), first)
+        if(!demand!.refresh() or demand!.current!.pItem!.fetchInt()!=0){FAIL("Initial predecessor context was unavailable")}
+        our POV: displayed <- demand!.current
+        me WorldParseResult: contradiction <- agent.worldManager.parse("{T 9 _}")
+        if(contradiction.target==NULL){FAIL(contradiction.error)}
+        parsed.target!.pItem!.wrkList.append(contradiction.target); parsed.target!.pItem!.noteNormalizationWork()
+        if(demand!.goNext() or demand!.status().outcome!=worldRejected){
+            FAIL("Forward carry reused a predecessor invalidated by new enclosing constraints")
+        }
+        if(demand!.current!==displayed or demand!.position!.node!==first or second!.pItem!==secondRecipe){
+            FAIL("Rejected predecessor replay changed the displayed or destination occurrence")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_demandScope_namedShallow(me string: testName) <- {
+        withEach scenario in range 0 .. 3{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me string: leaf <- "(unavailable^T)"; if(scenario==1){leaf <- "7"}
+            me WorldParseResult: declaration <- agent.worldManager.parse(
+                "{#base={changed:0 untouched:{blocked:"+leaf+"}} #alias=base}")
+            if(declaration.target==NULL){FAIL(declaration.error)}
+            our infonView: body <- declaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
+            our POV: untouched <- body!.fetchField("untouched")
+            our POV: blocked <- untouched!.pItem!.fetchField("blocked")
+            our infonView: recipe <- blocked!.pItem
+            our infonState: payload <- untouched!.pItem!.value
+            our WorldRequest: installed <- agent.normalize(declaration.target)
+            if(!installed!.complete()){FAIL("Could not install the named state shape: "+installed!.error())}
+            if(scenario==1){agent.worldManager.prepareInput(recipe)}
+            me string: original <- toString(body)
+            me string: name <- "base"; if(scenario==2){name <- "alias"}
+            me WorldParseResult: parsed <- agent.worldManager.parse("{T "+name+" {changed:1}}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            cursorDemandLinkMembers(parsed.target)
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), parsed.target!.pItem!.value!.items.head,
+                agent.getLocaleBaseName(), agent.world, agent.identityRegistry)
+            if(!demand!.refresh()){
+                FAIL("Named state acquisition evaluated an unrelated composite interior: "+demand!.status().detail)
+            }
+            our POV: firstChanged <- demand!.current!.pItem!.fetchField("changed")
+            our POV: firstUntouched <- demand!.current!.pItem!.fetchField("untouched")
+            if(firstChanged==NULL or firstChanged!.pItem!.fetchInt()!=0 or firstUntouched==NULL or firstUntouched!.pItem!.value!==payload){
+                FAIL("Named state acquisition did not expand and borrow its immediate definition shape")
+            }
+            if(!demand!.goNext()){FAIL("A change after a named state demanded unrelated descendants: "+demand!.status().detail)}
+            our POV: changed <- demand!.current!.pItem!.fetchField("changed")
+            our POV: retained <- demand!.current!.pItem!.fetchField("untouched")
+            if(changed==NULL or changed!.pItem!.fetchInt()!=1 or retained==NULL or retained!.pItem!.value!==payload){
+                FAIL("Changing a named state's scalar rebuilt or lost its untouched composite")
+            }
+            if(blocked!.pItem!==recipe or toString(body)!=original or !agent.worldManager.control!.inputWaiters.isEmpty()){
+                FAIL("Named shallow acquisition modified the definition or subscribed to an unrequested descendant")
+            }
+            agent.endWorldSessions(); modelMngr.clear()
         }
     }
 }
