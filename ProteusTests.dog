@@ -1,6 +1,14 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/recordProjection/addedField
+    unit/recordProjection/nestedField
+    unit/recordProjection/otherRequirements
+    unit/recordProjection/missingSelection
+    unit/recordProjection/unsafeAbsence
+    unit/recordProjection/waitAndCancel
+    unit/recordProjection/temporal
+    unit/recordProjection/scaling
     unit/namedListLayout/represented
     unit/namedListLayout/selection
     unit/namedListLayout/demand
@@ -5356,6 +5364,328 @@ struct GLOBAL {
                 }
                 if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Closed named history retained an input subscription")}
                 priorFrames <- frames; priorRelations <- relations; priorPositions <- positions; priorQueue <- queue; priorHeaders <- headers
+                agent.endWorldSessions(); modelMngr.clear(); width <*- 2
+            }
+        }
+    }
+}
+
+// A base record's lack of an added field is not a missing target occurrence.
+// Ancestor projection may contribute no requirement while other sources and
+// ordinary value acquisition continue to constrain the represented target.
+struct GLOBAL {
+    void: unit_recordProjection_addedField(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#base={x:1, y:2} #derived=base:{x:1, y:2, z:7}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our infonView: base <- declaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
+        our infonView: derived <- declaration.target!.pItem!.value!.items.tail!.pItem!.funcArgs
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me string: baseOriginal <- toString(base); me string: derivedOriginal <- toString(derived)
+        me List<string>: names <- ["base", "derived"]
+        withEach name in names{
+            // Whole-value completion needs a known target extent. The base
+            // requirement remains open and cannot prohibit the added field.
+            me string: input <- name+":*3+{x:1, y:2, z:7}"
+            me WorldParseResult: whole <- agent.worldManager.parse(input)
+            me WorldParseResult: selected <- agent.worldManager.parse(input)
+            if(whole.target==NULL or selected.target==NULL){FAIL("Added-field records did not parse")}
+            our WorldRequest: normalized <- agent.normalize(whole.target)
+            if(!normalized!.complete() or !temporalNormalizationNumber(whole.target,"z",7)){
+                FAIL("Whole added-field record control did not complete: "+normalized!.error())
+            }
+            cursorDemandLinkMembers(selected.target)
+            our POV: field <- temporalNormalizationField(selected.target,"z")
+            our POV: first <- selected.target!.pItem!.value!.items.head
+            me string: original <- toString(selected.target!.pItem)
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),field,
+                agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+            if(!demand!.refresh() or demand!.status().outcome!=worldComplete or demand!.current!.pItem!.fetchInt()!=7 or
+               demand!.position!.node!==field){FAIL("Added field could not acquire an ancestor with no corresponding requirement: "+demand!.status().detail)}
+            if(selected.target!.pItem!.value!.items.head!==first or temporalNormalizationField(selected.target,"z")!==field or
+               toString(selected.target!.pItem)!=original or toString(base)!=baseOriginal or toString(derived)!=derivedOriginal){
+                FAIL("Added-field acquisition changed occurrence identity or a shared definition")
+            }
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_recordProjection_nestedField(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#base={x:1, y:2}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our infonView: meaning <- declaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me string: definitionOriginal <- toString(meaning)
+        me string: input <- "base:{x:1, y:2, extra:{leaf:7, keep:8}}"
+        me WorldParseResult: parsed <- agent.worldManager.parse(input)
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: extra <- temporalNormalizationField(parsed.target,"extra")
+        our POV: leaf <- temporalNormalizationField(extra,"leaf")
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),leaf,
+            agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        if(!demand!.refresh() or demand!.status().outcome!=worldComplete or demand!.current!.pItem!.fetchInt()!=7 or
+           demand!.position!.node!==leaf){FAIL("Nested projection did not propagate an ancestor's lack of a requirement: "+demand!.status().detail)}
+        parsed <- agent.worldManager.parse(input)
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        demand <- agent.worldManager.demand(agent.startSession(),parsed.target,
+            agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        if(!demand!.requireField("extra.leaf") or !demand!.requireField("extra.keep") or !demand!.refresh() or
+           !temporalNormalizationNumber(temporalNormalizationField(demand!.current,"extra"),"leaf",7) or
+           !temporalNormalizationNumber(temporalNormalizationField(demand!.current,"extra"),"keep",8)){
+            FAIL("Required nested added fields did not agree with direct acquisition: "+demand!.status().detail)
+        }
+        if(toString(meaning)!=definitionOriginal){FAIL("Nested projection wrote added fields into the base definition")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_recordProjection_otherRequirements(me string: testName) <- {
+        withEach scenario in range 0 .. 3{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: declaration <- agent.worldManager.parse("{#base={x:1, y:2}}")
+            if(declaration.target==NULL){FAIL(declaration.error)}
+            our WorldRequest: installed <- agent.normalize(declaration.target)
+            if(!installed!.complete()){FAIL(installed!.error())}
+            me string: input <- "base:{x:1, y:2, z:_}"; me string: fieldName <- "z"
+            if(scenario==1){input <- "base:{x:1, y:2, z:7}"}
+            if(scenario==2){input <- "base:{x:9, y:2, z:7}"; fieldName <- "x"}
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            if(scenario<2){
+                me string: assertion <- "{z:7}"; if(scenario==1){assertion <- "{z:8}"}
+                me WorldParseResult: overlay <- agent.worldManager.parse(assertion)
+                if(overlay.target==NULL){FAIL(overlay.error)}
+                parsed.target!.pItem!.wrkList.append(overlay.target); parsed.target!.pItem!.noteNormalizationWork()
+            }
+            cursorDemandLinkMembers(parsed.target)
+            our POV: selected <- temporalNormalizationField(parsed.target,fieldName)
+            our infonView: recipe <- selected!.pItem
+            me string: original <- toString(parsed.target!.pItem)
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),selected,
+                agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+            me bool: ready <- demand!.refresh()
+            if(scenario==0){
+                if(!ready or demand!.status().outcome!=worldComplete or demand!.current!.pItem!.fetchInt()!=7){
+                    FAIL("No-contribution ancestor prevented a supplied overlay from resolving the field: "+demand!.status().detail)
+                }
+            }else{
+                if(ready or demand!.status().outcome!=worldRejected or selected!.pItem!==recipe or selected!.cursorValue!=NULL or
+                   toString(parsed.target!.pItem)!=original or (demand!.request!=NULL and demand!.request!.publications!=0)){
+                    FAIL("Added-field projection skipped a matching constraint or published a conflict: "+demand!.status().detail)
+                }
+            }
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_recordProjection_missingSelection(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#base={x:1, y:2}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me WorldParseResult: parsed <- agent.worldManager.parse("base:{x:1, y:2, z:7}")
+        me WorldParseResult: name <- agent.worldManager.parse("missing")
+        if(parsed.target==NULL or name.target==NULL){FAIL("Missing selection control did not parse")}
+        me string: original <- toString(parsed.target!.pItem)
+        our PartPath:: part; part!.pathMode <- dotField; part!.path <- name.target!.pItem
+        our WorldRequest: request <- agent.worldManager.select(agent.startSession(),agent.worldManager.graph.position(parsed.target),part,
+            agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        if(request!.status().outcome!=worldPartial or request!.selectedSource()!=NULL or request!.referenceAbsent or
+           request!.publications!=0 or toString(parsed.target!.pItem)!=original){
+            FAIL("A missing requested field was confused with an ancestor contributing no requirement: "+request!.error())
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_recordProjection_unsafeAbsence(me string: testName) <- {
+        withEach scenario in range 0 .. 2{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me string: definition <- "{#base=*2+{x:1, y:2}}"
+            if(scenario==1){definition <- "{#base={x:1, y:2}}"}
+            me WorldParseResult: declaration <- agent.worldManager.parse(definition)
+            if(declaration.target==NULL){FAIL(declaration.error)}
+            our infonView: meaning <- declaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
+            our WorldRequest: installed <- agent.normalize(declaration.target)
+            if(!installed!.complete()){FAIL(installed!.error())}
+            if(scenario==1){
+                me WorldParseResult: overlay <- agent.worldManager.parse("{z:7}")
+                if(overlay.target==NULL){FAIL(overlay.error)}
+                meaning!.wrkList.append(overlay.target); meaning!.noteNormalizationWork()
+            }
+            me string: definitionOriginal <- toString(meaning)
+            me WorldParseResult: parsed <- agent.worldManager.parse("base:{x:1, y:2, z:9}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            cursorDemandLinkMembers(parsed.target)
+            our POV: selected <- temporalNormalizationField(parsed.target,"z")
+            our infonView: recipe <- selected!.pItem
+            me string: original <- toString(parsed.target!.pItem)
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),selected,
+                agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+            me bool: ready <- demand!.refresh()
+            me WorldOutcome: outcome <- demand!.status().outcome
+            // Explicit membership bounds and unresolved root relationships
+            // require the existing full correspondence proof. This milestone
+            // may reject them or retain its explicit unsupported/partial result.
+            if(ready or (outcome!=worldPartial and outcome!=worldUnsupported and outcome!=worldRejected) or
+               selected!.pItem!==recipe or selected!.cursorValue!=NULL or toString(parsed.target!.pItem)!=original or
+               toString(meaning)!=definitionOriginal or (demand!.request!=NULL and demand!.request!.publications!=0)){
+                FAIL("Unproved record absence discarded a size bound or root relationship: "+demand!.status().detail)
+            }
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_recordProjection_waitAndCancel(me string: testName) <- {
+        withEach cancelled in range 0 .. 2{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: declaration <- agent.worldManager.parse("{#base={x:1, y:2}}")
+            if(declaration.target==NULL){FAIL(declaration.error)}
+            our infonView: meaning <- declaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
+            our infonView: pending <- meaning!.value!.items.tail!.pItem
+            our WorldRequest: installed <- agent.normalize(declaration.target)
+            if(!installed!.complete()){FAIL(installed!.error())}
+            me string: definitionOriginal <- toString(meaning)
+            me WorldParseResult: parsed <- agent.worldManager.parse("base:{x:1, y:2, z:7}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            cursorDemandLinkMembers(parsed.target)
+            our POV: selected <- temporalNormalizationField(parsed.target,"z")
+            our infonView: recipe <- selected!.pItem
+            me string: original <- toString(parsed.target!.pItem)
+            agent.worldManager.prepareInput(pending)
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),selected,
+                agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+            if(demand!.refresh() or demand!.status().outcome!=worldWaiting or agent.worldManager.control!.inputWaiters.size()!=1){
+                FAIL("Pending ancestor field identity did not retain one exact wait: "+demand!.status().detail)
+            }
+            our WorldRequest: request <- demand!.request
+            if(request==NULL){request <- demand!.layoutRequest}
+            if(request==NULL or request!.publications!=0 or selected!.pItem!==recipe or toString(parsed.target!.pItem)!=original){
+                FAIL("Waiting ancestor projection published the supplied target")
+            }
+            me uint64: frames <- request!.framesCreated; me uint64: queue <- request!.queueSteps
+            me uint64: positions <- request!.correspondencePositions
+            our infonView:: unrelated; agent.worldManager.inputReady(unrelated)
+            if(request!.framesCreated!=frames or request!.queueSteps!=queue or request!.correspondencePositions!=positions){
+                FAIL("Unrelated input restarted an ancestor field scan")
+            }
+            if(cancelled==1){request!.cancel()}
+            pending!.streamState <- parseDone; agent.worldManager.inputReady(pending)
+            me bool: ready <- demand!.refresh()
+            if(cancelled==1){
+                if(ready or demand!.status().outcome!=worldCancelled or request!.publications!=0 or selected!.pItem!==recipe or
+                   toString(parsed.target!.pItem)!=original){FAIL("Cancelled ancestor projection resumed or published")}
+            }else if(!ready or demand!.status().outcome!=worldComplete or demand!.current!.pItem!.fetchInt()!=7){
+                FAIL("Resumed ancestor scan did not establish its lack of a field requirement: "+demand!.status().detail)
+            }
+            if(!agent.worldManager.control!.inputWaiters.isEmpty() or toString(meaning)!=definitionOriginal){
+                FAIL("Finished ancestor projection leaked a subscription or changed the definition")
+            }
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_recordProjection_temporal(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#base={x:_, y:2}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me string: input <- "{T base:*3+{x:1, y:2, z:7} *3+{z:9} *3+{x:3}}"
+        me WorldParseResult: whole <- agent.worldManager.parse(input)
+        me WorldParseResult: selected <- agent.worldManager.parse(input)
+        if(whole.target==NULL or selected.target==NULL){FAIL("Added-field histories did not parse")}
+        our WorldRequest: request <- agent.normalize(whole.target)
+        if(!request!.complete()){FAIL("Whole added-field history did not complete: "+request!.error())}
+        cursorDemandLinkMembers(selected.target)
+        our POV: first <- selected.target!.pItem!.value!.items.head
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),first,
+            agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        if(!demand!.requireField("x") or !demand!.requireField("y") or !demand!.requireField("z") or !demand!.refresh()){
+            FAIL("Initial temporal added-field acquisition failed: "+demand!.status().detail)
+        }
+        our POV: member <- whole.target!.pItem!.value!.items.head
+        withEach ordinal in range 0 .. 3{
+            me int: x <- 1; me int: z <- 9
+            if(ordinal==0){z <- 7}
+            if(ordinal==2){x <- 3}
+            if(!temporalNormalizationNumber(member,"x",x) or !temporalNormalizationNumber(member,"y",2) or
+               !temporalNormalizationNumber(member,"z",z) or !temporalNormalizationNumber(demand!.current,"x",x) or
+               !temporalNormalizationNumber(demand!.current,"y",2) or !temporalNormalizationNumber(demand!.current,"z",z)){
+                FAIL("Ancestor projection changed new-field retention or whole/demand agreement")
+            }
+            member <- member!.next
+            if(ordinal<2 and !demand!.goNext()){FAIL("Temporal added-field successor failed: "+demand!.status().detail)}
+        }
+        if(demand!.goNext() or !demand!.atBoundary){FAIL("Added-field history lost its closed endpoint")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_recordProjection_scaling(me string: testName) <- {
+        withEach form in range 0 .. 2{
+            me uint64: priorFrames <- 0; me uint64: priorRelations <- 0; me uint64: priorPositions <- 0; me uint64: priorQueue <- 0
+            me uint64: priorChecks <- 0; me uint64: priorSkips <- 0
+            me int: width <- 16
+            while(width<=64){
+                me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+                me WorldParseResult: declaration <- agent.worldManager.parse("{#base={x:_, y:2}}")
+                if(declaration.target==NULL){FAIL(declaration.error)}
+                our WorldRequest: installed <- agent.normalize(declaration.target)
+                if(!installed!.complete()){FAIL(installed!.error())}
+                me string: input <- "{T"
+                withEach idx in range 0 .. width{input <+- " base:*3+{x:"+toString(idx)+", y:2, z:"+toString(idx+10)+"}"}
+                input <+- "}"
+                me WorldParseResult: parsed <- agent.worldManager.parse(input)
+                if(parsed.target==NULL){FAIL(parsed.error)}
+                me uint64: frames <- 0; me uint64: relations <- 0; me uint64: positions <- 0; me uint64: queue <- 0
+                me uint64: checks <- 0; me uint64: skips <- 0
+                if(form==0){
+                    our WorldRequest: request <- agent.normalize(parsed.target)
+                    if(!request!.complete()){FAIL("Whole added-field scaling control failed: "+request!.error())}
+                    frames <- request!.framesCreated; relations <- request!.relationshipsRead
+                    positions <- request!.correspondencePositions; queue <- request!.queueSteps
+                    checks <- request!.recordProjectionChecks; skips <- request!.recordProjectionSkips
+                    our POV: member <- parsed.target!.pItem!.value!.items.head
+                    withEach ordinal in range 0 .. width{
+                        if(!temporalNormalizationNumber(member,"z",ordinal+10)){FAIL("Whole added-field history has a wrong state")}
+                        member <- member!.next
+                    }
+                    if(member!=NULL){FAIL("Whole added-field history changed its extent")}
+                }else{
+                    cursorDemandLinkMembers(parsed.target)
+                    our WorldSession: session <- agent.startSession()
+                    our POV: member <- parsed.target!.pItem!.value!.items.head
+                    withEach ordinal in range 0 .. width{
+                        our POV: field <- temporalNormalizationField(member,"z")
+                        our WorldDemand: demand <- agent.worldManager.demand(session,field,
+                            agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+                        if(!demand!.refresh() or demand!.status().outcome!=worldComplete or demand!.current!.pItem!.fetchInt()!=ordinal+10){
+                            FAIL("Repeated added-field demand lost its value or ancestor proof: "+demand!.status().detail)
+                        }
+                        frames <+- demand!.framesCreated; relations <+- demand!.relationshipsRead
+                        positions <+- demand!.positionsVisited; queue <+- demand!.queueSteps
+                        if(demand!.request!=NULL){
+                            frames <+- demand!.request!.framesCreated; relations <+- demand!.request!.relationshipsRead
+                            positions <+- demand!.request!.correspondencePositions; queue <+- demand!.request!.queueSteps
+                            checks <+- demand!.request!.recordProjectionChecks; skips <+- demand!.request!.recordProjectionSkips
+                            agent.worldManager.release(session,demand!.request)
+                        }
+                        member <- member!.next
+                    }
+                    if(member!=NULL or !session!.requests.isEmpty()){FAIL("Independent added-field acquisitions retained their request registry entries")}
+                }
+                print("Record projection form=",form," width=",width," frames=",frames," relationships=",relations," positions=",positions," queue=",queue," checks=",checks," skips=",skips,"\n")
+                if(frames>width*256 or relations>width*128 or positions>width*128 or queue>width*1024 or checks>width*128 or skips>width*128){FAIL("Fixed-width added-field acquisition exceeded bounded per-state work")}
+                if(width>16 and (frames>priorFrames*3+32 or relations>priorRelations*3+32 or positions>priorPositions*3+32 or queue>priorQueue*3+32 or checks>priorChecks*3+32 or skips>priorSkips*3+32)){
+                    FAIL("Added-field acquisition repeatedly scanned the already processed history")
+                }
+                if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Closed added-field history retained subscriptions")}
+                priorFrames <- frames; priorRelations <- relations; priorPositions <- positions; priorQueue <- queue
+                priorChecks <- checks; priorSkips <- skips
                 agent.endWorldSessions(); modelMngr.clear(); width <*- 2
             }
         }

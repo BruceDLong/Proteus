@@ -1752,3 +1752,20 @@ completion resumes the same movement. Layout records are request-local and relea
 with progress. Fixed-context sequential traversal reads a bounded declaration
 chain per demand and does not scan the parent prefix for each state. This adds
 neither a cursor-owned normalizer nor a general dependency invalidation service.
+
+## Parent record projection without a matching field (D107, 2026-10-21)
+
+A parent requirement can contribute no constraint to a represented descendant.
+For a positive unordered source with an implicit remainder, a completed scan of
+unique known field identities can establish that the selected field has no
+corresponding source requirement. This is distinct from a missing public field
+selection or an unresolved correspondence. The common normalizer continues the
+target's remaining requirements without inventing a value or source occurrence.
+Nested projections propagate the same result.
+
+The proof excludes explicit totals, symbolic membership, negative fields,
+unexamined root relationships or meanings, input-driven structure and qualified
+relations. Bare named aliases must have no additional obligations. Field values
+remain lazy; unused siblings do not become normalization prerequisites. The field
+walk retains its exact position over parser waits, and rejection or cancellation
+publishes nothing. No cursor-specific inference or whole-history scan is added.

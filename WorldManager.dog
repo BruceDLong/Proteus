@@ -10,6 +10,7 @@ struct WorldModelLock: wraps=Nested_Lock_Mutex {}
 #include WorldTemporalAcquisition.dog
 #include WorldCheckedViews.dog
 #include WorldListLayout.dog
+#include WorldRecordProjection.dog
 
 // Replacement reasoner. Agent owns sessions; WorldManager owns their reasoning.
 // Scalar and closed ordered-list reasoning with local parser completion.
@@ -4295,6 +4296,14 @@ struct WorldManager {
 
     void: supplyCorrespondence(our WorldRequest: request, our WorldFrame: frame) <- {
         our WorldCorrespondence: lookup <- frame!.lookup
+        if(lookup!.result!.noConstraint){
+            // Only this source has been exhausted. Keep the target's facts and
+            // existing provenance, then continue its remaining relationships.
+            frame!.lookup <- NULL; request!.recordProjectionSkips <+- 1
+            if(frame!.referenceOnly){frame!.correspondenceResult <- lookup!.result; frame!.finished <- true}
+            else{request!.ready.append(frame)}
+            return()
+        }
         if(frame!.referenceOnly){
             frame!.correspondenceResult <- lookup!.result; frame!.lookup <- NULL
             rememberListContinuation(request, lookup)
@@ -5299,6 +5308,7 @@ struct WorldManager {
             if(!graph.enterLayout(request, lookup!.right)){walkReady(request, frame, lookup!.right); return(true)}
             our POV: source <- lookup!.right!.levels.last()!.position!.node
             me WorldScalar: header <- graph.read(request, source, source!.pParent)
+            lookup!.fieldAllowsExtra <- graph.recordProjectionAllowsExtra(request, lookup, header)
             if(parent.order!=uUnordered and header.order!=uUnordered and
                !(lookup!.query!.relation!.trueByDefinition and graph.stableRecordLayout(request, lookup!.query!.target!.parent!.node!.pItem) and graph.stableRecordLayout(request, source!.pItem))){return(false)}
             me WorldScalar: wanted <- graph.read(request, lookup!.query!.target!.node, lookup!.query!.target!.node!.pParent)
@@ -5323,6 +5333,7 @@ struct WorldManager {
             if(name==NULL or lookup!.fieldNames.contains(name!.typeID())){
                 frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Record field identity needs additional nominal evidence"; stopFrame(request, frame); return(true)
             }
+            if(lookup!.fieldSide==1 and header.negative){lookup!.fieldAllowsExtra <- false}
             lookup!.fieldNames.insert(name!.typeID())
             if(lookup!.fieldSide==1 and name!.typeID()==lookup!.selectedField!.typeID()){
                 if(graph.compareNominal(lookup!.selectedField, name)!=worldReady){
@@ -5332,7 +5343,10 @@ struct WorldManager {
             }
             lookup!.rhs <- NULL
         }
-        if(lookup!.result!.position==NULL){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Corresponding record field is not established"; stopFrame(request, frame); return(true)}
+        if(lookup!.result!.position==NULL){
+            if(lookup!.fieldAllowsExtra){lookup!.result!.noConstraint <- true}
+            else{frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Corresponding record field is not established"; stopFrame(request, frame); return(true)}
+        }
         supplyCorrespondence(request, frame); return(true)
     }
 
@@ -5361,6 +5375,7 @@ struct WorldManager {
             our WorldFrame: projection <- lookup!.projection
             projection!.node <- child!.node; projection!.initialized <- true; projection!.referenceOnly <- true
             projection!.lookup <- graph.correspondence(scope, lookup!.query!.relation, child, false)
+            projection!.lookup!.query!.parentRequirement <- lookup!.query!.parentRequirement
             projection!.lookup!.bounded <- true
             projection!.lookup!.left!.shallow <- true; projection!.lookup!.right!.shallow <- true
             projection!.lookup!.result!.sourceDomain <- lookup!.result!.sourceDomain
@@ -5369,6 +5384,9 @@ struct WorldManager {
             request!.ready.append(frame); request!.ready.append(projection); return(true)
         }
         if(lookup!.projection!.facts.outcome!=worldReady){frame!.facts <- lookup!.projection!.facts; stopFrame(request, frame); return(true)}
+        if(lookup!.projection!.correspondenceResult!=NULL and lookup!.projection!.correspondenceResult!.noConstraint){
+            lookup!.result!.noConstraint <- true; supplyCorrespondence(request, frame); return(true)
+        }
         our WorldPosition: source <- lookup!.projection!.correspondenceResult!.position
         // An unspecified corresponding container contributes no descendant
         // facts. The caller can continue its other retained sources.
@@ -5377,10 +5395,13 @@ struct WorldManager {
         if(header.outcome==worldReady and header.overlay<0 and !header.hasValue and !header.hasSize and !header.negative and
            (header.nominal==NULL or header.nominal!.defToUse==NULL) and item!.wrkList.isEmpty() and item!.argPos==apNoArgs and
            item!.viewMode!=vmCursor and item!.partRef==NULL and item!.parts.isEmpty()){
-            frame!.lookup <- NULL; request!.ready.append(frame); return(true)
+            if(lookup!.query!.parentRequirement){lookup!.result!.noConstraint <- true; supplyCorrespondence(request, frame)}
+            else{frame!.lookup <- NULL; request!.ready.append(frame)}
+            return(true)
         }
         our POV: edge <- graph.memberRelationship(lookup!.query!.relation); edge!.pItem <- source!.node!.pItem
         frame!.lookup <- graph.correspondence(lookup!.projectedTarget, edge, lookup!.query!.target, false)
+        frame!.lookup!.query!.parentRequirement <- lookup!.query!.parentRequirement
         frame!.lookup!.route <- lookup!.route
         frame!.lookup!.bounded <- true; frame!.lookup!.sourceResolved <- true
         frame!.lookup!.left!.shallow <- true; frame!.lookup!.right!.shallow <- true
@@ -5549,6 +5570,7 @@ struct WorldManager {
                 }
                 me bool: resumed <- frame!.lookup!=NULL
                 if(frame!.lookup==NULL){frame!.lookup <- graph.correspondence(scope, relation, frame!.context, input)}
+                frame!.lookup!.query!.parentRequirement <- true
                 frame!.lookup!.parentTemplate <- parentTemplate
                 if(required and !parentTemplate and !relation!.trueByDefinition and !input){
                     frame!.lookup!.continuationScope <- scope

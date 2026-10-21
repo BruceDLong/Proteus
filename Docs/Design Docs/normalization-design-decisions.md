@@ -3516,3 +3516,77 @@ absent. Next/Previous were exercised; navigation still reaches
 the next consumer issue; successful state navigation is not claimed.
 The existing startup normalization diagnostics remain.
 The app closed successfully and no maintained Slipstream source changed.
+
+## D107 — Parent requirements may contribute no field constraint (2026-10-21)
+
+**Problem.** Whole-record definition application permits extra fields under an
+implicit unordered remainder (D03Z), but direct descendant acquisition required
+every parent source to contain a matching field. Slipstream's second Rubix state
+adds `rubix-positions` to the base `rubix-state` record. Its inherited requirement
+therefore stopped at `Corresponding record field is not established`, even though
+the base record contributes no constraint on that added field.
+
+**Decision.** Give correspondence an explicit no-constraint result, enabled only
+when projecting a parent requirement. A positive unordered source with no stated
+total or symbolic tail permits additional instance fields when its complete
+field-identity scan proves unique known names. The source and any borrowed named
+alias wrappers must have no unexamined root work, input, meaning or structural
+operation. Negative fields and qualified/replacement relationships remain outside
+this proof. Values inside unrelated fields are not acquired to prove their names.
+
+The result exhausts only the current source. Normalization preserves existing
+target facts and provenance, then continues the remaining requirements. Intermediate
+ancestor projections propagate the result before reading a source position.
+The existing unconstrained-container case uses the same result on parent routes.
+No artificial POV, value, target-completion flag or public reference-absence result
+is introduced. Shared definitions remain borrowed and unchanged.
+
+**Alternatives.** Treating the failure as a missing query would conflate a source
+with no requirement and a requested object that cannot be found. Skipping every
+unmatched field would discard explicit membership bounds or unresolved root
+constraints. Normalizing the whole parent first would force unrelated values and
+reintroduce a dependency cycle. A viewer-only exception would duplicate inference.
+The explicit result instead composes with the existing requirement and projection
+paths, and retains conservative unresolved boundaries when its premises fail.
+
+**Lifecycle and cost.** Reuse the retained field walk, including its pending
+header and duplicate-name evidence. Resumption does not restart a completed prefix.
+No new subscriptions, persistent cache or continuation ownership are introduced.
+Each projection scans its containing records; fixed-width histories have bounded
+per-state projection work without scanning earlier history members. Wider-record
+indexing is a separate optimization if measured demand workloads require it.
+
+**Engine validation.** Final CodeDog regeneration/build succeeds. All **8** new
+ordinary CodeDog checks pass, covering direct and nested added fields, multiple
+definition levels, other resolving/conflicting constraints, direct missing-field
+selection, explicit totals, root work, parser waits/cancellation, temporal carry
+and source immutability. Complete whole-record controls state their target extent;
+implicitly unordered membership alone correctly remains partial. Separate tests
+retain unknown-total targets for descendant acquisition.
+
+The full timeout-protected run reports **24/616** failures/tests, exactly the same
+failure names as the **24/608** baseline. The existing named-layout checks pass
+**18/18**, and print-mode fixtures pass **23/23**. Existing expectations are unchanged.
+For histories of 16/32/64 fixed-width records, direct added-field demands use
+32/64/128 frames, 112/224/448 correspondence positions and 64/128/256 queue steps;
+projection checks and skips are 16/32/64 each. Whole-history controls use
+205/413/829 frames, 82/162/322 relationship reads and 306/610/1218 queue steps.
+No input subscriptions remain. These measurements establish bounded per-state
+work for this workload, not a general bound for unordered inference.
+
+**Consumer validation.** The shared library and Slipstream were separately
+regenerated; the consumer ABI matches the exported interface and the runtime
+path uses the canonical shared build. An isolated visible GUI run selected
+`solved-rubix-turn-state` at index 0, `turn-red-face-clockwise` at index 1, then
+the original occurrence at index 0. The cube renders at all three points and
+the turned state displays changed stickers. No `TCURSOR` or `DISPLAY` diagnostic
+was produced; the app exited successfully. Existing startup normalization
+diagnostics remain. No maintained Slipstream source changed.
+
+A temporary ordinary CodeDog consumer loaded the actual Foundation and Rubix
+model files and passed **52/52** checks through the production `TCursor` API.
+Front-west and front-south top-color hues change from 4/55 to 55/110; the front
+center's frame changes from 1 to 10. The back-center frame and overall z location
+remain 5 and 3.5. Previous restores the initial facts and occurrence, and a held
+initial snapshot stays unchanged after Next. Normalized facts and visible
+rendering therefore both establish navigation between distinct states.
