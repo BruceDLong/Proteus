@@ -6,6 +6,8 @@ struct WorldModelLock: wraps=Nested_Lock_Mutex {}
 #include WorldDemandCache.dog
 #include WorldDemandRetention.dog
 #include WorldExpandedPrint.dog
+#include WorldTemporalAcquisition.dog
+#include WorldCheckedViews.dog
 
 // Replacement reasoner. Agent owns sessions; WorldManager owns their reasoning.
 // Scalar and closed ordered-list reasoning with local parser completion.
@@ -330,6 +332,7 @@ struct WorldPatternProof {
     our WorldPatternProof: prior
     our WorldPatternProof: child
     me bool: ambiguous <- false
+    me bool: introducedTemporalStates <- false
 }
 struct WorldPatternResult {
     our WorldFrame: selected
@@ -390,6 +393,8 @@ struct WorldPatternChart {
 struct WorldProjectionRoute {me List<our WorldPosition>: members}
 struct WorldCorrespondence {
     our WorldPosition: continuationScope
+    our WorldListProgress: continuationProgress
+    me uint64: continuationGeneration <- 0
     me bool: parentTemplate <- false
     our WorldProjectionRoute: route
     our WorldFrame: projection
@@ -800,17 +805,11 @@ struct WorldRequest {
     // The identity token does not own the session or create an ownership cycle.
     our WorldDemandSessionIdentity: registeredSession
     me int64: sessionSlot <- -1
-    our WorldListProgress: listProgress
-    me uint64: listProgressGeneration <- 0
-    // Only the demand root acquires these enclosing obligations. Its ordinary
-    // prerequisites keep their existing source and constraint boundaries.
-    me bool: enclosingRequired <- false
     me Map<our POV, our WorldCursorWrite>: cursorWrites
     me Map<our POV, our POV>: cursorWriteTargets
     // Supplied work drains its given relationships; it does not discover
     // additional enclosing obligations after they have been exhausted.
     me bool: suppliedWork <- false
-    me bool: carryApplied <- false
     our WorldPosition: previousValue
     me bool: replaceTarget <- false
     me List<our ExternalAssociationReference>: associations
@@ -895,7 +894,7 @@ struct WorldRequest {
             withEach argument in bindings!.arguments{argument!.unresolvedReads.clear()}
         }
         parameterBindings.clear()
-        previousValue <- NULL
+        previousValue <- NULL; releaseCheckedViews()
         stableLayoutProofs.clear(); stableOrderedLayoutProofs.clear()
         cursorWrites.clear(); cursorWriteTargets.clear(); associations.clear(); completedOccurrences.clear(); boundaries.clear(); sparseEdits.clear(); unitOrigins.clear(); ready.clear(); attempts.clear(); activeContexts.clear(); edits.clear(); declarations.clear(); declarationOrigins.clear(); root <- NULL; waitingFrame <- NULL
     }
@@ -2711,6 +2710,11 @@ struct WorldPOVGraph {
             if(frame!.facts.outcome==worldReady and !left.hasValue and frame!.facts.overlay==LST){
                 // Adoption includes the requirements of members not yet present.
                 adoptListRequirements(frame, frame!.prerequisite)
+                if(!frame!.constraintSource and frame!.facts.timelike and frame!.prerequisite!.constraintSource and
+                   sequenceLength(frame!.facts.sequence)>0){
+                    frame!.facts.outcome <- worldUnsupported
+                    frame!.facts.detail <- "Introduced temporal states need target occurrence acquisition"
+                }
             }
             if(frame!.facts.outcome==worldReady and left.overlay==LST and left.hasValue and
                frame!.prerequisite!.facts.overlay==LST and frame!.prerequisite!.facts.hasValue){
@@ -2832,8 +2836,8 @@ struct WorldPOVGraph {
         if(request!.outcome==worldComplete or request!.outcome==worldPartial){request!.provenance <- request!.root!.correspondenceResult}
     }
 
-    // Prepare destination occurrences before any write. Existing literal lists
-    // keep their POVs; adopted/concatenated lists get independent occurrences.
+    // Prepare destination occurrences before any write. Owned literal lists
+    // keep their POVs; borrowed members acquire a private represented level.
     void: publish(our WorldRequest: request) <- {
         me List<WorldPublication>: pending
         me List<WorldPublication>: writes
@@ -2900,7 +2904,8 @@ struct WorldPOVGraph {
                 // The subtree is a retained description, not a recursively demanded result.
             }else if(facts.overlay==LST and facts.hasValue){
                 our infonState: body <- job.target!.pItem!.value
-                me bool: existing <- !(request!.replaceTarget and job.target===request!.target) and body!.overlayType==LST and body!.evalMode==emLiteral and
+                me bool: existing <- !job.target!.pItem!.worldBorrowedMembers and
+                    !(request!.replaceTarget and job.target===request!.target) and body!.overlayType==LST and body!.evalMode==emLiteral and
                     !(job.frame!.path!=NULL and job.frame!.path!.returned)
                 if(!existing and !facts.representable){
                     request!.outcome <- worldPartial; request!.detail <- "List result still has unresolved member work"; return()
@@ -3157,6 +3162,7 @@ struct WorldPOVGraph {
     void: reparentMembers(our POV: node) <- {
         our POV: member <- node!.pItem!.value!.items.head
         while(member!=NULL){member!.pParent <- node; member <- member!.next}
+        node!.pItem!.worldBorrowedMembers <- false
     }
     // A successful ordinary publication is persistent, including assertions
     // into a descendant of a cached state. Rejected transactions never get here.
@@ -3175,21 +3181,25 @@ struct WorldPOVGraph {
         }
     }
 
-    // A published root owns its immediate occurrence wrappers. Retained
-    // subtrees keep immutable payloads; copying a view does not traverse them.
+    // A published root owns its immediate wrappers and mutable headers.
+    // Retained descendants keep their payloads; no copy traverses below the
+    // requested level. Parent pointers do not establish header ownership.
     void: copyDescription(our POV: target, our infonView: source, me bool: ownMembers) <- {
         our infonState: value <- source!.value
         target!.pItem! <- source!
         if(source!.worldScalarCompletionOwner===source){target!.pItem!.worldScalarCompletionOwner <- target!.pItem}
         else{target!.pItem!.worldScalarCompletionOwner <- NULL}
+        target!.pItem!.worldBorrowedMembers <- value!.overlayType==LST and value!.evalMode==emLiteral
         if(ownMembers and value!.overlayType==LST and value!.evalMode==emLiteral){
             Allocate(target!.pItem!.value); target!.pItem!.value! <- value!
             target!.pItem!.value!.items.clear()
             our POV: member <- value!.items.head
             while(member!=NULL){
                 our POV:: copy{946}; copy! <- member!; copy!.pParent <- target
+                Allocate(copy!.pItem); copyDescription(copy, member!.pItem, false)
                 target!.pItem!.value!.items.appendPov(copy); member <- member!.next
             }
+            target!.pItem!.worldBorrowedMembers <- false
         }
     }
 
@@ -3272,7 +3282,7 @@ struct WorldPOVGraph {
             item!.innr <- NULL; item!.intersectPos <- ipNoIntersect
             item!.hasInnrOutr <- false; item!.intersectMarkedRetPOV <- NULL
         }
-        if(job.newList!=NULL){item!.value <- job.newList}
+        if(job.newList!=NULL){item!.value <- job.newList; item!.worldBorrowedMembers <- false}
         if(facts.overlay==LST and frame!.listSpecEdge!=NULL and item!.value!.listSpec==NULL){
             item!.value!.listSpec <- frame!.listSpecEdge!.pItem
         }
@@ -3425,11 +3435,11 @@ struct WorldManager {
         return(result)
     }
 
-    our WorldFrame: makeFrame(our WorldRequest: request, our POV: node, our WorldPosition: context <- NULL, me bool: requireSize <- false) <- {
+    our WorldFrame: makeFrame(our WorldRequest: request, our POV: node, our WorldPosition: context <- NULL, me bool: requireSize <- false, me bool: acquire <- false) <- {
         if(request!.edits.containsKey(node!.pItem)){return(request!.edits.at(node!.pItem))}
         if(context!=NULL and request!.completedOccurrences.containsKey(node)){
             our WorldFrame: prior <- request!.completedOccurrences.at(node)
-            if(graph.samePosition(prior!.navigation, context) and graph.completeFacts(prior!.facts, requireSize)){return(prior)}
+            if((!acquire or prior!.acquisitionSettled) and graph.samePosition(prior!.navigation, context) and graph.completeFacts(prior!.facts, requireSize)){return(prior)}
         }
         our WorldFrame:: frame
         frame!.node <- node; frame!.demandSize <- requireSize
@@ -3462,6 +3472,7 @@ struct WorldManager {
     our WorldFrame: projectFrame(our WorldRequest: request, our WorldFrame: left) <- {
         our WorldFrame:: pair
         pair!.deferredValue <- left!.deferredValue
+        pair!.constraintSource <- left!.constraintSource; pair!.temporalMembers <- left!.temporalMembers
         pair!.templateContext <- left!.templateContext
         pair!.lexicalParameters <- left!.lexicalParameters
         pair!.associationAnchor <- left!.associationAnchor
@@ -3490,12 +3501,19 @@ struct WorldManager {
         frame!.facts.contentsComplete <- false
         frame!.initialized <- true; frame!.projected <- true; frame!.finished <- true
         frame!.deferredValue <- item; request!.framesCreated <+- 1
-        if(expand or (item!.isNormed and item!.worldScalarCompletionOwner===item and item!.value!.overlayType!=LST)){
+        me bool: checked <- request!.checkedViewFacts.containsKey(item)
+        if(checked){
+            // A private read representation carries the already established
+            // readiness proof as well as its value. Sharing it does not turn
+            // fully checked descendants into undemanded descriptions again.
+            frame!.facts <- request!.checkedViewFacts.at(item)!.facts
+        }else if(expand or (item!.isNormed and item!.worldScalarCompletionOwner===item and item!.value!.overlayType!=LST)){
             frame!.facts <- graph.read(request, at!.node, at!.node!.pParent)
         }
         if(frame!.facts.outcome!=worldReady){return(frame)}
         if(expand and frame!.facts.overlay==LST and frame!.facts.hasValue){
-            frame!.deferredValue <- NULL; Allocate(frame!.facts.sequence); frame!.facts.contentsComplete <- false
+            frame!.deferredValue <- NULL; Allocate(frame!.facts.sequence)
+            if(!checked){frame!.facts.contentsComplete <- false}
             our POV: child <- item!.value!.items.head
             while(child!=NULL){
                 graph.appendMember(frame!.facts.sequence, borrowValue(request, graph.position(child, at)), child!.isSubItm)
@@ -3549,7 +3567,7 @@ struct WorldManager {
            graph.compareNominal(left!.facts.nominal, right!.facts.nominal)==worldReady){return(left)}
         // A borrowed definition member is evaluated only when correspondence
         // actually combines it with an occurrence's supplied field.
-        if(!edge!.cursorCarry and right!.deferredValue!=NULL){
+        if(!edge!.cursorCarry and right!.deferredValue!=NULL and !request!.checkedViewFacts.containsKey(right!.deferredValue)){
             our WorldFrame: input <- makeFrame(request, right!.node)
             input!.navigation <- right!.navigation; input!.acquireOnly <- true; input!.predicateOnly <- true
             input!.expressionParent <- right!.node!.pParent
@@ -3585,11 +3603,18 @@ struct WorldManager {
         // must evaluate that supplied work too; untouched borrowed members
         // never enter this pair and remain shared.
         if(left!.deferredValue!=NULL){
-            pair!.deferredInput <- makeFrame(request, left!.node)
-            pair!.deferredInput!.navigation <- left!.navigation
-            pair!.deferredInput!.expressionParent <- left!.node!.pParent
-            pair!.deferredInput!.lexicalParameters <- left!.lexicalParameters
-            pair!.deferredInput!.acquireOnly <- true; pair!.deferredInput!.predicateOnly <- true
+            if(request!.checkedViewFacts.containsKey(left!.deferredValue)){
+                // Retained checked facts can refine the original raw unknown.
+                // Apply this relationship to those facts, without rereading
+                // the old recipe or publishing the unrefined snapshot.
+                pair!.deferredValue <- NULL
+            }else{
+                pair!.deferredInput <- makeFrame(request, left!.node)
+                pair!.deferredInput!.navigation <- left!.navigation
+                pair!.deferredInput!.expressionParent <- left!.node!.pParent
+                pair!.deferredInput!.lexicalParameters <- left!.lexicalParameters
+                pair!.deferredInput!.acquireOnly <- true; pair!.deferredInput!.predicateOnly <- true
+            }
         }
         pair!.sourceEdge <- edge; pair!.prerequisite <- right; pair!.sourceNameInherited <- inheritedName
         return(pair)
@@ -3771,6 +3796,9 @@ struct WorldManager {
                 member <- alignment!.right!.suffix[alignment!.addedSuffix]; alignment!.addedSuffix <+- 1
             }
             if(member!=NULL){
+                if(frame!.temporalMembers!=NULL){
+                    frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Introduced temporal states need target occurrence acquisition"; stopFrame(request, frame); return()
+                }
                 frame!.pairedMember <- member
                 if(!frame!.pairedEmbedded){
                     request!.tailMembers <+- 1; frame!.memberRequirements.push(frame!.tailRequirements)
@@ -3787,6 +3815,9 @@ struct WorldManager {
             our WorldFrame: member
             if(frame!.remaining>0){member <- frame!.rightMembers!.next()}
             if(member!=NULL){
+                if(frame!.temporalMembers!=NULL){
+                    frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Introduced temporal states need target occurrence acquisition"; stopFrame(request, frame); return()
+                }
                 frame!.remaining <- frame!.remaining-1
                 frame!.pairedEmbedded <- false; request!.tailMembers <+- 1
                 frame!.pairedMember <- member
@@ -4144,21 +4175,22 @@ struct WorldManager {
 
     // Keep only the current/recent demand frontier. Visiting many different
     // scopes must not retain one continuation for every earlier occurrence.
-    void: beginListProgress(our WorldRequest: request) <- {
-        if(request!.listProgress==NULL or request!.listProgressGeneration!=0){return()}
-        our WorldListProgress: progress <- request!.listProgress
-        progress!.generation <+- 1; request!.listProgressGeneration <- progress!.generation
+    me uint64: beginListProgress(our WorldListProgress: progress, me uint64: generation) <- {
+        if(progress==NULL or generation!=0){return(generation)}
+        progress!.generation <+- 1
         me List<our WorldListContinuation>: retained
         withEach saved in progress!.continuations{
             if(saved!.generation+1>=progress!.generation){retained.append(saved)}
         }
         progress!.continuations <- retained
+        return(progress!.generation)
     }
 
     // Keep only the structural cursor after a proved positional member. A
     // pattern's captures depend on its selected target and cannot be retargeted.
     void: rememberListContinuation(our WorldRequest: request, our WorldCorrespondence: lookup) <- {
-        if(request!.listProgress==NULL or lookup!.continuationScope==NULL or
+        our WorldListProgress: progress <- lookup!.continuationProgress
+        if(progress==NULL or lookup!.continuationScope==NULL or
            !lookup!.bounded or lookup!.query!.testPattern or lookup!.query!.allMembers or
            lookup!.chart!=NULL or lookup!.parentTemplate or
            (lookup!.route!=NULL and !lookup!.route!.members.isEmpty()) or lookup!.selectedField!=NULL or
@@ -4167,14 +4199,14 @@ struct WorldManager {
            lookup!.result!.position!.tail or lookup!.query!.target==NULL or lookup!.query!.target!.tail or
            lookup!.left!.outcome!=worldReady or lookup!.right!.outcome!=worldReady){return()}
         our WorldListContinuation: saved
-        withEach stored in request!.listProgress!.continuations{
+        withEach stored in progress!.continuations{
             if(stored!.relation===lookup!.query!.relation and graph.samePosition(stored!.scope, lookup!.continuationScope)){
                 saved <- stored; break()
             }
         }
         if(saved==NULL){
             Allocate(saved); saved!.scope <- lookup!.continuationScope; saved!.relation <- lookup!.query!.relation
-            request!.listProgress!.continuations.append(saved)
+            progress!.continuations.append(saved)
         }
         saved!.scope <- lookup!.continuationScope
         saved!.scopeSite <- graph.demandSite(saved!.scope)
@@ -4199,7 +4231,7 @@ struct WorldManager {
         saved!.relationCarry <- saved!.relation!.cursorCarry
         saved!.relationParameters <- saved!.relation!.definitionParameters
         saved!.relationContext <- saved!.relation!.worldContext
-        saved!.generation <- request!.listProgressGeneration
+        saved!.generation <- lookup!.continuationGeneration
         // The returned result belongs to its consumer. The saved continuation
         // keeps no captured values, candidate frames or prior member demands.
         our WorldCorrespondenceResult:: remaining
@@ -4211,12 +4243,14 @@ struct WorldManager {
         // Empty-layout proofs were local to the completed request. Reestablish
         // them if a later demand encounters that layout again.
         lookup!.left!.emptyLayouts.clear(); lookup!.right!.emptyLayouts.clear()
-        saved!.lookup <- lookup; request!.listProgress!.continuationStores <+- 1
+        lookup!.continuationProgress <- NULL
+        saved!.lookup <- lookup; progress!.continuationStores <+- 1
     }
     our WorldCorrespondence: continueListCorrespondence(our WorldRequest: request, our WorldPosition: scope,
-                                                        our POV: relation, our WorldPosition: target) <- {
-        if(request!.listProgress==NULL){return(NULL)}
-        withEach saved in request!.listProgress!.continuations{
+                                                        our POV: relation, our WorldPosition: target,
+                                                        our WorldListProgress: progress, me uint64: generation) <- {
+        if(progress==NULL){return(NULL)}
+        withEach saved in progress!.continuations{
             if(saved!.relation!==relation or !graph.samePosition(saved!.scope, scope)){continue()}
             our WorldCorrespondence: lookup <- saved!.lookup
             // Claim once. A wait belongs to the requesting frame, while another
@@ -4239,16 +4273,17 @@ struct WorldManager {
                saved!.relationDefinition!=relation!.trueByDefinition or saved!.relationEmbedded!=relation!.isSubItm or
                saved!.relationCarry!=relation!.cursorCarry or saved!.relationParameters!==relation!.definitionParameters or
                saved!.relationContext!==relation!.worldContext){
-                request!.listProgress!.continuationMisses <+- 1; return(NULL)
+                progress!.continuationMisses <+- 1; return(NULL)
             }
             our WorldPosition: next <- graph.nextPosition(request, lookup!.left)
             if(lookup!.left!.outcome!=worldReady or next==NULL or !graph.samePosition(next, target)){
-                request!.listProgress!.continuationMisses <+- 1; return(NULL)
+                progress!.continuationMisses <+- 1; return(NULL)
             }
             lookup!.lhs <- next; lookup!.query!.target <- target
             lookup!.continuationScope <- scope
-            saved!.generation <- request!.listProgressGeneration
-            request!.listProgress!.continuationHits <+- 1
+            saved!.generation <- generation
+            lookup!.continuationProgress <- progress; lookup!.continuationGeneration <- generation
+            progress!.continuationHits <+- 1
             return(lookup)
         }
         return(NULL)
@@ -4279,6 +4314,7 @@ struct WorldManager {
         frame!.prerequisite <- lookup!.result!.facts
         if(frame!.prerequisite==NULL){frame!.prerequisite <- makeFrame(request, lookup!.result!.position!.node, lookup!.result!.position)}
         frame!.prerequisite!.acquireOnly <- frame!.acquireOnly
+        frame!.prerequisite!.constraintSource <- true
         frame!.correspondenceResult <- lookup!.result
         frame!.lookup <- NULL; request!.relationshipsRead <+- 1
         rememberListContinuation(request, lookup)
@@ -4357,7 +4393,12 @@ struct WorldManager {
             while(mapping!=NULL){
                 lookup!.mapped.append(mapping)
                 our WorldPattern: token <- lookup!.pattern[mapping!.slot]
-                if(token!.position!.tail){token!.owner!.remaining <+- 1}
+                if(token!.position!.tail){
+                    if(token!.owner!.temporalMembers!=NULL){
+                        frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Introduced temporal states need target occurrence acquisition"; stopFrame(request, frame); return()
+                    }
+                    token!.owner!.remaining <+- 1
+                }
                 mapping <- mapping!.prior
             }
             while(!lookup!.layouts.isEmpty()){
@@ -5117,6 +5158,11 @@ struct WorldManager {
                         next!.selected <- goal!.state!.selected; if(child!.selected!=NULL){next!.selected <- child!.selected}
                         next!.end <- child!.end; next!.sequence <- graph.join(goal!.state!.sequence, one)
                         next!.proof!.prior <- goal!.state!.proof; next!.proof!.child <- child!.proof
+                        // A consumed target tail creates an occurrence that
+                        // has not acquired its own temporal context. Carry
+                        // the boundary on the proof, including nested spans;
+                        // only an accepted mapping may reject the request.
+                        next!.proof!.introducedTemporalStates <- tail and pattern!.temporalMembers!=NULL
                         next!.complete <- goal!.state!.complete and graph.completeFacts(child!.frame!.facts, false)
                         next!.representable <- goal!.state!.representable and graph.representableFacts(child!.frame!.facts)
                         if(!pattern!.facts.hasSize or FlexNum(next!.sequence!.length)<=pattern!.facts.size){patternState(request, goal, next)}
@@ -5210,6 +5256,7 @@ struct WorldManager {
         }
         me List<our WorldPatternProof>: proofs; proofs.append(chart!.accepted!.proof)
         me Set<our WorldPatternProof>: visited
+        me bool: introducedTemporalStates <- false
         while(!proofs.isEmpty()){
             our WorldPatternProof: proof <- proofs.popLast()
             if(proof==NULL or visited.contains(proof)){continue()}
@@ -5217,7 +5264,11 @@ struct WorldManager {
             if(proof!.ambiguous){
                 frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Pattern has several accepted member mappings"; stopFrame(request, frame); return()
             }
+            introducedTemporalStates <- introducedTemporalStates or proof!.introducedTemporalStates
             proofs.append(proof!.prior); proofs.append(proof!.child)
+        }
+        if(introducedTemporalStates){
+            frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Introduced temporal states need target occurrence acquisition"; stopFrame(request, frame); return()
         }
         our WorldFrame: answer <- chart!.accepted!.frame
         if(lookup!.query!.target!=NULL){
@@ -5373,8 +5424,8 @@ struct WorldManager {
         matchCorrespondence(request, frame)
     }
     me bool: requestParentRHS(our WorldRequest: request, our WorldFrame: frame) <- {
-        me bool: required <- request!.enclosingRequired and frame===request!.root
-        if(required){beginListProgress(request)}
+        me bool: required <- frame!.acquisitionRequired
+        if(required){frame!.acquisitionGeneration <- beginListProgress(frame!.acquisitionProgress, frame!.acquisitionGeneration)}
         if(request!.suppliedWork and !required){
             // Explicit selection inputs are supplied work. Only additional
             // ancestor sources are suppressed in this execution mode.
@@ -5415,6 +5466,7 @@ struct WorldManager {
                         frame!.prerequisite <- makeFrame(request, spec)
                         frame!.prerequisite!.expressionParent <- parent!.node
                         frame!.prerequisite!.navigation <- frame!.navigation; frame!.prerequisite!.templateContext <- true
+                        frame!.prerequisite!.constraintSource <- true
                         request!.relationshipsRead <+- 1
                         request!.ready.append(frame); request!.ready.append(frame!.prerequisite); return(true)
                     }
@@ -5458,13 +5510,15 @@ struct WorldManager {
                     frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Parent endpoints need span alignment"; stopFrame(request, frame); return(true)
                 }
                 if(required and !parentTemplate and !relation!.trueByDefinition and !input){
-                    frame!.lookup <- continueListCorrespondence(request, scope, relation, frame!.context)
+                    frame!.lookup <- continueListCorrespondence(request, scope, relation, frame!.context, frame!.acquisitionProgress, frame!.acquisitionGeneration)
                 }
                 me bool: resumed <- frame!.lookup!=NULL
                 if(frame!.lookup==NULL){frame!.lookup <- graph.correspondence(scope, relation, frame!.context, input)}
                 frame!.lookup!.parentTemplate <- parentTemplate
                 if(required and !parentTemplate and !relation!.trueByDefinition and !input){
                     frame!.lookup!.continuationScope <- scope
+                    frame!.lookup!.continuationProgress <- frame!.acquisitionProgress
+                    frame!.lookup!.continuationGeneration <- frame!.acquisitionGeneration
                 }
                 if(parentTemplate or relation!.trueByDefinition){
                     our WorldPosition: source <- frame!.lookup!.result!.sourceDomain
@@ -5980,6 +6034,14 @@ struct WorldManager {
         while(temporal and path!.cursor!=NULL){
             our WorldPosition: at <- path!.cursor
             if(path!.descending){
+                if(previous and request!.completedOccurrences.containsKey(at!.node)){
+                    our WorldFrame: checked <- request!.completedOccurrences.at(at!.node)
+                    if(checked!.acquisitionSettled and checked!.finished and graph.samePosition(checked!.navigation, at)){
+                        at <- graph.checkedPosition(request, checked)
+                        if(at==NULL){return(false)}
+                        path!.cursor <- at
+                    }
+                }
                 if(at!.node!.pItem!.viewMode==vmCursor or at!.node!.pItem!.partRef!=NULL or !at!.node!.pItem!.parts.isEmpty()){
                     path!.source <- at; return(true)
                 }
@@ -6345,6 +6407,16 @@ struct WorldManager {
     }
 
     void: step(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(frame!.acquisitionCarry!=NULL){
+            if(!frame!.acquisitionCarry!.finished){request!.ready.append(frame); request!.ready.append(frame!.acquisitionCarry); return()}
+            our WorldFrame: retained <- frame!.acquisitionCarry
+            frame!.facts <- retained!.facts; frame!.retainedWork <- retained!.retainedWork
+            frame!.deferredValue <- retained!.deferredValue
+            graph.adoptListRequirements(frame, retained)
+            frame!.acquisitionCarry <- NULL; frame!.finished <- true
+            if(frame!.facts.outcome!=worldReady){stopFrame(request, frame)}
+            return()
+        }
         // Header consumers share parser waits without evaluating a recipe,
         // applying relationships or requesting any list members.
         if(frame!.headerOnly){
@@ -6402,6 +6474,9 @@ struct WorldManager {
         if(frame!.facts.outcome!=worldReady){
             stopFrame(request, frame); return()
         }
+        if(frame!.temporalMembers==NULL and !frame!.constraintSource and !frame!.projected and
+           frame!.facts.overlay==LST and frame!.facts.hasValue and frame!.facts.timelike and
+           frame!.node!.pItem!.value!.evalMode==emLiteral){Allocate(frame!.temporalMembers)}
         if((request!.suppliedWork or (frame!.navigation!=NULL and frame!.navigation!.constraintRoot)) and frame!.node!.pItem!.isNormed and
            frame!.node!.pItem!.worldScalarCompletionOwner===frame!.node!.pItem and
            frame!.facts.overlay!=LST and graph.completeFacts(frame!.facts, frame!.demandSize)){
@@ -6511,7 +6586,7 @@ struct WorldManager {
             if(frame!.sourceIsOperand and graph.memberSequence(frame) and frame!.sourceEdge!.isSubItm and
                !graph.checkEmbedded(frame)){stopFrame(request, frame); return()}
             if(frame!.sourceIsOperand and graph.memberSequence(frame) and
-               frame!.listSpecFrame!=NULL and !frame!.memberSpecified and
+               frame!.temporalMembers==NULL and frame!.listSpecFrame!=NULL and !frame!.memberSpecified and
                frame!.prerequisite!.facts.outcome==worldReady){
                 if(frame!.sourceEdge!.isSubItm){
                     frame!.prerequisite <- projectListSpec(request, frame!.prerequisite, frame!.listSpecFrame, frame!.listSpecEdge)
@@ -6559,6 +6634,9 @@ struct WorldManager {
             if(!frame!.sourceIsOperand and !frame!.sourceIsListSpec and
                graph.openLayout(frame!.facts) and graph.openLayout(frame!.prerequisite!.facts)){
                 frame!.openAlignment <- graph.alignOpen(request, frame)
+            }
+            if(frame!.temporalMembers!=NULL and frame!.sourceIsOperand and graph.memberSequence(frame) and !frame!.sourceEdge!.isSubItm){
+                frame!.temporalMembers!.previous <- frame!.prerequisite
             }
             graph.consumePrerequisite(request, frame)
             frame!.memberSpecified <- false
@@ -6629,6 +6707,8 @@ struct WorldManager {
         }
         our WorldPosition: position
         if(frame!.sourceIsOperand and graph.memberSequence(frame)){
+            if(frame!.temporalMembers==NULL and frame!.facts.timelike and !frame!.constraintSource){Allocate(frame!.temporalMembers)}
+            if(frame!.temporalMembers==NULL and !frame!.constraintSource){frame!.membersBeforeTemporalContext <- true}
             our WorldPosition: parent <- frame!.navigation
             if(parent==NULL){parent <- graph.position(frame!.node)}
             position <- graph.position(source, parent)
@@ -6645,16 +6725,32 @@ struct WorldManager {
         our WorldBindings: lexical <- frame!.lexicalParameters
         if(source!.trueByDefinition){lexical <- graph.parameterScope(position)}
         else if(lexical==NULL){lexical <- graph.parameterScope(frame!.navigation)}
+        me bool: temporalMember <- frame!.sourceIsOperand and graph.memberSequence(frame) and frame!.temporalMembers!=NULL
         // Acquiring a record level does not demand composite-field interiors.
         // Definition shape reads and explicit occurrence demands share this
         // boundary. Correspondence or a stronger field demand can acquire a
         // borrowed description through the ordinary deferred-input path.
-        if(frame!.sourceIsOperand and graph.memberSequence(frame) and
-           (frame!.acquireLevel or (frame!.acquireOnly and frame!.predicateOnly) or (request!.enclosingRequired and frame===request!.root)) and
+        if(!temporalMember and frame!.sourceIsOperand and graph.memberSequence(frame) and
+           (frame!.acquireLevel or (frame!.acquireOnly and frame!.predicateOnly)) and
            !source!.isSubItm and source!.pItem!.value!.overlayType==LST and source!.pItem!.value!.evalMode==emLiteral){
             frame!.prerequisite <- borrowValue(request, position)
             frame!.prerequisite!.facts <- graph.read(request, source, frame!.node, false, false, true)
             request!.ready.append(frame)
+        }else if(temporalMember){
+            our WorldPosition: acquisitionContext <- position
+            if(source!.isSubItm){acquisitionContext <- NULL}
+            frame!.prerequisite <- makeFrame(request, source, acquisitionContext, false, !source!.isSubItm)
+            frame!.prerequisite!.navigation <- position
+            frame!.prerequisite!.lexicalParameters <- lexical
+            frame!.prerequisite!.expressionParent <- frame!.node
+            frame!.prerequisite!.templateContext <- frame!.templateContext
+            if(source!.isSubItm){frame!.prerequisite!.temporalMembers <- frame!.temporalMembers}
+            else{
+                frame!.prerequisite!.acquisitionRequired <- true
+                frame!.prerequisite!.acquisitionProgress <- frame!.temporalMembers!.progress
+                frame!.prerequisite!.acquisitionPrevious <- frame!.temporalMembers!.previous
+            }
+            request!.ready.append(frame); request!.ready.append(frame!.prerequisite)
         }else if(request!.edits.containsKey(source!.pItem)){
             frame!.prerequisite <- request!.edits.at(source!.pItem); request!.ready.append(frame)
         }else if(position!=NULL and request!.completedOccurrences.containsKey(source) and
@@ -6679,13 +6775,18 @@ struct WorldManager {
             frame!.prerequisite!.lexicalParameters <- lexical
             if(lexical!=NULL){frame!.prerequisite!.contextual <- true}
             frame!.prerequisite!.templateContext <- frame!.templateContext or frame!.sourceIsListSpec
-            if(source!.trueByDefinition and (frame!.acquireLevel or (request!.enclosingRequired and frame===request!.root))){
+            frame!.prerequisite!.constraintSource <- frame!.constraintSource or frame!.sourceIsListSpec or (!frame!.sourceIsOperand and !source!.trueByDefinition)
+            if(source!.trueByDefinition and (frame!.acquireLevel)){
                 frame!.prerequisite!.acquireLevel <- true
             }
             if(frame!.sourceIsListSpec){frame!.prerequisite!.expressionParent <- frame!.node}
             if(frame!.sourceIsOperand){frame!.prerequisite!.expressionParent <- frame!.node; frame!.prerequisite!.acquireOnly <- frame!.acquireOnly or (graph.memberSequence(frame) and source!.pItem!.value!.overlayType==LST and source!.pItem!.value!.evalMode==emLiteral); frame!.prerequisite!.predicateOnly <- frame!.predicateOnly}
             if(source!.trueByDefinition and frame!.facts.overlay==LST and frame!.facts.hasValue){
                 frame!.prerequisite!.acquireOnly <- true; frame!.prerequisite!.predicateOnly <- true
+                // The supplied list owns its occurrences. Its definition is
+                // a shape constraint, including when its open T-template is
+                // closed against those already represented members.
+                frame!.prerequisite!.constraintSource <- true
             }
             request!.ready.append(frame)
             request!.ready.append(frame!.prerequisite)
@@ -6725,7 +6826,6 @@ struct WorldManager {
         our WorldRequest: request <- newRequest(session, target, language, worldSource, identities)
         request!.requireSize <- requireSize
         request!.previousValue <- previous; request!.suppliedWork <- suppliedWork
-        request!.listProgress <- listProgress; request!.enclosingRequired <- enclosingRequired
         if(request!.outcome!=worldReady){return(request)}
         if(source==NULL or source!.pItem==NULL or target==NULL or target!.pItem==NULL){
             request!.outcome <- worldError; request!.detail <- "Missing target POV"; return(request)
@@ -6742,8 +6842,12 @@ struct WorldManager {
             if(context==NULL){context <- graph.position(source)}
             our WorldPosition:: supplied; supplied! <- context!; supplied!.node <- source
             request!.root <- borrowValue(request, supplied)
-        }else{request!.root <- makeFrame(request, source, context, requireSize)}
+        }else{request!.root <- makeFrame(request, source, context, requireSize, enclosingRequired)}
         request!.root!.referenceOnly <- referenceOnly
+        request!.root!.acquisitionRequired <- enclosingRequired
+        request!.root!.acquireLevel <- enclosingRequired
+        request!.root!.acquisitionProgress <- listProgress
+        if(previous!=NULL){request!.root!.acquisitionPrevious <- borrowValue(request, previous)}
         request!.ready.append(request!.root)
         run(request)
         return(request)
@@ -6751,17 +6855,12 @@ struct WorldManager {
 
     void: run(our WorldRequest: request) <- {
         while(request!.outcome==worldReady){
-            if(request!.ready.isEmpty()){
-                if(request!.previousValue==NULL or request!.carryApplied or request!.root!.facts.outcome!=worldReady){break()}
-                request!.carryApplied <- true
-                our POV:: edge{946}; edge!.cursorCarry <- true; edge!.pItem <- request!.previousValue!.node!.pItem
-                request!.root <- derivePair(request, request!.root, borrowValue(request, request!.previousValue), edge)
-                request!.ready.append(request!.root)
-            }
+            if(request!.ready.isEmpty()){break()}
             our WorldFrame: frame <- request!.ready.popLast()
             request!.queueSteps <+- 1
             step(request, frame)
-            if(frame!.finished and frame!.navigation!=NULL and graph.completeFacts(frame!.facts, false)){
+            if(frame!.finished){settleAcquisition(request, frame)}
+            if(frame!.finished and frame!.navigation!=NULL and (frame!.acquisitionSettled or graph.completeFacts(frame!.facts, false))){
                 if(request!.completedOccurrences.containsKey(frame!.node)){request!.completedOccurrences.at(frame!.node) <- frame}
                 else{request!.completedOccurrences.insert(frame!.node, frame)}
             }

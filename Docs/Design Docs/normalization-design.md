@@ -1689,3 +1689,30 @@ The context-free formatter performs no normalization.
 The decision log records the exact supported boundary and validation. General
 sparse/ambiguous alignment, continuous time, inverse transitions, arbitrary
 external-change invalidation and cross-session deduction sharing remain deferred.
+
+## Ordinary temporal-list acquisition (D105, 2026-10-21)
+
+Ordinary normalization now acquires represented T-list members through the same
+state-acquisition and retention phase as occurrence demands. A state's supplied
+work and required enclosing listSpecs/overlays settle before retention. Embedded
+spans share the containing temporal frontier; ordinary nested lists preserve their
+own level. `%tprev` can read the checked predecessor, including retained fields
+absent from its original description, before the whole result is published.
+
+Private checked views share unchanged payloads and preserve readiness evidence.
+They use the ordinary publication writer without publishing to the model or
+running another solver. Borrowed list members acquire private wrappers and
+headers at the level being written, including writes without a cursor.
+Waits, cancellation and conflicts preserve the original
+history; successful ordinary publication remains durable. Shallow demands and
+whole-history requests still have their respective descendant requirements.
+
+Represented finite histories and closed embedded spans are covered. Introducing
+new temporal occurrences through open-tail correspondence or adoption of an
+unacquired temporal constraint source remains unsupported:
+those occurrences require target contexts before applying contextual state rules.
+Likewise, a T context established only after member evaluation cannot yet acquire
+states that need retention; it reports unsupported. Known scalar type inheritance
+remains supported.
+Non-temporal finite-tail closure is unchanged. D105 records the design choices,
+performance evidence and exact validation boundary.

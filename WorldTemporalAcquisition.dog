@@ -1,0 +1,73 @@
+// A logical temporal sequence owns one producer frontier. Embedded storage
+// spans share it; an ordinary nested list starts its own temporal level.
+struct WorldTemporalFrontier {
+    our WorldFrame: previous
+    our WorldListProgress: progress
+    void: INIT() <- {Allocate(progress)}
+}
+struct WorldFrame {
+    me bool: constraintSource <- false
+    our WorldTemporalFrontier: temporalMembers
+    me bool: membersBeforeTemporalContext <- false
+    // Acquisition is owned by the original occurrence frame, never by the
+    // derived relationship frames used to prove its value or retention.
+    me bool: acquisitionRequired <- false
+    me bool: acquisitionSettled <- false
+    our WorldListProgress: acquisitionProgress
+    me uint64: acquisitionGeneration <- 0
+    our WorldFrame: acquisitionPrevious
+    our WorldFrame: acquisitionCarry
+}
+struct WorldManager {
+    void: settleAcquisition(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(frame!.facts.outcome==worldReady and !frame!.constraintSource and !frame!.projected and
+           frame!.membersBeforeTemporalContext and frame!.facts.overlay==LST and frame!.facts.hasValue and frame!.facts.timelike and
+           frame!.node!.pItem!.value!.overlayType==LST and frame!.node!.pItem!.value!.evalMode==emLiteral){
+            // A meaning can establish T after this body's members were read.
+            // Known independent scalar states need no retention; other later
+            // states need context readiness before their first evaluation.
+            me WorldListCursor: members; members.push(frame!.facts.sequence)
+            our WorldFrame: member <- members.next()
+            if(member!=NULL){member <- members.next()}
+            while(member!=NULL){
+                if(needsRetainedValue(member!.facts)){
+                    frame!.facts.outcome <- worldUnsupported
+                    frame!.facts.detail <- "Temporal member acquisition needs its T context before evaluation"
+                    stopFrame(request, frame); return()
+                }
+                member <- members.next()
+            }
+            request!.sequenceVisits <+- members.visits
+        }
+        if(frame!.acquisitionSettled or (!frame!.acquisitionRequired and frame!.acquisitionPrevious==NULL) or
+           frame!.facts.outcome!=worldReady){return()}
+        // Paths and checked staged writes can finish their own value without
+        // passing the ordinary end-of-body branch. Their enclosing obligations
+        // are still part of this occurrence's acquisition.
+        if(frame!.acquisitionRequired and frame!.parentContext!=NULL){
+            frame!.finished <- false; frame!.projected <- false
+            frame!.expressionSlot <- 3; frame!.nextWork <- frame!.node!.pItem!.wrkList.size()
+            if(requestParentRHS(request, frame)){return()}
+            frame!.finished <- true
+        }
+        frame!.acquisitionSettled <- true
+        our WorldFrame: prior <- frame!.acquisitionPrevious
+        frame!.acquisitionPrevious <- NULL
+        if(prior==NULL or !needsRetainedValue(frame!.facts)){return()}
+        if(prior!.deferredValue==NULL){
+            our WorldPosition: checked <- graph.checkedPosition(request, prior)
+            if(checked==NULL){return()}
+            prior <- borrowValue(request, checked)
+        }
+        our POV:: edge{946}; edge!.cursorCarry <- true; edge!.pItem <- prior!.node!.pItem
+        // Copy the checked current facts, then use the normal correspondence
+        // operation. The stable occurrence keeps its identity even when an
+        // entirely unknown value can adopt its predecessor without work.
+        our WorldFrame: current <- projectFrame(request, frame)
+        current!.finished <- true
+        frame!.acquisitionCarry <- derivePair(request, current, prior, edge)
+        frame!.finished <- false
+        request!.ready.append(frame)
+        if(!frame!.acquisitionCarry!.finished){request!.ready.append(frame!.acquisitionCarry)}
+    }
+}

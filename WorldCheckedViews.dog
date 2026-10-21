@@ -1,0 +1,149 @@
+// Private representations of checked facts let paths traverse an acquired
+// state before the containing request atomically publishes its result.
+// This cache owns no solver, previous-state chain or public request handle.
+struct infonView {
+    // This view may share its literal member wrappers and their headers.
+    // A writer takes ownership of one represented level before changing it.
+    me bool: worldBorrowedMembers <- false
+}
+
+struct WorldRequest {
+    me Map<our WorldFrame, our infonView>: checkedViews
+    me Map<our infonView, our WorldFrame>: checkedViewFacts
+    me uint64: checkedViewNodes <- 0
+    me uint64: checkedViewMembers <- 0
+    me uint64: checkedViewHits <- 0
+    me uint64: checkedViewPeakDepth <- 0
+    me uint64: checkedViewTextBytes <- 0
+    me uint64: checkedViewTextNodes <- 0
+    void: releaseCheckedViews() <- {checkedViews.clear(); checkedViewFacts.clear()}
+}
+
+struct WorldCheckedViewWork {
+    our WorldFrame: frame
+    me WorldPublication: publication
+    me WorldListCursor: members
+    me WorldMember: nextMember
+    me int64: nextAlternative <- 0
+    me bool: entered <- false
+}
+
+struct WorldPOVGraph {
+    our infonView: checkedView(our WorldRequest: request, our WorldFrame: source) <- {
+        if(source==NULL){request!.outcome <- worldError; request!.detail <- "Checked view needs a frame"; return(NULL)}
+        if(request!.checkedViews.containsKey(source)){
+            request!.checkedViewHits <+- 1; return(request!.checkedViews.at(source))
+        }
+        // publishFrame writes only this detached target. In particular, do
+        // not call publish(), which commits declarations, writes and effects.
+        our WorldRequest:: writer
+        me List<our WorldCheckedViewWork>: pending
+        me Set<our WorldFrame>: active
+        our WorldCheckedViewWork:: root; root!.frame <- source; pending.append(root)
+        while(!pending.isEmpty()){
+            if(pending.size()>request!.checkedViewPeakDepth){request!.checkedViewPeakDepth <- pending.size()}
+            our WorldCheckedViewWork: work <- pending.last()
+            our WorldFrame: frame <- work!.frame
+            if(!work!.entered){
+                if(frame!.node==NULL or frame!.node!.pItem==NULL or !frame!.finished){
+                    request!.outcome <- worldError; request!.detail <- "Checked view needs settled occurrence facts"; return(NULL)
+                }
+                if(frame!.facts.outcome!=worldReady){
+                    request!.outcome <- frame!.facts.outcome; request!.detail <- frame!.facts.detail; return(NULL)
+                }
+                if(frame!.facts.pendingChecks!=NULL or frame!.facts.contextRequired or
+                   frame!.facts.contextAbsent or frame!.facts.declaration!=NULL){
+                    request!.outcome <- worldUnsupported
+                    request!.detail <- "Checked view needs a value with settled supplied constraints"; return(NULL)
+                }
+                if(!frame!.facts.representable and frame!.deferredValue==NULL){
+                    request!.outcome <- worldPartial; request!.detail <- "Checked value has unresolved representation requirements"; return(NULL)
+                }
+                if(active.contains(frame)){
+                    request!.outcome <- worldUnsupported; request!.detail <- "Cyclic checked value layout"; return(NULL)
+                }
+                active.insert(frame)
+                work!.publication.frame <- frame
+                Allocate(work!.publication.target, 949); Allocate(work!.publication.target!.pItem)
+                work!.publication.target!.pItem! <- frame!.node!.pItem!
+                // Even a partial value may update its extent or list flags.
+                // Isolate both states before invoking the common writer.
+                Allocate(work!.publication.target!.pItem!.value)
+                work!.publication.target!.pItem!.value! <- frame!.node!.pItem!.value!
+                Allocate(work!.publication.target!.pItem!.infSize)
+                work!.publication.target!.pItem!.infSize! <- frame!.node!.pItem!.infSize!
+                work!.publication.target!.pItem!.worldScalarCompletionOwner <- NULL
+                if(frame!.deferredValue==NULL and frame!.facts.alternatives!=NULL){
+                    Allocate(work!.publication.newAlternatives)
+                    our infonView: alternatives <- work!.publication.newAlternatives
+                    alternatives!.viewMode <- vmAny; alternatives!.itmMode <- mItem
+                    alternatives!.streamState <- parseDone; alternatives!.isInnr <- true
+                    alternatives!.infSize!.overlayType <- NUM; alternatives!.infSize!.evalMode <- emUnknown
+                    alternatives!.value!.overlayType <- LST; alternatives!.value!.evalMode <- emLiteral
+                    alternatives!.value!.sizeMode <- fromGiven
+                }else if(frame!.deferredValue==NULL and frame!.facts.overlay==LST and frame!.facts.hasValue){
+                    Allocate(work!.publication.newList)
+                    work!.publication.newList!.overlayType <- LST; work!.publication.newList!.evalMode <- emLiteral
+                    if(frame!.listSpecEdge!=NULL){work!.publication.newList!.listSpec <- frame!.listSpecEdge!.pItem}
+                    if(frame!.facts.explicitSize){work!.publication.newList!.sizeMode <- fromGiven}
+                    else{work!.publication.newList!.sizeMode <- fromCount}
+                    work!.members.push(frame!.facts.sequence)
+                    work!.nextMember <- work!.members.nextMember(false)
+                }
+                work!.entered <- true
+            }
+            our WorldFrame: child
+            me bool: embedded <- false
+            if(work!.publication.newAlternatives!=NULL){
+                if(work!.nextAlternative<frame!.facts.alternatives!.members.size()){
+                    child <- frame!.facts.alternatives!.members[work!.nextAlternative]
+                }
+            }else if(work!.publication.newList!=NULL){
+                child <- work!.nextMember.frame; embedded <- work!.nextMember.embedded
+            }
+            if(child!=NULL){
+                if(!request!.checkedViews.containsKey(child)){
+                    if(active.contains(child)){
+                        request!.outcome <- worldUnsupported; request!.detail <- "Cyclic checked value layout"; return(NULL)
+                    }
+                    our WorldCheckedViewWork:: nested; nested!.frame <- child; pending.append(nested); continue()
+                }
+                request!.checkedViewHits <+- 1
+                our infonState: body <- work!.publication.newList
+                if(work!.publication.newAlternatives!=NULL){body <- work!.publication.newAlternatives!.value}
+                // The header is immutable and reusable. Occurrence wrappers
+                // are local to this represented list; virtual positions carry
+                // their parent, so no pointer targets a temporary builder POV.
+                our POV: member <- body!.items.append(request!.checkedViews.at(child), embedded, 949)
+                member!.pParent <- NULL
+                request!.checkedViewMembers <+- 1
+                if(work!.publication.newAlternatives!=NULL){work!.nextAlternative <+- 1}
+                else{work!.nextMember <- work!.members.nextMember(false)}
+                continue()
+            }
+            publishFrame(writer, work!.publication)
+            // Deferred descriptions are shared without acquiring interiors.
+            // The returned root supplies its own qualified logical context.
+            work!.publication.target!.worldContext <- NULL
+            request!.checkedViews.insert(frame, work!.publication.target!.pItem)
+            request!.checkedViewFacts.insert(work!.publication.target!.pItem, frame)
+            request!.checkedViewNodes <+- 1
+            request!.sequenceVisits <+- work!.members.visits
+            active.erase(frame); pending.popLast()
+        }
+        request!.checkedViewTextBytes <+- writer!.publishedTextBytes
+        request!.checkedViewTextNodes <+- writer!.publishedTextNodes
+        return(request!.checkedViews.at(source))
+    }
+
+    our WorldPosition: checkedPosition(our WorldRequest: request, our WorldFrame: frame) <- {
+        our infonView: value <- checkedView(request, frame)
+        if(value==NULL){return(NULL)}
+        our POV:: view{949}; view!.pItem <- value
+        our WorldPosition: original <- frame!.navigation
+        if(original==NULL){original <- position(frame!.node)}
+        our WorldPosition: result <- representedPosition(view, original)
+        result!.constraintRoot <- true; result!.writable <- false
+        return(result)
+    }
+}

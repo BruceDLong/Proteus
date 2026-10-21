@@ -3299,3 +3299,115 @@ cache leases, known-prefix versus unresolved-endpoint selection, and bounded
 printing. `codeDog BuildProteusGraph.dog` also regenerated and built the shared
 library successfully. Slipstream consumer and visible rendering validation were
 not performed.
+
+## D105 — Temporal acquisition in ordinary list normalization (2026-10-21)
+
+**Decision.** A represented temporal member has an acquisition obligation inside
+its ordinary normalization frame. Its supplied relationships, definitions and
+required enclosing listSpecs/overlays are acquired before predecessor retention.
+The original occurrence frame owns this phase; its derived retention relationship
+uses the existing scalar/field/list correspondence and cannot recursively acquire
+itself. Demand roots use this same phase. `WorldDemand` still selects occurrences
+and reconstructs missing predecessor materializations, but it has no separate
+value-normalization or retention implementation.
+
+A logical T-list has one predecessor frontier. Embedded storage spans share that
+frontier; nonembedded nested lists establish their own levels. A state is added
+to the frontier only after its acquisition settles. Unknown values can retain
+prior evidence; explicit new values and `%?` keep their existing semantics.
+Constraint-source lists do not independently run a second temporal process before
+contributing their descriptions to the target. Ordinary whole-history requests
+retain their requested descendant work; a shallow occurrence demand does not
+thereby acquire every descendant.
+
+Enclosing correspondence progress belongs to the member acquisition, with one
+shared progress owner per logical temporal frontier. Each member begins one
+continuation generation. Lookups capture their owner and generation across waits;
+they do not borrow a mutable request-wide current cursor. Saved continuations
+release their owner back-reference, avoiding an ownership cycle. Whole-list
+normalization still checks the containing list's own relationships and endpoints.
+
+**Checked predecessor views.** Before retaining a computed record or traversing
+`%tprev.field`, a request can expose its checked facts through a private read-only
+representation. The representation preserves the logical occurrence and uses the
+existing publication writer on detached headers, without committing effects,
+registering another request or invoking another solver. An iterative memoized
+walk shares unchanged child payloads. The request also retains the associated
+readiness proof, so sharing a checked subtree does not turn it back into an
+unacquired description. Both maps are released when execution finishes or is
+cancelled; published model values contain no frame or predecessor-history chain.
+
+Ordinary results remain transactionally published: a wait, rejection or
+cancellation does not publish an already computed temporal prefix. Existing
+partial-result publication rules remain in force for exhausted unknown values.
+Explicit accepted writes use the existing copy-on-write publication path.
+
+Retained list descriptions explicitly record borrowed member ownership. Ordinary
+publication, including publication without a cursor, takes ownership of one
+represented level before writing through that boundary. Copying owned immediate
+members also copies their mutable headers; deeper payloads remain shared. Owned
+outer occurrence wrappers stay stable. Parent pointers alone do not prove that
+a header or member list is exclusive.
+
+**Boundary.** This integration covers represented temporal members and closed
+embedded spans. A correspondence that would introduce new temporal occurrences
+from an open tail, or adopt an unacquired temporal constraint source into a bare
+target, currently returns unsupported without publication. Those
+members need target occurrence contexts before listSpecs, `%tprev`, `%tnext` and
+other references can be applied; using the RHS occurrence would be wrong.
+Ordinary non-temporal finite-tail closure remains supported. General temporal
+occurrence generation, sparse/ambiguous alignment, external-change invalidation,
+continuous time and inverse transitions remain later work.
+
+A definition applied to an already supplied list is a constraint source, not a
+second temporal producer. It can still establish the T type of known scalar
+states. If that temporal context becomes known only after the members were
+evaluated, states needing retention require earlier header/context readiness;
+the request reports unsupported rather than publishing an unacquired history.
+A post-hoc retention pass would not safely repair contextual expressions that
+had already been evaluated at the wrong level.
+
+**Alternatives rejected.** Wrapping full normalization in a cursor or nested
+`solve()` loop would duplicate production and break its transaction/wait boundary.
+Applying carry before enclosing constraints would preserve stale values. Keeping
+whole predecessor-frame chains in published views would retain execution history.
+Copying every unchanged subtree for each output state would multiply payload size
+by history length. Skipping the containing list's final constraint checks to fix
+prefix rescans would weaken semantics; retaining its actual correspondence cursor
+addresses the cost directly.
+
+**Result formatting.** The optional seventh `.tst` column already selects
+`compressed`, `expanded` or `debug` for parse, norm, multi, world and graph checks.
+Additional fixtures compare the same input across modes and select all three
+modes after whole-history normalization. Expanded output remains a bounded
+context-bearing demand, currently one ordered list level with a 64-member limit;
+context-free `toString` remains pure. See `Docs/README.md` for the fixture format.
+
+**Measured work.** For represented histories of **16 / 32 / 64** states:
+
+| Case | Frames | Relationships acquired | Correspondence positions | Queue steps |
+| --- | --- | --- | --- | --- |
+| Record updates with retained fields | 126 / 254 / 510 | 35 / 67 / 131 | 0 / 0 / 0 | 131 / 259 / 515 |
+| Temporal recurrence listSpec | 67 / 131 / 259 | 65 / 129 / 257 | 0 / 0 / 0 | 148 / 292 / 580 |
+| Positional parent overlay | 51 / 99 / 195 | 33 / 65 / 129 | 51 / 99 / 195 | 132 / 260 / 516 |
+
+Increasing an unchanged descendant record from **16 to 128** fields adds **112**
+checked-view nodes, **112** checked member wrappers and **112** publications at
+both **4** and **32** states. The corresponding frame increase is **336** in
+both histories. Tests also check actual payload sharing, occurrence identity and
+absence of unnecessary input subscriptions. These bounds concern fixed-width,
+fixed-context histories; they assert no general bound on ambiguous inference.
+
+**Validation.** `codeDog Proteus.Lib.dog` regenerated and built the executable;
+`codeDog BuildProteusGraph.dog` separately regenerated and built the shared
+library. All **17** new compiled temporal acquisition/sharing checks pass. The
+full timeout-protected run reports **24/590** failures, with exactly the same
+failure names as the **24/573** baseline. The default fixture run remains
+**16/437**, and the separate print-mode fixture suite passes **23/23**. The existing
+`rubix/sparseNestedContinuation` now reports the earlier unsupported named-list
+template correspondence during world loading instead of the scalar-milestone
+diagnostic; its expected result is still unsatisfied.
+All prior fixture expectations were preserved. Validation covers successful and rejected
+writes through both ordinary publication and cursor-selected states, plus
+wait/cancel atomicity and explicit unsupported boundaries. Slipstream consumer
+and visible rendering validation were not performed.

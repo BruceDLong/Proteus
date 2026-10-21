@@ -1,6 +1,23 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/temporalNormalization/lateContext
+    unit/temporalNormalization/introducedBoundary
+    unit/temporalSharing/payloadCost
+    unit/temporalSharing/partialPayload
+    unit/temporalSharing/selectedWrite
+    unit/temporalSharing/ordinaryWrite
+    unit/temporalNormalization/records
+    unit/temporalNormalization/unknownAndIndependent
+    unit/temporalNormalization/parentRules
+    unit/temporalNormalization/embeddedScopes
+    unit/temporalNormalization/nestedBoundaries
+    unit/temporalNormalization/waitAndCancel
+    unit/temporalNormalization/conflictAtomicity
+    unit/temporalNormalization/namedState
+    unit/temporalNormalization/scaling
+    unit/temporalNormalization/retainedReference
+    unit/temporalNormalization/parentScaling
     unit/demandScope/sessionRegistry
     unit/demandScope/forwardContext
     unit/demandScope/boundaryWait
@@ -4063,6 +4080,637 @@ struct GLOBAL {
             if(blocked!.pItem!==recipe or toString(body)!=original or !agent.worldManager.control!.inputWaiters.isEmpty()){
                 FAIL("Named shallow acquisition modified the definition or subscribed to an unrequested descendant")
             }
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+}
+
+// Whole temporal histories use the same predecessor-retention semantics as
+// occurrence demands. Ordinary CodeDog tests; copied into ProteusTests.dog.
+struct GLOBAL {
+    our POV: temporalNormalizationField(our POV: record, me string: field) <- {
+        if(record==NULL or record!.pItem==NULL){return(NULL)}
+        return(record!.pItem!.fetchField(field))
+    }
+    me bool: temporalNormalizationNumber(our POV: record, me string: field, me int: expected) <- {
+        our POV: value <- temporalNormalizationField(record, field)
+        return(value!=NULL and value!.pItem!.value!.evalMode==emLiteral and value!.pItem!.fetchInt()==expected)
+    }
+
+    void: unit_temporalNormalization_records(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me string: input <- "{T {pose:{x:1 y:2} keep:{a:7 b:8}} {pose:{x:(3 +6)}} {pose:{x:4}}}"
+        me WorldParseResult: whole <- agent.worldManager.parse(input)
+        me WorldParseResult: incremental <- agent.worldManager.parse(input)
+        if(whole.target==NULL or incremental.target==NULL){FAIL("Record history did not parse")}
+        our POV: first <- whole.target!.pItem!.value!.items.head
+        our POV: second <- first!.next; our POV: third <- second!.next
+        our WorldRequest: normalized <- agent.normalize(whole.target)
+        if(!normalized!.complete()){FAIL("Whole record history did not complete: "+normalized!.error())}
+        if(!temporalNormalizationNumber(temporalNormalizationField(first,"pose"),"x",1) or
+           !temporalNormalizationNumber(temporalNormalizationField(second,"pose"),"x",9) or
+           !temporalNormalizationNumber(temporalNormalizationField(third,"pose"),"x",4) or
+           !temporalNormalizationNumber(temporalNormalizationField(third,"pose"),"y",2) or
+           !temporalNormalizationNumber(temporalNormalizationField(third,"keep"),"b",8)){
+            FAIL("Whole normalization lost a changed or retained nested field")
+        }
+        cursorDemandLinkMembers(incremental.target)
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), incremental.target!.pItem!.value!.items.head,
+            agent.getLocaleBaseName(), agent.world, agent.identityRegistry)
+        if(!demand!.requireField("pose.x") or !demand!.requireField("pose.y") or
+           !demand!.requireField("keep.a") or !demand!.requireField("keep.b") or !demand!.refresh()){
+            FAIL("Equivalent record demand was unavailable: "+demand!.status().detail)
+        }
+        our POV: expected <- first
+        while(expected!=NULL){
+            our POV: expectedPose <- temporalNormalizationField(expected,"pose")
+            our POV: expectedKeep <- temporalNormalizationField(expected,"keep")
+            our POV: actualPose <- temporalNormalizationField(demand!.current,"pose")
+            our POV: actualKeep <- temporalNormalizationField(demand!.current,"keep")
+            if(!temporalNormalizationNumber(actualPose,"x",temporalNormalizationField(expectedPose,"x")!.pItem!.fetchInt()) or
+               !temporalNormalizationNumber(actualPose,"y",2) or !temporalNormalizationNumber(actualKeep,"a",7) or
+               !temporalNormalizationNumber(actualKeep,"b",8)){FAIL("Whole normalization and occurrence demand disagree")}
+            expected <- expected!.next
+            if(expected!=NULL and !demand!.goNext()){FAIL("Record demand could not reach the next state: "+demand!.status().detail)}
+        }
+        if(demand!.goNext() or !demand!.atBoundary){FAIL("Equivalent demand did not preserve the closed endpoint")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_temporalNormalization_unknownAndIndependent(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T 7 _ %? _ 9 _}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our WorldRequest: request <- agent.normalize(parsed.target)
+        if(request!.status().outcome!=worldPartial){FAIL("Independent unknown history did not remain partial: "+request!.error())}
+        our POV: one <- parsed.target!.pItem!.value!.items.head
+        our POV: two <- one!.next; our POV: three <- two!.next; our POV: four <- three!.next
+        our POV: five <- four!.next; our POV: six <- five!.next
+        if(two!.pItem!.value!.evalMode!=emLiteral or two!.pItem!.fetchInt()!=7 or
+           six!.pItem!.value!.evalMode!=emLiteral or six!.pItem!.fetchInt()!=9){FAIL("Ordinary unknown states did not retain their predecessor values")}
+        if(three!.pItem!.value!.evalMode==emLiteral or four!.pItem!.value!.evalMode==emLiteral){
+            FAIL("Temporal independence was ignored or an unknown predecessor invented a value")
+        }
+        parsed <- agent.worldManager.parse("{T {x:1 y:2} {x:_ y:%?} {x:4}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        request <- agent.normalize(parsed.target)
+        if(request!.status().outcome!=worldPartial){FAIL("Independent field history did not remain partial")}
+        one <- parsed.target!.pItem!.value!.items.head; two <- one!.next; three <- two!.next
+        our POV: independent <- temporalNormalizationField(two,"y")
+        our POV: retainedUnknown <- temporalNormalizationField(three,"y")
+        if(!temporalNormalizationNumber(two,"x",1) or !temporalNormalizationNumber(three,"x",4) or
+           independent==NULL or retainedUnknown==NULL or independent!.pItem!.value!.evalMode==emLiteral or
+           retainedUnknown!.pItem!.value!.evalMode==emLiteral){FAIL("Field retention confused ordinary unknown with independent unknown")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_temporalNormalization_parentRules(me string: testName) <- {
+        me List<string>: inputs <- ["{T (%tprev +1)| 0 _ _}", "{T _ _ _} == {T 1 2 3}", "{T _ _ _} = {T 1 _ 3}"]
+        me int: scenario <- 0
+        withEach input in inputs{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: whole <- agent.worldManager.parse(input)
+            me WorldParseResult: incremental <- agent.worldManager.parse(input)
+            if(whole.target==NULL or incremental.target==NULL){FAIL("Parent-constrained history did not parse")}
+            our WorldRequest: request <- agent.normalize(whole.target)
+            if(!request!.complete()){FAIL("Parent constraints did not compose with whole temporal retention: "+request!.error())}
+            cursorDemandLinkMembers(incremental.target)
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),incremental.target!.pItem!.value!.items.head)
+            if(!demand!.refresh()){FAIL("Parent-constrained demand was unavailable: "+demand!.status().detail)}
+            our POV: item <- whole.target!.pItem!.value!.items.head
+            me int: ordinal <- 0
+            while(item!=NULL){
+                me int: expected <- ordinal
+                if(scenario==1){expected <- ordinal+1}
+                if(scenario==2){expected <- 1; if(ordinal==2){expected <- 3}}
+                if(item!.pItem!.value!.evalMode!=emLiteral or item!.pItem!.fetchInt()!=expected or demand!.current!.pItem!.fetchInt()!=expected){
+                    FAIL("Parent rule and temporal retention disagree between consumers: "+input)
+                }
+                item <- item!.next; ordinal <+- 1
+                if(item!=NULL and !demand!.goNext()){FAIL("Parent-constrained successor was unavailable: "+demand!.status().detail)}
+            }
+            agent.endWorldSessions(); modelMngr.clear(); scenario <+- 1
+        }
+    }
+
+    void: unit_temporalNormalization_embeddedScopes(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me string: input <- "{T {x:1 y:2} &{T {x:3} &{T {y:4}} &{T}} {x:5}}"
+        me WorldParseResult: parsed <- agent.worldManager.parse(input)
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our POV: span <- first!.next; our POV: last <- span!.next
+        our POV: second <- span!.pItem!.value!.items.head
+        our POV: third <- second!.next!.pItem!.value!.items.head
+        our WorldRequest: request <- agent.normalize(parsed.target)
+        if(!request!.complete()){FAIL("Embedded history did not complete: "+request!.error())}
+        if(!temporalNormalizationNumber(first,"x",1) or !temporalNormalizationNumber(second,"x",3) or
+           !temporalNormalizationNumber(second,"y",2) or !temporalNormalizationNumber(third,"x",3) or
+           !temporalNormalizationNumber(third,"y",4) or !temporalNormalizationNumber(last,"x",5) or
+           !temporalNormalizationNumber(last,"y",4)){FAIL("Embedded storage boundaries interrupted temporal retention")}
+        if(parsed.target!.pItem!.value!.items.head!==first or first!.next!==span or span!.next!==last or
+           span!.pItem!.value!.items.head!==second or second!.next!.pItem!.value!.items.head!==third){
+            FAIL("Whole temporal normalization replaced represented occurrence identity")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_temporalNormalization_nestedBoundaries(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T {1 _} {_ 2}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our WorldRequest: request <- agent.normalize(parsed.target)
+        if(request!.status().outcome!=worldPartial){FAIL("Whole history with an unresolved early field did not remain partial: "+request!.error())}
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our POV: second <- first!.next
+        if(first!.pItem!.value!.items.head!.next!.pItem!.value!.evalMode==emLiteral){FAIL("An ordinary nested list was treated as its own timeline")}
+        if(second!.pItem!.value!.items.head!.pItem!.fetchInt()!=1 or second!.pItem!.value!.items.head!.next!.pItem!.fetchInt()!=2){
+            FAIL("Nested state members did not retain corresponding fields from the preceding state")
+        }
+        parsed <- agent.worldManager.parse("{{T 1 _} {T 9 _}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        request <- agent.normalize(parsed.target)
+        if(!request!.complete()){FAIL("Independent nested temporal histories did not complete: "+request!.error())}
+        first <- parsed.target!.pItem!.value!.items.head; second <- first!.next
+        if(first!.pItem!.value!.items.head!.next!.pItem!.fetchInt()!=1 or second!.pItem!.value!.items.head!.next!.pItem!.fetchInt()!=9){
+            FAIL("Nested temporal histories shared a predecessor across their ordinary list boundary")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_temporalNormalization_waitAndCancel(me string: testName) <- {
+        withEach scenario in range 0 .. 2{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: parsed <- agent.worldManager.parse("{T {x:1 y:2} {x:3} {y:(4 +5)}}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our POV: first <- parsed.target!.pItem!.value!.items.head
+            our POV: second <- first!.next; our POV: third <- second!.next
+            our infonView: originalSecond <- second!.pItem
+            our infonView: pending <- temporalNormalizationField(third,"y")!.pItem
+            me string: parsedDescription <- toString(parsed.target!.pItem)
+            agent.worldManager.prepareInput(pending)
+            me string: original <- toString(parsed.target!.pItem)
+            our WorldRequest: request <- agent.normalize(parsed.target)
+            if(request!.status().outcome!=worldWaiting or agent.worldManager.control!.inputWaiters.size()!=1){
+                FAIL("Whole history did not retain exactly one pending input: "+request!.error())
+            }
+            if(request!.publications!=0 or second!.pItem!==originalSecond or toString(parsed.target!.pItem)!=original){
+                FAIL("Waiting history published its already-computed prefix")
+            }
+            me uint64: frames <- request!.framesCreated; me uint64: queue <- request!.queueSteps
+            our infonView:: unrelated; agent.worldManager.inputReady(unrelated)
+            if(request!.framesCreated!=frames or request!.queueSteps!=queue){FAIL("Unrelated input restarted temporal normalization")}
+            if(scenario==0){
+                pending!.streamState <- parseDone; agent.worldManager.inputReady(pending)
+                if(!request!.complete() or !temporalNormalizationNumber(second,"y",2) or
+                   !temporalNormalizationNumber(third,"x",3) or !temporalNormalizationNumber(third,"y",9)){
+                    FAIL("Resumed whole history lost its retained predecessor: "+request!.error())
+                }
+            }else{
+                request!.cancel(); pending!.streamState <- parseDone; agent.worldManager.inputReady(pending)
+                if(request!.status().outcome!=worldCancelled or request!.publications!=0 or
+                   toString(parsed.target!.pItem)!=parsedDescription){FAIL("Cancelled history published a temporal state: status="+toString(request!.status().outcome)+" writes="+toString(request!.publications)+" before="+parsedDescription+" after="+toString(parsed.target!.pItem))}
+            }
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Finished temporal history leaked its input subscription")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_temporalNormalization_conflictAtomicity(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T {x:1 y:2} {x:3} {y:(4=5)}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        me string: original <- toString(parsed.target!.pItem)
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our POV: second <- first!.next; our POV: third <- second!.next
+        our infonView: one <- first!.pItem; our infonView: two <- second!.pItem; our infonView: three <- third!.pItem
+        our WorldRequest: request <- agent.normalize(parsed.target)
+        if(request!.status().outcome!=worldRejected){FAIL("Contradictory later state was accepted: "+request!.error())}
+        if(request!.publications!=0 or first!.pItem!==one or second!.pItem!==two or third!.pItem!==three or
+           toString(parsed.target!.pItem)!=original){FAIL("Failed whole history published a computed temporal prefix")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_temporalNormalization_namedState(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#initialState={x:1 stable:{a:7 b:8}}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our infonView: body <- declaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL("Named initial state did not install: "+installed!.error())}
+        me string: original <- toString(body)
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T initialState {x:3} {x:4}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our WorldRequest: request <- agent.normalize(parsed.target)
+        if(!request!.complete()){FAIL("Named temporal state did not normalize in its caller context: "+request!.error())}
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our POV: last <- first!.next!.next
+        if(!temporalNormalizationNumber(first,"x",1) or !temporalNormalizationNumber(last,"x",4) or
+           !temporalNormalizationNumber(temporalNormalizationField(last,"stable"),"a",7) or
+           toString(body)!=original){FAIL("Named state retention lost fields or mutated the definition")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_temporalNormalization_scaling(me string: testName) <- {
+        me uint64: previousFrames <- 0; me uint64: previousRelations <- 0
+        me uint64: previousPositions <- 0; me uint64: previousQueue <- 0
+        me int: width <- 16
+        while(width<=64){
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me string: input <- "{T {changed:0 stable:{a:7 b:8}}"
+            withEach idx in range 1 .. width{input <+- " {changed:"+toString(idx)+"}"}
+            input <+- "}"
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our WorldRequest: request <- agent.normalize(parsed.target)
+            if(!request!.complete()){FAIL("Fixed-width temporal normalization failed: "+request!.error())}
+            our POV: state <- parsed.target!.pItem!.value!.items.head
+            me int: ordinal <- 0
+            while(state!=NULL){
+                if(!temporalNormalizationNumber(state,"changed",ordinal) or
+                   !temporalNormalizationNumber(temporalNormalizationField(state,"stable"),"b",8)){
+                    FAIL("Fixed-width normalization produced an incorrect retained state")
+                }
+                state <- state!.next; ordinal <+- 1
+            }
+            if(ordinal!=width){FAIL("Fixed-width history changed its represented extent")}
+            me uint64: frames <- request!.framesCreated; me uint64: relations <- request!.relationshipsRead
+            me uint64: positions <- request!.correspondencePositions; me uint64: queue <- request!.queueSteps
+            print("Whole temporal width=",width," frames=",frames," relationships=",relations," positions=",positions," queue=",queue,"\n")
+            if(frames>width*192 or relations>width*96 or positions>width*96 or queue>width*768){
+                FAIL("Fixed-width temporal normalization exceeded bounded per-state work")
+            }
+            if(width>16 and (frames>previousFrames*3+32 or relations>previousRelations*3+32 or
+               positions>previousPositions*3+32 or queue>previousQueue*3+32)){
+                FAIL("Whole temporal normalization repeatedly scanned its completed prefix")
+            }
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Closed normalization retained an unnecessary subscription")}
+            previousFrames <- frames; previousRelations <- relations; previousPositions <- positions; previousQueue <- queue
+            agent.endWorldSessions(); modelMngr.clear(); width <*- 2
+        }
+    }
+
+
+    void: unit_temporalNormalization_retainedReference(me string: testName) <- {
+        // Selecting a typed scalar and adding an untyped number has separate
+        // nominal-arithmetic semantics. An exact same-field identity isolates
+        // this regression to lookup of a predecessor's already-retained facts.
+        me List<string>: inputs <- [
+            "{T {x:1 y:2} {x:3} {y:(%tprev.y)}}",
+            "{T {x:1 y:2} &{T {x:3}} {y:(%tprev.y)}}",
+            "{T {x:1 y:2} {x:3} &{T {y:(%tprev.y)}}}"
+        ]
+        me int: scenario <- 0
+        withEach input in inputs{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: whole <- agent.worldManager.parse(input)
+            me WorldParseResult: incremental <- agent.worldManager.parse(input)
+            if(whole.target==NULL or incremental.target==NULL){FAIL("Retained-reference history did not parse")}
+            our POV: first <- whole.target!.pItem!.value!.items.head
+            our POV: second <- first!.next; our POV: last <- second!.next
+            if(scenario==1){second <- second!.pItem!.value!.items.head}
+            if(scenario==2){last <- last!.pItem!.value!.items.head}
+            our WorldRequest: request <- agent.normalize(whole.target)
+            if(!request!.complete()){FAIL("Explicit previous-field reference did not consume the retained predecessor: "+request!.error())}
+            if(!temporalNormalizationNumber(first,"x",1) or !temporalNormalizationNumber(second,"x",3) or
+               !temporalNormalizationNumber(second,"y",2) or !temporalNormalizationNumber(last,"x",3) or
+               !temporalNormalizationNumber(last,"y",2)){
+                FAIL("Previous-field lookup used the raw incomplete recipe instead of the acquired state")
+            }
+            cursorDemandLinkMembers(incremental.target)
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(), incremental.target!.pItem!.value!.items.head)
+            if(!demand!.requireField("x") or !demand!.requireField("y") or !demand!.refresh() or
+               !demand!.goNext() or !demand!.goNext() or !temporalNormalizationNumber(demand!.current,"x",3) or
+               !temporalNormalizationNumber(demand!.current,"y",2)){
+                FAIL("Demand and whole-history retained-reference semantics disagree: "+demand!.status().detail)
+            }
+            agent.endWorldSessions(); modelMngr.clear(); scenario <+- 1
+        }
+    }
+
+    void: unit_temporalNormalization_parentScaling(me string: testName) <- {
+        withEach form in range 0 .. 2{
+            me uint64: previousFrames <- 0; me uint64: previousRelations <- 0
+            me uint64: previousPositions <- 0; me uint64: previousQueue <- 0
+            me int: width <- 16
+            while(width<=64){
+                me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+                me string: input <- "{T (%tprev +1)| 0"
+                if(form==1){input <- "{T _"}
+                withEach idx in range 1 .. width{input <+- " _"}
+                input <+- "}"
+                if(form==1){
+                    input <+- " == {T"
+                    withEach idx in range 0 .. width{input <+- " "+toString(idx)}
+                    input <+- "}"
+                }
+                me WorldParseResult: parsed <- agent.worldManager.parse(input)
+                if(parsed.target==NULL){FAIL(parsed.error)}
+                our WorldRequest: request <- agent.normalize(parsed.target)
+                if(!request!.complete()){FAIL("Parent-constrained temporal scaling case did not complete: "+request!.error())}
+                our POV: state <- parsed.target!.pItem!.value!.items.head
+                me int: ordinal <- 0
+                while(state!=NULL){
+                    if(state!.pItem!.value!.evalMode!=emLiteral or state!.pItem!.fetchInt()!=ordinal){
+                        FAIL("Parent-constrained temporal scaling produced the wrong state")
+                    }
+                    state <- state!.next; ordinal <+- 1
+                }
+                if(ordinal!=width){FAIL("Parent-constrained temporal scaling changed the represented extent")}
+                me uint64: frames <- request!.framesCreated; me uint64: relations <- request!.relationshipsRead
+                me uint64: positions <- request!.correspondencePositions; me uint64: queue <- request!.queueSteps
+                print("Whole temporal parent form=",form," width=",width," frames=",frames," relationships=",relations,
+                    " positions=",positions," queue=",queue,"\n")
+                if(frames>width*192 or relations>width*96 or positions>width*96 or queue>width*768){
+                    FAIL("Fixed-width parent-constrained history exceeded bounded per-state work")
+                }
+                if(width>16 and (frames>previousFrames*3+32 or relations>previousRelations*3+32 or
+                   positions>previousPositions*3+32 or queue>previousQueue*3+32)){
+                    FAIL("Parent-constrained normalization repeatedly scanned the completed prefix")
+                }
+                if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Closed parent-constrained history retained a subscription")}
+                previousFrames <- frames; previousRelations <- relations; previousPositions <- positions; previousQueue <- queue
+                agent.endWorldSessions(); modelMngr.clear(); width <*- 2
+            }
+        }
+    }
+}
+
+// Sharing and publication costs for fully requested histories. These cases
+// separate number of changing states from unchanged descendant payload size.
+struct GLOBAL {
+    void: unit_temporalSharing_payloadCost(me string: testName) <- {
+        me List<int>: stateCounts <- [4, 32]
+        me List<int>: payloadWidths <- [16, 128]
+        me List<uint64>: snapshots; me List<uint64>: snapshotMembers
+        me List<uint64>: publications; me List<uint64>: frames
+        withEach count in stateCounts{
+            withEach width in payloadWidths{
+                me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+                me string: input <- "{T {x:0 stable:{"
+                withEach idx in range 0 .. width{input <+- "f"+toString(idx)+":("+toString(idx)+" +1) "}
+                input <+- "}}"
+                withEach ordinal in range 1 .. count{input <+- " {x:"+toString(ordinal)+"}"}
+                input <+- "}"
+                me WorldParseResult: parsed <- agent.worldManager.parse(input)
+                if(parsed.target==NULL){FAIL(parsed.error)}
+                our POV: first <- parsed.target!.pItem!.value!.items.head
+                me List<our POV>: occurrences
+                our POV: state <- first
+                while(state!=NULL){occurrences.append(state); state <- state!.next}
+                our WorldRequest: request <- agent.normalize(parsed.target)
+                if(!request!.complete()){FAIL("Complete history did not normalize its unchanged payload: "+request!.error())}
+                if(parsed.target!.pItem!.value!.items.head!==first){FAIL("Temporal normalization replaced its first represented occurrence")}
+                our infonState: shared
+                state <- first; me int: ordinal <- 0
+                while(state!=NULL){
+                    if(state!==occurrences[ordinal] or !temporalNormalizationNumber(state,"x",ordinal)){
+                        FAIL("Temporal normalization changed a represented occurrence or scalar state")
+                    }
+                    our POV: stable <- temporalNormalizationField(state,"stable")
+                    if(stable==NULL or !temporalNormalizationNumber(stable,"f0",1) or
+                       !temporalNormalizationNumber(stable,"f"+toString(width-1),width)){
+                        FAIL("Shared payload lost an initialized endpoint value")
+                    }
+                    if(ordinal==1){shared <- stable!.pItem!.value}
+                    if(ordinal>1 and stable!.pItem!.value!==shared){FAIL("Whole-history normalization rebuilt the unchanged payload for each state")}
+                    state <- state!.next; ordinal <+- 1
+                }
+                if(ordinal!=count){FAIL("Temporal normalization changed the represented state count")}
+                snapshots.append(request!.checkedViewNodes); snapshotMembers.append(request!.checkedViewMembers)
+                publications.append(request!.publications); frames.append(request!.framesCreated)
+                print("Temporal payload states=",count," width=",width," snapshots=",request!.checkedViewNodes,
+                    " snapshotMembers=",request!.checkedViewMembers," publications=",request!.publications,
+                    " frames=",request!.framesCreated," queue=",request!.queueSteps,"\n")
+                if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Complete payload sharing retained an input subscription")}
+                agent.endWorldSessions(); modelMngr.clear()
+            }
+        }
+        // Increasing payload width should cost about the same at 4 and 32
+        // states. A copy at every state multiplies this increment by eight.
+        if(snapshots[3]+2*snapshots[0]>snapshots[2]+2*snapshots[1]+32 or
+           snapshotMembers[3]+2*snapshotMembers[0]>snapshotMembers[2]+2*snapshotMembers[1]+32){
+            FAIL("Checked snapshots multiplied unchanged descendant size by state count")
+        }
+        if(publications[3]+2*publications[0]>publications[2]+2*publications[1]+32){
+            FAIL("Publication repeatedly walked the unchanged payload for every temporal state")
+        }
+        if(frames[3]+2*frames[0]>frames[2]+2*frames[1]+64){
+            FAIL("Full-history acquisition repeatedly normalized the unchanged descendant payload")
+        }
+    }
+
+    void: unit_temporalSharing_partialPayload(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse(
+            "{T {x:0 stable:{first:7 unknown:_ last:9}} {x:1} {x:2} {x:3}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our POV: second <- first!.next; our POV: third <- second!.next; our POV: fourth <- third!.next
+        our WorldRequest: request <- agent.normalize(parsed.target)
+        if(request!.status().outcome!=worldPartial){FAIL("Shared unknown descendant was reported complete: "+request!.error())}
+        our infonState: shared
+        our POV: state <- first; me int: ordinal <- 0
+        while(state!=NULL){
+            our POV: stable <- temporalNormalizationField(state,"stable")
+            our POV: unknown <- temporalNormalizationField(stable,"unknown")
+            if(!temporalNormalizationNumber(state,"x",ordinal) or !temporalNormalizationNumber(stable,"first",7) or
+               !temporalNormalizationNumber(stable,"last",9) or unknown==NULL or unknown!.pItem!.value!.evalMode==emLiteral){
+                FAIL("Retained partial subtree lost known fields or fabricated its unknown leaf")
+            }
+            if(ordinal==1){shared <- stable!.pItem!.value}
+            if(ordinal>1 and stable!.pItem!.value!==shared){FAIL("Partial unchanged payload was copied for every later state")}
+            state <- state!.next; ordinal <+- 1
+        }
+        if(ordinal!=4 or first!.next!==second or second!.next!==third or third!.next!==fourth){
+            FAIL("Sharing a partial payload replaced represented state occurrences")
+        }
+        if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Exhausted unknown payload subscribed without a pending source")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_temporalSharing_ordinaryWrite(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse(
+            "{T {x:0 stable:{left:7 z:_ right:9}} {x:1} {x:2} {x:3}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our WorldRequest: normalized <- agent.normalize(parsed.target)
+        if(normalized!.status().outcome!=worldPartial){FAIL("Unknown writable history did not retain partial status")}
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our POV: second <- first!.next; our POV: third <- second!.next; our POV: fourth <- third!.next
+        our POV: selectedStable <- temporalNormalizationField(third,"stable")
+        our infonState: shared <- temporalNormalizationField(second,"stable")!.pItem!.value
+        if(selectedStable!.pItem!.value!==shared or temporalNormalizationField(fourth,"stable")!.pItem!.value!==shared){
+            FAIL("Ordinary-write setup did not share its unchanged payload")
+        }
+        me string: beforeFirst <- toString(first!.pItem)
+        me string: beforeSecond <- toString(second!.pItem)
+        me string: beforeFourth <- toString(fourth!.pItem)
+        me WorldParseResult: assertion <- agent.worldManager.parse("{x:_ stable:{left:_ z:11 right:_}}")
+        if(assertion.target==NULL){FAIL(assertion.error)}
+        third!.pItem!.wrkList.append(assertion.target); third!.pItem!.noteNormalizationWork()
+        our WorldRequest: written <- agent.normalize(third)
+        if(written!.failed() or written!.publications==0 or !temporalNormalizationNumber(temporalNormalizationField(third,"stable"),"z",11)){
+            FAIL("Ordinary descendant assertion did not publish: "+written!.error())
+        }
+        if(toString(first!.pItem)!=beforeFirst or toString(second!.pItem)!=beforeSecond or toString(fourth!.pItem)!=beforeFourth or
+           temporalNormalizationField(second,"stable")!.pItem!.value!==shared or
+           temporalNormalizationField(fourth,"stable")!.pItem!.value!==shared){
+            FAIL("Ordinary descendant publication changed another state's shared payload")
+        }
+        if(parsed.target!.pItem!.value!.items.head!==first or first!.next!==second or second!.next!==third or third!.next!==fourth or
+           temporalNormalizationField(third,"stable")!==selectedStable){FAIL("Ordinary publication replaced an owned occurrence wrapper")}
+        if(selectedStable!.pItem!.value===shared or !temporalNormalizationNumber(selectedStable,"left",7) or
+           !temporalNormalizationNumber(selectedStable,"right",9)){FAIL("Ordinary publication did not isolate and preserve the modified subtree")}
+
+        // A later incompatible field must discard the earlier checked z
+        // change without attaching any private publication destinations.
+        me WorldParseResult: rejectedHistory <- agent.worldManager.parse(
+            "{T {x:0 stable:{left:7 z:_ right:9}} {x:1} {x:2} {x:3}}")
+        if(rejectedHistory.target==NULL){FAIL(rejectedHistory.error)}
+        our WorldRequest: rejectedSeed <- agent.normalize(rejectedHistory.target)
+        if(rejectedSeed!.status().outcome!=worldPartial){FAIL("Rejected-write setup did not retain its unknown field")}
+        our POV: rejectedFirst <- rejectedHistory.target!.pItem!.value!.items.head
+        our POV: rejectedSecond <- rejectedFirst!.next
+        our POV: rejectedThird <- rejectedSecond!.next
+        our POV: rejectedFourth <- rejectedThird!.next
+        our infonState: rejectedShared <- temporalNormalizationField(rejectedSecond,"stable")!.pItem!.value
+        if(temporalNormalizationField(rejectedThird,"stable")!.pItem!.value!==rejectedShared or
+           temporalNormalizationField(rejectedFourth,"stable")!.pItem!.value!==rejectedShared){FAIL("Rejected-write setup did not share its payload")}
+        me WorldParseResult: contradiction <- agent.worldManager.parse("{x:_ stable:{left:_ z:11 right:99}}")
+        if(contradiction.target==NULL){FAIL(contradiction.error)}
+        rejectedThird!.pItem!.wrkList.append(contradiction.target); rejectedThird!.pItem!.noteNormalizationWork()
+        me string: rejectedOriginal <- toString(rejectedHistory.target!.pItem)
+        our WorldRequest: rejected <- agent.normalize(rejectedThird)
+        if(rejected!.status().outcome!=worldRejected or rejected!.publications!=0 or
+           toString(rejectedHistory.target!.pItem)!=rejectedOriginal){FAIL("Rejected ordinary write published part of its changed history")}
+        if(rejectedHistory.target!.pItem!.value!.items.head!==rejectedFirst or rejectedFirst!.next!==rejectedSecond or
+           rejectedSecond!.next!==rejectedThird or rejectedThird!.next!==rejectedFourth or
+           temporalNormalizationField(rejectedSecond,"stable")!.pItem!.value!==rejectedShared or
+           temporalNormalizationField(rejectedThird,"stable")!.pItem!.value!==rejectedShared or
+           temporalNormalizationField(rejectedFourth,"stable")!.pItem!.value!==rejectedShared){
+            FAIL("Rejected ordinary write attached a copied path or changed a shared payload")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_temporalSharing_selectedWrite(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse(
+            "{T {x:0 stable:{left:7 z:_ right:9}} {x:1} {x:2} {x:3}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our WorldRequest: normalized <- agent.normalize(parsed.target)
+        if(normalized!.status().outcome!=worldPartial){FAIL("Unknown writable history did not retain partial status")}
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our POV: second <- first!.next; our POV: third <- second!.next; our POV: fourth <- third!.next
+        our infonState: shared <- temporalNormalizationField(second,"stable")!.pItem!.value
+        if(temporalNormalizationField(third,"stable")!.pItem!.value!==shared or
+           temporalNormalizationField(fourth,"stable")!.pItem!.value!==shared){FAIL("Selected-write setup did not share its unchanged payload")}
+        me string: beforeFirst <- toString(first!.pItem)
+        me string: beforeSecond <- toString(second!.pItem)
+        me string: beforeFourth <- toString(fourth!.pItem)
+        our TCursor: cursor; Allocate(cursor, parsed.target); cursor!.attach(agent.worldManager, agent.startSession()); cursor!.inList()
+        if(!cursor!.seek(FlexNum("3")) or cursor!.position!.node!==third){FAIL("Cursor could not select the later state for a descendant write")}
+        if(toString(first!.pItem)!=beforeFirst or toString(second!.pItem)!=beforeSecond or toString(fourth!.pItem)!=beforeFourth){
+            FAIL("Cursor acquisition changed another state's represented value before the write")
+        }
+        // Cursor acquisition may replace a reconstructible materialization.
+        // Compare payload identity across the write itself, after selection.
+        our infonState: secondPayload <- temporalNormalizationField(second,"stable")!.pItem!.value
+        our infonState: fourthPayload <- temporalNormalizationField(fourth,"stable")!.pItem!.value
+        our infonState: selectedPayload <- temporalNormalizationField(third,"stable")!.pItem!.value
+        me WorldParseResult: assertion <- agent.worldManager.parse("{x:_ stable:{left:_ z:11 right:_}}")
+        if(assertion.target==NULL){FAIL(assertion.error)}
+        third!.pItem!.wrkList.append(assertion.target); third!.pItem!.noteNormalizationWork()
+        our WorldRequest: written <- agent.normalize(third)
+        if(written!.failed() or written!.publications==0 or !temporalNormalizationNumber(temporalNormalizationField(third,"stable"),"z",11)){
+            FAIL("Selected state's descendant assertion did not publish: "+written!.error())
+        }
+        if(toString(first!.pItem)!=beforeFirst or toString(second!.pItem)!=beforeSecond or toString(fourth!.pItem)!=beforeFourth or
+           temporalNormalizationField(second,"stable")!.pItem!.value!==secondPayload or
+           temporalNormalizationField(fourth,"stable")!.pItem!.value!==fourthPayload){
+            FAIL("A selected descendant write changed another temporal state's shared payload")
+        }
+        if(temporalNormalizationField(third,"stable")!.pItem!.value===selectedPayload){FAIL("Writing a retained descendant did not isolate its modified path")}
+        if(!cursor!.refresh() or !cursor!.goPrev()){FAIL("Descendant write broke cursor acquisition of the selected or prior state")}
+        cursor!.clearCache()
+        if(!temporalNormalizationNumber(temporalNormalizationField(third,"stable"),"z",11) or
+           toString(first!.pItem)!=beforeFirst or toString(second!.pItem)!=beforeSecond or toString(fourth!.pItem)!=beforeFourth){
+            FAIL("Cache clearing discarded a durable descendant write or altered another state")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+}
+
+struct GLOBAL {
+    void: unit_temporalNormalization_lateContext(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#timeline={T ...}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL("Temporal definition did not install")}
+        me List<string>: inputs <- ["timeline:{1 _ _}", "timeline:{{x:1 y:2} {x:3}}"]
+        withEach input in inputs{
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            me string: original <- toString(parsed.target!.pItem)
+            our WorldRequest: request <- agent.normalize(parsed.target)
+            if(request!.status().outcome!=worldUnsupported or request!.publications!=0 or toString(parsed.target!.pItem)!=original){
+                FAIL("Late temporal context silently skipped member acquisition: "+input+": "+request!.error())
+            }
+        }
+        me WorldParseResult: known <- agent.worldManager.parse("timeline:{1 2}")
+        if(known.target==NULL){FAIL(known.error)}
+        our WorldRequest: complete <- agent.normalize(known.target)
+        if(!complete!.complete() or !known.target!.pItem!.value!.timelike){FAIL("Known scalar temporal type inheritance regressed")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+    void: unit_temporalNormalization_introducedBoundary(me string: testName) <- {
+        me List<string>: inputs <- ["{T 1 ...} = {T _ _ _}", "{T (%tprev +1)| 0 ...} = {T _ _ _}", "{T ...} = {T 1 2}",
+            "{T ...} == {T 1 2}", "{T 1 ...} == {T 1 2 3}", "? = {T 1 _}"]
+        withEach input in inputs{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            me string: original <- toString(parsed.target!.pItem)
+            our WorldRequest: request <- agent.normalize(parsed.target)
+            if(request!.status().outcome!=worldUnsupported or request!.publications!=0 or toString(parsed.target!.pItem)!=original){
+                FAIL("Introduced temporal occurrences bypassed acquisition or changed supplied evidence: "+input+": "+request!.error())
+            }
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+        me Agent: unresolvedAgent; Allocate(unresolvedAgent.identityRegistry)
+        unresolvedAgent.worldManager.control!.identities <- unresolvedAgent.identityRegistry
+        me WorldParseResult: unresolved <- unresolvedAgent.worldManager.parse("{T 1 ...} == {T 1 _ _}")
+        if(unresolved.target==NULL){FAIL(unresolved.error)}
+        me string: unresolvedOriginal <- toString(unresolved.target!.pItem)
+        our WorldRequest: pending <- unresolvedAgent.normalize(unresolved.target)
+        if(pending!.status().outcome!=worldPartial or pending!.publications!=0 or toString(unresolved.target!.pItem)!=unresolvedOriginal){
+            FAIL("An unresolved source bypassed the temporal correspondence proof")
+        }
+        unresolvedAgent.endWorldSessions(); modelMngr.clear()
+        // Closing a tail without adding an occurrence, refining represented
+        // temporal members, and extending an ordinary list remain supported.
+        me List<string>: controls <- ["{T 1 ...} = {T 1}", "{T _ _} == {T 1 2}", "{1 ...} = {1 2}"]
+        me int: scenario <- 0
+        withEach input in controls{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our POV: first <- parsed.target!.pItem!.value!.items.head
+            our POV: second <- first!.next
+            our WorldRequest: request <- agent.normalize(parsed.target)
+            if(!request!.complete()){FAIL("Temporal introduction guard blocked an existing supported correspondence: "+input+": "+request!.error())}
+            our POV: actual <- parsed.target!.pItem!.value!.items.head
+            if(actual!==first or actual!.pItem!.fetchInt()!=1){FAIL("Supported correspondence lost its represented first occurrence")}
+            actual <- actual!.next
+            if(scenario==0){
+                if(actual!=NULL){FAIL("Closing a temporal tail introduced a state")}
+            }else{
+                if(actual==NULL or actual!.pItem!.fetchInt()!=2 or actual!.next!=NULL){FAIL("Supported correspondence lost its second value or endpoint")}
+                if(scenario==1 and actual!==second){FAIL("Refining a temporal history replaced its represented second occurrence")}
+            }
+            scenario <+- 1
             agent.endWorldSessions(); modelMngr.clear()
         }
     }

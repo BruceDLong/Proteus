@@ -50,15 +50,13 @@ application-world setup. Default tests use tracked assets.
 The executable identifies WorldManager at startup. Check the printed failure
 summary: the inherited harness can exit zero on test failures.
 
-The active suite contains 83 compiled CodeDog checks and 332 default language
-cases. All 16 tracked `.tst` files, including print-mode fixtures, are preserved.
-Expected outputs were not adjusted to match current failures. The last full
-validation, on 2026-10-17 after adding cursor readiness
-([D089](<Design Docs/normalization-design-decisions.md#d089-require-selected-cursor-fields-before-presenting-a-temporal-state-2026-10-17>)),
-reported **391 passes and 24 failures out of 415 tests**. All eleven new checks
-passed; the failure names and diagnostics matched the 24/404 pre-change run.
-The earlier D087 validation also passed ten print-mode fixtures and retained
-the separate fixture suites' results.
+The active suite contains 153 compiled CodeDog checks and 437 default language
+cases. All 19 tracked `.tst` files, including print-mode fixtures, are preserved.
+Expected outputs were not adjusted to match incomplete behavior. Validation
+results and supported boundaries are recorded with each decision in
+[the decision log](<Design Docs/normalization-design-decisions.md>); D105 covers
+ordinary temporal acquisition and sharing. The pre-change baseline has 24 known
+failures, including 16 default language cases.
 
 Under D072, 140 registrations backed by verbatim C++ and 14 standalone drivers
 for the retired Proteus4 engine were removed. This includes the newer
@@ -67,7 +65,7 @@ WorldManager C++ test suites. The remaining `<% ... %>` delimiters in
 Subsequent cleanup converted the remaining production native function bodies to
 CodeDog. Future tests belong in ordinary CodeDog or `.tst` fixtures.
 
-ProteusTests.dog lists all 83 compiled checks, including eleven cursor-readiness
+ProteusTests.dog lists all 153 compiled checks, including eleven cursor-readiness
 checks. The graph inventories, audit scripts
 and diagnostic assets were removed from the checkout after the fixtures moved
 to Tests. The last inventory and retirement manifest remain available with:
@@ -88,8 +86,16 @@ establish that the behaviors they covered work.
 `toString(infon, ipmCompressed)`, `ipmExpanded`, or `ipmDebug`.
 `toStringColor` and `InfonViewPrinter.printInfonView` also accept a final mode
 parameter, defaulting to compressed. Debug includes the existing size and
-retained-template diagnostics. Expanded currently uses compressed output; cursor
-expansion will be implemented separately. Printing does not normalize the model.
+retained-template diagnostics. These context-free formatters remain pure:
+`ipmExpanded` uses compressed output when called without a reasoning context.
+
+Use `WorldManager.printExpanded(session, source, maxItems, ...)` for expanded
+output. It acquires logical members through the same normalizer-owned demands
+as cursors, including parent listSpecs, overlays and embedded members. Expansion
+currently covers one ordered-list level; nested values keep compressed formatting.
+The default limit is 64 requested members. The returned handle exposes text,
+status, completion and truncation; `refresh()` continues after a wait. A limit,
+unresolved value or unsupported list shape does not count as a complete display.
 
 Dynamic `.tst` rows accept an optional seventh column:
 
@@ -99,8 +105,20 @@ name, display, input, expected, execution-mode, world-file, print-mode
 
 `print-mode` is `compressed`, `expanded`, or `debug`. Omitted or blank means
 compressed. It applies to parse, norm, multi, world, and graph result checks;
-leave the sixth column empty when no world file is needed. Existing fixtures
-and expectations remain unchanged. Run the focused fixtures from `LocalBuild`:
+leave the sixth column empty when no world file is needed. For example, these
+rows select different renderings of the same input:
+
+```text
+example/compressed, Retain embedded structure, {1 &{2 3} 4}, {1 &{2 3} 4}, parse,,compressed
+example/expanded, Show logical members, {1 &{2 3} 4}, {1 2 3 4}, parse,,expanded
+example/debug, Show retained size information, {1 &{2 3} 4}, *4+{1 &*2+{2 3} 4}, parse,,debug
+```
+
+Expanded fixture checks use the Agent's session and the 64-member limit, and
+require a complete display. Even with `parse` execution mode, expanded printing
+acquires the requested members; `parse` skips only the initial whole-value
+normalization. Existing fixtures and expectations retain their default compressed
+mode. Run the focused fixtures from `LocalBuild`:
 
 ```sh
 ./TestProteus -t print-mode-tests.tst:
