@@ -1215,10 +1215,10 @@ Cost checks compare extents 10 and one billion with fewer than 20 structural vis
 
 ## Structured parsing through correspondence (2026-10-12)
 
-D03T extends whole-list correspondence to type-changing `==` and `==:` patterns. It does not change parsing syntax. `WorldPatternChart` belongs to the existing `WorldCorrespondence` operation. Each `WorldPatternGoal` identifies a checked template and an input boundary and returns possible end boundaries with projected result frames and shared proofs.
+D03T extends whole-list correspondence to type-changing `==` and `==:` patterns. It does not change parsing syntax. `WorldPatternChart` belongs to the existing `WorldCorrespondence` operation. Each `WorldPatternMatchProblem` identifies a checked template and an input boundary and returns possible end boundaries with projected result frames and shared proofs. `WorldPatternMatchState` records progress within that match. These are matching operations, not model-level goals: a destination or other intermediate condition has only the constraints expressed by its model, and a sequence can contain any number of segments.
 
 - A scalar terminal uses the existing scalar matcher against one source member or an established-width text window.
-- A list sequences child goals and retains its nested or embedded output shape. Its listSpec supplies repeated child goals; any given size constrains resulting member count.
+- A list sequences child matches and retains its nested or embedded output shape. Its listSpec supplies repeated child matches; any given size constrains resulting member count.
 - A finite OR requests each existing alternative template at the same boundary.
 - The root accepts an endpoint match for `==`, or a prefix match for `==:`. Multiple valid outputs or unbounded zero-width repetition remain partial and unpublished.
 
@@ -1707,10 +1707,11 @@ Waits, cancellation and conflicts preserve the original
 history; successful ordinary publication remains durable. Shallow demands and
 whole-history requests still have their respective descendant requirements.
 
-Represented finite histories and closed embedded spans are covered. Introducing
-new temporal occurrences through open-tail correspondence or adoption of an
-unacquired temporal constraint source remains unsupported:
-those occurrences require target contexts before applying contextual state rules.
+Represented finite histories and closed embedded spans are covered. D108 below
+adds target occurrence acquisition for uniquely bounded finite tail correspondence.
+Other introduction routes, including adoption of an unacquired temporal constraint
+source, still require target contexts before applying contextual state rules and
+remain unsupported.
 Likewise, a T context established only after member evaluation cannot acquire
 states that need retention; it reports unsupported. D106 establishes the context
 before member evaluation for the named layouts described below. Other late
@@ -1769,3 +1770,27 @@ relations. Bare named aliases must have no additional obligations. Field values
 remain lazy; unused siblings do not become normalization prerequisites. The field
 walk retains its exact position over parser waits, and rejection or cancellation
 publishes nothing. No cursor-specific inference or whole-history scan is added.
+
+
+## Finite temporal occurrence production (D108, 2026-10-22)
+
+A closed source can establish a finite remainder of a temporal target. The
+normalizer reserves those target occurrences before applying their contextual
+constraints, then acquires each through the ordinary queue, parent requirements
+and temporal retention. Matched source facts keep their source scope; retained
+tail requirements are applied in the new target context. Refinement of the
+represented prefix contributes the checked predecessor for the generated suffix.
+For example, `{T (%tprev +1)| 0 ...} = {T _ _ _}` yields `{T 0 1 2}`.
+
+A request-owned virtual layout provides private sibling links without changing
+the stored history. Existing prefix occurrences keep their identities; newly
+reserved occurrences become the published occurrences after validation. Waiting,
+rejection and cancellation leave the stored topology untouched and release private
+links. Cursors continue to traverse the ordinary normalized result.
+
+This finite correspondence does not infer an endpoint from a transition failure
+or create membership merely because a cursor asks for another state. Unbounded
+production, ambiguous contextual chart alternatives, general temporal adoption
+and retention of indefinitely generated occurrence metadata remain separate work.
+Matching problems and matching states carry no model-level goal or destination
+semantics and impose no two-segment restriction.

@@ -1,6 +1,13 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/temporalProduction/scalars
+    unit/temporalProduction/records
+    unit/temporalProduction/segments
+    unit/temporalProduction/sourceScope
+    unit/temporalProduction/conflict
+    unit/temporalProduction/waitAndCancel
+    unit/temporalProduction/scaling
     unit/recordProjection/addedField
     unit/recordProjection/nestedField
     unit/recordProjection/otherRequirements
@@ -4702,8 +4709,10 @@ struct GLOBAL {
         agent.endWorldSessions(); modelMngr.clear()
     }
     void: unit_temporalNormalization_introducedBoundary(me string: testName) <- {
-        me List<string>: inputs <- ["{T 1 ...} = {T _ _ _}", "{T (%tprev +1)| 0 ...} = {T _ _ _}", "{T ...} = {T 1 2}",
-            "{T ...} == {T 1 2}", "{T 1 ...} == {T 1 2 3}", "? = {T 1 _}"]
+        // Direct finite correspondence with or without a seed now has its
+        // positive contract in temporalProduction. Adoption and alignment
+        // routes still need their own occurrence acquisition proof.
+        me List<string>: inputs <- ["{T ...} == {T 1 2}", "{T 1 ...} == {T 1 2 3}", "? = {T 1 _}"]
         withEach input in inputs{
             me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
             me WorldParseResult: parsed <- agent.worldManager.parse(input)
@@ -5688,6 +5697,290 @@ struct GLOBAL {
                 priorChecks <- checks; priorSkips <- skips
                 agent.endWorldSessions(); modelMngr.clear(); width <*- 2
             }
+        }
+    }
+}
+
+// A finite identity can establish new target occurrences. Their values still
+// come from ordinary acquisition in the target's temporal and lexical context.
+struct GLOBAL {
+    void: unit_temporalProduction_scalars(me string: testName) <- {
+        me List<string>: inputs <- ["{T (%tprev +1)| 0 ...} = {T _ _ _}",
+            "{T (%tprev +1)| _ ...} = {T 10 _ _}",
+            "{T (%prev +1)| 0 ...} = {T _ _ _}", "{T 1 ...} = {T _ _ _}"]
+        me int: scenario <- 0
+        withEach input in inputs{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our POV: first <- parsed.target!.pItem!.value!.items.head
+            our POV: source <- parsed.target!.pItem!.wrkList[0]
+            our infonView: recipe <- parsed.target!.pItem!.value!.listSpec
+            me string: sourceOriginal <- toString(source!.pItem)
+            me string: recipeOriginal; if(recipe!=NULL){recipeOriginal <- toString(recipe)}
+            our WorldRequest: request <- agent.normalize(parsed.target)
+            if(!request!.complete()){FAIL("Finite temporal production did not complete: "+input+": "+request!.error())}
+            if(parsed.target!.pItem!.value!.items.head!==first){FAIL("Temporal production replaced its represented seed occurrence")}
+            me int: start <- 0; if(scenario==1){start <- 10}
+            if(scenario==3){start <- 1}
+            cursorDemandLinkMembers(parsed.target)
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),first,
+                agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+            if(!demand!.refresh()){FAIL("Produced history could not be acquired by a demand: "+demand!.status().detail)}
+            our WorldPosition: frozen <- demand!.snapshot()
+            our POV: item <- first; our POV: second
+            withEach ordinal in range 0 .. 3{
+                me int: expected <- start+ordinal; if(scenario==3){expected <- 1}
+                if(item==NULL or item!.pItem!.value!.evalMode!=emLiteral or item!.pItem!.fetchInt()!=expected or
+                   demand!.current!.pItem!.fetchInt()!=expected or demand!.position!.node!==item){
+                    FAIL("A produced state used the wrong predecessor or occurrence identity: "+input)
+                }
+                if(ordinal==1){second <- item}
+                item <- item!.next
+                if(ordinal<2 and !demand!.goNext()){FAIL("A produced successor was not available to ordinary traversal: "+demand!.status().detail)}
+            }
+            if(item!=NULL or !demand!.goPrev() or demand!.position!.node!==second or
+               frozen!.node!.pItem!.fetchInt()!=start){FAIL("Produced history lost its extent or changed a retained snapshot")}
+            if(toString(source!.pItem)!=sourceOriginal or (recipe!=NULL and toString(recipe)!=recipeOriginal)){
+                FAIL("Temporal production changed a source constraint or shared transition recipe")
+            }
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Finite temporal production retained an input subscription")}
+            agent.endWorldSessions(); modelMngr.clear(); scenario <+- 1
+        }
+        me Agent: emptyAgent; Allocate(emptyAgent.identityRegistry)
+        emptyAgent.worldManager.control!.identities <- emptyAgent.identityRegistry
+        me WorldParseResult: empty <- emptyAgent.worldManager.parse("{T ...} = {T 1 2}")
+        if(empty.target==NULL){FAIL(empty.error)}
+        our POV: supplied <- empty.target!.pItem!.wrkList[0]
+        me string: suppliedOriginal <- toString(supplied!.pItem)
+        our WorldRequest: produced <- emptyAgent.normalize(empty.target)
+        if(!produced!.complete() or !namedLayoutValues(empty.target,[1,2]) or toString(supplied!.pItem)!=suppliedOriginal or
+           !emptyAgent.worldManager.control!.inputWaiters.isEmpty()){
+            FAIL("Finite evidence did not establish an initially empty temporal history: "+produced!.error())
+        }
+        emptyAgent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_temporalProduction_records(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T {x:1 y:2 stable:{a:7 b:8}} ...} = {T ? {x:3} {y:4}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our POV: source <- parsed.target!.pItem!.wrkList[0]
+        me string: sourceOriginal <- toString(source!.pItem)
+        our WorldRequest: request <- agent.normalize(parsed.target)
+        if(!request!.complete()){FAIL("Produced record states did not complete: "+request!.error())}
+        our POV: second <- first!.next
+        if(second==NULL or second!.next==NULL){FAIL("Finite record production did not establish its three occurrences")}
+        our POV: third <- second!.next
+        if(parsed.target!.pItem!.value!.items.head!==first or third!.next!=NULL or
+           !temporalNormalizationNumber(first,"x",1) or !temporalNormalizationNumber(first,"y",2) or
+           !temporalNormalizationNumber(second,"x",3) or !temporalNormalizationNumber(second,"y",2) or
+           !temporalNormalizationNumber(third,"x",3) or !temporalNormalizationNumber(third,"y",4) or
+           !temporalNormalizationNumber(temporalNormalizationField(third,"stable"),"b",8)){
+            FAIL("New record occurrences lost changed or retained fields")
+        }
+        our POV: priorStable <- temporalNormalizationField(second,"stable")
+        our POV: lastStable <- temporalNormalizationField(third,"stable")
+        if(priorStable==NULL or lastStable==NULL or priorStable!.pItem!.value!==lastStable!.pItem!.value or
+           toString(source!.pItem)!=sourceOriginal){FAIL("Record production recopied an unchanged payload or changed its source")}
+        cursorDemandLinkMembers(parsed.target)
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),third,
+            agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        if(!demand!.requireField("stable.a") or !demand!.refresh() or demand!.position!.node!==third or
+           !temporalNormalizationNumber(temporalNormalizationField(demand!.current,"stable"),"a",7)){
+            FAIL("A produced record could not satisfy a later descendant demand: "+demand!.status().detail)
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_temporalProduction_segments(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        // Three independently closed source spans and a middle state establish
+        // one finite history. Neither endpoints nor two segments are privileged.
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T (%tprev +1)| 0 ...} = {T _ &{T _ _} 3 &{T _ _} &{T _ _}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our POV: source <- parsed.target!.pItem!.wrkList[0]
+        me string: original <- toString(source!.pItem)
+        our WorldRequest: request <- agent.normalize(parsed.target)
+        if(!request!.complete() or !namedLayoutValues(parsed.target,[0,1,2,3,4,5,6,7])){
+            FAIL("Closed source segments interrupted target-relative temporal acquisition: "+request!.error())
+        }
+        if(parsed.target!.pItem!.value!.items.head!==first or toString(source!.pItem)!=original){
+            FAIL("Segment production replaced the seed or changed an embedded source")
+        }
+        parsed <- agent.worldManager.parse("{T 0 &({T (%tprev +1)| ...}={T _ _}) 3}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        first <- parsed.target!.pItem!.value!.items.head
+        our POV: span <- first!.next
+        our POV: last <- span!.next
+        request <- agent.normalize(parsed.target)
+        if(!request!.complete() or !namedLayoutValues(span,[1,2]) or first!.pItem!.fetchInt()!=0 or last!.pItem!.fetchInt()!=3){
+            FAIL("An embedded target span lost the predecessor at its outer boundary: "+request!.error())
+        }
+        if(parsed.target!.pItem!.value!.items.head!==first or first!.next!==span or span!.next!==last){
+            FAIL("Embedded temporal production replaced a represented enclosing occurrence")
+        }
+        parsed <- agent.worldManager.parse("{T 0 &{T (%tprev +1)| ...} 3} = {T 0 _ _ 3}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        first <- parsed.target!.pItem!.value!.items.head; span <- first!.next; last <- span!.next
+        source <- parsed.target!.pItem!.wrkList[0]; original <- toString(source!.pItem)
+        request <- agent.normalize(parsed.target)
+        if(!request!.complete() or !namedLayoutValues(span,[1,2]) or first!.pItem!.fetchInt()!=0 or last!.pItem!.fetchInt()!=3 or
+           parsed.target!.pItem!.value!.items.head!==first or first!.next!==span or span!.next!==last or toString(source!.pItem)!=original){
+            FAIL("An ancestor-bounded embedded span lost its target context or represented boundaries: "+request!.error())
+        }
+        parsed <- agent.worldManager.parse("{T 0 &{T 10} ...} = {T 0 10 _}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        first <- parsed.target!.pItem!.value!.items.head; span <- first!.next
+        our POV: nested <- span!.pItem!.value!.items.head
+        request <- agent.normalize(parsed.target)
+        last <- span!.next
+        if(!request!.complete() or last==NULL or last!.next!=NULL or last!.pItem!.value!.evalMode!=emLiteral or
+           last!.pItem!.fetchInt()!=10 or parsed.target!.pItem!.value!.items.head!==first or first!.next!==span or
+           span!.pItem!.value!.items.head!==nested or nested!.pItem!.fetchInt()!=10){
+            FAIL("A generated occurrence retained the state before its embedded predecessor: "+request!.error())
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_temporalProduction_sourceScope(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#evidence(last)={T _ _ %last}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our infonView: meaning <- declaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me string: meaningOriginal <- toString(meaning)
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T (%tprev +1)| 0 ...} = evidence(last::2)")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our POV: source <- parsed.target!.pItem!.wrkList[0]
+        me string: sourceOriginal <- toString(source!.pItem)
+        our WorldRequest: request <- agent.normalize(parsed.target)
+        if(!request!.complete() or !namedLayoutValues(parsed.target,[0,1,2])){
+            FAIL("Source argument scope was lost while producing target occurrences: "+request!.error())
+        }
+        if(toString(meaning)!=meaningOriginal or toString(source!.pItem)!=sourceOriginal){
+            FAIL("Target production wrote into a parameterized source or its shared definition")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_temporalProduction_conflict(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T (%tprev +1)| 0 ...} = {T _ _ 7}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our POV: originalNext <- first!.next
+        our infonView: seed <- first!.pItem
+        our POV: source <- parsed.target!.pItem!.wrkList[0]
+        me string: original <- toString(parsed.target!.pItem)
+        me string: sourceOriginal <- toString(source!.pItem)
+        our WorldSession: session <- agent.startSession()
+        our WorldRequest: request <- agent.worldManager.normalize(session,parsed.target,false,
+            agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        if(request!.status().outcome!=worldRejected or request!.publications!=0 or first!.pItem!==seed or
+           first!.next!==originalNext or toString(parsed.target!.pItem)!=original or toString(source!.pItem)!=sourceOriginal){
+            FAIL("A late temporal conflict published a generated suffix or changed source evidence: "+request!.error())
+        }
+        agent.worldManager.release(session,request)
+        if(!session!.requests.isEmpty() or !agent.worldManager.control!.inputWaiters.isEmpty()){
+            FAIL("Rejected temporal production retained a request or subscription")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_temporalProduction_waitAndCancel(me string: testName) <- {
+        withEach pendingAt in range 0 .. 2{
+        withEach cancelled in range 0 .. 2{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: parsed <- agent.worldManager.parse("{T (%tprev +1)| 0 ...} = {T _ _ _ _}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our POV: first <- parsed.target!.pItem!.value!.items.head
+            our POV: originalNext <- first!.next
+            our infonView: seed <- first!.pItem
+            our POV: source <- parsed.target!.pItem!.wrkList[0]
+            our infonView: pending <- source!.pItem!.value!.items.tail!.pItem
+            // The seed has no predecessor, so its recurrence is inapplicable
+            // before reading this second operand. A generated state reaches
+            // the operand only after its private occurrence is established.
+            if(pendingAt==1){pending <- parsed.target!.pItem!.value!.listSpec!.value!.items.tail!.pItem}
+            me string: original <- toString(parsed.target!.pItem)
+            me string: sourceOriginal <- toString(source!.pItem)
+            agent.worldManager.prepareInput(pending)
+            our WorldSession: session <- agent.startSession()
+            our WorldRequest: request <- agent.worldManager.normalize(session,parsed.target,false,
+                agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+            if(request!.status().outcome!=worldWaiting or request!.publications!=0 or first!.pItem!==seed or first!.next!==originalNext or
+               agent.worldManager.control!.inputWaiters.size()!=1){FAIL("Pending temporal production did not retain one atomic parser wait: "+request!.error())}
+            if(pendingAt==1 and request!.productionMembers==0){FAIL("The transition-operand wait occurred before temporal production started")}
+            me uint64: frames <- request!.framesCreated; me uint64: queue <- request!.queueSteps
+            me uint64: positions <- request!.correspondencePositions
+            our infonView:: unrelated; agent.worldManager.inputReady(unrelated)
+            if(request!.framesCreated!=frames or request!.queueSteps!=queue or request!.correspondencePositions!=positions){
+                FAIL("Unrelated input restarted temporal suffix production")
+            }
+            if(cancelled==1){request!.cancel()}
+            pending!.streamState <- parseDone; agent.worldManager.inputReady(pending)
+            if(cancelled==1){
+                if(request!.status().outcome!=worldCancelled or request!.publications!=0 or first!.pItem!==seed or
+                   first!.next!==originalNext or toString(parsed.target!.pItem)!=original){FAIL("Cancelled temporal production attached its private suffix")}
+            }else if(!request!.complete() or !namedLayoutValues(parsed.target,[0,1,2,3]) or
+                     parsed.target!.pItem!.value!.items.head!==first){FAIL("Temporal production did not resume its retained frontier: "+request!.error())}
+            if(toString(source!.pItem)!=sourceOriginal or !agent.worldManager.control!.inputWaiters.isEmpty()){
+                FAIL("Finished temporal production changed its source or leaked a subscription")
+            }
+            agent.worldManager.release(session,request)
+            if(!session!.requests.isEmpty()){FAIL("Finished temporal production retained its released request")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+        }
+    }
+
+    void: unit_temporalProduction_scaling(me string: testName) <- {
+        me uint64: priorFrames <- 0; me uint64: priorRelations <- 0; me uint64: priorPositions <- 0
+        me uint64: priorQueue <- 0; me uint64: priorSnapshots <- 0; me uint64: priorSnapshotMembers <- 0
+        me uint64: priorWrappers <- 0; me uint64: priorProduced <- 0
+        me int: width <- 16
+        while(width<=64){
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me string: input <- "{T (%tprev +1)| 0 ...} = {T"
+            withEach ordinal in range 0 .. width{input <+- " _"}
+            input <+- "}"
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our POV: first <- parsed.target!.pItem!.value!.items.head
+            our WorldRequest: request <- agent.normalize(parsed.target)
+            if(!request!.complete()){FAIL("Fixed-width temporal production did not complete: "+request!.error())}
+            our POV: item <- parsed.target!.pItem!.value!.items.head
+            withEach ordinal in range 0 .. width{
+                if(item==NULL or item!.pItem!.value!.evalMode!=emLiteral or item!.pItem!.fetchInt()!=ordinal){
+                    me string: actual <- "<missing>"
+                    if(item!=NULL){actual <- toString(item!.pItem)}
+                    FAIL("Finite temporal production has a wrong state: width="+toString(width)+" ordinal="+toString(ordinal)+" actual="+actual)
+                }
+                item <- item!.next
+            }
+            if(item!=NULL or parsed.target!.pItem!.value!.items.head!==first){FAIL("Finite production changed its extent or represented seed")}
+            me uint64: frames <- request!.framesCreated; me uint64: relations <- request!.relationshipsRead
+            me uint64: positions <- request!.correspondencePositions; me uint64: queue <- request!.queueSteps
+            me uint64: snapshots <- request!.checkedViewNodes; me uint64: snapshotMembers <- request!.checkedViewMembers
+            me uint64: wrappers <- request!.productionWrappers; me uint64: produced <- request!.productionMembers
+            print("Temporal production width=",width," frames=",frames," relationships=",relations," positions=",positions,
+                " queue=",queue," snapshots=",snapshots," snapshotMembers=",snapshotMembers," wrappers=",wrappers," produced=",produced,"\n")
+            if(frames>width*256 or relations>width*128 or positions>width*128 or queue>width*1024 or
+               snapshots>width*128 or snapshotMembers>width*128 or wrappers>width*8 or produced>width*8){FAIL("Fixed-width temporal production exceeded bounded per-state work")}
+            if(width>16 and (frames>priorFrames*3+32 or relations>priorRelations*3+32 or positions>priorPositions*3+32 or
+               queue>priorQueue*3+32 or snapshots>priorSnapshots*3+32 or snapshotMembers>priorSnapshotMembers*3+32 or
+               wrappers>priorWrappers*3+32 or produced>priorProduced*3+32)){
+                FAIL("Temporal production repeatedly replayed an already produced prefix")
+            }
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Finite temporal production retained subscriptions")}
+            priorFrames <- frames; priorRelations <- relations; priorPositions <- positions; priorQueue <- queue
+            priorSnapshots <- snapshots; priorSnapshotMembers <- snapshotMembers
+            priorWrappers <- wrappers; priorProduced <- produced
+            agent.endWorldSessions(); modelMngr.clear(); width <*- 2
         }
     }
 }

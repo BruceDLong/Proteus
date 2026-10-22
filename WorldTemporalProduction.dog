@@ -1,0 +1,145 @@
+// A finite correspondence reserves target occurrences before their recipes
+// run. The private layout shares descriptions but owns every sibling link.
+struct WorldProducedList {
+    our WorldPosition: position
+    me Map<our POV, our POV>: represented
+    me List<our POV>: introduced
+    me int64: next <- 0
+}
+struct POV {
+    // Only detached prefix wrappers use this; published new occurrences have
+    // their own identity and never inherit a source occurrence.
+    their POV: productionOrigin <- NULL
+}
+struct WorldFrame {
+    our WorldProducedList: production
+    me bool: producingMember <- false
+}
+struct WorldRequest {
+    me Map<our POV, our WorldProducedList>: producedLists
+    me Set<our POV>: producedOccurrences
+    me Map<our POV, our WorldFrame>: producedFacts
+    me Set<our POV>: publishedProducedOccurrences
+    me uint64: productionWrappers <- 0
+    me uint64: productionMembers <- 0
+    void: releaseTemporalProduction() <- {
+        withEach layout in producedLists{
+            withEach node in layout!.represented{
+                node!.next <- NULL; node!.prev <- NULL; node!.pParent <- NULL; node!.productionOrigin <- NULL
+            }
+            withEach node in layout!.introduced{
+                if(!publishedProducedOccurrences.contains(node)){
+                    node!.next <- NULL; node!.prev <- NULL; node!.pParent <- NULL; node!.worldContext <- NULL
+                }
+            }
+            layout!.position!.node!.pItem!.value!.items.clear()
+        }
+        producedLists.clear(); producedOccurrences.clear(); producedFacts.clear(); publishedProducedOccurrences.clear()
+    }
+}
+struct WorldPOVGraph {
+    our WorldPosition: producedPosition(our WorldRequest: request, our WorldPosition: at) <- {
+        if(at==NULL or at!.parent==NULL or !request!.producedLists.containsKey(at!.parent!.owner)){return(at)}
+        our WorldProducedList: layout <- request!.producedLists.at(at!.parent!.owner)
+        if(!samePosition(layout!.position, at!.parent)){return(at)}
+        our POV: node <- at!.owner
+        if(layout!.represented.containsKey(node)){node <- layout!.represented.at(node)}
+        else if(!request!.producedOccurrences.contains(node)){return(at)}
+        our WorldPosition: result <- representedPosition(node, at)
+        result!.owner <- node; result!.parent <- layout!.position
+        return(result)
+    }
+    our WorldPosition: producedValue(our WorldRequest: request, our WorldPosition: at) <- {
+        if(at!=NULL and request!.producedFacts.containsKey(at!.owner)){
+            our WorldFrame: checked <- request!.producedFacts.at(at!.owner)
+            if(checked!.navigation==NULL or !samePosition(checked!.navigation, at)){return(at)}
+            our WorldPosition: result <- checkedPosition(request, checked)
+            if(result!=NULL){
+                result!.owner <- at!.owner; result!.occurrence <- at!.occurrence; result!.parent <- at!.parent
+            }
+            return(result)
+        }
+        return(at)
+    }
+}
+struct WorldManager {
+    me bool: prepareTemporalProduction(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(frame!.production!=NULL or !frame!.extendingTail or frame!.applyingListSpec or
+           frame!.temporalMembers==NULL or frame!.openAlignment!=NULL or frame!.gapWidth<=0){return(true)}
+        our WorldPosition: parent <- frame!.navigation
+        if(parent==NULL){parent <- graph.position(frame!.node)}
+        if(frame!.node!.pItem!.value!.overlayType!=LST or frame!.node!.pItem!.value!.evalMode!=emLiteral or
+           frame!.gapWidth.getDenominator()!=1 or frame!.gapWidth>9223372036854775807 or
+           request!.producedLists.containsKey(parent!.owner)){
+            frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Temporal production needs one established finite target layout"
+            stopFrame(request, frame); return(false)
+        }
+        our WorldProducedList:: layout
+        our POV:: view{950}; view! <- frame!.node!
+        Allocate(view!.pItem); view!.pItem! <- frame!.node!.pItem!
+        Allocate(view!.pItem!.value); view!.pItem!.value! <- frame!.node!.pItem!.value!
+        view!.pItem!.value!.items.clear()
+        Allocate(view!.pItem!.infSize); view!.pItem!.infSize! <- frame!.node!.pItem!.infSize!
+        view!.pItem!.infSize!.overlayType <- NUM; view!.pItem!.infSize!.evalMode <- emLiteral
+        view!.pItem!.infSize!.num <- frame!.remaining
+        view!.pItem!.value!.tailUnfinished <- false; view!.pItem!.value!.sizeMode <- fromCount
+        view!.pItem!.value!.timelike <- true
+        layout!.position <- graph.representedPosition(view, parent)
+        our POV: member <- frame!.node!.pItem!.value!.items.head
+        while(member!=NULL){
+            our POV:: copy{950}; copy! <- member!; copy!.productionOrigin <- member
+            copy!.pParent <- view; view!.pItem!.value!.items.appendPov(copy)
+            layout!.represented.insert(member, copy); request!.productionWrappers <+- 1
+            member <- member!.next
+        }
+        me int64: count <- frame!.gapWidth.getNumerator().convertToIntVal()
+        withEach slot in range 0 .. count{
+            our infonView:: item; item!.itmMode <- mItem; item!.streamState <- parseDone; item!.viewMode <- vmAny
+            item!.value!.overlayType <- tUnknown; item!.value!.evalMode <- emUnknown
+            item!.infSize!.overlayType <- NUM; item!.infSize!.evalMode <- emUnknown
+            our POV: created <- view!.pItem!.value!.items.append(item, false, 950)
+            created!.pParent <- view; layout!.introduced.append(created)
+            request!.producedOccurrences.insert(created); request!.productionWrappers <+- 1
+        }
+        request!.producedLists.insert(parent!.owner, layout); frame!.production <- layout
+        return(true)
+    }
+    void: produceTemporalMember(our WorldRequest: request, our WorldFrame: frame, our WorldFrame: supplied) <- {
+        our WorldProducedList: layout <- frame!.production
+        if(layout==NULL or layout!.next>=layout!.introduced.size()){
+            frame!.facts.outcome <- worldError; frame!.facts.detail <- "Finite temporal correspondence exceeded its reserved occurrences"
+            stopFrame(request, frame); return()
+        }
+        our POV: node <- layout!.introduced[layout!.next]; layout!.next <+- 1
+        our WorldPosition: at <- graph.position(node, layout!.position)
+        our WorldFrame: member <- makeFrame(request, node, at, false, true)
+        member!.expressionParent <- layout!.position!.node
+        member!.lexicalParameters <- frame!.lexicalParameters
+        member!.acquisitionRequired <- true
+        member!.acquisitionProgress <- frame!.temporalMembers!.progress
+        member!.acquisitionPrevious <- frame!.temporalMembers!.previous
+        member!.acquisitionRequirements.push(frame!.tailRequirements)
+        // Correspondence already established this source member. Contribute
+        // its facts at the target occurrence without moving an ancestor's
+        // whole-list relationship into this list's lexical scope.
+        member!.sourceEdge <- graph.memberRelationship(frame!.sourceEdge)
+        member!.sourceEdge!.pItem <- supplied!.node!.pItem; member!.prerequisite <- supplied
+        frame!.pairedMember <- member; frame!.pairedEmbedded <- false; frame!.producingMember <- true
+        request!.productionMembers <+- 1; request!.ready.append(member)
+    }
+    void: rememberProductionMember(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(frame!.production==NULL){return()}
+        me WorldListCursor: members
+        our WorldFrame: member <- frame!.pairedMember
+        if(frame!.pairedEmbedded){members.push(member!.facts.sequence); member <- members.next()}
+        while(member!=NULL){
+            our POV: node <- member!.node
+            if(frame!.production!.represented.containsKey(node)){node <- frame!.production!.represented.at(node)}
+            if(request!.producedFacts.containsKey(node)){request!.producedFacts.at(node) <- member}
+            else{request!.producedFacts.insert(node, member)}
+            frame!.temporalMembers!.previous <- member
+            member <- members.next()
+        }
+        request!.sequenceVisits <+- members.visits
+    }
+}

@@ -3590,3 +3590,88 @@ center's frame changes from 1 to 10. The back-center frame and overall z locatio
 remain 5 and 3.5. Previous restores the initial facts and occurrence, and a held
 initial snapshot stays unchanged after Next. Normalized facts and visible
 rendering therefore both establish navigation between distinct states.
+
+
+## D108 — Acquire finite generated temporal occurrences at their target (2026-10-22)
+
+**Problem.** Finite list correspondence could establish a missing temporal
+suffix, but reusing its source frames would evaluate contextual transitions at
+the source and omit target acquisition. The earlier guard correctly refused
+that shortcut. Matcher terminology also used “goal” for an internal matching
+problem, which could be mistaken for a destination condition in a word model.
+
+**Decision.** Give deterministic finite correspondence a request-owned target
+layout. Copy immediate prefix wrappers once while preserving their logical
+occurrence identities, share their descriptions, and reserve fresh suffix
+occurrences from the proved finite remainder. Existing graph traversal uses this
+layout during the request; no stored sibling link changes during inference.
+
+Each new occurrence receives the already-matched source member through an
+ordinary qualified member relationship. Source lexical context stays with the
+source frame. Parent requirements and accumulated tail requirements run through
+the common acquisition path before predecessor retention. The checked result
+of each correspondence step advances the temporal frontier, including the last
+logical leaf of an embedded prefix. A refined seed therefore supplies its latest
+checked value to the next transition. No cursor-owned evaluator is introduced.
+
+Publication reuses the reserved suffix POVs so that inference and later navigation
+refer to the same occurrences. Prefix POVs remain in place. Request cleanup
+explicitly severs scratch and unpublished sibling links; clearing container
+roots alone would leave owning next/previous cycles. Published suffix links
+survive cleanup. The private predecessor cache checks qualified occurrence
+context before reusing facts from a shared node.
+
+**Alternatives.** Copying a normalized source member directly loses target
+context. Moving an ancestor's whole-list relationship into an inner list changes
+its scope. Reconstructing the prefix for every new state repeats work, while
+attaching speculative states to the stored list violates atomic cancellation.
+The private finite layout and ordinary acquisition continuations avoid those
+problems. General repetition identity and cache lifetime for indefinite production
+remain deferred; this step does not create a global generated-occurrence registry.
+
+**Terminology and boundary.** Rename `WorldPatternGoal` and `patternGoal()` to
+`WorldPatternMatchProblem` and `patternMatchProblem()`, and use
+`WorldPatternMatchState` / `patternMatchState()` for progress within a match. A
+model can have any number of segments and intermediate conditions. No destination
+predicate, first-goal termination rule or special final goal state is added.
+Finite source correspondence establishes membership; an open tail or a request
+to move next does not. Other temporal introduction routes retain explicit
+unsupported boundaries rather than falling back to another normalizer.
+
+**Engine validation.** Final CodeDog regeneration/build succeeds for both the
+test executable and the separate shared library. All **7** new compiled checks
+pass, covering scalar recurrence, refined seeds, structural and temporal
+neighbours, retained record payloads, parameterized source scope, multiple
+segments, embedded target and source spans, and empty finite targets. Later
+demands preserve generated occurrence identity, backward movement and held
+snapshots. A rejected later transition publishes nothing. Parser waits are tested
+both before production and after `productionMembers` proves that a private
+occurrence has been created; resume continues the request and cancellation leaves
+the stored prefix unchanged.
+
+The full run reports **24 failures / 623 tests**, with exactly the same failing
+names as the **24 / 616** baseline. The three formerly unsupported direct finite
+introduction cases now have positive assertions; other introduction boundaries
+remain tested. No existing `.tst` expectation changed. Print-mode fixtures pass
+**23/23**, and eight additional language probes pass, including ancestor-bounded
+embedded production, multiple source constraints and an open recurrence that
+proves no additional membership.
+
+For finite histories of 16/32/64 scalar states, the requests allocate
+146/290/578 frames and 16/32/64 production wrappers, perform 113/225/449
+relationship reads and 339/675/1347 queue steps, and visit 38/70/134
+correspondence positions. Checked predecessor views number 15/31/63, with no
+copied list members or remaining subscriptions. These measurements support
+bounded per-state work for this fixed-width workload; they do not establish a
+general bound for ambiguous inference or indefinite history retention.
+
+**Consumer validation.** Slipstream was separately regenerated against the new
+shared library. Its imported ABI matches the exported interface, and runtime
+linking resolves to the canonical Proteus shared build. An isolated GUI run
+renders the cube at index 0, advances to `turn-red-face-clockwise` at index 1,
+then returns to the original `solved-rubix-turn-state` occurrence at index 0.
+The cube remains visible throughout. There are no `TCURSOR` or `DISPLAY`
+diagnostics, and the app exits successfully. The two baseline startup
+normalization diagnostics remain unchanged: semantics beyond the scalar
+milestone and open source correspondence needing span alignment. No maintained
+Slipstream source changed.
