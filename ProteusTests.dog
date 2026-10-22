@@ -118,6 +118,12 @@ TestsToRun = `
     unit/parserIdentity/validRange
     unit/parserIdentity/rejectedRange
     unit/parserLifecycle/errorBeforeCompletion
+    unit/connector/parserCompletion
+    unit/connector/syntaxError
+    unit/connector/inputClose
+    unit/connector/shutdown
+    unit/connector/transportFailure
+    unit/connector/reportingFailure
     unit/parserInput/openWait
     unit/parserInput/bufferedProgress
     unit/parserInput/syntaxCallback
@@ -2098,6 +2104,100 @@ struct ParserCallbackCore: inherits=ProteusCore {
 
 struct ParserInputConnector: inherits=InfonConnector {
     me bool: pumpOutputBuf(me string: message) <- {return(true)}
+}
+
+// Exercise connector availability through real stream/parser lifecycles.
+struct LifecycleTestConnector: inherits=ParserInputConnector {
+    me bool: throwFromInput
+    me bool: throwFromReport
+    void: pumpInputBuff() <- {
+        if(throwFromInput){me int: unused <- stoi("not-an-integer")}
+    }
+    me bool: pumpOutputBuf(me string: message) <- {
+        if(throwFromReport){me int: unused <- stoi("not-an-integer")}
+        return(true)
+    }
+}
+struct GLOBAL {
+    void: testConnectorLifecycle(me string: testName, me int: outcome) <- {
+        me ProteusCore: core; core.init("")
+        our LifecycleTestConnector:: connector
+        Allocate(connector!.streamSpec)
+        connector!.streamSpec!.spec <- testName
+        me bool: unattachedClosed <- !connector!.isOpen()
+        our ProteusParser:: parser{core, true, 0}
+        our infonView:: root
+        me InfonStream: stream
+        stream.parseOnly <- true
+        stream.init(connector, core.agent, parser, root, 0)
+        me bool: initiallyOpen <- connector!.isOpen()
+        stream.start("CONNECTOR_TEST")
+        stream.pushParserInputBuf("{ 23 ")
+        me bool: waitingOpen
+        // Call while owning the model lock, as GUI/model consumers may do.
+        // The parser must release that lock during its open-input wait.
+        protect(core.agent!.worldManager.control!.mutex){waitingOpen <- connector!.isOpen()}
+        if(outcome==1){stream.pushParserInputBuf("} ) ")}
+        else if(outcome==2){stream.pushParserInputBuf(") 0 ")}
+        else if(outcome==3){stream.closeInput()}
+        else if(outcome==4){stream.requestFinish()}
+        else{connector!.failInput("Injected transport failure")}
+        me int: elapsed
+        while(connector!.isOpen() and elapsed<2000){sleep(5); elapsed <+- 5}
+        me bool: ended <- !connector!.isOpen()
+        me bool: bufferStillOpen
+        protect(connector!.inputBuf.bufMutex){bufferStillOpen <- !connector!.inputBuf.bufferClosed}
+        me bool: eof <- connector!.inputEOF
+        me bool: shutdown <- connector!.shutdownRequested
+        // A bounded failed observation still closes and joins its workers.
+        stream.closeInput(); stream.waitForCompletion()
+        me bool: syntaxError <- parser!.doesParseHaveError()
+        core.deInit(); modelMngr.clear()
+        me string: expected <- toString(true)
+        me string: actual <- toString(unattachedClosed); REQUIRE(actual==expected)
+        actual <- toString(initiallyOpen); REQUIRE(actual==expected)
+        actual <- toString(waitingOpen); REQUIRE(actual==expected)
+        actual <- toString(ended); REQUIRE(actual==expected)
+        if(outcome<=2){
+            // Parser termination alone must close availability, even though
+            // the producer has neither closed its buffer nor sent EOF.
+            actual <- toString(bufferStillOpen and !eof and !shutdown); REQUIRE(actual==expected)
+            actual <- toString(syntaxError); expected <- toString(outcome==2); REQUIRE(actual==expected)
+        }else{
+            actual <- toString(!bufferStillOpen and eof); REQUIRE(actual==expected)
+            actual <- toString(shutdown); expected <- toString(outcome==4); REQUIRE(actual==expected)
+        }
+    }
+    void: unit_connector_parserCompletion(me string: testName) <- {testConnectorLifecycle(testName, 1)}
+    void: unit_connector_syntaxError(me string: testName) <- {testConnectorLifecycle(testName, 2)}
+    void: unit_connector_inputClose(me string: testName) <- {testConnectorLifecycle(testName, 3)}
+    void: unit_connector_shutdown(me string: testName) <- {testConnectorLifecycle(testName, 4)}
+    void: unit_connector_transportFailure(me string: testName) <- {testConnectorLifecycle(testName, 5)}
+    void: unit_connector_reportingFailure(me string: testName) <- {
+        me ProteusCore: core; core.init("")
+        our LifecycleTestConnector:: connector
+        Allocate(connector!.streamSpec)
+        connector!.streamSpec!.spec <- testName
+        connector!.throwFromInput <- true
+        connector!.throwFromReport <- true
+        our ProteusParser:: parser{core, true, 0}
+        our infonView:: root
+        me InfonStream: stream; stream.parseOnly <- true
+        stream.init(connector, core.agent, parser, root, 0)
+        stream.start("CONNECTOR_FAIL")
+        me int: elapsed
+        while(connector!.isOpen() and elapsed<2000){sleep(5); elapsed <+- 5}
+        me bool: ended <- !connector!.isOpen()
+        me bool: closed
+        protect(connector!.inputBuf.bufMutex){closed <- connector!.inputBuf.bufferClosed}
+        stream.closeInput(); stream.waitForCompletion()
+        me bool: published <- root!.graphParseError!=""
+        core.deInit(); modelMngr.clear()
+        me string: expected <- toString(true)
+        me string: actual <- toString(ended); REQUIRE(actual==expected)
+        actual <- toString(closed); REQUIRE(actual==expected)
+        actual <- toString(published); REQUIRE(actual==expected)
+    }
 }
 
 struct ParserStreamShutdown: inherits=Threads {

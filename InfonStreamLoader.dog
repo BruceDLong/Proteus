@@ -88,6 +88,35 @@ model InfonConnector{
     me bool:   allowStreamingNormalize
     their InfonStream: iStreamParent
 
+    // True while this infon's parser can consume more input. This is a
+    // snapshot of known local state, not a remote-peer health probe. Results
+    // may still drain after input ends; a diagnostic alone does not end it.
+    me bool: isOpen() <- {
+        if(iStreamParent==NULL or inputEOF or shutdownRequested){return(false)}
+        protect(inputBuf.bufMutex){if(inputBuf.bufferClosed){return(false)}}
+        protect(iStreamParent.parserThread.chkParseDone){
+            return(!iStreamParent.parserThread.parseCompleted)
+        }
+    }
+    void: closeInput() <- {
+        inputEOF <- true
+        inputBuf.close()
+    }
+    // Transport failures end input and fail dependent requests. Never hold
+    // the buffer/parser locks while publishing into the engine or reporting.
+    void: failInput(me string: message) <- {
+        try {
+            if(iStreamParent!=NULL and iStreamParent.parentAgent!=NULL){
+                iStreamParent.parentAgent.worldManager.failInput(iStreamParent.toFill, message)
+            }
+        } catch {
+            closeInput()
+            rethrow()
+        }
+        closeInput()
+        handleSystemError(message)
+    }
+
     void: init(our InfonStreamSpec: SP) <- {}
     void: pumpInputBuff() <- {}
     me string: readInputStream() <- {return("")}
@@ -139,7 +168,12 @@ struct AssetFileConnector: inherits=InfonConnector {
         me string: data
         if(inputEOF){return("")}
         if(!dataFile.EOF()){
-            data <- dataFile.getLine()+"\n"
+            data <- dataFile.getLine()
+            if(dataFile.failure() and !dataFile.EOF()){
+                failInput("Failed reading file: "+streamSpec.spec)
+                return("")
+            }
+            data <+- "\n"
         } else {
             inputEOF <- true
             log("INPUT_EOF:"+streamSpec.spec)
@@ -214,9 +248,9 @@ struct ThreadedStreamInput: inherits=Threads {
     void: run() <- {
         try {source.pumpInputBuff()}
         catch(error) {
-            source.iStreamParent.parentAgent.worldManager.failInput(source.iStreamParent.toFill, error)
-            source.handleSystemError(error)
-            source.inputBuf.close()
+            // Reporting failures cannot leave the parser asleep or escape
+            // the native worker boundary. failInput closes on every path.
+            try {source.failInput(error)} catch {}
         }
     }
 }
@@ -295,8 +329,7 @@ struct InfonStream{ // InfonConnector -> Parse -> Extract -> Normalize
 
     void: closeInput() <- {
         if(source!=NULL){
-            source.inputEOF <- true
-            source.inputBuf.close()
+            source.closeInput()
         }
     }
 

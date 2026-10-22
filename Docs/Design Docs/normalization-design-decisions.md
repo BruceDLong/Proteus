@@ -3675,3 +3675,48 @@ diagnostics, and the app exits successfully. The two baseline startup
 normalization diagnostics remain unchanged: semantics beyond the scalar
 milestone and open source correspondence needing span alignment. No maintained
 Slipstream source changed.
+
+## Connector input availability (2026-10-22)
+
+The terminal queries `InfonConnector.isOpen()` rather than inspecting parser
+thread fields. This means that more input can still be consumed for the current
+infon: an unattached connector, parser termination, EOF, a closed input buffer,
+or requested shutdown returns false. It does not certify remote-peer health or
+completion of pending normalization/results. Diagnostics alone do not close it.
+Inspecting only the connector pointer, the input worker's lifetime, or current
+normalizer quiescence would give the wrong answer for push-based input.
+
+`closeInput()` marks EOF and wakes the input buffer; `failInput(message)` first
+publishes document failure, then closes input and reports the system error.
+Closure is preserved when failure publication or reporting throws. The input
+worker contains reporting exceptions so its parser cannot remain asleep due to
+a failed diagnostic callback. File readers also distinguish I/O failure from
+normal EOF. Network startup runs after the stream's parser buffer is attached.
+
+CodeDog needs no language/compiler addition for this query. Its existing QUIC
+library callbacks now forward connection/stream closure and read/write errors to
+the client protocol, including zero-byte FIN, and do not treat EAGAIN as failure.
+Connection closure releases pending/active registrations before callbacks; a
+later request does not reuse a known-closed cached connection. Silent loss still
+requires transport failure/timeout detection. Threads.isActive remains a stub
+and is deliberately not used as a source of lifecycle truth.
+
+The query takes the buffer and parser-completion locks separately, never
+holding both. It performs no joins, I/O, callbacks, or model-lock acquisition.
+Failure publication and error callbacks execute outside those lifecycle locks.
+The existing input-wait binding releases the buffer lock before restoring a
+paused model lock. Focused checks call the query under the model lock while a
+real parser waits for input, and cover completion, syntax failure, explicit
+closure, shutdown, transport failure and failure during diagnostic reporting.
+
+**Connector validation.** Both an isolated checkout and the main checkout pass
+six real-worker connector lifecycle tests, four parser input-lock regressions,
+and parser error-before-completion ordering. The main UI was rebuilt against its
+matching exported engine interface and visually checked for Live to Ended after
+silent parser completion and fatal direct-input failure. QUIC client callback
+checks cover EOF, cancellation, read failure, premature/control-stream closure,
+request rejection, fragmented/truncated task IDs, and notification cleanup. The
+network checks use controlled callbacks, not a live remote-peer fault-injection
+run. Concurrent normalization edits are preserved. Evidence is under
+`/tmp/slipstream-connector-validation`, `/tmp/slipstream-connector-final-ui`, and
+`/tmp/slipstream-connector-*.log`.
