@@ -1,0 +1,571 @@
+// Deterministic temporal continuation. The program describes structural
+// segments; values and compatibility are proved by ordinary acquisition frames.
+struct WorldProductionSegment {
+    our infonView: recipe
+    me List<our infonView>: requirements
+    our POV: represented
+    our WorldGeneratedScopeKey: representedKey
+    me bool: bounded <- true
+    me int64: count <- 1
+}
+struct WorldProductionCheckpoint {
+    me int64: ordinal <- 0
+    me int64: segment <- 0
+    me int64: used <- 0
+    our WorldPosition: value
+}
+struct WorldProductionPrefixLevel {
+    our infonView: body
+    our POV: next
+}
+struct WorldProductionHeader {
+    our POV: node
+    our infonView: description
+}
+struct WorldProductionDependency {
+    our infonView: view
+    me uint64: revision <- 0
+    our infonState: value
+    our infonState: size
+    our infonView: listSpec
+}
+struct WorldProductionFrontier {
+    our WorldPosition: owner
+    their infonView: description
+    me uint64: revision <- 0
+    me uint64: writeRevision <- 0
+    our infonView: worldSource
+    me uint64: worldRevision <- 0
+    our IdentityRegistry: identities
+    me string: language
+    me List<our WorldProductionDependency>: dependencies
+    me List<our WorldProductionHeader>: sourceHeaders
+    me List<our WorldProductionSegment>: segments
+    me bool: applicable <- false
+    me bool: externalDependencies <- false
+    me WorldOutcome: outcome <- worldReady
+    me string: detail
+    our infonView: waiting
+    our WorldProductionCheckpoint: latest
+    me List<our WorldProductionCheckpoint>: checkpoints
+    me int64: checkpointLimit <- 8
+    me uint64: steps <- 0
+    me uint64: probes <- 0
+    me uint64: replaySteps <- 0
+    me uint64: peakCandidates <- 0
+}
+struct WorldGeneratedSeries {our WorldProductionFrontier: production}
+struct WorldProductionScratch {
+    me Map<our infonView, our WorldFrame>: outerAttempts
+    me Map<our infonView, our WorldFrame>: outerActive
+    me Map<our POV, our WorldFrame>: outerCompleted
+    me Map<our WorldFrame, our infonView>: outerChecked
+    me Map<our infonView, our WorldFrame>: outerCheckedFacts
+    me Map<our POV, our WorldListLayout>: outerLayouts
+    me Set<our infonView>: outerStableLayouts
+    me Map<our infonView, our WorldOrderedLayoutProof>: outerOrderedLayouts
+    me Map<our infonView, our WorldUnitOrigin>: outerUnitOrigins
+    me List<our WorldBindings>: outerBindings
+    our WorldPosition: previousValue
+}
+struct WorldRequest {
+    their WorldSession: productionSession <- NULL
+    me List<our WorldProductionScratch>: productionScratch
+}
+struct WorldProductionRun {
+    our WorldGeneratedSeries: series
+    our WorldProductionFrontier: frontier
+    me int64: wanted <- 1
+    me int64: ordinal <- 0
+    me int64: segment <- 0
+    me int64: used <- 0
+    our WorldPosition: previous
+    me List<int64>: choices
+    me int64: choice <- 0
+    our WorldFrame: candidate
+    our WorldFrame: accepted
+    our WorldFrame: valueFrame
+    me int64: acceptedSegment <- 0
+    me bool: uncertain <- false
+    me bool: membership <- false
+    me bool: begun <- false
+    their WorldProductionScratch: scratch <- NULL
+}
+struct WorldFrame {our WorldProductionRun: productionDemand}
+struct WorldPath {our WorldFrame: generatedNeighbour}
+struct WorldManager {
+    our infonView: productionRecipe(our infonView: original, me List<our infonView>: requirements) <- {
+        our infonView:: recipe
+        if(original!=NULL){recipe! <- original!}
+        else{
+            recipe!.itmMode <- mItem; recipe!.streamState <- parseDone; recipe!.viewMode <- vmAny
+            recipe!.value!.overlayType <- tUnknown; recipe!.value!.evalMode <- emUnknown
+            recipe!.infSize!.overlayType <- NUM; recipe!.infSize!.evalMode <- emUnknown
+        }
+        withEach requirement in requirements{
+            our POV:: edge{951}; edge!.pItem <- requirement; recipe!.wrkList.append(edge)
+        }
+        recipe!.noteNormalizationWork()
+        return(recipe)
+    }
+    // A finite structural program can contain arbitrarily many fixed and
+    // repeated segments. Unsupported structural obligations are kept explicit.
+    me bool: compileProductionList(our WorldRequest: request, our WorldProductionFrontier: frontier,
+                                  our POV: node, our WorldPosition: source, me List<our infonView>: requirements,
+                                  me Set<our infonView>: active) <- {
+        our infonView: item <- node!.pItem
+        if(item!.streamState==parseStarted or item!.streamState==parseListReady){
+            frontier!.outcome <- worldWaiting; frontier!.waiting <- item; return(false)
+        }
+        if(active.contains(item)){
+            frontier!.outcome <- worldUnsupported; frontier!.detail <- "Generated continuation has a cyclic layout"; return(false)
+        }
+        active.insert(item)
+        if(item!.value!.overlayType!=LST or item!.value!.evalMode!=emLiteral or item!.orderMode==uUnordered or
+           !item!.wrkList.isEmpty() or item!.partRef!=NULL or !item!.parts.isEmpty() or item!.invertMatch or
+           item!.funcArgs!=NULL or item!.argPos!=apNoArgs or
+           (item!.type!=NULL and item!.type!.defToUse!=NULL)){
+            frontier!.outcome <- worldUnsupported; frontier!.detail <- "Generated continuation needs an established literal ordered segment layout"; return(false)
+        }
+        if(item!.infSize!.evalMode!=emLiteral and item!.infSize!.evalMode!=emUnknown){
+            frontier!.outcome <- worldUnsupported;frontier!.detail <- "Generated continuation needs an established segment extent"
+            return(false)
+        }
+        if(item!.value!.listSpec!=NULL){requirements.append(item!.value!.listSpec)}
+        me int64: minimum <- 0
+        me bool: knownWidth <- true
+        our POV: member <- item!.value!.items.head
+        while(member!=NULL){
+            if(member!.isSubItm){
+                if(!compileProductionList(request, frontier, member, graph.position(member,source), requirements, active)){return(false)}
+                me WorldScalar: child <- graph.read(request,member,member!.pParent)
+                if(child.outcome!=worldReady){frontier!.outcome <- child.outcome;frontier!.detail <- child.detail;frontier!.waiting <- member!.pItem;return(false)}
+                if(child.hasSize and child.size>=0 and child.size.getDenominator()==1 and child.size<=9223372036854775807-minimum){minimum <+- child.size.getNumerator().convertToIntVal()}
+                else{knownWidth <- false}
+            }else{
+                our WorldProductionSegment:: segment; segment!.represented <- member
+                segment!.representedKey <- graph.generatedScopeKey(graph.position(member,source))
+                me List<our infonView>: noRequirements
+                segment!.recipe <- productionRecipe(member!.pItem, noRequirements); segment!.requirements <- requirements
+                frontier!.segments.append(segment)
+                if(minimum==9223372036854775807){knownWidth <- false}else{minimum <+- 1}
+            }
+            member <- member!.next
+        }
+        me WorldScalar: layoutHeader <- graph.read(request,node,node!.pParent)
+        if(layoutHeader.outcome!=worldReady){frontier!.outcome <- layoutHeader.outcome;frontier!.detail <- layoutHeader.detail;frontier!.waiting <- item;return(false)}
+        if(layoutHeader.explicitSize and layoutHeader.hasSize and !item!.value!.tailUnfinished and
+           (!knownWidth or layoutHeader.size!=minimum)){
+            frontier!.outcome <- worldUnsupported; frontier!.detail <- "Generated continuation extent needs cross-segment alignment"; return(false)
+        }
+        if(item!.value!.tailUnfinished){
+            our WorldProductionSegment:: segment; segment!.bounded <- false
+            me List<our infonView>: noRequirements
+            segment!.recipe <- productionRecipe(NULL, noRequirements); segment!.requirements <- requirements
+            me WorldScalar: header <- layoutHeader
+            if(header.explicitSize and header.hasSize){
+                if(!knownWidth or header.size.getDenominator()!=1 or header.size<minimum or header.size>9223372036854775807){
+                    frontier!.outcome <- worldUnsupported; frontier!.detail <- "Generated continuation needs a unique nonnegative segment extent"; return(false)
+                }
+                segment!.bounded <- true; segment!.count <- header.size.getNumerator().convertToIntVal()-minimum
+            }
+            frontier!.segments.append(segment); frontier!.applicable <- true
+        }
+        active.erase(item); return(true)
+    }
+    void: captureProductionDependencies(our WorldProductionFrontier: frontier, our infonView: root) <- {
+        me List<our infonView>: pending; me Set<our infonView>: seen; pending.append(root)
+        while(!pending.isEmpty()){
+            our infonView: item <- pending.popLast()
+            if(item==NULL or seen.contains(item)){continue()}
+            seen.insert(item)
+            our WorldProductionDependency:: dependency; dependency!.view <- item; dependency!.revision <- item!.cursorRevision
+            dependency!.value <- item!.value; dependency!.size <- item!.infSize; dependency!.listSpec <- item!.value!.listSpec
+            frontier!.dependencies.append(dependency)
+            if(item!.itmMode==mIncludeStream or (item!.viewMode==vmCursor and
+               item!.cursorMode!=cmSelf and item!.cursorMode!=cmPrev and item!.cursorMode!=cmNext and
+               item!.cursorMode!=cmTPrev and item!.cursorMode!=cmTNext)){
+                frontier!.externalDependencies <- true
+            }
+            if(item!.value!.listSpec!=NULL){pending.append(item!.value!.listSpec)}
+            our POV: member <- item!.value!.items.head
+            while(member!=NULL){
+                our WorldProductionHeader:: header; header!.node <- member; header!.description <- member!.pItem
+                frontier!.sourceHeaders.append(header)
+                pending.append(member!.pItem);member <- member!.next
+            }
+            member <- item!.infSize!.items.head
+            while(member!=NULL){
+                our WorldProductionHeader:: header; header!.node <- member; header!.description <- member!.pItem
+                frontier!.sourceHeaders.append(header)
+                pending.append(member!.pItem);member <- member!.next
+            }
+            withEach relation in item!.wrkList{
+                our WorldProductionHeader:: header; header!.node <- relation; header!.description <- relation!.pItem
+                frontier!.sourceHeaders.append(header)
+                pending.append(relation!.pItem)
+            }
+            if(item!.innr!=NULL){pending.append(item!.innr)}
+            if(item!.funcArgs!=NULL){pending.append(item!.funcArgs)}
+            if(item!.includeInfn!=NULL){pending.append(item!.includeInfn)}
+            if(item!.wordArguments!=NULL){withEach argument in item!.wordArguments!.values{pending.append(argument.value)}}
+            me List<our PartPath>: paths <- item!.parts
+            if(item!.partRef!=NULL){paths.append(item!.partRef)}
+            withEach path in paths{
+                if(path!.pathMode==upField){frontier!.externalDependencies <- true}
+                if(path!.path!=NULL){pending.append(path!.path)}
+                if(path!.spec!=NULL){pending.append(path!.spec)}
+                if(path!.continuation!=NULL){pending.append(path!.continuation)}
+            }
+            if(item!.type!=NULL and item!.type!.defToUse!=NULL){pending.append(item!.type!.defToUse)}
+        }
+    }
+    me bool: productionDependenciesValid(our WorldRequest: request, our WorldProductionFrontier: frontier) <- {
+        if(frontier!.worldSource!==request!.worldSource or frontier!.identities!==request!.identities or
+           frontier!.language!=request!.vocabulary.langSpec){return(false)}
+        if(request!.worldSource!=NULL and frontier!.worldRevision!=request!.worldSource!.cursorRevision){return(false)}
+        withEach header in frontier!.sourceHeaders{if(header!.node!.pItem!==header!.description){return(false)}}
+        withEach dependency in frontier!.dependencies{
+            if(dependency!.view!.cursorRevision!=dependency!.revision or dependency!.view!.value!==dependency!.value or
+               dependency!.view!.infSize!==dependency!.size or dependency!.view!.value!.listSpec!==dependency!.listSpec or
+               dependency!.view!.streamState==parseStarted or dependency!.view!.streamState==parseListReady){return(false)}
+        }
+        return(true)
+    }
+    me bool: productionHasOpenTail(our infonView: root) <- {
+        me List<our infonView>: pending; me Set<our infonView>: seen; pending.append(root)
+        while(!pending.isEmpty()){
+            our infonView: part <- pending.popLast()
+            if(seen.contains(part)){continue()}
+            seen.insert(part)
+            if(part!.value!.tailUnfinished){return(true)}
+            our POV: member <- part!.value!.items.head
+            while(member!=NULL){if(member!.isSubItm){pending.append(member!.pItem)} member <- member!.next}
+        }
+        return(false)
+    }
+    our WorldProductionFrontier: productionFrontier(our WorldRequest: request, our WorldPosition: list) <- {
+        if(request!.productionSession==NULL or list==NULL or list!.node==NULL or list!.node!.pItem==NULL){return(NULL)}
+        our infonView: body <- list!.node!.pItem
+        if(body!.value!.overlayType!=LST or body!.value!.evalMode!=emLiteral or !body!.value!.timelike or body!.orderMode==uUnordered){return(NULL)}
+        if(graph.parameterScope(list)!=NULL){
+            if(!productionHasOpenTail(body)){return(NULL)}
+            our WorldProductionFrontier:: unsupported;unsupported!.owner <- list;unsupported!.applicable <- true
+            unsupported!.outcome <- worldUnsupported;unsupported!.detail <- "Generated parameter contexts need canonical application bindings"
+            return(unsupported)
+        }
+        our WorldPosition: scope <- list
+        while(scope!=NULL){
+            if(scope!.generatedAddress!=NULL){
+                if(!productionHasOpenTail(body)){return(NULL)}
+                our WorldProductionFrontier:: unsupported; unsupported!.owner <- list; unsupported!.applicable <- true
+                unsupported!.outcome <- worldUnsupported; unsupported!.detail <- "Generated nested histories need a bounded series registry"
+                return(unsupported)
+            }
+            scope <- scope!.parent
+        }
+        our WorldGeneratedSeries: series <- generatedSeries(request!.productionSession, list)
+        if(series!.production!=NULL and series!.production!.description===body and
+           series!.production!.revision==body!.cursorRevision and
+           series!.production!.writeRevision==graph.generatedWriteRevision(list) and productionDependenciesValid(request,series!.production)){
+            if(!series!.production!.applicable and series!.production!.outcome==worldReady){return(NULL)}
+            return(series!.production)
+        }
+        our WorldProductionFrontier:: frontier; frontier!.owner <- list; frontier!.description <- body
+        frontier!.revision <- body!.cursorRevision; frontier!.writeRevision <- graph.generatedWriteRevision(list)
+        frontier!.worldSource <- request!.worldSource; frontier!.identities <- request!.identities; frontier!.language <- request!.vocabulary.langSpec
+        if(request!.worldSource!=NULL){frontier!.worldRevision <- request!.worldSource!.cursorRevision}
+        captureProductionDependencies(frontier,body)
+        // Eligibility is structural and cached once per model revision. Closed
+        // represented histories keep their established navigation machinery.
+        frontier!.applicable <- productionHasOpenTail(body)
+        if(!frontier!.applicable){series!.production <- frontier;return(NULL)}
+        if(frontier!.externalDependencies){
+            frontier!.outcome <- worldUnsupported;frontier!.detail <- "Generated external reads need dynamic dependency proofs"
+            series!.production <- frontier;return(frontier)
+        }
+        me List<our infonView>: requirements; me Set<our infonView>: active
+        compileProductionList(request, frontier, list!.node, list, requirements, active)
+        if(frontier!.outcome!=worldWaiting){series!.production <- frontier}
+        return(frontier)
+    }
+    me int64: productionRepresentedOrdinal(our WorldProductionFrontier: frontier, our WorldPosition: at) <- {
+        our WorldGeneratedScopeKey: key <- graph.generatedScopeKey(at)
+        if(frontier!.latest!=NULL and frontier!.latest!.value!.generatedAddress!=NULL and
+           graph.sameGeneratedScope(frontier!.latest!.value!.generatedAddress!.representedKey,key)){return(frontier!.latest!.ordinal)}
+        withEach checkpoint in frontier!.checkpoints{
+            if(checkpoint!.value!.generatedAddress!=NULL and graph.sameGeneratedScope(checkpoint!.value!.generatedAddress!.representedKey,key)){return(checkpoint!.ordinal)}
+        }
+        me int64: ordinal <- 1
+        withEach segment in frontier!.segments{
+            if(segment!.representedKey!=NULL and graph.sameGeneratedScope(segment!.representedKey,key)){return(ordinal)}
+            if(!segment!.bounded){return(0)}
+            if(segment!.count>9223372036854775807-ordinal){return(0)}
+            ordinal <+- segment!.count
+        }
+        return(0)
+    }
+    me bool: productionInRepresentedPrefix(our WorldPosition: list, me int64: wanted) <- {
+        if(list==NULL or wanted<1){return(false)}
+        me List<our WorldProductionPrefixLevel>: stack; me Set<our infonView>: active
+        our WorldProductionPrefixLevel:: root; root!.body <- list!.node!.pItem; root!.next <- root!.body!.value!.items.head
+        stack.append(root);active.insert(root!.body)
+        me int64: count <- 0
+        while(!stack.isEmpty()){
+            our WorldProductionPrefixLevel: level <- stack.last()
+            if(level!.body!.value!.overlayType!=LST or level!.body!.value!.evalMode!=emLiteral){return(false)}
+            if(level!.next==NULL){
+                if(level!.body!.value!.tailUnfinished){return(false)}
+                active.erase(level!.body);stack.popLast();continue()
+            }
+            our POV: member <- level!.next;level!.next <- member!.next
+            if(member!.isSubItm){
+                if(active.contains(member!.pItem)){return(false)}
+                our WorldProductionPrefixLevel:: child;child!.body <- member!.pItem;child!.next <- child!.body!.value!.items.head
+                stack.append(child);active.insert(child!.body)
+            }else{count <+- 1;if(count==wanted){return(true)}}
+        }
+        return(false)
+    }
+    our WorldFrame: productionOperation(our WorldRequest: request, our WorldPosition: list, me int64: wanted, me bool: valueRequested <- false) <- {
+        our WorldProductionFrontier: frontier <- productionFrontier(request, list)
+        if(frontier==NULL){return(NULL)}
+        our POV:: query{951}; Allocate(query!.pItem); query!.pItem!.streamState <- parseDone
+        our WorldFrame: frame <- makeFrame(request, query)
+        Allocate(frame!.productionDemand)
+        frame!.productionDemand!.frontier <- frontier
+        if(frontier!.outcome==worldReady or frontier!.outcome==worldWaiting){frame!.productionDemand!.series <- generatedSeries(request!.productionSession, list)}
+        frame!.productionDemand!.wanted <- wanted
+        frame!.acquireOnly <- true
+        frame!.referenceOnly <- !valueRequested
+        return(frame)
+    }
+    void: productionFailure(our WorldRequest: request, our WorldFrame: frame, me WorldOutcome: outcome, me string: detail) <- {
+        finishProductionScratch(request,frame!.productionDemand)
+        frame!.facts.outcome <- outcome; frame!.facts.detail <- detail; frame!.initialized <- true; frame!.finished <- true
+        stopFrame(request, frame)
+    }
+    void: productionStep(our WorldRequest: request, our WorldFrame: frame) <- {
+        our WorldProductionRun: run <- frame!.productionDemand
+        our WorldProductionFrontier: frontier <- run!.frontier
+        if(frontier!.outcome==worldWaiting){
+            // Rebuild only the uncompiled structural header after its parser
+            // dependency arrives. Acquired transition work is never restarted.
+            if(frontier!.waiting!.streamState==parseStarted or frontier!.waiting!.streamState==parseListReady){waitAt(request, frame, frontier!.waiting); return()}
+            run!.frontier <- productionFrontier(request, frontier!.owner)
+            request!.ready.append(frame); return()
+        }
+        if(frontier!.outcome!=worldReady){productionFailure(request, frame, frontier!.outcome, frontier!.detail); return()}
+        if(run!.wanted<1){frame!.facts.contextAbsent <- true; frame!.noMatch <- true; frame!.finished <- true; frame!.initialized <- true; return()}
+        if(!run!.begun){
+            if(productionEffectsPending(request)){
+                productionFailure(request,frame,worldUnsupported,"Generated continuation cannot share pending external effects");return()
+            }
+            run!.begun <- true
+            our WorldProductionScratch:: scratch; request!.productionScratch.append(scratch); run!.scratch <- scratch
+            captureProductionScratch(request,scratch)
+            // A checkpoint holds one checked state and its structural cursor,
+            // never the chain of acquisition frames which established it.
+            our WorldProductionCheckpoint: checkpoint
+            if(frontier!.latest!=NULL and frontier!.latest!.ordinal<=run!.wanted){checkpoint <- frontier!.latest}
+            withEach saved in frontier!.checkpoints{
+                if(saved!.ordinal<=run!.wanted and (checkpoint==NULL or saved!.ordinal>checkpoint!.ordinal)){checkpoint <- saved}
+            }
+            if(checkpoint!=NULL){
+                run!.ordinal <- checkpoint!.ordinal; run!.segment <- checkpoint!.segment; run!.used <- checkpoint!.used
+                run!.previous <- checkpoint!.value
+            }
+        }
+        if(run!.ordinal==run!.wanted){
+            if(run!.previous==NULL){productionFailure(request,frame,worldError,"Generated occurrence lost its checked value");return()}
+            // A value consumer may demand the selected record's interiors.
+            // The ordinary normalizer performs that acquisition from the
+            // checked state; it never reconstructs its temporal ancestors.
+            if(!frame!.referenceOnly and run!.previous!.node!.pItem!.value!.overlayType==LST){
+                if(run!.valueFrame==NULL){
+                    run!.valueFrame <- makeFrame(request,run!.previous!.node,run!.previous)
+                    run!.valueFrame!.parentContext <- NULL
+                }
+                if(!run!.valueFrame!.finished){request!.ready.append(frame);request!.ready.append(run!.valueFrame);return()}
+                if(run!.valueFrame!.facts.outcome!=worldReady){productionFailure(request,frame,run!.valueFrame!.facts.outcome,run!.valueFrame!.facts.detail);return()}
+            }
+            our WorldPosition: result <- graph.position(run!.previous!.owner,frontier!.owner)
+            if(!graph.cursorValueReady(result!.node)){graph.storeCursorValue(result!.node,run!.previous!.node!.pItem,worldComplete)}
+            rememberGeneratedPosition(request!.productionSession, result)
+            if(frontier!.latest==NULL or run!.ordinal>frontier!.latest!.ordinal){
+                if(frontier!.latest!=NULL){
+                    frontier!.checkpoints.append(frontier!.latest)
+                    if(frontier!.checkpoints.size()>frontier!.checkpointLimit){
+                        me List<our WorldProductionCheckpoint>: retained
+                        me int64: slot <- 0
+                        withEach checkpoint in frontier!.checkpoints{if(slot>0){retained.append(checkpoint)} slot <+- 1}
+                        frontier!.checkpoints <- retained
+                    }
+                }
+                our WorldProductionCheckpoint:: saved
+                saved!.ordinal <- run!.ordinal; saved!.segment <- run!.segment; saved!.used <- run!.used; saved!.value <- run!.previous
+                frontier!.latest <- saved
+            }
+            Allocate(frame!.correspondenceResult); frame!.correspondenceResult!.position <- result
+            if(run!.valueFrame!=NULL){frame!.facts <- run!.valueFrame!.facts}
+            else{frame!.facts <- graph.read(request,result!.node,result!.node!.pParent)}
+            finishProductionScratch(request,run)
+            frame!.initialized <- true; frame!.finished <- true
+            if(frame!.facts.outcome!=worldReady){stopFrame(request,frame)}
+            return()
+        }
+        if(run!.candidate!=NULL){
+            if(!run!.candidate!.finished){request!.ready.append(frame); request!.ready.append(run!.candidate); return()}
+            if(productionEffectsPending(request)){
+                productionFailure(request,frame,worldUnsupported,"Generated alternatives with external effects need isolated branch publication");return()
+            }
+            me WorldOutcome: result <- run!.candidate!.facts.outcome
+            if(result==worldReady and graph.representableFacts(run!.candidate!.facts) and
+               !run!.candidate!.facts.needsEvidence and run!.candidate!.facts.pendingChecks==NULL and
+               !run!.candidate!.facts.contextRequired and !run!.candidate!.facts.contextAbsent){
+                if(run!.accepted!=NULL){run!.uncertain <- true}
+                else{run!.accepted <- run!.candidate; run!.acceptedSegment <- run!.choices[run!.choice]}
+            }else if(result!=worldRejected){run!.uncertain <- true}
+            // Alternatives share an occurrence address, not deductions made
+            // under different hypothetical values at that address.
+            restoreProductionScratch(request,run!.scratch)
+            run!.candidate <- NULL; run!.choice <+- 1
+        }
+        if(run!.choices.isEmpty()){
+            while(run!.segment<frontier!.segments.size()){
+                our WorldProductionSegment: current <- frontier!.segments[run!.segment]
+                if(current!.bounded and run!.used>=current!.count){run!.segment <+- 1; run!.used <- 0}
+                else{break()}
+            }
+            me int64: slot <- run!.segment
+            run!.membership <- false
+            while(slot<frontier!.segments.size()){
+                our WorldProductionSegment: segment <- frontier!.segments[slot]
+                if(segment!.bounded and segment!.count==0){slot <+- 1; continue()}
+                run!.choices.append(slot)
+                if(segment!.bounded){run!.membership <- true; break()}
+                slot <+- 1
+            }
+            if(run!.choices.size()>frontier!.peakCandidates){frontier!.peakCandidates <- run!.choices.size()}
+            if(!run!.membership){
+                if(run!.choices.isEmpty()){
+                    finishProductionScratch(request,run)
+                    frame!.facts.contextAbsent <- true; frame!.noMatch <- true; frame!.initialized <- true; frame!.finished <- true; return()
+                }
+                productionFailure(request,frame,worldPartial,"An open continuation does not establish another occurrence");return()
+            }
+        }
+        if(run!.choice<run!.choices.size()){
+            me int64: slot <- run!.choices[run!.choice]
+            our WorldProductionSegment: segment <- frontier!.segments[slot]
+            our infonView: recipe <- segment!.recipe
+            our POV: written <- graph.generatedWrittenValue(frontier!.owner,run!.ordinal+1)
+            if(written!=NULL){
+                me List<our infonView>: constraints; constraints.append(segment!.recipe)
+                recipe <- productionRecipe(written!.pItem,constraints)
+            }
+            our WorldPosition: candidate <- graph.newGeneratedPosition(frontier!.owner,run!.ordinal+1,recipe)
+            if(segment!.represented!=NULL){
+                candidate!.node!.productionOrigin <- segment!.represented; candidate!.occurrence <- segment!.represented
+                candidate!.generatedAddress!.representedKey <- segment!.representedKey
+            }
+            run!.series!.created <+- 1
+            run!.candidate <- makeFrame(request,candidate!.node,candidate,false,true)
+            run!.candidate!.parentContext <- NULL
+            run!.candidate!.acquisitionRequired <- true; run!.candidate!.acquireLevel <- true
+            our WorldRequirement: requirements
+            withEach memberRule in segment!.requirements{
+                our POV:: edge{951}; edge!.pItem <- memberRule
+                our WorldFrame: obligation <- makeFrame(request,edge)
+                obligation!.navigation <- candidate; obligation!.expressionParent <- frontier!.owner!.node
+                obligation!.templateContext <- true; obligation!.constraintSource <- true
+                obligation!.lexicalParameters <- graph.parameterScope(candidate)
+                requirements <- graph.joinRequirements(requirements,graph.requirement(obligation,edge))
+            }
+            run!.candidate!.acquisitionRequirements.push(requirements)
+            if(run!.previous!=NULL){run!.candidate!.acquisitionPrevious <- borrowValue(request,run!.previous)}
+            request!.previousValue <- run!.previous
+            frontier!.probes <+- 1
+            request!.ready.append(frame); request!.ready.append(run!.candidate); return()
+        }
+        if(run!.uncertain){productionFailure(request,frame,worldPartial,"Generated continuation has more than one viable route or unresolved candidate");return()}
+        if(run!.accepted==NULL){productionFailure(request,frame,worldRejected,"Every required generated continuation contradicts its constraints");return()}
+        our WorldPosition: checked <- graph.checkedPosition(request,run!.accepted)
+        if(checked==NULL){return()}
+        // Make the returned detached occurrence own the checked description;
+        // its logical generated address does not retain any predecessor.
+        our WorldPosition: accepted <- run!.accepted!.navigation
+        me WorldOutcome: readiness <- worldPartial
+        if(graph.completeFacts(run!.accepted!.facts,false)){readiness <- worldComplete}
+        graph.storeCursorValue(accepted!.node,checked!.node!.pItem,readiness)
+        // Replaying an explicit assertion preserves its retention status;
+        // this is a checked read, not a new durable publication.
+        if(graph.generatedWrittenValue(frontier!.owner,run!.ordinal+1)!=NULL){
+            accepted!.node!.cursorValue!.original <- NULL
+            accepted!.node!.cursorValue!.permanent <- true
+        }
+        accepted!.node!.worldContext <- NULL
+        our POV:: frozen{951}; Allocate(frozen!.pItem); frozen!.pItem! <- accepted!.node!.pItem!
+        if(accepted!.node!.pItem!.worldScalarCompletionOwner===accepted!.node!.pItem){frozen!.pItem!.worldScalarCompletionOwner <- frozen!.pItem}
+        frozen!.generatedAddress <- accepted!.generatedAddress
+        run!.previous <- graph.representedPosition(frozen,accepted)
+        run!.previous!.constraintRoot <- true; run!.previous!.writable <- false
+        if(run!.acceptedSegment==run!.segment){run!.used <+- 1}
+        else{run!.segment <- run!.acceptedSegment; run!.used <- 1}
+        run!.ordinal <+- 1; frontier!.steps <+- 1
+        if(frontier!.latest!=NULL and run!.ordinal<=frontier!.latest!.ordinal){frontier!.replaySteps <+- 1}
+        run!.choices.clear(); run!.choice <- 0; run!.accepted <- NULL; run!.uncertain <- false
+        // This operation owns no concurrent sibling evaluation. Once a state
+        // is checked only its value/continuation survives, not all proof frames.
+        restoreProductionScratch(request,run!.scratch)
+        request!.ready.append(frame)
+    }
+    // A production probe must not leave branch-specific persistent effects in
+    // the containing request. These features need a separate transactional
+    // branch protocol; rejecting them never commits a losing alternative.
+    me bool: productionEffectsPending(our WorldRequest: request) <- {
+        return(!request!.edits.isEmpty() or !request!.associations.isEmpty() or
+            !request!.cursorWrites.isEmpty() or !request!.cursorWriteTargets.isEmpty() or
+            !request!.boundaries.isEmpty() or !request!.sparseEdits.isEmpty() or
+            !request!.declarations.isEmpty() or !request!.declarationOrigins.isEmpty() or
+            !request!.producedLists.isEmpty() or !request!.producedOccurrences.isEmpty() or
+            !request!.publishedProducedOccurrences.isEmpty())
+    }
+    void: captureProductionScratch(our WorldRequest: request, our WorldProductionScratch: scratch) <- {
+        scratch!.outerAttempts <- request!.attempts; scratch!.outerActive <- request!.activeContexts
+        scratch!.outerCompleted <- request!.completedOccurrences; scratch!.outerChecked <- request!.checkedViews
+        scratch!.outerCheckedFacts <- request!.checkedViewFacts; scratch!.previousValue <- request!.previousValue
+        scratch!.outerLayouts <- request!.listLayouts; scratch!.outerStableLayouts <- request!.stableLayoutProofs
+        scratch!.outerOrderedLayouts <- request!.stableOrderedLayoutProofs; scratch!.outerUnitOrigins <- request!.unitOrigins
+        scratch!.outerBindings <- request!.parameterBindings
+    }
+    // Finished nested demands must not keep the enclosing candidate frames
+    // alive until a distant outer demand ends. Waiting runs keep their scratch.
+    void: finishProductionScratch(our WorldRequest: request, our WorldProductionRun: run) <- {
+        if(run!.scratch==NULL){return()}
+        restoreProductionScratch(request,run!.scratch)
+        request!.previousValue <- run!.scratch!.previousValue
+        me List<our WorldProductionScratch>: retained
+        withEach scratch in request!.productionScratch{if(scratch!==run!.scratch){retained.append(scratch)}}
+        run!.scratch <- NULL
+        request!.productionScratch <- retained
+    }
+    // The accepted state's immutable representation owns what it needs. Drop
+    // every candidate-local pure cache, including layout proofs keyed by POV,
+    // before the following state is acquired. Restore outer work untouched.
+    void: restoreProductionScratch(our WorldRequest: request, their WorldProductionScratch: scratch) <- {
+        me int64: bindingIndex <- 0
+        withEach binding in request!.parameterBindings{
+            if(bindingIndex>=scratch!.outerBindings.size()){
+                withEach argument in binding!.arguments{argument!.unresolvedReads.clear()}
+            }
+            bindingIndex <+- 1
+        }
+        request!.parameterBindings <- scratch!.outerBindings
+        request!.attempts <- scratch!.outerAttempts; request!.completedOccurrences <- scratch!.outerCompleted
+        request!.activeContexts <- scratch!.outerActive; request!.checkedViews <- scratch!.outerChecked
+        request!.checkedViewFacts <- scratch!.outerCheckedFacts
+        request!.listLayouts <- scratch!.outerLayouts; request!.stableLayoutProofs <- scratch!.outerStableLayouts
+        request!.stableOrderedLayoutProofs <- scratch!.outerOrderedLayouts; request!.unitOrigins <- scratch!.outerUnitOrigins
+    }
+}

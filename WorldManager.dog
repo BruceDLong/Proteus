@@ -9,6 +9,9 @@ struct WorldModelLock: wraps=Nested_Lock_Mutex {}
 #include WorldExpandedPrint.dog
 #include WorldTemporalAcquisition.dog
 #include WorldTemporalProduction.dog
+#include WorldGeneratedOccurrences.dog
+#include WorldPrivateMembers.dog
+#include WorldProductionFrontier.dog
 #include WorldCheckedViews.dog
 #include WorldListLayout.dog
 #include WorldRecordProjection.dog
@@ -898,7 +901,7 @@ struct WorldRequest {
             withEach argument in bindings!.arguments{argument!.unresolvedReads.clear()}
         }
         parameterBindings.clear()
-        previousValue <- NULL; releaseCheckedViews()
+        previousValue <- NULL; productionSession <- NULL; releaseCheckedViews(); productionScratch.clear()
         releaseTemporalProduction()
         stableLayoutProofs.clear(); stableOrderedLayoutProofs.clear(); listLayouts.clear()
         cursorWrites.clear(); cursorWriteTargets.clear(); associations.clear(); completedOccurrences.clear(); boundaries.clear(); sparseEdits.clear(); unitOrigins.clear(); ready.clear(); attempts.clear(); activeContexts.clear(); edits.clear(); declarations.clear(); declarationOrigins.clear(); root <- NULL; waitingFrame <- NULL
@@ -1583,6 +1586,7 @@ struct WorldPOVGraph {
     our WorldPosition: position(our POV: node, our WorldPosition: parent <- NULL) <- {
         our WorldPosition:: result; result!.node <- node; result!.owner <- node; result!.parent <- parent; result!.occurrence <- node
         if(node!.productionOrigin!=NULL){result!.occurrence <- node!.productionOrigin}
+        result!.generatedAddress <- node!.generatedAddress
         result!.embedded <- node!.isSubItm; if(parent!=NULL){result!.writable <- parent!.writable} return(result)
     }
     // Replacing a representation does not change its occurrence, embedding,
@@ -1594,7 +1598,7 @@ struct WorldPOVGraph {
     our WorldPosition: siblingPosition(our WorldPosition: from, me bool: previous) <- {
         if(from==NULL or from!.parent==NULL){return(NULL)}
         our POV: neighbour <- from!.owner!.next
-        if(previous){neighbour <- from!.owner!.prev}
+        if(previous){neighbour <- from!.owner!.previousNode()}
         if(neighbour==NULL){return(NULL)}
         our WorldPosition: result <- position(neighbour, from!.parent)
         result!.writable <- from!.writable
@@ -1634,6 +1638,9 @@ struct WorldPOVGraph {
         return(result)
     }
     our WorldPosition: occurrencePath(our POV: node) <- {
+        if(node!.generatedAddress!=NULL and node!.generatedParentContext!=NULL){
+            return(validateGeneratedPath(position(node,node!.generatedParentContext)))
+        }
         if(node!.worldContext!=NULL){
             // A deferred definition field belongs to its materialized instance.
             // Bind a borrowed wrapper on demand; do not rewrite the definition
@@ -1654,7 +1661,7 @@ struct WorldPOVGraph {
         me Set<their POV>: seen
         seen.insert(result!.occurrence)
         while(parent!=NULL){
-            if(parent!.worldContext!=NULL){at!.parent <- parent!.worldContext; return(result)}
+            if(parent!.worldContext!=NULL){at!.parent <- parent!.worldContext; return(validateGeneratedPath(result))}
             if(seen.contains(parent)){return(NULL)}
             seen.insert(parent)
             me bool: contained <- false
@@ -1663,17 +1670,29 @@ struct WorldPOVGraph {
                 if(child===at!.occurrence){contained <- true; break()}
                 child <- child!.next
             }
-            if(!contained){return(NULL)}
+            // A generated occurrence has a proved qualified coordinate rather
+            // than a permanent sibling node in the source layout. Validate its
+            // detached parent route after reconstructing the complete path.
+            if(!contained and at!.generatedAddress==NULL){return(NULL)}
             our POV:: borrowed{936}; borrowed! <- parent!
             at!.parent <- position(borrowed); at <- at!.parent; at!.occurrence <- parent
+            if(parent!.generatedAddress!=NULL and parent!.generatedParentContext!=NULL){
+                at!.parent <- parent!.generatedParentContext; return(validateGeneratedPath(result))
+            }
             parent <- parent!.pParent
         }
-        return(result)
+        return(validateGeneratedPath(result))
     }
     me bool: samePosition(our WorldPosition: left, our WorldPosition: right) <- {
         while(left!=NULL and right!=NULL){
             if(left===right){return(true)}
-            if(left!.occurrence!==right!.occurrence or left!.parameters!==right!.parameters){return(false)}
+            if(left!.generatedAddress!=NULL and right!.generatedAddress==NULL and left!.generatedAddress!.representedKey!=NULL){
+                return(sameGeneratedScope(left!.generatedAddress!.representedKey,generatedScopeKey(right)))
+            }
+            if(right!.generatedAddress!=NULL and left!.generatedAddress==NULL and right!.generatedAddress!.representedKey!=NULL){
+                return(sameGeneratedScope(right!.generatedAddress!.representedKey,generatedScopeKey(left)))
+            }
+            if(!sameGeneratedOccurrence(left,right) or left!.parameters!==right!.parameters){return(false)}
             left <- left!.parent; right <- right!.parent
         }
         return(left==NULL and right==NULL)
@@ -1929,7 +1948,7 @@ struct WorldPOVGraph {
             if(walk!.reverse){level!.next <- node!.pItem!.value!.items.tail}
             if(level!.after!=NULL){
                 level!.next <- level!.after!.next
-                if(walk!.reverse){level!.next <- level!.after!.prev; level!.tailRead <- true}
+                if(walk!.reverse){level!.next <- level!.after!.previousNode(); level!.tailRead <- true}
             }
             if(emptyExtent){level!.tailRead <- true}
             if(level!.after==NULL and level!.contextFreeLayout and walk!.emptyLayouts.contains(node!.pItem)){
@@ -1985,7 +2004,7 @@ struct WorldPOVGraph {
                     }
                 }
                 level!.next <- member!.next
-                if(walk!.reverse){level!.next <- member!.prev}
+                if(walk!.reverse){level!.next <- member!.previousNode()}
                 request!.correspondencePositions <+- 1
                 if(result!.embedded and walk!.activeLayouts.contains(member!.pItem)){
                     walk!.outcome <- worldUnsupported; walk!.detail <- "Cyclic list layout"; return(NULL)
@@ -2038,7 +2057,7 @@ struct WorldPOVGraph {
         while(frame!.expressionSlot<3){
             if(frame!.nextOperand!=NULL){
                 our POV: operand <- frame!.nextOperand
-                if(operand!.prev!==frame!.priorOperand){
+                if(operand!.previousNode()!==frame!.priorOperand){
                     frame!.facts.outcome <- worldError; frame!.facts.detail <- "Broken expression operand chain"; return(NULL)
                 }
                 if(operand!.isSubItm and !memberSequence(frame)){
@@ -2904,6 +2923,7 @@ struct WorldPOVGraph {
                 job.newAlternatives!.infSize!.overlayType <- NUM; job.newAlternatives!.infSize!.evalMode <- emUnknown
                 job.newAlternatives!.value!.overlayType <- LST; job.newAlternatives!.value!.evalMode <- emLiteral
                 job.newAlternatives!.value!.sizeMode <- fromGiven
+                job.newAlternatives!.value!.items.privateLinks <- job.target!.pItem!.privateMemberLinks or job.target!.generatedAddress!=NULL
                 withEach member in facts.alternatives!.members{
                     if(!representableFacts(member!.facts)){
                         request!.outcome <- worldPartial; request!.detail <- "Alternative still has unresolved work"; return()
@@ -2929,6 +2949,7 @@ struct WorldPOVGraph {
                 if(!existing){
                     Allocate(job.newList); body <- job.newList
                     body!.overlayType <- LST; body!.evalMode <- emLiteral
+                    body!.items.privateLinks <- job.target!.pItem!.privateMemberLinks or job.target!.generatedAddress!=NULL
                     if(job.frame!.listSpecEdge!=NULL){body!.listSpec <- job.frame!.listSpecEdge!.pItem}
                     if(facts.explicitSize){body!.sizeMode <- fromGiven}else{body!.sizeMode <- fromCount}
                 }
@@ -2951,7 +2972,7 @@ struct WorldPOVGraph {
                         }
                         our infonState: destination <- body
                         if(existing){
-                            if(job.appendedList==NULL){Allocate(job.appendedList)}
+                            if(job.appendedList==NULL){Allocate(job.appendedList); job.appendedList!.items.privateLinks <- body!.items.privateLinks}
                             destination <- job.appendedList
                         }
                         our infonView:: item
@@ -2991,10 +3012,11 @@ struct WorldPOVGraph {
                 // Traversal proved membership. Validate its immediate links;
                 // do not search from the parent's start again for every edit.
                 our infonView: parent <- batch!.source!.parent!.node!.pItem
-                if((source!.prev==NULL and parent!.value!.items.head!==source) or
-                   (source!.prev!=NULL and source!.prev!.next!==source) or
+                our POV: prior <- source!.previousNode()
+                if((prior==NULL and parent!.value!.items.head!==source) or
+                   (prior!=NULL and prior!.next!==source) or
                    (source!.next==NULL and parent!.value!.items.tail!==source) or
-                   (source!.next!=NULL and source!.next!.prev!==source)){
+                   (source!.next!=NULL and source!.next!.previousNode()!==source)){
                     request!.outcome <- worldUnsupported; request!.detail <- "Sparse occurrence is no longer in its source list"; return()
                 }
             }
@@ -3072,6 +3094,14 @@ struct WorldPOVGraph {
             source!.pItem!.noteNormalizationWork()
             parent!.pItem!.noteNormalizationWork()
         }
+        // Durable generated assertions own their immediate member wrappers.
+        // Capture them after every validated write, including copied branches
+        // and sparse descendants, has reached its final published description.
+        withEach job in writes{
+            if(request!.cursorWriteTargets.containsKey(job.target)){job.target <- request!.cursorWriteTargets.at(job.target)}
+            preserveGeneratedAncestors(job.target)
+        }
+        withEach batch in request!.sparseEdits{preserveGeneratedAncestors(batch!.source!.node)}
     }
 
     // A closed containing level need not print a type-only requirement
@@ -3183,8 +3213,13 @@ struct WorldPOVGraph {
     // Transfer a detached, owned member list without leaving parent pointers
     // into its discarded staging wrapper. Descendant parents remain stable.
     void: reparentMembers(our POV: node) <- {
+        me bool: generatedContext <- hasGeneratedOwner(node)
         our POV: member <- node!.pItem!.value!.items.head
-        while(member!=NULL){member!.pParent <- node; member <- member!.next}
+        while(member!=NULL){
+            member!.pParent <- node
+            if(generatedContext){member!.worldContext <- NULL}
+            member <- member!.next
+        }
         node!.pItem!.worldBorrowedMembers <- false
     }
     // A successful ordinary publication is persistent, including assertions
@@ -3214,13 +3249,22 @@ struct WorldPOVGraph {
         else{target!.pItem!.worldScalarCompletionOwner <- NULL}
         target!.pItem!.worldBorrowedMembers <- value!.overlayType==LST and value!.evalMode==emLiteral
         if(ownMembers and value!.overlayType==LST and value!.evalMode==emLiteral){
+            me bool: generatedContext <- hasGeneratedOwner(target)
+            target!.pItem!.privateMemberLinks <- source!.privateMemberLinks or target!.generatedAddress!=NULL
             Allocate(target!.pItem!.value); target!.pItem!.value! <- value!
             target!.pItem!.value!.items.clear()
+            target!.pItem!.value!.items.privateLinks <- target!.pItem!.privateMemberLinks
             our POV: member <- value!.items.head
             while(member!=NULL){
                 our POV:: copy{946}; copy! <- member!; copy!.pParent <- target
+                // An owned generated member navigates through its physical
+                // parent and the root's qualified generated parent. Importing
+                // the read snapshot can make that snapshot own this target.
+                // Only the new wrapper changes; borrowed payloads stay shared.
+                if(generatedContext){copy!.worldContext <- NULL}
                 Allocate(copy!.pItem); copyDescription(copy, member!.pItem, false)
-                target!.pItem!.value!.items.appendPov(copy); member <- member!.next
+                target!.pItem!.value!.items.appendPov(copy)
+                member <- member!.next
             }
             target!.pItem!.worldBorrowedMembers <- false
         }
@@ -3305,7 +3349,7 @@ struct WorldPOVGraph {
             item!.innr <- NULL; item!.intersectPos <- ipNoIntersect
             item!.hasInnrOutr <- false; item!.intersectMarkedRetPOV <- NULL
         }
-        if(job.newList!=NULL){item!.value <- job.newList; item!.worldBorrowedMembers <- false}
+        if(job.newList!=NULL){item!.value <- job.newList; item!.worldBorrowedMembers <- false; item!.privateMemberLinks <- job.newList!.items.privateLinks}
         if(facts.overlay==LST and frame!.listSpecEdge!=NULL and item!.value!.listSpec==NULL){
             item!.value!.listSpec <- frame!.listSpecEdge!.pItem
         }
@@ -5902,6 +5946,20 @@ struct WorldManager {
     // Paths describe consumers of selection, never a separate search engine.
     our WorldFrame: pathSelection(our WorldRequest: request, our WorldPosition: source,
                                  our PartPath: part, our WorldFrame: index) <- {
+        if(part!.pathMode==idxField and part!.spec==NULL and index!=NULL and index!.facts.hasValue and
+           index!.facts.number>=1 and index!.facts.number.getDenominator()==1 and index!.facts.number<=9223372036854775807 and
+           !productionInRepresentedPrefix(source,index!.facts.number.getNumerator().convertToIntVal())){
+            our WorldFrame: generated <- productionOperation(request,source,index!.facts.number.getNumerator().convertToIntVal(),true)
+            if(generated!=NULL){
+                our infonView: continuation <- part!.continuation
+                if(continuation!=NULL and (!continuation!.wrkList.isEmpty() or continuation!.type!=NULL or
+                   continuation!.innr!=NULL or continuation!.funcArgs!=NULL or continuation!.wordArguments!=NULL or
+                   continuation!.invertMatch or continuation!.doReply or continuation!.identityName!=NULL)){
+                    productionFailure(request,generated,worldUnsupported,"Generated indexed assertions need a selected-occurrence constraint adapter")
+                }
+                return(generated)
+            }
+        }
         our WorldFrame: units <- unitOperation(request, source, part, index)
         if(units!=NULL){return(units)}
         if(part!.pathMode==idxField and part!.spec!=NULL and part!.spec!.value!.overlayType!=LST){
@@ -6081,14 +6139,87 @@ struct WorldManager {
         return(true)
     }
 
-    // Neighbour selection borrows occurrence layouts. It does not construct an
-    // execution cursor or produce/replay list members. Both walks retain their
-    // exact boundary across parser and layout-acquisition waits.
+    // Generated neighbours use the common occurrence producer. Internal reads
+    // borrow its checked representation; ordinary navigation keeps the writable
+    // occurrence. Both retain their boundary across acquisition waits.
+    me bool: generatedNeighbourSource(our WorldRequest: request, our WorldFrame: frame, our WorldPath: path, me bool: previous) <- {
+            if(previous and request!.previousValue!=NULL and graph.samePosition(request!.previousValue!.parent,path!.cursor!.parent)){
+                me bool: adjacent <- request!.previousValue!.generatedAddress!=NULL and
+                    request!.previousValue!.generatedAddress!.ordinal==path!.cursor!.generatedAddress!.ordinal-1
+                if(!adjacent and path!.cursor!.generatedAddress!.ordinal==2){
+                    our POV: first <- path!.cursor!.parent!.node!.pItem!.value!.items.head
+                    adjacent <- first!=NULL and request!.previousValue!.occurrence===first and !first!.isSubItm
+                }
+                if(adjacent){path!.source <- request!.previousValue;return(true)}
+            }
+            if(previous and path!.cursor!.generatedAddress!.ordinal==1){
+                our POV:: absent{951}; Allocate(absent!.pItem); absent!.pItem!.itmMode <- mItem; absent!.pItem!.streamState <- parseDone
+                absent!.pItem!.value!.undefined <- true; path!.source <- graph.position(absent); path!.contextAbsent <- true; return(true)
+            }
+            if(previous and path!.cursor!.generatedAddress!.ordinal>1){
+                if(path!.generatedNeighbour==NULL){
+                    path!.generatedNeighbour <- productionOperation(request,path!.cursor!.parent,path!.cursor!.generatedAddress!.ordinal-1)
+                }
+                if(path!.generatedNeighbour!=NULL){
+                    our WorldFrame: acquired <- path!.generatedNeighbour
+                    if(!acquired!.finished){request!.ready.append(frame);request!.ready.append(acquired);return(false)}
+                    if(acquired!.facts.outcome!=worldReady){frame!.facts <- acquired!.facts;stopFrame(request,frame);return(false)}
+                    if(acquired!.correspondenceResult!=NULL and acquired!.correspondenceResult!.position!=NULL){
+                        // Its requirements were checked while producing this
+                        // state. Reacquiring the writable occurrence would
+                        // recursively apply that same transition once again.
+                        path!.source <- acquired!.productionDemand!.previous;return(true)
+                    }
+                }
+            }
+            frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Generated transition needs established neighbour evidence"; stopFrame(request,frame); return(false)
+    }
+
     me bool: cursorSource(our WorldRequest: request, our WorldFrame: frame) <- {
         our WorldPath: path <- frame!.path
         me bool: previous <- frame!.node!.pItem!.cursorMode==cmTPrev or frame!.node!.pItem!.cursorMode==cmPrev
         me bool: temporal <- frame!.node!.pItem!.cursorMode==cmTPrev or frame!.node!.pItem!.cursorMode==cmTNext
         if(path!.cursor==NULL){path!.cursor <- graph.producedPosition(request, frame!.navigation)}
+        if(path!.cursor!=NULL and path!.cursor!.generatedAddress!=NULL and !(frame===request!.root and frame!.referenceOnly)){
+            return(generatedNeighbourSource(request,frame,path,previous))
+        }
+        if(frame===request!.root and frame!.referenceOnly and path!.cursor!=NULL and path!.cursor!.parent!=NULL and
+           (path!.cursor!.generatedAddress!=NULL or
+            (!previous and (path!.cursor!.owner!.next==NULL or path!.cursor!.owner!.next!.isSubItm)))){
+            if(path!.generatedNeighbour==NULL){
+                our WorldPosition: owner <- path!.cursor!.parent
+                while(owner!=NULL and owner!.embedded){owner <- owner!.parent}
+                our WorldProductionFrontier: frontier <- productionFrontier(request,owner)
+                if(frontier!=NULL){
+                    if(frontier!.outcome==worldWaiting){waitAt(request,frame,frontier!.waiting);return(false)}
+                    if(frontier!.outcome!=worldReady){
+                        frame!.facts.outcome <- frontier!.outcome;frame!.facts.detail <- frontier!.detail
+                        stopFrame(request,frame);return(false)
+                    }
+                    me int64: ordinal <- 0
+                    if(path!.cursor!.generatedAddress!=NULL){ordinal <- path!.cursor!.generatedAddress!.ordinal}
+                    else{ordinal <- productionRepresentedOrdinal(frontier,path!.cursor)}
+                    if(ordinal>0){
+                        if(!previous and ordinal==9223372036854775807){
+                            frame!.facts.outcome <- worldUnsupported;frame!.facts.detail <- "Generated coordinate exceeds the supported integer index"
+                            stopFrame(request,frame);return(false)
+                        }
+                        if(previous){ordinal <- ordinal-1}else{ordinal <+- 1}
+                        path!.generatedNeighbour <- productionOperation(request,owner,ordinal)
+                    }
+                }
+            }
+            if(path!.generatedNeighbour!=NULL){
+                our WorldFrame: generated <- path!.generatedNeighbour
+                if(!generated!.finished){request!.ready.append(frame);request!.ready.append(generated);return(false)}
+                if(generated!.facts.outcome!=worldReady){frame!.facts <- generated!.facts;stopFrame(request,frame);return(false)}
+                if(generated!.noMatch){
+                    our POV:: absent{951};Allocate(absent!.pItem);absent!.pItem!.itmMode <- mItem;absent!.pItem!.streamState <- parseDone
+                    absent!.pItem!.value!.undefined <- true;path!.source <- graph.position(absent);path!.contextAbsent <- true;return(true)
+                }
+                path!.source <- generated!.correspondenceResult!.position; return(true)
+            }
+        }
         if(!temporal){
             if(path!.neighbours==NULL){
                 our WorldPosition: parent
@@ -6118,6 +6249,9 @@ struct WorldManager {
         }
         while(temporal and path!.cursor!=NULL){
             our WorldPosition: at <- path!.cursor
+            if(at!.generatedAddress!=NULL and !path!.descending and !(frame===request!.root and frame!.referenceOnly)){
+                return(generatedNeighbourSource(request,frame,path,previous))
+            }
             if(path!.descending){
                 if(previous and request!.producedFacts.containsKey(at!.owner)){
                     at <- graph.producedValue(request, at)
@@ -6513,6 +6647,7 @@ struct WorldManager {
     }
 
     void: step(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(frame!.productionDemand!=NULL){productionStep(request,frame);return()}
         if(frame!.acquisitionCarry!=NULL){
             if(!frame!.acquisitionCarry!.finished){request!.ready.append(frame); request!.ready.append(frame!.acquisitionCarry); return()}
             our WorldFrame: retained <- frame!.acquisitionCarry
@@ -7047,7 +7182,7 @@ struct WorldManager {
             session!.requestRegistryMoves <+- 1
         }
         session!.requests.popLast()
-        request!.sessionSlot <- -1; request!.registeredSession <- NULL
+        request!.sessionSlot <- -1; request!.registeredSession <- NULL; request!.productionSession <- NULL
         session!.requestReleases <+- 1
         return(true)
     }
@@ -7058,7 +7193,7 @@ struct WorldManager {
         withEach request in session!.requests{
             cancel(request); request!.sessionSlot <- -1; request!.registeredSession <- NULL
         }
-        session!.requests.clear(); session!.closed <- true
+        session!.requests.clear(); session!.generatedSeries.clear(); session!.closed <- true
     }
 }
 
@@ -7515,6 +7650,7 @@ struct WorldDemand {
             language, worldSource, identities, saved, NULL, true, unchanged)
         if(written!.publications>0 and !written!.failed()){
             manager!.graph.rememberCursorValue(position!.node, NULL, written!.status().outcome, true)
+            manager!.graph.preserveGeneratedValue(position!.node)
             rememberDemandContext(position)
             current <- position!.node; activeValue <- current!.cursorValue!.use
         }
@@ -7524,7 +7660,9 @@ struct WorldDemand {
     // Every live cursor holds its current entry, so another cursor cannot clear it.
     me int: clearCache() <- {
         if(manager==NULL or position==NULL or !position!.writable or position!.parent==NULL){return(0)}
-        return(manager!.clearCursorCache(logicalList(position)!.node))
+        our WorldPosition: scope <- logicalList(position)
+        me int: cleared <- manager!.clearCursorCache(scope!.node)
+        return(cleared+manager!.clearGeneratedCache(session, scope))
     }
     me WorldStatus: status() <- {
         if(layoutRequest!=NULL){return(layoutRequest!.status())}

@@ -3676,6 +3676,142 @@ normalization diagnostics remain unchanged: semantics beyond the scalar
 milestone and open source correspondence needing span alignment. No maintained
 Slipstream source changed.
 
+## D109 — Demand-driven temporal continuations with reclaimable occurrences (2026-10-22)
+
+**Problem and scope.** D108 acquires newly established finite suffixes correctly,
+but repeating finite closure for successive cursor movements would copy the
+represented prefix repeatedly and retain one stored POV per generated state.
+The next increment supports uniquely determined temporal continuations through
+finite demands. The model may have no supplied numerical extent and may contain
+any number of supported segments. Neither a cursor request nor an open tail
+establishes membership by itself.
+
+**Continuation proof.** A known remaining extent establishes another slot. In
+an unknown repeated span with required later segments, the ordinary constraints
+must establish which consuming route follows. Candidate state descriptions are
+acquired through normalizer frames, including the covering listSpecs and checked
+predecessor. Exactly one established route may advance the continuation. A
+rejected optional route does not reject another viable route; an unresolved
+route cannot be discarded as if it contradicted the constraints. A required
+contradiction is not an endpoint. A trailing open repetition with no further
+membership evidence remains partial. Forward dependencies must not treat the
+materialized frontier as a proved final member.
+
+This is a deterministic structural continuation within the normalizer, not a
+second evaluator for transitions. The sequence can contain several repeated
+spans and intervening required states; there is no destination predicate or
+privileged final-goal segment. Broader ambiguous mappings remain an explicit
+boundary. Parser waits retain the pending candidate and exact queue position;
+cancelled or unsuccessful candidates cannot publish assertions.
+
+**Identity and ownership.** Generated occurrences have qualified logical
+coordinates independent of their current POV allocation. The enclosing occurrence
+and bindings distinguish histories, including ordinary nested levels. Replaying
+one coordinate recovers that occurrence's identity without a permanent identity
+record for every visited state. Session ownership of deductions does not make
+occurrence identity session-relative. Source descriptions remain compressed and
+read-only during traversal; generated sibling links do not own the entire history.
+
+Keep compact structural progress, bounded cached occurrences and the evidence
+needed for reconstruction. Checkpoints require continuation information as well
+as values. Live handles and required dependencies may retain additional evidence.
+Explicit accepted writes are sparse durable assertions owned by the model, with
+qualified scope keys; ending a session or evicting derived values must not erase
+them. Ordinary normalization and publication remain responsible for validating
+those assertions.
+
+A transient generated occurrence retains its exact qualified model parent for
+navigation. A durable assertion stores the pure scope key instead, avoiding an
+owning link back to the model that owns the assertion. Validated publication
+removes snapshot navigation that would make a written node own itself; its
+generated coordinate and qualified parent preserve navigation. Releasing the
+model and its active handles must also release written payloads.
+The same rule applies when refreshing a generated cache: newly owned member
+wrappers use their new parent context instead of importing source navigation
+that can own the destination. Borrowed payloads remain shared.
+
+Private checked member lists use owning forward links and weak backward links.
+The list retains its head and tail; a qualified position retains its containing
+value during navigation. Insertion, removal and copying preserve this ownership
+policy. Ordinary supplied lists keep their existing policy. The native weak
+reference wrapper supplies lifetime operations only; layout, traversal and
+normalization remain CodeDog. A bounded cache alone would be insufficient if
+evicted record members still owned one another in a cycle.
+
+Alternative probes retain separate ordinary-frame deductions. The enclosing
+request's caches and predecessor context are restored between candidates and
+completed states, while checked values retain only the evidence they need.
+Reading or evicting an already written occurrence does not publish another
+assertion or advance its write revision. A missing cached predecessor is another
+ordinary occurrence request, with the same wait and replay behavior.
+
+**Current boundary.** The structural program requires literal ordered layouts.
+Unresolved cross-segment extents, branch-dependent external effects, external
+reads without captured dependencies, parameter scopes without canonical
+application identity, assertion-bearing indexed selections, and nested generated histories
+needing a growing series registry report the corresponding unresolved/unsupported
+result. Re-created argument bindings cannot stand in for persistent application
+identity. A cyclic structural description is detected;
+there is no fixed segment-count or syntactic-depth limit. Forward dependencies
+still require evidence beyond the generated frontier. Cache validity checks
+cover the captured model headers, revisions and request environment.
+Changing a world leaf need not change the world root's revision, so a root
+revision alone is not a dependency proof for external reads. A selection's
+assertions must not be discarded when its occurrence is generated. Cursor
+write-back and ordinary assertions on an acquired generated occurrence retain
+their normal publication path; assertion-bearing indexed production awaits that
+selection integration.
+
+**Alternatives and costs.** Extending the stored prefix permanently avoids replay
+but grows with traversal length. Re-running D108 for every Next adds repeated
+prefix work. Retaining completed normalization requests would keep obsolete
+frames and proof chains. A virtual occurrence provider and compact continuation
+avoid those costs. Bounded retention trades memory for replay distance; it cannot
+guarantee fast access to every old state. Fixed-width deterministic sequential
+work is measured separately from model size, active handles, durable writes and
+replay distance. No constant-memory or linear-work promise is made for arbitrary
+inference.
+
+**Validation.** CodeDog regeneration and builds succeeded for `Proteus.Lib.dog`
+and `BuildProteusGraph.dog`. From `LocalBuild`,
+`./TestProteus -t unit/demandProduction/ -T 3` passes all 13 groups. The groups
+cover counted prefixes, several unbounded segments, embedded occurrence identity,
+eviction/replay, durable scalar and descendant writes, parser waits/cancellation,
+ordinary indexed reads, expanded printing, changed parent constraints and explicit
+unsupported boundaries. Two direct language fixtures for indexed scalar and
+record production also pass.
+
+`./TestProteus -T 3` reports 24 failures among 642 checks, with exactly the same
+24 failing names as the pre-change 623-check baseline. The working-tree count
+also includes six concurrent connector checks outside this change. No existing
+fixture expectations were changed.
+
+Fixed-width sequential scaling, measured with `-T 0` to show the successful
+check's counters:
+
+| Requested traversal length | Frames | Relationships | Queue steps | Generated candidates | Evicted cache nodes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 64 | 2414 | 580 | 3645 | 194 | 54 |
+| 128 | 4206 | 1028 | 6333 | 322 | 118 |
+| 256 | 7790 | 1924 | 11709 | 578 | 246 |
+
+Each run retains ten generated occurrence-cache nodes, at most four temporal
+value slots and one request, with no completed input subscription. Production
+checkpoints have their own bounded limit. Weak-reference checks verify actual
+release of evicted record roots and fields, and of written roots and payloads
+after their required owners are released. Durable assertions remain readable
+across session closure; replaying them does not advance the write revision.
+
+The separately regenerated Slipstream consumer links this checkout's shared
+library with matching exported ABI. An isolated real display check confirms
+visible cube rendering and navigation from index 0 to 1 and back to the same
+index-0 occurrence (`solved-rubix-turn-state`, `turn-red-face-clockwise`, then
+`solved-rubix-turn-state`). There are no `TCURSOR` or `DISPLAY` diagnostics and
+shutdown exits normally. The two existing normalization diagnostics remain:
+semantics beyond the scalar milestone and open source correspondence needing
+span alignment. This consumer check covers the represented Rubix history.
+No maintained Slipstream source changed in this work.
+
 ## Connector input availability (2026-10-22)
 
 The terminal queries `InfonConnector.isOpen()` rather than inspecting parser

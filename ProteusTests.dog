@@ -1,6 +1,19 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/demandProduction/counted
+    unit/demandProduction/segments
+    unit/demandProduction/replayIdentity
+    unit/demandProduction/embeddedIdentity
+    unit/demandProduction/writes
+    unit/demandProduction/durableDescendant
+    unit/demandProduction/boundaries
+    unit/demandProduction/waitAndCancel
+    unit/demandProduction/scaling
+    unit/demandProduction/reclamation
+    unit/demandProduction/expandedPrint
+    unit/demandProduction/language
+    unit/demandProduction/invalidation
     unit/temporalProduction/scalars
     unit/temporalProduction/records
     unit/temporalProduction/segments
@@ -6082,5 +6095,538 @@ struct GLOBAL {
             priorWrappers <- wrappers; priorProduced <- produced
             agent.endWorldSessions(); modelMngr.clear(); width <*- 2
         }
+    }
+}
+
+
+// A demand asks ordinary normalization to establish and acquire one occurrence.
+// Repetitions may continue or end only when their constraints prove that route.
+struct GLOBAL {
+    void: unit_demandProduction_counted(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("*1000000+{T (%tprev +1)| 0 ...}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: seed <- parsed.target!.pItem!.value!.items.head
+        our POV: originalNext <- seed!.next
+        our infonView: rule <- parsed.target!.pItem!.value!.listSpec
+        me string: ruleOriginal <- toString(rule)
+        our WorldSession: session <- agent.startSession()
+        our WorldDemand: demand <- agent.worldManager.demand(session,seed)
+        if(!demand!.configureRetention(2,8,1) or !demand!.refresh()){FAIL("Counted temporal seed failed: "+demand!.status().detail)}
+        our WorldPosition: frozen <- demand!.snapshot()
+        withEach ordinal in range 1 .. 65{
+            if(!demand!.goNext() or demand!.current!.pItem!.fetchInt()!=ordinal){
+                FAIL("Counted continuation did not acquire its next state: "+toString(ordinal)+": "+demand!.status().detail)
+            }
+        }
+        if(demand!.atBoundary or seed!.next!==originalNext or toString(rule)!=ruleOriginal or
+           frozen!.node!.pItem!.fetchInt()!=0){FAIL("Incremental production changed source topology or transition or a held snapshot")}
+        if(session!.requests.size()>2 or !agent.worldManager.control!.inputWaiters.isEmpty()){
+            FAIL("Completed production retained old requests or input subscriptions")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_demandProduction_segments(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        // There is no numerical extent. Each ! predicate excludes the ordinary
+        // following state, producing three repetitions and three delimiters.
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T (%tprev +1)|0 &{T !3|...} 3 &{T !6|...} 6 &{T !9|...} 9}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        me string: original <- toString(parsed.target!.pItem)
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),parsed.target!.pItem!.value!.items.head)
+        if(!demand!.configureRetention(1,0,0) or !demand!.refresh()){FAIL("Segmented temporal seed failed: "+demand!.status().detail)}
+        withEach ordinal in range 1 .. 10{
+            if(!demand!.goNext() or demand!.current!.pItem!.fetchInt()!=ordinal){
+                FAIL("Uniquely established segment continuation failed at "+toString(ordinal)+": "+demand!.status().detail)
+            }
+        }
+        if(demand!.goNext() or !demand!.atBoundary or demand!.status().outcome!=worldComplete){
+            FAIL("The last ordinary segment did not establish the closed endpoint")
+        }
+        if(!demand!.goPrev() or demand!.current!.pItem!.fetchInt()!=8 or !demand!.goNext() or demand!.current!.pItem!.fetchInt()!=9){
+            FAIL("Previous and Next could not cross the last repeat boundary")
+        }
+        if(toString(parsed.target!.pItem)!=original){FAIL("Segment traversal rewrote the supplying pattern")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_demandProduction_replayIdentity(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T (%tprev +1)|0 &{T !16|...} 16 &{T !32|...} 32}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our WorldSession: session <- agent.startSession()
+        our WorldDemand: demand <- agent.worldManager.demand(session,parsed.target!.pItem!.value!.items.head)
+        if(!demand!.configureRetention(1,8,1) or !demand!.refresh() or !demand!.goNext()){
+            FAIL("Could not establish the first generated identity: "+demand!.status().detail)
+        }
+        our WorldPosition:: first; first! <- demand!.position!
+        our WorldPosition: snapshot <- demand!.snapshot()
+        withEach ordinal in range 2 .. 31{
+            if(!demand!.goNext() or demand!.current!.pItem!.fetchInt()!=ordinal){FAIL("Could not advance past the replay origin")}
+        }
+        our WorldDemand: observer <- agent.worldManager.demand(session,parsed.target)
+        observer!.inList()
+        if(!observer!.configureRetention(1,0,0) or !observer!.seek(FlexNum("2")) or observer!.current!.pItem!.fetchInt()!=1 or
+           !agent.worldManager.graph.samePosition(first,observer!.position)){
+            FAIL("Another demand did not recover the same generated occurrence: "+observer!.status().detail)
+        }
+        if(!demand!.seek(FlexNum("2")) or demand!.current!.pItem!.fetchInt()!=1 or
+           !agent.worldManager.graph.samePosition(first,demand!.position) or snapshot!.node!.pItem!.fetchInt()!=1){
+            FAIL("Reconstruction changed logical identity or a held value snapshot: "+demand!.status().detail)
+        }
+        if(!demand!.goNext() or demand!.current!.pItem!.fetchInt()!=2 or
+           agent.worldManager.graph.samePosition(first,demand!.position) or observer!.current!.pItem!.fetchInt()!=1){
+            FAIL("Independent cursors shared positions instead of only occurrence identity")
+        }
+        me WorldParseResult: repeated <- agent.worldManager.parse("*4+{T 7 ...}")
+        if(repeated.target==NULL){FAIL(repeated.error)}
+        cursorDemandLinkMembers(repeated.target)
+        our WorldDemand: equalValues <- agent.worldManager.demand(session,repeated.target!.pItem!.value!.items.head)
+        if(!equalValues!.refresh() or !equalValues!.goNext()){FAIL("Equal-valued generated occurrence was unavailable")}
+        our WorldPosition:: equalFirst; equalFirst! <- equalValues!.position!
+        if(!equalValues!.goNext() or equalValues!.current!.pItem!.fetchInt()!=7 or agent.worldManager.graph.samePosition(equalFirst,equalValues!.position)){
+            FAIL("Equal generated values were collapsed into one occurrence identity")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_demandProduction_writes(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("*128+{T (%tprev +1)|0 ...}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our WorldSession: session <- agent.startSession()
+        our WorldDemand: demand <- agent.worldManager.demand(session,parsed.target!.pItem!.value!.items.head)
+        if(!demand!.configureRetention(1,0,0) or !demand!.refresh() or !demand!.goNext()){FAIL("Could not acquire a generated state to write")}
+        our WorldPosition:: writtenPosition; writtenPosition! <- demand!.position!
+        our POV: writtenNode <- demand!.current
+        our WorldRequest: written <- demand!.writeBack()
+        if(written==NULL or written!.failed() or written!.publications==0){FAIL("Generated state write-back was unavailable")}
+        if(writtenNode!.worldContext!=NULL or
+           !agent.worldManager.graph.samePosition(agent.worldManager.graph.occurrencePath(writtenNode),writtenPosition)){
+            FAIL("Generated write publication changed its qualified occurrence path")
+        }
+        me WorldWeakReference<POV>: publishedOccurrence
+        publishedOccurrence.set(writtenNode)
+        agent.worldManager.release(session,written)
+        withEach ordinal in range 2 .. 65{if(!demand!.goNext()){FAIL("Could not traverse beyond a durable generated state")}}
+        demand!.clearCache()
+        if(writtenNode!.cursorValue==NULL or !writtenNode!.cursorValue!.permanent or writtenNode!.pItem!.fetchInt()!=1){
+            FAIL("Generated occurrence reclamation discarded an explicit write")
+        }
+        if(!demand!.seek(FlexNum("2")) or !agent.worldManager.graph.samePosition(writtenPosition,demand!.position) or
+           demand!.current!.pItem!.fetchInt()!=1){FAIL("Replay could not find the durable occurrence after eviction")}
+        me uint64: writeRevision <- agent.worldManager.graph.generatedWriteRevision(writtenPosition!.parent)
+        agent.worldManager.closeSession(session)
+        our WorldDemand: fresh <- agent.worldManager.demand(agent.startSession(),parsed.target)
+        fresh!.inList()
+        if(!fresh!.configureRetention(1,0,0) or !fresh!.seek(FlexNum("2")) or fresh!.current!.pItem!.fetchInt()!=1 or
+           !agent.worldManager.graph.samePosition(writtenPosition,fresh!.position) or fresh!.current!.cursorValue==NULL or
+           !fresh!.current!.cursorValue!.permanent){FAIL("Ending the producer session lost its durable generated assertion or occurrence identity")}
+        if(writeRevision!=agent.worldManager.graph.generatedWriteRevision(writtenPosition!.parent) or
+           !fresh!.refresh() or writeRevision!=agent.worldManager.graph.generatedWriteRevision(writtenPosition!.parent)){
+            FAIL("Reading a durable generated assertion republished it as new work")
+        }
+        agent.endWorldSessions()
+        written <- NULL; writtenPosition <- NULL; writtenNode <- NULL; demand <- NULL; session <- NULL
+        if(!publishedOccurrence.expired() or fresh!.current!.pItem!.fetchInt()!=1){
+            FAIL("A durable assertion retained its released original generated occurrence")
+        }
+        me WorldWeakReference<POV>: replayedOccurrence
+        replayedOccurrence.set(fresh!.current)
+        modelMngr.clear()
+        fresh <- NULL; parsed.target <- NULL
+        if(!replayedOccurrence.expired()){FAIL("A written generated occurrence outlived its model and sessions")}
+    }
+
+    void: unit_demandProduction_boundaries(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T (%tprev +1)|0 ...}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),parsed.target!.pItem!.value!.items.head)
+        if(!demand!.refresh()){FAIL("Bare open recurrence did not expose its supplied seed")}
+        our WorldPosition: before <- demand!.position
+        if(demand!.goNext() or demand!.atBoundary or demand!.status().outcome!=worldPartial or
+           demand!.position!==before or demand!.current!.pItem!.fetchInt()!=0){
+            FAIL("Asking for Next invented membership or turned an unknown tail into absence")
+        }
+        parsed <- agent.worldManager.parse("*3+{T (%tprev +1)|0 ...}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        demand <- agent.worldManager.demand(agent.startSession(),parsed.target!.pItem!.value!.items.head)
+        if(!demand!.refresh() or !demand!.goNext() or !demand!.goNext() or demand!.current!.pItem!.fetchInt()!=2 or
+           demand!.goNext() or !demand!.atBoundary){FAIL("A proved finite extent did not establish its exact endpoint")}
+        parsed <- agent.worldManager.parse("{T (%tprev +1)|0 &{T !3|...} 4}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        me string: rejectedOriginal <- toString(parsed.target!.pItem)
+        demand <- agent.worldManager.demand(agent.startSession(),parsed.target!.pItem!.value!.items.head)
+        if(!demand!.refresh() or !demand!.goNext() or !demand!.goNext()){FAIL("A later contradiction blocked an earlier valid prefix")}
+        before <- demand!.position
+        if(demand!.goNext() or demand!.atBoundary or demand!.status().outcome!=worldRejected or
+           demand!.position!==before or demand!.current!.pItem!.fetchInt()!=2){
+            FAIL("A required inconsistent continuation became an endpoint or changed the visible state")
+        }
+        if(toString(parsed.target!.pItem)!=rejectedOriginal){FAIL("A rejected candidate modified its supplying transition or segment recipes")}
+        parsed <- agent.worldManager.parse("{T (%tprev +1)|0 &{T _|...} 1}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        me string: ambiguousOriginal <- toString(parsed.target!.pItem)
+        demand <- agent.worldManager.demand(agent.startSession(),parsed.target!.pItem!.value!.items.head)
+        if(!demand!.refresh()){FAIL("An ambiguous later boundary blocked its represented seed")}
+        before <- demand!.position
+        if(demand!.goNext() or demand!.atBoundary or demand!.position!==before or demand!.current!.pItem!.fetchInt()!=0 or
+           (demand!.status().outcome!=worldPartial and demand!.status().outcome!=worldUnsupported) or
+           toString(parsed.target!.pItem)!=ambiguousOriginal){FAIL("Two viable segment continuations were selected arbitrarily")}
+        if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("An unproved or contradictory continuation subscribed without an input link")}
+        parsed <- agent.worldManager.parse("{T 0 &*64+{T (%W.n@[1] +1)|...}}")
+        me WorldParseResult: worldInput <- agent.worldManager.parse("{n:{0}}")
+        if(parsed.target==NULL or worldInput.target==NULL){FAIL("External-read boundary model did not parse")}
+        cursorDemandLinkMembers(parsed.target)
+        me string: externalOriginal <- toString(parsed.target!.pItem)
+        our WorldSession: externalSession <- agent.startSession()
+        demand <- agent.worldManager.demand(externalSession,parsed.target!.pItem!.value!.items.head,
+            agent.getLocaleBaseName(),worldInput.target!.pItem,agent.identityRegistry)
+        if(!demand!.refresh() or demand!.current!.pItem!.fetchInt()!=0){FAIL("An unsupported external continuation blocked its represented seed")}
+        before <- demand!.position
+        our WorldRequest: external <- agent.worldManager.reference(externalSession,before,false,
+            agent.getLocaleBaseName(),worldInput.target!.pItem,agent.identityRegistry)
+        if(external!.status().outcome!=worldUnsupported or external!.publications!=0 or demand!.goNext() or
+           demand!.status().outcome!=worldUnsupported or demand!.position!==before or demand!.current!.pItem!.fetchInt()!=0 or
+           toString(parsed.target!.pItem)!=externalOriginal){FAIL("A generated continuation used untracked external evidence")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_demandProduction_waitAndCancel(me string: testName) <- {
+        withEach cancelled in range 0 .. 2{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: parsed <- agent.worldManager.parse("{T (%tprev +1)|0 &{T !3|...} 3 &{T !6|...} 6}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            cursorDemandLinkMembers(parsed.target)
+            our POV: first <- parsed.target!.pItem!.value!.items.head
+            our POV: originalNext <- first!.next
+            our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),first)
+            if(!demand!.configureRetention(1,0,0) or !demand!.refresh()){FAIL("Could not acquire the visible seed before a generation wait")}
+            our infonView: input <- parsed.target!.pItem!.value!.listSpec!.value!.items.tail!.pItem
+            agent.worldManager.prepareInput(input)
+            if(demand!.goNext() or demand!.status().outcome!=worldWaiting or demand!.current!.pItem!.fetchInt()!=0 or
+               first!.next!==originalNext or agent.worldManager.control!.inputWaiters.size()!=1){
+                FAIL("Pending generated transition did not preserve the visible state and one retained parser wait")
+            }
+            our WorldRequest: waiting <- demand!.selectionRequest
+            if(waiting==NULL){waiting <- demand!.request}
+            if(waiting==NULL){FAIL("Generated transition waited without an ordinary normalization request")}
+            me uint64: frames <- waiting!.framesCreated; me uint64: queue <- waiting!.queueSteps
+            our infonView:: unrelated; agent.worldManager.inputReady(unrelated)
+            if(demand!.refresh() or waiting!.framesCreated!=frames or waiting!.queueSteps!=queue){FAIL("Unrelated input or polling restarted production")}
+            if(cancelled==1){waiting!.cancel()}
+            input!.streamState <- parseDone; agent.worldManager.inputReady(input)
+            me bool: ready <- demand!.refresh()
+            if(cancelled==1){
+                if(ready or demand!.status().outcome!=worldCancelled or demand!.current!.pItem!.fetchInt()!=0 or first!.next!==originalNext){
+                    FAIL("Cancelled production published a provisional occurrence")
+                }
+            }else if(!ready or demand!.current!.pItem!.fetchInt()!=1 or !demand!.goNext() or demand!.current!.pItem!.fetchInt()!=2){
+                FAIL("Production did not resume the same continuation after parser completion: "+demand!.status().detail)
+            }
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Settled generated transition retained a parser subscription")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_demandProduction_scaling(me string: testName) <- {
+        me uint64: previousFrames <- 0; me uint64: previousRelationships <- 0; me uint64: previousQueue <- 0
+        me List<int>: lengths <- [64,128,256]
+        withEach length in lengths{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me string: limit <- toString(length)
+            me string: later <- toString(length*2)
+            me WorldParseResult: parsed <- agent.worldManager.parse("{T (%tprev +1)|0 &{T !"+limit+"|...} "+limit+" &{T !"+later+"|...} "+later+"}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            cursorDemandLinkMembers(parsed.target)
+            our WorldSession: session <- agent.startSession()
+            our WorldDemand: demand <- agent.worldManager.demand(session,parsed.target!.pItem!.value!.items.head)
+            if(!demand!.configureRetention(2,16,2) or !demand!.refresh()){FAIL("Could not start bounded generated traversal")}
+            withEach ordinal in range 1 .. length+1{
+                if(!demand!.goNext() or demand!.current!.pItem!.fetchInt()!=ordinal){FAIL("Long symbolic continuation stopped: "+demand!.status().detail)}
+            }
+            me uint64: frames <- demand!.framesCreated
+            me uint64: relationships <- demand!.relationshipsRead
+            me uint64: queue <- demand!.queueSteps
+            if(demand!.request!=NULL){frames <+- demand!.request!.framesCreated; relationships <+- demand!.request!.relationshipsRead; queue <+- demand!.request!.queueSteps}
+            our WorldGeneratedSeries: series <- agent.worldManager.generatedSeries(session,demand!.list)
+            if(series==NULL or series!.retainedCount()>series!.recentLimit+6 or series!.peakRetained>series!.recentLimit+6 or
+               series!.created<length-1 or series!.evicted==0){
+                FAIL("Generated occurrence metadata grew with every visited state")
+            }
+            if(demand!.position!.generatedAddress!=NULL and (demand!.position!.node!.prev!=NULL or demand!.position!.node!.next!=NULL)){
+                FAIL("Generated occurrence wrappers retained an owning chain of the visited history")
+            }
+            print("Demand production length=",length," frames=",frames," relationships=",relationships," queue=",queue,
+                " retainedSlots=",demand!.retentionPeakSlots," generated=",series!.created," evicted=",series!.evicted,
+                " retainedNodes=",series!.retainedCount()," peakNodes=",series!.peakRetained," requests=",session!.requests.size(),"\n")
+            if(frames>length*512 or relationships>length*256 or queue>length*2048 or demand!.retentionPeakSlots>4 or session!.requests.size()>2){
+                FAIL("Fixed-width generated traversal exceeded bounded work or retention slots")
+            }
+            if(length>64 and (frames>previousFrames*3+64 or relationships>previousRelationships*3+64 or queue>previousQueue*3+64)){
+                FAIL("Each generated Next replayed the already traversed prefix")
+            }
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Generated traversal retained completed subscriptions")}
+            previousFrames <- frames; previousRelationships <- relationships; previousQueue <- queue
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+}
+
+
+struct GLOBAL {
+    void: unit_demandProduction_expandedPrint(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T (%tprev +1)|0 &{T !3|...} 3 &{T !6|...} 6}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        me string: original <- toString(parsed.target!.pItem)
+        our WorldSession: session <- agent.startSession()
+        our WorldExpandedPrint: printed <- agent.worldManager.printExpanded(session,parsed.target,4)
+        if(!printed!.finished or !printed!.truncated or printed!.tailClosed or printed!.emitted!=4 or
+           printed!.status().outcome!=worldPartial or printed!.text!="{T 0 1 2 3 ...}"){
+            FAIL("Bounded expanded print did not use generated occurrences: "+printed!.text+": "+printed!.status().detail)
+        }
+        our WorldGeneratedSeries: series <- agent.worldManager.generatedSeries(session,printed!.demand!.list)
+        me uint64: created <- series!.created
+        if(!printed!.refresh() or series!.created!=created or toString(parsed.target!.pItem)!=original){
+            FAIL("A finished print continued production or changed the supplying pattern")
+        }
+        printed <- agent.worldManager.printExpanded(session,parsed.target,16)
+        if(!printed!.finished or printed!.truncated or !printed!.tailClosed or printed!.emitted!=7 or
+           printed!.status().outcome!=worldComplete or printed!.text!="{T 0 1 2 3 4 5 6}"){
+            FAIL("Expanded print confused its requested bound with the proved endpoint: "+printed!.text+": "+printed!.status().detail)
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+}
+
+
+struct GLOBAL {
+    void: unit_demandProduction_language(me string: testName) <- {
+        me List<string>: inputs <- ["{T (%tprev +1)|0 &{T !3|...} 3 &{T !6|...} 6}@[5]",
+            "*1000000+{T (%prev +1)|0 ...}@[5]", "*1000000+{T (%tprev +1)|0 ...}@[5]"]
+        withEach input in inputs{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our WorldRequest: request <- agent.normalize(parsed.target)
+            if(!request!.complete() or parsed.target!.pItem!.value!.evalMode!=emLiteral or parsed.target!.pItem!.fetchInt()!=4){
+                FAIL("Ordinary indexed normalization did not share demand production: "+input+": "+request!.error())
+            }
+            if(request!.framesCreated>2048 or request!.queueSteps>8192 or !agent.worldManager.control!.inputWaiters.isEmpty()){
+                FAIL("Ordinary indexing expanded an unrelated future or retained a completed input wait")
+            }
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+        me Agent: records; Allocate(records.identityRegistry); records.worldManager.control!.identities <- records.identityRegistry
+        me WorldParseResult: selected <- records.worldManager.parse("*64+{T {keep:{z:7}} ...}@[2]")
+        if(selected.target==NULL){FAIL(selected.error)}
+        our WorldRequest: acquired <- records.normalize(selected.target)
+        if(!acquired!.complete() or !temporalNormalizationNumber(temporalNormalizationField(selected.target,"keep"),"z",7)){
+            FAIL("Ordinary indexing lost the generated composite value: "+acquired!.error())
+        }
+        records.endWorldSessions(); modelMngr.clear()
+        me Agent: assertions; Allocate(assertions.identityRegistry); assertions.worldManager.control!.identities <- assertions.identityRegistry
+        me WorldParseResult: conflicting <- assertions.worldManager.parse("*64+{T (%tprev +1)|0 ...}@[5]=9")
+        if(conflicting.target==NULL){FAIL(conflicting.error)}
+        me string: original <- toString(conflicting.target!.pItem)
+        our WorldRequest: rejected <- assertions.normalize(conflicting.target)
+        if((rejected!.status().outcome!=worldRejected and rejected!.status().outcome!=worldUnsupported) or
+           rejected!.publications!=0 or toString(conflicting.target!.pItem)!=original){
+            FAIL("An indexed generated-state assertion was ignored or partially published")
+        }
+        assertions.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_demandProduction_invalidation(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("*32+{T (%tprev +1)|0 ...}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),parsed.target!.pItem!.value!.items.head)
+        if(!demand!.configureRetention(1,0,0) or !demand!.refresh() or !demand!.goNext() or demand!.current!.pItem!.fetchInt()!=1){
+            FAIL("Could not establish a continuation before changing its parent evidence")
+        }
+        our WorldPosition: displayedPosition <- demand!.position
+        our POV: displayed <- demand!.current
+        me WorldParseResult: contradiction <- agent.worldManager.parse("{T 0 9 ...}")
+        if(contradiction.target==NULL){FAIL(contradiction.error)}
+        parsed.target!.pItem!.wrkList.append(contradiction.target); parsed.target!.pItem!.noteNormalizationWork()
+        if(demand!.goNext() or demand!.atBoundary or demand!.position!==displayedPosition or demand!.current!==displayed or
+           demand!.current!.pItem!.fetchInt()!=1 or (demand!.status().outcome!=worldRejected and demand!.status().outcome!=worldUnsupported)){
+            FAIL("A generated continuation ignored changed required parent constraints")
+        }
+        if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Unresolved generated alignment subscribed without pending input")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+}
+
+
+struct GLOBAL {
+    void: unit_demandProduction_durableDescendant(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("*64+{T {keep:{z:_}} ...}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: seed <- parsed.target!.pItem!.value!.items.head
+        me string: seedBefore <- toString(seed!.pItem)
+        our WorldSession: session <- agent.startSession()
+        our WorldDemand: demand <- agent.worldManager.demand(session,seed)
+        if(!demand!.configureRetention(1,0,0) or !demand!.refresh() or !demand!.goNext()){
+            FAIL("Could not acquire a generated record with an unknown descendant: "+demand!.status().detail)
+        }
+        our POV: second <- demand!.current
+        our WorldPosition:: secondPosition; secondPosition! <- demand!.position!
+        me WorldParseResult: assertion <- agent.worldManager.parse("{keep:{z:9}}")
+        if(assertion.target==NULL){FAIL(assertion.error)}
+        second!.pItem!.wrkList.append(assertion.target); second!.pItem!.noteNormalizationWork()
+        our WorldRequest: written <- agent.normalize(second)
+        if(written!.failed() or !temporalNormalizationNumber(temporalNormalizationField(second,"keep"),"z",9) or
+           toString(seed!.pItem)!=seedBefore){FAIL("Ordinary generated descendant publication failed or changed the supplied seed")}
+        if(second!.worldContext!=NULL or
+           !agent.worldManager.graph.samePosition(agent.worldManager.graph.occurrencePath(second),secondPosition)){
+            FAIL("Generated descendant publication changed its qualified occurrence path")
+        }
+        me WorldWeakReference<POV>: publishedOccurrence
+        me WorldWeakReference<POV>: writtenField
+        publishedOccurrence.set(second)
+        writtenField.set(temporalNormalizationField(temporalNormalizationField(second,"keep"),"z"))
+        if(!demand!.refresh()){FAIL("Ordinary write invalidated its generated occurrence: "+demand!.status().detail)}
+        withEach ordinal in range 2 .. 33{if(!demand!.goNext()){FAIL("Could not traverse beyond a generated descendant write")}}
+        demand!.clearCache()
+        if(!temporalNormalizationNumber(temporalNormalizationField(second,"keep"),"z",9) or toString(seed!.pItem)!=seedBefore){
+            FAIL("Generated eviction discarded a descendant assertion or modified shared prior data")
+        }
+        agent.endSession(session)
+        our WorldDemand: fresh <- agent.worldManager.demand(agent.startSession(),parsed.target)
+        fresh!.inList()
+        if(!fresh!.configureRetention(1,0,0) or !fresh!.seek(FlexNum("2")) or
+           !agent.worldManager.graph.samePosition(secondPosition,fresh!.position) or
+           !temporalNormalizationNumber(temporalNormalizationField(fresh!.current,"keep"),"z",9) or toString(seed!.pItem)!=seedBefore){
+            FAIL("A generated descendant assertion did not outlive its production session: "+fresh!.status().detail)
+        }
+        agent.endWorldSessions()
+        written <- NULL; secondPosition <- NULL; second <- NULL; demand <- NULL; session <- NULL
+        if(!publishedOccurrence.expired() or !temporalNormalizationNumber(temporalNormalizationField(fresh!.current,"keep"),"z",9)){
+            FAIL("A durable descendant assertion retained its released original generated occurrence")
+        }
+        me WorldWeakReference<POV>: replayedOccurrence
+        replayedOccurrence.set(fresh!.current)
+        modelMngr.clear()
+        fresh <- NULL; assertion.target <- NULL; seed <- NULL; parsed.target <- NULL
+        if(!replayedOccurrence.expired() or !writtenField.expired()){
+            FAIL("A written generated descendant outlived its model and sessions")
+        }
+    }
+}
+
+
+struct GLOBAL {
+    me bool: demandProductionCounter(our POV: record, me int: expected) <- {
+        our POV: field <- temporalNormalizationField(record,"n")
+        if(field==NULL or field!.pItem!.value!.overlayType!=LST){return(false)}
+        our POV: value <- field!.pItem!.value!.items.head
+        return(value!=NULL and value!.pItem!.value!.evalMode==emLiteral and value!.pItem!.fetchInt()==expected)
+    }
+    void: unit_demandProduction_reclamation(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("*128+{T {n:{(%tprev.n@[1] +1)} keep:{a:7 b:8}}|{n:{0} keep:{a:7 b:8}} ...}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our WorldSession: session <- agent.startSession()
+        our WorldDemand: demand <- agent.worldManager.demand(session,parsed.target!.pItem!.value!.items.head)
+        if(!demand!.configureRetention(1,0,0) or !demand!.refresh() or !demand!.goNext() or
+           !demandProductionCounter(demand!.current,1)){FAIL("Could not acquire an evolving generated record: "+demand!.status().detail)}
+        me WorldWeakReference<POV>: oldOccurrence
+        me WorldWeakReference<POV>: oldField
+        oldOccurrence.set(demand!.current)
+        oldField.set(temporalNormalizationField(demand!.current,"n"))
+        our WorldPosition: snapshot <- demand!.snapshot()
+        our WorldSession: observerSession <- agent.startSession()
+        our WorldDemand: observer <- agent.worldManager.demandAt(observerSession,demand!.position)
+        if(!observer!.refresh()){FAIL("Observer could not hold a generated record")}
+        withEach ordinal in range 2 .. 49{
+            if(!demand!.goNext() or !demandProductionCounter(demand!.current,ordinal)){
+                FAIL("Record traversal did not advance beyond its cached and checkpointed prefix: "+demand!.status().detail)
+            }
+        }
+        if(oldOccurrence.expired() or oldField.expired() or !demandProductionCounter(snapshot!.node,1) or
+           !demandProductionCounter(observer!.current,1)){FAIL("Reclamation discarded a live observer or held snapshot")}
+        observer <- NULL; agent.endSession(observerSession); snapshot <- NULL
+        if(!demand!.goNext() or !demand!.goNext()){FAIL("Could not service released generated leases")}
+        if(!oldOccurrence.expired() or !oldField.expired()){
+            FAIL("Generated record nodes remained owned after cache and checkpoint eviction and release of all observers")
+        }
+        our WorldGeneratedSeries: series <- agent.worldManager.generatedSeries(session,demand!.list)
+        if(series!.production!.checkpoints.size()>series!.production!.checkpointLimit or
+           (demand!.position!.generatedAddress!=NULL and demand!.position!.node!.worldContext!=NULL)){
+            FAIL("Generated retention kept an unbounded continuation or owning navigation path")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+}
+
+
+struct GLOBAL {
+    void: unit_demandProduction_embeddedIdentity(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T (%tprev +1)|0 &*2+{T ...} &{T 3} &*2+{T ...}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        cursorDemandLinkMembers(parsed.target)
+        our POV: seed <- parsed.target!.pItem!.value!.items.head
+        our POV: fixedSpan <- seed!.next!.next
+        our POV: represented <- fixedSpan!.pItem!.value!.items.head
+        our WorldPosition: raw <- agent.worldManager.graph.position(represented,
+            agent.worldManager.graph.position(fixedSpan,agent.worldManager.graph.position(parsed.target)))
+        our WorldDemand: demand <- agent.worldManager.demand(agent.startSession(),seed)
+        if(!demand!.refresh()){FAIL("Could not acquire the seed before a fixed embedded occurrence")}
+        withEach ordinal in range 1 .. 4{
+            if(!demand!.goNext() or demand!.current!.pItem!.fetchInt()!=ordinal){FAIL("Could not cross a bounded embedded generated span")}
+        }
+        if(!agent.worldManager.graph.samePosition(raw,demand!.position)){
+            FAIL("Generated traversal lost the exact identity of a represented embedded occurrence")
+        }
+        if(!demand!.goNext() or !demand!.goNext() or !demand!.seek(FlexNum("4")) or
+           !agent.worldManager.graph.samePosition(raw,demand!.position)){
+            FAIL("Embedded represented identity changed when reached through replay")
+        }
+        // Both wrappers borrow the very same child POV. Their containing
+        // embedded occurrences still make these two distinct logical sites.
+        parsed <- agent.worldManager.parse("{T 7|7 &*2+{T ...} &{T 7} &*2+{T ...} &{T 7}}")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        seed <- parsed.target!.pItem!.value!.items.head
+        our POV: firstSpan <- seed!.next!.next
+        our POV: secondSpan <- firstSpan!.next!.next
+        secondSpan!.pItem <- firstSpan!.pItem
+        cursorDemandLinkMembers(parsed.target)
+        represented <- firstSpan!.pItem!.value!.items.head
+        our WorldPosition: root <- agent.worldManager.graph.position(parsed.target)
+        our WorldPosition: firstRaw <- agent.worldManager.graph.position(represented,agent.worldManager.graph.position(firstSpan,root))
+        our WorldPosition: secondRaw <- agent.worldManager.graph.position(represented,agent.worldManager.graph.position(secondSpan,root))
+        demand <- agent.worldManager.demand(agent.startSession(),seed)
+        if(!demand!.refresh()){FAIL("Could not acquire the shared embedded identity control")}
+        withEach ordinal in range 1 .. 4{if(!demand!.goNext()){FAIL("Could not reach the first shared embedded occurrence")}}
+        our WorldPosition: firstChecked <- demand!.position
+        if(!agent.worldManager.graph.samePosition(firstRaw,firstChecked) or agent.worldManager.graph.samePosition(secondRaw,firstChecked)){
+            FAIL("The first generated marker borrowed another embedded occurrence identity")
+        }
+        withEach ordinal in range 4 .. 7{if(!demand!.goNext()){FAIL("Could not reach the second shared embedded occurrence")}}
+        if(!agent.worldManager.graph.samePosition(secondRaw,demand!.position) or
+           agent.worldManager.graph.samePosition(firstRaw,demand!.position) or
+           agent.worldManager.graph.samePosition(firstChecked,demand!.position) or demand!.current!.pItem!.fetchInt()!=7){
+            FAIL("Equal borrowed descriptions collapsed distinct generated occurrence contexts")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
     }
 }

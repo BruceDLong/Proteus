@@ -1794,3 +1794,48 @@ production, ambiguous contextual chart alternatives, general temporal adoption
 and retention of indefinitely generated occurrence metadata remain separate work.
 Matching problems and matching states carry no model-level goal or destination
 semantics and impose no two-segment restriction.
+
+## Demand-driven temporal continuations (D109, 2026-10-22)
+
+An occurrence request can advance a uniquely determined temporal continuation
+without allocating its entire extent. The continuation is a structural program
+of supplied states and repeated segments. Ordinary acquisition frames apply each
+candidate's own constraints, enclosing listSpecs and checked predecessor. The
+same provider serves indexed normalization, neighbour references, occurrence
+demands and expanded printing; cursors do not evaluate transitions themselves.
+
+A declared extent or a required later segment can establish that another
+occurrence exists. At a repeated-segment boundary, exactly one candidate must
+satisfy the available evidence. An unresolved or second viable candidate leaves
+the request partial. A required contradiction rejects; it does not prove an
+endpoint. Thus `{T (%tprev +1)|0 ...}` alone does not establish another member,
+while a counted extent or a sequence with required later states can. Several
+repeated spans and intervening states use the same rules, with no built-in goal.
+
+For example, successive demands traverse all three repeated spans in:
+
+```
+{T (%tprev +1)|0 &{T !3|...} 3 &{T !6|...} 6 &{T !9|...} 9}
+```
+
+The constraints determine the values 0 through 9 and the boundaries at 3, 6 and
+9 without a supplied total extent. Intermediate markers are ordinary states.
+
+Generated occurrences use qualified logical coordinates. Eviction and replay
+preserve identity without retaining an occurrence record for every visited
+state. A bounded recent cache and bounded continuation checkpoints retain values
+and structural progress; active handles can keep additional states alive.
+Explicit writes are separate sparse durable assertions and survive session
+closure. Checkpoint values do not retain acquisition frames or previous-state
+chains. Private checked record lists use non-owning backward links so evicted
+multi-field payloads can also be reclaimed.
+
+This increment supports established literal ordered temporal layouts with
+uniquely determined continuations. It guards unresolved cross-segment alignment,
+branch-dependent external effects, external reads without captured dependencies,
+parameter scopes without canonical application identity, assertion-bearing
+indexed selections, and generated nested histories requiring an unbounded series registry.
+Parser dependencies retain their existing request
+continuation; cancellation publishes no provisional occurrence. Replay cost
+depends on retained checkpoints, model width and the requested distance; arbitrary
+inference has no linear-work or constant-memory guarantee.
