@@ -22,6 +22,10 @@ struct WorldListLayout {
     me bool: layoutRequired <- true
     me bool: templateLayoutRequired <- false
     me bool: ordinaryLayout <- false
+    // A bare application can obtain its structure from its declaration. This
+    // remains a borrowed source; the application occurrence owns any result.
+    me bool: definitionOwnsLayout <- false
+    our WorldPosition: ownedSource
     our WorldTemplateLayout: templateShape
     our WorldPosition: source
     our POV: edge
@@ -146,11 +150,16 @@ struct WorldPOVGraph {
         our WorldListLayout: proof
         if(request!.listLayouts.containsKey(at!.owner)){
             proof <- request!.listLayouts.at(at!.owner)
-            if(!samePosition(proof!.position, at)){proof <- NULL}
+            if(!sameProofPosition(proof!.position, at)){proof <- NULL}
         }
         if(proof==NULL){
             Allocate(proof); proof!.position <- at; proof!.source <- at
             proof!.header <- read(request, at!.node, at!.node!.pParent, at!.input!=NULL)
+            our infonView: applied <- at!.node!.pItem
+            proof!.definitionOwnsLayout <- !proof!.header.hasValue and !proof!.header.hasSize and
+                applied!.value!.evalMode==emUnknown and applied!.wrkList.isEmpty() and
+                applied!.innr==NULL and applied!.partRef==NULL and applied!.parts.isEmpty() and
+                applied!.funcArgs==NULL and applied!.argPos==apNoArgs and applied!.proxy==NULL and !applied!.invertMatch
             if(request!.listLayouts.containsKey(at!.owner)){request!.listLayouts.at(at!.owner) <- proof}
             else{request!.listLayouts.insert(at!.owner, proof)}
         }else{request!.listLayoutHits <+- 1}
@@ -173,6 +182,11 @@ struct WorldPOVGraph {
                 if(!body!.wrkList.isEmpty() or body!.argPos!=apNoArgs or body!.funcArgs!=NULL or
                    body!.innr!=NULL or body!.partRef!=NULL or !body!.parts.isEmpty() or body!.proxy!=NULL or header.negative){
                     proof!.outcome <- worldUnsupported; proof!.detail <- "Named list layout needs general template correspondence"; proof!.finished <- true; return(proof)
+                }
+                if(proof!.definitionOwnsLayout and header.hasValue and header.overlay==LST and
+                   header.timelike and header.order!=uUnordered and body!.value!.evalMode==emLiteral){
+                    proof!.ownedSource <- proof!.source; proof!.header <- header
+                    proof!.finished <- true; return(proof)
                 }
                 // A closed ordinary literal retains the established field or
                 // positional correspondence path. Inspect the rest of its
@@ -216,6 +230,10 @@ struct WorldPOVGraph {
             proof!.visited.insert(meaning)
             our POV:: edge{939}; edge!.pItem <- meaning; edge!.trueByDefinition <- true
             edge!.definitionParameters <- bindArguments(request, header.nominal, source!.pItem, proof!.source)
+            if(request!.outcome!=worldReady){
+                proof!.outcome <- request!.outcome; proof!.detail <- request!.detail
+                proof!.finished <- proof!.outcome!=worldWaiting; return(proof)
+            }
             our WorldPosition: next <- representedPosition(edge, proof!.source)
             next!.parameters <- edge!.definitionParameters; next!.writable <- false
             proof!.edge <- edge; proof!.source <- next

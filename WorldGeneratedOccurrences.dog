@@ -2,13 +2,30 @@
 // These identity tokens are metadata owned by represented model sites. They
 // never point back to the model, a session, or a production continuation.
 struct WorldGeneratedAnchorIdentity {}
-struct WorldGeneratedBindingIdentity {}
+struct WorldGeneratedDeclarationIdentity {}
+struct WordDefn {
+    // Copies of a declaration retain its identity, without retaining the
+    // declaration or its model through generated occurrence keys.
+    our WorldGeneratedDeclarationIdentity: generatedDeclarationIdentity
+}
+struct WorldGeneratedBindingIdentity {
+    our WorldGeneratedDeclarationIdentity: declaration
+    our WorldGeneratedScopeKey: application
+    me bool: canonical <- false
+}
 struct WorldGeneratedScopeKey {
     our WorldGeneratedAnchorIdentity: occurrence
     our WorldGeneratedBindingIdentity: parameters
     me bool: generated <- false
     me int64: ordinal <- 0
     our WorldGeneratedScopeKey: parent
+}
+struct WorldGeneratedScopePair {
+    our WorldGeneratedScopeKey: left
+    our WorldGeneratedScopeKey: right
+}
+struct WorldGeneratedScopeMatches {
+    me Set<our WorldGeneratedScopeKey>: right
 }
 struct WorldGeneratedAddress {
     me int64: ordinal <- 0
@@ -35,6 +52,7 @@ struct WorldGeneratedAssertions {
 }
 struct POV {
     our WorldGeneratedAddress: generatedAddress
+    our WorldProductionEvidenceIdentity: generatedProductionIdentity
     // A transient generated value retains its qualified model parent, never
     // a navigation position which owns the value itself. Durable copies clear
     // this link because their canonical parent already owns the assertion.
@@ -45,7 +63,13 @@ struct POV {
 }
 struct WorldBindings {
     our WorldGeneratedBindingIdentity: generatedBindingIdentity
-    their WorldBindings: generatedBindingOwner <- NULL
+    me bool: productionSnapshot <- false
+}
+struct WorldArgumentBinding {
+    // Live bindings expose the supplied header to dependency capture. Detached
+    // production environments retain its checked scalar copy instead.
+    our infonView: sourceDescription
+    me bool: immutable <- false
 }
 struct WorldPosition {
     our WorldGeneratedAddress: generatedAddress
@@ -86,10 +110,77 @@ struct WorldPOVGraph {
     }
     our WorldGeneratedBindingIdentity: generatedBinding(our WorldBindings: bindings) <- {
         if(bindings==NULL){return(NULL)}
-        if(bindings!.generatedBindingIdentity==NULL or bindings!.generatedBindingOwner!==bindings){
-            Allocate(bindings!.generatedBindingIdentity); bindings!.generatedBindingOwner <- bindings
-        }
+        if(bindings!.generatedBindingIdentity==NULL){Allocate(bindings!.generatedBindingIdentity)}
         return(bindings!.generatedBindingIdentity)
+    }
+    our WorldGeneratedDeclarationIdentity: generatedDeclaration(our WordDefn: definition) <- {
+        if(definition==NULL){return(NULL)}
+        if(definition!.generatedDeclarationIdentity==NULL){Allocate(definition!.generatedDeclarationIdentity)}
+        return(definition!.generatedDeclarationIdentity)
+    }
+    void: identifyApplication(our WorldBindings: bindings, our infonView: item, our WorldPosition: caller) <- {
+        our WorldGeneratedBindingIdentity: identity <- generatedBinding(bindings)
+        identity!.declaration <- generatedDeclaration(bindings!.definition)
+        // A relationship can apply a word to another destination. Until that
+        // separate syntax site is represented, keep its binding identity local.
+        // An ordinary application is qualified by its occurrence, not by its
+        // argument values or the allocation of a transient binding object.
+        if(caller!=NULL and (caller!.node!.pItem===item or
+           (caller!.occurrence!=NULL and caller!.occurrence!.pItem===item))){
+            identity!.application <- generatedScopeKey(caller)
+            identity!.canonical <- identity!.application!=NULL
+        }
+    }
+    me bool: sameGeneratedBinding(our WorldGeneratedBindingIdentity: left, our WorldGeneratedBindingIdentity: right) <- {
+        if(left===right){return(true)}
+        if(left==NULL or right==NULL or !left!.canonical or !right!.canonical or
+           left!.declaration!==right!.declaration){return(false)}
+        return(sameGeneratedScope(left!.application,right!.application))
+    }
+    me bool: sameBindings(our WorldBindings: left, our WorldBindings: right) <- {
+        if(left===right){return(true)}
+        return(sameGeneratedBinding(generatedBinding(left),generatedBinding(right)))
+    }
+    // This is eligibility and ownership preparation, not argument evaluation.
+    // The ordinary parameter path still acquires and checks each requested
+    // scalar. Unknown omitted slots remain unknown in that normal path.
+    our WorldBindings: detachedProductionBindings(our WorldRequest: request, our WorldBindings: bindings) <- {
+        if(bindings==NULL){return(NULL)}
+        if(bindings!.productionSnapshot){return(bindings)}
+        our WorldGeneratedBindingIdentity: identity <- generatedBinding(bindings)
+        if(!identity!.canonical){
+            request!.outcome <- worldUnsupported; request!.detail <- "Generated parameter context needs an established application occurrence"; return(NULL)
+        }
+        our WorldBindings:: detached; detached!.generatedBindingIdentity <- identity; detached!.productionSnapshot <- true
+        withEach (name,argument) in bindings!.arguments{
+            our infonView: source <- argument!.expression!.pItem
+            if(argument!.sourceDescription!=NULL){source <- argument!.sourceDescription}
+            if(!argument!.omitted){
+                if(source!.type!=NULL or !source!.addedTypes.isEmpty() or !source!.wrkList.isEmpty() or
+                   source!.viewMode==vmCursor or source!.partRef!=NULL or !source!.parts.isEmpty() or
+                   source!.innr!=NULL or source!.funcArgs!=NULL or source!.wordArguments!=NULL or
+                   source!.copySource!=NULL or source!.includeInfn!=NULL or source!.proxy!=NULL or
+                   source!.value!.evalMode!=emLiteral or
+                   (source!.value!.overlayType!=NUM and source!.value!.overlayType!=STR)){
+                    request!.outcome <- worldUnsupported; request!.detail <- "Generated parameters currently require literal scalar arguments"; return(NULL)
+                }
+                our POV:: literal{947}; literal!.pItem <- source
+                me WorldScalar: facts <- read(request,literal)
+                if(!completeFacts(facts,false)){
+                    request!.outcome <- facts.outcome
+                    if(request!.outcome==worldReady){request!.outcome <- worldPartial}
+                    request!.detail <- "Generated scalar argument still needs evidence"; return(NULL)
+                }
+            }
+            our WorldArgumentBinding:: copied
+            copied!.omitted <- argument!.omitted; copied!.borrowed <- true; copied!.immutable <- true
+            Allocate(copied!.expression,947); Allocate(copied!.expression!.pItem)
+            copied!.expression!.pItem! <- source!
+            Allocate(copied!.expression!.pItem!.value); copied!.expression!.pItem!.value! <- source!.value!
+            Allocate(copied!.expression!.pItem!.infSize); copied!.expression!.pItem!.infSize! <- source!.infSize!
+            detached!.arguments.insert(name,copied)
+        }
+        return(detached)
     }
     // This is a compact qualified identity, not a retained WorldPosition path.
     // A durable write can keep it without keeping the containing model alive.
@@ -113,13 +204,36 @@ struct WorldPOVGraph {
         return(parent)
     }
     me bool: sameGeneratedScope(our WorldGeneratedScopeKey: left, our WorldGeneratedScopeKey: right) <- {
-        while(left!=NULL and right!=NULL){
-            if(left===right){return(true)}
-            if(left!.generated!=right!.generated or left!.ordinal!=right!.ordinal or
-               left!.occurrence!==right!.occurrence or left!.parameters!==right!.parameters){return(false)}
-            left <- left!.parent; right <- right!.parent
+        if(left===right){return(true)}
+        me List<WorldGeneratedScopePair>: pending
+        me Map<our WorldGeneratedScopeKey, our WorldGeneratedScopeMatches>: compared
+        me WorldGeneratedScopePair: initial; initial.left <- left; initial.right <- right; pending.append(initial)
+        // Nested application keys share ancestor subgraphs. Compare each pair
+        // once for this operation, rather than recursively revisiting a common
+        // caller for every enclosing binding. Nothing is retained afterwards.
+        while(!pending.isEmpty()){
+            me WorldGeneratedScopePair: comparison <- pending.popLast()
+            left <- comparison.left; right <- comparison.right
+            while(left!==right){
+                if(left==NULL or right==NULL){return(false)}
+                if(compared.containsKey(left) and compared.at(left)!.right.contains(right)){break()}
+                if(left!.generated!=right!.generated or left!.ordinal!=right!.ordinal or
+                   left!.occurrence!==right!.occurrence){return(false)}
+                if(!compared.containsKey(left)){our WorldGeneratedScopeMatches:: matches; compared.insert(left,matches)}
+                compared.at(left)!.right.insert(right)
+                if(left!.parameters!==right!.parameters){
+                    our WorldGeneratedBindingIdentity: leftBinding <- left!.parameters
+                    our WorldGeneratedBindingIdentity: rightBinding <- right!.parameters
+                    if(leftBinding==NULL or rightBinding==NULL or !leftBinding!.canonical or !rightBinding!.canonical or
+                       leftBinding!.declaration!==rightBinding!.declaration){return(false)}
+                    me WorldGeneratedScopePair: application
+                    application.left <- leftBinding!.application; application.right <- rightBinding!.application
+                    pending.append(application)
+                }
+                left <- left!.parent; right <- right!.parent
+            }
         }
-        return(left==NULL and right==NULL)
+        return(true)
     }
     our WorldPosition: validateGeneratedPath(our WorldPosition: result) <- {
         our WorldPosition: at <- result

@@ -51,12 +51,46 @@ struct WorldDemandValueProof {
     their IdentityRegistry: identities
     me string: language
     me uint64: generatedWriteRevision <- 0
+    our WorldProductionEvidenceIdentity: productionIdentity
+}
+
+struct WorldManager {
+    // Inspect existing session evidence only. The returned token owns no
+    // frontier, checkpoint, binding, or model; stale values cannot keep an
+    // old production graph alive through their cache proof.
+    our WorldProductionEvidenceIdentity: generatedProductionIdentity(their WorldSession: session,
+            our WorldPosition: at, me string: language, our infonView: world, our IdentityRegistry: identities) <- {
+        me WorldModelLock: lock{control!.mutex}
+        if(session==NULL or session!.closed){return(NULL)}
+        at <- graph.generatedContext(at)
+        if(at==NULL or at!.parent==NULL){return(NULL)}
+        if(identities==NULL){identities <- control!.identities}
+        withEach series in session!.generatedSeries{
+            if(!graph.samePosition(series!.owner,at!.parent)){continue()}
+            our WorldProductionFrontier: frontier <- series!.production
+            if(frontier==NULL or frontier!.outcome!=worldReady or !frontier!.applicable or
+               frontier!.description!==at!.parent!.node!.pItem or frontier!.revision!=at!.parent!.node!.pItem!.cursorRevision or
+               frontier!.writeRevision!=graph.generatedWriteRevision(at!.parent) or
+               frontier!.worldSource!==world or frontier!.identities!==identities or frontier!.language!=unicodeMgr.normalizeStr(language) or
+               (world!=NULL and frontier!.worldRevision!=world!.cursorRevision) or !productionInputsValid(frontier)){return(NULL)}
+            return(frontier!.evidenceIdentity)
+        }
+        return(NULL)
+    }
 }
 struct WorldCursorValue {
     our WorldDemandValueProof: demandProof
 }
 
 struct WorldPOVGraph {
+    our WorldPosition: generatedContext(our WorldPosition: at) <- {
+        while(at!=NULL){
+            if(at!.constraintRoot){return(NULL)}
+            if(at!.generatedAddress!=NULL){return(at)}
+            at <- at!.parent
+        }
+        return(NULL)
+    }
     // Allocate identity only for headers used by a cache proof. A shallow
     // copied header retains the old owner marker and receives its own token.
     // The token is pure metadata and never refers back to the model.
@@ -144,6 +178,8 @@ struct WorldDemand {
 
     me bool: contextAvailable(our WorldDemandValueProof: proof, our WorldPosition: at) <- {
         if(manager==NULL or at==NULL or at!.node==NULL or at!.node!.pItem==NULL){return(false)}
+        our WorldProductionEvidenceIdentity: production <- manager!.generatedProductionIdentity(session,at,language,worldSource,identities)
+        if(production==NULL and manager!.graph.generatedContext(at)!=NULL){demandContextMisses <+- 1; return(false)}
         our infonView: occurrenceDescription
         if(at!.occurrence!=NULL){occurrenceDescription <- at!.occurrence!.pItem}
         our IdentityRegistry: registry <- identities
@@ -159,6 +195,7 @@ struct WorldDemand {
            (worldSource!=NULL and proof!.worldRevision!=worldSource!.cursorRevision) or
            proof!.identities!==registry or proof!.language!=language or
            proof!.generatedWriteRevision!=manager!.graph.generatedContextRevision(at) or
+           proof!.productionIdentity!==production or
            !manager!.graph.sameDemandSite(proof!.site, at)){
             demandContextMisses <+- 1; return(false)
         }
@@ -187,6 +224,8 @@ struct WorldDemand {
     }
     our WorldDemandValueProof: captureDemandContext(our WorldPosition: at) <- {
         if(manager==NULL or at==NULL or session==NULL or session!.closed){return(NULL)}
+        our WorldProductionEvidenceIdentity: production <- manager!.generatedProductionIdentity(session,at,language,worldSource,identities)
+        if(production==NULL and manager!.graph.generatedContext(at)!=NULL){return(NULL)}
         our WorldDemandScopeProof: scope <- demandScope(at!.parent)
         if(at!.parent!=NULL and scope==NULL){return(NULL)}
         our WorldDemandValueProof:: proof
@@ -201,6 +240,7 @@ struct WorldDemand {
         proof!.session <- session; proof!.sessionIdentity <- session!.demandIdentity
         proof!.worldSource <- worldSource; proof!.identities <- identities; proof!.language <- language
         proof!.generatedWriteRevision <- manager!.graph.generatedContextRevision(at)
+        proof!.productionIdentity <- production
         if(proof!.identities==NULL){proof!.identities <- manager!.control!.identities}
         proof!.worldIdentity <- manager!.graph.demandHeaderIdentity(worldSource)
         if(worldSource!=NULL){proof!.worldRevision <- worldSource!.cursorRevision}
@@ -209,6 +249,26 @@ struct WorldDemand {
     void: rememberDemandContext(our WorldPosition: at) <- {
         if(manager==NULL or at==NULL or !manager!.graph.cursorValueReady(at!.node)){return()}
         at!.node!.cursorValue!.demandProof <- captureDemandContext(at)
+    }
+    me bool: generatedContextCurrent(our WorldPosition: at) <- {
+        our WorldPosition: generated <- manager!.graph.generatedContext(at)
+        if(generated==NULL){return(true)}
+        our WorldProductionEvidenceIdentity: evidence <- manager!.generatedProductionIdentity(session,generated,language,worldSource,identities)
+        return(evidence!=NULL and evidence===generated!.node!.generatedProductionIdentity)
+    }
+    me bool: reacquireGenerated(our WorldPosition: at) <- {
+        if(at!.generatedAddress==NULL){
+            movement.outcome <- worldUnsupported
+            movement.detail <- "Changed generated evidence requires reacquiring the containing state before its descendant"
+            return(false)
+        }
+        our PartPath:: part; part!.pathMode <- idxField
+        Allocate(part!.path); part!.path!.itmMode <- mItem; part!.path!.streamState <- parseDone
+        part!.path!.value!.overlayType <- NUM; part!.path!.value!.evalMode <- emLiteral
+        part!.path!.value!.num <- at!.generatedAddress!.ordinal
+        selectionPurpose <- 3; atBoundary <- false
+        selectionRequest <- manager!.select(session,at!.parent,part,language,worldSource,identities)
+        return(settleSelection())
     }
     void: rememberWorkingContext(our WorldPosition: at) <- {
         workingProof <- captureDemandContext(at)

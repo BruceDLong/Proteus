@@ -1839,3 +1839,52 @@ Parser dependencies retain their existing request
 continuation; cancellation publishes no provisional occurrence. Replay cost
 depends on retained checkpoints, model width and the requested distance; arbitrary
 inference has no linear-work or constant-memory guarantee.
+
+## Parameterized temporal production (D110, 2026-10-22)
+
+A word application can supply a demand-produced temporal history through its
+ordinary definition meaning. The shared list-layout proof establishes the
+definition-owned structural source and its lexical bindings. The existing
+production provider then acquires each candidate through ordinary frames,
+including the definition's listSpecs and parameter references. It neither
+substitutes argument values into a copied model nor evaluates a separate cursor
+program.
+
+The initial argument boundary is literal scalars. Named and positional bindings
+have the same declaration-defined meaning. An omitted argument remains unknown;
+an unused omission does not prevent unrelated states from being acquired.
+Computed arguments and parameter-dependent structural extents remain outside
+this increment. The established requirements for unique continuation and
+explicit unresolved outcomes still apply across any number of segments.
+
+For example, `#progress(step,seed)=*1000000+{T (%tprev +(%step))|%seed ...}`
+supplies the same demanded values through `progress(2,7)`,
+`progress(seed::7,step::2)` and an embedded `&progress(2,7)`. The million-member
+extent establishes membership without materializing the unrequested suffix.
+
+The application owns its generated coordinates; the declaration remains
+read-only. Application identity includes the qualified call occurrence and
+declaration, rather than the allocation address of temporary bindings or the
+argument values. Equal arguments at distinct call occurrences do not identify
+those calls. Reconstructed bindings and evicted/replayed states preserve the
+same logical occurrence, including across sessions.
+
+Argument values and revisions are dependency evidence, separate from identity.
+Changing a relevant argument invalidates derived production evidence without
+turning the call into another occurrence. Pure identity metadata and detached
+scalar bindings must not retain the caller's model through a durable assertion.
+Bounded state/checkpoint retention and sparse explicit writes retain the D109
+ownership policy; no registry entry is required for each visited state.
+
+An unchanged checked state can reuse its current production proof. Ordinary
+normalization of an edited state or a state from another session re-establishes
+the coordinate through production and checks the assertions against that frozen
+result. The proof operation must not overwrite pending assertions. Clean
+disposable values can adopt a newly derived value; durable assertions remain
+constraints.
+
+Additional named constraints on the structural body still require general
+layout correspondence and are reported as unsupported. Demand refresh of a
+direct descendant whose generating evidence changes must reacquire its
+containing state first; it must not silently reuse the previous argument
+snapshot.

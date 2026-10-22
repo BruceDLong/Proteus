@@ -3856,3 +3856,123 @@ network checks use controlled callbacks, not a live remote-peer fault-injection
 run. Concurrent normalization edits are preserved. Evidence is under
 `/tmp/slipstream-connector-validation`, `/tmp/slipstream-connector-final-ui`, and
 `/tmp/slipstream-connector-*.log`.
+
+## D110 — Parameterized words in ordinary demand production (2026-10-22)
+
+**Decision.** Extend D109's production provider to temporal histories supplied by
+word definitions, starting with literal scalar arguments. The ordinary named
+list-layout proof follows the definition relationship and establishes its
+structural source and binding scope. Production consumes that proof and runs
+the existing acquisition machinery for the states, parameter references and
+covering listSpecs. Cursors continue to request occurrences rather than expand
+words or evaluate transitions.
+
+The qualified application is the occurrence owner. Its shared definition is
+constraint evidence, never the writable owner. A persistent application key
+combines declaration identity with the qualified call occurrence. Temporary
+bindings may be reconstructed without changing that key. Argument values are
+excluded from identity: two distinct calls with equal values remain distinct,
+and changing a call's argument invalidates deductions rather than changing its
+logical identity. Call and argument headers/revisions participate in dependency
+validation. A call-root revision alone cannot prove that an argument is unchanged.
+
+Pure keys do not own declarations, callers or sessions. Scalar binding snapshots
+used by retained checked values must likewise avoid an owning path back into
+the model. Bounded recent occurrences and checkpoints retain replay progress;
+explicit writes remain sparse durable assertions. Candidate frames and unresolved
+parameter readers must not accumulate in the retained frontier. The work and
+storage checks distinguish model size, active handles, explicit writes and
+replay distance from the length of sequential traversal.
+
+Missing arguments retain D102's partial-information semantics. An unused slot
+does not prevent acquiring another part of the history. A required unresolved
+slot does not justify choosing a value, discarding a viable segment or claiming
+an endpoint. The initial literal-scalar boundary does not add computed argument
+evaluation, parameter-dependent layout, recursive word proofs, general external
+effects, indexed assertions or nested generated histories. These retain their
+explicit unresolved/unsupported boundaries.
+
+**Alternatives.** A producer-specific word expander would duplicate definition
+binding and scope rules. Binding-allocation identity would lose durable writes
+when bindings are recreated. Keying by argument values would merge distinct
+calls and change identity on revision. An immortal application/occurrence map
+would defeat bounded retention. Reusing the ordinary proof plus pure qualified
+identity avoids those problems while keeping argument changes in the existing
+dependency-validation responsibility.
+
+Logical identity and reusable proof context are distinct. Request-local frame,
+layout and predecessor caches continue to require the exact lexical binding
+objects that established their deductions, including mutable omitted slots.
+Generated-value caches additionally validate a pure production-evidence token
+against the live source dependencies. A missing token is not valid evidence for
+a generated occurrence. Refreshing a changed state requests its coordinate
+through the ordinary provider before reading the new binding snapshot.
+
+The structural-body boundary also checks the resolved nominal type. Looking
+only at the raw syntax's type binding could skip an inherited definition whose
+meaning is discovered by ordinary lookup. Such additional structural constraints
+remain unsupported until their correspondence is established. Direct descendant
+refresh after changed production evidence likewise requires reacquiring the
+containing state first.
+
+A produced state's coordinate and its checked value are separate evidence.
+Consuming an unchanged checked value can reuse the current source proof. A
+changed value or a new session re-establishes the coordinate through the same
+production operation, then uses ordinary acquisition/correspondence to check
+the supplied assertions against the frozen result. This proof request does not
+overwrite the caller's pending assertions. An unchanged disposable cache can
+adopt the newly proved value; an edited or durable value remains a constraint.
+No other session's frames or frontier are borrowed to justify the result.
+Refreshing a derived value does not create a durable assertion or advance the
+generated write revision. A completed unchanged value with current evidence
+returns without publication; supplied or edited assertions use durable
+publication after validation.
+
+Named indexed selection waits for an unresolved definition header before
+choosing its traversal provider. The existing path, checked index and layout
+continuation survive the wait. A pending header does not establish that the
+eventual layout will be temporal; an ordinary list still uses its ordinary
+selection path after completion.
+
+Durable record assertions use established ordinary field correspondence. This
+increment does not add general sparse record alignment: a closed one-field
+description cannot silently stand for a larger record. The write regression
+supplies the existing fields with an unknown marker, so the parameter must
+still provide that field's value while the new assertion supplies the written
+field.
+
+Newly owned publication members and copied wrappers inherit their owning list's
+private-link policy. Nested generated records therefore use weak predecessor
+links as well as their outer list; a later write cannot recreate a sibling
+ownership cycle. Borrowed source payloads are unchanged. The descendant-write
+regression checks both replay of the durable value and reclamation after the
+owning application is released.
+
+**Engine validation.** Final CodeDog regeneration passes all nine new ordinary
+CodeDog test groups, all thirteen existing demand-production groups and all
+forty word-argument language fixtures. The complete run reports 24 failures
+out of 651 tests; its failure names exactly match the pre-change 24/642
+baseline. No existing fixture expectation changed. Coverage includes positional
+and named calls, numeric and string literals, embedded calls, multiple repeated
+segments, qualified call identity, eviction/replay across sessions, durable
+scalar and nested writes, argument invalidation, missing arguments, parser
+wait/resume and cancellation.
+
+For sequential traversals of 64, 128 and 256 states, measured relationship
+attempts are 257/513/1025, queue work is 2384/4752/9488, frame creation is
+1545/3081/6153 and generated occurrences are 129/257/513. Retention stays at
+four temporal cache slots, ten live generated nodes (also the measured peak) and eight
+checkpoints, with zero retained request binding slots or live requests after
+each demand. The tests additionally check released-node weak references and
+completed-input subscriptions. These are fixed-width deterministic examples,
+not a bound on arbitrary inference or random-access replay cost. Evidence is
+under `/tmp/proteus-parameter-production-20261022/`.
+
+**Consumer validation.** The separately regenerated shared library and
+Slipstream executable expose the same ABI symbol, and the consumer resolves
+this checkout's library. An isolated real display check shows both Rubix
+states, advances index 0 to 1, and returns to the same index-0 occurrence.
+There are no `TCURSOR` or `DISPLAY` diagnostics; shutdown exits normally. The
+two existing diagnostics about semantics beyond the scalar milestone and open
+source span alignment remain. This checks the represented Rubix history, not
+a new parameterized animation. No maintained Slipstream source changed.

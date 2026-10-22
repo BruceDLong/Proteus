@@ -1,6 +1,15 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/parameterProduction/equivalence
+    unit/parameterProduction/segments
+    unit/parameterProduction/identity
+    unit/parameterProduction/writes
+    unit/parameterProduction/descendantWrite
+    unit/parameterProduction/boundaries
+    unit/parameterProduction/invalidation
+    unit/parameterProduction/scaling
+    unit/parameterProduction/waitAndCancel
     unit/demandProduction/counted
     unit/demandProduction/segments
     unit/demandProduction/replayIdentity
@@ -6628,5 +6637,483 @@ struct GLOBAL {
             FAIL("Equal borrowed descriptions collapsed distinct generated occurrence contexts")
         }
         agent.endWorldSessions(); modelMngr.clear()
+    }
+}
+
+// Parameterized histories retain call identity while ordinary demands acquire
+// each continuation. The declaration remains shared and unchanged.
+struct GLOBAL {
+    our WorldDemand: parameterProductionOpen(their Agent: agent, our WorldSession: session, our POV: call) <- {
+        our WorldDemand: demand <- agent!.worldManager.demand(session,call,
+            agent!.getLocaleBaseName(),agent!.world,agent!.identityRegistry)
+        demand!.inList()
+        return(demand)
+    }
+    void: unit_parameterProduction_equivalence(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#progress(step,seed)=*1000000+{T (%tprev +(%step))|%seed ...} #labels(text)=*64+{T (%text)|...}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        me string: original <- toString(declaration.target!.pItem)
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me List<string>: inputs <- ["*1000000+{T (%tprev +2)|7 ...}","progress(2,7)","progress(seed::7,step::2)","{T &progress(2,7)}"]
+        withEach input in inputs{
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our WorldSession: session <- agent.startSession()
+            our WorldDemand: demand <- parameterProductionOpen(agent,session,parsed.target)
+            if(!demand!.configureRetention(2,8,1) or !demand!.seek(FlexNum("1")) or demand!.current!.pItem!.fetchInt()!=7){
+                FAIL("Literal and parameterized seed acquisition differ: "+input+": "+demand!.status().detail)
+            }
+            our WorldPosition: held <- demand!.snapshot()
+            withEach ordinal in range 1 .. 65{
+                if(!demand!.goNext() or demand!.current!.pItem!.fetchInt()!=7+2*ordinal){
+                    FAIL("Parameterized continuation differs from its literal model: "+input+": "+demand!.status().detail)
+                }
+            }
+            if(held!.node!.pItem!.fetchInt()!=7 or demand!.atBoundary or session!.requests.size()>2){
+                FAIL("A large counted call changed its snapshot or retained every request")
+            }
+            agent.endSession(session)
+        }
+        me WorldParseResult: selected <- agent.worldManager.parse("progress(seed::7,step::2)@[65]")
+        if(selected.target==NULL){FAIL(selected.error)}
+        our WorldRequest: result <- agent.normalize(selected.target)
+        if(!result!.complete() or selected.target!.pItem!.fetchInt()!=135){
+            FAIL("Ordinary indexed application disagrees with demand traversal: "+result!.error())
+        }
+        me WorldParseResult: label <- agent.worldManager.parse("labels('ready')")
+        if(label.target==NULL){FAIL(label.error)}
+        our WorldDemand: text <- parameterProductionOpen(agent,agent.startSession(),label.target)
+        if(!text!.seek(FlexNum("32")) or text!.current!.pItem!.value!.evalMode!=emLiteral or
+           text!.current!.pItem!.value!.overlayType!=STR or text!.current!.pItem!.fetchString()!="ready"){
+            FAIL("A captured literal string argument did not produce its repeated states: "+text!.status().detail)
+        }
+        if(toString(declaration.target!.pItem)!=original){FAIL("Production rewrote the shared parameterized declaration")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_parameterProduction_segments(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#stages(first,second,third)={T (%tprev +1)|0 &{T !%first|...} %first &{T !%second|...} %second &{T !%third|...} %third}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        me string: original <- toString(declaration.target!.pItem)
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me List<string>: inputs <- ["stages(3,6,9)","stages(third::9,first::3,second::6)"]
+        withEach input in inputs{
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our WorldDemand: demand <- parameterProductionOpen(agent,agent.startSession(),parsed.target)
+            if(!demand!.configureRetention(1,0,0) or !demand!.seek(FlexNum("1")) or demand!.current!.pItem!.fetchInt()!=0){
+                FAIL("Parameterized segments did not expose their seed: "+demand!.status().detail)
+            }
+            withEach ordinal in range 1 .. 10{
+                if(!demand!.goNext() or demand!.current!.pItem!.fetchInt()!=ordinal){
+                    FAIL("Parameterized segment boundary failed at "+toString(ordinal)+": "+demand!.status().detail)
+                }
+            }
+            if(demand!.goNext() or !demand!.atBoundary or demand!.status().outcome!=worldComplete or
+               !demand!.goPrev() or demand!.current!.pItem!.fetchInt()!=8 or !demand!.goNext() or demand!.current!.pItem!.fetchInt()!=9){
+                FAIL("Parameterized segment endpoints or reverse traversal differ from literal segments")
+            }
+        }
+        if(toString(declaration.target!.pItem)!=original){FAIL("Parameterized marker evaluation changed its declaration")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_parameterProduction_identity(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#progress(step)=*128+{T (%tprev +(%step))|0 ...}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me WorldParseResult: first <- agent.worldManager.parse("progress(1)")
+        me WorldParseResult: equal <- agent.worldManager.parse("progress(step::1)")
+        me WorldParseResult: other <- agent.worldManager.parse("progress(2)")
+        if(first.target==NULL or equal.target==NULL or other.target==NULL){FAIL("Independent history calls did not parse")}
+        our WorldSession: session <- agent.startSession()
+        our WorldDemand: demand <- parameterProductionOpen(agent,session,first.target)
+        if(!demand!.configureRetention(1,0,0) or !demand!.seek(FlexNum("2")) or demand!.current!.pItem!.fetchInt()!=1){FAIL("Could not acquire the first generated call occurrence")}
+        our WorldPosition:: firstPosition; firstPosition! <- demand!.position!
+        our WorldPosition: held <- demand!.snapshot()
+        our WorldDemand: sameSession <- parameterProductionOpen(agent,session,first.target)
+        our WorldDemand: equalCall <- parameterProductionOpen(agent,session,equal.target)
+        our WorldDemand: otherCall <- parameterProductionOpen(agent,session,other.target)
+        if(!sameSession!.seek(FlexNum("2")) or !equalCall!.seek(FlexNum("2")) or !otherCall!.seek(FlexNum("2")) or
+           !agent.worldManager.graph.samePosition(firstPosition,sameSession!.position) or
+           agent.worldManager.graph.samePosition(firstPosition,equalCall!.position) or
+           agent.worldManager.graph.samePosition(firstPosition,otherCall!.position) or
+           equalCall!.current!.pItem!.fetchInt()!=1 or otherCall!.current!.pItem!.fetchInt()!=2){
+            FAIL("Parameterized occurrence identity lost its actual call site or mixed argument values")
+        }
+        withEach ordinal in range 2 .. 65{if(!demand!.goNext() or demand!.current!.pItem!.fetchInt()!=ordinal){FAIL("Parameterized identity traversal stopped before eviction")}}
+        demand!.clearCache()
+        if(!demand!.seek(FlexNum("2")) or !agent.worldManager.graph.samePosition(firstPosition,demand!.position) or held!.node!.pItem!.fetchInt()!=1){
+            FAIL("Eviction changed parameterized occurrence identity or a held value")
+        }
+        agent.endSession(session)
+        our WorldDemand: fresh <- parameterProductionOpen(agent,agent.startSession(),first.target)
+        if(!fresh!.seek(FlexNum("2")) or fresh!.current!.pItem!.fetchInt()!=1 or
+           !agent.worldManager.graph.samePosition(firstPosition,fresh!.position)){
+            FAIL("A fresh session assigned another identity to the same application occurrence")
+        }
+        // A shared physical call is still two occurrences beneath two wrappers.
+        me WorldParseResult: borrowed <- agent.worldManager.parse("{{progress(1)} {progress(1)}}")
+        if(borrowed.target==NULL){FAIL(borrowed.error)}
+        our POV: firstWrapper <- borrowed.target!.pItem!.value!.items.head
+        our POV: secondWrapper <- firstWrapper!.next
+        secondWrapper!.pItem <- firstWrapper!.pItem
+        cursorDemandLinkMembers(borrowed.target)
+        our POV: sharedCall <- firstWrapper!.pItem!.value!.items.head
+        our WorldPosition: root <- agent.worldManager.graph.position(borrowed.target)
+        our WorldPosition: leftCall <- agent.worldManager.graph.position(sharedCall,agent.worldManager.graph.position(firstWrapper,root))
+        our WorldPosition: rightCall <- agent.worldManager.graph.position(sharedCall,agent.worldManager.graph.position(secondWrapper,root))
+        our WorldSession: borrowedSession <- agent.startSession()
+        our WorldDemand: left <- agent.worldManager.demandAt(borrowedSession,leftCall,agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        our WorldDemand: right <- agent.worldManager.demandAt(borrowedSession,rightCall,agent.getLocaleBaseName(),agent.world,agent.identityRegistry)
+        left!.inList(); right!.inList()
+        if(!left!.seek(FlexNum("2")) or !right!.seek(FlexNum("2")) or left!.current!.pItem!.fetchInt()!=1 or right!.current!.pItem!.fetchInt()!=1 or
+           agent.worldManager.graph.samePosition(left!.position,right!.position)){
+            FAIL("A borrowed parameterized call lost its enclosing occurrence qualification")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+}
+
+struct GLOBAL {
+    void: unit_parameterProduction_writes(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#progress(step)=*128+{T (%tprev +(%step))|0 ...}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        me string: original <- toString(declaration.target!.pItem)
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me WorldParseResult: parsed <- agent.worldManager.parse("progress(2)")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our WorldSession: session <- agent.startSession()
+        our WorldDemand: demand <- parameterProductionOpen(agent,session,parsed.target)
+        if(!demand!.configureRetention(1,0,0) or !demand!.seek(FlexNum("2")) or demand!.current!.pItem!.fetchInt()!=2){FAIL("Could not acquire parameterized state to write")}
+        our WorldPosition:: writtenPosition; writtenPosition! <- demand!.position!
+        our POV: writtenNode <- demand!.current
+        me WorldWeakReference<POV>: originalOccurrence; originalOccurrence.set(writtenNode)
+        our WorldRequest: written <- demand!.writeBack()
+        if(written==NULL or written!.failed() or written!.publications==0 or writtenNode!.worldContext!=NULL or
+           !agent.worldManager.graph.samePosition(agent.worldManager.graph.occurrencePath(writtenNode),writtenPosition)){
+            FAIL("Parameterized state write lost its qualified occurrence")
+        }
+        agent.worldManager.release(session,written)
+        me uint64: revision <- agent.worldManager.graph.generatedWriteRevision(writtenPosition!.parent)
+        withEach ordinal in range 2 .. 65{if(!demand!.goNext() or demand!.current!.pItem!.fetchInt()!=ordinal*2){FAIL("Could not evict a written parameterized state")}}
+        demand!.clearCache(); agent.endSession(session)
+        our WorldDemand: fresh <- parameterProductionOpen(agent,agent.startSession(),parsed.target)
+        if(!fresh!.seek(FlexNum("2")) or fresh!.current!.pItem!.fetchInt()!=2 or !fresh!.current!.cursorValue!.permanent or
+           !agent.worldManager.graph.samePosition(writtenPosition,fresh!.position) or
+           agent.worldManager.graph.generatedWriteRevision(writtenPosition!.parent)!=revision){
+            FAIL("A parameterized durable assertion did not survive its session without republishing")
+        }
+        if(toString(declaration.target!.pItem)!=original){FAIL("A generated write changed the shared word definition")}
+        agent.endWorldSessions()
+        written <- NULL; writtenPosition <- NULL; writtenNode <- NULL; demand <- NULL; session <- NULL
+        if(!originalOccurrence.expired() or fresh!.current!.pItem!.fetchInt()!=2){FAIL("A durable parameterized assertion retained its original occurrence")}
+        me WorldWeakReference<POV>: replayedOccurrence; replayedOccurrence.set(fresh!.current)
+        fresh <- NULL; parsed.target <- NULL; installed <- NULL; declaration.target <- NULL; modelMngr.clear()
+        if(!replayedOccurrence.expired()){FAIL("Parameterized durable value retained its completed application context")}
+    }
+
+    void: unit_parameterProduction_descendantWrite(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#records(marker)=*64+{T {keep:{z:_, marker:(%marker)}} ...}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        me string: original <- toString(declaration.target!.pItem)
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me WorldParseResult: parsed <- agent.worldManager.parse("records(marker::7)")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our WorldSession: session <- agent.startSession()
+        our WorldDemand: demand <- parameterProductionOpen(agent,session,parsed.target)
+        if(!demand!.configureRetention(1,0,0) or !demand!.requireField("keep.marker") or !demand!.seek(FlexNum("2")) or
+           !temporalNormalizationNumber(temporalNormalizationField(demand!.current,"keep"),"marker",7)){
+            FAIL("Parameterized record did not retain its literal argument: "+demand!.status().detail)
+        }
+        our POV: second <- demand!.current
+        our WorldPosition:: secondPosition; secondPosition! <- demand!.position!
+        me WorldParseResult: assertion <- agent.worldManager.parse("{keep:{z:9, marker:_}}")
+        if(assertion.target==NULL){FAIL(assertion.error)}
+        second!.pItem!.wrkList.append(assertion.target); second!.pItem!.noteNormalizationWork()
+        our WorldRequest: written <- agent.normalize(second)
+        if(written!.failed() or !temporalNormalizationNumber(temporalNormalizationField(second,"keep"),"z",9) or
+           !temporalNormalizationNumber(temporalNormalizationField(second,"keep"),"marker",7)){
+            FAIL("A parameterized descendant assertion lost its value: "+written!.error()+": "+toString(second!.pItem))
+        }
+        if(second!.worldContext!=NULL){
+            FAIL("A parameterized descendant assertion retained its owning navigation context: "+written!.error())
+        }
+        if(!agent.worldManager.graph.samePosition(agent.worldManager.graph.occurrencePath(second),secondPosition)){
+            FAIL("A parameterized descendant assertion lost its application identity: "+written!.error())
+        }
+        me WorldWeakReference<POV>: originalOccurrence; originalOccurrence.set(second)
+        me WorldWeakReference<POV>: writtenField
+        writtenField.set(temporalNormalizationField(temporalNormalizationField(second,"keep"),"z"))
+        if(!demand!.refresh()){FAIL("Could not refresh the parameterized descendant write: "+demand!.status().detail)}
+        withEach ordinal in range 2 .. 33{if(!demand!.goNext()){FAIL("Could not evict a written parameterized record")}}
+        demand!.clearCache(); agent.endSession(session)
+        our WorldDemand: fresh <- parameterProductionOpen(agent,agent.startSession(),parsed.target)
+        if(!fresh!.requireField("keep.marker") or !fresh!.seek(FlexNum("2")) or !agent.worldManager.graph.samePosition(secondPosition,fresh!.position) or
+           !temporalNormalizationNumber(temporalNormalizationField(fresh!.current,"keep"),"z",9) or
+           !temporalNormalizationNumber(temporalNormalizationField(fresh!.current,"keep"),"marker",7)){
+            FAIL("Replayed descendant write lost its parameterized meaning: "+fresh!.status().detail)
+        }
+        if(toString(declaration.target!.pItem)!=original){FAIL("A descendant assertion mutated its shared word definition")}
+        agent.endWorldSessions()
+        written <- NULL; secondPosition <- NULL; second <- NULL; demand <- NULL; session <- NULL
+        if(!originalOccurrence.expired()){FAIL("A parameterized descendant assertion retained its released original occurrence")}
+        me WorldWeakReference<POV>: replayedOccurrence; replayedOccurrence.set(fresh!.current)
+        fresh <- NULL; assertion.target <- NULL; parsed.target <- NULL; installed <- NULL; declaration.target <- NULL; modelMngr.clear()
+        if(!replayedOccurrence.expired() or !writtenField.expired()){FAIL("A parameterized descendant survived release of its owning application")}
+    }
+
+    void: unit_parameterProduction_boundaries(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#needed(step)=*64+{T (%tprev +(%step))|0 ...} #unused(ignored)=*64+{T (%tprev +1)|0 ...} #sized(width)=*(%width)+{T (%tprev +1)|0 ...} #fixed(step)=*64+{T (%tprev +(%step=1))|0 ...} #zeros={T 0|...} #typed(step)=zeros:*64+{T (%tprev +(%step))|0 ...} #outside(item)={T !%item|1 2}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me WorldParseResult: exclusion <- agent.worldManager.parse("outside(3)")
+        if(exclusion.target==NULL){FAIL(exclusion.error)}
+        our WorldRequest: checked <- agent.normalize(exclusion.target)
+        if(!checked!.complete() or toString(exclusion.target!.pItem)!="outside(3):{T 1 2}"){
+            FAIL("An ordinary parameter exclusion lost its complement: "+checked!.error())
+        }
+        exclusion <- agent.worldManager.parse("outside(1)")
+        if(exclusion.target==NULL){FAIL(exclusion.error)}
+        checked <- agent.normalize(exclusion.target)
+        if(checked!.status().outcome!=worldRejected or checked!.publications!=0){FAIL("An ordinary parameter exclusion accepted its excluded literal")}
+        me WorldParseResult: missing <- agent.worldManager.parse("needed()")
+        if(missing.target==NULL){FAIL(missing.error)}
+        our WorldDemand: demand <- parameterProductionOpen(agent,agent.startSession(),missing.target)
+        if(!demand!.seek(FlexNum("1")) or demand!.current!.pItem!.fetchInt()!=0){FAIL("An unused-at-the-seed missing parameter hid the supplied seed")}
+        demand!.goNext()
+        if(demand!.status().outcome!=worldPartial or demand!.atBoundary){
+            FAIL("A required missing argument fabricated a complete transition or endpoint")
+        }
+        me WorldParseResult: unused <- agent.worldManager.parse("unused()")
+        if(unused.target==NULL){FAIL(unused.error)}
+        demand <- parameterProductionOpen(agent,agent.startSession(),unused.target)
+        if(!demand!.seek(FlexNum("8")) or demand!.current!.pItem!.fetchInt()!=7){FAIL("An unused omitted argument prevented a determined continuation")}
+        me WorldParseResult: matching <- agent.worldManager.parse("fixed(1)")
+        if(matching.target==NULL){FAIL(matching.error)}
+        demand <- parameterProductionOpen(agent,agent.startSession(),matching.target)
+        if(!demand!.seek(FlexNum("2")) or demand!.current!.pItem!.fetchInt()!=1){
+            FAIL("A matching captured literal constraint was mistaken for an external effect: "+demand!.status().detail)
+        }
+        me WorldParseResult: conflicting <- agent.worldManager.parse("fixed(2)")
+        if(conflicting.target==NULL){FAIL(conflicting.error)}
+        demand <- parameterProductionOpen(agent,agent.startSession(),conflicting.target)
+        if(!demand!.seek(FlexNum("1")) or demand!.current!.pItem!.fetchInt()!=0){FAIL("Could not acquire the seed before a conflicting literal constraint")}
+        if(demand!.goNext() or demand!.status().outcome!=worldRejected or demand!.atBoundary or demand!.current!.pItem!.fetchInt()!=0){
+            FAIL("A conflicting captured literal constraint published a continuation or endpoint")
+        }
+        me List<string>: guarded <- ["needed((1+1))","sized(64)","typed(1)"]
+        withEach input in guarded{
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            me string: original <- toString(parsed.target!.pItem)
+            demand <- parameterProductionOpen(agent,agent.startSession(),parsed.target)
+            demand!.seek(FlexNum("2"))
+            if(demand!.status().outcome!=worldUnsupported or demand!.atBoundary or toString(parsed.target!.pItem)!=original){
+                FAIL("An unresolved argument or inherited layout bypassed its production boundary: "+input+": "+demand!.status().detail)
+            }
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_parameterProduction_invalidation(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#progress(step)=*128+{T (%tprev +(%step))|0 ...}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me WorldParseResult: parsed <- agent.worldManager.parse("progress(1)")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our WorldSession: initialSession <- agent.startSession()
+        our WorldDemand: demand <- parameterProductionOpen(agent,initialSession,parsed.target)
+        if(!demand!.seek(FlexNum("2")) or demand!.current!.pItem!.fetchInt()!=1){FAIL("Could not establish the initial parameter dependency")}
+        me uint64: initialWrites <- agent.worldManager.graph.generatedWriteRevision(demand!.position!.parent)
+        our WorldRequest: unchanged <- agent.normalizeInSession(initialSession,demand!.current)
+        if(!unchanged!.complete() or unchanged!.publications!=0 or demand!.current!.pItem!.fetchInt()!=1 or
+           agent.worldManager.graph.generatedWriteRevision(demand!.position!.parent)!=initialWrites){
+            FAIL("Normalizing a clean derived occurrence published a durable assertion: "+unchanged!.error())
+        }
+        our WorldPosition:: earlier; earlier! <- demand!.position!
+        our POV: cleanEarlier <- demand!.current
+        me uint64: rootRevision <- parsed.target!.pItem!.cursorRevision
+        if(parsed.target!.pItem!.wordArguments==NULL or parsed.target!.pItem!.wordArguments!.values.size()!=1){FAIL("Read-only production replaced its supplied argument header")}
+        our infonView: actual <- parsed.target!.pItem!.wordArguments!.values[0].value
+        me WorldParseResult: replacement <- agent.worldManager.parse("2")
+        if(replacement.target==NULL){FAIL(replacement.error)}
+        actual!.value <- replacement.target!.pItem!.value; actual!.noteNormalizationWork()
+        if(parsed.target!.pItem!.cursorRevision!=rootRevision){FAIL("The argument dependency probe changed its call root revision")}
+        our WorldRequest: reacquired <- agent.normalizeInSession(agent.startSession(),cleanEarlier)
+        if(!reacquired!.complete() or cleanEarlier!.pItem!.fetchInt()!=2 or
+           !agent.worldManager.graph.samePosition(earlier,agent.worldManager.graph.occurrencePath(cleanEarlier))){
+            FAIL("Ordinary normalization reused a clean state derived from an obsolete argument: "+reacquired!.error())
+        }
+        if(!demand!.refresh() or demand!.current!.pItem!.fetchInt()!=2 or
+           !agent.worldManager.graph.samePosition(earlier,demand!.position)){
+            FAIL("Refreshing a generated occurrence reused its superseded literal argument: "+demand!.status().detail)
+        }
+        replacement <- agent.worldManager.parse("3")
+        if(replacement.target==NULL){FAIL(replacement.error)}
+        actual!.value <- replacement.target!.pItem!.value; actual!.noteNormalizationWork()
+        if(parsed.target!.pItem!.cursorRevision!=rootRevision){FAIL("The second argument mutation changed its call root revision")}
+        if(!demand!.seek(FlexNum("2")) or demand!.current!.pItem!.fetchInt()!=3 or
+           !agent.worldManager.graph.samePosition(earlier,demand!.position)){
+            FAIL("A cached generated occurrence ignored an argument-only revision: "+demand!.status().detail)
+        }
+        if(!demand!.seek(FlexNum("65")) or demand!.current!.pItem!.fetchInt()!=192){FAIL("A changed literal argument left a stale production frontier")}
+        our WorldDemand: fresh <- parameterProductionOpen(agent,agent.startSession(),parsed.target)
+        if(!fresh!.seek(FlexNum("65")) or fresh!.current!.pItem!.fetchInt()!=192 or
+           !agent.worldManager.graph.samePosition(demand!.position,fresh!.position)){
+            FAIL("A fresh session reused stale argument bindings or changed occurrence identity")
+        }
+        // A source proof establishes the generated occurrence. It must not
+        // certify an acquired scalar after that scalar has been changed.
+        our POV: changed <- fresh!.current
+        me string: originalCall <- toString(parsed.target!.pItem)
+        replacement <- agent.worldManager.parse("999")
+        if(replacement.target==NULL){FAIL(replacement.error)}
+        changed!.pItem!.value <- replacement.target!.pItem!.value
+        changed!.pItem!.noteNormalizationWork()
+        our WorldRequest: checked <- agent.normalize(changed)
+        if(checked!.status().outcome!=worldRejected or checked!.publications!=0 or
+           toString(parsed.target!.pItem)!=originalCall){
+            FAIL("A changed generated scalar bypassed its producing constraints: "+checked!.error())
+        }
+        our WorldDemand: replay <- parameterProductionOpen(agent,agent.startSession(),parsed.target)
+        if(!replay!.seek(FlexNum("65")) or replay!.current!.pItem!.fetchInt()!=192){
+            FAIL("A rejected generated scalar changed its source history: "+replay!.status().detail)
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+}
+
+struct GLOBAL {
+    void: unit_parameterProduction_scaling(me string: testName) <- {
+        me uint64: previousFrames <- 0; me uint64: previousRelationships <- 0; me uint64: previousQueue <- 0
+        me List<int>: lengths <- [64,128,256]
+        withEach length in lengths{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: declaration <- agent.worldManager.parse("{#stages(first,second)={T (%tprev +1)|0 &{T !%first|...} %first &{T !%second|...} %second}}")
+            if(declaration.target==NULL){FAIL(declaration.error)}
+            our WorldRequest: installed <- agent.normalize(declaration.target)
+            if(!installed!.complete()){FAIL(installed!.error())}
+            me WorldParseResult: parsed <- agent.worldManager.parse("stages("+toString(length)+","+toString(length*2)+")")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our WorldSession: session <- agent.startSession()
+            our WorldDemand: demand <- parameterProductionOpen(agent,session,parsed.target)
+            if(!demand!.configureRetention(2,16,2) or !demand!.seek(FlexNum("1"))){FAIL("Could not start parameterized scaling traversal: "+demand!.status().detail)}
+            me int64: bindingSlots <- 0
+            withEach ordinal in range 1 .. length+1{
+                if(!demand!.goNext() or demand!.current!.pItem!.fetchInt()!=ordinal){FAIL("Parameterized scaling traversal stopped: "+demand!.status().detail)}
+                if(demand!.request!=NULL and demand!.request!.parameterBindings.size()>bindingSlots){bindingSlots <- demand!.request!.parameterBindings.size()}
+            }
+            me uint64: frames <- demand!.framesCreated
+            me uint64: relationships <- demand!.relationshipsRead
+            me uint64: queue <- demand!.queueSteps
+            if(demand!.request!=NULL){frames <+- demand!.request!.framesCreated; relationships <+- demand!.request!.relationshipsRead; queue <+- demand!.request!.queueSteps}
+            our WorldGeneratedSeries: series <- agent.worldManager.generatedSeries(session,demand!.list)
+            if(series==NULL or series!.retainedCount()>series!.recentLimit+6 or series!.peakRetained>series!.recentLimit+6 or
+               series!.created<length-1 or series!.evicted==0 or series!.production!.checkpoints.size()>series!.production!.checkpointLimit or
+               bindingSlots>8 or session!.requests.size()>2 or demand!.retentionPeakSlots>4){
+                FAIL("Parameterized traversal accumulated per-state bindings or retained occurrences")
+            }
+            if(frames>length*768 or relationships>length*384 or queue>length*3072 or
+               (length>64 and (frames>previousFrames*3+128 or relationships>previousRelationships*3+128 or queue>previousQueue*3+128))){
+                FAIL("Fixed-width parameterized production replayed its entire preceding history")
+            }
+            print("Parameterized production length=",length," frames=",frames," relationships=",relationships," queue=",queue,
+                " bindingSlots=",bindingSlots," retainedSlots=",demand!.retentionPeakSlots," generated=",series!.created,
+                " evicted=",series!.evicted," retainedNodes=",series!.retainedCount()," peakNodes=",series!.peakRetained,
+                " checkpoints=",series!.production!.checkpoints.size()," requests=",session!.requests.size(),"\n")
+            previousFrames <- frames; previousRelationships <- relationships; previousQueue <- queue
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+}
+
+struct GLOBAL {
+    void: unit_parameterProduction_waitAndCancel(me string: testName) <- {
+        withEach headerWait in range 0 .. 2{
+            withEach cancelled in range 0 .. 2{
+                me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+                me WorldParseResult: declaration <- agent.worldManager.parse("{#progress(step)=*64+{T (%tprev +(%step))|0 ...}}")
+                if(declaration.target==NULL){FAIL(declaration.error)}
+                our infonView: meaning <- declaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
+                our infonView: rule <- meaning!.value!.listSpec
+                our WorldRequest: installed <- agent.normalize(declaration.target)
+                if(!installed!.complete()){FAIL(installed!.error())}
+                me WorldParseResult: parsed <- agent.worldManager.parse("progress(2)")
+                if(parsed.target==NULL){FAIL(parsed.error)}
+                me string: original <- toString(parsed.target!.pItem)
+                our WorldDemand: demand <- parameterProductionOpen(agent,agent.startSession(),parsed.target)
+                our infonView: input <- meaning
+                if(headerWait==0){
+                    if(!demand!.seek(FlexNum("1")) or demand!.current!.pItem!.fetchInt()!=0){FAIL("Could not acquire the seed before a parameterized transition wait")}
+                    input <- rule!.value!.items.tail!.pItem
+                }
+                agent.worldManager.prepareInput(input)
+                if(headerWait==1){meaning!.value!.timelike <- false; meaning!.value!.listSpec <- NULL}
+                me bool: ready
+                if(headerWait==1){ready <- demand!.seek(FlexNum("2"))}else{ready <- demand!.goNext()}
+                if(ready or demand!.status().outcome!=worldWaiting or agent.worldManager.control!.inputWaiters.size()!=1 or
+                   toString(parsed.target!.pItem)!=original or (headerWait==0 and demand!.current!.pItem!.fetchInt()!=0)){
+                    FAIL("A pending parameterized definition or transition bypassed its ordinary wait: "+demand!.status().detail)
+                }
+                our WorldRequest: waiting <- demand!.layoutRequest
+                if(waiting==NULL){waiting <- demand!.selectionRequest}
+                if(waiting==NULL){waiting <- demand!.request}
+                if(waiting==NULL or waiting!.publications!=0){FAIL("A waiting parameterized continuation published provisional work")}
+                me uint64: frames <- waiting!.framesCreated; me uint64: queue <- waiting!.queueSteps
+                our infonView:: unrelated; agent.worldManager.inputReady(unrelated)
+                if(demand!.refresh() or waiting!.framesCreated!=frames or waiting!.queueSteps!=queue){FAIL("Polling restarted a parameterized continuation wait")}
+                if(cancelled==1){waiting!.cancel()}
+                if(headerWait==1){meaning!.value!.timelike <- true; meaning!.value!.listSpec <- rule}
+                input!.streamState <- parseDone; agent.worldManager.inputReady(input)
+                ready <- demand!.refresh()
+                if(cancelled==1){
+                    if(ready or demand!.status().outcome!=worldCancelled or waiting!.publications!=0 or
+                       toString(parsed.target!.pItem)!=original or (headerWait==0 and demand!.current!.pItem!.fetchInt()!=0)){
+                        FAIL("Cancellation published or restarted a parameterized continuation")
+                    }
+                }else if(!ready or demand!.current!.pItem!.fetchInt()!=2 or !demand!.goNext() or demand!.current!.pItem!.fetchInt()!=4){
+                    FAIL("A parameterized continuation did not resume after its exact input became ready: "+demand!.status().detail)
+                }
+                if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("A settled parameterized continuation retained its input subscription")}
+                agent.endWorldSessions(); modelMngr.clear()
+            }
+        }
+        // The header may settle as an ordinary list. Resumption must choose
+        // that layout after the wait without assuming a temporal producer.
+        me Agent: ordinaryAgent; Allocate(ordinaryAgent.identityRegistry)
+        ordinaryAgent.worldManager.control!.identities <- ordinaryAgent.identityRegistry
+        me WorldParseResult: ordinaryDeclaration <- ordinaryAgent.worldManager.parse("{#pair(step)={0 (%step)}}")
+        if(ordinaryDeclaration.target==NULL){FAIL(ordinaryDeclaration.error)}
+        our infonView: ordinaryMeaning <- ordinaryDeclaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
+        our WorldRequest: ordinaryInstalled <- ordinaryAgent.normalize(ordinaryDeclaration.target)
+        if(!ordinaryInstalled!.complete()){FAIL(ordinaryInstalled!.error())}
+        me WorldParseResult: ordinaryCall <- ordinaryAgent.worldManager.parse("pair(2)")
+        if(ordinaryCall.target==NULL){FAIL(ordinaryCall.error)}
+        ordinaryAgent.worldManager.prepareInput(ordinaryMeaning)
+        our WorldDemand: ordinary <- parameterProductionOpen(ordinaryAgent,ordinaryAgent.startSession(),ordinaryCall.target)
+        if(ordinary!.seek(FlexNum("2")) or ordinary!.status().outcome!=worldWaiting){
+            FAIL("A pending ordinary named header bypassed layout readiness")
+        }
+        ordinaryMeaning!.streamState <- parseDone; ordinaryAgent.worldManager.inputReady(ordinaryMeaning)
+        if(!ordinary!.refresh() or ordinary!.current!.pItem!.fetchInt()!=2 or ordinary!.position!.generatedAddress!=NULL or
+           !ordinaryAgent.worldManager.control!.inputWaiters.isEmpty()){
+            FAIL("A resumed ordinary named header incorrectly used temporal production: "+ordinary!.status().detail)
+        }
+        ordinaryAgent.endWorldSessions(); modelMngr.clear()
     }
 }
