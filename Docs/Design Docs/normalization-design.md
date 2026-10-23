@@ -16,6 +16,15 @@ Develop the solver on `main` in `/home/bruce/devl/Proteus`. D084 promotes the cl
 
 Build the replacement behind WorldManager in CodeDog. Reuse the parser, POV storage, printing, and semantic tests where their contracts fit; assess solver internals individually. The branch started from that checkpoint and now runs the replacement through the normal Proteus Engine and TestProteus path. Unsupported features are reported explicitly; the old solver is not linked as a fallback. Build outputs are separate; public-world resources remain an external shared input.
 
+### Work priority (2026-10-23)
+
+Dedicated demand-production expansion is paused after the completed D111
+implementation, commit `41c6efc`. Resume world-model construction and let concrete
+discrete models determine which engine capabilities to develop next.
+Parameter-dependent segment lengths remain a candidate whose priority will be
+set by those models. The [pause checkpoint](normalization-design-decisions.md#work-paused-after-d111-2026-10-23)
+preserves the remaining options and the conditions for resuming this work.
+
 ## WorldManager reasoning interface
 
 The `WorldManager` class in `WorldManager.dog` owns the complete reasoning interface. Substituting a differently implemented `WorldManager.dog` must permit replacing the reasoning system without changing reasoning callers. Internal helpers can support the implementation, but callers must not depend on its scheduler or graph implementation details. The exact methods and lifecycle contract will be specified as the solving design develops. See G03.

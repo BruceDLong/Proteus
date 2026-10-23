@@ -4074,3 +4074,45 @@ existing diagnostics about semantics beyond the scalar milestone and open
 source span alignment remain. This checks the existing Rubix history; computed
 argument behavior is covered by the engine tests above. No maintained
 Slipstream source changed.
+
+### Work paused after D111 (2026-10-23)
+
+**Checkpoint.** Commit `41c6efc` completes computed and forwarded scalar
+arguments through ordinary demand production. D109-D111 preserve ordinary
+normalization ownership, waiting continuations, bounded retention, qualified
+occurrence identity and durable writes. The validation above is complete:
+the full suite retains the same 24 known failures across 657 tests, and the
+represented Rubix history was checked in Slipstream. There is no unfinished
+implementation from this increment to resume.
+
+**Priority.** Pause dedicated expansion of demand production and return to
+building the world model. Use concrete discrete model examples to determine
+the next engine priorities. For a blocked example, retain the smallest model
+and intended result, distinguish missing model constraints from an engine gap,
+and implement the capability the example actually needs. The remaining engine
+boundaries are candidates to revisit, not a fixed implementation queue.
+
+**Recorded candidate.** Parameter-dependent finite list and segment lengths
+were recommended but have not been implemented or selected as the next task:
+
+```proteus
+#sized(width)=*(%width)+{T (%tprev +1)|0 ...}
+sized(5)
+```
+
+The intended example has five states, 0 through 4. If this increment is selected,
+acquire its extent through ordinary size-expression normalization, preserving
+the waiting continuation and retaining only checked extent facts and dependency
+evidence. The extent includes represented members and embedded spans. Unknown
+counts must not fabricate membership or an endpoint. Cover zero-length and
+multiple segments, changed counts, cancellation, eviction and replay. A smaller
+bound must not silently discard or relocate durable writes at established
+coordinates; the incompatible bound/write case needs an explicit outcome.
+
+Other recorded boundaries include object/reference arguments, recursive
+parameterized proofs, external effects, ambiguous continuation and general
+alignment, and bounded ownership of generated nested histories. Concrete world
+models may make one of these more useful than parameter-dependent lengths.
+Broader arithmetic work remains explicitly deferred. Preserve the ordinary
+normalization path and the D109-D111 identity, waiting and retention guarantees
+when any of these capabilities is developed.
