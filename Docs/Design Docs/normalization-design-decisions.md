@@ -4116,3 +4116,65 @@ models may make one of these more useful than parameter-dependent lengths.
 Broader arithmetic work remains explicitly deferred. Preserve the ordinary
 normalization path and the D109-D111 identity, waiting and retention guarantees
 when any of these capabilities is developed.
+
+## D112 — Astronomy histories and simultaneous populations (2026-10-23)
+
+**Decision.** Replace the old galaxy T-list of solar systems and solar-system
+T-list of `star, planets` with histories of explicitly named S-state models.
+`galaxy-state` contains a solar-system population; `solar-system-state` contains
+star and planet populations. Temporal succession is at the owning object's
+level, and its simultaneous parts remain within each state. Generic population
+sizes are open; the general solar-system model permits several stars. Remove
+the arbitrary minimum population from the former galaxy declaration.
+
+World commit `b8e7b1c` owns these definitions in
+`public/Nature/Space/Space.pr`. `KernelKB.pr` imports them through the existing
+Nature tree rather than retaining a conflicting second set of definitions.
+`public/Nature/Space/Sol.pr` describes Sun, Mercury, Venus, Earth, Mars, Jupiter,
+Saturn, Uranus, Neptune and Sol-System. The supplied Sol state contains one star
+and eight planets. The current inventory is sourced from NASA's
+[planet overview](https://science.nasa.gov/solar-system/planets/); no new empirical
+formation dates, orbital measurements or motion equations are introduced.
+
+PublicKB introduces one Milky Way and one Andromeda in a galaxy population,
+with one Sol-System occurrence inside the supplied Milky Way state. The named
+bodies occur once inside Sol's population. One application of `known-galaxies`
+owns the population and its assertions. Name associations use `%self`-rooted
+paths to those occurrences, and are separate from their body-history definitions.
+A name-path result must not stand in for a body history. Additional applications
+of the same definition would introduce additional occurrences; matching names
+are not an identity proof. The existing broad Milky Way start constraint is
+retained and now addresses the introduced population member.
+
+Earth's tiny history supplies two local orientations, `(0,0,0)` and `(0,0,1)`
+radians in a chosen frame, and an open future. No elapsed time, formation date,
+location, orbit or rotation rate is asserted. Both states belong to the single
+Earth occurrence inside Sol, rather than introducing two Earths. These local
+positions do not assert a shared time step for Earth, Sol and Milky Way.
+
+**Validation and next evidence.** World's `tests/check_astronomy.py` checks the
+authored S/T hierarchy, inventory and occurrence-name paths, then uses the real
+Proteus parser on KernelKB, Space, Sol and PublicKB. All four parser checks pass.
+The separate `tests/astronomy-model.tst` retains nine runtime acceptance cases
+with intended scalar results, using the actual astronomy definitions in an
+isolated context. Seven Earth/Sol reads currently report `Generated segment
+layout needs its inherited named obligations`. Two finite galaxy/system history
+controls report `Named list template needs an occurrence-width proof`. These
+are explicit implementation boundaries; no fallback, weakened expectation or
+engine special case is added to make the authored model appear executable.
+
+The first concrete model therefore identifies inherited named history/listSpec
+composition and occurrence-width proofs as useful candidate engine work before
+parameter-dependent extents. The symbolic World bootstrap remains a separate
+known prerequisite, and general temporal rooting/name associations remain
+unverified by these local reads. Dedicated production expansion and arithmetic
+changes remain paused; this increment changes models and acceptance cases.
+
+The existing complete Proteus run retains exactly the same 24 failing names
+across 657 tests. An isolated Slipstream run reads the fresh shared World
+sources, renders both represented Rubix states and navigates 0 -> 1 -> 0,
+returning to the same index-0 occurrence. There are no cursor/display errors,
+and shutdown exits normally. The existing open-source span-alignment diagnostic
+remains. This is consumer regression coverage, not proof of the blocked
+astronomy normalization or temporal rooting. No engine or consumer source
+changed. Evidence is in `/tmp/proteus-world-astronomy-20261023/`.
