@@ -64,12 +64,16 @@ struct POV {
 struct WorldBindings {
     our WorldGeneratedBindingIdentity: generatedBindingIdentity
     me bool: productionSnapshot <- false
+    me bool: productionScalarContext <- false
+    our WorldBindings: productionParent
 }
 struct WorldArgumentBinding {
     // Live bindings expose the supplied header to dependency capture. Detached
     // production environments retain its checked scalar copy instead.
     our infonView: sourceDescription
     me bool: immutable <- false
+    our infonView: productionSource
+    our WorldBindings: productionCaller
 }
 struct WorldPosition {
     our WorldGeneratedAddress: generatedAddress
@@ -141,46 +145,112 @@ struct WorldPOVGraph {
         if(left===right){return(true)}
         return(sameGeneratedBinding(generatedBinding(left),generatedBinding(right)))
     }
-    // This is eligibility and ownership preparation, not argument evaluation.
-    // The ordinary parameter path still acquires and checks each requested
-    // scalar. Unknown omitted slots remain unknown in that normal path.
-    our WorldBindings: detachedProductionBindings(our WorldRequest: request, our WorldBindings: bindings) <- {
+    // Copy lexical scope, not caller occurrences. Supplied arguments stay lazy
+    // until the ordinary parameter path asks for their checked scalar value.
+    our WorldBindings: detachedProductionBindings(our WorldRequest: request, our WorldBindings: bindings,
+                                                   our WorldProductionFrontier: frontier, me bool: canonical <- true, me bool: retained <- true) <- {
         if(bindings==NULL){return(NULL)}
         if(bindings!.productionSnapshot){return(bindings)}
+        if(request!.productionBindingActive.contains(bindings)){
+            request!.outcome <- worldUnsupported; request!.detail <- "Cyclic production argument scope"; return(NULL)
+        }
+        withEach copiedScope in request!.productionBindingCopies{
+            if(copiedScope!.source===bindings and copiedScope!.frontier===frontier){return(copiedScope!.snapshot)}
+        }
         our WorldGeneratedBindingIdentity: identity <- generatedBinding(bindings)
-        if(!identity!.canonical){
+        if(canonical and !identity!.canonical){
             request!.outcome <- worldUnsupported; request!.detail <- "Generated parameter context needs an established application occurrence"; return(NULL)
         }
+        request!.productionBindingActive.insert(bindings)
         our WorldBindings:: detached; detached!.generatedBindingIdentity <- identity; detached!.productionSnapshot <- true
+        our WorldProductionBindingCopy:: copiedScope
+        copiedScope!.source <- bindings;copiedScope!.snapshot <- detached;copiedScope!.frontier <- frontier
+        request!.productionBindingCopies.append(copiedScope)
+        if(retained){frontier!.parameterScopes.append(detached)}
+        else{request!.productionArgumentScopes.insert(detached,frontier)}
+        detached!.productionParent <- detachedProductionBindings(request,parameterScope(bindings!.caller),frontier,false,retained)
         withEach (name,argument) in bindings!.arguments{
-            our infonView: source <- argument!.expression!.pItem
-            if(argument!.sourceDescription!=NULL){source <- argument!.sourceDescription}
-            if(!argument!.omitted){
-                if(source!.type!=NULL or !source!.addedTypes.isEmpty() or !source!.wrkList.isEmpty() or
-                   source!.viewMode==vmCursor or source!.partRef!=NULL or !source!.parts.isEmpty() or
-                   source!.innr!=NULL or source!.funcArgs!=NULL or source!.wordArguments!=NULL or
-                   source!.copySource!=NULL or source!.includeInfn!=NULL or source!.proxy!=NULL or
-                   source!.value!.evalMode!=emLiteral or
-                   (source!.value!.overlayType!=NUM and source!.value!.overlayType!=STR)){
-                    request!.outcome <- worldUnsupported; request!.detail <- "Generated parameters currently require literal scalar arguments"; return(NULL)
-                }
-                our POV:: literal{947}; literal!.pItem <- source
-                me WorldScalar: facts <- read(request,literal)
-                if(!completeFacts(facts,false)){
-                    request!.outcome <- facts.outcome
-                    if(request!.outcome==worldReady){request!.outcome <- worldPartial}
-                    request!.detail <- "Generated scalar argument still needs evidence"; return(NULL)
-                }
-            }
             our WorldArgumentBinding:: copied
             copied!.omitted <- argument!.omitted; copied!.borrowed <- true; copied!.immutable <- true
             Allocate(copied!.expression,947); Allocate(copied!.expression!.pItem)
-            copied!.expression!.pItem! <- source!
-            Allocate(copied!.expression!.pItem!.value); copied!.expression!.pItem!.value! <- source!.value!
-            Allocate(copied!.expression!.pItem!.infSize); copied!.expression!.pItem!.infSize! <- source!.infSize!
+            copied!.expression!.pItem!.itmMode <- mItem; copied!.expression!.pItem!.streamState <- parseDone
+            copied!.expression!.pItem!.viewMode <- vmAny
+            copied!.expression!.pItem!.value!.evalMode <- emUnknown
+            copied!.expression!.pItem!.infSize!.evalMode <- emUnknown
+            if(!argument!.omitted){
+                copied!.productionSource <- argument!.sourceDescription
+                if(copied!.productionSource==NULL){copied!.productionSource <- argument!.expression!.pItem}
+                copied!.productionCaller <- detachedProductionBindings(request,parameterScope(argument!.caller),frontier,false,retained)
+            }
             detached!.arguments.insert(name,copied)
         }
+        request!.productionBindingActive.erase(bindings)
         return(detached)
+    }
+    our WorldProductionFrontier: productionBindingFrontier(our WorldRequest: request, our WorldBindings: scope) <- {
+        if(request!.productionSession==NULL){return(NULL)}
+        me Set<our WorldBindings>: seen
+        while(scope!=NULL and !seen.contains(scope)){
+            seen.insert(scope)
+            if(request!.productionArgumentScopes.containsKey(scope)){return(request!.productionArgumentScopes.at(scope))}
+            if(scope!.productionSnapshot){
+                withEach series in request!.productionSession!.generatedSeries{
+                    if(series!.production==NULL){continue()}
+                    withEach candidate in series!.production!.parameterScopes{if(candidate===scope){return(series!.production)}}
+                }
+                scope <- scope!.productionParent
+            }else{scope <- parameterScope(scope!.caller)}
+        }
+        return(NULL)
+    }
+    our WorldProductionFrontier: productionFrameFrontier(our WorldRequest: request, our WorldFrame: frame) <- {
+        our WorldProductionFrontier: frontier <- productionBindingFrontier(request,frame!.lexicalParameters)
+        if(frontier!=NULL or request!.productionSession==NULL){return(frontier)}
+        our WorldPosition: at <- frame!.navigation
+        while(at!=NULL){
+            if(at!.generatedAddress!=NULL and at!.parent!=NULL){
+                withEach series in request!.productionSession!.generatedSeries{
+                    if(series!.production!=NULL and samePosition(series!.owner,at!.parent)){return(series!.production)}
+                }
+            }
+            at <- at!.parent
+        }
+        return(NULL)
+    }
+    our WorldBindings: scalarProductionScope(our WorldRequest: request, our WorldBindings: lexical, our WorldProductionFrontier: frontier) <- {
+        if(lexical!=NULL and lexical!.productionScalarContext){return(lexical)}
+        our WorldBindings:: scope
+        if(lexical!=NULL){scope! <- lexical!}
+        scope!.productionSnapshot <- true; scope!.productionScalarContext <- true
+        request!.productionArgumentScopes.insert(scope,frontier)
+        return(scope)
+    }
+    // Scalar arguments have lexical scope only. Their ordinary expression
+    // evaluator must not silently acquire an object or external occurrence.
+    me bool: productionScalarSource(our infonView: root) <- {
+        me List<our infonView>: pending; pending.append(root); me Set<our infonView>: seen
+        while(!pending.isEmpty()){
+            our infonView: item <- pending.popLast()
+            if(item==NULL or seen.contains(item)){continue()}
+            seen.insert(item)
+            if(item!.streamState==parseStarted or item!.streamState==parseListReady){continue()}
+            if(item!.itmMode==mIncludeStream or item!.itmMode==mWordDefn or
+               (item!.viewMode==vmCursor and item!.cursorMode!=cmParameter) or
+               (item!.value!.overlayType==LST and item!.value!.evalMode==emLiteral) or
+               item!.partRef!=NULL or !item!.parts.isEmpty() or item!.includeInfn!=NULL or
+               item!.proxy!=NULL or item!.copySource!=NULL or item!.thisPtr!=NULL or
+               item!.temporalValueSource!=NULL or item!.temporalPredecessor!=NULL or
+               !item!.retainedPOVs.isEmpty() or !item!.sourceGraphDependencies.isEmpty()){return(false)}
+            our POV: member <- item!.value!.items.head
+            while(member!=NULL){pending.append(member!.pItem);member <- member!.next}
+            member <- item!.infSize!.items.head
+            while(member!=NULL){pending.append(member!.pItem);member <- member!.next}
+            withEach relation in item!.wrkList{pending.append(relation!.pItem)}
+            if(item!.innr!=NULL){pending.append(item!.innr)}
+            if(item!.funcArgs!=NULL){pending.append(item!.funcArgs)}
+            // Attached actuals are screened when their parameter is read.
+        }
+        return(true)
     }
     // This is a compact qualified identity, not a retained WorldPosition path.
     // A durable write can keep it without keeping the containing model alive.

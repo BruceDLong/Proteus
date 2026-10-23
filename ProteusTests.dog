@@ -1,6 +1,12 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/computedProduction/values
+    unit/computedProduction/dependencies
+    unit/computedProduction/waitAndCancel
+    unit/computedProduction/partialRetention
+    unit/computedProduction/writes
+    unit/computedProduction/scaling
     unit/parameterProduction/equivalence
     unit/parameterProduction/segments
     unit/parameterProduction/identity
@@ -6914,7 +6920,15 @@ struct GLOBAL {
         if(demand!.goNext() or demand!.status().outcome!=worldRejected or demand!.atBoundary or demand!.current!.pItem!.fetchInt()!=0){
             FAIL("A conflicting captured literal constraint published a continuation or endpoint")
         }
-        me List<string>: guarded <- ["needed((1+1))","sized(64)","typed(1)"]
+        // Computed scalar actuals are now admitted; structural extents and
+        // inherited layout obligations retain their earlier boundaries.
+        me WorldParseResult: computed <- agent.worldManager.parse("needed((1+1))")
+        if(computed.target==NULL){FAIL(computed.error)}
+        demand <- parameterProductionOpen(agent,agent.startSession(),computed.target)
+        if(!demand!.seek(FlexNum("2")) or demand!.current!.pItem!.fetchInt()!=2){
+            FAIL("An ordinarily computed argument did not reach its generated state: "+demand!.status().detail)
+        }
+        me List<string>: guarded <- ["sized(64)","typed(1)"]
         withEach input in guarded{
             me WorldParseResult: parsed <- agent.worldManager.parse(input)
             if(parsed.target==NULL){FAIL(parsed.error)}
@@ -7115,5 +7129,516 @@ struct GLOBAL {
             FAIL("A resumed ordinary named header incorrectly used temporal production: "+ordinary!.status().detail)
         }
         ordinaryAgent.endWorldSessions(); modelMngr.clear()
+    }
+}
+
+// Computed arguments use ordinary scalar proof and preserve their caller's
+// lexical scope. These cases extend the literal-argument production contract.
+struct ComputedProductionCounts {
+    me int64: scopes <- 0
+    me int64: slots <- 0
+}
+struct GLOBAL {
+    me ComputedProductionCounts: computedProductionCounts(our WorldGeneratedSeries: series, our WorldDemand: demand) <- {
+        me ComputedProductionCounts: counts
+        if(series==NULL or series!.production==NULL){return(counts)}
+        me List<our WorldBindings>: pending
+        pending <- series!.production!.parameterScopes
+        withEach segment in series!.production!.segments{
+            pending.append(segment!.parameters)
+            withEach rule in segment!.requirements{pending.append(rule!.parameters)}
+        }
+        withEach node in series!.recent{pending.append(node!.definitionParameters)}
+        withEach node in series!.leased{pending.append(node!.definitionParameters)}
+        withEach checkpoint in series!.production!.checkpoints{
+            if(checkpoint!.value!=NULL){pending.append(checkpoint!.value!.parameters);pending.append(checkpoint!.value!.node!.definitionParameters)}
+        }
+        if(series!.production!.latest!=NULL and series!.production!.latest!.value!=NULL){
+            pending.append(series!.production!.latest!.value!.parameters)
+            pending.append(series!.production!.latest!.value!.node!.definitionParameters)
+        }
+        if(demand!=NULL and demand!.position!=NULL){pending.append(demand!.position!.parameters)}
+        me Set<our WorldBindings>: scopes; me Set<our WorldArgumentBinding>: slots
+        while(!pending.isEmpty()){
+            our WorldBindings: scope <- pending.popLast()
+            if(scope==NULL or scopes.contains(scope)){continue()}
+            scopes.insert(scope); pending.append(scope!.productionParent)
+            withEach argument in scope!.arguments{
+                slots.insert(argument);pending.append(argument!.productionCaller)
+                if(argument!.expression!=NULL){pending.append(argument!.expression!.definitionParameters)}
+            }
+        }
+        counts.scopes <- scopes.size(); counts.slots <- slots.size()
+        return(counts)
+    }
+
+    void: unit_computedProduction_values(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#inc(item)=(%item +1) #progress(step)=*128+{T (%tprev +(%step))|0 ...} #forward(step)={T &progress((%step +1))} #outer(step)={T &forward(%step)} #labels(text)=*64+{T (%text)|...} #echo(text)={T &labels(%text)} #choose(value)={T 0 &{T (%value=3)|...} (%value=2)} #advance(step)=*64+{T inc((%tprev +(%step)))|0 ...} #sequence(value)={T 0 &*63+{T (%value)|...}}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        me string: original <- toString(declaration.target!.pItem)
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me List<string>: inputs <- ["progress((1 +1))","progress(step::(1 +1))","outer(1)","{T &outer((0 +1))}"]
+        withEach input in inputs{
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            me string: before <- toString(parsed.target!.pItem)
+            our WorldDemand: demand <- parameterProductionOpen(agent,agent.startSession(),parsed.target)
+            if(!demand!.seek(FlexNum("65")) or demand!.current!.pItem!.fetchInt()!=128 or toString(parsed.target!.pItem)!=before){
+                FAIL("Computed or forwarded arguments lost their value or changed their source: "+input+": "+demand!.status().detail)
+            }
+        }
+        me WorldParseResult: selected <- agent.worldManager.parse("outer((0 +1))@[65]")
+        if(selected.target==NULL){FAIL(selected.error)}
+        our WorldRequest: result <- agent.normalize(selected.target)
+        if(!result!.complete() or selected.target!.pItem!.fetchInt()!=128){FAIL("Ordinary indexed forwarding disagrees with demand acquisition: "+result!.error())}
+        // This first transition is already supported. Subsequent arithmetic
+        // on its nominal inc result retains the existing type-rule boundary.
+        selected <- agent.worldManager.parse("advance(1)@[2]")
+        if(selected.target==NULL){FAIL(selected.error)}
+        result <- agent.normalize(selected.target)
+        if(!result!.complete() or selected.target!.pItem!.fetchInt()!=2){
+            FAIL("A named transition helper was mistaken for an isolated argument expression: "+result!.error())
+        }
+        me WorldParseResult: nested <- agent.worldManager.parse("sequence(inc(1))")
+        if(nested.target==NULL){FAIL(nested.error)}
+        our WorldDemand: nestedDemand <- parameterProductionOpen(agent,agent.startSession(),nested.target)
+        if(!nestedDemand!.seek(FlexNum("32")) or nestedDemand!.current!.pItem!.fetchInt()!=2 or
+           nestedDemand!.current!.pItem!.type==NULL or nestedDemand!.current!.pItem!.type!.normedWord!="inc"){
+            FAIL("A nested scalar word did not supply its repeated value: "+nestedDemand!.status().detail)
+        }
+        me WorldParseResult: text <- agent.worldManager.parse("echo(('rea' 'dy'))")
+        if(text.target==NULL){FAIL(text.error)}
+        our WorldDemand: demand <- parameterProductionOpen(agent,agent.startSession(),text.target)
+        if(!demand!.seek(FlexNum("32")) or demand!.current!.pItem!.value!.overlayType!=STR or demand!.current!.pItem!.fetchString()!="ready"){
+            FAIL("A computed string lost its forwarded lexical value: "+demand!.status().detail)
+        }
+        me WorldParseResult: choice <- agent.worldManager.parse("choose((1 +1))")
+        if(choice.target==NULL){FAIL(choice.error)}
+        me string: choiceBefore <- toString(choice.target!.pItem)
+        demand <- parameterProductionOpen(agent,agent.startSession(),choice.target)
+        if(!demand!.seek(FlexNum("2")) or demand!.current!.pItem!.fetchInt()!=2 or demand!.goNext() or !demand!.atBoundary){
+            FAIL("A rejected candidate constraint poisoned its shared raw argument: "+demand!.status().detail)
+        }
+        our WorldDemand: replay <- parameterProductionOpen(agent,agent.startSession(),choice.target)
+        if(!replay!.seek(FlexNum("2")) or replay!.current!.pItem!.fetchInt()!=2 or toString(choice.target!.pItem)!=choiceBefore){
+            FAIL("Candidate-local parameter constraints escaped into the application")
+        }
+        me WorldParseResult: partial <- agent.worldManager.parse("progress((1 +_))")
+        if(partial.target==NULL){FAIL(partial.error)}
+        demand <- parameterProductionOpen(agent,agent.startSession(),partial.target)
+        if(!demand!.seek(FlexNum("1")) or demand!.current!.pItem!.fetchInt()!=0){FAIL("An unused unresolved expression hid the supplied seed")}
+        demand!.goNext()
+        if(demand!.status().outcome!=worldPartial or demand!.atBoundary){FAIL("An unresolved computed argument fabricated a value or endpoint")}
+        me List<string>: unsupported <- ["progress({x:1})","progress(unavailable^T)"]
+        withEach input in unsupported{
+            me WorldParseResult: guarded <- agent.worldManager.parse(input)
+            if(guarded.target==NULL){FAIL(guarded.error)}
+            demand <- parameterProductionOpen(agent,agent.startSession(),guarded.target)
+            if(!demand!.seek(FlexNum("1")) or demand!.current!.pItem!.fetchInt()!=0){FAIL("An unused unsupported argument hid the supplied seed")}
+            if(demand!.goNext() or demand!.status().outcome!=worldUnsupported or demand!.atBoundary){
+                FAIL("A demanded non-scalar argument bypassed its supported boundary: "+input+": "+demand!.status().detail)
+            }
+        }
+        if(toString(declaration.target!.pItem)!=original){FAIL("Computed production rewrote its shared declarations")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_computedProduction_dependencies(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#progress(step)=*128+{T (%tprev +(%step))|0 ...} #forward(step)={T &progress((%step +1))} #outer(step)={T &forward(%step)}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me WorldParseResult: parsed <- agent.worldManager.parse("outer((1 +1))")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our WorldDemand: demand <- parameterProductionOpen(agent,agent.startSession(),parsed.target)
+        if(!demand!.configureRetention(1,0,0) or !demand!.seek(FlexNum("2")) or demand!.current!.pItem!.fetchInt()!=3){
+            FAIL("Could not establish a forwarded computed dependency: "+demand!.status().detail)
+        }
+        our WorldPosition:: earlier; earlier! <- demand!.position!
+        me WorldParseResult: other <- agent.worldManager.parse("outer((2 +2))")
+        if(other.target==NULL){FAIL(other.error)}
+        our WorldDemand: distinct <- parameterProductionOpen(agent,agent.startSession(),other.target)
+        if(!distinct!.seek(FlexNum("2")) or distinct!.current!.pItem!.fetchInt()!=5 or agent.worldManager.graph.samePosition(earlier,distinct!.position)){
+            FAIL("A shared inner application mixed its outer caller bindings")
+        }
+        our infonView: actual <- parsed.target!.pItem!.wordArguments!.values[0].value
+        our infonView: leaf <- actual!.value!.items.tail!.pItem
+        me uint64: callRevision <- parsed.target!.pItem!.cursorRevision; me uint64: actualRevision <- actual!.cursorRevision
+        me WorldParseResult: replacement <- agent.worldManager.parse("2")
+        if(replacement.target==NULL){FAIL(replacement.error)}
+        // The + operand stores addition in its size mode. Change its
+        // numeric payload while preserving that expression operation.
+        replacement.target!.pItem!.value!.sizeMode <- leaf!.value!.sizeMode
+        leaf!.value <- replacement.target!.pItem!.value; leaf!.noteNormalizationWork()
+        if(parsed.target!.pItem!.cursorRevision!=callRevision or actual!.cursorRevision!=actualRevision){FAIL("The dependency probe changed its enclosing headers")}
+        if(!demand!.refresh() or demand!.current!.pItem!.fetchInt()!=4 or !agent.worldManager.graph.samePosition(earlier,demand!.position)){
+            FAIL("A nested operand revision left a stale forwarded argument: "+demand!.status().detail)
+        }
+        our POV: clean <- demand!.current
+        replacement <- agent.worldManager.parse("3")
+        if(replacement.target==NULL){FAIL(replacement.error)}
+        replacement.target!.pItem!.value!.sizeMode <- leaf!.value!.sizeMode
+        leaf!.value <- replacement.target!.pItem!.value; leaf!.noteNormalizationWork()
+        our WorldRequest: refreshed <- agent.normalizeInSession(agent.startSession(),clean)
+        if(!refreshed!.complete() or clean!.pItem!.fetchInt()!=5 or
+           !agent.worldManager.graph.samePosition(earlier,agent.worldManager.graph.occurrencePath(clean))){
+            FAIL("Ordinary acquisition reused stale transitive argument evidence: "+refreshed!.error())
+        }
+        if(!demand!.seek(FlexNum("65")) or demand!.current!.pItem!.fetchInt()!=320){FAIL("Forwarded dependency invalidation did not reach later states")}
+        demand!.clearCache()
+        if(!demand!.seek(FlexNum("2")) or demand!.current!.pItem!.fetchInt()!=5 or !agent.worldManager.graph.samePosition(earlier,demand!.position)){
+            FAIL("Eviction changed a computed application's logical occurrence")
+        }
+        our WorldDemand: fresh <- parameterProductionOpen(agent,agent.startSession(),parsed.target)
+        if(!fresh!.seek(FlexNum("2")) or fresh!.current!.pItem!.fetchInt()!=5 or !agent.worldManager.graph.samePosition(earlier,fresh!.position)){
+            FAIL("A fresh session lost a computed application's identity or current argument")
+        }
+        our WorldRequest: written <- fresh!.writeBack()
+        if(written==NULL or written!.failed() or written!.publications==0){FAIL("Could not persist a computed scalar state")}
+        me uint64: writeRevision <- agent.worldManager.graph.generatedWriteRevision(fresh!.position!.parent)
+        replacement <- agent.worldManager.parse("4")
+        if(replacement.target==NULL){FAIL(replacement.error)}
+        replacement.target!.pItem!.value!.sizeMode <- leaf!.value!.sizeMode
+        leaf!.value <- replacement.target!.pItem!.value; leaf!.noteNormalizationWork()
+        our WorldDemand: conflict <- parameterProductionOpen(agent,agent.startSession(),parsed.target)
+        if(conflict!.seek(FlexNum("2")) or conflict!.status().outcome!=worldRejected or conflict!.atBoundary or
+           agent.worldManager.graph.generatedWriteRevision(fresh!.position!.parent)!=writeRevision or fresh!.current!.pItem!.fetchInt()!=5){
+            FAIL("A changed computed dependency overwrote its durable scalar assertion: "+conflict!.status().detail)
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+
+        // A helper in the transition is ordinary candidate work. Its actual
+        // still contributes source evidence even though it is not an isolated
+        // argument supplied to the temporal definition.
+        withEach bodyIndex in range 0 .. 2{
+            me Agent: helperAgent; Allocate(helperAgent.identityRegistry)
+            helperAgent.worldManager.control!.identities <- helperAgent.identityRegistry
+            me WorldParseResult: helperDeclaration <- helperAgent.worldManager.parse("{#inc(item)=(%item +1) #constant(ignored)={T 0 &*127+{T inc((1 +1))|...}} #plain={T 0 &*127+{T inc((1 +1))|...}}}")
+            if(helperDeclaration.target==NULL){FAIL(helperDeclaration.error)}
+            our infonView: helperBody <- helperDeclaration.target!.pItem!.value!.items.head!.next!.pItem!.funcArgs
+            if(bodyIndex==1){helperBody <- helperDeclaration.target!.pItem!.value!.items.tail!.pItem!.funcArgs}
+            our infonView: helperRule <- helperBody!.value!.items.tail!.pItem!.value!.listSpec
+            if(helperRule==NULL or helperRule!.wordArguments==NULL){FAIL("The transition helper probe lost its attached actual")}
+            our infonView: helperActual <- helperRule!.wordArguments!.values[0].value
+            our infonView: helperLeaf <- helperActual!.value!.items.tail!.pItem
+            our WorldRequest: helperInstalled <- helperAgent.normalize(helperDeclaration.target)
+            if(!helperInstalled!.complete()){FAIL(helperInstalled!.error())}
+            me string: helperInput <- "constant()"
+            if(bodyIndex==1){helperInput <- "plain"}
+            me WorldParseResult: helperCall <- helperAgent.worldManager.parse(helperInput)
+            if(helperCall.target==NULL){FAIL(helperCall.error)}
+            me uint64: helperCallRevision <- helperCall.target!.pItem!.cursorRevision
+            me uint64: helperBodyRevision <- helperBody!.cursorRevision; me uint64: helperRuleRevision <- helperRule!.cursorRevision
+            me uint64: helperActualRevision <- helperActual!.cursorRevision
+            our WorldSession: helperSession <- helperAgent.startSession()
+            our WorldDemand: helper <- parameterProductionOpen(helperAgent,helperSession,helperCall.target)
+            if(!helper!.seek(FlexNum("2")) or helper!.current!.pItem!.fetchInt()!=3){
+                FAIL("A constant transition helper failed ordinary scalar acquisition: "+helper!.status().detail)
+            }
+            our WorldPosition:: helperPosition; helperPosition! <- helper!.position!
+            me WorldParseResult: helperReplacement <- helperAgent.worldManager.parse("2")
+            if(helperReplacement.target==NULL){FAIL(helperReplacement.error)}
+            helperReplacement.target!.pItem!.value!.sizeMode <- helperLeaf!.value!.sizeMode
+            helperLeaf!.value <- helperReplacement.target!.pItem!.value; helperLeaf!.noteNormalizationWork()
+            if(helperCall.target!.pItem!.cursorRevision!=helperCallRevision or helperBody!.cursorRevision!=helperBodyRevision or
+               helperRule!.cursorRevision!=helperRuleRevision or helperActual!.cursorRevision!=helperActualRevision){
+                FAIL("The transition helper dependency probe changed an enclosing header")
+            }
+            if(!helper!.refresh() or helper!.current!.pItem!.fetchInt()!=4 or
+               !helperAgent.worldManager.graph.samePosition(helperPosition,helper!.position)){
+                FAIL("A nested transition actual revision left stale ordinary candidate evidence: "+helper!.status().detail)
+            }
+            our WorldGeneratedSeries: helperSeries <- helperAgent.worldManager.generatedSeries(helperSession,helper!.list)
+            me int64: dependencyCount <- helperSeries!.production!.dependencies.size()
+            me int64: headerCount <- helperSeries!.production!.sourceHeaders.size()
+            me int64: argumentCount <- helperSeries!.production!.argumentSources.size()
+            me int64: transitionCount <- helperSeries!.production!.transitionArgumentSources.size()
+            me ComputedProductionCounts: scopeCount <- computedProductionCounts(helperSeries,helper)
+            withEach ordinal in range 0 .. 64{
+                if(!helper!.goNext() or helper!.current!.pItem!.fetchInt()!=4){
+                    FAIL("A repeated scalar helper lost its checked transition value: "+helper!.status().detail)
+                }
+            }
+            me ComputedProductionCounts: finalScopeCount <- computedProductionCounts(helperSeries,helper)
+            if(helperSeries!.production!.dependencies.size()>dependencyCount+4 or helperSeries!.production!.sourceHeaders.size()>headerCount+4 or
+               helperSeries!.production!.argumentSources.size()>argumentCount+2 or
+               helperSeries!.production!.transitionArgumentSources.size()>transitionCount+2 or finalScopeCount.scopes>scopeCount.scopes+2 or
+               finalScopeCount.slots>scopeCount.slots+2){
+                FAIL("Ordinary transition helper evidence grew with generated states")
+            }
+            helperAgent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+}
+
+struct GLOBAL {
+    void: unit_computedProduction_waitAndCancel(me string: testName) <- {
+        withEach pendingForm in range 0 .. 3{
+            withEach cancelled in range 0 .. 2{
+                me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+                me WorldParseResult: declaration <- agent.worldManager.parse("{#progress(step)=*64+{T (%tprev +(%step))|0 ...}}")
+                if(declaration.target==NULL){FAIL(declaration.error)}
+                our WorldRequest: installed <- agent.normalize(declaration.target)
+                if(!installed!.complete()){FAIL(installed!.error())}
+                me WorldParseResult: parsed <- agent.worldManager.parse("progress((1 +1))")
+                if(parsed.target==NULL){FAIL(parsed.error)}
+                me string: original <- toString(parsed.target!.pItem)
+                our WorldDemand: demand <- parameterProductionOpen(agent,agent.startSession(),parsed.target)
+                our infonView: input <- parsed.target!.pItem!.wordArguments!.values[0].value
+                if(pendingForm!=1){input <- input!.value!.items.tail!.pItem}
+                if(pendingForm!=0){agent.worldManager.prepareInput(input)}
+                if(!demand!.seek(FlexNum("1")) or demand!.current!.pItem!.fetchInt()!=0){FAIL("Could not acquire the seed before a computed argument wait")}
+                if(pendingForm==0){agent.worldManager.prepareInput(input)}
+                if(demand!.goNext() or demand!.status().outcome!=worldWaiting or demand!.current!.pItem!.fetchInt()!=0 or
+                   agent.worldManager.control!.inputWaiters.size()!=1){FAIL("A pending scalar operand bypassed its ordinary input wait")}
+                our WorldRequest: waiting <- demand!.request
+                if(demand!.layoutRequest!=NULL and demand!.layoutRequest!.status().outcome==worldWaiting){waiting <- demand!.layoutRequest}
+                if(demand!.selectionRequest!=NULL and demand!.selectionRequest!.status().outcome==worldWaiting){waiting <- demand!.selectionRequest}
+                if(waiting==NULL or waiting!.status().outcome!=worldWaiting or waiting!.publications!=0){FAIL("A computed argument wait did not retain its ordinary request")}
+                me uint64: frames <- waiting!.framesCreated; me uint64: queue <- waiting!.queueSteps
+                our infonView:: unrelated; agent.worldManager.inputReady(unrelated)
+                if(demand!.refresh() or waiting!.framesCreated!=frames or waiting!.queueSteps!=queue){FAIL("Polling restarted a computed argument proof")}
+                if(cancelled==1){waiting!.cancel()}
+                input!.streamState <- parseDone; agent.worldManager.inputReady(input)
+                me bool: ready <- demand!.refresh()
+                if(cancelled==1){
+                    if(ready or demand!.status().outcome!=worldCancelled or waiting!.publications!=0 or demand!.current!.pItem!.fetchInt()!=0){
+                        FAIL("Cancellation published a provisional computed argument")
+                    }
+                }else if(!ready or demand!.current!.pItem!.fetchInt()!=2 or !waiting!.complete() or
+                         !demand!.goNext() or demand!.current!.pItem!.fetchInt()!=4){
+                    FAIL("A computed scalar proof did not resume at its waiting operand: "+demand!.status().detail)
+                }
+                if(toString(parsed.target!.pItem)!=original or !agent.worldManager.control!.inputWaiters.isEmpty()){
+                    FAIL("A settled computed argument changed its source or retained a subscription")
+                }
+                agent.endWorldSessions(); modelMngr.clear()
+            }
+        }
+        // A settled lexical sibling can capture the enclosing expression
+        // before its waiting operand arrives. That operand still becomes a
+        // dependency when the same proof resumes.
+        me Agent: siblingAgent; Allocate(siblingAgent.identityRegistry)
+        siblingAgent.worldManager.control!.identities <- siblingAgent.identityRegistry
+        me WorldParseResult: siblingDeclaration <- siblingAgent.worldManager.parse("{#progress(step)=*64+{T (%tprev +(%step))|0 ...} #combine(left,right)={T &progress((%left +(%right)))}}")
+        if(siblingDeclaration.target==NULL){FAIL(siblingDeclaration.error)}
+        our WorldRequest: siblingInstalled <- siblingAgent.normalize(siblingDeclaration.target)
+        if(!siblingInstalled!.complete()){FAIL(siblingInstalled!.error())}
+        me WorldParseResult: siblingCall <- siblingAgent.worldManager.parse("combine(1,(1 +1))")
+        if(siblingCall.target==NULL){FAIL(siblingCall.error)}
+        our infonView: siblingActual <- siblingCall.target!.pItem!.wordArguments!.values[1].value
+        our infonView: siblingLeaf <- siblingActual!.value!.items.tail!.pItem
+        me uint64: siblingCallRevision <- siblingCall.target!.pItem!.cursorRevision
+        me uint64: siblingActualRevision <- siblingActual!.cursorRevision
+        siblingAgent.worldManager.prepareInput(siblingLeaf)
+        our WorldDemand: sibling <- parameterProductionOpen(siblingAgent,siblingAgent.startSession(),siblingCall.target)
+        if(!sibling!.seek(FlexNum("1")) or sibling!.current!.pItem!.fetchInt()!=0 or sibling!.goNext() or
+           sibling!.status().outcome!=worldWaiting){FAIL("A lexical sibling did not preserve the later operand wait")}
+        our WorldRequest: siblingWaiting <- sibling!.request
+        if(sibling!.selectionRequest!=NULL and sibling!.selectionRequest!.status().outcome==worldWaiting){siblingWaiting <- sibling!.selectionRequest}
+        if(siblingWaiting==NULL or siblingWaiting!.waitingInput!==siblingLeaf or siblingWaiting!.publications!=0){
+            FAIL("The lexical sibling wait lost its exact operand")
+        }
+        siblingLeaf!.streamState <- parseDone; siblingAgent.worldManager.inputReady(siblingLeaf)
+        if(!sibling!.refresh() or sibling!.current!.pItem!.fetchInt()!=3 or !siblingWaiting!.complete()){
+            FAIL("A lexical sibling proof did not resume after its operand arrived: "+sibling!.status().detail)
+        }
+        our WorldPosition:: siblingPosition; siblingPosition! <- sibling!.position!
+        me WorldParseResult: siblingReplacement <- siblingAgent.worldManager.parse("2")
+        if(siblingReplacement.target==NULL){FAIL(siblingReplacement.error)}
+        siblingReplacement.target!.pItem!.value!.sizeMode <- siblingLeaf!.value!.sizeMode
+        siblingLeaf!.value <- siblingReplacement.target!.pItem!.value; siblingLeaf!.noteNormalizationWork()
+        if(siblingCall.target!.pItem!.cursorRevision!=siblingCallRevision or siblingActual!.cursorRevision!=siblingActualRevision){
+            FAIL("The resumed dependency probe changed its enclosing headers")
+        }
+        if(!sibling!.refresh() or sibling!.current!.pItem!.fetchInt()!=4 or
+           !siblingAgent.worldManager.graph.samePosition(siblingPosition,sibling!.position) or
+           !siblingAgent.worldManager.control!.inputWaiters.isEmpty()){
+            FAIL("A formerly waiting nested operand was absent from the resumed proof dependencies: "+sibling!.status().detail)
+        }
+        siblingAgent.endWorldSessions(); modelMngr.clear()
+        withEach becomesObject in range 0 .. 2{
+            me Agent: helperAgent; Allocate(helperAgent.identityRegistry); helperAgent.worldManager.control!.identities <- helperAgent.identityRegistry
+            me WorldParseResult: helperDeclaration <- helperAgent.worldManager.parse("{#helper(item)=(%item +1) #sequence(value)={T 0 &*63+{T (%value)|...}}}")
+            if(helperDeclaration.target==NULL){FAIL(helperDeclaration.error)}
+            our infonView: body <- helperDeclaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
+            our WorldRequest: helperInstalled <- helperAgent.normalize(helperDeclaration.target)
+            if(!helperInstalled!.complete()){FAIL(helperInstalled!.error())}
+            me WorldParseResult: call <- helperAgent.worldManager.parse("sequence(helper(1))")
+            if(call.target==NULL){FAIL(call.error)}
+            helperAgent.worldManager.prepareInput(body)
+            our WorldDemand: helper <- parameterProductionOpen(helperAgent,helperAgent.startSession(),call.target)
+            if(!helper!.seek(FlexNum("1")) or helper!.current!.pItem!.fetchInt()!=0){FAIL("A pending scalar helper hid its independent seed")}
+            if(helper!.goNext() or helper!.status().outcome!=worldWaiting){FAIL("A pending named scalar meaning bypassed its input wait")}
+            our WorldRequest: waiting <- helper!.request
+            if(helper!.selectionRequest!=NULL and helper!.selectionRequest!.status().outcome==worldWaiting){waiting <- helper!.selectionRequest}
+            if(waiting==NULL or waiting!.waitingInput!==body or waiting!.publications!=0){FAIL("The scalar helper wait lost its exact source meaning")}
+            if(becomesObject==1){
+                me WorldParseResult: object <- helperAgent.worldManager.parse("{x:1}")
+                if(object.target==NULL){FAIL(object.error)}
+                body!.value <- object.target!.pItem!.value; body!.noteNormalizationWork()
+            }
+            body!.streamState <- parseDone; helperAgent.worldManager.inputReady(body)
+            me bool: ready <- helper!.refresh()
+            if(becomesObject==1){
+                if(ready or helper!.status().outcome!=worldUnsupported or waiting!.publications!=0 or helper!.current!.pItem!.fetchInt()!=0){
+                    FAIL("A scalar helper revealed an object after its eligibility check")
+                }
+            }else if(!ready or helper!.current!.pItem!.fetchInt()!=2 or !waiting!.complete()){
+                FAIL("An ordinary scalar helper did not resume its original waiting proof: "+helper!.status().detail)
+            }
+            if(!helperAgent.worldManager.control!.inputWaiters.isEmpty()){FAIL("A resumed helper retained its source subscription")}
+            helperAgent.endWorldSessions(); modelMngr.clear()
+        }
+        me Agent: lazy; Allocate(lazy.identityRegistry); lazy.worldManager.control!.identities <- lazy.identityRegistry
+        me WorldParseResult: declaration <- lazy.worldManager.parse("{#unused(ignored)=*64+{T (%tprev +1)|0 ...}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our WorldRequest: installed <- lazy.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me List<string>: inputs <- ["unused()","unused((1 +_))","unused(unavailable^T)","unused((1 +1))"]
+        me int: index <- 0
+        withEach input in inputs{
+            me WorldParseResult: parsed <- lazy.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our infonView: pending
+            if(index==3){pending <- parsed.target!.pItem!.wordArguments!.values[0].value!.value!.items.tail!.pItem; lazy.worldManager.prepareInput(pending)}
+            our WorldDemand: demand <- parameterProductionOpen(lazy,lazy.startSession(),parsed.target)
+            if(!demand!.seek(FlexNum("8")) or demand!.current!.pItem!.fetchInt()!=7 or !lazy.worldManager.control!.inputWaiters.isEmpty()){
+                FAIL("An unused argument was eagerly acquired: "+input+": "+demand!.status().detail)
+            }
+            if(pending!=NULL){pending!.streamState <- parseDone; lazy.worldManager.inputReady(pending)}
+            index <+- 1
+        }
+        lazy.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_computedProduction_writes(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#records(marker)=*64+{T {keep:{z:_, marker:(%marker)}} ...} #wrap(marker)={T &records(%marker)}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        me string: original <- toString(declaration.target!.pItem)
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me WorldParseResult: parsed <- agent.worldManager.parse("wrap((3 +4))")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our WorldSession: session <- agent.startSession()
+        our WorldDemand: demand <- parameterProductionOpen(agent,session,parsed.target)
+        if(!demand!.configureRetention(1,0,0) or !demand!.requireField("keep.marker") or !demand!.seek(FlexNum("2")) or
+           !temporalNormalizationNumber(temporalNormalizationField(demand!.current,"keep"),"marker",7)){
+            FAIL("Could not acquire a record with a forwarded computed field: "+demand!.status().detail)
+        }
+        our POV: originalNode <- demand!.current
+        our WorldPosition:: position; position! <- demand!.position!
+        me WorldParseResult: assertion <- agent.worldManager.parse("{keep:{z:9, marker:_}}")
+        if(assertion.target==NULL){FAIL(assertion.error)}
+        originalNode!.pItem!.wrkList.append(assertion.target); originalNode!.pItem!.noteNormalizationWork()
+        our WorldRequest: written <- agent.normalize(originalNode)
+        if(written!.failed() or !temporalNormalizationNumber(temporalNormalizationField(originalNode,"keep"),"z",9) or
+           !temporalNormalizationNumber(temporalNormalizationField(originalNode,"keep"),"marker",7)){
+            FAIL("A descendant write lost its computed lexical facts: "+written!.error())
+        }
+        me WorldWeakReference<POV>: originalOccurrence; originalOccurrence.set(originalNode)
+        me WorldWeakReference<POV>: field; field.set(temporalNormalizationField(temporalNormalizationField(originalNode,"keep"),"z"))
+        if(!demand!.refresh()){FAIL("Could not refresh a computed descendant write: "+demand!.status().detail)}
+        withEach ordinal in range 2 .. 33{if(!demand!.goNext()){FAIL("Could not evict a computed descendant write")}}
+        demand!.clearCache(); agent.endSession(session)
+        our WorldDemand: fresh <- parameterProductionOpen(agent,agent.startSession(),parsed.target)
+        if(!fresh!.requireField("keep.marker") or !fresh!.seek(FlexNum("2")) or !agent.worldManager.graph.samePosition(position,fresh!.position) or
+           !temporalNormalizationNumber(temporalNormalizationField(fresh!.current,"keep"),"z",9) or
+           !temporalNormalizationNumber(temporalNormalizationField(fresh!.current,"keep"),"marker",7)){
+            FAIL("A fresh session lost a durable descendant or its computed argument: "+fresh!.status().detail)
+        }
+        if(toString(declaration.target!.pItem)!=original){FAIL("A computed descendant write modified its shared definitions")}
+        agent.endWorldSessions(); written <- NULL; position <- NULL; originalNode <- NULL; demand <- NULL; session <- NULL
+        if(!originalOccurrence.expired()){FAIL("A computed argument retained the released written occurrence")}
+        me WorldWeakReference<POV>: replayed; replayed.set(fresh!.current)
+        fresh <- NULL; assertion.target <- NULL; parsed.target <- NULL; installed <- NULL; declaration.target <- NULL; modelMngr.clear()
+        if(!replayed.expired() or !field.expired()){FAIL("Computed argument evidence retained its released model or descendant")}
+    }
+
+    void: unit_computedProduction_scaling(me string: testName) <- {
+        me uint64: previousFrames <- 0; me uint64: previousRelationships <- 0; me uint64: previousQueue <- 0
+        me ComputedProductionCounts: previousRetained
+        me List<int>: lengths <- [64,128,256]
+        withEach length in lengths{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: declaration <- agent.worldManager.parse("{#stages(first,second)={T (%tprev +1)|0 &{T !%first|...} %first &{T !%second|...} %second} #span(limit)={T &stages((%limit +0),(%limit +(%limit)))}}")
+            if(declaration.target==NULL){FAIL(declaration.error)}
+            me string: original <- toString(declaration.target!.pItem)
+            our WorldRequest: installed <- agent.normalize(declaration.target)
+            if(!installed!.complete()){FAIL(installed!.error())}
+            me WorldParseResult: parsed <- agent.worldManager.parse("span(("+toString(length-1)+" +1))")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our WorldSession: session <- agent.startSession()
+            our WorldDemand: demand <- parameterProductionOpen(agent,session,parsed.target)
+            if(!demand!.configureRetention(2,16,2) or !demand!.seek(FlexNum("1"))){FAIL("Could not start computed scaling traversal: "+demand!.status().detail)}
+            me int64: bindingSlots <- 0
+            me WorldWeakReference<POV>: early
+            withEach ordinal in range 1 .. length+1{
+                if(!demand!.goNext() or demand!.current!.pItem!.fetchInt()!=ordinal){FAIL("Computed multi-segment traversal stopped: "+demand!.status().detail)}
+                if(ordinal==1){early.set(demand!.current)}
+                if(demand!.request!=NULL and demand!.request!.parameterBindings.size()>bindingSlots){bindingSlots <- demand!.request!.parameterBindings.size()}
+            }
+            me uint64: frames <- demand!.framesCreated; me uint64: relationships <- demand!.relationshipsRead; me uint64: queue <- demand!.queueSteps
+            if(demand!.request!=NULL){frames <+- demand!.request!.framesCreated; relationships <+- demand!.request!.relationshipsRead; queue <+- demand!.request!.queueSteps}
+            our WorldGeneratedSeries: series <- agent.worldManager.generatedSeries(session,demand!.list)
+            me ComputedProductionCounts: retained <- computedProductionCounts(series,demand)
+            if(series==NULL or series!.retainedCount()>series!.recentLimit+6 or series!.peakRetained>series!.recentLimit+6 or
+               series!.created<length-1 or series!.evicted==0 or series!.production!.checkpoints.size()>series!.production!.checkpointLimit or
+               bindingSlots>16 or session!.requests.size()>4 or demand!.retentionPeakSlots>4 or !early.expired()){
+                FAIL("Computed argument traversal retained prior states or unbounded binding evidence")
+            }
+            if(retained.scopes>32 or retained.slots>32 or
+               (length>64 and (retained.scopes>previousRetained.scopes+2 or retained.slots>previousRetained.slots+2))){
+                FAIL("Detached argument environments grew with the generated history")
+            }
+            if(frames>length*1024 or relationships>length*512 or queue>length*4096 or
+               (length>64 and (frames>previousFrames*3+512 or relationships>previousRelationships*3+512 or queue>previousQueue*3+512))){
+                FAIL("Computed scalar proofs repeatedly traversed the preceding history")
+            }
+            if(toString(declaration.target!.pItem)!=original){FAIL("Computed scaling traversal changed its source templates")}
+            print("Computed production length=",length," frames=",frames," relationships=",relationships," queue=",queue,
+                " bindingSlots=",bindingSlots," retainedSlots=",demand!.retentionPeakSlots," generated=",series!.created,
+                " evicted=",series!.evicted," retainedNodes=",series!.retainedCount()," peakNodes=",series!.peakRetained,
+                " checkpoints=",series!.production!.checkpoints.size()," requests=",session!.requests.size(),"\n")
+            print("Computed retained scopes=",retained.scopes," argumentSlots=",retained.slots,"\n")
+            previousFrames <- frames; previousRelationships <- relationships; previousQueue <- queue
+            previousRetained <- retained
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_computedProduction_partialRetention(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#inc(item)=(%item +1) #sequence(value)={T 0 &*63+{T (%value)|...}}}")
+        if(declaration.target==NULL){FAIL(declaration.error)}
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me WorldParseResult: parsed <- agent.worldManager.parse("sequence(value::inc(_))")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our WorldSession: session <- agent.startSession()
+        me ComputedProductionCounts: initial
+        withEach attempt in range 0 .. 20{
+            // Each completed partial query may be released and asked again.
+            // Its persistent lexical environment must not grow with queries.
+            our WorldDemand: demand <- parameterProductionOpen(agent,session,parsed.target)
+            if(!demand!.seek(FlexNum("1")) or demand!.current!.pItem!.fetchInt()!=0){FAIL("An unresolved helper argument hid its independent seed")}
+            demand!.seek(FlexNum("2"))
+            if(demand!.status().outcome!=worldPartial or demand!.atBoundary){FAIL("An unresolved helper produced a complete continuation or endpoint")}
+            our WorldGeneratedSeries: series <- agent.worldManager.generatedSeries(session,demand!.list)
+            me ComputedProductionCounts: retained <- computedProductionCounts(series,demand)
+            if(attempt==0){initial <- retained}
+            if(series==NULL or retained.scopes>initial.scopes+1 or retained.slots>initial.slots+1 or
+               retained.scopes>24 or retained.slots>24 or series!.retainedCount()>series!.recentLimit+6){
+                FAIL("Repeated partial queries accumulated detached helper environments")
+            }
+            demand!.retireRequest();demand!.retireSelection();demand!.retireLayoutRequest()
+            if(session!.requests.size()>1){FAIL("A completed partial query retained its request registry entry")}
+            if(attempt==19){print("Computed partial attempts=20 scopes=",retained.scopes," argumentSlots=",retained.slots,"\n")}
+        }
+        agent.endWorldSessions(); modelMngr.clear()
     }
 }

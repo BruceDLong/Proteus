@@ -52,6 +52,10 @@ struct WorldProductionFrontier {
     me Set<our infonView>: capturedDependencies
     me List<our WorldProductionHeader>: sourceHeaders
     me List<our WorldProductionSegment>: segments
+    me List<our WorldBindings>: parameterScopes
+    me Set<our infonView>: argumentSources
+    me Set<our infonView>: transitionArgumentSources
+    me Set<our infonView>: pendingArgumentDependencies
     me bool: applicable <- false
     me bool: externalDependencies <- false
     me WorldOutcome: outcome <- worldReady
@@ -66,6 +70,11 @@ struct WorldProductionFrontier {
     me uint64: peakCandidates <- 0
 }
 struct WorldGeneratedSeries {our WorldProductionFrontier: production}
+struct WorldProductionBindingCopy {
+    our WorldBindings: source
+    our WorldBindings: snapshot
+    our WorldProductionFrontier: frontier
+}
 struct WorldProductionScratch {
     me Map<our infonView, our WorldFrame>: outerAttempts
     me Map<our infonView, our WorldFrame>: outerActive
@@ -77,11 +86,16 @@ struct WorldProductionScratch {
     me Map<our infonView, our WorldOrderedLayoutProof>: outerOrderedLayouts
     me Map<our infonView, our WorldUnitOrigin>: outerUnitOrigins
     me List<our WorldBindings>: outerBindings
+    me List<our WorldProductionBindingCopy>: outerBindingCopies
+    me Map<our WorldBindings,our WorldProductionFrontier>: outerArgumentScopes
     our WorldPosition: previousValue
 }
 struct WorldRequest {
     their WorldSession: productionSession <- NULL
     me List<our WorldProductionScratch>: productionScratch
+    me List<our WorldProductionBindingCopy>: productionBindingCopies
+    me Set<our WorldBindings>: productionBindingActive
+    me Map<our WorldBindings,our WorldProductionFrontier>: productionArgumentScopes
 }
 struct WorldProductionRun {
     our WorldGeneratedSeries: series
@@ -112,6 +126,8 @@ struct WorldFrame {
     our WorldPosition: productionContext
     our WorldPosition: productionChecked
     me bool: productionParentApplied <- false
+    our WorldProductionFrontier: productionArgumentFrontier
+    me bool: productionArgumentRaw <- false
 }
 struct WorldPath {our WorldFrame: generatedNeighbour}
 struct WorldPosition {
@@ -119,6 +135,61 @@ struct WorldPosition {
     me bool: productionCandidate <- false
 }
 struct WorldManager {
+    // The ordinary parameter acquisition owns waits and expression work.
+    // Cache its unrefined scalar before this particular use adds constraints.
+    me bool: settleProductionArgument(our WorldRequest: request, our WorldFrame: frame) <- {
+        our WorldFrame: value <- frame!.parameterValue
+        if(!graph.completeFacts(value!.facts,false) or !graph.representableFacts(value!.facts) or
+           value!.facts.needsEvidence or value!.facts.parameterBindingRequired or !value!.retainedWork.isEmpty()){
+            frame!.facts <- value!.facts
+            if(frame!.facts.outcome==worldReady){frame!.facts.outcome <- worldPartial;frame!.facts.detail <- "Generated scalar argument still needs evidence"}
+            stopFrame(request,frame);return(false)
+        }
+        if((value!.facts.overlay!=NUM and value!.facts.overlay!=STR) or productionEffectsPending(request) or
+           !graph.productionScalarSource(frame!.parameterBinding!.productionSource)){
+            frame!.facts.outcome <- worldUnsupported;frame!.facts.detail <- "Generated argument needs a checked scalar without effects"
+            stopFrame(request,frame);return(false)
+        }
+        withEach source in frame!.productionArgumentFrontier!.argumentSources{
+            if(!graph.productionScalarSource(source)){
+                frame!.facts.outcome <- worldUnsupported;frame!.facts.detail <- "Generated argument meaning needs a lexical scalar expression"
+                stopFrame(request,frame);return(false)
+            }
+        }
+        our infonView: checked <- graph.checkedView(request,value)
+        if(checked==NULL){frame!.facts.outcome <- request!.outcome;frame!.facts.detail <- request!.detail;stopFrame(request,frame);return(false)}
+        our infonView:: scalar;scalar! <- checked!
+        // The common writer preserves value, extent and nominal qualifiers.
+        // Evaluation syntax and borrowed context no longer belong to this
+        // immutable checked value.
+        scalar!.innr <- NULL;scalar!.funcArgs <- NULL;scalar!.wordArguments <- NULL
+        scalar!.partRef <- NULL;scalar!.parts.clear();scalar!.copySource <- NULL;scalar!.thisPtr <- NULL
+        scalar!.proxy <- NULL;scalar!.includeInfn <- NULL;scalar!.retainedPOVs.clear();scalar!.sourceGraphDependencies.clear()
+        scalar!.temporalValueSource <- NULL;scalar!.temporalPredecessor <- NULL
+        scalar!.intersectMarkedRetPOV <- NULL;scalar!.intersectPos <- ipNoIntersect;scalar!.hasInnrOutr <- false
+        scalar!.definedWord <- NULL;scalar!.appliedListSpecs.clear()
+        scalar!.wrkList.clear();scalar!.parameterName <- "";scalar!.cursorMode <- cmNone
+        if(checked!.worldScalarCompletionOwner===checked){scalar!.worldScalarCompletionOwner <- scalar}
+        frame!.parameterBinding!.expression!.pItem <- scalar
+        frame!.parameterBinding!.productionSource <- NULL;frame!.parameterBinding!.productionCaller <- NULL
+        frame!.productionArgumentRaw <- false
+        withEach source in frame!.productionArgumentFrontier!.argumentSources{captureProductionDependencies(frame!.productionArgumentFrontier,source,true)}
+        capturePendingProductionArguments(frame!.productionArgumentFrontier)
+        // Consumers use the detached base, including provenance. The live
+        // expression frame stays request-local and never becomes a snapshot.
+        frame!.parameterValue <- makeFrame(request,frame!.parameterBinding!.expression)
+        frame!.parameterValue!.contextual <- true
+        request!.ready.append(frame);request!.ready.append(frame!.parameterValue)
+        return(false)
+    }
+    void: capturePendingProductionArguments(our WorldProductionFrontier: frontier) <- {
+        me List<our infonView>: pendingSources
+        withEach source in frontier!.pendingArgumentDependencies{pendingSources.append(source)}
+        withEach source in pendingSources{
+            captureProductionDependencies(frontier,source,true)
+            if(source!.streamState!=parseStarted and source!.streamState!=parseListReady){frontier!.pendingArgumentDependencies.erase(source)}
+        }
+    }
     // Production proves membership and the enclosing program once. A checked
     // representation can retain that evidence while its own pending field
     // constraints and new assertions still use ordinary normalization.
@@ -214,16 +285,7 @@ struct WorldManager {
         captureProductionDependencies(frontier,item)
         our WorldBindings: lexical <- graph.parameterScope(source)
         if(lexical!=NULL){
-            withEach argument in lexical!.arguments{
-                if(argument!.sourceDescription!=NULL){
-                    our infonView: actual <- argument!.sourceDescription
-                    captureProductionDependencies(frontier,actual)
-                    if(actual!.streamState==parseStarted or actual!.streamState==parseListReady){
-                        frontier!.outcome <- worldWaiting; frontier!.waiting <- actual; return(false)
-                    }
-                }
-            }
-            lexical <- graph.detachedProductionBindings(request,lexical)
+            lexical <- graph.detachedProductionBindings(request,lexical,frontier)
             if(request!.outcome!=worldReady){frontier!.outcome <- request!.outcome; frontier!.detail <- request!.detail; return(false)}
         }
         if(item!.streamState==parseStarted or item!.streamState==parseListReady){
@@ -295,11 +357,18 @@ struct WorldManager {
         }
         active.erase(item); return(true)
     }
-    void: captureProductionDependencies(our WorldProductionFrontier: frontier, our infonView: root) <- {
+    void: captureProductionDependencies(our WorldProductionFrontier: frontier, our infonView: root, me bool: argument <- false) <- {
         me List<our infonView>: pending; pending.append(root)
         while(!pending.isEmpty()){
             our infonView: item <- pending.popLast()
-            if(item==NULL or frontier!.capturedDependencies.contains(item)){continue()}
+            if(item==NULL){continue()}
+            if(argument and (item!.streamState==parseStarted or item!.streamState==parseListReady)){
+                // A ready argument may settle before a sibling header arrives.
+                // Remember that exact source, without making the unused header
+                // a prerequisite of the already checked scalar.
+                frontier!.pendingArgumentDependencies.insert(item);continue()
+            }
+            if(frontier!.capturedDependencies.contains(item)){continue()}
             frontier!.capturedDependencies.insert(item)
             our WorldProductionDependency:: dependency; dependency!.view <- item; dependency!.revision <- item!.cursorRevision
             dependency!.value <- item!.value; dependency!.size <- item!.infSize; dependency!.listSpec <- item!.value!.listSpec
@@ -332,7 +401,7 @@ struct WorldManager {
             if(item!.innr!=NULL){pending.append(item!.innr)}
             if(item!.funcArgs!=NULL){pending.append(item!.funcArgs)}
             if(item!.includeInfn!=NULL){pending.append(item!.includeInfn)}
-            if(item!.wordArguments!=NULL){withEach argument in item!.wordArguments!.values{pending.append(argument.value)}}
+            // Actual expressions enter the proof only when their parameter is read.
             me List<our PartPath>: paths <- item!.parts
             if(item!.partRef!=NULL){paths.append(item!.partRef)}
             withEach path in paths{
@@ -589,7 +658,15 @@ struct WorldManager {
             if(productionEffectsPending(request)){
                 productionFailure(request,frame,worldUnsupported,"Generated alternatives with external effects need isolated branch publication");return()
             }
+            withEach source in frontier!.transitionArgumentSources{captureProductionDependencies(frontier,source,true)}
+            capturePendingProductionArguments(frontier)
+            if(frontier!.externalDependencies){
+                productionFailure(request,frame,worldUnsupported,"Generated external reads need dynamic dependency proofs");return()
+            }
             me WorldOutcome: result <- run!.candidate!.facts.outcome
+            if(result==worldUnsupported and run!.choices.size()==1){
+                productionFailure(request,frame,result,run!.candidate!.facts.detail);return()
+            }
             if(result==worldReady and graph.representableFacts(run!.candidate!.facts) and
                !run!.candidate!.facts.needsEvidence and run!.candidate!.facts.pendingChecks==NULL and
                !run!.candidate!.facts.contextRequired and !run!.candidate!.facts.contextAbsent){
@@ -715,6 +792,8 @@ struct WorldManager {
         scratch!.outerLayouts <- request!.listLayouts; scratch!.outerStableLayouts <- request!.stableLayoutProofs
         scratch!.outerOrderedLayouts <- request!.stableOrderedLayoutProofs; scratch!.outerUnitOrigins <- request!.unitOrigins
         scratch!.outerBindings <- request!.parameterBindings
+        scratch!.outerBindingCopies <- request!.productionBindingCopies
+        scratch!.outerArgumentScopes <- request!.productionArgumentScopes
     }
     // Finished nested demands must not keep the enclosing candidate frames
     // alive until a distant outer demand ends. Waiting runs keep their scratch.
@@ -739,6 +818,8 @@ struct WorldManager {
             bindingIndex <+- 1
         }
         request!.parameterBindings <- scratch!.outerBindings
+        request!.productionBindingCopies <- scratch!.outerBindingCopies
+        request!.productionArgumentScopes <- scratch!.outerArgumentScopes
         request!.attempts <- scratch!.outerAttempts; request!.completedOccurrences <- scratch!.outerCompleted
         request!.activeContexts <- scratch!.outerActive; request!.checkedViews <- scratch!.outerChecked
         request!.checkedViewFacts <- scratch!.outerCheckedFacts

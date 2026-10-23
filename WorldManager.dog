@@ -901,7 +901,7 @@ struct WorldRequest {
         withEach bindings in parameterBindings{
             withEach argument in bindings!.arguments{argument!.unresolvedReads.clear()}
         }
-        parameterBindings.clear()
+        parameterBindings.clear(); productionBindingCopies.clear(); productionBindingActive.clear(); productionArgumentScopes.clear()
         previousValue <- NULL; productionSession <- NULL; releaseCheckedViews(); productionScratch.clear()
         releaseTemporalProduction()
         stableLayoutProofs.clear(); stableOrderedLayoutProofs.clear(); listLayouts.clear()
@@ -1090,7 +1090,8 @@ struct WorldPOVGraph {
                (generatedBinding(ancestor)!.declaration===generatedDeclaration(word!.baseDefinition))){
                 request!.outcome <- worldUnsupported; request!.detail <- "Recursive parameterized application needs a recursive proof"; return(NULL)
             }
-            ancestor <- parameterScope(ancestor!.caller)
+            if(ancestor!.productionSnapshot){ancestor <- ancestor!.productionParent}
+            else{ancestor <- parameterScope(ancestor!.caller)}
         }
         our WorldBindings:: bindings
         bindings!.definition <- word!.baseDefinition; bindings!.caller <- caller
@@ -2068,6 +2069,18 @@ struct WorldPOVGraph {
             lexical!.parameters <- frame!.lexicalParameters; caller <- lexical
         }
         meaning!.definitionParameters <- bindArguments(request, frame!.facts.nominal, frame!.node!.pItem, caller)
+        our WorldProductionFrontier: production <- productionFrameFrontier(request,frame)
+        if(production!=NULL){
+            if(frame!.lexicalParameters!=NULL and frame!.lexicalParameters!.productionScalarContext){
+                if(!productionScalarSource(meaning!.pItem)){
+                    request!.outcome <- worldUnsupported; request!.detail <- "Generated argument meaning needs a lexical scalar expression"
+                    return(NULL)
+                }
+                production!.argumentSources.insert(meaning!.pItem)
+                meaning!.definitionParameters <- detachedProductionBindings(request,meaning!.definitionParameters,production,false,false)
+                meaning!.definitionParameters <- scalarProductionScope(request,meaning!.definitionParameters,production)
+            }else{production!.transitionArgumentSources.insert(meaning!.pItem)}
+        }
         return(meaning)
     }
 
@@ -6456,22 +6469,44 @@ struct WorldManager {
                             frame!.facts.outcome <- worldError; frame!.facts.detail <- "Parameter '"+item!.parameterName+"' has no application scope"; stopFrame(request, frame); return()
                         }
                         frame!.parameterBinding <- scope!.arguments.at(item!.parameterName)
-                        frame!.parameterValue <- makeFrame(request, frame!.parameterBinding!.expression)
-                        frame!.parameterValue!.navigation <- frame!.parameterBinding!.caller
-                        frame!.parameterValue!.expressionParent <- frame!.node
-                        frame!.parameterValue!.lexicalParameters <- graph.parameterScope(frame!.parameterBinding!.caller)
-                        our infonView: argument <- frame!.parameterBinding!.expression!.pItem
-                        if(argument!.value!.overlayType==LST and argument!.value!.evalMode==emLiteral){
-                            frame!.parameterValue!.navigation <- graph.position(frame!.parameterBinding!.expression)
-                            frame!.parameterValue!.navigation!.parameters <- graph.parameterScope(frame!.parameterBinding!.caller)
-                            frame!.parameterValue!.navigation!.writable <- !frame!.parameterBinding!.borrowed
+                        if(!scope!.productionSnapshot and frame!.parameterBinding!.sourceDescription!=NULL){
+                            our WorldProductionFrontier: production <- graph.productionFrameFrontier(request,frame)
+                            if(production!=NULL){production!.transitionArgumentSources.insert(frame!.parameterBinding!.sourceDescription)}
                         }
-                        frame!.parameterValue!.referenceOnly <- item!.wrkList.isEmpty() and
-                            (frame!.referenceOnly or item!.partRef!=NULL or !item!.parts.isEmpty())
+                        if(frame!.parameterBinding!.productionSource!=NULL){
+                            frame!.productionArgumentFrontier <- graph.productionBindingFrontier(request,scope)
+                            if(frame!.productionArgumentFrontier==NULL or !graph.productionScalarSource(frame!.parameterBinding!.productionSource)){
+                                frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Generated argument needs a lexical scalar expression"; stopFrame(request,frame);return()
+                            }
+                            frame!.productionArgumentFrontier!.argumentSources.insert(frame!.parameterBinding!.productionSource)
+                            our POV:: actual{947};actual!.pItem <- frame!.parameterBinding!.productionSource
+                            our WorldPosition: context <- graph.position(actual)
+                            context!.parameters <- graph.scalarProductionScope(request,frame!.parameterBinding!.productionCaller,frame!.productionArgumentFrontier)
+                            context!.writable <- false;context!.constraintRoot <- true
+                            frame!.parameterValue <- makeFrame(request,actual,context)
+                            frame!.parameterValue!.lexicalParameters <- context!.parameters
+                            frame!.productionArgumentRaw <- true
+                        }else{
+                            frame!.parameterValue <- makeFrame(request, frame!.parameterBinding!.expression)
+                            frame!.parameterValue!.navigation <- frame!.parameterBinding!.caller
+                            frame!.parameterValue!.expressionParent <- frame!.node
+                            frame!.parameterValue!.lexicalParameters <- graph.parameterScope(frame!.parameterBinding!.caller)
+                            our infonView: argument <- frame!.parameterBinding!.expression!.pItem
+                            if(argument!.value!.overlayType==LST and argument!.value!.evalMode==emLiteral){
+                                frame!.parameterValue!.navigation <- graph.position(frame!.parameterBinding!.expression)
+                                frame!.parameterValue!.navigation!.parameters <- graph.parameterScope(frame!.parameterBinding!.caller)
+                                frame!.parameterValue!.navigation!.writable <- !frame!.parameterBinding!.borrowed
+                            }
+                            frame!.parameterValue!.referenceOnly <- item!.wrkList.isEmpty() and
+                                (frame!.referenceOnly or item!.partRef!=NULL or !item!.parts.isEmpty())
+                        }
                         frame!.parameterValue!.contextual <- true
                         request!.ready.append(frame); request!.ready.append(frame!.parameterValue); return()
                     }
                     if(frame!.parameterValue!.facts.outcome!=worldReady){frame!.facts <- frame!.parameterValue!.facts; stopFrame(request, frame); return()}
+                    if(frame!.productionArgumentRaw){
+                        if(!settleProductionArgument(request,frame)){return()}
+                    }
                     if(!frame!.parameterMerged and (!item!.wrkList.isEmpty() or item!.type!=NULL)){
                         if(frame!.parameterConstraints==NULL){
                             our POV:: constraints{947}; constraints!.pItem <- graph.pathBody(item, false)
@@ -6740,6 +6775,11 @@ struct WorldManager {
     void: step(our WorldRequest: request, our WorldFrame: frame) <- {
         if(frame!.productionDemand!=NULL){productionStep(request,frame);return()}
         if(!frame!.initialized and prepareProductionAcquisition(request,frame)){return()}
+        if(!frame!.initialized and frame!.lexicalParameters!=NULL and frame!.lexicalParameters!.productionScalarContext and
+           frame!.node!.pItem!.streamState==parseDone and !graph.productionScalarSource(frame!.node!.pItem)){
+            frame!.facts.outcome <- worldUnsupported;frame!.facts.detail <- "Generated argument needs a lexical scalar expression"
+            stopFrame(request,frame);return()
+        }
         if(frame!.acquisitionCarry!=NULL){
             if(!frame!.acquisitionCarry!.finished){request!.ready.append(frame); request!.ready.append(frame!.acquisitionCarry); return()}
             our WorldFrame: retained <- frame!.acquisitionCarry

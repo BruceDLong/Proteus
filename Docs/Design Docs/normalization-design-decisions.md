@@ -3976,3 +3976,101 @@ There are no `TCURSOR` or `DISPLAY` diagnostics; shutdown exits normally. The
 two existing diagnostics about semantics beyond the scalar milestone and open
 source span alignment remain. This checks the represented Rubix history, not
 a new parameterized animation. No maintained Slipstream source changed.
+
+## D111 — Ordinary acquisition of computed production arguments (2026-10-23)
+
+**Decision.** Extend D110's literal scalar boundary to scalar expressions and
+lexical parameter forwarding. Ordinary parameter acquisition proves the value;
+production retains a detached representation of those checked facts. Cursors
+continue to request occurrences through the common provider.
+
+Argument acquisition is lazy. A pending or unresolved argument is not evidence
+against a state that does not use it. When an argument is needed, the ordinary
+frame and input subscription own the continuation. Repeated polling cannot
+recreate it, and an input arriving after cancellation cannot publish its state.
+The original input header remains the wait target rather than a frozen copy of
+its pending parse status.
+
+Detached lexical environments form a shared graph. Their application keys are
+pure identity metadata; their lexical edges do not retain caller positions,
+definitions as binding environments, requests or acquisition frames. Sharing
+must be established from the exact source binding environment, since equal
+logical identity alone does not establish equal current proof context. Pending
+source expressions are bounded by the reachable model, not the number of
+generated states. Successfully acquired scalar slots retain checked value facts
+and release their pending expression and evaluation-scope links.
+
+Only structural application scopes belong to the retained frontier. Helper
+bindings and wrappers used while acquiring an argument belong to the request
+and are released with its production scratch. Repeating an unresolved demand
+must not add another helper environment to the retained frontier.
+
+The cached scalar is the base argument result. A constraint or inversion on a
+particular parameter reference is applied afterward through ordinary derived
+relationships. A rejected speculative candidate must not replace that shared
+base with its own constraint. Checked scalar publication preserves nominal
+qualifications, size evidence and text values; extracting only a primitive
+number or string would lose semantic information.
+
+Dependency evidence follows demanded argument sources, forwarded outer inputs
+and scalar meanings discovered by ordinary name binding. Syntax-only traversal
+of an initially unbound word is insufficient. Argument-source replacement and
+nested-header revision changes must invalidate old deductions even when the
+call-root revision is unchanged. Evidence validity remains separate from
+qualified occurrence identity and sparse durable assertions.
+
+Ordinary helper calls inside transition descriptions retain their existing
+semantics. Their demanded arguments and resolved meanings contribute dependency
+evidence separately from isolated scalar-argument acquisition. The scalar-only
+argument guard must not restrict a transition's ordinary temporal references.
+
+**Alternatives.** Evaluating expressions in the production compiler would
+duplicate normalization and its waits. Eagerly acquiring every parameter would
+block independent states on unused information. Retaining live bindings would
+keep caller contexts and proof frames alive through cached or written states.
+Reconstructing request-local bindings on every demand would repeat structural
+work and complicate pending continuations. Detached lexical scopes plus ordinary
+lazy acquisition preserve the existing semantic and retention boundaries.
+
+Parameter-dependent extents, general object/reference arguments, recursive
+parameterized proofs, external effects and ambiguous continuation selection
+remain separate work. The existing uniquely determined continuation rule is
+unchanged. Arithmetic operators and nominal arithmetic rules are unchanged;
+broader arithmetic work is deferred.
+
+**Engine validation.** Final CodeDog regeneration passes all six new ordinary
+CodeDog test groups, the nine existing parameter-production groups, the thirteen
+demand-production groups and all forty word-argument language fixtures. The
+complete run reports 24 failures out of 657 tests; the failure names exactly
+match the pre-change 24/651 baseline. One compiled boundary assertion now
+accepts its formerly unsupported computed argument. No `.tst` expectation
+changed.
+
+Coverage includes numeric and string expressions, nested lexical forwarding,
+nominal scalar helper results, candidate-local constraints, partial and unused
+arguments, exact input waits, cancellation, late helper-body arrival, transitive
+operand invalidation, replay identity, durable scalar and descendant writes,
+and source dependency capture for ordinary transition helpers. Operand-mutation
+fixtures preserve the existing addition marker while changing a number; they
+do not change arithmetic semantics.
+
+For sequential traversals of 64, 128 and 256 states, relationship attempts are
+261/517/1029, queue work is 2398/4766/9502 and frame creation is
+1552/3088/6160. Retention stays at four temporal cache slots, ten generated nodes
+(also the measured peak), eight checkpoints, two detached scopes and three
+argument slots, with no retained live requests after a completed demand. Twenty
+fresh partial queries retain one scope and one argument slot. Tests also check
+weak-reference reclamation and bounded dependency records for repeated helper
+transitions. These measurements cover fixed-width deterministic examples, not
+a bound on arbitrary inference or random-access replay. Evidence is under
+`/tmp/proteus-computed-production-20261023/`.
+
+**Consumer validation.** The separately regenerated shared library and
+Slipstream executable use the same ABI symbol, and the consumer resolves this
+checkout's library. An isolated display check renders both represented Rubix
+states, advances index 0 to 1 and returns to the same index-0 occurrence. No
+`TCURSOR` or `DISPLAY` diagnostics occur, and shutdown exits normally. The two
+existing diagnostics about semantics beyond the scalar milestone and open
+source span alignment remain. This checks the existing Rubix history; computed
+argument behavior is covered by the engine tests above. No maintained
+Slipstream source changed.

@@ -1888,3 +1888,27 @@ layout correspondence and are reported as unsupported. Demand refresh of a
 direct descendant whose generating evidence changes must reacquire its
 containing state first; it must not silently reuse the previous argument
 snapshot.
+
+## Computed scalar production arguments (D111, 2026-10-23)
+
+Demand-produced word applications can acquire computed and forwarded scalar
+arguments through ordinary parameter normalization. The argument is evaluated
+in its caller's lexical scope when a demanded state needs it. An unused or
+unresolved argument does not block an independently determined state. A needed
+pending input keeps the existing request and acquisition continuation waiting;
+polling does not restart work, and cancellation publishes no provisional state.
+
+A retained argument environment contains qualified application identity and
+detached lexical scopes, not caller positions or normalization frames. Pending
+slots retain their source expression until it is acquired. A complete checked
+numeric or string scalar replaces that pending expression, preserving the
+qualifications and extent established by ordinary normalization. Constraints
+on a particular parameter reference are applied after this base acquisition,
+so a rejected candidate cannot alter the value seen by another candidate.
+
+The production proof tracks the actual sources used, including forwarded outer
+arguments and resolved scalar definitions. Changing that evidence invalidates
+derived values without changing the application's occurrence identity. Existing
+bounded retention, replay and durable-write rules continue to apply. This does
+not add parameter-dependent extents, general object/reference arguments,
+external effects or ambiguous continuation selection.
