@@ -74,6 +74,16 @@ List membership/count, values, and temporal duration are distinct. Member count 
 
 ### Definitions and selection
 
+There are two distinct namespace contributions (D113). `#planet = ...`
+defines a general model. An individual carries an external name association,
+such as `planet:{T ...}^name=Earth`; a description may also contain a
+`^name=Bob` field. `~name` looks up the name relationship and `~Earth`
+resolves the named individual through ordinary contextual resolution. The
+name value and its bearer are distinct. Resolving an individual preserves
+its occurrence identity; it does not apply a reusable `#Earth` template.
+This is an accepted semantic distinction, not a claim that all naming and
+resolution paths are implemented. Naming scope and collision rules remain open.
+
 Fields are typed members with nominal compatibility. Equal structure alone does not make sibling types interchangeable. Ordered lookup selects the first proved compatible logical member; unresolved earlier candidates can block a later winner. Unordered lookup retains matching alternatives. Route cost must not change the semantic winner.
 
 Definitions are optional sources of meaning. Compiling meaning does not prove instance validity. Supplied typed descriptions can be partial, including ordered descriptions. Explicit normalization requests the result's immediate omitted definition parts; incidental traversal remains lazy. D03 limits an unordered target to its main level rather than renewing this expansion policy recursively for every member. Dependency search may still reach deeper facts needed for that level. Route choice must not silently determine expansion.

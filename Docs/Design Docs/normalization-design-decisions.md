@@ -4136,15 +4136,14 @@ and eight planets. The current inventory is sourced from NASA's
 [planet overview](https://science.nasa.gov/solar-system/planets/); no new empirical
 formation dates, orbital measurements or motion equations are introduced.
 
-PublicKB introduces one Milky Way and one Andromeda in a galaxy population,
-with one Sol-System occurrence inside the supplied Milky Way state. The named
-bodies occur once inside Sol's population. One application of `known-galaxies`
-owns the population and its assertions. Name associations use `%self`-rooted
-paths to those occurrences, and are separate from their body-history definitions.
-A name-path result must not stand in for a body history. Additional applications
-of the same definition would introduce additional occurrences; matching names
-are not an identity proof. The existing broad Milky Way start constraint is
-retained and now addresses the introduced population member.
+World correction `5d59228` distinguishes the general models above from named
+individuals (D113). Sol.pr associates each body with its name through `^name`,
+then Sol's supplied state references the same Sun and planets through `~Sun`,
+`~Earth`, etc. PublicKB similarly names one Milky-Way and one Andromeda, then
+references them in a simultaneous galaxy population. Its supplied Milky-Way
+state references the named Sol-System. There are no `#Earth`, `#Sun` or other
+individual-body templates, and no `known-galaxies` wrapper definition. The
+existing broad Milky Way start constraint is retained on the named individual.
 
 Earth's tiny history supplies two local orientations, `(0,0,0)` and `(0,0,1)`
 radians in a chosen frame, and an open future. No elapsed time, formation date,
@@ -4153,28 +4152,64 @@ Earth occurrence inside Sol, rather than introducing two Earths. These local
 positions do not assert a shared time step for Earth, Sol and Milky Way.
 
 **Validation and next evidence.** World's `tests/check_astronomy.py` checks the
-authored S/T hierarchy, inventory and occurrence-name paths, then uses the real
-Proteus parser on KernelKB, Space, Sol and PublicKB. All four parser checks pass.
-The separate `tests/astronomy-model.tst` retains nine runtime acceptance cases
-with intended scalar results, using the actual astronomy definitions in an
-isolated context. Seven Earth/Sol reads currently report `Generated segment
-layout needs its inherited named obligations`. Two finite galaxy/system history
-controls report `Named list template needs an occurrence-width proof`. These
-are explicit implementation boundaries; no fallback, weakened expectation or
-engine special case is added to make the authored model appear executable.
+authored S/T hierarchy, inventory, absence of individual word definitions and
+twelve `^name` associations. The real Proteus parser passes all four source
+checks on KernelKB, Space, Sol and PublicKB. The acceptance fixture now has
+14 cases, retaining the original intended scalar values and using `~Earth`
+and `~Sol-System` to resolve individuals. The external-name lookup control and
+external-field parser case pass. Three individual-name cases report `Named
+value has no available definition`. Seven actual Earth/Sol reads stop during
+context loading at that diagnostic, before their queries execute. Two finite
+history controls load only the generic astronomy prerequisites, independently
+reporting `Named list template needs an occurrence-width proof`. The runner
+returns nonzero for these 12 failures. No fallback or weakened expectations
+make the model appear executable.
 
-The first concrete model therefore identifies inherited named history/listSpec
-composition and occurrence-width proofs as useful candidate engine work before
-parameter-dependent extents. The symbolic World bootstrap remains a separate
-known prerequisite, and general temporal rooting/name associations remain
-unverified by these local reads. Dedicated production expansion and arithmetic
-changes remain paused; this increment changes models and acceptance cases.
+The corrected model identifies individual-name association and contextual
+resolution as an earlier prerequisite than the inherited-history/layout gaps
+seen with the previous template-based data. Basic `~name` property lookup is
+already supported; resolving a named bearer must use the ordinary resolution
+and occurrence relationships, rather than adding astronomy-specific dispatch.
+The symbolic World bootstrap and general temporal rooting remain separate
+known prerequisites. Dedicated production expansion and arithmetic changes
+remain paused; this increment changes models and acceptance cases.
 
-The existing complete Proteus run retains exactly the same 24 failing names
-across 657 tests. An isolated Slipstream run reads the fresh shared World
-sources, renders both represented Rubix states and navigates 0 -> 1 -> 0,
-returning to the same index-0 occurrence. There are no cursor/display errors,
-and shutdown exits normally. The existing open-source span-alignment diagnostic
-remains. This is consumer regression coverage, not proof of the blocked
-astronomy normalization or temporal rooting. No engine or consumer source
-changed. Evidence is in `/tmp/proteus-world-astronomy-20261023/`.
+The earlier complete Proteus run at this engine implementation retained the
+same 24 failing names across 657 tests. The focused resolution baseline is 0/2;
+the name baseline is 1/3, retaining the existing expanded-name/reference mismatch.
+No engine source changed in this correction, and the full suite was not rerun.
+An isolated Slipstream run reads the final fresh shared World sources, visibly
+renders both represented Rubix states and navigates 0 -> 1 -> 0, returning to
+the same index-0 occurrence. There are no cursor/display errors, and shutdown
+exits normally. The existing open-source span-alignment diagnostic remains.
+This is consumer regression coverage, not proof of astronomy normalization.
+Evidence is in `/tmp/proteus-individual-names-20261023/`.
+
+## D113 — General definitions and named individuals (2026-10-23)
+
+**Decision.** The namespace has two distinct sources: `#` word definitions for
+generalization, and names associated with individuals through `^name`. A name
+association can be a `^name=Bob` field in a description. It need not be expanded
+into an explicit spelling/pronunciation record in the simple world model.
+`^name` establishes the external association; `~name` looks up the name
+relationship. Resolving `~Bob` identifies its bearer through contextual
+resolution. A name value and the individual carrying it are different values.
+An individual reference must retain occurrence identity, including the same
+history and facts learned through other references.
+
+**Reason and rejected alternative.** Writing `#Earth = planet:{...}` gives Earth
+a reusable template, which can create new occurrences when applied. Adding name
+records to those occurrences does not repair the distinction. World commit
+`5d59228` replaces that use in `b8e7b1c` with individual name associations and
+resolution references. It also removes the wrapper whose only purpose was to
+provide `%self` paths for those redundant associations. The single-token names
+`Milky-Way` and `Sol-System` remain explicit; no space/hyphen alias rule is added.
+
+**Boundary.** The parser accepts the external field and the engine supports a
+basic external `~name` lookup. The new word-valued name, bearer lookup and shared
+fact cases still fail; the accepted naming semantics are not complete merely
+because the source parses. Naming scope, collisions, multiple bearers and
+richer name metadata are not settled by this example. Future implementation
+must compose the ordinary relationship and resolution machinery, preserving
+qualification, context and occurrence identity. No special individual-definition
+syntax, second identity store or old-solver fallback is introduced here.
