@@ -43,6 +43,24 @@ struct WorldFrame {
 }
 
 struct WorldPOVGraph {
+    // An unordered record's open remainder adds fields inside the S-item;
+    // it does not add occurrences to the enclosing history. This proves only
+    // that outer width, not a closed or stable field layout.
+    me bool: oneRecordOccurrence(our WorldRequest: request, our infonView: item) <- {
+        if(stableRecordLayout(request,item)){return(true)}
+        if(!item!.value!.tailUnfinished or item!.value!.listSpec!=NULL){return(false)}
+        me Set<string>: names
+        our POV: field <- item!.value!.items.head
+        while(field!=NULL){
+            request!.layoutShapeMembers <+- 1
+            if(field!.isSubItm or field!.pItem!.invertMatch or field!.pItem!.type==NULL){return(false)}
+            me string: name <- field!.pItem!.type!.typeID()
+            if(names.contains(name)){return(false)}
+            names.insert(name); field <- field!.next
+        }
+        return(true)
+    }
+
     // Positive structural evidence for one repeated occurrence. In particular,
     // an unrecognized unit is not evidence that regrouping is unnecessary.
     // Record interiors and scalar values are not acquired by this proof.
@@ -79,7 +97,7 @@ struct WorldPOVGraph {
                 if(argument!.omitted or argument!.expression==NULL){shape!.outcome <- worldUnsupported; break()}
                 shape!.position <- position(argument!.expression, argument!.caller); continue()
             }
-            me WorldScalar: binding; binding <- bind(request, binding, item!.type)
+            me WorldScalar: binding; binding <- bind(request, binding, item!.type, item!.lexicalScope, at)
             if(binding.outcome!=worldReady){shape!.outcome <- binding.outcome; break()}
             if(binding.nominal!=NULL and binding.nominal!.defToUse!=NULL and
                (binding.nominal!.defToUse!.streamState==parseStarted or binding.nominal!.defToUse!.streamState==parseListReady)){
@@ -124,7 +142,7 @@ struct WorldPOVGraph {
             }else{
                 if(item!.value!.evalMode!=emLiteral and item!.value!.evalMode!=emUnknown){shape!.outcome <- worldUnsupported; break()}
                 if(item!.value!.overlayType==LST){
-                    if(item!.orderMode!=uUnordered or item!.value!.listSpec!=NULL or !stableRecordLayout(request, item)){
+                    if(item!.orderMode!=uUnordered or item!.value!.listSpec!=NULL or !oneRecordOccurrence(request, item)){
                         shape!.outcome <- worldUnsupported; break()
                     }
                 }else if(item!.value!.overlayType!=NUM and item!.value!.overlayType!=STR and
@@ -133,7 +151,7 @@ struct WorldPOVGraph {
                 }
             }
             if(binding.nominal==NULL or binding.nominal!.defToUse==NULL){shape!.position <- NULL; break()}
-            our POV:: meaning{939}; meaning!.pItem <- binding.nominal!.defToUse; meaning!.trueByDefinition <- true
+            our POV:: meaning{939}; meaning!.pItem <- binding.nominal!.defToUse; meaning!.trueByDefinition <- true; meaning!.definitionBinding <- binding.nominal!.baseDefinition
             meaning!.definitionParameters <- bindArguments(request, binding.nominal, item, at)
             if(request!.outcome!=worldReady){shape!.outcome <- request!.outcome; break()}
             // Each named application establishes its own lexical boundary;
@@ -154,7 +172,7 @@ struct WorldPOVGraph {
         }
         if(proof==NULL){
             Allocate(proof); proof!.position <- at; proof!.source <- at
-            proof!.header <- read(request, at!.node, at!.node!.pParent, at!.input!=NULL)
+            proof!.header <- read(request, at!.node, at!.node!.pParent, at!.input!=NULL, false, false, at)
             our infonView: applied <- at!.node!.pItem
             proof!.definitionOwnsLayout <- !proof!.header.hasValue and !proof!.header.hasSize and
                 applied!.value!.evalMode==emUnknown and applied!.wrkList.isEmpty() and
@@ -169,7 +187,7 @@ struct WorldPOVGraph {
             our POV: source <- proof!.source!.node
             if(proof!.edge!=NULL and source!.pItem!.value!=NULL and
                (source!.pItem!.value!.timelike or source!.pItem!.value!.listSpec!=NULL)){proof!.templateLayoutRequired <- true}
-            me WorldScalar: header <- read(request, source, source!.pParent, proof!.source!.input!=NULL)
+            me WorldScalar: header <- read(request, source, source!.pParent, proof!.source!.input!=NULL, false, false, proof!.source)
             request!.listLayoutHeaders <+- 1
             if(header.outcome!=worldReady){
                 proof!.outcome <- header.outcome; proof!.detail <- header.detail
@@ -228,7 +246,7 @@ struct WorldPOVGraph {
                 proof!.outcome <- worldUnsupported; proof!.detail <- "Cyclic named list layout"; proof!.finished <- true; return(proof)
             }
             proof!.visited.insert(meaning)
-            our POV:: edge{939}; edge!.pItem <- meaning; edge!.trueByDefinition <- true
+            our POV:: edge{939}; edge!.pItem <- meaning; edge!.trueByDefinition <- true; edge!.definitionBinding <- header.nominal!.baseDefinition
             edge!.definitionParameters <- bindArguments(request, header.nominal, source!.pItem, proof!.source)
             if(request!.outcome!=worldReady){
                 proof!.outcome <- request!.outcome; proof!.detail <- request!.detail

@@ -9,6 +9,21 @@ struct GLOBAL{
 }
 //struct partOfSpeech: inherits=<mode[posUnknown, posNone, posFuncWord, posNoun, posVerb, posAdj, posAdv, posNegotiator, posName, posNum]> {}
 
+// Declaration locations borrow syntax without retaining a scope/model cycle.
+// Embedded syntax contributes a relative path inside the same lexical scope.
+struct WordScopePath {
+    me WorldWeakReference<POV>: member
+    our WordScopePath: parent
+}
+struct WordScopeDeclarations {
+    me List<our WordScopePath>: paths
+}
+struct WordScope {
+    our WordScope: parent
+    me bool: global <- false
+    me Map<string, our WordScopeDeclarations>: declarations
+}
+
 model WordDefn{
     me string: defWord
     me string: modelID
@@ -16,8 +31,18 @@ model WordDefn{
     me List<me string>: parameterNames
     me List<me string>: UsageTags
     our infonView: meaning
+    our WordScope: lexicalScope
     me string: langSpecTag      // e.g., 'eng:us:southern::slang'
     mode[posUnknown, posNone, posFuncWord, posNoun, posVerb, posAdj, posAdv, posNegotiator, posName, posNum]: defPOS     // The primary use for this word in speech
+    me bool: sameQualifiers(our WordDefn: other) <- {
+        me Set<string>: left
+        me Set<string>: right
+        withEach tagIndex in range 1 .. UsageTags.size(){left.insert(unicodeMgr.normalizeStr(UsageTags[tagIndex]))}
+        withEach tagIndex in range 1 .. other!.UsageTags.size(){right.insert(unicodeMgr.normalizeStr(other!.UsageTags[tagIndex]))}
+        if(left.size()!=right.size()){return(false)}
+        withEach tag in left{if(!right.contains(tag)){return(false)}}
+        return(true)
+    }
     me bool: tagExists(me string: tag) <- {
         withEach usageTag in UsageTags{
             if(usageTag==tag){return(true)}
@@ -179,6 +204,8 @@ struct AgentContext {
                 topicHistory!.value!.items.erase(priorContextPOV)
                 our POV: refreshedPOV <- topicHistory!.value!.items.prepend(
                         itemToAdd, povSrcContextReference)
+                refreshedPOV!.referenceAlias.sourcePov <- sourcePOV
+                refreshedPOV!.worldContext <- sourcePOV!.worldContext
                 if(registry!=NULL){
                     refreshedPOV!.bindIdentityRegistry(registry)
                     registry!.recordIdentity(refreshedPOV,
@@ -193,6 +220,8 @@ struct AgentContext {
         }
         our POV: contextPOV <- topicHistory!.value!.items.prepend(
                 itemToAdd, povSrcContextReference)
+        contextPOV!.referenceAlias.sourcePov <- sourcePOV
+        contextPOV!.worldContext <- sourcePOV!.worldContext
         if(registry!=NULL){
             contextPOV!.bindIdentityRegistry(registry)
             registry!.recordIdentity(contextPOV, sourcePOV,

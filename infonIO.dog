@@ -56,6 +56,8 @@ struct ProteusParser{
     me int64: errorSuppressDepth
     // Replaced at every definition boundary, including unparameterized ones.
     our WordDefn: parameterScope
+    our WordScope: wordScope
+    our infonView: embeddedWordScope
 
     their WorldManager: worldManager
     our infonView: documentRoot
@@ -701,6 +703,7 @@ struct ProteusParser{
         me char:  peek; WCHK_PEEK(cPos,valid_notDone)
         me bool:  fetchInnerInfon <- true
         if(chkPeek(cPos, peek, "!")){WCHK_PEEK(cPos,valid_notDone)}
+        if(chkPeek(cPos, peek, "#")){WCHK_PEEK(cPos,valid_notDone)}
         if(chkPeek(cPos, peek, "~")){
             // Unary `~word` is `%ctx~word`.  Check the descriptor here and
             // let the ordinary suffix checker handle anything following it.
@@ -844,6 +847,48 @@ struct ProteusParser{
         }
         return(-1)
     }
+    void: indexWordScope(our WordScope: scope, our infonView: body) <- {
+        if(scope==NULL or scope!.global){return()}
+        me List<our WordScopePath>: pending
+        our POV: member <- body!.value!.items.head
+        while(member!=NULL){
+            our WordScopePath:: path; path!.member.set(member); pending.append(path)
+            member <- member!.next
+        }
+        while(!pending.isEmpty()){
+            our WordScopePath: path <- pending.popLast()
+            our POV: at <- path!.member.lock()
+            if(at!.pItem!.itmMode==mWordDefn){
+                me string: name <- unicodeMgr.normalizeStr(at!.pItem!.definedWord!.defWord)
+                me int: separator <- findString(name,"_")
+                if(separator!=-1){name <- name.subStr(0,separator)}
+                if(!scope!.declarations.containsKey(name)){
+                    our WordScopeDeclarations:: entries; scope!.declarations.insert(name,entries)
+                }
+                scope!.declarations.at(name)!.paths.append(path)
+            }else if(at!.isSubItm and at!.pItem!.memberScope==NULL and at!.pItem!.value!.overlayType==LST and at!.pItem!.value!.evalMode==emLiteral){
+                member <- at!.pItem!.value!.items.head
+                while(member!=NULL){
+                    our WordScopePath:: child; child!.member.set(member); child!.parent <- path; pending.append(child)
+                    member <- member!.next
+                }
+            }
+        }
+    }
+    me bool: startsDeclaration(me int64: pos) <- {
+        me int64: at <- pos+1
+        at <+- text!.scrapeWSC(at)
+        me int64: length <- text!.scrapeUniID(at)
+        if(length<=0){return(false)}
+        at <+- length; at <+- text!.scrapeWSC(at)
+        if(text!.at(at)=="("){
+            at <+- 1
+            while(text!.at(at)!=")" and text!.at(at)!="\0"){at <+- 1}
+            if(text!.at(at)==")"){at <+- 1; at <+- text!.scrapeWSC(at)}
+        }
+        if(text!.at(at)=="<" and text!.at(at+1)!="~" and text!.at(at+1)!=":" and text!.at(at+1)!="!"){return(true)}
+        return(text!.at(at)=="=")
+    }
     me int64: parseWordDefn(our infonView: infn, me int64: pos) <- {
         me int64: cPos <- pos
         me int64: len
@@ -851,6 +896,7 @@ struct ProteusParser{
         if(chk(text!.scrapeUniID(cPos), cPos,len)){
             Allocate(infn!.definedWord)
             infn!.definedWord!.defWord <- makeStr(cPos-len, cPos)
+            infn!.definedWord!.lexicalScope <- wordScope
             cPos <+- text!.scrapeWSC(cPos)
             if(text!.at(cPos)=="("){
                 me int64: parameterLen <- parseDefinitionParameters(infn!.definedWord, cPos)
@@ -864,7 +910,7 @@ struct ProteusParser{
                         me string: usageTag <- makeStr(cPos-len, cPos)
                         trimWS(usageTag)
                         infn!.definedWord!.UsageTags.append(usageTag)
-                    } else{}
+                    }else{setError("Expected a usage tag or '>'",cPos); return(-1)}
                 }
                 chkStr(cPos,">")
             }
@@ -962,7 +1008,8 @@ struct ProteusParser{
 
         me char: peek <- peekWSC(cPos)
         me bool: isSubItm <- false
-        if(peek=="#"){
+        infn!.lexicalScope <- wordScope
+        if(peek=="#" and startsDeclaration(cPos)){
             cPos <+- 1
             infn!.itmMode <- mWordDefn
             if(chk(parseWordDefn(infn, cPos), cPos,len)){}
@@ -1013,7 +1060,10 @@ struct ProteusParser{
             }
             if(chkPeek(cPos, peek, "&")){
                 isSubItm <- true
+                our infonView: previousEmbeddedScope <- embeddedWordScope
+                embeddedWordScope <- infn
                 cPos <+- parseInfonView(infn, cPos, true, isFromDefn, prsCtxt)
+                embeddedWordScope <- previousEmbeddedScope
             } else {
             log("1 Parsing pure infon as list item at pos " + toString(cPos) + "\n")
                 infn!.itmMode <- mItem
@@ -1124,6 +1174,16 @@ struct ProteusParser{
                 return(-1)
             }
 
+            our WordScope: outerWords <- wordScope
+            if(parent===embeddedWordScope){
+                // Embedding contributes members to the enclosing lexical scope.
+                parent!.memberScope <- NULL
+            }else{
+                if(prsCtxt==pcMainInfn and parent===documentRoot and parent!.type==NULL and !parent!.templateReference){
+                    if(wordScope==NULL){Allocate(wordScope); wordScope!.global <- true}
+                }else{Allocate(wordScope); wordScope!.parent <- outerWords}
+                parent!.memberScope <- wordScope
+            }
             me int64: count<-0
             me bool: lastWasEllipsis <- false
             while(peekWSC(cPos) != ender){
@@ -1168,6 +1228,8 @@ struct ProteusParser{
                 count <+- 1
             }
             cPos <+- 1
+            if(parent!.memberScope!=NULL){indexWordScope(wordScope,parent)}
+            wordScope <- outerWords
 
             // Fold only the actual ellipsis token. An explicit embedded list
             // may carry a prefix, template or supplied constraints of its own.
@@ -1364,7 +1426,10 @@ struct ProteusParser{
             infn!.infSize!.evalMode <- emUnknown
         } else if(chkPeek(cPos, peek, "%")){
             infn!.viewMode <- vmCursor
-            if(chk(text!.scrapeCID(cPos), cPos,len)){
+            // A cursor states no size; keep that true when its attached
+            // constraints are normalized as an ordinary value description.
+            infn!.infSize!.evalMode <- emUnknown
+            if(chk(text!.scrapeUniID(cPos), cPos,len)){
                 me string: tag <- makeStr(cPos-len, cPos)
                 switch(tag){
                     case "self":{infn!.cursorMode <- cmSelf}
@@ -1380,10 +1445,13 @@ struct ProteusParser{
                     default:{
                         if(parameterScope!=NULL and parameterScope!.hasParameter(tag)){
                             infn!.cursorMode <- cmParameter; infn!.parameterName <- tag
-                        }else{setError("Invalid %tag '%"+tag+"'", cPos-len-1)}
+                        }else{infn!.cursorMode <- cmNamed; infn!.parameterName <- tag}
                     }
                 }
-            } else {infn!.cursorMode <- cmSelf}
+            }else{
+                if(isdigit(text!.at(cPos))){setError("Cursor name must start with a word character",cPos)}
+                infn!.cursorMode <- cmSelf
+            }
         } else {
             me bool: requirePlusMinusSign <- false
             infn!.viewMode <- vmOverlay
@@ -1448,11 +1516,24 @@ struct ProteusParser{
     me int64: parseInfonView(our infonView: infn, me int64: pos, me bool: allowIDs, me bool: isFromDefn, me parseContext: prsCtxt <- pcMainInfn, me bool: doNotify <- true) <- {
         infn!.streamState  <- parseStarted // parsing has started
         infn!.isFromDefn   <- isFromDefn
+        infn!.lexicalScope <- wordScope
         me int64: cPos    <- pos  // Current position
         me int64: len
         me bool: fetchInnerInfon <- true
         infn!.originID     <- originID
         infn!.infCharPos   <- pos
+
+        // A declaration is also a complete assertion at the interaction root.
+        // Nested declarations are handled by parseListItem.
+        cPos <+- text!.scrapeWSC(cPos)
+        if(infn===documentRoot and text!.at(cPos)=="#" and startsDeclaration(cPos)){
+            infn!.itmMode <- mWordDefn
+            me int64: declarationLen <- parseWordDefn(infn,cPos+1)
+            if(declarationLen<0){return(-1)}
+            cPos <+- declarationLen+1
+            notifyStreamState(infn,parseDone)
+            return(cPos-pos)
+        }
 
         // Check for '!' invertMatch
         if(chkStrWSC(cPos, "!")){
@@ -1481,6 +1562,11 @@ struct ProteusParser{
             cPos <+- pathLen
             implicitPart!.path <- pathSeg
             infn!.partRef <- implicitPart
+        }
+
+        if(fetchInnerInfon and chkStrWSC(cPos, "#")){
+            infn!.templateReference <- true
+            cPos <+- text!.scrapeWSC(cPos)
         }
 
         // WordUse:type
@@ -1592,7 +1678,7 @@ struct ProteusParser{
         try {
             if(streamingMode){beginDocument(infn)}
             clearError()
-            parameterScope <- NULL
+            parameterScope <- NULL; wordScope <- NULL; embeddedWordScope <- NULL
             parseInfonView(infn, 0, true, false)
             if(errorSet and infn!.graphParseError==""){infn!.graphParseError <- formattedError()}
             finishingDocument <- true
@@ -1918,7 +2004,12 @@ struct InfonViewPrinter{
         }
         else{used![iSymbol]<-1}
         if(i!.value!.undefined){S <+- "UNDEFINED"; if(resetColor){S<+-tam.popColor();} return(S)}
+        if(i!.templateModel!=NULL){
+            S <+- "#"+printInfonViewActual(i!.templateModel,used,false,true,verbosity,special,printMode)
+            return(S)
+        }
         if(i!.invertMatch){S <+- "!"}
+        if(i!.templateReference){S <+- "#"}
         if(i!.type!=NULL and i!.itmMode!=mWordDefn){
             me string: wordSysString <- i!.type!.asGiven
             if(wordSysString==""){wordSysString<-"ERROR: NULL-TAG"}
@@ -2014,6 +2105,7 @@ struct InfonViewPrinter{
                         case cmTPrev:  {S <+- "tprev"}
                         case cmTNext:  {S <+- "tnext"}
                         case cmParameter:{S <+- i!.parameterName}
+                        case cmNamed:{S <+- i!.parameterName}
                     }
                 }
             } else if(i!.viewMode==vmOverlay){

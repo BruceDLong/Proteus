@@ -74,15 +74,48 @@ List membership/count, values, and temporal duration are distinct. Member count 
 
 ### Definitions and selection
 
-There are two distinct namespace contributions (D113). `#planet = ...`
-defines a general model. An individual carries an external name association,
-such as `planet:{T ...}^name=Earth`; a description may also contain a
-`^name=Bob` field. `~name` looks up the name relationship and `~Earth`
-resolves the named individual through ordinary contextual resolution. The
-name value and its bearer are distinct. Resolving an individual preserves
-its occurrence identity; it does not apply a reusable `#Earth` template.
-This is an accepted semantic distinction, not a claim that all naming and
-resolution paths are implemented. Naming scope and collision rules remain open.
+The unified namespace (D114, superseding D113) binds a name either to an
+immutable reusable model or to an existing contextual occurrence. A literal or
+model declaration such as `#planet={T {thing, ...}|...}` defines a template;
+`#planet` reads that template without instantiating it. Ordinary `planet` applies
+it. `#planet.listSpec` exposes the immediate state template, avoiding a second
+`planet-state` definition. A refined template can be declared as
+`#redBalloon=#balloon:{color:'red'}`.
+
+A direct cursor initializer such as `#Earth=%ctx.planet` or `#Other=%Earth`
+binds the selected occurrence once. `%Earth` subsequently refers to that same
+individual, preserving qualifications, original context and facts learned
+through other aliases. Parameterized headers always describe templates;
+`#copy=#original` preserves the source template's parameter signature when no
+new signature is supplied. The binding itself has no temporal history; its
+model or selected individual may contain a T-list. All infons remain immutable:
+additional constraints may establish unknown facts through checked, non-failing
+relationships, but cannot replace a known value or a name's referent.
+
+Names have lexical scope. Ordinary nested lists introduce scopes; embedded
+`&{...}` shares its containing scope. Each application has its own local bindings
+while its shared declaration stays read-only. Definitions capture their lexical
+declaration context, rather than implicitly accessing a caller's data-structure
+parent. Top-level assertion lists publish global names atomically with their
+checked facts. `%ctx` remains session context and supplies source-ordered recent
+references; a name captures its referent rather than tracking future recency.
+
+Existing header decorations are retained on both kinds of binding. The first
+usage tag, e.g. `<en>`, supplies the existing language filter. Additional usage
+tags and explicit model IDs are preserved. Exact qualified-name rebinding is
+rejected; distinct qualifier sets can coexist, but unresolved overload selection
+reports unsupported instead of choosing a meaning. An alias's own header tags
+belong to its spelling; its source declaration remains unchanged. Template values
+carry the prototype needed to preserve parameter signatures when binding aliases.
+Additional usage-tag order is not significant for collision detection.
+
+`^name` remains an ordinary external relationship, without namespace registration;
+`~name` can still select that property. World individual naming uses `#`/`%`.
+Only immediate template `.listSpec` introspection is supported in this increment.
+Template metadata editing, arbitrary quoted phrase construction, temporal-view
+conversion, overload inference, and names inside demand-generated occurrences
+remain deferred. Static local environments live with their owning Agent; generated
+local names explicitly report unsupported until retention is designed.
 
 Fields are typed members with nominal compatibility. Equal structure alone does not make sibling types interchangeable. Ordered lookup selects the first proved compatible logical member; unresolved earlier candidates can block a later winner. Unordered lookup retains matching alternatives. Route cost must not change the semantic winner.
 

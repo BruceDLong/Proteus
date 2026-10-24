@@ -4213,3 +4213,102 @@ richer name metadata are not settled by this example. Future implementation
 must compose the ordinary relationship and resolution machinery, preserving
 qualification, context and occurrence identity. No special individual-definition
 syntax, second identity store or old-solver fallback is introduced here.
+
+
+## D114 — Unified template and individual bindings (2026-10-24)
+
+**Decision.** Supersede D113's second naming mechanism with a single scoped
+catalogue. A declaration binds a reusable template or an existing occurrence.
+`#planet` reads a template; `planet` applies it; `#planet.listSpec` reads its
+immediate state model. `#kind=#balloon:{color:'red'}` constructs a refined model
+without instantiating it. A direct cursor RHS, `#Earth=%ctx.planet`, binds the
+selected individual; `%Earth` is its explicit new-cursor reference. Parameterized
+headers remain templates, including bodies that consist of a parameter cursor.
+A template alias without a new header signature inherits its prototype's roles.
+
+Bindings are immutable once established. Their values may describe histories,
+but the bindings themselves do not have T-lists. Existing infon immutability
+and ordinary checked publication govern new facts; no mutable-name history or
+special replacement operation is added. Conflicting facts and rebinding reject
+without publishing names, values or recency from the failed request.
+
+The existing usage decorations remain on each binding. First tag means language;
+the current locale compatibility check filters it. Later tags are retained and
+compared as normalized sets for collision detection. Different language, model-ID
+or usage-qualified declarations can coexist. Selecting among multiple applicable
+meanings remains unsupported. Tags do not decide whether a value is a template
+or an individual. An alias keeps its own header decorations; its source declaration remains
+unchanged, and the prototype supplies the inherited parameter signature. No noun category is inferred.
+
+**Scope and implementation.** Parsed lists carry lexical scope metadata. Ordinary
+nested lists introduce scope; transparent embedded lists reuse the enclosing
+scope. A per-name weak syntax index finds lazy local declarations without
+repeated traversal from the beginning of an authored list. Runtime local bindings
+are keyed by their owning occurrence; shared template syntax is never a runtime
+environment. Definition relationships retain their original declaration binding
+and lexical context through header probes and structured correspondence.
+
+Initializers use ordinary normalization and its waiting/cancellation lifecycle.
+A bare individual initializer requests a reference without eagerly normalizing
+its whole lifetime. Explicit initializer constraints use ordinary checked
+normalization. Cursor syntax leaves size unknown, including when its attached
+constraints are evaluated as a value description; a default zero size must not
+create a spurious endpoint constraint. Stored aliases retain qualified source positions; normal source
+relationships acquire their values and stage checked facts back to the referent.
+Exact reference wrappers do not register a second active semantic occurrence
+for the source syntax: their source frame owns cycle detection, while wrapper
+list requirements and navigation coordinates remain in place. A weak reference
+from the stored representation avoids a backwards ownership cycle; the catalogue holds the durable selected occurrence. No second solver,
+independent value cache or old-solver fallback is involved. Context wrappers
+carry their actual source POV, and top-level assertions update request-local
+recency in source order before atomic publication. Agent supplies its interaction
+context through the WorldManager interface; context access and parser
+continuation share the model lock, without caller writes to graph internals.
+
+Authored local environments currently remain with the Agent. A declaration under
+a demand-generated occurrence reports unsupported: retaining an environment per
+generated state would defeat bounded temporal retention. General collection of
+static environments, generated-scope retention and additional asynchronous
+session-recency policies are later work. This increment claims no general
+linear bound for ambiguous inference.
+
+**Related correspondence fixes.** An open unordered record with a finite set of
+unique named fields can still occupy one outer S-item without a closed field
+layout. An unconstrained remainder imposes no constraint on an extra represented
+field. These proofs reuse ordinary matching and preserve the existing unsafe-
+absence controls. Record-field merging must not consume either side's listSpec
+or retained tail requirements; those continue through ordinary correspondence.
+
+**Migration and limits.** World commit `ac5ff75` uses one temporal definition
+per astronomy model
+with an inline S-listSpec, twelve `#Name=%ctx.type` individual bindings and `%Name`
+references. The tiny Earth history and inventory are unchanged. `^name` has no
+special namespace implementation to preserve: it remains generic external data,
+just like other `^` properties. Removing its naming role and migrating clients
+avoids a special parser ban and preserves existing property fixtures. Arbitrary
+quoted phrase assembly, metadata writes, temporal conversion and overload
+selection remain deferred; immediate `.listSpec` inspection is supported.
+
+**Validation.** Focused language cases and ordinary CodeDog checks cover parsing,
+refinement, inherited parameter roles, decorated collisions, lexical shadowing,
+separate applications, read-only declarations, stable occurrence identity,
+shared writes, failure atomicity, streaming readiness and cancellation. The final
+ordinary CodeDog regeneration and optimized TestProteus build pass.
+All six compiled naming checks and 25 language cases pass. The full run has
+24 failures across 688 cases, with exactly the same failing names as the fresh
+24/657 baseline. Parser negative controls now use malformed cursor/tag syntax:
+unknown `%name` and prefix template reads are valid syntax in this increment.
+
+The actual World authored-structure check and all four source parser cases pass.
+All five naming controls and both finite-history controls pass. Seven actual
+Earth/Sol reads retain the open-source span-alignment failure during context
+loading, before their queries run. All intended scalar values remain unchanged.
+The separate optimized shared-library build passes, exporting
+`proteusGraph_abi_bbf28e59a70aef609605`. Slipstream regenerates and builds against
+that interface. An isolated real GUI run with the current World sources visibly
+renders both Rubix states, navigates 0 -> 1 -> 0, and returns to the same index-0
+occurrence. All three screenshots were inspected. There are no cursor/display
+errors and shutdown exits zero; the existing open-source alignment NRMERR remains.
+This is consumer regression coverage, not proof of astronomy normalization.
+Generated C++ was used only for diagnosis; all accepted changes were ported to
+CodeDog and regenerated. Evidence: `/tmp/proteus-unified-names-20261024/`.

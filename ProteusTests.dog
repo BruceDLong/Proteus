@@ -1,6 +1,12 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/unifiedNames/identity
+    unit/unifiedNames/decorations
+    unit/unifiedNames/scopes
+    unit/unifiedNames/templateReadiness
+    unit/unifiedNames/waitAndCancel
+    unit/unifiedNames/streamedSyntax
     unit/computedProduction/values
     unit/computedProduction/dependencies
     unit/computedProduction/waitAndCancel
@@ -458,8 +464,8 @@ struct GLOBAL {
     //WORLDTEST(word/wordID,      "Sets wordID",              "world.localeTest.pr",  "{wordA_wn123}//:{wordA_wn123:'wordA for en_US and wn123'}")
     //WORLDTEST(word/locale,      "Test locales",             "world.localeTest.pr",  "{wordA}//:{wordA:*_+['wordA for en_US' 'wordA for en_US and wn246' 'wordA for en_US and wn123' 'wordA for en_US and wn456']}")
 
-    PARSEERR(parse/errorBadTag, "Invalid %tag reports line and column", "{1\n%bogus}", "Invalid %tag '%bogus'", 2, 1)
-    PARSEERR(parse/errorWordDefn, "Missing '=' in word definition reports location", "{#color {1}}", "Expected '=' in the definition of color", 1, 9)
+    PARSEERR(parse/errorBadTag, "Invalid cursor name reports line and column", "{1\n%1}", "Cursor name must start with a word character", 2, 2)
+    PARSEERR(parse/errorWordDefn, "Missing '=' in word definition reports location", "{#color <en> {1}}", "Expected '=' in the definition of color", 1, 14)
     PARSEERR(parse/errorBareNegativeSize, "Bare negative size remains unavailable", "*-1+5", "Expected a number", 1, 2)
     PARSEERR(parse/errorLegacyDefinition, "Legacy definition marker reports its replacement", "{@color=1}", "Legacy '@' definition syntax is no longer supported; use '#'", 1, 2)
 //    WORLDTEST(parse/toyLang,    "Complex parse", "toyLang.pr",   "toyLang=='if(a>b){a=2;};'//:zzzz")
@@ -2448,9 +2454,9 @@ struct GLOBAL {
         me List<string>: inputs <- [
             "{#give(item, item)=_}", "{#give(item,)=_}", "{#give(,item)=_}",
             "{#give(item actor)=_}", "{#give(item=_)=_}", "{#give(7)=_}",
-            "{#give(item = _}", "{#give(item)=%other}",
-            "{#outer(item)={#inner=%item}}", "{#outer(item)={#inner(other)=%item}}",
-            "{#give(item)=%item %item}", "{#give: item = _}"
+            "{#give(item = _}", "{#give(item)=%1}",
+            "{#outer(item)={#inner=%1}}", "{#outer(item)={#inner(other)=%1}}",
+            "{#give <en> : _}", "{#give <en = _}"
         ]
         withEach input in inputs{
             me ProteusParser: parser{NULL, false, 0}
@@ -7639,6 +7645,142 @@ struct GLOBAL {
             if(session!.requests.size()>1){FAIL("A completed partial query retained its request registry entry")}
             if(attempt==19){print("Computed partial attempts=20 scopes=",retained.scopes," argumentSlots=",retained.slots,"\n")}
         }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+}
+
+
+// First-class name bindings use the ordinary normalization lifecycle.
+struct GLOBAL {
+    void: unit_unifiedNames_identity(me string: testName) <- {
+        me ProteusCore: core; core.init("",false)
+        our Agent: agent <- core.agent
+        me WorldParseResult: definitions <- agent!.worldManager.parse("{#value=_ #box={value}}")
+        if(agent!.normalize(definitions.target)!.failed()){FAIL("Could not establish template definitions")}
+        me WorldParseResult: objectValue <- agent!.worldManager.parse("box:{value:7}")
+        agent!.normalize(objectValue.target)
+        me WorldParseResult: declaration <- agent!.worldManager.parse("#Bob <en name> = %ctx.box")
+        our WorldRequest: bound <- agent!.normalize(declaration.target)
+        if(bound!.status().outcome!=worldComplete){FAIL("Could not bind an individual: "+bound!.status().detail)}
+        me WorldParseResult: alias <- agent!.worldManager.parse("#Robert=%Bob")
+        if(agent!.normalize(alias.target)!.failed()){FAIL("Could not bind the second name")}
+        me List<string>: spellings <- ["%Bob", "%Robert"]
+        withEach spelling in spellings{
+            me WorldParseResult: query <- agent!.worldManager.parse(spelling)
+            our WorldRequest: result <- agent!.normalize(query.target)
+            if(result!.selectedSource()!==objectValue.target){FAIL("An individual reference did not retain its source occurrence")}
+        }
+        me WorldScalar: facts; our WordUse:: word; word!.setAsGiven("Bob")
+        facts <- agent!.worldManager.graph.bind(bound,facts,word)
+        our WorldNameBinding: binding <- agent!.worldManager.graph.nameBinding(bound,facts.nominal!.baseDefinition)
+        if(binding==NULL or binding!.declaration!.UsageTags.size()!=2 or !binding!.declaration!.tagExists("name") or binding!.target!.node!==objectValue.target){FAIL("Binding lost its decorations or referent")}
+        me WorldParseResult: conflicting <- agent!.worldManager.parse("{#Lost=%Bob 3=4}")
+        if(agent!.normalize(conflicting.target)!.status().outcome!=worldRejected){FAIL("Conflicting assertion was accepted")}
+        if(agent!.worldManager.graph.definitions.containsKey("lost")){FAIL("A failing assertion published a name")}
+        core.deInit(); modelMngr.clear()
+    }
+    void: unit_unifiedNames_waitAndCancel(me string: testName) <- {
+        me List<bool>: cancellationModes <- [false,true]
+        withEach cancelFirst in cancellationModes{
+            me ProteusCore: core; core.init("",false)
+            our Agent: agent <- core.agent
+            me WorldParseResult: definitions <- agent!.worldManager.parse("{#value=_ #box={value}}")
+            agent!.normalize(definitions.target)
+            me WorldParseResult: objectValue <- agent!.worldManager.parse("box:{value:7}")
+            agent!.normalize(objectValue.target)
+            agent!.worldManager.prepareInput(objectValue.target!.pItem)
+            me WorldParseResult: declaration <- agent!.worldManager.parse("#Bob=%ctx.box")
+            our WorldRequest: pending <- agent!.normalize(declaration.target)
+            if(pending!.status().outcome!=worldWaiting or agent!.worldManager.graph.definitions.containsKey("bob")){FAIL("Pending name published early or failed to wait")}
+            if(cancelFirst){pending!.cancel()}
+            objectValue.target!.pItem!.streamState <- parseDone
+            agent!.worldManager.inputReady(objectValue.target!.pItem)
+            if(cancelFirst){
+                if(pending!.status().outcome!=worldCancelled or agent!.worldManager.graph.definitions.containsKey("bob")){FAIL("Cancelled declaration published a name")}
+            }else{
+                if(pending!.status().outcome!=worldComplete){FAIL("Name binding did not resume: "+pending!.status().detail)}
+                me WorldParseResult: query <- agent!.worldManager.parse("%Bob.value")
+                our WorldRequest: read <- agent!.normalize(query.target)
+                if(read!.status().outcome!=worldComplete or query.target!.pItem!.fetchInt()!=7){FAIL("Resumed binding has the wrong referent")}
+            }
+            if(!agent!.worldManager.control!.inputWaiters.isEmpty()){FAIL("Name declaration retained a stale subscription")}
+            core.deInit(); modelMngr.clear()
+        }
+    }
+    void: unit_unifiedNames_streamedSyntax(me string: testName) <- {
+        me string: source <- "{#give(actor, item) <en verb> = %item #copy=#give #give.listSpec %Milky-Way}"
+        me List<int>: cuts <- [1,2,6,10,18,24,29,40,44,49,55,61,67]
+        withEach cut in cuts{
+            me ProteusCore: core; core.init("",false)
+            me strBuf: input; input.init(testName); input.putStr(source.subStr(0,cut))
+            our ProteusParser:: parser{core,true,0}; parser!.initParseFromStream(input)
+            our infonView:: root
+            me ParserInputWorker: reader; reader.core <- core; reader.parser <- parser; reader.root <- root
+            reader.entered.wait(); reader.start(); reader.entered.wait()
+            me ParserInputQuery: query; query.core <- core; query.watched <- root; query.start()
+            me int: elapsed
+            while(!query.isDone() and elapsed<2000){sleep(5); elapsed <+- 5}
+            me bool: progressed <- query.isDone()
+            input.putStr(source.subStr(cut)); input.close()
+            reader.waitForExit(); query.waitForExit()
+            me string: actual <- toString(root)
+            core.deInit(); modelMngr.clear()
+            if(!progressed or parser!.doesParseHaveError()){FAIL("Naming syntax did not resume at offset "+toString(cut))}
+            me string: expected <- "{#give(actor, item) <en verb >= %item #copy = #give #give.listSpec %Milky-Way}"
+            REQUIRE(actual==expected)
+        }
+    }
+}
+
+struct GLOBAL {
+    void: unit_unifiedNames_templateReadiness(me string: testName) <- {
+        me ProteusCore: core; core.init("",false)
+        me WorldParseResult: declaration <- core.agent!.worldManager.parse("{#model={x:7}}")
+        core.agent!.normalize(declaration.target)
+        me WorldParseResult: reference <- core.agent!.worldManager.parse("#model")
+        core.agent!.worldManager.prepareInput(reference.target!.pItem)
+        our WorldRequest: waiting <- core.agent!.normalize(reference.target)
+        if(waiting!.status().outcome!=worldWaiting or reference.target!.pItem!.templateModel!=NULL or waiting!.publications!=0){FAIL("Template reference normalized an incomplete parser header")}
+        reference.target!.pItem!.streamState <- parseDone
+        core.agent!.worldManager.inputReady(reference.target!.pItem)
+        if(waiting!.status().outcome!=worldComplete or reference.target!.pItem!.templateModel==NULL){FAIL("Template reference did not resume after parser completion")}
+        if(!core.agent!.worldManager.control!.inputWaiters.isEmpty()){FAIL("Template reference retained its parser subscription")}
+        core.deInit(); modelMngr.clear()
+    }
+}
+
+struct GLOBAL {
+    void: unit_unifiedNames_scopes(me string: testName) <- {
+        me ProteusCore: core; core.init("",false)
+        me WorldParseResult: definitions <- core.agent!.worldManager.parse("{#value=_ #box={value} #sample={#picked=%ctx.box %picked.value}}")
+        our infonView: schema <- definitions.target!.pItem!.value!.items.tail!.pItem!.funcArgs
+        me string: original <- toString(schema)
+        core.agent!.normalize(definitions.target)
+        me WorldParseResult: instances <- core.agent!.worldManager.parse("{box:{value:7} sample box:{value:9} sample}")
+        our WorldRequest: normalized <- core.agent!.normalize(instances.target)
+        if(normalized!.failed()){FAIL("Local scopes did not normalize: "+normalized!.error())}
+        our POV: first <- instances.target!.pItem!.value!.items.head!.next
+        our POV: second <- first!.next!.next
+        if(first!.pItem!.value!.items.tail!.pItem!.fetchInt()!=7 or second!.pItem!.value!.items.tail!.pItem!.fetchInt()!=9){FAIL("Two instances shared a local name binding")}
+        if(schema!.value!.items.head!.pItem!.isNormed or toString(schema)!=original){FAIL("Application modified a shared declaration")}
+        if(!core.agent!.worldManager.graph.scopedDefinitions.containsKey(schema!.memberScope) or
+           core.agent!.worldManager.graph.scopedDefinitions.at(schema!.memberScope)!.occurrences.size()!=2){FAIL("Local names did not retain distinct occurrence scopes")}
+        core.deInit(); modelMngr.clear()
+    }
+}
+
+struct GLOBAL {
+    void: unit_unifiedNames_decorations(me string: testName) <- {
+        me Agent: agent
+        me WorldParseResult: declarations <- agent.worldManager.parse("{#bank <en noun> = 1 #bank <en verb> = 2}")
+        our WorldRequest: installed <- agent.normalize(declarations.target)
+        if(installed!.failed() or !agent.worldManager.graph.definitions.containsKey("bank") or
+           agent.worldManager.graph.definitions.at("bank")!.entries.size()!=2){FAIL("Distinct decorated declarations were discarded or replaced")}
+        me WorldParseResult: ambiguous <- agent.worldManager.parse("#bank")
+        our WorldRequest: lookup <- agent.normalize(ambiguous.target)
+        if(lookup!.status().outcome!=worldUnsupported){FAIL("Undecided usage qualifiers silently chose a meaning")}
+        me WorldParseResult: duplicate <- agent.worldManager.parse("{#bank <en noun> = 3}")
+        if(agent.normalize(duplicate.target)!.status().outcome!=worldRejected or agent.worldManager.graph.definitions.at("bank")!.entries.size()!=2){FAIL("Redefinition changed an established decorated binding")}
         agent.endWorldSessions(); modelMngr.clear()
     }
 }
