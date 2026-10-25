@@ -1462,6 +1462,17 @@ Positive type selection preserves an existing primary name and pending list requ
 
 A positive numeric/string `<<=` supplies new value and size evidence. Anonymous RHSs keep the declared destination name; named RHSs supply their own. One fresh value goal checks the retained meaning and parent listSpec at the destination occurrence, preserving completed RHS cursors and exact parser waits. This is a new semantic state, not a restarted old goal. Staged publication preserves occurrence identity, replaces discarded extents, and leaves sources intact on rejection or cancellation. List and qualified replacement semantics remain separate work.
 
+**Selected descendants (D123, 2026-10-25).** Inline intersections can supply a
+path's base occurrence through ordinary selection. When an ancestor constraint
+has a positive open list with no stated extent, an established target member
+beyond its represented prefix still receives the source listSpec. A bare open
+remainder contributes no individual-member constraint. Projection borrows the
+template at the target's occurrence; it does not create members in the source
+or establish an absent queried instance. Qualified relationships, unresolved
+source work and ambiguous embedded spans retain their existing boundaries.
+Replacement discards the old literal's local size, while a size, type or value
+imposed by the retained listSpec still applies to the new value.
+
 **D047 acceptance.** Both regular CodeDog builds succeed and agree across 160 relevant generated methods. All 46 WorldManager suites pass; the independent regenerated library passes 29,998 native checks, including 69 replacement assertions. Default failures fall from 28 to 27 out of 332, recovering `merge/ident/force`; the full inventory is 1419/1908 with no new failing names. Protected fixtures, historical registrations, archived assertions and unrelated `myTests.tst` remain unchanged.
 
 ### External properties and resolution (D048)

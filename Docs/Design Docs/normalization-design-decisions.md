@@ -4875,3 +4875,88 @@ checks consumer build/link compatibility only. Interactive startup and visible
 rendering were not exercised by this engine/fixture change. Evidence:
 `/tmp/proteus-stage5-slipstream-build.log` and
 `/tmp/proteus-stage5-consumer-link-final.log`.
+
+### D123 Selected descendants retain open-tail templates during replacement
+
+**Model-driven increment, 2026-10-25.** The `user/setNth` write changes
+`member:'Tiffany'` to `member:'KTiffany'`. Its schema requires `member:$`, not
+a seven-character string. The old literal supplies the discarded local size;
+a size or literal explicitly imposed by a definition or listSpec remains a
+constraint on the replacement. D047's destination checks are retained.
+
+Two independent reductions expose the blockers. An inline intersection such
+as `*2+[{properties:{member:'Bruce'}} {properties:{member:'Tiffany'}}]`
+cannot previously serve as the base of `.properties.member`. The path now
+asks the ordinary selection machinery for that base's occurrence before
+applying the next path instruction, retaining the same request on waits.
+Publishing the path result also clears the consumed intersection wrapper, so
+the result prints and normalizes as the selected field rather than the old
+bracket expression.
+
+With `@[2]`, the write reaches destination constraint acquisition. An ancestor
+schema supplies `data:{...}` or `data:{task:{...}| task:{...} ...}`. The second
+instance member exists, but its corresponding schema position is in the open
+remainder. The old projection treated that remainder as missing source data
+and returned `Selected span needs more source positions` before publication.
+
+**Rule.** For an ordinary parent requirement and an established nonembedded
+target member beyond the represented prefix of a positive ordinary source
+list, a root open remainder with no stated extent contributes its listSpec.
+An absent listSpec contributes no individual-member constraint. A present
+listSpec is a borrowed, read-only representation at the target occurrence;
+its ordinary normalization and descendant projection still check values,
+types, extents and pending relationships. The template's parameter binding
+and the target's navigation context are retained. No source occurrence is
+invented or appended to the open list.
+
+The rule does not satisfy a query for an absent instance. It excludes
+qualified relations, fixed or unresolved explicit extents, temporal and
+unordered sources, pending source relationships and open embedded spans with
+unsettled correspondence. Other retained parent requirements remain active.
+The ordinary replacement path still stages all writes until the checks pass;
+rejection or cancellation leaves the stored instance and schemas unchanged.
+
+**Reason and alternatives.** Removing listSpec checks would accept invalid
+numeric, fixed-width or literal-constrained replacements. Keeping the old
+literal's width would incorrectly reject the allowed string update. Expanding
+the schema's unknown remainder into stored members would fabricate instance
+identity and turn a finite demand into unbounded work. Projecting the existing
+template expresses the required member constraint directly through the common
+correspondence and merge operations.
+
+**Cost.** The source walk consumes its represented prefix once and projects
+only the requested member's template. It does not enumerate the distance into
+the open source remainder or request unneeded sibling values. Each inline
+base retains one ordinary selection request; there is no reset or second
+matcher. General ambiguous alignment remains outside this increment.
+
+**Validation.** Three ordinary CodeDog checks and ten language fixtures pass.
+The original `user/getNth` and `user/setNth` inputs and expectations pass
+unchanged. A fresh indexed read returns `member:'KTiffany'` after the inline
+write; the stored size is 8, the selected POV is unchanged, and siblings and
+the borrowed schema retain their original values. Numeric replacement under
+`member:$`, length 8 under `member:*7+$`, and a changed literal under
+`member:'Tiffany'` all reject. Ordinary equality still rejects a conflicting
+value. Parser completion continues the waiting replacement; unrelated input
+does no work, and cancellation publishes nothing and removes the subscription.
+
+At 16/32/64 represented target members, replacement uses 191/335/623 frames,
+454/806/1510 queue steps, 59/107/203 relationship reads and 74/90/122
+correspondence positions, with no subscriptions to the open remainder.
+
+The regenerated executable passes **773/777**, leaving four previously active
+failures: typed selection source provenance, ambiguous `align4b`, Rubix
+nested selection and implicit selection in a sized composite
+list. Defaults pass **520/523**. No retained expectation was changed and no
+new failing name was introduced. The final executable build took 291.94
+seconds; the shared-library build took 195.19 seconds. The three changed
+generated methods match between the executable and shared-library targets.
+Evidence: `/tmp/proteus-setnth-{compiled,fixtures-final,user-final,scaling,all-final,default-final}.log`
+and `/tmp/proteus-setnth-{build-final,shared-build}.log`.
+
+Slipstream was regenerated and rebuilt against the updated exported interface
+in 132.71 seconds. `ldd -r` resolves the canonical
+`SharedBuild/libproteusGraph.so` with no missing symbols. This verifies consumer
+build/link compatibility; interactive startup and visible rendering were not
+exercised. Evidence: `/tmp/proteus-setnth-slipstream-build.log` and
+`/tmp/proteus-setnth-consumer-link.log`.

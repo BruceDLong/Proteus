@@ -1,6 +1,9 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/selectionReplacement/persistence
+    unit/selectionReplacement/waitAndCancel
+    unit/selectionReplacement/scaling
     unit/openAlignment/unconstrainedSource
     unit/openAlignment/sourceGuards
     unit/openAlignment/waitAndCancel
@@ -8498,6 +8501,107 @@ struct GLOBAL {
             }
             if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Wide header proof created an unrequested subscription")}
             previousFrames <- checked!.framesCreated; previousQueue <- checked!.queueSteps
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+}
+
+// Replacement follows the selected instance while ancestor templates remain
+// constraints. Re-reading uses a fresh request against the stored world.
+struct GLOBAL {
+    me string: selectionReplacementWorld(me string: memberSpec, me int: width) <- {
+        me string: pattern <- "{properties:{member:"+memberSpec+"}}"
+        me string: source <- "{holder:{data:{"+pattern+"| "+pattern+" ...}}|holder:{data:{"
+        withEach idx in range 0 .. width{source <+- "{properties:{member:'Tiffany'}} "}
+        return(source+"}}}")
+    }
+
+    void: unit_selectionReplacement_persistence(me string: testName) <- {
+        me List<string>: specifications <- ["$", "*7+$", "'Tiffany'"]
+        me int: scenario <- 0
+        withEach specification in specifications{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: world <- agent.worldManager.parse(selectionReplacementWorld(specification,3))
+            if(world.target==NULL){FAIL(world.error)}
+            agent.world <- world.target!.pItem
+            our infonView: schema <- agent.world!.value!.listSpec
+            me string: schemaBefore <- toString(schema)
+            our POV: data <- agent.world!.value!.items.head!.pItem!.fetchField("data")
+            our POV: first <- data!.pItem!.value!.items.head
+            our POV: second <- first!.next
+            our POV: third <- second!.next
+            our POV: member <- second!.pItem!.fetchField("properties")!.pItem!.fetchField("member")
+            me WorldParseResult: query <- agent.worldManager.parse("*2+[& %W.holder.data].properties.member<<='KTiffany'")
+            our WorldRequest: written <- agent.normalize(query.target)
+            if(scenario==0){
+                if(!written!.complete() or toString(query.target!.pItem)!="member:'KTiffany'" or
+                   member!.pItem!.value!.str!="KTiffany" or member!.pItem!.infSize!.num!=8){
+                    FAIL("Selected replacement did not persist its value and local extent: "+written!.error())
+                }
+                if(written!.selectedSource()!==member){FAIL("Replacement lost the selected source occurrence")}
+            }else if(written!.status().outcome!=worldRejected or written!.publications!=0 or member!.pItem!.value!.str!="Tiffany"){
+                FAIL("Replacement bypassed a retained size or literal listSpec constraint")
+            }
+            me WorldParseResult: fresh <- agent.worldManager.parse("%W.holder.data@[2].properties.member")
+            our WorldRequest: read <- agent.normalize(fresh.target)
+            me string: expected <- "member:'Tiffany'"; if(scenario==0){expected <- "member:'KTiffany'"}
+            if(!read!.complete() or toString(fresh.target!.pItem)!=expected){FAIL("Fresh indexed read lost the stored replacement")}
+            if(data!.pItem!.value!.items.head!==first or first!.next!==second or second!.next!==third or
+               third!.next!=NULL or second!.pItem!.fetchField("properties")!.pItem!.fetchField("member")!==member or
+               first!.pItem!.fetchField("properties")!.pItem!.fetchField("member")!.pItem!.value!.str!="Tiffany" or
+               third!.pItem!.fetchField("properties")!.pItem!.fetchField("member")!.pItem!.value!.str!="Tiffany" or
+               toString(schema)!=schemaBefore){FAIL("Replacement changed a sibling or template or occurrence identity")}
+            agent.endWorldSessions(); modelMngr.clear(); scenario <+- 1
+        }
+    }
+
+    void: unit_selectionReplacement_waitAndCancel(me string: testName) <- {
+        withEach cancellation in range 0 .. 2{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: world <- agent.worldManager.parse(selectionReplacementWorld("$",3))
+            if(world.target==NULL){FAIL(world.error)}
+            agent.world <- world.target!.pItem
+            our infonView: pendingSchema <- agent.world!.value!.listSpec!.fetchField("data")!.pItem!.value!.listSpec
+            me string: before <- toString(agent.world)
+            pendingSchema!.streamState <- parseStarted
+            me WorldParseResult: query <- agent.worldManager.parse("%W.holder.data@[2].properties.member<<='KTiffany'")
+            our WorldRequest: written <- agent.normalize(query.target)
+            if(written!.status().outcome!=worldWaiting or written!.waitingInput!==pendingSchema or written!.publications!=0){
+                FAIL("Selected write bypassed its pending listSpec: "+written!.error())
+            }
+            me uint64: frames <- written!.framesCreated; me uint64: queue <- written!.queueSteps
+            our infonView:: unrelated; agent.worldManager.inputReady(unrelated)
+            if(written!.framesCreated!=frames or written!.queueSteps!=queue){FAIL("Unrelated input replayed a waiting replacement")}
+            if(cancellation==1){written!.cancel()}
+            pendingSchema!.streamState <- parseDone; agent.worldManager.inputReady(pendingSchema)
+            if(cancellation==0){
+                if(!written!.complete() or toString(query.target!.pItem)!="member:'KTiffany'"){FAIL("ListSpec arrival did not complete the retained replacement: "+written!.error())}
+            }else if(written!.status().outcome!=worldCancelled or written!.publications!=0 or toString(agent.world)!=before){
+                FAIL("Cancelled replacement changed the stored world")
+            }
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Replacement retained a stale parser subscription")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_selectionReplacement_scaling(me string: testName) <- {
+        me uint64: previousQueue <- 0; me uint64: previousPositions <- 0
+        me List<int>: widths <- [16,32,64]
+        withEach width in widths{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: world <- agent.worldManager.parse(selectionReplacementWorld("$",width))
+            if(world.target==NULL){FAIL(world.error)}
+            agent.world <- world.target!.pItem
+            me WorldParseResult: query <- agent.worldManager.parse("%W.holder.data@["+toString(width)+"].properties.member<<='KTiffany'")
+            our WorldRequest: written <- agent.normalize(query.target)
+            if(!written!.complete() or toString(query.target!.pItem)!="member:'KTiffany'"){FAIL("Wide template projection did not replace the selected member: "+written!.error())}
+            print("Replacement width ",width,": frames=",written!.framesCreated," queue=",written!.queueSteps,
+                " relationships=",written!.relationshipsRead," positions=",written!.correspondencePositions,"\n")
+            if(previousQueue>0 and (written!.queueSteps>previousQueue*3 or written!.correspondencePositions>previousPositions*3)){
+                FAIL("Fixed-width replacement projection rescanned growing prefixes")
+            }
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Replacement subscribed to an unrequested open tail")}
+            previousQueue <- written!.queueSteps; previousPositions <- written!.correspondencePositions
             agent.endWorldSessions(); modelMngr.clear()
         }
     }

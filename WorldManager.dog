@@ -706,6 +706,7 @@ struct WorldPath {
     our WorldPosition: cursor
     me bool: descending <- false
     our WorldPosition: source
+    our WorldFrame: sourceReference
     me int64: next <- 0
     me bool: returned <- false
     me bool: applied <- false
@@ -3754,6 +3755,12 @@ struct WorldPOVGraph {
         if(frame!.path!=NULL){
             item!.partRef <- NULL; item!.parts.clear()
             item!.wordArguments <- NULL
+            if(frame!.path!.sourceReference!=NULL){
+                // The path has consumed its intersection base. Publish the
+                // selected value without retaining the old selection syntax.
+                item!.innr <- NULL; item!.intersectPos <- ipNoIntersect
+                item!.hasInnrOutr <- false; item!.intersectMarkedRetPOV <- NULL
+            }
             if(frame!.correspondenceResult!=NULL and frame!.correspondenceResult!.position!=NULL){
                 item!.orderMode <- frame!.correspondenceResult!.position!.node!.pItem!.orderMode
             }
@@ -5193,6 +5200,41 @@ struct WorldManager {
             lookup!.branch <- NULL
         }
     }
+    me bool: projectOpenTailRequirement(our WorldRequest: request, our WorldFrame: frame, our WorldPosition: source) <- {
+        our WorldCorrespondence: lookup <- frame!.lookup
+        // An established target member beyond a source's represented prefix
+        // still obeys that source's listSpec. The open remainder contributes
+        // no individual value. This is constraint projection, not discovery
+        // of an occurrence in an unrepresented source tail.
+        if(!lookup!.query!.parentRequirement or lookup!.query!.testPattern or
+           lookup!.query!.target==NULL or lookup!.query!.target!.embedded or
+           source==NULL or !source!.tail or lookup!.right!.levels.size()!=1 or
+           source!.node!==lookup!.result!.sourceDomain!.node or
+           lookup!.query!.relation!.forceID or lookup!.query!.relation!.looseMode or
+           lookup!.query!.relation!.looseTop or lookup!.query!.relation!.looseInhtd){return(false)}
+        our infonView: item <- source!.node!.pItem
+        me WorldScalar: header <- graph.read(request, source!.node, source!.node!.pParent, false, false, false, source)
+        if(header.outcome!=worldReady or header.overlay!=LST or !header.hasValue or
+           !header.openTail or header.hasSize or header.explicitSize or header.negative or
+           header.timelike or header.order==uUnordered or !graph.pureRecordProjectionRoot(item) or
+           item!.value!.evalMode!=emLiteral or lookup!.right!.levels[0]!.position!.input!=NULL or
+           (header.nominal!=NULL and header.nominal!.defToUse!=NULL and !header.meaningApplied)){return(false)}
+        if(item!.value!.listSpec==NULL){
+            lookup!.result!.noConstraint <- true
+        }else{
+            our POV:: spec{937}; spec!.pItem <- item!.value!.listSpec
+            our WorldPosition: at <- graph.representedPosition(spec, lookup!.query!.target)
+            at!.writable <- false; at!.constraintRoot <- true
+            at!.parameters <- graph.parameterScope(lookup!.result!.sourceDomain)
+            lookup!.result!.position <- at
+            lookup!.result!.facts <- makeFrame(request, spec)
+            lookup!.result!.facts!.navigation <- at
+            lookup!.result!.facts!.lexicalParameters <- at!.parameters
+            lookup!.result!.facts!.templateContext <- true
+            lookup!.result!.facts!.constraintSource <- true
+        }
+        supplyCorrespondence(request, frame); return(true)
+    }
     // Fixed coordinates supply a span as one borrowed RHS. The two cursors
     // advance once; a known-width unconstrained prefix needs no virtual items.
     void: locateSpanRHS(our WorldRequest: request, our WorldFrame: frame) <- {
@@ -5298,6 +5340,7 @@ struct WorldManager {
                     if(!walkReady(request, frame, lookup!.right)){return()}
                 }
                 our WorldPosition: source <- lookup!.rhs
+                if(projectOpenTailRequirement(request, frame, source)){return()}
                 if(source==NULL or source!.tail){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Selected span needs more source positions"; stopFrame(request, frame); return()}
                 if(source!.embedded){
                     me WorldScalar: header <- graph.read(request, source!.node, source!.node!.pParent, false, false, false, source)
@@ -7144,6 +7187,18 @@ struct WorldManager {
             frame!.initialized <- true; frame!.finished <- true; return()
         }
         our WorldPath: path <- frame!.path
+        if(path!.source!.node!.pItem!.value!.evalMode==emIntersection){
+            if(path!.sourceReference==NULL){
+                path!.sourceReference <- makeFrame(request, path!.source!.node, path!.source)
+                path!.sourceReference!.referenceOnly <- true
+                path!.sourceReference!.acquireOnly <- true
+                request!.ready.append(frame); request!.ready.append(path!.sourceReference); return()
+            }
+            if(path!.sourceReference!.facts.outcome!=worldReady){frame!.facts <- path!.sourceReference!.facts; stopFrame(request, frame); return()}
+            our WorldCorrespondenceResult: selected <- path!.sourceReference!.correspondenceResult
+            if(selected==NULL or selected!.position==NULL){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Path base needs one selected occurrence"; stopFrame(request, frame); return()}
+            path!.source <- selected!.position
+        }
         if(path!.source!=NULL and (path!.source!.node!.referenceAlias.sourcePov!=NULL or path!.source!.node!.hasNamedReference or path!.source!.node!.discreteTemporalState!=NULL)){
             path!.source <- graph.namedTarget(path!.source)
             if(path!.source==NULL){frame!.facts.outcome <- worldError; frame!.facts.detail <- "Cyclic reference source"; stopFrame(request,frame); return()}
