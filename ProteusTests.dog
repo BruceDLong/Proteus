@@ -235,6 +235,10 @@ TestsToRun = `
     unit/referenceRegistry/lastSelection
     unit/referenceRegistry/positiveSpanSelection
     unit/indexLowering/typedSugarMatchesIntersection
+    unit/indexLowering/equalValuedSources
+    unit/indexLowering/nestedSourceContext
+    unit/indexLowering/waitAndCancel
+    unit/indexLowering/scaling
     unit/implicitItem/canonical
     unit/implicitItem/distinctPositions
     unit/implicitItem/nonMaterializing
@@ -458,6 +462,7 @@ struct GLOBAL {
     POSITIONALSELECTION(unit/referenceRegistry/lastSelection, "retain the original last-item occurrence", 3)
     POSITIONALSELECTION(unit/referenceRegistry/positiveSpanSelection, "retain every original source position of a positive span", 4)
     INDEXLOWERING(unit/indexLowering/typedSugarMatchesIntersection, "give sugar and low-level typed selections equivalent values and source windows", 2)
+    INDEXLOWERING(unit/indexLowering/equalValuedSources, "retain distinct equal-valued seconds after releasing typed selection progress", 3)
     IMPLICITITEM(unit/implicitItem/canonical, "reuse the canonical POV for one implicit source position", 1)
     IMPLICITITEM(unit/implicitItem/distinctPositions, "keep distinct implicit source positions distinct", 2)
     IMPLICITITEM(unit/implicitItem/nonMaterializing, "look up an implicit item without expanding the source list", 3)
@@ -1472,6 +1477,11 @@ struct GLOBAL {
         }
         me List<string>: inputs <- ["hour:{second| 1 2 3 4 5 6}@[-1]",
             "*(-1)+[<minute>] <~ hour:{second| 1 2 3 4 5 6}"]
+        me List<int>: expected <- [4,5,6]
+        if(caseID==3){
+            inputs <- ["hour:{second| 7 7 7 7 7 7}@[-1]", "*(-1)+[<minute>] <~ hour:{second| 7 7 7 7 7 7}"]
+            expected <- [7,7,7]
+        }
         our WorldSession: session <- CORE.agent!.startSession()
         me bool: retainsSources <- true
         me int: scenario <- 0
@@ -1487,11 +1497,12 @@ struct GLOBAL {
             our WorldRequest: request <- CORE.agent!.normalize(target)
             request!.waitForCompletion()
             if(!request!.complete() or target!.pItem!.type==NULL or target!.pItem!.type!.typeID()!="minute" or
-               !namedLayoutValues(target,[4,5,6])){
+               !namedLayoutValues(target,expected)){
                 FAIL("Typed selection did not return the final logical minute: "+input+": "+request!.error())
             }
             // Read each selected second through the public interface after
             // publication. Values alone cannot establish occurrence identity.
+            if(caseID==3){request!.cancel()}
             if(request!.provenance==NULL or request!.provenance!.position==NULL){retainsSources <- false}
             else{
                 withEach idx in range 0 .. 3{
@@ -1512,13 +1523,131 @@ struct GLOBAL {
                 }
             }
             withEach idx in range 0 .. 6{
-                if(originals[idx]!.pItem!.fetchInt()!=idx+1){FAIL("Typed selection changed a source second")}
+                me int64: value <- idx+1; if(caseID==3){value <- 7}
+                if(originals[idx]!.pItem!.fetchInt()!=value){FAIL("Typed selection changed a source second")}
+                if(idx<5 and originals[idx]!.next!==originals[idx+1]){FAIL("Typed selection changed source sibling identity")}
             }
+            if(originals[5]!.next!=NULL){FAIL("Typed selection extended the source list")}
             scenario <+- 1
         }
         CORE.deInit(); modelMngr.clear()
         if(!retainsSources){FAIL("Typed selection lost the original source-second positions or their context")}
     }
+    our PartPath: typedProvenanceIndex(me string: testName, me int: index) <- {
+        our PartPath:: part; part!.pathMode <- idxField
+        part!.path <- parseAndExtract(testName,toString(index)); return(part)
+    }
+
+    void: unit_indexLowering_nestedSourceContext(me string: testName) <- {
+        me TestProteusCore: CORE
+        if(!CORE.initForWorldTest("TestFiles/timeTestCases.pr")){FAIL(CORE.errorMesg)}
+        // Explicitly group anonymous second storage. Neighbour navigation of
+        // an unapplied named day has its separate template-layout boundary.
+        our POV:: root{949}; root!.pItem <- parseAndExtract(testName,"{{second| 1 2 3 4 5 6 7 8 9 10 11 12}}")
+        our POV: source <- root!.pItem!.value!.items.head
+        our POV: member <- source!.pItem!.value!.items.head
+        me List<our POV>: originals
+        while(member!=NULL){originals.append(member); member <- member!.next}
+        me string: before <- toString(root!.pItem)
+        our WorldPosition: context <- CORE.agent!.worldManager.graph.position(root)
+        context!.writable <- false
+        our WorldPosition: position <- CORE.agent!.worldManager.graph.position(source,context)
+        our WorldSession: session <- CORE.agent!.startSession()
+        our PartPath: hourPart <- typedProvenanceIndex(testName,-1); hourPart!.spec <- parseAndExtract(testName,"hour")
+        our WorldRequest: hour <- CORE.agent!.worldManager.select(session,position,hourPart,
+            CORE.agent!.getLocaleBaseName(),CORE.agent!.world,CORE.agent!.identityRegistry)
+        if(!hour!.complete() or hour!.selectedSource()==NULL or hour!.selectedSource()===source or hour!.provenance!.position!.writable){
+            FAIL("Grouped hour lost its independent container or source access qualification: "+hour!.error())
+        }
+        hour!.cancel()
+        our WorldRequest: minute <- CORE.agent!.worldManager.select(session,hour!.provenance!.position,typedProvenanceIndex(testName,2),
+            CORE.agent!.getLocaleBaseName(),CORE.agent!.world,CORE.agent!.identityRegistry)
+        if(!minute!.complete() or minute!.selectedSource()==NULL){FAIL("Retained hour did not supply its second minute: "+minute!.error())}
+        minute!.cancel()
+        withEach idx in range 0 .. 3{
+            our WorldRequest: second <- CORE.agent!.worldManager.select(session,minute!.provenance!.position,typedProvenanceIndex(testName,idx+1),
+                CORE.agent!.getLocaleBaseName(),CORE.agent!.world,CORE.agent!.identityRegistry)
+            if(!second!.complete() or second!.selectedSource()!==originals[idx+9]){FAIL("Nested typed view lost its original second")}
+            our WorldPosition: at <- second!.provenance!.position
+            if(at!.writable or at!.parent==NULL or at!.parent!.node!==source or at!.parent!.parent==NULL or
+               at!.parent!.parent!.node!==root){FAIL("Nested typed view lost the qualified source ancestry")}
+            if(idx==1){
+                our WorldRequest: previous <- CORE.agent!.worldManager.reference(session,at,true,CORE.agent!.getLocaleBaseName(),CORE.agent!.world)
+                our WorldRequest: next <- CORE.agent!.worldManager.reference(session,at,false,CORE.agent!.getLocaleBaseName(),CORE.agent!.world)
+                if(!previous!.complete() or previous!.selectedSource()!==originals[9] or
+                   !next!.complete() or next!.selectedSource()!==originals[11]){FAIL("Typed leaf navigation used the result container instead of its source neighbours")}
+            }
+        }
+        if(toString(root!.pItem)!=before or source!.pItem!.value!.items.head!==originals[0]){FAIL("Typed reference reads changed the supplying source")}
+        CORE.deInit(); modelMngr.clear()
+    }
+
+    void: unit_indexLowering_waitAndCancel(me string: testName) <- {
+        withEach cancellation in range 0 .. 2{
+            me TestProteusCore: CORE
+            if(!CORE.initForWorldTest("TestFiles/timeTestCases.pr")){FAIL(CORE.errorMesg)}
+            our POV:: target{949}; target!.pItem <- parseAndExtract(testName,"hour:{second| 1 2 3 4 5 6}@[-1]")
+            our POV: first <- target!.pItem!.value!.items.head
+            our POV: pending <- first!.next!.next!.next!.next
+            pending!.pItem!.streamState <- parseStarted
+            me string: before <- toString(target!.pItem)
+            our WorldRequest: request <- CORE.agent!.normalize(target)
+            if(request!.status().outcome!=worldWaiting or request!.waitingInput!==pending!.pItem or request!.publications!=0){
+                FAIL("Typed selection did not wait on its pending original second: "+request!.error())
+            }
+            me uint64: frames <- request!.framesCreated; me uint64: queue <- request!.queueSteps
+            our infonView:: unrelated; CORE.agent!.worldManager.inputReady(unrelated)
+            if(request!.framesCreated!=frames or request!.queueSteps!=queue){FAIL("Unrelated input replayed typed selection")}
+            if(cancellation==1){request!.cancel()}
+            pending!.pItem!.streamState <- parseDone; CORE.agent!.worldManager.inputReady(pending!.pItem)
+            if(cancellation==0){
+                if(!request!.complete() or !namedLayoutValues(target,[4,5,6])){FAIL("Typed selection did not continue after parser completion: "+request!.error())}
+                our WorldRequest: second <- CORE.agent!.worldManager.select(CORE.agent!.startSession(),request!.provenance!.position,
+                    typedProvenanceIndex(testName,2),CORE.agent!.getLocaleBaseName(),CORE.agent!.world,CORE.agent!.identityRegistry)
+                if(!second!.complete() or second!.selectedSource()!==pending or second!.provenance!.position!.parent==NULL or
+                   second!.provenance!.position!.parent!.node!.pItem!.value!.items.head!==first){FAIL("Resumed typed selection lost its original source context")}
+            }else if(request!.status().outcome!=worldCancelled or request!.publications!=0 or toString(target!.pItem)!=before){
+                FAIL("Cancelled typed selection published a result")
+            }
+            if(!CORE.agent!.worldManager.control!.inputWaiters.isEmpty()){FAIL("Typed selection left a parser subscription behind")}
+            CORE.deInit(); modelMngr.clear()
+        }
+    }
+
+    void: unit_indexLowering_scaling(me string: testName) <- {
+        me uint64: previousFrames <- 0; me uint64: previousQueue <- 0
+        me uint64: previousPositions <- 0; me uint64: previousMappings <- 0
+        me List<int>: widths <- [16,32,64]
+        withEach width in widths{
+            me TestProteusCore: CORE
+            if(!CORE.initForWorldTest("TestFiles/timeTestCases.pr")){FAIL(CORE.errorMesg)}
+            me string: expression <- "{second|"
+            withEach idx in range 0 .. width*3{expression <+- " "+toString(idx+1)}
+            expression <+- "}@[0:*"+toString(width)+"+{minute| ...}]"
+            our POV:: target{949}; target!.pItem <- parseAndExtract(testName,expression)
+            our POV: last <- target!.pItem!.value!.items.tail
+            our WorldRequest: request <- CORE.agent!.normalize(target)
+            if(!request!.complete()){FAIL("Wide typed selection did not complete: "+request!.error())}
+            print("Typed minutes ",width,": frames=",request!.framesCreated," queue=",request!.queueSteps,
+                " relationships=",request!.relationshipsRead," positions=",request!.correspondencePositions," mappings=",request!.correspondenceMappings,"\n")
+            if(previousQueue>0 and (request!.framesCreated>previousFrames*3 or request!.queueSteps>previousQueue*3 or
+               request!.correspondencePositions>previousPositions*3 or request!.correspondenceMappings>previousMappings*3)){
+                FAIL("Typed view construction rescanned growing source prefixes")
+            }
+            our WorldSession: session <- CORE.agent!.startSession()
+            our WorldRequest: minute <- CORE.agent!.worldManager.select(session,request!.provenance!.position,
+                typedProvenanceIndex(testName,width),CORE.agent!.getLocaleBaseName(),CORE.agent!.world,CORE.agent!.identityRegistry)
+            if(!minute!.complete() or minute!.provenance==NULL){FAIL("Wide typed view lost its final minute")}
+            our WorldRequest: second <- CORE.agent!.worldManager.select(session,minute!.provenance!.position,
+                typedProvenanceIndex(testName,3),CORE.agent!.getLocaleBaseName(),CORE.agent!.world,CORE.agent!.identityRegistry)
+            if(!second!.complete() or second!.selectedSource()!==last){FAIL("Wide typed view lost its final source occurrence")}
+            previousFrames <- request!.framesCreated; previousQueue <- request!.queueSteps
+            previousPositions <- request!.correspondencePositions; previousMappings <- request!.correspondenceMappings
+            if(!CORE.agent!.worldManager.control!.inputWaiters.isEmpty()){FAIL("Typed view subscribed without a missing prerequisite")}
+            CORE.deInit(); modelMngr.clear()
+        }
+    }
+
     me void: unitTestImplicitItem(me string: testName, me int: caseID) <- {
         our infonView: source <- parseAndExtract(testName, "*4+{item| ...}")
         our POV:: sourcePOV{povSrcImplicitItem}

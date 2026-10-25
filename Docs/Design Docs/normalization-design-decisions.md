@@ -4960,3 +4960,71 @@ in 132.71 seconds. `ldd -r` resolves the canonical
 build/link compatibility; interactive startup and visible rendering were not
 exercised. Evidence: `/tmp/proteus-setnth-slipstream-build.log` and
 `/tmp/proteus-setnth-consumer-link.log`.
+
+### D124 Typed selection retains source positions after completion
+
+**Required behavior, 2026-10-25.** Both
+`hour:{second| 1 2 3 4 5 6}@[-1]` and
+`*(-1)+[<minute>] <~ hour:{second| 1 2 3 4 5 6}` already return
+`minute:{4 5 6}`. A later public selection of each second must return the
+original fourth, fifth or sixth source POV, with its original containing
+context. D118 deliberately retained this assertion as a semantic contract.
+
+**Cause.** Unit projection copied leaf descriptions into a synthesized group
+and kept their source positions only in the execution request's `unitOrigins`.
+`run` releases that execution state on completion. The published correspondence
+pointed to the grouped value without its member mapping, so the next request
+selected a copied leaf instead of the original occurrence.
+
+**Choice.** Retain a per-container mapping from each demanded projected member
+to its qualified `WorldPosition` on the returned position. The ordinary logical
+layout walk consumes that mapping. A represented leaf's selection returns its
+original source position; a regrouped composite has its own container and
+retains mappings for its children. Nested typed selection composes through the
+same walk. Preserve source writability and an intersection's supplied input
+context. No execution frame or whole request is retained by this mapping.
+
+The request-local origin records still serve checked write staging during the
+request. Sparse recipes retain their existing identity/materialization
+boundary; this change does not invent source occurrences inside a sparse gap.
+
+**Alternatives and cost.** Retaining all execution progress would keep unrelated
+work alive and couple public provenance to solver lifetime. Reusing source POVs
+as physical members of the synthesized list would rewrite sibling/parent links
+and identify differently sized containers. A value-based reverse lookup would
+confuse equal-valued occurrences. The selected-position mapping preserves the
+existing separation between representation and occurrence. It stores only
+demanded output, with identity-keyed hash lookup at each group's represented
+members; source traversal keeps its retained forward cursor. Under the map's
+expected constant-cost lookup, construction grows with visited source and
+demanded output. The mapping count is included in `correspondenceMappings`.
+
+**Validation.** The original sugar/intersection test and four new ordinary
+CodeDog checks pass (**5/5**). They cover distinct equal-valued leaves, source
+sibling preservation, successive hour/minute/second selections after releasing
+creating requests, read-only source ancestry, original previous/next neighbours,
+exact parser waits, unrelated arrivals and cancellation without publication.
+The neighbour control uses anonymous seconds with an explicit hour projection;
+neighbour navigation through an unapplied named day still reaches its existing
+general-template-layout boundary and is not claimed by this fix.
+
+At 16/32/64 demanded minutes, construction uses 68/132/260 frames,
+135/263/519 queue steps, 64/128/256 relationship reads, 49/97/193 visited
+positions and 64/128/256 retained member mappings, with no input subscriptions.
+The scale check also verifies the final original source occurrence through two
+subsequent public selections.
+
+The final regenerated executable passes **778/781**, recovering the original
+typed-selection failure. All compiled checks pass. The three remaining language
+failures are `merge/dots/align4b`, `rubix/sparseNestedContinuation` and
+`sparse/implicit/readAfterSparsePrefixInSizedCompositeList`; their diagnostics
+match the preceding baseline exactly. No `.tst` fixture or expectation changed.
+Evidence: `/tmp/proteus-typed-{focused-final,scaling-final,all-final,remaining}.log`.
+
+The final test build succeeds in 281.89 seconds and the shared-library build
+in 190.70 seconds. All four changed generated methods agree between targets.
+Slipstream regenerates and builds against the exported interface in 121.81
+seconds; `ldd -r` resolves the canonical Proteus shared library with no missing
+symbols. This is build/link validation; interactive startup and visible
+rendering were not exercised. Evidence:
+`/tmp/proteus-typed-{build-final,shared-build,methods,slipstream-build,consumer-link}.log`.

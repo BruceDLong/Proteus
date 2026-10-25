@@ -1422,6 +1422,16 @@ Under D040, finite homogeneous definitions provide exact widths in a shared nume
 
 Projected leaves retain their original source occurrences. Reads preserve the source; writes reuse ordinary checked merges and staged publication, recursively following the projected view's origins. A conflicting write rejects atomically. Positive requests ignore unneeded suffixes; endpoint requests retain their progress through parser waits. Unit definitions remain borrowed, and their T metadata is preserved in composite views. Sparse-gap materialization, arbitrary heterogeneous conversion and general pattern alignment remain separate requirements.
 
+**Retained selection provenance (D124, 2026-10-25).** A returned typed window
+retains the source position of each demanded represented leaf, including its
+qualified ancestry. Its synthesized grouping containers remain distinct from
+the supplying list. Subsequent public selections use this mapping through the
+ordinary layout walk, including after the creating request releases its
+execution progress. Nested regrouping composes these mappings; equal scalar
+values never identify different occurrences. Read-only source qualification is
+preserved. The retained mapping covers demanded output only and does not
+materialize sparse gaps or retain execution frames.
+
 ## Inherited type qualifiers (2026-10-12)
 
 D041 preserves the distinction between a member's primary name and a type-only qualifier inherited from its listSpec. A previously unnamed member stores the latter in `addedTypes`; subsequent reads expose it as checked nominal evidence. Explicit primary names and value-producing named templates remain primary. Thus `{second|1 2}` can publish `{1 2}` while retaining each member's second-type evidence for later queries and writes. The printer is unchanged. The current supported representation has one inherited nominal without a primary type; general nominal conjunction remains separate work.

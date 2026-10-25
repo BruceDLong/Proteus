@@ -186,6 +186,9 @@ struct WorldBindings {
     me Map<string, our WorldArgumentBinding>: arguments
 }
 struct WorldPosition {
+    // A regrouped unit has its own container; its demanded members retain
+    // their source positions independently of the creating request's frames.
+    me Map<our POV, our WorldPosition>: unitMembers
     our WorldBindings: parameters
     // A constructed occurrence captures names without making its declaration
     // a structural parent or a temporal/list coordinate.
@@ -639,6 +642,7 @@ struct WorldUnitLevel {
     void: INIT() <- {Allocate(walk); walk!.shallow <- true; walk!.rawLayout <- true; walk!.requireClosedRelations <- true}
 }
 struct WorldUnitOrigin {
+    our WorldPosition: position
     our WorldUnit: member
     me FlexNum: membersCount
     me bool: sparse <- false
@@ -2322,6 +2326,7 @@ struct WorldPOVGraph {
             if(level!.next!=NULL){
                 our POV: member <- level!.next
                 our WorldPosition: result <- position(member, level!.position)
+                if(level!.position!.unitMembers.containsKey(member)){result <- level!.position!.unitMembers.at(member)}
                 result!.embedded <- result!.embedded or level!.concatenated
                 if(result!.embedded and walk!.stopIndex>0 and member!.pItem!.partRef==NULL and member!.pItem!.parts.isEmpty()){
                     me WorldScalar: header <- read(request, member, member!.pParent, false, false, false, result)
@@ -6285,6 +6290,7 @@ struct WorldManager {
         if(units!.prefix.getDenominator()!=1 or units!.suffix.getDenominator()!=1){return(false)}
         units!.coordinate <- selected!.index; units!.explicitSpec <- true
         units!.source <- graph.position(selected!.domain!.input); units!.writeThrough <- !frame!.node!.pItem!.wrkList.isEmpty()
+        if(selected!.domain!.inputContext!=NULL){units!.source <- selected!.domain!.inputContext}
         frame!.unitSelection <- units; request!.ready.append(frame)
         return(true)
     }
@@ -6376,6 +6382,9 @@ struct WorldManager {
             if(leaf!.pItem!.type==NULL and leaf!.pItem!.addedTypes.isEmpty()){leaf!.pItem!.addedTypes.append(unit!.word)}
             our WorldUnitOrigin:: origin; origin!.source <- segment.source
             if(gap!=NULL){origin <- gap}
+            origin!.position <- graph.position(leaf)
+            origin!.position!.writable <- selection!.source!.writable
+            if(!segment.gap){origin!.position <- segment.source}
             request!.unitOrigins.insert(leaf!.pItem, origin)
             return(leaf)
         }
@@ -6392,15 +6401,22 @@ struct WorldManager {
             Allocate(body!.value!.listSpec); body!.value!.listSpec!.itmMode <- mItem; body!.value!.listSpec!.streamState <- parseDone
             body!.value!.listSpec!.infSize!.evalMode <- emUnknown; body!.value!.listSpec!.infSize!.overlayType <- NUM
             body!.value!.listSpec!.type <- member!.word; body!.value!.tailUnfinished <- true; body!.value!.sizeMode <- fromGiven
-            gap!.member <- member; gap!.membersCount <- count; request!.unitOrigins.insert(body, gap)
+            gap!.member <- member; gap!.membersCount <- count; gap!.position <- graph.position(result)
+            gap!.position!.writable <- selection!.source!.writable
+            request!.unitOrigins.insert(body, gap)
             return(result)
         }
         our WorldUnitOrigin:: origin
+        origin!.position <- graph.position(result)
+        origin!.position!.writable <- selection!.source!.writable
         me FlexNum: n
         while(n<count){
             our POV: child <- unitView(request, selection, member, start+n*member!.width, FlexNum("1"), false)
             if(child==NULL){return(NULL)}
             body!.value!.items.appendPov(child); child!.pParent <- result
+            our WorldUnitOrigin: childOrigin <- request!.unitOrigins.at(child!.pItem)
+            origin!.position!.unitMembers.insert(child, childOrigin!.position)
+            request!.correspondenceMappings <+- 1
             origin!.members.append(child); n <+- 1
         }
         request!.unitOrigins.insert(body, origin)
@@ -6412,7 +6428,8 @@ struct WorldManager {
             if(selection!.result!.facts.outcome!=worldReady){frame!.facts <- selection!.result!.facts; stopFrame(request, frame); return()}
             frame!.facts <- selection!.result!.facts; frame!.retainedWork <- selection!.result!.retainedWork
             graph.adoptListRequirements(frame, selection!.result)
-            Allocate(frame!.correspondenceResult); frame!.correspondenceResult!.position <- graph.position(selection!.result!.node)
+            Allocate(frame!.correspondenceResult)
+            frame!.correspondenceResult!.position <- request!.unitOrigins.at(selection!.result!.node!.pItem)!.position
             if(selection!.writeThrough and !stageSelection(request, frame)){return()}
             frame!.initialized <- true; frame!.finished <- true; return()
         }
