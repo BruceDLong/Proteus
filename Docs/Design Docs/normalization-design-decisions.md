@@ -4475,3 +4475,70 @@ World-load `Open source correspondence needs span alignment` error remains;
 this increment does not claim Sol/Earth whole/part alignment. Consumer source
 files and World sources are unchanged. Evidence:
 `/tmp/proteus-temporal-views-20261025/`.
+
+## D117 Part views within represented temporal states (2026-10-25)
+
+**Request and increment.** Continue D116. The first whole/part correspondence is
+provided by explicit S-containment: `system@[2]^S.part^T` views the original part
+over the containing represented state's support. This does not align separate
+histories. Several Earth states within one Sol state remain a subsequent case.
+
+**Representation.** `WorldTemporalSupport` distinguishes `state` (the original
+viewed occurrence), `extent` (the represented temporal state establishing its
+support), and `history` (the subject's lifetime, when established). A temporal
+member has its own extent and lifetime. An S-part borrows its containing state's
+extent; containment does not establish that part's lifetime. The temporal-parent
+provider returns no established lifetime for this case. Returning the whole's
+history would identify different subjects; constructing a lifetime by collecting
+same-named fields would presume persistence and alignment that the model has not
+established. Both alternatives are rejected.
+
+**Composition.** The ordinary layout provider classifies containing scopes.
+Traversal stops at the nearest T-level or an existing selected support, and
+respects constraint-root boundaries. Embedded storage is transparent; ordinary
+S-list nesting retains its structural and lexical scopes while sharing time.
+A nested T-list keeps its independent level. No value comparison, sibling index,
+field spelling or nominal type is used as evidence of cross-history alignment.
+The single-member T-window continues to reference its original source, and its
+S-view retains that occurrence. Published S-views and reference members retain
+the support witness when resolving aliases. Window identity compares occurrence,
+qualified context and extent; equal values or shared boundaries alone do not
+identify separate parts.
+
+**Reads, writes and cost.** Both view boundary requests use the represented
+extent. Part acquisition still receives enclosing listSpecs and overlays through
+ordinary normalization. Parser waits remain on their existing request; cancelled
+requests publish nothing. Window writes use the existing checked occurrence
+staging and publication path. The D116 source-scope cache proof already includes
+the containing S-context, so no new cache, invalidation mechanism, producer or
+subscription registry is needed. Establishing a view reads only its source and
+containing headers, proportional to containment depth. It allocates one support
+witness and a one-reference window, independent of unrequested history length.
+This is not a constant-time field selection or general alignment claim.
+
+**Validation.** The maintained CodeDog test target regenerates and builds
+successfully (269.17 seconds). All **13 new language fixtures** and **five new
+ordinary CodeDog runtime checks** pass; the temporal-view fixture file now has
+34 passing cases. Coverage includes nested and embedded S-parts, inherited T
+context, independent nested histories, parameter forwarding, named and published
+views, shared boundaries across requests, structural-neighbour and constraint
+scope, pending ancestor headers and overlays, cancellation, cache eviction,
+durable writes, contradiction atomicity and sibling/predecessor isolation.
+The write test uses `%?` for an independently constrained later field; `_` would
+correctly preserve its known predecessor and reject a conflicting assertion.
+
+For already selected parts in represented open histories of 16, 64 and 256
+states, each view reads **three headers**, creates **two frames**, takes **three
+queue steps**, reads **zero relationships/positions**, allocates **one reference
+member**, and leaves no input subscription. The complete suite reports
+**24/747** failures with exactly the same failing names and diagnostics as the
+D116 **24/729** baseline. Existing language fixture expectations are unchanged.
+The optimized shared-library build also succeeds (187.33 seconds).
+
+Slipstream regenerates and builds against ABI
+`proteusGraph_abi_f1f313405654cdce9df8` (113.03 seconds). An isolated real GUI run
+visibly renders the cube before and after next/previous navigation; all three
+captures were inspected. No cursor/display errors occur, and normal window
+closure exits zero. The known World-load `Open source correspondence needs span
+alignment` diagnostic remains. Consumer source and World models are unchanged.
+Evidence: `/tmp/proteus-part-views-20261025/`.

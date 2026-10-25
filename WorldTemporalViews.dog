@@ -1,8 +1,11 @@
 // Discrete views borrow represented occurrences. Support is independent of
 // the view's storage wrapper; no state, duration or alignment is invented.
 struct WorldTemporalSupport {
+    // The subject's lifetime, when established. S-containment establishes a
+    // shared support but does not identify a part's lifetime with the whole's.
     our WorldPosition: history
     our WorldPosition: state
+    our WorldPosition: extent
 }
 struct WorldPosition {
     our WorldTemporalSupport: temporalSupport
@@ -16,9 +19,15 @@ struct POV {
 struct WorldRequest {
     me uint64: temporalViews <- 0
     me uint64: temporalViewMembers <- 0
+    me uint64: temporalSupportHeaders <- 0
 }
 
 struct WorldPOVGraph {
+    our WorldPosition: supportedState(our WorldTemporalSupport: support) <- {
+        our WorldPosition: result <- representedPosition(support!.state!.node,support!.state)
+        result!.temporalSupport <- support
+        return(result)
+    }
     our WorldPosition: temporalParent(our WorldPosition: view) <- {
         if(view!=NULL and view!.temporalSupport!=NULL){return(view!.temporalSupport!.history)}
         if(view!=NULL and view!.node!.pItem!.value!.timelike){return(view)}
@@ -27,6 +36,7 @@ struct WorldPOVGraph {
     // The header proof is the ordinary layout provider. A pending named
     // meaning must not be classified from its unfinished physical spelling.
     me WorldScalar: temporalHeader(our WorldRequest: request, our WorldPosition: at) <- {
+        request!.temporalSupportHeaders <+- 1
         me WorldScalar: header <- read(request,at!.node,at!.node!.pParent,false,false,false,at)
         if(header.outcome!=worldReady){return(header)}
         if(header.nominal!=NULL and header.nominal!.defToUse!=NULL and !header.meaningApplied){
@@ -55,7 +65,7 @@ struct WorldPOVGraph {
         reference!.value!.evalMode <- emUnknown; reference!.infSize!.evalMode <- emUnknown
         our POV: member <- body!.value!.items.append(reference,false,951)
         member!.referenceAlias.sourcePov <- support!.state!.node
-        member!.worldContext <- support!.state
+        member!.worldContext <- supportedState(support)
         our WorldPosition: result <- position(span)
         // Temporal parent is semantic lifetime, never the wrapper's container.
         result!.writable <- support!.state!.writable
@@ -65,8 +75,8 @@ struct WorldPOVGraph {
 }
 
 struct WorldManager {
-    // Resolve only represented states and explicit history headers. Whole/part
-    // correspondence at different temporal partitions is a later provider.
+    // S-containment establishes shared support. It does not align independent
+    // histories or establish the part's lifetime outside this represented state.
     our WorldPosition: temporalView(our WorldRequest: request, our WorldFrame: consumer,
                                    our WorldPosition: source, me bool: asSpan) <- {
         me WorldScalar: header <- graph.temporalHeader(request,source)
@@ -115,8 +125,13 @@ struct WorldManager {
         }
         our WorldTemporalSupport: support <- source!.temporalSupport
         if(support==NULL){
+            if(source!.embedded or source!.tail){
+                consumer!.facts.outcome <- worldUnsupported; consumer!.facts.detail <- "Temporal view needs a represented state in an established history"
+                stopFrame(request,consumer); return(NULL)
+            }
+            our WorldPosition: extent <- source
             our WorldPosition: history <- source!.parent
-            while(history!=NULL){
+            while(history!=NULL and !extent!.constraintRoot){
                 me WorldScalar: parent <- graph.temporalHeader(request,history)
                 if(parent.outcome==worldWaiting){
                     our infonView: waiting <- history!.node!.pItem
@@ -125,16 +140,25 @@ struct WorldManager {
                     waitAt(request,consumer,waiting); return(NULL)
                 }
                 if(parent.outcome!=worldReady){consumer!.facts <- parent; stopFrame(request,consumer); return(NULL)}
-                if(parent.overlay==LST and parent.hasValue and parent.timelike){break()}
-                if(!history!.embedded){history <- NULL; break()}
+                if(parent.overlay!=LST or !parent.hasValue){history <- NULL; break()}
+                if(parent.timelike){break()}
+                // An explicitly selected S-view can already carry a support
+                // reached through a published alias. Preserve that witness.
+                if(history!.temporalSupport!=NULL){
+                    Allocate(support); support!.state <- source
+                    support!.extent <- history!.temporalSupport!.extent
+                    break()
+                }
+                if(history!.constraintRoot){history <- NULL; break()}
+                if(!history!.embedded){extent <- history}
                 history <- history!.parent
             }
-            if(history==NULL or source!.embedded or source!.tail){
+            if(support==NULL and (history==NULL or extent!.constraintRoot)){
                 consumer!.facts.outcome <- worldUnsupported; consumer!.facts.detail <- "Temporal view needs a represented state in an established history"
                 stopFrame(request,consumer); return(NULL)
             }
             // Embedded storage belongs to the same logical history.
-            while(history!.embedded and history!.parent!=NULL){
+            while(support==NULL and history!.embedded and history!.parent!=NULL){
                 me WorldScalar: enclosing <- graph.temporalHeader(request,history!.parent)
                 if(enclosing.outcome==worldWaiting){
                     our infonView: waiting <- history!.parent!.node!.pItem
@@ -146,12 +170,13 @@ struct WorldManager {
                 if(!enclosing.timelike){break()}
                 history <- history!.parent
             }
-            Allocate(support); support!.history <- history; support!.state <- source
+            if(support==NULL){
+                Allocate(support); support!.state <- source; support!.extent <- extent
+                if(graph.samePosition(source,extent)){support!.history <- history}
+            }
         }
         if(asSpan){return(graph.discreteSpan(request,support))}
-        our WorldPosition: result <- graph.representedPosition(source!.node,source)
-        result!.temporalSupport <- support
-        return(result)
+        return(graph.supportedState(support))
     }
 
     our WorldFrame: temporalViewOperation(our WorldRequest: request, our WorldPosition: selected,

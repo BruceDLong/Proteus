@@ -342,7 +342,10 @@ Selections, paths and identities after a view apply to its result, as in
 `cube^T@[1]^S.location` and `cube^T = {T ...}`. D101 established their syntax;
 D116 implements views of explicitly
 represented discrete histories and their selected states through ordinary
-normalization. Cross-subject support correspondence remains unsupported.
+normalization. D117 adds parts selected within a represented S-state, such as
+`system@[2]^S.part^T@[1]^S`. These retain the original part occurrence and share
+the containing state's support. This does not establish the part's lifetime,
+infer finer transitions, or align an independently represented history.
 
 | Expression | View |
 | --- | --- |
@@ -353,7 +356,9 @@ normalization. Cross-subject support correspondence remains unsupported.
 | `tItem@[1]^S` | The S-item view of the first selected temporal member |
 
 For a T-span obtained from an object state, its temporal parent evaluates to that
-object's lifetime T-list. This is an explicit semantic relationship supplied by
+object's lifetime T-list, when that lifetime is established. A part selected only
+through S-containment currently has no established lifetime; its whole's history
+must not be returned in its place. This is an explicit semantic relationship supplied by
 the view, not an implicit climb through storage containers. The selected span
 and the full lifetime retain their distinct supports. A part's lifetime can
 extend beyond the period when it belongs to the selected whole.

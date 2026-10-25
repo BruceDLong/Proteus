@@ -2,6 +2,11 @@
 
 TestsToRun = `
     unit/temporalViews/identity
+    unit/temporalParts/identity
+    unit/temporalParts/waitAndCancel
+    unit/temporalParts/parentWait
+    unit/temporalParts/writes
+    unit/temporalParts/scaling
     unit/temporalViews/waitAndCancel
     unit/temporalViews/parentWait
     unit/temporalViews/writes
@@ -2532,7 +2537,7 @@ struct GLOBAL {
         }
     }
     void: unit_parserViews_unsupported(me string: testName) <- {
-        me List<string>: inputs <- ["{x:1}^T", "{T {x:1} {x:2}}^S", "{T {x:1} {x:2}}@[1].x^T"]
+        me List<string>: inputs <- ["{x:1}^T", "{T {x:1} {x:2}}^S", "{{7}}@[1]@[1]^T"]
         withEach input in inputs{
             me Agent: agent
             me WorldParseResult: parsed <- agent.worldManager.parse(input)
@@ -8040,5 +8045,160 @@ struct GLOBAL {
         me WorldParseResult: after <- agent!.worldManager.parse("%Now.x")
         if(!agent!.normalize(after.target)!.complete() or after.target!.pItem!.fetchInt()!=9 or toString(first!.pItem)!=before){FAIL("A rejected view write changed a source or predecessor")}
         core.deInit(); modelMngr.clear()
+    }
+}
+
+// A part has its own occurrence and the support of its represented S-context.
+// No part lifetime or cross-history alignment follows from that containment.
+struct GLOBAL {
+    void: unit_temporalParts_identity(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T {7 7} {7 7}}")
+        cursorDemandLinkMembers(parsed.target)
+        our WorldSession: session <- agent.startSession()
+        our WorldPosition: history <- agent.worldManager.graph.position(parsed.target)
+        our WorldPosition: state <- agent.worldManager.graph.position(parsed.target!.pItem!.value!.items.tail,history)
+        our WorldPosition: part <- agent.worldManager.graph.position(state!.node!.pItem!.value!.items.head,state)
+        our WorldPosition: sibling <- agent.worldManager.graph.position(state!.node!.pItem!.value!.items.tail,state)
+        our WorldRequest: view <- agent.worldManager.select(session,part,temporalViewPart("^T"))
+        if(!view!.complete() or view!.provenance==NULL){FAIL("Part view failed: "+view!.error())}
+        our WorldPosition: window <- view!.provenance!.position
+        if(!agent.worldManager.graph.samePosition(window!.temporalSupport!.state,part) or
+           !agent.worldManager.graph.samePosition(window!.temporalSupport!.extent,state) or
+           agent.worldManager.graph.temporalParent(window)!=NULL){FAIL("Part view conflated its occurrence or support or lifetime with the whole")}
+        our WorldRequest: other <- agent.worldManager.select(session,sibling,temporalViewPart("^T"))
+        if(!other!.complete() or agent.worldManager.graph.samePosition(window,other!.provenance!.position)){FAIL("Equal sibling values identified distinct parts")}
+        our WorldRequest: again <- agent.worldManager.select(session,part,temporalViewPart("^T"))
+        if(!again!.complete() or !agent.worldManager.graph.samePosition(window,again!.provenance!.position)){FAIL("Independent part windows lost identity")}
+        our WorldRequest: asState <- agent.worldManager.select(session,part,temporalViewPart("^S"))
+        if(!asState!.complete()){FAIL("Part S view failed")}
+        our WorldRequest: previous <- agent.worldManager.reference(session,asState!.provenance!.position,true)
+        our WorldRequest: next <- agent.worldManager.reference(session,asState!.provenance!.position,false)
+        if(!previous!.complete() or !previous!.referenceAbsent or !next!.complete() or
+           !agent.worldManager.graph.samePosition(next!.provenance!.position,sibling)){FAIL("Shared temporal support changed structural neighbour scope")}
+        our WorldPosition: scope <- agent.worldManager.graph.representedPosition(state!.node,state)
+        scope!.constraintRoot <- true
+        our WorldPosition: local <- agent.worldManager.graph.position(part!.node,scope)
+        our WorldRequest: isolated <- agent.worldManager.select(session,local,temporalViewPart("^T"))
+        if(isolated!.status().outcome!=worldUnsupported or isolated!.publications!=0){FAIL("Part view escaped a constraint-root boundary")}
+        withEach ending in range 0 .. 2{
+            our POV: wholeBoundary <- agent.worldManager.graph.boundaryOf(view,state,ending==1)
+            if(agent.worldManager.graph.boundaryOf(view,window,ending==1)!==wholeBoundary or
+               agent.worldManager.graph.boundaryOf(view,asState!.provenance!.position,ending==1)!==wholeBoundary){FAIL("Part S and T views lost the whole support boundaries")}
+        }
+        our WorldRequest: member <- agent.worldManager.select(session,window,temporalViewPart("@[1]"))
+        if(!member!.complete()){FAIL("Could not select part window member")}
+        our WorldRequest: returned <- agent.worldManager.select(session,member!.provenance!.position,temporalViewPart("^S"))
+        if(!returned!.complete() or returned!.selectedSource()!==part!.node or
+           !agent.worldManager.graph.samePosition(returned!.provenance!.position!.temporalSupport!.extent,state)){FAIL("Part round trip lost its original occurrence or support")}
+        our POV:: stored{951}; Allocate(stored!.pItem)
+        if(!agent.worldManager.materialize(session,window!.node,stored)!.complete()){FAIL("Could not publish part window")}
+        agent.endWorldSessions()
+        our WorldRequest: saved <- agent.worldManager.select(agent.startSession(),agent.worldManager.graph.occurrencePath(stored),temporalViewPart("@[1]"))
+        if(!saved!.complete()){FAIL("Part window lost its source after session close")}
+        our WorldPosition: canonical <- agent.worldManager.graph.namedTarget(saved!.provenance!.position)
+        if(canonical==NULL or !agent.worldManager.graph.samePosition(canonical,part) or canonical!.temporalSupport==NULL or
+           !agent.worldManager.graph.samePosition(canonical!.temporalSupport!.extent,state)){FAIL("Published part view lost support provenance")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+    void: unit_temporalParts_waitAndCancel(me string: testName) <- {
+        withEach cancellation in range 0 .. 2{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: parsed <- agent.worldManager.parse("{T {{7}} {{8}}}")
+            cursorDemandLinkMembers(parsed.target)
+            our WorldPosition: history <- agent.worldManager.graph.position(parsed.target)
+            our WorldPosition: state <- agent.worldManager.graph.position(parsed.target!.pItem!.value!.items.tail,history)
+            our WorldPosition: record <- agent.worldManager.graph.position(state!.node!.pItem!.value!.items.head,state)
+            our WorldPosition: part <- agent.worldManager.graph.position(record!.node!.pItem!.value!.items.head,record)
+            agent.worldManager.prepareInput(record!.node!.pItem)
+            our WorldRequest: request <- agent.worldManager.select(agent.startSession(),part,temporalViewPart("^T"))
+            if(request!.status().outcome!=worldWaiting or request!.publications!=0 or agent.worldManager.control!.inputWaiters.size()!=1){FAIL("Part view bypassed a pending containing S-context")}
+            me uint64: queue <- request!.queueSteps; me uint64: frames <- request!.framesCreated
+            our infonView:: unrelated; agent.worldManager.inputReady(unrelated)
+            if(request!.queueSteps!=queue or request!.framesCreated!=frames){FAIL("Unrelated input repeated part view work")}
+            if(cancellation==1){request!.cancel()}
+            record!.node!.pItem!.streamState <- parseDone; agent.worldManager.inputReady(record!.node!.pItem)
+            if(cancellation==0){
+                if(!request!.complete() or !agent.worldManager.graph.samePosition(request!.provenance!.position!.temporalSupport!.extent,state)){FAIL("Part view did not resume at the same support")}
+            }else if(request!.status().outcome!=worldCancelled or request!.publications!=0){FAIL("Cancelled part view published")}
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Part view retained a stale wait")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+    void: unit_temporalParts_parentWait(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{T {_ _} {_ _}} == {T {0 1} {7 8}}")
+        cursorDemandLinkMembers(parsed.target)
+        our WorldPosition: history <- agent.worldManager.graph.position(parsed.target)
+        our WorldPosition: state <- agent.worldManager.graph.position(parsed.target!.pItem!.value!.items.tail,history)
+        our WorldPosition: part <- agent.worldManager.graph.position(state!.node!.pItem!.value!.items.head,state)
+        our infonView: input <- parsed.target!.pItem!.wrkList[0]!.pItem!.value!.items.tail!.pItem!.value!.items.head!.pItem
+        agent.worldManager.prepareInput(input)
+        our WorldSession: session <- agent.startSession()
+        our WorldRequest: view <- agent.worldManager.select(session,part,temporalViewPart("^S"))
+        if(!view!.complete()){FAIL("Part reference prematurely acquired the parent overlay")}
+        our WorldDemand: demand <- agent.worldManager.demandAt(session,view!.provenance!.position)
+        if(demand!.refresh() or demand!.status().outcome!=worldWaiting){FAIL("Part acquisition skipped its pending whole-system overlay")}
+        our WorldRequest: waiting <- demand!.request
+        input!.streamState <- parseDone; agent.worldManager.inputReady(input)
+        if(!demand!.refresh() or demand!.request!==waiting or demand!.current!.pItem!.fetchInt()!=7){FAIL("Part acquisition failed to resume its ordinary request")}
+        if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Part acquisition retained a stale wait")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+    void: unit_temporalParts_writes(me string: testName) <- {
+        me ProteusCore: core; core.init("",false)
+        our Agent: agent <- core.agent
+        me WorldParseResult: models <- agent!.worldManager.parse("{#x=_ #y=_ #body=#{T {x,y,...}|...}}")
+        if(agent!.normalize(models.target)!.failed()){FAIL("Could not define part model")}
+        me WorldParseResult: creation <- agent!.worldManager.parse("#System=body:{T {x:4,y:5} {x:%?,y:6}}")
+        if(agent!.normalize(creation.target)!.failed()){FAIL("Could not construct part model")}
+        me WorldParseResult: binding <- agent!.worldManager.parse("#Part=%System@[2]^S.x^S")
+        if(agent!.normalize(binding.target)!.failed()){FAIL("Could not name the selected part")}
+        me WorldParseResult: query <- agent!.worldManager.parse("%Part^T")
+        our WorldRequest: read <- agent!.normalize(query.target)
+        if(read!.provenance==NULL){FAIL("Part window lost provenance: "+read!.error())}
+        our WorldDemand: demand <- agent!.worldManager.demandAt(agent!.startSession(),read!.provenance!.position)
+        if(!demand!.configureRetention(0,0,0) or !demand!.refresh()){FAIL("Could not acquire the part window")}
+        me WorldParseResult: write <- agent!.worldManager.parse("%Part^T={T 9}")
+        our WorldRequest: written <- agent!.normalize(write.target)
+        if(written!.failed() or written!.publications==0){FAIL("Part window write failed: "+written!.error())}
+        if(!demand!.refresh() or demand!.current!.pItem!.value!.items.head!.pItem!.fetchInt()!=9){FAIL("Part window cache missed a durable write")}
+        demand!.clearCache()
+        if(!demand!.refresh() or demand!.current!.pItem!.value!.items.head!.pItem!.fetchInt()!=9){FAIL("Part write vanished on eviction")}
+        me List<string>: routes <- ["%Part", "%System@[2].x", "%System@[2].x^T@[1]^S"]
+        withEach route in routes{
+            me WorldParseResult: value <- agent!.worldManager.parse(route)
+            if(!agent!.normalize(value.target)!.complete() or value.target!.pItem!.fetchInt()!=9){FAIL("Part write was not visible through "+route)}
+        }
+        me WorldParseResult: conflict <- agent!.worldManager.parse("%Part^T={T 10}")
+        if(agent!.normalize(conflict.target)!.status().outcome!=worldRejected){FAIL("Part view replaced an established value")}
+        me List<string>: protectedRoutes <- ["%System@[1].x", "%System@[2].y", "%Part"]
+        me List<int>: expected <- [4,6,9]
+        withEach i in range 0 .. protectedRoutes.size(){
+            me WorldParseResult: value <- agent!.worldManager.parse(protectedRoutes[i])
+            if(!agent!.normalize(value.target)!.complete() or value.target!.pItem!.fetchInt()!=expected[i]){FAIL("Part write or rejection changed a predecessor or sibling or durable value")}
+        }
+        core.deInit(); modelMngr.clear()
+    }
+    void: unit_temporalParts_scaling(me string: testName) <- {
+        me List<int>: widths <- [16,64,256]
+        withEach width in widths{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me string: syntax <- "{T "
+            withEach i in range 0 .. width{syntax <+- "{"+toString(i)+" 0} "}
+            syntax <+- "...}"
+            me WorldParseResult: parsed <- agent.worldManager.parse(syntax)
+            cursorDemandLinkMembers(parsed.target)
+            our WorldPosition: history <- agent.worldManager.graph.position(parsed.target)
+            our WorldPosition: state <- agent.worldManager.graph.position(parsed.target!.pItem!.value!.items.tail,history)
+            our WorldPosition: part <- agent.worldManager.graph.position(state!.node!.pItem!.value!.items.head,state)
+            our WorldRequest: view <- agent.worldManager.select(agent.startSession(),part,temporalViewPart("^T"))
+            print("Part view width ",width,": frames=",view!.framesCreated," queue=",view!.queueSteps," relationships=",view!.relationshipsRead," positions=",view!.correspondencePositions," headers=",view!.temporalSupportHeaders," members=",view!.temporalViewMembers,"\n")
+            if(!view!.complete() or view!.framesCreated>8 or view!.queueSteps>12 or view!.relationshipsRead!=0 or
+               view!.correspondencePositions!=0 or view!.temporalSupportHeaders!=3 or view!.temporalViewMembers!=1 or !agent.worldManager.control!.inputWaiters.isEmpty()){
+                FAIL("Part projection scanned or acquired the unrequested history")
+            }
+            agent.endWorldSessions(); modelMngr.clear()
+        }
     }
 }

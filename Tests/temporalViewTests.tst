@@ -20,3 +20,16 @@ view/parameter/history, A definition can select a supplied history through its T
 view/parameter/state, Forwarding a selected state retains its original history support, {#sample(item)=%item^T@[1]^S}\nsample(item::{T 4 8}@[2]^S), sample(item::{T 4 8}@[2]^S):8, multi
 view/support/explicitTime, An explicit selected time remains explicit inside another history, {#body=#{T _|...}}\n#Earth=body:{T 4 8}\n#Now=%Earth@[2]^S\n{T %Now^T^T@[1]^S}, {T 8}, multi
 view/definition/context, An explicit represented layout retains T context from its definition, {#timeline=#{T _|...}}\ntimeline:{4 8}^T@[2]^S, 8, multi
+view/part/scalar, A scalar part borrows its containing state's support, {T {4 5} {8 9}}@[2]@[1]^T@[1]^S, 8, norm
+view/part/nested, Nested S parts share the represented whole state, {T {{4 5}} {{8 9}}}@[2]@[1]@[2]^S^T@[1]^S, 9, norm
+view/part/field, A named part view reads the original field, {#x=_}\n{T {x:4} {x:8}}@[2]^S.x^T@[1]^S, x:8, multi
+view/part/embedded, Embedded storage preserves the whole state support, {T &{{4 5} {8 9}}}@[2]@[1]^T@[1]^S, 8, norm
+view/part/prefix, A part view does not enumerate an open history, {T {4 5} {8 9} ...}@[2]@[1]^T@[1]^S, 8, norm
+view/part/overlay, A part view acquires enclosing overlay constraints, ({T {_ _} {_ _}} == {T {4 5} {8 9}})@[2]@[1]^T@[1]^S, 8, norm
+view/part/listSpec, A part view acquires the whole state's listSpec, {T {4 5}| {_ _} {_ _}}@[2]@[2]^T@[1]^S, 5, norm
+view/part/innerHistory, An inner T list keeps its independent temporal level, {T {{T 4 8}} {{T 3 7}}}@[2]@[1]^T@[2]^S, 7, norm
+view/part/parameter, A forwarded part retains its support, {#sample(item)=%item^T@[1]^S}\nsample(item::{T {4 5} {8 9}}@[2]@[1]^S), sample(item::{T {4 5} {8 9}}@[2]@[1]^S):8, multi
+view/part/name, A named part and published window retain the original occurrence, {#x=_ #body=#{T {x\, ...}|...}}\n#System=body:{T {x:4} {x:8}}\n#Part=%System@[2]^S.x^S\n#Window=%Part^T\n%Window@[1]^S, x:8, multi
+view/part/write, A checked part window write is visible through the whole, {#x=_ #body=#{T {x\, ...}|...}}\n#System=body:{T {x:4} {x:%?}}\n%System@[2].x^T={T 8}//:{T x:%? = 8}\n%System@[2]^S.x//:x:%? = 8\n%System@[1]^S.x//:x:4, -, multi
+view/part/definitionContext, Part views use the T context established by an ordinary definition, {#x=_ #body=#{T {x\, ...}|...}}\nbody:{{x:4} {x:8}}@[2].x^T@[1]^S, x:8, multi
+view/part/boundaries, Whole and part views retain shared boundary identity across requests, {#x=_ #body=#{T {x\, ...}|...}}\n#System=body:{T {x:4} {x:8}}\n#Part=%System@[2].x^S\n%System@[2]^S.begin//:NULL:1\n%Part^S.begin//:NULL:1\n%Part^T.begin//:NULL:1\n%System@[2]^S.end//:NULL:2\n%Part^T.end//:NULL:2, -, multi

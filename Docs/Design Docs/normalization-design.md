@@ -206,6 +206,23 @@ different subject's current state. Explicit supplied prefixes remain usable
 without enumerating an open remainder. The existing demand producer owns any
 production; conversion does not supply a second producer or matcher.
 
+**Represented part views (D117).** A represented member nested within the S-view
+of a represented temporal state shares that state's temporal support. For
+example, `system@[2]^S.part^T@[1]^S` retains the original part occurrence and
+its enclosing state's boundaries. Ordinary nested S-lists preserve their own
+structural scope; sharing a time-slice does not change `%prev`, `%next` or
+parameter scope. Embedded storage remains transparent. An explicitly nested
+T-list establishes a separate temporal level.
+
+Support now distinguishes the viewed occurrence, its containing temporal extent,
+and its own lifetime when known. S-containment alone does not establish a part's
+lifetime or identify it with the whole's history. The temporal-parent provider
+therefore returns no established lifetime for such a part view. No part history
+is assembled across sibling whole states, and no finer internal changes are
+inferred. Foreign histories, such as several Earth states during one Sol state,
+still require explicit support correspondence. Selected part views use the same
+ordinary acquisition, waiting, publication and checked-write routes as D116.
+
 `%ctx` is initially a session-scoped, recency-ordered collection of model references
 established by explicit agent interactions. It works in ordinary assertion lists
 as well as T-lists. Assertions resolve references in source order and contribute
