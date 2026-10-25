@@ -4722,3 +4722,62 @@ diagnostics are unchanged. The separate compiled
 remains active alongside the eight default failures. Inputs, fixture modes and
 registrations were compared against HEAD and preserved. Evidence, temporary
 composite probes and build output are in `/tmp/proteus-next-fix/`.
+
+## D121 World bootstrap requires a semantic list header (2026-10-25)
+
+**Scope and decision.** Keep `world/load/kernel` and `world/load/publicKB`.
+They cover kernel imports, construction of the Agent's world occurrence and
+subsequent public-document loading. The user requested fixing these failures
+and reviewing whether the coverage was obsolete. Their language inputs and
+expectations remain unchanged. The obsolete requirement is in
+`TestProteusCore.initializeWorldFromKernel`: it demanded a literal list in the
+occurrence's storage and the internal `wordDerefed` flag after ordinary value
+normalization.
+
+The current virtual-list interface can establish a named temporal list's
+semantic header without materializing its value or completing its extent.
+After initialization, explicitly reject failed or unsettled initialization
+statuses, then use the existing `WorldManager.acquireHeader` request. Require
+that header request to complete and establish a list. Keep the initialization
+and header handles separate: completion of the header request does not complete
+the original world-value request. Missing names, scalar worlds and semantic
+rejections must still fail bootstrap.
+
+**Why the tests remain useful.** Slipstream's current startup waits for its
+kernel stream, creates and normalizes a `world` occurrence, then loads public
+knowledge. It explicitly permits that occurrence to remain partial. The test
+helper additionally verifies a usable list header; requiring the world's raw
+storage to contain a fully interpreted list imposes an older representation
+contract. The synthetic finite-public fixture still checks actual `%W` member
+access and a public declaration depending on a kernel-relative import. The
+symbolic-public check verifies its document's supplied value and continued
+access to declarations imported by the sibling kernel. These are current
+loading behaviors, not old scheduler or cache assertions.
+
+**Symbolic size remains required work.** `*(20000+_)+{T epoch|...}` retains its
+entire explicit size expression, open temporal structure and epoch listSpec.
+Ordinary world normalization remains partial. A separate request requiring
+size also stays partial and publishes nothing. Header acquisition publishes
+nothing and preserves its source occurrence. This refines D119's classification
+of the two failures: deleting the flag check alone was insufficient, but the
+existing virtual header proof establishes the needed structure without solving
+or erasing the symbolic extent.
+
+**Alternatives and boundaries.** Deleting the tests would remove useful startup
+coverage. Substituting a finite size or dropping the expression would change
+the world model. Merely accepting every partial normalization would also admit
+an unproved or non-list world. A new solver rule is unnecessary because the
+semantic header demand already exists. No production normalizer, native
+binding, world asset or Slipstream source changes. These synthetic tests do not
+establish that every real PublicKB rule or visible consumer renders correctly.
+
+**Validation.** `codeDog Proteus.Lib.dog` regenerates and builds successfully in
+273.79 seconds. All three `unit/worldLoad/` checks and all three original
+`worldLoadTests.tst:` fixtures pass. Defaults report **6/509**, down from
+**8/509**; the full suite reports **7/756**, down from **9/753** with three new
+passing compiled checks. Exactly `world/load/kernel` and `world/load/publicKB`
+disappear from the failure lists, with no new failures or changed diagnostics
+in retained failures. The independent typed-unit source-provenance failure
+remains active. Every `.tst` file and world asset is unchanged. Evidence:
+`/tmp/proteus-world-load-{baseline,compiled,fixtures,default-final,all-final}.log`
+and `/tmp/proteus-world-load-build-final.log`.

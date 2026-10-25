@@ -7,6 +7,9 @@ TestsToRun = `
     unit/fixtureContracts/cubeTemplateExtent
     unit/fixtureContracts/pendingNegativeWrite
     unit/fixtureContracts/nonAligningUnitGuard
+    unit/worldLoad/symbolicKernel
+    unit/worldLoad/symbolicPublic
+    unit/worldLoad/bootstrapValidation
     unit/temporalViews/identity
     unit/temporalParts/identity
     unit/temporalParts/waitAndCancel
@@ -282,6 +285,8 @@ struct TestConnectionManager: inherits=InfonStreamLoader{}
 struct TestProteusCore: inherits=ProteusCore {
     me TestConnectionManager: connectionMgr
     our infonView: loadedWorldSource
+    our WorldRequest: worldInitialization
+    our WorldRequest: worldHeader
 
     our InfonConnector: makeInfonConnector(me string: specString,
             me int: loadNumber) <- {
@@ -333,20 +338,31 @@ struct TestProteusCore: inherits=ProteusCore {
     }
 
     me bool: initializeWorldFromKernel() <- {
+        worldInitialization <- NULL; worldHeader <- NULL
         our infonView: parsedWorld <-
                 parseAndExtractString("world", "internal:world")
         if(parsedWorld==NULL){return(false)}
         agent!.world <- parsedWorld
         our POV:: worldPov{30}
         worldPov!.pItem <- agent!.world
-        agent!.normalizeAndWait(worldPov)
+        worldInitialization <- agent!.normalize(worldPov)
+        worldInitialization!.waitForCompletion()
         agent!.world <- worldPov!.pItem
-        if(agent!.world==NULL or
-                agent!.world!.value!.overlayType!=LST or
-                agent!.world!.value!.evalMode!=emLiteral or
-                !agent!.world!.wordDerefed){
-            errorMesg <-
-                    "The kernel definition 'world' did not normalize into a resolved list."
+        me WorldStatus: initialized <- worldInitialization!.status()
+        if(initialized.outcome!=worldComplete and initialized.outcome!=worldPartial){
+            errorMesg <- "The kernel world could not initialize: "+initialized.detail
+            return(false)
+        }
+        // Startup needs the semantic list header. A named temporal list can
+        // supply that through its virtual layout while size/value work remains
+        // partial. Do not require materialization or a legacy completion flag.
+        worldHeader <- agent!.worldManager.acquireHeader(agent!.startSession(),
+            agent!.worldManager.graph.position(worldPov), agent!.getLocaleBaseName(),
+            agent!.world, agent!.identityRegistry)
+        worldHeader!.waitForCompletion()
+        if(!worldHeader!.complete() or !worldHeader!.acquiredHeader.hasValue or
+           worldHeader!.acquiredHeader.overlay!=LST){
+            errorMesg <- "The kernel definition 'world' has no established list header: "+worldHeader!.error()
             return(false)
         }
         return(true)
@@ -8087,6 +8103,95 @@ struct GLOBAL {
 // Semantic checks for revised fixture snapshots. Pending requests must retain
 // their work and source; acquired facts must survive expanded printing.
 struct GLOBAL {
+    void: unit_worldLoad_symbolicKernel(me string: testName) <- {
+        me TestProteusCore: core
+        if(!core.initForWorldTest("TestFiles/world-load/symbolic/KernelKB.pr")){FAIL(core.errorMesg)}
+        if(core.worldInitialization==NULL or core.worldInitialization!.status().outcome!=worldPartial or
+           core.worldHeader==NULL or !core.worldHeader!.complete() or core.worldHeader!.publications!=0 or
+           core.worldHeader!.selectedSource()==NULL or core.worldHeader!.selectedSource()!.pItem!==core.agent!.world){
+            FAIL("Symbolic bootstrap did not distinguish a proved header from an incomplete world value")
+        }
+        me WorldScalar: header <- core.worldHeader!.acquiredHeader
+        if(header.overlay!=LST or !header.hasValue or !header.timelike or !header.openTail or header.hasSize){
+            FAIL("Symbolic world header lost its temporal open list or fabricated an extent")
+        }
+        me WorldParseResult: reference <- core.agent!.worldManager.parse("#world")
+        if(reference.target==NULL){FAIL(reference.error)}
+        our WorldRequest: read <- core.agent!.normalize(reference.target)
+        our infonView: templateBody <- reference.target!.pItem!.templateModel
+        if(!read!.complete() or templateBody==NULL or templateBody!.infSize!.evalMode!=emConcat or
+           templateBody!.value!.listSpec==NULL or templateBody!.value!.listSpec!.type==NULL or
+           templateBody!.value!.listSpec!.type!.typeID()!="epoch"){
+            FAIL("Bootstrap erased the explicit size expression or the imported epoch requirement")
+        }
+        our infonView: expected <- parseAndExtract(testName,"*(20000+_)+{T epoch| ...}")
+        if(expected==NULL or toString(templateBody)!=toString(expected)){FAIL("Bootstrap changed the kernel world model")}
+        me string: original <- toString(templateBody)
+        me WorldParseResult: requested <- core.agent!.worldManager.parse("world")
+        if(requested.target==NULL){FAIL(requested.error)}
+        our WorldRequest: pending <- core.agent!.normalizeInSession(core.agent!.startSession(),requested.target,true)
+        if(pending!.status().outcome!=worldPartial or pending!.publications!=0 or toString(templateBody)!=original){
+            FAIL("Header readiness completed a stronger size request or changed its borrowed model")
+        }
+        me WorldParseResult: imported <- core.agent!.worldManager.parse("#epoch")
+        if(imported.target==NULL){FAIL(imported.error)}
+        read <- core.agent!.normalize(imported.target)
+        templateBody <- imported.target!.pItem!.templateModel
+        if(!read!.complete() or templateBody==NULL or templateBody!.infSize!.evalMode!=emLiteral or templateBody!.infSize!.num!=2 or
+           !templateBody!.value!.timelike or templateBody!.value!.listSpec==NULL or templateBody!.value!.listSpec!.type==NULL or
+           templateBody!.value!.listSpec!.type!.typeID()!="tick"){
+            FAIL("Kernel bootstrap did not retain its origin-relative unit import")
+        }
+        core.deInit(); modelMngr.clear()
+    }
+
+    void: unit_worldLoad_symbolicPublic(me string: testName) <- {
+        me TestProteusCore: core
+        if(!core.initForWorldTest("TestFiles/world-load/symbolic/PublicKB.pr")){FAIL(core.errorMesg)}
+        if(core.worldInitialization==NULL or core.worldInitialization!.status().outcome!=worldPartial or
+           core.worldHeader==NULL or !core.worldHeader!.complete() or core.worldHeader!.acquiredHeader.hasSize or
+           core.loadedWorldSource==NULL or core.loadedWorldSource===core.agent!.world){
+            FAIL("Public loading replaced or completed the partial kernel world")
+        }
+        our POV: label <- core.loadedWorldSource!.fetchField("fixture-label")
+        if(label==NULL or label!.pItem!.value!.evalMode!=emLiteral or label!.pItem!.value!.str!="stable"){
+            FAIL("Public document did not load after the symbolic kernel header became ready")
+        }
+        me WorldParseResult: imported <- core.agent!.worldManager.parse("#epoch")
+        if(imported.target==NULL){FAIL(imported.error)}
+        our WorldRequest: read <- core.agent!.normalize(imported.target)
+        if(!read!.complete() or imported.target!.pItem!.templateModel==NULL){
+            FAIL("Public loading lost a declaration inserted by its sibling kernel")
+        }
+        core.deInit(); modelMngr.clear()
+    }
+
+    void: unit_worldLoad_bootstrapValidation(me string: testName) <- {
+        me List<string>: inputs <- ["{}", "{#world=7}", "{#world='text'}", "{#world=(1=2)}", "{#world={T 1 2}}"]
+        me int: scenario <- 0
+        withEach input in inputs{
+            me TestProteusCore: core
+            if(!core.initForWorldTest("")){FAIL(core.errorMesg)}
+            me WorldParseResult: declarations <- core.agent!.worldManager.parse(input)
+            if(declarations.target==NULL){FAIL(declarations.error)}
+            our WorldRequest: installed <- core.agent!.normalize(declarations.target)
+            if(!installed!.complete()){FAIL("Bootstrap control declarations did not install: "+installed!.error())}
+            me bool: loaded <- core.initializeWorldFromKernel()
+            if(scenario<4){
+                if(loaded or core.errorMesg==""){FAIL("World bootstrap accepted a missing scalar or contradictory model")}
+                if(scenario==3 and (core.worldInitialization==NULL or core.worldInitialization!.status().outcome!=worldRejected)){
+                    FAIL("World bootstrap hid a semantic rejection")
+                }
+            }else if(!loaded or core.worldInitialization==NULL or !core.worldInitialization!.complete() or
+                     core.worldHeader==NULL or !core.worldHeader!.complete() or
+                     !core.worldHeader!.acquiredHeader.hasSize or core.worldHeader!.acquiredHeader.size!=2){
+                FAIL("World bootstrap rejected a valid finite temporal list")
+            }
+            scenario <+- 1
+            core.deInit(); modelMngr.clear()
+        }
+    }
+
     void: unit_fixtureContracts_pendingNegativeWrite(me string: testName) <- {
         me Agent: agent
         Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
