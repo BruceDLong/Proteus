@@ -4542,3 +4542,53 @@ captures were inspected. No cursor/display errors occur, and normal window
 closure exits zero. The known World-load `Open source correspondence needs span
 alignment` diagnostic remains. Consumer source and World models are unchanged.
 Evidence: `/tmp/proteus-part-views-20261025/`.
+
+## D118 Retire legacy selection bookkeeping assertions (2026-10-25)
+
+**Choice.** Keep the eight compiled selection cases reviewed against the
+24/747 baseline, but remove requirements that normalization populate the old
+`IdentityRegistry.selectionReferences` and `selectionRequests` indexes, emit a
+particular repetition-materialization identity event, leave the identity store
+empty, share result/source `pItem` pointers, or populate `POV.viewMap`. These are
+implementation choices of the previous engine, not requirements on its
+replacement. No production implementation or language fixture expectation
+changes in this cleanup.
+
+**Retained behavior.** Direct and ordered field reads still return `b:2` and
+retain the original selected occurrence and containing list. Positive index,
+first and last reads retain their original source POVs; a positive span returns
+exactly `{20 30}` and retains both original source positions and context. The
+returned `WorldRequest` retains status, result and source after another request.
+Typed sugar and the explicit intersection must both return the final logical
+`minute:{4 5 6}`, preserve the six supplying seconds, and retain the original
+selected source window. The assertions use the current request/provenance
+contract in the design's “Path reads and writes as correspondence consumers”
+section. Exact source occurrence identity remains a semantic requirement;
+result allocation and old reverse indexes do not.
+
+**Reason and alternatives.** Deleting all eight cases would discard required
+selection coverage along with obsolete machinery. Restoring registry writes or
+`viewMap` aliases would couple callers to the retired representation. The tests
+instead retain their expressions and semantic checks through `WorldRequest`.
+The four passing tests of explicitly invoked registry helper APIs are outside
+this cleanup. A typed window whose values are correct but whose original source
+positions are missing must remain an active failure, rather than being reduced
+to a value-only assertion.
+
+**Validation.** `codeDog Proteus.Lib.dog` regenerates and builds successfully
+(254.42 seconds). The reference-registry group passes **11/11** checks. Both
+typed selection expressions return `minute:{4 5 6}` and preserve their six
+supplying values, but subsequent public `WorldManager.select` requests do not
+retain all original source-second occurrences and context. The typed-selection
+case therefore remains an active semantic failure with a specific diagnostic;
+no replacement `viewMap` requirement or fixed typed-provenance container layout
+is imposed.
+
+The full protected run reports **17/747**, down from **24/747**, removing
+exactly the seven obsolete registry failures. The default run remains
+**16/509**, with all 16 failing names and diagnostics identical to the baseline
+and to the full run. All eight compiled case registrations remain. No new
+failing names appear. Commands use `-T 3`; the printed counts were checked
+because the harness exits zero despite failures. Evidence:
+`/tmp/proteus-selection-test-cleanup-build.log`,
+`/tmp/proteus-selection-cleanup-{registry,typed,all,default}.log`.

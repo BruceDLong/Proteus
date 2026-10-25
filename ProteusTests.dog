@@ -417,18 +417,18 @@ struct GLOBAL {
     ENDRELQUERY(unit/endRelative/incompatibleSource, "classify a non-list source as incompatible", 4)
     ENDRELQUERY(unit/endRelative/outOfRangeWindow, "reject a window outside an exact extent", 5)
     ENDRELQUERY(unit/endRelative/derivedBoundaryStable, "use a stable derived-view end instead of the ultimate source end", 6)
-    SELECTIONREFERENCE(unit/referenceRegistry/partPathSelection, "record direct part selection without asserting identity", 1)
-    SELECTIONREFERENCE(unit/referenceRegistry/intersectionPartPathSelection, "record intersection-lowered part selection without asserting identity", 2)
+    SELECTIONREFERENCE(unit/referenceRegistry/partPathSelection, "retain the source occurrence and context of direct part selection", 1)
+    SELECTIONREFERENCE(unit/referenceRegistry/intersectionPartPathSelection, "retain the source occurrence and context of ordered part selection", 2)
     EXTERNALASSOCIATION(unit/referenceRegistry/externalAssociation, "record a reversible external association without identifying its endpoints")
     SELECTIONRESOLUTION(unit/referenceRegistry/multipleEqualValuedOccurrences, "preserve equal-valued source occurrences as distinct selection results", 2)
     SELECTIONRESOLUTION(unit/referenceRegistry/reverseSourceMultiplicity, "report every query and result that selected one exact source occurrence", 3)
-    SELECTIONRESOLUTION(unit/referenceRegistry/resolvedPartPathRequest, "resolve the original part-path request through its accepted intersection match", 4)
+    SELECTIONRESOLUTION(unit/referenceRegistry/resolvedPartPathRequest, "retain the original part-path request result and provenance", 4)
     SELECTIONRESOLUTION(unit/referenceRegistry/singleSelectionInverse, "reverse only a unique one-item positional selection to its source occurrence", 5)
-    POSITIONALSELECTION(unit/referenceRegistry/positiveIndexSelection, "record a positive index result by exact source POV", 1)
-    POSITIONALSELECTION(unit/referenceRegistry/firstSelection, "record first-item navigation by exact source POV", 2)
-    POSITIONALSELECTION(unit/referenceRegistry/lastSelection, "record last-item navigation by exact source POV", 3)
-    POSITIONALSELECTION(unit/referenceRegistry/positiveSpanSelection, "record a positive span by its exact first source POV", 4)
-    INDEXLOWERING(unit/indexLowering/typedSugarMatchesIntersection, "give sugar and low-level typed selections equivalent mappings", 2)
+    POSITIONALSELECTION(unit/referenceRegistry/positiveIndexSelection, "select a positive index with its original source occurrence", 1)
+    POSITIONALSELECTION(unit/referenceRegistry/firstSelection, "retain the original first-item occurrence", 2)
+    POSITIONALSELECTION(unit/referenceRegistry/lastSelection, "retain the original last-item occurrence", 3)
+    POSITIONALSELECTION(unit/referenceRegistry/positiveSpanSelection, "retain every original source position of a positive span", 4)
+    INDEXLOWERING(unit/indexLowering/typedSugarMatchesIntersection, "give sugar and low-level typed selections equivalent values and source windows", 2)
     IMPLICITITEM(unit/implicitItem/canonical, "reuse the canonical POV for one implicit source position", 1)
     IMPLICITITEM(unit/implicitItem/distinctPositions, "keep distinct implicit source positions distinct", 2)
     IMPLICITITEM(unit/implicitItem/nonMaterializing, "look up an implicit item without expanding the source list", 3)
@@ -1174,104 +1174,29 @@ struct GLOBAL {
         me ProteusCore: CORE
         CORE.init("", false)
         me string: expression <- "{a:1, b:2}.b"
-        me SelectionReferenceKind: expectedKind <- srkPartPathSelection
-        if(caseID==2){
-            expression <- "{a:1 b:2}.b"
-            expectedKind <- srkIntersectionCorrespondence
-        }
-        our infonView: result <- parseAndExtract(
-                testName, expression)
+        if(caseID==2){expression <- "{a:1 b:2}.b"}
+        our infonView: result <- parseAndExtract(testName, expression)
+        our POV: firstSource <- result!.value!.items.head
+        our POV: selected <- result!.value!.items.tail
         our POV:: resultPOV{povSrcPartPathSelection}
         resultPOV!.pItem <- result
-        CORE.agent!.normalizeAndWait(resultPOV)
-
-        our SelectionReference: registeredReference
-        me int: partPathReferenceCount <- 0
-        withEach reference in
-                CORE.agent!.identityRegistry!.selectionReferences{
-            if(reference!.referenceKind==expectedKind){
-                partPathReferenceCount <+- 1
-                if(reference!.sourceStartPOV!=NULL and
-                        reference!.sourceStartPOV!.pItem!=NULL and
-                        reference!.sourceStartPOV!.pItem!.type!=NULL and
-                        reference!.sourceStartPOV!.pItem!.
-                                type!.typeID()=="b" and
-                        reference!.sourceStartPOV!.pItem!.
-                                value!.overlayType==NUM and
-                        reference!.sourceStartPOV!.pItem!.
-                                value!.num.convertToInt()==2 and
-                        reference!.resultPOV!=NULL and
-                        reference!.resultPOV!.pItem===resultPOV!.pItem){
-                    registeredReference <- reference
-                }
-            }
+        our WorldRequest: request <- CORE.agent!.normalize(resultPOV)
+        request!.waitForCompletion()
+        if(!request!.complete()){FAIL("Part selection did not complete: "+request!.error())}
+        // Selection identifies a contextual source occurrence. It does not
+        // require a global registry record or aliasing the result's pItem.
+        if(request!.result()!==resultPOV or request!.selectedSource()!==selected or
+           request!.provenance!.position!.parent==NULL or
+           request!.provenance!.position!.parent!.node!.pItem!.value!.items.head!==firstSource){
+            FAIL("Part selection lost its original source occurrence or containing list")
         }
-        me List<our SelectionReference>: queryReferences
-        me List<our SelectionReference>: resultReferences
-        me List<our SelectionReference>: sourceReferences
-        if(registeredReference!=NULL){
-            CORE.agent!.identityRegistry!.
-                    collectSelectionReferencesForQuery(
-                            registeredReference!.queryPOV,
-                            queryReferences)
-            CORE.agent!.identityRegistry!.
-                    collectSelectionReferencesForResult(
-                            registeredReference!.resultPOV,
-                            resultReferences)
-            CORE.agent!.identityRegistry!.
-                    collectSelectionReferencesForSource(
-                            registeredReference!.sourceContextPOV,
-                            registeredReference!.sourceStartPOV,
-                            sourceReferences)
+        if(resultPOV!.pItem!.type==NULL or resultPOV!.pItem!.type!.typeID()!="b" or
+           resultPOV!.pItem!.value!.overlayType!=NUM or resultPOV!.pItem!.fetchInt()!=2 or
+           selected!.pItem!.type==NULL or selected!.pItem!.type!.typeID()!="b" or
+           selected!.pItem!.fetchInt()!=2 or firstSource!.pItem!.fetchInt()!=1){
+            FAIL("Part selection changed its type or a source value")
         }
-        me bool: sourceIncludesRegistered <- false
-        withEach sourceReference in sourceReferences{
-            if(sourceReference===registeredReference){
-                sourceIncludesRegistered <- true
-                break()
-            }
-        }
-
-        me bool: passed <- registeredReference!=NULL and
-                partPathReferenceCount>=1 and
-                queryReferences.size()==1 and
-                queryReferences.first()===registeredReference and
-                resultReferences.size()==1 and
-                resultReferences.first()===registeredReference and
-                sourceIncludesRegistered and
-                CORE.agent!.identityRegistry!.identities.isEmpty() and
-                registeredReference!.queryPOV!=NULL and
-                registeredReference!.queryPOV!.pItem!=NULL and
-                registeredReference!.queryPOV!.pItem!.type!=NULL and
-                registeredReference!.queryPOV!.pItem!.type!.typeID()=="b" and
-                registeredReference!.resultPOV!=NULL and
-                registeredReference!.resultPOV!.pItem===resultPOV!.pItem and
-                registeredReference!.sourceContextPOV!=NULL and
-                registeredReference!.sourceContextPOV!.pItem!=NULL and
-                registeredReference!.sourceContextPOV!.pItem!.value!.
-                        overlayType==LST and
-                registeredReference!.sourceStartPOV!=NULL and
-                registeredReference!.sourceStartPOV!.pItem!=NULL and
-                registeredReference!.sourceStartPOV!.pItem!.type!=NULL and
-                registeredReference!.sourceStartPOV!.pItem!.
-                        type!.typeID()=="b" and
-                registeredReference!.sourceStartPOV!.pItem!.
-                        value!.num.convertToInt()==2 and
-                resultPOV!.pItem!.type!=NULL and
-                resultPOV!.pItem!.type!.typeID()=="b" and
-                resultPOV!.pItem!.value!.num.convertToInt()==2
-        if(caseID==1){
-            passed <- passed and
-                    registeredReference!.resultPOV===resultPOV and
-                    registeredReference!.sourceStartPOV!.pItem===
-                            resultPOV!.pItem
-        }
-        me string: actual <- "false"
-        me string: expected <- "true"
-        if(passed){actual <- "true"}
-        REQUIRE(actual==expected)
-        modelMngr.clear()
-        return()
+        CORE.agent!.endWorldSessions(); modelMngr.clear()
     }
     me void: unitTestSelectionResolution(
             me string: testName, me int: caseID) <- {
@@ -1368,36 +1293,22 @@ struct GLOBAL {
         }else if(caseID==4){
             me ProteusCore: CORE
             CORE.init("", false)
-            our infonView: result <- parseAndExtract(
-                    testName, "{a:1 b:2}.b")
+            our infonView: result <- parseAndExtract(testName, "{a:1 b:2}.b")
+            our POV: selected <- result!.value!.items.tail
             our POV:: resultPOV{povSrcPartPathSelection}
             resultPOV!.pItem <- result
-            CORE.agent!.normalizeAndWait(resultPOV)
-            our SelectionRequest: partRequest
-            withEach request in
-                    CORE.agent!.identityRegistry!.selectionRequests{
-                if(request!.referenceKind==srkPartPathSelection and
-                        request!.consumerResultPOV===resultPOV){
-                    partRequest <- request
-                    break()
-                }
-            }
-            our SelectionResolution: resolution
-            if(partRequest!=NULL){
-                resolution <- CORE.agent!.identityRegistry!.
-                        resolveSelectionRequest(partRequest!.requestID)
-            }
-            passed <- partRequest!=NULL and resolution!=NULL and
-                    resolution!.resolutionState==srsUnique and
-                    resolution!.references.size()==1 and
-                    resolution!.references.first()!.queryPOV===
-                            partRequest!.queryPOV and
-                    resolution!.references.first()!.resultPOV===resultPOV and
-                    resolution!.references.first()!.sourceStartPOV!=NULL and
-                    resolution!.references.first()!.sourceStartPOV!.pItem!.
-                            type!.typeID()=="b" and
-                    resultPOV!.pItem!.value!.num.convertToInt()==2
-            modelMngr.clear()
+            our WorldRequest: request <- CORE.agent!.normalize(resultPOV)
+            request!.waitForCompletion()
+            // A later request must not consume the caller's earlier handle.
+            our POV:: otherPOV{povSrcPartPathSelection}
+            otherPOV!.pItem <- parseAndExtract(testName, "99")
+            our WorldRequest: other <- CORE.agent!.normalize(otherPOV)
+            passed <- request!.complete() and other!.complete() and
+                    request!.result()===resultPOV and request!.selectedSource()===selected and
+                    resultPOV!.pItem!.type!=NULL and resultPOV!.pItem!.type!.typeID()=="b" and
+                    resultPOV!.pItem!.fetchInt()==2 and selected!.pItem!.fetchInt()==2 and
+                    other!.result()===otherPOV and otherPOV!.pItem!.fetchInt()==99
+            CORE.agent!.endWorldSessions(); modelMngr.clear()
         }else{
             our IdentityRegistry:: registry
             our infonView: source <- parseAndExtract(
@@ -1484,136 +1395,100 @@ struct GLOBAL {
         }else if(caseID==3){
             expression <- "{10 20 30}.last"
             expectedValue <- 30
-        }else if(caseID==4){
-            expression <- "{10 20 30 40}@[1:*2+{ ... }]"
-            expectedValue <- 20
-        }
+        }else if(caseID==4){expression <- "{10 20 30 40}@[1:*2+{ ... }]"}
         our infonView: result <- parseAndExtract(testName, expression)
+        our POV: firstSource <- result!.value!.items.head
+        our POV: secondSource <- firstSource!.next
+        our POV: thirdSource <- secondSource!.next
+        our POV: selected <- secondSource
+        if(caseID==2){selected <- firstSource}
+        else if(caseID==3){selected <- thirdSource}
         our POV:: resultPOV{povSrcPartPathSelection}
         resultPOV!.pItem <- result
-        CORE.agent!.normalizeAndWait(resultPOV)
-
-        our SelectionReference: registeredReference
-        me int: positionalReferenceCount <- 0
-        withEach reference in
-                CORE.agent!.identityRegistry!.selectionReferences{
-            if(reference!.referenceKind==srkPositionalSelection){
-                positionalReferenceCount <+- 1
-                registeredReference <- reference
-            }
-        }
-        me List<our SelectionReference>: sourceReferences
-        if(registeredReference!=NULL){
-            CORE.agent!.identityRegistry!.
-                    collectSelectionReferencesForSource(
-                            registeredReference!.sourceContextPOV,
-                            registeredReference!.sourceStartPOV,
-                            sourceReferences)
-        }
-        me bool: sourceIncludesRegistered <- false
-        withEach sourceReference in sourceReferences{
-            if(sourceReference===registeredReference){
-                sourceIncludesRegistered <- true
-                break()
-            }
-        }
-
-        me bool: passed <- registeredReference!=NULL and
-                positionalReferenceCount==1 and
-                sourceIncludesRegistered and
-                registeredReference!.queryPOV!=NULL and
-                registeredReference!.resultPOV!=NULL and
-                registeredReference!.resultPOV!.pItem===resultPOV!.pItem and
-                registeredReference!.sourceContextPOV!=NULL and
-                registeredReference!.sourceContextPOV!.pItem!=NULL and
-                registeredReference!.sourceContextPOV!.pItem!.value!.
-                        overlayType==LST and
-                registeredReference!.sourceStartPOV!=NULL and
-                registeredReference!.sourceStartPOV!.pItem!=NULL and
-                registeredReference!.sourceStartPOV!.pItem!.
-                        value!.num.convertToInt()==expectedValue
+        our WorldRequest: request <- CORE.agent!.normalize(resultPOV)
+        request!.waitForCompletion()
+        if(!request!.complete()){FAIL("Positional selection did not complete: "+request!.error())}
         if(caseID==4){
-            our POV: firstResultPOV <-
-                    resultPOV!.pItem!.value!.items.head
-            our POV: secondResultPOV <-
-                    resultPOV!.pItem!.value!.items.tail
-            // The positive range's compressed prefix is a repetition. When
-            // its demanded occurrence is exposed, that occurrence and the
-            // concrete head are genuinely identical; this is independent of
-            // the non-identity selection provenance checked above.
-            our IdentityRelation: exposureIdentity
-            if(CORE.agent!.identityRegistry!.identities.size()==1){
-                exposureIdentity <-
-                        CORE.agent!.identityRegistry!.identities.first()
+            // A result span has its own container and retains every source
+            // position; no repetition-materialization identity is required.
+            if(!namedLayoutValues(resultPOV,[20,30])){FAIL("Positive span returned the wrong values or extent")}
+            if(request!.selectedSource()!=NULL or request!.provenance==NULL or
+               request!.provenance!.positions.size()!=2){FAIL("Positive span lost its source positions")}
+            our WorldPosition: first <- request!.provenance!.positions[0]
+            our WorldPosition: second <- request!.provenance!.positions[1]
+            if(first!.node!==secondSource or second!.node!==thirdSource or first!.parent==NULL or second!.parent==NULL or
+               first!.parent!.node!.pItem!.value!.items.head!==firstSource or
+               second!.parent!.node!.pItem!.value!.items.head!==firstSource){
+                FAIL("Positive span lost an original source occurrence or its context")
             }
-            passed <- passed and firstResultPOV!=NULL and
-                    secondResultPOV!=NULL and
-                    exposureIdentity!=NULL and
-                    exposureIdentity!.evidenceKind==
-                            iekRepetitionMaterialization and
-                    firstResultPOV!.pItem!.value!.
-                            num.convertToInt()==20 and
-                    secondResultPOV!.pItem!.value!.
-                            num.convertToInt()==30
         }else{
-            passed <- passed and
-                    CORE.agent!.identityRegistry!.identities.isEmpty() and
-                    resultPOV!.pItem!.value!.
-                            num.convertToInt()==expectedValue
+            if(resultPOV!.pItem!.value!.overlayType!=NUM or resultPOV!.pItem!.fetchInt()!=expectedValue or
+               request!.selectedSource()!==selected or request!.provenance!.position!.parent==NULL or
+               request!.provenance!.position!.parent!.node!.pItem!.value!.items.head!==firstSource){
+                FAIL("Positional selection lost its value or qualified source occurrence")
+            }
         }
-        me string: actual <- "false"
-        me string: expected <- "true"
-        if(passed){actual <- "true"}
-        REQUIRE(actual==expected)
-        modelMngr.clear()
-        return()
+        if(firstSource!.pItem!.fetchInt()!=10 or secondSource!.pItem!.fetchInt()!=20 or thirdSource!.pItem!.fetchInt()!=30 or
+           firstSource!.next!==secondSource or secondSource!.next!==thirdSource){
+            FAIL("Reading a selection changed its supplying list")
+        }
+        CORE.agent!.endWorldSessions(); modelMngr.clear()
     }
     me void: unitTestIndexLowering(me string: testName, me int: caseID) <- {
-        me bool: passed <- false
-
         me TestProteusCore: CORE
         if(!CORE.initForWorldTest("TestFiles/timeTestCases.pr")){
             me string: failure <- CORE.errorMesg
             CORE.deInit()
             FAIL("WORLD_LOAD: "+failure)
         }
-        our infonView: sugar <- parseAndExtract(testName,
-                "hour:{second| 1 2 3 4 5 6}@[-1]")
-        our infonView: lowLevel <- parseAndExtract(testName,
-                "*(-1)+[<minute>] <~ hour:{second| 1 2 3 4 5 6}")
-        our POV:: sugarPOV{povSrcEndRelativeView}
-        sugarPOV!.pItem <- sugar
-        our POV:: lowLevelPOV{povSrcEndRelativeView}
-        lowLevelPOV!.pItem <- lowLevel
-        CORE.agent!.normalizeAndWait(sugarPOV)
-        CORE.agent!.normalizeAndWait(lowLevelPOV)
-        our POV: sugarFirst <- sugarPOV!.pItem!.value!.items.head
-        our POV: lowLevelFirst <- lowLevelPOV!.pItem!.value!.items.head
-        passed <- sugarPOV!.pItem!.type!=NULL and
-                lowLevelPOV!.pItem!.type!=NULL and
-                sugarPOV!.pItem!.type!.typeID()=="minute" and
-                lowLevelPOV!.pItem!.type!.typeID()=="minute" and
-                sugarPOV!.viewMap.sourcePov!=NULL and
-                sugarPOV!.viewMap.startPov!=NULL and
-                lowLevelPOV!.viewMap.sourcePov!=NULL and
-                lowLevelPOV!.viewMap.startPov!=NULL and
-                sugarPOV!.viewMap.startPov!.pItem!.value!.num.
-                        convertToInt()==4 and
-                lowLevelPOV!.viewMap.startPov!.pItem!.value!.num.
-                        convertToInt()==4 and
-                sugarFirst!=NULL and lowLevelFirst!=NULL and
-                sugarFirst!.viewMap.startPov!=NULL and
-                lowLevelFirst!.viewMap.startPov!=NULL and
-                sugarFirst!.viewMap.startPov!.pItem!.value!.num.
-                        convertToInt()==4 and
-                lowLevelFirst!.viewMap.startPov!.pItem!.value!.num.
-                        convertToInt()==4
-        CORE.deInit()
-        modelMngr.clear()
-
-        me string: actual <- "false"; me string: expected <- "true"
-        if(passed){actual <- "true"}
-        REQUIRE(actual==expected)
+        me List<string>: inputs <- ["hour:{second| 1 2 3 4 5 6}@[-1]",
+            "*(-1)+[<minute>] <~ hour:{second| 1 2 3 4 5 6}"]
+        our WorldSession: session <- CORE.agent!.startSession()
+        me bool: retainsSources <- true
+        me int: scenario <- 0
+        withEach input in inputs{
+            our infonView: expression <- parseAndExtract(testName,input)
+            our infonView: source <- expression
+            if(scenario==1){source <- expression!.innr!.funcArgs}
+            our POV: member <- source!.value!.items.head
+            me List<our POV>: originals
+            while(member!=NULL){originals.append(member); member <- member!.next}
+            if(originals.size()!=6){FAIL("Typed selection fixture lost its six represented source seconds")}
+            our POV:: target{povSrcEndRelativeView}; target!.pItem <- expression
+            our WorldRequest: request <- CORE.agent!.normalize(target)
+            request!.waitForCompletion()
+            if(!request!.complete() or target!.pItem!.type==NULL or target!.pItem!.type!.typeID()!="minute" or
+               !namedLayoutValues(target,[4,5,6])){
+                FAIL("Typed selection did not return the final logical minute: "+input+": "+request!.error())
+            }
+            // Read each selected second through the public interface after
+            // publication. Values alone cannot establish occurrence identity.
+            if(request!.provenance==NULL or request!.provenance!.position==NULL){retainsSources <- false}
+            else{
+                withEach idx in range 0 .. 3{
+                    our PartPath:: part; part!.pathMode <- idxField
+                    part!.path <- parseAndExtract(testName,toString(idx+1))
+                    our WorldRequest: selected <- CORE.agent!.worldManager.select(session,
+                        request!.provenance!.position,part,CORE.agent!.getLocaleBaseName(),CORE.agent!.world,CORE.agent!.identityRegistry)
+                    if(!selected!.complete() or selected!.selectedSource()!==originals[idx+3]){retainsSources <- false}
+                    else{
+                        our WorldPosition: context <- selected!.provenance!.position!.parent
+                        me bool: foundSource <- false
+                        while(context!=NULL){
+                            if(context!.node!.pItem!.value!.items.head===originals[0]){foundSource <- true; break()}
+                            context <- context!.parent
+                        }
+                        if(!foundSource){retainsSources <- false}
+                    }
+                }
+            }
+            withEach idx in range 0 .. 6{
+                if(originals[idx]!.pItem!.fetchInt()!=idx+1){FAIL("Typed selection changed a source second")}
+            }
+            scenario <+- 1
+        }
+        CORE.deInit(); modelMngr.clear()
+        if(!retainsSources){FAIL("Typed selection lost the original source-second positions or their context")}
     }
     me void: unitTestImplicitItem(me string: testName, me int: caseID) <- {
         our infonView: source <- parseAndExtract(testName, "*4+{item| ...}")
