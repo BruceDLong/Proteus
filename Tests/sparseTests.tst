@@ -41,7 +41,10 @@ sparse/split/writeInsideFirstSparseRemainder, Sparse write after RHS symbolic sp
 sparse/split/writeAfterCrossingSparseBoundary, Sparse write after selector crosses symbolic boundary, [&*61+{second| ...} <_> &*58+{second| ...} _] <~ %W.twoSparseThenMarker = 82\n[&*61+{second| ...} <_> &*58+{second| ...} _] <~ %W.twoSparseThenMarker, second:82, world, TestFiles/sparseTestCases.pr
 sparse/split/writeAfterSparseMinuteSkip, Sparse minute selector skips symbolic seconds, [&*1+{minute| ...} <_> &*3539+{second| ...}] <~ %W.secondRun = 83\n[&*60+{second| ...} <_> &*3539+{second| ...}] <~ %W.secondRun, second:83, world, TestFiles/sparseTestCases.pr
 sparse/split/readAfterTwoSparseMinuteSkip, Sparse two-minute selector skips symbolic seconds, [&*2+{minute| ...} <_>] <~ %W.twoSparseThenMarker, 123, world, TestFiles/sparseTestCases.pr
-sparse/guard/nonAligningMinuteDoesNotSkipHalfMinute, Sparse minute selector does not skip half-minute span, [&*1+{minute| ...} <_>] <~ %W.halfMinuteThenMarker, _, world, TestFiles/sparseTestCases.pr
+# No source occurrence is proved. Retain the partial selector rather than
+# replacing it with a generic unknown. fixtureContracts/nonAligningUnitGuard
+# also checks status plus unchanged span/marker and a successful aligned control.
+sparse/guard/nonAligningMinuteDoesNotSkipHalfMinute, Sparse minute selector does not skip half-minute span, [&*1+{minute| ...} <_>] <~ %W.halfMinuteThenMarker, [&*1+{minute|  ... } <_>], world, TestFiles/sparseTestCases.pr
 
 # Repeated edits in the same sparse parent should not make later positions or
 # concrete tail markers unreachable.

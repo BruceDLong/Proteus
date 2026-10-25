@@ -5,6 +5,8 @@ TestsToRun = `
     unit/fixtureContracts/typedMinuteViews
     unit/fixtureContracts/expandedAliases
     unit/fixtureContracts/cubeTemplateExtent
+    unit/fixtureContracts/pendingNegativeWrite
+    unit/fixtureContracts/nonAligningUnitGuard
     unit/temporalViews/identity
     unit/temporalParts/identity
     unit/temporalParts/waitAndCancel
@@ -8082,9 +8084,87 @@ struct GLOBAL {
     }
 }
 
-// Semantic checks for fixtures whose historical output retained unresolved
-// aliases or redundant template work. Printing snapshots are separate checks.
+// Semantic checks for revised fixture snapshots. Pending requests must retain
+// their work and source; acquired facts must survive expanded printing.
 struct GLOBAL {
+    void: unit_fixtureContracts_pendingNegativeWrite(me string: testName) <- {
+        me Agent: agent
+        Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{'Cat' 'Hat' ...}@[-1] = 'Dog';")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our POV: first <- parsed.target!.pItem!.value!.items.head
+        our POV: last <- parsed.target!.pItem!.value!.items.tail
+        me string: before <- toString(parsed.target!.pItem)
+        if(first==NULL or last==NULL or first===last){FAIL("Pending write fixture lost its supplied prefix")}
+        withEach pass in range 0 .. 2{
+            our WorldRequest: request <- agent.normalize(parsed.target)
+            request!.waitForCompletion()
+            if(request!.status().outcome!=worldPartial or request!.publications!=0 or request!.selectedSource()!=NULL or
+               request!.result()!==parsed.target or toString(parsed.target!.pItem)!=before){
+                FAIL("Unknown endpoint lost the pending write or published an unproved destination")
+            }
+            if(parsed.target!.pItem!.value!.items.head!==first or parsed.target!.pItem!.value!.items.tail!==last or
+               first!.next!==last or last!.next!=NULL or !parsed.target!.pItem!.value!.tailUnfinished or
+               first!.pItem!.value!.str!="Cat" or last!.pItem!.value!.str!="Hat"){
+                FAIL("Pending negative write changed a supplied occurrence or the open endpoint")
+            }
+        }
+        // A proved endpoint must still perform the write's ordinary checks.
+        me WorldParseResult: matching <- agent.worldManager.parse("{'Cat' 'Hat'}@[-1] = 'Hat';")
+        me WorldParseResult: conflicting <- agent.worldManager.parse("{'Cat' 'Hat'}@[-1] = 'Dog';")
+        if(matching.target==NULL or conflicting.target==NULL){FAIL("Closed negative-write control did not parse")}
+        our WorldRequest: accepted <- agent.normalize(matching.target)
+        me string: conflictBefore <- toString(conflicting.target!.pItem)
+        our WorldRequest: rejected <- agent.normalize(conflicting.target)
+        if(!accepted!.complete() or matching.target!.pItem!.value!.items.tail!.pItem!.value!.str!="Hat"){
+            FAIL("Known endpoint did not accept a compatible final-member assertion")
+        }
+        if(rejected!.status().outcome!=worldRejected or rejected!.publications!=0 or
+           toString(conflicting.target!.pItem)!=conflictBefore){
+            FAIL("Known endpoint did not reject a conflicting write atomically")
+        }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+
+    void: unit_fixtureContracts_nonAligningUnitGuard(me string: testName) <- {
+        me TestProteusCore: core
+        if(!core.initForWorldTest("TestFiles/sparseTestCases.pr")){FAIL(core.errorMesg)}
+        our POV: source <- core.agent!.world!.fetchField("halfminutethenmarker")
+        if(source==NULL){FAIL("Half-minute guard fixture lost its source")}
+        our POV: span <- source!.pItem!.value!.items.head
+        our POV: marker <- source!.pItem!.value!.items.tail
+        me string: sourceBefore <- toString(source!.pItem)
+        if(span==NULL or marker==NULL or span===marker){FAIL("Half-minute guard fixture lost its span or marker")}
+        me List<string>: inputs <- ["[&*1+{minute| ...} <_>] <~ %W.halfMinuteThenMarker",
+            "[&*1+{minute| ...} <_>] <~ %W.halfMinuteThenMarker = 77"]
+        withEach input in inputs{
+            me WorldParseResult: parsed <- core.agent!.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            me string: before <- toString(parsed.target!.pItem)
+            our WorldRequest: request <- core.agent!.normalize(parsed.target)
+            request!.waitForCompletion()
+            if(request!.status().outcome!=worldPartial or request!.publications!=0 or request!.selectedSource()!=NULL or
+               toString(parsed.target!.pItem)!=before){
+                FAIL("A minute-sized skip returned an unproved occurrence from a half-minute source")
+            }
+            if(toString(source!.pItem)!=sourceBefore or source!.pItem!.value!.items.head!==span or
+               source!.pItem!.value!.items.tail!==marker or span!.next!==marker or marker!.next!=NULL or
+               !span!.isSubItm or span!.pItem!.infSize!.evalMode!=emLiteral or span!.pItem!.infSize!.num!=30 or
+               marker!.pItem!.value!.evalMode!=emLiteral or marker!.pItem!.fetchInt()!=303){
+                FAIL("Nonaligning selection changed the sparse span or following marker")
+            }
+        }
+        me WorldParseResult: aligned <- core.agent!.worldManager.parse(
+            "[&*1+{minute| ...} <_>] <~ {second| &*60+{second| ...} 303}")
+        if(aligned.target==NULL){FAIL(aligned.error)}
+        our WorldRequest: accepted <- core.agent!.normalize(aligned.target)
+        if(!accepted!.complete() or aligned.target!.pItem!.value!.overlayType!=NUM or
+           aligned.target!.pItem!.value!.evalMode!=emLiteral or aligned.target!.pItem!.fetchInt()!=303){
+            FAIL("An aligned minute skip did not reach the following marker")
+        }
+        core.deInit(); modelMngr.clear()
+    }
+
     void: unit_fixtureContracts_unknownSchemaFields(me string: testName) <- {
         me List<string>: inputs <- ["{member:$}={member:'Tiffany'}",
             "{screenPos:{xPos:_ yPos:_}}={screenPos:{xPos:350 yPos:80}}",

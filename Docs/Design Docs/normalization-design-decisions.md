@@ -4662,3 +4662,63 @@ checks, not a new visible Slipstream validation. Only the six approved snapshot
 expectations change; all fixture inputs, modes, resource paths, case names and
 registrations are preserved. Evidence: `/tmp/proteus-low-fruit/`, with original
 baselines in `/tmp/proteus-low-fruit-baseline-{default,all}.log`.
+
+## D120 Preserve partial requests in two legacy output snapshots (2026-10-25)
+
+**Scope and authorization.** After reviewing the remaining ten language
+failures, the user approved working on the pending negative write, the
+nonaligning minute guard and the finite sparse composite read. The first two
+are result-contract corrections backed by ordinary CodeDog behavior checks.
+Their inputs, registrations and semantic requirements remain unchanged. This
+does not authorize converting an unimplemented sparse read into a passing
+snapshot of its unresolved expression.
+
+**Pending write.** An end-relative write cannot identify its destination while
+the endpoint is unknown. Keep `worldPartial`, publish no changes and retain
+the entire update expression in the returned view. Printing only the source
+would hide the still-required write. The focused check also verifies that two
+normalization attempts retain the original prefix occurrences and open end,
+and that a known endpoint accepts a matching assertion and atomically rejects
+a conflicting one. Repeating normalization here checks preservation; it does
+not introduce a reset/restart mechanism for live goals.
+
+**Nonaligning unit guard.** A minute-sized skip does not fit the thirty-second
+span followed by marker 303. The request stays partial without a proved source
+occurrence. Retain the selector rather than publishing `_` as a replacement
+answer. Check both read and write requests: neither may split the span, alter
+its size or change the marker. An aligned sixty-second-prefix control must
+still reach 303. These checks keep a blanket refusal from satisfying the guard.
+This increment does not claim a general proof-of-no-match or a new rejection
+policy for closed sparse patterns.
+
+**Composite read remains active.** D042 makes a pure numeric `<_>` capture a
+base-unit request; it is not an unconstrained list-valued wildcard. Consequently
+the existing fixture's expected minute is not justified by that capture.
+Temporary probes using `<minute>` and a direct index into the composite
+capacity still reach the `Unit view needs a demanded sparse occurrence`
+boundary. An unconstrained `<?>` probe reaches `Counted template needs bounded
+predicate propagation`. Returning the stored minute recipe without a qualified
+occurrence, treating base-unit offsets as stored composite indices, or deleting
+the composite-gap guard would bypass unresolved identity and write-coordinate
+requirements. Preserve the original fixture and failure until that capability
+is developed with explicit source correspondence and sparse-cost checks.
+
+**Alternatives and limits.** Dropping either pending expression to reproduce
+the old display would discard relevant work. Broadly ignoring partial outcomes
+in the harness would hide real failures. Keep exact output comparisons and add
+specific status, source-preservation and successful-control checks instead.
+No production normalizer or native bindings change. No library rebuild or
+Slipstream rendering validation is needed for these test-contract changes.
+The two `.tst` snapshots pass using the existing executable; regeneration is
+needed only for the added compiled CodeDog checks.
+
+**Validation.** `codeDog Proteus.Lib.dog` succeeds in 270.25 seconds. All six
+`unit/fixtureContracts/` checks pass, including both new checks. Default fixtures
+report **8/509**, down from **10/509**; the full suite reports **9/753**, down
+from **11/751** with two new passing compiled tests. Exactly the two reviewed
+names disappear, no new failing names appear and all retained failure
+diagnostics are unchanged. The separate compiled
+`unit/indexLowering/typedSugarMatchesIntersection` source-provenance failure
+remains active alongside the eight default failures. Inputs, fixture modes and
+registrations were compared against HEAD and preserved. Evidence, temporary
+composite probes and build output are in `/tmp/proteus-next-fix/`.

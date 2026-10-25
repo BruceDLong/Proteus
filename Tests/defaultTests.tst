@@ -206,7 +206,9 @@ notTemplate/resolvedUnknown, Inverted value template waits for candidate normali
 write/writeStrA,       Write first String,             {2 3 $ 'Hat'}.$ = 'Cat';,                                               {2 3 'Cat' 'Hat'},              norm
 write/writeByIdx,      Write third item,               {'Cat' 'Hat' $ 'Dog'}@[3] = 'Bat';,                                     {'Cat' 'Hat' 'Bat' 'Dog'},      norm
 write/negativeLast,    Write last item by negative index, {'Cat' 'Hat' 'Bat' $}@[-1] = 'Dog';,                                {'Cat' 'Hat' 'Bat' 'Dog'},      norm
-write/openNegativeLast, Open-tail negative write stays pending, {'Cat' 'Hat' ...}@[-1] = 'Dog';,                              {'Cat' 'Hat' ... },             norm
+# Retain the unresolved update as well as its source. The compiled
+# fixtureContracts/pendingNegativeWrite check requires partial status and no write.
+write/openNegativeLast, Open-tail negative write stays pending, {'Cat' 'Hat' ...}@[-1] = 'Dog';, {'Cat' 'Hat' ... }@[-1] = 'Dog'; , norm
 write/first,           Write first item,               {$ 'Hat' 'Bat' 'Dog'}.first = 'Cat';,                                   {'Cat' 'Hat' 'Bat' 'Dog'},      norm
 write/last,            Write last item,                {'Cat' 'Hat' 'Bat' $}.last = 'Dog';,                                    {'Cat' 'Hat' 'Bat' 'Dog'},      norm
 write/1stAndLst,       Write 1st & last item,          {$ 'Hat' 'Bat' $}.first='Cat';.last='Dog';,                             {'Cat' 'Hat' 'Bat' 'Dog'},      norm
