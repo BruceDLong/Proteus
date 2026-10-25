@@ -186,6 +186,9 @@ struct WorldBindings {
     me Map<string, our WorldArgumentBinding>: arguments
 }
 struct WorldPosition {
+    // A demanded native sparse member has a detached representation and a
+    // repetition occurrence witness. Its parent retains the supplying span.
+    me bool: sparseMember <- false
     // A regrouped unit has its own container; its demanded members retain
     // their source positions independently of the creating request's frames.
     me Map<our POV, our WorldPosition>: unitMembers
@@ -632,6 +635,8 @@ struct WorldUnitSegment {
     me FlexNum: start
     me FlexNum: width
     me bool: gap <- false
+    our WorldPosition: container
+    me FlexNum: nativeOffset
 }
 struct WorldUnitLevel {
     our infonView: source
@@ -1485,7 +1490,8 @@ struct WorldPOVGraph {
            body!.value!.items.head!=NULL or !body!.value!.tailUnfinished or body!.value!.listSpec==NULL or
            body!.infSize!.evalMode!=emLiteral or body!.infSize!.num<=0 or body!.infSize!.num.getDenominator()!=1){return(NULL)}
         our infonView: spec <- body!.value!.listSpec
-        if(pathOperator(spec)==""){return(NULL)}
+        if(pathOperator(spec)=="" or !spec!.wrkList.isEmpty() or spec!.partRef!=NULL or
+           !spec!.parts.isEmpty() or spec!.argPos!=apNoArgs or spec!.value!.undefined or spec!.value!.inverted){return(NULL)}
         seen!.insert(body)
         result!.member <- unitMeasure(request, spec!.type, seen)
         if(result!.member==NULL){return(NULL)}
@@ -1494,7 +1500,9 @@ struct WorldPOVGraph {
         return(result)
     }
     our WorldUnit: unitType(our WorldRequest: request, our infonView: item) <- {
-        if(item==NULL or pathOperator(item)==""){return(NULL)}
+        if(item==NULL or pathOperator(item)=="" or !item!.wrkList.isEmpty() or
+           item!.partRef!=NULL or !item!.parts.isEmpty() or item!.argPos!=apNoArgs or
+           item!.value!.undefined or item!.value!.inverted){return(NULL)}
         me Set<our infonView>: seen
         return(unitMeasure(request, item!.type, seen))
     }
@@ -2320,7 +2328,7 @@ struct WorldPOVGraph {
             // member. Its last stored member is not evidence of an endpoint.
             if(walk!.reverse and !level!.tailRead and node!.pItem!.value!.tailUnfinished){
                 level!.tailRead <- true
-                our WorldPosition: result <- position(node, level!.position!.parent)
+                our WorldPosition: result <- representedPosition(node, level!.position)
                 result!.tail <- true; return(result)
             }
             if(level!.next!=NULL){
@@ -2360,7 +2368,7 @@ struct WorldPOVGraph {
                 }
             }else if(!level!.tailRead and node!.pItem!.value!.tailUnfinished){
                 level!.tailRead <- true
-                our WorldPosition: result <- position(node, level!.position!.parent)
+                our WorldPosition: result <- representedPosition(node, level!.position)
                 result!.tail <- true; return(result)
             }else{
                 if((walk!.checkExtents or (walk!.requireOrdered and level!.after==NULL)) and level!.hasExtent and walk!.position!=level!.end){
@@ -6354,6 +6362,44 @@ struct WorldManager {
     }
     // Create only the demanded view. Leaves borrow facts from their original
     // occurrences; the request records where a later checked write belongs.
+    our WorldPosition: nativeUnitPosition(our WorldRequest: request, me WorldUnitSegment: segment,
+                                           our WorldUnit: unit, me FlexNum: start) <- {
+        if(segment.container==NULL or graph.compareNominal(unit!.word,segment.member!.word)!=worldReady){return(NULL)}
+        me FlexNum: ordinal <- segment.nativeOffset+(start-segment.start)/segment.member!.width
+        if(ordinal<0 or ordinal.getDenominator()!=1 or ordinal>FlexNum("9223372036854775807")){return(NULL)}
+        our WorldPosition: source <- segment.container
+        // Borrowed layouts and enclosing predicates need their own occurrence
+        // proof. A pure native recipe must not discharge those requirements.
+        if(source!.input!=NULL or source!.node!.trueByDefinition){return(NULL)}
+        if(source!.node!==source!.occurrence and (source!.owner==NULL or
+           source!.owner!==source!.occurrence or source!.owner!.pItem!.value!==source!.node!.pItem!.value or
+           source!.owner!.pItem!.infSize!==source!.node!.pItem!.infSize)){return(NULL)}
+        me WorldScalar: header <- graph.read(request,source!.node,source!.node!.pParent,false,false,false,source)
+        if(header.outcome!=worldReady or !header.hasSize or header.size<0 or header.size.getDenominator()!=1 or
+           header.negative or source!.node!.pItem!.value!.inverted or
+           source!.node!.pItem!.value!.undefined or
+           (header.nominal!=NULL and header.nominal!.defToUse!=NULL and !header.meaningApplied)){return(NULL)}
+        me Set<our WorldPosition>: seen
+        our WorldPosition: ancestor <- source!.parent
+        while(ancestor!=NULL){
+            if(seen.contains(ancestor)){return(NULL)}
+            seen.insert(ancestor)
+            our infonView: body <- ancestor!.node!.pItem
+            if(body!.value!.listSpec!=NULL or body!.type!=NULL or !body!.addedTypes.isEmpty() or
+               !body!.wrkList.isEmpty() or ancestor!.input!=NULL or body!.argPos!=apNoArgs or
+               body!.invertMatch or body!.value!.inverted or body!.value!.undefined or
+               body!.streamState!=parseDone or body!.partRef!=NULL or !body!.parts.isEmpty() or
+               body!.innr!=NULL or body!.funcArgs!=NULL or body!.wordArguments!=NULL){return(NULL)}
+            ancestor <- ancestor!.parent
+        }
+        if(ordinal>FlexNum("9223372036854775807")-FlexNum(toString(source!.node!.repetitionSpan.startOrdinal))){return(NULL)}
+        our POV: occurrence <- request!.identities!.getOrCreateIndexedRepetitionOccurrence(
+            source!.node,ordinal.getNumerator().convertToIntVal())
+        if(occurrence==NULL){return(NULL)}
+        our WorldPosition: result <- graph.position(occurrence,source)
+        result!.sparseMember <- true; result!.parameters <- graph.parameterScope(source)
+        return(result)
+    }
     our POV: unitView(our WorldRequest: request, our WorldUnitSelection: selection, our WorldUnit: unit, me FlexNum: start, me FlexNum: count, me bool: collection) <- {
         while(selection!.segment<selection!.segments.size() and
               selection!.segments[selection!.segment].start+selection!.segments[selection!.segment].width<=start){selection!.segment <+- 1}
@@ -6368,7 +6414,11 @@ struct WorldManager {
                 our WorldUnitOrigin: original <- request!.unitOrigins.at(segment.source!.node!.pItem)
                 if(original!.sparse){gap!.source <- original!.source; gap!.offset <+- original!.offset; gap!.count <- original!.count}
                 else{return(NULL)}
-            }else if(segment.member!.member!=NULL){return(NULL)}
+            }else if(segment.member!.member!=NULL){
+                if(collection or count!=1){return(NULL)}
+                gap!.position <- nativeUnitPosition(request,segment,unit,start)
+                if(gap!.position==NULL){return(NULL)}
+            }
         }
         if(unit!.member==NULL and !collection){
             our POV:: leaf{941}; Allocate(leaf!.pItem)
@@ -6382,7 +6432,7 @@ struct WorldManager {
             if(leaf!.pItem!.type==NULL and leaf!.pItem!.addedTypes.isEmpty()){leaf!.pItem!.addedTypes.append(unit!.word)}
             our WorldUnitOrigin:: origin; origin!.source <- segment.source
             if(gap!=NULL){origin <- gap}
-            origin!.position <- graph.position(leaf)
+            origin!.position <- graph.position(leaf,segment.source)
             origin!.position!.writable <- selection!.source!.writable
             if(!segment.gap){origin!.position <- segment.source}
             request!.unitOrigins.insert(leaf!.pItem, origin)
@@ -6401,8 +6451,14 @@ struct WorldManager {
             Allocate(body!.value!.listSpec); body!.value!.listSpec!.itmMode <- mItem; body!.value!.listSpec!.streamState <- parseDone
             body!.value!.listSpec!.infSize!.evalMode <- emUnknown; body!.value!.listSpec!.infSize!.overlayType <- NUM
             body!.value!.listSpec!.type <- member!.word; body!.value!.tailUnfinished <- true; body!.value!.sizeMode <- fromGiven
-            gap!.member <- member; gap!.membersCount <- count; gap!.position <- graph.position(result)
-            gap!.position!.writable <- selection!.source!.writable
+            gap!.member <- member; gap!.membersCount <- count
+            if(gap!.position!=NULL){
+                gap!.position <- graph.representedPosition(result,gap!.position)
+                request!.correspondenceMappings <+- 1
+            }else{
+                gap!.position <- graph.position(result)
+                gap!.position!.writable <- selection!.source!.writable
+            }
             request!.unitOrigins.insert(body, gap)
             return(result)
         }
@@ -6473,7 +6529,13 @@ struct WorldManager {
                 if(!header.hasSize){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Unit window crosses an unknown endpoint"; stopFrame(request, frame); return()}
                 me FlexNum: width <- header.size*level!.member!.width-(selection!.end-level!.start)
                 if(width<0){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Unit representation exceeds its extent"; stopFrame(request, frame); return()}
-                if(width>0){me WorldUnitSegment: gap; gap.member <- level!.member; gap.source <- position; gap.start <- selection!.end; gap.width <- width; gap.gap <- true; selection!.segments.append(gap); selection!.end <+- width}
+                if(width>0){
+                    me WorldUnitSegment: gap; gap.member <- level!.member; gap.source <- position
+                    gap.container <- level!.walk!.levels.last()!.position
+                    gap.nativeOffset <- (selection!.end-level!.start)/level!.member!.width
+                    gap.start <- selection!.end; gap.width <- width; gap.gap <- true
+                    selection!.segments.append(gap); selection!.end <+- width
+                }
                 level!.pending <- NULL; continue()
             }
             if(position!.embedded){
@@ -6633,6 +6695,15 @@ struct WorldManager {
 
     me bool: stageOccurrence(our WorldRequest: request, our WorldPosition: destination, our WorldFrame: facts) <- {
         if(destination==NULL){request!.outcome <- worldPartial; request!.detail <- "Write needs an established source occurrence"; return(false)}
+        our WorldPosition: sparseAncestor <- destination
+        me Set<our WorldPosition>: sparseAncestors
+        while(sparseAncestor!=NULL){
+            if(sparseAncestor!.sparseMember or sparseAncestors.contains(sparseAncestor)){
+                request!.outcome <- worldUnsupported; request!.detail <- "Native sparse composite writes need checked materialization"; return(false)
+            }
+            sparseAncestors.insert(sparseAncestor)
+            sparseAncestor <- sparseAncestor!.parent
+        }
         if(destination!.temporalSpan){
             if(facts!.facts.overlay!=LST or graph.openLayout(facts!.facts) or graph.sequenceLength(facts!.facts.sequence)!=1){
                 request!.outcome <- worldPartial; request!.detail <- "Temporal window write must preserve its represented support"; return(false)

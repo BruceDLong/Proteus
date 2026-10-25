@@ -1432,6 +1432,16 @@ values never identify different occurrences. Read-only source qualification is
 preserved. The retained mapping covers demanded output only and does not
 materialize sparse gaps or retain execution frames.
 
+**Aligned native sparse members (D125, 2026-10-25).** A typed capture or
+index can acquire one native composite member from a finite homogeneous sparse
+capacity. The returned compressed view retains its known size, member listSpec,
+repetition occurrence witness, qualified source parent and access. Source
+prefixes remain compressed, and repeated reads preserve occurrence identity.
+Only a proved integral native ordinal is accepted. Numeric `<_>` remains a
+base-unit capture. Ancestor predicates, borrowed native layouts, regrouping
+inside composite gaps and native composite writes retain their unsupported
+boundaries; none may be discharged by copying a recipe.
+
 ## Inherited type qualifiers (2026-10-12)
 
 D041 preserves the distinction between a member's primary name and a type-only qualifier inherited from its listSpec. A previously unnamed member stores the latter in `addedTypes`; subsequent reads expose it as checked nominal evidence. Explicit primary names and value-producing named templates remain primary. Thus `{second|1 2}` can publish `{1 2}` while retaining each member's second-type evidence for later queries and writes. The printer is unchanged. The current supported representation has one inherited nominal without a primary type; general nominal conjunction remains separate work.

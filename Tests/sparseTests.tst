@@ -26,7 +26,8 @@ sparse/scarcity/readSecondLastByNegativeIndex, Sparse negative index stays indep
 # even when the list does not contain an explicit &*... child span.
 sparse/implicit/readAfterSparsePrefixInSizedList, Sparse read inside implicit typed capacity, [&*15432+{second| ...} <_>] <~ *20000+{second| ...}, second:_, world, TestFiles/sparseTestCases.pr
 sparse/implicit/writeAfterSparsePrefixInSizedList, Sparse write inside implicit typed capacity, [&*15432+{second| ...} <_>] <~ *20000+{second| ...} = 80, second:80, world, TestFiles/sparseTestCases.pr
-sparse/implicit/readAfterSparsePrefixInSizedCompositeList, Sparse read inside implicit composite typed capacity, [&*15432+{minute| ...} <_>] <~ *20000+{minute| ...}, minute:{&seconds:{second|  ... }}, world, TestFiles/sparseTestCases.pr
+# A minute is a composite capture; numeric <_> still requests a base unit.
+sparse/implicit/readAfterSparsePrefixInSizedCompositeList, Sparse read inside implicit composite typed capacity, [&*15432+{minute| ...} <minute>] <~ *20000+{minute| ...}, minute:*60+{second|  ... }, world, TestFiles/sparseTestCases.pr
 
 # Traversal should continue correctly after sparse spans are split or after
 # adjacent sparse spans cover a single selector span.
@@ -55,3 +56,10 @@ sparse/traverse/splitPreservesTailMarker, Sparse split preserves following concr
 # The known 777 cannot become 20 without forceID (<<=); no partial values
 # should be written into either adjacent sparse span.
 sparse/pending/writeSpanAcrossSparseConcreteSparse, Reject conflicting sparse crossing write, [&*119+{second| ...} <&*3+{second| ...}> &*239+{second| ...} _ &*360+{second| ...}] <~ %W.sparseMarkers = {10 20 30}//:<REJECTED>\n%W.sparseMarkers//:sparseMarkers:{&seconds:*120+{second|  ... } 777 &seconds:*240+{second|  ... } 888 &seconds:*360+{second|  ... }}, -, world, TestFiles/sparseTestCases.pr
+
+# Aligned native composite demand retains the known size and sparse member recipe.
+sparse/native/typed, Native composite read, [&*2+{minute| ...} <minute>] <~ *4+{minute| ...}, minute:*60+{second|  ... }, world, TestFiles/sparseTestCases.pr
+sparse/native/indexed, Native composite read, *4+{minute| ...}@[3], minute:*60+{second|  ... }, world, TestFiles/sparseTestCases.pr
+sparse/native/negative, Native composite read, *4+{minute| ...}@[-1], minute:*60+{second|  ... }, world, TestFiles/sparseTestCases.pr
+sparse/native/prefix, Native composite read, *4+{minute| minute ...}@[3], minute:*60+{second|  ... }, world, TestFiles/sparseTestCases.pr
+sparse/native/embedded, Native composite read, [&*2+{minute| ...} <minute>] <~ {&*4+{minute| ...}}, minute:*60+{second|  ... }, world, TestFiles/sparseTestCases.pr

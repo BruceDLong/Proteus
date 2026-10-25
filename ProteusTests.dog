@@ -239,6 +239,9 @@ TestsToRun = `
     unit/indexLowering/nestedSourceContext
     unit/indexLowering/waitAndCancel
     unit/indexLowering/scaling
+    unit/nativeSparse/provenanceAndScale
+    unit/nativeSparse/guards
+    unit/nativeSparse/waitAndCancel
     unit/implicitItem/canonical
     unit/implicitItem/distinctPositions
     unit/implicitItem/nonMaterializing
@@ -1645,6 +1648,122 @@ struct GLOBAL {
             previousPositions <- request!.correspondencePositions; previousMappings <- request!.correspondenceMappings
             if(!CORE.agent!.worldManager.control!.inputWaiters.isEmpty()){FAIL("Typed view subscribed without a missing prerequisite")}
             CORE.deInit(); modelMngr.clear()
+        }
+    }
+
+    me bool: nativeSparseMinute(our infonView: value) <- {
+        return(value!=NULL and value!.type!=NULL and value!.type!.typeID()=="minute" and
+            value!.value!.overlayType==LST and value!.value!.evalMode==emLiteral and
+            value!.infSize!.evalMode==emLiteral and value!.infSize!.num==60 and
+            value!.value!.items.isEmpty() and value!.value!.tailUnfinished and
+            value!.value!.listSpec!=NULL and value!.value!.listSpec!.type!=NULL and
+            value!.value!.listSpec!.type!.typeID()=="second")
+    }
+    void: unit_nativeSparse_provenanceAndScale(me string: testName) <- {
+        me TestProteusCore: core
+        if(!core.initForWorldTest("TestFiles/sparseTestCases.pr")){FAIL(core.errorMesg)}
+        our WorldSession: session <- core.agent!.startSession()
+        me List<int64>: widths <- [4,20000,1000000000,9007199254740994]
+        me uint64: frames <- 0; me uint64: queue <- 0; me uint64: positions <- 0
+        withEach width in widths{
+            our POV:: parent{949}; parent!.pItem <- parseAndExtract(testName,"{*"+toString(width)+"+{minute| ...}}")
+            our POV: source <- parent!.pItem!.value!.items.head
+            me string: before <- toString(parent!.pItem)
+            our infonView: schema <- source!.pItem!.value!.listSpec
+            our WorldPosition: context <- core.agent!.worldManager.graph.position(parent); context!.writable <- false
+            our WorldPosition: at <- core.agent!.worldManager.graph.position(source,context)
+            our WorldRequest: read <- core.agent!.worldManager.select(session,at,typedProvenanceIndex(testName,-1),
+                core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+            if(!read!.complete() or (read!.selectedSource()==NULL or !nativeSparseMinute(read!.selectedSource()!.pItem)) or read!.provenance==NULL){
+                FAIL("Native sparse minute was not acquired: "+read!.error())
+            }
+            our WorldPosition: selected <- read!.provenance!.position
+            if(selected==NULL or !selected!.sparseMember or selected!.writable or selected!.parent!==at or
+               selected!.occurrence==NULL or selected!.occurrence!.implicitItem.sourcePov!==source or
+               selected!.occurrence!.implicitItem.sourceIndex!=width-1){FAIL("Native minute lost its qualified source ordinal")}
+            read!.cancel()
+            our WorldRequest: repeated <- core.agent!.worldManager.select(session,at,typedProvenanceIndex(testName,-1),
+                core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+            our WorldRequest: first <- core.agent!.worldManager.select(session,at,typedProvenanceIndex(testName,1),
+                core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+            if(!repeated!.complete() or !first!.complete() or
+               !core.agent!.worldManager.graph.samePosition(selected,repeated!.provenance!.position) or
+               core.agent!.worldManager.graph.samePosition(selected,first!.provenance!.position) or
+               repeated!.provenance!.position!.occurrence!==selected!.occurrence){FAIL("Sparse read confused repeated or distinct occurrences")}
+            our WorldRequest: second <- core.agent!.worldManager.select(session,selected,typedProvenanceIndex(testName,2),
+                core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+            if(!second!.complete() or second!.provenance==NULL or second!.provenance!.position==NULL or
+               second!.provenance!.position!.writable or second!.provenance!.position!.parent==NULL or
+               !core.agent!.worldManager.graph.samePosition(second!.provenance!.position!.parent,selected)){
+                FAIL("A subsequent second selection lost its native minute context: "+second!.error())
+            }
+            if(toString(parent!.pItem)!=before or source!.pItem!.value!.listSpec!==schema or
+               !source!.pItem!.value!.items.isEmpty() or source!.repetitionSpan.family==NULL or
+               source!.repetitionSpan.family!.occurrences.size()!=2){FAIL("Sparse read expanded or changed its supplying span")}
+            print("Native sparse ",width,": frames=",read!.framesCreated," queue=",read!.queueSteps,
+                " relationships=",read!.relationshipsRead," positions=",read!.correspondencePositions,
+                " mappings=",read!.correspondenceMappings," occurrences=",source!.repetitionSpan.family!.occurrences.size(),"\n")
+            if(frames>0 and (read!.framesCreated!=frames or read!.queueSteps!=queue or read!.correspondencePositions!=positions)){
+                FAIL("Native sparse read work grew with virtual extent")
+            }
+            frames <- read!.framesCreated; queue <- read!.queueSteps; positions <- read!.correspondencePositions
+            if(!core.agent!.worldManager.control!.inputWaiters.isEmpty()){FAIL("Ready sparse read subscribed for input")}
+        }
+        core.deInit(); modelMngr.clear()
+    }
+    void: unit_nativeSparse_guards(me string: testName) <- {
+        me TestProteusCore: core
+        if(!core.initForWorldTest("TestFiles/sparseTestCases.pr")){FAIL(core.errorMesg)}
+        me List<string>: inputs <- ["*4+{minute| ...}@[5]", "*4+{minute| ...}@[-5]", "*4.5+{minute| ...}@[3]",
+            "[&*30+{second| ...} <minute>] <~ *4+{minute| ...}",
+            "[&*2+{minute| ...} <_>] <~ *4+{minute| ...}",
+            "[&*2+{minute| ...} <minute>] <~ *4+{minute=7| ...}",
+            "[&*2+{minute| ...} <minute>] <~ *4+{minute| ...} <<= minute"]
+        withEach input in inputs{
+            me WorldParseResult: parsed <- core.agent!.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            me string: before <- toString(parsed.target!.pItem)
+            our WorldRequest: request <- core.agent!.normalize(parsed.target)
+            if(request!.complete() or request!.publications!=0 or toString(parsed.target!.pItem)!=before){
+                FAIL("Invalid or unsupported native sparse selection published a value: "+input)
+            }
+        }
+        // The list containing the capacity still constrains that capacity.
+        our POV:: parent{949}; parent!.pItem <- parseAndExtract(testName,"{*30+{second| ...}| *4+{minute| ...}}")
+        our WorldPosition: at <- core.agent!.worldManager.graph.position(parent!.pItem!.value!.items.head,
+            core.agent!.worldManager.graph.position(parent))
+        our WorldRequest: guarded <- core.agent!.worldManager.select(core.agent!.startSession(),at,typedProvenanceIndex(testName,3),
+            core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+        if(guarded!.complete() or guarded!.publications!=0){FAIL("Native sparse recipe bypassed an ancestor listSpec")}
+        core.deInit(); modelMngr.clear()
+    }
+    void: unit_nativeSparse_waitAndCancel(me string: testName) <- {
+        withEach cancellation in range 0 .. 2{
+            me TestProteusCore: core
+            if(!core.initForWorldTest("TestFiles/sparseTestCases.pr")){FAIL(core.errorMesg)}
+            our POV:: source{949}; source!.pItem <- parseAndExtract(testName,"*4+{minute| ...}")
+            source!.pItem!.streamState <- parseStarted
+            our WorldPosition: at <- core.agent!.worldManager.graph.position(source)
+            our WorldRequest: request <- core.agent!.worldManager.select(core.agent!.startSession(),at,typedProvenanceIndex(testName,3),
+                core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+            if(request!.status().outcome!=worldWaiting or request!.waitingInput!==source!.pItem or request!.publications!=0){
+                FAIL("Native sparse read did not wait for its source header: "+request!.error())
+            }
+            me uint64: frames <- request!.framesCreated; me uint64: queue <- request!.queueSteps
+            our infonView:: unrelated; core.agent!.worldManager.inputReady(unrelated)
+            if(request!.framesCreated!=frames or request!.queueSteps!=queue){FAIL("Unrelated input restarted sparse selection")}
+            if(cancellation==1){request!.cancel()}
+            source!.pItem!.streamState <- parseDone; core.agent!.worldManager.inputReady(source!.pItem)
+            if(cancellation==0){
+                if(!request!.complete() or (request!.selectedSource()==NULL or !nativeSparseMinute(request!.selectedSource()!.pItem)) or
+                   request!.provenance!.position!.occurrence!.implicitItem.sourceIndex!=2){FAIL("Sparse read did not resume at its source ordinal")}
+            }else if(request!.status().outcome!=worldCancelled or request!.publications!=0 or source!.repetitionSpan.family!=NULL){
+                FAIL("Cancelled sparse read exposed or published an occurrence")
+            }
+            if(!source!.pItem!.value!.items.isEmpty() or !core.agent!.worldManager.control!.inputWaiters.isEmpty()){
+                FAIL("Sparse wait changed the source or leaked a subscription")
+            }
+            core.deInit(); modelMngr.clear()
         }
     }
 

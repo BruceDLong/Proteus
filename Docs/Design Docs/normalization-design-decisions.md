@@ -5028,3 +5028,85 @@ seconds; `ldd -r` resolves the canonical Proteus shared library with no missing
 symbols. This is build/link validation; interactive startup and visible
 rendering were not exercised. Evidence:
 `/tmp/proteus-typed-{build-final,shared-build,methods,slipstream-build,consumer-link}.log`.
+
+
+### D125 Read aligned native sparse composite occurrences
+
+**Problem and capture contract, 2026-10-25.** The small example is
+`[&*2+{minute| ...} <minute>] <~ *4+{minute| ...}`, with
+`#minute = *60+{second| ...}` and `#second = _`. The native third minute
+is available from the listSpec and known extent, but unit projection refused
+all composite gaps. D042 still defines `<_>` as a numeric base-unit capture;
+it cannot justify the minute expected by the original legacy fixture.
+
+**Choice.** Extend the measured unit cursor only for one aligned member whose
+nominal unit matches the source's native member unit. Keep both the measured
+base-unit offset and the native ordinal, including an already represented
+prefix. The existing repetition registry supplies the demanded occurrence
+witness. The returned description is a detached compressed minute with its
+known size and retained second listSpec; its qualified position retains that
+witness and the original source position as parent. Repeated reads share the
+occurrence witness without sharing execution frames or deductions. Equal-valued
+members at different ordinals remain distinct. Tail events preserve their
+qualified source position so subsequent selection retains context and access.
+
+**Constraints and boundaries.** The unit shortcut accepts pure named recipes,
+not names with attached work or paths. Definition member recipes receive the
+same screening. Native sparse reads require an established instance layout;
+borrowed layouts and ancestor predicates remain unsupported until their ordinary
+correspondence is established. This prevents the compressed recipe from silently
+discharging a containing listSpec. Numeric capture semantics are unchanged.
+Native composite writes, including writes through a descendant selection,
+remain unsupported before publication: base-unit offsets are not native write
+indices. This increment does not implement arbitrary sparse predicates,
+regrouping inside native composite gaps, or composite materialization.
+
+**Alternatives and cost.** Removing the old guard alone would copy a recipe
+without an occurrence and let write staging treat seconds as minutes. Expanding
+the skipped prefix would make demand proportional to virtual extent. Retain one
+registry occurrence per demanded native ordinal and one compressed description
+per returned view instead. Source traversal retains its existing forward cursor;
+identity lookup and retained output depend on demanded positions, not the
+number of omitted members. A registry witness stores identity only; it does not
+materialize a source child or assert that a differently sized unit is identical.
+
+
+**Fixture correction and validation.** The user approved changing the existing
+composite-capacity capture from numeric `<_>` to `<minute>` and retaining its
+known size in `minute:*60+{second| ... }`. The selected minute remains the
+15,433rd member of a 20,000-minute capacity. Remove the duplicate new large
+control; keep the existing test name and resource. The compiled guard preserves
+numeric capture semantics. These fixture-only edits were verified with the
+existing executable, without rebuilding.
+
+The final executable passes **787/789**. All three ordinary CodeDog checks, five
+new language cases and the corrected existing case pass. The sparse fixture
+group passes **28/28**. The compiled checks
+cover repeated/distinct occurrences, retained read-only parent context, a later
+second selection, unchanged source/listSpec, bounds and fractional capacity,
+nonalignment, numeric capture, attached and ancestor listSpec predicates,
+unsupported native writes, exact parser waits, unrelated arrivals and
+cancellation without publication or occurrence allocation.
+
+Public reference reads from capacities 4, 20,000, 1,000,000,000 and
+9,007,199,254,740,994 each use four frames, seven queue steps, zero relationship
+reads, one structural position and one retained mapping. Repeated last-member
+reads plus a first-member read retain exactly two occurrence witnesses per
+source. The largest case also checks exact integer conversion beyond floating
+point precision. No input subscriptions remain.
+
+The two remaining failures are `merge/dots/align4b` and
+`rubix/sparseNestedContinuation`; both diagnostics are unchanged from D124.
+No other existing fixture input or expectation changed. Evidence:
+`/tmp/proteus-composite-{all-approved,sparse-approved,units-final,remaining}.log`.
+
+The final test build succeeds in 301.12 seconds; the shared-library build
+succeeds in 204.53 seconds. All seven changed generated method bodies match
+between the targets. Evidence:
+`/tmp/proteus-composite-{build-final,shared-build,methods}.log`.
+
+Slipstream regenerates and builds against the exported interface in 123.69
+seconds. `ldd -r LocalBuild/Slipstream` resolves the canonical Proteus shared
+library with no unresolved symbols. This validates the build and link;
+interactive startup and visible rendering were not exercised. Evidence:
+`/tmp/proteus-composite-{slipstream-build,consumer-link}.log`.
