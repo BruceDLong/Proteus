@@ -2792,7 +2792,7 @@ struct WorldPOVGraph {
     }
     // An unconstrained target adopts represented structure, including symbolic
     // tails. Other list identities prove the shape before pairing members.
-    me WorldScalar: mergeList(me WorldScalar: left, me WorldScalar: right, our POV: edge, me bool: alignedOpen <- false) <- {
+    me WorldScalar: mergeList(me WorldScalar: left, me WorldScalar: right, our POV: edge, me bool: alignedOpen <- false, me bool: openHeaderOnly <- false) <- {
         // With no target type, extent or contents there is no list pattern to
         // test. Adoption still preserves top-only size qualification.
         me bool: unconstrained <- left.overlay<0 and !left.hasSize and !left.hasValue
@@ -2801,6 +2801,12 @@ struct WorldPOVGraph {
         }
         if((left.overlay>=0 and left.overlay!=LST) or (right.overlay>=0 and right.overlay!=LST)){
             left.outcome <- worldRejected; left.detail <- "Incompatible list types"; return(left)
+        }
+        // A checked bare {...} supplies the list type but no positions or
+        // endpoint. Its proof does not depend on finishing the target members.
+        if(openHeaderOnly){
+            if(left.order==uUnknown){left.order <- right.order}
+            return(left)
         }
         if(!alignedOpen and openLayout(right) and (left.hasValue or left.hasSize)){
             left.outcome <- worldUnsupported; left.detail <- "Open source correspondence needs span alignment"; return(left)
@@ -2833,7 +2839,7 @@ struct WorldPOVGraph {
         return(left)
     }
 
-    me WorldScalar: merge(me WorldScalar: left, me WorldScalar: right, our POV: edge) <- {
+    me WorldScalar: merge(me WorldScalar: left, me WorldScalar: right, our POV: edge, me bool: openHeaderOnly <- false) <- {
         // Correspondence must not independently fill each use of one unknown
         // argument. This needs a binding proof, including speculative routes.
         if((left.parameterBindingRequired and (right.hasValue or right.hasRange or right.terminalValue!=0)) or
@@ -2876,7 +2882,7 @@ struct WorldPOVGraph {
         }
         left <- mergeNames(left, right, edge)
         if(left.outcome!=worldReady){return(left)}
-        if(left.overlay==LST or right.overlay==LST){return(mergeList(left, right, edge))}
+        if(left.overlay==LST or right.overlay==LST){return(mergeList(left, right, edge, false, openHeaderOnly))}
         if(left.negative or right.negative){
             if(edge!.looseType() or left.hasRange or right.hasRange){
                 left.outcome <- worldUnsupported; left.detail <- "Qualified negative matching needs template semantics"; return(left)
@@ -2950,7 +2956,7 @@ struct WorldPOVGraph {
 
     // A pending comparison keeps its checked source and qualified edge. Only
     // newly known scalar facts wake it; adding unrelated edges does no replay.
-    void: mergeRelationship(our WorldRequest: request, our WorldFrame: frame) <- {
+    void: mergeRelationship(our WorldRequest: request, our WorldFrame: frame, me bool: openHeaderOnly <- false) <- {
         me WorldScalar: before <- frame!.facts
         // A bare member name has no contrary type/value meaning. Its
         // parent's type-only assertion qualifies that occurrence, not its name.
@@ -2961,7 +2967,7 @@ struct WorldPOVGraph {
             withEach word in frame!.prerequisite!.facts.qualifications{addNominal(before, word)}
             before.meaningApplied <- true
         }
-        me WorldScalar: result <- merge(before, frame!.prerequisite!.facts, frame!.sourceEdge)
+        me WorldScalar: result <- merge(before, frame!.prerequisite!.facts, frame!.sourceEdge, openHeaderOnly)
         if(result.outcome==worldReady and frame!.prerequisite!.facts.meaningApplied and !frame!.prerequisite!.contextual and
            result.nominal!=NULL and compareNominal(result.nominal, frame!.prerequisite!.facts.nominal)==worldReady){
             result.meaningApplied <- true
@@ -3054,6 +3060,19 @@ struct WorldPOVGraph {
         frame!.tailRequirements <- source!.tailRequirements
     }
 
+    // Only a fully checked ordinary open source with no member obligations
+    // is a header constraint. In particular an unknown explicit extent,
+    // template, retained relationship or contextual premise cannot disappear.
+    me bool: unconstrainedOpenSource(our WorldFrame: source) <- {
+        me WorldScalar: facts <- source!.facts
+        return(representableFacts(facts) and facts.overlay==LST and facts.hasValue and
+            facts.openTail and !facts.hasSize and !facts.explicitSize and
+            !facts.timelike and facts.order!=uUnordered and
+            sequenceLength(facts.sequence)==0 and (facts.sequence==NULL or !facts.sequence!.hasSpans) and
+            source!.listSpecFrame==NULL and source!.listSpecEdge==NULL and source!.tailRequirements==NULL and
+            !needsRequirements(source) and source!.retainedWork.isEmpty())
+    }
+
     void: consumePrerequisite(our WorldRequest: request, our WorldFrame: frame) <- {
         frame!.contextual <- frame!.contextual or frame!.prerequisite!.contextual
         if(!frame!.sourceIsListSpec){
@@ -3088,17 +3107,19 @@ struct WorldPOVGraph {
             if(frame!.expression.outcome!=worldReady){frame!.facts <- frame!.expression}
         }else{
             me WorldScalar: left <- frame!.facts
+            me bool: openHeaderOnly <- left.overlay==LST and left.hasValue and unconstrainedOpenSource(frame!.prerequisite)
             // Two sole unknown tails need no positional alignment. A bare
             // target can adopt the source's future member requirements.
-            if(left.overlay==LST and left.openTail and !left.hasSize and sequenceLength(left.sequence)==0 and
+            if(!openHeaderOnly and left.overlay==LST and left.openTail and !left.hasSize and sequenceLength(left.sequence)==0 and
                frame!.listSpecEdge==NULL and frame!.tailRequirements==NULL and !needsRequirements(frame) and frame!.retainedWork.isEmpty() and
                !left.negative and !frame!.sourceEdge!.forceID and !frame!.sourceEdge!.looseType() and
                frame!.prerequisite!.facts.overlay==LST and frame!.prerequisite!.facts.hasValue and frame!.prerequisite!.facts.openTail and
                !frame!.prerequisite!.facts.hasSize and sequenceLength(frame!.prerequisite!.facts.sequence)==0 and representableFacts(frame!.prerequisite!.facts)){
                 left.hasValue <- false; left.openTail <- false; frame!.facts <- left; frame!.openAlignment <- NULL
             }
+            if(openHeaderOnly){frame!.openAlignment <- NULL}
             if(frame!.openAlignment!=NULL){frame!.facts <- mergeList(left, frame!.prerequisite!.facts, frame!.sourceEdge, true)}
-            else{mergeRelationship(request, frame)}
+            else{mergeRelationship(request, frame, openHeaderOnly)}
             if(frame!.facts.outcome==worldReady and !left.hasValue and frame!.facts.overlay==LST){
                 // Adoption includes the requirements of members not yet present.
                 adoptListRequirements(frame, frame!.prerequisite)
@@ -3108,7 +3129,7 @@ struct WorldPOVGraph {
                     frame!.facts.detail <- "Introduced temporal states need target occurrence acquisition"
                 }
             }
-            if(frame!.facts.outcome==worldReady and left.overlay==LST and left.hasValue and
+            if(!openHeaderOnly and frame!.facts.outcome==worldReady and left.overlay==LST and left.hasValue and
                frame!.prerequisite!.facts.overlay==LST and frame!.prerequisite!.facts.hasValue){
                 beginCorrespondence(frame, FlexNum(sequenceLength(frame!.prerequisite!.facts.sequence)))
                 if(frame!.openAlignment==NULL){
@@ -3130,10 +3151,10 @@ struct WorldPOVGraph {
             // Closed correspondence checks the source endpoint. Unconstrained
             // adoption copies the whole layout and its future requirements.
             // Retain this edge below if any contribution is still unresolved.
-            me bool: listSource <- frame!.prerequisite!.facts.overlay==LST and frame!.prerequisite!.facts.hasValue and
+            me bool: listSource <- openHeaderOnly or (frame!.prerequisite!.facts.overlay==LST and frame!.prerequisite!.facts.hasValue and
                 representableFacts(frame!.prerequisite!.facts) and
                 ((frame!.prerequisite!.facts.hasSize and !openLayout(frame!.prerequisite!.facts)) or
-                 ((!left.hasValue and !left.hasSize or frame!.openAlignment!=NULL) and frame!.prerequisite!.retainedWork.isEmpty()))
+                 ((!left.hasValue and !left.hasSize or frame!.openAlignment!=NULL) and frame!.prerequisite!.retainedWork.isEmpty())))
             frame!.retainSource <- !frame!.sourceEdge!.cursorCarry and !listSource and !scalarExpression and (!supplied!.wrkList.isEmpty() or
                 (supplied!.value!.evalMode!=emLiteral and supplied!.value!.evalMode!=emUnknown) or
                 !frame!.prerequisite!.facts.representable)
@@ -7602,7 +7623,8 @@ struct WorldManager {
                frame!.facts.overlay==LST and frame!.facts.hasValue and frame!.facts.hasSize and
                !graph.openLayout(frame!.facts) and frame!.facts.size==FlexNum(graph.sequenceLength(frame!.facts.sequence)) and
                frame!.prerequisite!.facts.outcome==worldReady and frame!.prerequisite!.facts.overlay==LST and
-               frame!.prerequisite!.facts.hasValue and graph.openLayout(frame!.prerequisite!.facts)){
+               frame!.prerequisite!.facts.hasValue and graph.openLayout(frame!.prerequisite!.facts) and
+               !graph.unconstrainedOpenSource(frame!.prerequisite)){
                 our WorldFrame: endpoint <- projectFrame(request, frame); endpoint!.finished <- true
                 // Nonnegative widths summing to zero are all zero. The checked
                 // header proves emptiness without unfolding shared source spans.
@@ -7618,7 +7640,8 @@ struct WorldManager {
                 }
             }
             if(!frame!.sourceIsOperand and !frame!.sourceIsListSpec and
-               graph.openLayout(frame!.facts) and graph.openLayout(frame!.prerequisite!.facts)){
+               graph.openLayout(frame!.facts) and graph.openLayout(frame!.prerequisite!.facts) and
+               !graph.unconstrainedOpenSource(frame!.prerequisite)){
                 frame!.openAlignment <- graph.alignOpen(request, frame)
             }
             if(frame!.temporalMembers!=NULL and frame!.sourceIsOperand and graph.memberSequence(frame) and !frame!.sourceEdge!.isSubItm){

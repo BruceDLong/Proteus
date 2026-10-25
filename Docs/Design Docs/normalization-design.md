@@ -404,6 +404,14 @@ Still to specify: the exact goal requirements and `isNormed` scope within the nu
 
 **Accepted principles: D03A–D03D.** The specific edge API and chart representation remain proposals in the decision log.
 
+A checked bare `{...}` source contributes a list header without positional
+constraints (D122). A represented target can accept that constraint while its
+members remain partial; accepting it neither finishes those members nor closes
+the target's tail. The proof excludes source templates, extents, pending work
+and temporal/unordered decorations, and preserves ordinary nominal and
+qualification checks. Sources with those additional obligations still require
+their corresponding semantic proof.
+
 ### Member relationship sources
 
 A member can use its own wrkList, a corresponding member reached through a parent or ancestor ident, its type, and its parent's or an applicable ancestor's listSpec. Projection preserves the original scope, qualifiers, and placement or nominal correspondence. An ancestor template is not automatically applied directly to every descendant.

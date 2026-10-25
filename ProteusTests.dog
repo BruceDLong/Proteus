@@ -1,6 +1,10 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/openAlignment/unconstrainedSource
+    unit/openAlignment/sourceGuards
+    unit/openAlignment/waitAndCancel
+    unit/openAlignment/headerScaling
     unit/fixtureContracts/unknownSchemaFields
     unit/fixtureContracts/typedMinuteViews
     unit/fixtureContracts/expandedAliases
@@ -8386,5 +8390,115 @@ struct GLOBAL {
         if(embedded==NULL or !embedded!.isSubItm or embedded!.pItem!.type==NULL or embedded!.pItem!.type!.typeID()!="thing" or
            embedded!.next!=NULL){FAIL("Sparse cube state lost its embedded thing template")}
         core.deInit(); modelMngr.clear()
+    }
+}
+
+// A bare open source has no positional constraints. Pending target members
+// remain pending; the header theorem must not erase their listSpec obligations.
+struct GLOBAL {
+    void: unit_openAlignment_unconstrainedSource(me string: testName) <- {
+        me List<string>: inputs <- ["{{_| _ ...}| {} ...}",
+            "{{_| _ ...}| {1} {} ...}", "{&{1 ...} &{...}}",
+            "*1000000000+{1 ...}", "{1 ...}", "{}", "{...}"]
+        withEach input in inputs{
+            me Agent: agent
+            me WorldParseResult: baseline <- agent.worldManager.parse(input)
+            our WorldRequest: expected <- agent.normalize(baseline.target)
+            if(expected!.failed()){FAIL("The unconstrained-source control failed: "+expected!.error())}
+            me string: expectedText <- toString(baseline.target!.pItem)
+            me WorldParseResult: parsed <- agent.worldManager.parse(input+"={...}")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our POV: member <- parsed.target!.pItem!.value!.items.head
+            our infonView: source <- parsed.target!.pItem!.wrkList[0]!.pItem
+            our infonState: sourceValue <- source!.value
+            me string: originalSource <- toString(source)
+            our WorldRequest: checked <- agent.normalize(parsed.target)
+            if(checked!.status().outcome!=expected!.status().outcome or toString(parsed.target!.pItem)!=expectedText){
+                FAIL("A bare open source changed target facts or completion: "+input+": "+checked!.error())
+            }
+            if(parsed.target!.pItem!.value!.items.head!==member or source!.value!==sourceValue or toString(source)!=originalSource){
+                FAIL("Header discharge changed a target occurrence or its borrowed source")
+            }
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Header discharge subscribed to an unbounded remainder")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_openAlignment_sourceGuards(me string: testName) <- {
+        me List<string>: inputs <- ["{1 ...}={2| ...}", "{1 ...}=({...}={2 ...})",
+            "{1 ...}={...}={2 ...}", "{1 ...}=*2+{...}",
+            "{1 ...}=*(1+_)+{...}", "{1 ...}=={...}"]
+        me int: scenario <- 0
+        withEach input in inputs{
+            me Agent: agent
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            me string: original <- toString(parsed.target!.pItem)
+            our WorldRequest: checked <- agent.normalize(parsed.target)
+            if(checked!.complete() or checked!.publications!=0 or toString(parsed.target!.pItem)!=original){
+                FAIL("A constrained source was treated as a bare open remainder: "+input)
+            }
+            if(scenario<3 and checked!.status().outcome!=worldRejected){FAIL("Header discharge hid a required contradiction")}
+            scenario <+- 1
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_openAlignment_waitAndCancel(me string: testName) <- {
+        withEach cancellation in range 0 .. 2{
+            me Agent: agent
+            me WorldParseResult: parsed <- agent.worldManager.parse("{{_| _ ...}| {} ...}={...}")
+            our infonView: source <- parsed.target!.pItem!.wrkList[0]!.pItem
+            me string: before <- toString(parsed.target!.pItem)
+            agent.worldManager.prepareInput(source)
+            our WorldRequest: pending <- agent.normalize(parsed.target)
+            if(pending!.status().outcome!=worldWaiting or pending!.waitingInput!==source or pending!.publications!=0){
+                FAIL("Open-source header proof bypassed pending input")
+            }
+            me uint64: frames <- pending!.framesCreated; me uint64: queue <- pending!.queueSteps
+            our infonView:: unrelated; agent.worldManager.inputReady(unrelated)
+            if(pending!.framesCreated!=frames or pending!.queueSteps!=queue){FAIL("Unrelated input replayed open-source work")}
+            if(cancellation==1){pending!.cancel()}
+            source!.streamState <- parseDone; agent.worldManager.inputReady(source)
+            if(cancellation==0){
+                if(pending!.status().outcome!=worldPartial or parsed.target!.pItem!.value!.listSpec==NULL){
+                    FAIL("Header arrival failed to retain the pending nested requirement: "+pending!.error())
+                }
+            }else if(pending!.status().outcome!=worldCancelled or pending!.publications!=0 or toString(parsed.target!.pItem)!=before){
+                FAIL("Cancelled header proof published target facts")
+            }
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Header continuation retained a stale subscription")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_openAlignment_headerScaling(me string: testName) <- {
+        me List<int>: widths <- [16,32,64]
+        me uint64: previousFrames <- 0; me uint64: previousQueue <- 0
+        withEach width in widths{
+            me Agent: agent
+            me string: input <- "{{_| _ ...}|"
+            withEach idx in range 0 .. width{input <+- " {}"}
+            input <+- " ...}"
+            me WorldParseResult: baseline <- agent.worldManager.parse(input)
+            our WorldRequest: expected <- agent.normalize(baseline.target)
+            me WorldParseResult: parsed <- agent.worldManager.parse(input+"={...}")
+            our WorldRequest: checked <- agent.normalize(parsed.target)
+            print("Open source width ",width,": frames=",checked!.framesCreated," queue=",checked!.queueSteps,
+                " relationships=",checked!.relationshipsRead," pairs=",checked!.memberPairs," visits=",checked!.sequenceVisits,"\n")
+            if(checked!.status().outcome!=worldPartial or toString(parsed.target!.pItem)!=toString(baseline.target!.pItem)){
+                FAIL("Wide header discharge lost pending target requirements")
+            }
+            if(checked!.framesCreated>expected!.framesCreated+8 or checked!.queueSteps>expected!.queueSteps+16 or
+               checked!.memberPairs>expected!.memberPairs or checked!.sequenceVisits>expected!.sequenceVisits+4){
+                FAIL("A bare open source introduced positional correspondence work")
+            }
+            if(previousFrames>0 and (checked!.framesCreated>previousFrames*3 or checked!.queueSteps>previousQueue*3)){
+                FAIL("Fixed-width target work grew faster than its represented members")
+            }
+            if(!agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Wide header proof created an unrequested subscription")}
+            previousFrames <- checked!.framesCreated; previousQueue <- checked!.queueSteps
+            agent.endWorldSessions(); modelMngr.clear()
+        }
     }
 }

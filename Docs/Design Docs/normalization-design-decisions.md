@@ -4781,3 +4781,97 @@ in retained failures. The independent typed-unit source-provenance failure
 remains active. Every `.tst` file and world asset is unchanged. Evidence:
 `/tmp/proteus-world-load-{baseline,compiled,fixtures,default-final,all-final}.log`
 and `/tmp/proteus-world-load-build-final.log`.
+
+### D122 A bare open source constrains the list header without aligning members
+
+**Model-driven increment, 2026-10-25.** The three retained `user/` fixtures first
+fail while loading `Resources/user_3.pr`. The failing relationship is the
+board's populated `data` list against its schema's `data:{...}`. The populated
+list contains pending nested task-list requirements, so D03P's checked-layout
+precondition rejects it before any query runs.
+
+The anonymous reduction is `{{_| _ ...}| {} ...}={...}`. The left side alone
+is a valid partial result with an unresolved nested requirement. A bare open
+source supplies no member, endpoint or future-member predicate to align with
+it. Proving that header relationship therefore does not depend on finishing
+the target's children. The target's partial status and obligations must remain.
+
+**Rule and implementation.** For a represented list target, a fully checked
+ordinary source with only an open remainder contributes its nominal and list
+type constraints through the existing merge operation. It contributes no
+positional correspondence. The source must have no represented logical
+members or open embedded spans, explicit extent, temporal/unordered decoration,
+listSpec, future-member requirement, pending requirement, comparison,
+contextual premise or retained relationship. Ordinary name, qualification and
+parameter-binding checks still run. Successful discharge preserves the
+target's sequence, endpoint knowledge, occurrence paths, listSpec and all
+pending member work. Source POVs remain borrowed and unchanged.
+
+The same proof avoids reverse endpoint projection for a closed target and
+single-gap scanning for an open target. It never enumerates a symbolic extent,
+closes an open tail or marks a pending child complete. A genuinely constrained
+source continues through existing correspondence and its explicit boundaries.
+
+**Reason and alternatives.** General ambiguous alignment is unnecessary for a
+source that has no positional constraints. Relaxing D03P's representability
+precondition globally could accept unsettled placement evidence. Discarding a
+source merely because it has no stored members could lose its template,
+endpoint or retained constraints. This guarded theorem uses the common
+relationship continuation and staged publication; it adds no second matcher
+or model-specific path. General two-open-list ambiguity, multiple-gap
+alignment and later streamed-link arrivals remain separate Stage 5 work.
+
+**Cost and lifecycle.** The source proof inspects checked constant-size header
+and sequence summaries. It creates no member pairs or materialized tail
+positions. Reading the source and completing any source prerequisites still
+uses normal request scheduling and local parser waits. Cancellation retains
+ordinary atomic publication behavior.
+
+**Next exposed model obligation.** With the alignment blocker removed, the
+unchanged user fixture reaches a required `kanban` versus `terminal` identity
+and rejects it. The second board's `data` list declares a `terminal:{...}`
+listSpec while explicitly containing a `kanban:{...}` member. No definition
+establishes their nominal compatibility. This is distinct from sparse
+alignment; removing name checks would violate the accepted nominal contract.
+The failure was traced at the returned required merge, not inferred from the
+diagnostic text alone. The user authorized allowing both member types. The
+shared listSpec now has anonymous common `properties` fields and open `data`;
+each member retains its own `kanban` or `terminal` identity and its own nested
+data schema. Instance data and the original query inputs and expected outputs
+are unchanged. This permits loading and makes `user/getUser3` pass.
+
+The other two user fixtures now reach their queries and expose independent
+composition gaps. The small expression
+`*2+[{properties:{member:'Bruce'}} {properties:{member:'Tiffany'}}].properties.member`
+is unsupported, while its `@[2]` form reads the expected field. A diagnostic
+`@[2]` version of the real user read likewise returns `Tiffany`, but its write
+does not persist to the original source occurrence. Neither query is rewritten
+to hide these boundaries; `user/getNth` and `user/setNth` remain active.
+
+**Validation.** Four ordinary CodeDog tests and four language fixtures pass.
+They cover the reduction, preserved occurrence/source identity and pending
+requirements, multiple target gaps, a billion-member declared extent, required
+contradictions, constrained/qualified sources, parser continuation, cancellation
+and unrelated-input silence. At 16/32/64 pending target members the requests
+use 70/134/262 frames, 107/203/395 queue steps and 20/36/68 relationship reads;
+all use zero member pairs and one sequence visit. The new header contribution
+stays within constant additional work relative to each target-only control;
+there are no subscriptions to the unknown remainder.
+
+The regenerated test target passes **758/764**, leaving six active failures
+(previously seven of 756). Defaults pass **508/513**, leaving five failures
+(previously six of 509). Besides the two remaining user queries, the unchanged
+failures are ambiguous `align4b`, the historical Rubix selection composition,
+implicit composite-unit selection and typed selection source provenance.
+No retained expectation was changed. The test build took 300.66 seconds and the
+separate shared-library build took 204.96 seconds while running concurrently.
+Evidence is in `/tmp/proteus-stage5-{compiled,fixtures,scaling,all-final,default-final}.log`;
+source/query diagnostics are in `/tmp/proteus-stage5-{rejection,selection-probes}.log`.
+
+The regenerated library changes the exported interface fingerprint. Slipstream
+was regenerated and rebuilt against it (119.70 seconds); `ldd -r` then resolves
+the canonical `SharedBuild/libproteusGraph.so` with no missing symbols. This
+checks consumer build/link compatibility only. Interactive startup and visible
+rendering were not exercised by this engine/fixture change. Evidence:
+`/tmp/proteus-stage5-slipstream-build.log` and
+`/tmp/proteus-stage5-consumer-link-final.log`.

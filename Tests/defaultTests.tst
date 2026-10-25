@@ -322,3 +322,4 @@ merge/lookahead,       Merge lookahead,                 {&{_|...} _ $} =: {33 22
 @include unifiedNamingTests.tst
 @include individualConstructionTests.tst
 @include temporalViewTests.tst
+@include openAlignmentTests.tst
