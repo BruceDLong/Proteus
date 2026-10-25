@@ -5110,3 +5110,58 @@ seconds. `ldd -r LocalBuild/Slipstream` resolves the canonical Proteus shared
 library with no unresolved symbols. This validates the build and link;
 interactive startup and visible rendering were not exercised. Evidence:
 `/tmp/proteus-composite-{slipstream-build,consumer-link}.log`.
+
+
+### D126 Replace the obsolete Rubix snapshot with behavior checks
+
+**Problem and scope, 2026-10-25.** The historical
+`rubix/sparseNestedContinuation` fixture asks for the first cube state's
+`edgecubes` collection. The current engine reaches both edge cubes and all
+twelve nested sides. The remaining mismatch is the old returned representation:
+an enclosing `solvedState` wrapper, generated `sides` labels, replacement of
+primary color names with `color`, and omission of explicit unknown numeric
+sizes. The fixture's original introduction in `359bff45` tested continuation
+through already represented members of a typed list after nested normalization;
+its old scheduler and materialization mechanisms are not the contract.
+
+**Choice.** At the user's request, remove the obsolete
+`defaultTests.tst:rubix/sparseNestedContinuation` snapshot. Retain its original
+query and resource in an ordinary CodeDog behavior check. The requested
+collection contains exactly two edge cubes with y coordinates -1.1 and 1.1,
+each with six sides. Check every hue,
+including the second cube's yellow first side and both orange fifth sides;
+check the other coordinates and orientations as well. Primary `pink`, `orange`
+and `yellow` names retain their `color` qualification and inherited unknown
+saturation and brightness. The side listSpecs survive, repeated fresh requests
+agree, the shared source remains unchanged and no input subscriptions remain.
+
+The returned value is legitimately partial: its records and unknown color
+facts are not made complete by traversing the represented members. D02F
+preserves explicit unknown numeric sizes, D03Z retains primary record names,
+and D054 retains listSpecs even when compact printing omits them. A populated
+printout alone is not the acceptance test.
+
+**Reduction and alternatives.** A two-member `batch` of two-member `pair`
+lists exercises continuation with a much smaller model. A partial first pair
+must still expose the second pair, and a contradiction in the final leaf must
+reject against its listSpec. Keep all three controls in `sparseTests.tst`.
+Changing the engine or printer to reproduce the legacy wrapper and aliases
+would discard the current selection and naming contracts. The focused checks
+retain the real-model regression without a large representation snapshot. This
+work does not extend arbitrary chained selection or the separate Rubix transition fixtures,
+and it does not validate application rendering.
+
+**Validation.** The final CodeDog regeneration builds successfully in 267.10
+seconds. The fixture-contract group passes **7/7**, the sparse fixtures pass
+**31/31**, and the full suite passes **791/792**. All four added checks pass.
+The only remaining failure is `defaultTests.tst:merge/dots/align4b`, still
+reporting `UNSUPPORTED: Open source correspondence needs span alignment`.
+No existing expectation was rewritten; only the authorized obsolete snapshot
+row was removed. The Rubix model and engine sources are unchanged.
+
+The reduced known-value case completes, its unknown-value variant is partial,
+and its final-leaf contradiction rejects with zero publications. Coordinates
+in the structural regression use exact `FlexNum` comparisons. Evidence:
+`/tmp/proteus-rubix-{build-final,contracts-final,sparse-final,all-final,small-status}.log`.
+This is test and contract validation; no shared-library, consumer or visible
+rendering change was made or validated in this increment.

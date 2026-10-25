@@ -12,6 +12,7 @@ TestsToRun = `
     unit/fixtureContracts/typedMinuteViews
     unit/fixtureContracts/expandedAliases
     unit/fixtureContracts/cubeTemplateExtent
+    unit/fixtureContracts/rubixNestedContinuation
     unit/fixtureContracts/pendingNegativeWrite
     unit/fixtureContracts/nonAligningUnitGuard
     unit/worldLoad/symbolicKernel
@@ -8625,6 +8626,88 @@ struct GLOBAL {
             FAIL("Expanded blue lost its supplied hue or inherited color constraints")
         }
         searchCore.deInit(); modelMngr.clear()
+    }
+
+    void: unit_fixtureContracts_rubixNestedContinuation(me string: testName) <- {
+        me TestProteusCore: core
+        if(!core.initForWorldTest("rubix_sparse_nested.pr")){FAIL(core.errorMesg)}
+        me string: sourceBefore <- toString(core.agent!.world)
+        me string: firstResult <- ""
+        // A fresh demand must traverse both outer members after completing each
+        // nested six-side list, without changing the shared world or recipes.
+        withEach attempt in range 0 .. 2{
+            me WorldParseResult: parsed <- core.agent!.worldManager.parse(
+                "*1+[& %W.myStuff.rubixCube].solvedState.edgecubes")
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our WorldRequest: request <- core.agent!.normalize(parsed.target)
+            request!.waitForCompletion()
+            if(request!.status().outcome!=worldPartial or request!.error()!="" or request!.publications==0){
+                FAIL("The Rubix selection did not publish its known partial value: "+request!.error())
+            }
+            our infonView: result <- parsed.target!.pItem
+            if(result!.type==NULL or result!.type!.typeID()!="edgecubes" or
+               result!.value!.overlayType!=LST or result!.value!.tailUnfinished){
+                FAIL("The requested finite edge-cube collection was not returned")
+            }
+            our POV: edge <- result!.value!.items.head
+            withEach edgeIndex in range 0 .. 2{
+                if(edge==NULL or edge!.pItem!.type==NULL or edge!.pItem!.type!.typeID()!="edgecube"){
+                    FAIL("Nested normalization stopped before both edge cubes")
+                }
+                our POV: thing <- edge!.pItem!.fetchField("thing")
+                if(thing==NULL){FAIL("An edge cube lost its thing record")}
+                our POV: orientation <- thing!.pItem!.fetchField("orientation")
+                our POV: location <- thing!.pItem!.fetchField("location")
+                if(!namedLayoutValues(orientation,[0,0,0]) or location==NULL){FAIL("An edge cube lost its orientation or location")}
+                our POV: x <- location!.pItem!.fetchField("xloc")
+                our POV: y <- location!.pItem!.fetchField("yloc")
+                our POV: z <- location!.pItem!.fetchField("zloc")
+                me FlexNum: expectedY <- FlexNum("-1.1")
+                if(edgeIndex==1){expectedY <- FlexNum("1.1")}
+                if(x==NULL or y==NULL or z==NULL or x!.pItem!.value!.evalMode!=emLiteral or
+                   y!.pItem!.value!.evalMode!=emLiteral or z!.pItem!.value!.evalMode!=emLiteral or
+                   x!.pItem!.fetchFlexNum()!=FlexNum("0") or y!.pItem!.fetchFlexNum()!=expectedY or
+                   z!.pItem!.fetchFlexNum()!=FlexNum("1.1")){
+                    FAIL("Edge-cube continuation lost or reused a coordinate")
+                }
+                our POV: sides <- edge!.pItem!.value!.items.tail
+                if(sides==NULL or sides===thing or sides!.pItem!.value!.overlayType!=LST or
+                   sides!.pItem!.value!.tailUnfinished or sides!.pItem!.value!.listSpec==NULL){
+                    FAIL("An edge cube lost its finite side list or retained listSpec")
+                }
+                our POV: side <- sides!.pItem!.value!.items.head
+                withEach sideIndex in range 0 .. 6{
+                    if(side==NULL or side!.pItem!.type==NULL or side!.pItem!.type!.typeID()!="side"){
+                        FAIL("Nested continuation did not reach all six qualified sides")
+                    }
+                    our POV: color <- side!.pItem!.fetchField("color")
+                    if(color==NULL){FAIL("A named color lost its inherited color qualification")}
+                    me string: expectedName <- "pink"; me int: expectedHue <- 345
+                    if(sideIndex==4){expectedName <- "orange"; expectedHue <- 30}
+                    if(edgeIndex==1 and sideIndex==0){expectedName <- "yellow"; expectedHue <- 55}
+                    if(color!.pItem!.type==NULL or color!.pItem!.type!.typeID()!=expectedName){FAIL("A side lost its primary color name")}
+                    our POV: hue <- color!.pItem!.fetchField("hue")
+                    our POV: saturation <- color!.pItem!.fetchField("saturation")
+                    our POV: brightness <- color!.pItem!.fetchField("brightness")
+                    if(hue==NULL or saturation==NULL or brightness==NULL or
+                       hue!.pItem!.value!.evalMode!=emLiteral or hue!.pItem!.fetchInt()!=expectedHue or
+                       hue!.pItem!.infSize!.evalMode!=emUnknown or
+                       saturation!.pItem!.value!.evalMode!=emUnknown or brightness!.pItem!.value!.evalMode!=emUnknown){
+                        FAIL("A side lost its supplied hue or fabricated unknown color facts")
+                    }
+                    side <- side!.next
+                }
+                if(side!=NULL){FAIL("Nested continuation fabricated extra sides")}
+                edge <- edge!.next
+            }
+            if(edge!=NULL){FAIL("Nested continuation fabricated extra edge cubes")}
+            if(attempt==0){firstResult <- toString(result)}
+            else if(toString(result)!=firstResult){FAIL("Repeated Rubix selection changed the result")}
+            if(toString(core.agent!.world)!=sourceBefore or !core.agent!.worldManager.control!.inputWaiters.isEmpty()){
+                FAIL("Rubix selection changed its source or retained an input subscription")
+            }
+        }
+        core.deInit(); modelMngr.clear()
     }
 
     void: unit_fixtureContracts_cubeTemplateExtent(me string: testName) <- {

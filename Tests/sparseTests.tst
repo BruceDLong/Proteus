@@ -31,6 +31,9 @@ sparse/implicit/readAfterSparsePrefixInSizedCompositeList, Sparse read inside im
 
 # Traversal should continue correctly after sparse spans are split or after
 # adjacent sparse spans cover a single selector span.
+sparse/traverse/nestedTypedContinuation, Continue after a nested typed member, {#leaf=*_+_ #pair=*2+{leaf| ...} #batch=*2+{pair| pair:{1 2} pair:{3 4}}}\nbatch, batch:{pair:{*_+1 *_+2} pair:{*_+3 *_+4}}, multi
+sparse/traverse/nestedPartialContinuation, An unknown nested value does not hide the next member, {#leaf=*_+_ #pair=*2+{leaf| ...} #batch=*2+{pair| pair:{1 _} pair:{3 4}}}\nbatch, batch:{pair:{*_+1 *_+_} pair:{*_+3 *_+4}}, multi
+sparse/traverse/nestedLateContradiction, Check the final nested member against its listSpec, {#leaf=*_+7 #pair=*2+{leaf| ...} #batch=*2+{pair| pair:{7 7} pair:{7 9}}}\nbatch, <REJECTED>, multi
 sparse/traverse/readAfterAdjacentSparseSpans, Sparse read after adjacent symbolic spans, [&*120+{second| ...} <_>] <~ %W.twoSparseThenMarker, 123, world, TestFiles/sparseTestCases.pr
 sparse/traverse/readFirstConcreteBetweenSparseSpans, Sparse read first concrete marker between symbolic spans, [&*120+{second| ...} <_> &*240+{second| ...} _ &*360+{second| ...}] <~ %W.sparseMarkers, 777, world, TestFiles/sparseTestCases.pr
 sparse/traverse/readSecondConcreteBetweenSparseSpans, Sparse read second concrete marker between symbolic spans, [&*120+{second| ...} _ &*240+{second| ...} <_> &*360+{second| ...}] <~ %W.sparseMarkers, 888, world, TestFiles/sparseTestCases.pr
