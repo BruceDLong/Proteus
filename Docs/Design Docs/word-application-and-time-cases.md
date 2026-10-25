@@ -339,8 +339,10 @@ notation, with dedicated parser operations for the exact uppercase tokens.
 These are semantic views of the selected subject and support. Other names such
 as `^size`, `^Timeline`, `^t` and `^s` remain ordinary external-property paths.
 Selections, paths and identities after a view apply to its result, as in
-`cube^T@[1]^S.location` and `cube^T = {T ...}`. Parsing these forms does not yet
-implement their normalization; a demanded conversion reports unsupported.
+`cube^T@[1]^S.location` and `cube^T = {T ...}`. D101 established their syntax;
+D116 implements views of explicitly
+represented discrete histories and their selected states through ordinary
+normalization. Cross-subject support correspondence remains unsupported.
 
 | Expression | View |
 | --- | --- |

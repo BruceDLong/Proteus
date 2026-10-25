@@ -1,0 +1,171 @@
+// Discrete views borrow represented occurrences. Support is independent of
+// the view's storage wrapper; no state, duration or alignment is invented.
+struct WorldTemporalSupport {
+    our WorldPosition: history
+    our WorldPosition: state
+}
+struct WorldPosition {
+    our WorldTemporalSupport: temporalSupport
+    me bool: temporalSpan <- false
+}
+struct POV {
+    // A published span keeps its provenance after its request is released.
+    our WorldTemporalSupport: discreteTemporalSpan
+    our WorldTemporalSupport: discreteTemporalState
+}
+struct WorldRequest {
+    me uint64: temporalViews <- 0
+    me uint64: temporalViewMembers <- 0
+}
+
+struct WorldPOVGraph {
+    our WorldPosition: temporalParent(our WorldPosition: view) <- {
+        if(view!=NULL and view!.temporalSupport!=NULL){return(view!.temporalSupport!.history)}
+        if(view!=NULL and view!.node!.pItem!.value!.timelike){return(view)}
+        return(NULL)
+    }
+    // The header proof is the ordinary layout provider. A pending named
+    // meaning must not be classified from its unfinished physical spelling.
+    me WorldScalar: temporalHeader(our WorldRequest: request, our WorldPosition: at) <- {
+        me WorldScalar: header <- read(request,at!.node,at!.node!.pParent,false,false,false,at)
+        if(header.outcome!=worldReady){return(header)}
+        if(header.nominal!=NULL and header.nominal!.defToUse!=NULL and !header.meaningApplied){
+            our WorldListLayout: layout <- listLayout(request,at)
+            if(layout!.outcome==worldReady){header <- layout!.header}
+            else if(layout!.layoutRequired or layout!.outcome==worldWaiting){
+                header.outcome <- layout!.outcome; header.detail <- layout!.detail
+            }
+        }
+        return(header)
+    }
+
+    our WorldPosition: discreteSpan(our WorldRequest: request, our WorldTemporalSupport: support) <- {
+        our POV:: span{951}; Allocate(span!.pItem)
+        span!.discreteTemporalSpan <- support
+        our infonView: body <- span!.pItem
+        body!.itmMode <- mItem; body!.viewMode <- vmOverlay; body!.streamState <- parseDone
+        body!.orderMode <- uOrdered
+        body!.value!.overlayType <- LST; body!.value!.evalMode <- emLiteral
+        body!.value!.timelike <- true; body!.value!.sizeMode <- fromCount
+        body!.infSize!.overlayType <- NUM; body!.infSize!.evalMode <- emLiteral; body!.infSize!.num <- FlexNum("1")
+        // A reference member acquires the source under its original parent
+        // listSpecs and overlays. Its private sibling links belong to the view.
+        our infonView:: reference
+        reference!.itmMode <- mItem; reference!.viewMode <- vmAny; reference!.streamState <- parseDone
+        reference!.value!.evalMode <- emUnknown; reference!.infSize!.evalMode <- emUnknown
+        our POV: member <- body!.value!.items.append(reference,false,951)
+        member!.referenceAlias.sourcePov <- support!.state!.node
+        member!.worldContext <- support!.state
+        our WorldPosition: result <- position(span)
+        // Temporal parent is semantic lifetime, never the wrapper's container.
+        result!.writable <- support!.state!.writable
+        request!.temporalViews <+- 1; request!.temporalViewMembers <+- 1
+        return(result)
+    }
+}
+
+struct WorldManager {
+    // Resolve only represented states and explicit history headers. Whole/part
+    // correspondence at different temporal partitions is a later provider.
+    our WorldPosition: temporalView(our WorldRequest: request, our WorldFrame: consumer,
+                                   our WorldPosition: source, me bool: asSpan) <- {
+        me WorldScalar: header <- graph.temporalHeader(request,source)
+        if(header.outcome==worldWaiting){
+            our infonView: waiting <- source!.node!.pItem
+            our WorldListLayout: layout <- graph.listLayout(request,source)
+            if(layout!.outcome==worldWaiting){waiting <- layout!.waiting}
+            waitAt(request,consumer,waiting); return(NULL)
+        }
+        if(header.outcome!=worldReady){consumer!.facts <- header; stopFrame(request,consumer); return(NULL)}
+        if(source!.node!.pItem!.templateModel!=NULL){
+            consumer!.facts.outcome <- worldUnsupported; consumer!.facts.detail <- "Temporal views require an occurrence, not a template"
+            stopFrame(request,consumer); return(NULL)
+        }
+        if(source!.temporalSpan or (header.overlay==LST and header.hasValue and header.timelike)){
+            if(asSpan){
+                if(source!.temporalSpan){return(source)}
+                // An external individual's lifetime is not automatically the
+                // span occupied by a different subject's current state.
+                our WorldPosition: caller <- consumer!.navigation
+                while(caller!=NULL and caller!.parent!=NULL){
+                    me WorldScalar: context <- graph.temporalHeader(request,caller!.parent)
+                    if(context.outcome==worldWaiting){
+                        our infonView: waiting <- caller!.parent!.node!.pItem
+                        our WorldListLayout: layout <- graph.listLayout(request,caller!.parent)
+                        if(layout!.outcome==worldWaiting){waiting <- layout!.waiting}
+                        waitAt(request,consumer,waiting); return(NULL)
+                    }
+                    if(context.outcome!=worldReady){consumer!.facts <- context; stopFrame(request,consumer); return(NULL)}
+                    if(context.timelike){
+                        our WorldPosition: at <- source
+                        while(at!=NULL and !graph.samePosition(at,caller)){at <- at!.parent}
+                        if(at==NULL){
+                            consumer!.facts.outcome <- worldUnsupported
+                            consumer!.facts.detail <- "Temporal view across subjects needs support correspondence"
+                            stopFrame(request,consumer); return(NULL)
+                        }
+                        break()
+                    }
+                    caller <- caller!.parent
+                }
+                return(source)
+            }
+            consumer!.facts.outcome <- worldUnsupported; consumer!.facts.detail <- "Select one temporal member before applying ^S"
+            stopFrame(request,consumer); return(NULL)
+        }
+        our WorldTemporalSupport: support <- source!.temporalSupport
+        if(support==NULL){
+            our WorldPosition: history <- source!.parent
+            while(history!=NULL){
+                me WorldScalar: parent <- graph.temporalHeader(request,history)
+                if(parent.outcome==worldWaiting){
+                    our infonView: waiting <- history!.node!.pItem
+                    our WorldListLayout: layout <- graph.listLayout(request,history)
+                    if(layout!.outcome==worldWaiting){waiting <- layout!.waiting}
+                    waitAt(request,consumer,waiting); return(NULL)
+                }
+                if(parent.outcome!=worldReady){consumer!.facts <- parent; stopFrame(request,consumer); return(NULL)}
+                if(parent.overlay==LST and parent.hasValue and parent.timelike){break()}
+                if(!history!.embedded){history <- NULL; break()}
+                history <- history!.parent
+            }
+            if(history==NULL or source!.embedded or source!.tail){
+                consumer!.facts.outcome <- worldUnsupported; consumer!.facts.detail <- "Temporal view needs a represented state in an established history"
+                stopFrame(request,consumer); return(NULL)
+            }
+            // Embedded storage belongs to the same logical history.
+            while(history!.embedded and history!.parent!=NULL){
+                me WorldScalar: enclosing <- graph.temporalHeader(request,history!.parent)
+                if(enclosing.outcome==worldWaiting){
+                    our infonView: waiting <- history!.parent!.node!.pItem
+                    our WorldListLayout: layout <- graph.listLayout(request,history!.parent)
+                    if(layout!.outcome==worldWaiting){waiting <- layout!.waiting}
+                    waitAt(request,consumer,waiting); return(NULL)
+                }
+                if(enclosing.outcome!=worldReady){consumer!.facts <- enclosing; stopFrame(request,consumer); return(NULL)}
+                if(!enclosing.timelike){break()}
+                history <- history!.parent
+            }
+            Allocate(support); support!.history <- history; support!.state <- source
+        }
+        if(asSpan){return(graph.discreteSpan(request,support))}
+        our WorldPosition: result <- graph.representedPosition(source!.node,source)
+        result!.temporalSupport <- support
+        return(result)
+    }
+
+    our WorldFrame: temporalViewOperation(our WorldRequest: request, our WorldPosition: selected,
+                                         our infonView: work, me bool: referenceOnly) <- {
+        our POV: node <- selected!.node
+        if(work!=NULL and !work!.wrkList.isEmpty()){
+            Allocate(node,951); node!.pItem <- graph.pathBody(selected!.node!.pItem,false)
+            withEach relation in work!.wrkList{node!.pItem!.wrkList.append(relation)}
+        }
+        our WorldFrame: operation <- makeFrame(request,node,selected)
+        operation!.acquireOnly <- work==NULL or work!.wrkList.isEmpty()
+        operation!.referenceOnly <- operation!.acquireOnly and (referenceOnly or
+            (work!=NULL and (work!.partRef!=NULL or !work!.parts.isEmpty())))
+        Allocate(operation!.correspondenceResult); operation!.correspondenceResult!.position <- selected
+        return(operation)
+    }
+}

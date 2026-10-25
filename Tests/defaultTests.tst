@@ -319,3 +319,4 @@ merge/lookahead,       Merge lookahead,                 {&{_|...} _ $} =: {33 22
 @include embeddedNeighbourTests.tst
 @include unifiedNamingTests.tst
 @include individualConstructionTests.tst
+@include temporalViewTests.tst

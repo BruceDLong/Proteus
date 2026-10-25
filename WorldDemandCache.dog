@@ -2,6 +2,13 @@
 // Scope nodes are shared; a cached value does not copy its ancestor chain.
 struct WorldDemandSessionIdentity {}
 struct WorldDemandHeaderIdentity {}
+// A lazily observed publication token has no link back to the model. It
+// covers descendant facts as well as the tracked occurrence's own header.
+struct WorldPublicationIdentity {}
+struct POV {
+    our WorldPublicationIdentity: demandPublication
+    their POV: demandPublicationOwner
+}
 struct WorldSession {
     our WorldDemandSessionIdentity:: demandIdentity
 }
@@ -33,6 +40,7 @@ struct WorldDemandScopeProof {
     our WorldDemandHeaderIdentity: occurrenceIdentity
     me uint64: occurrenceRevision <- 0
     our WorldDemandScopeProof: parent
+    our WorldPublicationIdentity: publication
 }
 struct WorldDemandValueProof {
     our WorldDemandSite: site
@@ -43,6 +51,7 @@ struct WorldDemandValueProof {
     our WorldDemandHeaderIdentity: occurrenceIdentity
     me uint64: occurrenceRevision <- 0
     our WorldDemandScopeProof: scope
+    our WorldDemandScopeProof: temporalScope
     their WorldSession: session
     our WorldDemandSessionIdentity: sessionIdentity
     their infonView: worldSource
@@ -83,6 +92,12 @@ struct WorldCursorValue {
 }
 
 struct WorldPOVGraph {
+    our WorldPublicationIdentity: publicationIdentity(our POV: node) <- {
+        if(node!.demandPublication==NULL or node!.demandPublicationOwner!==node){
+            Allocate(node!.demandPublication); node!.demandPublicationOwner <- node
+        }
+        return(node!.demandPublication)
+    }
     our WorldPosition: generatedContext(our WorldPosition: at) <- {
         while(at!=NULL){
             if(at!.constraintRoot){return(NULL)}
@@ -157,6 +172,7 @@ struct WorldDemand {
                !manager!.graph.sameDemandSite(proof!.site, scope) or
                proof!.description!==scope!.node!.pItem or proof!.revision!=scope!.node!.pItem!.cursorRevision or
                proof!.headerIdentity!==manager!.graph.demandHeaderIdentity(scope!.node!.pItem) or
+               (proof!.publication!=NULL and proof!.publication!==manager!.graph.publicationIdentity(scope!.node)) or
                proof!.occurrenceDescription!==occurrenceDescription or
                proof!.occurrenceIdentity!==manager!.graph.demandHeaderIdentity(occurrenceDescription) or
                (occurrenceDescription!=NULL and proof!.occurrenceRevision!=occurrenceDescription!.cursorRevision)){
@@ -176,6 +192,25 @@ struct WorldDemand {
         return(parent)
     }
 
+    me bool: scopeAvailable(our WorldDemandScopeProof: scope, our WorldPosition: parent) <- {
+        while(scope!=NULL and parent!=NULL){
+            demandScopeChecks <+- 1
+            our infonView: occurrenceDescription
+            if(parent!.occurrence!=NULL){occurrenceDescription <- parent!.occurrence!.pItem}
+            if(!manager!.graph.sameDemandSite(scope!.site, parent) or
+               scope!.description!==parent!.node!.pItem or scope!.revision!=parent!.node!.pItem!.cursorRevision or
+               scope!.headerIdentity!==manager!.graph.demandHeaderIdentity(parent!.node!.pItem) or
+               (scope!.publication!=NULL and scope!.publication!==manager!.graph.publicationIdentity(parent!.node)) or
+               scope!.occurrenceDescription!==occurrenceDescription or
+               scope!.occurrenceIdentity!==manager!.graph.demandHeaderIdentity(occurrenceDescription) or
+               (occurrenceDescription!=NULL and scope!.occurrenceRevision!=occurrenceDescription!.cursorRevision) or
+               parent!.node!.pItem!.streamState!=parseDone){demandContextMisses <+- 1; return(false)}
+            scope <- scope!.parent
+            if(parent!.constraintRoot){parent <- NULL}else{parent <- parent!.parent}
+        }
+        if(scope!=NULL or parent!=NULL){demandContextMisses <+- 1; return(false)}
+        return(true)
+    }
     me bool: contextAvailable(our WorldDemandValueProof: proof, our WorldPosition: at) <- {
         if(manager==NULL or at==NULL or at!.node==NULL or at!.node!.pItem==NULL){return(false)}
         our WorldProductionEvidenceIdentity: production <- manager!.generatedProductionIdentity(session,at,language,worldSource,identities)
@@ -199,24 +234,10 @@ struct WorldDemand {
            !manager!.graph.sameDemandSite(proof!.site, at)){
             demandContextMisses <+- 1; return(false)
         }
-        our WorldDemandScopeProof: scope <- proof!.scope
-        our WorldPosition: parent <- at!.parent
-        while(scope!=NULL and parent!=NULL){
-            demandScopeChecks <+- 1
-            our infonView: occurrenceDescription
-            if(parent!.occurrence!=NULL){occurrenceDescription <- parent!.occurrence!.pItem}
-            if(!manager!.graph.sameDemandSite(scope!.site, parent) or
-               scope!.description!==parent!.node!.pItem or scope!.revision!=parent!.node!.pItem!.cursorRevision or
-               scope!.headerIdentity!==manager!.graph.demandHeaderIdentity(parent!.node!.pItem) or
-               scope!.occurrenceDescription!==occurrenceDescription or
-               scope!.occurrenceIdentity!==manager!.graph.demandHeaderIdentity(occurrenceDescription) or
-               (occurrenceDescription!=NULL and scope!.occurrenceRevision!=occurrenceDescription!.cursorRevision) or
-               parent!.node!.pItem!.streamState!=parseDone){demandContextMisses <+- 1; return(false)}
-            scope <- scope!.parent
-            if(parent!.constraintRoot){parent <- NULL}else{parent <- parent!.parent}
-        }
-        if(scope!=NULL or parent!=NULL){demandContextMisses <+- 1; return(false)}
-        return(true)
+        if(!scopeAvailable(proof!.scope,at!.parent)){return(false)}
+        our WorldPosition: temporal
+        if(at!.temporalSpan){temporal <- at!.temporalSupport!.state}
+        return(scopeAvailable(proof!.temporalScope,temporal))
     }
     me bool: cacheAvailable(our WorldPosition: at) <- {
         if(manager==NULL or at==NULL or !manager!.graph.cursorValueReady(at!.node)){return(false)}
@@ -230,6 +251,11 @@ struct WorldDemand {
         if(at!.parent!=NULL and scope==NULL){return(NULL)}
         our WorldDemandValueProof:: proof
         proof!.site <- manager!.graph.demandSite(at); proof!.scope <- scope
+        if(at!.temporalSpan){
+            proof!.temporalScope <- demandScope(at!.temporalSupport!.state)
+            if(proof!.temporalScope==NULL){return(NULL)}
+            proof!.temporalScope!.publication <- manager!.graph.publicationIdentity(at!.temporalSupport!.state!.node)
+        }
         proof!.description <- at!.node!.pItem; proof!.revision <- at!.node!.pItem!.cursorRevision
         proof!.headerIdentity <- manager!.graph.demandHeaderIdentity(at!.node!.pItem)
         if(at!.occurrence!=NULL){

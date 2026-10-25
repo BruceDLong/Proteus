@@ -110,4 +110,6 @@ Parameter headers use `#give(actor, item, object) = ...`, with local `%actor`
 references. The parser also recognizes postfix `^T` and `^S`, including
 `item^T@[1]^S`. Attached calls accept named bindings (`give(item::box)`) or
 positional arguments in declaration order, with missing arguments left unknown.
-Do not mix named and positional arguments. Temporal conversion remains unimplemented.
+Do not mix named and positional arguments. Temporal views of explicitly represented
+discrete histories and selected states are supported (D116). General temporal
+alignment and direct ^S of an unselected history remain unsupported.

@@ -4379,3 +4379,99 @@ errors and shutdown exits zero; the existing open-source alignment NRMERR remain
 This is consumer regression coverage, not proof of astronomy normalization.
 Generated C++ was used only for diagnosis; all accepted changes were ported to
 CodeDog and regenerated. Evidence: `/tmp/proteus-unified-names-20261024/`.
+
+## D116 Represented discrete temporal views (2026-10-25)
+
+**Request.** Implement the first `^T` / `^S` execution increment for explicitly
+represented discrete histories using ordinary normalization, retaining identity,
+temporal support, waiting and durable writes. Whole/part alignment is deferred.
+
+**Representation and scope.** An explicit history's `^T` retains its existing
+occurrence. A represented member's `^S` retains that member and a support witness
+containing its original state occurrence and lifetime history. Its `^T` supplies
+an ordinary one-member T-list window whose member references that occurrence.
+The wrapper owns sibling links, not a duplicate semantic state. Equal-valued
+states have different supports; independently requested windows of the same
+qualified occurrence have the same semantic position. Proof reuse additionally
+requires the original binding environments. There is no invented timestamp or
+duration and no ordinal alignment between independent histories.
+
+`WorldTemporalViews.dog` supplies the support provider and the conversion adapter
+called by `pathStep`. Conversion and index continuations share the existing path
+consumer, and reference demands may request either view. The virtual graph's
+boundary provider redirects a window to its selected state. Its temporal-parent
+provider returns the lifetime; it does not install the lifetime as the wrapper's
+structural parent. Doing that would incorrectly apply a history's state listSpec
+to the window as though it were another state. Embedded storage is transparent
+within an established temporal level; ordinary nested histories remain separate.
+No implicit projection from a record field to that field's lower-level history
+is inferred. A foreign lifetime encountered in another subject's temporal state
+reports unsupported until support correspondence can establish the right span.
+Direct `^S` on an unselected history also reports unsupported, even if its current
+stored prefix happens to contain only one member.
+
+**Ordinary acquisition and writes.** A window member uses the common reference
+member path. Normalization previously rejected reference aliases unconditionally
+as relationship operands; represented list operands now enter the existing
+reference acquisition path, preserving source context and parent requirements.
+No new transition evaluator, traversal matcher, parse wait registry or producer
+is added. Continuation constraints are ordinary relationship work; a checked
+window write maps its one corresponding member back through `stageOccurrence`.
+Existing transactions reject contradictions without changing a known state or
+its predecessor. Source permissions remain applicable. A published view retains
+its support independently of the creating request, and its state references
+resolve back to the original occurrence. Retention evicts acquired values, not
+asserted writes or occurrence/support identity.
+
+Window cache proofs also capture the existing source-state scope proof. The
+same scope validator checks structural ancestry and that semantic dependency;
+a checked source write invalidates a previously acquired window. Observing a
+semantic dependency lazily allocates a pure publication token at its source.
+The existing successful-publication ancestor notification replaces that token,
+including for descendant changes which leave the record header intact. Scope
+proofs compare the token alongside header evidence. This adds no global epoch,
+subscriber list or reverse graph traversal; notification follows the ancestry
+already visited for durable cursor writes. Unobserved occurrences allocate no
+token. Proof metadata remains non-owning and introduces no model/cache cycles.
+
+**Cost and alternatives.** Creating a state window allocates one header, one
+reference member and a support witness; it does not enumerate the lifetime or
+acquire sibling values. Classification and scope checks follow the existing
+context/layout providers and ancestry. It does not retain every generated value
+or build an index for the lifetime. The input history itself is already explicitly
+represented. Value acquisition and matching retain the existing normalizer's
+costs; arbitrary alignment is not claimed linear. Merely toggling `timelike`,
+copying a snapshot into an unrelated singleton history, or placing lifetime in
+structural ancestry would lose support/identity or apply the wrong constraints.
+
+**Numeric construction.** The new window extent uses `FlexNum("1")`. Assigning
+integer literal `1` selects the existing precision constructor and produces zero;
+this local use is corrected without beginning the deferred arithmetic redesign.
+
+**Validation.** Final optimized CodeDog regeneration/build succeeds. All **21**
+new language fixtures and **five** ordinary CodeDog runtime checks pass. They
+cover scalar/record paths, repeated conversions, independent nested levels,
+embedded storage, inherited T context, parameters, named states, boundaries,
+source listSpecs/overlays, parser waits and cancellation, session-independent
+published windows, cache invalidation after descendant writes, durable writes,
+rejection atomicity and predecessor isolation. The existing parser execution
+staging check now asserts the remaining unsupported boundaries, including an
+external lifetime inside literal and definition-backed T contexts. Existing
+`.tst` expectations are unchanged.
+
+For already selected positions in histories of 16, 64 and 256 members, each
+window request creates **two frames**, takes **three queue steps**, reads **zero
+relationships/positions**, allocates **one window/reference member**, and leaves
+no input subscription. These are conversion costs after occurrence selection;
+they do not assert constant-time indexing or general alignment.
+
+The complete suite reports **24/729** failures, with exactly the same failing
+names as the committed **24/703** baseline. The shared-library build succeeds.
+Slipstream regenerates against ABI `proteusGraph_abi_11c9d79bf1ec1f845f76` and
+builds successfully. An isolated real GUI run visibly renders the cube before
+and after next/previous navigation; all three captures were inspected. There
+are no cursor/display errors, and normal window closure exits zero. The known
+World-load `Open source correspondence needs span alignment` error remains;
+this increment does not claim Sol/Earth whole/part alignment. Consumer source
+files and World sources are unchanged. Evidence:
+`/tmp/proteus-temporal-views-20261025/`.

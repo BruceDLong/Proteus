@@ -126,8 +126,8 @@ Additional usage-tag order is not significant for collision detection.
 `^name` remains an ordinary external relationship, without namespace registration;
 `~name` can still select that property. World individual naming uses `#`/`%`.
 Only immediate template `.listSpec` introspection is supported in this increment.
-Template metadata editing, arbitrary quoted phrase construction, temporal-view
-conversion, overload inference, and names inside demand-generated occurrences
+Template metadata editing, arbitrary quoted phrase construction, general temporal
+alignment, overload inference, and names inside demand-generated occurrences
 remain deferred. Static local environments live with their owning Agent; generated
 local names explicitly report unsupported until retention is designed.
 
@@ -189,6 +189,22 @@ a temporal member and taking its `^S` view preserves subject and support:
 `tItem@[1]^S` selects the first member using one-based item indexing. The span's
 temporal parent is that object's lifetime T-list. These semantic relationships
 are independent of the storage level; detailed examples remain in development.
+
+**Represented discrete views (D116).** `^T` on an explicit history retains that
+history. On a selected represented state it supplies a one-member temporal
+window referring to the original occurrence; `^S` on that selected temporal
+member retains its state, support and qualifications. State/span round trips
+preserve occurrence identity, and window boundaries are the source state's
+boundaries. The lifetime link belongs to the semantic support provider rather
+than structural ancestry. Window cardinality does not specify duration.
+Selection, parent listSpecs, overlays, value acquisition, parser waits and
+checked writes use ordinary normalization. Published windows retain provenance;
+writing through a view constrains its source and survives cache eviction.
+Direct `^S` of an unselected history remains unsupported, as do implicit
+whole/part correspondence and borrowing a foreign lifetime as the span of a
+different subject's current state. Explicit supplied prefixes remain usable
+without enumerating an open remainder. The existing demand producer owns any
+production; conversion does not supply a second producer or matcher.
 
 `%ctx` is initially a session-scoped, recency-ordered collection of model references
 established by explicit agent interactions. It works in ordinary assertion lists

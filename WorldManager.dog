@@ -9,6 +9,7 @@ struct WorldModelLock: wraps=Nested_Lock_Mutex {}
 #include WorldExpandedPrint.dog
 #include WorldTemporalAcquisition.dog
 #include WorldTemporalProduction.dog
+#include WorldTemporalViews.dog
 #include WorldGeneratedOccurrences.dog
 #include WorldPrivateMembers.dog
 #include WorldProductionFrontier.dog
@@ -1048,6 +1049,7 @@ struct WorldPOVGraph {
     }
 
     our POV: boundaryOf(our WorldRequest: request, our WorldPosition: source, me bool: end) <- {
+        if(source!.temporalSpan){source <- source!.temporalSupport!.state}
         if(source!.node!.pItem!.isNull()){return(source!.node)}
         our POV: anchor <- source!.owner
         our BoundaryReference: reference
@@ -1149,10 +1151,11 @@ struct WorldPOVGraph {
     // only after selection; following aliases while walking would lose siblings.
     our WorldPosition: namedTarget(our WorldPosition: at) <- {
         me Set<our POV>: seen
-        while(at!=NULL and (at!.node!.referenceAlias.sourcePov!=NULL or at!.node!.hasNamedReference)){
+        while(at!=NULL and (at!.node!.referenceAlias.sourcePov!=NULL or at!.node!.hasNamedReference or at!.node!.discreteTemporalState!=NULL)){
             if(seen.contains(at!.node)){return(NULL)}
             seen.insert(at!.node)
-            if(at!.node!.hasNamedReference){at <- at!.node!.namedReference.lock()}
+            if(at!.node!.discreteTemporalState!=NULL){at <- at!.node!.discreteTemporalState!.state}
+            else if(at!.node!.hasNamedReference){at <- at!.node!.namedReference.lock()}
             else if(at!.node!.worldContext!=NULL){at <- at!.node!.worldContext}
             else{at <- occurrencePath(at!.node!.referenceAlias.sourcePov)}
         }
@@ -1886,6 +1889,9 @@ struct WorldPOVGraph {
 
     our WorldPosition: position(our POV: node, our WorldPosition: parent <- NULL) <- {
         our WorldPosition:: result; result!.node <- node; result!.owner <- node; result!.parent <- parent; result!.occurrence <- node
+        if(node!.discreteTemporalSpan!=NULL){
+            result!.temporalSupport <- node!.discreteTemporalSpan; result!.temporalSpan <- true
+        }
         if(node!.productionOrigin!=NULL){result!.occurrence <- node!.productionOrigin}
         result!.generatedAddress <- node!.generatedAddress
         result!.productionIdentity <- node!.generatedProductionIdentity
@@ -1941,6 +1947,7 @@ struct WorldPOVGraph {
         return(result)
     }
     our WorldPosition: occurrencePath(our POV: node) <- {
+        if(node!.discreteTemporalState!=NULL){return(node!.discreteTemporalState!.state)}
         if(node!.generatedAddress!=NULL and node!.generatedParentContext!=NULL){
             return(validateGeneratedPath(position(node,node!.generatedParentContext)))
         }
@@ -1989,6 +1996,11 @@ struct WorldPOVGraph {
     me bool: samePosition(our WorldPosition: left, our WorldPosition: right) <- {
         while(left!=NULL and right!=NULL){
             if(left===right){return(true)}
+            if(left!.temporalSpan or right!.temporalSpan){
+                return(left!.temporalSpan and right!.temporalSpan and
+                    samePosition(left!.temporalSupport!.history,right!.temporalSupport!.history) and
+                    samePosition(left!.temporalSupport!.state,right!.temporalSupport!.state))
+            }
             if(left!.generatedAddress!=NULL and right!.generatedAddress==NULL and left!.generatedAddress!.representedKey!=NULL){
                 return(sameGeneratedScope(left!.generatedAddress!.representedKey,generatedScopeKey(right)))
             }
@@ -2005,6 +2017,10 @@ struct WorldPOVGraph {
     // established their facts; mutable omitted slots are not identity facts.
     me bool: sameProofPosition(our WorldPosition: left, our WorldPosition: right) <- {
         if(!samePosition(left,right)){return(false)}
+        if(left!=NULL and right!=NULL and left!.temporalSpan and right!.temporalSpan){
+            return(sameProofPosition(left!.temporalSupport!.history,right!.temporalSupport!.history) and
+                sameProofPosition(left!.temporalSupport!.state,right!.temporalSupport!.state))
+        }
         while(left!=NULL and right!=NULL){
             if(left===right){return(true)}
             if(left!.parameters!==right!.parameters){return(false)}
@@ -3638,6 +3654,7 @@ struct WorldPOVGraph {
         me Set<their POV>: seen
         while(at!=NULL and !seen.contains(at)){
             seen.insert(at)
+            if(at!.demandPublication!=NULL and at!.demandPublicationOwner===at){Allocate(at!.demandPublication)}
             if(at!.cursorValue!=NULL and at!.cursorValue!.value===at!.pItem){
                 at!.cursorValue!.original <- NULL; at!.cursorValue!.permanent <- true
                 // A descendant publication changes the acquired ancestor
@@ -3875,6 +3892,14 @@ struct WorldPOVGraph {
         // Discharge represented work even if no value was supplied. Exhausted
         // unknowns remain partial; removing a tautology does not invent a value.
         item!.wrkList <- frame!.retainedWork
+        our WorldPosition: temporal <- frame!.navigation
+        if(frame!.correspondenceResult!=NULL and frame!.correspondenceResult!.position!=NULL and
+           frame!.correspondenceResult!.position!.temporalSupport!=NULL){temporal <- frame!.correspondenceResult!.position}
+        if(temporal!=NULL and temporal!.temporalSupport!=NULL and job.target!==temporal!.node and
+           job.target!==temporal!.temporalSupport!.state!.node){
+            if(temporal!.temporalSpan){job.target!.discreteTemporalSpan <- temporal!.temporalSupport}
+            else{job.target!.discreteTemporalState <- temporal!.temporalSupport}
+        }
         request!.publications <+- 1
         if(completeFacts(facts, request!.requireSize and job.target===request!.target)){
             item!.isNormed <- true; item!.worldScalarCompletionOwner <- item
@@ -3938,7 +3963,7 @@ struct WorldManager {
         }
         our WorldFrame:: frame
         frame!.node <- node; frame!.demandSize <- requireSize
-        if(node!.referenceAlias.sourcePov!=NULL or node!.hasNamedReference){
+        if(node!.referenceAlias.sourcePov!=NULL or node!.hasNamedReference or node!.discreteTemporalState!=NULL){
             frame!.referenceTarget <- graph.namedTarget(graph.position(node,context))
             frame!.contextual <- true
             if(frame!.referenceTarget==NULL){
@@ -6525,6 +6550,13 @@ struct WorldManager {
 
     me bool: stageOccurrence(our WorldRequest: request, our WorldPosition: destination, our WorldFrame: facts) <- {
         if(destination==NULL){request!.outcome <- worldPartial; request!.detail <- "Write needs an established source occurrence"; return(false)}
+        if(destination!.temporalSpan){
+            if(facts!.facts.overlay!=LST or graph.openLayout(facts!.facts) or graph.sequenceLength(facts!.facts.sequence)!=1){
+                request!.outcome <- worldPartial; request!.detail <- "Temporal window write must preserve its represented support"; return(false)
+            }
+            me WorldListCursor: members; members.push(facts!.facts.sequence)
+            return(stageOccurrence(request,destination!.temporalSupport!.state,members.next()))
+        }
         if(request!.unitOrigins.containsKey(destination!.node!.pItem)){
             our WorldUnitOrigin: origin <- request!.unitOrigins.at(destination!.node!.pItem)
             if(origin!.sparse){
@@ -7089,7 +7121,7 @@ struct WorldManager {
             frame!.initialized <- true; frame!.finished <- true; return()
         }
         our WorldPath: path <- frame!.path
-        if(path!.source!=NULL and (path!.source!.node!.referenceAlias.sourcePov!=NULL or path!.source!.node!.hasNamedReference)){
+        if(path!.source!=NULL and (path!.source!.node!.referenceAlias.sourcePov!=NULL or path!.source!.node!.hasNamedReference or path!.source!.node!.discreteTemporalState!=NULL)){
             path!.source <- graph.namedTarget(path!.source)
             if(path!.source==NULL){frame!.facts.outcome <- worldError; frame!.facts.detail <- "Cyclic reference source"; stopFrame(request,frame); return()}
         }
@@ -7149,14 +7181,12 @@ struct WorldManager {
                 return()
             }
             me string: primitive <- graph.pathOperator(path!.part!.path)
-            if(path!.part!.pathMode==asTSpanField or path!.part!.pathMode==asSListField){
-                frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Temporal view conversion is not implemented"; stopFrame(request, frame); return()
-            }
             if(path!.part!.pathMode==dotField and (primitive=="cut" or primitive=="astlist")){
                 frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Path needs a boundary occurrence provider"; stopFrame(request, frame); return()
             }
             if(path!.part!.pathMode!=dotField and path!.part!.pathMode!=idxField and
-               path!.part!.pathMode!=upField and path!.part!.pathMode!=resolutionField){
+               path!.part!.pathMode!=upField and path!.part!.pathMode!=resolutionField and
+               path!.part!.pathMode!=asTSpanField and path!.part!.pathMode!=asSListField){
                 frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Path needs an additional relation provider"; stopFrame(request, frame); return()
             }
         }
@@ -7189,7 +7219,11 @@ struct WorldManager {
                path!.index!.facts.overlay!=NUM or path!.index!.facts.number.getDenominator()!=1)){
                 frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Index needs an integer value"; stopFrame(request, frame); return()
             }
-            if(path!.part!.pathMode==upField or path!.externalTier){
+            if(path!.part!.pathMode==asTSpanField or path!.part!.pathMode==asSListField){
+                our WorldPosition: selected <- temporalView(request,frame,path!.source,path!.part!.pathMode==asTSpanField)
+                if(selected==NULL){return()}
+                path!.operation <- temporalViewOperation(request,selected,path!.part!.continuation,frame!.referenceOnly)
+            }else if(path!.part!.pathMode==upField or path!.externalTier){
                 path!.associationAnchor <- graph.associationAnchor(path!.source)
                 path!.operation <- externalSelection(request, path!.associationAnchor, path!.part, path!.part!.pathMode==upField)
             }else if(path!.part!.pathMode==dotField and (primitive=="begin" or primitive=="end")){
@@ -7226,7 +7260,7 @@ struct WorldManager {
         }
         if(path!.operation!.facts.outcome!=worldReady){frame!.facts <- path!.operation!.facts; stopFrame(request, frame); return()}
         our infonView: work <- path!.part!.path
-        if(path!.part!.pathMode==idxField){work <- path!.part!.continuation}
+        if(path!.part!.pathMode==idxField or path!.part!.pathMode==asTSpanField or path!.part!.pathMode==asSListField){work <- path!.part!.continuation}
         if(!path!.applied){
             if(path!.operation!.createdAssociation!=NULL){
                 our ExternalAssociationReference: reference <- path!.operation!.createdAssociation
@@ -7639,7 +7673,7 @@ struct WorldManager {
             request!.ready.append(frame); return()
         }
         if(source!.pItem==NULL){request!.outcome <- worldError; request!.detail <- "Empty relationship"; return()}
-        if(source!.viewMap.sourcePov!=NULL or source!.referenceAlias.sourcePov!=NULL or
+        if(source!.viewMap.sourcePov!=NULL or (source!.referenceAlias.sourcePov!=NULL and !frame!.sourceIsOperand) or
            (source!.pParent!=NULL and !frame!.sourceIsOperand)){
             request!.outcome <- worldUnsupported; request!.detail <- "Contextual expression source"; return()
         }
@@ -7813,7 +7847,8 @@ struct WorldManager {
                 }
             }
         }
-        if(context==NULL and (source!.pParent!=NULL or source!.worldContext!=NULL)){
+        if(context==NULL and (source!.pParent!=NULL or source!.worldContext!=NULL or
+           source!.discreteTemporalState!=NULL or source!.discreteTemporalSpan!=NULL)){
             context <- graph.occurrencePath(source)
             if(context==NULL){request!.outcome <- worldUnsupported; request!.detail <- "Invalid or cyclic occurrence path"; return(request)}
         }
