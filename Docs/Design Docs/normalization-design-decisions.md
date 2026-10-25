@@ -4299,6 +4299,73 @@ All six compiled naming checks and 25 language cases pass. The full run has
 24/657 baseline. Parser negative controls now use malformed cursor/tag syntax:
 unknown `%name` and prefix template reads are valid syntax in this increment.
 
+## D115 — Concrete named construction and global participants (2026-10-25)
+
+**Decision.** The user confirmed that Earth may be named inside Sol's inventory
+while remaining globally accessible as `%Earth`. A reusable template supplies
+constraints true of its applications; an individual initializer can supply its
+own facts and history. Later identities and paths constrain that same individual.
+Temporary assumption names remain deferred.
+
+An ordinary typed initializer, `#Earth=planet:{...}`, constructs an individual.
+`#planet=#{...}` explicitly constructs a template value, while `#other=#planet`
+reads and aliases that template. The binding retains one resulting occurrence, and an inline
+binding contributes a reference to that occurrence as its list member. Nested
+individual constructors and aliases authored inside a concrete named initializer
+publish in the existing global catalogue. Initializers, including declarations
+inside its listSpec, are checked through ordinary frames before publication.
+Repeating that inventory across states reuses its original individuals rather
+than rebinding their names. Required identity bodies use the same rule. Shared
+template bodies remain opaque to this declaration scan; applications keep their
+local bindings and never export a participant merely because it is constructed.
+
+The constructed occurrence has its own structural root, plus a captured lexical
+context for name lookup and the existing parameter bindings. Treating the
+declaration as its structural parent gave list/history lookup incorrect
+coordinates and let ancestor publication reach a declaration as data. The binding
+member borrows the initializer's retained description through the existing
+reference/publication path, preserving incomplete open histories without copying
+or expanding an unrequested tail. The finite authored declaration scan visits
+each syntax node once per initializer, skips shared model bodies, and does not
+enumerate virtual members. Generated names retain the existing retention boundary.
+
+**Alternatives and compatibility.** Moving every name outside Sol or requiring
+an outer alias would make this authored model unnecessarily indirect. Exporting
+all names in arbitrary template applications would collide across instances.
+The user rejected a compatibility distinction based on how the source model
+was declared. Older reusable typed aliases are migrated to explicit template
+references in models, generators and tests; ordinary applications consistently
+construct individuals. Literal definition bodies and parameter headers retain
+their template meaning. Semantic test expectations remain unchanged apart from
+printed syntax where the source spelling changes. No
+noun category, mutable binding, second catalogue or solver fallback is introduced.
+Quoting a complete decorated body uses grouping, for example
+`#Holder=#(thing:{}^measure={value:7})`; writing the property after a bare
+template reference would instead address template metadata. The existing typed
+external-association projection control retains its semantic expectation.
+Lookup prefers the nearest lexical scope and then globals. The older
+`sortResultsByScore(results, scopeID)` hook in ModelManager is a TODO, including
+on `proteus3b`; conceptual-distance ranking is not an implemented guarantee.
+
+**World boundary.** Sol's inventory remains before `|`, constraining its lifetime.
+One S-list member after `|` contains `%Earth^T={T ...}` for Earth's finer history
+over that Sol state. The authored checker now recognizes explicit templates and
+nested constructors. Parser success does not establish temporal conversion: the
+seven existing astronomy runtime failures now report that `^T` is unimplemented.
+Their intended expectations remain unchanged. General temporal-view conversion,
+open-history alignment, morphology and temporary assumption scopes are not added
+by this naming change.
+
+**Validation.** The optimized CodeDog regeneration/build succeeds. All thirteen
+new language cases and both new compiled identity/scope checks pass. The full
+suite has **24/703** failures, with exactly the same failing names as the
+**24/688** baseline. Fifteen migrated source files pass parsing. Authored
+astronomy checks, four astronomy parser cases, three Rubix geometry/specification
+checks and generator reproducibility pass. The seven of fourteen astronomy
+runtime failures remain explicit at temporal-view conversion. Shared-library
+consumer and visible Slipstream rendering validation were not performed for
+this naming change.
+
 The actual World authored-structure check and all four source parser cases pass.
 All five naming controls and both finite-history controls pass. Seven actual
 Earth/Sol reads retain the open-source span-alignment failure during context

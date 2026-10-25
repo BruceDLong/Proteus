@@ -186,6 +186,9 @@ struct WorldBindings {
 }
 struct WorldPosition {
     our WorldBindings: parameters
+    // A constructed occurrence captures names without making its declaration
+    // a structural parent or a temporal/list coordinate.
+    our WorldPosition: lexicalContext
     // Source requirements stop here; navigation still retains its caller context.
     me bool: constraintRoot <- false
     our POV: owner
@@ -498,6 +501,10 @@ struct WorldNameBinding {
     our WorldPosition: target
     our infonView: modelValue
     me int: kind <- 0 // pending expression, 1 template, 2 occurrence cursor
+    me bool: constructed <- false
+    me bool: exported <- false
+    me bool: exportMembers <- false
+    me bool: membersStaged <- false
 }
 struct WorldDefinitionTable {
     our WordScope: scope
@@ -714,6 +721,8 @@ struct WorldFrame {
     our WorldBindings: lexicalParameters
     our WorldNameBinding: naming
     our WorldFrame: nameValue
+    me List<our WorldFrame>: nameMembers
+    me int64: nextNameMember <- 0
     our WorldFrame: parameterValue
     our WorldArgumentBinding: parameterBinding
     our WorldFrame: parameterConstraints
@@ -1160,7 +1169,8 @@ struct WorldPOVGraph {
                 our WorldNameBinding: binding <- nameBinding(request,definition)
                 if(binding==NULL){return(NULL)}
                 at <- binding!.context
-            }else{at <- at!.parent}
+            }else if(at!.parent!=NULL){at <- at!.parent}
+            else{at <- at!.lexicalContext}
         }
         return(NULL)
     }
@@ -1190,8 +1200,12 @@ struct WorldPOVGraph {
                 if(member==NULL){return(false)}
                 position <- self.position(member,position)
             }
-            stageDefinition(request,position!.node!.pItem,position)
-            if(request!.outcome!=worldReady){return(false)}
+            // A constructor can already have published its value at this
+            // syntax location. Its established catalogue entry survives.
+            if(position!.node!.pItem!.itmMode==mWordDefn){
+                stageDefinition(request,position!.node!.pItem,position)
+                if(request!.outcome!=worldReady){return(false)}
+            }
         }
         return(true)
     }
@@ -1208,8 +1222,28 @@ struct WorldPOVGraph {
         }
         return(values!.occurrences.at(owner))
     }
-    our WordDefn: stageDefinition(our WorldRequest: request, our infonView: item, our WorldPosition: context <- NULL) <- {
+    our WordDefn: stageDefinition(our WorldRequest: request, our infonView: item, our WorldPosition: context <- NULL, me bool: exportIndividual <- false) <- {
+        // A concrete named initializer owns its authored individuals once.
+        // Re-projecting its listSpec must find those same global bindings.
+        me string: spelling <- unicodeMgr.normalizeStr(item!.definedWord!.defWord)
+        me int: qualifierSeparator <- findString(spelling,"_")
+        if(qualifierSeparator!=-1){spelling <- spelling.subStr(0,qualifierSeparator)}
+        withEach pass in range 0 .. 2{
+            our WorldDefinitions: candidates
+            if(pass==0 and request!.declarations.containsKey(spelling)){candidates <- request!.declarations.at(spelling)}
+            if(pass==1 and definitions.containsKey(spelling)){candidates <- definitions.at(spelling)}
+            if(candidates!=NULL){withEach candidate in candidates!.entries{
+                our WorldNameBinding: prior <- nameBinding(request,candidate)
+                if(prior!=NULL and prior!.exported and prior!.origin===item!.definedWord){return(candidate)}
+            }}
+        }
+        // An ordinary typed initializer is an application. Prefix # explicitly
+        // quotes a model instead; parameter headers supply their own template.
+        our infonView: body <- item!.funcArgs
+        me bool: constructed <- !body!.templateReference and !item!.definedWord!.hasParameterList and body!.type!=NULL
+        me bool: exported <- exportIndividual and (constructed or body!.viewMode==vmCursor) and !item!.definedWord!.hasParameterList
         our WordScope: scope <- item!.lexicalScope
+        if(exported){scope <- NULL}
         our POV: owner
         if(scope!=NULL and !scope!.global){
             owner <- scopeOwner(request,scope,context)
@@ -1255,11 +1289,21 @@ struct WorldPOVGraph {
         generatedDeclaration(item!.definedWord)
         our WorldNameBinding:: binding
         binding!.declaration <- definition; binding!.origin <- item!.definedWord; binding!.context <- context
-        our infonView: body <- item!.funcArgs
-        // Existing literal/model declarations remain template shorthand.
-        // Explicit occurrence cursors bind their referent once.
+        binding!.constructed <- constructed; binding!.exported <- exported
+        binding!.exportMembers <- constructed
+        our WorldPosition: lexicalContext <- context
+        while(lexicalContext!=NULL){
+            if(lexicalContext!.node!.trueByDefinition){binding!.exportMembers <- false}
+            if(lexicalContext!.generatedAddress!=NULL){
+                request!.outcome <- worldUnsupported; request!.detail <- "Generated local names need scoped retention"; return(NULL)
+            }
+            if(lexicalContext!.parent!=NULL){lexicalContext <- lexicalContext!.parent}
+            else{lexicalContext <- lexicalContext!.lexicalContext}
+        }
+        // Literal and parameterized definition bodies describe templates.
+        // Applications construct an occurrence; cursors select an existing one.
         me bool: explicitOccurrence <- body!.viewMode==vmCursor
-        if(definition!.hasParameterList or (!body!.templateReference and !explicitOccurrence)){
+        if(definition!.hasParameterList or (!body!.templateReference and !explicitOccurrence and !constructed)){
             binding!.kind <- 1; binding!.modelValue <- body
         }
         request!.nameBindings.insert(definition,binding)
@@ -1269,6 +1313,40 @@ struct WorldPOVGraph {
             addDefinition(table!.entries,definition)
         }
         return(definition)
+    }
+    me List<our WorldPosition>: stageIndividualMembers(our WorldRequest: request, our WorldPosition: root) <- {
+        // Walk finite authored syntax once, never a virtual/generated tail.
+        // Definition bodies are opaque here; constructors stage their own body.
+        me List<our WorldPosition>: pending
+        me List<our WorldPosition>: result
+        me Set<our infonView>: visited
+        pending.append(root)
+        while(!pending.isEmpty()){
+            our WorldPosition: at <- pending.popLast()
+            our infonView: item <- at!.node!.pItem
+            if(visited.contains(item)){continue()}
+            visited.insert(item)
+            if(item!.itmMode==mWordDefn){
+                our WordDefn: definition <- stageDefinition(request,item,at,true)
+                if(request!.outcome!=worldReady){return(result)}
+                our WorldNameBinding: binding <- nameBinding(request,definition)
+                if(binding!.exported){result.append(at)}
+                continue()
+            }
+            if(item!.templateReference){continue()}
+            withEach relation in item!.wrkList Backward{
+                pending.append(position(relation,at))
+            }
+            if(item!.value!.overlayType==LST and item!.value!.evalMode==emLiteral){
+                our POV: member <- item!.value!.items.tail
+                while(member!=NULL){pending.append(position(member,at)); member <- member!.previousNode()}
+                if(item!.value!.listSpec!=NULL){
+                    our POV:: spec{949}; spec!.pItem <- item!.value!.listSpec
+                    pending.append(position(spec,at))
+                }
+            }
+        }
+        return(result)
     }
     me string: checkArguments(our infonView: item, our WordUse: word) <- {
         if(item!.wordArguments==NULL){return("")}
@@ -3649,6 +3727,11 @@ struct WorldPOVGraph {
         if(facts.declaration!=NULL){
             item!.isNormed <- true; item!.worldScalarCompletionOwner <- item
             request!.publications <+- 1; return()
+        }
+        if(item!.itmMode==mWordDefn){
+            // The catalogue retains the declaration; its inline occurrence
+            // publishes the constructed value, just like another expression.
+            item!.itmMode <- mItem; item!.funcArgs <- NULL
         }
         if(facts.terminalValue!=0){
             Allocate(item!.value); Allocate(item!.infSize)
@@ -6730,12 +6813,28 @@ struct WorldManager {
             frame!.naming <- binding
             our POV:: expression{949}; Allocate(expression!.pItem)
             expression!.pItem! <- binding!.declaration!.meaning!
-            frame!.nameValue <- makeFrame(request,expression,binding!.context)
+            if(binding!.constructed){
+                binding!.target <- graph.position(expression)
+                binding!.target!.lexicalContext <- binding!.context
+                binding!.target!.parameters <- graph.parameterScope(binding!.context)
+                frame!.nameValue <- makeFrame(request,expression,binding!.target)
+            }else{frame!.nameValue <- makeFrame(request,expression,binding!.context)}
+            if(binding!.exportMembers and !binding!.membersStaged){
+                me List<our WorldPosition>: members <- graph.stageIndividualMembers(request,binding!.target)
+                if(request!.outcome!=worldReady){return(false)}
+                withEach member in members{frame!.nameMembers.append(makeFrame(request,member!.node,member))}
+                binding!.membersStaged <- true
+            }
             // Bare naming captures need only a reference. Explicit constraints
             // remain ordinary checked work and must never be skipped.
             frame!.nameValue!.referenceOnly <- !expression!.pItem!.templateReference and
                 expression!.pItem!.type==NULL and expression!.pItem!.wrkList.isEmpty()
-            request!.ready.append(frame); request!.ready.append(frame!.nameValue); return(false)
+        }
+        while(frame!.nextNameMember<frame!.nameMembers.size()){
+            our WorldFrame: member <- frame!.nameMembers[frame!.nextNameMember]
+            if(!member!.finished){request!.ready.append(frame); request!.ready.append(member); return(false)}
+            if(member!.facts.outcome!=worldReady){frame!.facts <- member!.facts; stopFrame(request,frame); return(false)}
+            frame!.nextNameMember <+- 1
         }
         if(!frame!.nameValue!.finished){request!.ready.append(frame); request!.ready.append(frame!.nameValue); return(false)}
         if(frame!.nameValue!.facts.outcome!=worldReady){frame!.facts <- frame!.nameValue!.facts; stopFrame(request,frame); return(false)}
@@ -6749,6 +6848,8 @@ struct WorldManager {
             }
         }else if(binding!.declaration!.meaning!.templateReference){
             frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "Template expression did not produce a model"; stopFrame(request,frame); return(false)
+        }else if(binding!.constructed){
+            binding!.kind <- 2
         }else if(frame!.nameValue!.correspondenceResult!=NULL and frame!.nameValue!.correspondenceResult!.position!=NULL){
             binding!.target <- graph.namedTarget(frame!.nameValue!.correspondenceResult!.position)
             if(binding!.target==NULL){frame!.facts.outcome <- worldError; frame!.facts.detail <- "Cyclic occurrence alias"; stopFrame(request,frame); return(false)}
@@ -7288,6 +7389,23 @@ struct WorldManager {
         if(frame!.facts.declaration!=NULL){
             our WorldNameBinding: binding <- graph.nameBinding(request,frame!.facts.declaration)
             if(binding!=NULL and !resolveName(request,frame,binding)){return()}
+            if(binding!=NULL and (binding!.constructed or binding!.exported)){
+                if(frame!.nameValue==NULL){
+                    frame!.nameValue <- makeFrame(request,binding!.target!.node,binding!.target)
+                    request!.ready.append(frame); request!.ready.append(frame!.nameValue); return()
+                }
+                if(!frame!.nameValue!.finished){request!.ready.append(frame); request!.ready.append(frame!.nameValue); return()}
+                frame!.facts <- frame!.nameValue!.facts
+                frame!.referenceTarget <- binding!.target
+                frame!.retainedWork <- frame!.nameValue!.retainedWork
+                graph.adoptListRequirements(frame,frame!.nameValue)
+                // Publish the initializer at its own occurrence. The binding's
+                // member borrows that description instead of materializing a
+                // second copy of an incomplete or open history.
+                if(!stageOccurrence(request,binding!.target,frame!.nameValue)){return()}
+                frame!.referenceStaged <- true
+                frame!.deferredValue <- binding!.target!.node!.pItem
+            }
             frame!.finished <- true; return()
         }
         if(frame!.facts.templateModel!=NULL){frame!.finished <- true; return()}

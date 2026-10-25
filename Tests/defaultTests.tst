@@ -281,9 +281,9 @@ query/getNthSub,       Get Nth item,                   {#myLst={'Cat' 'Hat' 'Bat
 query/getNthSub2,      Get Nth item,                   {#Axx={bat:{cat:{dog:{eel:{fox:{AA:'aaa' BB:'bbb' CC:'ccc' DD:'ddd'}}}}}}}\n*3+[& Axx.bat.cat.dog.eel.fox]//:CC:'ccc', -, multi
 word/types,            Check types1,                   {#position=_ #torque=_ #pedals={...}}\npedals:{position=321 torque:4}//:pedals:{position:321 torque:4}, -, multi
 word/deref,            deref word1,                    {#tag={1 2 3}}\ntag//:tag:{1 2 3},                                      -,                              multi
-name/value/direct,     A name word denotes its name value, {#spelling=$ #pronunciation=$ #name={spelling\, pronunciation} #Morgan <en name>=name:{spelling="Morgan"\, pronunciation="mor"}}\nMorgan//:Morgan:{spelling:'Morgan'\, pronunciation:'mor'}, -, multi
-name/value/afterAssociation, A name word remains a name after a bearer is associated with it, {#spelling=$ #pronunciation=$ #marker=_ #name={spelling\, pronunciation} #human <en noun>={marker} #Morgan <en name>=name:{spelling="Morgan"\, pronunciation="mor"}}\nhuman:{marker=1}^name=Morgan\nMorgan//:Morgan:{spelling:'Morgan'\, pronunciation:'mor'}, -, multi
-name/reference/externalProperty, An external name property returns its asserted name reference, {#spelling=$ #pronunciation=$ #marker=_ #name={spelling\, pronunciation} #human <en noun>={marker} #Morgan <en name>=name:{spelling="Morgan"\, pronunciation="mor"}}\nhuman:{marker=1}^name=Morgan;~name//:Morgan\nMorgan//:Morgan:{spelling:'Morgan'\, pronunciation:'mor'}, -, multi
+name/value/direct,     A name word denotes its name value, {#spelling=$ #pronunciation=$ #name={spelling\, pronunciation} #Morgan <en name>=#name:{spelling="Morgan"\, pronunciation="mor"}}\nMorgan//:Morgan:{spelling:'Morgan'\, pronunciation:'mor'}, -, multi
+name/value/afterAssociation, A name word remains a name after a bearer is associated with it, {#spelling=$ #pronunciation=$ #marker=_ #name={spelling\, pronunciation} #human <en noun>={marker} #Morgan <en name>=#name:{spelling="Morgan"\, pronunciation="mor"}}\nhuman:{marker=1}^name=Morgan\nMorgan//:Morgan:{spelling:'Morgan'\, pronunciation:'mor'}, -, multi
+name/reference/externalProperty, An external name property returns its asserted name reference, {#spelling=$ #pronunciation=$ #marker=_ #name={spelling\, pronunciation} #human <en noun>={marker} #Morgan <en name>=#name:{spelling="Morgan"\, pronunciation="mor"}}\nhuman:{marker=1}^name=Morgan;~name//:Morgan\nMorgan//:Morgan:{spelling:'Morgan'\, pronunciation:'mor'}, -, multi
 association/typedRHSProjection, LHS type selects an external association from a normally normalized RHS, measure=Holder, measure:{value:7}, world, TestFiles/associationProjection.pr
 query/firstType,       Find by type,                   {#wheel='wheel' #chain='chain' #seat='seat'}\n [&{wheel|...} chain]<~{wheel wheel chain seat}//:chain:'chain', -, multi
 query/byType1,         Find by type,                   {#pedals={position:_ torque:_} #wheel={position:_ torque:_}}\n{pedals:{position:321 torque:4} wheel:{position:210 torque:5} breaks}.wheel//:wheel:{position:210 torque:5}, -, multi
@@ -302,7 +302,7 @@ user/getUser,          getUser,                        %W.bruceLong//:bruceLong:
 user/getUser3,         getUser,                        %W.bruceLong.projects.properties.title//:title:'Slipstream Projects',   -,                              world, user_3.pr
 user/getNth,           getNth,                         *2 + [& %W.bruceLong.projects.data.boardElement.data.TaskList.data].properties.member//:member:'Tiffany', -, world, user_3.pr
 user/setNth,           setNth,                         *2 + [& %W.bruceLong.projects.data.boardElement.data.TaskList.data].properties.member <<= 'KTiffany'\n*2 + [& %W.bruceLong.projects.data.boardElement.data.TaskList.data].properties.member//:member:'KTiffany', -, world, user_3.pr
-this/lvl1,             this lvl1,                      {#hue=_ #color={hue}  #red=color:{hue:0} #pink=color:{hue:345} #paper = paper:{red\, {{%.color}{pink}}}}\npaper//:paper:{red:{hue:0}\, {{red:{hue:0}} {pink:{hue:345}}}}, -, multi
+this/lvl1,             this lvl1,                      {#hue=_ #color={hue}  #red=#color:{hue:0} #pink=#color:{hue:345} #paper = #paper:{red\, {{%.color}{pink}}}}\npaper//:paper:{red:{hue:0}\, {{red:{hue:0}} {pink:{hue:345}}}}, -, multi
 word/setColor,         setColor,                       color=red//:color:{hue:*_+0\, saturation:*_+5\, brightness:*_+_},                  -,                              world, bike.pr
 search/adj1,           Search by adjective,            {{color=red\, ...} { name='Bob'\, color=blue\, ...} {color=green\, ...} {name='Wally'\, color=blue\, ...}}.{color=blue\, ...}//:{name:'Bob'\, color = blue\, ... }, -, world, bike.pr
 
@@ -318,3 +318,4 @@ merge/lookahead,       Merge lookahead,                 {&{_|...} _ $} =: {33 22
 @include wordArgumentTests.tst
 @include embeddedNeighbourTests.tst
 @include unifiedNamingTests.tst
+@include individualConstructionTests.tst

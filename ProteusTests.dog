@@ -2,6 +2,8 @@
 
 TestsToRun = `
     unit/unifiedNames/identity
+    unit/unifiedNames/construction
+    unit/unifiedNames/inventoryHistory
     unit/unifiedNames/decorations
     unit/unifiedNames/scopes
     unit/unifiedNames/templateReadiness
@@ -478,7 +480,7 @@ struct GLOBAL {
 
     //WORLDTEST(sugar/getNth,    "getNth",   "user_3.pr", "%W.bruceLong.projects.data.boardElement.data.TaskList.data@[(2)].properties.member//:member:'Tiffany'")
     //WORLDTEST(sugar/getNth,    "getNth",   "user_2.5.pr", "%W.goat@[(2)].ibex//:ibex:'bbb'")
-    const string: this1_In  <- "{#hue=_ #color={hue}  #red=color:{hue:0} #pink=color:{hue:345} #paper = paper:{red, {{%.color}{pink}}}}\npaper"
+    const string: this1_In  <- "{#hue=_ #color={hue}  #red=#color:{hue:0} #pink=#color:{hue:345} #paper = #paper:{red, {{%.color}{pink}}}}\npaper"
     const string: this1_Out <- "paper:{red:{hue:0},{{red:{hue:0}} {pink:{hue:345}}}}"
     const string: setColorOut <- "color:{hue:0, saturation:5, brightness}"
 
@@ -2604,7 +2606,7 @@ struct GLOBAL {
         recursive <- agent.worldManager.parse("repeat(1)")
         request <- agent.normalize(recursive.target)
         if(request!.status().outcome!=worldUnsupported){FAIL("Unbounded recursive application was not diagnosed")}
-        me WorldParseResult: shared <- agent.worldManager.parse("{#change(item)=%item.x=7; #holder=change(item::{x:_})}")
+        me WorldParseResult: shared <- agent.worldManager.parse("{#change(item)=%item.x=7; #holder=#change(item::{x:_})}")
         request <- agent.normalize(shared.target)
         me string: before <- toString(shared.target!.pItem)
         me WorldParseResult: call <- agent.worldManager.parse("holder")
@@ -4214,7 +4216,7 @@ struct GLOBAL {
             me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
             me string: leaf <- "(unavailable^T)"; if(scenario==1){leaf <- "7"}
             me WorldParseResult: declaration <- agent.worldManager.parse(
-                "{#base={changed:0 untouched:{blocked:"+leaf+"}} #alias=base}")
+                "{#base={changed:0 untouched:{blocked:"+leaf+"}} #alias=#base}")
             if(declaration.target==NULL){FAIL(declaration.error)}
             our infonView: body <- declaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
             our POV: untouched <- body!.fetchField("untouched")
@@ -4993,7 +4995,7 @@ struct GLOBAL {
     }
 
     void: unit_namedListLayout_inheritedContext(me string: testName) <- {
-        me List<string>: definitions <- ["{#series={T ?| ...}}", "{#series={T ...}}", "{#base={T ?| ...} #series=base}"]
+        me List<string>: definitions <- ["{#series={T ?| ...}}", "{#series={T ...}}", "{#base={T ?| ...} #series=#base}"]
         withEach text in definitions{
             me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
             me WorldParseResult: declaration <- agent.worldManager.parse(text)
@@ -5319,7 +5321,7 @@ struct GLOBAL {
         withEach name in names{
             withEach indexed in range 0 .. 2{
                 me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
-                me WorldParseResult: declaration <- agent.worldManager.parse("{#second=_ #alias=second #series={"+name+"| ...}}")
+                me WorldParseResult: declaration <- agent.worldManager.parse("{#second=_ #alias=#second #series={"+name+"| ...}}")
                 if(declaration.target==NULL){FAIL(declaration.error)}
                 our infonView: meaning <- declaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
                 our WorldRequest: installed <- agent.normalize(declaration.target)
@@ -5519,7 +5521,7 @@ struct GLOBAL {
 struct GLOBAL {
     void: unit_recordProjection_addedField(me string: testName) <- {
         me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
-        me WorldParseResult: declaration <- agent.worldManager.parse("{#base={x:1, y:2} #derived=base:{x:1, y:2, z:7}}")
+        me WorldParseResult: declaration <- agent.worldManager.parse("{#base={x:1, y:2} #derived=#base:{x:1, y:2, z:7}}")
         if(declaration.target==NULL){FAIL(declaration.error)}
         our infonView: base <- declaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
         our infonView: derived <- declaration.target!.pItem!.value!.items.tail!.pItem!.funcArgs
@@ -7652,6 +7654,72 @@ struct GLOBAL {
 
 // First-class name bindings use the ordinary normalization lifecycle.
 struct GLOBAL {
+    void: unit_unifiedNames_construction(me string: testName) <- {
+        me ProteusCore: core; core.init("",false)
+        our Agent: agent <- core.agent
+        me WorldParseResult: models <- agent!.worldManager.parse("{#value=_ #planet=#{value} #system=#{planets}}")
+        if(agent!.normalize(models.target)!.failed()){FAIL("Could not establish explicit models")}
+        me WorldParseResult: construction <- agent!.worldManager.parse("#Sol=system:{planets:{#Earth=planet}}")
+        our WorldRequest: created <- agent!.normalize(construction.target)
+        if(created!.failed()){FAIL("Nested construction failed: "+created!.error())}
+        if(!agent!.worldManager.graph.definitions.containsKey("earth")){FAIL("A nested individual was not published globally")}
+        me WorldParseResult: alias <- agent!.worldManager.parse("#Terra=%Earth")
+        if(agent!.normalize(alias.target)!.failed()){FAIL("Could not alias the constructed individual")}
+        me WorldParseResult: update <- agent!.worldManager.parse("%Terra.value=7")
+        if(agent!.normalize(update.target)!.failed()){FAIL("Could not constrain the individual")}
+        me List<string>: references <- ["%Earth.value", "%Sol.planets@[1].value"]
+        withEach reference in references{
+            me WorldParseResult: query <- agent!.worldManager.parse(reference)
+            our WorldRequest: read <- agent!.normalize(query.target)
+            if(read!.status().outcome!=worldComplete or query.target!.pItem!.fetchInt()!=7){FAIL("A route lost the individual's facts: "+reference+": "+read!.error())}
+        }
+        our POV: individual
+        me uint64: bindingsBefore <- agent!.worldManager.graph.nameBindings.size()
+        me List<string>: aliases <- ["%Earth", "%Terra", "%Sol.planets@[1]"]
+        withEach spelling in aliases{
+            me WorldParseResult: query <- agent!.worldManager.parse(spelling)
+            our WorldRequest: read <- agent!.normalize(query.target)
+            if(read!.selectedSource()==NULL){FAIL("An individual route lost its provenance")}
+            our WorldPosition: source <- agent!.worldManager.graph.namedTarget(agent!.worldManager.graph.position(read!.selectedSource()))
+            if(individual==NULL){individual <- source!.node}
+            else if(individual!==source!.node){FAIL("Named and structural routes created different individuals")}
+        }
+        if(agent!.worldManager.graph.nameBindings.size()!=bindingsBefore){FAIL("Reading a constructor created more name bindings")}
+        me WorldParseResult: bad <- agent!.worldManager.parse("#Bad=system:{planets:{#Lost=planet:{value:7=8}}}")
+        if(agent!.normalize(bad.target)!.status().outcome!=worldRejected){FAIL("A conflicting initializer was accepted")}
+        if(agent!.worldManager.graph.definitions.containsKey("bad") or agent!.worldManager.graph.definitions.containsKey("lost")){FAIL("A failed initializer published names")}
+        core.deInit(); modelMngr.clear()
+    }
+    void: unit_unifiedNames_inventoryHistory(me string: testName) <- {
+        me ProteusCore: core; core.init("",false)
+        our Agent: agent <- core.agent
+        me WorldParseResult: models <- agent!.worldManager.parse("{#value=_ #planet=#{value} #system=#{T ...} #sample=#{#picked=planet:{value:7} %picked.value}}")
+        our infonView: schema <- models.target!.pItem!.value!.items.tail!.pItem!.funcArgs
+        me string: original <- toString(schema)
+        if(agent!.normalize(models.target)!.failed()){FAIL("Could not establish explicit models")}
+        me WorldParseResult: construction <- agent!.worldManager.parse("#Sol=system:{T {planets:{#Earth=planet:{value:7}}}| {planets} {planets}}")
+        our WorldRequest: created <- agent!.normalize(construction.target)
+        if(created!.failed()){FAIL("Could not construct a repeated inventory: "+created!.error())}
+        our POV: individual
+        me uint64: bindingsBefore <- agent!.worldManager.graph.nameBindings.size()
+        me List<string>: references <- ["%Earth", "%Sol@[1].planets@[1]", "%Sol@[2].planets@[1]"]
+        withEach reference in references{
+            me WorldParseResult: query <- agent!.worldManager.parse(reference)
+            our WorldRequest: read <- agent!.normalize(query.target)
+            if(read!.selectedSource()==NULL){FAIL("An inventory member lost its source occurrence")}
+            our WorldPosition: source <- agent!.worldManager.graph.namedTarget(agent!.worldManager.graph.position(read!.selectedSource()))
+            if(individual==NULL){individual <- source!.node}
+            else if(individual!==source!.node){FAIL("A listSpec created another individual for a later state")}
+        }
+        if(agent!.worldManager.graph.nameBindings.size()!=bindingsBefore){FAIL("History projection registered more individuals")}
+        me WorldParseResult: local <- agent!.worldManager.parse("sample@[2]")
+        our WorldRequest: localRead <- agent!.normalize(local.target)
+        if(localRead!.status().outcome!=worldComplete or local.target!.pItem!.fetchInt()!=7){FAIL("A constructed template-local participant did not resolve")}
+        if(agent!.worldManager.graph.definitions.containsKey("picked") or toString(schema)!=original){FAIL("An application exported a local name or changed its template")}
+        me WorldParseResult: bad <- agent!.worldManager.parse("#Bad=system:{T {planets:{#Lost=planet:{value:7=8}}}| ...}")
+        if(agent!.normalize(bad.target)!.status().outcome!=worldRejected or agent!.worldManager.graph.definitions.containsKey("lost")){FAIL("An unused inventory initializer escaped checking")}
+        core.deInit(); modelMngr.clear()
+    }
     void: unit_unifiedNames_identity(me string: testName) <- {
         me ProteusCore: core; core.init("",false)
         our Agent: agent <- core.agent

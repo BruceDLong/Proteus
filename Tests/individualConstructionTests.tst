@@ -1,0 +1,14 @@
+# Explicit templates construct individuals; nested individuals keep one identity.
+individual/construct/read, An ordinary explicit-model application constructs one individual, {#value=_ #planet=#{value}}\n#Earth=planet:{value:7}\n%Earth.value, value:7, multi
+individual/construct/alias, A second name selects the constructed occurrence, {#value=_ #planet=#{value}}\n#Earth=planet\n#Terra=%Earth\n%Terra.value=7//:value:7\n%Earth.value//:value:7, -, multi
+individual/global/nested, A concrete initializer publishes nested individual names, {#value=_ #planet=#{value} #system=#{planets}}\n#Sol=system:{planets:{#Earth=planet:{value:7}}}\n%Earth.value, value:7, multi
+individual/global/member, An inline constructor contributes its value as a member, {#value=_ #planet=#{value} #system=#{planets}}\n#Sol=system:{planets:{#Earth=planet:{value:7}}}\n%Sol.planets@[1].value, value:7, multi
+individual/global/shared, Structural and named references learn facts about the same individual, {#value=_ #planet=#{value} #system=#{planets}}\n#Sol=system:{planets:{#Earth=planet}}\n%Earth.value=7//:value:7\n%Sol.planets@[1].value//:value:7, -, multi
+individual/global/conflict, A conflicting constructor is rejected, {#value=_ #planet=#{value} #system=#{planets}}\n#Sol=system:{planets:{#Earth=planet:{value:7=8}}}//:<REJECTED>, -, multi
+individual/construct/immutable, Rebinding cannot replace a constructed individual, {#value=_ #planet=#{value}}\n#Earth=planet:{value:7}\n#Earth=planet:{value:8}//:<REJECTED>\n%Earth.value//:value:7, -, multi
+individual/scope/application, A reusable model keeps its constructed participants local, {#value=_ #planet=#{value} #sample=#{#picked=planet:{value:7} %picked.value}}\nsample@[2], value:7, multi
+individual/history/own, A constructed individual retains its supplied temporal states, {#angle=_ #planet=#{T {angle\, ...}|...}}\n#Earth=planet:{T {angle:0} {angle:1} ...}\n%Earth@[2].angle//:angle:1\n%Earth@[1].angle//:angle:0, -, multi
+individual/history/listSpec, Repeated inventory constraints refer to one named individual, {#value=_ #planet=#{value} #system=#{T ...}}\n#Sol=system:{T {planets:{#Earth=planet:{value:7}}}| {planets} {planets}}\n%Sol@[1].planets@[1].value//:value:7\n%Sol@[2].planets@[1].value//:value:7\n%Earth.value//:value:7, -, multi
+individual/global/identityBody, A required identity body can introduce named participants, {#value=_ #planet=#{value} #system=#{planets}}\n#Sol=system={planets:{#Earth=planet:{value:7}}}\n%Earth.value, value:7, multi
+individual/global/inlineAlias, A nested alias contributes its existing individual as a member, {#value=_ #planet=#{value} #system=#{planets}}\n#Earth=planet:{value:7}\n#Sol=system:{planets:{#Home=%Earth}}\n%Home.value//:value:7\n%Sol.planets@[1].value//:value:7, -, multi
+individual/construct/ordinaryModel, An application constructs regardless of the model declaration's spelling, {#value=_ #planet={value}}\n#Earth=planet:{value:7}\n%Earth.value, value:7, multi

@@ -100,6 +100,20 @@ parent. Top-level assertion lists publish global names atomically with their
 checked facts. `%ctx` remains session context and supplies source-ordered recent
 references; a name captures its referent rather than tracking future recency.
 
+D115 adds concrete construction through ordinary typed initializers:
+`#planet=#{...}` followed by `#Earth=planet:{...}` evaluates an ordinary
+initializer and binds its one resulting occurrence. An inline constructor also
+contributes that occurrence as its containing list's member. Individual names
+authored inside a concrete named initializer publish into the global catalogue
+with the initializer's checked facts; structural nesting does not hide them.
+Reusing its listSpec retains these bindings. Reusable template applications keep
+their own local names; generated names and temporary assumption scopes remain
+deferred. Reusable typed aliases use an explicit model reference, for example
+`#other=#planet`; an unquoted application constructs an individual regardless
+of how its source model was declared. Literal definition bodies and parameter
+headers retain their template meaning. Lookup currently prefers the nearest
+lexical scope, then globals; conceptual-distance ranking is not implemented.
+
 Existing header decorations are retained on both kinds of binding. The first
 usage tag, e.g. `<en>`, supplies the existing language filter. Additional usage
 tags and explicit model IDs are preserved. Exact qualified-name rebinding is
