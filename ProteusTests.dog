@@ -1,6 +1,10 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/fixtureContracts/unknownSchemaFields
+    unit/fixtureContracts/typedMinuteViews
+    unit/fixtureContracts/expandedAliases
+    unit/fixtureContracts/cubeTemplateExtent
     unit/temporalViews/identity
     unit/temporalParts/identity
     unit/temporalParts/waitAndCancel
@@ -8075,5 +8079,127 @@ struct GLOBAL {
             }
             agent.endWorldSessions(); modelMngr.clear()
         }
+    }
+}
+
+// Semantic checks for fixtures whose historical output retained unresolved
+// aliases or redundant template work. Printing snapshots are separate checks.
+struct GLOBAL {
+    void: unit_fixtureContracts_unknownSchemaFields(me string: testName) <- {
+        me List<string>: inputs <- ["{member:$}={member:'Tiffany'}",
+            "{screenPos:{xPos:_ yPos:_}}={screenPos:{xPos:350 yPos:80}}",
+            "{title:$}={title:'Backlog'}", "{member:''}={member:'Bruce'}",
+            "{screenPos:{xPos:40 yPos:90}}={screenPos:{xPos:40 yPos:100}}",
+            "{title:'<Type a title>'}={title:'Backlog'}"]
+        me int: scenario <- 0
+        withEach input in inputs{
+            me Agent: agent
+            Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: parsed <- agent.worldManager.parse(input)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            me string: before <- toString(parsed.target!.pItem)
+            our WorldRequest: request <- agent.normalize(parsed.target)
+            if(scenario<3){
+                if(!request!.complete()){FAIL("Unknown schema fields did not accept supplied values: "+request!.error())}
+                if(scenario==0 and parsed.target!.pItem!.value!.items.head!.pItem!.value!.str!="Tiffany"){
+                    FAIL("Unknown member schema lost the supplied name")
+                }
+                if(scenario==1 and !namedLayoutValues(parsed.target!.pItem!.value!.items.head,[350,80])){
+                    FAIL("Unknown position schema lost supplied coordinates")
+                }
+                if(scenario==2 and parsed.target!.pItem!.value!.items.head!.pItem!.value!.str!="Backlog"){
+                    FAIL("Unknown title schema lost the supplied title")
+                }
+            }else if(request!.status().outcome!=worldRejected or request!.publications!=0 or toString(parsed.target!.pItem)!=before){
+                FAIL("Literal schema facts were treated as overridable defaults")
+            }
+            scenario <+- 1
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+
+    void: unit_fixtureContracts_typedMinuteViews(me string: testName) <- {
+        me TestProteusCore: core
+        if(!core.initForWorldTest("TestFiles/timeTestCases.pr")){FAIL(core.errorMesg)}
+        me List<string>: selectors <- [".hour", "@[2]", "@[-1]"]
+        me int: scenario <- 0
+        withEach selector in selectors{
+            me WorldParseResult: parsed <- core.agent!.worldManager.parse(
+                "day:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6} minute:{second| 7 8 9} minute:{second| 10 11 12}}"+selector)
+            if(parsed.target==NULL){FAIL(parsed.error)}
+            our WorldRequest: request <- core.agent!.normalize(parsed.target)
+            if(!request!.complete() or parsed.target!.pItem!.type==NULL or parsed.target!.pItem!.type!.typeID()!="hour"){
+                FAIL("Day selection did not return a complete logical hour: "+request!.error())
+            }
+            our POV: first <- parsed.target!.pItem!.value!.items.head
+            our POV: second <- parsed.target!.pItem!.value!.items.tail
+            if(first==NULL or second==NULL or first===second or first!.next!==second or second!.next!=NULL or
+               first!.pItem!.type==NULL or first!.pItem!.type!.typeID()!="minute" or
+               second!.pItem!.type==NULL or second!.pItem!.type!.typeID()!="minute"){
+                FAIL("Logical hour lost its two qualified minute members")
+            }
+            if(scenario==0){
+                if(!namedLayoutValues(first,[1,2,3]) or !namedLayoutValues(second,[4,5,6])){FAIL("First hour selected the wrong seconds")}
+            }else if(!namedLayoutValues(first,[7,8,9]) or !namedLayoutValues(second,[10,11,12])){
+                FAIL("Final hour selected the wrong seconds")
+            }
+            scenario <+- 1
+        }
+        core.deInit(); modelMngr.clear()
+    }
+
+    void: unit_fixtureContracts_expandedAliases(me string: testName) <- {
+        me ProteusCore: core; core.init("",false)
+        me WorldParseResult: definitions <- core.agent!.worldManager.parse(
+            "{#spelling=$ #pronunciation=$ #marker=_ #name={spelling, pronunciation} #human <en noun>={marker} #Morgan <en name>=#name:{spelling='Morgan', pronunciation='mor'}}")
+        if(definitions.target==NULL){FAIL(definitions.error)}
+        our WorldRequest: installed <- core.agent!.normalize(definitions.target)
+        if(!installed!.complete()){FAIL(installed!.error())}
+        me WorldParseResult: property <- core.agent!.worldManager.parse("human:{marker=1}^name=Morgan;~name")
+        if(property.target==NULL){FAIL(property.error)}
+        our WorldRequest: request <- core.agent!.normalize(property.target)
+        our POV: spelling <- property.target!.pItem!.fetchField("spelling")
+        our POV: pronunciation <- property.target!.pItem!.fetchField("pronunciation")
+        if(request!.failed() or spelling==NULL or pronunciation==NULL or
+           spelling!.pItem!.value!.evalMode!=emLiteral or pronunciation!.pItem!.value!.evalMode!=emLiteral or
+           spelling!.pItem!.value!.str!="Morgan" or pronunciation!.pItem!.value!.str!="mor"){
+            FAIL("An expanded external name lost its asserted spelling or pronunciation")
+        }
+        core.deInit(); modelMngr.clear()
+        me TestProteusCore: searchCore
+        if(!searchCore.initForWorldTest("bike.pr")){FAIL(searchCore.errorMesg)}
+        me WorldParseResult: selected <- searchCore.agent!.worldManager.parse(
+            "{{color=red, ...} {name='Bob', color=blue, ...} {color=green, ...} {name='Wally', color=blue, ...}}.{color=blue, ...}")
+        if(selected.target==NULL){FAIL(selected.error)}
+        request <- searchCore.agent!.normalize(selected.target)
+        our POV: name <- selected.target!.pItem!.fetchField("name")
+        our POV: color <- selected.target!.pItem!.fetchField("color")
+        if(request!.failed() or name==NULL or color==NULL or name!.pItem!.value!.str!="Bob"){
+            FAIL("Adjective search lost the first matching record")
+        }
+        our POV: hue <- color!.pItem!.fetchField("hue")
+        our POV: saturation <- color!.pItem!.fetchField("saturation")
+        our POV: brightness <- color!.pItem!.fetchField("brightness")
+        if(hue==NULL or saturation==NULL or brightness==NULL or hue!.pItem!.value!.evalMode!=emLiteral or hue!.pItem!.fetchInt()!=4 or
+           saturation!.pItem!.value!.evalMode!=emLiteral or saturation!.pItem!.fetchInt()!=5 or brightness!.pItem!.value!.evalMode!=emUnknown){
+            FAIL("Expanded blue lost its supplied hue or inherited color constraints")
+        }
+        searchCore.deInit(); modelMngr.clear()
+    }
+
+    void: unit_fixtureContracts_cubeTemplateExtent(me string: testName) <- {
+        me TestProteusCore: core
+        if(!core.initForWorldTest("cube.pr")){FAIL(core.errorMesg)}
+        me WorldParseResult: parsed <- core.agent!.worldManager.parse("%W.myStuff.rubixCube")
+        if(parsed.target==NULL){FAIL(parsed.error)}
+        our WorldRequest: request <- core.agent!.normalize(parsed.target)
+        our infonView: spec <- parsed.target!.pItem!.value!.listSpec
+        if(request!.failed() or parsed.target!.pItem!.type==NULL or parsed.target!.pItem!.type!.typeID()!="rubixcube" or
+           !parsed.target!.pItem!.value!.timelike or !parsed.target!.pItem!.value!.tailUnfinished or spec==NULL or
+           spec!.infSize!.evalMode!=emUnknown){FAIL("Sparse cube template fabricated a state extent or lost its temporal listSpec")}
+        our POV: embedded <- spec!.value!.items.head
+        if(embedded==NULL or !embedded!.isSubItm or embedded!.pItem!.type==NULL or embedded!.pItem!.type!.typeID()!="thing" or
+           embedded!.next!=NULL){FAIL("Sparse cube state lost its embedded thing template")}
+        core.deInit(); modelMngr.clear()
     }
 }

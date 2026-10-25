@@ -39,9 +39,9 @@ unit/day/fromSeconds/readLastHourNegativeIntersection, Day from seconds: last ho
 unit/day/fromSeconds/readThirdMinute, Day from seconds: third minute, day:{second| 1 2 3 4 5 6 7 8 9 10 11 12}@[2]@[1], minute:{7 8 9}, world, TestFiles/timeTestCases.pr
 
 # Day spans defined in minutes, then read as hours and seconds.
-unit/day/fromMinutes/readFirstHour, Day from minutes: first hour, day:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6} minute:{second| 7 8 9} minute:{second| 10 11 12}}.hour, hour:{minute:{1 2 3} minute:{second| 4 5 6 ... }}, world, TestFiles/timeTestCases.pr
-unit/day/fromMinutes/readSecondHour, Day from minutes: second hour, day:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6} minute:{second| 7 8 9} minute:{second| 10 11 12}}@[2], hour:{minute:{second| 7 8 9 ... } minute:{second| 10 11 12 ... }}, world, TestFiles/timeTestCases.pr
-unit/day/fromMinutes/readLastHourNegative, Day from minutes: last hour by negative index, day:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6} minute:{second| 7 8 9} minute:{second| 10 11 12}}@[-1], hour:{minute:{second| 7 8 9 ... } minute:{second| 10 11 12 ... }}, world, TestFiles/timeTestCases.pr
+unit/day/fromMinutes/readFirstHour, Day from minutes: first hour, day:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6} minute:{second| 7 8 9} minute:{second| 10 11 12}}.hour, hour:{minute:{1 2 3} minute:{4 5 6}}, world, TestFiles/timeTestCases.pr
+unit/day/fromMinutes/readSecondHour, Day from minutes: second hour, day:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6} minute:{second| 7 8 9} minute:{second| 10 11 12}}@[2], hour:{minute:{7 8 9} minute:{10 11 12}}, world, TestFiles/timeTestCases.pr
+unit/day/fromMinutes/readLastHourNegative, Day from minutes: last hour by negative index, day:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6} minute:{second| 7 8 9} minute:{second| 10 11 12}}@[-1], hour:{minute:{7 8 9} minute:{10 11 12}}, world, TestFiles/timeTestCases.pr
 unit/day/fromMinutes/readTenthSecond, Day from minutes: tenth second, day:{minute| minute:{second| 1 2 3} minute:{second| 4 5 6} minute:{second| 7 8 9} minute:{second| 10 11 12}}@[2]@[2]@[1], 10, world, TestFiles/timeTestCases.pr
 
 # Day spans defined in hours, then read as minutes and seconds.

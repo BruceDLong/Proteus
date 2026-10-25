@@ -4592,3 +4592,73 @@ failing names appear. Commands use `-T 3`; the printed counts were checked
 because the harness exits zero despite failures. Evidence:
 `/tmp/proteus-selection-test-cleanup-build.log`,
 `/tmp/proteus-selection-cleanup-{registry,typed,all,default}.log`.
+
+## D119 Review remaining language failures and retire obsolete snapshots (2026-10-25)
+
+**Scope and authorization.** The user requested review of the remaining 16
+language failures and work on the low-hanging fruit. After the fixture-protection
+rule in AGENTS.md was identified, the user explicitly approved updating the six
+verified obsolete output snapshots and adding focused behavior checks. This is
+a scoped exception for those six expectations; it does not relax the rule for
+unsupported or incomplete behavior. Inputs and registrations stay intact.
+
+**Review.**
+
+| Cases | Finding and action |
+| --- | --- |
+| `name/reference/externalProperty` | The old snapshot expected an unresolved `Morgan` token. The asserted external property has acquired spelling `Morgan` and pronunciation `mor`; update that property's snapshot to the expanded name record. Preserve the subsequent standalone `Morgan` check. |
+| `cube/getLstSpec` | The state template contains an embedded `thing` with unknown logical extent. The current output explicitly prints that unknown size. Preserve the temporal/open listSpec and embedded member in the behavior check. |
+| `search/adj1` | The first matching record is Bob. Its color has acquired blue's hue 4 and the inherited saturation 5; brightness remains unknown. Update the old unresolved `color = blue` snapshot without changing the selected record or values. |
+| Three `unit/day/fromMinutes/read*Hour*` cases | The source contains complete three-second minutes. Both selected minutes now finish; the old snapshots retained listSpecs and open tails on already supplied members. Check logical hour/minute types, both minute members, all six seconds and exact finite output extent. |
+| Three `user/*` cases | The shared model treats literal screen positions, empty member names and a placeholder title as overridable defaults. They are ordinary constraints. Correct schema fields to unknown numeric/string values while preserving actual instance data. The isolated corrected model then reaches the existing unsupported open-source alignment boundary; keep all three language expectations and failures active. |
+| `merge/dots/align4b` | Ambiguous open-source alignment is explicitly deferred by D04A. Keep the fixture and failure. |
+| `write/openNegativeLast` | The endpoint is unknown. The current result retains the pending write expression; the fixture prints only the source list. Do not discard the write or change this expectation without checking the pending-request and source-preservation contract. |
+| `rubix/sparseNestedContinuation` | Sparse typed nested continuation remains unsupported on this path. Keep the expected cube data and failure. |
+| Two `sparse/implicit` / `sparse/guard` cases | The request remains expressed instead of producing the demanded sparse member or the fixture's generic unknown. These need occurrence, alignment and no-skip checks; unchanged printing alone does not establish success. Keep active. |
+| Two `world/load` cases | The symbolic kernel has an explicit unresolved size expression, unlike a bare unknown size under D02F. Its `world` application remains unresolved. The `wordDerefed` assertion is an old implementation detail, but removing it would not establish a list-valued world. Keep the bootstrap failures. |
+
+**Model evidence.** The first rejected user-model target is `yPos:100`, while
+the task-list schema fixes `yPos:90`. Replacing empty member strings alone leaves
+that failure. Replacing the schema positions, member strings and placeholder
+title with unknown fields exposes `Open source correspondence needs span
+alignment`. No engine change grants literal default/override behavior. Focused
+ordinary CodeDog controls require unknown schema fields to accept supplied data
+and conflicting literal strings, titles and coordinates to reject atomically.
+
+**Alternatives.** Restoring the old partially expanded output would retain
+redundant work and hide already acquired facts. Merely deleting the six cases
+would lose printing coverage. Updating their snapshots alongside independent
+value/type/template checks preserves that coverage. Eagerly bypassing failed
+world loading, dropping pending writes, or replacing unsupported results with
+old-solver output remains prohibited. No production normalizer changes are made
+in this increment.
+
+**Rubix follow-up.** The working application uses the current World cube model
+with explicit `parts.edge-cubes` and face-slot relationships. The historical
+`rubix/sparseNestedContinuation` fixture uses a different model and implicit
+`edgecubes` collection lookup; it is not the application's rendering path. Keep
+current model/geometry regressions and generic template semantics distinct from
+that deferred sparse/morphology requirement. A separate diagnostic run of
+`rubixTransitionTests.tst` reports **13/17** failures, before its affected queries
+run, at named-template correspondence or cyclic name binding in those historical
+fixtures. This suite is not included by `defaultTests.tst`, and its expectations
+are unchanged. These results are not regressions introduced by this cleanup.
+
+**Validation.** `.tst` files load at runtime; the six approved snapshots pass
+without rebuilding. The CodeDog regeneration is required for the four added
+compiled behavior checks. The final build succeeds (261.60 seconds), all four
+new checks pass, and the full suite reports **11/751**, down from **17/747**.
+Default fixtures report **10/509**, down from **16/509**. Exactly the six approved
+failing names disappear; there are no new failing names. The three corrected
+user fixtures change only their setup diagnostic from contradictory scalar
+values to unsupported open-source alignment. Every other retained failure's
+diagnostic is unchanged. The separate typed-unit source-provenance failure
+remains active.
+
+Current World geometry checks also pass: 26 physical cubies, 54 transformed face
+slots, nine outward stickers per color, 12 turn relations, 24 proper frames,
+108 directional transfers and four-turn identities. These are source-model
+checks, not a new visible Slipstream validation. Only the six approved snapshot
+expectations change; all fixture inputs, modes, resource paths, case names and
+registrations are preserved. Evidence: `/tmp/proteus-low-fruit/`, with original
+baselines in `/tmp/proteus-low-fruit-baseline-{default,all}.log`.
