@@ -8,7 +8,8 @@ unresolved fixture questions recorded by the retired audit helper.
 
 The [library class reference](proteus-classes.md) lists the models and structs
 in `Proteus.Lib.dog` and its production includes, with role comments and source
-links.
+links. The accompanying [class diagrams](proteus-class-diagrams.md) provide an
+overview and subsystem views in SVG and editable Mermaid.
 
 The Proteus Engine on `main` routes Agent normalization
 and TestProteus through `WorldManager.dog`. Agent owns sessions; normalize returns

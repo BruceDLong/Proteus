@@ -2,6 +2,9 @@
 
 Source snapshot: `main` at `e2ee4c982204`, reviewed 2026-10-25.
 
+See the [class diagrams](proteus-class-diagrams.md) for the overview and subsystem
+relationships, with SVG previews and editable Mermaid source.
+
 This inventory covers **187 distinct names** declared with `model` or `struct`
 in `Proteus.Lib.dog` and its recursive production `#include` tree: **22 source
 files, 275 declaration blocks**. It excludes tests (including the `TestSpec`
