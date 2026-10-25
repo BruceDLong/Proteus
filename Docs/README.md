@@ -6,6 +6,10 @@ for earlier design notes and recovery of removed reports, [shared-library.md](sh
 for Slipstream integration, and [test-ambiguities.md](test-ambiguities.md) for
 unresolved fixture questions recorded by the retired audit helper.
 
+The [library class reference](proteus-classes.md) lists the models and structs
+in `Proteus.Lib.dog` and its production includes, with role comments and source
+links.
+
 The Proteus Engine on `main` routes Agent normalization
 and TestProteus through `WorldManager.dog`. Agent owns sessions; normalize returns
 a `WorldRequest` handle. The old GraphNormalizer is not linked into this engine.
