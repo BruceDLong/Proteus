@@ -1442,6 +1442,32 @@ base-unit capture. Ancestor predicates, borrowed native layouts, regrouping
 inside composite gaps and native composite writes retain their unsupported
 boundaries; none may be discharged by copying a recipe.
 
+### Adjacent unit windows (D127, 2026-10-25)
+
+The normalizer retains the source, measured unit, coordinate and nonempty extent
+of a selected composite unit window. Its ordinary previous/next reference
+operation selects an adjacent window of the same width through the unit-window
+operation. WorldDemand and TCursor delegate that relationship; they have no
+unit converter or prefix-scanning loop. Primitive leaves keep their original
+occurrence and structural neighbours.
+
+Immutable first/last boundary bookmarks retain containing layouts and sibling
+anchors, rather than preceding results or execution frames. Forward and reverse
+walks resume there and recheck the layouts they enter. Fixed-width traversal at
+fixed nesting depth visits newly requested members rather than the growing
+source prefix. Native measured sparse gaps retain arithmetic coordinates.
+Unknown endpoints remain partial, parser waits retain the active request, and
+structurally changed bookmarks explicitly require fresh selection. Reverse
+entry into an unmeasured, partially represented sparse container still needs
+its prefix extent; general temporal alignment remains separate.
+
+Grouping identity includes its source occurrence, unit, coordinate and extent;
+equal values do not identify different windows. Native sparse members retain
+their existing occurrence witnesses. Member correspondence keys survive
+normalizer publication and wrapper copying, so subsequent selection from a
+cursor-acquired window still reaches original qualified source occurrences.
+No source sibling links are rewritten to construct a unit view.
+
 ## Inherited type qualifiers (2026-10-12)
 
 D041 preserves the distinction between a member's primary name and a type-only qualifier inherited from its listSpec. A previously unnamed member stores the latter in `addedTypes`; subsequent reads expose it as checked nominal evidence. Explicit primary names and value-producing named templates remain primary. Thus `{second|1 2}` can publish `{1 2}` while retaining each member's second-type evidence for later queries and writes. The printer is unchanged. The current supported representation has one inherited nominal without a primary type; general nominal conjunction remains separate work.

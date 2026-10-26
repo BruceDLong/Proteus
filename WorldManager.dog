@@ -185,13 +185,23 @@ struct WorldBindings {
     our WorldPosition: caller
     me Map<string, our WorldArgumentBinding>: arguments
 }
+// Copying a projected member wrapper preserves this correspondence key. It
+// owns no model, occurrence or execution state and cannot form a parent cycle.
+struct WorldUnitMemberIdentity {}
+struct POV {
+    our WorldUnitMemberIdentity: unitMemberIdentity
+    // A retained projected child may outlive its temporary physical parent.
+    // Its qualified handle owns it, never the reverse.
+    me WorldWeakReference<WorldPosition>: unitPosition
+}
 struct WorldPosition {
+    our WorldUnitWindow: unitWindow
     // A demanded native sparse member has a detached representation and a
     // repetition occurrence witness. Its parent retains the supplying span.
     me bool: sparseMember <- false
     // A regrouped unit has its own container; its demanded members retain
     // their source positions independently of the creating request's frames.
-    me Map<our POV, our WorldPosition>: unitMembers
+    me Map<our WorldUnitMemberIdentity, our WorldPosition>: unitMembers
     our WorldBindings: parameters
     // A constructed occurrence captures names without making its declaration
     // a structural parent or a temporal/list coordinate.
@@ -233,6 +243,8 @@ struct WorldWalkLevel {
     me FlexNum: end
 }
 struct WorldWalk {
+    // Raw member at the last returned event, before projection provenance.
+    our POV: lastMember
     me bool: rawLayout <- false
     me bool: reverse <- false
     me bool: requireOrdered <- false
@@ -630,6 +642,7 @@ struct WorldUnit {
     me FlexNum: width <- FlexNum("1")
 }
 struct WorldUnitSegment {
+    our WorldUnitAnchor: anchor
     our WorldUnit: member
     our WorldPosition: source
     me FlexNum: start
@@ -639,12 +652,41 @@ struct WorldUnitSegment {
     me FlexNum: nativeOffset
 }
 struct WorldUnitLevel {
+    our WorldUnitAnchor: ancestry
+    me bool: hasStart <- true
+    me bool: hasEnd <- false
+    me FlexNum: end
     our infonView: source
     our WorldWalk: walk
     our WorldUnit: member
     our WorldPosition: pending
     me FlexNum: start
     void: INIT() <- {Allocate(walk); walk!.shallow <- true; walk!.rawLayout <- true; walk!.requireClosedRelations <- true}
+}
+// Immutable boundary bookmarks, not saved solver frames or a chain of prior
+// results. Each route retains only the containing layouts and sibling anchors.
+struct WorldUnitAnchor {
+    our infonState: value
+    our infonState: size
+    me uint64: revision <- 0
+    our WorldUnitAnchor: parent
+    our WorldPosition: source
+    our WorldUnit: member
+    our POV: after
+    me bool: tail <- false
+    me bool: hasStart <- true
+    me FlexNum: start
+    me bool: hasEnd <- false
+    me FlexNum: end
+}
+struct WorldUnitWindow {
+    our WorldPosition: source
+    our WorldUnit: unit
+    me FlexNum: start
+    me FlexNum: count
+    me bool: span <- false
+    me WorldUnitSegment: first
+    me WorldUnitSegment: last
 }
 struct WorldUnitOrigin {
     our WorldPosition: position
@@ -686,6 +728,9 @@ struct WorldSparseBatch {
     }
 }
 struct WorldUnitSelection {
+    me bool: adjacent <- false
+    me bool: reverse <- false
+    our WorldUnitAnchor: resume
     me FlexNum: prefix
     me FlexNum: suffix
     me bool: writeThrough <- false
@@ -706,6 +751,7 @@ struct WorldUnitSelection {
 }
 
 struct WorldPath {
+    our WorldFrame: unitNeighbour
     me bool: contextRequired <- false
     me bool: contextAbsent <- false
     me bool: externalTier <- false
@@ -908,6 +954,7 @@ struct WorldRequest {
     me uint64: correspondencePositions <- 0
     me uint64: correspondenceChecks <- 0
     me uint64: correspondenceMappings <- 0
+    me uint64: unitBookmarksCreated <- 0
     me uint64: parentLookups <- 0
     me uint64: ancestrySteps <- 0
     me uint64: templateApplications <- 0
@@ -1978,6 +2025,8 @@ struct WorldPOVGraph {
             }
             return(node!.worldContext)
         }
+        our WorldPosition: unit <- node!.unitPosition.lock()
+        if(unit!=NULL){return(unit)}
         our WorldPosition: result <- position(node)
         our WorldPosition: at <- result
         their POV: parent <- node!.pParent
@@ -1985,6 +2034,8 @@ struct WorldPOVGraph {
         seen.insert(result!.occurrence)
         while(parent!=NULL){
             if(parent!.worldContext!=NULL){at!.parent <- parent!.worldContext; return(validateGeneratedPath(result))}
+            our WorldPosition: unitParent <- parent!.unitPosition.lock()
+            if(unitParent!=NULL){at!.parent <- unitParent; return(validateGeneratedPath(result))}
             if(seen.contains(parent)){return(NULL)}
             seen.insert(parent)
             me bool: contained <- false
@@ -2009,6 +2060,12 @@ struct WorldPOVGraph {
     me bool: samePosition(our WorldPosition: left, our WorldPosition: right) <- {
         while(left!=NULL and right!=NULL){
             if(left===right){return(true)}
+            if((left!.unitWindow!=NULL or right!.unitWindow!=NULL) and !left!.sparseMember and !right!.sparseMember){
+                if(left!.unitWindow==NULL or right!.unitWindow==NULL){return(false)}
+                our WorldUnitWindow: a <- left!.unitWindow; our WorldUnitWindow: b <- right!.unitWindow
+                return(a!.start==b!.start and a!.count==b!.count and a!.span==b!.span and
+                    compareNominal(a!.unit!.word,b!.unit!.word)==worldReady and samePosition(a!.source,b!.source))
+            }
             if(left!.temporalSpan or right!.temporalSpan){
                 return(left!.temporalSpan and right!.temporalSpan and
                     samePosition(left!.temporalSupport!.history,right!.temporalSupport!.history) and
@@ -2031,6 +2088,9 @@ struct WorldPOVGraph {
     // established their facts; mutable omitted slots are not identity facts.
     me bool: sameProofPosition(our WorldPosition: left, our WorldPosition: right) <- {
         if(!samePosition(left,right)){return(false)}
+        if(left!=NULL and right!=NULL and left!.unitWindow!=NULL and right!.unitWindow!=NULL){
+            return(sameProofPosition(left!.unitWindow!.source,right!.unitWindow!.source))
+        }
         if(left!=NULL and right!=NULL and left!.temporalSpan and right!.temporalSpan){
             return(sameProofPosition(left!.temporalSupport!.history,right!.temporalSupport!.history) and
                 sameProofPosition(left!.temporalSupport!.extent,right!.temporalSupport!.extent) and
@@ -2328,13 +2388,17 @@ struct WorldPOVGraph {
             // member. Its last stored member is not evidence of an endpoint.
             if(walk!.reverse and !level!.tailRead and node!.pItem!.value!.tailUnfinished){
                 level!.tailRead <- true
+                walk!.lastMember <- NULL
                 our WorldPosition: result <- representedPosition(node, level!.position)
                 result!.tail <- true; return(result)
             }
             if(level!.next!=NULL){
                 our POV: member <- level!.next
+                walk!.lastMember <- member
                 our WorldPosition: result <- position(member, level!.position)
-                if(level!.position!.unitMembers.containsKey(member)){result <- level!.position!.unitMembers.at(member)}
+                if(member!.unitMemberIdentity!=NULL and level!.position!.unitMembers.containsKey(member!.unitMemberIdentity)){
+                    result <- level!.position!.unitMembers.at(member!.unitMemberIdentity)
+                }
                 result!.embedded <- result!.embedded or level!.concatenated
                 if(result!.embedded and walk!.stopIndex>0 and member!.pItem!.partRef==NULL and member!.pItem!.parts.isEmpty()){
                     me WorldScalar: header <- read(request, member, member!.pParent, false, false, false, result)
@@ -2368,6 +2432,7 @@ struct WorldPOVGraph {
                 }
             }else if(!level!.tailRead and node!.pItem!.value!.tailUnfinished){
                 level!.tailRead <- true
+                walk!.lastMember <- NULL
                 our WorldPosition: result <- representedPosition(node, level!.position)
                 result!.tail <- true; return(result)
             }else{
@@ -3337,7 +3402,8 @@ struct WorldPOVGraph {
                 job.newAlternatives!.infSize!.overlayType <- NUM; job.newAlternatives!.infSize!.evalMode <- emUnknown
                 job.newAlternatives!.value!.overlayType <- LST; job.newAlternatives!.value!.evalMode <- emLiteral
                 job.newAlternatives!.value!.sizeMode <- fromGiven
-                job.newAlternatives!.value!.items.privateLinks <- job.target!.pItem!.privateMemberLinks or job.target!.generatedAddress!=NULL
+                job.newAlternatives!.value!.items.privateLinks <- job.target!.pItem!.privateMemberLinks or job.target!.generatedAddress!=NULL or
+                    (job.frame!.node!=NULL and job.frame!.node!.pItem!.privateMemberLinks)
                 job.newAlternatives!.privateMemberLinks <- job.newAlternatives!.value!.items.privateLinks
                 withEach member in facts.alternatives!.members{
                     if(!representableFacts(member!.facts)){
@@ -3366,7 +3432,8 @@ struct WorldPOVGraph {
                 if(!existing){
                     Allocate(job.newList); body <- job.newList
                     body!.overlayType <- LST; body!.evalMode <- emLiteral
-                    body!.items.privateLinks <- job.target!.pItem!.privateMemberLinks or job.target!.generatedAddress!=NULL
+                    body!.items.privateLinks <- job.target!.pItem!.privateMemberLinks or job.target!.generatedAddress!=NULL or
+                        (job.frame!.node!=NULL and job.frame!.node!.pItem!.privateMemberLinks)
                     if(job.frame!.listSpecEdge!=NULL){body!.listSpec <- job.frame!.listSpecEdge!.pItem}
                     if(facts.explicitSize){body!.sizeMode <- fromGiven}else{body!.sizeMode <- fromCount}
                 }
@@ -3743,10 +3810,21 @@ struct WorldPOVGraph {
         our WorldFrame: frame <- job.frame
         our infonView: item <- job.target!.pItem
         if(job.borrowedDeclaration){return()}
+        if(frame!.node!=NULL and frame!.node!.unitMemberIdentity!=NULL){job.target!.unitMemberIdentity <- frame!.node!.unitMemberIdentity}
         me WorldScalar: facts <- frame!.facts
         if(frame!.deferredValue!=NULL){
             copyDescription(job.target, frame!.deferredValue, job.target===request!.target)
             job.target!.worldContext <- frame!.navigation
+            // A borrowed projected member already has a qualified source.
+            // Retaining the temporary group's parent here would create an
+            // ownership cycle when its value is stored back on that group.
+            if(frame!.navigation!=NULL and frame!.navigation!.parent!=NULL and frame!.node!.unitMemberIdentity!=NULL and
+               frame!.navigation!.parent!.unitMembers.containsKey(frame!.node!.unitMemberIdentity)){
+                job.target!.worldContext <- frame!.navigation!.parent!.unitMembers.at(frame!.node!.unitMemberIdentity)
+                if(job.target!.worldContext!.node===job.target){
+                    job.target!.unitPosition.set(job.target!.worldContext); job.target!.worldContext <- NULL
+                }
+            }
             // Exact scalar retention preserves its proved value, including
             // contextual recipes already checked before the snapshot.
             if(frame!.deferredValue!.isNormed and frame!.deferredValue!.worldScalarCompletionOwner===frame!.deferredValue and item!.value!.overlayType!=LST){
@@ -6357,7 +6435,91 @@ struct WorldManager {
             frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Stored list has no compatible homogeneous unit"; stopFrame(request, frame); return(false)
         }
         our WorldUnitLevel:: level; level!.source <- source!.node!.pItem; level!.member <- member; level!.start <- selection!.end
+        if(!selection!.levels.isEmpty()){level!.ancestry <- unitAnchor(request,selection!.levels.last(),false)}
+        if(selection!.reverse){level!.hasStart <- false; level!.hasEnd <- true; level!.end <- selection!.end}
+        level!.walk!.reverse <- selection!.reverse
         level!.walk!.push(source); selection!.levels.append(level); selection!.active.insert(source!.node!.pItem)
+        return(true)
+    }
+    our WorldUnitAnchor: unitAnchor(our WorldRequest: request, our WorldUnitLevel: level, me bool: tail) <- {
+        our WorldUnitAnchor:: anchor; request!.unitBookmarksCreated <+- 1
+        anchor!.parent <- level!.ancestry; anchor!.source <- level!.walk!.levels.last()!.position
+        anchor!.member <- level!.member; anchor!.after <- level!.walk!.lastMember; anchor!.tail <- tail
+        anchor!.value <- anchor!.source!.node!.pItem!.value; anchor!.size <- anchor!.source!.node!.pItem!.infSize
+        anchor!.revision <- anchor!.source!.node!.pItem!.cursorRevision
+        anchor!.hasStart <- level!.hasStart; anchor!.start <- level!.start
+        anchor!.hasEnd <- level!.hasEnd; anchor!.end <- level!.end
+        return(anchor)
+    }
+    void: retainUnitWindow(our WorldUnitSelection: selection, our WorldPosition: position,
+                          our WorldUnit: unit, me FlexNum: start, me FlexNum: count, me bool: span,
+                          me WorldUnitSegment: first, me WorldUnitSegment: last) <- {
+        if(count<=0 or first.anchor==NULL or last.anchor==NULL){return()}
+        Allocate(position!.unitWindow)
+        position!.unitWindow!.source <- selection!.source; position!.unitWindow!.unit <- unit
+        position!.unitWindow!.start <- start; position!.unitWindow!.count <- count; position!.unitWindow!.span <- span
+        position!.unitWindow!.first <- first; position!.unitWindow!.last <- last
+        position!.node!.unitPosition.set(position)
+    }
+    our WorldFrame: unitNeighbourOperation(our WorldRequest: request, our WorldPosition: from, me bool: previous) <- {
+        our WorldUnitWindow: window <- from!.unitWindow
+        our POV:: node{941}; Allocate(node!.pItem)
+        our WorldFrame: frame <- makeFrame(request,node)
+        frame!.referenceOnly <- true; frame!.acquireOnly <- true
+        Allocate(frame!.unitSelection)
+        our WorldUnitSelection: selection <- frame!.unitSelection
+        selection!.source <- window!.source; selection!.unit <- window!.unit
+        selection!.count <- window!.count; selection!.span <- window!.span
+        selection!.adjacent <- true; selection!.reverse <- previous; selection!.explicitSpec <- true
+        me FlexNum: start <- window!.start+window!.count*window!.unit!.width
+        me WorldUnitSegment: boundary <- window!.last
+        if(previous){start <- window!.start-window!.count*window!.unit!.width; boundary <- window!.first}
+        selection!.coordinate <- start/window!.unit!.width
+        selection!.end <- window!.start+window!.count*window!.unit!.width
+        if(previous){selection!.end <- window!.start}
+        selection!.resume <- boundary.anchor
+        // A measured gap is one segment, irrespective of its virtual extent.
+        if(boundary.gap){
+            selection!.segments.append(boundary)
+            selection!.end <- boundary.start+boundary.width
+            if(previous){selection!.end <- boundary.start}
+        }
+        return(frame)
+    }
+    me bool: resumeUnitLevels(our WorldRequest: request, our WorldFrame: frame) <- {
+        our WorldUnitSelection: selection <- frame!.unitSelection
+        me List<our WorldUnitAnchor>: route
+        our WorldUnitAnchor: anchor <- selection!.resume
+        while(anchor!=NULL){route.append(anchor); anchor <- anchor!.parent}
+        // Check all headers before consuming the bookmark. A parser wait keeps
+        // this frame and route; it does not replay earlier windows.
+        withEach saved in route{
+            if(saved!.source!.node!.pItem!.value!==saved!.value or saved!.source!.node!.pItem!.infSize!==saved!.size or
+               saved!.source!.node!.pItem!.cursorRevision!=saved!.revision){
+                frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Unit boundary layout changed; select its occurrence again"; stopFrame(request,frame); return(false)
+            }
+            me WorldScalar: header <- graph.read(request,saved!.source!.node,saved!.source!.node!.pParent,false,false,false,saved!.source)
+            if(header.outcome==worldWaiting){waitAt(request,frame,saved!.source!.node!.pItem); return(false)}
+            if(header.outcome!=worldReady){frame!.facts <- header; stopFrame(request,frame); return(false)}
+            our WorldUnit: member <- graph.writtenUnit(request,saved!.source,saved!.member)
+            if(member==NULL or member!.width!=saved!.member!.width or graph.compareNominal(member!.word,saved!.member!.word)!=worldReady){
+                frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Unit boundary no longer has its measured layout"; stopFrame(request,frame); return(false)
+            }
+        }
+        while(!route.isEmpty()){
+            anchor <- route.popLast()
+            our WorldUnitLevel:: level; level!.source <- anchor!.source!.node!.pItem; level!.member <- anchor!.member
+            level!.ancestry <- anchor!.parent; level!.hasStart <- anchor!.hasStart; level!.start <- anchor!.start
+            level!.hasEnd <- anchor!.hasEnd; level!.end <- anchor!.end
+            level!.walk!.reverse <- selection!.reverse; level!.walk!.push(anchor!.source)
+            level!.walk!.levels.last()!.after <- anchor!.after
+            if(anchor!.tail){
+                level!.walk!.levels.last()!.tailRead <- true
+                if(!selection!.reverse){level!.walk!.levels.last()!.after <- anchor!.source!.node!.pItem!.value!.items.tail}
+            }
+            selection!.levels.append(level); selection!.active.insert(level!.source)
+        }
+        selection!.entered <- true; selection!.resume <- NULL
         return(true)
     }
     // Create only the demanded view. Leaves borrow facts from their original
@@ -6441,6 +6603,7 @@ struct WorldManager {
         our POV:: result{941}; Allocate(result!.pItem)
         our infonView: body <- result!.pItem
         body!.itmMode <- mItem; body!.streamState <- parseDone; body!.viewMode <- vmOverlay; body!.orderMode <- uOrdered
+        body!.privateMemberLinks <- true; body!.value!.items.privateLinks <- true
         body!.value!.overlayType <- LST; body!.value!.evalMode <- emLiteral
         body!.infSize!.overlayType <- NUM; body!.infSize!.evalMode <- emLiteral; body!.value!.sizeMode <- fromCount
         body!.wordDerefed <- true
@@ -6460,6 +6623,8 @@ struct WorldManager {
                 gap!.position!.writable <- selection!.source!.writable
             }
             request!.unitOrigins.insert(body, gap)
+            me FlexNum: windowCount <- FlexNum("1"); if(collection){windowCount <- count}
+            retainUnitWindow(selection,gap!.position,unit,start,windowCount,collection,segment,segment)
             return(result)
         }
         our WorldUnitOrigin:: origin
@@ -6471,11 +6636,14 @@ struct WorldManager {
             if(child==NULL){return(NULL)}
             body!.value!.items.appendPov(child); child!.pParent <- result
             our WorldUnitOrigin: childOrigin <- request!.unitOrigins.at(child!.pItem)
-            origin!.position!.unitMembers.insert(child, childOrigin!.position)
+            Allocate(child!.unitMemberIdentity)
+            origin!.position!.unitMembers.insert(child!.unitMemberIdentity, childOrigin!.position)
             request!.correspondenceMappings <+- 1
             origin!.members.append(child); n <+- 1
         }
         request!.unitOrigins.insert(body, origin)
+        me FlexNum: windowCount <- FlexNum("1"); if(collection){windowCount <- count}
+        if(windowCount>0){retainUnitWindow(selection,origin!.position,unit,start,windowCount,collection,segment,selection!.segments[selection!.segment])}
         return(result)
     }
     void: selectUnit(our WorldRequest: request, our WorldFrame: frame) <- {
@@ -6502,6 +6670,10 @@ struct WorldManager {
             selection!.source <- source!.position
         }
         if(!selection!.entered){
+            if(selection!.adjacent){if(!resumeUnitLevels(request,frame)){return()}}
+        }
+        if(selection!.adjacent and selection!.coordinate<0){frame!.noMatch <- true; frame!.finished <- true; return()}
+        if(!selection!.entered){
             our WorldUnit: leaf <- selection!.unit
             while(leaf!.member!=NULL){leaf <- leaf!.member}
             if(!pushUnitLevel(request, frame, selection!.source, leaf)){return()}
@@ -6513,7 +6685,8 @@ struct WorldManager {
             frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Selected unit index is outside the source"; stopFrame(request, frame); return()
         }
         while(!selection!.levels.isEmpty()){
-            if(index>=0 and selection!.end>=(index+selection!.prefix+selection!.count+selection!.suffix)*selection!.unit!.width){break()}
+            if(selection!.reverse){if(selection!.end<=index*selection!.unit!.width){break()}}
+            else if(index>=0 and selection!.end>=(index+selection!.prefix+selection!.count+selection!.suffix)*selection!.unit!.width){break()}
             our WorldUnitLevel: level <- selection!.levels.last()
             if(level!.pending==NULL){level!.pending <- graph.nextPosition(request, level!.walk)}
             if(!walkReady(request, frame, level!.walk)){return()}
@@ -6528,13 +6701,22 @@ struct WorldManager {
             if(position!.tail){
                 if(!header.hasSize){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Unit window crosses an unknown endpoint"; stopFrame(request, frame); return()}
                 me FlexNum: width <- header.size*level!.member!.width-(selection!.end-level!.start)
+                if(selection!.reverse){
+                    if(position!.node!.pItem!.value!.items.head!=NULL){
+                        frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Reverse unit window needs the sparse prefix extent"; stopFrame(request,frame); return()
+                    }
+                    width <- header.size*level!.member!.width
+                }else if(!level!.hasStart and level!.hasEnd){width <- level!.end-selection!.end}
                 if(width<0){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Unit representation exceeds its extent"; stopFrame(request, frame); return()}
                 if(width>0){
                     me WorldUnitSegment: gap; gap.member <- level!.member; gap.source <- position
                     gap.container <- level!.walk!.levels.last()!.position
                     gap.nativeOffset <- (selection!.end-level!.start)/level!.member!.width
                     gap.start <- selection!.end; gap.width <- width; gap.gap <- true
-                    selection!.segments.append(gap); selection!.end <+- width
+                    if(selection!.reverse){gap.start <- selection!.end-width; gap.nativeOffset <- FlexNum("0"); selection!.end <- gap.start}
+                    else{selection!.end <+- width}
+                    gap.anchor <- unitAnchor(request,level,true)
+                    selection!.segments.append(gap)
                 }
                 level!.pending <- NULL; continue()
             }
@@ -6555,17 +6737,28 @@ struct WorldManager {
             }else{
                 if(header.overlay!=NUM and header.overlay>=0){frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "Unit leaf contradicts its numeric definition"; stopFrame(request, frame); return()}
                 me WorldUnitSegment: segment; segment.member <- actual; segment.source <- position; segment.start <- selection!.end; segment.width <- FlexNum("1")
-                selection!.segments.append(segment); selection!.end <+- 1
+                if(selection!.reverse){segment.start <- selection!.end-1; selection!.end <- segment.start}else{selection!.end <+- 1}
+                segment.anchor <- unitAnchor(request,level,false)
+                selection!.segments.append(segment)
             }
             level!.pending <- NULL
         }
-        if(index<0){
+        if(index<0 and !selection!.adjacent){
             me FlexNum: extent <- selection!.end/selection!.unit!.width
             if(extent.getDenominator()!=1){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Source endpoint does not align to requested units"; stopFrame(request, frame); return()}
             index <+- extent
         }
-        if(index<0 or (index+selection!.prefix+selection!.count+selection!.suffix)*selection!.unit!.width>selection!.end){
+        if(selection!.adjacent and !selection!.reverse and index*selection!.unit!.width==selection!.end){
+            frame!.noMatch <- true; frame!.finished <- true; return()
+        }
+        if(index<0 or (selection!.reverse and selection!.end>index*selection!.unit!.width) or
+           (!selection!.reverse and (index+selection!.prefix+selection!.count+selection!.suffix)*selection!.unit!.width>selection!.end)){
             frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Selected unit window is outside the source"; stopFrame(request, frame); return()
+        }
+        if(selection!.reverse){
+            me List<WorldUnitSegment>: ordered
+            while(!selection!.segments.isEmpty()){me WorldUnitSegment: segment <- selection!.segments.popLast(); ordered.append(segment)}
+            selection!.segments <- ordered
         }
         our POV: projected <- unitView(request, selection, selection!.unit, (index+selection!.prefix)*selection!.unit!.width, selection!.count, selection!.span)
         if(projected==NULL){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Unit view needs a demanded sparse occurrence"; stopFrame(request, frame); return()}
@@ -6833,6 +7026,17 @@ struct WorldManager {
         me bool: previous <- frame!.node!.pItem!.cursorMode==cmTPrev or frame!.node!.pItem!.cursorMode==cmPrev
         me bool: temporal <- frame!.node!.pItem!.cursorMode==cmTPrev or frame!.node!.pItem!.cursorMode==cmTNext
         if(path!.cursor==NULL){path!.cursor <- graph.producedPosition(request, frame!.navigation)}
+        if(path!.cursor!=NULL and path!.cursor!.unitWindow!=NULL and !temporal){
+            if(path!.unitNeighbour==NULL){path!.unitNeighbour <- unitNeighbourOperation(request,path!.cursor,previous)}
+            our WorldFrame: adjacent <- path!.unitNeighbour
+            if(!adjacent!.finished){request!.ready.append(frame); request!.ready.append(adjacent); return(false)}
+            if(adjacent!.facts.outcome!=worldReady){frame!.facts <- adjacent!.facts; stopFrame(request,frame); return(false)}
+            if(adjacent!.noMatch){
+                our POV:: absent{941}; Allocate(absent!.pItem); absent!.pItem!.itmMode <- mItem; absent!.pItem!.streamState <- parseDone
+                absent!.pItem!.value!.undefined <- true; path!.source <- graph.position(absent); path!.contextAbsent <- true; return(true)
+            }
+            path!.source <- adjacent!.correspondenceResult!.position; return(true)
+        }
         if(path!.cursor!=NULL and path!.cursor!.generatedAddress!=NULL and !(frame===request!.root and frame!.referenceOnly)){
             return(generatedNeighbourSource(request,frame,path,previous))
         }
@@ -8542,7 +8746,7 @@ struct WorldDemand {
         if(pendingPosition!=NULL){return(settle())}
         if(!hasValue and !refresh()){return(false)}
         me WorldModelLock: lock{manager!.control!.mutex}
-        if(position==NULL or position!.parent==NULL){atBoundary <- true; return(false)}
+        if(position==NULL){atBoundary <- true; return(false)}
         atBoundary <- false
         selectNeighbour(position, previous, 1)
         if(previous){selectionPurpose <- 2}

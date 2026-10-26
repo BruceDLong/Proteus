@@ -5165,3 +5165,103 @@ in the structural regression use exact `FlexNum` comparisons. Evidence:
 `/tmp/proteus-rubix-{build-final,contracts-final,sparse-final,all-final,small-status}.log`.
 This is test and contract validation; no shared-library, consumer or visible
 rendering change was made or validated in this increment.
+
+### D127 Normalizer-owned neighbours of measured unit windows
+
+**Problem, 2026-10-25.** Unit selection already returned the correct grouped
+minutes, but a subsequent `WorldManager.reference` or TCursor next/previous
+reported a boundary. A synthesized group has no structural parent; its member
+provenance alone does not describe the adjacent measured window. Repeated
+absolute selection would also rescan an increasingly long represented prefix.
+
+**Choice.** Retain a `WorldUnitWindow` on a projected composite position. It
+records the qualified supplying occurrence, measured unit, start, count and
+single-unit versus collection shape. The normalizer's ordinary cursor-source
+relationship creates an adjacent unit selection and executes it with the same
+`selectUnit`/`unitView` path as indexed and typed selection. WorldDemand no longer
+assumes that a parentless position proves a boundary; it asks that relationship.
+TCursor itself is unchanged.
+
+Each nonempty window retains first/last measured segments and immutable
+`WorldUnitAnchor` routes. A route contains the supplying layouts, their measured
+bounds, and the raw sibling anchors. New requests reconstruct shallow logical
+walks at those anchors, in either direction, and recheck layout evidence. Reverse
+collection orders only the newly visited segments before using ordinary unit
+projection. No prior result, request, solver frame or growing prefix index is
+retained. At fixed unit width and nesting depth, adjacent traversal work and
+new allocations are bounded per window. Initial absolute selection retains its
+existing cost; this does not claim constant-time arbitrary random access.
+
+A measured sparse gap is reused arithmetically. Native sparse members retain
+the existing repetition witness. A changed layout description or revision
+invalidates the bookmark explicitly instead of silently returning an endpoint
+or rescanning. Reverse entry into a partially represented sparse container whose
+prefix extent has not been measured remains unsupported. Unknown endpoints are
+partial, and parser-completion waits retain their current request and progress.
+General heterogeneous/temporal alignment and native sparse composite writes
+remain outside this increment. Primitive leaves retain their original structural
+neighbours; this work supplies traversal for composite unit windows.
+
+**Identity and copying.** A regrouped window's identity includes source, unit,
+coordinate, extent and collection shape; equal payloads do not identify distinct
+windows, and a round trip reaches the same contextual window. Native sparse
+positions continue to use their occurrence witnesses. The first cursor test
+also exposed a separate representation boundary: normalizing a selected group
+and then storing its value copies its immediate member wrappers. Pointer-keyed
+member mappings no longer recognized those copies. Retain a model-free
+`WorldUnitMemberIdentity` key on projected members, copy it through ordinary
+publication and wrapper copying, and key the container's provenance map with
+it. This preserves original source occurrences and read-only qualifications
+without rewriting source links or retaining parent ownership cycles.
+
+**Alternatives.** A converter in TCursor would duplicate normalization and
+exclude ordinary reference consumers. Calling absolute selection for every step
+would make a complete walk quadratic in a dense prefix. Retaining all previous
+windows or the whole original execution request would make space grow with
+traversal history. Treating regrouped containers as physical source members
+would corrupt their distinct identity and containing scope. Boundary routes and
+retained member correspondence are the normalizer-owned alternative.
+
+**Reclamation.** Disposable unit lists use the existing private-member policy
+with weak backward sibling links. Ordinary publication now carries that policy
+from a private source when it creates a new list or alternative list; value
+copying already preserves it. Deferred projected members retain their qualified
+member origin, rather than their temporary group's parent context. A weak
+unit-position link lets a retained projected child recover its own qualified
+handle without owning its parent or itself. The reclamation regression checks
+actual weak-reference expiry for abandoned minute/hour views and their members,
+and again after closing the cursor. Policy queue sizes alone did not detect the
+old owning sibling cycles.
+
+**Validation.** Eight new ordinary CodeDog checks pass (**8/8**): next/previous
+through flat, named, nested and embedded storage; end-relative entry; direct
+normalizer and TCursor parity; equal-valued but distinct windows; original leaf
+identity and read-only access; parser waits, unrelated arrivals and cancellation;
+known/unknown endpoints; durable source writes after eviction; counted spans;
+native selection within a billion-member sparse capacity; layout invalidation;
+scaling and actual object reclamation. Existing fixtures and expectations are
+unchanged. The regenerated full suite passes **799/800**. Its only failure is
+the preceding baseline's `defaultTests.tst:merge/dots/align4b`, still reporting
+`UNSUPPORTED: Open source correspondence needs span alignment`.
+
+For 16/32/64 three-member windows traversed forward and back, direct normalizer
+references visit 120/248/504 positions, take 150/310/630 queue steps and allocate
+90/186/378 frames plus the same number of boundary bookmarks. They acquire no
+additional semantic relationships or input subscriptions. TCursor visits
+124/252/508 positions and takes 498/1010/2034 queue steps, including ordinary
+value acquisition; its configured retention peaks at one entry. Minute and hour
+views and their member wrappers expire after abandonment and after cursor
+shutdown. This separately checks execution work, cache policy and ownership.
+
+The final CodeDog test regeneration succeeds in 277.66 seconds; the separately
+regenerated shared library succeeds in 183.08 seconds. A standalone ordinary
+CodeDog TCursor consumer rebuilds against that exported interface in 79.81
+seconds. Rerun against the final shared library, its former failing
+seek/select/next/previous examples traverse both minutes correctly for flat
+seconds and stored minute groups, preserving the unit definition's T metadata.
+The ordinary represented-state control still works. Slipstream required a
+rebuild for the changed exported interface; its CodeDog regeneration succeeds
+in 112.57 seconds. `ldd -r` resolves this checkout's shared library without
+missing symbols, and Slipstream's source tree remains unchanged. These checks
+validate shared-library consumers; visible UI/rendering was not tested.
+Evidence: `/tmp/proteus-unit-traversal-{build7,focused-final,all-final,metrics-final,shared-final,consumer-build,consumer-final,slipstream-build,slipstream-link}.log`.

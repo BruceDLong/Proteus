@@ -240,6 +240,14 @@ TestsToRun = `
     unit/indexLowering/nestedSourceContext
     unit/indexLowering/waitAndCancel
     unit/indexLowering/scaling
+    unit/unitTraversal/windows
+    unit/unitTraversal/identity
+    unit/unitTraversal/waitAndBounds
+    unit/unitTraversal/durableSource
+    unit/unitTraversal/spansAndSparse
+    unit/unitTraversal/scaling
+    unit/unitTraversal/cursorScaling
+    unit/unitTraversal/reclamation
     unit/nativeSparse/provenanceAndScale
     unit/nativeSparse/guards
     unit/nativeSparse/waitAndCancel
@@ -1540,6 +1548,296 @@ struct GLOBAL {
     our PartPath: typedProvenanceIndex(me string: testName, me int: index) <- {
         our PartPath:: part; part!.pathMode <- idxField
         part!.path <- parseAndExtract(testName,toString(index)); return(part)
+    }
+
+    me List<our POV>: unitTraversalLeaves(our POV: source) <- {
+        me List<our POV>: result
+        me List<our POV>: pending; pending.append(source)
+        while(!pending.isEmpty()){
+            our POV: item <- pending.popLast()
+            if(item!.pItem!.value!.overlayType==LST){
+                our POV: child <- item!.pItem!.value!.items.tail
+                while(child!=NULL){pending.append(child); child <- child!.previousNode()}
+            }else{result.append(item)}
+        }
+        return(result)
+    }
+    void: unit_unitTraversal_windows(me string: testName) <- {
+        me List<string>: sources <- [
+            "hour:{second|1 2 3 4 5 6 7 8 9 10 11 12}",
+            "{T second|1 2 3 4 5 6 7 8 9 10 11 12}",
+            "{hour|hour:{second|1 2 3 4 5 6} hour:{second|7 8 9 10 11 12}}",
+            "{second|1 &{second|2 3 4 5} 6 &{second|7 8 9 10} 11 12}"
+        ]
+        withEach syntax in sources{
+            me TestProteusCore: core
+            if(!core.initForWorldTest("TestFiles/timeTestCases.pr")){FAIL(core.errorMesg)}
+            me WorldParseResult: parsed <- core.agent!.worldManager.parse(syntax)
+            cursorDemandLinkMembers(parsed.target)
+            me List<our POV>: leaves <- unitTraversalLeaves(parsed.target)
+            our WorldSession: session <- core.agent!.startSession()
+            our TCursor: cursor; Allocate(cursor,parsed.target)
+            cursor!.attach(core.agent!.worldManager,session,core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+            cursor!.inList()
+            our PartPath: minute <- typedProvenanceIndex(testName,0); minute!.spec <- parseAndExtract(testName,"minute")
+            me bool: firstReady <- false
+            if(syntax==sources[0]){firstReady <- cursor!.seek(FlexNum("1"))}else{firstReady <- cursor!.select(minute)}
+            if(!firstReady){FAIL("First unit window: "+cursor!.status().detail)}
+            our WorldPosition: first <- cursor!.position
+            withEach direction in range 0 .. 2{
+                withEach offset in range 0 .. 4{
+                    me int: ordinal <- offset
+                    if(direction==1){ordinal <- 3-offset}
+                    if(offset>0){
+                        me bool: moved <- false
+                        if(direction==0){moved <- cursor!.goNext()}else{moved <- cursor!.goPrev()}
+                        if(!moved){FAIL("Adjacent unit window "+toString(ordinal)+": "+cursor!.status().detail)}
+                    }
+                    if(!namedLayoutValues(cursor!.current,[ordinal*3+1,ordinal*3+2,ordinal*3+3])){FAIL("Unit neighbour selected the wrong interval")}
+                    our WorldRequest: second <- core.agent!.worldManager.select(session,cursor!.position,typedProvenanceIndex(testName,2),
+                        core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+                    if(!second!.complete() or second!.selectedSource()!==leaves[ordinal*3+1]){
+                        FAIL("Unit neighbour lost source occurrence identity: "+syntax+" window="+toString(ordinal)+" direction="+toString(direction)+" "+second!.error())
+                    }
+                    core.agent!.worldManager.release(session,second)
+                }
+            }
+            if(!core.agent!.worldManager.graph.samePosition(first,cursor!.position)){FAIL("Returning to a unit window changed its identity")}
+            if(cursor!.goPrev() or !cursor!.atBoundary){FAIL("First unit did not establish its left boundary")}
+            if(!cursor!.goNext()){FAIL("Boundary failure prevented subsequent movement")}
+            minute!.path <- parseAndExtract(testName,"-1")
+            if(!cursor!.select(minute) or !namedLayoutValues(cursor!.current,[10,11,12]) or
+               !cursor!.goPrev() or !namedLayoutValues(cursor!.current,[7,8,9])){FAIL("End-relative selection lost its backward unit boundary")}
+            core.deInit(); modelMngr.clear()
+        }
+    }
+    void: unit_unitTraversal_identity(me string: testName) <- {
+        me TestProteusCore: core
+        if(!core.initForWorldTest("TestFiles/timeTestCases.pr")){FAIL(core.errorMesg)}
+        me WorldParseResult: parsed <- core.agent!.worldManager.parse("{second|7 7 7 7 7 7}")
+        cursorDemandLinkMembers(parsed.target)
+        me List<our POV>: leaves <- unitTraversalLeaves(parsed.target)
+        our WorldPosition: source <- core.agent!.worldManager.graph.position(parsed.target); source!.writable <- false
+        our WorldSession: session <- core.agent!.startSession()
+        our PartPath: minute <- typedProvenanceIndex(testName,0); minute!.spec <- parseAndExtract(testName,"minute")
+        our WorldRequest: selected <- core.agent!.worldManager.select(session,source,minute,
+            core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+        if(!selected!.complete()){FAIL(selected!.error())}
+        our WorldPosition: first <- selected!.provenance!.position
+        core.agent!.worldManager.release(session,selected)
+        our WorldRequest: next <- core.agent!.worldManager.reference(session,first,false,core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+        if(!next!.complete() or next!.provenance==NULL){FAIL("Direct normalizer neighbour: "+next!.error())}
+        our WorldPosition: second <- next!.provenance!.position
+        core.agent!.worldManager.release(session,next)
+        if(first!.writable or second!.writable or core.agent!.worldManager.graph.samePosition(first,second)){FAIL("Equal values collapsed windows or widened source access")}
+        our WorldRequest: previous <- core.agent!.worldManager.reference(session,second,true,core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+        if(!previous!.complete() or previous!.provenance==NULL or !core.agent!.worldManager.graph.samePosition(first,previous!.provenance!.position)){
+            FAIL("Direct normalizer round trip lost window identity")
+        }
+        our WorldRequest: leaf <- core.agent!.worldManager.select(session,second,typedProvenanceIndex(testName,1),core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+        if(!leaf!.complete() or leaf!.selectedSource()!==leaves[3] or leaf!.provenance!.position!.writable){FAIL("Unit leaf lost qualified original occurrence")}
+        our WorldRequest: end <- core.agent!.worldManager.reference(session,second,false,core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+        if(!end!.complete() or !end!.referenceAbsent){FAIL("Closed unit endpoint was not proved")}
+        core.deInit(); modelMngr.clear()
+    }
+    void: unit_unitTraversal_waitAndBounds(me string: testName) <- {
+        withEach scenario in range 0 .. 3{
+            me TestProteusCore: core
+            if(!core.initForWorldTest("TestFiles/timeTestCases.pr")){FAIL(core.errorMesg)}
+            me string: syntax <- "{second|1 2 3 4 5 6}"
+            if(scenario==2){syntax <- "{second|1 2 3 ...}"}
+            me WorldParseResult: parsed <- core.agent!.worldManager.parse(syntax)
+            cursorDemandLinkMembers(parsed.target)
+            our WorldSession: session <- core.agent!.startSession()
+            our PartPath: minute <- typedProvenanceIndex(testName,0); minute!.spec <- parseAndExtract(testName,"minute")
+            our WorldRequest: selected <- core.agent!.worldManager.select(session,core.agent!.worldManager.graph.position(parsed.target),minute,
+                core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+            if(!selected!.complete()){FAIL(selected!.error())}
+            our POV: pending
+            if(scenario<2){pending <- parsed.target!.pItem!.value!.items.tail!.previousNode(); pending!.pItem!.streamState <- parseStarted}
+            our WorldRequest: next <- core.agent!.worldManager.reference(session,selected!.provenance!.position,false,
+                core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+            if(scenario==2){
+                if(next!.status().outcome!=worldPartial or next!.referenceAbsent){FAIL("Unknown endpoint was reported as absent")}
+            }else{
+                if(next!.status().outcome!=worldWaiting or next!.waitingInput!==pending!.pItem){FAIL("Unit neighbour did not retain its exact parser wait: "+next!.error())}
+                me uint64: queue <- next!.queueSteps; me uint64: positions <- next!.correspondencePositions
+                our infonView:: unrelated; core.agent!.worldManager.inputReady(unrelated)
+                if(next!.queueSteps!=queue or next!.correspondencePositions!=positions){FAIL("Unrelated arrival replayed unit traversal")}
+                if(scenario==1){next!.cancel()}
+                pending!.pItem!.streamState <- parseDone; core.agent!.worldManager.inputReady(pending!.pItem)
+                if(scenario==0){
+                    if(!next!.complete() or next!.provenance==NULL){FAIL("Unit neighbour failed to resume: "+next!.error())}
+                    our WorldRequest: leaf <- core.agent!.worldManager.select(session,next!.provenance!.position,typedProvenanceIndex(testName,2),core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+                    if(!leaf!.complete() or leaf!.selectedSource()!==pending){FAIL("Resumed neighbour lost its source")}
+                }else if(next!.status().outcome!=worldCancelled or next!.publications!=0){FAIL("Cancelled unit traversal published")}
+            }
+            if(!core.agent!.worldManager.control!.inputWaiters.isEmpty()){FAIL("Unit traversal leaked subscriptions")}
+            core.deInit(); modelMngr.clear()
+        }
+    }
+    void: unit_unitTraversal_scaling(me string: testName) <- {
+        me uint64: priorPositions <- 0; me uint64: priorQueue <- 0; me uint64: priorFrames <- 0
+        me uint64: priorBookmarks <- 0; me uint64: priorRelationships <- 0
+        me List<int>: widths <- [16,32,64]
+        withEach width in widths{
+            me TestProteusCore: core
+            if(!core.initForWorldTest("TestFiles/timeTestCases.pr")){FAIL(core.errorMesg)}
+            me string: syntax <- "{second|"
+            withEach idx in range 0 .. width*3{syntax <+- " "+toString(idx+1)}
+            syntax <+- "}"
+            me WorldParseResult: parsed <- core.agent!.worldManager.parse(syntax)
+            cursorDemandLinkMembers(parsed.target)
+            our WorldSession: session <- core.agent!.startSession()
+            our PartPath: minute <- typedProvenanceIndex(testName,0); minute!.spec <- parseAndExtract(testName,"minute")
+            our WorldRequest: selected <- core.agent!.worldManager.select(session,core.agent!.worldManager.graph.position(parsed.target),minute,core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+            if(!selected!.complete()){FAIL(selected!.error())}
+            our WorldPosition: at <- selected!.provenance!.position
+            core.agent!.worldManager.release(session,selected)
+            me uint64: positions <- 0; me uint64: queue <- 0; me uint64: frames <- 0; me uint64: bookmarks <- 0; me uint64: relationships <- 0
+            withEach direction in range 0 .. 2{
+                withEach ordinal in range 1 .. width{
+                    our WorldRequest: next <- core.agent!.worldManager.reference(session,at,direction==1,core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+                    if(!next!.complete() or next!.provenance==NULL){FAIL("Scaling unit neighbour: "+next!.error())}
+                    at <- next!.provenance!.position
+                    positions <+- next!.correspondencePositions; queue <+- next!.queueSteps; frames <+- next!.framesCreated
+                    bookmarks <+- next!.unitBookmarksCreated; relationships <+- next!.relationshipsRead
+                    if(at!.unitMembers.size()!=3 or at!.unitWindow!.first.anchor!.parent!=NULL or at!.unitWindow!.last.anchor!.parent!=NULL){FAIL("Flat unit traversal retained more than the current window and boundary routes")}
+                    core.agent!.worldManager.release(session,next)
+                    if(!session!.requests.isEmpty()){FAIL("Unit traversal retained completed execution requests")}
+                }
+            }
+            print("Unit traversal ",width,": positions=",positions," queue=",queue," frames=",frames," bookmarks=",bookmarks," relationships=",relationships,"\n")
+            if(priorQueue>0 and (positions>priorPositions*3 or queue>priorQueue*3 or frames>priorFrames*3 or bookmarks>priorBookmarks*3 or relationships>priorRelationships*3)){
+                FAIL("Unit traversal rescanned growing prefixes")
+            }
+            priorPositions <- positions; priorQueue <- queue; priorFrames <- frames; priorBookmarks <- bookmarks; priorRelationships <- relationships
+            if(!core.agent!.worldManager.control!.inputWaiters.isEmpty()){FAIL("Unit traversal subscribed without missing input")}
+            core.deInit(); modelMngr.clear()
+        }
+    }
+
+    void: unit_unitTraversal_durableSource(me string: testName) <- {
+        me TestProteusCore: core
+        if(!core.initForWorldTest("TestFiles/timeTestCases.pr")){FAIL(core.errorMesg)}
+        me WorldParseResult: parsed <- core.agent!.worldManager.parse("{second|1 _ 3 4 5 6}")
+        cursorDemandLinkMembers(parsed.target)
+        our POV: written <- parsed.target!.pItem!.value!.items.head!.next
+        our WorldSession: session <- core.agent!.startSession()
+        our TCursor: cursor; Allocate(cursor,parsed.target)
+        cursor!.attach(core.agent!.worldManager,session,core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+        cursor!.demand!.configureRetention(0,0,0); cursor!.inList()
+        our PartPath: minute <- typedProvenanceIndex(testName,0); minute!.spec <- parseAndExtract(testName,"minute")
+        if(!cursor!.select(minute) or !cursor!.goNext()){FAIL("Could not traverse away from the unknown unit member")}
+        me WorldParseResult: assertion <- core.agent!.worldManager.parse("2")
+        written!.pItem!.wrkList.append(assertion.target); written!.pItem!.noteNormalizationWork()
+        our WorldRequest: publication <- core.agent!.normalize(written)
+        if(!publication!.complete() or written!.pItem!.fetchInt()!=2){FAIL("Original unit member write failed: "+publication!.error())}
+        if(!cursor!.goPrev() or !namedLayoutValues(cursor!.current,[1,2,3])){FAIL("Returning unit window lost the durable source write: "+cursor!.status().detail)}
+        cursor!.clearCache()
+        if(!cursor!.goNext() or !cursor!.goPrev() or !namedLayoutValues(cursor!.current,[1,2,3]) or written!.pItem!.fetchInt()!=2){
+            FAIL("Eviction lost the written member or its window traversal context")
+        }
+        core.deInit(); modelMngr.clear()
+    }
+    void: unit_unitTraversal_cursorScaling(me string: testName) <- {
+        me uint64: priorPositions <- 0; me uint64: priorQueue <- 0; me uint64: priorFrames <- 0
+        me List<int>: widths <- [16,32,64]
+        withEach width in widths{
+            me TestProteusCore: core
+            if(!core.initForWorldTest("TestFiles/timeTestCases.pr")){FAIL(core.errorMesg)}
+            me string: syntax <- "{T second|"
+            withEach idx in range 0 .. width*3{syntax <+- " "+toString(idx+1)}
+            syntax <+- "}"
+            me WorldParseResult: parsed <- core.agent!.worldManager.parse(syntax)
+            cursorDemandLinkMembers(parsed.target)
+            our WorldSession: session <- core.agent!.startSession()
+            our TCursor: cursor; Allocate(cursor,parsed.target)
+            cursor!.attach(core.agent!.worldManager,session,core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+            cursor!.demand!.configureRetention(1,0,0); cursor!.inList()
+            our PartPath: minute <- typedProvenanceIndex(testName,0); minute!.spec <- parseAndExtract(testName,"minute")
+            if(!cursor!.select(minute)){FAIL(cursor!.status().detail)}
+            withEach direction in range 0 .. 2{
+                withEach idx in range 1 .. width{
+                    me bool: moved <- false
+                    if(direction==0){moved <- cursor!.goNext()}else{moved <- cursor!.goPrev()}
+                    me int: ordinal <- idx; if(direction==1){ordinal <- width-idx-1}
+                    if(!moved or !namedLayoutValues(cursor!.current,[ordinal*3+1,ordinal*3+2,ordinal*3+3])){
+                        FAIL("Cursor unit traversal: "+cursor!.status().detail)
+                    }
+                    if(session!.requests.size()>1 or cursor!.demand!.retentionPeakSlots>1){FAIL("Cursor retained growing unit-window execution or values")}
+                }
+            }
+            me uint64: positions <- cursor!.demand!.positionsVisited; me uint64: queue <- cursor!.demand!.queueSteps; me uint64: frames <- cursor!.demand!.framesCreated
+            if(cursor!.request!=NULL){positions <+- cursor!.request!.correspondencePositions; queue <+- cursor!.request!.queueSteps; frames <+- cursor!.request!.framesCreated}
+            print("Unit cursor ",width,": positions=",positions," queue=",queue," frames=",frames," retained=",cursor!.demand!.retentionPeakSlots,"\n")
+            if(priorQueue>0 and (positions>priorPositions*3 or queue>priorQueue*3 or frames>priorFrames*3)){FAIL("TCursor unit traversal rescanned source prefixes")}
+            priorPositions <- positions; priorQueue <- queue; priorFrames <- frames
+            core.deInit(); modelMngr.clear()
+        }
+    }
+
+    void: unit_unitTraversal_reclamation(me string: testName) <- {
+        me List<string>: units <- ["minute","hour"]
+        withEach unit in units{
+            me TestProteusCore: core
+            if(!core.initForWorldTest("TestFiles/timeTestCases.pr")){FAIL(core.errorMesg)}
+            me WorldParseResult: parsed <- core.agent!.worldManager.parse("{second|1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18}")
+            cursorDemandLinkMembers(parsed.target)
+            our WorldSession: session <- core.agent!.startSession()
+            our TCursor: cursor; Allocate(cursor,parsed.target)
+            cursor!.attach(core.agent!.worldManager,session,core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+            cursor!.demand!.configureRetention(0,0,0); cursor!.inList()
+            our PartPath: part <- typedProvenanceIndex(testName,0); part!.spec <- parseAndExtract(testName,unit)
+            if(!cursor!.select(part)){FAIL("Reclamation seed: "+cursor!.status().detail)}
+            me WorldWeakReference<POV>: first; first.set(cursor!.current)
+            me WorldWeakReference<POV>: member; member.set(cursor!.current!.pItem!.value!.items.head)
+            if(!cursor!.goNext() or !cursor!.goNext()){FAIL("Reclamation movement: "+cursor!.status().detail)}
+            if(!first.expired() or !member.expired()){FAIL("Unit traversal retained an abandoned "+unit+" or its member wrappers")}
+            first.set(cursor!.current); member.set(cursor!.current!.pItem!.value!.items.head)
+            core.agent!.endSession(session); cursor <- NULL
+            if(!first.expired() or !member.expired()){FAIL("Released unit cursor retained its final "+unit+" or members")}
+            core.deInit(); modelMngr.clear()
+        }
+    }
+    void: unit_unitTraversal_spansAndSparse(me string: testName) <- {
+        me TestProteusCore: core
+        if(!core.initForWorldTest("TestFiles/timeTestCases.pr")){FAIL(core.errorMesg)}
+        our WorldSession: session <- core.agent!.startSession()
+        me WorldParseResult: parsed <- core.agent!.worldManager.parse("{second|1 2 3 4 5 6 7 8 9 10 11 12}")
+        cursorDemandLinkMembers(parsed.target)
+        our PartPath: span <- typedProvenanceIndex(testName,0); span!.spec <- parseAndExtract(testName,"*2+{minute|...}")
+        our WorldRequest: selected <- core.agent!.worldManager.select(session,core.agent!.worldManager.graph.position(parsed.target),span,
+            core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+        if(!selected!.complete()){FAIL(selected!.error())}
+        our WorldPosition: first <- selected!.provenance!.position
+        our WorldRequest: next <- core.agent!.worldManager.reference(session,first,false,core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+        if(!next!.complete() or next!.provenance==NULL or next!.provenance!.position!.unitWindow!.start!=6){FAIL("Counted unit span did not advance by its full width")}
+        our WorldRequest: previous <- core.agent!.worldManager.reference(session,next!.provenance!.position,true,core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+        if(!previous!.complete() or previous!.provenance==NULL or !core.agent!.worldManager.graph.samePosition(first,previous!.provenance!.position)){FAIL("Counted unit span did not return to the same window")}
+        our WorldPosition: firstSpan <- first
+        me WorldParseResult: sparse <- core.agent!.worldManager.parse("*1000000000+{minute|...}")
+        our WorldPosition: source <- core.agent!.worldManager.graph.position(sparse.target)
+        selected <- core.agent!.worldManager.select(session,source,typedProvenanceIndex(testName,700000000),
+            core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+        if(!selected!.complete()){FAIL("Sparse window seed: "+selected!.error())}
+        first <- selected!.provenance!.position
+        next <- core.agent!.worldManager.reference(session,first,false,core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+        if(!next!.complete() or next!.provenance==NULL or next!.provenance!.position!.occurrence!.implicitItem.sourceIndex!=700000000){FAIL("Sparse unit neighbour lost its native ordinal")}
+        previous <- core.agent!.worldManager.reference(session,next!.provenance!.position,true,core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+        if(!previous!.complete() or previous!.provenance==NULL or previous!.provenance!.position!.occurrence!==first!.occurrence or
+           !core.agent!.worldManager.graph.samePosition(first,previous!.provenance!.position)){FAIL("Sparse unit round trip changed occurrence identity")}
+        if(next!.correspondencePositions>8 or previous!.correspondencePositions>8 or !sparse.target!.pItem!.value!.items.isEmpty()){
+            FAIL("Sparse unit traversal enumerated the virtual prefix")
+        }
+        // Structural replacement invalidates a bookmark; it is not an endpoint.
+        Allocate(sparse.target!.pItem!.value)
+        next <- core.agent!.worldManager.reference(session,first,false,core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+        if(next!.status().outcome!=worldUnsupported or next!.referenceAbsent){FAIL("Changed unit layout reused stale boundary evidence")}
+        Allocate(parsed.target!.pItem!.value)
+        previous <- core.agent!.worldManager.reference(session,firstSpan,true,core.agent!.getLocaleBaseName(),core.agent!.world,core.agent!.identityRegistry)
+        if(previous!.status().outcome!=worldUnsupported or previous!.referenceAbsent){FAIL("Changed first-window layout was reported as a left boundary")}
+        core.deInit(); modelMngr.clear()
     }
 
     void: unit_indexLowering_nestedSourceContext(me string: testName) <- {
