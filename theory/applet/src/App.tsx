@@ -1,5 +1,5 @@
 import { Pause, Play, RotateCcw, StepForward } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import {
   buildAdditiveModel,
@@ -49,7 +49,7 @@ type CaseAnalysis = {
 
 type Focus = "parent" | "divisor" | "quotient";
 type DecompositionMode = "additive" | "multiplicative";
-type AdditiveChildKey = "a" | "b0" | "bend";
+type AdditiveBMode = "end" | "zero";
 
 const MAX_SIZE = 24;
 
@@ -567,6 +567,8 @@ function ParentIdentityMap({
   divisorStep,
   quotientStep,
   onFocusChange,
+  focusLabels = { parent: "Parent", quotient: "Quotient", divisor: "Divisor" },
+  operationExpression,
 }: {
   parentBaseline: number[];
   parentTraversal: number[];
@@ -588,6 +590,8 @@ function ParentIdentityMap({
   divisorStep: number;
   quotientStep: number;
   onFocusChange: (focus: Focus) => void;
+  focusLabels?: Record<Focus, string>;
+  operationExpression?: ReactNode;
 }) {
   const cellWidth = 42;
   const chipCenter = 17;
@@ -609,36 +613,41 @@ function ParentIdentityMap({
         <div className="rowTitle">Parent identities</div>
         <div className="focusButtons" role="group" aria-label="Displayed object">
           <button
+            aria-pressed={focus === "parent"}
             className={classNames(focus === "parent" && "selected")}
             onClick={() => onFocusChange("parent")}
             type="button"
           >
-            Parent
+            {focusLabels.parent}
           </button>
           <button
+            aria-pressed={focus === "quotient"}
             className={classNames(focus === "quotient" && "selected")}
             onClick={() => onFocusChange("quotient")}
             type="button"
           >
-            Quotient
+            {focusLabels.quotient}
           </button>
           <button
+            aria-pressed={focus === "divisor"}
             className={classNames(focus === "divisor" && "selected")}
             onClick={() => onFocusChange("divisor")}
             type="button"
           >
-            Divisor
+            {focusLabels.divisor}
           </button>
         </div>
-        <OperationExpression
-          divisorSize={divisorSize}
-          divisorStep={divisorStep}
-          focus={focus}
-          quotientSize={quotientSize}
-          quotientStep={quotientStep}
-          size={size}
-          value={value}
-        />
+        {operationExpression ?? (
+          <OperationExpression
+            divisorSize={divisorSize}
+            divisorStep={divisorStep}
+            focus={focus}
+            quotientSize={quotientSize}
+            quotientStep={quotientStep}
+            size={size}
+            value={value}
+          />
+        )}
       </div>
       <div className={classNames("stepCallout", focus !== "parent" && "stepCalloutActive")}>
         {stepText}
@@ -1011,6 +1020,74 @@ function ScanPanel({
   );
 }
 
+function TransportControls({
+  playing,
+  onPlayToggle,
+  onReset,
+  onStep,
+}: {
+  playing: boolean;
+  onPlayToggle: () => void;
+  onReset: () => void;
+  onStep: () => void;
+}) {
+  return (
+    <div className="transport">
+      <button
+        className="iconButton"
+        onClick={onPlayToggle}
+        title={playing ? "Pause" : "Play"}
+        type="button"
+      >
+        {playing ? <Pause size={18} /> : <Play size={18} />}
+      </button>
+      <button className="iconButton" onClick={onStep} title="Step" type="button">
+        <StepForward size={18} />
+      </button>
+      <button className="iconButton" onClick={onReset} title="Reset" type="button">
+        <RotateCcw size={18} />
+      </button>
+    </div>
+  );
+}
+
+function DecompositionStageRail({
+  focus,
+  rebaseNeeded,
+  stage,
+  onStageChange,
+}: {
+  focus: Focus;
+  rebaseNeeded: boolean;
+  stage: number;
+  onStageChange: (stage: number) => void;
+}) {
+  return (
+    <nav className="stepRail" aria-label="Evaluation stage">
+      {STAGES.map((label, index) => {
+        const disabled = isStageDisabled(index, focus, rebaseNeeded);
+        return (
+          <button
+            className={classNames(
+              "stepButton",
+              index === stage && "selected",
+              index < stage && !disabled && "complete",
+            )}
+            disabled={disabled}
+            key={label}
+            onClick={() => onStageChange(index)}
+            aria-label={`Step ${index + 1}: ${label}`}
+            type="button"
+          >
+            <span className="stepDot">{index + 1}</span>
+            <span className="stepLabel">{label}</span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
 function DecompositionModeSwitch({
   value,
   onChange,
@@ -1044,112 +1121,142 @@ function infonLabel(size: number, value: number | null): string {
   return value === null ? "—" : `*${size}+${value}`;
 }
 
-function AdditiveSequence({
-  title,
-  items,
-  cosetLookup,
-  lifts,
-  sources,
+function additiveStepLabel(
+  focus: Focus,
+  stage: number,
+  aSize: number,
+  bMode: AdditiveBMode,
+  rebaseNeeded: boolean,
+): string {
+  if (focus === "parent") return "Parent source: all singlet identities are visible";
+  const child = focus === "quotient" ? "A" : "B";
+  if (stage === 0) {
+    if (focus === "quotient") return `Step 1: Select A's first ${aSize} traversal singlets`;
+    return bMode === "end"
+      ? "Step 1: Select B from A's shared end through the suffix"
+      : "Step 1: Select B from shared singlet 0 and the unselected suffix";
+  }
+  if (stage === 1) return `Step 2: Ignore singlets outside ${child}`;
+  if (stage === GHOST_STAGE) {
+    return rebaseNeeded
+      ? `Step 3: Move ${child} identities into minimal forward ghost slots`
+      : `Step 3: Ghost slots not needed; ${child}'s inherited baseline already matches`;
+  }
+  return `Step 4: Shrink ignored and ghost singlets, then relabel ${child}`;
+}
+
+function AdditiveOperationExpression({
+  size,
+  value,
+  a,
+  b,
+  focus,
+  sumPassed,
 }: {
-  title: string;
-  items: number[];
-  cosetLookup: Map<number, number>;
-  lifts?: number[];
-  sources?: Map<number, number>;
+  size: number;
+  value: number;
+  a: AdditiveChildAnalysis;
+  b: AdditiveChildAnalysis;
+  focus: Focus;
+  sumPassed: boolean;
 }) {
   return (
-    <div className="additiveSequence">
-      <div className="rowTitle">{title}</div>
-      <div className="additiveSequenceChips">
-        {items.map((item, index) => {
-          const lift = lifts?.[index];
-          const source = sources?.get(item) ?? item;
-          const ghost = lift !== undefined && lift !== source;
-          return (
-            <div className={classNames("additiveOccurrence", ghost && "additiveOccurrenceGhost")} key={`${title}-${item}-${index}`}>
-              <SingletChip item={item} cosetId={cosetLookup.get(item) ?? 0} />
-              {lift !== undefined && (
-                <span className="liftLabel">{ghost ? `${source}→${lift}` : lift}</span>
-              )}
-            </div>
-          );
-        })}
-      </div>
+    <div className="operationExpression">
+      <span className={classNames("exprToken", focus === "parent" && "exprTokenActive")}>
+        *{size}+{value}
+      </span>
+      <span className="exprOperator">{sumPassed ? "=" : "≠"}</span>
+      <span className="exprBrace">{"{"}</span>
+      <span className={classNames("exprToken", focus === "quotient" && "exprTokenActive")}>
+        *{a.selected.length}+{a.value}
+      </span>
+      <span className="exprOperator">+</span>
+      <span className={classNames("exprToken", focus === "divisor" && "exprTokenActive")}>
+        *{b.selected.length}+{b.value}
+      </span>
+      <span className="exprBrace">{"}"}</span>
     </div>
   );
 }
 
-function AdditiveChildCard({
-  childKey,
-  details,
-  label,
-  note,
-  selected,
-  onSelect,
-}: {
-  childKey: AdditiveChildKey;
-  details: AdditiveChildAnalysis;
-  label: string;
-  note: string;
-  selected: boolean;
-  onSelect: (child: AdditiveChildKey) => void;
-}) {
-  return (
-    <button
-      aria-pressed={selected}
-      className={classNames("additiveChildCard", selected && "selected")}
-      onClick={() => onSelect(childKey)}
-      type="button"
-    >
-      <span className="additiveChildName">{label}</span>
-      <strong>{infonLabel(details.selected.length, details.value)}</strong>
-      <span>{note}</span>
-      <span className={classNames("ghostCount", details.moves.length > 0 && "hasGhosts")}>
-        {details.moves.length === 0
-          ? details.status === "value changed"
-            ? "value changed; no moves"
-            : "no additional ghost moves"
-          : `${details.moves.length} ghost ${details.moves.length === 1 ? "move" : "moves"}`}
-      </span>
-    </button>
-  );
+function additiveGhostMoves(details: AdditiveChildAnalysis): GhostMove[] {
+  return details.baseline.map((item, targetSlot) => ({
+    item,
+    sourceSlot: item,
+    ghostSlot: details.lifts[targetSlot],
+    targetSlot,
+  }));
 }
 
 function AdditiveDecomposer({ onModeChange }: { onModeChange: (mode: DecompositionMode) => void }) {
   const [size, setSize] = useState(7);
   const [value, setValue] = useState(4);
   const [aSize, setASize] = useState(3);
-  const [activeChild, setActiveChild] = useState<AdditiveChildKey>("a");
+  const [bMode, setBMode] = useState<AdditiveBMode>("end");
+  const [focus, setFocus] = useState<Focus>("parent");
+  const [stage, setStage] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1100);
   const activeValue = Math.min(value, size - 1);
   const activeASize = Math.min(aSize, size);
   const model = useMemo(
     () => buildAdditiveModel(size, activeValue, activeASize),
     [activeASize, activeValue, size],
   );
+  const b = bMode === "end" ? model.bend : model.b0;
+  const activeDetails = focus === "divisor" ? b : model.a;
+  const sumPassed = bMode === "end" ? model.sumEnd : model.sum0;
+  const rebaseNeeded =
+    focus !== "parent" && !baselinesMatch(activeDetails.initialBaseline, activeDetails.baseline);
+  const ghostMoves = useMemo(() => additiveGhostMoves(activeDetails), [activeDetails]);
+  const generatedItems = canonicalTraversal(activeDetails.baseline, activeDetails.value);
+  const mismatchIndex = firstMismatch(activeDetails.selected, generatedItems);
+  const evaluationPassed = focus === "parent" || mismatchIndex === -1;
+  const passed = evaluationPassed && (focus === "parent" || sumPassed);
+  const activeItems = focus === "parent" ? model.parentTraversal : activeDetails.selected;
+  const displayedSet = new Set(activeItems);
+  const selectedOrder = selectionOrder(activeItems);
+  const fadeUnselected = focus !== "parent" && stage >= 1;
+  const selectionActive = focus !== "parent" && stage === 0;
   const cosetLookup = useMemo(
     () => makeCosetLookup(decomposeCosets(model.parentBaseline, activeValue)),
     [activeValue, model.parentBaseline],
   );
-  const children: Array<{
-    key: AdditiveChildKey;
-    label: string;
-    note: string;
-    details: AdditiveChildAnalysis;
-  }> = [
-    { key: "a", label: "A", note: `first ${activeASize} traversal singlets`, details: model.a },
-    { key: "b0", label: "B₀", note: "shares parent singlet 0", details: model.b0 },
-    { key: "bend", label: "Bend", note: "shares A's last singlet", details: model.bend },
-  ];
-  const focused = children.find((child) => child.key === activeChild) ?? children[0];
-  const focusedSources = new Map(
-    focused.details.initialBaseline.map((item, index) => [item, focused.details.initialLifts[index]]),
-  );
-  const endOperator = model.sumEnd ? "=" : "≠";
+  const stepText = additiveStepLabel(focus, stage, activeASize, bMode, rebaseNeeded);
+  const activeResult =
+    focus === "parent"
+      ? `*${size}+${activeValue}`
+      : infonLabel(activeDetails.selected.length, activeDetails.value);
+  const statusText =
+    focus === "parent"
+      ? "SOURCE"
+      : !evaluationPassed
+        ? `FAIL @ ${mismatchIndex}`
+        : sumPassed
+          ? "PASS"
+          : "VALUE MISMATCH";
 
   useEffect(() => {
     setValue((current) => Math.min(current, size - 1));
     setASize((current) => Math.min(current, size));
   }, [size]);
+
+  useEffect(() => {
+    if (isStageDisabled(stage, focus, rebaseNeeded)) setStage(1);
+  }, [focus, rebaseNeeded, stage]);
+
+  useEffect(() => {
+    if (!playing) return;
+    const id = window.setInterval(() => {
+      setStage((current) => nextStage(current, focus, rebaseNeeded));
+    }, speed);
+    return () => window.clearInterval(id);
+  }, [focus, playing, rebaseNeeded, speed]);
+
+  function handleFocusChange(nextFocus: Focus) {
+    setFocus(nextFocus);
+    setStage(0);
+  }
 
   return (
     <main className="appShell">
@@ -1157,23 +1264,25 @@ function AdditiveDecomposer({ onModeChange }: { onModeChange: (mode: Decompositi
         <div>
           <h1>Proteus Infon Decomposer</h1>
           <div className="signature">
-            *{size}+{activeValue} {endOperator} *{activeASize}+{model.a.value} + *{model.bend.selected.length}+
-            {model.bend.value} (shared end)
+            *{size}+{activeValue} {sumPassed ? "=" : "≠"} *{activeASize}+{model.a.value} + *{b.selected.length}+
+            {b.value} ({bMode === "end" ? "shared end" : "shared 0"})
           </div>
         </div>
-        <DecompositionModeSwitch value="additive" onChange={onModeChange} />
+        <div className="headerActions">
+          <DecompositionModeSwitch value="additive" onChange={onModeChange} />
+          <TransportControls
+            onPlayToggle={() => setPlaying((current) => !current)}
+            onReset={() => setStage(0)}
+            onStep={() => setStage((current) => nextStage(current, focus, rebaseNeeded))}
+            playing={playing}
+          />
+        </div>
       </header>
 
-      <section className="controlBand additiveControls">
+      <section className="controlBand">
         <label className="control">
           <span>Parent size</span>
-          <input
-            min={1}
-            max={MAX_SIZE}
-            type="range"
-            value={size}
-            onChange={(event) => setSize(Number(event.target.value))}
-          />
+          <input min={1} max={MAX_SIZE} type="range" value={size} onChange={(event) => setSize(Number(event.target.value))} />
           <input
             min={1}
             max={MAX_SIZE}
@@ -1184,13 +1293,7 @@ function AdditiveDecomposer({ onModeChange }: { onModeChange: (mode: Decompositi
         </label>
         <label className="control">
           <span>Parent value</span>
-          <input
-            min={0}
-            max={size - 1}
-            type="range"
-            value={activeValue}
-            onChange={(event) => setValue(Number(event.target.value))}
-          />
+          <input min={0} max={size - 1} type="range" value={activeValue} onChange={(event) => setValue(Number(event.target.value))} />
           <input
             min={0}
             max={size - 1}
@@ -1199,15 +1302,8 @@ function AdditiveDecomposer({ onModeChange }: { onModeChange: (mode: Decompositi
             onChange={(event) => setValue(Math.max(0, Math.min(size - 1, Number(event.target.value))))}
           />
         </label>
-        <label className="control">
-          <span>A size / prefix length</span>
-          <input
-            min={1}
-            max={size}
-            type="range"
-            value={activeASize}
-            onChange={(event) => setASize(Number(event.target.value))}
-          />
+        <label className="control compact">
+          <span>A size</span>
           <input
             min={1}
             max={size}
@@ -1216,155 +1312,152 @@ function AdditiveDecomposer({ onModeChange }: { onModeChange: (mode: Decompositi
             onChange={(event) => setASize(Math.max(1, Math.min(size, Number(event.target.value))))}
           />
         </label>
+        <label className="control compact">
+          <span>B overlap</span>
+          <select value={bMode} onChange={(event) => setBMode(event.target.value as AdditiveBMode)}>
+            <option value="end">A end</option>
+            <option value="zero">Parent 0</option>
+          </select>
+        </label>
+        <label className="control compact">
+          <span>Speed</span>
+          <input min={500} max={1800} step={100} type="range" value={speed} onChange={(event) => setSpeed(Number(event.target.value))} />
+        </label>
       </section>
 
-      <div className="additiveShell">
-        <section className="rowPanel additiveParentPanel">
-          <div className="additivePanelHeader">
-            <div>
-              <div className="rowTitle">Parent canonical traversal</div>
-              <div className="additiveHint">
-                A takes the prefix. Each B alternative retains one shared boundary singlet and the remaining suffix.
+      <div className="animationShell">
+        <DecompositionStageRail
+          focus={focus}
+          onStageChange={setStage}
+          rebaseNeeded={rebaseNeeded}
+          stage={stage}
+        />
+
+        <section className="workspace">
+          <ParentIdentityMap
+            active={focus === "parent" || stage <= REBASE_STAGE}
+            cosetLookup={cosetLookup}
+            divisorSize={activeASize}
+            divisorStep={model.a.value}
+            fadeUnselected={fadeUnselected}
+            focus={focus}
+            focusLabels={{ parent: "Parent", quotient: "A", divisor: "B" }}
+            ghostActive={focus !== "parent" && stage === GHOST_STAGE && rebaseNeeded}
+            ghostMoves={ghostMoves}
+            onFocusChange={handleFocusChange}
+            operationExpression={
+              <AdditiveOperationExpression
+                a={model.a}
+                b={b}
+                focus={focus}
+                size={size}
+                sumPassed={sumPassed}
+                value={activeValue}
+              />
+            }
+            parentBaseline={model.parentBaseline}
+            parentTraversal={model.parentTraversal}
+            quotientSize={b.selected.length}
+            quotientStep={b.value}
+            rebaseActive={focus !== "parent" && stage === REBASE_STAGE}
+            selectedOrder={selectedOrder}
+            selectedSet={displayedSet}
+            selectionActive={selectionActive}
+            size={size}
+            stepText={stepText}
+            value={activeValue}
+          />
+
+          {focus === "parent" && (
+            <section className="additiveSumGrid" aria-label="Additive result">
+              <div className="additiveSumCard parentSumCard">
+                <span>Parent</span>
+                <strong>*{size}+{activeValue}</strong>
+                <small>canonical source traversal</small>
               </div>
-            </div>
-            <div className="operationExpression">
-              <span className="exprToken exprTokenActive">*{size}+{activeValue}</span>
-              <span className="exprOperator">→</span>
-              <span className="exprToken">A + B</span>
-            </div>
-          </div>
-          <div className="additiveTraversal">
-            {model.parentTraversal.map((item, index) => (
-              <div
-                className={classNames(
-                  "additiveTraversalCell",
-                  index < activeASize && "inA",
-                  (index === 0 || index >= activeASize) && "inB0",
-                  index >= activeASize - 1 && "inBend",
+              <div className="additiveSumCard">
+                <span>A prefix</span>
+                <strong>{infonLabel(model.a.selected.length, model.a.value)}</strong>
+                <small>first {activeASize} traversal singlets</small>
+              </div>
+              <div className={classNames("additiveSumCard", sumPassed ? "sumPass" : "sumFail")}>
+                <span>B · {bMode === "end" ? "shared A end" : "shared parent 0"}</span>
+                <strong>{infonLabel(b.selected.length, b.value)}</strong>
+                <small>{sumPassed ? "A + B values match the parent" : "A + B value mismatch"}</small>
+              </div>
+            </section>
+          )}
+
+          {focus !== "parent" && (
+            <>
+              <Row
+                active={stage <= 1}
+                cosetLookup={cosetLookup}
+                items={activeDetails.selected}
+                title={`${focus === "quotient" ? "A" : "B"} selected traversal`}
+              />
+              <div className="additiveInference">
+                {focus === "quotient" ? (
+                  <>
+                    <div>
+                      <span>Step inference</span>
+                      <strong>mode ⌊distance × {activeASize} / {size}⌋ = {model.a.value}</strong>
+                    </div>
+                    <div>
+                      <span>Parent distances</span>
+                      <strong>
+                        {model.a.stepInference?.zeroParent
+                          ? "known zero cosets"
+                          : `[${model.a.stepInference?.distances.join(" ") ?? ""}]`}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Scaled samples</span>
+                      <strong>
+                        {model.a.stepInference?.zeroParent
+                          ? "[0]"
+                          : `[${model.a.stepInference?.samples.join(" ") ?? ""}]`}
+                      </strong>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      <span>B selection</span>
+                      <strong>{bMode === "end" ? "A end + suffix" : "parent 0 + suffix"}</strong>
+                    </div>
+                    <div>
+                      <span>Initial classification</span>
+                      <strong>{infonLabel(b.selected.length, b.valueBefore)}</strong>
+                    </div>
+                    <div>
+                      <span>Ghost reconstruction</span>
+                      <strong>{b.moves.length} additional {b.moves.length === 1 ? "move" : "moves"}</strong>
+                    </div>
+                  </>
                 )}
-                key={`additive-parent-${index}-${item}`}
-              >
-                <span className="traversalPosition">{index}</span>
-                <SingletChip item={item} cosetId={cosetLookup.get(item) ?? 0} />
-                <span className="membershipLabel">
-                  {index < activeASize ? "A" : ""}
-                  {index === 0 || index >= activeASize ? " B₀" : ""}
-                  {index >= activeASize - 1 ? " Be" : ""}
-                </span>
               </div>
-            ))}
-          </div>
-        </section>
+            </>
+          )}
 
-        <section className="additiveSumGrid" aria-label="Additive results">
-          <div className="additiveSumCard parentSumCard">
-            <span>Parent</span>
-            <strong>*{size}+{activeValue}</strong>
-            <small>selected source</small>
-          </div>
-          <div className={classNames("additiveSumCard", model.sum0 ? "sumPass" : "sumFail")}>
-            <span>Zero overlap</span>
-            <strong>
-              *{activeASize}+{model.a.value} + *{model.b0.selected.length}+{model.b0.value}
-            </strong>
-            <small>{model.sum0 ? "values add to the parent" : "value mismatch"}</small>
-          </div>
-          <div className={classNames("additiveSumCard", model.sumEnd ? "sumPass" : "sumFail")}>
-            <span>End overlap</span>
-            <strong>
-              *{activeASize}+{model.a.value} + *{model.bend.selected.length}+{model.bend.value}
-            </strong>
-            <small>{model.sumEnd ? "values add to the parent" : "value mismatch"}</small>
-          </div>
-        </section>
-
-        <div className="additiveChildTabs" role="group" aria-label="Additive child details">
-          {children.map((child) => (
-            <AdditiveChildCard
-              childKey={child.key}
-              details={child.details}
-              key={child.key}
-              label={child.label}
-              note={child.note}
-              onSelect={setActiveChild}
-              selected={activeChild === child.key}
-            />
-          ))}
-        </div>
-
-        <section className="rowPanel additiveDetailPanel">
-          <div className="additivePanelHeader">
+          <section className={classNames("resultBand", passed ? "passBand" : "failBand")}>
             <div>
-              <div className="rowTitle">{focused.label} reconstruction</div>
-              <div className="additiveHint">
-                {focused.key === "a"
-                  ? `Step ${focused.details.value} is inferred from parent-scaled transition distances before choosing A's final baseline.`
-                  : focused.details.valueBefore === null
-                    ? `The inherited baseline was noncanonical; cyclic descents inferred step ${focused.details.value}.`
-                    : `The inherited baseline already classifies canonically as step ${focused.details.value}.`}
-              </div>
+              <span>Active result</span>
+              <strong>{activeResult}</strong>
             </div>
-            <div className={classNames("statusPill", focused.details.moves.length > 0 && "statusPillGhost")}>
-              {focused.details.status}
+            <div>
+              <span>{focus === "parent" ? "Traversal" : "Selected"}</span>
+              <strong>[{activeItems.join(" ")}]</strong>
             </div>
-          </div>
-
-          <AdditiveSequence
-            title="Selected traversal"
-            items={focused.details.selected}
-            cosetLookup={cosetLookup}
-          />
-          <AdditiveSequence
-            title={`Initial inherited baseline${focused.details.valueBefore === null ? " — noncanonical" : ` — ${infonLabel(focused.details.selected.length, focused.details.valueBefore)}`}`}
-            items={focused.details.initialBaseline}
-            lifts={focused.details.initialLifts}
-            sources={focusedSources}
-            cosetLookup={cosetLookup}
-          />
-          <AdditiveSequence
-            title={`Final baseline — ${infonLabel(focused.details.selected.length, focused.details.value)}`}
-            items={focused.details.baseline}
-            lifts={focused.details.lifts}
-            sources={focusedSources}
-            cosetLookup={cosetLookup}
-          />
-
-          {focused.details.stepInference && (
-            <div className="additiveInference">
-              <div>
-                <span>Inference</span>
-                <strong>mode ⌊distance × {activeASize} / {size}⌋ = {focused.details.stepInference.step}</strong>
-              </div>
-              <div>
-                <span>Parent distances</span>
-                <strong>
-                  {focused.details.stepInference.zeroParent
-                    ? "known zero cosets"
-                    : `[${focused.details.stepInference.distances.join(" ")}]`}
-                </strong>
-              </div>
-              <div>
-                <span>Scaled samples</span>
-                <strong>
-                  {focused.details.stepInference.zeroParent
-                    ? "[0]"
-                    : `[${focused.details.stepInference.samples.join(" ")}]`}
-                </strong>
-              </div>
+            <div>
+              <span>Status</span>
+              <strong>{statusText}</strong>
             </div>
-          )}
+          </section>
 
-          {focused.details.moves.length > 0 && (
-            <div className="ghostMoveSummary">
-              {focused.details.moves
-                .map((move) => `${move.item}: ${move.source}→${move.target} (+${(move.target - move.source) / size} parent cycle${move.target - move.source === size ? "" : "s"})`)
-                .join("   ")}
-            </div>
-          )}
-        </section>
-
-        <section className="additiveCaveat">
-          <strong>Experimental rule:</strong> A uses parent-scaled transition inference; B₀ and Bend are controls using canonical/descent reconstruction. Canonicality and value addition are reported separately.
+          <section className="additiveCaveat">
+            <strong>Experimental rule:</strong> A uses parent-scaled transition inference; B uses canonical/descent reconstruction. Canonical traversal and additive value agreement remain separate checks.
+          </section>
         </section>
       </div>
     </main>
@@ -1497,32 +1590,12 @@ function MultiplicativeDecomposer({ onModeChange }: { onModeChange: (mode: Decom
         </div>
         <div className="headerActions">
           <DecompositionModeSwitch value="multiplicative" onChange={onModeChange} />
-          <div className="transport">
-            <button
-              className="iconButton"
-              onClick={() => setPlaying((current) => !current)}
-              title={playing ? "Pause" : "Play"}
-              type="button"
-            >
-              {playing ? <Pause size={18} /> : <Play size={18} />}
-            </button>
-            <button
-              className="iconButton"
-              onClick={() => setStage((current) => nextStage(current, focus, model.rebaseNeeded))}
-              title="Step"
-              type="button"
-            >
-              <StepForward size={18} />
-            </button>
-            <button
-              className="iconButton"
-              onClick={() => setStage(0)}
-              title="Reset"
-              type="button"
-            >
-              <RotateCcw size={18} />
-            </button>
-          </div>
+          <TransportControls
+            onPlayToggle={() => setPlaying((current) => !current)}
+            onReset={() => setStage(0)}
+            onStep={() => setStage((current) => nextStage(current, focus, model.rebaseNeeded))}
+            playing={playing}
+          />
         </div>
       </header>
 
@@ -1597,28 +1670,12 @@ function MultiplicativeDecomposer({ onModeChange }: { onModeChange: (mode: Decom
       </section>
 
       <div className="animationShell">
-        <nav className="stepRail" aria-label="Animation stage">
-          {STAGES.map((label, index) => {
-            const disabled = isStageDisabled(index, focus, model.rebaseNeeded);
-            return (
-              <button
-                className={classNames(
-                  "stepButton",
-                  index === stage && "selected",
-                  index < stage && !disabled && "complete",
-                )}
-                disabled={disabled}
-                key={label}
-                onClick={() => setStage(index)}
-                aria-label={`Step ${index + 1}: ${label}`}
-                type="button"
-              >
-                <span className="stepDot">{index + 1}</span>
-                <span className="stepLabel">{label}</span>
-              </button>
-            );
-          })}
-        </nav>
+        <DecompositionStageRail
+          focus={focus}
+          onStageChange={setStage}
+          rebaseNeeded={model.rebaseNeeded}
+          stage={stage}
+        />
 
         <section className="workspace">
           <ParentIdentityMap
