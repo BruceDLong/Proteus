@@ -1151,7 +1151,7 @@ function App() {
   );
   const activeResult = focus === "parent" ? `*${size}+${activeValue}` : `*${model.activePeriod}+${model.activeStep}`;
   const statusText =
-    focus === "parent" ? "SOURCE" : passed ? "PASS" : `FAIL @ ${model.mismatchIndex}`;
+    focus === "parent" ? "SOURCE" : passed ? "PASS" : occurrenceTrace ? "COUNTER MISMATCH" : `FAIL @ ${model.mismatchIndex}`;
 
   return (
     <main className="appShell">
