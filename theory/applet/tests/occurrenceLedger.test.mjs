@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {buildOccurrenceTrace, canonicalTraversal} from './occurrenceLedger.ts';
+import {buildOccurrenceTrace, canonicalTraversal} from '../src/occurrenceLedger.ts';
 let cases=0, events=0, atomicAdvances=0, rebase=0;
 for(let N=4;N<=120;N++)for(let b=2;b<N;b++)if(N%b===0){for(let v=0;v<N;v++){
  const t=buildOccurrenceTrace(N,v,b);
