@@ -1,5 +1,7 @@
 import { Pause, Play, RotateCcw, StepForward } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { buildOccurrenceTrace } from "./occurrenceLedger";
+import { OccurrenceExplorer } from "./OccurrenceExplorer";
 
 type Mode = "divisor" | "quotient";
 
@@ -288,16 +290,16 @@ function selectionOrder(items: number[]): Map<number, number> {
   return new Map(items.map((item, index) => [item, index]));
 }
 
-function isStageDisabled(index: number, focus: Focus, rebaseNeeded: boolean): boolean {
+function isStageDisabled(index: number, focus: Focus, rebaseNeeded: boolean, occurrenceMode = false): boolean {
   if (focus === "parent") return index >= GHOST_STAGE;
-  if (index === GHOST_STAGE) return !rebaseNeeded;
+  if (index === GHOST_STAGE) return !rebaseNeeded && !occurrenceMode;
   return false;
 }
 
-function nextStage(current: number, focus: Focus, rebaseNeeded: boolean): number {
+function nextStage(current: number, focus: Focus, rebaseNeeded: boolean, occurrenceMode = false): number {
   for (let offset = 1; offset <= STAGES.length; offset += 1) {
     const candidate = (current + offset) % STAGES.length;
-    if (!isStageDisabled(candidate, focus, rebaseNeeded)) return candidate;
+    if (!isStageDisabled(candidate, focus, rebaseNeeded, occurrenceMode)) return candidate;
   }
 
   return 0;
@@ -1011,6 +1013,7 @@ function App() {
   const [phase, setPhase] = useState(0);
   const [focus, setFocus] = useState<Focus>("parent");
   const [stage, setStage] = useState(0);
+  const [occurrenceStep, setOccurrenceStep] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1100);
   const mode: Mode = focus === "divisor" ? "quotient" : "divisor";
@@ -1040,6 +1043,7 @@ function App() {
   function handleFocusChange(nextFocus: Focus) {
     setFocus(nextFocus);
     setStage(0);
+    setOccurrenceStep(0);
   }
 
   const model = useMemo(() => {
@@ -1092,19 +1096,40 @@ function App() {
     };
   }, [activePhase, activeValue, divisorSize, effectiveQuotientSize, mode, size]);
 
+  // Boundary/counter construction currently covers the phase-0 contiguous
+  // quotient factor. Other phases retain the explicitly labeled legacy path.
+  const occurrenceTrace = useMemo(
+    () => focus === "quotient" && activePhase === 0 && divisorSize > 1 && effectiveQuotientSize > 1
+      ? buildOccurrenceTrace(size, activeValue, effectiveQuotientSize)
+      : null,
+    [focus, activePhase, divisorSize, effectiveQuotientSize, size, activeValue],
+  );
+
   useEffect(() => {
-    if (isStageDisabled(stage, focus, model.rebaseNeeded)) {
+    setOccurrenceStep(0);
+  }, [size, activeValue, effectiveQuotientSize, activePhase, focus]);
+
+  useEffect(() => {
+    if (isStageDisabled(stage, focus, model.rebaseNeeded, Boolean(occurrenceTrace))) {
       setStage(1);
     }
-  }, [focus, model.rebaseNeeded, stage]);
+  }, [focus, model.rebaseNeeded, stage, occurrenceTrace]);
+
+  const advanceAnimation = useCallback(() => {
+    if (occurrenceTrace && stage === GHOST_STAGE &&
+        occurrenceStep < occurrenceTrace.frames.length - 1) {
+      setOccurrenceStep(current => Math.min(occurrenceTrace.frames.length - 1, current + 1));
+      return;
+    }
+    setStage(nextStage(stage, focus, model.rebaseNeeded, Boolean(occurrenceTrace)));
+    if (stage === REBASE_STAGE) setOccurrenceStep(0);
+  }, [occurrenceTrace, occurrenceStep, stage, focus, model.rebaseNeeded]);
 
   useEffect(() => {
     if (!playing) return;
-    const id = window.setInterval(() => {
-      setStage((current) => nextStage(current, focus, model.rebaseNeeded));
-    }, speed);
+    const id = window.setInterval(advanceAnimation, speed);
     return () => window.clearInterval(id);
-  }, [focus, model.rebaseNeeded, playing, speed]);
+  }, [advanceAnimation, playing, speed]);
 
   const activeItems = mode === "divisor" ? model.divisorItems : model.quotientItems;
   const displayedItems = focus === "parent" ? model.parentTraversal : activeItems;
@@ -1112,8 +1137,18 @@ function App() {
   const selectedOrder = selectionOrder(displayedItems);
   const fadeUnselected = focus !== "parent" && stage >= 1;
   const selectionActive = focus !== "parent" && stage === 0;
-  const stepText = stepLabel(focus, stage, model.divisorSize, effectiveQuotientSize, activePhase, model.rebaseNeeded);
-  const passed = focus === "parent" || model.mismatchIndex === -1;
+  const stepText = occurrenceTrace && stage === GHOST_STAGE
+    ? "Step 3: Cross rational boundaries, advancing individual occurrence counters by +1"
+    : occurrenceTrace && stage === REBASE_STAGE
+      ? "Step 4: Read the component baseline from the selected occurrence positions"
+      : stepLabel(focus, stage, model.divisorSize, effectiveQuotientSize, activePhase, model.rebaseNeeded);
+  const passed = focus === "parent" || (
+    occurrenceTrace
+      ? occurrenceTrace.benchmarkMatch &&
+        firstMismatch(canonicalTraversal([...occurrenceTrace.finalBaseline], model.divisorStep),
+          model.divisorItems) === -1
+      : model.mismatchIndex === -1
+  );
   const activeResult = focus === "parent" ? `*${size}+${activeValue}` : `*${model.activePeriod}+${model.activeStep}`;
   const statusText =
     focus === "parent" ? "SOURCE" : passed ? "PASS" : `FAIL @ ${model.mismatchIndex}`;
@@ -1139,15 +1174,15 @@ function App() {
           </button>
           <button
             className="iconButton"
-            onClick={() => setStage((current) => nextStage(current, focus, model.rebaseNeeded))}
-            title="Step"
+            onClick={advanceAnimation}
+            title={occurrenceTrace && stage === GHOST_STAGE ? "Advance occurrence counter" : "Step"}
             type="button"
           >
             <StepForward size={18} />
           </button>
           <button
             className="iconButton"
-            onClick={() => setStage(0)}
+            onClick={() => { setStage(0); setOccurrenceStep(0); }}
             title="Reset"
             type="button"
           >
@@ -1229,7 +1264,7 @@ function App() {
       <div className="animationShell">
         <nav className="stepRail" aria-label="Animation stage">
           {STAGES.map((label, index) => {
-            const disabled = isStageDisabled(index, focus, model.rebaseNeeded);
+            const disabled = isStageDisabled(index, focus, model.rebaseNeeded, Boolean(occurrenceTrace));
             return (
               <button
                 className={classNames(
@@ -1244,7 +1279,7 @@ function App() {
                 type="button"
               >
                 <span className="stepDot">{index + 1}</span>
-                <span className="stepLabel">{label}</span>
+                <span className="stepLabel">{occurrenceTrace && index === GHOST_STAGE ? "Counters" : occurrenceTrace && index === REBASE_STAGE ? "Result" : label}</span>
               </button>
             );
           })}
@@ -1258,14 +1293,14 @@ function App() {
             divisorStep={model.divisorStep}
             fadeUnselected={fadeUnselected}
             focus={focus}
-            ghostActive={focus !== "parent" && stage === GHOST_STAGE && model.rebaseNeeded}
-            ghostMoves={model.ghostMoves}
+            ghostActive={!occurrenceTrace && focus !== "parent" && stage === GHOST_STAGE && model.rebaseNeeded}
+            ghostMoves={occurrenceTrace ? [] : model.ghostMoves}
             onFocusChange={handleFocusChange}
             parentBaseline={model.parentBaseline}
             parentTraversal={model.parentTraversal}
             quotientSize={effectiveQuotientSize}
             quotientStep={model.quotientStep}
-            rebaseActive={focus !== "parent" && stage === REBASE_STAGE}
+            rebaseActive={!occurrenceTrace && focus !== "parent" && stage === REBASE_STAGE}
             selectedOrder={selectedOrder}
             selectedSet={displayedSet}
             selectionActive={selectionActive}
@@ -1273,6 +1308,22 @@ function App() {
             stepText={stepText}
             value={activeValue}
           />
+
+          {occurrenceTrace && stage >= GHOST_STAGE && (
+            <OccurrenceExplorer
+              trace={occurrenceTrace}
+              step={occurrenceStep}
+              onStepChange={setOccurrenceStep}
+              showFinal={stage >= REBASE_STAGE}
+            />
+          )}
+          {!occurrenceTrace && focus !== "parent" && stage >= GHOST_STAGE && (
+            <p className="stepCallout">
+              This phase or factor still uses the legacy baseline reconstruction.
+              Event-by-event occurrence counters currently cover the phase-0
+              contiguous quotient factor only.
+            </p>
+          )}
 
           <ParentCosetStack
             active={focus === "parent" && stage === 0}
@@ -1313,7 +1364,7 @@ function App() {
           </section>
 
           {focus !== "parent" && (
-            <ScanPanel scan={model.scan} active={!passed || model.scan.failures.length > 0} />
+            {!occurrenceTrace && <ScanPanel scan={model.scan} active={!passed || model.scan.failures.length > 0} />}
           )}
         </section>
       </div>
