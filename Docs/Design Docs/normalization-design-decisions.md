@@ -3205,3 +3205,68 @@ run retains the same 16 failures (450 versus 437). Separate checks covered
 all 108 combinations of phase, window residue, component and known seed
 value with the other seed unknown, and all nine inverse lookups. The test
 program and the shared library both regenerated and built with CodeDog.
+
+## D105 Deriving a component from a finite temporal listSpec (2026-11-05)
+
+D104 projected a six-window period written into the model. The example in
+`Resources/TestFiles/derivedRecurrence.pr` supplies an initial pair and just
+one step. The step takes the form F(a,b) = (b,U(a)), with U selected from a
+finite table of public scalar maps. F need not be invertible. A read of one
+later component can derive which seed supplies it and which maps can act on
+that seed. The other component of the initial pair can remain unknown.
+
+Write the scalar history as x₀,x₁,… with windows (xₜ,xₜ₊₁). A one-based
+window w and component j select xᵢ with i = w+j−2. The seed is component
+1+(i mod 2), and the lookup along that path is applied floor(i/2) times. The
+implementation computes parity and count without adding the two indices.
+For a shared row parameter, compose each admissible row with itself for the
+whole path and take the union of its endpoint values. For an independent
+choice in the step’s actual arguments, take the union of the possible edges
+at one step and raise that relation to the required power. These two orders
+of operations implement different binding identities. Binary composition
+skips the intervening windows. An optional work budget limits table size
+and edge visits when composing the relations would become expensive.
+
+The root request must be a value read through two literal positive indices.
+The extractor checks the actual positional word applications, parameter
+references, temporal predecessor, literal shift table and its index
+expressions. It accepts either plain pairs of unknowns in the temporal tail
+or a virtual tail with a proved finite extent and a uniform step. The target
+ordinal must be in range and losslessly representable as a signed 64-bit
+integer on the build platform. An existing concrete phase and physically
+stored windows keep their ordinary projection path. Writes, references and
+unproved qualifications also retain their ordinary handling.
+
+The table can have different numbers of phase rows and state labels. Each
+row is a total map on the same finite label set, and cells have a uniform
+numeric representation. This proof currently uses a known integer seed on
+the selected path. An unknown phase is a literal enumeration of every row
+label in order, for example `*_+[*3+0 *3+1 *3+2]`. An unconstrained numeric
+interval `*3+_` admits fractions in the native model and does not establish
+that enumeration. Multiple proved outcomes use the existing alternatives
+representation. A unique scalar result records the demanded application and
+logical coordinate. It makes no assertion that a later temporal occurrence
+is identical to a seed occurrence or a declaration cell.
+
+For the shared unknown ternary phase, the measured native queries used the
+same declared tail of 6,000,000 steps.
+
+| One-based window | Normalization frames | Queue steps | Structural positions visited | Binary rounds across rows | Table or relation edge visits |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 7 | 1 | 1 | 0 | 6 | 24 |
+| 6,001 | 1 | 1 | 0 | 36 | 129 |
+| 6,000,001 | 1 | 1 | 0 | 66 | 228 |
+
+The counts exclude parsing the declaration and checking its syntax. For an
+explicit sequence of stored placeholders, checking their qualifications
+additionally visits each placeholder. The constant-size virtual declaration
+avoids that scan. General recurrence discovery, arbitrary coordinate
+expressions and temporal reference identity remain open.
+
+Both CodeDog targets regenerated and built. The full suite passed the 12
+added cases and retained the same 24 failures in 559 tests (547 at D104).
+The language-only run retained the same 16 failures in 461 tests (450 at
+D104). All failure names and diagnostics match. An independent comparison
+against explicit evolution of whole pairs passed 432 native projection
+queries, including noncommuting and noninvertible tables. A separate set of
+310 concrete projections over stored windows agreed with the D104 evaluator.
