@@ -1,6 +1,9 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/projection/recurrence
+    unit/projection/closedWidths
+    unit/projection/recursiveLookup
     unit/embeddedNeighbours/boundaries
     unit/embeddedNeighbours/waiting
     unit/embeddedNeighbours/scaling
@@ -2368,6 +2371,12 @@ struct GLOBAL {
             request <- agent.normalize(call.target)
             if(request!.status().outcome!=worldRejected or toString(call.target!.pItem)!=before){FAIL("Invalid binding did not reject atomically: "+input)}
         }
+        // Two ordinary occurrences demanding each other's value have no independent fact.
+        me WorldParseResult: cycle <- agent.worldManager.parse("{%next %prev}@[1]")
+        request <- agent.normalize(cycle.target)
+        if(request!.status().outcome!=worldUnsupported or request!.error()!="Cyclic contextual prerequisites need a joint proof"){
+            FAIL("Circular neighbour proof was accepted or lost its occurrence")
+        }
         me WorldParseResult: recursive <- agent.worldManager.parse("{#repeat(item)=repeat(item::%item)}")
         request <- agent.normalize(recursive.target)
         recursive <- agent.worldManager.parse("repeat(1)")
@@ -2600,6 +2609,112 @@ struct GLOBAL {
 
 
 struct GLOBAL {
+    void: unit_projection_recurrence(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me string: choices <- "*_+[*3+0 *3+1 *3+2]"
+        me string: defs <- "{#step(w,p)={%w@[2] {{*3+0 *3+1 *3+2} {*3+1 *3+2 *3+0} {*3+2 *3+0 *3+1}}@[(%p +1)]@[(%w@[1] +1)]} #track(x,y,p)={T {%x %y} &*6000000+{T step(%tprev,%p) | ...}}}"
+        me WorldParseResult: declaration <- agent.worldManager.parse(defs)
+        our WorldRequest: known <- agent.normalize(declaration.target)
+        if(!known!.complete()){FAIL("Could not install recurrence declaration")}
+        me string: initial <- toString(declaration.target!.pItem)
+        me List<int64>: ordinals <- [7,6001,6000001]
+        withEach ordinal in ordinals{
+            me string: expression <- "track(*3+1,*3+_,"+choices+")@["+toString(ordinal)+"]@[1]"
+            me WorldParseResult: call <- agent.worldManager.parse(expression)
+            our WorldRequest: answer <- agent.normalize(call.target)
+            our WorldRecurrenceProjection: why <- answer!.recurrenceProjection
+            if(!answer!.complete() or call.target!.pItem!.fetchInt()!=1 or why==NULL or why!.application==NULL or
+               why!.window!=ordinal or why!.component!=1 or answer!.selectedSource()!=NULL){FAIL("Missing derived value or wrong temporal occurrence")}
+            if(answer!.framesCreated>12 or answer!.correspondencePositions>24 or why!.powerRounds>80 or why!.relationVisits>1000){FAIL("Projection enumerated intermediate windows")}
+            print("Derived window ",ordinal," frames=",answer!.framesCreated," queue=",answer!.queueSteps," positions=",answer!.correspondencePositions," rounds=",why!.powerRounds," relation visits=",why!.relationVisits,"\n")
+        }
+        me List<string>: controls <- ["track(*3+1,*3+_,*3+_)@[7]@[1]", "track(*3+1,*3+_,*3+1/2)@[7]@[1]", "track(*3+1,*3+_,"+choices+")@[6000002]@[1]"]
+        withEach query in controls{
+            me WorldParseResult: call <- agent.worldManager.parse(query)
+            our WorldRequest: answer <- agent.normalize(call.target)
+            if(answer!.recurrenceProjection!=NULL or answer!.complete()){FAIL("Unproved phase or endpoint produced a recurrence result: "+query)}
+        }
+        if(toString(declaration.target!.pItem)!=initial){FAIL("Projection changed the source declaration")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+    void: unit_projection_recursiveLookup(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declarations <- agent.worldManager.parse("{#a={b@[1]} #b={a@[1]} #box(x)={%x} #loop=box(loop@[1]) #pair={7 box(pair@[1])@[1] box(pair@[2])@[1]}}")
+        our WorldRequest: defined <- agent.normalize(declarations.target)
+        if(!defined!.complete()){FAIL("Could not register recursive lookup cases")}
+        me List<string>: cycles <- ["a@[1]", "loop@[1]"]
+        withEach expression in cycles{
+            me WorldParseResult: call <- agent.worldManager.parse(expression)
+            our WorldRequest: result <- agent.normalize(call.target)
+            if(result!.status().outcome!=worldUnsupported or result!.framesCreated>100){FAIL("Recursive lookup did not stop: "+expression)}
+        }
+        // The same declaration can legitimately be reentered at a different member.
+        me WorldParseResult: resolved <- agent.worldManager.parse("pair@[3]")
+        our WorldRequest: answer <- agent.normalize(resolved.target)
+        if(!answer!.complete() or resolved.target!.pItem!.fetchInt()!=7){FAIL("Blocked a productive nested lookup")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+    void: unit_projection_closedWidths(me string: testName) <- {
+        // The two branches borrow the same body. A width can skip a prefix,
+        // but each selected leaf keeps the application parameters at its use.
+        me List<int>: depths <- [3, 12, 24]
+        withEach depth in depths{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me string: defs <- "{#tiles0(x)={%x %x}"
+            me int: width <- 2
+            withEach idx in range 0 .. depth{
+                me string: block <- "&tiles"+toString(idx)+"(%x)"
+                width <*- 2
+                defs <+- " #tiles"+toString(idx+1)+"(x)=*"+toString(width)+"+{"+block+" "+block+"}"
+            }
+            me string: tiles <- "tiles"+toString(depth)
+            defs <+- " #ends(a,b)={&"+tiles+"(%a) &"+tiles+"(%b)}}"
+            me WorldParseResult: declared <- agent.worldManager.parse(defs)
+            our WorldRequest: defined <- agent.normalize(declared.target)
+            if(!defined!.complete()){FAIL("Could not define repeated blocks: "+defined!.error())}
+            me int: endIndex <- 2*width
+            me WorldParseResult: call <- agent.worldManager.parse("ends(*3+_,*3+2)@["+toString(endIndex)+"]")
+            our WorldRequest: request <- agent.normalize(call.target)
+            if(!request!.complete() or call.target!.pItem!.fetchInt()!=2){FAIL("Lost the selected application's parameter: "+request!.error())}
+            print("Closed widths depth ",depth," frames=",request!.framesCreated," positions=",request!.correspondencePositions," named=",request!.namedLayouts,"\n")
+            if(request!.correspondencePositions>12*depth+40 or request!.framesCreated>4*depth+30){FAIL("Repeated width was enumerated")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+        // Widths of projected arguments vary between calls to the same word.
+        me Agent: cases; Allocate(cases.identityRegistry); cases.worldManager.control!.identities <- cases.identityRegistry
+        me WorldParseResult: bindings <- cases.worldManager.parse("{#block(x)={&%x@[1]} #series={&block({{11 12}}) &block({{21}}) &block({{31 32 33}}) 91} #open={7 ...} #tile(x)={%x %x} #check(x)={%x=7} #sized=*5+{1 2}}")
+        our WorldRequest: known <- cases.normalize(bindings.target)
+        if(!known!.complete()){FAIL("Could not define projection controls")}
+        me List<string>: calls <- ["series@[5]", "{&sized &sized 3}@[5]", "{&open &open 3}@[5]", "{&tile(7) &tile(_)}@[4]", "{&check(7) &check(8)}@[2]"]
+        withEach idx in range 0 .. calls.size(){
+            me WorldParseResult: call <- cases.worldManager.parse(calls[idx])
+            our WorldRequest: request <- cases.normalize(call.target)
+            if(idx==0 and (!request!.complete() or call.target!.pItem!.fetchInt()!=32)){FAIL("Contextual width reused across parameters")}
+            if(idx==1 and (!request!.complete() or call.target!.pItem!.fetchInt()!=3)){FAIL("Stated extent used without a structural proof")}
+            if(idx==2 and request!.status().outcome!=worldUnsupported){FAIL("Skipped an unproved open extent")}
+            if(idx==3 and request!.status().outcome!=worldPartial){FAIL("Skipped an unresolved selected parameter")}
+            if(idx==4 and request!.status().outcome!=worldRejected){FAIL("Skipped the selected occurrence's constraint")}
+        }
+        cases.endWorldSessions(); modelMngr.clear()
+        // Walk one shared syntax body twice and compare its occurrence paths.
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{&*2+{7 7} &*2+{7 7} &*2+{7 7}}")
+        our POV: outer <- parsed.target!.pItem!.value!.items.head
+        outer!.next!.pItem <- outer!.pItem; outer!.next!.next!.pItem <- outer!.pItem
+        me FlexNum: targetIndex; targetIndex.fromString("5")
+        our WorldWalk:: reference; reference!.push(agent.worldManager.graph.position(parsed.target))
+        our WorldRequest:: proof
+        our WorldPosition: first <- agent.worldManager.graph.nextPosition(proof,reference)
+        our WorldPosition: expected <- first
+        while(reference!.position<targetIndex and expected!=NULL){expected <- agent.worldManager.graph.nextPosition(proof,reference)}
+        our WorldWalk:: indexed; indexed!.stopIndex <- targetIndex; indexed!.push(agent.worldManager.graph.position(parsed.target))
+        our WorldPosition: actual <- agent.worldManager.graph.nextPosition(proof,indexed)
+        while(indexed!.position<targetIndex and actual!=NULL){actual <- agent.worldManager.graph.nextPosition(proof,indexed)}
+        if(first==NULL or expected==NULL or actual==NULL or indexed!.position!=5 or
+           actual!.node!==first!.node or !agent.worldManager.graph.samePosition(expected,actual) or
+           agent.worldManager.graph.samePosition(first,actual)){FAIL("Indexed leaf lost its original occurrence")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
     void: unit_embeddedNeighbours_boundaries(me string: testName) <- {
         me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
         me List<string>: inputs <- ["{1 &{2 ...} %prev}", "{%next &{...} 3}", "{1 &*1000000000+{_|...} %prev}", "{1 &*5+{2 3} %prev}"]

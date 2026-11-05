@@ -3159,3 +3159,124 @@ unknown span stays partial with bounded work rather than allocating its extent.
 These checks establish the stated structural and lifecycle cases, not arbitrary
 dynamic-layout, temporal-conversion or general inference support. Consumer and
 visible-rendering validation remain separate from the engine builds.
+
+## D104 Indexed projection through repeated closed blocks (2026-11-05)
+
+A positive numeric index can skip an earlier occurrence of a shared closed
+layout after the same walk has traversed its full shape. The retained fact is
+its width. The walk enters the block containing the index with that block's
+own occurrence, ancestry and arguments. A cached width equal to the remaining
+distance still requires entering that block to prove its final member.
+
+Reuse requires an ordered, unqualified, context-independent shape and a
+forward whole-block walk with no marked member or shallow stop. A descendant
+whose extent depends on its arguments prevents reuse of the enclosing shape.
+A child bypassed on positive header width alone also prevents that enclosing
+proof. Positive reuse respects inherited bounds and is disabled after an input
+wait or with staged scalar edits. The cursor retains its ordinary handling of
+open spans, unresolved selections and member constraints. The cache lasts for
+one walk. In the test family of doubly used named blocks, a lookup at the far
+end visits a number of structural positions proportional to the nesting depth.
+
+A separate cycle check lets several active occurrences share one expression.
+It compares their contextual positions, including argument bindings and the
+owner chain. Completion removes the particular frame from the expression's
+active occurrences. Re-entering the same contextual prerequisite and genuine
+recursive definitions still use their existing diagnostics. This also serves
+the ordinary repeated-step route when the model supplies only a recurrence.
+
+During review, two indexed declarations referring back to each other could
+re-enter an active proof with a longer chain of borrowed representations.
+Passing the same recursive lookup through a word argument could also allocate
+a new binding for the same call. The cycle guard now checks for an already
+active demand at a declaration expansion. It compares a binding’s declaration,
+supplied argument site and caller occurrence. Completed facts still require
+strict occurrence matching. An indexed member that reads a different member
+of its own declaration can therefore reach a literal and finish.
+The regression checks both circular forms and such a terminating lookup.
+
+The executable `Resources/TestFiles/periodicHistory.pr` makes the distinction
+between the model and the evaluator explicit. Its `p` is an ordinary ternary
+argument. The table `once` specifies the shift U(x) = (x+p) mod 3. The example
+uses the pair rule F(a,b) = (b,U(a)). Applying F twice gives (U(a),U(b)).
+Three applications of U restore the original ternary value for every p, so
+six windows suffice to express every coordinate value. Separate repeated
+blocks retain separate occurrences. Numeric agreement of overlapping fields
+does not prove that they share a single temporal source occurrence. The six
+windows are supplied by the model. From the public first and third scalar
+values, a second lookup table can recover p = (x₂−x₀) mod 3. This makes
+(a,b,p) and the first three scalar values reversibly interchangeable under
+the chosen law. Exponent syntax, recovery of an intrinsic ordering from a
+parent’s opaque singlets and automatic discovery of periods remain open.
+
+The native suite passes all 14 added cases and reports the same 24 failing
+names as the original suite (547 versus 533 total tests). The language-only
+run retains the same 16 failures (450 versus 437). Separate checks covered
+all 108 combinations of phase, window residue, component and known seed
+value with the other seed unknown, and all nine inverse lookups. The test
+program and the shared library both regenerated and built with CodeDog.
+
+## D105 Deriving a component from a finite temporal listSpec (2026-11-05)
+
+D104 projected a six-window period written into the model. The example in
+`Resources/TestFiles/derivedRecurrence.pr` supplies an initial pair and just
+one step. The step takes the form F(a,b) = (b,U(a)), with U selected from a
+finite table of public scalar maps. F need not be invertible. A read of one
+later component can derive which seed supplies it and which maps can act on
+that seed. The other component of the initial pair can remain unknown.
+
+Write the scalar history as x₀,x₁,… with windows (xₜ,xₜ₊₁). A one-based
+window w and component j select xᵢ with i = w+j−2. The seed is component
+1+(i mod 2), and the lookup along that path is applied floor(i/2) times. The
+implementation computes parity and count without adding the two indices.
+For a shared row parameter, compose each admissible row with itself for the
+whole path and take the union of its endpoint values. For an independent
+choice in the step’s actual arguments, take the union of the possible edges
+at one step and raise that relation to the required power. These two orders
+of operations implement different binding identities. Binary composition
+skips the intervening windows. An optional work budget limits table size
+and edge visits when composing the relations would become expensive.
+
+The root request must be a value read through two literal positive indices.
+The extractor checks the actual positional word applications, parameter
+references, temporal predecessor, literal shift table and its index
+expressions. It accepts either plain pairs of unknowns in the temporal tail
+or a virtual tail with a proved finite extent and a uniform step. The target
+ordinal must be in range and losslessly representable as a signed 64-bit
+integer on the build platform. An existing concrete phase and physically
+stored windows keep their ordinary projection path. Writes, references and
+unproved qualifications also retain their ordinary handling.
+
+The table can have different numbers of phase rows and state labels. Each
+row is a total map on the same finite label set, and cells have a uniform
+numeric representation. This proof currently uses a known integer seed on
+the selected path. An unknown phase is a literal enumeration of every row
+label in order, for example `*_+[*3+0 *3+1 *3+2]`. An unconstrained numeric
+interval `*3+_` admits fractions in the native model and does not establish
+that enumeration. Multiple proved outcomes use the existing alternatives
+representation. A unique scalar result records the demanded application and
+logical coordinate. It makes no assertion that a later temporal occurrence
+is identical to a seed occurrence or a declaration cell.
+
+For the shared unknown ternary phase, the measured native queries used the
+same declared tail of 6,000,000 steps.
+
+| One-based window | Normalization frames | Queue steps | Structural positions visited | Binary rounds across rows | Table or relation edge visits |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 7 | 1 | 1 | 0 | 6 | 24 |
+| 6,001 | 1 | 1 | 0 | 36 | 129 |
+| 6,000,001 | 1 | 1 | 0 | 66 | 228 |
+
+The counts exclude parsing the declaration and checking its syntax. For an
+explicit sequence of stored placeholders, checking their qualifications
+additionally visits each placeholder. The constant-size virtual declaration
+avoids that scan. General recurrence discovery, arbitrary coordinate
+expressions and temporal reference identity remain open.
+
+Both CodeDog targets regenerated and built. The full suite passed the 12
+added cases and retained the same 24 failures in 559 tests (547 at D104).
+The language-only run retained the same 16 failures in 461 tests (450 at
+D104). All failure names and diagnostics match. An independent comparison
+against explicit evolution of whole pairs passed 432 native projection
+queries, including noncommuting and noninvertible tables. A separate set of
+310 concrete projections over stored windows agreed with the D104 evaluator.
