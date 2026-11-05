@@ -217,7 +217,7 @@ struct WorldWalk {
     me List<our WorldWalkLevel>: levels
     me Set<our infonView>: activeLayouts
     // Full closed structural proofs only; an anchored suffix proves no such fact.
-    me Set<our infonView>: emptyLayouts
+    me Map<our infonView, me FlexNum>: closedWidths
     our WorldPosition: outerScope
     me Set<our WorldPosition>: crossedScopes
     me uint64: levelsCreated <- 0
@@ -741,6 +741,11 @@ struct WorldCursorWrite {
     our POV: staged
     me Map<our POV, our POV>: members
 }
+// Only outstanding occurrences of one shared expression are in a bucket.
+struct WorldActiveContexts {
+    me List<our WorldFrame>: frames
+}
+
 struct WorldRequest {
     me Map<our POV, our WorldCursorWrite>: cursorWrites
     me Map<our POV, our POV>: cursorWriteTargets
@@ -789,6 +794,7 @@ struct WorldRequest {
     me uint64: neighbourAncestors <- 0
     me uint64: neighbourLevelsCreated <- 0
     me uint64: neighbourPeakLevels <- 0
+    me bool: resumedInput <- false
     me uint64: emptyLayoutHits <- 0
     me uint64: layoutShapeMembers <- 0
     me Set<our infonView>: stableLayoutProofs
@@ -800,7 +806,7 @@ struct WorldRequest {
     me Map<our infonView, our WorldFrame>: attempts
     // Active ancestry only: this prevents circular contextual proofs, not
     // reuse of facts from a different occurrence.
-    me Map<our infonView, our WorldFrame>: activeContexts
+    me Map<our infonView, our WorldActiveContexts>: activeContexts
     our WorldFrame: root
     me Map<our infonView, our WorldFrame>: edits
     our WorldCorrespondenceResult: provenance
@@ -1774,6 +1780,7 @@ struct WorldPOVGraph {
             level!.firstPosition <- walk!.position
             level!.contextFreeLayout <- !level!.contextualLayout and !level!.concatenated and
                 (header.order!=uUnordered or emptyExtent) and (!header.openTail or emptyExtent) and
+                (node!.pItem!.value!.listSpec==NULL or emptyExtent) and
                 !header.negative and node!.pItem!.wrkList.isEmpty() and
                 node!.pItem!.argPos==apNoArgs and level!.position!.input==NULL and
                 (header.nominal==NULL or header.nominal!.defToUse==NULL)
@@ -1784,8 +1791,15 @@ struct WorldPOVGraph {
                 if(walk!.reverse){level!.next <- level!.after!.prev; level!.tailRead <- true}
             }
             if(emptyExtent){level!.tailRead <- true}
-            if(level!.after==NULL and level!.contextFreeLayout and walk!.emptyLayouts.contains(node!.pItem)){
-                level!.next <- NULL; level!.tailRead <- true; request!.emptyLayoutHits <+- 1
+            if(level!.after==NULL and level!.contextFreeLayout and walk!.closedWidths.containsKey(node!.pItem)){
+                me FlexNum: width <- walk!.closedWidths.at(node!.pItem)
+                // A requested interior member still needs its own occurrence.
+                // Skip only a wholly preceding block in a numeric forward read.
+                if(width==0 or (!request!.resumedInput and request!.edits.isEmpty() and !walk!.reverse and !walk!.shallow and walk!.stopAt==NULL and
+                   walk!.position+width<walk!.stopIndex and (!level!.hasLimit or walk!.position+width<=level!.limit))){
+                    walk!.position <+- width; level!.next <- NULL; level!.tailRead <- true
+                    if(width==0){request!.emptyLayoutHits <+- 1}
+                }
             }
             return(true)
         }
@@ -1829,6 +1843,8 @@ struct WorldPOVGraph {
                         return(NULL)
                     }
                     if(skippableWidth(header, member) and walk!.position+header.size<walk!.stopIndex){
+                        // A skipped positive child did not establish its own closed structure.
+                        if(header.size>0){level!.contextFreeLayout <- false}
                         if(level!.hasLimit and walk!.position+header.size>level!.limit){
                             walk!.outcome <- worldPartial; walk!.detail <- "Correspondence exceeds a known source endpoint"; return(NULL)
                         }
@@ -1860,8 +1876,10 @@ struct WorldPOVGraph {
                     walk!.outcome <- worldPartial; walk!.detail <- "Source layout does not reach its known endpoint"; return(NULL)
                 }
                 withEach named in level!.namedLayouts{walk!.activeLayouts.erase(named)}
-                if(level!.after==NULL and level!.contextFreeLayout and walk!.position==level!.firstPosition){
-                    walk!.emptyLayouts.insert(node!.pItem)
+                if(level!.after==NULL and level!.contextFreeLayout and !walk!.closedWidths.containsKey(node!.pItem) and
+                   (walk!.position==level!.firstPosition or
+                    (!request!.resumedInput and request!.edits.isEmpty() and walk!.stopIndex>0 and !walk!.reverse and !walk!.shallow and walk!.stopAt==NULL))){
+                    walk!.closedWidths.insert(node!.pItem, walk!.position-level!.firstPosition)
                 }
                 walk!.activeLayouts.erase(node!.pItem); walk!.levels.popLast()
                 if(!level!.contextFreeLayout and !walk!.levels.isEmpty()){walk!.levels.last()!.contextualLayout <- true; walk!.levels.last()!.contextFreeLayout <- false}
@@ -3254,6 +3272,7 @@ struct WorldManager {
         control!.inputWaiters.erase(item)
         withEach request in waiters!.requests{
             if(request!.outcome==worldWaiting and request!.waitingInput===item){
+                request!.resumedInput <- true
                 request!.waitingInput <- NULL
                 request!.ready.append(request!.waitingFrame); request!.waitingFrame <- NULL
                 request!.outcome <- worldReady; request!.detail <- ""
@@ -3281,21 +3300,29 @@ struct WorldManager {
             if(graph.samePosition(prior!.navigation, context) and graph.completeFacts(prior!.facts, requireSize)){return(prior)}
         }
         our WorldFrame:: frame
+        request!.framesCreated <+- 1
         frame!.node <- node; frame!.demandSize <- requireSize
         frame!.context <- context; frame!.navigation <- context
         frame!.lexicalParameters <- graph.parameterScope(context)
         if(context!=NULL){
             frame!.expressionParent <- node!.pParent; frame!.parentContext <- context!.parent
+            our WorldActiveContexts: active
             if(request!.activeContexts.containsKey(node!.pItem)){
-                frame!.initialized <- true; frame!.facts.outcome <- worldUnsupported
-                frame!.facts.detail <- "Cyclic contextual prerequisites need a joint proof"
-            }else{request!.activeContexts.insert(node!.pItem, frame)}
+                active <- request!.activeContexts.at(node!.pItem)
+                withEach prior in active!.frames{
+                    if(graph.samePosition(prior!.context, context)){
+                        frame!.initialized <- true; frame!.facts.outcome <- worldUnsupported
+                        frame!.facts.detail <- "Cyclic contextual prerequisites need a joint proof"
+                        return(frame)
+                    }
+                }
+            }else{Allocate(active); request!.activeContexts.insert(node!.pItem, active)}
+            active!.frames.append(frame)
         }
         else{
             if(request!.attempts.containsKey(node!.pItem)){request!.attempts.at(node!.pItem) <- frame}
             else{request!.attempts.insert(node!.pItem, frame)}
         }
-        request!.framesCreated <+- 1
         return(frame)
     }
 
@@ -6399,8 +6426,15 @@ struct WorldManager {
                 if(request!.completedOccurrences.containsKey(frame!.node)){request!.completedOccurrences.at(frame!.node) <- frame}
                 else{request!.completedOccurrences.insert(frame!.node, frame)}
             }
-            if(frame!.finished and frame!.context!=NULL and request!.activeContexts.containsKey(frame!.node!.pItem) and
-               request!.activeContexts.at(frame!.node!.pItem)===frame){request!.activeContexts.erase(frame!.node!.pItem)}
+            if(frame!.finished and frame!.context!=NULL and request!.activeContexts.containsKey(frame!.node!.pItem)){
+                our WorldActiveContexts: active <- request!.activeContexts.at(frame!.node!.pItem)
+                me int64: i <- active!.frames.size()
+                while(i>0){
+                    i <-- 1
+                    if(active!.frames[i]===frame){active!.frames.deleteNth(i); break()}
+                }
+                if(active!.frames.isEmpty()){request!.activeContexts.erase(frame!.node!.pItem)}
+            }
         }
         if(request!.outcome==worldReady){graph.finish(request)}
         if(request!.outcome!=worldWaiting){request!.releaseProgress()}

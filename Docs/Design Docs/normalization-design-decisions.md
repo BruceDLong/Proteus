@@ -3159,3 +3159,49 @@ unknown span stays partial with bounded work rather than allocating its extent.
 These checks establish the stated structural and lifecycle cases, not arbitrary
 dynamic-layout, temporal-conversion or general inference support. Consumer and
 visible-rendering validation remain separate from the engine builds.
+
+## D104 Indexed projection through repeated closed blocks (2026-11-05)
+
+A positive numeric index can skip an earlier occurrence of a shared closed
+layout after the same walk has traversed its full shape. The retained fact is
+its width. The walk enters the block containing the index with that block's
+own occurrence, ancestry and arguments. A cached width equal to the remaining
+distance still requires entering that block to prove its final member.
+
+Reuse requires an ordered, unqualified, context-independent shape and a
+forward whole-block walk with no marked member or shallow stop. A descendant
+whose extent depends on its arguments prevents reuse of the enclosing shape.
+A child bypassed on positive header width alone also prevents that enclosing
+proof. Positive reuse respects inherited bounds and is disabled after an input
+wait or with staged scalar edits. The cursor retains its ordinary handling of
+open spans, unresolved selections and member constraints. The cache lasts for
+one walk. In the test family of doubly used named blocks, a lookup at the far
+end visits a number of structural positions proportional to the nesting depth.
+
+A separate cycle check lets several active occurrences share one expression.
+It compares their contextual positions, including argument bindings and the
+owner chain. Completion removes the particular frame from the expression's
+active occurrences. Re-entering the same contextual prerequisite and genuine
+recursive definitions still use their existing diagnostics. This also serves
+the ordinary repeated-step route when the model supplies only a recurrence.
+
+The executable `Resources/TestFiles/periodicHistory.pr` makes the distinction
+between the model and the evaluator explicit. Its `p` is an ordinary ternary
+argument. The table `once` specifies the shift U(x) = (x+p) mod 3. The example
+uses the pair rule F(a,b) = (b,U(a)). Applying F twice gives (U(a),U(b)).
+Three applications of U restore the original ternary value for every p, so
+six windows suffice to express every coordinate value. Separate repeated
+blocks retain separate occurrences. Numeric agreement of overlapping fields
+does not prove that they share a single temporal source occurrence. The six
+windows are supplied by the model. From the public first and third scalar
+values, a second lookup table can recover p = (x₂−x₀) mod 3. This makes
+(a,b,p) and the first three scalar values reversibly interchangeable under
+the chosen law. Exponent syntax, recovery of an intrinsic ordering from a
+parent’s opaque singlets and automatic discovery of periods remain open.
+
+The native suite passes all 14 added cases and reports the same 24 failing
+names as the original suite (547 versus 533 total tests). The language-only
+run retains the same 16 failures (450 versus 437). Separate checks covered
+all 108 combinations of phase, window residue, component and known seed
+value with the other seed unknown, and all nine inverse lookups. The test
+program and the shared library both regenerated and built with CodeDog.
