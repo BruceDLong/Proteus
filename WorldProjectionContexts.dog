@@ -1,0 +1,56 @@
+// Walk-local structural proofs and active contextual prerequisites; D128.
+struct WorldActiveContexts { me List<our WorldFrame>: frames }
+struct WorldRequest {
+    me bool: resumedInput <- false
+    me uint64: closedWidthHits <- 0
+}
+struct WorldPOVGraph {
+    me bool: pureWidthRead(our WorldRequest: request, our WorldWalk: walk) <- {
+        return(!request!.resumedInput and request!.edits.isEmpty() and request!.cursorWrites.isEmpty() and
+            request!.sparseEdits.isEmpty() and walk!.stopIndex>0 and !walk!.reverse and !walk!.shallow and walk!.stopAt==NULL)
+    }
+    // Active demands may borrow the same expression at distinct occurrences.
+    // Logical addresses and application bindings, including generated states,
+    // belong in this comparison; equal values do not establish a cycle.
+    me bool: reentersDemand(our WorldPosition: prior, our WorldPosition: current) <- {
+        if(!sameGeneratedOccurrence(prior,current) or !sameBindings(parameterScope(prior),parameterScope(current))){return(false)}
+        our WorldPosition: start <- current
+        while(start!=NULL){
+            if(start===current or start!.node!.trueByDefinition){
+                our WorldPosition: left <- prior; our WorldPosition: right <- start
+                while(left!=NULL and right!=NULL and sameGeneratedOccurrence(left,right) and sameBindings(left!.parameters,right!.parameters)){
+                    if(left===right){return(true)}
+                    left <- left!.parent; right <- right!.parent
+                }
+                if(left==NULL and right==NULL){return(true)}
+            }
+            start <- start!.parent
+        }
+        return(false)
+    }
+    // Copy on change: production scratch snapshots must retain their own set
+    // of outer active frames when a branch borrows the same syntax body.
+    me bool: enterActiveContext(our WorldRequest: request, our WorldFrame: frame) <- {
+        our WorldActiveContexts:: active
+        if(request!.activeContexts.containsKey(frame!.node!.pItem)){
+            our WorldActiveContexts: prior <- request!.activeContexts.at(frame!.node!.pItem)
+            withEach other in prior!.frames{
+                if(reentersDemand(other!.context,frame!.context)){return(false)}
+                active!.frames.append(other)
+            }
+            request!.activeContexts.at(frame!.node!.pItem) <- active
+        }else{request!.activeContexts.insert(frame!.node!.pItem,active)}
+        active!.frames.append(frame); return(true)
+    }
+    void: leaveActiveContext(our WorldRequest: request, our WorldFrame: frame) <- {
+        if(!request!.activeContexts.containsKey(frame!.node!.pItem)){return()}
+        our WorldActiveContexts: prior <- request!.activeContexts.at(frame!.node!.pItem)
+        me bool: found <- false
+        withEach other in prior!.frames{if(other===frame){found <- true; break()}}
+        if(!found){return()}
+        our WorldActiveContexts:: active
+        withEach other in prior!.frames{if(other!==frame){active!.frames.append(other)}}
+        if(active!.frames.isEmpty()){request!.activeContexts.erase(frame!.node!.pItem)}
+        else{request!.activeContexts.at(frame!.node!.pItem) <- active}
+    }
+}

@@ -16,6 +16,8 @@ struct WorldModelLock: wraps=Nested_Lock_Mutex {}
 #include WorldCheckedViews.dog
 #include WorldListLayout.dog
 #include WorldRecordProjection.dog
+#include WorldRecurrenceProjection.dog
+#include WorldProjectionContexts.dog
 
 // Replacement reasoner. Agent owns sessions; WorldManager owns their reasoning.
 // Scalar and closed ordered-list reasoning with local parser completion.
@@ -262,7 +264,7 @@ struct WorldWalk {
     me List<our WorldWalkLevel>: levels
     me Set<our infonView>: activeLayouts
     // Full closed structural proofs only; an anchored suffix proves no such fact.
-    me Set<our infonView>: emptyLayouts
+    me Map<our infonView, me FlexNum>: closedWidths
     our WorldPosition: outerScope
     me Set<our WorldPosition>: crossedScopes
     me uint64: levelsCreated <- 0
@@ -978,7 +980,7 @@ struct WorldRequest {
     me Map<our infonView, our WorldFrame>: attempts
     // Active ancestry only: this prevents circular contextual proofs, not
     // reuse of facts from a different occurrence.
-    me Map<our infonView, our WorldFrame>: activeContexts
+    me Map<our infonView, our WorldActiveContexts>: activeContexts
     our WorldFrame: root
     me Map<our infonView, our WorldFrame>: edits
     our WorldCorrespondenceResult: provenance
@@ -2348,7 +2350,7 @@ struct WorldPOVGraph {
             level!.firstPosition <- walk!.position
             level!.contextFreeLayout <- !level!.contextualLayout and !level!.concatenated and
                 (header.order!=uUnordered or emptyExtent) and (!header.openTail or emptyExtent) and
-                !header.negative and node!.pItem!.wrkList.isEmpty() and
+                (node!.pItem!.value!.listSpec==NULL or emptyExtent) and !header.negative and node!.pItem!.wrkList.isEmpty() and
                 node!.pItem!.argPos==apNoArgs and level!.position!.input==NULL and
                 (header.nominal==NULL or header.nominal!.defToUse==NULL)
             level!.entered <- true; level!.next <- node!.pItem!.value!.items.head
@@ -2358,8 +2360,13 @@ struct WorldPOVGraph {
                 if(walk!.reverse){level!.next <- level!.after!.previousNode(); level!.tailRead <- true}
             }
             if(emptyExtent){level!.tailRead <- true}
-            if(level!.after==NULL and level!.contextFreeLayout and walk!.emptyLayouts.contains(node!.pItem)){
-                level!.next <- NULL; level!.tailRead <- true; request!.emptyLayoutHits <+- 1
+            if(level!.after==NULL and level!.contextFreeLayout and walk!.closedWidths.containsKey(node!.pItem)){
+                me FlexNum: width <- walk!.closedWidths.at(node!.pItem)
+                if(width==0 or (pureWidthRead(request,walk) and walk!.position+width<walk!.stopIndex and
+                   (!level!.hasLimit or walk!.position+width<=level!.limit))){
+                    walk!.position <+- width; level!.next <- NULL; level!.tailRead <- true
+                    if(width==0){request!.emptyLayoutHits <+- 1}else{request!.closedWidthHits <+- 1}
+                }
             }
             return(true)
         }
@@ -2408,6 +2415,7 @@ struct WorldPOVGraph {
                         return(NULL)
                     }
                     if(skippableWidth(header, member) and walk!.position+header.size<walk!.stopIndex){
+                        if(header.size>0){level!.contextFreeLayout <- false}
                         if(level!.hasLimit and walk!.position+header.size>level!.limit){
                             walk!.outcome <- worldPartial; walk!.detail <- "Correspondence exceeds a known source endpoint"; return(NULL)
                         }
@@ -2440,8 +2448,9 @@ struct WorldPOVGraph {
                     walk!.outcome <- worldPartial; walk!.detail <- "Source layout does not reach its known endpoint"; return(NULL)
                 }
                 withEach named in level!.namedLayouts{walk!.activeLayouts.erase(named)}
-                if(level!.after==NULL and level!.contextFreeLayout and walk!.position==level!.firstPosition){
-                    walk!.emptyLayouts.insert(node!.pItem)
+                if(level!.after==NULL and level!.contextFreeLayout and !walk!.closedWidths.containsKey(node!.pItem) and
+                   (walk!.position==level!.firstPosition or pureWidthRead(request,walk))){
+                    walk!.closedWidths.insert(node!.pItem,walk!.position-level!.firstPosition)
                 }
                 walk!.activeLayouts.erase(node!.pItem); walk!.levels.popLast()
                 if(!level!.contextFreeLayout and !walk!.levels.isEmpty()){walk!.levels.last()!.contextualLayout <- true; walk!.levels.last()!.contextFreeLayout <- false}
@@ -4055,6 +4064,7 @@ struct WorldManager {
         control!.inputWaiters.erase(item)
         withEach request in waiters!.requests{
             if(request!.outcome==worldWaiting and request!.waitingInput===item){
+                request!.resumedInput <- true
                 request!.waitingInput <- NULL
                 request!.ready.append(request!.waitingFrame); request!.waitingFrame <- NULL
                 request!.outcome <- worldReady; request!.detail <- ""
@@ -4101,10 +4111,10 @@ struct WorldManager {
             // Its source frame owns cycle detection; the wrapper still keeps
             // its own container requirements and navigation coordinates.
             if(frame!.referenceTarget==NULL or node!.pItem!==frame!.referenceTarget!.node!.pItem){
-                if(request!.activeContexts.containsKey(node!.pItem)){
+                if(!graph.enterActiveContext(request,frame)){
                     frame!.initialized <- true; frame!.facts.outcome <- worldUnsupported
                     frame!.facts.detail <- "Cyclic contextual prerequisites need a joint proof"
-                }else{request!.activeContexts.insert(node!.pItem, frame)}
+                }
             }
         }
         else{
@@ -4901,9 +4911,9 @@ struct WorldManager {
         lookup!.candidate <- NULL; lookup!.supplied <- NULL; lookup!.prefixPredicate <- NULL
         lookup!.capture <- NULL; lookup!.priorCapture <- NULL; lookup!.lhs <- NULL; lookup!.rhs <- NULL
         lookup!.captured <- false; lookup!.capturing <- false
-        // Empty-layout proofs were local to the completed request. Reestablish
+        // Closed-width proofs were local to the completed request. Reestablish
         // them if a later demand encounters that layout again.
-        lookup!.left!.emptyLayouts.clear(); lookup!.right!.emptyLayouts.clear()
+        lookup!.left!.closedWidths.clear(); lookup!.right!.closedWidths.clear()
         lookup!.continuationProgress <- NULL
         saved!.lookup <- lookup; progress!.continuationStores <+- 1
     }
@@ -7618,7 +7628,14 @@ struct WorldManager {
                     our WorldListLayout: layout <- graph.listLayout(request,path!.source)
                     if(layout!.outcome==worldWaiting){waitAt(request,frame,layout!.waiting);return()}
                 }
-                path!.operation <- pathSelection(request, path!.source, path!.part, path!.index)
+                if(!frame!.referenceOnly){
+                    path!.operation <- recurrenceSelection(request,path!.source,path!.part,path!.index)
+                    if(path!.operation==NULL and request!.recurrenceWaiting!=NULL){
+                        our infonView: waiting <- request!.recurrenceWaiting; request!.recurrenceWaiting <- NULL
+                        waitAt(request,frame,waiting);return()
+                    }
+                }
+                if(path!.operation==NULL){path!.operation <- pathSelection(request, path!.source, path!.part, path!.index)}
             }
             path!.operation!.demandSize <- frame!.demandSize
             path!.operation!.lexicalParameters <- frame!.lexicalParameters
@@ -7631,6 +7648,7 @@ struct WorldManager {
         if(path!.operation!.facts.outcome!=worldReady){frame!.facts <- path!.operation!.facts; stopFrame(request, frame); return()}
         our infonView: work <- path!.part!.path
         if(path!.part!.pathMode==idxField or path!.part!.pathMode==asTSpanField or path!.part!.pathMode==asSListField){work <- path!.part!.continuation}
+        if(path!.operation!.recurrenceProjection!=NULL){work <- path!.operation!.recurrenceContinuation}
         if(!path!.applied){
             if(path!.operation!.createdAssociation!=NULL){
                 our ExternalAssociationReference: reference <- path!.operation!.createdAssociation
@@ -8256,8 +8274,7 @@ struct WorldManager {
                 if(request!.completedOccurrences.containsKey(frame!.node)){request!.completedOccurrences.at(frame!.node) <- frame}
                 else{request!.completedOccurrences.insert(frame!.node, frame)}
             }
-            if(frame!.finished and frame!.context!=NULL and request!.activeContexts.containsKey(frame!.node!.pItem) and
-               request!.activeContexts.at(frame!.node!.pItem)===frame){request!.activeContexts.erase(frame!.node!.pItem)}
+            if(frame!.finished and frame!.context!=NULL){graph.leaveActiveContext(request,frame)}
         }
         if(request!.outcome==worldReady){graph.finish(request)}
         if(request!.outcome!=worldWaiting){request!.releaseProgress()}

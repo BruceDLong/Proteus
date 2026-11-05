@@ -5265,3 +5265,115 @@ in 112.57 seconds. `ldd -r` resolves this checkout's shared library without
 missing symbols, and Slipstream's source tree remains unchanged. These checks
 validate shared-library consumers; visible UI/rendering was not tested.
 Evidence: `/tmp/proteus-unit-traversal-{build7,focused-final,all-final,metrics-final,shared-final,consumer-build,consumer-final,slipstream-build,slipstream-link}.log`.
+
+### D128 Composable finite recurrence value projections
+
+**Problem and choice, 2026-11-04.** PR #36, based on `6dbd49a`, proves scalar
+projections of F(a,b)=(b,U(a)) from a finite literal table and a temporal
+listSpec. Its binary map/relation composition is reused. Its root-only frame
+completion is replaced with a value relationship consumed by the current
+normalizer's ordinary selection, RHS merging, alternatives and publication.
+A parenthesized expression, list member or argument can therefore request the
+same proof. Constraints on the selected value use the existing merge path.
+
+The extractor proves the supplying template, two-component seed, temporal
+predecessor, uniform step, finite endpoint, table labels and index expressions.
+It resolves declarations in their lexical context and follows explicit
+parameter bindings in their caller contexts. Named and positional calls share
+the argument lookup. Unknown phase choices must enumerate the finite row labels;
+a numeric interval also admits fractions and proves no such domain. A shared
+phase stays fixed across the path; a literal choice in each step supplies the
+union relation before exponentiation. Ambiguous outcomes obtained through an outer parameter retain the existing
+parameter-binding obligation on every branch. Ordinary merging therefore
+reports unsupported when fixing such a branch would require a joint binding
+proof. It cannot silently choose different phases for separate consumers of
+the same parameter. Unique outcomes need no such choice; literal choices owned
+by separate applications remain independent. General correlated binding
+inference is outside this increment.
+
+A derived scalar has a private coordinate witness recording its supplying
+application, window and component. Its numeric RHS borrows no seed or table-cell
+occurrence. This value theorem does not establish a materialized temporal
+reference, temporal support, inverse inference or a write into that history.
+Reference demands retain the existing occurrence-producing route. Parser
+completion waits at the required meaning and retries that unresolved proof;
+previously normalized surrounding work and the checked index remain retained.
+No live request is reset. Cancellation publishes no result.
+
+**Structural proofs and cycles.** Positive indexed walks may reuse a fully
+traversed closed, ordered, context-independent block's width. Widths are local
+to the walk, respect inherited bounds, and do not replace proof of the selected
+occurrence. Argument-dependent extents, listSpecs, partial walks, skipped positive
+children, pending input and staged edits prevent positive width reuse. Existing
+zero-width reuse remains available. Active prerequisites are compared using the
+current logical occurrence and application-binding identities. Several active
+occurrences may borrow one expression; genuinely circular demands still stop.
+Copy-on-change buckets preserve outer active contexts across production scratch
+snapshots, including branches and refresh of generated occurrences.
+
+**Alternatives and limits.** Merging the old engine integration would discard
+newer occurrence, production and view contracts. Removing the root guard alone
+would also bypass ordinary selected constraints. The derived relationship keeps
+the tested calculation while using the current framework. Arbitrary recurrence
+discovery, expression-dependent tables and general temporal inference remain
+outside this increment. Finite table size and relation-edge work are capped at
+262144; relation powers can become dense. At fixed table size, binary rounds
+are logarithmic in the selected window. Explicit placeholder tails additionally
+require inspecting their represented shape. No general inference bound follows.
+
+The separate `theory/SingletMapping` reference model and additive experiments
+are preserved unchanged. This theorem assumes the supplied transition law; it
+does not derive singlet addressing, factor/span correspondences or additive
+child-value rules, and does not replace those experiments.
+
+**Validation.** Seven new ordinary CodeDog checks and 41 new language cases
+pass. The final regenerated full suite passes **847/848**; the language-only
+suite passes **570/571**. Both retain only the preceding baseline's
+`defaultTests.tst:merge/dots/align4b`, with the same
+`UNSUPPORTED: Open source correspondence needs span alignment` diagnostic.
+No existing fixture expectation changed. The old PR's temporal examples and
+width assertions are retained; its recursive zero-argument declaration uses an
+explicit template header under the current naming contract.
+
+The checks cover direct and parenthesized projections, arithmetic, list and
+record members, arguments and forwarded bindings, named applications, computed
+first indices, template aliases, lexical shadowing, named step arguments and
+selected-value constraints. Literal ordinals beyond floating-point precision
+and at signed 64-bit maximum are checked without intermediate production.
+The maintained whole-pair oracle passes 248 queries over noncommuting and
+noninvertible maps, distinguishing shared and fresh phases. A separate explicit
+whole-pair evaluator passes another 176 queries over four tables with different
+state/row counts. Unknown numeric intervals, fractional phases and out-of-range
+endpoints do not acquire a derived proof.
+
+Shared outer-phase controls preserve the existing binding obligation and stop
+unsupported joint deductions atomically, with no publication. Concrete shared
+phases and independent application choices still compose. Parser waits retain
+their request and checked index; unrelated input does no work, cancellation
+publishes nothing and subscriptions are released. Distinct equal-valued calls
+retain distinct application witnesses; an unchanged completed result creates
+zero new frames. Weak references verify actual witness reclamation after request
+release. Shared source declarations remain unchanged.
+
+For the virtual six-million-step source, direct windows 7, 6001 and 6000001 each
+allocate six frames (including the private index adapter), take nine queue
+steps, visit two structural positions and produce zero intermediate states.
+They use 6/36/66 binary rounds and 24/129/228 relation-edge visits respectively.
+Ordinary parentheses add one frame and two queue steps. The repeated-block
+family at depth 3/12/24 visits 33/105/201 structural positions and allocates
+9/18/30 frames; controls retain argument-dependent widths, constraints, open
+extents and distinct selected occurrences.
+
+The final CodeDog test build succeeds in 171.99 seconds and the separately
+regenerated shared library in 116.87 seconds. An ordinary CodeDog client linked
+against the exported interface rebuilds in 46.46 seconds and evaluates a
+parenthesized projection-plus-one at window 6000001 to `*3+2` through the final
+shared library (eight frames, 13 queue steps, 228 relation visits). Slipstream
+regenerates and builds in 65.87 seconds. Both clients resolve the canonical
+shared library with no unresolved dynamic symbols. Slipstream's source tree
+is unchanged; visible UI/rendering was not exercised. A complete before/after
+content hash comparison confirms `theory/SingletMapping` is unchanged.
+
+Evidence: `/tmp/proteus-recurrence-{build-final,all-final,language-final,cost-final,
+width-final,independent-final,shared-final,consumer-build,consumer-final,
+consumer-link-final,slipstream-build,slipstream-link-final}.log`.

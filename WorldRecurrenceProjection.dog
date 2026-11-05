@@ -1,0 +1,434 @@
+// Finite recurrence value proofs; D128. Singlet addressing is independent.
+// Scalar labels in a finite table, used only after its operands and extents
+// have been proved. Members of different temporal windows keep their own POVs.
+struct WorldLabelSet {
+    me Set<int64>: labels
+}
+struct WorldLabelRelation {
+    me List<WorldLabelSet>: targets
+}
+
+struct WorldPairRule {
+    me int64: stateCount <- 0
+    me List<int64>: entries // Row-major. Each row maps labels 0 .. stateCount-1 to labels.
+    me uint64: powerRounds <- 0
+    me uint64: relationVisits <- 0
+    // Repeated squaring can densify the relation for independently chosen rows.
+    // Decline this proof when its table and successive graphs become too costly.
+    const uint64: visitLimit <- 262144
+
+    me WorldLabelSet: image(our WorldLabelRelation: relation, me WorldLabelSet: starts) <- {
+        me WorldLabelSet: result
+        withEach start in starts.labels{
+            withEach target in relation!.targets[start].labels{
+                relationVisits <+- 1; if(relationVisits>visitLimit){return(result)}
+                result.labels.insert(target)
+            }
+        }
+        return(result)
+    }
+
+    // For F(a,b)=(b,U(a)), two updates apply U once to either component.
+    me int64: sourceComponent(me int64: window, me int64: component) <- {
+        if(window<1 or component<1 or component>2){return(0)}
+        if(window % 2==0){return(3-component)}
+        return(component)
+    }
+    me WorldLabelSet: powerImage(me int64: choice, me int64: count, me WorldLabelSet: starts) <- {
+        // choice=-1 denotes the union of possible one-step maps. Composing
+        // that relation permits a fresh choice at each application.
+        our WorldLabelRelation:: power
+        me int64: first <- choice; me int64: limit <- choice+1
+        if(choice<0){first <- 0; limit <- entries.size()/stateCount}
+        withEach label in range 0 .. stateCount{
+            me WorldLabelSet: next
+            withEach row in range first .. limit{
+                relationVisits <+- 1; if(relationVisits>visitLimit){return(starts)}
+                next.labels.insert(entries[row*stateCount+label])
+            }
+            power!.targets.append(next)
+        }
+        while(count>0){
+            powerRounds <+- 1
+            if(count % 2==1){
+                starts <- image(power,starts); if(relationVisits>visitLimit){return(starts)}
+            }
+            count <- count/2
+            if(count>0){
+                our WorldLabelRelation:: squared
+                withEach targetsOfStart in power!.targets{
+                    squared!.targets.append(image(power,targetsOfStart))
+                    if(relationVisits>visitLimit){return(starts)}
+                }
+                power <- squared
+            }
+        }
+        return(starts)
+    }
+    // An empty list declines the proof. A -1 seed/phase quantifies
+    // over its finite public domain. Keep a shared row fixed for the entire
+    // projection, even if its numeric value is unknown.
+    me List<int64>: project(me int64: window, me int64: component, me int64: seed, me int64: phase, me bool: fresh) <- {
+        me List<int64>: result
+        powerRounds <- 0; relationVisits <- 0
+        if(sourceComponent(window,component)==0 or stateCount<=0 or entries.isEmpty() or
+           entries.size()>visitLimit or entries.size() % stateCount!=0 or seed<(-1) or seed>=stateCount){return(result)}
+        me int64: rowCount <- entries.size()/stateCount
+        if(phase<(-1) or phase>=rowCount){return(result)}
+        withEach target in entries{if(target<0 or target>=stateCount){return(result)}}
+        me WorldLabelSet: starts
+        withEach label in range 0 .. stateCount{if(seed<0 or seed==label){starts.labels.insert(label)}}
+        me int64: count <- window/2
+        if(window % 2==0 and component==1){count <-- 1}
+        me WorldLabelSet: reachable
+        if(count==0){reachable <- starts}
+        else{
+            me int64: first <- phase; me int64: limit <- phase+1
+            if(phase<0 and !fresh){first <- 0; limit <- rowCount}
+            withEach row in range first .. limit{
+                me WorldLabelSet: images <- powerImage(row,count,starts)
+                if(relationVisits>visitLimit){return(result)}
+                withEach target in images.labels{reachable.labels.insert(target)}
+            }
+        }
+        withEach label in range 0 .. stateCount{if(reachable.labels.contains(label)){result.append(label)}}
+        return(result)
+    }
+}
+
+// A checked two-component temporal projection with application-specific inputs.
+struct WorldRecurrenceRule {
+    me WorldPairRule: action
+    me List<our infonView>: seeds
+    our infonView: phase
+    me bool: sharedPhase <- false
+    me bool: finitePhase <- false
+    me bool: phaseBindingRequired <- false
+    me bool: sizedCells <- false
+    me int64: rows <- 0
+    me FlexNum: windows
+    me bool: virtualTail <- false
+}
+
+// A value proof names its supplying application and logical coordinate. It is
+// not an identity with a seed, table cell, or materialized temporal occurrence.
+struct WorldRecurrenceProjection {
+    our WorldPosition: application
+    me int64: window
+    me int64: component
+    me bool: sized
+    me List<int64>: values
+}
+struct POV { our WorldRecurrenceProjection: recurrenceProjection }
+struct WorldFrame {
+    our WorldRecurrenceProjection: recurrenceProjection
+    our infonView: recurrenceContinuation
+}
+struct WorldRequest {
+    our infonView: recurrenceWaiting
+    me uint64: recurrenceProjections <- 0
+    me uint64: recurrenceRounds <- 0
+    me uint64: recurrenceVisits <- 0
+}
+
+struct WorldPOVGraph {
+    our infonView: ruleArgument(our WordDefn: def, our infonView: call, me int64: index) <- {
+        if(call!.wordArguments==NULL){return(NULL)}
+        me int64: pos <- 0
+        withEach arg in call!.wordArguments!.values{
+            if((arg.name=="" and pos==index) or arg.name==def!.parameterNames[index]){return(arg.value)}
+            pos <+- 1
+        }
+        return(NULL)
+    }
+    // A literal supplied through another parameter retains its caller scope.
+    // This resolves references only; arbitrary expressions use ordinary solving.
+    our infonView: ruleOperand(our infonView: item, our WorldPosition: context) <- {
+        me Set<our WorldArgumentBinding>: visited
+        while(ruleCursor(item,false)){
+            our WorldBindings: scope <- parameterScope(context)
+            if(scope==NULL or !scope!.arguments.containsKey(item!.parameterName)){return(NULL)}
+            our WorldArgumentBinding: argument <- scope!.arguments.at(item!.parameterName)
+            if(argument!.omitted or argument!.expression==NULL or visited.contains(argument)){return(NULL)}
+            visited.insert(argument); item <- argument!.expression!.pItem; context <- argument!.caller
+        }
+        return(item)
+    }
+    // Closed syntax only. The parser represents a postfix continuation and
+    // the body of an explicit alternative list with non-streamed wrappers.
+    me bool: ruleSyntax(our infonView: item, me bool: wrapper <- false) <- {
+        return(item!=NULL and item!.value!=NULL and item!.infSize!=NULL and
+            (item!.streamState==parseDone or (wrapper and item!.streamState==notParsing)) and item!.graphParseError=="" and
+            (item!.itmMode==mItem or item!.itmMode==mNone) and item!.useMode==umAssert and
+            item!.addedTypes.isEmpty() and item!.wrkList.isEmpty() and item!.parts.isEmpty() and item!.proxy==NULL and
+            item!.identityName==NULL and item!.definedWord==NULL and item!.funcArgs==NULL and item!.argPos==apNoArgs and
+            !item!.parameterBindingRequired and !item!.templateReference and item!.templateModel==NULL and !item!.wordDerefed and
+            !item!.invertMatch and !item!.doReply and !item!.isNormed and !item!.isTentative and !item!.independentTemporalValue and
+            item!.temporalPredecessor==NULL and item!.temporalValueSource==NULL and item!.orderMode!=uUnordered and
+            !item!.value!.inverted and !item!.value!.undefined and !item!.infSize!.inverted and !item!.infSize!.undefined and
+            item!.infSize!.overlayType==NUM and (item!.infSize!.evalMode==emLiteral or item!.infSize!.evalMode==emUnknown))
+    }
+    me bool: ruleEdge(our POV: edge, me bool: embedded <- false) <- {
+        return(edge!=NULL and edge!.isSubItm==embedded and !edge!.forceID and !edge!.looseType() and
+            edge!.accessMode==aCopyOf and edge!.viewMap.sourcePov==NULL and edge!.referenceAlias.sourcePov==NULL)
+    }
+    me bool: ruleList(our infonView: item, me bool: temporal <- false, me bool: postfix <- false) <- {
+        return(ruleSyntax(item) and item!.viewMode==vmOverlay and item!.value!.overlayType==LST and
+            item!.value!.evalMode==emLiteral and item!.value!.timelike==temporal and item!.type==NULL and
+            item!.innr==NULL and item!.wordArguments==NULL and (postfix or item!.partRef==NULL))
+    }
+    me bool: ruleClosedList(our infonView: item, me bool: postfix <- false) <- {
+        return(ruleList(item, false, postfix) and item!.value!.sizeMode==fromCount and
+            item!.value!.listSpec==NULL and !item!.value!.tailUnfinished)
+    }
+    me bool: rulePair(our infonView: item) <- {
+        if(!ruleClosedList(item)){return(false)}
+        our POV: first <- item!.value!.items.head
+        return(ruleEdge(first) and ruleEdge(first!.next) and first!.next!.next==NULL)
+    }
+    me bool: ruleScalar(our infonView: item) <- {
+        return(ruleSyntax(item) and item!.viewMode==vmOverlay and item!.value!.overlayType==NUM and
+            (item!.value!.evalMode==emUnknown or item!.value!.evalMode==emLiteral) and
+            item!.value!.listSpec==NULL and !item!.value!.tailUnfinished and !item!.value!.timelike and
+            item!.type==NULL and item!.wordArguments==NULL and item!.innr==NULL and item!.partRef==NULL)
+    }
+    me bool: ruleLabel(our infonView: item, me int64: count, me bool: allowUnknown) <- {
+        if(!ruleScalar(item)){return(false)}
+        if(item!.value!.sizeMode==fromGiven){
+            if(item!.infSize!.evalMode!=emLiteral or item!.infSize!.num!=FlexNum(count)){return(false)}
+        }else if(item!.value!.sizeMode!=fromCount or item!.infSize!.evalMode!=emUnknown){return(false)}
+        if(item!.value!.evalMode==emUnknown){return(allowUnknown)}
+        return(item!.value!.num.getDenominator()==1 and item!.value!.num>=0 and item!.value!.num<FlexNum(count))
+    }
+    me bool: ruleCursor(our infonView: item, me bool: previous, me bool: indexed <- false) <- {
+        if(!ruleSyntax(item) or item!.viewMode!=vmCursor or item!.type!=NULL or item!.wordArguments!=NULL or
+           item!.innr!=NULL or (item!.partRef!=NULL)!=indexed or item!.value!.evalMode!=emUnknown or
+           item!.value!.overlayType!=tUnset or item!.value!.sizeMode!=fromCount){return(false)}
+        if(previous){return(item!.cursorMode==cmTPrev)}
+        return(item!.cursorMode==cmParameter)
+    }
+    me bool: ruleIndexPart(our PartPath: part) <- {
+        return(part!=NULL and part!.pathMode==idxField and !part!.hasSemiColon and !part!.wasTransfered and
+            !part!.implicitSource and part!.spec==NULL and (part!.continuation==NULL or (ruleSyntax(part!.continuation,true) and
+            part!.continuation!.viewMode==vmAny and part!.continuation!.type==NULL and part!.continuation!.innr==NULL and
+            part!.continuation!.wordArguments==NULL and part!.continuation!.value!.overlayType==tUnset and
+            part!.continuation!.value!.evalMode==emUnknown and part!.continuation!.value!.sizeMode==fromCount)))
+    }
+    me bool: ruleMember(our infonView: item, me string: windowName, me int: index) <- {
+        if(!ruleCursor(item,false,true) or item!.parameterName!=windowName or !ruleIndexPart(item!.partRef)){return(false)}
+        our infonView: ordinal <- item!.partRef!.path
+        return((item!.partRef!.continuation==NULL or item!.partRef!.continuation!.partRef==NULL) and ruleScalar(ordinal) and
+            ordinal!.value!.evalMode==emLiteral and ordinal!.value!.sizeMode==fromCount and
+            ordinal!.infSize!.evalMode==emUnknown and ordinal!.value!.num==index)
+    }
+    // Numeric +1 converts a public scalar label to a Proteus list ordinal.
+    our infonView: ruleCoordinate(our PartPath: part) <- {
+        if(!ruleIndexPart(part)){return(NULL)}
+        our infonView: sum <- part!.path
+        if(!ruleSyntax(sum) or sum!.viewMode!=vmOverlay or sum!.type!=NULL or sum!.wordArguments!=NULL or
+           sum!.innr!=NULL or sum!.partRef!=NULL or sum!.value!.sizeMode!=fromCount or !scalarExpression(sum!.value)){return(NULL)}
+        our POV: source <- sum!.value!.items.head
+        if(!ruleEdge(source) or !ruleEdge(source!.next) or source!.next!.next!=NULL){return(NULL)}
+        our infonView: one <- source!.next!.pItem
+        if(!ruleScalar(one) or one!.value!.evalMode!=emLiteral or one!.value!.sizeMode!=fromContext or
+           one!.infSize!.evalMode!=emUnknown or one!.value!.num!=1){return(NULL)}
+        return(source!.pItem)
+    }
+    // Resolve through the current lexical catalogue and occurrence context.
+    our WordDefn: ruleDefinition(our WorldRequest: request, our infonView: call, our WorldPosition: context) <- {
+        if(!ruleSyntax(call) or call!.viewMode!=vmAny or call!.value!.overlayType!=tUnset or
+           call!.value!.sizeMode!=fromCount or call!.value!.evalMode!=emUnknown or call!.infSize!.evalMode!=emUnknown or
+           call!.type==NULL or call!.wordArguments==NULL or call!.innr!=NULL or call!.partRef!=NULL){return(NULL)}
+        me WorldScalar: facts; facts <- bind(request, facts, call!.type, call!.lexicalScope, context)
+        if(facts.outcome!=worldReady or facts.nominal==NULL or facts.nominal!.baseDefinition==NULL){return(NULL)}
+        our WordDefn: def <- facts.nominal!.baseDefinition
+        if(def!.meaning==NULL or def!.meaning!==facts.nominal!.defToUse or
+           def!.parameterNames.size()!=call!.wordArguments!.values.size()){return(NULL)}
+        if(checkArguments(call,facts.nominal)!=""){return(NULL)}
+        our WorldNameBinding: binding <- nameBinding(request,def)
+        if(binding!=NULL and (binding!.kind!=1 or binding!.constructed)){return(NULL)}
+        if(def!.meaning!.streamState==parseStarted or def!.meaning!.streamState==parseListReady){
+            request!.recurrenceWaiting <- def!.meaning; return(NULL)
+        }
+        return(def)
+    }
+    our infonView: ruleActual(our WordDefn: def, our infonView: call, our infonView: param) <- {
+        if(!ruleCursor(param,false)){return(NULL)}
+        withEach idx in range 0 .. def!.parameterNames.size(){
+            if(param!.parameterName==def!.parameterNames[idx]){return(ruleArgument(def,call,idx))}
+        }
+        return(NULL)
+    }
+    me bool: readPairTable(our WorldRecurrenceRule: rule, our WordDefn: step) <- {
+        if(step!.parameterNames.size()!=2 or !rulePair(step!.meaning)){return(false)}
+        our POV: first <- step!.meaning!.value!.items.head
+        if(!ruleMember(first!.pItem,step!.parameterNames[0],2)){return(false)}
+        our infonView: table <- first!.next!.pItem
+        if(!ruleClosedList(table,true) or !ruleIndexPart(table!.partRef) or table!.partRef!.continuation==NULL){return(false)}
+        our infonView: rowIndex <- ruleCoordinate(table!.partRef)
+        if(!ruleCursor(rowIndex,false) or rowIndex!.parameterName!=step!.parameterNames[1]){return(false)}
+        our PartPath: column <- table!.partRef!.continuation!.partRef
+        if(!ruleMember(ruleCoordinate(column),step!.parameterNames[0],1) or (column!.continuation!=NULL and column!.continuation!.partRef!=NULL)){return(false)}
+        me List<our infonView>: cells
+        our POV: row <- table!.value!.items.head
+        while(row!=NULL){
+            if(!ruleEdge(row) or !ruleClosedList(row!.pItem)){return(false)}
+            our POV: cell <- row!.pItem!.value!.items.head
+            me int64: columns <- 0
+            while(cell!=NULL){
+                if(!ruleEdge(cell) or cells.size()>=rule!.action.visitLimit){return(false)}
+                cells.append(cell!.pItem); columns <+- 1; cell <- cell!.next
+            }
+            if(columns==0 or (rule!.rows>0 and columns!=rule!.action.stateCount)){return(false)}
+            rule!.action.stateCount <- columns; rule!.rows <+- 1; row <- row!.next
+        }
+        if(cells.isEmpty()){return(false)}
+        rule!.sizedCells <- cells[0]!.value!.sizeMode==fromGiven
+        withEach cell in cells{
+            if(!ruleLabel(cell,rule!.action.stateCount,false) or (cell!.value!.sizeMode==fromGiven)!=rule!.sizedCells){return(false)}
+            rule!.action.entries.append(cell!.fetchInt())
+        }
+        return(true)
+    }
+    me bool: ruleFinitePhase(our infonView: phase, me int64: rows) <- {
+        if(!ruleSyntax(phase) or !phase!.isOrLike() or phase!.type!=NULL or phase!.partRef!=NULL or
+           phase!.wordArguments!=NULL or phase!.value!.sizeMode!=fromGiven or phase!.infSize!.evalMode!=emUnknown){return(false)}
+        our infonView: list <- phase!.innr
+        if(!ruleSyntax(list,true) or list!.value!.overlayType!=LST or list!.value!.timelike or
+           list!.type!=NULL or list!.partRef!=NULL or list!.wordArguments!=NULL or list!.innr!=NULL or
+           list!.value!.tailUnfinished or list!.value!.listSpec!=NULL){return(false)}
+        our POV: label <- list!.value!.items.head
+        me int64: pos <- 0
+        while(label!=NULL){
+            if(!ruleEdge(label) or !ruleLabel(label!.pItem,rows,false) or label!.pItem!.value!.num!=FlexNum(pos)){return(false)}
+            pos <+- 1; label <- label!.next
+        }
+        return(pos==rows)
+    }
+    our WorldRecurrenceRule: recurrenceRule(our WorldRequest: request, our WorldPosition: application) <- {
+        if(!request!.edits.isEmpty() or !request!.cursorWrites.isEmpty() or !request!.sparseEdits.isEmpty()){return(NULL)}
+        our infonView: call <- application!.node!.pItem
+        our WordDefn: history <- ruleDefinition(request,call,application)
+        if(history==NULL){return(NULL)}
+        our infonView: body <- history!.meaning
+        if(!ruleList(body,true) or body!.value!.listSpec!=NULL or body!.value!.sizeMode!=fromCount or body!.value!.tailUnfinished){return(NULL)}
+        our WorldRecurrenceRule:: rule
+        our POV: seedPair <- body!.value!.items.head
+        if(!ruleEdge(seedPair) or !rulePair(seedPair!.pItem)){return(NULL)}
+        our POV: tailEdge <- seedPair!.next
+        if(!ruleEdge(tailEdge,true) or tailEdge!.next!=NULL or !ruleList(tailEdge!.pItem,true)){return(NULL)}
+        our infonView: tail <- tailEdge!.pItem
+        our infonView: spec <- tail!.value!.listSpec
+        our WordDefn: step <- ruleDefinition(request,spec,application)
+        if(step==NULL or step===history or !readPairTable(rule,step)){return(NULL)}
+        if(!ruleCursor(ruleArgument(step,spec,0),true)){return(NULL)}
+        our infonView: selector <- ruleArgument(step,spec,1)
+        rule!.phase <- ruleActual(history,call,selector)
+        rule!.sharedPhase <- rule!.phase!=NULL
+        if(!rule!.sharedPhase){rule!.phase <- selector}
+        // Following an outer parameter must retain its binding obligation.
+        // Distinct scalar consumers cannot choose that shared phase separately.
+        rule!.phaseBindingRequired <- ruleCursor(rule!.phase,false)
+        rule!.phase <- ruleOperand(rule!.phase,application)
+        rule!.finitePhase <- ruleFinitePhase(rule!.phase,rule!.rows)
+        if(!rule!.finitePhase and !ruleLabel(rule!.phase,rule!.rows,false)){return(NULL)}
+        our POV: seed <- seedPair!.pItem!.value!.items.head
+        while(seed!=NULL){
+            our infonView: value <- ruleOperand(ruleActual(history,call,seed!.pItem),application)
+            if(!ruleLabel(value,rule!.action.stateCount,true)){return(NULL)}
+            rule!.seeds.append(value); seed <- seed!.next
+        }
+        rule!.virtualTail <- tail!.value!.tailUnfinished
+        our POV: member <- tail!.value!.items.head
+        if(rule!.virtualTail){
+            if(member!=NULL or tail!.value!.sizeMode!=fromGiven or tail!.infSize!.evalMode!=emLiteral or
+               tail!.infSize!.num.getDenominator()!=1 or tail!.infSize!.num<0){return(NULL)}
+            rule!.windows <- tail!.infSize!.num+1
+        }else{
+            if(tail!.value!.sizeMode!=fromCount){return(NULL)}
+            rule!.windows <+- 1
+            while(member!=NULL){
+                if(!ruleEdge(member) or !rulePair(member!.pItem)){return(NULL)}
+                our POV: field <- member!.pItem!.value!.items.head
+                while(field!=NULL){
+                    if(!ruleScalar(field!.pItem) or field!.pItem!.value!.evalMode!=emUnknown or
+                       field!.pItem!.value!.sizeMode!=fromCount or field!.pItem!.infSize!.evalMode!=emUnknown){return(NULL)}
+                    field <- field!.next
+                }
+                rule!.windows <+- 1; member <- member!.next
+            }
+        }
+        return(rule)
+    }
+}
+
+struct WorldManager {
+    // This theorem supplies a value relationship to the normal selection and
+    // merge path. Enclosing work, alternatives and publication remain ordinary.
+    our WorldFrame: recurrenceSelection(our WorldRequest: request, our WorldPosition: source,
+                                        our PartPath: part, our WorldFrame: index) <- {
+        request!.recurrenceWaiting <- NULL
+        if(part!.pathMode!=idxField or part!.spec!=NULL or part!.hasSemiColon or part!.wasTransfered or part!.implicitSource or
+           index==NULL or !index!.facts.hasValue or index!.facts.overlay!=NUM or index!.facts.number.getDenominator()!=1 or
+           index!.facts.number<2 or index!.facts.number>FlexNum("9223372036854775807") or
+           source!.input!=NULL or !graph.ruleEdge(source!.node) or source!.node!.cursorValue!=NULL or
+           source!.node!.referenceAlias.sourcePov!=NULL or source!.node!.hasNamedReference or source!.generatedAddress!=NULL){return(NULL)}
+        our infonView: rest <- part!.continuation
+        if(!graph.ruleSyntax(rest,true) or rest!.viewMode!=vmAny or rest!.type!=NULL or rest!.wordArguments!=NULL or
+           rest!.innr!=NULL or rest!.partRef==NULL or rest!.partRef!.pathMode!=idxField or rest!.partRef!.spec!=NULL or
+           rest!.partRef!.hasSemiColon or rest!.partRef!.wasTransfered or rest!.partRef!.implicitSource){return(NULL)}
+        our infonView: componentIndex <- rest!.partRef!.path
+        if(!graph.ruleScalar(componentIndex) or componentIndex!.value!.evalMode!=emLiteral or
+           componentIndex!.value!.sizeMode!=fromCount or componentIndex!.infSize!.evalMode!=emUnknown or
+           (componentIndex!.value!.num!=1 and componentIndex!.value!.num!=2)){return(NULL)}
+        me int64: window <- index!.facts.number.getNumerator().convertToIntVal()
+        if(FlexNum(window)!=index!.facts.number){return(NULL)}
+        me int64: component <- componentIndex!.fetchInt()
+        if(window==2 and component==1){return(NULL)}
+        our WorldRecurrenceRule: rule <- graph.recurrenceRule(request,source)
+        if(rule==NULL or FlexNum(window)>rule!.windows){return(NULL)}
+        our infonView: seed <- rule!.seeds[rule!.action.sourceComponent(window,component)-1]
+        if(seed!.value!.evalMode!=emLiteral){return(NULL)}
+        me int64: phase <- -1
+        if(!rule!.finitePhase){phase <- rule!.phase!.fetchInt()}
+        me List<int64>: answers <- rule!.action.project(window,component,seed!.fetchInt(),phase,!rule!.sharedPhase)
+        if(answers.isEmpty()){return(NULL)}
+        our WorldRecurrenceProjection:: proof
+        proof!.application <- source; proof!.window <- window; proof!.component <- component
+        proof!.sized <- rule!.sizedCells; proof!.values <- answers
+        request!.recurrenceProjections <+- 1; request!.recurrenceRounds <+- rule!.action.powerRounds
+        request!.recurrenceVisits <+- rule!.action.relationVisits
+        our infonView:: fact; fact!.infSize!.evalMode <- emUnknown; fact!.itmMode <- mItem; fact!.streamState <- parseDone; fact!.viewMode <- vmOverlay
+        if(answers.size()>1){
+            fact!.value!.overlayType <- tUnknown; fact!.value!.evalMode <- emIntersection
+            fact!.value!.sizeMode <- fromGiven; fact!.intersectPos <- ipGetLast
+            Allocate(fact!.innr); fact!.innr!.infSize!.evalMode <- emUnknown; fact!.innr!.itmMode <- mItem; fact!.innr!.streamState <- parseDone
+            fact!.innr!.privateMemberLinks <- true; fact!.innr!.value!.items.privateLinks <- true; fact!.innr!.viewMode <- vmOverlay; fact!.innr!.value!.overlayType <- LST; fact!.innr!.value!.evalMode <- emLiteral
+            fact!.innr!.value!.sizeMode <- fromGiven
+        }
+        withEach answer in answers{
+            our infonView:: cell; cell!.infSize!.evalMode <- emUnknown; cell!.itmMode <- mItem; cell!.streamState <- parseDone; cell!.viewMode <- vmOverlay
+            cell!.value!.overlayType <- NUM; cell!.value!.evalMode <- emLiteral; cell!.value!.num <- FlexNum(answer)
+            cell!.parameterBindingRequired <- answers.size()>1 and rule!.phaseBindingRequired
+            if(rule!.sizedCells){cell!.value!.sizeMode <- fromGiven; cell!.infSize!.evalMode <- emLiteral; cell!.infSize!.num <- FlexNum(rule!.action.stateCount)}
+            if(answers.size()==1){fact <- cell}else{fact!.innr!.value!.items.append(cell,false,954)}
+        }
+        // The private coordinate witness receives a derived RHS; it borrows no
+        // declaration member and cannot write through to an earlier state.
+        our infonView:: projected; projected!.infSize!.evalMode <- emUnknown; projected!.itmMode <- mItem; projected!.streamState <- parseDone
+        projected!.privateMemberLinks <- true; projected!.viewMode <- vmOverlay; projected!.value!.overlayType <- NUM; projected!.value!.evalMode <- emUnknown
+        our POV:: relation{954}; relation!.pItem <- fact; projected!.wrkList.append(relation)
+        our POV:: container{954}; Allocate(container!.pItem)
+        container!.pItem!.infSize!.evalMode <- emUnknown; container!.pItem!.itmMode <- mItem; container!.pItem!.streamState <- parseDone
+        container!.pItem!.privateMemberLinks <- true; container!.pItem!.value!.items.privateLinks <- true; container!.pItem!.viewMode <- vmOverlay; container!.pItem!.value!.overlayType <- LST; container!.pItem!.value!.evalMode <- emLiteral
+        our POV: member <- container!.pItem!.value!.items.append(projected,false,954)
+        member!.pParent <- container; member!.recurrenceProjection <- proof
+        our WorldFrame:: first; request!.framesCreated <+- 1
+        first!.facts.overlay <- NUM; first!.facts.hasValue <- true; first!.facts.number <- FlexNum("1")
+        our PartPath:: selected; selected!.pathMode <- idxField; selected!.path <- componentIndex
+        selected!.continuation <- rest!.partRef!.continuation
+        our WorldFrame: operation <- pathSelection(request,graph.position(container),selected,first)
+        operation!.recurrenceProjection <- proof; operation!.recurrenceContinuation <- selected!.continuation
+        return(operation)
+    }
+}

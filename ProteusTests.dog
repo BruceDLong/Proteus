@@ -1,6 +1,13 @@
 // ProteusTests.dog
 
 TestsToRun = `
+    unit/recurrence/valuesAndCost
+    unit/recurrence/identity
+    unit/recurrence/bindings
+    unit/recurrence/waitAndCancel
+    unit/recurrence/oracle
+    unit/projection/closedWidths
+    unit/projection/recursiveLookup
     unit/selectionReplacement/persistence
     unit/selectionReplacement/waitAndCancel
     unit/selectionReplacement/scaling
@@ -9233,5 +9240,268 @@ struct GLOBAL {
             previousQueue <- written!.queueSteps; previousPositions <- written!.correspondencePositions
             agent.endWorldSessions(); modelMngr.clear()
         }
+    }
+}
+
+// Ordinary CodeDog behavior checks for composable finite recurrence proofs.
+struct GLOBAL {
+    me string: recurrenceDeclarations() <- {
+        return("{#step(w,p)={%w@[2] {{*3+0 *3+1 *3+2} {*3+1 *3+2 *3+0} {*3+2 *3+0 *3+1}}@[(%p +1)]@[(%w@[1] +1)]} #track(a,b,p)={T {%a %b} &*6000000+{T step(%tprev,%p) | ...}}}")
+    }
+    void: unit_recurrence_valuesAndCost(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse(recurrenceDeclarations())
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL("Could not install finite recurrence")}
+        me string: original <- toString(declaration.target!.pItem)
+        me List<int64>: ordinals <- [7,6001,6000001]
+        withEach ordinal in ordinals{
+            me string: expression <- "track(*3+1,*3+_,*_+[*3+0 *3+1 *3+2])@["+toString(ordinal)+"]@[1]"
+            withEach wrapped in range 0 .. 2{
+                me string: query <- expression; if(wrapped==1){query <- "("+query+")"}
+                me WorldParseResult: parsed <- agent.worldManager.parse(query)
+                our WorldRequest: answer <- agent.normalize(parsed.target)
+                if(!answer!.complete() or parsed.target!.pItem!.fetchInt()!=1 or answer!.recurrenceProjections!=1){FAIL("Missing composed recurrence result: "+answer!.error())}
+                if(answer!.framesCreated>50 or answer!.queueSteps>150 or answer!.correspondencePositions>24 or
+                   answer!.recurrenceRounds>80 or answer!.recurrenceVisits>1000 or answer!.productionMembers!=0){FAIL("Derived projection enumerated the history")}
+                print("Recurrence ",ordinal," wrapped=",wrapped," frames=",answer!.framesCreated," queue=",answer!.queueSteps,
+                      " positions=",answer!.correspondencePositions," rounds=",answer!.recurrenceRounds," visits=",answer!.recurrenceVisits,"\n")
+            }
+        }
+        me List<string>: controls <- ["track(*3+1,*3+_,*3+_)@[3]@[1]", "track(*3+1,*3+_,*3+1/2)@[3]@[1]", "track(*3+1,*3+_,*_+[*3+0 *3+1 *3+2])@[6000002]@[1]"]
+        withEach query in controls{
+            me WorldParseResult: parsed <- agent.worldManager.parse(query)
+            our WorldRequest: answer <- agent.normalize(parsed.target)
+            if(answer!.recurrenceProjections!=0 or answer!.complete()){FAIL("Unproved phase or endpoint produced a derived result: "+query)}
+        }
+        if(toString(declaration.target!.pItem)!=original or !agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Projection changed its declaration or retained an input wait")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+    void: unit_recurrence_waitAndCancel(me string: testName) <- {
+        withEach cancelled in range 0 .. 2{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me WorldParseResult: declaration <- agent.worldManager.parse(recurrenceDeclarations())
+            our infonView: pending <- declaration.target!.pItem!.value!.items.head!.pItem!.funcArgs
+            our WorldRequest: installed <- agent.normalize(declaration.target)
+            if(!installed!.complete()){FAIL("Could not install pending recurrence")}
+            me string: original <- toString(declaration.target!.pItem)
+            agent.worldManager.prepareInput(pending)
+            me WorldParseResult: parsed <- agent.worldManager.parse("(track(*3+1,*3+_,*_+[*3+0 *3+1 *3+2])@[6000001]@[1])")
+            me string: before <- toString(parsed.target!.pItem)
+            our WorldRequest: answer <- agent.normalize(parsed.target)
+            if(answer!.status().outcome!=worldWaiting or answer!.publications!=0 or agent.worldManager.control!.inputWaiters.size()!=1){FAIL("Recurrence proof did not retain its parser dependency: "+answer!.error())}
+            me uint64: frames <- answer!.framesCreated; me uint64: queue <- answer!.queueSteps
+            our infonView:: unrelated; agent.worldManager.inputReady(unrelated)
+            if(answer!.framesCreated!=frames or answer!.queueSteps!=queue){FAIL("Unrelated input replayed the recurrence demand")}
+            if(cancelled==1){answer!.cancel()}
+            pending!.streamState <- parseDone; agent.worldManager.inputReady(pending)
+            if(cancelled==1){
+                if(answer!.status().outcome!=worldCancelled or answer!.publications!=0 or toString(parsed.target!.pItem)!=before){FAIL("Cancelled recurrence published a result")}
+            }else if(!answer!.complete() or parsed.target!.pItem!.fetchInt()!=1 or answer!.recurrenceProjections!=1 or answer!.productionMembers!=0){FAIL("Parser arrival did not continue the recurrence proof: "+answer!.error())}
+            if(toString(declaration.target!.pItem)!=original or !agent.worldManager.control!.inputWaiters.isEmpty()){FAIL("Recurrence continuation changed source or retained input")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+    void: unit_recurrence_oracle(me string: testName) <- {
+        // Evolve whole pairs independently. Shared rows keep a separate pair
+        // per phase; fresh choices branch and deduplicate the whole pair set.
+        me List<string>: tables <- ["{{*3+0 *3+1 *3+2} {*3+1 *3+0 *3+2} {*3+0 *3+2 *3+1}}", "{{*3+1 *3+2 *3+2} {*3+2 *3+0 *3+0} {*3+0 *3+0 *3+1}}"]
+        me List<int64>: maps <- [0,1,2,1,0,2,0,2,1, 1,2,2,2,0,0,0,0,1]
+        withEach tableIdx in range 0 .. tables.size(){
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me string: choices <- "*_+[*3+0 *3+1 *3+2]"
+            me string: defs <- "{#update(w,p)={%w@[2] "+tables[tableIdx]+"@[(%p +1)]@[(%w@[1] +1)]} #bound(a,b,p)={T {%a %b} &*64+{T update(%tprev,%p) | ...}} #fresh(a,b)={T {%a %b} &*64+{T update(%tprev,"+choices+") | ...}}}"
+            me WorldParseResult: declaration <- agent.worldManager.parse(defs)
+            our WorldRequest: installed <- agent.normalize(declaration.target)
+            if(!installed!.complete()){FAIL("Could not install oracle recurrence")}
+            me List<int64>: shared <- [1,1,1]
+            me Set<int64>: fresh; fresh.insert(1)
+            withEach step in range 1 .. 33{
+                withEach row in range 0 .. 3{
+                    me int64: code <- shared[row]
+                    shared[row] <- (code % 3)*3+maps[9*tableIdx+3*row+code/3]
+                }
+                me Set<int64>: next
+                withEach code in fresh{
+                    withEach row in range 0 .. 3{next.insert((code % 3)*3+maps[9*tableIdx+3*row+code/3])}
+                }
+                fresh <- next
+                if(step>1){
+                    withEach independent in range 0 .. 2{
+                    withEach component in range 1 .. 3{
+                        me Set<int64>: expected
+                        if(independent==0){withEach code in shared{if(component==1){expected.insert(code/3)}else{expected.insert(code % 3)}}}
+                        else{withEach code in fresh{if(component==1){expected.insert(code/3)}else{expected.insert(code % 3)}}}
+                        me string: want
+                        withEach label in range 0 .. 3{
+                            if(expected.contains(label)){if(want!=""){want <+- " "} want <+- "*3+"+toString(label)}
+                        }
+                        if(expected.size()>1){want <- "*_+["+want+"]"}
+                        me string: call <- "bound(*3+0,*3+1,"+choices+")"
+                        if(independent==1){call <- "fresh(*3+0,*3+1)"}
+                        call <+- "@["+toString(step+1)+"]@["+toString(component)+"]"
+                        me WorldParseResult: parsed <- agent.worldManager.parse(call)
+                        our WorldRequest: answer <- agent.normalize(parsed.target)
+                        if(answer!.recurrenceProjections!=1 or toString(parsed.target!.pItem)!=want){FAIL("Whole-pair oracle mismatch: "+call+" expected "+want+" got "+toString(parsed.target!.pItem)+": "+answer!.error())}
+                    }
+                    }
+                }
+            }
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+    }
+}
+
+// Reused PR #36 behavioral assertions for width proofs and contextual cycles.
+struct GLOBAL {
+    void: unit_projection_recursiveLookup(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declarations <- agent.worldManager.parse("{#a={b@[1]} #b={a@[1]} #box(x)={%x} #loop()=box(loop()@[1]) #pair={7 box(pair@[1])@[1] box(pair@[2])@[1]}}")
+        our WorldRequest: defined <- agent.normalize(declarations.target)
+        if(!defined!.complete()){FAIL("Could not register recursive lookup cases")}
+        me List<string>: cycles <- ["a@[1]", "loop()@[1]"]
+        withEach expression in cycles{
+            me WorldParseResult: call <- agent.worldManager.parse(expression)
+            our WorldRequest: result <- agent.normalize(call.target)
+            if(result!.status().outcome!=worldUnsupported or result!.framesCreated>100){FAIL("Recursive lookup did not stop: "+expression)}
+        }
+        // The same declaration can legitimately be reentered at a different member.
+        me WorldParseResult: resolved <- agent.worldManager.parse("pair@[3]")
+        our WorldRequest: answer <- agent.normalize(resolved.target)
+        if(!answer!.complete() or resolved.target!.pItem!.fetchInt()!=7){FAIL("Blocked a productive nested lookup")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+    void: unit_projection_closedWidths(me string: testName) <- {
+        // The two branches borrow the same body. A width can skip a prefix,
+        // but each selected leaf keeps the application parameters at its use.
+        me List<int>: depths <- [3, 12, 24]
+        withEach depth in depths{
+            me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+            me string: defs <- "{#tiles0(x)={%x %x}"
+            me int: width <- 2
+            withEach idx in range 0 .. depth{
+                me string: block <- "&tiles"+toString(idx)+"(%x)"
+                width <*- 2
+                defs <+- " #tiles"+toString(idx+1)+"(x)=*"+toString(width)+"+{"+block+" "+block+"}"
+            }
+            me string: tiles <- "tiles"+toString(depth)
+            defs <+- " #ends(a,b)={&"+tiles+"(%a) &"+tiles+"(%b)}}"
+            me WorldParseResult: declared <- agent.worldManager.parse(defs)
+            our WorldRequest: defined <- agent.normalize(declared.target)
+            if(!defined!.complete()){FAIL("Could not define repeated blocks: "+defined!.error())}
+            me int: endIndex <- 2*width
+            me WorldParseResult: call <- agent.worldManager.parse("ends(*3+_,*3+2)@["+toString(endIndex)+"]")
+            our WorldRequest: request <- agent.normalize(call.target)
+            if(!request!.complete() or call.target!.pItem!.fetchInt()!=2){FAIL("Lost the selected application's parameter: "+request!.error())}
+            print("Closed widths depth ",depth," frames=",request!.framesCreated," positions=",request!.correspondencePositions," named=",request!.namedLayouts,"\n")
+            if(request!.closedWidthHits==0 or request!.correspondencePositions>12*depth+40 or request!.framesCreated>4*depth+30){FAIL("Repeated width was enumerated")}
+            agent.endWorldSessions(); modelMngr.clear()
+        }
+        // Widths of projected arguments vary between calls to the same word.
+        me Agent: cases; Allocate(cases.identityRegistry); cases.worldManager.control!.identities <- cases.identityRegistry
+        me WorldParseResult: bindings <- cases.worldManager.parse("{#block(x)={&%x@[1]} #series={&block({{11 12}}) &block({{21}}) &block({{31 32 33}}) 91} #open={7 ...} #tile(x)={%x %x} #check(x)={%x=7} #sized=*5+{1 2}}")
+        our WorldRequest: known <- cases.normalize(bindings.target)
+        if(!known!.complete()){FAIL("Could not define projection controls")}
+        me List<string>: calls <- ["series@[5]", "{&sized &sized 3}@[5]", "{&open &open 3}@[5]", "{&tile(7) &tile(_)}@[4]", "{&check(7) &check(8)}@[2]"]
+        withEach idx in range 0 .. calls.size(){
+            me WorldParseResult: call <- cases.worldManager.parse(calls[idx])
+            our WorldRequest: request <- cases.normalize(call.target)
+            if(idx==0 and (!request!.complete() or call.target!.pItem!.fetchInt()!=32)){FAIL("Contextual width reused across parameters")}
+            if(idx==1 and (!request!.complete() or call.target!.pItem!.fetchInt()!=3)){FAIL("Stated extent used without a structural proof")}
+            if(idx==2 and request!.status().outcome!=worldUnsupported){FAIL("Skipped an unproved open extent")}
+            if(idx==3 and request!.status().outcome!=worldPartial){FAIL("Skipped an unresolved selected parameter")}
+            if(idx==4 and request!.status().outcome!=worldRejected){FAIL("Skipped the selected occurrence's constraint")}
+        }
+        cases.endWorldSessions(); modelMngr.clear()
+        // Walk one shared syntax body twice and compare its occurrence paths.
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: parsed <- agent.worldManager.parse("{&*2+{7 7} &*2+{7 7} &*2+{7 7}}")
+        our POV: outer <- parsed.target!.pItem!.value!.items.head
+        outer!.next!.pItem <- outer!.pItem; outer!.next!.next!.pItem <- outer!.pItem
+        me FlexNum: targetIndex; targetIndex.fromString("5")
+        our WorldWalk:: reference; reference!.push(agent.worldManager.graph.position(parsed.target))
+        our WorldRequest:: proof
+        our WorldPosition: first <- agent.worldManager.graph.nextPosition(proof,reference)
+        our WorldPosition: expected <- first
+        while(reference!.position<targetIndex and expected!=NULL){expected <- agent.worldManager.graph.nextPosition(proof,reference)}
+        our WorldWalk:: indexed; indexed!.stopIndex <- targetIndex; indexed!.push(agent.worldManager.graph.position(parsed.target))
+        our WorldPosition: actual <- agent.worldManager.graph.nextPosition(proof,indexed)
+        while(indexed!.position<targetIndex and actual!=NULL){actual <- agent.worldManager.graph.nextPosition(proof,indexed)}
+        if(first==NULL or expected==NULL or actual==NULL or indexed!.position!=5 or
+           actual!.node!==first!.node or !agent.worldManager.graph.samePosition(expected,actual) or
+           agent.worldManager.graph.samePosition(first,actual)){FAIL("Indexed leaf lost its original occurrence")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+}
+
+
+
+struct GLOBAL {
+    void: unit_recurrence_identity(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: declaration <- agent.worldManager.parse(recurrenceDeclarations())
+        our WorldRequest: installed <- agent.normalize(declaration.target)
+        if(!installed!.complete()){FAIL("Could not install recurrence identity model")}
+        me string: original <- toString(declaration.target!.pItem)
+        our WorldSession: session <- agent.startSession()
+        me string: query <- "track(*3+1,*3+_,*_+[*3+0 *3+1 *3+2])@[6000001]@[1]"
+        me WorldParseResult: first <- agent.worldManager.parse(query)
+        me WorldParseResult: second <- agent.worldManager.parse(query)
+        our WorldRequest: a <- agent.normalizeInSession(session,first.target)
+        our WorldRequest: b <- agent.normalizeInSession(session,second.target)
+        our POV: aSource <- a!.selectedSource(); our POV: bSource <- b!.selectedSource()
+        if(!a!.complete() or !b!.complete() or aSource==NULL or bSource==NULL or
+           aSource!.recurrenceProjection==NULL or bSource!.recurrenceProjection==NULL){FAIL("Missing derived coordinate witnesses")}
+        our WorldRecurrenceProjection: proof <- aSource!.recurrenceProjection
+        if(proof!.application!.occurrence!==first.target or proof!.window!=6000001 or proof!.component!=1 or
+           aSource===proof!.application!.node or agent.worldManager.graph.samePosition(proof!.application,bSource!.recurrenceProjection!.application)){
+            FAIL("Distinct applications or temporal coordinates were identified with their value suppliers")
+        }
+        our WorldRequest: repeated <- agent.normalizeInSession(session,first.target)
+        if(!repeated!.complete() or repeated!.framesCreated!=0 or repeated!.recurrenceProjections!=0){FAIL("Completed scalar restarted recurrence work")}
+        me WorldParseResult: conflict <- agent.worldManager.parse(query+" = *3+2")
+        me string: before <- toString(conflict.target!.pItem)
+        our WorldRequest: rejected <- agent.normalizeInSession(session,conflict.target)
+        if(rejected!.status().outcome!=worldRejected or rejected!.publications!=0 or toString(conflict.target!.pItem)!=before){FAIL("Conflicting derived value was not rejected atomically: "+rejected!.error())}
+        if(toString(declaration.target!.pItem)!=original){FAIL("Derived projection changed a shared declaration")}
+        me WorldWeakReference<WorldRecurrenceProjection>: released
+        released.set(proof)
+        agent.worldManager.release(session,a); agent.worldManager.release(session,b)
+        agent.worldManager.release(session,repeated); agent.worldManager.release(session,rejected)
+        a <- NULL; b <- NULL; repeated <- NULL; rejected <- NULL
+        aSource <- NULL; bSource <- NULL; proof <- NULL; first.target <- NULL; second.target <- NULL
+        if(!released.expired() or !session!.requests.isEmpty()){FAIL("Released derived projection retained its private coordinate witness")}
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+}
+
+struct GLOBAL {
+    void: unit_recurrence_bindings(me string: testName) <- {
+        me Agent: agent; Allocate(agent.identityRegistry); agent.worldManager.control!.identities <- agent.identityRegistry
+        me WorldParseResult: definitions <- agent.worldManager.parse(recurrenceDeclarations())
+        our WorldRequest: installed <- agent.normalize(definitions.target)
+        if(!installed!.complete()){FAIL("Could not install phase-binding controls")}
+        me string: choices <- "*_+[*3+0 *3+1 *3+2]"
+        me string: read <- "track(*3+1,*3+_,%p)@[3]@[1]"
+        me WorldParseResult: cases <- agent.worldManager.parse("{#one(p)=*3+2 = "+read+" #conflict(p)={*3+2 = "+read+" *3+0 = "+read+"} #known(p)={*3+2 = "+read+" *3+0 = track(*3+1,*3+_,%p)@[5]@[1]}}")
+        installed <- agent.normalize(cases.target)
+        if(!installed!.complete()){FAIL("Could not install binding consumers")}
+        me List<string>: queries <- ["one("+choices+")", "conflict("+choices+")"]
+        withEach query in queries{
+            me WorldParseResult: parsed <- agent.worldManager.parse(query)
+            me string: before <- toString(parsed.target!.pItem)
+            our WorldRequest: answer <- agent.normalize(parsed.target)
+            if(answer!.status().outcome!=worldUnsupported or answer!.recurrenceProjections==0 or answer!.publications!=0 or
+               answer!.error()!="Parameter correspondence needs a binding proof" or toString(parsed.target!.pItem)!=before){
+                FAIL("Shared phase alternatives were independently fixed: "+query+": "+answer!.error())
+            }
+        }
+        me WorldParseResult: known <- agent.worldManager.parse("known(*3+1)")
+        our WorldRequest: answer <- agent.normalize(known.target)
+        if(!answer!.complete() or answer!.recurrenceProjections!=2){FAIL("Concrete shared phase did not compose: "+answer!.error())}
+        me WorldParseResult: independent <- agent.worldManager.parse("{*3+2 = track(*3+1,*3+_,"+choices+")@[3]@[1] *3+0 = track(*3+1,*3+_,"+choices+")@[3]@[1]}")
+        answer <- agent.normalize(independent.target)
+        if(!answer!.complete() or answer!.recurrenceProjections!=2){FAIL("Independent application choices were treated as one binding: "+answer!.error())}
+        agent.endWorldSessions(); modelMngr.clear()
     }
 }

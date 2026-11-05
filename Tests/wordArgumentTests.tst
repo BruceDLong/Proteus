@@ -39,3 +39,4 @@ parameters/recordResult, recordResult, {#point(x\, y)={x:(%x)\, y:(%y)}}\npoint(
 parameters/recordField, recordField, {#point(x\, y)={x:(%x)\, y:(%y)}}\npoint(3\,4).x//:x:3, -, multi
 parameters/stringArgument, stringArgument, {#ident(item)=%item}\nident('box')//:ident('box'):'box', -, multi
 parameters/bare, bare, {#fixed(item)=%item=7}\nfixed//:fixed:7, -, multi
+parameters/nestedOccurrence, repeated body at distinct input occurrences, {#step(w)={%w@[2] {1 2 0}@[(%w@[1] +1)]}}\nstep(step(step({1 _})))@[2]//:0, -, multi

@@ -2076,3 +2076,21 @@ derived values without changing the application's occurrence identity. Existing
 bounded retention, replay and durable-write rules continue to apply. This does
 not add parameter-dependent extents, general object/reference arguments,
 external effects or ambiguous continuation selection.
+
+
+## Finite recurrence value projection (D128)
+
+A proved two-component temporal rule F(a,b)=(b,U(a)), with a finite literal
+table of scalar maps, can supply a demanded later component without producing
+intermediate states. Shared phase bindings compose each admissible map before
+union; independently chosen step arguments compose the one-step union relation.
+The derived RHS enters ordinary scoped selection and normalization, including
+nested expressions and selected-value constraints. Ambiguous outcomes read
+through an outer parameter retain their binding obligation; fixing those
+outcomes requires a joint binding proof and currently reports unsupported.
+Its coordinate witness does
+not identify a later temporal occurrence with its seed or a declaration cell.
+Reference production and temporal supports retain their existing providers.
+This is a bounded finite-rule theorem, independent of the SingletMapping
+experiments and of general recurrence discovery. See D128 for premises,
+complexity, lifecycle and validation.
