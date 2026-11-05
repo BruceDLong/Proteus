@@ -3185,6 +3185,16 @@ active occurrences. Re-entering the same contextual prerequisite and genuine
 recursive definitions still use their existing diagnostics. This also serves
 the ordinary repeated-step route when the model supplies only a recurrence.
 
+During review, two indexed declarations referring back to each other could
+re-enter an active proof with a longer chain of borrowed representations.
+Passing the same recursive lookup through a word argument could also allocate
+a new binding for the same call. The cycle guard now checks for an already
+active demand at a declaration expansion. It compares a binding’s declaration,
+supplied argument site and caller occurrence. Completed facts still require
+strict occurrence matching. An indexed member that reads a different member
+of its own declaration can therefore reach a literal and finish.
+The regression checks both circular forms and such a terminating lookup.
+
 The executable `Resources/TestFiles/periodicHistory.pr` makes the distinction
 between the model and the evaluator explicit. Its `p` is an ordinary ternary
 argument. The table `once` specifies the shift U(x) = (x+p) mod 3. The example

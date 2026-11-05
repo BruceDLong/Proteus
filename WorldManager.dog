@@ -263,6 +263,7 @@ struct WorldArgumentBinding {
     me List<our WorldFrame>: unresolvedReads
 }
 struct WorldBindings {
+    our WordArguments: actuals
     our WordDefn: definition
     our WorldPosition: caller
     me Map<string, our WorldArgumentBinding>: arguments
@@ -1335,7 +1336,7 @@ struct WorldPOVGraph {
             ancestor <- parameterScope(ancestor!.caller)
         }
         our WorldBindings:: bindings
-        bindings!.definition <- word!.baseDefinition; bindings!.caller <- caller
+        bindings!.definition <- word!.baseDefinition; bindings!.caller <- caller; bindings!.actuals <- item!.wordArguments
         request!.parameterBindings.append(bindings)
         withEach name in word!.baseDefinition!.parameterNames{
             our WorldArgumentBinding:: binding
@@ -1923,6 +1924,31 @@ struct WorldPOVGraph {
             left <- left!.parent; right <- right!.parent
         }
         return(left==NULL and right==NULL)
+    }
+    // Only for active proof ancestry. Binding allocations at an identical call
+    // site with identical supplied arguments can repeat the same demand.
+    me bool: sameDemandBinding(our WorldBindings: left, our WorldBindings: right) <- {
+        return(left===right or (left!=NULL and right!=NULL and left!.definition===right!.definition and
+            left!.actuals===right!.actuals and samePosition(left!.caller,right!.caller)))
+    }
+    me bool: reentersDemand(our WorldPosition: prior, our WorldPosition: current) <- {
+        if(prior!.occurrence!==current!.occurrence or !sameDemandBinding(parameterScope(prior),parameterScope(current))){return(false)}
+        our WorldPosition: start <- current
+        while(start!=NULL){
+            // Expanding a recursive declaration can insert levels between the
+            // demanded occurrence and its original parent. Other contextual
+            // occurrences, including temporal neighbours, are separate demands.
+            if(start===current or start!.node!.trueByDefinition){
+                our WorldPosition: left <- prior; our WorldPosition: right <- start
+                while(left!=NULL and right!=NULL and left!.occurrence===right!.occurrence and sameDemandBinding(left!.parameters,right!.parameters)){
+                    if(left===right){return(true)}
+                    left <- left!.parent; right <- right!.parent
+                }
+                if(left==NULL and right==NULL){return(true)}
+            }
+            start <- start!.parent
+        }
+        return(false)
     }
     our POV: memberRelationship(our POV: parent) <- {
         our POV:: result{937}; result! <- parent!
@@ -3628,7 +3654,7 @@ struct WorldManager {
             if(request!.activeContexts.containsKey(node!.pItem)){
                 active <- request!.activeContexts.at(node!.pItem)
                 withEach prior in active!.frames{
-                    if(graph.samePosition(prior!.context, context)){
+                    if(graph.reentersDemand(prior!.context, context)){
                         frame!.initialized <- true; frame!.facts.outcome <- worldUnsupported
                         frame!.facts.detail <- "Cyclic contextual prerequisites need a joint proof"
                         return(frame)
