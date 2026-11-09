@@ -175,6 +175,7 @@ TestsToRun = `
     unit/orderedJoins/grammar
     unit/orderedJoins/continuation
     unit/orderedJoins/correlation
+    unit/orderedJoins/signedReadings
     unit/parserViews/structure
     unit/parserViews/unsupported
     unit/cursorReadiness/requiredValues
@@ -3027,6 +3028,50 @@ struct GLOBAL {
             }else if(outcome!=worldPartial and outcome!=worldComplete){FAIL("Lost an admissible even total")}
             candidate <+- 1
         }
+        agent.endWorldSessions(); modelMngr.clear()
+    }
+    void: unit_orderedJoins_signedReadings(me string: testName) <- {
+        me Agent: agent
+        me int: candidate <- -10
+        while(candidate<=10){
+            me WorldParseResult: free <- agent.worldManager.parse("-(*10+_) = "+toString(candidate))
+            me WorldOutcome: outcome <- agent.normalize(free.target).status().outcome
+            if(candidate+9>=0 and candidate<=0){
+                if(outcome!=worldPartial){FAIL("An admissible signed displacement needs its operand")}
+            }else if(outcome!=worldRejected){FAIL("Accepted an impossible signed displacement")}
+            if(candidate>=0){
+                me WorldParseResult: received <- agent.worldManager.parse("*10-(*3+_) = "+toString(candidate))
+                outcome <- agent.normalize(received.target).status().outcome
+                if(candidate==0 or candidate==8 or candidate==9){
+                    if(outcome!=worldPartial){FAIL("Lost a possible receiving state")}
+                }else if(outcome!=worldRejected){FAIL("Accepted a state outside the received displacement")}
+            }
+            candidate <+- 1
+        }
+        me WorldParseResult: pending <- agent.worldManager.parse("*12-(*10+3)")
+        our infonView: input <- pending.target!.pItem!.value!.items.head!.pItem
+        input!.streamState <- parseStarted
+        our WorldRequest: waiting <- agent.normalize(pending.target)
+        if(waiting!.status().outcome!=worldWaiting or waiting!.publications!=0){FAIL("Negation bypassed a pending operand")}
+        me uint64: steps <- waiting!.queueSteps
+        our infonView:: unrelated; agent.worldManager.inputReady(unrelated)
+        if(waiting!.queueSteps!=steps){FAIL("Unrelated input replayed numeric negation")}
+        input!.streamState <- parseDone; agent.worldManager.inputReady(input)
+        if(!waiting!.complete() or toString(pending.target!.pItem)!="*12+9" or !agent.worldManager.control!.inputWaiters.isEmpty()){
+            FAIL("Negation did not resume after its operand")
+        }
+        me WorldParseResult: direct <- agent.worldManager.parse("-(*10+3)")
+        our infonView: source <- direct.target!.pItem!.value!.items.head!.pItem
+        if(!agent.normalize(direct.target).complete() or direct.target!.pItem!.value!.items.head!.pItem!==source){
+            FAIL("The signed view lost its literal operand")
+        }
+        me WorldParseResult: parsed <- agent.worldManager.parse("-(++(*4+2 *3+1))")
+        our infonView: original <- parsed.target!.pItem!.value!.items.head!.pItem
+        me string: before <- toString(original)
+        if(!agent.normalize(parsed.target).complete() or toString(original)!=before){FAIL("Negating a computed reading changed its operand")}
+        me string: written <- toString(parsed.target!.pItem)
+        me WorldParseResult: again <- agent.worldManager.parse("-("+written+")")
+        if(!agent.normalize(again.target).complete() or toString(again.target!.pItem)!="*6+3"){FAIL("Re-reading the displacement lost its source extent")}
         agent.endWorldSessions(); modelMngr.clear()
     }
     void: unit_parserViews_structure(me string: testName) <- {

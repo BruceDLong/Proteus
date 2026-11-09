@@ -174,7 +174,12 @@ struct WorldOpenAlignment {
 
 // A witness identifies one unknown scalar value without owning its evaluation
 // frame, binding, or model. Repeated occurrences contribute a coefficient.
-struct WorldSummand {}
+struct WorldSummand {
+    // A receiving extent translates each negative displacement once. Store
+    // its source so point tests can check both preimages without enumeration.
+    our WorldDiscreteSum: displacement
+    me FlexNum: receiver
+}
 struct WorldSumTerm {
     our WorldSummand: symbol
     me FlexNum: coefficient
@@ -191,10 +196,11 @@ struct WorldDiscreteSum {
             Allocate(term); term!.symbol <- symbol; term!.bounds <- bounds; terms.insert(symbol,term)
         }
         term!.coefficient <+- coefficient
+        if(term!.coefficient==0 and !term!.bounds.empty()){terms.erase(symbol)}
     }
-    void: addSum(our WorldDiscreteSum: other) <- {
-        constant <+- other!.constant
-        withEach term in other!.terms{addTerm(term!.symbol, term!.coefficient, term!.bounds)}
+    void: addSum(our WorldDiscreteSum: other, me FlexNum: factor) <- {
+        constant <+- factor*other!.constant
+        withEach term in other!.terms{addTerm(term!.symbol, factor*term!.coefficient, term!.bounds)}
     }
     // A point outside these bounds or off the coefficient lattice is
     // impossible. Feasibility alone never binds a caller's unknown operand.
@@ -205,16 +211,28 @@ struct WorldDiscreteSum {
         withEach term in terms{
             if(term!.bounds.empty()){return(true)}
             if(term!.bounds.bounded){
-                low <+- term!.coefficient*term!.bounds.low
-                if(term!.bounds.point){high <+- term!.coefficient*term!.bounds.low}
-                else{high <+- term!.coefficient*(term!.bounds.high-1)}
+                me FlexNum: first <- term!.coefficient*term!.bounds.low
+                me FlexNum: last <- first
+                if(!term!.bounds.point){last <- term!.coefficient*(term!.bounds.high-1)}
+                low <+- min(first,last); high <+- max(first,last)
             }else{bounded <- false}
             me BigInt: next <- term!.coefficient.getNumerator()
             while(next!=0){me BigInt: rem <- divisor % next; divisor <- next; next <- rem}
         }
         if(bounded and (point<low or point>high)){return(true)}
         me FlexNum: delta <- point-constant
-        return(delta.getDenominator()!=1 or (divisor!=0 and delta.getNumerator() % divisor!=0))
+        if(delta.getDenominator()!=1 or (divisor!=0 and delta.getNumerator() % divisor!=0)){return(true)}
+        if(terms.size()==1){
+            withEach term in terms{
+                if(term!.symbol!.displacement!=NULL and term!.coefficient!=0){
+                    me FlexNum: reading <- delta/term!.coefficient
+                    me FlexNum: before <- reading-term!.symbol!.receiver
+                    return((reading<0 or term!.symbol!.displacement!.excludes(reading)) and
+                           (before>=0 or term!.symbol!.displacement!.excludes(before)))
+                }
+            }
+        }
+        return(false)
     }
 }
 // Occurrence paths borrow the model. They are local to a live request, not
@@ -596,6 +614,9 @@ struct WorldScalar {
     me bool: emptyProduct <- false
     our WorldSummand: summand
     our WorldDiscreteSum: discreteSum
+    // A free displacement remembers the selected reading for double negation.
+    // Its source cardinality is independent of any receiving extent.
+    our WorldSignedReading: negatedOperand
     me bool: independent <- false
     me bool: parameterBindingRequired <- false
     // An unbound contextual recipe differs from a proved absent neighbour.
@@ -656,12 +677,46 @@ struct WorldScalar {
         else if(hasRange){lower <- result.low; upper <- result.high}
     }
 
+    void: addReadingTo(our WorldDiscreteSum: sum, me FlexNum: factor) <- {
+        if(hasValue){sum!.constant <+- factor*number}
+        else if(discreteSum!=NULL){sum!.addSum(discreteSum,factor)}
+        else{
+            if(summand==NULL){Allocate(summand)}
+            sum!.addTerm(summand,factor,bounds())
+        }
+    }
+    void: useSum(our WorldDiscreteSum: sum) <- {
+        summand <- NULL; hasRange <- false
+        hasValue <- sum!.terms.isEmpty()
+        if(hasValue){number <- sum!.constant; discreteSum <- NULL; parameterBindingRequired <- false}
+        else{discreteSum <- sum}
+    }
+    void: receiveDisplacement(me FlexNum: extent) <- {
+        if(negatedOperand==NULL){return()}
+        if(!hasValue and discreteSum!=NULL){
+            our WorldSummand:: selected; selected!.displacement <- discreteSum; selected!.receiver <- extent
+            our WorldDiscreteSum:: received; received!.addTerm(selected,FlexNum("1"),WorldBounds())
+            discreteSum <- received
+        }
+        negatedOperand <- NULL
+    }
+    me bool: excludesReading(their WorldScalar: reading, me bool: shareSize) <- {
+        if(discreteSum==NULL or reading!.overlay!=NUM or !reading!.hasValue){return(false)}
+        me FlexNum: candidate <- reading!.number
+        if(shareSize and hasSize and !reading!.hasSize and !reading!.extentApplied and candidate<0){candidate <+- size}
+        return(discreteSum!.excludes(candidate))
+    }
     void: applyExtent() <- {
         if(hasValue and overlay==NUM and hasSize and !extentApplied){
             if(number<0){number <+- size}
             extentApplied <- true
         }
     }
+}
+
+struct WorldSignedReading {
+    me WorldScalar: reading
+    our infonView: literal
 }
 
 // Persistent ordered requirements: joining scopes never copies either side.
@@ -1959,7 +2014,7 @@ struct WorldPOVGraph {
             facts.outcome <- worldUnsupported; facts.detail <- "List needs correspondence or template semantics"; return(facts)
         }
         if(item!.value!.evalMode==emIntersection or
-           item!.value!.undefined or (item!.value!.inverted and (expression or item!.value!.overlayType!=NUM)) or
+           item!.value!.undefined or (item!.value!.inverted and item!.value!.evalMode!=emGroup and (expression or item!.value!.overlayType!=NUM)) or
            item!.infSize!.undefined or item!.infSize!.inverted or
            !((item!.infSize!.overlayType==NUM and
               (item!.infSize!.evalMode==emUnknown or item!.infSize!.evalMode==emLiteral)) or
@@ -2344,7 +2399,7 @@ struct WorldPOVGraph {
                 }
                 if(layout!.outcome==worldReady){header <- layout!.header}
             }
-            level!.concatenated <- node!.pItem!.value!.evalMode==emGroup
+            level!.concatenated <- node!.pItem!.value!.evalMode==emGroup and !node!.pItem!.value!.inverted
             if(!level!.concatenated and header.overlay==LST and header.hasValue){walk!.listTypeProved <- true}
             if(!level!.concatenated and (header.overlay!=LST or !header.hasValue)){
                 walk!.outcome <- worldUnsupported; walk!.detail <- "Correspondence needs a list layout"; return(false)
@@ -2633,19 +2688,26 @@ struct WorldPOVGraph {
         if(left.overlay!=NUM or right.overlay!=NUM or left.negative or right.negative){
             left.outcome <- worldUnsupported; left.detail <- "Numeric expression needs positive numeric operands"; return(left)
         }
+        left.negatedOperand <- NULL
+        if(additive and !right.hasValue and (right.discreteSum!=NULL or left.discreteSum!=NULL)){
+            our WorldDiscreteSum:: shifted
+            left.addReadingTo(shifted,FlexNum("1")); right.addReadingTo(shifted,FlexNum("1"))
+            left.parameterBindingRequired <- left.parameterBindingRequired or right.parameterBindingRequired
+            left.useSum(shifted); return(left)
+        }
         if(!right.hasValue){left.outcome <- worldPartial; left.detail <- "Expression operand value is unknown"; return(left)}
-        if(left.discreteSum!=NULL and !left.hasValue){
+        if(!left.hasValue and (left.discreteSum!=NULL or (left.summand!=NULL and !left.hasRange))){
             me FlexNum: radix <- FlexNum("1")
             if(!additive){
                 if(!right.hasSize or right.size<1 or right.size.getDenominator()!=1){
                     left.outcome <- worldPartial; left.detail <- "Symbolic concatenation needs a positive integer radix"; return(left)
                 }
                 radix <- right.size
-                if(left.hasSize){left.size <- left.size*radix}
             }
-            our WorldDiscreteSum:: shifted; shifted!.constant <- left.discreteSum!.constant*radix+right.number
-            withEach term in left.discreteSum!.terms{shifted!.addTerm(term!.symbol,term!.coefficient*radix,term!.bounds)}
-            left.discreteSum <- shifted; return(left)
+            our WorldDiscreteSum:: shifted; shifted!.constant <- right.number
+            left.addReadingTo(shifted,radix); left.useSum(shifted)
+            if(!additive and left.hasSize){left.size <- left.size*radix}
+            return(left)
         }
         if(additive){
             me WorldBounds: result <- left.bounds()
@@ -2806,8 +2868,9 @@ struct WorldPOVGraph {
     // Ready=yes, Rejected=no, Partial=not enough evidence. Work only on local
     // facts: a negative template must not acquire its candidate's size/value.
     me WorldOutcome: compare(me WorldScalar: required, me WorldScalar: actual) <- {
-        if((required.discreteSum!=NULL and actual.hasValue and actual.overlay==NUM and required.discreteSum!.excludes(actual.number)) or
-           (actual.discreteSum!=NULL and required.hasValue and required.overlay==NUM and actual.discreteSum!.excludes(required.number))){return(worldRejected)}
+        if(required.hasSize){actual.receiveDisplacement(required.size)}
+        if(actual.hasSize){required.receiveDisplacement(actual.size)}
+        if(required.excludesReading(actual,true) or actual.excludesReading(required,true)){return(worldRejected)}
         if(required.discreteSum!=NULL or actual.discreteSum!=NULL or
            required.parameterBindingRequired or actual.parameterBindingRequired){return(worldPartial)}
         if(required.terminalValue!=0 or actual.terminalValue!=0){
@@ -3021,8 +3084,11 @@ struct WorldPOVGraph {
     me WorldScalar: merge(me WorldScalar: left, me WorldScalar: right, our POV: edge, me bool: openHeaderOnly <- false) <- {
         left <- productIdentity(left,right.overlay); right <- productIdentity(right,left.overlay)
         left.emptyProduct <- left.emptyProduct or right.emptyProduct
-        if((left.discreteSum!=NULL and right.overlay==NUM and right.hasValue and left.discreteSum!.excludes(right.number)) or
-           (right.discreteSum!=NULL and left.overlay==NUM and left.hasValue and right.discreteSum!.excludes(left.number))){
+        if(!edge!.looseSize()){
+            if(left.hasSize){right.receiveDisplacement(left.size)}
+            if(right.hasSize){left.receiveDisplacement(right.size)}
+        }
+        if(left.excludesReading(right,!edge!.looseSize()) or right.excludesReading(left,!edge!.looseSize())){
             left.outcome <- worldRejected; left.detail <- "Value outside discrete sum"; return(left)
         }
         if((left.discreteSum!=NULL and (right.hasValue or right.hasRange)) or
@@ -3119,6 +3185,7 @@ struct WorldPOVGraph {
         }
         if(!edge!.looseSize() and left.hasSize and !right.hasSize){right.hasSize <- true; right.size <- left.size}
         left.applyExtent(); right.applyExtent()
+        if(!left.hasSize and left.negatedOperand==NULL){left.negatedOperand <- right.negatedOperand}
         if(left.hasValue and right.hasValue){
             // Unsized signed displacements may agree once an extent is known.
             // Missing extent is not proof that this equality is contradictory.
@@ -3271,6 +3338,8 @@ struct WorldPOVGraph {
         if(left.overlay!=NUM or right.overlay!=NUM or left.nominal!=NULL or right.nominal!=NULL or left.negative or right.negative){
             left.outcome <- worldUnsupported; left.detail <- "Structural sum needs discrete numeric operands"; return(left)
         }
+        if(left.negatedOperand!=NULL){left.hasSize <- left.negatedOperand!.reading.hasSize; left.size <- left.negatedOperand!.reading.size; left.negatedOperand <- NULL}
+        if(right.negatedOperand!=NULL){right.hasSize <- right.negatedOperand!.reading.hasSize; right.size <- right.negatedOperand!.reading.size}
         if((left.hasSize and (left.size<1 or left.size.getDenominator()!=1)) or
            (right.hasSize and (right.size<1 or right.size.getDenominator()!=1)) or
            (left.hasValue and left.number.getDenominator()!=1) or (right.hasValue and right.number.getDenominator()!=1)){
@@ -3284,9 +3353,46 @@ struct WorldPOVGraph {
         left.parameterBindingRequired <- left.parameterBindingRequired or right.parameterBindingRequired
         return(left)
     }
+    me WorldScalar: negateOperand(our WorldFrame: operand, me bool: hasReceiver) <- {
+        me WorldScalar: value <- operand!.facts
+        if(value.outcome!=worldReady){return(value)}
+        if(value.terminalValue!=0 or (value.overlay>=0 and value.overlay!=NUM)){
+            value.outcome <- worldRejected; value.detail <- "A signed displacement requires a numeric operand"; return(value)
+        }
+        if(value.overlay!=NUM or value.negative or value.alternatives!=NULL or value.pendingChecks!=NULL){
+            value.outcome <- worldPartial; value.detail <- "Signed displacement needs a selected number"; return(value)
+        }
+        if(value.negatedOperand!=NULL and !value.explicitSize and !hasReceiver){return(value.negatedOperand!.reading)}
+        if(!value.hasValue){
+            our WorldDiscreteSum:: reversed; operand!.facts.addReadingTo(reversed,FlexNum("-1"))
+            value.discreteSum <- reversed
+        }
+        Allocate(value.negatedOperand); value.negatedOperand!.reading <- operand!.facts
+        our infonView: source <- operand!.node!.pItem
+        if(operand!.parameterValue!=NULL){source <- operand!.parameterValue!.node!.pItem}
+        if(source!.value!.overlayType==NUM and source!.value!.evalMode==emLiteral and
+           source!.value!.sizeMode==fromGiven and source!.infSize!.evalMode==emLiteral and source!.infSize!.num==value.size and
+           !source!.value!.numericExtentApplied and source!.type==NULL and source!.wrkList.isEmpty() and
+           source!.partRef==NULL and source!.parts.isEmpty() and !source!.invertMatch){
+            me FlexNum: reading <- source!.value!.num
+            if(reading<0){reading <+- source!.infSize!.num}
+            if(value.hasValue and value.hasSize and reading==value.number){value.negatedOperand!.literal <- source}
+        }
+        if(value.hasValue){value.number <- FlexNum()-value.number}
+        value.summand <- NULL; value.hasRange <- false
+        value.hasSize <- false; value.explicitSize <- false; value.extentApplied <- false
+        return(value)
+    }
     void: takeOperand(our WorldFrame: frame, our WorldFrame: operand) <- {
+        if(!operand!.facts.hasValue and operand!.facts.overlay==NUM and operand!.facts.summand==NULL and
+           operand!.naming!=NULL and operand!.referenceTarget!=NULL){
+            if(operand!.referenceTarget!.summand==NULL){Allocate(operand!.referenceTarget!.summand)}
+            operand!.facts.summand <- operand!.referenceTarget!.summand
+        }
         if(frame!.operandsRead==0){
-            frame!.expression <- operand!.facts
+            if(frame!.expressionSlot==2 and frame!.node!.pItem!.value!.evalMode==emGroup and frame!.node!.pItem!.value!.inverted){
+                frame!.expression <- negateOperand(operand,frame!.facts.hasSize)
+            }else{frame!.expression <- operand!.facts}
             if(frame!.expressionSlot==2 and frame!.expression.overlay==LST){adoptListRequirements(frame, operand)}
         }else if(frame!.joining!=NULL and frame!.joining!.evalMode==emSum){
             frame!.expression <- sumOperand(frame!.expression, operand!.facts)
@@ -3295,17 +3401,6 @@ struct WorldPOVGraph {
         }
         frame!.operandsRead <+- 1
         if(frame!.expression.outcome!=worldReady){frame!.facts <- frame!.expression}
-    }
-    void: recordSummand(our WorldDiscreteSum: sum, our WorldFrame: operand) <- {
-        me WorldScalar: facts <- operand!.facts
-        if(facts.hasValue){sum!.constant <+- facts.number; return()}
-        if(facts.discreteSum!=NULL){sum!.addSum(facts.discreteSum); return()}
-        if(operand!.facts.summand==NULL and operand!.naming!=NULL and operand!.referenceTarget!=NULL){
-            if(operand!.referenceTarget!.summand==NULL){Allocate(operand!.referenceTarget!.summand)}
-            operand!.facts.summand <- operand!.referenceTarget!.summand
-        }
-        if(operand!.facts.summand==NULL){Allocate(operand!.facts.summand)}
-        sum!.addTerm(operand!.facts.summand, FlexNum("1"), facts.bounds())
     }
     void: foldJoin(our WorldRequest: request, our WorldFrame: frame) <- {
         me WorldScalar: list <- frame!.prerequisite!.facts
@@ -3323,16 +3418,17 @@ struct WorldPOVGraph {
         }
         our WorldDiscreteSum: sum
         while(operand!=NULL and frame!.facts.outcome==worldReady){
-            if(frame!.joining!.evalMode==emSum and (sum!=NULL or !operand!.facts.hasValue)){
-                if(sum==NULL){
-                    Allocate(sum)
-                    if(frame!.operandsRead>0){sum!.constant <- frame!.expression.number}
-                }
-                recordSummand(sum,operand)
+            if(frame!.joining!.evalMode==emSum and sum==NULL and !operand!.facts.hasValue){
+                Allocate(sum)
+                if(frame!.operandsRead>0){sum!.constant <- frame!.expression.number}
             }
-            takeOperand(frame, operand); operand <- cursor.next()
+            takeOperand(frame,operand)
+            if(sum!=NULL){operand!.facts.addReadingTo(sum,FlexNum("1"))}
+            operand <- cursor.next()
         }
-        if(sum!=NULL and frame!.operandsRead>1){frame!.expression.discreteSum <- sum; frame!.expression.summand <- NULL}
+        if(sum!=NULL and frame!.operandsRead>1 and frame!.expression.outcome==worldReady){
+            frame!.expression.useSum(sum)
+        }
         request!.sequenceVisits <+- cursor.visits
     }
     void: consumePrerequisite(our WorldRequest: request, our WorldFrame: frame) <- {
@@ -4164,6 +4260,23 @@ struct WorldPOVGraph {
             item!.value!.inverted <- false
             item!.value!.numericExtentApplied <- facts.extentApplied
         }
+        // A sized operand printed as a bare negative literal would lose its
+        // cardinality. Rebuild a closed group from the checked value so a
+        // returned parameter can be read again outside the caller's scope.
+        if(facts.negatedOperand!=NULL and (facts.negatedOperand!.reading.hasSize or facts.negatedOperand!.reading.explicitSize) and facts.hasValue){
+            our infonView: source <- facts.negatedOperand!.literal
+            if(source==NULL){
+                Allocate(source); source!.streamState <- parseDone; source!.viewMode <- vmOverlay; source!.itmMode <- mItem
+                source!.infSize!.overlayType <- NUM; source!.infSize!.evalMode <- emUnknown
+                if(facts.negatedOperand!.reading.hasSize){source!.infSize!.evalMode <- emLiteral; source!.infSize!.num <- facts.negatedOperand!.reading.size}
+                source!.value!.overlayType <- NUM; source!.value!.evalMode <- emLiteral; source!.value!.sizeMode <- fromGiven
+                source!.value!.num <- facts.negatedOperand!.reading.number
+                if(source!.value!.num<0){source!.value!.num <- source!.value!.num-source!.infSize!.num}
+            }
+            our infonState:: group; group!.overlayType <- LST; group!.evalMode <- emGroup; group!.inverted <- true
+            group!.items.append(source,false,932)!.pParent <- job.target
+            item!.value <- group
+        }
         if(changedRange){
             item!.value!.overlayType <- LST; item!.value!.evalMode <- emConcat
             item!.value!.items.clear()
@@ -4185,6 +4298,7 @@ struct WorldPOVGraph {
         }
         if(facts.overlay!=LST){
             if(facts.explicitSize){item!.value!.sizeMode <- fromGiven}
+            else if(item!.value!.evalMode==emGroup and item!.value!.inverted){item!.value!.sizeMode <- fromContext}
             else{item!.value!.sizeMode <- fromCount}
         }
         if(facts.overlay==LST and facts.openTail and facts.nominal==NULL and item!.value!.listSpec!=NULL){modelMngr.completeItemsType(item)}
@@ -5940,7 +6054,7 @@ struct WorldManager {
                         chart!.sourceProbe <- meaning
                         continue()
                     }
-                    if(chart!.sourceProbe!.pItem!.value!.evalMode!=emGroup){break()}
+                    if(chart!.sourceProbe!.pItem!.value!.evalMode!=emGroup or chart!.sourceProbe!.pItem!.value!.inverted){break()}
                     if(chart!.sourcePath.contains(chart!.sourceProbe!.pItem)){
                         frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Cyclic sequence source"; stopFrame(request, frame); return()
                     }
@@ -7693,8 +7807,8 @@ struct WorldManager {
         // would expose one extra list level at an explicit embedding.
         if(!instructions!.parts.isEmpty() or instructions!.partRef!=NULL){
             our infonState: state <- path!.source!.node!.pItem!.value
-            while(state!.evalMode==emGroup and state!.items.head!=NULL){state <- state!.items.head!.pItem!.value}
-            if(state!.isJoin()){
+            while(state!.evalMode==emGroup and !state!.inverted and state!.items.head!=NULL){state <- state!.items.head!.pItem!.value}
+            if(state!.isJoin() or (state!.evalMode==emGroup and state!.inverted)){
                 if(path!.joinedSource==NULL){
                     path!.joinedSource <- makeFrame(request,path!.source!.node,path!.source)
                     request!.ready.append(frame); request!.ready.append(path!.joinedSource); return()

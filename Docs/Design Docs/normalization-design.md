@@ -2107,3 +2107,13 @@ sizes and values directly with exact integer arithmetic. A bare `**()`
 yields `?`. Ordinary parentheses contain exactly one infon.
 The migration and behavioral examples are in the
 [D129 decision](normalization-design-decisions.md#d129-grouping-and-ordered-multiplicative-and-additive-joins).
+
+## Grouped numeric negation (D130)
+
+`-(A)` reads the selected numeric value of `A` as a displacement with its
+sign reversed. A free `-(*10+3)` carries `-3` and retains the ten-state
+source. Applying the sign twice recovers `*10+3`. In
+`**(*12+8 -(*10+3))` the displacement gives `*12+5`. In `*12-(*10+3)`
+the twelve-state receiver interprets `-3` as `*12+9`.
+An unknown selected value remains correlated across all uses of its operand.
+[Decision and examples](normalization-design-decisions.md#d130-grouped-numeric-negation)

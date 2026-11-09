@@ -5519,3 +5519,53 @@ numeric range, numeric literal, print mode and qualified text suites passed
 all 66 cases. The canonical World kernel migrated in World commit `e74ba47`.
 A client linked to the regenerated shared library parsed that kernel and
 evaluated both inline embedding examples.
+
+## D130 Grouped numeric negation
+
+**Language decision, 2026-11-09.** The existing displacement prefix may
+take an ordinary grouped infon. Resolve the inner infon in its own context,
+then negate its selected numeric value. For `#back(x)=-(%x)`, a call with
+`*10+3` supplies the displacement `-3`. The original occurrence still
+has value three and size ten. A known text or list operand rejects the
+numeric requirement. An unresolved operand can keep its expression.
+
+| Expression | Reading |
+|---|---|
+| `-(3)` | `-3` |
+| `-(*10+3)` | A displacement of `-3` from a ten-state operand. The group can be printed and read back. |
+| `-(-(*10+3))` | `*10+3` |
+| `**(*12+8 -(*10+3))` | `*12+5` |
+| `*10-(*10+3)` | `*10+7` |
+| `*12-(-(*10+3))` | `*12+3` |
+| `-(*10+_)` | One unknown displacement among the integers from `-9` through `0`. |
+| `*10-(*3+_)` | Receiving states `0`, `9` and `8` correspond to source values `0`, `1` and `2`. |
+
+A leading minus already takes a scalar value, and parentheses already scope a
+complete infon. A new operator or special list opener would add syntax for
+the same operation. Interpreting the sign in the operand's own extent would
+prematurely turn a displacement of `-3` into value seven. An explicit
+receiving extent applies the existing single negative-offset translation.
+For example, `*10-(*16+12)` has the same reading as `*10-12`. The established
+display of that result is `*10-2`.
+
+The evaluator uses exact numeric arithmetic on a local reading. A free
+displacement retains the source facts needed for double negation. A discrete
+structural sum can use that source's cardinality. With one four-state
+parameter `x`, `++(%x -(%x))` therefore has size seven and value zero.
+An independent four-state parameter contributes its own selected value.
+
+Unknown arithmetic carries the coefficient of each value witness. Opposite
+coefficients of the same witness cancel. To check a receiving state `r`
+at extent `s`, the possible original displacements are `r` when `r >= 0`
+and `r-s` when `r-s < 0`. Checking these preimages preserves gaps without
+enumerating states. A feasible assertion that requires fixing an unknown
+operand stays partial. More general constraints on several unknowns can
+likewise stay partial.
+
+**Validation.** The regenerated engine passed 925 of 926 checks. The sole
+failure, `merge/dots/align4b`, also failed before this change. All 74
+ordered-join fixtures passed, along with the compiled signed-reading check
+covering the free and received domains, operand identity, print/read and
+parser continuation. The separate numeric, print and qualified-text suites
+passed all 66 cases. A client linked to the regenerated shared library
+verified four signed expressions, and Slipstream rebuilt against that library.
