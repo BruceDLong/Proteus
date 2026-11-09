@@ -2094,3 +2094,13 @@ Reference production and temporal supports retain their existing providers.
 This is a bounded finite-rule theorem, independent of the SingletMapping
 experiments and of general recurrence discovery. See D128 for premises,
 complexity, lifecycle and validation.
+
+## Grouping and ordered joins (D129, planned)
+
+Ordinary parentheses group one infon. `**(…)` joins ordered members by
+concatenation. `++(…)` forms the discrete structural sum of ordered members.
+Each join opener is contiguous. Both joins consume the logical members of
+their operand list, so an explicit `&` embedding contributes its members
+in place. The current parser still uses parentheses for concatenation.
+The migration and behavioral examples are in the
+[D129 decision](normalization-design-decisions.md#d129-grouping-and-ordered-multiplicative-and-additive-joins).

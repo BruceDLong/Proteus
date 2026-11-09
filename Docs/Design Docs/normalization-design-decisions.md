@@ -5377,3 +5377,104 @@ content hash comparison confirms `theory/SingletMapping` is unchanged.
 Evidence: `/tmp/proteus-recurrence-{build-final,all-final,language-final,cost-final,
 width-final,independent-final,shared-final,consumer-build,consumer-final,
 consumer-link-final,slipstream-build,slipstream-link-final}.log`.
+
+## D129 Grouping and ordered multiplicative and additive joins
+
+**Language decision, 2026-11-09. Implementation pending.** Ordinary
+parentheses group an expression for evaluation. `**(…)` multiplicatively
+joins an ordered list (the existing concatenation operation). `++(…)`
+additively joins an ordered list of whole infons. Each opener is three
+contiguous characters. Whitespace and comments inside the list follow the
+ordinary list rules. The body accepts ordered list members and `&` embeddings.
+Word-call argument binding applies to an attached word call such as `f(x::A)`.
+The two joins use list syntax with whitespace-separated members. Ordinary
+parentheses enclose one infon. Adjacent operands in `(A B)` therefore
+require migration to an explicit join. Grouping introduces no cursor shift.
+
+| Expression | Intended behavior |
+|---|---|
+| `(A)` or `A==(B=C)` | Group the inner expression and preserve the scope of its identities and qualifications. |
+| `**(*4+2 *3+1)` | Multiplicative join, giving `*12+7`. |
+| `**(*4+2 +(*3+1))` | The signed operand supplies a contextual displacement, giving `*4+3`. |
+| `++(*4+2 *3+1)` | Structural additive join, giving `*6+3`. |
+| `++( &%itemsToSum )` | Apply the same additive join to the logical members of the referenced ordered list. |
+
+**Reason.** An infon's selected value can supply a displacement, while the
+whole infon can participate as an additive part with its own singlets.
+Selecting the operation from a solved operand's size would let later
+information change an expression's meaning. Explicit list openers distinguish
+the operations when parsed and retain a definite end for a streamed infon.
+Grouping has its own meaning even if a singleton join gives the same value.
+
+**Implementation plan**
+
+1. Recognize the complete openers in both value and computed-size positions,
+   before consuming a single size or displacement prefix. A partial opener
+   on a live stream waits for its next character. Give grouping a distinct
+   representation or an equivalent scoped inner view. Parse the full inner
+   infon, including relationships and selectors, and attach outer constraints
+   at their proper level. Parse both join bodies with the ordered-list member
+   grammar, including nested joins, list specifications and explicit embedded
+   occurrences. Reject comma-separated join bodies. Print each construct with
+   its own spelling, retaining parentheses wherever precedence or qualification
+   requires them.
+2. Give each join an ordered operand-list view distinct from its result.
+   Consume that view through ordinary list acquisition and logical member
+   traversal. The current `WorldPOVGraph.nextRelationship` walks raw
+   `nextOperand` links and rejects embedded expression operands. A join needs
+   the same occurrence resolution and embedding semantics as ordered lists.
+   Use the normalizer's ordered layout walk (`WorldWalk`, `nextPosition`)
+   or its sequence cursor (`WorldListCursor.nextMember`) once the members
+   have been acquired. Preserve the position that supplied each operand.
+   Resolve a referenced embedding in its own binding and caller context before
+   entering its layout. An ordinary nested list contributes one operand. An
+   embedded list contributes its logical members in place. Retain the current
+   occurrence and progress across parser waits. An unresolved span or open tail
+   keeps the whole join pending or partial until its endpoint is established.
+   Scan sequentially, with no repeated indexed lookup from the start.
+3. Keep the existing numeric radix, contextual displacement, text and list
+   concatenation rules under `**(`. For discrete structural addition, a
+   nonempty list of operands of positive finite size has extent
+   `1 + sum(si - 1)` and value `sum(vi)`. A contextual operand such as
+   `+1` needs a view that supplies its size to establish its contribution
+   to the extent. The join opener determines the operation even when an
+   operand's size is unknown. Use the working shared-first-singlet decomposition
+   and retain the operand correspondences needed to justify the result. Each
+   occurrence contributes, including repeated references to the same unknown
+   value. Unknown quantities retain their constraints. In particular, for a
+   four-state X, `++(%X %X)` has extent seven and admits only 0, 2, 4 and 6.
+   Numeric summaries alone cannot establish operand identity or discharge
+   these constraints. Singleton joins preserve the member's meaning and
+   qualifications.
+4. Migrate existing multi-member parenthesized joins to `**(…)`. For example,
+   the existing two-member parameter expression `(%item +1)` becomes
+   `**(%item +1)`. Keep ordinary grouping, computed-size parentheses and
+   attached word calls in their respective roles. Audit the printer, synthesized
+   numeric ranges, computed sizes, layout classifiers and recurrence recognition
+   as well as maintained inputs and expected syntax displays. Preserve the
+   semantic results of legacy cases. Inventory shared World/Slipstream inputs
+   for the coordinated grammar change.
+
+**Acceptance checks.** Exercise parsing and printing, prefix splits across
+stream chunks, forbidden split openers, ordinary word calls and qualified
+grouping. Use one parameterized definition with the exact body
+`++( &%itemsToSum )`. Calling it with `{*4+2 *3+1}` must produce `*6+3`.
+The corresponding `**(` case must produce `*12+7`. Compare both with direct
+operands, nested embeddings, empty embedded spans and a reference between
+ordinary prefix and suffix members. Check an unembedded list as one operand,
+repeated references and unknowns, and a wait followed by completion without
+prefix replay or duplicate contributions. Cover both operand and result sizes
+with a three-member case. Run migrated parser, numeric-range, word-argument,
+list, string, recurrence and full regressions after CodeDog regeneration. Compare
+the printed failure count and failing names with the pre-change baseline.
+
+Three pre-change `TestProteus` controls passed on `3d74a600`. Under the
+current grammar, `(*4+2 *3+1)` gives `*12+7`, `((*4+2) +(*3+1))` gives
+`*4+3`, and `(*4+2)` gives `*4+2`.
+
+**Proposed empty-list behavior for review.** An empty discrete additive join
+denotes the zero-copy sum `*1+0`. For an empty multiplicative join the
+numeric, text and list identities are `*1+0`, `''` and `{}` respectively.
+Use a proved result kind to select its identity and leave an untyped
+`**()` unresolved. An empty embedding inside a larger join contributes zero
+members, so it needs no identity of its own.
