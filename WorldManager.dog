@@ -114,6 +114,7 @@ struct WorldList {
     me int: freeSpans <- 0 // Saturated at two: unique or potentially ambiguous.
     me bool: hasSpans <- false
     me bool: requirementsPending <- false
+    me bool: unorderedEmbedding <- false
 }
 struct WorldListPosition {
     our WorldList: sequence
@@ -171,9 +172,55 @@ struct WorldOpenAlignment {
     me bool: remainderAdded <- false
 }
 
+// A witness identifies one unknown scalar value without owning its evaluation
+// frame, binding, or model. Repeated occurrences contribute a coefficient.
+struct WorldSummand {}
+struct WorldSumTerm {
+    our WorldSummand: symbol
+    me FlexNum: coefficient
+    me WorldBounds: bounds
+}
+struct WorldDiscreteSum {
+    me FlexNum: constant
+    me Map<our WorldSummand, our WorldSumTerm>: terms
+    void: addTerm(our WorldSummand: symbol, me FlexNum: coefficient, me WorldBounds: bounds) <- {
+        our WorldSumTerm: term
+        if(terms.containsKey(symbol)){
+            term <- terms.at(symbol); term!.bounds <- term!.bounds.intersect(bounds)
+        }else{
+            Allocate(term); term!.symbol <- symbol; term!.bounds <- bounds; terms.insert(symbol,term)
+        }
+        term!.coefficient <+- coefficient
+    }
+    void: addSum(our WorldDiscreteSum: other) <- {
+        constant <+- other!.constant
+        withEach term in other!.terms{addTerm(term!.symbol, term!.coefficient, term!.bounds)}
+    }
+    // A point outside these bounds or off the coefficient lattice is
+    // impossible. Feasibility alone never binds a caller's unknown operand.
+    me bool: excludes(me FlexNum: point) <- {
+        me FlexNum: low <- constant; me FlexNum: high <- constant
+        me bool: bounded <- true
+        me BigInt: divisor
+        withEach term in terms{
+            if(term!.bounds.empty()){return(true)}
+            if(term!.bounds.bounded){
+                low <+- term!.coefficient*term!.bounds.low
+                if(term!.bounds.point){high <+- term!.coefficient*term!.bounds.low}
+                else{high <+- term!.coefficient*(term!.bounds.high-1)}
+            }else{bounded <- false}
+            me BigInt: next <- term!.coefficient.getNumerator()
+            while(next!=0){me BigInt: rem <- divisor % next; divisor <- next; next <- rem}
+        }
+        if(bounded and (point<low or point>high)){return(true)}
+        me FlexNum: delta <- point-constant
+        return(delta.getDenominator()!=1 or (divisor!=0 and delta.getNumerator() % divisor!=0))
+    }
+}
 // Occurrence paths borrow the model. They are local to a live request, not
 // a persistent record of parent merge progress.
 struct WorldArgumentBinding {
+    our WorldSummand: summand
     our POV: expression
     our WorldPosition: caller
     me bool: omitted <- false
@@ -197,6 +244,7 @@ struct POV {
     me WorldWeakReference<WorldPosition>: unitPosition
 }
 struct WorldPosition {
+    our WorldSummand: summand
     our WorldUnitWindow: unitWindow
     // A demanded native sparse member has a detached representation and a
     // repetition occurrence witness. Its parent retains the supplying span.
@@ -545,6 +593,9 @@ struct WorldFieldMerge {
     void: INIT() <- {Allocate(sequence)}
 }
 struct WorldScalar {
+    me bool: emptyProduct <- false
+    our WorldSummand: summand
+    our WorldDiscreteSum: discreteSum
     me bool: independent <- false
     me bool: parameterBindingRequired <- false
     // An unbound contextual recipe differs from a proved absent neighbour.
@@ -753,6 +804,7 @@ struct WorldUnitSelection {
 }
 
 struct WorldPath {
+    our WorldFrame: joinedSource
     our WorldFrame: unitNeighbour
     me bool: contextRequired <- false
     me bool: contextAbsent <- false
@@ -856,6 +908,8 @@ struct WorldFrame {
     me WorldRequirementCursor: memberRequirements
     our POV: nextOperand
     our POV: priorOperand
+    our infonState: joining
+    me bool: joinBody <- false
     me int64: operandsRead <- 0
     me WorldScalar: expression
     me WorldBounds: bodyBounds
@@ -1679,6 +1733,7 @@ struct WorldPOVGraph {
         result!.length <- left!.length+right!.length
         result!.minimum <- left!.minimum+right!.minimum
         result!.freeSpans <- min(2, left!.freeSpans+right!.freeSpans)
+        result!.unorderedEmbedding <- left!.unorderedEmbedding or right!.unorderedEmbedding
         result!.hasSpans <- left!.hasSpans or right!.hasSpans
         result!.requirementsPending <- left!.requirementsPending or right!.requirementsPending
         return(result)
@@ -1696,6 +1751,8 @@ struct WorldPOVGraph {
                 sequence!.minimum <+- minimumWidth(frame!.facts)
                 sequence!.freeSpans <- min(2, sequence!.freeSpans+freeSpans(frame!.facts))
             }
+            sequence!.unorderedEmbedding <- sequence!.unorderedEmbedding or frame!.facts.order==uUnordered or
+                (frame!.facts.sequence!=NULL and frame!.facts.sequence!.unorderedEmbedding)
             sequence!.hasSpans <- sequence!.hasSpans or openLayout(frame!.facts)
         }else{sequence!.minimum <+- 1}
         return(true)
@@ -1769,7 +1826,7 @@ struct WorldPOVGraph {
         return(true)
     }
     me bool: scalarExpression(our infonState: state) <- {
-        return(state!.overlayType==LST and state!.evalMode==emConcat and !state!.inverted and
+        return(state!.overlayType==LST and (state!.evalMode==emConcat or state!.evalMode==emGroup) and !state!.inverted and
             !state!.undefined and state!.items.head!=NULL and state!.listSpec==NULL and
             !state!.tailUnfinished and !state!.timelike)
     }
@@ -1888,7 +1945,7 @@ struct WorldPOVGraph {
         }
         facts.meaningApplied <- item!.wordDerefed
         if(facts.outcome!=worldReady or selection){return(facts)}
-        me bool: expression <- item!.value!.evalMode==emConcat
+        me bool: expression <- item!.value!.isExpression()
         if(item!.isNull() or item!.value!.undefined){
             if(item!.invertMatch or facts.nominal!=NULL){facts.outcome <- worldUnsupported; facts.detail <- "Qualified terminal value needs predicate proof"; return(facts)}
             facts.terminalValue <- 2
@@ -1906,7 +1963,7 @@ struct WorldPOVGraph {
            item!.infSize!.undefined or item!.infSize!.inverted or
            !((item!.infSize!.overlayType==NUM and
               (item!.infSize!.evalMode==emUnknown or item!.infSize!.evalMode==emLiteral)) or
-             scalarExpression(item!.infSize))){
+             item!.infSize!.isExpression())){
             facts.outcome <- worldUnsupported; facts.detail <- "Nonliteral scalar or size"; return(facts)
         }
         facts.hasSize <- item!.infSize!.evalMode==emLiteral
@@ -1916,12 +1973,7 @@ struct WorldPOVGraph {
             facts.outcome <- worldError; facts.detail <- "Numeric size has a zero denominator"; return(facts)
         }
         if(facts.hasSize){facts.size.normalize()}
-        if(expression){
-            if(!scalarExpression(item!.value)){
-                facts.outcome <- worldUnsupported; facts.detail <- "Non-scalar expression template"
-            }
-            return(facts)
-        }
+        if(expression){return(facts)}
         if(item!.value!.overlayType!=tUnknown and item!.value!.overlayType!=tUnset){facts.overlay <- item!.value!.overlayType}
         facts.hasValue <- item!.value!.evalMode==emLiteral
         if(facts.hasValue and facts.overlay!=NUM and facts.overlay!=STR and facts.overlay!=LST){
@@ -2248,7 +2300,7 @@ struct WorldPOVGraph {
                 }
             }
             our POV: node <- level!.position!.node
-            if(node!.pItem!.viewMode==vmCursor or node!.pItem!.partRef!=NULL or !node!.pItem!.parts.isEmpty()){
+            if(node!.pItem!.viewMode==vmCursor or node!.pItem!.partRef!=NULL or !node!.pItem!.parts.isEmpty() or node!.pItem!.value!.isJoin()){
                 level!.contextualLayout <- true
                 walk!.requestedLayout <- level!.position
                 walk!.outcome <- worldPartial; walk!.detail <- "List layout needs the selected path occurrence"; return(false)
@@ -2292,7 +2344,7 @@ struct WorldPOVGraph {
                 }
                 if(layout!.outcome==worldReady){header <- layout!.header}
             }
-            level!.concatenated <- scalarExpression(node!.pItem!.value)
+            level!.concatenated <- node!.pItem!.value!.evalMode==emGroup
             if(!level!.concatenated and header.overlay==LST and header.hasValue){walk!.listTypeProved <- true}
             if(!level!.concatenated and (header.overlay!=LST or !header.hasValue)){
                 walk!.outcome <- worldUnsupported; walk!.detail <- "Correspondence needs a list layout"; return(false)
@@ -2506,14 +2558,27 @@ struct WorldPOVGraph {
                 frame!.priorOperand <- operand; frame!.nextOperand <- operand!.next
                 frame!.sourceIsOperand <- true; return(operand)
             }
-            if(frame!.operandsRead>0 or memberSequence(frame)){finishExpression(request, frame)}
+            if(frame!.operandsRead>0 or memberSequence(frame) or frame!.joining!=NULL){finishExpression(request, frame)}
             if(frame!.facts.outcome!=worldReady){return(NULL)}
             frame!.expressionSlot <+- 1
-            frame!.operandsRead <- 0; frame!.priorOperand <- NULL
+            frame!.operandsRead <- 0; frame!.priorOperand <- NULL; frame!.joining <- NULL
             our infonState: slot
             if(frame!.expressionSlot==1){slot <- frame!.node!.pItem!.infSize}
             else if(frame!.expressionSlot==2){slot <- frame!.node!.pItem!.value}
-            if(slot!=NULL and (slot!.evalMode==emConcat or memberSequence(frame))){
+            if(slot!=NULL and slot!.isJoin()){
+                // Acquire the operand list with the ordinary list evaluator. Its
+                // stored edges and lexical scope are borrowed from this expression.
+                our POV:: body{934}; Allocate(body!.pItem)
+                our infonView: list <- body!.pItem
+                list!.streamState <- parseDone; list!.viewMode <- vmOverlay; list!.itmMode <- mItem
+                list!.value! <- slot!; list!.value!.evalMode <- emLiteral; list!.value!.sizeMode <- fromCount
+                list!.infSize!.overlayType <- NUM; list!.infSize!.evalMode <- emUnknown
+                if(slot!.operandExtent!=NULL){list!.infSize <- slot!.operandExtent; list!.value!.sizeMode <- fromGiven}
+                list!.lexicalScope <- frame!.node!.pItem!.lexicalScope; list!.memberScope <- frame!.node!.pItem!.memberScope
+                frame!.joining <- slot; frame!.sourceIsOperand <- true
+                return(body)
+            }
+            if(slot!=NULL and (slot!.evalMode==emGroup or memberSequence(frame))){
                 frame!.nextOperand <- slot!.items.head
                 // A finite template is read once, then projected into each member.
                 // Empty closed lists need no template evaluation.
@@ -2569,6 +2634,19 @@ struct WorldPOVGraph {
             left.outcome <- worldUnsupported; left.detail <- "Numeric expression needs positive numeric operands"; return(left)
         }
         if(!right.hasValue){left.outcome <- worldPartial; left.detail <- "Expression operand value is unknown"; return(left)}
+        if(left.discreteSum!=NULL and !left.hasValue){
+            me FlexNum: radix <- FlexNum("1")
+            if(!additive){
+                if(!right.hasSize or right.size<1 or right.size.getDenominator()!=1){
+                    left.outcome <- worldPartial; left.detail <- "Symbolic concatenation needs a positive integer radix"; return(left)
+                }
+                radix <- right.size
+                if(left.hasSize){left.size <- left.size*radix}
+            }
+            our WorldDiscreteSum:: shifted; shifted!.constant <- left.discreteSum!.constant*radix+right.number
+            withEach term in left.discreteSum!.terms{shifted!.addTerm(term!.symbol,term!.coefficient*radix,term!.bounds)}
+            left.discreteSum <- shifted; return(left)
+        }
         if(additive){
             me WorldBounds: result <- left.bounds()
             if(!result.bounded){left.outcome <- worldPartial; left.detail <- "Additive input has no finite value bounds"; return(left)}
@@ -2586,7 +2664,15 @@ struct WorldPOVGraph {
         return(left)
     }
 
+    me WorldScalar: productIdentity(me WorldScalar: value, me int: kind) <- {
+        if(!value.emptyProduct or kind<0){return(value)}
+        value.emptyProduct <- false; value.overlay <- kind; value.hasValue <- true; value.hasSize <- true
+        if(kind==NUM){value.size <- FlexNum("1"); value.explicitSize <- true}
+        return(value)
+    }
     me WorldScalar: appendOperand(me WorldScalar: left, me WorldScalar: right, me bool: additive) <- {
+        if(left.emptyProduct and right.emptyProduct){return(left)}
+        left <- productIdentity(left,right.overlay); right <- productIdentity(right,left.overlay)
         if(left.nominal!=NULL or right.nominal!=NULL){
             left.outcome <- worldUnsupported; left.detail <- "Nominal expression needs type rules"; return(left)
         }
@@ -2697,7 +2783,9 @@ struct WorldPOVGraph {
                 expression.extentApplied <- expression.hasSize
                 expression.explicitSize <- expression.hasSize or frame!.facts.explicitSize
             }
-            frame!.facts <- merge(frame!.facts, expression, frame!.node!.pItem!.value!.items.head)
+            our POV: edge <- frame!.node!.pItem!.value!.items.head
+            if(edge==NULL){edge <- frame!.node}
+            frame!.facts <- merge(frame!.facts, expression, edge)
         }
         // Negation applies to the computed predicate, not to its operands.
         frame!.facts.negative <- frame!.node!.pItem!.invertMatch
@@ -2718,7 +2806,10 @@ struct WorldPOVGraph {
     // Ready=yes, Rejected=no, Partial=not enough evidence. Work only on local
     // facts: a negative template must not acquire its candidate's size/value.
     me WorldOutcome: compare(me WorldScalar: required, me WorldScalar: actual) <- {
-        if(required.parameterBindingRequired or actual.parameterBindingRequired){return(worldPartial)}
+        if((required.discreteSum!=NULL and actual.hasValue and actual.overlay==NUM and required.discreteSum!.excludes(actual.number)) or
+           (actual.discreteSum!=NULL and required.hasValue and required.overlay==NUM and actual.discreteSum!.excludes(required.number))){return(worldRejected)}
+        if(required.discreteSum!=NULL or actual.discreteSum!=NULL or
+           required.parameterBindingRequired or actual.parameterBindingRequired){return(worldPartial)}
         if(required.terminalValue!=0 or actual.terminalValue!=0){
             if(required.terminalValue!=actual.terminalValue){
                 if(required.hasValue or required.overlay>=0 or (required.hasSize and required.size!=0)){return(worldRejected)}
@@ -2928,6 +3019,18 @@ struct WorldPOVGraph {
     }
 
     me WorldScalar: merge(me WorldScalar: left, me WorldScalar: right, our POV: edge, me bool: openHeaderOnly <- false) <- {
+        left <- productIdentity(left,right.overlay); right <- productIdentity(right,left.overlay)
+        left.emptyProduct <- left.emptyProduct or right.emptyProduct
+        if((left.discreteSum!=NULL and right.overlay==NUM and right.hasValue and left.discreteSum!.excludes(right.number)) or
+           (right.discreteSum!=NULL and left.overlay==NUM and left.hasValue and right.discreteSum!.excludes(left.number))){
+            left.outcome <- worldRejected; left.detail <- "Value outside discrete sum"; return(left)
+        }
+        if((left.discreteSum!=NULL and (right.hasValue or right.hasRange)) or
+           (right.discreteSum!=NULL and (left.hasValue or left.hasRange))){
+            left.outcome <- worldPartial; left.detail <- "Discrete sum retains a constraint on its operands"; return(left)
+        }
+        if(left.discreteSum==NULL){left.discreteSum <- right.discreteSum}
+        if(left.summand==NULL){left.summand <- right.summand}
         // Correspondence must not independently fill each use of one unknown
         // argument. This needs a binding proof, including speculative routes.
         if((left.parameterBindingRequired and (right.hasValue or right.hasRange or right.terminalValue!=0)) or
@@ -3161,6 +3264,77 @@ struct WorldPOVGraph {
             !needsRequirements(source) and source!.retainedWork.isEmpty())
     }
 
+    me WorldScalar: sumOperand(me WorldScalar: left, me WorldScalar: right) <- {
+        if(left.overlay<0 or right.overlay<0){
+            left.outcome <- worldPartial; left.detail <- "Discrete operand type is unknown"; return(left)
+        }
+        if(left.overlay!=NUM or right.overlay!=NUM or left.nominal!=NULL or right.nominal!=NULL or left.negative or right.negative){
+            left.outcome <- worldUnsupported; left.detail <- "Structural sum needs discrete numeric operands"; return(left)
+        }
+        if((left.hasSize and (left.size<1 or left.size.getDenominator()!=1)) or
+           (right.hasSize and (right.size<1 or right.size.getDenominator()!=1)) or
+           (left.hasValue and left.number.getDenominator()!=1) or (right.hasValue and right.number.getDenominator()!=1)){
+            left.outcome <- worldRejected; left.detail <- "Invalid discrete sum operand"; return(left)
+        }
+        left.hasSize <- left.hasSize and right.hasSize
+        if(left.hasSize){left.size <- left.size+right.size-1}
+        left.hasValue <- left.hasValue and right.hasValue
+        if(left.hasValue){left.number <+- right.number}
+        left.hasRange <- false
+        left.parameterBindingRequired <- left.parameterBindingRequired or right.parameterBindingRequired
+        return(left)
+    }
+    void: takeOperand(our WorldFrame: frame, our WorldFrame: operand) <- {
+        if(frame!.operandsRead==0){
+            frame!.expression <- operand!.facts
+            if(frame!.expressionSlot==2 and frame!.expression.overlay==LST){adoptListRequirements(frame, operand)}
+        }else if(frame!.joining!=NULL and frame!.joining!.evalMode==emSum){
+            frame!.expression <- sumOperand(frame!.expression, operand!.facts)
+        }else{
+            frame!.expression <- appendOperand(frame!.expression, operand!.facts, operand!.node!.pItem!.value!.sizeMode==fromContext)
+        }
+        frame!.operandsRead <+- 1
+        if(frame!.expression.outcome!=worldReady){frame!.facts <- frame!.expression}
+    }
+    void: recordSummand(our WorldDiscreteSum: sum, our WorldFrame: operand) <- {
+        me WorldScalar: facts <- operand!.facts
+        if(facts.hasValue){sum!.constant <+- facts.number; return()}
+        if(facts.discreteSum!=NULL){sum!.addSum(facts.discreteSum); return()}
+        if(operand!.facts.summand==NULL and operand!.naming!=NULL and operand!.referenceTarget!=NULL){
+            if(operand!.referenceTarget!.summand==NULL){Allocate(operand!.referenceTarget!.summand)}
+            operand!.facts.summand <- operand!.referenceTarget!.summand
+        }
+        if(operand!.facts.summand==NULL){Allocate(operand!.facts.summand)}
+        sum!.addTerm(operand!.facts.summand, FlexNum("1"), facts.bounds())
+    }
+    void: foldJoin(our WorldRequest: request, our WorldFrame: frame) <- {
+        me WorldScalar: list <- frame!.prerequisite!.facts
+        if(list.overlay!=LST or list.order==uUnordered or (list.sequence!=NULL and list.sequence!.unorderedEmbedding) or openLayout(list) or !list.hasSize or list.size!=FlexNum(sequenceLength(list.sequence))){
+            frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Join needs a closed ordered operand list"; return()
+        }
+        me WorldListCursor: cursor; cursor.push(list.sequence)
+        our WorldFrame: operand <- cursor.next()
+        if(operand==NULL){
+            me WorldScalar: empty
+            if(frame!.joining!.evalMode==emSum){
+                empty.overlay <- NUM; empty.hasSize <- true; empty.explicitSize <- true; empty.size <- FlexNum("1"); empty.hasValue <- true
+            }else{empty.emptyProduct <- true}
+            frame!.expression <- empty
+        }
+        our WorldDiscreteSum: sum
+        while(operand!=NULL and frame!.facts.outcome==worldReady){
+            if(frame!.joining!.evalMode==emSum and (sum!=NULL or !operand!.facts.hasValue)){
+                if(sum==NULL){
+                    Allocate(sum)
+                    if(frame!.operandsRead>0){sum!.constant <- frame!.expression.number}
+                }
+                recordSummand(sum,operand)
+            }
+            takeOperand(frame, operand); operand <- cursor.next()
+        }
+        if(sum!=NULL and frame!.operandsRead>1){frame!.expression.discreteSum <- sum; frame!.expression.summand <- NULL}
+        request!.sequenceVisits <+- cursor.visits
+    }
     void: consumePrerequisite(our WorldRequest: request, our WorldFrame: frame) <- {
         frame!.contextual <- frame!.contextual or frame!.prerequisite!.contextual
         if(!frame!.sourceIsListSpec){
@@ -3183,16 +3357,8 @@ struct WorldPOVGraph {
             frame!.facts.contentsComplete <- frame!.facts.contentsComplete and completeFacts(frame!.prerequisite!.facts, false)
             frame!.operandsRead <- sequenceLength(frame!.facts.sequence)
         }else if(frame!.sourceIsOperand){
-            if(frame!.operandsRead==0){
-                frame!.expression <- frame!.prerequisite!.facts
-                if(frame!.expressionSlot==2 and frame!.expression.overlay==LST){adoptListRequirements(frame, frame!.prerequisite)}
-            }
-            else{
-                frame!.expression <- appendOperand(frame!.expression, frame!.prerequisite!.facts,
-                    frame!.sourceEdge!.pItem!.value!.sizeMode==fromContext)
-            }
-            frame!.operandsRead <+- 1
-            if(frame!.expression.outcome!=worldReady){frame!.facts <- frame!.expression}
+            if(frame!.joining!=NULL){foldJoin(request, frame)}
+            else{takeOperand(frame, frame!.prerequisite)}
         }else{
             me WorldScalar: left <- frame!.facts
             me bool: openHeaderOnly <- left.overlay==LST and left.hasValue and unconstrainedOpenSource(frame!.prerequisite)
@@ -3232,7 +3398,7 @@ struct WorldPOVGraph {
             // and value, including the case where its value is unknown. A
             // successful qualified test adds no identity. Fully checked scalar
             // expressions supply the same facts; other nested work stays.
-            me bool: scalarExpression <- (supplied!.value!.evalMode==emConcat or
+            me bool: scalarExpression <- (supplied!.value!.isExpression() or
                 frame!.prerequisite!.selection!=NULL or frame!.prerequisite!.parameterBinding!=NULL or frame!.sourceNameInherited) and frame!.prerequisite!.retainedWork.isEmpty() and
                 (frame!.prerequisite!.facts.overlay==NUM or frame!.prerequisite!.facts.overlay==STR) and
                 (frame!.prerequisite!.facts.hasValue or frame!.prerequisite!.facts.hasRange)
@@ -3948,9 +4114,13 @@ struct WorldPOVGraph {
             coveredListSpec(frame))
         // An unresolved expression is still the representation of its partial
         // result. Type evidence alone must not turn its body into 0 or ''.
-        if(item!.value!.evalMode==emConcat and !facts.hasValue and !facts.hasRange){return()}
+        if(facts.emptyProduct and facts.overlay<0){
+            our infonState:: unknown; unknown!.overlayType <- tUnknown; unknown!.evalMode <- emUnknown
+            item!.value <- unknown; item!.viewMode <- vmAny
+        }
+        if(item!.value!.isExpression() and !facts.hasValue and !facts.hasRange){return()}
         me bool: sameView <- item===frame!.node!.pItem
-        if(sameView and item!.infSize!.evalMode!=emConcat and facts.hasRange and frame!.bodyBounds.same(facts.bounds()) and
+        if(sameView and !item!.infSize!.isExpression() and facts.hasRange and frame!.bodyBounds.same(facts.bounds()) and
            frame!.bodyHasSize==facts.hasSize and (!facts.hasSize or frame!.bodySize==facts.size)){
             // The existing expression already represents these facts. Only
             // discharge work, without allocating an equivalent partial body.
@@ -4584,13 +4754,22 @@ struct WorldManager {
     }
     me bool: walkReady(our WorldRequest: request, our WorldFrame: frame, our WorldWalk: walk) <- {
         if(walk!.requestedLayout!=NULL){
+            me bool: join <- walk!.requestedLayout!.node!.pItem!.value!.isJoin()
             if(walk!.layoutFrame==NULL){
                 walk!.layoutFrame <- makeFrame(request, walk!.requestedLayout!.node, walk!.requestedLayout)
                 walk!.layoutFrame!.acquireOnly <- true
-                walk!.layoutFrame!.referenceOnly <- true
+                walk!.layoutFrame!.referenceOnly <- !join
                 request!.ready.append(frame); request!.ready.append(walk!.layoutFrame); return(false)
             }
             if(walk!.layoutFrame!.facts.outcome!=worldReady){frame!.facts <- walk!.layoutFrame!.facts; stopFrame(request, frame); return(false)}
+            if(join){
+                our WorldPosition: result <- graph.checkedPosition(request, walk!.layoutFrame)
+                if(result==NULL or result!.node!.pItem!.value!.evalMode!=emLiteral or result!.node!.pItem!.value!.overlayType!=LST){
+                    frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Join needs a proved list result"; stopFrame(request,frame); return(false)
+                }
+                walk!.levels.last()!.position <- result; walk!.requestedLayout <- NULL; walk!.layoutFrame <- NULL
+                request!.ready.append(frame); return(false)
+            }
             our WorldCorrespondenceResult: result <- walk!.layoutFrame!.correspondenceResult
             if(result==NULL or result!.position==NULL){
                 frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Path has not established one list occurrence"; stopFrame(request, frame); return(false)
@@ -5761,7 +5940,7 @@ struct WorldManager {
                         chart!.sourceProbe <- meaning
                         continue()
                     }
-                    if(!graph.scalarExpression(chart!.sourceProbe!.pItem!.value)){break()}
+                    if(chart!.sourceProbe!.pItem!.value!.evalMode!=emGroup){break()}
                     if(chart!.sourcePath.contains(chart!.sourceProbe!.pItem)){
                         frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Cyclic sequence source"; stopFrame(request, frame); return()
                     }
@@ -7444,6 +7623,10 @@ struct WorldManager {
                     }
                     if(item!.partRef==NULL and item!.parts.isEmpty()){
                         frame!.facts <- frame!.parameterValue!.facts
+                        if(frame!.facts.overlay==NUM and !frame!.facts.hasValue and frame!.facts.summand==NULL){
+                            if(frame!.parameterBinding!.summand==NULL){Allocate(frame!.parameterBinding!.summand)}
+                            frame!.facts.summand <- frame!.parameterBinding!.summand
+                        }
                         // A bare argument reference can itself be an exclusion.
                         // Refined references already apply this qualification
                         // through their ordinary constraint frame above.
@@ -7506,6 +7689,27 @@ struct WorldManager {
             if(path!.source==NULL){frame!.facts.outcome <- worldError; frame!.facts.detail <- "Cyclic reference source"; stopFrame(request,frame); return()}
         }
         our infonView: instructions <- frame!.node!.pItem
+        // A selector sees the joined value. Walking the operand list here
+        // would expose one extra list level at an explicit embedding.
+        if(!instructions!.parts.isEmpty() or instructions!.partRef!=NULL){
+            our infonState: state <- path!.source!.node!.pItem!.value
+            while(state!.evalMode==emGroup and state!.items.head!=NULL){state <- state!.items.head!.pItem!.value}
+            if(state!.isJoin()){
+                if(path!.joinedSource==NULL){
+                    path!.joinedSource <- makeFrame(request,path!.source!.node,path!.source)
+                    request!.ready.append(frame); request!.ready.append(path!.joinedSource); return()
+                }
+                if(!path!.joinedSource!.finished){request!.ready.append(frame); request!.ready.append(path!.joinedSource); return()}
+                if(path!.joinedSource!.facts.outcome!=worldReady or !path!.joinedSource!.facts.hasValue){
+                    frame!.facts <- path!.joinedSource!.facts
+                    if(frame!.facts.outcome==worldReady){frame!.facts.outcome <- worldPartial}
+                    stopFrame(request,frame); return()
+                }
+                path!.source <- graph.checkedPosition(request,path!.joinedSource)
+                path!.joinedSource <- NULL
+                if(path!.source==NULL){frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Joined source layout is unresolved"; stopFrame(request,frame); return()}
+            }
+        }
         if(path!.part==NULL){
             if(path!.next<instructions!.parts.size()){
                 path!.part <- instructions!.parts[path!.next]; path!.next <+- 1
@@ -7716,7 +7920,7 @@ struct WorldManager {
     void: step(our WorldRequest: request, our WorldFrame: frame) <- {
         if(frame!.productionDemand!=NULL){productionStep(request,frame);return()}
         if(!frame!.initialized and prepareProductionAcquisition(request,frame)){return()}
-        if(!frame!.initialized and frame!.lexicalParameters!=NULL and frame!.lexicalParameters!.productionScalarContext and
+        if(!frame!.initialized and !frame!.joinBody and frame!.lexicalParameters!=NULL and frame!.lexicalParameters!.productionScalarContext and
            frame!.node!.pItem!.streamState==parseDone and !graph.productionScalarSource(frame!.node!.pItem)){
             frame!.facts.outcome <- worldUnsupported;frame!.facts.detail <- "Generated argument needs a lexical scalar expression"
             stopFrame(request,frame);return()
@@ -7883,7 +8087,7 @@ struct WorldManager {
                 if(frame!.sourceNameInherited and frame!.prerequisite!.facts.contextAbsent){
                     frame!.prerequisite <- NULL; request!.ready.append(frame); return()
                 }
-                if(!frame!.sourceIsListSpec and (frame!.templateContext or !(frame!.sourceIsOperand and graph.memberSequence(frame)))){
+                if(!frame!.sourceIsListSpec and (frame!.templateContext or frame!.joinBody or !(frame!.sourceIsOperand and graph.memberSequence(frame)))){
                     frame!.facts <- frame!.prerequisite!.facts; frame!.finished <- true; return()
                 }
             }
@@ -8085,7 +8289,9 @@ struct WorldManager {
         }
         our WorldPosition: position
         if(frame!.sourceIsReference){position <- frame!.referenceTarget}
-        else if(frame!.sourceIsOperand and graph.memberSequence(frame)){
+        // Direct expression operands inherit the caller's cursor. An explicit
+        // embedded list establishes its own member positions in the usual way.
+        else if(frame!.sourceIsOperand and graph.memberSequence(frame) and !frame!.joinBody){
             if(frame!.temporalMembers==NULL and frame!.facts.timelike and !frame!.constraintSource){Allocate(frame!.temporalMembers)}
             if(frame!.temporalMembers==NULL and !frame!.constraintSource){frame!.membersBeforeTemporalContext <- true}
             our WorldPosition: parent <- frame!.navigation
@@ -8151,6 +8357,7 @@ struct WorldManager {
         }else{
             frame!.prerequisite <- makeFrame(request, source)
             frame!.prerequisite!.navigation <- position
+            frame!.prerequisite!.joinBody <- frame!.joining!=NULL and frame!.sourceIsOperand
             frame!.prerequisite!.lexicalParameters <- lexical
             if(lexical!=NULL){frame!.prerequisite!.contextual <- true}
             frame!.prerequisite!.templateContext <- frame!.templateContext or frame!.sourceIsListSpec

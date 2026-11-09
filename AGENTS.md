@@ -101,6 +101,10 @@ unrelated local files out, and report any remaining known failures.
 Syntax
 ------
 
+Ordinary parentheses group one infon. `**(…)` concatenates an ordered list and
+`++(…)` forms its structural sum. Both openers are contiguous. Use `&` to
+embed an operand list, for example `++(&{*4+2 *3+1} *2+1)` gives `*7+4`.
+
 Definitions use #, for example `#minute = *60+{second| ...}`. @ is reserved for
 bracketed postfix selection: `items@[3]`, `items@[3:*5+{ ... }]`. The old items#3
 syntax is not supported. A reply marker requests normalized output to the caller;

@@ -5380,7 +5380,7 @@ consumer-link-final,slipstream-build,slipstream-link-final}.log`.
 
 ## D129 Grouping and ordered multiplicative and additive joins
 
-**Language decision, 2026-11-09. Implementation pending.** Ordinary
+**Language decision, 2026-11-09.** Ordinary
 parentheses group an expression for evaluation. `**(…)` multiplicatively
 joins an ordered list (the existing concatenation operation). `++(…)`
 additively joins an ordered list of whole infons. Each opener is three
@@ -5422,8 +5422,8 @@ Grouping has its own meaning even if a singleton join gives the same value.
    requires them.
 2. Give each join an ordered operand-list view distinct from its result.
    Consume that view through ordinary list acquisition and logical member
-   traversal. The current `WorldPOVGraph.nextRelationship` walks raw
-   `nextOperand` links and rejects embedded expression operands. A join needs
+   traversal. Before D129, `WorldPOVGraph.nextRelationship` walked raw
+   `nextOperand` links and rejected embedded expression operands. A join needs
    the same occurrence resolution and embedding semantics as ordered lists.
    Use the normalizer's ordered layout walk (`WorldWalk`, `nextPosition`)
    or its sequence cursor (`WorldListCursor.nextMember`) once the members
@@ -5480,12 +5480,42 @@ list, string, recurrence and full regressions after CodeDog regeneration. Compar
 the printed failure count and failing names with the pre-change baseline.
 
 Three pre-change `TestProteus` controls passed on `3d74a600`. Under the
-current grammar, `(*4+2 *3+1)` gives `*12+7`, `((*4+2) +(*3+1))` gives
+preceding grammar, `(*4+2 *3+1)` gives `*12+7`, `((*4+2) +(*3+1))` gives
 `*4+3`, and `(*4+2)` gives `*4+2`.
 
 **Empty lists.** A bare `**()` yields the unknown infon `?`. An empty
 embedding inside a larger join contributes zero members and traversal
-continues with the next sibling. The proposed identity for `++()` is the
-zero-copy sum `*1+0`. For a multiplicative join with a known result kind,
-the proposed numeric, text and list identities are `*1+0`, `''` and `{}`
+continues with the next sibling. The identity for `++()` is the zero-copy
+sum `*1+0`. For a multiplicative join with a known result kind, the numeric,
+text and list identities are `*1+0`, `''` and `{}`
 respectively.
+
+**Implementation.** The parser distinguishes grouping, multiplicative joins and
+additive joins in both value and size slots. Each join acquires a literal
+ordered view of its operands through the existing list evaluator. Its
+`WorldListCursor` visits the acquired occurrences, including members supplied
+by embeddings and list specifications. An inner `~` constrains the number of
+operands. An outer extent constrains the result. Text, list and numeric
+concatenation continue to use the existing value operations. Direct operands
+inherit the join's evaluation position. For example, in the existing recurrence `**(%next +1)`, `%next`
+reads the next enclosing item. Inside `&{…}`, `%prev` and `%next` have
+the ordinary member positions of that embedded list.
+
+Known discrete sums use exact `FlexNum` integer arithmetic. For unknowns, the
+evaluator records the constant contribution, the coefficient of each shared
+unknown, and its known bounds. Numeric comparisons can reject impossible
+values from those bounds and coefficients. A possible value whose proof
+requires constraining an operand remains a relationship for further reasoning.
+For example, `twice(*4+_)` for `#twice(x)=++(%x %x)` has size seven. An
+assertion that the result is three is rejected. An assertion that it is four
+remains pending evidence about the input. Open operand lists likewise retain
+their expression until their endpoint is established.
+
+**Validation.** The regenerated full suite passed 896 of 897 checks. All 46
+ordered-join fixtures and three new compiled checks passed. The sole failure,
+`defaultTests.tst:merge/dots/align4b`, reported the same unsupported open
+source span alignment in the pre-change run (847 of 848). The separate
+numeric range, numeric literal, print mode and qualified text suites passed
+all 66 cases. The canonical World kernel migrated in World commit `e74ba47`.
+A client linked to the regenerated shared library parsed that kernel and
+evaluated both inline embedding examples.

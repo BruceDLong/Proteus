@@ -2095,7 +2095,7 @@ This is a bounded finite-rule theorem, independent of the SingletMapping
 experiments and of general recurrence discovery. See D128 for premises,
 complexity, lifecycle and validation.
 
-## Grouping and ordered joins (D129, planned)
+## Grouping and ordered joins (D129)
 
 Ordinary parentheses group one infon. `**(…)` joins ordered members by
 concatenation. `++(…)` forms the discrete structural sum of ordered members.
@@ -2104,6 +2104,6 @@ their operand list, so an explicit `&` embedding contributes its members
 in place. For example, `++( &{*4+2 *3+1} *2+1 )` yields `*7+4`.
 The shared-singlet rule defines the size formula. The evaluator computes
 sizes and values directly with exact integer arithmetic. A bare `**()`
-yields `?`. The current parser still uses parentheses for concatenation.
+yields `?`. Ordinary parentheses contain exactly one infon.
 The migration and behavioral examples are in the
 [D129 decision](normalization-design-decisions.md#d129-grouping-and-ordered-multiplicative-and-additive-joins).

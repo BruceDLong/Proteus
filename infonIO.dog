@@ -947,9 +947,12 @@ struct ProteusParser{
         if(chkStrWSC(cPos,"~")){
             // Read optional inner ~size.  It is syntactic sugar for the
             // size slot belonging to this pure infon; do not store a second copy.
-            if(pureInfn!.sizeMode==fromGiven){
+            if(!pureInfn!.isJoin() and pureInfn!.sizeMode==fromGiven){
                 setError("Infon size cannot be specified both outside and inside the list", cPos-1)
                 return(-1)
+            }
+            if(pureInfn!.isJoin()){
+                Allocate(pureInfn!.operandExtent); sizeSlot <- pureInfn!.operandExtent
             }
             if(sizeSlot==NULL){
                 setError("Inner list size has no enclosing infon size slot", cPos-1)
@@ -965,7 +968,7 @@ struct ProteusParser{
                 setError("Size of infons must be numeric")
                 return(-1)
             }
-            pureInfn!.sizeMode <- fromGiven
+            if(!pureInfn!.isJoin()){pureInfn!.sizeMode <- fromGiven}
             pureInfn!.sizeWasInner <- true
         }
 
@@ -1101,11 +1104,18 @@ struct ProteusParser{
         return(cPos-pos)
     }
 
+    // The lookahead is contiguous. strBuf waits for the next character on
+    // a live stream, just as it does for other attached operators.
+    me bool: joinOpener(me int64: pos, me char: first) <- {
+        return((first=="*" or first=="+") and text!.at(pos+1)==first and text!.at(pos+2)=="(")
+    }
+
     me int64: parseInfonState(their infonState: pureInfn, me int64: pos, our infonView: parent, me bool: isFromDefn, me parseContext: prsCtxt, their infonState: sizeSlot <- NULL) <- {
         me int64: cPos      <- pos
         me int64: len
 
         me char: peek <- peekWSC(cPos)
+        me bool: join <- joinOpener(cPos, peek)
         if(isdigit(peek) or peek=="_"){
             pureInfn!.overlayType <- NUM
             if(chkPeek(cPos, peek, "_")){pureInfn!.evalMode <- emUnknown; pureInfn!.num<-0;}
@@ -1160,14 +1170,28 @@ struct ProteusParser{
                     //pureInfn.quoteType <- qDouble
                 }
             }
-        } else if(peek=="{" or peek=="[" or peek=="("){
+        } else if(peek=="("){
             cPos <+- 1
+            pureInfn!.overlayType <- LST; pureInfn!.evalMode <- emGroup
+            our infonView:: inner
+            pureInfn!.items.append(inner, false, 301)
+            me int64: innerLen <- parseInfonView(inner, cPos, true, isFromDefn, prsCtxt)
+            if(innerLen<=0){return(-1)}
+            cPos <+- innerLen
+            if(!chkStrWSC(cPos, ")")){setError("Expected ')' after grouped infon", cPos); return(-1)}
+        } else if(peek=="{" or peek=="[" or join){
             pureInfn!.overlayType <- LST
             me char: ender
-            me string: tmp<-"}])"
-            if     (peek=="{"){pureInfn!.evalMode <- emLiteral;      ender<-tmp[0]}
-            else if(peek=="["){pureInfn!.evalMode <- emIntersection; ender<-tmp[1]}
-            else if(peek=="("){pureInfn!.evalMode <- emConcat;       ender<-tmp[2]}
+            me string: closers <- "}])"
+            if(join){
+                cPos <+- 3; ender <- closers[2]
+                if(peek=="*"){pureInfn!.evalMode <- emConcat}
+                else{pureInfn!.evalMode <- emSum}
+            }else{
+                cPos <+- 1
+                if(peek=="{"){pureInfn!.evalMode <- emLiteral; ender <- closers[0]}
+                else{pureInfn!.evalMode <- emIntersection; ender <- closers[1]}
+            }
 
             if(chk(parseListInfo(pureInfn, sizeSlot, cPos, parent, isFromDefn), cPos,len)){
             } else if(errorSet){
@@ -1455,7 +1479,8 @@ struct ProteusParser{
         } else {
             me bool: requirePlusMinusSign <- false
             infn!.viewMode <- vmOverlay
-            if(peek=="*" or peek=="/"){
+            me bool: join <- joinOpener(cPos, peek)
+            if(!join and (peek=="*" or peek=="/")){
                 cPos <+- 1
                 if(peek=="/"){infn!.infSize!.inverted <- true}
                 infn!.value!.sizeMode <- fromGiven
@@ -1478,7 +1503,7 @@ struct ProteusParser{
                 infn!.infSize!.overlayType  <- NUM
                 infn!.infSize!.evalMode <- emUnknown
             }
-            if(peek=="+" or peek=="-"){
+            if(!join and (peek=="+" or peek=="-")){
                 cPos <+- 1
                 me bool: negativeValue <- peek=="-"
                 if(!requirePlusMinusSign){infn!.value!.sizeMode <- fromContext}
@@ -1842,6 +1867,7 @@ struct InfonViewPrinter{
                 pure!.evalMode==emLiteral and size!=NULL and (size!.evalMode==emLiteral or pure!.sizeMode==fromGiven)
         me bool: showSize <- size!=NULL and (
             boundedOpenList or boundedUnordered or (asInnr and parentInfon!.isOrLike()) or
+            (size!.isExpression() and pure!.sizeMode==fromGiven and !pure!.sizeWasInner) or
             ((((pure!.sizeMode==fromGiven) and (pure!.overlayType!=LST or pure!.evalMode!=emLiteral))
             or (pure!.overlayType!=NUM and size!.evalMode==emUnknown and pure!.evalMode==emLiteral and
                     parentInfon!.orderMode!=uUnordered))
@@ -1873,7 +1899,8 @@ struct InfonViewPrinter{
             if(pure!.evalMode == emUnknown){S <+- "_"}
             else{
                 me FlexNum:N <- pure!.num
-                S <+- N.stringify()
+                if(N.getDenominator()==1){S <+- toString(N.getNumerator())}
+                else{S <+- N.stringify()}
             }
         }else if(pure!.overlayType == STR){
             if(pure!.evalMode == emUnknown){S <+- "$"}
@@ -1886,10 +1913,15 @@ struct InfonViewPrinter{
             me string: strtBrkt<-"{"
             me string: endBrkt <-"}"
             if(asInnr or pure!.evalMode == emIntersection){strtBrkt<-"["; endBrkt<-"]"}
-            else if(pure!.evalMode == emConcat) {strtBrkt<-"("; endBrkt<-")"}
+            else if(pure!.evalMode == emGroup) {strtBrkt<-"("; endBrkt<-")"}
+            else if(pure!.evalMode == emConcat) {strtBrkt<-"**("; endBrkt<-")"}
+            else if(pure!.evalMode == emSum) {strtBrkt<-"++("; endBrkt<-")"}
             S <+- strtBrkt
             if(pure!.timelike){S <+- "T "}
-            if(size!=NULL and pure!.sizeWasInner and pure!.evalMode==emLiteral){
+            if(pure!.isJoin() and pure!.operandExtent!=NULL){
+                S <+- "~"+printInfonState(pure!.operandExtent, NULL, false, isSpec, parentInfon, used, verbosity, special, printMode, true)
+                showBar<-true
+            }else if(size!=NULL and pure!.sizeWasInner and pure!.evalMode==emLiteral){
                 S <+- "~"+printInfonState(size, NULL, false, isSpec, parentInfon, used, verbosity, special, printMode, true)
                 showBar<-true
             }

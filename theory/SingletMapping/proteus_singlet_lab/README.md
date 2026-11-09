@@ -14,7 +14,7 @@ and B takes the first singlet followed by the remaining suffix. The shared
 singlet gives the size `sA+sB-1`; the child values must add to the parent's
 value. For `A+A`, the remaining singlets are distinct and correspond in order.
 Both copies have the same value, including when that value is unknown.
-In the planned Proteus evaluator the shared first singlet justifies the
+In the Proteus evaluator the shared first singlet justifies the
 size formula. The evaluator computes sizes and values directly with GMP or
 machine integer arithmetic. Singlet enumeration belongs to the reference
 experiment.
@@ -27,13 +27,12 @@ shows which singlets and child values each choice yields.
 python infon_additive_prefix_table.py 6 --ghosting when-needed --case 3 4
 ```
 
-In the current evaluator, `((*4+2) +(*3+1))` gives `*4+3`. The parser marks
-the signed operand as `fromContext`, and the evaluator adds its value to the
-left operand. Under the planned grammar this displacement is written
-`**(*4+2 +(*3+1))`. The structural sum of the two whole infons is written
-`++(*4+2 *3+1)` and gives `*6+3`. Both joins take ordered lists and
-ordinary parentheses group an expression.
-[D129 records the syntax and migration plan](../../../Docs/Design%20Docs/normalization-design-decisions.md#d129-grouping-and-ordered-multiplicative-and-additive-joins).
+In Proteus, `**(*4+2 +(*3+1))` gives `*4+3`. The signed operand supplies
+a contextual displacement. The structural sum `++(*4+2 *3+1)` gives
+`*6+3`. Both joins take ordered lists. In `++(&{*4+2 *3+1} *2+1)`,
+the embedded list supplies the first two operands and the result is `*7+4`.
+Ordinary parentheses group one infon.
+[D129 records the language decision](../../../Docs/Design%20Docs/normalization-design-decisions.md#d129-grouping-and-ordered-multiplicative-and-additive-joins).
 
 Under the proposal, the selected view
 determines how far a cursor displacement can carry. Unknowns used in range

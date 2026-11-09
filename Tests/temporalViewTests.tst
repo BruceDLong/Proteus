@@ -5,7 +5,7 @@ view/state/roundTrip, State and temporal views retain the selected occurrence, {
 view/state/directT, T can select the support of a represented state directly, {T 4 8}@[2]^T@[1]^S, 8, norm
 view/state/repeatT, Repeating T does not add another temporal level, {T 4 8}@[2]^T^T@[1]^S, 8, norm
 view/state/repeatS, Repeating S preserves the selected state, {T 4 8}@[2]^S^S, 8, norm
-view/parent/listSpec, A view acquires the original parent listSpec, {T (%tprev +1)| 0 _ _}@[3]^S^T@[1]^S, 2, norm
+view/parent/listSpec, A view acquires the original parent listSpec, {T **(%tprev +1)| 0 _ _}@[3]^S^T@[1]^S, 2, norm
 view/parent/overlay, A view acquires the original parent overlay, ({T _ _} == {T 3 7})@[2]^S, 7, norm
 view/embedded/state, Embedded storage keeps logical temporal context, {T 4 &{8 12} 16}@[3]^S^T@[1]^S, 12, norm
 view/nested/history, An ordinary nested history keeps its own temporal level, {T 4 {T 8 12} 16}@[2]^T@[2]^S, 12, norm

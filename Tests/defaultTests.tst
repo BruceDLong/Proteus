@@ -46,7 +46,7 @@ parser/list/CandS2,    Both specs2,                    {~2 item | 'A' 12},      
 parser/list/noC,       No C,                           {item| 'A' 12},                                                         {item| 'A' 12},                 parse
 parser/list/partial,   partial lists,                  { {...} {1 ... } {1 ... 5} {}},                                         {{ ... } {1 ... } {1 ... 5} {}}, parse
 parser/list/embedded,  Embedded list,                  {1 2 &{3 4 5} 6 7},                                                     {1 2 &{3 4 5} 6 7},             parse
-parser/list/concat,    concated list,                  (1 2 3),                                                                (1 2 3),                        parse
+parser/list/concat,    concated list,                  **(1 2 3),                                                                **(1 2 3),                        parse
 parser/list/square,    square brackets,                [1 2 3],                                                                [1 2 3],                        parse
 parser/list/commas,    comma list,                     {2\, 3\, 4 \, 5 },                                                      {2\, 3\, 4\, 5},                parse
 parser/definition/hash, Hash definition marker,        {#thing=1},                                                             {#thing = 1},                   parse
@@ -160,13 +160,13 @@ pushArg/leftFirst,     test left arg,                  5:>{_ 6 _},              
 pushArg/rightLast,     test right inverse,             {_ 6 _}<!7,                                                             {_ 6 7},                        norm
 pushArg/leftLast,      test left inverse,              7!>{_ 6 _},                                                             {_ 6 7},                        norm
 concat/oneItem,        Test null concat,               ('Hello'),                                                              'Hello',                        norm
-concat/simpleStr,      simple string concat,           ('Hello' ' there' ' world'),                                            'Hello there world',            norm
-concat/twoNums,        Test small concat,              {1 (*8+4 *4+3) 3},                                                      {1 *32+19 3},                   norm
-concat/strCat,         string concat,                  (('Hello' ' There!' (' How' ' are' (' you' ' Doing') '?'))),            'Hello There! How are you Doing?', norm
-concat/numCat,         integer concat,                 ((*5+2 *6+3 (*7+4 *8+5 (*9+6 *10+7) *1+8))),                            *151200+79005,                  norm
-concat/simpleList,     simple list,                    ({1 2} {} {3 4}),                                                       {1 2 3 4},                      norm
-concat/listCat,        list concat,                    (({1 2} {} {3} ({4 5} ({} {6 7}) {8} {}))),                             {1 2 3 4 5 6 7 8},              norm
-concat/parseSrc,       Parse a concatenated string,    [*4+$ *10+$] <~ ('DO' 'gsTin' 'tinabulation'),                          'Tintinabul',                   norm
+concat/simpleStr,      simple string concat,           **('Hello' ' there' ' world'),                                            'Hello there world',            norm
+concat/twoNums,        Test small concat,              {1 **(*8+4 *4+3) 3},                                                      {1 *32+19 3},                   norm
+concat/strCat,         string concat,                  (**('Hello' ' There!' **(' How' ' are' **(' you' ' Doing') '?'))),            'Hello There! How are you Doing?', norm
+concat/numCat,         integer concat,                 (**(*5+2 *6+3 **(*7+4 *8+5 **(*9+6 *10+7) *1+8))),                            *151200+79005,                  norm
+concat/simpleList,     simple list,                    **({1 2} {} {3 4}),                                                       {1 2 3 4},                      norm
+concat/listCat,        list concat,                    (**({1 2} {} {3} **({4 5} **({} {6 7}) {8} {}))),                             {1 2 3 4 5 6 7 8},              norm
+concat/parseSrc,       Parse a concatenated string,    [*4+$ *10+$] <~ **('DO' 'gsTin' 'tinabulation'),                          'Tintinabul',                   norm
 tUnknown/simple,       test isolated tUnknown,         ?,                                                                      ?,                              norm
 tUnknown/simple2,      test tUnknown = ?,              ?=?,                                                                    ?,                              norm
 tUnknown/unknownIsNum, test tUnknown = _,              ?=_,                                                                    _,                              norm
@@ -229,7 +229,7 @@ word/pluralize,        Singular to plural,             {bike| ... },            
 word/findPlural,       Find plural,                    {123\, foot\, {foot|foot1\,foot2}}.feet,                                feet:{foot1\, foot2},           norm
 neg/simple,            Negative cnvt,                  *10-1,                                                                  *10+9,                          norm
 fracs/simple,          simple,                         *10+8/2,                                                                *10+4,                          norm
-range/join,            Range joins,                    *10+(2+3),                                                              *10+5,                          norm
+range/join,            Range joins,                    *10+**(2+3),                                                              *10+5,                          norm
 
 #`range/select1` is not a `GET_LAST` bug. It is a propagation-order bug that shows up as polluted `candidatesForLastItem`.
 #- The last build where range/select1 passed was likely fdaa2c1
@@ -249,11 +249,11 @@ range/join,            Range joins,                    *10+(2+3),               
 #
 # So the best current statement is: `range/select1` is caused by an interaction between the step-0 concat fastpath change and the newer non-streaming propagation/subscription timing in `propagateProxy()`. The visible bug is stale last-item candidates; the root bug is earlier scheduling/order. The workspace is back on the clean baseline.
 
-range/select1,         Select in range,                {[&{!(*4+_ +2)|  ... } (*4+_ +2)] | ...} <~ {1 2 0 3 4 5 6 7},          {[&{!(*4+_ +2)|  ... } (*4+_ +2)]| 2 3 4 5 ... } == {1 2 0 3 4 5 6 7},                      norm
+range/select1,         Select in range,                {[&{!**(*4+_ +2)|  ... } **(*4+_ +2)] | ...} <~ {1 2 0 3 4 5 6 7},          {[&{!**(*4+_ +2)|  ... } **(*4+_ +2)]| 2 3 4 5 ... } == {1 2 0 3 4 5 6 7},                      norm
 range/select2,         Select in range,                {[&{!*4+_|  ... } *4+_] | ...} <~ {1 2 0 3 444 555 666 777 2},          {1 2 0 3 2},                    norm
-range/select3,         Select in range,                {[&{!*4+_|  ... } *4+_] | ...} <~ {1 *3+_  5 *4+(*2+_ +1)  *4+_  },     {1 *4+_ *4+(*2+_ +1) *4+_},     norm
-range/concat1,         Overlapping range,              *10+(*5+_+2) = *10+(*4+_+5),                                            *10+(*2+_ +5),                  norm
-range/dot,             Find with dot,                  {1 0 6 7 8 4 5 6 7}.*10+(*3+_+2) ,                                      4,                              norm
+range/select3,         Select in range,                {[&{!*4+_|  ... } *4+_] | ...} <~ {1 *3+_  5 *4+**(*2+_ +1)  *4+_  },     {1 *4+_ *4+**(*2+_ +1) *4+_},     norm
+range/concat1,         Overlapping range,              *10+**(*5+_+2) = *10+**(*4+_+5),                                            *10+**(*2+_ +5),                  norm
+range/dot,             Find with dot,                  {1 0 6 7 8 4 5 6 7}.*10+**(*3+_+2) ,                                      4,                              norm
 # range/alts	    Select alts	{[&{!*_+[*10+(*3+_+2) *10+(*3+_+6)]|  ... } *_+[*10+(*3+_+2) *10+(*3+_+6)]] | ...} <~ {1 2 3 4 5 6 7 8 9}	{2 3 4 6 7 8}	norm
 slice/select,          Select slice,                   [& *3+{...} <&*4+{...}> ] <~ {3 4 5 6 7 8 9 0},                         {6 7 8 9},                      norm
 slice/endRelativeLast, Select last item with negative-sized intersection, *(-1)+[<_>] <~ {1 2 3 4},                            4,                              norm
@@ -317,6 +317,7 @@ merge/lookahead,       Merge lookahead,                 {&{_|...} _ $} =: {33 22
 @include worldLoadTests.tst
 @include wordSyntaxTests.tst
 @include wordArgumentTests.tst
+@include orderedJoinTests.tst
 @include embeddedNeighbourTests.tst
 @include unifiedNamingTests.tst
 @include individualConstructionTests.tst

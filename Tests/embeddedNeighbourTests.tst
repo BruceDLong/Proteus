@@ -21,9 +21,9 @@ neighbours/ordinaryInsideEmbedded, ordinaryInsideEmbedded, {1 &{{2 3} %prev}}@[3
 neighbours/nestedEmbeddedBoundary, nestedEmbeddedBoundary, {1 {&{%prev 2}}}@[2]@[1], UNDEFINED, norm
 neighbours/innerScope, innerScope, {1 {9 &{%prev}}}@[2]@[2], 9, norm
 neighbours/unordered, unordered, {1\, %prev}, {1\, UNDEFINED}, norm
-neighbours/parentTemplate, parentTemplate, {(%prev +1)|0 &{_ _} _}@[4], 3, norm
-neighbours/embeddedTemplate, embeddedTemplate, {0 &{(%prev +1)|_ _} 9}@[3], 2, norm
-neighbours/templateCoverage, templateCoverage, {0 &{(%prev +1)|_ _} 9}@[4], 9, norm
+neighbours/parentTemplate, parentTemplate, {**(%prev +1)|0 &{_ _} _}@[4], 3, norm
+neighbours/embeddedTemplate, embeddedTemplate, {0 &{**(%prev +1)|_ _} 9}@[3], 2, norm
+neighbours/templateCoverage, templateCoverage, {0 &{**(%prev +1)|_ _} 9}@[4], 9, norm
 neighbours/temporalControl, temporalControl, {T 1 &{T %tprev 2} 3}@[2], 1, norm
 neighbours/temporalStructural, temporalStructural, {T 1 &{%prev 2} 3}@[2], 1, norm
 neighbours/conflict, conflict, {1 &{%prev=2}}@[2], <REJECTED>, norm
@@ -38,5 +38,5 @@ neighbours/namedNext, namedNext, {#span={2 %next}}\n{1 &span 4}@[3]//:4, -, mult
 neighbours/namedEmpty, namedEmpty, {#empty={}}\n{1 &empty %prev}@[2]//:1, -, multi
 neighbours/namedRepeated, namedRepeated, {#span={%prev}}\n{1 &span 3 &span}@[4]//:3, -, multi
 neighbours/namedIsolation, namedIsolation, {#span={%prev}}\n{1 span 3}@[2]@[1]//:UNDEFINED, -, multi
-neighbours/namedParameter, namedParameter, {#steps(amount)={(%prev +(%amount))|_ _}}\n{0 &steps(2) 9}@[3]//:4, -, multi
+neighbours/namedParameter, namedParameter, {#steps(amount)={**(%prev +(%amount))|_ _}}\n{0 &steps(2) 9}@[3]//:4, -, multi
 neighbours/knownDeclaredEndpoint, knownDeclaredEndpoint, {&*2+{2 3} %prev}, {&{2 3} 3}, norm

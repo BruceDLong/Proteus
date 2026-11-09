@@ -12,7 +12,7 @@ parser/calls/embedded, embedded, {&pair(first::1\,second::2)}, *_+{&pair(first::
 parameters/identity, identity, {#ident(item)=%item}\nident(item::7)//:ident(item::7):7, -, multi
 parameters/positional, positional, {#ident(item)=%item}\nident(7)//:ident(7):7, -, multi
 parameters/order, order, {#pair(first\, second)={%first %second}}\npair(second::2\, first::1)//:pair(second::2\, first::1):{1 2}, -, multi
-parameters/arithmetic, arithmetic, {#inc(item)=(%item +1)}\ninc(item::4)//:inc(item::4):5, -, multi
+parameters/arithmetic, arithmetic, {#inc(item)=**(%item +1)}\ninc(item::4)//:inc(item::4):5, -, multi
 parameters/instances, instances, {#ident(item)=%item}\n{ident(3) ident(8)}//:{ident(3):3 ident(8):8}, -, multi
 parameters/nested, nested, {#ident(item)=%item #outer(item)=ident(item::%item)}\nouter(item::9)//:outer(item::9):9, -, multi
 parameters/prev, prev, {#ident(item)=%item}\n{7 ident(item::%prev)}//:{7 ident(item::%prev):7}, -, multi
@@ -26,10 +26,10 @@ parameters/repeatedInner, repeatedInner, {#ident(item)=%item #duo(item)={ident(2
 parameters/localShared, localShared, {#fixed(item)={%item=7 %item}}\nfixed()//:fixed():{7 7}, -, multi
 parameters/localReverse, localReverse, {#fixed(item)={%item %item=7}}\nfixed()//:fixed():{7 7}, -, multi
 parameters/lazyField, lazyField, {#pick(item)=%item.x}\npick(item::{x:7 unavailable^T})//:pick(item::{x:7 unavailable^T}):7, -, multi
-parameters/tprev, tprev, {#inc(item)=(%item +1)}\n{T 0 inc(item::%tprev)}//:{T 0 inc(item::%tprev):1}, -, multi
+parameters/tprev, tprev, {#inc(item)=**(%item +1)}\n{T 0 inc(item::%tprev)}//:{T 0 inc(item::%tprev):1}, -, multi
 parameters/recordBinding, recordBinding, {#pick(item)=%item.x}\n{ {x:7} pick(item::%prev)}//:{{x:7} pick(item::%prev):7}, -, multi
 parameters/sameRequest, sameRequest, {#ident(item)=%item}\n{ident(2) ident(3) ident(4)}//:{ident(2):2 ident(3):3 ident(4):4}, -, multi
-parameters/listSpec, listSpec, {#count(step)={T (%tprev +(%step)) | 0 _ _}}\ncount(step::2)//:count(step::2):{T 0 2 4}, -, multi
+parameters/listSpec, listSpec, {#count(step)={T **(%tprev +(%step)) | 0 _ _}}\ncount(step::2)//:count(step::2):{T 0 2 4}, -, multi
 parameters/listSpecSupplied, listSpecSupplied, {#filled(item)={(%item) | ...}}\nfilled(7):{_ _}//:filled(7):{7 7}, -, multi
 parameters/learnCaller, learnCaller, {#fixed(item)=%item=7}\n{_ fixed(item::%prev)}//:{7 fixed(item::%prev):7}, -, multi
 parameters/nestedArgumentScope, nestedArgumentScope, {#pick(item)=%item@[1] #outer(value)=pick(item::{%value 2})}\nouter(value::3)//:outer(value::3):3, -, multi
@@ -39,4 +39,4 @@ parameters/recordResult, recordResult, {#point(x\, y)={x:(%x)\, y:(%y)}}\npoint(
 parameters/recordField, recordField, {#point(x\, y)={x:(%x)\, y:(%y)}}\npoint(3\,4).x//:x:3, -, multi
 parameters/stringArgument, stringArgument, {#ident(item)=%item}\nident('box')//:ident('box'):'box', -, multi
 parameters/bare, bare, {#fixed(item)=%item=7}\nfixed//:fixed:7, -, multi
-parameters/nestedOccurrence, repeated body at distinct input occurrences, {#step(w)={%w@[2] {1 2 0}@[(%w@[1] +1)]}}\nstep(step(step({1 _})))@[2]//:0, -, multi
+parameters/nestedOccurrence, repeated body at distinct input occurrences, {#step(w)={%w@[2] {1 2 0}@[**(%w@[1] +1)]}}\nstep(step(step({1 _})))@[2]//:0, -, multi
