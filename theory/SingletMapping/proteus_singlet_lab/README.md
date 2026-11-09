@@ -14,6 +14,10 @@ and B takes the first singlet followed by the remaining suffix. The shared
 singlet gives the size `sA+sB-1`; the child values must add to the parent's
 value. For `A+A`, the remaining singlets are distinct and correspond in order.
 Both copies have the same value, including when that value is unknown.
+In the planned Proteus evaluator the shared first singlet justifies the
+size formula. The evaluator computes sizes and values directly with GMP or
+machine integer arithmetic. Singlet enumeration belongs to the reference
+experiment.
 
 The reference script and applet calculate both `B0` (shared first singlet)
 and `Bend` (shared last singlet of A). For the parent `*6+3`, this command

@@ -5397,7 +5397,9 @@ require migration to an explicit join. Grouping introduces no cursor shift.
 | `**(*4+2 *3+1)` | Multiplicative join, giving `*12+7`. |
 | `**(*4+2 +(*3+1))` | The signed operand supplies a contextual displacement, giving `*4+3`. |
 | `++(*4+2 *3+1)` | Structural additive join, giving `*6+3`. |
+| `++( &{*4+2 *3+1} *2+1 )` | The embedded list supplies the first two operands. The following operand brings the sum to `*7+4`. |
 | `++( &%itemsToSum )` | Apply the same additive join to the logical members of the referenced ordered list. |
+| `**()` | A bare empty multiplicative join yields `?`. |
 
 **Reason.** An infon's selected value can supply a displacement, while the
 whole infon can participate as an additive part with its own singlets.
@@ -5438,10 +5440,14 @@ Grouping has its own meaning even if a singleton join gives the same value.
    `1 + sum(si - 1)` and value `sum(vi)`. A contextual operand such as
    `+1` needs a view that supplies its size to establish its contribution
    to the extent. The join opener determines the operation even when an
-   operand's size is unknown. Use the working shared-first-singlet decomposition
-   and retain the operand correspondences needed to justify the result. Each
-   occurrence contributes, including repeated references to the same unknown
-   value. Unknown quantities retain their constraints. In particular, for a
+   operand's size is unknown. The shared first singlet explains the size
+   formula. The evaluator applies that formula directly to operand sizes and
+   values using exact integer arithmetic. Use the existing `FlexNum`/GMP
+   arithmetic or machine arithmetic where the intermediate and final results
+   fit. Traverse the logical operands once. Computing the join requires
+   no singlet allocation, enumeration or mapping tables. Each occurrence
+   contributes, including repeated references to the same unknown value.
+   Preserve that shared value through the operand references. For a
    four-state X, `++(%X %X)` has extent seven and admits only 0, 2, 4 and 6.
    Numeric summaries alone cannot establish operand identity or discharge
    these constraints. Singleton joins preserve the member's meaning and
@@ -5455,16 +5461,21 @@ Grouping has its own meaning even if a singleton join gives the same value.
    semantic results of legacy cases. Inventory shared World/Slipstream inputs
    for the coordinated grammar change.
 
-**Acceptance checks.** Exercise parsing and printing, prefix splits across
-stream chunks, forbidden split openers, ordinary word calls and qualified
-grouping. Use one parameterized definition with the exact body
-`++( &%itemsToSum )`. Calling it with `{*4+2 *3+1}` must produce `*6+3`.
-The corresponding `**(` case must produce `*12+7`. Compare both with direct
-operands, nested embeddings, empty embedded spans and a reference between
-ordinary prefix and suffix members. Check an unembedded list as one operand,
-repeated references and unknowns, and a wait followed by completion without
-prefix replay or duplicate contributions. Cover both operand and result sizes
-with a three-member case. Run migrated parser, numeric-range, word-argument,
+**Acceptance checks.** Start with the standalone expression
+`++( &{*4+2 *3+1} *2+1 )`. Its three logical operands give size
+`1 + (4−1) + (3−1) + (2−1) = 7` and value `2+1+1 = 4`. The expected
+infon is `*7+4`. With the same body, `**( &{*4+2 *3+1} *2+1 )` must
+produce `*24+15`, which also checks traversal order. Check bare `**()`
+against `?`, and a two-operand sum whose extent exceeds machine integer
+width against its exact result.
+
+Compare both joins with direct operands, nested embeddings, empty embedded
+spans and an embedded reference between ordinary prefix and suffix members.
+Check an unembedded list as one operand, repeated references and unknowns,
+and a wait followed by completion without prefix replay or duplicate
+contributions. Exercise parsing and printing, prefix splits across stream
+chunks, forbidden split openers, ordinary word calls and qualified grouping.
+Run migrated parser, numeric-range, word-argument,
 list, string, recurrence and full regressions after CodeDog regeneration. Compare
 the printed failure count and failing names with the pre-change baseline.
 
@@ -5472,9 +5483,9 @@ Three pre-change `TestProteus` controls passed on `3d74a600`. Under the
 current grammar, `(*4+2 *3+1)` gives `*12+7`, `((*4+2) +(*3+1))` gives
 `*4+3`, and `(*4+2)` gives `*4+2`.
 
-**Proposed empty-list behavior for review.** An empty discrete additive join
-denotes the zero-copy sum `*1+0`. For an empty multiplicative join the
-numeric, text and list identities are `*1+0`, `''` and `{}` respectively.
-Use a proved result kind to select its identity and leave an untyped
-`**()` unresolved. An empty embedding inside a larger join contributes zero
-members, so it needs no identity of its own.
+**Empty lists.** A bare `**()` yields the unknown infon `?`. An empty
+embedding inside a larger join contributes zero members and traversal
+continues with the next sibling. The proposed identity for `++()` is the
+zero-copy sum `*1+0`. For a multiplicative join with a known result kind,
+the proposed numeric, text and list identities are `*1+0`, `''` and `{}`
+respectively.
