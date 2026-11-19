@@ -2015,7 +2015,7 @@ struct WorldPOVGraph {
         }
         if(item!.value!.evalMode==emIntersection or
            item!.value!.undefined or (item!.value!.inverted and item!.value!.evalMode!=emGroup and (expression or item!.value!.overlayType!=NUM)) or
-           item!.infSize!.undefined or item!.infSize!.inverted or
+           item!.infSize!.undefined or (item!.infSize!.inverted and !expression and item!.value!.overlayType!=NUM) or
            !((item!.infSize!.overlayType==NUM and
               (item!.infSize!.evalMode==emUnknown or item!.infSize!.evalMode==emLiteral)) or
              item!.infSize!.isExpression())){
@@ -2028,6 +2028,11 @@ struct WorldPOVGraph {
             facts.outcome <- worldError; facts.detail <- "Numeric size has a zero denominator"; return(facts)
         }
         if(facts.hasSize){facts.size.normalize()}
+        if(item!.infSize!.inverted and !item!.infSize!.isExpression()){
+            if(!facts.hasSize){facts.outcome <- worldPartial; facts.detail <- "Reciprocal radix needs its divisor"; return(facts)}
+            if(facts.size<=0){facts.outcome <- worldRejected; facts.detail <- "Reciprocal radix needs a positive divisor"; return(facts)}
+            facts.size <- FlexNum("1")/facts.size
+        }
         if(expression){return(facts)}
         if(item!.value!.overlayType!=tUnknown and item!.value!.overlayType!=tUnset){facts.overlay <- item!.value!.overlayType}
         facts.hasValue <- item!.value!.evalMode==emLiteral
@@ -2808,14 +2813,22 @@ struct WorldPOVGraph {
         if(frame!.expressionSlot==1){
             // The operand's value supplies the owner's size, not its type,
             // radix or range width. Unsupported extents remain expressed.
+            me bool: reciprocal <- frame!.node!.pItem!.infSize!.inverted
             if(expression.overlay!=NUM or expression.negative or !expression.hasValue or
-               expression.number<0 or expression.number.getDenominator()!=1){
+               (!reciprocal and (expression.number<0 or expression.number.getDenominator()!=1))){
                 frame!.facts.outcome <- worldPartial
                 frame!.facts.detail <- "Computed size needs a nonnegative whole numeric value"; return()
             }
             frame!.facts.hasSize <- true; frame!.facts.size <- expression.number
+            if(reciprocal){
+                if(expression.number<=0){frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "Reciprocal radix needs a positive divisor"; return()}
+                frame!.facts.size <- FlexNum("1")/expression.number
+            }
             frame!.facts.applyExtent()
             return()
+        }
+        if(frame!.node!.pItem!.infSize!.inverted and expression.overlay!=NUM){
+            frame!.facts.outcome <- worldUnsupported; frame!.facts.detail <- "Reciprocal radix needs a numeric payload"; return()
         }
         if(expression.overlay==LST){
             if(!expression.representable){
@@ -4244,7 +4257,7 @@ struct WorldPOVGraph {
         if(facts.overlay==LST and facts.order==uUnordered and !facts.explicitSize){item!.infSize!.evalMode <- emUnknown}
         if(facts.hasSize){
             item!.infSize!.overlayType <- NUM; item!.infSize!.evalMode <- emLiteral; item!.infSize!.num <- facts.size
-            item!.infSize!.items.clear()
+            item!.infSize!.inverted <- false; item!.infSize!.items.clear()
         }
         if(facts.hasValue and facts.overlay!=LST){
             item!.value!.evalMode <- emLiteral

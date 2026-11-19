@@ -5569,3 +5569,24 @@ covering the free and received domains, operand identity, print/read and
 parser continuation. The separate numeric, print and qualified-text suites
 passed all 66 cases. A client linked to the regenerated shared library
 verified four signed expressions, and Slipstream rebuilt against that library.
+
+## D131 Reciprocal radices for scaled rational readings
+
+A positive divisor in a numeric size slot supplies its exact reciprocal as
+the radix. For example, joining a four-state tick with `/4+0` maps its
+reading and its extent to turns. A grouped divisor borrows the existing
+size-expression frame, so a parameter can supply the count for that occurrence.
+A missing divisor leaves the operation partial. A zero or negative divisor
+rejects. Publication stores the resolved radix and clears the inversion flag
+so a later read uses the same size.
+
+The executable model in `Resources/scaledPhase.pr` uses whole ticks from
+zero through N−1, as specified for this grid. A known turn alone establishes
+a degree reading while its subdivision count can stay unknown. The discrete
+structural sum checks integrality and a qualified range match checks the
+bounds. These checks belong to the model because ordinary rational readings
+can be fractional inside the same bounds. The inverse query divides a
+bounded turn by the width of one tick and checks integrality. This also
+recovers the tick extent N. Both directions use a fixed
+number of scalar operations regardless of N, with arithmetic cost depending
+on operand precision. The model uses the existing default numeric display.

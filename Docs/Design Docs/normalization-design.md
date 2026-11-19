@@ -2117,3 +2117,17 @@ source. Applying the sign twice recovers `*10+3`. In
 the twelve-state receiver interprets `-3` as `*12+9`.
 An unknown selected value remains correlated across all uses of its operand.
 [Decision and examples](normalization-design-decisions.md#d130-grouped-numeric-negation)
+
+## Scaled rational readings (D131)
+
+In an ordered numeric join, `/4+0` supplies radix 1/4 and offset zero.
+`**(*4+1 /4+0)` therefore has size one and reading one quarter.
+A positive scalar divisor may be literal or computed. An unknown divisor
+retains the expression. The ordinary computed-size rule continues to apply
+to the multiplication spelling.
+
+Load `Resources/scaledPhase.pr` for the reference model. Use
+`scaled-phase(4,1)` to obtain turns and degrees, `phase-reading(1/2)` for
+a known turn before choosing a grid, and `phase-tick(6,1/2)` to obtain tick
+three on a six-division grid. A plain rational range admits fractional
+readings. The grid adds an explicit whole-tick requirement.
