@@ -5590,3 +5590,20 @@ bounded turn by the width of one tick and checks integrality. This also
 recovers the tick extent N. Both directions use a fixed
 number of scalar operations regardless of N, with arithmetic cost depending
 on operand precision. The model uses the existing default numeric display.
+
+## D132 Closed rational coordinates in the kernel
+
+Represent a closed rational interval as one ordered numeric range. Track
+inclusion of its upper endpoint alongside the existing bounds. A separate
+endpoint alternative could establish membership but loses the linear
+relationship under translation. Inflating the width would admit additional
+fractions. Both endpoints can be signed and fractional. Exact comparison
+of the coordinate works at unknown state size and density.
+
+The contiguous two-operand form `..(lo hi)` supplies the relationship used
+by the kernel definition `rat-closed(lo,hi)`. The parser already distinguishes
+the three-dot open tail and stops postfix field parsing at a second dot.
+Endpoint expressions use the ordinary scalar operand frames and lexical
+parameter bindings. Cost is two endpoint evaluations and a fixed number
+of exact rational comparisons regardless of subdivision count. Existing
+width-plus-offset domains keep their half-open upper bound.

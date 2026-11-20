@@ -26,23 +26,24 @@ struct WorldOutcome: inherits=<mode[
     worldRejected, worldUnsupported, worldCancelled, worldError
 ]> {}
 
-// Exact numeric value sets. A point and an empty half-open interval differ.
+// Exact rational value sets. An included upper endpoint shares the same coordinate scale.
 struct WorldBounds {
     me bool: bounded <- false
     me bool: point <- false
     me FlexNum: low
     me FlexNum: high
-    me bool: empty() <- {return(bounded and !point and low>=high)}
+    me bool: includeHigh <- false
+    me bool: empty() <- {return(bounded and !point and (low>high or (low==high and !includeHigh)))}
     me bool: contains(me WorldBounds: other) <- {
         if(other.empty()){return(true)}
         if(empty()){return(false)}
         if(!bounded){return(true)}
         if(!other.bounded){return(false)}
-        if(other.point){return(low<=other.low and ((point and low==other.low) or (!point and other.low<high)))}
-        return(!point and low<=other.low and other.high<=high)
+        if(low>other.low or high<other.high){return(false)}
+        return(high>other.high or point or includeHigh or (!other.point and !other.includeHigh))
     }
     me bool: same(me WorldBounds: other) <- {
-        return(bounded==other.bounded and point==other.point and (!bounded or (low==other.low and high==other.high)))
+        return(bounded==other.bounded and point==other.point and includeHigh==other.includeHigh and (!bounded or (low==other.low and high==other.high)))
     }
     me WorldBounds: intersect(me WorldBounds: other) <- {
         me WorldBounds: result <- self
@@ -50,8 +51,13 @@ struct WorldBounds {
         if(other.empty() or !bounded){return(other)}
         if(point){if(other.contains(result)){return(result)}}
         else if(other.point){if(contains(other)){return(other)}}
-        else{result.low <- max(low, other.low); result.high <- min(high, other.high); return(result)}
-        result.point <- false; result.high <- result.low
+        else{
+            result.low <- max(low, other.low); result.high <- min(high, other.high)
+            result.includeHigh <- (result.high<high or includeHigh) and (result.high<other.high or other.includeHigh)
+            result.point <- result.low==result.high and result.includeHigh
+            return(result)
+        }
+        result.point <- false; result.includeHigh <- false; result.high <- result.low
         return(result)
     }
 }
@@ -213,7 +219,11 @@ struct WorldDiscreteSum {
             if(term!.bounds.bounded){
                 me FlexNum: first <- term!.coefficient*term!.bounds.low
                 me FlexNum: last <- first
-                if(!term!.bounds.point){last <- term!.coefficient*(term!.bounds.high-1)}
+                if(!term!.bounds.point){
+                    me FlexNum: end <- term!.bounds.high
+                    if(!term!.bounds.includeHigh and end.getDenominator()==1){end <- end-1}
+                    last <- term!.coefficient*end
+                }
                 low <+- min(first,last); high <+- max(first,last)
             }else{bounded <- false}
             me BigInt: next <- term!.coefficient.getNumerator()
@@ -660,21 +670,24 @@ struct WorldScalar {
     me bool: hasRange <- false
     me FlexNum: lower
     me FlexNum: upper
+    me bool: includeUpper <- false
 
     me WorldBounds: bounds() <- {
         me WorldBounds: result
         result.bounded <- hasValue or hasRange or hasSize
         result.point <- hasValue
-        if(hasValue){result.low <- number; result.high <- number}
-        else if(hasRange){result.low <- lower; result.high <- upper}
+        if(hasValue){result.low <- number; result.high <- number; result.includeHigh <- hasRange and includeUpper}
+        else if(hasRange){result.low <- lower; result.high <- upper; result.includeHigh <- includeUpper}
         else if(hasSize){result.high <- size}
         return(result)
     }
     void: useBounds(me WorldBounds: result) <- {
         hasValue <- result.point
-        hasRange <- result.bounded and !result.point
+        // Retain the coordinate domain of a singleton until its consumer has
+        // checked it. In particular a signed input cannot become end-relative.
+        hasRange <- result.bounded and (!result.point or result.includeHigh)
         if(hasValue){number <- result.low}
-        else if(hasRange){lower <- result.low; upper <- result.high}
+        if(hasRange){lower <- result.low; upper <- result.high; includeUpper <- result.includeHigh}
     }
 
     void: addReadingTo(our WorldDiscreteSum: sum, me FlexNum: factor) <- {
@@ -2638,7 +2651,7 @@ struct WorldPOVGraph {
                 frame!.joining <- slot; frame!.sourceIsOperand <- true
                 return(body)
             }
-            if(slot!=NULL and (slot!.evalMode==emGroup or memberSequence(frame))){
+            if(slot!=NULL and (slot!.evalMode==emGroup or slot!.evalMode==emClosedRange or memberSequence(frame))){
                 frame!.nextOperand <- slot!.items.head
                 // A finite template is read once, then projected into each member.
                 // Empty closed lists need no template evaluation.
@@ -2669,7 +2682,10 @@ struct WorldPOVGraph {
         if(needsTemplate or frame!.nextWork>=item!.wrkList.size()){
             // An unbounded empty body does not supply its named member shape.
             // Request that meaning once; the future template itself stays lazy.
-            if(frame!.referenceOnly or (frame!.acquireOnly and !frame!.predicateOnly and (frame!.facts.hasValue or (frame!.parentContext!=NULL and !request!.suppliedWork)) and
+            // A selected numeric coordinate still owes its declared bounds.
+            // Borrowed siblings and reference-only traversal keep their lazy meanings.
+            me bool: selectedNumber <- frame!.expressionParent==NULL and frame!.facts.overlay==NUM and frame!.facts.hasValue
+            if(frame!.referenceOnly or (frame!.acquireOnly and !selectedNumber and !frame!.predicateOnly and (frame!.facts.hasValue or (frame!.parentContext!=NULL and !request!.suppliedWork)) and
                !(frame!.facts.openTail and !frame!.facts.hasSize and sequenceLength(frame!.facts.sequence)==0 and frame!.listSpecEdge==NULL))){return(NULL)}
             if(frame!.meaningRequested or frame!.facts.nominal==NULL or frame!.facts.meaningApplied or
                (frame!.predicateOnly and typePredicate(frame!.facts))){return(NULL)}
@@ -2714,13 +2730,18 @@ struct WorldPOVGraph {
             if(!additive and left.hasSize){left.size <- left.size*radix}
             return(left)
         }
-        if(additive){
+        if(additive or (left.hasRange and right.hasSize and right.size>=0)){
             me WorldBounds: result <- left.bounds()
             if(!result.bounded){left.outcome <- worldPartial; left.detail <- "Additive input has no finite value bounds"; return(left)}
             if(result.empty()){left.outcome <- worldRejected; left.detail <- "Empty numeric range"; return(left)}
+            if(!additive){
+                result.low <- result.low*right.size; result.high <- result.high*right.size
+                if(right.size==0){result.point <- true}
+                if(left.hasSize){left.size <- left.size*right.size}
+            }
             result.low <+- right.number; result.high <+- right.number
             left.useBounds(result)
-            if(left.hasRange){left.hasSize <- false; left.explicitSize <- false}
+            if(additive and left.hasRange and !left.hasValue){left.hasSize <- false; left.explicitSize <- false}
         }else{
             if(!left.hasValue or !right.hasSize or right.size<0){
                 left.outcome <- worldPartial; left.detail <- "Numeric concatenation needs a value and radix"; return(left)
@@ -3402,7 +3423,30 @@ struct WorldPOVGraph {
             if(operand!.referenceTarget!.summand==NULL){Allocate(operand!.referenceTarget!.summand)}
             operand!.facts.summand <- operand!.referenceTarget!.summand
         }
-        if(frame!.operandsRead==0){
+        our infonState: slot <- frame!.node!.pItem!.value
+        if(frame!.expressionSlot==1){slot <- frame!.node!.pItem!.infSize}
+        if(slot!.evalMode==emClosedRange){
+            me WorldScalar: endpoint <- operand!.facts
+            if(endpoint.terminalValue!=0 or endpoint.negative or (endpoint.overlay>=0 and endpoint.overlay!=NUM)){
+                frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "Interval endpoint must be numeric"; return()
+            }
+            if(!endpoint.hasValue or endpoint.overlay!=NUM){
+                frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Interval needs its endpoint coordinates"; return()
+            }
+            if(frame!.operandsRead==0){
+                frame!.expression <- WorldScalar(); frame!.expression.overlay <- NUM
+                frame!.expression.lower <- endpoint.number
+            }else{
+                frame!.expression.upper <- endpoint.number
+                frame!.expression.hasRange <- true; frame!.expression.includeUpper <- true
+                if(frame!.expression.lower==endpoint.number){
+                    frame!.expression.hasValue <- true; frame!.expression.number <- endpoint.number
+                }
+                if(frame!.expression.lower>endpoint.number){
+                    frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "Reversed closed interval"; return()
+                }
+            }
+        }else if(frame!.operandsRead==0){
             if(frame!.expressionSlot==2 and frame!.node!.pItem!.value!.evalMode==emGroup and frame!.node!.pItem!.value!.inverted){
                 frame!.expression <- negateOperand(operand,frame!.facts.hasSize)
             }else{frame!.expression <- operand!.facts}
@@ -4229,7 +4273,7 @@ struct WorldPOVGraph {
         }
         if(item!.value!.isExpression() and !facts.hasValue and !facts.hasRange){return()}
         me bool: sameView <- item===frame!.node!.pItem
-        if(sameView and !item!.infSize!.isExpression() and facts.hasRange and frame!.bodyBounds.same(facts.bounds()) and
+        if(sameView and !item!.infSize!.isExpression() and !facts.hasValue and facts.hasRange and frame!.bodyBounds.same(facts.bounds()) and
            frame!.bodyHasSize==facts.hasSize and (!facts.hasSize or frame!.bodySize==facts.size)){
             // The existing expression already represents these facts. Only
             // discharge work, without allocating an equivalent partial body.
@@ -4240,14 +4284,14 @@ struct WorldPOVGraph {
         }
         // Scalar states may be shared by other views. Publish through fresh
         // state objects, never overwrite another occurrence's borrowed payload.
-        me bool: changedRange <- facts.hasRange and (!sameView or !frame!.bodyBounds.same(facts.bounds()))
+        me bool: changedRange <- facts.hasRange and !facts.hasValue and (!sameView or !frame!.bodyBounds.same(facts.bounds()))
         if(facts.overlay!=LST){
             our infonState:: nextValue; nextValue! <- item!.value!; item!.value <- nextValue
         }
         our infonState:: nextSize; nextSize! <- item!.infSize!; item!.infSize <- nextSize
         if(facts.overlay>=0){
             item!.viewMode <- vmOverlay
-            if(!facts.hasRange and facts.overlay!=LST){item!.value!.overlayType <- facts.overlay}
+            if((facts.hasValue or !facts.hasRange) and facts.overlay!=LST){item!.value!.overlayType <- facts.overlay}
         }
         // Selection and replacement discard the previous view's extent,
         // including when the new value has no known size.
@@ -4292,12 +4336,18 @@ struct WorldPOVGraph {
         }
         if(changedRange){
             item!.value!.overlayType <- LST; item!.value!.evalMode <- emConcat
+            if(facts.includeUpper){item!.value!.evalMode <- emClosedRange}
             item!.value!.items.clear()
             withEach part in range 0 .. 2{
                 our infonView:: term
                 term!.viewMode <- vmOverlay; term!.itmMode <- mItem; term!.streamState <- parseDone
                 term!.infSize!.overlayType <- NUM; term!.value!.overlayType <- NUM
-                if(part==0){
+                if(facts.includeUpper){
+                    term!.infSize!.evalMode <- emUnknown; term!.value!.evalMode <- emLiteral
+                    term!.value!.num <- facts.lower
+                    if(part==1){term!.value!.num <- facts.upper}
+                    term!.value!.sizeMode <- fromCount
+                }else if(part==0){
                     term!.infSize!.evalMode <- emLiteral; term!.infSize!.num <- facts.upper-facts.lower
                     term!.value!.evalMode <- emUnknown; term!.value!.sizeMode <- fromGiven
                 }else{

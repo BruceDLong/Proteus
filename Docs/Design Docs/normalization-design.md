@@ -2131,3 +2131,19 @@ Load `Resources/scaledPhase.pr` for the reference model. Use
 a known turn before choosing a grid, and `phase-tick(6,1/2)` to obtain tick
 three on a six-division grid. A plain rational range admits fractional
 readings. The grid adds an explicit whole-tick requirement.
+
+## Closed rational coordinates (D132)
+
+The world kernel defines `#rat-closed(lo,hi) = ..(%lo %hi)` and
+`#proportion = (rat-closed(0,1))`. The two operands of `..(lo hi)` are
+ordered rational coordinates. Both endpoints belong to the range. The
+coordinate span imposes no infon size. A reversed pair rejects, and an
+unresolved endpoint keeps the expression partial.
+
+For a unit span with a positive, unspecified subdivision count N, a whole
+tick k has reading k/N for 0 ≤ k ≤ N. The last tick is N. The first and
+last spacings are both 1/N. Every rational in the interval has such a
+representation, so checking a supplied reading requires two endpoint
+comparisons and leaves the subdivision count unspecified. A translation
+moves both endpoints equally. An intersection keeps a shared endpoint
+only when both inputs admit it.
