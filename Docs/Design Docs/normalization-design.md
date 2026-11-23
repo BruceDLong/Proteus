@@ -2147,3 +2147,33 @@ representation, so checking a supplied reading requires two endpoint
 comparisons and leaves the subdivision count unspecified. A translation
 moves both endpoints equally. An intersection keeps a shared endpoint
 only when both inputs admit it.
+
+## Shared rational scales and linear sampling (D133)
+
+A scale records the positive factor that must divide its subdivision count.
+For readings rᵢ in turns, kᵢ = N rᵢ must be a whole tick for each i. If a
+reading in lowest terms is a/b, this requires b to divide N. The set of
+compatible densities is therefore N = m × lcm(b₁, …, bₙ) for positive
+integer m. The factor for an empty observation set is 1. The scale retains
+the entire family. Neither the infon size nor a particular N follows.
+
+The kernel exposes this fact as `shared-scale({1/4 1/6}).multiple-of`,
+which evaluates to 12. `refine-scale(scale, reading)` adds a reading and
+returns a new scale. `scale-density(scale, n)` checks a proposed count and
+`scale-width(scale, n)` obtains its exact reciprocal. Within the closed
+unit interval, `tick-at(scale, n, turn)` and `turn-at-tick(scale, n, k)`
+convert between absolute coordinates and whole, zero-based ticks. In
+particular, the last tick is N. Distinct scale values can be tested with
+different counts.
+
+The fixed-arity numeric operations accept evaluated operands, including
+field selections. `(.common-denominator readings)` takes a finite list of
+rational observations. `(.positive-multiple n f)` checks positive whole operands
+and exact divisibility. An unspecified count leaves the check partial.
+`(.affine x a b)` evaluates a×x+b in native
+coordinates. `(.mod x p)` gives the unique residue in [0,p) for positive p.
+An exact result carries no inferred cardinality. The kernel defines cyclic
+coordinates with the residue operation and reserves `rat-closed` for linear
+coordinates. `sample-turn(segment,progress)` applies the segment's signed
+span to progress in [0,1] and adds its starting coordinate. This can query
+the interior of a represented T-list segment without allocating ticks.

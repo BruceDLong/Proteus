@@ -2651,7 +2651,7 @@ struct WorldPOVGraph {
                 frame!.joining <- slot; frame!.sourceIsOperand <- true
                 return(body)
             }
-            if(slot!=NULL and (slot!.evalMode==emGroup or slot!.evalMode==emClosedRange or memberSequence(frame))){
+            if(slot!=NULL and (slot!.hasFixedOperands() or memberSequence(frame))){
                 frame!.nextOperand <- slot!.items.head
                 // A finite template is read once, then projected into each member.
                 // Empty closed lists need no template evaluation.
@@ -3417,7 +3417,38 @@ struct WorldPOVGraph {
         value.hasSize <- false; value.explicitSize <- false; value.extentApplied <- false
         return(value)
     }
-    void: takeOperand(our WorldFrame: frame, our WorldFrame: operand) <- {
+    me WorldScalar: commonDenominator(me WorldScalar: readings, our WorldRequest: request) <- {
+        me WorldScalar: result; result.overlay <- NUM
+        if(readings.terminalValue!=0 or (readings.overlay>=0 and readings.overlay!=LST)){
+            result.outcome <- worldRejected; result.detail <- "Expected a list of rational readings"; return(result)
+        }
+        if(readings.overlay!=LST or !readings.hasValue or openLayout(readings) or !readings.hasSize or
+           readings.size!=FlexNum(sequenceLength(readings.sequence)) or !readings.representable){
+            result.outcome <- worldPartial; result.detail <- "Common denominator needs a finite list"; return(result)
+        }
+        me BigInt: multiple <- 1
+        me WorldListCursor: members; members.push(readings.sequence)
+        our WorldFrame: member <- members.next()
+        while(member!=NULL){
+            me WorldScalar: value <- member!.facts
+            if(value.terminalValue!=0 or (value.overlay>=0 and value.overlay!=NUM)){
+                result.outcome <- worldRejected; result.detail <- "A scale reading must be numeric"; break()
+            }
+            if(value.outcome!=worldReady or !value.hasValue or value.negative or value.pendingChecks!=NULL or value.overlay!=NUM){
+                result.outcome <- worldPartial; result.detail <- "Scale reading is unresolved"
+            }else{
+                me BigInt: denominator <- value.number.getDenominator()
+                me BigInt: gcd <- multiple; me BigInt: next <- denominator
+                while(next!=0){me BigInt: rem <- gcd % next; gcd <- next; next <- rem}
+                multiple <- (multiple/gcd)*denominator
+            }
+            member <- members.next()
+        }
+        request!.sequenceVisits <+- members.visits
+        if(result.outcome==worldReady){result.number <- FlexNum(multiple); result.hasValue <- true}
+        return(result)
+    }
+    void: takeOperand(our WorldRequest: request, our WorldFrame: frame, our WorldFrame: operand) <- {
         if(!operand!.facts.hasValue and operand!.facts.overlay==NUM and operand!.facts.summand==NULL and
            operand!.naming!=NULL and operand!.referenceTarget!=NULL){
             if(operand!.referenceTarget!.summand==NULL){Allocate(operand!.referenceTarget!.summand)}
@@ -3425,7 +3456,45 @@ struct WorldPOVGraph {
         }
         our infonState: slot <- frame!.node!.pItem!.value
         if(frame!.expressionSlot==1){slot <- frame!.node!.pItem!.infSize}
-        if(slot!.evalMode==emClosedRange){
+        if(slot!.evalMode==emNumericCall and slot!.numericOp==ncCommonDenominator){
+            frame!.expression <- commonDenominator(operand!.facts,request)
+        }else if(slot!.evalMode==emNumericCall){
+            me WorldScalar: input <- operand!.facts
+            if(input.terminalValue!=0 or (input.overlay>=0 and input.overlay!=NUM)){
+                frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "Coordinate operation needs numeric operands"; return()
+            }
+            if(slot!.numericOp==ncPositiveMultiple){
+                me bool: known <- input.overlay==NUM and input.hasValue and !input.negative
+                if(known and (input.number<=0 or input.number.getDenominator()!=1)){
+                    frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "Expected a positive whole count"; return()
+                }
+                if(frame!.operandsRead==0){
+                    frame!.expression <- WorldScalar(); frame!.expression.overlay <- NUM
+                    frame!.expression.hasValue <- known
+                    if(known){frame!.expression.number <- input.number}
+                }else if(!known or !frame!.expression.hasValue){
+                    frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Multiple check needs the count and divisor"; return()
+                }else if(frame!.expression.number.getNumerator() % input.number.getNumerator()!=0){
+                    frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "Count is not divisible by the required factor"; return()
+                }
+            }else if(input.overlay!=NUM or !input.hasValue or input.negative){
+                frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Coordinate operation needs an exact reading"; return()
+            }else if(frame!.operandsRead==0){
+                frame!.expression <- WorldScalar(); frame!.expression.overlay <- NUM
+                frame!.expression.number <- input.number
+            }else if(slot!.numericOp==ncAffine){
+                if(frame!.operandsRead==1){frame!.expression.number <- frame!.expression.number*input.number}
+                else{frame!.expression.number <+- input.number; frame!.expression.hasValue <- true}
+            }else{
+                if(input.number<=0){frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "Period must be positive"; return()}
+                me FlexNum: turns <- frame!.expression.number / input.number
+                me BigInt: denominator <- turns.getDenominator()
+                me BigInt: residue <- turns.getNumerator() % denominator
+                if(residue<0){residue <- residue+denominator}
+                frame!.expression.number <- (FlexNum(residue)/FlexNum(denominator))*input.number
+                frame!.expression.hasValue <- true
+            }
+        }else if(slot!.evalMode==emClosedRange){
             me WorldScalar: endpoint <- operand!.facts
             if(endpoint.terminalValue!=0 or endpoint.negative or (endpoint.overlay>=0 and endpoint.overlay!=NUM)){
                 frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "Interval endpoint must be numeric"; return()
@@ -3479,7 +3548,7 @@ struct WorldPOVGraph {
                 Allocate(sum)
                 if(frame!.operandsRead>0){sum!.constant <- frame!.expression.number}
             }
-            takeOperand(frame,operand)
+            takeOperand(request,frame,operand)
             if(sum!=NULL){operand!.facts.addReadingTo(sum,FlexNum("1"))}
             operand <- cursor.next()
         }
@@ -3511,7 +3580,7 @@ struct WorldPOVGraph {
             frame!.operandsRead <- sequenceLength(frame!.facts.sequence)
         }else if(frame!.sourceIsOperand){
             if(frame!.joining!=NULL){foldJoin(request, frame)}
-            else{takeOperand(frame, frame!.prerequisite)}
+            else{takeOperand(request,frame, frame!.prerequisite)}
         }else{
             me WorldScalar: left <- frame!.facts
             me bool: openHeaderOnly <- left.overlay==LST and left.hasValue and unconstrainedOpenSource(frame!.prerequisite)
@@ -7812,6 +7881,12 @@ struct WorldManager {
                         graph.adoptListRequirements(frame, frame!.parameterValue)
                         frame!.retainedWork <- frame!.parameterValue!.retainedWork
                         frame!.correspondenceResult <- frame!.parameterValue!.correspondenceResult
+                        // A selector on a forwarded argument needs the actual occurrence
+                        // and its caller scope, even when that argument was a literal.
+                        if(frame!.referenceOnly and frame!.correspondenceResult==NULL and !frame!.parameterMerged){
+                            Allocate(frame!.correspondenceResult)
+                            frame!.correspondenceResult!.position <- frame!.path!.source
+                        }
                         if(frame!.parameterBinding!.omitted and !frame!.parameterBinding!.immutable and
                            !frame!.facts.hasValue and item!.wrkList.isEmpty() and item!.type==NULL){
                             frame!.parameterBinding!.unresolvedReads.append(frame)

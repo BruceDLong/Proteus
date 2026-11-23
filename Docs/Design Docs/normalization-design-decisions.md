@@ -5607,3 +5607,43 @@ Endpoint expressions use the ordinary scalar operand frames and lexical
 parameter bindings. Cost is two endpoint evaluations and a fixed number
 of exact rational comparisons regardless of subdivision count. Existing
 width-plus-offset domains keep their half-open upper bound.
+
+## D133 Shared subdivision counts and exact coordinate operations
+
+Store a common divisor requirement as a kernel record. The least common
+denominator summarizes all evidence needed for later membership checks.
+Combining 1/4 with 1/6 rules out 18, admits 12 and 24, and preserves the
+same whole-tick relationship for every positive multiple of 12. Selecting
+the minimum would prematurely fix both the density and the tick readings.
+A new observation combines with the old factor through the coordinate
+1/factor, so callers can keep the summarized scale.
+
+Use the existing expression operand frames for named numeric operations
+inside parentheses. The dot immediately after the opening parenthesis
+distinguishes a numeric operation from an ordinary word application.
+Grouped closed intervals keep their existing spelling. Fold the reduced
+denominators with integer GCD, dividing before multiplying. One forward
+list cursor visits the represented observations. Euclidean remainder and
+affine evaluation use exact arithmetic on selected coordinate values. A
+typed input can supply its reading without carrying its nominal type,
+state extent or cyclic behavior into the result.
+
+A forwarded parameter used as a path source needs the original bound
+occurrence and caller scope. Preserve that position through a reference
+read, including a bare literal argument. This makes nested scale checks
+and ordinary forwarded record selectors use the same lookup rule.
+
+For a two-observation scale the request used 7 frames and 5 relationship
+reads for tested denominators from 4 through 10⁶⁰+7. Sampling a represented
+quarter-turn segment took 33 frames, 11 relationship reads and 67 queue
+steps throughout the same range. Reading 1, 8, 32 and 128 observations
+took 6, 13, 37 and 133 frames. Integer arithmetic cost still depends on
+operand precision.
+
+The count check must validate positive integral operands even when a caller
+supplies a scale record by hand. A kernel composition of integer checks,
+reciprocal and residue checked both operands in 51 frames and 30 relationship
+reads for `scale-density(shared-scale({1/4 1/6}),12)`. The two-operand
+`(.positive-multiple n f)` checks membership in 15 frames and 6 relationship
+reads for that call. It returns the checked n. An omitted n leaves the result
+partial. A separately known invalid divisor rejects even with n unknown.
