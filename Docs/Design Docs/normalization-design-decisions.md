@@ -5647,3 +5647,30 @@ reads for `scale-density(shared-scale({1/4 1/6}),12)`. The two-operand
 `(.positive-multiple n f)` checks membership in 15 frames and 6 relationship
 reads for that call. It returns the checked n. An omitted n leaves the result
 partial. A separately known invalid divisor rejects even with n unknown.
+
+## D134. Carry the domain on each linear witness
+
+Extend the existing structural-sum coefficient map to describe rational
+readings as well as whole counts. The source occurrence establishes identity.
+Each term carries its rational interval and any whole-multiple and positivity
+requirements. Exact affine maps reuse the same representation. This supports
+both shared-density identities and correlations between repeated measurements
+without choosing a default subdivision count.
+
+A universal whole-number test on a linear expression rejects feasible
+fractional differences between independent rational readings. Apply a lattice
+test only when every contributing witness carries a stride. For rational
+coefficients the lattice step is the rational GCD of the scaled strides.
+Use attained endpoints for whole witnesses and propagate open boundaries
+under sign reversal for dense ones. Bounds and lattice membership give
+necessary conditions. A feasible unresolved relationship remains partial.
+Multiplication of two unknown readings and unproved integrality of a
+composite operand can also remain partial.
+
+Keep storage layout and instrument conventions in kernel definitions. A
+zero-valued structural summand widens a code while preserving its index.
+The decoder independently checks the logical extent and the whole-state
+requirement. Floor quantization uses lower-inclusive, upper-exclusive bins.
+Nearest-quantum measurements use translated bins, and an explicit symmetric
+error uses a closed interval. This lets callers choose a tie rule or an
+error model independently of rational literal syntax and formatting.

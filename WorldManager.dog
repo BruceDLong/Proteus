@@ -183,55 +183,113 @@ struct WorldOpenAlignment {
 struct WorldSummand {
     // A receiving extent translates each negative displacement once. Store
     // its source so point tests can check both preimages without enumeration.
-    our WorldDiscreteSum: displacement
+    our WorldLinearSum: displacement
     me FlexNum: receiver
 }
 struct WorldSumTerm {
     our WorldSummand: symbol
     me FlexNum: coefficient
     me WorldBounds: bounds
+    // Zero permits any rational. A positive stride denotes whole multiples.
+    me FlexNum: stride
+    me bool: positive <- false
+
+    me FlexNum: floorOf(me FlexNum: value) <- {
+        me BigInt: n <- value.getNumerator(); me BigInt: d <- value.getDenominator()
+        me BigInt: quotient <- n/d
+        if(n<0 and n % d!=0){quotient <- quotient-1}
+        return(FlexNum(quotient))
+    }
+    me FlexNum: lower() <- {
+        me FlexNum: result <- bounds.low
+        if(stride>0){result <- -floorOf(-result/stride)*stride}
+        if(positive){result <- max(result,stride)}
+        return(result)
+    }
+    me FlexNum: upper() <- {
+        if(stride==0){return(bounds.high)}
+        me FlexNum: last <- floorOf(bounds.high/stride)*stride
+        if(!bounds.point and !bounds.includeHigh and last==bounds.high){return(last-stride)}
+        return(last)
+    }
+    me bool: empty() <- {
+        return(bounds.empty() or (bounds.bounded and stride>0 and lower()>upper()))
+    }
 }
-struct WorldDiscreteSum {
+struct WorldLinearSum {
     me FlexNum: constant
     me Map<our WorldSummand, our WorldSumTerm>: terms
-    void: addTerm(our WorldSummand: symbol, me FlexNum: coefficient, me WorldBounds: bounds) <- {
+    void: addTerm(our WorldSummand: symbol, me FlexNum: coefficient, me WorldBounds: bounds,
+        me FlexNum: stride, me bool: positive) <- {
         our WorldSumTerm: term
         if(terms.containsKey(symbol)){
             term <- terms.at(symbol); term!.bounds <- term!.bounds.intersect(bounds)
         }else{
             Allocate(term); term!.symbol <- symbol; term!.bounds <- bounds; terms.insert(symbol,term)
         }
+        if(stride>0){
+            if(term!.stride==0){term!.stride <- stride}
+            else{me FlexNum: ratio <- stride/term!.stride; term!.stride <- term!.stride*FlexNum(ratio.getNumerator())}
+        }
+        term!.positive <- term!.positive or positive
         term!.coefficient <+- coefficient
-        if(term!.coefficient==0 and !term!.bounds.empty()){terms.erase(symbol)}
+        if(term!.coefficient==0 and !term!.empty()){terms.erase(symbol)}
     }
-    void: addSum(our WorldDiscreteSum: other, me FlexNum: factor) <- {
+    void: addSum(our WorldLinearSum: other, me FlexNum: factor) <- {
         constant <+- factor*other!.constant
-        withEach term in other!.terms{addTerm(term!.symbol, factor*term!.coefficient, term!.bounds)}
+        withEach term in other!.terms{
+            addTerm(term!.symbol, factor*term!.coefficient, term!.bounds, term!.stride, term!.positive)
+        }
     }
-    // A point outside these bounds or off the coefficient lattice is
-    // impossible. Feasibility alone never binds a caller's unknown operand.
+    me bool: sameDomain(our WorldLinearSum: other) <- {
+        if(terms.size()!=other!.terms.size()){return(false)}
+        withEach term in terms{
+            if(!other!.terms.containsKey(term!.symbol)){return(false)}
+            our WorldSumTerm: rhs <- other!.terms.at(term!.symbol)
+            if(rhs!.stride!=term!.stride or rhs!.positive!=term!.positive or !term!.bounds.same(rhs!.bounds)){return(false)}
+        }
+        return(true)
+    }
+    me bool: whole() <- {
+        if(constant.getDenominator()!=1){return(false)}
+        withEach term in terms{
+            me FlexNum: increment <- term!.coefficient*term!.stride
+            if(term!.stride==0 or increment.getDenominator()!=1){return(false)}
+        }
+        return(true)
+    }
+    // Evaluate the bounds of the linear form without enumerating readings.
+    // An open upper endpoint becomes an open lower endpoint under negation.
     me bool: excludes(me FlexNum: point) <- {
         me FlexNum: low <- constant; me FlexNum: high <- constant
-        me bool: bounded <- true
-        me BigInt: divisor
+        me bool: haveLow <- true; me bool: haveHigh <- true
+        me bool: openLow <- false; me bool: openHigh <- false
+        me bool: discrete <- true; me FlexNum: lattice
         withEach term in terms{
-            if(term!.bounds.empty()){return(true)}
-            if(term!.bounds.bounded){
-                me FlexNum: first <- term!.coefficient*term!.bounds.low
-                me FlexNum: last <- first
-                if(!term!.bounds.point){
-                    me FlexNum: end <- term!.bounds.high
-                    if(!term!.bounds.includeHigh and end.getDenominator()==1){end <- end-1}
-                    last <- term!.coefficient*end
-                }
-                low <+- min(first,last); high <+- max(first,last)
-            }else{bounded <- false}
-            me BigInt: next <- term!.coefficient.getNumerator()
-            while(next!=0){me BigInt: rem <- divisor % next; divisor <- next; next <- rem}
+            if(term!.empty()){return(true)}
+            me bool: bounded <- term!.bounds.bounded
+            me bool: lowerBounded <- bounded or term!.positive
+            me bool: openEnd <- bounded and term!.stride==0 and !term!.bounds.point and !term!.bounds.includeHigh
+            me FlexNum: c <- term!.coefficient
+            if(c>0){
+                haveLow <- haveLow and lowerBounded; haveHigh <- haveHigh and bounded
+                low <+- c*term!.lower(); high <+- c*term!.upper(); openHigh <- openHigh or openEnd
+            }else{
+                haveLow <- haveLow and bounded; haveHigh <- haveHigh and lowerBounded
+                low <+- c*term!.upper(); high <+- c*term!.lower(); openLow <- openLow or openEnd
+            }
+            if(term!.stride==0){discrete <- false}
+            else{
+                me FlexNum: step <- c*term!.stride
+                if(step<0){step <- -step}
+                if(lattice==0){lattice <- step}
+                else{me FlexNum: ratio <- step/lattice; lattice <- lattice/FlexNum(ratio.getDenominator())}
+            }
         }
-        if(bounded and (point<low or point>high)){return(true)}
+        if((haveLow and (point<low or (point==low and openLow))) or
+           (haveHigh and (point>high or (point==high and openHigh)))){return(true)}
         me FlexNum: delta <- point-constant
-        if(delta.getDenominator()!=1 or (divisor!=0 and delta.getNumerator() % divisor!=0)){return(true)}
+        if(discrete and lattice>0){me FlexNum: count <- delta/lattice; if(count.getDenominator()!=1){return(true)}}
         if(terms.size()==1){
             withEach term in terms{
                 if(term!.symbol!.displacement!=NULL and term!.coefficient!=0){
@@ -623,7 +681,7 @@ struct WorldFieldMerge {
 struct WorldScalar {
     me bool: emptyProduct <- false
     our WorldSummand: summand
-    our WorldDiscreteSum: discreteSum
+    our WorldLinearSum: linearSum
     // A free displacement remembers the selected reading for double negation.
     // Its source cardinality is independent of any receiving extent.
     our WorldSignedReading: negatedOperand
@@ -690,34 +748,58 @@ struct WorldScalar {
         if(hasRange){lower <- result.low; upper <- result.high; includeUpper <- result.includeHigh}
     }
 
-    void: addReadingTo(our WorldDiscreteSum: sum, me FlexNum: factor) <- {
+    void: addReadingTo(our WorldLinearSum: sum, me FlexNum: factor) <- {
         if(hasValue){sum!.constant <+- factor*number}
-        else if(discreteSum!=NULL){sum!.addSum(discreteSum,factor)}
+        else if(linearSum!=NULL){sum!.addSum(linearSum,factor)}
         else{
             if(summand==NULL){Allocate(summand)}
-            sum!.addTerm(summand,factor,bounds())
+            sum!.addTerm(summand,factor,bounds(),FlexNum(),false)
         }
     }
-    void: useSum(our WorldDiscreteSum: sum) <- {
+    // A structural sum requires each selected operand to be integral. A
+    // composite rational expression can be flattened when integrality follows
+    // from its witnesses. Otherwise its whole-value guard is still pending.
+    me bool: addWholeReadingTo(our WorldLinearSum: sum) <- {
+        if(hasValue){sum!.constant <+- number; return(true)}
+        if(linearSum==NULL){
+            if(summand==NULL){Allocate(summand)}
+            sum!.addTerm(summand,FlexNum("1"),bounds(),FlexNum("1"),false); return(true)
+        }
+        if(linearSum!.whole()){sum!.addSum(linearSum,FlexNum("1")); return(true)}
+        if(linearSum!.terms.size()==1 and linearSum!.constant.getDenominator()==1){
+            withEach term in linearSum!.terms{
+                if(term!.coefficient==1 or term!.coefficient==-1){
+                    sum!.constant <+- linearSum!.constant
+                    sum!.addTerm(term!.symbol,term!.coefficient,term!.bounds,FlexNum("1"),term!.positive)
+                    return(true)
+                }
+            }
+        }
+        return(false)
+    }
+    void: useSum(our WorldLinearSum: sum) <- {
         summand <- NULL; hasRange <- false
+        withEach term in sum!.terms{
+            if(term!.empty()){outcome <- worldRejected; detail <- "Empty numeric operand domain"; return()}
+        }
         hasValue <- sum!.terms.isEmpty()
-        if(hasValue){number <- sum!.constant; discreteSum <- NULL; parameterBindingRequired <- false}
-        else{discreteSum <- sum}
+        if(hasValue){number <- sum!.constant; linearSum <- NULL; parameterBindingRequired <- false}
+        else{linearSum <- sum}
     }
     void: receiveDisplacement(me FlexNum: extent) <- {
         if(negatedOperand==NULL){return()}
-        if(!hasValue and discreteSum!=NULL){
-            our WorldSummand:: selected; selected!.displacement <- discreteSum; selected!.receiver <- extent
-            our WorldDiscreteSum:: received; received!.addTerm(selected,FlexNum("1"),WorldBounds())
-            discreteSum <- received
+        if(!hasValue and linearSum!=NULL){
+            our WorldSummand:: selected; selected!.displacement <- linearSum; selected!.receiver <- extent
+            our WorldLinearSum:: received; received!.addTerm(selected,FlexNum("1"),WorldBounds(),FlexNum(),false)
+            linearSum <- received
         }
         negatedOperand <- NULL
     }
     me bool: excludesReading(their WorldScalar: reading, me bool: shareSize) <- {
-        if(discreteSum==NULL or reading!.overlay!=NUM or !reading!.hasValue){return(false)}
+        if(linearSum==NULL or reading!.overlay!=NUM or !reading!.hasValue){return(false)}
         me FlexNum: candidate <- reading!.number
         if(shareSize and hasSize and !reading!.hasSize and !reading!.extentApplied and candidate<0){candidate <+- size}
-        return(discreteSum!.excludes(candidate))
+        return(linearSum!.excludes(candidate))
     }
     void: applyExtent() <- {
         if(hasValue and overlay==NUM and hasSize and !extentApplied){
@@ -2710,22 +2792,22 @@ struct WorldPOVGraph {
             left.outcome <- worldUnsupported; left.detail <- "Numeric expression needs positive numeric operands"; return(left)
         }
         left.negatedOperand <- NULL
-        if(additive and !right.hasValue and (right.discreteSum!=NULL or left.discreteSum!=NULL)){
-            our WorldDiscreteSum:: shifted
+        if(additive and !right.hasValue){
+            our WorldLinearSum:: shifted
             left.addReadingTo(shifted,FlexNum("1")); right.addReadingTo(shifted,FlexNum("1"))
             left.parameterBindingRequired <- left.parameterBindingRequired or right.parameterBindingRequired
             left.useSum(shifted); return(left)
         }
         if(!right.hasValue){left.outcome <- worldPartial; left.detail <- "Expression operand value is unknown"; return(left)}
-        if(!left.hasValue and (left.discreteSum!=NULL or (left.summand!=NULL and !left.hasRange))){
+        if(!left.hasValue and (left.linearSum!=NULL or left.summand!=NULL)){
             me FlexNum: radix <- FlexNum("1")
             if(!additive){
-                if(!right.hasSize or right.size<1 or right.size.getDenominator()!=1){
-                    left.outcome <- worldPartial; left.detail <- "Symbolic concatenation needs a positive integer radix"; return(left)
+                if(!right.hasSize or right.size<0){
+                    left.outcome <- worldPartial; left.detail <- "Symbolic concatenation needs a nonnegative radix"; return(left)
                 }
                 radix <- right.size
             }
-            our WorldDiscreteSum:: shifted; shifted!.constant <- right.number
+            our WorldLinearSum:: shifted; shifted!.constant <- right.number
             left.addReadingTo(shifted,radix); left.useSum(shifted)
             if(!additive and left.hasSize){left.size <- left.size*radix}
             return(left)
@@ -2905,7 +2987,7 @@ struct WorldPOVGraph {
         if(required.hasSize){actual.receiveDisplacement(required.size)}
         if(actual.hasSize){required.receiveDisplacement(actual.size)}
         if(required.excludesReading(actual,true) or actual.excludesReading(required,true)){return(worldRejected)}
-        if(required.discreteSum!=NULL or actual.discreteSum!=NULL or
+        if(required.linearSum!=NULL or actual.linearSum!=NULL or
            required.parameterBindingRequired or actual.parameterBindingRequired){return(worldPartial)}
         if(required.terminalValue!=0 or actual.terminalValue!=0){
             if(required.terminalValue!=actual.terminalValue){
@@ -3123,13 +3205,26 @@ struct WorldPOVGraph {
             if(right.hasSize){left.receiveDisplacement(right.size)}
         }
         if(left.excludesReading(right,!edge!.looseSize()) or right.excludesReading(left,!edge!.looseSize())){
-            left.outcome <- worldRejected; left.detail <- "Value outside discrete sum"; return(left)
+            left.outcome <- worldRejected; left.detail <- "Value outside numeric expression"; return(left)
         }
-        if((left.discreteSum!=NULL and (right.hasValue or right.hasRange)) or
-           (right.discreteSum!=NULL and (left.hasValue or left.hasRange))){
-            left.outcome <- worldPartial; left.detail <- "Discrete sum retains a constraint on its operands"; return(left)
+        if((left.linearSum!=NULL and (right.hasValue or right.hasRange)) or
+           (right.linearSum!=NULL and (left.hasValue or left.hasRange))){
+            left.outcome <- worldPartial; left.detail <- "Numeric expression retains a constraint on its operands"; return(left)
         }
-        if(left.discreteSum==NULL){left.discreteSum <- right.discreteSum}
+        if(left.linearSum!=NULL and right.linearSum!=NULL){
+            our WorldLinearSum:: difference
+            difference!.addSum(left.linearSum,FlexNum("1")); difference!.addSum(right.linearSum,FlexNum("-1"))
+            if(difference!.excludes(FlexNum()) and !left.negative and !right.negative){
+                left.outcome <- worldRejected; left.detail <- "Incompatible symbolic readings"; return(left)
+            }
+            // Equality of two unresolved forms cannot import just one side's
+            // guards. Keep the relationship until their domains also agree.
+            if(left.negative or right.negative or !difference!.terms.isEmpty() or
+               !left.linearSum!.sameDomain(right.linearSum)){
+                left.outcome <- worldPartial; left.detail <- "Symbolic equality needs operand evidence"; return(left)
+            }
+        }
+        if(left.linearSum==NULL){left.linearSum <- right.linearSum}
         if(left.summand==NULL){left.summand <- right.summand}
         // Correspondence must not independently fill each use of one unknown
         // argument. This needs a binding proof, including speculative routes.
@@ -3398,8 +3493,8 @@ struct WorldPOVGraph {
         }
         if(value.negatedOperand!=NULL and !value.explicitSize and !hasReceiver){return(value.negatedOperand!.reading)}
         if(!value.hasValue){
-            our WorldDiscreteSum:: reversed; operand!.facts.addReadingTo(reversed,FlexNum("-1"))
-            value.discreteSum <- reversed
+            our WorldLinearSum:: reversed; operand!.facts.addReadingTo(reversed,FlexNum("-1"))
+            value.linearSum <- reversed
         }
         Allocate(value.negatedOperand); value.negatedOperand!.reading <- operand!.facts
         our infonView: source <- operand!.node!.pItem
@@ -3448,6 +3543,26 @@ struct WorldPOVGraph {
         if(result.outcome==worldReady){result.number <- FlexNum(multiple); result.hasValue <- true}
         return(result)
     }
+    // An affine map is linear while either factor is known. Use the same
+    // occurrence witness that signed displacements and structural sums use.
+    me WorldScalar: affineOperand(me WorldScalar: accumulated, our WorldFrame: operand, me int64: index) <- {
+        me WorldScalar: result; result.overlay <- NUM
+        if(operand!.facts.hasValue and (index==0 or accumulated.hasValue)){
+            result.hasValue <- true; result.number <- operand!.facts.number
+            if(index==1){result.number <- accumulated.number*result.number}
+            if(index==2){result.number <+- accumulated.number}
+            return(result)
+        }
+        our WorldLinearSum:: sum
+        if(index==0){operand!.facts.addReadingTo(sum,FlexNum("1"))}
+        else if(index==2){
+            accumulated.addReadingTo(sum,FlexNum("1")); operand!.facts.addReadingTo(sum,FlexNum("1"))
+        }else if(operand!.facts.hasValue){accumulated.addReadingTo(sum,operand!.facts.number)}
+        else if(accumulated.hasValue){operand!.facts.addReadingTo(sum,accumulated.number)}
+        else{result.outcome <- worldPartial; result.detail <- "Product has two unresolved factors"; return(result)}
+        result.useSum(sum); return(result)
+    }
+
     void: takeOperand(our WorldRequest: request, our WorldFrame: frame, our WorldFrame: operand) <- {
         if(!operand!.facts.hasValue and operand!.facts.overlay==NUM and operand!.facts.summand==NULL and
            operand!.naming!=NULL and operand!.referenceTarget!=NULL){
@@ -3468,23 +3583,51 @@ struct WorldPOVGraph {
                 if(known and (input.number<=0 or input.number.getDenominator()!=1)){
                     frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "Expected a positive whole count"; return()
                 }
-                if(frame!.operandsRead==0){
-                    frame!.expression <- WorldScalar(); frame!.expression.overlay <- NUM
-                    frame!.expression.hasValue <- known
-                    if(known){frame!.expression.number <- input.number}
-                }else if(!known or !frame!.expression.hasValue){
-                    frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Multiple check needs the count and divisor"; return()
-                }else if(frame!.expression.number.getNumerator() % input.number.getNumerator()!=0){
-                    frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "Count is not divisible by the required factor"; return()
+                if(input.negative){
+                    frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Multiple check needs a selected number"; return()
                 }
+                if(frame!.operandsRead==0){
+                    frame!.expression <- input
+                }else if(!known){
+                    frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Multiple check needs its divisor"; return()
+                }else if(frame!.expression.hasValue){
+                    if(frame!.expression.number.getNumerator() % input.number.getNumerator()!=0){
+                        frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "Count is not divisible by the required factor"; return()
+                    }
+                    me FlexNum: count <- frame!.expression.number
+                    frame!.expression <- WorldScalar(); frame!.expression.overlay <- NUM
+                    frame!.expression.hasValue <- true; frame!.expression.number <- count
+                }else{
+                    me WorldScalar: source <- frame!.expression
+                    if(source.overlay!=NUM and !(source.overlay<0 and source.summand!=NULL and source.nominal==NULL)){
+                        frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Multiple check needs a numeric count"; return()
+                    }
+                    our WorldLinearSum:: multiples
+                    if(source.linearSum!=NULL){
+                        if(source.linearSum!.terms.size()!=1 or source.linearSum!.constant!=0){
+                            frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Multiple check needs a count witness"; return()
+                        }
+                        withEach term in source.linearSum!.terms{
+                            if(term!.coefficient!=1){
+                                frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Multiple check needs a count witness"; return()
+                            }
+                            multiples!.addTerm(term!.symbol,FlexNum("1"),term!.bounds,term!.stride,term!.positive)
+                            multiples!.addTerm(term!.symbol,FlexNum(),term!.bounds,input.number,true)
+                        }
+                    }else{
+                        if(source.summand==NULL){Allocate(source.summand)}
+                        multiples!.addTerm(source.summand,FlexNum("1"),source.bounds(),input.number,true)
+                    }
+                    frame!.expression <- WorldScalar(); frame!.expression.overlay <- NUM; frame!.expression.useSum(multiples)
+                }
+            }else if(slot!.numericOp==ncAffine and !input.negative and
+                (input.overlay==NUM or (input.overlay<0 and input.summand!=NULL and input.nominal==NULL))){
+                frame!.expression <- affineOperand(frame!.expression,operand,frame!.operandsRead)
             }else if(input.overlay!=NUM or !input.hasValue or input.negative){
                 frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Coordinate operation needs an exact reading"; return()
             }else if(frame!.operandsRead==0){
                 frame!.expression <- WorldScalar(); frame!.expression.overlay <- NUM
                 frame!.expression.number <- input.number
-            }else if(slot!.numericOp==ncAffine){
-                if(frame!.operandsRead==1){frame!.expression.number <- frame!.expression.number*input.number}
-                else{frame!.expression.number <+- input.number; frame!.expression.hasValue <- true}
             }else{
                 if(input.number<=0){frame!.facts.outcome <- worldRejected; frame!.facts.detail <- "Period must be positive"; return()}
                 me FlexNum: turns <- frame!.expression.number / input.number
@@ -3542,18 +3685,21 @@ struct WorldPOVGraph {
             }else{empty.emptyProduct <- true}
             frame!.expression <- empty
         }
-        our WorldDiscreteSum: sum
+        our WorldLinearSum: sum
         while(operand!=NULL and frame!.facts.outcome==worldReady){
             if(frame!.joining!.evalMode==emSum and sum==NULL and !operand!.facts.hasValue){
                 Allocate(sum)
                 if(frame!.operandsRead>0){sum!.constant <- frame!.expression.number}
             }
             takeOperand(request,frame,operand)
-            if(sum!=NULL){operand!.facts.addReadingTo(sum,FlexNum("1"))}
+            if(sum!=NULL and !operand!.facts.addWholeReadingTo(sum)){
+                frame!.facts.outcome <- worldPartial; frame!.facts.detail <- "Structural sum needs a whole reading"
+            }
             operand <- cursor.next()
         }
         if(sum!=NULL and frame!.operandsRead>1 and frame!.expression.outcome==worldReady){
             frame!.expression.useSum(sum)
+            if(frame!.expression.outcome!=worldReady){frame!.facts <- frame!.expression}
         }
         request!.sequenceVisits <+- cursor.visits
     }
@@ -7869,7 +8015,10 @@ struct WorldManager {
                     }
                     if(item!.partRef==NULL and item!.parts.isEmpty()){
                         frame!.facts <- frame!.parameterValue!.facts
-                        if(frame!.facts.overlay==NUM and !frame!.facts.hasValue and frame!.facts.summand==NULL){
+                        // An omitted argument starts without an overlay. Its first
+                        // numeric consumer can constrain it while all uses still share the slot.
+                        if((frame!.facts.overlay==NUM or frame!.parameterBinding!.omitted) and
+                           !frame!.facts.hasValue and frame!.facts.summand==NULL){
                             if(frame!.parameterBinding!.summand==NULL){Allocate(frame!.parameterBinding!.summand)}
                             frame!.facts.summand <- frame!.parameterBinding!.summand
                         }

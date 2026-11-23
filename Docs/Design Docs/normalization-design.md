@@ -2177,3 +2177,31 @@ coordinates with the residue operation and reserves `rat-closed` for linear
 coordinates. `sample-turn(segment,progress)` applies the segment's signed
 span to progress in [0,1] and adds its starting coordinate. This can query
 the interior of a represented T-list segment without allocating ticks.
+
+## Shared ticks and rational measurement constraints (D134)
+
+Linear expressions retain an occurrence for each unresolved reading and an
+exact rational coefficient. Reusing the same argument preserves that
+occurrence. Distinct arguments remain independent. A known affine factor,
+addition, subtraction, and concatenation with a known radix can preserve
+this evidence. A product of two unresolved factors remains partial.
+
+A reading in a bounded rational range admits fractional coordinates. A
+structural sum requires whole operands. A positive subdivision count with a
+known required divisor ranges over its positive whole multiples. Repeated
+requirements on the same count combine by least common multiple. For a
+shared N compatible with 1/4 and 1/6, twice the first tick minus three
+times the second is exactly zero without binding N or inferring a size.
+
+Scale and add endpoints with their signs and inclusion flags. A point at an
+unattainable open endpoint rejects. For whole witnesses use the first and
+last admitted multiples and test the lattice implied by the coefficients.
+An admissible point can still require evidence from unresolved operands.
+Independent readings in [10.25,10.35) admit a difference of 1/100 and
+exclude both −1/10 and 1/10. The same reading subtracted from itself gives 0.
+
+The world kernel implements unsigned state padding, normalized sampling
+cells, rounded measurements and inclusive absolute error bounds through
+existing operations. The logical state count, physical storage extent,
+reporting resolution and underlying coordinate density can vary independently.
+See the World repository's `analog-modeling.md` for conventions and examples.
