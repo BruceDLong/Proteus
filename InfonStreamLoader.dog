@@ -136,6 +136,20 @@ model InfonConnector{
 }
 struct InfonConnector{}
 
+// A pathname can also name a FIFO. Block for one byte, then drain what is
+// available rather than waiting to fill a block before releasing a packet.
+struct GLOBAL {
+    me string: readProteusFileChunk(their FileStream: stream) <- <%{
+        char chunk[16384];
+        auto first = stream->get();
+        if (first == std::char_traits<char>::eof()) return {};
+        chunk[0] = static_cast<char>(first);
+        auto extra = std::min<std::streamsize>(stream->rdbuf()->in_avail(), sizeof(chunk)-1);
+        if (extra <= 0) return std::string(chunk,1);
+        stream->read(chunk+1,extra);
+        return std::string(chunk,1+stream->gcount());
+    }%>
+}
 // Default file policy; applications may override it or supply other protocols.
 struct AssetFileConnector: inherits=InfonConnector {
     me FileStream: dataFile
@@ -146,7 +160,7 @@ struct AssetFileConnector: inherits=InfonConnector {
         shutdownRequested <- false
         allowStreamingNormalize <- false
         me string: filePath <- getAssetsDir()+"/"+streamSpec.contentArgs
-        dataFile.open(filePath, "r")
+        dataFile.open(filePath, "rb")
         if(dataFile.failure()){
             statusCode <- 1
             statusMesg <- "Failed to open file: "+filePath
@@ -167,14 +181,12 @@ struct AssetFileConnector: inherits=InfonConnector {
     me string: readInputStream() <- {
         me string: data
         if(inputEOF){return("")}
-        if(!dataFile.EOF()){
-            data <- dataFile.getLine()
-            if(dataFile.failure() and !dataFile.EOF()){
-                failInput("Failed reading file: "+streamSpec.spec)
-                return("")
-            }
-            data <+- "\n"
-        } else {
+        data <- readProteusFileChunk(dataFile)
+        if(dataFile.failure() and !dataFile.EOF()){
+            failInput("Failed reading file: "+streamSpec.spec)
+            return("")
+        }
+        if(data.size()==0){
             inputEOF <- true
             log("INPUT_EOF:"+streamSpec.spec)
         }

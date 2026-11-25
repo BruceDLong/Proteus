@@ -14,14 +14,14 @@ Authors = "Bruce Long"
 Description = "CLIP - The Command Line Interface to Proteus"
 ProgramOrLibrary = "program"
 
-featuresNeeded = [Proteus, Unicode, Logger, BigNumbers, Threads, IOBuffer, List, GraphLogger]
+featuresNeeded = [Proteus, ClipPacketIO, Unicode, Logger, BigNumbers, Threads, IOBuffer, List, GraphLogger]
 
 LicenseText = `This file is part of the "Proteus suite" All Rights Reserved.`
 
 runCode=`
     log("Clip started")
     CommandLineManager.processCmdLine(joinCmdStrings(argc, argv), false);
-    CommandLineManager.defineOption("Clip", "RunMode", "-m", "--mode", "load, stream, script, or command.", "stream")
+    CommandLineManager.defineOption("Clip", "RunMode", "-m", "--mode", "load, stream, script, command, inspect, or extract.", "stream")
     CommandLineManager.defineOption("Clip", "foundationFile", "-F", "--foundation", "The protected kernel file to load.", "file:///public/KernelKB.pr")
     CommandLineManager.defineOption("Clip", "worldFile", "-w", "--world", "The public world file to load.", "file:///public/PublicKB.pr")
     CommandLineManager.defineOption("Clip", "topFile", "-f", "--file", "Alias for --world.", "")
@@ -68,6 +68,7 @@ struct ClipConnectionManager: inherits=InfonStreamLoader{}
 struct ClipCore: inherits=ProteusCore{
     me ClipConnectionManager: connectionMgr
     me bool: shutdownStarted
+    me bool: packetTool
 
     me bool: startsWith(me string: S, me string: prefix) <- {
         if(S.size()<prefix.size()){return(false)}
@@ -127,7 +128,9 @@ struct ClipCore: inherits=ProteusCore{
         print("RESULT["+getOriginIDString(originID)+":"+toString(pos)+"] "+mesg+"\n")
     }
     void: handleSystemError  (me uint64: originID, me string: mesg)  <- {print("SYSERR["+getOriginIDString(originID)+"] "+mesg+"\n")}
-    void: handleSyntaxError  (me uint64: originID, me string: mesg)  <- {print("SYNERR["+getOriginIDString(originID)+"] "+mesg+"\n")}
+    void: handleSyntaxError  (me uint64: originID, me string: mesg)  <- {
+        if(packetTool){clipDiagnostic(mesg)}else{print("SYNERR["+getOriginIDString(originID)+"] "+mesg+"\n")}
+    }
     void: handleProteusError (me uint64: originID, me string: mesg)  <- {print("NRMERR["+getOriginIDString(originID)+"] "+mesg+"\n")}
 
     me bool: loadInto(me string: label, our infonView: target, me string: specString) <- {
@@ -196,7 +199,7 @@ struct ClipCore: inherits=ProteusCore{
         while(!done){
             me string: inputStr
             print("clip> ")
-            input(inputStr)
+            if(!clipReadLine(inputStr)){break()}
             trimWS(inputStr)
             log("$: "+inputStr)
             if(inputStr=="quit"){break()}
@@ -205,7 +208,7 @@ struct ClipCore: inherits=ProteusCore{
             else if(startsWith(inputStr, "show")){showSetting(inputStr)}
             else if(inputStr==""){continue()}
             else {
-                me string: result <- toString(query(inputStr, false))
+                me string: result <- toString(query(inputStr, false), ipmPacketSummary)
                 print("RESULT[query] "+result+"\n")
             }
         }
@@ -224,7 +227,7 @@ struct ClipCore: inherits=ProteusCore{
     void: finishInputStream(our InfonStream: inputStream, me bool: wrapInput) <- {
         if(inputStream==NULL){return()}
         if(wrapInput){
-            inputStream.pushParserInputBuf("}\n")
+            inputStream.pushParserInputBuf("\n}\n")
             sleep(100)
         }
         inputStream.closeInput()
@@ -246,10 +249,10 @@ struct ClipCore: inherits=ProteusCore{
         if(inputStream==NULL){return(false)}
         me string: scriptPath <- scriptPathFromSpec(scriptSpec)
         me FileStream: scriptFile
-        scriptFile.open(scriptPath)
+        scriptFile.open(scriptPath,"rb")
         if(scriptFile.failure()){
             me string: assetPath <- getAssetsDir()+"/"+scriptPath
-            scriptFile.open(assetPath)
+            scriptFile.open(assetPath,"rb")
             if(scriptFile.failure()){
                 print("SYSERR:Failed to open input script: "+scriptSpec+"\n")
                 return(false)
@@ -258,8 +261,9 @@ struct ClipCore: inherits=ProteusCore{
         }
         print("INPUT_BEGIN:"+scriptPath+"\n")
         while(!scriptFile.EOF()){
-            me string: line <- scriptFile.getLine()
-            inputStream.pushParserInputBuf(line+"\n")
+            me string: chunk <- readProteusFileChunk(scriptFile)
+            if(scriptFile.failure() and !scriptFile.EOF()){inputStream.source.failInput("Failed reading "+scriptPath); return(false)}
+            inputStream.pushParserInputBuf(chunk)
         }
         scriptFile.close()
         print("INPUT_DONE:"+scriptPath+"\n")
@@ -273,7 +277,7 @@ struct ClipCore: inherits=ProteusCore{
             me string: qry <- inputStr.subStr(7, inputStr.size()-7)
             me bool: oldMode <- streamingMode
             setStreamingMode(false)
-            print("RESULT[query] "+toString(query(qry, false))+"\n")
+            print("RESULT[query] "+toString(query(qry, false),ipmPacketSummary)+"\n")
             setStreamingMode(oldMode)
             return(true)
         }
@@ -292,18 +296,32 @@ struct ClipCore: inherits=ProteusCore{
             finishInputStream(inputStream, wrapInput)
             return()
         }
+        if(!clipInputTerminal()){
+            clipBinaryStdio()
+            me bool: failed <- false
+            while(!failed){
+                me string: chunk <- clipInputChunk(failed)
+                if(chunk.size()==0){break()}
+                inputStream.pushParserInputBuf(chunk)
+            }
+            if(failed){inputStream.source.failInput("Failed reading standard input")}
+            finishInputStream(inputStream, wrapInput)
+            return()
+        }
         print("CLIP stream mode. Type infons, ':query ...', ':files', ':close', or 'quit'.\n")
+        me ClipCommandBoundary: boundary
         me bool: done <- false
         while(!done){
             me string: inputStr
             print("clip-stream> ")
-            input(inputStr)
-            trimWS(inputStr)
-            if(inputStr=="quit" or inputStr==":quit"){break()}
-            if(inputStr==""){continue()}
-            if(handleStreamCommand(inputStr, inputStream, wrapInput)){
-                if(inputStr==":close"){inputStream <- startInputStream("interactive", wrapInput)}
-                continue()
+            if(!clipReadLine(inputStr)){break()}
+            me string: command <- inputStr; trimWS(command)
+            if((command=="quit" or command=="help" or (command.size()>0 and command[0]==":")) and boundary.outsideLiteral(inputStream.source.inputBuf)){
+                if(command=="quit" or command==":quit"){break()}
+                if(handleStreamCommand(command, inputStream, wrapInput)){
+                    if(command==":close"){inputStream <- startInputStream("interactive", wrapInput); boundary.pos <- 0}
+                    continue()
+                }
             }
             inputStream.pushParserInputBuf(inputStr+"\n")
         }
@@ -316,13 +334,34 @@ struct ClipCore: inherits=ProteusCore{
         connectionMgr.shutdown()
     }
 
+    void: runPacketTool(me string: modeName, me string: inputSpec) <- {
+        packetTool <- true
+        clipBinaryStdio()
+        our ClipPacketSink:: sink; sink!.extract <- modeName=="extract"; sink!.inspect <- !sink!.extract
+        packetSink <- sink
+        me ClipPacketInput: source
+        if(!source.openSource(inputSpec)){clipDiagnostic(source.error); exit(1)}
+        source.start()
+        me ProteusParser: parser{self,true,0}
+        parser.initParseFromStream(source.buffer)
+        our infonView:: root; parser.doParse(root)
+        if(parser.errorSet){exit(1)}
+        me int64: end <- parser.parsedEnd
+        end <+- source.buffer.scrapeWSC(end)
+        if(source.buffer.getItrAt(end)!=NULL){clipDiagnostic("Unexpected input after packet document"); exit(1)}
+        source.waitForExit()
+        if(source.error!=""){clipDiagnostic(source.error); exit(1)}
+        if(sink!.received==0){clipDiagnostic("No fenced string in packet document"); exit(1)}
+    }
     void: run(me string: runMode, me string: kernelSpec, me string: worldSpec, me string: inputSpec, me string: wrapSpec) <- {
+        if(runMode=="inspect" or runMode=="extract"){runPacketTool(runMode,inputSpec); return()}
         initClip()
         if(!loadBootstrap(kernelSpec, worldSpec)){
             print("BOOTSTRAP_FAILED\n")
             shutdown()
             return()
         }
+        if(clipInputTerminal()){our ClipPacketSink:: summaries; packetSink <- summaries}
         if(runMode=="load"){
             print("BOOTSTRAP_OK\n")
         } else if(runMode=="command"){

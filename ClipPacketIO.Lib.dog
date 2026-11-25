@@ -1,0 +1,127 @@
+featuresNeeded = [Proteus]
+interface = {headers=[cerrno, cstdio]}
+embedAboveIncludes = `
+#ifdef _WIN32
+# include <io.h>
+# include <fcntl.h>
+#else
+# include <unistd.h>
+#endif
+`
+
+// stdin can be a live pipe. Return the available bytes of one OS read so a
+// sender may wait for a verified packet before sending the next operand.
+struct GLOBAL {
+    me string: clipInputChunk(their bool: failed) <- <%{
+        char bytes[16384];
+        for (;;) {
+#ifdef _WIN32
+            int n = _read(_fileno(stdin), bytes, sizeof(bytes));
+#else
+            auto n = ::read(STDIN_FILENO, bytes, sizeof(bytes));
+#endif
+            if (n >= 0) return std::string(bytes, n);
+            if (errno != EINTR) { *failed = true; return {}; }
+        }
+    }%>
+    void: clipBinaryStdio() <- <%{
+#ifdef _WIN32
+        _setmode(_fileno(stdin), _O_BINARY);
+        _setmode(_fileno(stdout), _O_BINARY);
+#endif
+    }%>
+    me bool: clipInputTerminal() <- <%{
+#ifdef _WIN32
+        return _isatty(_fileno(stdin));
+#else
+        return isatty(STDIN_FILENO);
+#endif
+    }%>
+    void: clipDiagnostic(me string: message) <- <%{ std::cerr << message << std::endl; }%>
+    me bool: clipReadLine(their string: line) <- <%{ return bool(std::getline(std::cin,*line)); }%>
+    void: clipWriteBytes(their string: bytes) <- <%{
+        std::cout.write(bytes->data(), bytes->size()).flush();
+        if (!std::cout) throw std::runtime_error("Failed writing packet output");
+    }%>
+}
+
+struct ClipPacketInput: inherits=Threads {
+    me strBuf: buffer
+    me FileStream: file
+    me bool: fromStdin
+    me string: error
+    me bool: openSource(me string: path) <- {
+        buffer.init(path)
+        fromStdin <- path=="" or path=="-"
+        if(!fromStdin){
+            file.open(path,"rb")
+            if(file.failure()){error <- "Cannot open "+path; return(false)}
+        }
+        return(true)
+    }
+    void: run() <- {
+        while(error==""){
+            me string: chunk
+            me bool: failed <- false
+            if(fromStdin){chunk <- clipInputChunk(failed)}
+            else{chunk <- readProteusFileChunk(file); failed <- file.failure() and !file.EOF()}
+            if(failed){error <- "Failed reading packet input"; break()}
+            if(chunk.size()==0){break()}
+            buffer.putStr(chunk)
+        }
+        buffer.close()
+    }
+}
+
+struct ClipPacketSink: inherits=ProteusPacketSink {
+    me bool: extract
+    me bool: inspect
+    me uint64: received
+    void: acceptPacket(me uint64: origin, me int64: offset, me ProteusStringFence: fence, me string: bytes) <- {
+        if(extract){clipWriteBytes(bytes)}
+        else{
+            me string: display <- fence.summary(bytes)+"\n"
+            if(inspect){
+                me int64: limit <- bytes.size()
+                if(limit>64){limit <- 64}
+                withEach idx in range 0 .. limit{
+                    if(idx%16==0){display <+- packetHex(idx,8)+" "}
+                    display <+- " "+packetHex(bytes[idx] & 255,2)
+                    if(idx%16==15 or idx+1==limit){display <+- "\n"}
+                }
+            }
+            clipWriteBytes(display)
+        }
+        // Only the single-document packet tool reads this counter.
+        if(extract or inspect){received <+- 1}
+    }
+}
+
+// A pasted line such as "quit" can itself be packet data. Consult the same
+// quote reader before treating a terminal line as a command. File and pipe
+// input never passes through the command interpreter.
+struct ClipCommandBoundary {
+    me int64: pos
+    me bool: outsideLiteral(their strBuf: buffer) <- {
+        me int64: end
+        protect(buffer!.bufMutex){end <- buffer!.crntStreamSize}
+        while(pos<end){
+            me char: ch <- buffer!.at(pos)
+            if(ch=="'" or ch=="\""){
+                me ProteusFenceReader: reader
+                me ppStatus: status <- reader.readLiteral(buffer,pos,ch,true)
+                if(status==valid_notDone or status==valid_maybeDone){return(false)}
+                if(status==syntax_error){pos <- end; return(true)}
+                pos <- reader.pos
+            }else if(ch=="/" and pos+1<end and buffer!.at(pos+1)=="/"){
+                while(pos<end and !fenceEOL(buffer!.at(pos))){pos <+- 1}
+            }else if(ch=="/" and pos+1<end and buffer!.at(pos+1)=="*"){
+                me int64: close <- pos+2
+                while(close+1<end and (buffer!.at(close)!="*" or buffer!.at(close+1)!="/")){close <+- 1}
+                if(close+1>=end){return(false)}
+                pos <- close+2
+            }else{pos <+- 1}
+        }
+        return(true)
+    }
+}

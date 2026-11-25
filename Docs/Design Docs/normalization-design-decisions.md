@@ -5691,3 +5691,32 @@ the available boundary and a live parse can wait there for another chunk.
 A completed literal supplies its decoded value and the source position
 after the closing delimiter. Printing uses named control escapes or fixed
 three-digit octal where a following digit could otherwise change the value.
+
+## D136. Verify a fenced string before delivering its bytes
+
+A closed fence supplies the same byte-string facts as D135. Its stored
+format records a text tag or the presence of a binary checksum. Derive the
+serialized count and CRC from the current payload so a replacement, window
+or join can be serialized directly. Ordinary quotes keep their escape rules.
+
+Count binary input against available buffer spans. A short read can split
+any part of the framing. The declaration alone never reserves the payload.
+For tagged text the closer determines the margin, so retain the raw lines
+until that margin can be checked. A nonempty tag is compared byte for byte.
+A following word byte or hyphen continues the tag. Serialization chooses
+a fresh tag on collision. A removable space on the last empty line can keep
+a terminal payload CR distinct from the serializer's framing LF.
+
+Report each verified source packet to an optional host sink with its source
+offset. ListSpec lookahead can visit an occurrence twice, so the parser
+records the last delivered offset for that document. The callback receives
+its own payload and format outside the model lock. This permits ordered
+consumption during an open join. The normalizer retains ownership of the
+final joined value and of any error from a later operand.
+
+File connectors and Clip script input read byte counts directly. Clip's
+inspection and extraction modes take one document from a file or stdin
+and bypass world bootstrap. A bare closer or a checksum at the current
+end of a live chunk needs a delimiter or EOF to determine its boundary.
+Interactive summaries and bounded previews allow a terminal to display
+binary-bearing documents without emitting the payload as terminal commands.

@@ -71,7 +71,7 @@ Unknown or incomplete escapes, byte overflow, Unicode surrogates, and values abo
 
 ### Long string literals (accepted design)
 
-These forms are pending implementation under A03. Each parses as a single string infon. Size counts the bytes in the resulting value.
+Both forms parse as a single string infon (D136). Size counts the bytes in the resulting value.
 
 | Syntax | Meaning |
 | --- | --- |
@@ -116,6 +116,15 @@ Accept LF (`\n`), CRLF (`\r\n`), and CR (`\r`) as framing line endings. Match CR
 **Packet completion.** Release each fenced literal for processing only after parsing its complete body and accepting its closer, including verification of any supplied checksum. In `**(...)`, pass completed operands downstream in order while later packets are still arriving. The example makes `abc` available when its first packet completes and produces `abcdef` when the join completes. A malformed, truncated, or checksum-mismatched packet contributes no bytes and fails the join. Input waiting for another read remains pending until the parser receives more bytes or reaches end of input.
 
 **Clip and editor handling.** Display a packet summary in interactive terminals, including byte count and checksum status where available. Inspection can show a bounded hex preview with offsets. Extraction writes the payload bytes directly. File and pipe I/O carry raw bytes, with prompts and diagnostics kept out of the data stream. A binary-aware editor can fold packets, inspect or replace payload bytes, and update the count and any checksum. Hex is a display format for inspection. Proteus serialization uses the verbatim payload.
+
+Build Clip with `codeDog clip.dog`. Run the following from the repository root to inspect a single Proteus document or extract its fenced values in source order. Inspection shows up to 64 payload bytes per packet. Extraction flushes each verified payload to stdout. Diagnostics go to stderr and errors return a nonzero exit status. An open pipe needs a token boundary after the closing tag or checksum so the reader can distinguish a complete closer from a longer one.
+
+```sh
+LocalBuild/clip -m inspect -i packets.pr
+LocalBuild/clip -m extract < packets.pr > payload.bin
+```
+
+Hosts can attach a `ProteusPacketSink` to `ProteusCore.packetSink`. It receives the origin, source byte offset, fence format and payload once per accepted fenced occurrence. The enclosing normalization request reports the outcome of the whole expression.
 
 ### Whitespace, separators and grouping
 
@@ -947,7 +956,7 @@ Keep these IDs stable. Mark completed items with their decision, implementing co
 
 - [x] **A01 — Decode C-style backslash escapes in strings.** D135 (`d450632`) implements control, delimiter and byte escapes, line continuation, malformed-escape rejection, and round-trip printing. **Reference:** R01–R02.
 - [x] **A02 — Support Unicode character-code escapes in strings.** D135 (`d450632`) implements `\u` and `\U` escapes, validates Unicode scalar values, and counts the resulting UTF-8 bytes. **Reference:** R01–R02.
-- [ ] **A03 — Implement fenced text and verbatim binary packets.** Follow the [accepted design](#long-string-literals-accepted-design). Implement parsing, serialization, and delivery of completed packets through `**(...)`. Cover the LF, CRLF, and CR framing cases, empty and newline-ending payloads, short reads, delimiter bytes inside payloads, and packet failures. Test the CRC-32C vector, hex case and padding, and rejection of malformed or mismatched checksums. Add Clip summaries, inspection, and raw extraction. **Reference:** R01–R02.
+- [x] **A03 — Fenced text and verbatim binary packets.** D136 implements parsing, serialization, verified packet delivery, Clip inspection and raw extraction. See the [long-string syntax](#long-string-literals-accepted-design) and [language fixtures](../Tests/stringFenceTests.tst).
 
 Decode escapes before applying the existing byte-based string size and selection rules. Counting Unicode code points or displayed characters would require a separate language decision.
 

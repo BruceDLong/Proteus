@@ -70,6 +70,18 @@ struct WorldText {
     our WorldText: right
     me int64: leftLength <- 0
     me int64: start <- 0 // A borrowed text window, measured in source bytes.
+    our ProteusStringFence: fence
+    // A composed binary value stays serializable as a packet. Prefer an
+    // explicitly checked format and recompute its checksum on serialization.
+    void: joinParts(our WorldText: lhs, our WorldText: rhs, me int64: width) <- {
+        left <- lhs; right <- rhs; leftLength <- width
+        if(lhs!=NULL){fence <- lhs!.fence}
+        if(rhs!=NULL and rhs!.fence!=NULL){
+            if(fence==NULL or (rhs!.fence!.tag=="" and (fence!.tag!="" or rhs!.fence!.checksummed))){
+                fence <- rhs!.fence
+            }
+        }
+    }
 }
 struct WorldTextSpan {
     our WorldText: text
@@ -2143,7 +2155,7 @@ struct WorldPOVGraph {
         if(facts.hasValue and facts.overlay==NUM){facts.number.normalize()}
         if(facts.hasSize){facts.size.normalize()}
         if(facts.hasValue and facts.overlay==STR){
-            Allocate(facts.textSource); facts.textSource!.source <- item!.value
+            Allocate(facts.textSource); facts.textSource!.source <- item!.value; facts.textSource!.fence <- item!.value!.stringFence
             facts.textLength <- item!.value!.str.size()
         }
         facts.order <- item!.orderMode; facts.timelike <- item!.value!.timelike
@@ -2877,8 +2889,7 @@ struct WorldPOVGraph {
             left.outcome <- worldError; left.detail <- "String expression exceeds representable length"; return(left)
         }
         our WorldText:: joined
-        joined!.left <- left.textSource; joined!.right <- right.textSource
-        joined!.leftLength <- left.textLength
+        joined!.joinParts(left.textSource,right.textSource,left.textLength)
         left.textSource <- joined; left.textLength <+- right.textLength
         return(left)
     }
@@ -4523,6 +4534,7 @@ struct WorldPOVGraph {
             item!.value!.items.clear()
             item!.value!.num <- facts.number
             if(facts.overlay==STR){
+                if(facts.textSource!=NULL){item!.value!.setStringFence(facts.textSource!.fence)}
                 me WorldTextCursor: text; text.push(facts.textSource, facts.textLength)
                 item!.value!.str <- ""
                 withEach pos in range 0 .. facts.textLength{item!.value!.str <+- text.next()}
@@ -6219,8 +6231,9 @@ struct WorldManager {
             me int64: offset <- start+consumed-span.start
             me int64: width <- min(length-consumed, span.length-offset)
             our WorldText:: part; part!.source <- span.text!.source; part!.start <- span.text!.start+offset
+            part!.fence <- part!.source!.stringFence
             if(result==NULL){result <- part}
-            else{our WorldText:: joined; joined!.left <- result; joined!.right <- part; joined!.leftLength <- consumed; result <- joined}
+            else{our WorldText:: joined; joined!.joinParts(result,part,consumed); result <- joined}
             consumed <+- width; chart!.textIndex <- index; index <+- 1; request!.textWindowNodes <+- 1
         }
         return(result)

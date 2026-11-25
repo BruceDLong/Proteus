@@ -2226,3 +2226,14 @@ values above U+10FFFF and incomplete literals produce syntax errors.
 Printed literals use single quotes, preserve readable UTF-8, and escape
 the delimiter, backslashes and control bytes. A byte outside a valid UTF-8
 sequence prints as three octal digits so the next character stays distinct.
+
+## Fenced strings and packet delivery (D136)
+
+Tagged multiline text and counted binary packets each supply one STR value.
+Its extent is the payload byte count. Formatting follows copied text and
+borrowed windows through normalization. A join containing a binary packet
+uses binary framing on serialization. A checksummed binary operand requests
+a fresh checksum for the resulting bytes. Formatting never participates in
+string comparison. The parser publishes a validated packet independently of
+the enclosing request, which can still fail on a subsequent operand.
+[Syntax, framing and Clip](../Proteus-Language-Reference.md#long-string-literals-accepted-design)

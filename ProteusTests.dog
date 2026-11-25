@@ -284,6 +284,9 @@ TestsToRun = `
     parse/stringEscape/values
     parse/stringEscape/errors
     parse/stringEscape/stream
+    parse/fence/bytes
+    parse/fence/errors
+    parse/fence/stream
     parse/errorLegacyDefinition
 `
 runCode=`
@@ -2604,6 +2607,15 @@ struct ParserInputWorker: inherits=Threads {
     }
 }
 
+struct FenceTestSink: inherits=ProteusPacketSink {
+    me Mutex: mutex
+    me int: received
+    me string: first
+    me int: count() <- {protect(mutex){return(received)}}
+    void: acceptPacket(me uint64: origin, me int64: offset, me ProteusStringFence: fence, me string: bytes) <- {
+        protect(mutex){received <+- 1; if(received==1){first <- bytes}}
+    }
+}
 struct ParserCallbackCore: inherits=ProteusCore {
     me bool: callbackRan
     me string: callbackAnswer
@@ -2884,6 +2896,82 @@ struct GLOBAL {
 }
 
 struct GLOBAL {
+    void: parse_fence_bytes(me string: testName) <- {
+        me string: payload
+        withEach n in range 0 .. 256{me char: byte <- n; payload <+- byte}
+        payload <+- "\n'''feedface\r\n"
+        me int64: length <- payload.size()
+        me List<string>: eols <- ["\n","\r\n","\r"]
+        withEach eol in eols{
+            me string: input <- "'''"+toString(length)+eol+payload+eol+"\t '''"
+            our infonView: parsed <- parseAndExtract(testName,input)
+            if(parsed==NULL or parsed!.value!.str!=payload or parsed!.infSize!.num!=length){FAIL("Binary packet changed bytes or size")}
+            our infonView: again <- parseAndExtract(testName,toString(parsed))
+            if(again==NULL or again!.value!.str!=payload){FAIL("Binary packet did not round trip")}
+        }
+        me string: marker <- "\"\"\"TAG"
+        me string: source <- marker+"\r\n \ta\\n\r\n \t  b\r\n\n \t"+marker+"}"
+        our infonView: root <- parseAndExtract(testName,source)
+        if(root==NULL or root!.value!.str!="a\\n\r\n  b\r\n"){FAIL("Text margin or line endings changed")}
+        // Editing may introduce a matching closer and a terminal lone CR.
+        root!.value!.str <- "  "+marker+"\r"
+        our infonView: again <- parseAndExtract(testName,toString(root))
+        if(again==NULL or again!.value!.str!=root!.value!.str){FAIL("Edited fenced text did not round trip")}
+        root <- parseAndExtract(testName,"'''0\n\n'''00000000")
+        if(root==NULL){FAIL("Empty checksummed packet failed")}
+        root!.value!.str <- "123456789"
+        if(toString(root)!="'''9\n123456789\n'''e3069283"){FAIL("Edited packet retained stale length or checksum")}
+    }
+    void: parse_fence_errors(me string: testName) <- {
+        me List<string>: invalid <- ["'''x\n\n'''","'''9223372036854775808\n","'''5\nabc","'''1\nAB\n'''","'''0\n'''",
+            "'''0\n\n''","'''0\n\n'''a","'''0\n\n'''0000000z","'''0\n\n'''000000000","'''0\n\n'''ffffffff",
+            "\"\"\"TAG\nabc\n  \"\"\"TAG","\"\"\"TAG\nabc\n\"\"\"TAGmore","\"\"\"\nbody\n\"\"\""]
+        withEach input in invalid{
+            me WorldManager: manager
+            if(manager.parse(input).target!=NULL){FAIL("Accepted malformed fenced string: "+input)}
+        }
+        me strBuf: split; split.init(testName)
+        split.putStr("'''3\r"); split.putStr("\n"); split.putStr("abc\r"); split.putStr("'''bad"); split.close()
+        me ProteusParser: parser{NULL,false,0}; parser.initParseFromStream(split)
+        our infonView:: root; parser.doParse(root)
+        if(!parser.errorSet or parser.errLineNum!=3 or parser.errCharPos!=4){FAIL("Misplaced checksum diagnostic across split CRLF and CR")}
+    }
+    void: parse_fence_stream(me string: testName) <- {
+        me ProteusCore: core; core.init("")
+        our FenceTestSink:: sink; core.packetSink <- sink
+        me strBuf: input; input.init(testName)
+        our ProteusParser:: parser{core,true,0}; parser!.initParseFromStream(input)
+        our infonView:: root
+        core.agent!.worldManager.prepareInput(root)
+        our POV:: target{977}; target!.pItem <- root
+        our WorldRequest: join <- core.agent!.normalize(target)
+        me ParserInputWorker: worker; worker.core <- core; worker.parser <- parser; worker.root <- root
+        worker.entered.wait(); worker.start(); worker.entered.wait()
+        me string: first <- "**('''9\r\n123456789\r\n'''E3069283\n"
+        withEach idx in range 0 .. first.size(){input.putStr(first.subStr(idx,1))}
+        me int: elapsed <- 0
+        while(sink!.count()==0 and elapsed<1500){sleep(5); elapsed <+- 5}
+        me bool: early <- sink!.count()==1
+        input.putStr("'''3\nbad\n'''00000000)")
+        input.close(); worker.waitForExit()
+        me bool: failed <- parser!.errorSet and join!.status().outcome==worldError and join!.error()==root!.graphParseError
+        core.deInit(); modelMngr.clear()
+        if(!early or sink!.count()!=1 or sink!.first!="123456789" or !failed){FAIL("Expected exactly one verified packet before the join failed")}
+        me List<string>: packets <- ["'''3\r\nabc\r\n'''", "\"\"\"END\r\n\tone\r\n\t\"\"\"END"]
+        withEach packet in packets{
+            me strBuf: prefix; prefix.init(testName)
+            me ProteusParser: look{NULL,false,0}; look.initParseFromStream(prefix)
+            withEach idx in range 0 .. packet.size(){
+                prefix.putStr(packet.subStr(idx,1))
+                me int64: at <- 0
+                me ppStatus: status <- look.preCheckInfonState(at,pcMainInfn)
+                if(status!=valid_notDone and status!=valid_maybeDone){FAIL("Lookahead finalized a partial fence")}
+            }
+            prefix.putStr(")"); me int64: at <- 0
+            if(look.preCheckInfonState(at,pcMainInfn)!=valid_done or at!=packet.size()){FAIL("Lookahead consumed syntax after the fence")}
+            prefix.close()
+        }
+    }
     void: parse_stringEscape_values(me string: testName) <- {
         me string: slash <- "\\"
         me string: names <- "abtnvfr"

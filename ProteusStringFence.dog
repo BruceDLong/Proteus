@@ -1,0 +1,200 @@
+struct GLOBAL {
+    const string: packetHexDigits <- "0123456789abcdef"
+    me bool: fenceIndent(me char: ch) <- {return(ch==" " or ch=="\t")}
+    me bool: fenceEOL(me char: ch) <- {return(ch=="\r" or ch=="\n")}
+    me bool: fenceWordByte(me char: ch) <- {
+        return((ch>="A" and ch<="Z") or (ch>="a" and ch<="z") or
+               (ch>="0" and ch<="9") or ch=="_" or (ch & 128)!=0)
+    }
+    me string: packetHex(me uint32: number, me int: width) <- {
+        me string: result
+        withEach idx in range 0 .. width{
+            me string: digit; digit <+- packetHexDigits[number & 15]
+            result <- digit + result
+            number <- number / 16
+        }
+        return(result)
+    }
+    me uint32: packetCRC32C(their string: bytes) <- {
+        me uint32: crc <- 0xffffffff
+        withEach idx in range 0 .. bytes!.size(){
+            crc <^- (bytes![idx] & 255)
+            withEach bit in range 0 .. 8{
+                if((crc & 1)!=0){crc <- (crc / 2) ^ 0x82f63b78}
+                else{crc <- crc / 2}
+            }
+        }
+        return(crc ^ 0xffffffff)
+    }
+}
+
+// Formatting belongs to the occurrence. The model still holds one byte string.
+struct ProteusStringFence {
+    me string: tag   // A binary packet has no text tag.
+    me bool: checksummed
+
+    me string: summary(their string: bytes) <- {
+        me int64: count <- bytes!.size()
+        me string: detail <- "text"
+        if(tag==""){
+            detail <- "binary; no checksum"
+            if(checksummed){detail <- "binary; CRC-32C "+packetHex(packetCRC32C(bytes),8)}
+        }
+        return("["+toString(count)+" bytes; "+detail+"]")
+    }
+    me bool: tagCollision(their string: bytes, me string: marker) <- {
+        me int64: pos <- 0
+        while(pos<bytes!.size()){
+            while(pos<bytes!.size() and fenceIndent(bytes![pos])){pos <+- 1}
+            if(bytes!.subStr(pos,marker.size())==marker){
+                me int64: after <- pos+marker.size()
+                if(after==bytes!.size() or (!fenceWordByte(bytes![after]) and bytes![after]!="-")){return(true)}
+            }
+            while(pos<bytes!.size() and !fenceEOL(bytes![pos])){pos <+- 1}
+            if(pos<bytes!.size()){pos <+- 1}
+        }
+        return(false)
+    }
+    me string: serialize(their string: bytes) <- {
+        me int64: count <- bytes!.size()
+        if(tag==""){
+            me string: result <- "'''"+toString(count)+"\n"+bytes!+"\n'''"
+            if(checksummed){result <+- packetHex(packetCRC32C(bytes),8)}
+            return(result)
+        }
+        me string: marker <- "\"\"\""+tag
+        while(tagCollision(bytes,marker)){marker <+- "_"}
+        me string: result <- marker+"\n"
+        if(count==0){return(result+marker)}
+        // A terminal payload CR and framing LF would become a single CRLF.
+        // A removable margin keeps these two physical line endings distinct.
+        if(bytes![count-1]=="\r"){
+            result <+- " "
+            withEach idx in range 0 .. count{
+                me char: ch <- bytes![idx]; result <+- ch
+                if(ch=="\n" or (ch=="\r" and (idx+1==count or bytes![idx+1]!="\n"))){result <+- " "}
+            }
+            return(result+"\n "+marker)
+        }
+        return(result+bytes!+"\n"+marker)
+    }
+}
+
+struct ProteusFenceReader: inherits=ProteusStringLiteral {
+    our ProteusStringFence: fence
+
+    void: takeEOL() <- {
+        me char: first <- ch; advance()
+        if(first=="\r" and available and ch=="\n"){advance()}
+    }
+    me ppStatus: binaryBody() <- {
+        if(!available){return(missing("Missing binary byte count"))}
+        if(ch<"0" or ch>"9"){return(invalid("Expected decimal binary byte count"))}
+        me int64: count <- 0
+        while(available and ch>="0" and ch<="9"){
+            me int: digit <- ch-48
+            if(count>(9223372036854775807-digit)/10){return(invalid("Binary byte count exceeds int64"))}
+            count <- count*10+digit; advance()
+        }
+        if(!available or !fenceEOL(ch)){return(missing("Expected line break after binary byte count"))}
+        takeEOL()
+        // Copy the available span of each buffer. Never allocate from the
+        // declared length alone; a short read or EOF may come at any byte.
+        me int64: remaining <- count
+        while(remaining>0){
+            if(!available){return(missing("Truncated binary payload"))}
+            me int64: width <- cursor!.crntInnerBuf!.buf.size()-cursor!.crntRelPos
+            if(width>remaining){width <- remaining}
+            if(openEnd>=0 and width>openEnd-pos){width <- openEnd-pos}
+            value <+- cursor!.crntInnerBuf!.buf.subStr(cursor!.crntRelPos,width)
+            cursor!.crntRelPos <+- width-1; pos <+- width-1
+            remaining <- remaining-width; advance()
+        }
+        if(!available or !fenceEOL(ch)){return(missing("Expected framing line break after binary payload"))}
+        takeEOL()
+        while(available and fenceIndent(ch)){advance()}
+        withEach idx in range 0 .. 3{
+            if(!available or ch!="'"){return(missing("Expected binary closing fence"))}
+            advance()
+        }
+        if(available and fenceWordByte(ch)){
+            errorPos <- pos
+            me uint32: supplied <- 0
+            withEach idx in range 0 .. 8{
+                if(!available or digitValue()<0){return(missing("Expected eight CRC-32C hex digits"))}
+                supplied <- supplied*16+digitValue(); advance()
+            }
+            if(available and fenceWordByte(ch)){return(invalid("Expected exactly eight CRC-32C hex digits"))}
+            if(supplied!=packetCRC32C(value)){return(invalid("Binary packet CRC-32C mismatch"))}
+            fence!.checksummed <- true
+        }
+        if(pos==openEnd){return(valid_notDone)}
+        return(valid_done)
+    }
+    me ppStatus: stripMargin(their string: raw, me int64: end, me string: margin, me int64: start) <- {
+        if(margin==""){value <- raw!.subStr(0,end); return(valid_done)}
+        me int64: line <- 0
+        while(line<end){
+            me int64: content <- line
+            while(content<end and !fenceEOL(raw![content])){content <+- 1}
+            if(content-line>=margin.size() and raw!.subStr(line,margin.size())==margin){
+                value <+- raw!.subStr(line+margin.size(),content-line-margin.size())
+            }else{
+                withEach offset in range 0 .. content-line{
+                    if(!fenceIndent(raw![line+offset])){errorPos <- start+line; return(invalid("Text line lacks the closing fence indentation"))}
+                }
+            }
+            if(content<end){value <+- raw![content]; content <+- 1}
+            if(content<end and raw![content-1]=="\r" and raw![content]=="\n"){value <+- "\n"; content <+- 1}
+            line <- content
+        }
+        return(valid_done)
+    }
+    me ppStatus: textBody() <- {
+        while(available and !fenceEOL(ch)){fence!.tag <+- ch; advance()}
+        if(!available){return(missing("Expected line break after text tag"))}
+        if(fence!.tag==""){return(invalid("Expected a text fence tag"))}
+        takeEOL()
+        me int64: start <- pos
+        me string: marker <- "\"\"\""+fence!.tag
+        me string: raw
+        me int64: end <- 0
+        while(available){
+            me int64: line <- raw.size()
+            while(available and fenceIndent(ch)){raw <+- ch; advance()}
+            me int64: indent <- raw.size()-line
+            me int64: matched <- 0
+            while(available and matched<marker.size() and ch==marker[matched]){
+                raw <+- ch; matched <+- 1; advance()
+            }
+            if(matched==marker.size() and (!available or (!fenceWordByte(ch) and ch!="-"))){
+                if(pos==openEnd){return(valid_notDone)}
+                return(stripMargin(raw,end,raw.subStr(line,indent),start))
+            }
+            while(available and !fenceEOL(ch)){raw <+- ch; advance()}
+            end <- raw.size()
+            if(available){
+                me char: first <- ch; raw <+- ch; advance()
+                if(first=="\r" and available and ch=="\n"){raw <+- ch; advance()}
+            }
+        }
+        return(missing("Unterminated tagged text literal"))
+    }
+    me ppStatus: readLiteral(their strBuf: input, me int64: start, me char: quote, me bool: lookahead) <- {
+        if(lookahead){
+            protect(input!.bufMutex){if(!input!.bufferClosed){openEnd <- input!.crntStreamSize}}
+        }
+        pos <- start; errorPos <- start
+        cursor <- input!.getItrAt(start); advance()
+        if(available and ch==quote){
+            advance()
+            if(pos==openEnd){return(valid_maybeDone)}
+            if(available and ch==quote){
+                Allocate(fence); advance()
+                if(quote=="'"){return(binaryBody())}
+                return(textBody())
+            }
+        }
+        return(read(input,start,quote,lookahead))
+    }
+}

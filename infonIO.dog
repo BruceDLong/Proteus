@@ -44,6 +44,10 @@ struct infonView{
 
 struct ppStatus:inherits=<mode[valid_EOB, valid_notDone, valid_maybeDone, valid_done, syntax_error, other_error]>{}
 #include ProteusStringLiteral.dog
+#include ProteusStringFence.dog
+struct ProteusPacketSink: virtualMethods=[acceptPacket] {
+    void: acceptPacket(me uint64: origin, me int64: offset, me ProteusStringFence: fence, me string: bytes) <- {}
+}
 struct ProteusParser{
     their ProteusCore: CORE
     me bool: streamingMode
@@ -55,6 +59,17 @@ struct ProteusParser{
     me int64: errLineNum
     me int64: errCharPos
     me int64: errorSuppressDepth
+    me int64: lastPacketOffset <- -1
+    me int64: parsedEnd
+    // ListSpec lookahead can parse a source occurrence again. This event is
+    // about the verified source packet, independent of its later qualifications.
+    void: publishPacket(me int64: start, their ProteusFenceReader: literal) <- {
+        if(errorSet or start<=lastPacketOffset or CORE==NULL or CORE!.packetSink==NULL){return()}
+        lastPacketOffset <- start
+        our ProteusPacketSink: sink <- CORE!.packetSink
+        me InputPause: pause
+        sink!.acceptPacket(originID,start,literal!.fence!,literal!.value)
+    }
     // Replaced at every definition boundary, including unparameterized ones.
     our WordDefn: parameterScope
     our WordScope: wordScope
@@ -120,23 +135,26 @@ struct ProteusParser{
         errLineNum <- 1
         errCharPos <- 1
         if(errPos < 0){return()}
-        their strInnerBuf: bufWithChar <- text!.findInrBufWithPos(errPos)
-        if(bufWithChar == NULL){return()}
-        me int64: lastLinePos <- -1
-        if(bufWithChar!.prev!=NULL){
-            errLineNum <- bufWithChar!.prev!.endingLineNumber + 1
-        }
-        me int: bufSize <- bufWithChar!.buf.size()
-        withEach idx in range 0 .. bufSize {
-            if(bufWithChar!.myOffset + idx > errPos){
-                break()
+        // File and pipe chunks may split a line, including its CRLF. Count
+        // bytes before the error without waiting for input beyond that point.
+        me bool: afterCR <- false
+        protect(text!.bufMutex){
+            // The existing parser reports 1:1 when no source byte occupies
+            // the error offset (for example a missing RHS at closed EOF).
+            if(errPos>=text!.crntStreamSize){return()}
+            their strInnerBuf: chunk <- text!.head
+            while(chunk!=NULL and chunk!.myOffset<errPos){
+                me int64: count <- chunk!.buf.size()
+                if(count>errPos-chunk!.myOffset){count <- errPos-chunk!.myOffset}
+                withEach idx in range 0 .. count{
+                    me char: ch <- chunk!.buf[idx]
+                    if(ch=="\r" or (ch=="\n" and !afterCR)){errLineNum <+- 1; errCharPos <- 1}
+                    else if(ch!="\n"){errCharPos <+- 1}
+                    afterCR <- ch=="\r"
+                }
+                chunk <- chunk!.next
             }
-            if(bufWithChar!.buf[idx] == "\n"){
-                errLineNum <+- 1
-                lastLinePos <- idx
-            }
         }
-        errCharPos <- errPos-(lastLinePos+bufWithChar!.myOffset)
     }
     me string: formattedError(me bool: includeStreamName <- true) <- {
         me string: msg <- "Parse error"
@@ -539,8 +557,8 @@ struct ProteusParser{
                 return(status)
             }
         }else if(peek=="'" or peek=="\""){
-            me ProteusStringLiteral: literal
-            status <- literal.read(text, cPos, peek, true)
+            me ProteusFenceReader: literal
+            status <- literal.readLiteral(text, cPos, peek, true)
             pos! <- literal.pos
             return(status)
         } else if(peek=="{" or peek=="[" or peek=="("){
@@ -1157,11 +1175,13 @@ struct ProteusParser{
             pureInfn!.overlayType <- STR
             if(chkPeek(cPos, peek, "$")){pureInfn!.evalMode <- emUnknown; pureInfn!.str<-""}
             else{
-                me ProteusStringLiteral: literal
-                if(literal.read(text, cPos, peek, false)!=valid_done){
+                me ProteusFenceReader: literal
+                if(literal.readLiteral(text, cPos, peek, false)!=valid_done){
                     setError(literal.error, literal.errorPos)
                     return(-1)
                 }
+                if(literal.fence!=NULL){publishPacket(cPos,literal)}
+                pureInfn!.setStringFence(literal.fence)
                 cPos <- literal.pos
                 pureInfn!.str <- literal.value
                 pureInfn!.evalMode <- emLiteral
@@ -1719,7 +1739,8 @@ struct ProteusParser{
             if(streamingMode){beginDocument(infn)}
             clearError()
             parameterScope <- NULL; wordScope <- NULL; embeddedWordScope <- NULL
-            parseInfonView(infn, 0, true, false)
+            lastPacketOffset <- -1
+            parsedEnd <- parseInfonView(infn, 0, true, false)
             if(errorSet and infn!.graphParseError==""){infn!.graphParseError <- formattedError()}
             finishingDocument <- true
             notifyStreamState(infn, parseDone)
@@ -1765,7 +1786,7 @@ struct ProteusParser{
 // Context-free formatting remains pure; expanded uses compressed output here.
 // WorldManager.printExpanded supplies occurrence/session context for bounded
 // expansion through normalizer-owned demands.
-struct InfonPrintMode: inherits=<mode[ipmCompressed, ipmExpanded, ipmDebug]> {}
+struct InfonPrintMode: inherits=<mode[ipmCompressed, ipmExpanded, ipmDebug, ipmPacketSummary]> {}
 
 ///////////////////////////////// Infon to string
 struct GLOBAL{
@@ -1919,7 +1940,10 @@ struct InfonViewPrinter{
             }
         }else if(pure!.overlayType == STR){
             if(pure!.evalMode == emUnknown){S <+- "$"}
-            else{S <+- quoteProteusString(pure!.str)}
+            else if(pure!.stringFence!=NULL){
+                if(printMode==ipmPacketSummary){S <+- pure!.stringFence!.summary(pure!.str)}
+                else{S <+- pure!.stringFence!.serialize(pure!.str)}
+            }else{S <+- quoteProteusString(pure!.str)}
         }else if(pure!.overlayType == LST){
             me bool: showBar<-false
             me string: strtBrkt<-"{"

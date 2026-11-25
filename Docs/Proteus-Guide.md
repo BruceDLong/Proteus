@@ -273,7 +273,7 @@ Unknown or incomplete escapes, byte overflow, Unicode surrogates, and values abo
 
 **Implementation:** D135 in Proteus `d450632`. See the [reader and printer](https://github.com/BruceDLong/Proteus/blob/d450632365d51e6d528724e56c1a4f18ff10194d/ProteusStringLiteral.dog) and [string escape fixtures](https://github.com/BruceDLong/Proteus/blob/d450632365d51e6d528724e56c1a4f18ff10194d/Tests/stringEscapeTests.tst).
 
-See the [accepted long-string design](Proteus-Language-Reference.md#long-string-literals-accepted-design) for A03.
+Use a tagged fence for raw multiline text or a counted packet for arbitrary bytes. Clip can inspect a packet or extract its payload. See the [long-string reference](Proteus-Language-Reference.md#long-string-literals-accepted-design).
 
 #### Whitespace, separators and grouping
 
@@ -1177,5 +1177,5 @@ The compact forms below are derived from Chapter 17's source reference. The matc
 | Explicit wrap | `(.mod -9/4 1)` | Residue 3/4; size alone does not request wrapping. |
 | Model-defined units | `#minute = *60+{second \| ...}` | Requires second; the model supplies units and conversions. |
 
-Names require the indicated model definitions. These are separate forms, not one combined program. Unknown, partial, rejected and unsupported are distinct outcomes. Detailed call coverage remains A04; runtime verification remains A09. Quoted string escapes are implemented under D135. Long strings remain A03.
+Names require the indicated model definitions. These are separate forms, not one combined program. Unknown, partial, rejected and unsupported are distinct outcomes. Detailed call coverage remains A04; runtime verification remains A09. D135 covers quoted escapes. D136 covers fenced text and binary packets.
 <!-- END DERIVED CHEAT SHEET -->
