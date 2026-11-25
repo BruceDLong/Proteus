@@ -281,6 +281,9 @@ TestsToRun = `
     parse/errorBareNegativeSize
     parse/prefixInput
     parse/decimalInput
+    parse/stringEscape/values
+    parse/stringEscape/errors
+    parse/stringEscape/stream
     parse/errorLegacyDefinition
 `
 runCode=`
@@ -2881,6 +2884,71 @@ struct GLOBAL {
 }
 
 struct GLOBAL {
+    void: parse_stringEscape_values(me string: testName) <- {
+        me string: slash <- "\\"
+        me string: names <- "abtnvfr"
+        me string: source <- "'"
+        me string: expected <- ""
+        withEach idx in range 0 .. names.size(){
+            source <+- slash; source <+- names[idx]
+            me char: byte <- idx+7; expected <+- byte
+        }
+        source <+- "\\?\\'\\\"\\\\\\0\\u0000\\U00000000\\377\\x000ff'"
+        expected <+- "?'\"\\"
+        me char: nul <- 0; me char: high <- 255
+        expected <+- nul; expected <+- nul; expected <+- nul; expected <+- high; expected <+- high
+        our infonView: root <- parseAndExtract(testName, source)
+        if(root==NULL or root!.value!.str!=expected){FAIL("Incorrect decoded bytes for C escapes")}
+
+        expected <- ""
+        source <- "'"
+        me string: hexSource <- "\""
+        me string: hex <- "0123456789abcdef"
+        withEach idx in range 0 .. 256{
+            me char: byte <- idx; expected <+- byte
+            if(byte=="'" or byte=="\\"){source <+- slash}
+            source <+- byte
+            hexSource <+- "\\x"; hexSource <+- hex[idx / 16]; hexSource <+- hex[idx & 15]
+        }
+        root <- parseAndExtract(testName, source+"'")
+        if(root==NULL or root!.value!.str!=expected){FAIL("Raw bytes changed inside a literal")}
+        root <- parseAndExtract(testName, hexSource+"\"")
+        if(root==NULL or root!.value!.str!=expected){FAIL("Hex escapes changed binary data")}
+        root <- parseAndExtract(testName, quoteProteusString(expected))
+        if(root==NULL or root!.value!.str!=expected){FAIL("Printing and reparsing lost byte values")}
+    }
+    void: parse_stringEscape_errors(me string: testName) <- {
+        me List<string>: bad <- ["q", "8", "x", "x100", "400", "u123", "u12G4",
+            "uD800", "uDFFF", "U0000DC00", "U00110000", "UFFFFFFFF", "U1234567"]
+        withEach escape in bad{
+            me ProteusParser: parser{NULL, false, 0}
+            parser.initParseFromString(testName, "{1\n 'a\\"+escape+"'}")
+            our infonView:: root; parser.doParse(root)
+            if(!parser.errorSet or parser.errLineNum!=2 or parser.errCharPos!=4){
+                FAIL("Missing or misplaced error for escape "+escape)
+            }
+        }
+        testParseError(testName, "'abc", "Unterminated string literal", 1, 1)
+        testParseError(testName, "'abc\\", "Incomplete string escape", 1, 5)
+    }
+    void: parse_stringEscape_stream(me string: testName) <- {
+        me string: source <- "'\\U0001f642\\\r\n\\x41\\\\'"
+        me string: expected <- "'🙂A\\\\'"
+        me List<int>: cuts <- [1,2,3,6,11,12,13,16,18,19,20]
+        checkSplitSyntax(testName, source, cuts, expected)
+
+        me strBuf: input; input.init(testName)
+        me ProteusParser: parser{NULL, false, 0}; parser.initParseFromStream(input)
+        withEach idx in range 0 .. source.size(){
+            input.putStr(source.subStr(idx, 1))
+            me int64: pos <- 0
+            me ppStatus: status <- parser.preCheckInfonState(pos, pcMainInfn)
+            if(idx+1==source.size()){
+                if(status!=valid_done or pos!=source.size()){FAIL("Lookahead missed closing quote")}
+            }else if(status!=valid_notDone){FAIL("Lookahead finalized an incomplete quoted string")}
+        }
+        input.close()
+    }
     void: parse_decimalInput(me string: testName) <- {
         me List<string>: inputs <- ["08", "010", "08/09", "0.25", "184467440737095516160"]
         me List<string>: outputs <- ["8", "10", "8/9", "0.25", "184467440737095516160"]
@@ -2975,7 +3043,7 @@ struct GLOBAL {
         me List<int>: cuts <- [1,2,3,6,7,8,12]
         checkSplitSyntax(testName, "++(&{**(*4+2 *3+1)} *2+1)", cuts)
     }
-    void: checkSplitSyntax(me string: testName, me string: source, me List<int>: cuts) <- {
+    void: checkSplitSyntax(me string: testName, me string: source, me List<int>: cuts, me string: canonical <- "") <- {
         withEach cut in cuts{
             me ProteusCore: core; core.init("")
             me strBuf: input; input.init(testName); input.putStr(source.subStr(0, cut))
@@ -2993,7 +3061,9 @@ struct GLOBAL {
             me string: actual <- toString(root)
             core.deInit(); modelMngr.clear()
             if(!progressed or !parsed){FAIL("Split syntax did not resume at offset "+toString(cut))}
-            me string: expected <- source; REQUIRE(actual==expected)
+            me string: expected <- source
+            if(canonical!=""){expected <- canonical}
+            REQUIRE(actual==expected)
         }
     }
     void: unit_orderedJoins_continuation(me string: testName) <- {

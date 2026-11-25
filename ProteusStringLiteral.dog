@@ -1,0 +1,169 @@
+// C escape letters for the control bytes 7 through 13, in byte order.
+struct GLOBAL {
+    const string: proteusControlEscapes <- "abtnvfr"
+}
+
+// A reader belongs to one quoted occurrence. pos counts source bytes, while
+// value holds decoded bytes. Only a completed value is published to the model.
+struct ProteusStringLiteral {
+    our strBufItr: cursor
+    me int64: pos
+    me int64: openEnd <- -1
+    me char: ch
+    me bool: available
+    me string: value
+    me string: error
+    me int64: errorPos
+
+    void: advance() <- {
+        pos <+- 1
+        if(pos==openEnd){available <- false; return()}
+        cursor!.goNext()
+        available <- cursor!.status==bfOK
+        if(available){ch <- cursor!.ch()}
+    }
+    me ppStatus: invalid(me string: message) <- {
+        error <- message
+        return(syntax_error)
+    }
+    me ppStatus: missing(me string: message) <- {
+        if(pos==openEnd){return(valid_notDone)}
+        return(invalid(message))
+    }
+    me int: digitValue() <- {
+        if(ch>="0" and ch<="9"){return(ch-48)}
+        if(ch>="a" and ch<="f"){return(ch-97+10)}
+        if(ch>="A" and ch<="F"){return(ch-65+10)}
+        return(-1)
+    }
+    void: appendByte(me char: byte) <- {value <+- byte}
+    void: appendScalar(me int64: scalar) <- {
+        if(scalar<0x80){appendByte(scalar); return()}
+        if(scalar<0x800){appendByte(0xc0 + (scalar / 64))}
+        else{
+            if(scalar<0x10000){appendByte(0xe0 + (scalar / 4096))}
+            else{
+                appendByte(0xf0 + (scalar / 262144))
+                appendByte(0x80 + ((scalar / 4096) & 63))
+            }
+            appendByte(0x80 + ((scalar / 64) & 63))
+        }
+        appendByte(0x80 + (scalar & 63))
+    }
+    me ppStatus: readNumericEscape() <- {
+        me int: radix <- 16
+        me int: width <- 0  // Hex byte escapes end at the first non-hex digit.
+        me bool: unicode <- ch=="u" or ch=="U"
+        if(ch=="u"){width <- 4; advance()}
+        else if(ch=="U"){width <- 8; advance()}
+        else if(ch=="x"){advance()}
+        else{radix <- 8; width <- 3}
+        me int64: number <- 0
+        me int64: count <- 0
+        while(available and (width==0 or count<width)){
+            me int: digit <- digitValue()
+            if(digit<0 or digit>=radix){break()}
+            number <- number*radix + digit
+            if(!unicode and number>255){return(invalid("String escape exceeds one byte"))}
+            count <+- 1
+            advance()
+        }
+        if(unicode and count!=width){return(missing("Incomplete Unicode escape"))}
+        if(count==0){return(missing("Expected hexadecimal digit after string escape"))}
+        if(unicode){
+            if(number>0x10ffff or (number>=0xd800 and number<=0xdfff)){
+                return(invalid("Invalid Unicode scalar value"))
+            }
+            appendScalar(number)
+        }else{appendByte(number)}
+        return(valid_done)
+    }
+    me ppStatus: readEscape() <- {
+        errorPos <- pos
+        advance()
+        if(!available){return(missing("Incomplete string escape"))}
+        if(ch=="x" or ch=="u" or ch=="U" or (ch>="0" and ch<="7")){
+            return(readNumericEscape())
+        }
+        if(ch=="\\" or ch=="'" or ch=="\"" or ch=="?"){value <+- ch}
+        else if(ch=="\r"){
+            advance()
+            if(!available){return(missing("Expected newline after escaped carriage return"))}
+            if(ch!="\n"){return(invalid("Expected newline after escaped carriage return"))}
+        }else if(ch!="\n"){
+            withEach idx in range 0 .. proteusControlEscapes.size(){
+                if(ch==proteusControlEscapes[idx]){
+                    appendByte(7+idx)
+                    advance()
+                    return(valid_done)
+                }
+            }
+            return(invalid("Unknown string escape"))
+        }
+        advance()
+        return(valid_done)
+    }
+    // The caller has already recognized the opening delimiter. Lookahead
+    // stops at the current open boundary. Actual parsing can wait for input.
+    me ppStatus: read(their strBuf: input, me int64: start, me char: quote, me bool: lookahead) <- {
+        if(lookahead){
+            protect(input!.bufMutex){if(!input!.bufferClosed){openEnd <- input!.crntStreamSize}}
+        }
+        pos <- start
+        cursor <- input!.getItrAt(start)
+        advance()
+        while(available){
+            if(ch==quote){pos <+- 1; return(valid_done)}
+            if(ch=="\\"){
+                me ppStatus: status <- readEscape()
+                if(status!=valid_done){return(status)}
+            }else{value <+- ch; advance()}
+        }
+        errorPos <- start
+        return(missing("Unterminated string literal"))
+    }
+}
+
+struct GLOBAL {
+    // Preserve readable UTF-8. Byte escapes can also represent arbitrary
+    // data, so emit each ill-formed byte using an unambiguous octal escape.
+    me int: literalUTF8Width(their string: bytes, me int64: pos) <- {
+        me int: lead <- bytes![pos] & 255
+        if(lead<0xc2 or lead>0xf4){return(0)}
+        me int: width <- remainingOctets(lead)+1
+        if(pos+width>bytes!.size()){return(0)}
+        me int: second <- bytes![pos+1] & 255
+        if((lead==0xe0 and second<0xa0) or (lead==0xed and second>0x9f) or
+           (lead==0xf0 and second<0x90) or (lead==0xf4 and second>0x8f)){return(0)}
+        withEach offset in range 1 .. width{
+            me int: byte <- bytes![pos+offset] & 255
+            if(byte<0x80 or byte>0xbf){return(0)}
+        }
+        return(width)
+    }
+    me string: quoteProteusString(their string: bytes) <- {
+        me string: quoted <- "'"
+        me string: octal <- "01234567"
+        me int64: pos <- 0
+        while(pos<bytes!.size()){
+            me char: ch <- bytes![pos]
+            me int: byte <- ch & 255
+            if(ch=="'" or ch=="\\"){quoted <+- "\\"; quoted <+- ch}
+            else if(byte>=7 and byte<=13){quoted <+- "\\"; quoted <+- proteusControlEscapes[byte-7]}
+            else if(byte>=32 and byte<127){quoted <+- ch}
+            else{
+                if(byte>=128){
+                    me int: width <- literalUTF8Width(bytes, pos)
+                    if(width>0){quoted <+- bytes!.subStr(pos, width); pos <+- width; continue()}
+                }
+                quoted <+- "\\"
+                quoted <+- octal[byte / 64]
+                quoted <+- octal[(byte / 8) & 7]
+                quoted <+- octal[byte & 7]
+            }
+            pos <+- 1
+        }
+        quoted <+- "'"
+        return(quoted)
+    }
+}

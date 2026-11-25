@@ -2205,3 +2205,24 @@ cells, rounded measurements and inclusive absolute error bounds through
 existing operations. The logical state count, physical storage extent,
 reporting resolution and underlying coordinate density can vary independently.
 See the World repository's `analog-modeling.md` for conventions and examples.
+
+## Quoted string literals (D135)
+
+Single and double quotes accept the same escapes. `\\`, `\'`, `\"` and
+`\?` give the named character. `\a`, `\b`, `\f`, `\n`, `\r`, `\t` and
+`\v` give their C control bytes. A backslash followed by a physical LF or
+CRLF continues the string on the next line.
+
+String values are byte sequences and may contain arbitrary binary data.
+For example, `'A\000\377B'` contains the four bytes `41 00 FF 42` in hex.
+An octal escape takes one to three digits. `\x` takes one or more hex
+digits through the first non-hex character. Either form represents one
+byte, including zero. `\u` takes exactly four hex digits and `\U` takes
+exactly eight. Each represents one Unicode scalar encoded as UTF-8.
+For example, `'\xC3\xA9'`, `'\u00E9'` and `'é'` have the same two-byte
+value and extent. Unknown escapes, byte overflow, surrogate code points,
+values above U+10FFFF and incomplete literals produce syntax errors.
+
+Printed literals use single quotes, preserve readable UTF-8, and escape
+the delimiter, backslashes and control bytes. A byte outside a valid UTF-8
+sequence prints as three octal digits so the next character stays distinct.

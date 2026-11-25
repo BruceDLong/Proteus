@@ -5674,3 +5674,20 @@ requirement. Floor quantization uses lower-inclusive, upper-exclusive bins.
 Nearest-quantum measurements use translated bins, and an explicit symmetric
 error uses a closed interval. This lets callers choose a tie rule or an
 error model independently of rational literal syntax and formatting.
+
+## D135. Decode string literals at the Proteus parser boundary
+
+The old parser copied the bytes between delimiters. For example, it gave
+`'\u00e9\U0001f642'` an extent of 16. Decode escapes before counting or
+publishing the string. This gives the same six bytes as `'é🙂'` to every
+consumer, including equality, concatenation and printing. Byte escapes can
+represent arbitrary data. Unicode escapes represent individual scalar
+values, so a supplementary character uses one `\U` escape.
+
+Use a new Proteus reader for both lookahead and parsing. CodeDog's existing
+quoted-string scanners have other callers that consume source spans. The
+Proteus reader walks the input with a buffer iterator. Lookahead stops at
+the available boundary and a live parse can wait there for another chunk.
+A completed literal supplies its decoded value and the source position
+after the closing delimiter. Printing uses named control escapes or fixed
+three-digit octal where a following digit could otherwise change the value.
