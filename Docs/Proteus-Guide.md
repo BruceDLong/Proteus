@@ -219,8 +219,8 @@ References below to **Appendix A** or task IDs such as **A09** mean the [remaini
 
 | Entry | Subject | Coverage |
 | --- | --- | --- |
-| [R01](#r01) | [Lexical forms, comments, separators, grouping, precedence](#r01) | Documented below; checked through Proteus `2436d02f` |
-| [R02](#r02) | [Infons, literals, unknowns, size and value](#r02) | Documented below; checked through Proteus `2436d02f` |
+| [R01](#r01) | [Lexical forms, comments, separators, grouping, precedence](#r01) | Documented below; checked through Proteus `2436d02f`; string escapes checked through `d450632` |
+| [R02](#r02) | [Infons, literals, unknowns, size and value](#r02) | Documented below; checked through Proteus `2436d02f`; string escapes checked through `d450632` |
 | [R03](#r03) | [Numeric operations, domains, ranges and resolution](#r03) | Documented below; checked through Proteus `2436d02f` |
 | [R04](#r04) | [Ordered/unordered lists, joins, embedding and additive lists](#r04) | Documented below; checked through Proteus `2436d02f` |
 | [R05](#r05) | [Definitions, templates, named individuals, parameters and scope](#r05) | Naming rules below; detailed call syntax to document |
@@ -255,7 +255,25 @@ Examples are Proteus source, without the escaping used by the repository's `.tst
 
 **Spelling and case.** Ordinary words use Unicode normalization with case folding for lookup; their authored spelling is retained. Parameter names and argument labels are case-sensitive: `item` and `Item` differ. Reserved forms such as `%W`, `%U`, `%INSERT`, `%PROTEUS`, `^T` and `^S` require their stated case. A hyphen inside a word is part of that word: `item-1` is one token; use `**(item -1)` for a separate numeric displacement.
 
-**Numbers and strings.** Keep the digits of a decimal or rational together; write `0.5`, not `.5`. Scientific notation is not a numeric token in the inspected scanner. Backslashes protect quote delimiters during string scanning, but the parser currently retains the enclosed source characters without decoding escapes: `"a\n"` contains a backslash and `n`, not a newline. This is an implementation detail, not a general C-style escape contract.
+**Numbers.** Keep the digits of a decimal or rational together. Write `0.5` for a fractional literal. Scientific notation is outside the numeric token grammar.
+
+#### Quoted string escapes
+
+Proteus decodes the same escapes in single- and double-quoted literals before counting their bytes or publishing their values.
+
+| Syntax | Decoded value |
+| --- | --- |
+| `\\`, `\'`, `\"`, `\?` | The named character. |
+| `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v` | The corresponding C control byte. |
+| `\0`, `\377`, `\xFF` | One byte. An octal escape consumes one to three digits. A `\x` escape consumes one or more hex digits up to the first non-hex character. The value must be at most 255. |
+| `\u00E9`, `\U0001F642` | One Unicode scalar encoded as UTF-8. `\u` takes exactly four hex digits and `\U` exactly eight. |
+| Backslash followed by a physical LF or CRLF | Continues the literal on the next line. The backslash and line break contribute no bytes. |
+
+Unknown or incomplete escapes, byte overflow, Unicode surrogates, and values above U+10FFFF are syntax errors. `'\u00E9\U0001F642'` has the same six bytes as `'é🙂'`. Printing uses single quotes and preserves valid UTF-8. It escapes the delimiter, backslashes, and control bytes. Other bytes outside printable ASCII and valid UTF-8 sequences use fixed three-digit octal escapes.
+
+**Implementation:** D135 in Proteus `d450632`. See the [reader and printer](https://github.com/BruceDLong/Proteus/blob/d450632365d51e6d528724e56c1a4f18ff10194d/ProteusStringLiteral.dog) and [string escape fixtures](https://github.com/BruceDLong/Proteus/blob/d450632365d51e6d528724e56c1a4f18ff10194d/Tests/stringEscapeTests.tst).
+
+See the [accepted long-string design](Proteus-Language-Reference.md#long-string-literals-accepted-design) for A03.
 
 #### Whitespace, separators and grouping
 
@@ -377,7 +395,7 @@ Unknowns record missing information; they are not default values or instructions
 
 #### Sources and status
 
-**Coverage:** R02 documented on 2026-11-24 against Proteus `2436d02f`. This entry covers literal descriptions and partial knowledge; operations, list correspondence, qualifications and identity rules continue in R03–R08. String escape decoding and a dedicated long-string form are not established here; current scanning behavior is recorded in R01.
+**Coverage:** R02 documented on 2026-11-24 against Proteus `2436d02f`, with quoted string escapes updated through `d450632`. This entry covers literal descriptions and partial knowledge. Operations, list correspondence, qualifications and identity rules continue in R03–R08.
 
 **Implementation evidence:** [Parser](https://github.com/BruceDLong/Proteus/blob/2436d02f73d88db371efb364418aa65d86d26fef/infonIO.dog), [size counting and null representation](https://github.com/BruceDLong/Proteus/blob/2436d02f73d88db371efb364418aa65d86d26fef/Proteus.Lib.dog), [literal and unknown fixtures](https://github.com/BruceDLong/Proteus/blob/2436d02f73d88db371efb364418aa65d86d26fef/Tests/defaultTests.tst), [numeric literals](https://github.com/BruceDLong/Proteus/blob/2436d02f73d88db371efb364418aa65d86d26fef/Tests/numeric-literal-tests.tst), [print modes](https://github.com/BruceDLong/Proteus/blob/2436d02f73d88db371efb364418aa65d86d26fef/Tests/print-mode-tests.tst), [scaled rational readings](https://github.com/BruceDLong/Proteus/blob/2436d02f73d88db371efb364418aa65d86d26fef/Tests/scaledPhaseTests.tst) and [closed ranges](https://github.com/BruceDLong/Proteus/blob/2436d02f73d88db371efb364418aa65d86d26fef/Tests/closedRangeTests.tst).
 
@@ -1159,5 +1177,5 @@ The compact forms below are derived from Chapter 17's source reference. The matc
 | Explicit wrap | `(.mod -9/4 1)` | Residue 3/4; size alone does not request wrapping. |
 | Model-defined units | `#minute = *60+{second \| ...}` | Requires second; the model supplies units and conversions. |
 
-Names require the indicated model definitions. These are separate forms, not one combined program. Unknown, partial, rejected and unsupported are distinct outcomes. Detailed call coverage remains A04; runtime verification remains A09. String escapes and long strings remain A01–A03.
+Names require the indicated model definitions. These are separate forms, not one combined program. Unknown, partial, rejected and unsupported are distinct outcomes. Detailed call coverage remains A04; runtime verification remains A09. Quoted string escapes are implemented under D135. Long strings remain A03.
 <!-- END DERIVED CHEAT SHEET -->

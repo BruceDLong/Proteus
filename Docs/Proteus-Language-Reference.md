@@ -12,8 +12,8 @@ Use a table with **syntax/example**, **meaning**, and, where useful, **usage**. 
 
 | Entry | Subject | Coverage |
 | --- | --- | --- |
-| [R01](#r01) | [Lexical forms, comments, separators, grouping, precedence](#r01) | Documented below; checked through Proteus `2436d02f` |
-| [R02](#r02) | [Infons, literals, unknowns, size and value](#r02) | Documented below; checked through Proteus `2436d02f` |
+| [R01](#r01) | [Lexical forms, comments, separators, grouping, precedence](#r01) | Documented below; checked through Proteus `2436d02f`; string escapes checked through `d450632` |
+| [R02](#r02) | [Infons, literals, unknowns, size and value](#r02) | Documented below; checked through Proteus `2436d02f`; string escapes checked through `d450632` |
 | [R03](#r03) | [Numeric operations, domains, ranges and resolution](#r03) | Documented below; checked through Proteus `2436d02f` |
 | [R04](#r04) | [Ordered/unordered lists, joins, embedding and additive lists](#r04) | Documented below; checked through Proteus `2436d02f` |
 | [R05](#r05) | [Definitions, templates, named individuals, parameters and scope](#r05) | Naming rules below; detailed call syntax to document |
@@ -51,7 +51,71 @@ Examples are Proteus source, without the escaping used by the repository's `.tst
 
 **Spelling and case.** Ordinary words use Unicode normalization with case folding for lookup; their authored spelling is retained. Parameter names and argument labels are case-sensitive: `item` and `Item` differ. Reserved forms such as `%W`, `%U`, `%INSERT`, `%PROTEUS`, `^T` and `^S` require their stated case. A hyphen inside a word is part of that word: `item-1` is one token; use `**(item -1)` for a separate numeric displacement.
 
-**Numbers and strings.** Keep the digits of a decimal or rational together; write `0.5`, not `.5`. Scientific notation is not a numeric token in the inspected scanner. Backslashes protect quote delimiters during string scanning, but the parser currently retains the enclosed source characters without decoding escapes: `"a\n"` contains a backslash and `n`, not a newline. This is an implementation detail, not a general C-style escape contract.
+**Numbers.** Keep the digits of a decimal or rational together. Write `0.5` for a fractional literal. Scientific notation is outside the numeric token grammar.
+
+### Quoted string escapes
+
+Proteus decodes the same escapes in single- and double-quoted literals before counting their bytes or publishing their values.
+
+| Syntax | Decoded value |
+| --- | --- |
+| `\\`, `\'`, `\"`, `\?` | The named character. |
+| `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v` | The corresponding C control byte. |
+| `\0`, `\377`, `\xFF` | One byte. An octal escape consumes one to three digits. A `\x` escape consumes one or more hex digits up to the first non-hex character. The value must be at most 255. |
+| `\u00E9`, `\U0001F642` | One Unicode scalar encoded as UTF-8. `\u` takes exactly four hex digits and `\U` exactly eight. |
+| Backslash followed by a physical LF or CRLF | Continues the literal on the next line. The backslash and line break contribute no bytes. |
+
+Unknown or incomplete escapes, byte overflow, Unicode surrogates, and values above U+10FFFF are syntax errors. `'\u00E9\U0001F642'` has the same six bytes as `'é🙂'`. Printing uses single quotes and preserves valid UTF-8. It escapes the delimiter, backslashes, and control bytes. Other bytes outside printable ASCII and valid UTF-8 sequences use fixed three-digit octal escapes.
+
+**Implementation:** D135 in Proteus `d450632`. See the [reader and printer](https://github.com/BruceDLong/Proteus/blob/d450632365d51e6d528724e56c1a4f18ff10194d/ProteusStringLiteral.dog) and [string escape fixtures](https://github.com/BruceDLong/Proteus/blob/d450632365d51e6d528724e56c1a4f18ff10194d/Tests/stringEscapeTests.tst).
+
+### Long string literals (accepted design)
+
+These forms are pending implementation under A03. Each parses as a single string infon. Size counts the bytes in the resulting value.
+
+| Syntax | Meaning |
+| --- | --- |
+| `"""TAG` followed by a line break, with a matching `"""TAG` starting the closing line after any indentation | Raw multiline text with the closing fence’s indentation removed from content lines. Choose a tag that does not occur in a closing-fence position in the body. |
+| `'''N` followed by a line break, `N` bytes, a line break, and `'''` | Verbatim binary packet. `N` is a decimal byte count. The closing fence may carry a CRC-32C checksum immediately after `'''`. |
+
+```proteus
+{
+  instructions:"""NOTES
+    Turn the face marked "front".
+      Keep the center piece in place.
+    """NOTES,
+  revision:2
+}
+```
+
+The text closer starts at the first non-indentation character of its line and matches the entire tag. Ordinary Proteus syntax can follow the closing tag, as the comma does above. Strip the closer’s exact space-and-tab prefix from nonblank content lines and reject a nonblank line that lacks that prefix. For whitespace-only lines, strip the prefix when present and otherwise leave an empty line. Preserve indentation beyond the margin and preserve interior line breaks. The line breaks immediately after the opener and before the closer are outside the value. An extra blank line before the closer gives the text a final line break. Backslashes and ordinary quotes in the body are literal.
+
+```proteus
+**(
+  '''3
+abc
+  '''
+  '''3
+def
+  '''
+)
+```
+
+The binary reader consumes exactly the declared bytes before looking for the framing newline and optionally indented closer. This works with arbitrary bytes, including NULs, invalid UTF-8, and embedded fence spellings. The binary payload bypasses text decoding and newline normalization. A zero-byte payload still has both framing line breaks. A payload ending in a newline still needs the framing newline before its closer.
+
+**Optional checksum.** A bare closing `'''` carries no checksum. A checksum immediately follows the three quotes and consists of exactly eight hexadecimal digits representing the CRC-32C (Castagnoli) integer, most significant digit first. Accept either hex case and print lowercase with leading zeros. Compute CRC-32C over exactly the declared payload bytes. Framing and delimiters are outside the checksum. Reject a malformed checksum or a mismatch before releasing the packet. The nine ASCII bytes `123456789` give `e3069283`. [CRC-32C parameters](https://specification.opencyphal.org/Cyphal_Specification.pdf)
+
+```proteus
+'''9
+123456789
+'''e3069283
+```
+
+Accept LF (`\n`), CRLF (`\r\n`), and CR (`\r`) as framing line endings. Match CRLF before CR. LF is the preferred form and the serializer emits LF for framing. A sender whose payload begins with LF can use LF or CRLF to end the binary header, since a lone CR followed by LF is read as CRLF. The serializer preserves binary payload bytes and interior line breaks of text values.
+
+**Packet completion.** Release each fenced literal for processing only after parsing its complete body and accepting its closer, including verification of any supplied checksum. In `**(...)`, pass completed operands downstream in order while later packets are still arriving. The example makes `abc` available when its first packet completes and produces `abcdef` when the join completes. A malformed, truncated, or checksum-mismatched packet contributes no bytes and fails the join. Input waiting for another read remains pending until the parser receives more bytes or reaches end of input.
+
+**Clip and editor handling.** Display a packet summary in interactive terminals, including byte count and checksum status where available. Inspection can show a bounded hex preview with offsets. Extraction writes the payload bytes directly. File and pipe I/O carry raw bytes, with prompts and diagnostics kept out of the data stream. A binary-aware editor can fold packets, inspect or replace payload bytes, and update the count and any checksum. Hex is a display format for inspection. Proteus serialization uses the verbatim payload.
 
 ### Whitespace, separators and grouping
 
@@ -173,7 +237,7 @@ Unknowns record missing information; they are not default values or instructions
 
 ### Sources and status
 
-**Coverage:** R02 documented on 2026-11-24 against Proteus `2436d02f`. This entry covers literal descriptions and partial knowledge; operations, list correspondence, qualifications and identity rules continue in R03–R08. String escape decoding and a dedicated long-string form are not established here; current scanning behavior is recorded in R01.
+**Coverage:** R02 documented on 2026-11-24 against Proteus `2436d02f`, with quoted string escapes updated through `d450632`. This entry covers literal descriptions and partial knowledge. Operations, list correspondence, qualifications and identity rules continue in R03–R08.
 
 **Implementation evidence:** [Parser](https://github.com/BruceDLong/Proteus/blob/2436d02f73d88db371efb364418aa65d86d26fef/infonIO.dog), [size counting and null representation](https://github.com/BruceDLong/Proteus/blob/2436d02f73d88db371efb364418aa65d86d26fef/Proteus.Lib.dog), [literal and unknown fixtures](https://github.com/BruceDLong/Proteus/blob/2436d02f73d88db371efb364418aa65d86d26fef/Tests/defaultTests.tst), [numeric literals](https://github.com/BruceDLong/Proteus/blob/2436d02f73d88db371efb364418aa65d86d26fef/Tests/numeric-literal-tests.tst), [print modes](https://github.com/BruceDLong/Proteus/blob/2436d02f73d88db371efb364418aa65d86d26fef/Tests/print-mode-tests.tst), [scaled rational readings](https://github.com/BruceDLong/Proteus/blob/2436d02f73d88db371efb364418aa65d86d26fef/Tests/scaledPhaseTests.tst) and [closed ranges](https://github.com/BruceDLong/Proteus/blob/2436d02f73d88db371efb364418aa65d86d26fef/Tests/closedRangeTests.tst).
 
@@ -881,11 +945,11 @@ Keep these IDs stable. Mark completed items with their decision, implementing co
 
 ### A.1 Requested string features
 
-- [ ] **A01 — Decode C-style backslash escapes in strings.** Define the supported escape set and malformed-escape behavior, then decode the source text instead of retaining every backslash literally. Cover control characters, escaped quotes and backslashes, and parse/print round trips. **Reference:** R01–R02.
-- [ ] **A02 — Support Unicode character-code escapes in strings.** Choose and document the notation for code-point escapes; decode valid values into the string representation and reject invalid codes or incomplete escapes appropriately. Include non-ASCII and supplementary-plane examples. Exact escape spelling remains to be decided. **Reference:** R01–R02.
-- [ ] **A03 — Add a long-string form.** Choose delimiters and multiline behavior, including embedded quotes, delimiter escaping, and whether backslash escapes are interpreted. Implement parsing and printing, with examples that preserve the intended text and newlines. **Reference:** R01–R02.
+- [x] **A01 — Decode C-style backslash escapes in strings.** D135 (`d450632`) implements control, delimiter and byte escapes, line continuation, malformed-escape rejection, and round-trip printing. **Reference:** R01–R02.
+- [x] **A02 — Support Unicode character-code escapes in strings.** D135 (`d450632`) implements `\u` and `\U` escapes, validates Unicode scalar values, and counts the resulting UTF-8 bytes. **Reference:** R01–R02.
+- [ ] **A03 — Implement fenced text and verbatim binary packets.** Follow the [accepted design](#long-string-literals-accepted-design). Implement parsing, serialization, and delivery of completed packets through `**(...)`. Cover the LF, CRLF, and CR framing cases, empty and newline-ending payloads, short reads, delimiter bytes inside payloads, and packet failures. Test the CRC-32C vector, hex case and padding, and rejection of malformed or mismatched checksums. Add Clip summaries, inspection, and raw extraction. **Reference:** R01–R02.
 
-String work must also state how decoded text interacts with the existing byte-based size and selection rules. Changing those rules to count Unicode code points or displayed characters would require a separate language decision.
+Decode escapes before applying the existing byte-based string size and selection rules. Counting Unicode code points or displayed characters would require a separate language decision.
 
 ### A.2 Reference and guide work
 
