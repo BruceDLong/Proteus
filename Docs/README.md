@@ -19,6 +19,19 @@ The maintained solver is CodeDog. The accepted contract and implementation limit
 are in [the consolidated design](<Design Docs/normalization-design.md>); choices and reasons
 are in [the decision log](<Design Docs/normalization-design-decisions.md>).
 
+## Language documentation
+
+The [practical guide](Proteus-Guide.md) contains Chapters 1–3, the derived Chapter 17
+reference, and Appendix B. The [language reference](Proteus-Language-Reference.md)
+is the maintained source of the R01–R10 entries; its linked coverage table leads
+to each section, and [Appendix A](Proteus-Language-Reference.md#appendix-a) tracks
+remaining work. The [guide outline](Proteus-Guide-Outline.md) records the planned chapters.
+
+Use the [syntax cheat sheet](Proteus-Cheat-Sheet.md) for compact forms or the
+[one-page PDF](Proteus-Cheat-Sheet.pdf) for printing. Keep Chapter 17 and both
+cheat-sheet formats aligned when the reference changes. The examples record
+source and fixture expectations at `2436d02f`; focused engine reruns remain A09.
+
 ## Build and verify
 
 Use CodeDog commit `e0dae8e` or later. From the repository root:

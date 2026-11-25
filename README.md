@@ -84,6 +84,10 @@ are looked up in `../Tests` first; explicit file paths are used as supplied.
 
 ## Documentation
 
+- [Practical guide and chapter reference](Docs/Proteus-Guide.md)
+- [Language reference and remaining work](Docs/Proteus-Language-Reference.md)
+- [Syntax cheat sheet](Docs/Proteus-Cheat-Sheet.md) ([one-page PDF](Docs/Proteus-Cheat-Sheet.pdf))
+- [Guide outline](Docs/Proteus-Guide-Outline.md)
 - [Build, testing and request lifecycle](Docs/README.md)
 - [Design references and working notes](<Docs/Design Docs/README.md>)
 - [Historical design notes and Git recovery](<Docs/Design Docs/Historical/README.md>)
