@@ -5,6 +5,8 @@ import {
   buildAdditiveModel,
   type AdditiveChildAnalysis,
 } from "./additiveModel";
+import { allowedAValues, buildSignedAdditiveModel } from "./signedAdditiveModel";
+import { SignedAdditiveView } from "./SignedAdditiveView";
 
 type Mode = "divisor" | "quotient";
 
@@ -50,6 +52,7 @@ type CaseAnalysis = {
 type Focus = "parent" | "divisor" | "quotient";
 type DecompositionMode = "additive" | "multiplicative";
 type AdditiveBMode = "end" | "zero";
+type AdditiveMethod = "current" | "signed";
 
 const MAX_SIZE = 24;
 
@@ -1192,6 +1195,8 @@ function AdditiveDecomposer({ onModeChange }: { onModeChange: (mode: Decompositi
   const [size, setSize] = useState(7);
   const [value, setValue] = useState(4);
   const [aSize, setASize] = useState(3);
+  const [method, setMethod] = useState<AdditiveMethod>("current");
+  const [chosenAValue, setChosenAValue] = useState<number | null>(null);
   const [bMode, setBMode] = useState<AdditiveBMode>("end");
   const [focus, setFocus] = useState<Focus>("parent");
   const [stage, setStage] = useState(0);
@@ -1202,6 +1207,20 @@ function AdditiveDecomposer({ onModeChange }: { onModeChange: (mode: Decompositi
   const model = useMemo(
     () => buildAdditiveModel(size, activeValue, activeASize),
     [activeASize, activeValue, size],
+  );
+  const validAValues = useMemo(
+    () => allowedAValues(size, activeValue, activeASize),
+    [size, activeValue, activeASize],
+  );
+  const signedAValue = Math.max(
+    validAValues[0],
+    Math.min(validAValues[validAValues.length - 1], chosenAValue ?? model.a.value),
+  );
+  const signedModel = useMemo(
+    () => method === "signed"
+      ? buildSignedAdditiveModel(size, activeValue, activeASize, signedAValue)
+      : null,
+    [method, size, activeValue, activeASize, signedAValue],
   );
   const b = bMode === "end" ? model.bend : model.b0;
   const activeDetails = focus === "divisor" ? b : model.a;
@@ -1242,20 +1261,26 @@ function AdditiveDecomposer({ onModeChange }: { onModeChange: (mode: Decompositi
   }, [size]);
 
   useEffect(() => {
-    if (isStageDisabled(stage, focus, rebaseNeeded)) setStage(1);
-  }, [focus, rebaseNeeded, stage]);
+    if (method === "current" && isStageDisabled(stage, focus, rebaseNeeded)) setStage(1);
+  }, [focus, method, rebaseNeeded, stage]);
 
   useEffect(() => {
     if (!playing) return;
     const id = window.setInterval(() => {
-      setStage((current) => nextStage(current, focus, rebaseNeeded));
+      setStage((current) => method === "signed" ? (current + 1) % 4 : nextStage(current, focus, rebaseNeeded));
     }, speed);
     return () => window.clearInterval(id);
-  }, [focus, playing, rebaseNeeded, speed]);
+  }, [focus, method, playing, rebaseNeeded, speed]);
 
   function handleFocusChange(nextFocus: Focus) {
     setFocus(nextFocus);
     setStage(0);
+  }
+
+  function handleMethodChange(nextMethod: AdditiveMethod) {
+    setMethod(nextMethod);
+    setStage(0);
+    setPlaying(false);
   }
 
   return (
@@ -1264,8 +1289,11 @@ function AdditiveDecomposer({ onModeChange }: { onModeChange: (mode: Decompositi
         <div>
           <h1>Proteus Infon Decomposer</h1>
           <div className="signature">
-            *{size}+{activeValue} {sumPassed ? "=" : "≠"} *{activeASize}+{model.a.value} + *{b.selected.length}+
-            {b.value} ({bMode === "end" ? "shared end" : "shared 0"})
+            {method === "signed" ? (
+              <>*{size}+{activeValue} {signedModel?.passed ? "=" : "≟"} *{activeASize}+{signedAValue} + *{size + 1 - activeASize}+{activeValue - signedAValue} (shared 0)</>
+            ) : (
+              <>*{size}+{activeValue} {sumPassed ? "=" : "≠"} *{activeASize}+{model.a.value} + *{b.selected.length}+{b.value} ({bMode === "end" ? "shared end" : "shared 0"})</>
+            )}
           </div>
         </div>
         <div className="headerActions">
@@ -1273,11 +1301,33 @@ function AdditiveDecomposer({ onModeChange }: { onModeChange: (mode: Decompositi
           <TransportControls
             onPlayToggle={() => setPlaying((current) => !current)}
             onReset={() => setStage(0)}
-            onStep={() => setStage((current) => nextStage(current, focus, rebaseNeeded))}
+            onStep={() => setStage((current) => method === "signed" ? (current + 1) % 4 : nextStage(current, focus, rebaseNeeded))}
             playing={playing}
           />
         </div>
       </header>
+
+      <section className="additiveMethodBand" aria-label="Compare additive methods">
+        <div className="modeSwitch" role="group" aria-label="Additive method">
+          <button
+            type="button"
+            aria-pressed={method === "current"}
+            className={classNames(method === "current" && "selected")}
+            onClick={() => handleMethodChange("current")}
+          >Current method</button>
+          <button
+            type="button"
+            aria-pressed={method === "signed"}
+            className={classNames(method === "signed" && "selected")}
+            onClick={() => handleMethodChange("signed")}
+          >Signed construction</button>
+        </div>
+        <p>
+          {method === "current"
+            ? "Extract a prefix of the parent traversal, then reconstruct the children with forward ghosts."
+            : "Construct both child operations on the fixed root baseline. Intermediate steps may move backward; complete returns and composition are checked."}
+        </p>
+      </section>
 
       <section className="controlBand">
         <label className="control">
@@ -1288,7 +1338,7 @@ function AdditiveDecomposer({ onModeChange }: { onModeChange: (mode: Decompositi
             max={MAX_SIZE}
             type="number"
             value={size}
-            onChange={(event) => setSize(Math.max(1, Math.min(MAX_SIZE, Number(event.target.value))))}
+            onChange={(event) => setSize(Math.max(1, Math.min(MAX_SIZE, Math.trunc(Number(event.target.value)))))}
           />
         </label>
         <label className="control">
@@ -1299,7 +1349,7 @@ function AdditiveDecomposer({ onModeChange }: { onModeChange: (mode: Decompositi
             max={size - 1}
             type="number"
             value={activeValue}
-            onChange={(event) => setValue(Math.max(0, Math.min(size - 1, Number(event.target.value))))}
+            onChange={(event) => setValue(Math.max(0, Math.min(size - 1, Math.trunc(Number(event.target.value)))))}
           />
         </label>
         <label className="control compact">
@@ -1309,22 +1359,46 @@ function AdditiveDecomposer({ onModeChange }: { onModeChange: (mode: Decompositi
             max={size}
             type="number"
             value={activeASize}
-            onChange={(event) => setASize(Math.max(1, Math.min(size, Number(event.target.value))))}
+            onChange={(event) => setASize(Math.max(1, Math.min(size, Math.trunc(Number(event.target.value)))))}
           />
         </label>
-        <label className="control compact">
-          <span>B overlap</span>
-          <select value={bMode} onChange={(event) => setBMode(event.target.value as AdditiveBMode)}>
-            <option value="end">A end</option>
-            <option value="zero">Parent 0</option>
-          </select>
-        </label>
+        {method === "signed" ? (
+          <label className="control compact">
+            <span>A value</span>
+            <select value={signedAValue} onChange={(event) => setChosenAValue(Number(event.target.value))}>
+              {validAValues.map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>
+          </label>
+        ) : (
+          <label className="control compact">
+            <span>B overlap</span>
+            <select value={bMode} onChange={(event) => setBMode(event.target.value as AdditiveBMode)}>
+              <option value="end">A end</option>
+              <option value="zero">Parent 0</option>
+            </select>
+          </label>
+        )}
         <label className="control compact">
           <span>Speed</span>
           <input min={500} max={1800} step={100} type="range" value={speed} onChange={(event) => setSpeed(Number(event.target.value))} />
         </label>
       </section>
 
+      {method === "signed" && signedModel ? (
+        <>
+          <section className="additiveComparisonNote" aria-label="Current method comparison">
+            <span><strong>Current method at these settings:</strong> *{activeASize}+{model.a.value} + *{b.selected.length}+{b.value} {sumPassed ? "=" : "≠"} *{size}+{activeValue} ({bMode === "end" ? "shared A end" : "shared 0"}).</span>
+            <span>{validAValues.length} valid A {validAValues.length === 1 ? "value" : "values"} for this size; {(activeValue + 1) * (size - activeValue)} ordered numeric splits in total. Each method shows its own real-state placement.</span>
+          </section>
+          <SignedAdditiveView
+            model={signedModel}
+            focus={focus === "quotient" ? "a" : focus === "divisor" ? "b" : "parent"}
+            onFocusChange={(nextFocus) => handleFocusChange(nextFocus === "a" ? "quotient" : nextFocus === "b" ? "divisor" : "parent")}
+            stage={stage}
+            onStageChange={setStage}
+          />
+        </>
+      ) : (
       <div className="animationShell">
         <DecompositionStageRail
           focus={focus}
@@ -1460,6 +1534,7 @@ function AdditiveDecomposer({ onModeChange }: { onModeChange: (mode: Decompositi
           </section>
         </section>
       </div>
+      )}
     </main>
   );
 }
